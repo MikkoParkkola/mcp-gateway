@@ -52,9 +52,9 @@ fn firewall_delivery_keeps_a_minted_continuation_and_refuses_a_foreign_one() {
 
     let own = mint(&fixture.meta.continuation());
     let delivered = deliver(&own);
-    assert!(!delivered.delivery_refusal);
+    assert!(!delivered.wire_meta.delivery_refusal);
     assert_eq!(delivered.result.unwrap()["requestState"], own);
 
     let foreign = mint(&ContinuationState::new());
-    assert!(deliver(&foreign).delivery_refusal);
+    assert!(deliver(&foreign).wire_meta.delivery_refusal);
 }

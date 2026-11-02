@@ -22,6 +22,8 @@ fn rule(tool_match: &str, scan: &[ScanType], action: FirewallAction) -> Firewall
         servers: None,
         keys: None,
         except: None,
+        allowed_roots: None,
+        path_args: None,
     }
 }
 
@@ -55,7 +57,7 @@ fn resolve(fw: &Firewall, tool: &str, found: &[(ScanType, Severity)]) -> Firewal
         tool,
         key: crate::security::response_policy::KeyOf::NoKey,
     };
-    fw.resolve_action(target, &findings)
+    super::Firewall::resolve_action(fw.startup_policy(), target, &findings)
 }
 
 /// The fail-open this fixes: a credentials `allow` must not carry a shell

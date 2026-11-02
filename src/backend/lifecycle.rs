@@ -130,6 +130,7 @@ impl Backend {
             sign_in,
             destination: std::sync::OnceLock::new(),
             secret_resolver: std::sync::OnceLock::new(),
+            needles: std::sync::OnceLock::new(),
             started: std::sync::OnceLock::new(),
             #[cfg(test)]
             mark_window_gate: parking_lot::Mutex::new(None),
@@ -408,7 +409,7 @@ impl Backend {
         &self,
         built_under: crate::security::ssrf::DestinationPolicy,
     ) -> Result<()> {
-        let _pairing = self.replaced_transport_cleanups.lock();
+        let pairing = self.replaced_transport_cleanups.lock();
         if self.destination.get().is_none() {
             self.connected_unpinned
                 .store(true, std::sync::atomic::Ordering::SeqCst);
@@ -417,6 +418,7 @@ impl Backend {
         if self.destination() == built_under {
             return Ok(());
         }
+        drop(pairing);
         debug!(backend = %self.name, "Not connecting: the destination policy changed while it was starting");
         Err(Error::BackendUnavailable(self.name.clone()))
     }
@@ -453,6 +455,7 @@ impl Backend {
             built_under,
         )?;
         transport.mark_single_tenant();
+        self.attach_needles_to(&transport);
         // The same pairing check a slot's start runs: refused when the
         // policy changed since it was read, and recorded when none is pinned.
         self.begin_connecting(built_under)?;
@@ -597,6 +600,7 @@ impl Backend {
                 // it reads this cache to know it is the one message that may
                 // not wait for a verdict.
                 transport.attach_era(Arc::clone(&entry.era));
+                self.attach_needles_to(&transport);
                 // Connect without handshaking: the probe needs the credential
                 // and the message endpoint, and nothing else.
                 self.begin_connecting(built_under)?;

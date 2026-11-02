@@ -23,6 +23,10 @@ use crate::transport::upstream_tap::{
 /// What the peer saw: `(request, x-cred header)`, in order.
 type Log = Arc<Mutex<Vec<(String, Option<String>)>>>;
 
+/// A value with a quote in it: serde's error text escapes it, so a literal
+/// match on that text misses it (G4).
+const BAD_BODY_NEEDLE: &str = "listen-q\"secret-77d1";
+
 /// A one-session spec SSE peer: `GET /sse` names `/messages` and keeps the
 /// stream; each POST is answered 202 with its response on the stream, except
 /// `resources/unsubscribe`, which is refused with HTTP 500.
@@ -65,6 +69,28 @@ async fn peer() -> (String, Log) {
                     // A refusal to answer as an error status (the request row).
                     if method == "resources/unsubscribe" {
                         return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+                    }
+                    // A subscribe to an `echo` URI: a change notice for it and
+                    // a refusal quoting it, both on the stream.
+                    let uri = frame["params"]["uri"].as_str().unwrap_or_default().to_owned();
+                    // A subscribe to a `badbody` URI: a direct answer whose
+                    // `error` is a string quoting the value, which no
+                    // response type accepts (G4).
+                    if method == "resources/subscribe" && uri.contains("badbody") {
+                        let body = json!({"jsonrpc": "2.0", "id": frame["id"],
+                            "error": format!("refused {BAD_BODY_NEEDLE}")});
+                        return (StatusCode::OK, body.to_string()).into_response();
+                    }
+                    if method == "resources/subscribe" && uri.contains("echo") {
+                        let notice = json!({"jsonrpc": "2.0",
+                            "method": "notifications/resources/updated", "params": {"uri": uri}});
+                        let refusal = json!({"jsonrpc": "2.0", "id": frame["id"],
+                            "error": {"code": -32602, "message": format!("bad uri {uri}")}});
+                        if let Some(tx) = stream.lock().expect("stream").as_ref() {
+                            let _ = tx.send(notice.to_string());
+                            let _ = tx.send(refusal.to_string());
+                        }
+                        return StatusCode::ACCEPTED.into_response();
                     }
                     if let Some(id) = frame.get("id") {
                         let answer = json!({"jsonrpc": "2.0", "id": id, "result": {}});
@@ -251,5 +277,112 @@ async fn a_refused_listener_request_names_the_status() {
     assert!(
         refused.to_string().contains("returned HTTP 500"),
         "names the status: {refused}"
+    );
+}
+
+/// on a legacy listener session, a change notice and a refusal
+/// that echo an injected value both arrive scrubbed: neither passes
+/// `read_answer`, so the session scrubs them itself.
+#[tokio::test]
+async fn a_legacy_listener_scrubs_its_notices_and_answers() {
+    const NEEDLE: &str = "legacy-listen-secret-08aa";
+    let (url, _log) = peer().await;
+    let (transport, session) = session(&url, None);
+    let needles = crate::security::needles::NeedleSet::with_grace(Duration::from_secs(3_600));
+    needles.insert("b", NEEDLE);
+    transport.attach_needles(Arc::new(needles));
+    let mut stream = Arc::clone(&session)
+        .unsolicited(Watched::default())
+        .await
+        .map_err(|_| "refused")
+        .expect("handshake");
+    let answer = Arc::clone(&session)
+        .legacy_interest(
+            LegacyPin::default(),
+            &format!("file:///echo?k={NEEDLE}"),
+            true,
+        )
+        .await
+        .expect("the refusal arrives on the stream");
+    let refusal = format!("{:?}", answer.error);
+    assert!(
+        refusal.contains("bad uri"),
+        "premise: the refusal: {refusal}"
+    );
+    assert!(
+        !refusal.contains(NEEDLE),
+        "the refusal carried the value: {refusal}"
+    );
+    let note = tokio::time::timeout(Duration::from_secs(30), stream.rx.recv())
+        .await
+        .expect("the notice arrives")
+        .expect("a note");
+    let text = format!("{note:?}");
+    assert!(text.contains("file:///echo"), "premise: the notice: {text}");
+    assert!(
+        !text.contains(NEEDLE),
+        "the notice carried the value: {text}"
+    );
+}
+
+/// Lead ruling G9 (HTTP): the watch filter compares the scrubbed note. A
+/// watcher of the redacted URI gets the update; one guessing the raw URI does
+/// not.
+#[tokio::test]
+async fn the_watch_filter_compares_the_redacted_uri() {
+    const NEEDLE: &str = "watch-secret-3a6c";
+    let echo_uri = format!("file:///echo?k={NEEDLE}");
+    for (watched, expects) in [
+        (Watched::by(|uri| uri == "file:///echo?k=[redacted]"), true),
+        (Watched::by(|uri| uri.contains(NEEDLE)), false),
+    ] {
+        let (url, _log) = peer().await;
+        let (transport, session) = session(&url, None);
+        let needles = crate::security::needles::NeedleSet::with_grace(Duration::from_secs(3_600));
+        needles.insert("b", NEEDLE);
+        transport.attach_needles(Arc::new(needles));
+        let mut stream = Arc::clone(&session)
+            .unsolicited(watched)
+            .await
+            .map_err(|_| "refused")
+            .expect("handshake");
+        let _ = Arc::clone(&session)
+            .legacy_interest(LegacyPin::default(), &echo_uri, true)
+            .await;
+        // The notice precedes the refusal on one ordered stream, so it was
+        // routed or dropped before the refusal answered.
+        let note = stream.rx.try_recv();
+        assert_eq!(
+            note.is_ok(),
+            expects,
+            "watcher expecting {expects}: {note:?}"
+        );
+    }
+}
+
+/// G4: a listener answer that fails to parse is named by its
+/// position, never by its text. serde would quote the string it rejected,
+/// escaped, and an escaped value passes the literal scrub.
+#[tokio::test]
+async fn a_listener_answer_that_fails_to_parse_quotes_none_of_itself() {
+    let (url, _log) = peer().await;
+    let (transport, session) = session(&url, None);
+    let needles = crate::security::needles::NeedleSet::with_grace(Duration::from_secs(3_600));
+    needles.insert("b", BAD_BODY_NEEDLE);
+    transport.attach_needles(Arc::new(needles));
+    let _stream = Arc::clone(&session)
+        .unsolicited(Watched::default())
+        .await
+        .map_err(|_| "refused")
+        .expect("handshake");
+    let refused = Arc::clone(&session)
+        .legacy_interest(LegacyPin::default(), "file:///badbody", true)
+        .await
+        .expect_err("an error that is a string is malformed");
+    let text = refused.to_string();
+    assert!(text.contains("listener answer"), "premise: {text}");
+    assert!(
+        !text.contains("secret-77d1"),
+        "the error quotes the answer: {text}"
     );
 }

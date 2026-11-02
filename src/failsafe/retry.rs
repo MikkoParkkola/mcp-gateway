@@ -135,6 +135,17 @@ fn is_retryable(error: &Error) -> bool {
 
 #[cfg(test)]
 mod tests {
+
+    /// C7: a backend's own JSON-RPC error is its final answer: never retried.
+    #[test]
+    fn a_backends_own_json_rpc_error_is_not_retried() {
+        let answer = crate::Error::backend_json_rpc(crate::protocol::JsonRpcError {
+            code: -32001,
+            message: "backend says no".to_owned(),
+            data: None,
+        });
+        assert!(!super::is_retryable(&answer));
+    }
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
 

@@ -50,15 +50,15 @@ fn http() -> TransportConfig {
     TransportConfig::default()
 }
 
+/// What a send carries: its params and its headers.
+type Sent = (Option<Value>, Vec<(String, String)>);
+
 /// The params and headers `backend` sends for `params`, given `headers`.
-fn send(
-    backend: &Backend,
-    params: Value,
-    headers: Vec<(String, String)>,
-) -> crate::Result<super::Outbound> {
-    Ok(backend
+fn send(backend: &Backend, params: Value, headers: Vec<(String, String)>) -> crate::Result<Sent> {
+    let (params, headers, _) = backend
         .prepare_secrets("tools/call", Some(params))?
-        .apply(headers))
+        .apply(headers);
+    Ok((params, headers))
 }
 
 #[test]

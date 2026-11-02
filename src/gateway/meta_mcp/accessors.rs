@@ -43,6 +43,15 @@ impl MetaMcp {
         self.startup_live_config.get().cloned().or(from_reload)
     }
 
+    /// The generation published now: the answer side's P beside the request's
+    /// pinned one, and the only one for a check no request is behind (task
+    /// settlement, a poll, a requestless notification). `None` only before
+    /// startup sets the live config. Every reader is a firewall check.
+    #[cfg(feature = "firewall")]
+    pub(crate) fn current_generation(&self) -> Option<Arc<crate::config_reload::Generation>> {
+        self.live_config().map(|live| live.generation())
+    }
+
     /// Startup's live config; a second call keeps the first.
     pub(crate) fn set_live_config(&self, live: Arc<crate::config_reload::LiveConfig>) {
         let _ = self.startup_live_config.set(live);
@@ -63,6 +72,39 @@ impl MetaMcp {
 
     pub(in crate::gateway) fn get_capabilities(&self) -> Option<Arc<CapabilityBackend>> {
         self.capabilities.read().clone()
+    }
+
+    /// The live capability slot, shared with the firewall's folder check.
+    #[cfg(feature = "firewall")]
+    pub(in crate::gateway) fn capability_slot(
+        &self,
+    ) -> Arc<parking_lot::RwLock<Option<Arc<CapabilityBackend>>>> {
+        Arc::clone(&self.capabilities)
+    }
+
+    /// The session profile's check of `(server, tool)` for this request's
+    /// caller. The profile judges a name by name alone, registered or not,
+    /// so a name hidden from the caller meets exactly what an unregistered
+    /// name does here: the profile's refusal when the profile leaves it out,
+    /// else the dispatch's miss, which routes by the caller's view
+    /// (`super::hiding`). Never skipped for a hidden name.
+    pub(in crate::gateway) fn caller_profile_check(
+        &self,
+        session_id: Option<&str>,
+        (server, tool): (&str, &str),
+    ) -> crate::Result<()> {
+        self.active_profile(session_id)
+            .check(server, tool)
+            .map_err(crate::Error::Protocol)
+    }
+
+    /// The capability provider as this request's caller sees it: `None` when
+    /// it is hidden from the caller, as for a gateway with none
+    /// (`super::hiding`). Per-caller paths read this; a judgment of hiding
+    /// itself reads [`Self::get_capabilities`].
+    pub(in crate::gateway) fn caller_capabilities(&self) -> Option<Arc<CapabilityBackend>> {
+        self.get_capabilities()
+            .filter(|cap| !super::hiding::hidden(&cap.name))
     }
 
     /// Return the full `Tool` objects for all dynamically promoted tools in a session.

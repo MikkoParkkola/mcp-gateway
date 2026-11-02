@@ -53,11 +53,6 @@ fn only_an_error_raised_before_the_send_is_a_determined_outcome() {
         Error::Internal("x".into()),
         Error::Protocol("x".into()),
         Error::ResponseFirewallRefused,
-        Error::Forbidden {
-            code: -32003,
-            status: 403,
-            message: "x".into(),
-        },
         Error::JsonRpc {
             code: -32602,
             message: "x".into(),
@@ -74,6 +69,12 @@ fn only_an_error_raised_before_the_send_is_a_determined_outcome() {
         assert!(error.outcome_undetermined(), "{error:?}");
     }
     let determined = [
+        Error::Forbidden {
+            code: -32003,
+            status: 403,
+            message: "x".into(),
+        },
+        Error::gateway_refused(-32000, "x"),
         Error::TransportConnect("x".into()),
         Error::BackendUnavailable("x".into()),
         Error::BackendNotFound("x".into()),
@@ -107,7 +108,7 @@ fn only_an_error_raised_before_the_send_is_a_determined_outcome() {
 }
 
 /// A step's text says it may have run, except a gateway refusal's, which
-/// keeps its neutral reason (A3) while still reading as undetermined.
+/// keeps its neutral reason (A3) and reads as raised before the send.
 #[test]
 fn only_a_refusal_keeps_its_step_text_unmarked() {
     let lost = Error::BackendTimeout("no answer".into());
@@ -117,13 +118,13 @@ fn only_a_refusal_keeps_its_step_text_unmarked() {
         status: 403,
         message: "step not permitted for this caller".into(),
     };
-    assert!(refused.outcome_undetermined());
+    assert!(refused.is_pre_dispatch());
     assert_eq!(
         step_failure_text(&refused, refused.to_string()),
         "step not permitted for this caller"
     );
     let gated = Error::gateway_refused(-32000, "Server 'mail' is currently disabled");
-    assert!(gated.outcome_undetermined());
+    assert!(gated.is_pre_dispatch());
     assert_eq!(
         step_failure_text(&gated, gated.to_string()),
         gated.to_string(),

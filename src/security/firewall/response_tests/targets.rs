@@ -26,6 +26,7 @@ fn firewall_response_multitarget_block_dominates_in_both_orders() {
         let mut response = json!({"text": INJECTION});
         let verdict = firewall
             .check_response_artifact(
+                firewall.startup_policy(),
                 &mut response,
                 &targets,
                 &correlation(),
@@ -75,6 +76,7 @@ fn firewall_response_multitarget_warn_dominates_allow_in_both_orders() {
         let mut response = original.clone();
         let verdict = firewall
             .check_response_artifact(
+                firewall.startup_policy(),
                 &mut response,
                 &targets,
                 &correlation(),
@@ -119,6 +121,7 @@ fn firewall_response_audit_targets_are_sorted_unique_and_external_label_preserve
     let mut response = json!({"text": "plain text"});
     let verdict = firewall
         .check_response_artifact(
+            firewall.startup_policy(),
             &mut response,
             &targets,
             &correlation(),
@@ -155,6 +158,7 @@ fn firewall_response_empty_targets_refuse_without_inspection_or_malformed_audit(
     let original = response.clone();
     let (result, warning) = capture_warnings(|| {
         firewall.check_response_artifact(
+            firewall.startup_policy(),
             &mut response,
             &[],
             &correlation(),

@@ -39,10 +39,12 @@ fn every_pre_send_exit_of_request_attempted_is_marked() {
         exits, marked_exits,
         "a pre-send `?` exit without the mark:\n{code}"
     );
-    // The seven reviewed `?` steps; the withheld call's return is the eighth.
+    // The eight reviewed `?` steps (the eighth: a call carrying an injected
+    // secret over a transport that cannot redact it); the withheld call's
+    // return is the ninth.
     assert_eq!(
-        marked_exits, 7,
-        "premise: the seven reviewed pre-send steps are marked"
+        marked_exits, 8,
+        "premise: the eight reviewed pre-send steps are marked"
     );
     assert!(
         region.contains("return Err(refused_before_send(refusal));"),
@@ -80,7 +82,9 @@ fn the_never_sent_list_is_the_reviewed_one() {
     // Each reviewed as never sent where it is constructed. AmbiguousBackend:
     // only in meta_mcp/invoke/dispatch.rs (a name that is both a backend and
     // the capability, refused while routing, before any send), from #4414.
-    const REVIEWED: [&str; 12] = [
+    // Forbidden and GatewayRefused: every construction and builder call is a
+    // reviewed pre-send site in error_pre_send_scan_refusal_tests.rs.
+    const REVIEWED: [&str; 14] = [
         "AmbiguousBackend",
         "AuthorizationCancelled",
         "AuthorizationIncomplete",
@@ -89,6 +93,8 @@ fn the_never_sent_list_is_the_reviewed_one() {
         "BackendNotFound",
         "BackendUnavailable",
         "CircuitOpen",
+        "Forbidden",
+        "GatewayRefused",
         "IdentitySlotsExhausted",
         "RateLimited",
         "ToolNotFound",
@@ -98,7 +104,16 @@ fn the_never_sent_list_is_the_reviewed_one() {
         .find("pub fn is_pre_dispatch(&self) -> bool {")
         .expect("is_pre_dispatch is in error.rs");
     let end = start + ERROR[start..].find("\n    }\n").expect("the body ends");
-    let body = &ERROR[start..end];
+    let whole = &ERROR[start..end];
+    // The members are the arms before the one `=> true`: every variant is
+    // named somewhere in the match, so only that group is the list. A second
+    // arm answering `true` would hold members this pin never reads.
+    assert_eq!(
+        whole.matches("=> true").count(),
+        1,
+        "is_pre_dispatch answers true in exactly one arm"
+    );
+    let body = &whole[..whole.find("=> true,").expect("one arm answers true")];
     let mut members: Vec<&str> = body
         .split("Self::")
         .skip(1)
@@ -115,7 +130,8 @@ fn the_never_sent_list_is_the_reviewed_one() {
         "a new is_pre_dispatch member needs a never-sent review naming where it is constructed"
     );
     assert!(
-        body.contains("refusal::transient_data(self).is_some()"),
+        whole.contains("Self::JsonRpc { .. } => {")
+            && whole.contains("refusal::transient_data(self).is_some()"),
         "the sealed transient is no longer the list's only other term"
     );
 }

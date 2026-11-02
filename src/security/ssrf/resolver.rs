@@ -184,19 +184,27 @@ impl SsrfDenied {
 }
 
 /// The [`PinningResolver`] refusal somewhere in `error`'s source chain.
-///
-/// Also looks inside an `io::Error`, whose `source()` skips the error it wraps.
 pub(crate) fn ssrf_denial<'a>(
     error: &'a (dyn std::error::Error + 'static),
 ) -> Option<&'a SsrfDenied> {
+    source_of::<SsrfDenied>(error)
+}
+
+/// The first `T` somewhere in `error`'s source chain: how a typed refusal is
+/// found inside the transport error that carries it.
+///
+/// Also looks inside an `io::Error`, whose `source()` skips the error it wraps.
+pub(crate) fn source_of<'a, T: std::error::Error + 'static>(
+    error: &'a (dyn std::error::Error + 'static),
+) -> Option<&'a T> {
     let mut next = Some(error);
     while let Some(current) = next {
         let wrapped = current
             .downcast_ref::<std::io::Error>()
             .and_then(std::io::Error::get_ref)
-            .and_then(|inner| inner.downcast_ref::<SsrfDenied>());
-        if let Some(denied) = current.downcast_ref::<SsrfDenied>().or(wrapped) {
-            return Some(denied);
+            .and_then(|inner| inner.downcast_ref::<T>());
+        if let Some(found) = current.downcast_ref::<T>().or(wrapped) {
+            return Some(found);
         }
         next = current.source();
     }

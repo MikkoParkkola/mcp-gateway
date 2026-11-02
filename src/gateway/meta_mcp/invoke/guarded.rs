@@ -31,9 +31,9 @@ impl GuardedValue {
     }
 
     /// Seal a cached value: guarded at store time, never chain-eligible. The
-    /// call is noted as a cached delivery (MIK-7116.MIN.1).
-    pub(super) fn from_cache(value: Value) -> Self {
-        super::audit::note_cached();
+    /// call is noted as a cached delivery (MIK-7116.MIN.1) from `answered`.
+    pub(super) fn from_cache(value: Value, answered: super::audit::Answered) -> Self {
+        super::audit::note_cached(answered);
         Self(value, ChainSource::NotEligible, None)
     }
 

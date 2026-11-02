@@ -180,7 +180,7 @@ fn assert_control_plane_views(body: &Value) {
 }
 
 #[tokio::test]
-async fn test_control_plane_endpoint_projects_non_admin_api_key_as_auditor() {
+async fn test_control_plane_endpoint_projects_non_admin_api_key_as_viewer() {
     let auth_config = AuthConfig {
         enabled: true,
         bearer_token: None,
@@ -213,13 +213,19 @@ async fn test_control_plane_endpoint_projects_non_admin_api_key_as_auditor() {
 
     assert_eq!(status, StatusCode::OK, "Expected 200, got: {body}");
     assert_eq!(body["route"]["read_only"], true);
-    assert_eq!(body["actor"]["role"], "auditor");
+    // No role rule maps an API key: it reads as viewer, which reads only its
+    // own grants and audit events.
+    assert_eq!(body["actor"]["role"], "viewer");
     assert_eq!(body["actor"]["display_name"], "auditor-client");
     assert_eq!(body["view"]["servers"][0]["name"], "docs");
     assert_eq!(body["authorizations"]["read_inventory"]["allowed"], true);
     assert_eq!(body["authorizations"]["read_evidence"]["allowed"], true);
     assert_eq!(body["authorizations"]["mutate_policy"]["allowed"], false);
     assert_eq!(body["authorizations"]["mutate_grant"]["allowed"], false);
+    assert_eq!(
+        body["authorizations"]["read_all_principals"]["allowed"],
+        false
+    );
 }
 
 #[tokio::test]

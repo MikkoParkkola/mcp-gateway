@@ -81,6 +81,8 @@ fn gateway(port: u16) -> MetaMcp {
         servers: None,
         keys: None,
         except: None,
+        allowed_roots: None,
+        path_args: None,
     }];
     let config = FirewallConfig {
         enabled: true,
@@ -130,6 +132,7 @@ async fn delivered(meta: &MetaMcp) -> (Value, Map<String, Value>) {
                 signing: None,
                 chain_source: ChainSource::NotEligible,
                 chain_nonce: None,
+                generation: None,
             },
         );
         let mut fields = Map::new();

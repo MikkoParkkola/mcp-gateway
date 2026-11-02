@@ -28,6 +28,7 @@ use std::sync::Arc;
 
 use serde_json::Value;
 
+use crate::gateway::health_metrics::Origin;
 use crate::protocol::{JsonRpcNotification, JsonRpcResponse};
 use crate::security::tenant_reads::{ReadAttribution, ReadTicket, ReadVerdict};
 
@@ -115,6 +116,12 @@ pub(crate) struct OutboundFrame {
     /// the stdio writer as it takes the frame. A frame replaced, withheld or
     /// dropped before then carries none of them away, so they release.
     holds: crate::gateway::meta_mcp::sealed_hold::CarriedHolds,
+    /// Who wrote an error in an [`Payload::Answer`] value, whose frame no
+    /// longer carries the origin a [`Payload::Response`] does.
+    origin: Origin,
+    /// The failure an [`Payload::Answer`] value carries folded into a tool
+    /// result, which its frame carried as `wire_meta.folded`.
+    folded: Option<crate::gateway::health_metrics::RpcError>,
 }
 
 impl OutboundFrame {
@@ -129,7 +136,24 @@ impl OutboundFrame {
             key: None,
             delivery: None,
             holds: crate::gateway::meta_mcp::sealed_hold::CarriedHolds::none(),
+            origin: Origin::Gateway,
+            folded: None,
         }
+    }
+
+    /// This frame, its error (if any) written by `origin`.
+    pub(crate) fn written_by(mut self, origin: Origin) -> Self {
+        self.origin = origin;
+        self
+    }
+
+    /// This frame, carrying `folded`: a failure folded into its tool result.
+    pub(crate) fn folded_by(
+        mut self,
+        folded: Option<crate::gateway::health_metrics::RpcError>,
+    ) -> Self {
+        self.folded = folded;
+        self
     }
 
     /// The verdict; `None` when unassessed or within the rule.
@@ -149,7 +173,9 @@ impl OutboundFrame {
     /// follow; a result beside an error is still delivered.
     pub(crate) fn delivers_result(&self) -> bool {
         match &self.payload {
-            Payload::Response(response) => response.result.is_some() && !response.delivery_refusal,
+            Payload::Response(response) => {
+                response.result.is_some() && !response.wire_meta.delivery_refusal
+            }
             Payload::Answer(value) => value.get("result").is_some(),
             _ => false,
         }
@@ -195,6 +221,8 @@ impl OutboundFrame {
             key: self.key,
             delivery: None,
             holds: crate::gateway::meta_mcp::sealed_hold::CarriedHolds::none(),
+            origin: Origin::Gateway,
+            folded: None,
         }
     }
 
@@ -209,6 +237,8 @@ impl OutboundFrame {
             key: self.key,
             delivery: None,
             holds: crate::gateway::meta_mcp::sealed_hold::CarriedHolds::none(),
+            origin: Origin::Gateway,
+            folded: None,
         }
     }
 
@@ -267,6 +297,9 @@ impl OutboundFrame {
 
 /// The outcome of judging a frame that is withheld rather than replaced when
 /// blocked: a notification, a server-to-client request, an event delivery.
+// Admitted is nearly every frame and Blocked is rare: boxing the frame would
+// allocate on every delivery to shrink the rare case.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug)]
 pub(crate) enum Admission {
     /// Write it through a sink.
@@ -318,14 +351,16 @@ pub(crate) fn answer_value(
     body: Value,
     request: Option<&Value>,
     hidden: Option<&ReadAttribution>,
+    origin: Origin,
 ) -> OutboundFrame {
     #[cfg(feature = "firewall")]
     if let Some(guard) = guard {
-        return judge::delivered(guard, key, Payload::Answer(body), request, hidden);
+        return judge::delivered(guard, key, Payload::Answer(body), request, hidden)
+            .written_by(origin);
     }
     #[cfg(not(feature = "firewall"))]
     let _ = (guard, key, request, hidden);
-    OutboundFrame::unjudged(Payload::Answer(body))
+    OutboundFrame::unjudged(Payload::Answer(body)).written_by(origin)
 }
 
 /// Judge a frame that is withheld, not replaced, when blocked.

@@ -6,7 +6,6 @@ use crate::error::rpc_codes::{INVALID_PARAMS, INVALID_REQUEST};
 use std::sync::Arc;
 
 use axum::{
-    Json,
     extract::{Path, State},
     http::StatusCode,
 };
@@ -16,7 +15,7 @@ use tracing::warn;
 use super::AppState;
 use super::authorization::ToolTarget;
 use super::direct_guards::refusal;
-use super::helpers::{bodiless_accepted, build_http_error_response};
+use super::helpers::{RpcHttp, bodiless_accepted, build_http_error_response};
 use crate::gateway::auth::AuthenticatedClient;
 use crate::gateway::meta_mcp::invoke::relay::GatewayStamps;
 use crate::gateway::oauth::OAuthAgentIdentity;
@@ -28,7 +27,7 @@ use crate::security::firewall::FirewallAction;
 use crate::security::response_policy::{KeyOf, RuleTarget, ServerOf};
 use crate::security::validate_tool_name;
 
-type BackendRejection = (StatusCode, Json<Value>);
+type BackendRejection = RpcHttp;
 type BackendSecurityResult = Result<Option<Value>, BackendRejection>;
 
 /// Forwarded passthrough headers paired with the caller's stable upstream-session
@@ -173,6 +172,7 @@ async fn guard_tool_call(
         id,
         (backend_name, tool_name),
         (params, arguments),
+        backend,
     ) {
         return Err(rejection);
     }
@@ -219,6 +219,7 @@ fn firewall_refusal(
     id: &RequestId,
     (backend_name, tool_name): (&str, &str),
     (params, arguments): (&Value, &Value),
+    backend: &crate::backend::Backend,
 ) -> Option<BackendRejection> {
     let fw = state.firewall.as_ref()?;
     let caller_name = auth.client.map_or("anonymous", |c| c.name.as_str());
@@ -230,11 +231,13 @@ fn firewall_refusal(
         key: KeyOf::of_client(auth.client.and_then(AuthenticatedClient::api_key_identity)),
     };
     let verdict = fw.check_request_keyed(
+        auth.generation.firewall_policy(),
         &session_id,
         target,
         arguments,
         caller_name,
         &control_identity,
+        Some(backend),
     );
     if verdict.action == FirewallAction::Warn {
         warn!(
@@ -302,7 +305,7 @@ fn take_attestation_token(params: Option<&mut Value>) -> Option<String> {
 }
 
 /// Build a `403 Forbidden` JSON-RPC error response for security rejections.
-fn backend_security_error(id: &RequestId, message: &str) -> (StatusCode, Json<Value>) {
+fn backend_security_error(id: &RequestId, message: &str) -> RpcHttp {
     build_http_error_response(
         Some(id.clone()),
         INVALID_REQUEST,
@@ -317,7 +320,7 @@ fn backend_security_error_with_status(
     code: i32,
     message: &str,
     status: StatusCode,
-) -> (StatusCode, Json<Value>) {
+) -> RpcHttp {
     build_http_error_response(Some(id.clone()), code, message, status)
 }
 
@@ -488,9 +491,12 @@ pub(super) async fn backend_handler(
     // instance the send compares), boxed so the scope wraps a pointer.
     // The minted-receipt scope rides outside the memo.
     crate::gateway::meta_mcp::invoke::with_minted_receipts(Box::pin(
-        crate::gateway::meta_mcp::visible::memo::with_visibility_memo(Box::pin(
-            direct_audit::audited_call(Arc::clone(&state), name, request),
-        )),
+        // The caller's hiding judgment, filled once the caller is resolved.
+        crate::gateway::meta_mcp::hiding::with_caller_slot(
+            crate::gateway::meta_mcp::visible::memo::with_visibility_memo(Box::pin(
+                direct_audit::audited_call(Arc::clone(&state), name, request),
+            )),
+        ),
     ))
     .await
 }
@@ -509,18 +515,24 @@ async fn backend_handler_inner(
     request: axum::http::Request<axum::body::Body>,
     call: &mut Option<direct_audit::DirectCall>,
     reads: &mut direct_audit::DirectReads,
-) -> (StatusCode, Json<Value>) {
+) -> RpcHttp {
+    let shared = Arc::clone(&state);
     let state = &*state;
     let (caller, key, request) = match direct_caller::resolve_caller(state, request).await {
         Ok(resolved) => resolved,
         Err(response) => return response,
     };
+    // The owned session first: hiding is judged under the profile the call
+    // is routed under.
+    let session = direct_caller::owned_session(state, &caller, key);
+    // Before the absence stage and the backend lookup read the scoped view.
+    direct_caller::record_hiding_caller(shared, &caller, session);
     let mut envelope =
         match direct_caller::read_envelope(state, &name, request, &caller, (call, reads)).await {
             Ok(envelope) => envelope,
             Err(response) => return response,
         };
-    let route = match direct_caller::route(state, &name, &caller, key, &envelope) {
+    let route = match direct_caller::route(state, &name, &caller, session, &envelope) {
         Ok(route) => route,
         Err(response) => return response,
     };
@@ -635,7 +647,7 @@ fn settle_direct_idempotency(
     let Some(reservation) = reservation else {
         return;
     };
-    if response.delivery_refusal {
+    if response.wire_meta.delivery_refusal {
         reservation.fail(&stored_failure(
             crate::gateway::meta_mcp::invoke::dispatch_guards::firewall_refusal_body(),
         ));
@@ -725,16 +737,6 @@ fn cached_error_response(id: Option<RequestId>, error: &Value) -> JsonRpcRespons
     }
 }
 
-fn record_client_success(state: &AppState, client: Option<&AuthenticatedClient>) {
-    if let Some(client) = client {
-        state
-            .live_config
-            .generation()
-            .auth()
-            .record_client_success(client);
-    }
-}
-
 /// Stamp a signed runtime-provenance receipt onto a direct-route `tools/call`
 /// result (MIK-6905 rung 3). The `/mcp/{name}` passthrough bypasses the meta
 /// chokepoint, so without this a client could route around provenance simply
@@ -766,16 +768,7 @@ fn stamp_direct_provenance(
     ));
 }
 
-fn record_client_failure(state: &AppState, client: Option<&AuthenticatedClient>) {
-    if let Some(client) = client {
-        state
-            .live_config
-            .generation()
-            .auth()
-            .record_client_failure(client);
-    }
-}
-
+mod client_outcome;
 mod costs;
 mod direct_audit;
 mod direct_caller;

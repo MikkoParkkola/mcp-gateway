@@ -172,6 +172,29 @@ pub(super) fn item_attrs(item: &syn::Item) -> &[syn::Attribute] {
     }
 }
 
+/// `path` with its `.` and `..` components resolved lexically. A `..` with
+/// nothing to pop is kept, so a path that leaves its start still says so
+/// instead of collapsing onto a file inside it.
+pub(super) fn normalised(path: &Path) -> PathBuf {
+    use std::path::Component;
+    let mut real = PathBuf::new();
+    for part in path.components() {
+        match part {
+            Component::ParentDir => match real.components().next_back() {
+                Some(Component::Normal(_)) => {
+                    real.pop();
+                }
+                // Above a root there is nothing higher: `/..` is `/`.
+                Some(Component::RootDir | Component::Prefix(_)) => {}
+                _ => real.push(".."),
+            },
+            Component::CurDir => {}
+            part => real.push(part),
+        }
+    }
+    real
+}
+
 /// Walk the crate at `crate_root` from each of `roots` (paths relative to
 /// it, such as `src/lib.rs`), reporting every production node to `sink`.
 /// A declared module whose file cannot be found or parsed is an error, so a
@@ -243,16 +266,7 @@ impl Walker<'_> {
         let saved = self.place.clone();
         // A `#[path = "../x.rs"]` include names the file by where it lives,
         // not by the route the declaring module took to it.
-        let mut real = PathBuf::new();
-        for part in path.components() {
-            match part {
-                std::path::Component::ParentDir => {
-                    real.pop();
-                }
-                std::path::Component::CurDir => {}
-                part => real.push(part),
-            }
-        }
+        let real = normalised(path);
         self.place = Place {
             file: real
                 .strip_prefix(self.crate_root)

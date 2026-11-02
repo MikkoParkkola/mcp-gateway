@@ -103,7 +103,7 @@ impl MetaMcp {
             use crate::security::{decision_record::DecisionKind, firewall::RelayCaller};
             let fw = self.firewall.as_ref().filter(|fw| fw.relay_active())?;
             let capability = self
-                .get_capabilities()
+                .caller_capabilities()
                 .is_some_and(|cap| server == cap.name && cap.get(tool).is_some());
             // The backend's secret rules overwrite their keys on the send:
             // what the caller put there never leaves, so it is not checked.
@@ -358,7 +358,7 @@ impl MetaMcp {
         reason = "the call sits beside the other relay steps on the Meta-MCP"
     )]
     pub(crate) fn settle_relay_receipts(&self, response: &crate::protocol::JsonRpcResponse) {
-        let delivers = response.error.is_none() && !response.delivery_refusal;
+        let delivers = response.error.is_none() && !response.wire_meta.delivery_refusal;
         let _ = RELAY_DELIVERS.try_with(|flag| flag.set(delivers));
     }
 

@@ -110,6 +110,27 @@ impl MtlsPolicy {
         PolicyDecision::Deny
     }
 
+    /// Whether every tool on `backend` is refused to `identity`, decided from
+    /// the backend's name alone: no rule, or the first matching rule (as
+    /// [`Self::evaluate`] picks it) denies the backend or leaves it out of its
+    /// allow list. `false` when the policy is off, or when the answer depends
+    /// on the tool.
+    #[must_use]
+    pub(crate) fn refuses_backend(&self, identity: Option<&CertIdentity>, backend: &str) -> bool {
+        if !self.enabled {
+            return false;
+        }
+        let Some(id) = identity else {
+            return true;
+        };
+        self.rules
+            .iter()
+            .find(|rule| rule.matches(id))
+            .is_none_or(|rule| {
+                rule.deny.matches_backend(backend) || !rule.allow.matches_backend(backend)
+            })
+    }
+
     /// Returns `true` when the policy has zero rules (no restrictions).
     ///
     /// Useful for short-circuiting when policies are not configured.

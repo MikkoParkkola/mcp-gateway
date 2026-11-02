@@ -284,7 +284,6 @@ mod mik_8659_dashboard_tests {
             proxy_manager,
             streaming_config,
             key_server: None,
-            tool_policy: Arc::new(crate::security::ToolPolicy::default()),
             mtls_policy: Arc::new(crate::mtls::MtlsPolicy::from_config(
                 &crate::mtls::MtlsConfig::default(),
             )),

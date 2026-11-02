@@ -148,3 +148,66 @@ fn scan_19_a_file_level_cfg_test_module_is_test_only() {
         "SCAN-19 control: the production file was walked: {walked:?}"
     );
 }
+
+/// The files a walk reports, by the path each is named with.
+#[derive(Default)]
+struct Files(Vec<String>);
+
+impl super::scan::Sink for Files {
+    fn file(&mut self, at: &super::scan::Place, _file: &syn::File) {
+        self.0.push(at.file.clone());
+    }
+}
+
+/// SCAN-20: a parent-relative `#[path]` include is reported by its real path,
+/// including consecutive `..` components, not by the route taken to it.
+#[test]
+fn scan_20_a_parent_relative_include_reports_its_normalised_path() {
+    let dir = tempfile::tempdir().expect("a temp crate");
+    for (path, source) in [
+        (
+            "src/lib.rs",
+            "#[path = \"sub/deep/../../../shared/b.rs\"] mod b;",
+        ),
+        ("src/sub/deep/keep", ""),
+        ("shared/b.rs", "fn b() {}"),
+    ] {
+        let full = dir.path().join(path);
+        std::fs::create_dir_all(full.parent().expect("a parent")).expect("dirs");
+        std::fs::write(full, source).expect("a file");
+    }
+    let mut files = Files::default();
+    super::scan::walk(dir.path(), &["src/lib.rs"], &mut files).expect("the walk");
+    assert_eq!(files.0, ["src/lib.rs", "shared/b.rs"], "SCAN-20");
+}
+
+/// SCAN-21: a `..` with nothing to pop is kept, so an include that escapes
+/// the scanned root is named outside it, not as a file inside it.
+#[test]
+fn scan_21_a_leading_parent_component_is_kept() {
+    use super::scan::normalised;
+    use std::path::Path;
+    assert_eq!(normalised(Path::new("../x.rs")), Path::new("../x.rs"));
+    assert_eq!(normalised(Path::new("a/../../x.rs")), Path::new("../x.rs"));
+    assert_eq!(normalised(Path::new("../../x.rs")), Path::new("../../x.rs"));
+    assert_eq!(normalised(Path::new("a/./b/../c.rs")), Path::new("a/c.rs"));
+    assert_eq!(normalised(Path::new("/../x.rs")), Path::new("/x.rs"));
+
+    let dir = tempfile::tempdir().expect("a temp dir");
+    let root = dir.path().join("crate");
+    std::fs::create_dir_all(root.join("src")).expect("dirs");
+    std::fs::write(
+        root.join("src/lib.rs"),
+        "#[path = \"../../outside.rs\"] mod o;",
+    )
+    .expect("lib");
+    std::fs::write(dir.path().join("outside.rs"), "fn o() {}").expect("outside");
+    let mut files = Files::default();
+    super::scan::walk(&root, &["src/lib.rs"], &mut files).expect("the walk");
+    assert_eq!(files.0[0], "src/lib.rs");
+    assert!(
+        !files.0[1].starts_with("src/") && files.0[1].ends_with("outside.rs"),
+        "SCAN-21: {:?}",
+        files.0
+    );
+}

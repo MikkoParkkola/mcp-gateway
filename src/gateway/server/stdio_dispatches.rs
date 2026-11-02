@@ -94,6 +94,7 @@ impl StdioDispatches {
                     self.by_task.insert(handle.id(), entry.key().clone());
                     entry.insert((handle.id(), handle));
                 } else {
+                    drop(marks);
                     warn!(id = %entry.key(), "stdio: request id reused while in flight; it cannot be cancelled");
                 }
             }

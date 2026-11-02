@@ -82,7 +82,7 @@ impl MetaMcp {
         lens: crate::backend::Lens,
     ) -> Result<Option<KeyRefusal>> {
         if self
-            .get_capabilities()
+            .caller_capabilities()
             .is_some_and(|cap| server == cap.name && cap.has_capability(tool))
         {
             return Ok(None);
@@ -115,6 +115,9 @@ impl MetaMcp {
             } else {
                 text
             };
+            // The gateway's refusal of the call's arguments, answered as a
+            // tool result: counted as the gateway's.
+            crate::gateway::delivery_facts::gateway_folded(crate::error::rpc_codes::INVALID_PARAMS);
             KeyRefusal {
                 answer: json!({ "content": [{ "type": "text", "text": text }], "isError": true }),
                 kind,

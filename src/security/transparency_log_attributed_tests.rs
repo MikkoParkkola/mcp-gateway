@@ -163,6 +163,7 @@ fn decided() -> crate::security::decision_record::Decision {
         request_findings: Some(Vec::new()),
         request_findings_truncated: false,
         declared_effect: None,
+        declared_effect_source: None,
         decided: Decided::Fresh,
     }
 }

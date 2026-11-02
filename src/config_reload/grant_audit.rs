@@ -317,12 +317,17 @@ impl GrantAuditor {
             #[cfg(not(test))]
             let _ = done;
             if let Err(e) = self.store.append_audit(&planned.event) {
+                let mut gap_unwritten = None;
                 if let Some(state) = inner.state.take() {
                     let state = mark_gap(state);
                     if let Err(write) = state.save(&self.state_path) {
-                        error!(error = %write, "grant audit gap could not be written");
+                        gap_unwritten = Some(write);
                     }
                     inner.state = Some(state);
+                }
+                drop(inner);
+                if let Some(write) = gap_unwritten {
+                    error!(error = %write, "grant audit gap could not be written");
                 }
                 error!(error = %e, "grant change applied but not recorded");
                 return Recorded::Unrecorded(e.to_string());
@@ -345,9 +350,10 @@ impl GrantAuditor {
                 Recorded::All(total)
             }
             Err(e) => {
-                error!(error = %e, "grant audit plan commit failed; grant changes are refused until it succeeds");
                 inner.commit_owed = true;
                 inner.state = Some(state);
+                drop(inner);
+                error!(error = %e, "grant audit plan commit failed; grant changes are refused until it succeeds");
                 Recorded::Unrecorded(format!(
                     "{total} records written but the audit plan could not be committed: {e}"
                 ))

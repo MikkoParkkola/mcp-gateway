@@ -44,7 +44,7 @@ async fn http_forwards_both_notification_methods_to_the_callers_sink() {
             // only if the caller declared a level, so the request this row is
             // about declares one. What the row asserts is unchanged.
             crate::transport::notification_sink::set_request_log_level(Some("debug"));
-            sse_decoder::decode_sse_exchange(sse_stream(body)).await
+            sse_decoder::decode_sse_exchange(sse_stream(body), None).await
         })
         .await;
 
@@ -80,7 +80,7 @@ async fn http_never_crosses_a_notification_between_two_calls_in_flight() {
             // about declares one. What the row asserts is unchanged.
             crate::transport::notification_sink::set_request_log_level(Some("debug"));
             tokio::task::yield_now().await;
-            sse_decoder::decode_sse_exchange(sse_stream(mine))
+            sse_decoder::decode_sse_exchange(sse_stream(mine), None)
                 .await
                 .map(|_| ())
         },
@@ -92,7 +92,7 @@ async fn http_never_crosses_a_notification_between_two_calls_in_flight() {
             // only if the caller declared a level, so the request this row is
             // about declares one. What the row asserts is unchanged.
             crate::transport::notification_sink::set_request_log_level(Some("debug"));
-            sse_decoder::decode_sse_exchange(sse_stream(theirs))
+            sse_decoder::decode_sse_exchange(sse_stream(theirs), None)
                 .await
                 .map(|_| ())
         },
@@ -113,7 +113,7 @@ async fn http_never_crosses_a_notification_between_two_calls_in_flight() {
 async fn http_leaves_the_sink_empty_when_the_backend_raises_nothing() {
     let (response, notifications) = crate::transport::notify_ingress::test_support::collect(
         None,
-        sse_decoder::decode_sse_exchange(sse_stream(sse_body(&[], 1))),
+        sse_decoder::decode_sse_exchange(sse_stream(sse_body(&[], 1)), None),
     )
     .await;
 
@@ -154,7 +154,7 @@ async fn row_16_a_status_carried_json_rpc_error_reaches_the_caller_as_json_rpc()
         .expect_err("a refused call must not report success");
 
     match &err {
-        Error::JsonRpc { code, message, .. } => {
+        Error::BackendJsonRpc { code, message, .. } => {
             assert_eq!(
                 *code, METHOD_NOT_FOUND,
                 "the peer's own code must survive the status carriage"
@@ -165,7 +165,7 @@ async fn row_16_a_status_carried_json_rpc_error_reaches_the_caller_as_json_rpc()
             );
         }
         other => panic!(
-            "a status-carried JSON-RPC error must reach the caller as Error::JsonRpc, got: {other:?}"
+            "a status-carried JSON-RPC error must reach the caller as the backend's own error, got: {other:?}"
         ),
     }
     assert_eq!(
@@ -208,12 +208,12 @@ async fn row_16e_a_404_carrying_a_refusal_is_terminal_and_does_not_reinitialize(
         .expect_err("a refused call must not report success");
 
     match &err {
-        Error::JsonRpc { code, .. } => assert_eq!(
+        Error::BackendJsonRpc { code, .. } => assert_eq!(
             *code, METHOD_NOT_FOUND,
             "a 404 is the spec's refusal carriage; the peer's code must survive it"
         ),
         other => panic!(
-            "a 404 carrying a refusal must reach the caller as Error::JsonRpc, got: {other:?}"
+            "a 404 carrying a refusal must reach the caller as the backend's own error, got: {other:?}"
         ),
     }
     assert_eq!(

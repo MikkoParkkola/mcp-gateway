@@ -463,7 +463,9 @@ impl IdempotencyCache {
         let at_capacity = self.entries.len() >= MAX_ENTRIES;
         let now = self.now();
 
-        match self.entries.entry(key.to_string()) {
+        // Logged once the entry's shard lock is released.
+        let mut replaced_stale = false;
+        let outcome = match self.entries.entry(key.to_string()) {
             MapEntry::Occupied(mut occupied) => {
                 // Before the state: a live entry for another request must be
                 // refused whether it is in flight or already completed, and a
@@ -495,7 +497,7 @@ impl IdempotencyCache {
                         // Replacing in place keeps the entry count flat, so a
                         // stale entry never costs a caller its admission.
                         occupied.insert(Entry::in_flight(fingerprint, owner, now));
-                        debug!("Replaced stale idempotency entry");
+                        replaced_stale = true;
                         AdmitOutcome::Proceed
                     }
                 }
@@ -507,7 +509,11 @@ impl IdempotencyCache {
                 vacant.insert(Entry::in_flight(fingerprint, owner, now));
                 AdmitOutcome::Proceed
             }
+        };
+        if replaced_stale {
+            debug!("Replaced stale idempotency entry");
         }
+        outcome
     }
 
     /// Register `key` as in-flight.  Overwrites any stale entry.

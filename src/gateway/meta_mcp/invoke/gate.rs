@@ -218,7 +218,7 @@ impl MetaMcp {
         session_id: Option<&str>,
     ) -> Option<Error> {
         let defined = self
-            .get_capabilities()
+            .caller_capabilities()
             .is_some_and(|cap| server == cap.name && cap.has_capability(tool));
         self.active_profile(session_id)
             .check(server, tool)
@@ -240,7 +240,7 @@ impl MetaMcp {
         is_admin: bool,
     ) -> Option<Error> {
         let defined = self
-            .get_capabilities()
+            .caller_capabilities()
             .is_some_and(|cap| server == cap.name && cap.has_capability(tool));
         if !defined {
             return None;
@@ -448,10 +448,7 @@ impl MetaMcp {
         tool: &str,
         session_id: Option<&str>,
     ) -> Option<Error> {
-        self.active_profile(session_id)
-            .check(server, tool)
-            .err()
-            .map(Error::Protocol)
+        self.caller_profile_check(session_id, (server, tool)).err()
     }
 
     /// The dispatch-time backstop (design r2 item 4): a refusal the policy
@@ -513,9 +510,11 @@ impl MetaMcp {
             note_denial_code(server, tool, -32003, Some(DecisionKind::BackendScope));
             // Outside the key's scope: refused, not merely missing.
             crate::gateway::delivery_facts::withheld();
+            crate::gateway::delivery_facts::gateway_folded(-32003);
         } else {
             // Not out of scope: the name matches nothing.
             super::audit::note_refused_by(DecisionKind::NotFound, None);
+            crate::gateway::delivery_facts::gateway_folded(-32001);
         }
         self.record_withheld(server, tool, Withholding::Absent, caller, session_id)
             .await;
@@ -640,7 +639,7 @@ impl MetaMcp {
                 note_denial_code(server, tool, refusal.to_rpc_code(), Some(*kind));
             })
             .is_err();
-        if let Some(cap) = self.get_capabilities()
+        if let Some(cap) = self.caller_capabilities()
             && server == cap.name
         {
             // A capability the caller may not reach answers as one that is

@@ -140,6 +140,14 @@ pub(crate) struct PooledEntry {
     /// as of its last `tools/list`: the UI's declared-or-inferred label.
     /// Grants nothing, so revocation never narrows it; the next fill rewrites it.
     pub(crate) hint_declared: RwLock<std::collections::HashSet<String>>,
+    /// Tools every listed occurrence of which declared `readOnlyHint: false`,
+    /// as of this slot's last `tools/list`: the declared effect's may-write
+    /// evidence. Narrowed with `read_only_declared` on revocation.
+    pub(crate) write_declared: RwLock<std::collections::HashSet<String>>,
+    /// The names this slot's last `tools/list` listed, for the declared
+    /// effect: a name loses its place when a revocation clears its
+    /// declaration, so the record then carries no effect.
+    pub(crate) effect_listed: RwLock<std::collections::HashSet<String>>,
     /// Set when the last drain (MIK 7570 PAGING.1) stopped before the
     /// catalogue was exhausted (page cap, repeated cursor, or the fill
     /// budget); cleared by the next complete fill. Tools and resources only.
@@ -267,6 +275,8 @@ impl PooledEntry {
             resend_permitted: RwLock::default(),
             read_only_declared: RwLock::default(),
             hint_declared: RwLock::default(),
+            write_declared: RwLock::default(),
+            effect_listed: RwLock::default(),
             tools_truncated: AtomicBool::new(false),
             resources_truncated: AtomicBool::new(false),
             tools_fill_failed_at: parking_lot::Mutex::new(None),

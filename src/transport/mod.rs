@@ -23,6 +23,8 @@ pub(crate) use self::http::SlotCredential;
 pub(crate) use self::http::guarded_client;
 #[cfg(any(test, feature = "webui"))]
 pub(crate) use self::http::is_budget_refusal;
+#[cfg(test)]
+pub(crate) use self::http::peer_refusal_for_test;
 #[doc(hidden)]
 pub use self::http::transport_follows_redirect;
 pub(crate) use self::lender::{Lender, LentCredential, Loan, Refusal, SendCheck};
@@ -210,6 +212,16 @@ pub trait Transport: Send + Sync {
     /// overrides this to `true`. stdio and websocket transports carry no
     /// per-request HTTP header channel and must not claim otherwise.
     fn carries_identity_headers(&self) -> bool {
+        false
+    }
+
+    /// Whether this transport scrubs a backend's injected values out of what
+    /// it reads: it holds the backend's value set (DELTA-10). A call
+    /// carrying an injected value is refused on a transport that does not.
+    ///
+    /// Defaults to `false` (fail closed): a transport that never attached a
+    /// set, or a new kind that does not say, gets no secret.
+    fn redacts_injected_values(&self) -> bool {
         false
     }
 

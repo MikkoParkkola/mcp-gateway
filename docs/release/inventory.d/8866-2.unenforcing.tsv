@@ -1,0 +1,13 @@
+src/gateway/outbound/mod.rs	written_by	1	Sets who wrote the error in a rendered answer, for the error count; decides nothing.
+src/gateway/router/helpers.rs	gateway	1	Builds a direct-route answer the gateway wrote; decides nothing.
+src/gateway/router/helpers.rs	from	1	Wraps a status and body as the gateway-written answer; decides nothing.
+src/gateway/router/helpers.rs	into_response	1	Writes a direct-route answer as the response, marking its error for the count; decides nothing.
+src/gateway/router/mod.rs	protected_resource_route	1	Builds the unauthenticated protected-resource metadata route, moved out of the router build unchanged.
+src/gateway/router/mod.rs	outermost	1	Applies the generation pin and the error count as the last layers, moved out of the router build unchanged.
+src/gateway/router/mod.rs	timed_post	1	Wraps a POST handler in the added-latency layer; decides nothing.
+src/gateway/router/process_facts.rs	wall	1	Reads the process start for the start-time gauge; decides nothing.
+src/error.rs	origin	1	Classes an error as the gateway's or a backend's, for the error count; decides nothing.
+src/error.rs	http_is_backend_refusal	1	Names an Http status a backend refused with, shared by the code and origin maps; decides nothing.
+src/protocol/messages.rs	of_error	1	Builds an error frame from an Error with its code, text and origin; decides nothing.
+src/protocol/messages.rs	of_error_text	1	Builds an error frame from an Error and a chosen wire text; decides nothing.
+src/gateway/router/backend_handlers/direct_audit.rs	presented_credential	1	Reads which credential a direct request presented, for its delivery record; decides nothing.

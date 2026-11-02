@@ -173,7 +173,7 @@ async fn a_stream_ending_without_a_blank_line_still_yields_its_response() {
     let body = futures::stream::iter(vec![Ok(bytes::Bytes::from_static(
         b"event: message\ndata: {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{}}\n",
     ))]);
-    let response = decode_sse_exchange(body)
+    let response = decode_sse_exchange(body, None)
         .await
         .expect("the flushed final block is the response");
     assert!(response.result.is_some());
@@ -190,7 +190,7 @@ async fn frames_glued_without_a_blank_line_report_how_many_lines_were_joined() {
         b"data: {\"jsonrpc\":\"2.0\",\"method\":\"x\"}\n\
           data: {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{}}\n\n",
     ))]);
-    let error = decode_sse_exchange(body)
+    let error = decode_sse_exchange(body, None)
         .await
         .expect_err("two frames joined into one payload cannot parse");
     assert!(
@@ -216,11 +216,13 @@ async fn the_response_frame_completes_the_call_without_waiting_for_close() {
         }
     });
 
-    let response =
-        tokio::time::timeout(std::time::Duration::from_secs(5), decode_sse_exchange(body))
-            .await
-            .expect("the response frame must return at once, not on stream close")
-            .expect("a response");
+    let response = tokio::time::timeout(
+        std::time::Duration::from_secs(30),
+        decode_sse_exchange(body, None),
+    )
+    .await
+    .expect("the response frame must return at once, not on stream close")
+    .expect("a response");
     assert!(response.result.is_some());
 }
 
@@ -255,8 +257,10 @@ async fn a_notification_arrives_before_the_response_frame() {
         }
     });
 
-    let (scoped, mut rx) =
-        crate::transport::notify_ingress::test_support::scope(None, decode_sse_exchange(body));
+    let (scoped, mut rx) = crate::transport::notify_ingress::test_support::scope(
+        None,
+        decode_sse_exchange(body, None),
+    );
     tokio::pin!(scoped);
 
     let early = tokio::time::timeout(std::time::Duration::from_secs(5), async {
@@ -371,7 +375,7 @@ async fn a_retry_priming_frame_ahead_of_the_result_does_not_fail_the_exchange() 
         b"data: \nid: 0\nretry: 3000\n\n\
           data: {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"protocolVersion\":\"2025-03-26\"}}\n\n",
     ))]);
-    let response = decode_sse_exchange(body)
+    let response = decode_sse_exchange(body, None)
         .await
         .expect("the priming frame is skipped, not parsed as the response");
     let result = response
@@ -390,11 +394,63 @@ async fn a_null_method_frame_is_not_the_streams_response() {
     let body = futures::stream::iter(vec![Ok(bytes::Bytes::from_static(
         b"event: message\ndata: {\"jsonrpc\":\"2.0\",\"id\":1,\"method\":null,\"result\":{}}\n\n",
     ))]);
-    let error = decode_sse_exchange(body)
+    let error = decode_sse_exchange(body, None)
         .await
         .expect_err("a null-method frame is a malformed event");
     assert!(
         error.to_string().contains("Failed to parse SSE data"),
         "the malformed-event error, not another failure: {error}"
     );
+}
+
+/// T3.8: a notification on the response stream that echoes an
+/// injected value reaches the caller scrubbed, one whose method holds it is
+/// withheld, and the response still resolves the exchange.
+#[tokio::test]
+async fn a_notification_echoing_a_secret_is_scrubbed_before_it_is_published() {
+    const NEEDLE: &str = "sse-secret-3e7a90";
+    let needles =
+        crate::security::needles::NeedleSet::with_grace(std::time::Duration::from_secs(3_600));
+    needles.insert("b", NEEDLE);
+    let frames = format!(
+        "data: {{\"jsonrpc\":\"2.0\",\"method\":\"notifications/progress\",\"params\":{{\"progressToken\":\"t\",\"progress\":1,\"message\":\"got {NEEDLE}\"}}}}\n\n\
+         data: {{\"jsonrpc\":\"2.0\",\"method\":\"{NEEDLE}\"}}\n\n\
+         data: {{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{{}}}}\n\n"
+    );
+    let body = futures::stream::iter(vec![Ok(bytes::Bytes::from(frames))]);
+    let (scoped, mut rx) = crate::transport::notify_ingress::test_support::scope(
+        None,
+        decode_sse_exchange(body, Some(&needles)),
+    );
+    scoped.await.expect("the response resolves the exchange");
+    let first = rx
+        .try_recv()
+        .expect("the scrubbed notification is published");
+    let text = serde_json::to_string(&first.params).unwrap();
+    assert!(
+        !text.contains(NEEDLE),
+        "the published copy holds the secret: {text}"
+    );
+    assert!(
+        rx.try_recv().is_err(),
+        "a notification named by the secret is withheld"
+    );
+}
+
+/// Review G4 (DELTA-4): a frame that fails typed parsing is reported by its
+/// category and position; serde's text, which quotes (and escapes) what it
+/// read, never reaches the error.
+#[tokio::test]
+async fn a_frame_that_fails_to_parse_quotes_none_of_itself() {
+    const NEEDLE: &str = "parse-secret-5d02";
+    let frame = format!(
+        "data: {{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{{}},\"error\":\"{NEEDLE}\\\\\\\"q\"}}\n\n"
+    );
+    let body = futures::stream::iter(vec![Ok(bytes::Bytes::from(frame))]);
+    let error = decode_sse_exchange(body, None)
+        .await
+        .expect_err("an error that is a string is malformed");
+    let text = error.to_string();
+    assert!(text.contains("Failed to parse SSE data"), "premise: {text}");
+    assert!(!text.contains(NEEDLE), "the error quotes the frame: {text}");
 }

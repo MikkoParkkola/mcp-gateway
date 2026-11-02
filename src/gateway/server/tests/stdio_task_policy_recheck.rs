@@ -14,7 +14,7 @@ use crate::gateway::Gateway;
 use crate::gateway::meta_mcp::LOCAL_OPERATOR_PRINCIPAL;
 use crate::protocol::RequestId;
 use crate::protocol::meta::Declared;
-use crate::security::{ToolPolicy, ToolPolicyConfig};
+use crate::security::ToolPolicyConfig;
 
 /// U5b: the worker re-checks the current tool policy at run time (the dispatch
 /// chokepoint; r2.1 H1). U5's denied tool is now refused at submit, so this
@@ -23,14 +23,15 @@ use crate::security::{ToolPolicy, ToolPolicyConfig};
 /// name's task, never sent.
 #[tokio::test]
 async fn a_stdio_task_worker_refuses_a_tool_the_current_policy_denies() {
-    let denying = ToolPolicy::from_config(&ToolPolicyConfig {
+    let denying = ToolPolicyConfig {
         deny: vec![DENIED.to_string()],
         ..ToolPolicyConfig::default()
-    });
+    };
     let fixture = Box::pin(fixture(Some(denying))).await;
     let retry = keyed("u5b");
     let authorizer = crate::gateway::authz::ToolPolicyAuthorizer {
         tool_policy: &fixture.policy,
+        generation: None,
     };
     let mut caller = Gateway::build_stdio_caller_context(
         true,
