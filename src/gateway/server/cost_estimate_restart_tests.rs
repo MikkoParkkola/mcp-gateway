@@ -144,10 +144,13 @@ fn t8b_a_corrupt_saved_estimate_restores_nothing() {
             let _clock = at_secs(T);
             let dir = tempfile::tempdir().expect("tempdir");
             let mut saved = first_process(scope, dir.path());
-            match scope {
-                Scope::Tool => saved.tool_estimate.insert("target".to_owned(), bad),
-                Scope::Key => saved.key_estimate.insert("target".to_owned(), bad),
+            // A valid figure beside the bad one: entries drop one by one.
+            let map = match scope {
+                Scope::Tool => &mut saved.tool_estimate,
+                Scope::Key => &mut saved.key_estimate,
             };
+            map.insert("target".to_owned(), bad);
+            map.insert("kept".to_owned(), 1.25);
             cost_persistence::save(&dir.path().join("costs.json"), &saved).expect("save");
             let (_, restored) = boot_cost_governance(&governed(scope, Some(1.6)), dir.path());
             let restored = restored.expect("armed");
@@ -176,6 +179,11 @@ fn t8b_a_corrupt_saved_estimate_restores_nothing() {
             assert!(
                 !figures.contains_key("target"),
                 "{scope:?} {bad}: no figure"
+            );
+            assert_eq!(
+                figures.get("kept").copied(),
+                Some(1.25),
+                "{scope:?} {bad}: kept"
             );
             assert!(
                 scope.admits(&restored, "target"),
@@ -340,9 +348,41 @@ fn t8f_a_huge_restored_figure_saturates_and_refuses() {
         };
         cost_persistence::save(&dir.path().join("costs.json"), &saved).expect("save");
         let (_, restored) = boot_cost_governance(&governed(scope, Some(5.0)), dir.path());
+        let restored = restored.expect("armed");
         assert!(
-            !scope.admits(&restored.expect("armed"), "target"),
+            !scope.admits(&restored, "target"),
             "{scope:?}: a saturated figure refuses"
         );
+        // A settle adds the figure into its crossing totals, saturating too.
+        restored.observe(std::sync::Arc::new(|_| {}));
+        scope.spend(&restored, "target", 1.0);
     }
+}
+
+/// A `null` where an estimate map belongs restores as no figures; the rest
+/// of the saved state, and its spend, still loads.
+#[test]
+fn t8g_a_null_estimate_map_restores_as_no_figures() {
+    let _clock = at_secs(T);
+    let dir = tempfile::tempdir().expect("tempdir");
+    let saved = first_process(Scope::Tool, dir.path());
+    let costs = dir.path().join("costs.json");
+    let mut json: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&costs).expect("read")).expect("json");
+    json["tool_estimate"] = serde_json::Value::Null;
+    json["key_estimate"] = serde_json::Value::Null;
+    std::fs::write(&costs, json.to_string()).expect("write");
+    let (_, restored) = boot_cost_governance(&governed(Scope::Tool, None), dir.path());
+    let snap = restored.expect("armed").snapshot();
+    let saved_global = saved
+        .tool_totals
+        .values()
+        .map(|t| t.total_cost_usd)
+        .sum::<f64>()
+        + saved.tool_overflow_usd;
+    assert!(
+        (snap.global_daily_usd - saved_global).abs() < 1e-9,
+        "{snap:?}"
+    );
+    assert!(snap.tool_estimate.is_empty(), "{snap:?}");
 }
