@@ -27,11 +27,7 @@ pub(crate) const PENDING_SLOT_PREFIX: &str = "MCPGW_PENDING_SLOT_";
 /// mentions the prefix never matches. Text that does not parse is left to
 /// the loader, which reports it.
 pub(crate) fn reserved_slot_reference(text: &str) -> Option<(String, usize)> {
-    for item in granit_parser::Parser::new_from_str(text) {
-        let (event, span) = item.ok()?;
-        let granit_parser::Event::Scalar(value, ..) = event else {
-            continue;
-        };
+    for (value, line) in crate::yaml::scalars_with_lines(text) {
         let name = (value.strip_prefix("env:"))
             .filter(|name| name.starts_with(PENDING_SLOT_PREFIX))
             .or_else(|| {
@@ -39,7 +35,7 @@ pub(crate) fn reserved_slot_reference(text: &str) -> Option<(String, usize)> {
                     .find(|name| name.starts_with(PENDING_SLOT_PREFIX))
             });
         if let Some(name) = name {
-            return Some((name.to_owned(), span.start.line()));
+            return Some((name.to_owned(), line));
         }
     }
     None
