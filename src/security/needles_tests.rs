@@ -590,3 +590,29 @@ fn the_renewal_clock_is_read_under_the_lock() {
         "a clock read before the lock passed"
     );
 }
+
+/// A sent value refused at a full set is held nowhere, so the set keeps
+/// refusing until that value's own grace has passed, even after the older
+/// values retire and make room; it lifts then with no further send.
+#[tokio::test(start_paused = true)]
+async fn a_refused_sent_value_keeps_the_set_refusing_until_its_grace_passes() {
+    let needles = NeedleSet::with_grace(GRACE);
+    for step in 0..super::MAX_NEEDLES {
+        needles.insert("b", &format!("fill-token-{step:05}"));
+    }
+    tokio::time::advance(Duration::from_secs(10)).await;
+    needles.insert("b", "refused-token-x");
+    assert!(needles.overflowed(), "premise: the value was refused");
+    tokio::time::advance(GRACE - Duration::from_secs(9)).await;
+    let (outcome, text) = scrubbed(&needles, "echo refused-token-x");
+    assert!(
+        matches!(outcome, Scrubbed::Redacted | Scrubbed::Refuse)
+            && !text.contains("refused-token-x"),
+        "the refused value was served once older values retired: {outcome:?} {text}"
+    );
+    tokio::time::advance(Duration::from_secs(11)).await;
+    assert!(
+        !needles.overflowed(),
+        "the refusal outlived the refused value's grace"
+    );
+}
