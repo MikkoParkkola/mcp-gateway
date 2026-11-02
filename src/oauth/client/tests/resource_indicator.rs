@@ -170,7 +170,7 @@ fn token_exchange_params_include_resource() {
 fn refresh_params_include_resource_and_secret() {
     let client = secret_client("https://mcp.example.test/", "s3cr3t");
 
-    let params = client.refresh_params("refresh-abc", "cid");
+    let params = client.refresh_params(client.issuer_current().unwrap(), "refresh-abc", "cid");
 
     assert_eq!(param(&params, "grant_type"), Some("refresh_token"));
     assert_eq!(param(&params, "refresh_token"), Some("refresh-abc"));

@@ -360,6 +360,14 @@ pub(super) fn split_hook(
     }
 }
 
+/// Proof that a grant of this client's credential may run. Its field is
+/// private to this module, so only [`OAuthClient::issuer_current`] and
+/// [`OAuthClient::ui_sign_in`] make one; every grant entry takes it, and a
+/// grant path that skips the issuer check does not compile.
+pub(crate) struct GrantAllowed {
+    _only_here: (),
+}
+
 impl OAuthClient {
     /// This client publishing its backend's sign-in to `status`.
     pub(crate) fn with_sign_in_status(mut self, status: Arc<SignInStatus>) -> Self {
@@ -413,6 +421,26 @@ impl OAuthClient {
             (Some(installed), Some(own)) => installed != own,
             _ => false,
         }
+    }
+
+    /// The check before any grant of this client's credential (a refresh, a
+    /// client-credentials grant or a login): the proof a grant entry takes
+    /// while the latest install is under this client's key, else the sign-in
+    /// wait.
+    pub(super) fn issuer_current(&self) -> crate::Result<GrantAllowed> {
+        if self.issuer_differs() {
+            return Err(self.issuer_wait());
+        }
+        Ok(GrantAllowed { _only_here: () })
+    }
+
+    /// The one grant that may run under another issuer than the latest
+    /// install's: a web-UI sign-in, where a person signs in at the issuer this
+    /// client just discovered and the confirm records the new install. Only
+    /// `authorize_for_ui` calls it.
+    #[cfg(feature = "webui")]
+    pub(super) fn ui_sign_in(&self) -> GrantAllowed {
+        GrantAllowed { _only_here: () }
     }
 
     /// The sign-in wait a caller gets while the issuers differ.

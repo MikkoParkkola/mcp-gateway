@@ -55,7 +55,10 @@ impl OAuthClient {
     /// Returns `Ok(token)` only when the authorization server explicitly lists
     /// `"client_credentials"` in `grant_types_supported` — so we never try it
     /// against a server that won't accept it.
-    pub(super) async fn try_client_credentials(&self) -> Result<String> {
+    pub(super) async fn try_client_credentials(
+        &self,
+        _allowed: super::sign_in::GrantAllowed,
+    ) -> Result<String> {
         let auth_meta = self.auth_meta()?;
 
         if !auth_meta
@@ -167,6 +170,7 @@ impl OAuthClient {
     /// Form parameters for the `refresh_token` grant (RFC 6749 §6 + RFC 8707).
     pub(super) fn refresh_params(
         &self,
+        _allowed: super::sign_in::GrantAllowed,
         refresh_token: &str,
         client_id: &str,
     ) -> Vec<(&'static str, String)> {
@@ -478,10 +482,14 @@ impl OAuthClient {
                 || cached.expires_at != stored.expires_at
                 || cached.refresh_token != stored.refresh_token
         });
-        if fresher {
-            self.adopt_stored_login()
-        } else {
-            None
+        if !fresher {
+            return None;
+        }
+        // A moved install is not a token to adopt; the request that follows
+        // refuses it.
+        match self.adopt_stored_login() {
+            Adopt::Took(access) => Some(access),
+            Adopt::Moved | Adopt::Nothing => None,
         }
     }
 
@@ -491,13 +499,14 @@ impl OAuthClient {
     /// exchange, which have no window of their own, end at the deadline.
     pub(crate) async fn authorize_until_by(
         &self,
+        allowed: super::sign_in::GrantAllowed,
         cancel: &tokio_util::sync::CancellationToken,
         listeners: Option<tokio_util::sync::DropGuard>,
         deadline: Option<tokio::time::Instant>,
     ) -> Result<String> {
         // Boxed: a login is rare, and the future of its callback server, PKCE
         // and exchange must not sit inline in every start path that awaits it.
-        let token = Box::pin(self.issue_token(cancel, listeners, deadline, None)).await?;
+        let token = Box::pin(self.issue_token(allowed, cancel, listeners, deadline, None)).await?;
         // Store and cache the token, under the same cancel and the window.
         self.save_issued_until(&token, cancel, deadline).await?;
         *self.current_token.write() = Some(token.clone());
@@ -516,7 +525,10 @@ impl OAuthClient {
         deadline: tokio::time::Instant,
         ui: super::sign_in::UiSink,
     ) -> Result<super::sign_in::PendingGrant> {
-        let token = Box::pin(self.issue_token(cancel, listeners, Some(deadline), Some(ui))).await?;
+        let allowed = self.ui_sign_in();
+        let token =
+            Box::pin(self.issue_token(allowed, cancel, listeners, Some(deadline), Some(ui)))
+                .await?;
         Ok(super::sign_in::PendingGrant::from_token(token))
     }
 
@@ -609,6 +621,7 @@ impl OAuthClient {
     /// saves nothing; the caller decides what to do with the token.
     async fn issue_token(
         &self,
+        _allowed: super::sign_in::GrantAllowed,
         cancel: &tokio_util::sync::CancellationToken,
         listeners: Option<tokio_util::sync::DropGuard>,
         deadline: Option<tokio::time::Instant>,
@@ -745,6 +758,9 @@ impl super::refresh_flight::RefreshCaller for OAuthClient {
         _stored: &TokenInfo,
         sent: &str,
     ) -> Result<super::refresh_flight::RefreshRequest> {
+        // Under the flight: an install that moved while this refresh waited
+        // for the lock sends nothing.
+        let allowed = self.issuer_current()?;
         let auth_meta = self.auth_meta()?;
         let key = self.credential_key()?;
         self.reload_registered_client_id(&key);
@@ -754,7 +770,7 @@ impl super::refresh_flight::RefreshCaller for OAuthClient {
             .clone()
             .ok_or_else(|| Error::OAuth("No client ID".to_string()))?;
         Ok(super::refresh_flight::RefreshRequest {
-            params: self.refresh_params(sent, &client_id),
+            params: self.refresh_params(allowed, sent, &client_id),
             http: self.refresh_client_for(&auth_meta.token_endpoint)?,
             endpoint: auth_meta.token_endpoint.clone(),
             destination: self.destination,

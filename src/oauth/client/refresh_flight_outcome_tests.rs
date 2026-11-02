@@ -484,7 +484,10 @@ async fn a_login_repairs_a_damaged_refresh_state() {
     let key = owned.credential_key().unwrap();
     std::fs::write(owned.storage.refresh_state_path(&key, RESOURCE), "not json").unwrap();
 
-    owned.try_client_credentials().await.expect("logged in");
+    owned
+        .try_client_credentials(owned.issuer_current().unwrap())
+        .await
+        .expect("logged in");
     let issued = stored(&owned)
         .and_then(|t| t.refresh_token)
         .expect("the login stored a refresh token");
@@ -521,7 +524,10 @@ async fn a_login_repair_does_not_brand_the_server_rotating() {
     let key = owned.credential_key().unwrap();
     std::fs::write(owned.storage.refresh_state_path(&key, RESOURCE), "not json").unwrap();
 
-    owned.try_client_credentials().await.expect("logged in");
+    owned
+        .try_client_credentials(owned.issuer_current().unwrap())
+        .await
+        .expect("logged in");
     let issued = stored(&owned)
         .and_then(|t| t.refresh_token)
         .expect("the login stored a refresh token");
@@ -555,7 +561,10 @@ async fn a_login_stands_when_the_sidecar_cannot_be_repaired() {
     let key = owned.credential_key().unwrap();
     std::fs::create_dir(owned.storage.refresh_state_path(&key, RESOURCE)).unwrap();
 
-    let access = owned.try_client_credentials().await.expect("logged in");
+    let access = owned
+        .try_client_credentials(owned.issuer_current().unwrap())
+        .await
+        .expect("logged in");
     assert_eq!(stored(&owned).map(|t| t.access_token), Some(access));
     assert!(owned.storage.load_refresh_state(&key, RESOURCE).damaged);
 }

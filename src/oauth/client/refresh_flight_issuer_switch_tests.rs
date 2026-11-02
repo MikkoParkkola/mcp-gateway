@@ -374,3 +374,78 @@ async fn a_client_built_after_a_switch_starts_no_login_of_the_old_issuer() {
         "no login of the old issuer started"
     );
 }
+
+/// A refresh whose caller passed its entry check before a sign-in under the
+/// other issuer was confirmed (it waited on the refresh lock meanwhile):
+/// nothing is sent, and the call answers the sign-in wait. Red before the
+/// grant took the issuer proof: the adopt was refused and read as leave to
+/// refresh, so the old issuer's refresh token was spent.
+#[tokio::test]
+async fn a_refresh_after_a_switch_spends_nothing() {
+    let server = TokenServer::start(&[]).await;
+    let dir = tempfile::tempdir().unwrap();
+    let cell = Arc::new(SignInStatus::new(SignIn::NeverSignedIn));
+    let owned = client(dir.path(), &server).with_sign_in_status(Arc::clone(&cell));
+    hold(&owned, &token("a1", Some("r1"), true));
+    cell.record_install(OTHER_ISSUER_KEY);
+
+    let refused = owned
+        .refresh_token()
+        .await
+        .expect_err("no refresh of the old issuer");
+
+    assert!(
+        matches!(refused, Error::AuthorizationRequired { .. }),
+        "{refused}"
+    );
+    assert_eq!(server.requests(), 0, "the old refresh token was not sent");
+}
+
+/// An adopt that finds no stored token while the install is under the other
+/// issuer answers `Moved`, so no caller falls through to a login of the old
+/// issuer. Red before the check ran ahead of the missing-record exit: it
+/// answered `Nothing`.
+#[tokio::test]
+async fn an_adopt_with_nothing_stored_after_a_switch_answers_moved() {
+    let server = TokenServer::start(&[]).await;
+    let dir = tempfile::tempdir().unwrap();
+    let cell = Arc::new(SignInStatus::new(SignIn::NeverSignedIn));
+    let owned = client(dir.path(), &server).with_sign_in_status(Arc::clone(&cell));
+    cell.record_install(OTHER_ISSUER_KEY);
+
+    assert_eq!(owned.adopt_installed(), Adopt::Moved);
+}
+
+/// A login this client would lead, while the install is under the other
+/// issuer, ends with the sign-in wait before any link opens. Red before the
+/// login took the issuer proof: it led a login of the old issuer.
+#[tokio::test]
+async fn a_led_login_after_a_switch_opens_nothing() {
+    let server = TokenServer::start(&[]).await;
+    let dir = tempfile::tempdir().unwrap();
+    let cell = Arc::new(SignInStatus::new(SignIn::NeverSignedIn));
+    cell.record_install(OTHER_ISSUER_KEY);
+    let opened = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let browser = Arc::clone(&opened);
+    let owned = client(dir.path(), &server)
+        .with_sign_in_status(Arc::clone(&cell))
+        .with_login_gate(Arc::new(crate::oauth::login_gate::LoginGate::default()))
+        .with_open_browser(Arc::new(move |_: &str| {
+            browser.store(true, std::sync::atomic::Ordering::SeqCst);
+            false
+        }));
+
+    let refused = tokio::time::timeout(HANG_BOUND, owned.authorize_shared(true, None))
+        .await
+        .expect("the login answers within the bound")
+        .expect_err("no login of the old issuer");
+
+    assert!(
+        matches!(refused, Error::AuthorizationRequired { .. }),
+        "{refused}"
+    );
+    assert!(
+        !opened.load(std::sync::atomic::Ordering::SeqCst),
+        "no link of the old issuer opened"
+    );
+}

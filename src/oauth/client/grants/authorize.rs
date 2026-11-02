@@ -129,10 +129,21 @@ impl OAuthClient {
             Begin::Lead(mut lead) => {
                 // A login that ended while this client was being built may
                 // already have stored a token: use it, open no second login.
-                if let Some(access) = self.adopt_stored_login() {
-                    lead.end(None);
-                    return Ok(access);
-                }
+                let allowed = match self.adopt_stored_login() {
+                    Adopt::Took(access) => {
+                        lead.end(None);
+                        return Ok(access);
+                    }
+                    // The issuer check is the login's own: a moved install
+                    // ends here with the sign-in wait, before any link opens.
+                    Adopt::Moved | Adopt::Nothing => match self.issuer_current() {
+                        Ok(allowed) => allowed,
+                        Err(error) => {
+                            lead.end(Some(&error));
+                            return Err(error);
+                        }
+                    },
+                };
                 // The retry hint of a sign-in started from the dashboard names
                 // the deadline this login really runs to.
                 #[cfg(feature = "webui")]
@@ -144,7 +155,7 @@ impl OAuthClient {
                 }
                 let listeners = lead.take_listeners_guard();
                 let result = self
-                    .authorize_until_by(lead.cancel_token(), listeners, deadline)
+                    .authorize_until_by(allowed, lead.cancel_token(), listeners, deadline)
                     .await;
                 lead.end(result.as_ref().err());
                 result
@@ -162,9 +173,13 @@ impl OAuthClient {
                 if let Some(outcome) = finished {
                     return Err(outcome.to_error(self.backend_name()));
                 }
-                self.adopt_stored_login().ok_or_else(|| {
-                    Error::OAuth("the shared login completed but stored no token".to_string())
-                })
+                match self.adopt_stored_login() {
+                    Adopt::Took(access) => Ok(access),
+                    Adopt::Moved => Err(self.issuer_wait()),
+                    Adopt::Nothing => Err(Error::OAuth(
+                        "the shared login completed but stored no token".to_string(),
+                    )),
+                }
             }
         }
     }
@@ -194,29 +209,38 @@ impl OAuthClient {
         };
         loop {
             let sampled = status.installed();
-            let mut adopted = self.adopt_stored_login();
-            if adopted.is_none() {
-                let stored = self
-                    .credential_key()
-                    .ok()
-                    .and_then(|key| self.storage.load(&key, &self.resource_url));
-                let Some(stored) = stored else {
-                    // Nothing could be read: the old account's token stops serving,
-                    // and the install stays unacknowledged so the next call retries.
-                    *self.current_token.write() = None;
-                    return Adopt::Nothing;
-                };
-                if !self.cache_loaded(stored) {
-                    adopted = None;
+            let (adopted, read_nothing) = match self.adopt_stored_login() {
+                Adopt::Took(access) => (Some(access), false),
+                Adopt::Moved => (None, false),
+                Adopt::Nothing => {
+                    let stored = self
+                        .credential_key()
+                        .ok()
+                        .and_then(|key| self.storage.load(&key, &self.resource_url));
+                    let read_nothing = stored.is_none();
+                    match stored {
+                        // Inside the expiry buffer: cached for a refresh, if the
+                        // install is still this client's.
+                        Some(stored) => {
+                            self.cache_loaded(stored);
+                        }
+                        // Nothing could be read: the old account's token stops serving.
+                        None => *self.current_token.write() = None,
+                    }
+                    (None, read_nothing)
                 }
-            }
+            };
             #[cfg(all(test, feature = "webui"))]
             self.adopt_pause.pause_blocking();
-            // The install is under another issuer: nothing of this client's
-            // issuer stays cached, and the install is not acknowledged.
+            // Before any exit: the install is under another issuer, so nothing
+            // of this client's issuer stays cached and it is not acknowledged.
             if self.issuer_differs() {
                 *self.current_token.write() = None;
                 return Adopt::Moved;
+            }
+            // Nothing was read: unacknowledged, so the next call retries.
+            if read_nothing {
+                return Adopt::Nothing;
             }
             if status.clear_provider_changed() {
                 self.publish_sign_in();
@@ -230,20 +254,27 @@ impl OAuthClient {
     }
 
     /// Take up a live token another client of this backend stored, with the
-    /// client id it registered (a refresh needs both). `None` if there is none.
-    pub(super) fn adopt_stored_login(&self) -> Option<String> {
-        let key = self.credential_key().ok()?;
-        let token = self
+    /// client id it registered (a refresh needs both). `Nothing` if there is
+    /// none; `Moved` if the latest install is under another issuer, which no
+    /// caller may read as leave to run a grant.
+    pub(super) fn adopt_stored_login(&self) -> Adopt {
+        let Ok(key) = self.credential_key() else {
+            return Adopt::Nothing;
+        };
+        let Some(token) = self
             .storage
             .load(&key, &self.resource_url)
-            .filter(|token| !token.is_expired())?;
+            .filter(|token| !token.is_expired())
+        else {
+            return Adopt::Nothing;
+        };
         let access = token.access_token.clone();
         if !self.cache_loaded(token.clone()) {
-            return None;
+            return Adopt::Moved;
         }
         self.reload_registered_client_id(&key);
         self.publish_token_state(Some(&token));
-        Some(access)
+        Adopt::Took(access)
     }
 
     /// The login or refresh that stored this credential may have registered
@@ -272,7 +303,9 @@ impl OAuthClient {
         cancel: &tokio_util::sync::CancellationToken,
         listeners: Option<tokio_util::sync::DropGuard>,
     ) -> Result<String> {
-        self.authorize_until_by(cancel, listeners, None).await
+        let allowed = self.issuer_current()?;
+        self.authorize_until_by(allowed, cancel, listeners, None)
+            .await
     }
 }
 

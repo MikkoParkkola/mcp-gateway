@@ -52,7 +52,7 @@ async fn a_client_credentials_grant_publishes_signed_in() {
     );
 
     login
-        .try_client_credentials()
+        .try_client_credentials(login.issuer_current().unwrap())
         .await
         .expect("the grant is issued");
 

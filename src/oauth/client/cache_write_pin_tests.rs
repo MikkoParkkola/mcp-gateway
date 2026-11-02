@@ -1,11 +1,12 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! Pin: a token loaded from storage enters the cache only through
-//! `cache_loaded`, which checks the install's issuer under the install-key
-//! lock. Every other write to the cache is listed here: a token just issued
-//! (a login, a refresh, a client-credentials grant, a confirmed sign-in), an
-//! emptied cache, or a test seed. A new write site fails this row until it is
-//! classified, so no path can cache a token of another issuer unchecked.
+//! Pins, the backstop to the grant proof's type: a token loaded from storage
+//! enters the cache only through `cache_loaded`, which checks the install's
+//! issuer under the install-key lock, and the grant proof is built only by its
+//! two constructors. Every other write to the cache is listed here: a token
+//! just issued (a login, a refresh, a client-credentials grant, a confirmed
+//! sign-in), an emptied cache, or a test seed. A new site fails a row until it
+//! is classified.
 
 use std::collections::BTreeSet;
 use std::path::Path;
@@ -24,8 +25,8 @@ const WRITERS: [(&str, &str); 10] = [
     ("mod.rs", "seed_token_for_test"),
 ];
 
-/// Every `(file, enclosing fn)` holding a cache write, in non-test sources.
-fn writers(root: &Path, dir: &Path, out: &mut BTreeSet<(String, String)>) {
+/// Every non-test source under the client, as `(path relative to it, text)`.
+fn sources(root: &Path, dir: &Path, out: &mut Vec<(String, String)>) {
     for entry in std::fs::read_dir(dir).expect("the client sources list") {
         let path = entry.expect("an entry").path();
         let name = path.file_name().unwrap().to_string_lossy().into_owned();
@@ -33,13 +34,27 @@ fn writers(root: &Path, dir: &Path, out: &mut BTreeSet<(String, String)>) {
             continue;
         }
         if path.is_dir() {
-            writers(root, &path, out);
-            continue;
+            sources(root, &path, out);
+        } else if path.extension().is_some_and(|extension| extension == "rs") {
+            let file = path.strip_prefix(root).unwrap().to_string_lossy();
+            let text = std::fs::read_to_string(&path).expect("a readable source");
+            out.push((file.replace('\\', "/"), text));
         }
-        if path.extension().is_none_or(|extension| extension != "rs") {
-            continue;
-        }
-        let text = std::fs::read_to_string(&path).expect("a readable source");
+    }
+}
+
+/// The client's non-test sources.
+fn client_sources() -> Vec<(String, String)> {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/oauth/client");
+    let mut all = Vec::new();
+    sources(&root, &root, &mut all);
+    all
+}
+
+/// Every `(file, enclosing fn)` with a line holding `needle`.
+fn sites(all: &[(String, String)], needle: &str) -> BTreeSet<(String, String)> {
+    let mut found = BTreeSet::new();
+    for (file, text) in all {
         let mut current = String::from("-");
         for line in text.lines() {
             if let Some(at) = line.find("fn ") {
@@ -51,25 +66,34 @@ fn writers(root: &Path, dir: &Path, out: &mut BTreeSet<(String, String)>) {
                     current = rest[..end].to_owned();
                 }
             }
-            if line.contains("current_token.write()") {
-                let file = path.strip_prefix(root).unwrap().to_string_lossy();
-                out.insert((file.replace('\\', "/"), current.clone()));
+            if line.contains(needle) {
+                found.insert((file.clone(), current.clone()));
             }
         }
     }
+    found
+}
+
+fn pairs(list: &[(&str, &str)]) -> BTreeSet<(String, String)> {
+    list.iter()
+        .map(|(file, function)| ((*file).to_owned(), (*function).to_owned()))
+        .collect()
 }
 
 #[test]
 fn a_loaded_token_is_cached_only_through_the_checked_step() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/oauth/client");
-    let mut found = BTreeSet::new();
-    writers(&root, &root, &mut found);
-    let allowed: BTreeSet<(String, String)> = WRITERS
-        .iter()
-        .map(|(file, function)| ((*file).to_owned(), (*function).to_owned()))
-        .collect();
+    let all = client_sources();
+    for (file, text) in &all {
+        let squeezed: String = text.chars().filter(|c| !c.is_whitespace()).collect();
+        assert_eq!(
+            squeezed.matches("current_token.write()").count(),
+            text.matches("current_token.write()").count(),
+            "{file}: a cache write split across lines, which this scan cannot place"
+        );
+    }
+    let found = sites(&all, "current_token.write()");
 
-    let unlisted: Vec<_> = found.difference(&allowed).collect();
+    let unlisted: Vec<_> = found.difference(&pairs(&WRITERS)).collect();
     assert!(
         unlisted.is_empty(),
         "cache writes outside the listed sites: {unlisted:?}"
@@ -77,5 +101,23 @@ fn a_loaded_token_is_cached_only_through_the_checked_step() {
     assert!(
         found.contains(&("sign_in.rs".to_owned(), "cache_loaded".to_owned())),
         "the scan finds the checked step itself: {found:?}"
+    );
+}
+
+#[test]
+fn the_grant_proof_is_built_only_by_its_checks() {
+    let all = client_sources();
+    assert_eq!(
+        sites(&all, "GrantAllowed { _only_here"),
+        pairs(&[
+            ("sign_in.rs", "issuer_current"),
+            ("sign_in.rs", "ui_sign_in")
+        ]),
+        "who builds the grant proof"
+    );
+    assert_eq!(
+        sites(&all, ".ui_sign_in()"),
+        pairs(&[("grants.rs", "authorize_for_ui")]),
+        "who takes the web-UI grant proof"
     );
 }

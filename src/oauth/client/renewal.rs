@@ -33,9 +33,9 @@ impl OAuthClient {
     pub(super) async fn attempt_background_renewal(&self) -> Renewal {
         // A sign-in confirmed under another issuer: this client's credential
         // is not spent until the token step has re-discovered.
-        if self.issuer_differs() {
+        let Ok(allowed) = self.issuer_current() else {
             return Renewal::Deferred;
-        }
+        };
         // A refresh sends the stored refresh token (MIK-8018); a cached one
         // only says this client has a grant to refresh.
         let has_refresh_token = self
@@ -73,7 +73,7 @@ impl OAuthClient {
         }
 
         // Headless, for Beeper-style tokens.
-        match self.try_client_credentials().await {
+        match self.try_client_credentials(allowed).await {
             Ok(_) => Renewal::Renewed,
             Err(e) if is_ssrf_refusal(&e) => self.refused(&e),
             // Its save met the busy lease: deferred, not exhausted, so no
