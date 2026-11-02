@@ -64,26 +64,48 @@ pub(crate) enum Audit {
     Off,
 }
 
+/// Whether the gateway authenticates its callers.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum GatewayAuth {
+    On,
+    Off,
+}
+
+impl GatewayAuth {
+    /// From the running config's `auth.enabled`.
+    pub(crate) fn of(enabled: bool) -> Self {
+        if enabled { Self::On } else { Self::Off }
+    }
+}
+
+/// The refusal of a write on a gateway with auth on and no audit log.
+const NO_AUDIT_LOG: &str = "auth is on but no audit log is configured; config writes are refused";
+
 /// Where this gateway's writes are audited: its audit log, when it has one.
 /// The one place an [`Audit`] is built, so no caller chooses whether its
 /// write is audited.
-pub(crate) struct AuditPosture(Option<Arc<TransparencyLogger>>);
+pub(crate) struct AuditPosture {
+    log: Option<Arc<TransparencyLogger>>,
+    auth: GatewayAuth,
+}
 
 impl AuditPosture {
-    /// The posture of a gateway whose audit log is `log`. Auth on with no
-    /// log is a state startup refuses, so no log here means auth is off.
-    pub(crate) fn of(log: Option<Arc<TransparencyLogger>>) -> Self {
-        Self(log)
+    /// The posture of a gateway whose audit log is `log`, with `auth`.
+    pub(crate) fn of(log: Option<Arc<TransparencyLogger>>, auth: GatewayAuth) -> Self {
+        Self { log, auth }
     }
 
-    /// The audit for one operation of `kind`.
-    pub(crate) fn audit(self, kind: IntentKind) -> Audit {
-        match self.0 {
-            Some(log) => Audit::Required {
+    /// The audit for one operation of `kind`. Auth on with no audit log is
+    /// refused here as well as at startup: an authenticated gateway never
+    /// writes its config unaudited.
+    pub(crate) fn audit(self, kind: IntentKind) -> Result<Audit, ReplaceError> {
+        match (self.log, self.auth) {
+            (Some(log), _) => Ok(Audit::Required {
                 sink: Box::new(LogSink(log)),
                 kind,
-            },
-            None => Audit::Off,
+            }),
+            (None, GatewayAuth::Off) => Ok(Audit::Off),
+            (None, GatewayAuth::On) => Err(ReplaceError::Refused(NO_AUDIT_LOG.to_owned())),
         }
     }
 }
