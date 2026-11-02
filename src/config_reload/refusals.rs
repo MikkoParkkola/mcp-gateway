@@ -418,8 +418,13 @@ impl super::ReloadContext {
     }
 
     /// Share `reporting` with every other reload context of this gateway.
+    /// Reporting that carries the audit log audits this context's
+    /// recoveries there.
     #[must_use]
     pub fn with_reporting(mut self, reporting: ReloadReporting) -> Self {
+        if let Some(log) = reporting.audit_log.clone() {
+            self.audit_recoveries_into(log);
+        }
         self.reporting = reporting;
         self
     }

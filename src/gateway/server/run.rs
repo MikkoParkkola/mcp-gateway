@@ -98,7 +98,8 @@ impl Gateway {
             .record_at_start(&self.backends, transparency_log.as_ref())
             .await?;
         let reload_reporting =
-            crate::config_reload::refusals::ReloadReporting::with_override_audit(override_auditor);
+            crate::config_reload::refusals::ReloadReporting::with_override_audit(override_auditor)
+                .with_audit_log(transparency_log.clone());
         // Restored before anything is served or reloaded.
         let (counters, counter_saver) =
             counter_wiring::start(&data_dir, &meta_mcp, shutdown_tx.subscribe());

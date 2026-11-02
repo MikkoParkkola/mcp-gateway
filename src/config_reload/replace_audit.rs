@@ -148,6 +148,11 @@ impl ReloadContext {
         *self.recovery_audit.lock() = Some(sink);
     }
 
+    /// Audit this gateway's recoveries into its audit log.
+    pub(in crate::config_reload) fn audit_recoveries_into(&self, log: Arc<TransparencyLogger>) {
+        self.set_recovery_audit(Box::new(LogSink(log)));
+    }
+
     /// With anything pending (a crashed write's journal, or a reload owed
     /// after a failed one), append the recovery's own intent. `None`:
     /// nothing pending. A refused intent recovers nothing; the next holder
