@@ -19,7 +19,8 @@ fn admin_key_yaml(name: &str, principal: Option<&str>) -> String {
         "auth:\n  enabled: true\n  api_keys:\n    - name: {name}\n      key_sha256: \"{digest}\"\n      backends: [\"*\"]\n      admin: true\n"
     );
     if let Some(principal) = principal {
-        text.push_str(&format!("      principal: \"{principal}\"\n"));
+        use std::fmt::Write as _;
+        let _ = writeln!(text, "      principal: \"{principal}\"");
     }
     text
 }
