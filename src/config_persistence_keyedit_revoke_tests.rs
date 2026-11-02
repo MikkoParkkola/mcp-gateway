@@ -578,6 +578,18 @@ fn r13_a_block_scalar_key_removed_beside_a_revocation_proves() {
     assert!(dropped.is_empty(), "{dropped:?}");
 }
 
+// R13b: a revoked entry whose block scalar ends past a blank line takes
+// that line: it lies inside the entry's span, as R13 and R14 pin for the
+// plan and for a key removal.
+#[test]
+fn r13b_a_revoked_entry_takes_the_blank_lines_inside_its_span() {
+    let original =
+        "auth:\n  api_keys:\n    - name: a\n      note: |-\n        x\n\n    - name: b\n";
+    let (out, dropped) = revoked(original, &[revoke(0)]);
+    assert_eq!(out, "auth:\n  api_keys:\n    - name: b\n");
+    assert!(dropped.is_empty(), "{dropped:?}");
+}
+
 // R14: a key removal (no revocation) whose block scalar's trailing blank
 // line would otherwise join the `|+` scalar above it: the line goes with
 // the removed key, and the save proves.
