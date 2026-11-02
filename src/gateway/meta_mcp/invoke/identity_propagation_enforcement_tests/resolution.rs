@@ -35,6 +35,7 @@ async fn code_mode_execute_propagates_identity_to_backend() {
         confirmation: crate::gateway::destructive_confirmation::ConfirmationChannel::Unavailable,
         era: crate::protocol::meta::Era::Legacy,
         channel: &crate::gateway::input_bridge::NoClientChannel,
+        generation: None,
     };
     let args = json!({ "tool": "mem:read", "arguments": {} });
     m.code_mode_execute(&args, Some("s1"), &caller)
@@ -79,6 +80,7 @@ async fn code_mode_execute_fails_closed_without_identity() {
         confirmation: crate::gateway::destructive_confirmation::ConfirmationChannel::Unavailable,
         era: crate::protocol::meta::Era::Legacy,
         channel: &crate::gateway::input_bridge::NoClientChannel,
+        generation: None,
     };
     let args = json!({ "tool": "mem:read", "arguments": {} });
     let err = m
@@ -131,6 +133,7 @@ async fn required_mint_without_transparency_log_fails_closed() {
         confirmation: crate::gateway::destructive_confirmation::ConfirmationChannel::Unavailable,
         era: crate::protocol::meta::Era::Legacy,
         channel: &crate::gateway::input_bridge::NoClientChannel,
+        generation: None,
     };
     let args = json!({ "tool": "mem:read", "arguments": {} });
     let err = m
