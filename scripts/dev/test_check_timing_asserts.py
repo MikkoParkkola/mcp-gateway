@@ -766,6 +766,28 @@ class TestSection(unittest.TestCase):
         text = "fn product() {\nassert!(start.elapsed() < Duration::from_millis(100));\n}\n"
         self.assertEqual(len(guard.scan_text("src/x.rs", text, {})), 1, text)
 
+    def test_a_restricted_visibility_fn_with_a_where_comma_is_judged(self):
+        text = (
+            "fn product() {}\n\n#[cfg(test)]\npub(crate) async fn helper<T>()\nwhere\n    T: Send,\n    T: Sync,\n{\n"
+            + self.WINDOW + "\n}\n"
+        )
+        self.assertEqual(len(self.timeouts(text)), 1, text)
+
+    def test_a_test_only_field_runs_past_a_cast_after_its_block(self):
+        window = self.WINDOW.rstrip(";").removesuffix('.expect("x")')
+        text = (
+            "fn product() {\n    let c = C {\n        #[cfg(test)]\n        x: { 0 } as u64\n"
+            f'            + {window}.expect("x"),\n        y: 1,\n    }};\n}}\n'
+        )
+        self.assertEqual(len(self.timeouts(text)), 1, text)
+
+    def test_a_comparison_in_a_test_only_statement_does_not_hold_product_code(self):
+        text = (
+            "async fn product() {\n    #[cfg(test)]\n    if 1 < 2 {\n        probe();\n    }\n"
+            f"{self.WINDOW}\n}}\n"
+        )
+        self.assertEqual(self.timeouts(text), [], text)
+
     def test_a_test_only_field_with_nested_generics_ends_at_its_comma(self):
         text = (
             "fn product() {\n    let c = C {\n        #[cfg(test)]\n"
