@@ -117,7 +117,7 @@ fn the_grant_proof_is_built_only_by_its_checks() {
         "who builds the grant proof"
     );
     assert_eq!(
-        sites(&all, ".ui_sign_in()"),
+        sites(&all, "Self::ui_sign_in()"),
         pairs(&[("grants.rs", "authorize_for_ui")]),
         "who takes the web-UI grant proof"
     );

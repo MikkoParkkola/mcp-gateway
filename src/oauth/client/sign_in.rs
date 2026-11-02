@@ -439,7 +439,7 @@ impl OAuthClient {
     /// client just discovered and the confirm records the new install. Only
     /// `authorize_for_ui` calls it.
     #[cfg(feature = "webui")]
-    pub(super) fn ui_sign_in(&self) -> GrantAllowed {
+    pub(super) fn ui_sign_in() -> GrantAllowed {
         GrantAllowed { _only_here: () }
     }
 

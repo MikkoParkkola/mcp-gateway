@@ -525,7 +525,7 @@ impl OAuthClient {
         deadline: tokio::time::Instant,
         ui: super::sign_in::UiSink,
     ) -> Result<super::sign_in::PendingGrant> {
-        let allowed = self.ui_sign_in();
+        let allowed = Self::ui_sign_in();
         let token =
             Box::pin(self.issue_token(allowed, cancel, listeners, Some(deadline), Some(ui)))
                 .await?;
