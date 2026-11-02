@@ -265,6 +265,9 @@ mod late_refusal_lease_tests;
 /// A lent-only call carrying no credential records `refused`.
 #[cfg(test)]
 mod lend_refusal_tests;
+/// A name budgeted by reload starts from the day's overflow total.
+#[cfg(all(test, feature = "cost-governance"))]
+mod live_budget_estimate_tests;
 #[cfg(all(test, feature = "cost-governance"))]
 mod live_budget_members_tests;
 #[cfg(all(test, feature = "cost-governance"))]
