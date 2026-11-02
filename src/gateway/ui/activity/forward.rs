@@ -167,7 +167,7 @@ pub(in crate::gateway::ui) fn rows_after(
         page.diag.bytes_read += page.diag.anchor_bytes;
         return Ok(page);
     };
-    let mut scan = scan::Scan::new(file, at.offset, at.mode, budget.bytes);
+    let mut scan = scan::Scan::new(file, at.offset, at.mode, budget.bytes)?;
     // Where the scan itself starts, not where the place says it should.
     page.diag.first_read = Some(scan.offset);
     let mut spent = 0;
@@ -231,7 +231,7 @@ pub(in crate::gateway::ui) fn rows_after(
                 spent += scan.read;
                 at = at.at_start(seq, id);
                 let left = budget.bytes.saturating_sub(spent);
-                scan = scan::Scan::new(next, 0, scan::Mode::Boundary, left);
+                scan = scan::Scan::new(next, 0, scan::Mode::Boundary, left)?;
             }
         }
     };

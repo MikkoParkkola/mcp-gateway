@@ -65,31 +65,42 @@ pub(super) enum Step {
 
 /// One segment's forward scan.
 pub(super) struct Scan {
-    file: File,
+    /// One buffered reader for the whole scan: lines are read in order, so a
+    /// line never re-reads the bytes the buffer already holds.
+    // ponytail: the buffer reads ahead at most READ_AHEAD bytes past the last
+    // line counted; a tighter bound would need unbuffered reads.
+    reader: BufReader<File>,
     pub(super) offset: u64,
     pub(super) mode: Mode,
-    /// Bytes this scan consumed.
+    /// Bytes this scan consumed, an incomplete tail included.
     pub(super) read: u64,
     budget: u64,
 }
 
+/// The read-ahead of a scan's buffer.
+const READ_AHEAD: usize = 64 * 1024;
+
+/// The longest record the logger writes, its newline included.
+const RECORD_CAP: u64 = ASSEMBLY_WINDOW - 1;
+
 impl Scan {
-    pub(super) fn new(file: File, offset: u64, mode: Mode, budget: u64) -> Self {
-        Self {
-            file,
+    pub(super) fn new(mut file: File, offset: u64, mode: Mode, budget: u64) -> io::Result<Self> {
+        file.seek(SeekFrom::Start(offset))?;
+        Ok(Self {
+            reader: BufReader::with_capacity(READ_AHEAD, file),
             offset,
             mode,
             read: 0,
             budget,
-        }
+        })
     }
 
     /// Up to `limit` bytes from the offset, through the next newline.
-    fn line(&self, limit: u64) -> io::Result<Vec<u8>> {
-        let mut f = &self.file;
-        f.seek(SeekFrom::Start(self.offset))?;
+    fn line(&mut self, limit: u64) -> io::Result<Vec<u8>> {
         let mut buf = Vec::new();
-        BufReader::new(f.take(limit)).read_until(b'\n', &mut buf)?;
+        Read::by_ref(&mut self.reader)
+            .take(limit)
+            .read_until(b'\n', &mut buf)?;
         Ok(buf)
     }
 
@@ -104,6 +115,12 @@ impl Scan {
                     if buf.is_empty() {
                         return Ok(Step::End);
                     }
+                    if !buf.ends_with(b"\n") && len64(buf.len()) < self.budget - self.read {
+                        // The run ends the file with no newline: a partial
+                        // append, counted and left for a later scan.
+                        self.read += len64(buf.len());
+                        return Ok(Step::End);
+                    }
                     self.consume(buf.len());
                     if buf.ends_with(b"\n") {
                         self.mode = Mode::Boundary;
@@ -114,6 +131,9 @@ impl Scan {
                     let buf = self.line(ASSEMBLY_WINDOW)?;
                     if !buf.ends_with(b"\n") {
                         if len64(buf.len()) < ASSEMBLY_WINDOW {
+                            // A partial append: counted, never consumed, so a
+                            // later scan reads it whole.
+                            self.read += len64(buf.len());
                             return Ok(Step::End);
                         }
                         // Over the cap: never a record.
@@ -123,6 +143,10 @@ impl Scan {
                     }
                     let start = self.offset;
                     self.consume(buf.len());
+                    if len64(buf.len()) > RECORD_CAP {
+                        // One byte over: the logger never writes it.
+                        return Ok(Step::Unreadable);
+                    }
                     let record = serde_json::from_slice::<Value>(&buf[..buf.len() - 1])
                         .ok()
                         .filter(|e| e.get("counter").and_then(Value::as_u64).is_some());
