@@ -148,6 +148,35 @@ fn f5c_a_resumed_search_that_finds_the_cursor_gone_resets_and_forgets_its_offset
 }
 
 #[test]
+fn f5d_a_cursor_in_a_segment_whose_first_line_is_unreadable_is_found() {
+    let d = tempfile::tempdir().unwrap();
+    let path = d.path().join("inv.jsonl");
+    // Segment 1 starts with a torn line; the cursor is its first record.
+    let w = write(
+        &path,
+        &[
+            vec![Rec::Junk(100), Rec::Call(None), Rec::Call(None)],
+            calls(2),
+        ],
+    );
+    let l = log(&path, StreamKind::Activity);
+    let mut search = Search::default();
+    let pages = drain(
+        &l,
+        Some(&w.marks[0]),
+        w.marks.last(),
+        &Access::All,
+        WIDE,
+        &mut search,
+    );
+    assert!(
+        pages.iter().all(|p| !p.reset),
+        "the cursor is kept, not gone"
+    );
+    assert_eq!(counters(&pages), vec![2, 3, 4]);
+}
+
+#[test]
 fn f5d_the_cursor_record_straddling_the_budget_or_a_segment_is_found() {
     for budget in [1000_u64, 1023, 1024, 1025, 1100] {
         let d = tempfile::tempdir().unwrap();

@@ -5,15 +5,6 @@
 
 use super::*;
 
-/// Drain the rest of `s`'s catch-up.
-fn finish(s: &mut Suspended) -> Vec<ForwardPage> {
-    let mut pages = vec![s.resume()];
-    while pages.last().unwrap().more && pages.len() < 1000 {
-        pages.push(s.resume());
-    }
-    pages
-}
-
 #[test]
 fn f9c_a_file_swapped_onto_the_path_after_the_identity_check_is_not_read() {
     let mut s = suspended(calls(1));
@@ -23,21 +14,17 @@ fn f9c_a_file_swapped_onto_the_path_after_the_identity_check_is_not_read() {
         write_from(&other, &[vec![Rec::Admin; 8]], 1, 1);
         std::fs::rename(&other, &path).unwrap();
     });
-    let pages = finish(&mut s);
-    assert!(
-        pages.iter().all(|p| !p.restarted && !p.reset),
-        "the proven handle is read"
-    );
+    // The call that proved the handle reads to the end on it; a later call
+    // would restart, since the path now names another file.
+    let page = s.resume_with(WIDE);
+    assert!(!page.restarted && !page.reset, "the proven handle is read");
     assert_eq!(
-        counters(&pages),
+        counters(std::slice::from_ref(&page)),
         vec![3, 4],
         "its rows, not the swapped file's"
     );
     assert!(
-        pages
-            .iter()
-            .flat_map(|p| &p.rows)
-            .all(|r| r.row["kind"] == "call"),
+        page.rows.iter().all(|r| r.row["kind"] == "call"),
         "no row from the swapped file"
     );
 }
@@ -54,10 +41,11 @@ fn f9c_a_rename_or_unlink_after_the_open_leaves_the_read_on_the_same_bytes() {
                 std::fs::rename(&path, path.with_extension("moved")).unwrap();
             }
         });
-        let pages = finish(&mut s);
+        let page = s.resume_with(WIDE);
+        assert!(!page.restarted, "unlink {unlink}: no restart in that call");
         assert_eq!(
-            counters(&pages).first(),
-            Some(&3),
+            counters(std::slice::from_ref(&page)),
+            vec![3, 4],
             "unlink {unlink}: the handle's bytes"
         );
     }

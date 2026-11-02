@@ -47,13 +47,17 @@ impl Suspended {
     }
 
     fn resume(&mut self) -> ForwardPage {
+        self.resume_with(SMALL)
+    }
+
+    fn resume_with(&mut self, budget: Budget) -> ForwardPage {
         let (cursor, stop) = (self.cursor(), self.w.marks.last().unwrap().clone());
         rows_after(
             &log(&self.path, StreamKind::Activity),
             Some(&cursor),
             Some(&stop),
             &Access::All,
-            SMALL,
+            budget,
             &mut self.search,
         )
         .unwrap()
@@ -66,9 +70,16 @@ impl Suspended {
     }
 
     /// Replace the active file with a copy of its bytes: a new identity.
+    /// The old file is kept under another name, so its inode stays in use
+    /// and the copy cannot reuse it: a removed file's inode number may be
+    /// given straight to the next file created.
     fn replace_same_bytes(&self) {
         let bytes = std::fs::read(&self.path).unwrap();
-        std::fs::remove_file(&self.path).unwrap();
+        let aside = (0..)
+            .map(|i| self.path.with_extension(format!("old{i}")))
+            .find(|p| !p.exists())
+            .unwrap();
+        std::fs::rename(&self.path, aside).unwrap();
         std::fs::write(&self.path, bytes).unwrap();
     }
 
