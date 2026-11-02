@@ -483,8 +483,12 @@ impl Config {
         if let Some(key) =
             (overlay.owned_keys().iter()).find(|k| k.starts_with(PENDING_SLOT_PREFIX))
         {
+            let at = match overlay.assignment_of(key) {
+                Some((file, line)) => format!("env file {} line {line}", file.display()),
+                None => "an env file".to_owned(),
+            };
             return Err(Error::Config(format!(
-                "Refusing to load config: an env file assigns {key}; names starting \
+                "Refusing to load config: {at} assigns {key}; names starting \
                  {PENDING_SLOT_PREFIX} are reserved for the gateway's config writer, so rename it"
             )));
         }
