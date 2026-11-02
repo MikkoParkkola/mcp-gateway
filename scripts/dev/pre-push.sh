@@ -42,10 +42,15 @@ if [[ -f Cargo.toml ]]; then
   fi
   step "file size"
   python3 scripts/dev/check-file-size.py --base "$base"
+  # The gates that read Rust items run on their own pinned environment
+  # (tree-sitter, hash-locked). The hook installs nothing: an environment
+  # that is missing or out of date stops the push with the command to run.
+  step "gate environment"
+  GATE_PY="$(scripts/dev/gate-env-python.sh)"
   step "inventory rows"
-  python3 scripts/release/check_inventory_rows.py "$base" HEAD
+  "$GATE_PY" scripts/release/check_inventory_rows.py "$base" HEAD
   step "timing asserts"
-  python3 scripts/dev/check-timing-asserts.py --base "$base"
+  "$GATE_PY" scripts/dev/check-timing-asserts.py --base "$base"
   step "C6 obligations"
   # One line per obligation: show them all only when one is unresolved.
   c6="$(python3 scripts/release/c6_resolve.py --tree HEAD)" || { printf '%s\n' "$c6"; exit 1; }
