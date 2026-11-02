@@ -39,6 +39,8 @@ mod admin_exposure;
 mod backend_lists;
 #[path = "tests/bridge_drop_tests.rs"]
 mod bridge_drop;
+#[path = "tests/bridged_origin.rs"]
+mod bridged_origin;
 #[path = "tests/code_mode.rs"]
 mod code_mode;
 #[path = "tests/confirmation_binding.rs"]

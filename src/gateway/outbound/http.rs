@@ -153,7 +153,7 @@ pub(crate) fn to_http(
     };
     let marker = match &frame.payload {
         Payload::Response(answer) => RpcError::of_frame(answer),
-        Payload::Answer(answer) => RpcError::of_value(answer, frame.origin),
+        Payload::Answer(answer) => RpcError::of_value(answer, frame.origin, frame.folded),
         _ => None,
     };
     let mut response = match frame.ticket {
