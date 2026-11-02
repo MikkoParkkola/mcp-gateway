@@ -46,6 +46,7 @@ Usage:
 
 from __future__ import annotations
 
+import collections
 import enum
 import functools
 import re
@@ -351,24 +352,27 @@ class CfgItems(NamedTuple):
     unsure: tuple[str, ...]
 
 
-# Today's grammar gaps of the pinned tree-sitter-rust, each keyed on every
-# error and missing node in the file by (kind, stripped source line). A file
-# whose errors differ is unsure as a whole.
-KNOWN_GAPS: dict[str, frozenset[tuple[str, str]]] = {
-    "src/gateway/authz.rs": frozenset({("ERROR", "Some(raw @ Value::String(_)) => {")}),
-    "src/gateway/meta_mcp/invoke/send.rs": frozenset(
+# Today's grammar gaps of the pinned tree-sitter-rust: each file's errors as a
+# count of (kind, normalized text of the error node). A file whose errors
+# differ in any way (a new error, a repeat, a changed node) is unsure as a
+# whole, and a pin in test_cfg_items.py keeps each entry matching its file.
+KNOWN_GAPS: dict[str, collections.Counter] = {
+    "src/gateway/authz.rs": collections.Counter({("ERROR", "raw @"): 1}),
+    "src/gateway/meta_mcp/invoke/send.rs": collections.Counter(
         {
-            ("ERROR", '#[cfg(feature = "cost-governance")]'),
-            ("MISSING }", '#[cfg(feature = "cost-governance")]'),
-            ("ERROR", "permit,"),
+            ("ERROR", "#[cfg("): 1,
+            ("MISSING }", ""): 1,
+            ("ERROR", '"cost-governance")] cost_warnings, prompt_cache_key, outbound_retry,'): 1,
+            ("ERROR", ", }"): 1,
         }
     ),
-    "src/gateway/meta_mcp/invoke/post_dispatch.rs": frozenset(
+    "src/gateway/meta_mcp/invoke/post_dispatch.rs": collections.Counter(
         {
-            ("ERROR", '#[cfg(feature = "cost-governance")]'),
-            ("MISSING }", '#[cfg(feature = "cost-governance")]'),
-            ("ERROR", "cost_warnings,"),
-            ("ERROR", "} = dispatched;"),
+            ("ERROR", "#[cfg("): 1,
+            ("MISSING }", ""): 1,
+            ("ERROR", '"cost-governance")]'): 1,
+            ("ERROR", ","): 1,
+            ("ERROR", "}"): 1,
         }
     ),
 }
@@ -395,9 +399,15 @@ CFG_ATTR = re.compile(r"#\s*!?\s*\[\s*cfg\s*\(")
 
 @functools.lru_cache(maxsize=1)
 def _rust_parser():
-    import tree_sitter_rust
-    from tree_sitter import Language, Parser
-
+    try:
+        import tree_sitter_rust
+        from tree_sitter import Language, Parser
+    except ImportError as err:
+        raise SystemExit(
+            f"the cfg item finder needs the gates' environment ({err}); "
+            "run: UV_MALWARE_CHECK=1 uv sync --locked --project scripts/gate-env, "
+            "then run this gate with scripts/gate-env/.venv/bin/python"
+        ) from None
     return Parser(Language(tree_sitter_rust.language()))
 
 
@@ -436,40 +446,53 @@ def _cfg_predicates(attr_text: str) -> list[str]:
     return [cfg_expression(code, m.end()) for m in CFG_ATTR.finditer(code)]
 
 
-def _error_signatures(root, lines: list[bytes]) -> set[tuple[str, str]]:
-    found: set[tuple[str, str]] = set()
+def _nodes(root):
+    """Every node under `root`, depth first, by an explicit stack: a deeply
+    nested file never meets Python's recursion limit."""
+    stack = [root]
+    while stack:
+        node = stack.pop()
+        yield node
+        stack.extend(reversed(node.children))
 
-    def walk(node) -> None:
+
+def _errors(root, src: bytes) -> list:
+    """Each ERROR and missing node, outermost only (an ERROR's insides are
+    not walked): (kind, normalized text, start byte, end byte)."""
+    found = []
+    stack = [root]
+    while stack:
+        node = stack.pop()
         if node.type == "ERROR" or node.is_missing:
             kind = f"MISSING {node.type}" if node.is_missing else "ERROR"
-            found.add((kind, lines[node.start_point[0]].decode("utf-8", "replace").strip()))
+            text = " ".join(src[node.start_byte : node.end_byte].decode("utf-8", "replace").split())[:80]
+            found.append((kind, text, node.start_byte, node.end_byte))
             if node.type == "ERROR":
-                return
-        for child in node.children:
-            walk(child)
-
-    walk(root)
+                continue
+        stack.extend(reversed(node.children))
     return found
 
 
-def _error_ranges(root) -> list[tuple[int, int]]:
-    out: list[tuple[int, int]] = []
+def _error_signature(errors: list) -> collections.Counter:
+    """The file's errors as a count of (kind, normalized node text): a repeat
+    of a listed error, or any new one, no longer matches its entry."""
+    return collections.Counter((kind, text) for kind, text, _, _ in errors)
 
-    def walk(node) -> None:
-        if node.type == "ERROR" or node.is_missing:
-            out.append((node.start_byte, node.end_byte))
-            return
-        for child in node.children:
-            walk(child)
 
-    walk(root)
-    return out
+def _enclosing_function(node):
+    """The (start, end) bytes of the function holding `node`, or None."""
+    up = node.parent
+    while up is not None:
+        if up.type == "function_item":
+            return (up.start_byte, up.end_byte)
+        up = up.parent
+    return None
 
 
 def _walk_cfg(root, src: bytes, is_target):
-    """(start byte, end byte or None, reason) for each outermost target cfg
-    attribute and for each macro body holding one. `end` is None for an
-    unsure case; its start and the end of its fallback node are reported."""
+    """(start byte, end byte or None, fallback end, reason, enclosing
+    function) for each outermost target cfg attribute and each macro body
+    holding one. `end` is None for an unsure case."""
     found = []
 
     def target(text: str) -> bool:
@@ -487,7 +510,12 @@ def _walk_cfg(root, src: bytes, is_target):
         args = blank(src[parts[1].start_byte : parts[1].end_byte].decode("utf-8", "replace"))[0].strip()
         return args.startswith("(") and args.endswith(")") and is_target(args[1:-1])
 
-    def walk(node, inside_end: int) -> None:
+    # An explicit stack of (node, inside_end): the children of `node` that
+    # start before `inside_end` lie in an item already taken.
+    stack = [(root, -1)]
+    while stack:
+        node, inside_end = stack.pop()
+        pending = []
         for child in node.children:
             if child.start_byte < inside_end:
                 continue
@@ -497,22 +525,22 @@ def _walk_cfg(root, src: bytes, is_target):
                 if not attribute_targets(child):
                     continue
                 owner = _owner(child)
+                scope = _enclosing_function(child)
                 if owner is None:
-                    found.append((child.start_byte, None, node.end_byte, "owner not known"))
+                    found.append((child.start_byte, None, node.end_byte, "owner not known", scope))
                 else:
                     start = min(child.start_byte, owner.start_byte)
-                    found.append((start, max(owner.end_byte, child.end_byte), None, ""))
+                    found.append((start, max(owner.end_byte, child.end_byte), None, "", scope))
                     inside_end = max(inside_end, owner.end_byte)
                 continue
             if child.type in ("macro_invocation", "macro_definition"):
                 body = "".join(blank(src[child.start_byte : child.end_byte].decode("utf-8", "replace"))[0].split())
                 if any(target(m.group(0) + body[m.end() :]) for m in CFG_IN_TEXT.finditer(body)):
-                    found.append((child.start_byte, None, child.end_byte, "cfg inside a macro body"))
+                    found.append((child.start_byte, None, child.end_byte, "cfg inside a macro body", _enclosing_function(child)))
                     inside_end = max(inside_end, child.end_byte)
                     continue
-            walk(child, inside_end)
-
-    walk(root, -1)
+            pending.append((child, inside_end))
+        stack.extend(reversed(pending))
     return found
 
 
@@ -549,18 +577,22 @@ def cfg_items(text: str, side: SafeSide, is_target=None, path: str = "", report:
     root = tree.root_node
     to_char = _char_offsets(text, src)
     errors = root.has_error
-    known = errors and _error_signatures(root, src.split(b"\n")) == KNOWN_GAPS.get(path)
+    error_nodes = _errors(root, src) if errors else []
+    known = errors and _error_signature(error_nodes) == KNOWN_GAPS.get(path)
     if report is not None:
         report[path] = (bool(errors), bool(known))
     if errors and not known:
         whole = (_item(text, 0, len(text)),) if side is SafeSide.LEAN_LONG else ()
         return CfgItems(whole, True, False, ("parse errors outside the known-gap list",))
-    error_ranges = _error_ranges(root) if errors else []
+    error_ranges = [(a, b) for _, _, a, b in error_nodes]
     items: list[CfgItem] = []
     unsure: list[str] = []
-    for start, end, fallback, reason in _walk_cfg(root, src, is_target):
-        if end is not None and any(a < end and start < b for a, b in error_ranges):
-            end, fallback, reason = None, end, "item touches a known parse error"
+    for start, end, fallback, reason, scope in _walk_cfg(root, src, is_target):
+        # Recovery can move extents anywhere inside a broken function, so an
+        # item touching a listed error, or in a function holding one, is unsure.
+        near = [(start, end)] + ([scope] if scope else [])
+        if end is not None and any(a < e and s < b for a, b in error_ranges for s, e in near):
+            end, fallback, reason = None, end, "item near a known parse error"
         if end is None:
             unsure.append(f"{reason} at line {text.count(chr(10), 0, to_char(start)) + 1}")
             if side is SafeSide.LEAN_LONG:
@@ -588,7 +620,7 @@ def item_extents_ignoring_errors(text: str, is_target=None) -> list[tuple[int, i
     to_char = _char_offsets(text, src)
     root = _rust_parser().parse(src).root_node
     out = []
-    for start, end, _, _ in _walk_cfg(root, src, is_target or cfg_is_test):
+    for start, end, _, _, _ in _walk_cfg(root, src, is_target or cfg_is_test):
         if end is not None:
             item = _item(text, to_char(start), to_char(end))
             out.append((item.first_line, item.last_line))
