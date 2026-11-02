@@ -41,18 +41,21 @@ pub(super) fn set(
         ));
     }
     // Plain as written: the key's own text, with nothing but indentation (and
-    // an element's dash) before it on its line, so no anchor, tag or `?`.
+    // an element's dash) before it on its line, and its colon on that same
+    // line. So no anchor, tag or `?` before it, on its line or the one above
+    // (an explicit `? key` puts its colon on a later line).
     let undecorated = |k: &std::ops::Range<usize>| {
         let line_start = text[..k.start].rfind('\n').map_or(0, |n| n + 1);
         text[line_start..k.start]
             .chars()
             .all(|c| c == ' ' || c == '-')
     };
-    let Some(key_bytes) = node
+    let plain = node
         .key
         .clone()
         .filter(|k| text[k.clone()] == **key && undecorated(k))
-    else {
+        .and_then(|k| colon_after(&text, k.end).ok());
+    let Some(colon) = plain else {
         return Err(give_up(
             GiveUp::NotPlainKey,
             "the list's key is not written plain",
@@ -68,7 +71,7 @@ pub(super) fn set(
         .map_err(|_| unprovable("the file is not one mapping the parser accepts"))?;
     let current = value_at(&doc, &path.0);
     match node.shape {
-        Shape::Scalar { empty: true } => after_colon(lines, &text, key_bytes.end, value),
+        Shape::Scalar { empty: true } => write_after(lines, colon, value),
         Shape::Scalar { empty: false }
             if current.is_null() && one_line(&text, node.bytes.clone()) =>
         {
@@ -97,7 +100,6 @@ pub(super) fn set(
             // under the key's line, so deleting them first leaves the colon's
             // byte position as it was; nothing is re-parsed between the two
             // steps.
-            let colon = colon_after(&text, key_bytes.end)?;
             shape::remove_entry(lines, &path.0, CommentRule::Refuse, Span::Under)?;
             write_after(lines, colon, value)
         }
@@ -184,17 +186,8 @@ fn colon_after(text: &str, key_end: usize) -> Result<usize, ComputeRefusal> {
     }
 }
 
-/// `key:` written alone: the list goes after the colon, any comment kept.
-fn after_colon(
-    lines: &mut Lines,
-    text: &str,
-    key_end: usize,
-    value: &str,
-) -> Result<(), ComputeRefusal> {
-    let colon = colon_after(text, key_end)?;
-    write_after(lines, colon, value)
-}
-
+/// The list after the key's colon (`key:` alone, or a block list's key line),
+/// any comment after it kept.
 fn write_after(lines: &mut Lines, colon: usize, value: &str) -> Result<(), ComputeRefusal> {
     replaced(lines, colon + 1..colon + 1, &format!(" {value}"))
 }

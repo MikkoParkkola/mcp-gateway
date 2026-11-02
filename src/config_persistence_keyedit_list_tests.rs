@@ -393,6 +393,9 @@ fn a_decorated_key_is_refused() {
     for original in [
         "auth:\n  &k scope: [\"a\"]\n",
         "auth:\n  !!str scope: [\"a\"]\n",
+        "auth:\n  ? &k\n    scope\n  : [\"a\"]\n",
+        "auth:\n  ? !!str\n    scope\n  : [\"a\"]\n",
+        "auth:\n  ? scope\n  : [\"a\"]\n",
     ] {
         assert_refused_by(original, &[list("auth.scope", &["x"])], "not written plain");
     }
@@ -405,6 +408,13 @@ fn removing_an_explicit_key_keeps_a_comment_outside_it() {
     let original = "? scope\n: old\n # keep\nother: 1\n";
     let out = edited(original, &[(path("scope"), Change::Remove)]);
     assert_eq!(out, " # keep\nother: 1\n");
+    // At the key's own column the comment is not the entry's: kept.
+    let at = "? scope\n: old\n  # at the key\nother: 1\n";
+    let out = edited(at, &[(path("scope"), Change::Remove)]);
+    assert_eq!(out, "  # at the key\nother: 1\n");
+    // Deeper than the key it is the entry's: refused, naming its line.
+    let deeper = "? scope\n: old\n   # under the key\nother: 1\n";
+    assert_refused_by(deeper, &[(path("scope"), Change::Remove)], "line 3");
 }
 
 /// The planner and the deletion agree on trailing blank lines: after a block
