@@ -176,7 +176,7 @@ impl std::fmt::Debug for ResolvedAuthConfig {
 /// written against these names, so if any other code could build one — from a
 /// header, from `AuthenticatedClient::name`, from an OIDC subject — the
 /// allow-list would be satisfiable by an identity that never presented the key.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub(crate) struct NamedApiKey {
     name: String,
     personal: bool,
@@ -186,6 +186,18 @@ pub(crate) struct NamedApiKey {
     /// previous: what a watch or session opened by this request is bound to,
     /// so it ends when that secret stops being valid. Never the digest.
     digest_tag: String,
+}
+
+// The tag fingerprints a secret: redacted, as `ApiKeyRef` redacts it.
+impl std::fmt::Debug for NamedApiKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("NamedApiKey")
+            .field("name", &self.name)
+            .field("personal", &self.personal)
+            .field("matched_previous_digest", &self.matched_previous_digest)
+            .field("digest_tag", &"<redacted>")
+            .finish()
+    }
 }
 
 impl NamedApiKey {

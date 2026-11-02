@@ -65,10 +65,20 @@ pub(crate) struct Bound {
 /// to its secret: it lives while that secret is still valid, a routine
 /// rotation keeps it through the grace, and one that drops the secret at once
 /// ends it.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub(crate) struct MintingKey {
     pub(crate) quota: crate::gateway::auth::QuotaPrincipal,
     pub(crate) digest_tag: String,
+}
+
+// The tag fingerprints a secret: redacted, as `ApiKeyRef` redacts it.
+impl std::fmt::Debug for MintingKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MintingKey")
+            .field("quota", &self.quota)
+            .field("digest_tag", &"<redacted>")
+            .finish()
+    }
 }
 
 impl Bound {
