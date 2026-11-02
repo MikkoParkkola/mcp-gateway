@@ -85,3 +85,31 @@ async fn a_grants_yaml_naming_no_one_is_refused_with_its_path_and_rule_id() {
         assert!(error.contains("g-empty"), "rule id: {error}");
     }
 }
+
+#[test]
+fn new_refuses_a_subject_naming_no_one_and_names_the_empty_part() {
+    use super::EmptyIdentity;
+    assert_eq!(
+        GrantSubject::new("", "alice", None).unwrap_err(),
+        EmptyIdentity::Authority
+    );
+    assert_eq!(
+        GrantSubject::new("api_key", "", None).unwrap_err(),
+        EmptyIdentity::Subject
+    );
+    assert_eq!(
+        GrantSubject::new("", "", None).unwrap_err(),
+        EmptyIdentity::Authority
+    );
+}
+
+/// The check is raw, never trimmed: a value of spaces still names someone,
+/// both through `new` and on deserialize.
+#[test]
+fn whitespace_still_names_someone() {
+    let built = GrantSubject::new(" ", " admin ", None).expect("raw values name someone");
+    assert_eq!((built.authority(), built.subject()), (" ", " admin "));
+    let read: GrantSubject = serde_json::from_str(r#"{"authority":" ","subject":" "}"#)
+        .expect("raw values name someone");
+    assert_eq!(read.subject(), " ");
+}
