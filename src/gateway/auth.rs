@@ -421,7 +421,10 @@ impl AuthenticatedClient {
 mod cookies;
 pub use cookies::SESSION_COOKIE;
 pub(super) use cookies::session_limits;
-pub(crate) use cookies::{cookie_secure, cookies_are_secure, is_https_url, session_cookie};
+pub(crate) use cookies::{cookie_secure, is_https_url, session_cookie};
+// Outside this module only the web UI asks; `cookie_secure` asks it inside.
+#[cfg(feature = "webui")]
+pub(crate) use cookies::cookies_are_secure;
 
 /// Who a dashboard-session action is attributed to in the audit log: the same
 /// identity the middleware gives a valid session.
