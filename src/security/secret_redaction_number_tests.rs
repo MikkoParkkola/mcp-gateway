@@ -1,0 +1,199 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+//! A JSON number is redacted exactly when it equals a value by the number
+//! rules, however the scrub finds the match. The oracle below is the
+//! per-value comparison the scrub ran before it matched numbers by lookup,
+//! kept verbatim: every row compares the scrub's answer with it.
+
+use serde_json::{Number, Value};
+
+use super::{Compiled, exact_integer, redact_value_with};
+
+/// Whether `number` equals `needle` by the number rules: the comparison the
+/// scrub made per value, one value at a time.
+fn oracle(needle: &str, number: &Number) -> bool {
+    let n = number;
+    let digits = n.to_string();
+    let float = n.as_f64().filter(|_| n.is_f64()).map(f64::abs);
+    let value_f64 = n.as_f64().map(f64::abs);
+    let value_int = n
+        .as_u64()
+        .map(u128::from)
+        .or_else(|| n.as_i64().map(|v| u128::from(v.unsigned_abs())));
+    let needle = needle.trim_ascii();
+    let needle = needle.strip_prefix(['+', '-']).unwrap_or(needle);
+    let coefficient = needle.split(['e', 'E']).next().unwrap_or_default();
+    if !coefficient.bytes().any(|b| b.is_ascii_digit()) {
+        return false;
+    }
+    if !needle.bytes().all(|b| b.is_ascii_digit()) {
+        let trimmed = needle.trim_start_matches('0');
+        let normalized: std::borrow::Cow<'_, str> =
+            if trimmed.starts_with(|c: char| c.is_ascii_digit()) {
+                trimmed.into()
+            } else {
+                format!("0{trimmed}").into()
+            };
+        let Ok(parsed) = serde_json::from_str::<Number>(&normalized) else {
+            return false;
+        };
+        if let Some(v) = value_int {
+            return exact_integer(&normalized).is_some_and(|e| e == v.to_string());
+        }
+        return parsed
+            .as_f64()
+            .zip(value_f64)
+            .is_some_and(|(p, v)| p.abs().to_bits() == v.to_bits());
+    }
+    let value = needle.trim_start_matches('0');
+    let value = if value.is_empty() { "0" } else { value };
+    if let Some(f) = float {
+        return serde_json::from_str::<f64>(value).is_ok_and(|p| p.to_bits() == f.to_bits());
+    }
+    digits.trim_start_matches('-') == value
+}
+
+/// The scrub's verdict on `number` against `needles`, and the oracle's: a
+/// literal (exact JSON scalar equality) first, as the scrub checks it, then
+/// any value equal by the number rules.
+fn verdicts(needles: &[&str], number: &str) -> (bool, bool) {
+    let parsed: Value = serde_json::from_str(number).expect("a JSON number");
+    let Value::Number(n) = &parsed else {
+        panic!("premise: {number} is a number");
+    };
+    let literal = needles
+        .iter()
+        .filter_map(|needle| serde_json::from_str::<Value>(needle).ok())
+        .any(|literal| literal == parsed);
+    let expected = literal || needles.iter().any(|needle| oracle(needle, n));
+    let owned: Vec<String> = needles.iter().map(|s| (*s).to_owned()).collect();
+    let mut scrubbed = parsed.clone();
+    let actual = redact_value_with(&mut scrubbed, &Compiled::new(&owned));
+    (actual, expected)
+}
+
+/// Value forms: digits with and without leading zeros and signs, decimals,
+/// exponents, past f64 precision, past u64, past u128, and forms that name
+/// no number.
+const NEEDLES: &[&str] = &[
+    "0",
+    "000",
+    "007",
+    "012345",
+    "+012345",
+    "-012345",
+    " 12345.0\n",
+    "12.5",
+    "0012.5",
+    "1.5e10",
+    "1.2345e4",
+    "12345.0",
+    "1e400",
+    "0e99",
+    "e123",
+    "+",
+    "abc",
+    "12_345",
+    "0x1F",
+    "18446744073709551616",
+    "340282366920938463463374607431768211456",
+    "9007199254740993",
+    "123456789012345678901234567890",
+    "99999999999999991611392",
+    "1e23",
+];
+
+/// Number forms: zero in each sign and form, small and large integers in
+/// each sign, floats, exponents, the edges of u64, i64 and f64 precision,
+/// and a float that rounds to the same f64 as an integer-form value.
+const NUMBERS: &[&str] = &[
+    "0",
+    "-0",
+    "0.0",
+    "-0.0",
+    "7",
+    "1771",
+    "12345",
+    "-12345",
+    "12345.0",
+    "-12345.0",
+    "1.5e10",
+    "15000000000",
+    "12.5",
+    "-12.5",
+    "18446744073709551615",
+    "-9223372036854775808",
+    "9007199254740992",
+    "9007199254740993",
+    "1e23",
+    "99999999999999991611392",
+    "1e300",
+];
+
+/// Every value alone against every number form.
+#[test]
+fn each_value_alone_matches_numbers_as_the_oracle_does() {
+    let mut wrong = Vec::new();
+    for needle in NEEDLES {
+        for number in NUMBERS {
+            let (actual, expected) = verdicts(&[needle], number);
+            if actual != expected {
+                wrong.push(format!(
+                    "{needle:?} vs {number}: scrub {actual}, oracle {expected}"
+                ));
+            }
+        }
+    }
+    assert!(wrong.is_empty(), "{wrong:#?}");
+}
+
+/// Mixed sets: a match by any one value is a match, and a set none of whose
+/// values matches redacts nothing.
+#[test]
+fn mixed_value_sets_match_numbers_as_the_oracle_does() {
+    let sets: &[&[&str]] = &[
+        &["007", "12.5", "abc"],
+        &["e123", "+", "0x1F", "12_345"],
+        &["9007199254740993", "1.5e10", "-012345"],
+        &[
+            "0",
+            "99999999999999991611392",
+            "340282366920938463463374607431768211456",
+        ],
+        NEEDLES,
+    ];
+    let mut wrong = Vec::new();
+    for set in sets {
+        for number in NUMBERS {
+            let (actual, expected) = verdicts(set, number);
+            if actual != expected {
+                wrong.push(format!(
+                    "{set:?} vs {number}: scrub {actual}, oracle {expected}"
+                ));
+            }
+        }
+    }
+    assert!(wrong.is_empty(), "{wrong:#?}");
+}
+
+/// The grid's premise: it holds matches as well as misses, including the
+/// cases the lookup must get right (zero in each sign, the rounding pair).
+#[test]
+fn the_grid_holds_matches_and_misses() {
+    for (needle, number, expected) in [
+        ("0", "-0.0", true),
+        ("0", "0.0", true),
+        ("007", "7", true),
+        ("007", "1771", false),
+        ("99999999999999991611392", "1e23", true),
+        ("9007199254740993", "9007199254740992", false),
+        ("1.5e10", "15000000000", true),
+    ] {
+        let (actual, oracle) = verdicts(&[needle], number);
+        assert_eq!(
+            oracle, expected,
+            "premise: the oracle on {needle:?} vs {number}"
+        );
+        assert_eq!(actual, expected, "{needle:?} vs {number}");
+    }
+}
