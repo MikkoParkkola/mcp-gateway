@@ -446,16 +446,6 @@ def _cfg_predicates(attr_text: str) -> list[str]:
     return [cfg_expression(code, m.end()) for m in CFG_ATTR.finditer(code)]
 
 
-def _nodes(root):
-    """Every node under `root`, depth first, by an explicit stack: a deeply
-    nested file never meets Python's recursion limit."""
-    stack = [root]
-    while stack:
-        node = stack.pop()
-        yield node
-        stack.extend(reversed(node.children))
-
-
 def _errors(root, src: bytes) -> list:
     """Each ERROR and missing node, outermost only (an ERROR's insides are
     not walked): (kind, normalized text, start byte, end byte)."""
@@ -480,13 +470,15 @@ def _error_signature(errors: list) -> collections.Counter:
 
 
 def _enclosing_function(node):
-    """The (start, end) bytes of the function holding `node`, or None."""
+    """The (start, end) bytes of the outermost function holding `node`, or
+    None: error recovery in any function reaches every function it holds."""
+    found = None
     up = node.parent
     while up is not None:
         if up.type == "function_item":
-            return (up.start_byte, up.end_byte)
+            found = (up.start_byte, up.end_byte)
         up = up.parent
-    return None
+    return found
 
 
 def _walk_cfg(root, src: bytes, is_target):
@@ -502,7 +494,9 @@ def _walk_cfg(root, src: bytes, is_target):
         """The attribute is itself `cfg(P)` with a target P: by its own name,
         never by a `cfg` mentioned inside another attribute's arguments."""
         inner = next((c for c in attr.named_children if c.type == "attribute"), None)
-        parts = inner.named_children if inner is not None else []
+        # A comment is a token like any other: `#[cfg /* why */ (test)]` is cfg(test).
+        named = inner.named_children if inner is not None else []
+        parts = [c for c in named if c.type not in ("line_comment", "block_comment")]
         if len(parts) != 2 or parts[0].type != "identifier" or parts[1].type != "token_tree":
             return False
         if src[parts[0].start_byte : parts[0].end_byte] != b"cfg":
@@ -541,7 +535,8 @@ def _walk_cfg(root, src: bytes, is_target):
                     continue
             pending.append((child, inside_end))
         stack.extend(reversed(pending))
-    return found
+    # A level's attributes are found before its children's: restore source order.
+    return sorted(found, key=lambda f: f[0])
 
 
 def _char_offsets(text: str, src: bytes):
