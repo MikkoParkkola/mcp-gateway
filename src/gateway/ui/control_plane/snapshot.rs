@@ -41,6 +41,10 @@ pub(super) fn local_runtime_snapshot(
     // decision queue, counts, coverage) sees only its own grants and events.
     let all_principals =
         ControlPlaneRbac::authorize(actor, ControlPlaneAction::ReadAllPrincipals).allowed;
+    // A caller scoped to some backends is shown nothing gateway-wide: no
+    // policy, grant or store audit event, whatever its role. Every derived
+    // field reads the snapshot, so it is narrowed here once.
+    let scoped = is_scoped(client);
     let mut snapshot = ControlPlaneSnapshot::default();
     snapshot.users.push(ControlPlaneUser {
         user_id: actor.actor_id.clone(),
@@ -58,7 +62,9 @@ pub(super) fn local_runtime_snapshot(
             });
     }
 
-    snapshot.policies = local_policy_rows(generation);
+    if !scoped {
+        snapshot.policies = local_policy_rows(generation);
+    }
 
     #[allow(
         clippy::disallowed_methods,
@@ -115,7 +121,7 @@ pub(super) fn local_runtime_snapshot(
         .meta_mcp
         .identity_grant_rows()
         .into_iter()
-        .filter(|grant| all_principals || grant_subject == Some(&grant.subject))
+        .filter(|grant| !scoped && (all_principals || grant_subject == Some(&grant.subject)))
     {
         snapshot
             .grants
@@ -137,6 +143,12 @@ pub(super) fn local_runtime_snapshot(
         snapshot
             .audit_events
             .retain(|event| event.actor_id == actor.actor_id);
+    }
+    // No written event names a backend (`pin_written_action`), so a scoped
+    // caller is shown none. The store is still read, so a failed read is
+    // still reported.
+    if scoped {
+        snapshot.audit_events.clear();
     }
 
     (snapshot, store_read_degraded)
@@ -271,16 +283,32 @@ pub(super) fn local_policy_rows(
 }
 
 pub(super) fn can_view_backend(client: Option<&AuthenticatedClient>, backend_name: &str) -> bool {
-    client.is_some_and(|client| {
-        // Backend ACCESS is not inventory VISIBILITY. The anonymous identity
-        // used when authentication is disabled carries `backends: ["*"]` so
-        // that ordinary tool invocation keeps working, which handed it the
-        // whole control-plane inventory through `can_access_backend`. A scoped
-        // API key still sees the backends it is scoped to, admin or not: the
-        // scope bounds every role.
-        client.authenticated
-            && crate::gateway::authz::BackendGrant::for_ui(Some(client)).admits(backend_name)
-    })
+    snapshot_scope(client).admits(backend_name)
+}
+
+/// The backend scope the snapshot is read by. Backend ACCESS is not inventory
+/// VISIBILITY: the anonymous identity used when authentication is disabled
+/// carries `backends: ["*"]` so that tool invocation keeps working, so only
+/// an authenticated client's UI grant counts, and anyone else reaches
+/// nothing. A scoped API key sees the backends it is scoped to, admin or not.
+pub(super) fn snapshot_scope(
+    client: Option<&AuthenticatedClient>,
+) -> crate::gateway::authz::BackendGrant<'_> {
+    match client {
+        Some(client) if client.authenticated => {
+            crate::gateway::authz::BackendGrant::for_ui(Some(client))
+        }
+        _ => crate::gateway::authz::BackendGrant::Empty,
+    }
+}
+
+/// Whether the snapshot withholds its gateway-wide objects from `client`:
+/// any scope but every backend.
+pub(super) fn is_scoped(client: Option<&AuthenticatedClient>) -> bool {
+    !matches!(
+        snapshot_scope(client),
+        crate::gateway::authz::BackendGrant::Unscoped
+    )
 }
 
 pub(super) fn server_status_from_backend(
@@ -469,6 +497,15 @@ impl ControlPlaneShadowRadar {
             enterprise_boundary: handoff.enterprise_boundary,
             trustcard_input_count: handoff.trustcard_inputs.len(),
             doctor_finding_count: handoff.doctor_findings.len(),
+        }
+    }
+
+    /// The radar for a caller scoped to some backends: not run, every count
+    /// zero. Local discovery is gateway-wide, so it is withheld, not failed.
+    pub(super) fn out_of_scope() -> Self {
+        Self {
+            scan_status: "out_of_scope",
+            ..Self::scan_unavailable()
         }
     }
 

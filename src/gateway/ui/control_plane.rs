@@ -30,6 +30,8 @@ mod read_reflect_tests;
 #[cfg(test)]
 mod role_wiring_tests;
 mod snapshot;
+#[cfg(test)]
+mod snapshot_scope_tests;
 
 #[cfg(test)]
 use mutations::{
@@ -39,8 +41,8 @@ use mutations::{
     actor_from_client, mutate_grant, mutate_policy, mutation_disabled_reason, resolve_decision,
 };
 use snapshot::{
-    ControlPlaneApiResponse, ControlPlaneResponseFlags, caller_grant_subject,
-    local_runtime_snapshot, local_shadow_radar,
+    ControlPlaneApiResponse, ControlPlaneResponseFlags, ControlPlaneShadowRadar,
+    caller_grant_subject, is_scoped, local_runtime_snapshot, local_shadow_radar,
 };
 #[cfg(test)]
 use snapshot::{
@@ -169,7 +171,11 @@ async fn control_plane_snapshot(
         (&actor, grant_subject.as_ref()),
         now,
     );
-    let shadow_radar = local_shadow_radar(&state).await;
+    let shadow_radar = if is_scoped(client.as_ref()) {
+        ControlPlaneShadowRadar::out_of_scope()
+    } else {
+        local_shadow_radar(&state).await
+    };
 
     let Some(view) = snapshot.read_only_view(&actor) else {
         return auth_required(StatusCode::FORBIDDEN).into_response();
