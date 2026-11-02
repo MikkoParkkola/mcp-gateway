@@ -159,13 +159,104 @@ impl Emptied {
     }
 }
 
+/// Whether the expiry edit checked out (S9: every offered edit is checked).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Expiry {
+    Checked,
+    /// Its `expires_at` is shared through an anchor or alias: the one step
+    /// that cannot be checked is labelled as such.
+    Unchecked,
+}
+
+/// Any literal proves the same edit: the expiry check writes this one.
+const EXPIRY_PROBE: &str = "2000-01-01T00:00:00Z";
+
+/// Whether setting element `index`'s `expires_at` by hand changes that field
+/// alone: the edit applied in memory must parse and equal the original with
+/// only that field set. An anchor another key's alias names fails it.
+fn expiry_checked(original: &str, nodes: &[Node], index: usize) -> bool {
+    let element_path = [
+        Segment::Key("auth".into()),
+        Segment::Key("api_keys".into()),
+        Segment::Index(index),
+    ];
+    let field = [&element_path[..], &[Segment::Key("expires_at".into())][..]].concat();
+    let value = format!("\"{EXPIRY_PROBE}\"");
+    let edited = if let Some(node) = super::shape::find(nodes, &field) {
+        // Its value replaced, with any anchor or alias on it.
+        let Some(key) = node.key.clone() else {
+            return false;
+        };
+        format!(
+            "{}: {value}{}",
+            &original[..key.end],
+            &original[node.bytes.end..]
+        )
+    } else {
+        let Some(element) = super::shape::find(nodes, &element_path) else {
+            return false;
+        };
+        if element.flow {
+            if original.as_bytes().get(element.start) != Some(&b'{') {
+                return false;
+            }
+            let (head, tail) = original.split_at(element.start + 1);
+            format!("{head}expires_at: {value}, {tail}")
+        } else {
+            // A new line after the `name:` line, at its key's column.
+            let name_path = [&element_path[..], &[Segment::Key("name".into())][..]].concat();
+            let Some(key) = super::shape::find(nodes, &name_path).and_then(|n| n.key.clone())
+            else {
+                return false;
+            };
+            let starts = Starts::of(original);
+            let line = starts.line_of(key.start);
+            let col = key.start - starts.0[line];
+            let at = starts.0.get(line + 1).copied().unwrap_or(original.len());
+            let ending = if original[..at].ends_with('\n') {
+                ""
+            } else {
+                "\n"
+            };
+            format!(
+                "{}{ending}{}expires_at: {value}\n{}",
+                &original[..at],
+                " ".repeat(col),
+                &original[at..]
+            )
+        }
+    };
+    let Ok(doc) = crate::yaml::from_str::<crate::yaml::Value>(original) else {
+        return false;
+    };
+    let set = (
+        super::FieldPath(field),
+        super::Change::Set(super::Scalar::Str(EXPIRY_PROBE.into())),
+    );
+    let Some(want) = super::shape::expected(&doc, &[set]) else {
+        return false;
+    };
+    crate::yaml::from_str::<crate::yaml::Value>(&edited).is_ok_and(|got| got == want)
+}
+
 /// What a refused revocation tells the operator (S9): expiry first, which a
 /// reload always applies since the number of keys stays the same, then the
-/// hand deletion when one was checked (`None`: expiry alone). Names the key
-/// and lines, never a value.
-fn instructions(name: &str, deletion: Option<&Deletion>) -> String {
-    let expiry =
-        format!("to revoke key `{name}`: set its `expires_at` to now and reload the gateway");
+/// hand deletion when one was checked (`None`: expiry alone). Every edit it
+/// offers was checked in memory; an expiry that could not be is said so,
+/// with its one unchecked step labelled. Names the key and lines, never a
+/// value.
+fn instructions(name: &str, expiry: Expiry, deletion: Option<&Deletion>) -> String {
+    let expiry = match expiry {
+        Expiry::Checked => {
+            format!("to revoke key `{name}`: set its `expires_at` to now and reload the gateway")
+        }
+        Expiry::Unchecked => format!(
+            "to revoke key `{name}`: no hand edit of its `expires_at` could be checked here, \
+             because that value is shared through an anchor (`&`) or alias (`*`). Unchecked \
+             step: copy the value onto each alias that names it, then set this entry's \
+             `expires_at` to now and reload the gateway"
+        ),
+    };
     let deletion = match deletion {
         None => return expiry,
         Some(Deletion::OnLine(line, _)) => {
@@ -307,7 +398,12 @@ pub(super) fn refusal(original: &str, nodes: &[Node], index: usize) -> Option<Co
         element_lines(original, element).map(|lines| Deletion::Lines(lines, emptied))
     }
     .filter(|deletion| checked(original, index, deletion));
-    let reason = instructions(&name, deletion.as_ref());
+    let expiry = if expiry_checked(original, nodes, index) {
+        Expiry::Checked
+    } else {
+        Expiry::Unchecked
+    };
+    let reason = instructions(&name, expiry, deletion.as_ref());
     Some(ComputeRefusal::Unprovable { code, reason })
 }
 

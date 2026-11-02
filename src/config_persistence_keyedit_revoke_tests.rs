@@ -221,6 +221,7 @@ fn instructs(reason: &str, name: &str) {
         "the multi-user restart note: {reason}"
     );
     assert!(!reason.contains("sha256:"), "never a value: {reason}");
+    assert!(!reason.contains("Unchecked"), "a checked expiry: {reason}");
 }
 
 // R4, R4b: an anchor on the element and an alias refuse, with the
@@ -466,6 +467,27 @@ fn r4s_a_quoted_name_is_named_as_written() {
     assert_eq!(code, GiveUp::Flow);
     assert!(reason.contains("`name: \"'ops'\"`"), "{reason}");
     assert!(!reason.contains("`name: ops`"), "{reason}");
+}
+
+// R4t: an `expires_at` anchored in the revoked entry and aliased by a
+// survivor: setting it would expire both keys, so no expiry edit checks
+// out; the refusal says so and labels its one unchecked step, and offers
+// no deletion (that would strand `*e`).
+#[test]
+fn r4t_a_shared_expiry_is_labelled_unchecked() {
+    let original = "auth:\n  api_keys:\n    - name: ops\n      expires_at: &e \"2030-01-01T00:00:00Z\"\n    \
+                    - name: ci\n      expires_at: *e\n";
+    let (code, reason) = refused(original, &[revoke(0)]);
+    assert_eq!(code, GiveUp::Anchor);
+    expiry_only(&reason, "ops");
+    assert!(
+        reason.contains("no hand edit of its `expires_at` could be checked"),
+        "{reason}"
+    );
+    assert!(
+        reason.contains("Unchecked step: copy the value onto each alias"),
+        "{reason}"
+    );
 }
 
 // R4c, R4f: a flow list refuses with an entry-specific edit, never a
