@@ -75,9 +75,9 @@ fn f5b_a_search_across_a_malformed_run_spends_one_budget_per_call_and_completes(
         assert!(pages.len() > 2, "{kind:?}: the search took several calls");
         for p in &pages {
             assert!(
-                p.bytes_read <= bound(SMALL),
+                p.diag.bytes_read <= bound(SMALL),
                 "{kind:?}: {} over the bound",
-                p.bytes_read
+                p.diag.bytes_read
             );
         }
         assert!(
@@ -107,9 +107,9 @@ fn f5b_a_newline_free_run_past_the_budget_and_the_cap_is_crossed_in_bounded_call
         SMALL,
         &mut search,
     );
-    assert!(pages.iter().all(|p| p.bytes_read <= bound(SMALL)));
+    assert!(pages.iter().all(|p| p.diag.bytes_read <= bound(SMALL)));
     assert!(
-        pages.iter().all(|p| p.bytes_read > 0 || !p.more),
+        pages.iter().all(|p| p.diag.bytes_read > 0 || !p.more),
         "every call progresses"
     );
     assert_eq!(counters(&pages), vec![3]);
@@ -127,7 +127,7 @@ fn f5c_a_resumed_search_that_finds_the_cursor_gone_resets_and_forgets_its_offset
     };
     let mut search = Search::default();
     let first = suspend(&l, &wrong, w.marks.last().unwrap(), &mut search);
-    let stale = first.bytes_read;
+    let stale = first.diag.bytes_read;
     let pages = drain(
         &l,
         Some(&wrong),
@@ -142,7 +142,7 @@ fn f5c_a_resumed_search_that_finds_the_cursor_gone_resets_and_forgets_its_offset
     );
     let after = rows_after(&l, None, w.marks.last(), &Access::All, SMALL, &mut search).unwrap();
     assert!(
-        after.first_read.is_some_and(|o| o < stale),
+        after.diag.first_read.is_some_and(|o| o < stale),
         "the next search starts afresh"
     );
 }
@@ -340,12 +340,12 @@ fn f5f_records_at_the_cap_each_move_a_call_forward() {
     assert_eq!(counters(&pages), vec![2, 3, 4]);
     let mut last = Some(w.marks[0].clone());
     for p in &pages {
-        assert!(p.bytes_read <= bound(SMALL), "within the bound");
+        assert!(p.diag.bytes_read <= bound(SMALL), "within the bound");
         assert_ne!(p.next, last, "every call delivers or passes one record");
         last = p.next.clone();
     }
     assert!(
-        pages.iter().skip(1).any(|p| p.anchor_bytes > 0),
+        pages.iter().skip(1).any(|p| p.diag.anchor_bytes > 0),
         "anchor re-reads are counted"
     );
 }

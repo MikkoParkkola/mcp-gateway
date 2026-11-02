@@ -62,6 +62,15 @@ pub(super) fn segments(path: &Path) -> io::Result<Vec<u64>> {
     Ok(seqs)
 }
 
+/// The next kept segment after `seq`, opened with its identity; `None` when
+/// the log ends there.
+pub(super) fn next_segment(path: &Path, seq: u64) -> io::Result<Option<(File, u64, FileId)>> {
+    let Some(next) = segments(path)?.into_iter().find(|s| *s > seq) else {
+        return Ok(None);
+    };
+    Ok(open(path, next)?.map(|(f, id)| (f, next, id)))
+}
+
 /// A segment opened with its identity. `None` when it is gone, or when its
 /// identity cannot be read: an unreadable identity is never trusted.
 pub(super) fn open(path: &Path, seq: u64) -> io::Result<Option<(File, FileId)>> {

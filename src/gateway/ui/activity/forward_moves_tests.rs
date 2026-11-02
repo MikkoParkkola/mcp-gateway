@@ -75,7 +75,7 @@ impl Suspended {
     /// given straight to the next file created.
     fn replace_same_bytes(&self) {
         let bytes = std::fs::read(&self.path).unwrap();
-        let aside = (0..)
+        let aside = (0..1000)
             .map(|i| self.path.with_extension(format!("old{i}")))
             .find(|p| !p.exists())
             .unwrap();
@@ -98,20 +98,28 @@ impl Suspended {
 #[test]
 fn f9_a_resumed_search_continues_where_the_last_call_stopped() {
     let mut s = suspended(calls(1));
-    let saved = s.first.read_end.expect("the suspended call read");
+    let saved = s.first.diag.read_end.expect("the suspended call read");
     let next = s.resume();
-    assert_eq!(next.first_read, Some(saved), "resumed, not searched again");
-    assert!(!next.restarted);
+    assert_eq!(
+        next.diag.first_read,
+        Some(saved),
+        "resumed, not searched again"
+    );
+    assert!(!next.diag.restarted);
 }
 
 #[test]
 fn f9b_rotation_keeps_the_identity_and_continues() {
     let mut s = suspended(calls(1));
-    let saved = s.first.read_end.unwrap();
+    let saved = s.first.diag.read_end.unwrap();
     s.rotate();
     let next = s.resume();
-    assert_eq!(next.first_read, Some(saved), "the renamed file is read on");
-    assert!(!next.restarted, "a rotation is not a restart");
+    assert_eq!(
+        next.diag.first_read,
+        Some(saved),
+        "the renamed file is read on"
+    );
+    assert!(!next.diag.restarted, "a rotation is not a restart");
 }
 
 #[test]
@@ -119,7 +127,7 @@ fn f9b_a_replaced_file_restarts_and_still_serves_every_row() {
     let mut s = suspended(calls(1));
     s.replace_same_bytes();
     let next = s.resume();
-    assert!(next.restarted, "a new identity is a restart");
+    assert!(next.diag.restarted, "a new identity is a restart");
     let mut pages = vec![next];
     while pages.last().unwrap().more && pages.len() < 1000 {
         pages.push(s.resume());
@@ -135,7 +143,10 @@ fn f9b_a_replaced_file_restarts_and_still_serves_every_row() {
 fn f9b_an_in_place_change_to_the_anchor_record_restarts() {
     let mut s = suspended(calls(1));
     s.change_anchor_in_place();
-    assert!(s.resume().restarted, "the anchor no longer hashes the same");
+    assert!(
+        s.resume().diag.restarted,
+        "the anchor no longer hashes the same"
+    );
 }
 
 #[test]
@@ -147,10 +158,11 @@ fn f9b_a_shrink_below_the_offset_restarts() {
         .unwrap();
     file.set_len(s.w.at[0].2 + 10).unwrap();
     let next = s.resume();
-    assert!(next.restarted, "shorter than the offset");
+    assert!(next.diag.restarted, "shorter than the offset");
     assert!(
-        next.first_read
-            .is_some_and(|o| o < s.first.read_end.unwrap()),
+        next.diag
+            .first_read
+            .is_some_and(|o| o < s.first.diag.read_end.unwrap()),
         "read from the search start"
     );
 }
@@ -162,7 +174,7 @@ fn f9b_an_unreadable_identity_restarts() {
     let next = s.resume();
     IDENTITY_FAILS.with(|f| f.set(false));
     assert!(
-        next.restarted,
+        next.diag.restarted,
         "an identity that cannot be read is never trusted"
     );
 }
@@ -200,21 +212,21 @@ fn f9b_retention_removing_the_segment_restarts_into_a_reset() {
         &mut search,
     )
     .unwrap();
-    assert!(next.restarted, "the segment's identity is gone");
+    assert!(next.diag.restarted, "the segment's identity is gone");
 }
 
 #[test]
 fn e2_with_no_anchor_yet_a_rotation_continues_and_a_replacement_restarts() {
     let mut rotated = suspended(Vec::new());
-    let saved = rotated.first.read_end.unwrap();
+    let saved = rotated.first.diag.read_end.unwrap();
     rotated.rotate();
     let next = rotated.resume();
     assert_eq!(
-        (next.first_read, next.restarted),
+        (next.diag.first_read, next.diag.restarted),
         (Some(saved), false),
         "rotation"
     );
     let mut replaced = suspended(Vec::new());
     replaced.replace_same_bytes();
-    assert!(replaced.resume().restarted, "replacement");
+    assert!(replaced.resume().diag.restarted, "replacement");
 }

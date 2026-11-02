@@ -51,7 +51,7 @@ impl StreamKind {
     }
 
     /// Whether a row of `kind` belongs on this stream.
-    pub(in crate::gateway::ui) fn keeps(self, kind: Kind) -> bool {
+    fn keeps(self, kind: Kind) -> bool {
         match self {
             Self::Activity => matches!(kind, Kind::Call | Kind::AdminAction),
             Self::Config => kind == Kind::Config,
@@ -107,6 +107,14 @@ pub(in crate::gateway::ui) struct ForwardPage {
     pub(in crate::gateway::ui) reset: bool,
     /// The cursor is not yet found: this log is not at its head.
     pub(in crate::gateway::ui) searching: bool,
+    /// What this call read and from where: the bounds and the resume proof
+    /// are judged on these.
+    pub(in crate::gateway::ui) diag: Diagnostics,
+}
+
+/// One call's reads.
+#[derive(Clone, Debug, Default)]
+pub(in crate::gateway::ui) struct Diagnostics {
     /// Whether this call discarded a suspended position and searched again.
     pub(in crate::gateway::ui) restarted: bool,
     /// Bytes this call read, the anchor's re-read included.
@@ -138,38 +146,38 @@ pub(in crate::gateway::ui) fn rows_after(
     };
     let saved = search.at.take().filter(|p| p.continues(cursor));
     let resumed = match &saved {
-        Some(p) => place::resume(log, p, &mut page.anchor_bytes)?,
+        Some(p) => place::resume(log, p, &mut page.diag.anchor_bytes)?,
         None => None,
     };
     if saved.is_some() && resumed.is_none() {
         search.restarts += 1;
         if search.restarts > MAX_RESTARTS {
             page.reset = true;
-            page.bytes_read = page.anchor_bytes;
+            page.diag.bytes_read = page.diag.anchor_bytes;
             return Ok(page);
         }
-        page.restarted = true;
+        page.diag.restarted = true;
     }
     let started = match resumed {
         Some(r) => Some(r),
-        None => place::start(log, cursor, &mut page.bytes_read)?,
+        None => place::start(log, cursor, &mut page.diag.bytes_read)?,
     };
     let Some((file, mut at)) = started else {
         page.reset = true;
-        page.bytes_read += page.anchor_bytes;
+        page.diag.bytes_read += page.diag.anchor_bytes;
         return Ok(page);
     };
     let mut scan = scan::Scan::new(file, at.offset, at.mode, budget.bytes);
     // Where the scan itself starts, not where the place says it should.
-    page.first_read = Some(scan.offset);
+    page.diag.first_read = Some(scan.offset);
     let mut spent = 0;
     let outcome = loop {
-        let step = scan.next()?;
-        let anchor = match &step {
+        let item = scan.next()?;
+        let anchor = match &item {
             scan::Step::Record { anchor, .. } => Some(*anchor),
             _ => None,
         };
-        match step {
+        match item {
             scan::Step::Record { entry, .. } => {
                 at.anchor = anchor;
                 let Some(mark) = mark_of(&entry) else {
@@ -212,12 +220,7 @@ pub(in crate::gateway::ui) fn rows_after(
             scan::Step::Unreadable => {}
             scan::Step::Budget => break Outcome::More,
             scan::Step::End => {
-                let later = place::segments(log.path)?.into_iter().find(|s| *s > at.seq);
-                let opened = match later {
-                    Some(seq) => place::open(log.path, seq)?.map(|(f, id)| (f, seq, id)),
-                    None => None,
-                };
-                let Some((next, seq, id)) = opened else {
+                let Some((next, seq, id)) = place::next_segment(log.path, at.seq)? else {
                     // The log ends here: a cursor not yet found is ahead of it.
                     break if at.found {
                         Outcome::Done
@@ -234,15 +237,27 @@ pub(in crate::gateway::ui) fn rows_after(
     };
     at.offset = scan.offset;
     at.mode = scan.mode;
-    page.read_end = Some(scan.offset);
-    page.bytes_read += spent + scan.read + page.anchor_bytes;
+    page.diag.read_end = Some(scan.offset);
+    page.diag.bytes_read += spent + scan.read + page.diag.anchor_bytes;
+    settle(&mut page, search, at, outcome, cursor);
+    Ok(page)
+}
+
+/// Record how a call ended, and keep its place only when it stopped short.
+fn settle(
+    page: &mut ForwardPage,
+    search: &mut Search,
+    at: place::Place,
+    outcome: Outcome,
+    cursor: Option<&Mark>,
+) {
     match outcome {
         Outcome::Reset => {
             page.reset = true;
             search.at = None;
         }
         Outcome::Done => {
-            page.next = at.last.clone();
+            page.next.clone_from(&at.last);
             search.at = None;
         }
         Outcome::More => {
@@ -256,7 +271,6 @@ pub(in crate::gateway::ui) fn rows_after(
             search.at = Some(at);
         }
     }
-    Ok(page)
 }
 
 /// How a call ended.

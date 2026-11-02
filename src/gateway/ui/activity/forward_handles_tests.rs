@@ -17,7 +17,10 @@ fn f9c_a_file_swapped_onto_the_path_after_the_identity_check_is_not_read() {
     // The call that proved the handle reads to the end on it; a later call
     // would restart, since the path now names another file.
     let page = s.resume_with(WIDE);
-    assert!(!page.restarted && !page.reset, "the proven handle is read");
+    assert!(
+        !page.diag.restarted && !page.reset,
+        "the proven handle is read"
+    );
     assert_eq!(
         counters(std::slice::from_ref(&page)),
         vec![3, 4],
@@ -42,7 +45,10 @@ fn f9c_a_rename_or_unlink_after_the_open_leaves_the_read_on_the_same_bytes() {
             }
         });
         let page = s.resume_with(WIDE);
-        assert!(!page.restarted, "unlink {unlink}: no restart in that call");
+        assert!(
+            !page.diag.restarted,
+            "unlink {unlink}: no restart in that call"
+        );
         assert_eq!(
             counters(std::slice::from_ref(&page)),
             vec![3, 4],
@@ -71,7 +77,10 @@ fn f9e_a_resume_in_a_rotated_segment_crosses_into_the_next_without_restarting() 
         SMALL,
         &mut s.search,
     );
-    assert!(pages.iter().all(|p| !p.restarted), "no restart on crossing");
+    assert!(
+        pages.iter().all(|p| !p.diag.restarted),
+        "no restart on crossing"
+    );
     assert_eq!(counters(&pages), vec![3, 4, 5, 6]);
 }
 
@@ -99,7 +108,10 @@ fn f11_two_connections_each_resume_their_own_search() {
     )
     .unwrap();
     assert!(b_first.searching, "b is suspended too");
-    assert_ne!(b_first.read_end, a.first.read_end, "at another offset");
+    assert_ne!(
+        b_first.diag.read_end, a.first.diag.read_end,
+        "at another offset"
+    );
     let a_next = a.resume();
     let b_next = rows_after(
         &l,
@@ -111,11 +123,11 @@ fn f11_two_connections_each_resume_their_own_search() {
     )
     .unwrap();
     assert_eq!(
-        a_next.first_read, a.first.read_end,
+        a_next.diag.first_read, a.first.diag.read_end,
         "a resumes at its own offset"
     );
     assert_eq!(
-        b_next.first_read, b_first.read_end,
+        b_next.diag.first_read, b_first.diag.read_end,
         "b resumes at its own offset"
     );
 }
@@ -135,9 +147,9 @@ fn f12_a_new_connection_searches_from_its_cursor_not_an_old_offset() {
         &mut fresh,
     )
     .unwrap();
-    assert!(first.first_read.is_some(), "the new connection read");
+    assert!(first.diag.first_read.is_some(), "the new connection read");
     assert!(
-        first.first_read < s.first.read_end,
+        first.diag.first_read < s.first.diag.read_end,
         "from the search's start, not the old offset"
     );
     let mut pages = vec![first];
@@ -154,7 +166,7 @@ fn f12_a_new_connection_searches_from_its_cursor_not_an_old_offset() {
             .unwrap(),
         );
     }
-    assert!(pages.iter().all(|p| p.bytes_read <= bound(SMALL)));
+    assert!(pages.iter().all(|p| p.diag.bytes_read <= bound(SMALL)));
     assert_eq!(counters(&pages), vec![3, 4]);
 }
 
@@ -171,7 +183,7 @@ fn f9d_a_file_replaced_on_every_call_restarts_at_most_max_restarts_then_resets()
             break;
         }
     }
-    let restarts = pages.iter().filter(|p| p.restarted).count();
+    let restarts = pages.iter().filter(|p| p.diag.restarted).count();
     assert!(restarts >= 1, "a replacement restarts");
     assert!(restarts <= usize::from(MAX_RESTARTS), "{restarts} restarts");
     assert!(pages.last().unwrap().reset, "then the page resets");
@@ -198,6 +210,6 @@ fn f9d_a_file_rotated_on_every_call_never_restarts_and_progresses() {
             break;
         }
     }
-    assert!(pages.iter().all(|p| !p.restarted && !p.reset));
+    assert!(pages.iter().all(|p| !p.diag.restarted && !p.reset));
     assert_eq!(counters(&pages), vec![3, 4]);
 }

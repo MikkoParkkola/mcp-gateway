@@ -263,7 +263,7 @@ fn f5_an_unreadable_run_longer_than_the_budget_is_crossed_and_never_served() {
     assert_eq!(counters(&pages), vec![2]);
     assert!(pages.len() > 1, "the run took more than one call");
     assert!(
-        pages.iter().all(|p| p.bytes_read <= 2048 + 4096),
+        pages.iter().all(|p| p.diag.bytes_read <= 2048 + 4096),
         "each call within its bound"
     );
 }
