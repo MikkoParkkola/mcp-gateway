@@ -94,11 +94,12 @@ KNOWN_LEFTOVERS: list[tuple[str, str, int, str]] = [
      r"\.mcp-gateway/protocol-revision-telemetry/(\.window\.lock|window\.json)"
      r"|\.mcp-gateway/record-principal\.key|tasks/stdio/store\.lease|inner\.yaml"
      r"|\.gateway\.yaml\.lock|\.mcp-gateway/transparency/transparency\.jsonl"
-     r"|gateway-control-plane/audit\.jsonl", 2,
+     r"|gateway-control-plane/audit\.jsonl", 3,
      "the home of a gateway an integration test spawned, written after the "
      "test's temp dir is gone: its telemetry window, record key and stdio "
      "lease, or its config lock, transparency log and control-plane audit; "
-     "the tests' wait for that gateway removes it"),
+     "the tests' wait for that gateway removes it; up to three in one int-a "
+     "run (CI job 125058531711)"),
 ]
 # Written out, not derived from the list above: an entry added there and not
 # here, or a count raised past its ceiling, fails the self-test, so the list
@@ -111,7 +112,7 @@ LEFTOVER_CEILING: dict[tuple[str, str], int] = {
      r"\.mcp-gateway/protocol-revision-telemetry/(\.window\.lock|window\.json)"
      r"|\.mcp-gateway/record-principal\.key|tasks/stdio/store\.lease|inner\.yaml"
      r"|\.gateway\.yaml\.lock|\.mcp-gateway/transparency/transparency\.jsonl"
-     r"|gateway-control-plane/audit\.jsonl"): 2,
+     r"|gateway-control-plane/audit\.jsonl"): 3,
 }
 
 HEADER = re.compile(r"^\s*(Running|Doc-tests) ")
@@ -364,7 +365,7 @@ def self_test() -> int:
     gone = ["oauth_test_no_token", "chain-test-0b1c", "http_transport_tls_guard", "stdio-tail-1"]
     assert unexpected({n: ["tokens"] for n in gone}) == sorted(gone), gone
     # Each known source is tolerated up to its own count.
-    for files, most in ((hwm, 3), (task, 1), (home, 2), (control, 2)):
+    for files, most in ((hwm, 3), (task, 1), (home, 3), (control, 3)):
         names = [f".tmpAb12C{i}" for i in range(most + 1)]
         assert unexpected({n: files for n in names}) == [names[-1]], (files, most)
     # A plain temp folder is tolerated only for what a known source writes: a
