@@ -394,7 +394,9 @@ impl GrantAllowed {
     pub(super) fn spend(self, client: &OAuthClient) -> crate::Result<Spent> {
         match self.stamp {
             Stamp::Checked if client.issuer_differs() => Err(client.issuer_wait()),
-            _ => Ok(Spent { _only_here: () }),
+            Stamp::Checked => Ok(Spent { _only_here: () }),
+            #[cfg(feature = "webui")]
+            Stamp::UiSignIn => Ok(Spent { _only_here: () }),
         }
     }
 }

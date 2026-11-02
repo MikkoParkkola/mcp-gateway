@@ -773,7 +773,7 @@ impl super::refresh_flight::RefreshCaller for OAuthClient {
     ) -> Result<super::refresh_flight::RefreshRequest> {
         // Under the flight: an install that moved while this refresh waited
         // for the lock sends nothing.
-        let spent = self.issuer_current()?.spend(self)?;
+        let proof = self.issuer_current()?.spend(self)?;
         let auth_meta = self.auth_meta()?;
         let key = self.credential_key()?;
         self.reload_registered_client_id(&key);
@@ -783,7 +783,7 @@ impl super::refresh_flight::RefreshCaller for OAuthClient {
             .clone()
             .ok_or_else(|| Error::OAuth("No client ID".to_string()))?;
         Ok(super::refresh_flight::RefreshRequest {
-            params: self.refresh_params(spent, sent, &client_id),
+            params: self.refresh_params(proof, sent, &client_id),
             http: self.refresh_client_for(&auth_meta.token_endpoint)?,
             endpoint: auth_meta.token_endpoint.clone(),
             destination: self.destination,
