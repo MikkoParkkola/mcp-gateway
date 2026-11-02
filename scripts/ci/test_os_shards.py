@@ -176,6 +176,19 @@ def self_test(jobs: dict, st) -> None:
         assert table_problems(st), "a lib split that is not a complement passed"
     finally:
         st.SHARDS["linux"]["lib-b"] = saved
+    # The library whole, in one unfiltered shard, is complete too; a second
+    # lib shard beside it, filtered or not, would run some tests twice.
+    linux = st.SHARDS["linux"]
+    whole = [("suite", ["--lib"], [], 1)]
+    try:
+        st.SHARDS["linux"] = {k: v for k, v in linux.items() if k not in ("lib-a", "lib-b")} | {"lib": whole}
+        assert not [p for p in table_problems(st) if "lib shards" in p], "one unfiltered lib shard refused"
+        for extra in (whole, [("suite", ["--lib"], [st.LIB_SPLIT], 1)]):
+            st.SHARDS["linux"] = {**st.SHARDS["linux"], "lib-x": extra}
+            assert [p for p in table_problems(st) if "lib shards" in p], f"a whole lib plus {extra} passed"
+            del st.SHARDS["linux"]["lib-x"]
+    finally:
+        st.SHARDS["linux"] = linux
 
 
 def main() -> int:
