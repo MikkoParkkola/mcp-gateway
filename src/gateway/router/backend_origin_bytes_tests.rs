@@ -8,7 +8,7 @@
 
 use super::*;
 
-fn peer(status: reqwest::StatusCode, error: Value) -> crate::Error {
+fn peer(status: reqwest::StatusCode, error: &Value) -> crate::Error {
     let body = json!({"jsonrpc": "2.0", "id": 1, "error": error}).to_string();
     crate::transport::peer_refusal_for_test(&body, &RequestId::Number(1), status)
         .expect("premise: a body answering this request is surfaced")
@@ -19,22 +19,22 @@ fn refused() -> Value {
 }
 
 fn peer_404() -> crate::Error {
-    peer(reqwest::StatusCode::NOT_FOUND, refused())
+    peer(reqwest::StatusCode::NOT_FOUND, &refused())
 }
 
 fn peer_409() -> crate::Error {
-    peer(reqwest::StatusCode::CONFLICT, refused())
+    peer(reqwest::StatusCode::CONFLICT, &refused())
 }
 
 fn peer_400_data() -> crate::Error {
     peer(
         reqwest::StatusCode::BAD_REQUEST,
-        json!({"code": -32001, "message": "backend says no", "data": {"detail": "quota"}}),
+        &json!({"code": -32001, "message": "backend says no", "data": {"detail": "quota"}}),
     )
 }
 
 fn peer_500() -> crate::Error {
-    peer(reqwest::StatusCode::INTERNAL_SERVER_ERROR, refused())
+    peer(reqwest::StatusCode::INTERNAL_SERVER_ERROR, &refused())
 }
 
 /// Each case's route and answer, and the bytes captured on the base.
