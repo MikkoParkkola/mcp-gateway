@@ -704,3 +704,46 @@ fn a_watch_survives_its_keys_rotation() {
         "control: without the explicit principal the re-keyed watch is refused"
     );
 }
+
+/// A key rotated because its secret leaked keeps its principal, so its grants
+/// and tasks survive (ADR-022), but a watch opened with the leaked secret must
+/// stop: nothing that secret opened may keep receiving events.
+#[test]
+fn a_watch_opened_with_a_leaked_secret_ends_at_the_rotation() {
+    let watch = presented("alice", "s1");
+    let mut rotated = key("alice", "s2", None);
+    rotated.principal = Some(watch.principal.clone());
+    assert!(
+        !services(vec![rotated]).admits(Some(&watch), "x"),
+        "a leaked rotation left the old secret's watch admitted"
+    );
+}
+
+/// A routine rotation keeps the old secret's watch for the grace, and only
+/// for the grace.
+#[test]
+fn a_watch_opened_with_the_old_secret_lasts_exactly_the_grace() {
+    let watch = presented("alice", "s1");
+    let rotated = |grace_end| {
+        let mut k = key("alice", "s2", None);
+        k.principal = Some(watch.principal.clone());
+        k.previous_key_sha256 = Some(api_key_digest_spec(b"s1"));
+        k.previous_expires_at = Some(grace_end);
+        k
+    };
+    let now = chrono::Utc::now();
+    assert!(
+        services(vec![rotated(
+            now + crate::duration_bound::delta!(minutes, 15)
+        )])
+        .admits(Some(&watch), "x"),
+        "inside the grace the old secret's watch carries on"
+    );
+    assert!(
+        !services(vec![rotated(
+            now - crate::duration_bound::delta!(minutes, 1)
+        )])
+        .admits(Some(&watch), "x"),
+        "after the grace the old secret's watch was still admitted"
+    );
+}
