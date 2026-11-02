@@ -222,9 +222,13 @@ async fn spawn_locked(
 
 #[path = "replace_audit.rs"]
 mod audit;
-pub(crate) use audit::{Audit, AuditPosture, Intent, IntentKind, IntentSink, replace_audited};
+#[cfg(feature = "webui")]
+pub(crate) use audit::AuditPosture;
+pub(crate) use audit::{Audit, Intent, IntentSink};
 #[cfg(test)]
 pub(crate) use audit::{IntentId, replace_detached};
+#[cfg(any(test, feature = "webui"))]
+pub(crate) use audit::{IntentKind, replace_audited};
 
 #[path = "replace_slots.rs"]
 mod slots;
