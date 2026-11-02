@@ -211,9 +211,11 @@ fn many(count: usize) -> (Vec<(String, String)>, String) {
     let headers = (0..count)
         .map(|i| (format!("X-Key-{i}"), format!("env:KEY_{i}")))
         .collect();
-    let body = (0..count)
-        .map(|i| format!("KEY_{i}=configured-secret-{i:04}\n"))
-        .collect();
+    let mut body = String::new();
+    for i in 0..count {
+        use std::fmt::Write as _;
+        let _ = writeln!(body, "KEY_{i}=configured-secret-{i:04}");
+    }
     (headers, body)
 }
 
