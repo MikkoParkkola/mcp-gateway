@@ -57,6 +57,11 @@ struct Handoff {
 pub(crate) struct Bound {
     pub(crate) not_after: Option<SystemTime>,
     pub(crate) key: Option<crate::gateway::auth::QuotaPrincipal>,
+    /// The fingerprint of the minting key's digest that the minting request
+    /// matched: the session lives while that secret is still valid, so a
+    /// routine rotation keeps it through the grace and one that drops the
+    /// secret at once ends it.
+    pub(crate) digest_tag: Option<String>,
 }
 
 impl Bound {
@@ -67,15 +72,20 @@ impl Bound {
         Self {
             not_after,
             key: None,
+            digest_tag: None,
         }
     }
 
     /// Whether the minting key is gone from `keys`, no longer admin, or past
     /// its expiry at `now`: then the link, code or session dies at this use.
     fn key_dead(&self, keys: &crate::gateway::auth::ResolvedAuthConfig, now: Now) -> bool {
-        self.key
-            .as_ref()
-            .is_some_and(|key| !keys.admin_key_live(key, chrono::DateTime::from(now.wall)))
+        self.key.as_ref().is_some_and(|key| {
+            !keys.admin_key_live(
+                key,
+                self.digest_tag.as_deref(),
+                chrono::DateTime::from(now.wall),
+            )
+        })
     }
 }
 

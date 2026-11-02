@@ -239,15 +239,29 @@ impl ResolvedAuthConfig {
     /// reload then removed, demoted, expired or re-issued (another digest)
     /// ends there. A previous digest in its grace authenticates as its
     /// current key, so the grace ending alone ends nothing.
+    ///
+    /// With `digest_tag`, the fingerprint of the secret the minting request
+    /// matched, the key is found by its principal and the session lives while
+    /// that secret is still valid (current, or previous inside the grace), so
+    /// a routine rotation keeps it and one that drops the secret ends it.
+    /// Without it, the minter must be this exact credential.
     pub(crate) fn admin_key_live(
         &self,
         minter: &QuotaPrincipal,
+        digest_tag: Option<&str>,
         at: chrono::DateTime<chrono::Utc>,
     ) -> bool {
         self.api_keys().iter().any(|k| {
-            k.quota_principal == *minter
-                && k.admin
-                && !crate::config::api_key_expired(k.expires_at, at)
+            let same = match digest_tag {
+                Some(tag) => {
+                    k.quota_principal.same_key_principal(minter)
+                        && secret_still_valid(k, tag, |end| {
+                            !crate::config::api_key_expired(Some(end), at)
+                        })
+                }
+                None => k.quota_principal == *minter,
+            };
+            same && k.admin && !crate::config::api_key_expired(k.expires_at, at)
         })
     }
 

@@ -471,6 +471,7 @@ fn a_handoff_code_ends_with_its_minting_key() {
     let bound = || super::Bound {
         not_after: None,
         key: Some(key.clone()),
+        digest_tag: None,
     };
     let store = DashboardBootstrap::new();
     let now = super::Now::read();
@@ -497,6 +498,7 @@ fn an_event_delivery_ends_with_the_sessions_minting_key() {
         super::Bound {
             not_after: None,
             key: Some(key),
+            digest_tag: None,
         },
     );
     let digest = crate::hashing::sha256_hex(handle.as_bytes());

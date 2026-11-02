@@ -128,6 +128,7 @@ async fn logout(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Respo
 pub(super) async fn dashboard_link(
     State(state): State<Arc<AppState>>,
     Extension(generation): Extension<Arc<crate::config_reload::Generation>>,
+    named: Option<Extension<crate::gateway::auth::NamedApiKey>>,
     guard: Guard,
 ) -> Response {
     if let Err(refused) = guard.admit() {
@@ -177,14 +178,26 @@ pub(super) async fn dashboard_link(
     // nothing: it is restart-only.
     // An API-key client that carries no quota identity cannot be bound to
     // its key, so it may not mint: fail closed.
-    let key = match (client.api_key_identity(), client.quota_principal.clone()) {
-        (None, _) => None,
-        (Some(_), Some(key)) => Some(key),
-        (Some(_), None) => return admin_auth_required().into_response(),
+    // The session lives while the secret this request matched is valid, so
+    // it is bound to that secret's fingerprint too; an API-key client whose
+    // match left none cannot be bound to its secret, and may not mint.
+    let digest_tag = named.map(|Extension(key)| key.digest_tag().to_owned());
+    let key = match (
+        client.api_key_identity(),
+        client.quota_principal.clone(),
+        &digest_tag,
+    ) {
+        (None, _, _) => None,
+        (Some(_), Some(key), Some(_)) => Some(key),
+        (Some(_), _, _) => return admin_auth_required().into_response(),
     };
     let value = state
         .dashboard_bootstrap
-        .rearm_bound(crate::gateway::auth::Bound { not_after, key });
+        .rearm_bound(crate::gateway::auth::Bound {
+            not_after,
+            key,
+            digest_tag,
+        });
     let scheme = if running.mtls.enabled {
         "https"
     } else {

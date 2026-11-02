@@ -144,12 +144,12 @@ fn t3_rotation_widens_no_authority() {
     let minter = quota_of(&before, A);
     let now = crate::clock::utc_now().expect("the test clock reads");
     assert!(
-        before.admin_key_live(&minter, now),
+        before.admin_key_live(&minter, None, now),
         "premise: live on A's table"
     );
     let after = over(&runtime, vec![key("k", B, Some(P1))]);
     assert!(
-        !after.admin_key_live(&minter, now),
+        !after.admin_key_live(&minter, None, now),
         "A's session outlived the rotation"
     );
 }
@@ -166,6 +166,7 @@ fn t3b_a_changed_principal_ends_the_session_and_the_window() {
     assert!(
         !after.admin_key_live(
             &minter,
+            None,
             crate::clock::utc_now().expect("the test clock reads")
         ),
         "a session outlived its principal"
@@ -185,6 +186,7 @@ fn t3c_adopting_the_derived_principal_changes_nothing() {
     assert!(
         after.admin_key_live(
             &minter,
+            None,
             crate::clock::utc_now().expect("the test clock reads")
         ),
         "adopting the derived principal ended the session"
