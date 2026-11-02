@@ -33,6 +33,10 @@ def lines(text: str, side=LONG) -> list[tuple[int, int]]:
     return [(i.first_line, i.last_line) for i in G.cfg_items(text, side).items]
 
 
+def lines_at(text: str, side, path: str) -> list[tuple[int, int]]:
+    return [(i.first_line, i.last_line) for i in G.cfg_items(text, side, path=path).items]
+
+
 class Owner(unittest.TestCase):
     """The construct each attribute marks, both sides agreeing when certain."""
 
@@ -124,6 +128,33 @@ class KnownGaps(unittest.TestCase):
         "binding with a path pattern": "fn p(v: V) {\n match v {\n Some(raw @ V::S(_)) => {}\n _ => {}\n }\n}\n",
         "cfg on a struct pattern field": "fn p(s: S) {\n let S {\n #[cfg(feature = \"x\")]\n a,\n b,\n } = s;\n}\n",
     }
+
+    # A listed file whose errors are exactly its listed ones: its items keep
+    # their extents, and only an item touching an error is unsure.
+    LISTED = "src/gateway/authz.rs"
+    GAP = "fn p(v: Value) {\n match v {\n Some(raw @ Value::String(_)) => {\n f()\n }\n _ => {}\n }\n}\n"
+
+    def test_a_listed_file_keeps_its_items_extents(self):
+        text = self.GAP + "#[cfg(test)]\nfn t() {\n  x();\n}\nfn q() {}\n"
+        found = G.cfg_items(text, SHORT, path=self.LISTED)
+        self.assertTrue(found.parse_errors and found.known_gap, found)
+        self.assertEqual([(i.first_line, i.last_line) for i in found.items], [(9, 12)])
+        self.assertEqual(found.unsure, ())
+
+    def test_the_same_errors_in_an_unlisted_file_are_unsure_as_a_whole(self):
+        text = self.GAP + "#[cfg(test)]\nfn t() {\n  x();\n}\nfn q() {}\n"
+        found = G.cfg_items(text, SHORT, path="src/elsewhere.rs")
+        self.assertFalse(found.known_gap)
+        self.assertEqual(found.items, ())
+
+    def test_an_item_touching_a_listed_error_is_unsure(self):
+        text = "#[cfg(test)]\n" + self.GAP + "fn q() {}\n"
+        self.assertEqual(lines_at(text, SHORT, self.LISTED), [])
+        self.assertTrue(G.cfg_items(text, SHORT, path=self.LISTED).unsure)
+        # Lean long covers at least the item; recovery may run it further.
+        ((first, last),) = lines_at(text, LONG, self.LISTED)
+        self.assertEqual(first, 1)
+        self.assertGreaterEqual(last, 9)
 
     def test_an_item_right_after_each_gap_keeps_its_extent(self):
         for name, gap in self.SHAPES.items():
