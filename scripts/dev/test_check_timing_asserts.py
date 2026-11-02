@@ -743,6 +743,44 @@ class TestSection(unittest.TestCase):
         self.assertEqual([f.fn for f in self.timeouts(text)], ["case"], text)
         self.assertEqual({f.fn for f in self.new(text)} - {""}, {"case"}, text)
 
+    # A compound cfg is test-only when a bare `test` sits under `all(..)` alone
+    # (no `any` or `not` above it): the item is compiled only in tests.
+    TEST_ONLY_CFGS = (
+        '#[cfg(all(test, feature = "firewall"))]',
+        "#[cfg(all(unix, test))]",
+        "#[cfg(all(unix, all(test, feature = \"webui\")))]",
+        "#[cfg( test )]",
+        "#[cfg(all( test ,unix ))]",
+    )
+    NOT_TEST_ONLY_CFGS = (
+        '#[cfg(any(test, feature = "firewall"))]',
+        "#[cfg(all(not(test), unix))]",
+        "#[cfg(not(test))]",
+        "#[cfg(all(unix, any(test, windows)))]",
+        "#[cfg(feature = \"test\")]",
+    )
+
+    def test_an_item_under_a_test_only_compound_cfg_is_judged(self):
+        for cfg in self.TEST_ONLY_CFGS:
+            with self.subTest(cfg=cfg):
+                text = f"fn product() {{}}\n\n{cfg}\nmod tests {{\n    async fn case() {{\n{self.WINDOW}\n    }}\n}}\n"
+                self.assertEqual(len(self.timeouts(text)), 1, text)
+                self.assertTrue(self.new(text), text)
+
+    def test_product_code_after_a_test_only_compound_cfg_item_is_not_test_code(self):
+        for cfg in self.TEST_ONLY_CFGS:
+            with self.subTest(cfg=cfg):
+                text = self.product_after(f"{cfg}\nfn helper() {{}}")
+                self.assertEqual(self.timeouts(text), [], text)
+                self.assertEqual(self.new(text), [], text)
+
+    def test_an_item_under_a_cfg_that_also_builds_outside_tests_is_product_code(self):
+        for cfg in self.NOT_TEST_ONLY_CFGS:
+            with self.subTest(cfg=cfg):
+                text = f"{cfg}\nmod m {{\n    async fn product() {{\n{self.WINDOW}\n    }}\n}}\n"
+                self.assertEqual(self.timeouts(text), [], text)
+                self.assertEqual(self.new(text), [], text)
+
     def test_a_product_file_without_test_items_has_no_test_code(self):
         self.assertEqual(self.timeouts(self.product_after("fn other() {}")), [])
 

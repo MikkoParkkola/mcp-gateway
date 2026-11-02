@@ -40,7 +40,9 @@ pub(crate) fn production_text(text: &str) -> String {
 ///
 /// A `,` in a generic header or a `where` clause ends an item early. That is
 /// safe here only because [`production_text`] then keeps the item's remainder,
-/// so a scan sees more; a reuse that classifies test code would miss it.
+/// so a scan sees more; a reuse that classifies test code would miss it. So
+/// does matching only the exact [`MARK`]: an item under a compound test cfg
+/// (`#[cfg(all(test, ..))]`) stays in the production text, safe here alone.
 fn item_end(code: &[u8], text: &[u8], start: usize) -> Option<usize> {
     let mut depth = 0_usize;
     let mut i = start;
