@@ -163,7 +163,7 @@ fn audit_backed_by_verifiable_transparency_log() {
         .append_audit(&audit_event(
             "gov2",
             "bob",
-            ControlPlaneAction::ApproveServer,
+            ControlPlaneAction::MutatePolicy,
         ))
         .unwrap();
 
@@ -353,7 +353,7 @@ fn cross_process_audit_append_stays_verifiable() {
     a.append_audit(&audit_event(
         "e3",
         "carol",
-        ControlPlaneAction::ApproveServer,
+        ControlPlaneAction::MutatePolicy,
     ))
     .unwrap();
 
@@ -520,3 +520,29 @@ fn write_atomic_replaces_a_stale_open_temp_instead_of_inheriting_its_dacl() {
 
 #[path = "store_version_tests.rs"]
 mod version;
+
+/// The scoped-reader pin: writing an audit action other than a grant or
+/// policy change fails, and the failure names the scoped-filter obligation.
+#[test]
+#[should_panic(expected = "before its newest-N limit")]
+fn writing_a_backend_shaped_audit_action_fails_until_scoped_readers_filter_it() {
+    let _ = InMemoryControlPlaneStore::new().append_audit(&audit_event(
+        "approve",
+        "alice",
+        ControlPlaneAction::ApproveServer,
+    ));
+}
+
+/// The same pin on the file store, whose writes funnel through its own path.
+#[test]
+#[should_panic(expected = "before its newest-N limit")]
+fn file_store_pins_written_actions_too() {
+    let dir = tempfile::tempdir().unwrap();
+    let logger = governance_logger(dir.path());
+    let store = FileControlPlaneStore::open(dir.path().join("store"), logger).unwrap();
+    let _ = store.append_audit(&audit_event(
+        "approve",
+        "alice",
+        ControlPlaneAction::ApproveServer,
+    ));
+}

@@ -162,6 +162,26 @@ impl AuditFilter {
     }
 }
 
+/// Every test that writes an audit action other than a grant or policy change
+/// fails here. A backend-scoped UI reader is shown no Config row and no store
+/// audit event because no written action names a backend; a new action
+/// reopens that, so the obligation travels with the change that creates it.
+#[cfg(test)]
+pub(super) fn pin_written_action(action: ControlPlaneAction) {
+    assert!(
+        matches!(
+            action,
+            ControlPlaneAction::MutateGrant | ControlPlaneAction::MutatePolicy
+        ),
+        "audit action {action:?} is now written to the governance log. Backend-scoped UI \
+         readers see no Config row or store audit event only because every written action \
+         was a grant or policy change. Before this ships, admit {action:?} to a scoped reader \
+         only for a `backend:<in-scope>` target, filtering inside the store's audit scan \
+         before its newest-N limit (AuditFilter, read by ui/control_plane/snapshot.rs) and in \
+         ui/activity/rows.rs `in_scope`; then add it here."
+    );
+}
+
 /// Build the domain fields for an audit event (chain fields are added by the
 /// logger). Kept as a free function so both backends serialise identically.
 pub(super) fn audit_fields(
