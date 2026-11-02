@@ -449,3 +449,38 @@ async fn a_led_login_after_a_switch_opens_nothing() {
         "no link of the old issuer opened"
     );
 }
+
+/// A joiner whose shared login stored a token while a sign-in under the other
+/// issuer was confirmed answers the sign-in wait, which a caller retries, not
+/// a hard error. Red before the adopt was typed: the refused adopt read as
+/// "the login stored no token".
+#[tokio::test]
+async fn a_joiner_after_a_switch_answers_the_sign_in_wait() {
+    let server = TokenServer::start(&[]).await;
+    let dir = tempfile::tempdir().unwrap();
+    let cell = Arc::new(SignInStatus::new(SignIn::NeverSignedIn));
+    let gate = Arc::new(crate::oauth::login_gate::LoginGate::default());
+    let crate::oauth::login_gate::Begin::Lead(lead) = gate.begin(None, None) else {
+        panic!("no login in flight, so the test leads");
+    };
+    let owned = client(dir.path(), &server)
+        .with_sign_in_status(Arc::clone(&cell))
+        .with_login_gate(Arc::clone(&gate));
+    let key = owned.credential_key().unwrap();
+
+    let (joined, ()) = tokio::join!(owned.authorize_shared(true, None), async {
+        tokio::task::yield_now().await;
+        owned
+            .storage
+            .save(&key, RESOURCE, &token("a1", Some("r1"), false))
+            .unwrap();
+        cell.record_install(OTHER_ISSUER_KEY);
+        lead.end(None);
+    });
+
+    let refused = joined.expect_err("nothing of the old issuer");
+    assert!(
+        matches!(refused, Error::AuthorizationRequired { .. }),
+        "{refused}"
+    );
+}
