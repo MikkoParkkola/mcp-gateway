@@ -30,6 +30,12 @@ const MINUTE_NS: u128 = 60_000_000_000;
 pub(crate) struct AuthRuntime {
     buckets: DashMap<String, Arc<ClientBucket>>,
     breakers: DashMap<String, Arc<CircuitBreaker>>,
+    /// When each configured key last authenticated, in unix seconds, keyed by
+    /// the key's principal, so a rotation under one principal keeps it and a
+    /// reload never clears it. In memory only: empty after a restart.
+    // ponytail: one entry per principal ever matched since start; a derived
+    // principal adds one per rotation. Prune to the current table if it grows.
+    last_used: DashMap<String, i64>,
 }
 
 impl AuthRuntime {
@@ -58,6 +64,31 @@ impl AuthRuntime {
             .entry(key)
             .or_insert_with(|| Arc::new(CircuitBreaker::new(&format!("client:{name}"), config)))
             .clone()
+    }
+
+    /// Records an accepted match of the key with `principal` at `at` (unix
+    /// seconds). The newer reading wins, under the entry's shard lock, so an
+    /// older reading arriving last never moves the time back.
+    pub(crate) fn note_used(&self, principal: &str, at: i64) {
+        self.last_used
+            .entry(principal.to_owned())
+            .and_modify(|seen| *seen = (*seen).max(at))
+            .or_insert(at);
+    }
+
+    /// Every recorded last use, so a row can compare the whole map.
+    #[cfg(all(test, feature = "webui"))]
+    pub(crate) fn last_used_all(&self) -> std::collections::BTreeMap<String, i64> {
+        self.last_used
+            .iter()
+            .map(|seen| (seen.key().clone(), *seen.value()))
+            .collect()
+    }
+
+    /// When the key with `principal` last authenticated in this process.
+    #[cfg(any(test, feature = "webui"))]
+    pub(crate) fn last_used(&self, principal: &str) -> Option<i64> {
+        self.last_used.get(principal).map(|seen| *seen)
     }
 
     /// `key`'s breaker, if one was made.

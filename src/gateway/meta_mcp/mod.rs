@@ -154,6 +154,7 @@ mod call_dispatch;
 mod caller_context;
 mod construction;
 mod handlers;
+pub(crate) mod hiding;
 pub(crate) mod passthrough;
 mod session_tools;
 pub use caller_context::MetaMcpCallerContext;

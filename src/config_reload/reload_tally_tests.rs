@@ -151,3 +151,27 @@ async fn a_write_that_cannot_get_the_reload_lock_is_counted_once_as_skipped() {
     assert_eq!(counts.applied, 0);
     assert_eq!(counts.last.map(|l| l.outcome), Some(ReloadResult::Skipped));
 }
+
+/// A forced `lock_config` failure: another writer holds the config lock and
+/// the whole-config write gives up at once, so exactly one `skipped` is
+/// tallied and nothing is written.
+#[tokio::test]
+async fn a_whole_config_write_that_cannot_lock_the_config_is_counted_once_as_skipped() {
+    let (_dir, path) = fixture();
+    let ctx = context(path.clone(), &ReloadReporting::default());
+    let held = crate::config_persistence::lock::lock_config(
+        &path,
+        std::time::Instant::now() + Duration::from_secs(10),
+    )
+    .await
+    .expect("the test plays the other holder of the config lock");
+    let before = ctx.reload_tally().snapshot().attempts;
+    let result = ctx
+        .write_and_reload_outcome_within(&path, Duration::ZERO, &Config::default())
+        .await;
+    drop(held);
+    assert!(result.is_err(), "the write must be refused as busy");
+    let counts = ctx.reload_tally().snapshot();
+    assert_eq!((counts.attempts, counts.applied), (before + 1, 0));
+    assert_eq!(counts.last.map(|l| l.outcome), Some(ReloadResult::Skipped));
+}

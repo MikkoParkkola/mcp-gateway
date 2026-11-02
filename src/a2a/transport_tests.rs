@@ -242,6 +242,7 @@ async fn a_private_literal_a2a_url_is_refused_under_the_hardened_policy() {
             Duration::from_secs(5),
             DestinationPolicy::Public,
             None,
+            None,
         )
         .await;
         let Err(error) = refused else {

@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! Rows of the parent table kept beside it (the gateway status read, the web
-//! UI tool call) so the table stays under the file-size limit. The parent's tests read it through
+//! Rows of the parent table kept beside it (the gateway status read, the
+//! configured-keys read, the web UI tool call) so the table stays under the file-size limit. The parent's tests read it through
 //! `all_rows`; the rules for a row are the parent's.
 
 use super::*;
@@ -12,6 +12,14 @@ pub(super) const ROWS: &[Row] = &[
         "/ui/api/gateway",
         Method::GET,
         "/ui/api/gateway",
+        Payload::None,
+        [401, 403, 403, 200],
+    ),
+    // src/gateway/ui/keys.rs (keys; admin-only read of the configured keys)
+    row(
+        "/ui/api/keys",
+        Method::GET,
+        "/ui/api/keys",
         Payload::None,
         [401, 403, 403, 200],
     ),

@@ -213,6 +213,16 @@ pub trait Transport: Send + Sync {
         false
     }
 
+    /// Whether this transport scrubs a backend's injected values out of what
+    /// it reads: it holds the backend's value set (DELTA-10). A call
+    /// carrying an injected value is refused on a transport that does not.
+    ///
+    /// Defaults to `false` (fail closed): a transport that never attached a
+    /// set, or a new kind that does not say, gets no secret.
+    fn redacts_injected_values(&self) -> bool {
+        false
+    }
+
     /// Send a notification (no response expected)
     async fn notify(&self, method: &str, params: Option<Value>) -> Result<()>;
 

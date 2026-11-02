@@ -370,6 +370,71 @@ fn a_skipped_field_is_escaped_for_the_terminal() {
     assert!(!shown.contains('\u{1b}'), "{shown}");
 }
 
+/// `shown` escapes exactly the characters that can hide, reorder or break
+/// terminal text, and keeps everything else, a Windows path included.
+#[test]
+fn shown_escapes_hidden_characters_and_keeps_the_rest() {
+    let rows = [
+        ("plain-name_1.0", "plain-name_1.0"),
+        ("C:\\Users\\me\\mcp.json", "C:\\Users\\me\\mcp.json"),
+        ("ünïcødé 名前", "ünïcødé 名前"),
+        ("a\u{1b}[31mb", "a\\u{1b}[31mb"),
+        ("a\u{202e}b", "a\\u{202e}b"),
+        ("a\u{200b}b", "a\\u{200b}b"),
+        ("a\nb\rc\td", "a\\u{a}b\\u{d}c\\u{9}d"),
+        ("a\u{2028}b\u{2029}c", "a\\u{2028}b\\u{2029}c"),
+        ("a\u{7f}b\u{85}c", "a\\u{7f}b\\u{85}c"),
+        // Only a backslash that begins `\u{` is doubled.
+        ("a\\u{1b}b", "a\\\\u{1b}b"),
+        ("C:\\u\\x\\{y}", "C:\\u\\x\\{y}"),
+    ];
+    for (raw, expected) in rows {
+        assert_eq!(shown(raw).to_string(), expected, "{raw:?}");
+        assert_eq!(shows_unchanged(raw), raw == expected, "{raw:?}");
+    }
+}
+
+/// A name that spells an escape out never reads like one `shown` wrote.
+#[test]
+fn a_spelled_out_escape_is_told_apart_from_a_real_one() {
+    let real = shown("tool\u{1b}x").to_string();
+    let spelled = shown("tool\\u{1b}x").to_string();
+    assert_eq!(real, "tool\\u{1b}x");
+    assert_eq!(spelled, "tool\\\\u{1b}x");
+    assert_ne!(real, spelled);
+}
+
+/// Backslash runs before an escape are doubled whole, so no two names print
+/// alike: an odd run before `u{` is an escape `shown` wrote, an even one is
+/// literal text.
+#[test]
+fn backslash_runs_never_make_two_names_print_alike() {
+    let names = [
+        "a\u{1b}",    // a real ESC
+        "a\\u{1b}",   // the text \u{1b}
+        "a\\\u{1b}",  // a backslash, then a real ESC
+        "a\\\\u{1b}", // the text \\u{1b}
+    ];
+    let printed: Vec<String> = names.iter().map(|n| shown(n).to_string()).collect();
+    assert_eq!(
+        printed,
+        ["a\\u{1b}", "a\\\\u{1b}", "a\\\\\\u{1b}", "a\\\\\\\\u{1b}"]
+    );
+    // A path's lone backslashes stay single.
+    assert_eq!(shown("C:\\Users\\me").to_string(), "C:\\Users\\me");
+}
+
+/// The skip warning keeps its quotes around an escaped name.
+#[test]
+fn a_skip_warning_quotes_the_escaped_name() {
+    let shown_skip = describe_skipped(&[Outcome::Skipped {
+        name: "a\u{1b}b".to_string(),
+        reasons: vec![("invalid_name", "name".to_string())],
+        skip: Skip::Refused,
+    }]);
+    assert_eq!(shown_skip, "\"a\\u{1b}b\": invalid_name (name)");
+}
+
 /// A run whose only find is left out by rule (the gateway's own entry,
 /// named like `capabilities.name`) imports nothing and succeeds; no store is
 /// opened.

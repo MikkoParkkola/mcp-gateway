@@ -179,6 +179,10 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
         "events store records read through read_checked_bytes (EventsRecord, 0600); File::open only opens the store directory to fsync it",
     ),
     (
+        "src/gateway/health_metrics/process.rs",
+        "/proc/self/statm, the process's own memory counters; nothing secret",
+    ),
+    (
         "src/gateway/mod.rs",
         "test_helpers fixture writer, not a gateway read",
     ),
@@ -195,6 +199,10 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
         "cfg(test) helper reading the repo files the MIK-8387/MIK-8481 pins check (registry-ban clippy.toml, pre-push.sh, the CI workflow); no secret",
     ),
     (
+        "src/gateway/meta_mcp/boundary_pins/fragments.rs",
+        "cfg(test) loader reading the boundary-pin tables and their fragment files beside them, and writing scratch copies of them for its own tests; no secret",
+    ),
+    (
         "src/gateway/meta_mcp/boundary_pins/shipped_reads.rs",
         "cfg(test) source scanner reading Cargo.toml and the crate's own sources for the MIK-8481 unshipped-read guard; no secret",
     ),
@@ -207,8 +215,16 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
         "cfg(test) source scanner reading the crate's own source for the MIK-8387 boundary pins; no secret",
     ),
     (
+        "src/gateway/meta_mcp/boundary_pins/caller_view.rs",
+        "cfg(test) source scanner reading the crate's own sources to count unfiltered capability-provider reads; no secret",
+    ),
+    (
         "src/gateway/meta_mcp/boundary_pins/invoke_stages.rs",
         "cfg(test) source scanner reading the invoke stage files for the MIK-8488 stage pin; no secret",
+    ),
+    (
+        "src/gateway/meta_mcp/boundary_pins/pinned_role_mapping.rs",
+        "cfg(test) source scanner for the role-mapping guard, reading the crate's own sources and writing a fixture crate to a temp dir for its own test; no secret",
     ),
     (
         "src/gateway/meta_mcp/sealed_hold_guards.rs",

@@ -386,6 +386,7 @@ fn firewall_response_modern_input_required_protects_state_and_questions() {
         let original = response.clone();
         let verdict = firewall
             .check_response_artifact(
+                firewall.startup_policy(),
                 &mut response,
                 &[target("backend-a", "inspect_me")],
                 &correlation(),
@@ -420,6 +421,7 @@ fn firewall_response_modern_input_required_protects_state_and_questions() {
     let original = response.clone();
     let verdict = firewall
         .check_response_artifact(
+            firewall.startup_policy(),
             &mut response,
             &[target("backend-a", "inspect_me")],
             &correlation(),
@@ -465,6 +467,7 @@ fn firewall_response_credential_in_object_key() {
         let mut response = original.clone();
         let verdict = firewall
             .check_response_artifact(
+                firewall.startup_policy(),
                 &mut response,
                 &[target("backend-a", "inspect_me")],
                 &correlation(),
@@ -507,6 +510,7 @@ fn firewall_response_injection_finding_masks_a_credential() {
         let mut response = original.clone();
         firewall
             .check_response_artifact(
+                firewall.startup_policy(),
                 &mut response,
                 &[target("backend-a", "inspect_me")],
                 &correlation(),

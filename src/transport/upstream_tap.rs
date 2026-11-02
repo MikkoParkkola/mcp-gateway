@@ -85,6 +85,37 @@ pub(crate) fn listen_filter(kinds: KindSet, uris: &[String]) -> Value {
     })
 }
 
+/// The `_meta[SUBSCRIPTION_ID]` tag `params` carries, if any.
+fn subscription_tag(params: Option<&Value>) -> Option<&Value> {
+    params
+        .and_then(|p| p.get("_meta"))
+        .and_then(|m| m.get(SUBSCRIPTION_ID))
+}
+
+/// `note` with the injected values removed from its URIs; `None` when it
+/// must not be handed on (the value set overflowed). A URI is backend text;
+/// an acknowledgement's URIs are the listen's own requested ones.
+pub(crate) fn scrub_note(
+    needles: Option<&crate::security::needles::NeedleSet>,
+    mut note: UpstreamNote,
+) -> Option<UpstreamNote> {
+    use crate::security::needles::{Scrubbed, scrub_text};
+    let Some(needles) = needles else {
+        return Some(note);
+    };
+    let uris: Vec<&mut String> = match &mut note {
+        UpstreamNote::Notice { uri, .. } => uri.iter_mut().collect(),
+        UpstreamNote::Ack { uris, .. } => uris.iter_mut().collect(),
+        UpstreamNote::End | UpstreamNote::Unsupported => Vec::new(),
+    };
+    for uri in uris {
+        if scrub_text(needles, uri) == Scrubbed::Refuse {
+            return None;
+        }
+    }
+    Some(note)
+}
+
 /// Whether `params` carries `_meta[SUBSCRIPTION_ID] == listen_id`.
 fn tagged(params: Option<&Value>, listen_id: &Value) -> bool {
     params
@@ -331,18 +362,35 @@ impl Taps {
 
     /// Offer a peer notification. `true` when a tap consumed it (routed or
     /// dropped on its behalf); `false` leaves it to the existing routes.
+    #[cfg(test)]
     pub(crate) fn notification(&self, method: &str, params: Option<&Value>) -> bool {
-        let tag = params
-            .and_then(|p| p.get("_meta"))
-            .and_then(|m| m.get(SUBSCRIPTION_ID));
-        if let Some(tag) = tag {
+        self.notification_keyed(method, params, None)
+    }
+
+    /// Offer a peer notification, `original` as the peer sent it. `true` when
+    /// a tap consumed it (routed or dropped on its behalf); `false` leaves it
+    /// to the existing routes. The listen tag and the acknowledgement are read
+    /// from `original`; the projected note is then scrubbed of `needles`, and
+    /// the watch filter compares the scrubbed note, the URI a client knows
+    /// (DELTA-5, lead ruling G9).
+    pub(crate) fn notification_keyed(
+        &self,
+        method: &str,
+        original: Option<&Value>,
+        needles: Option<&crate::security::needles::NeedleSet>,
+    ) -> bool {
+        if let Some(tag) = subscription_tag(original) {
             let mut listens = self.listens.lock();
             if let Some(listen) = listens.get_mut(&tag.to_string()) {
                 let first = std::mem::replace(&mut listen.first, false);
                 // The last slot stays free for the listen's terminal answer, so
                 // a full tap still reports `Unsupported` rather than `Closed`.
-                let routed = project_listen(method, params, tag, &listen.requested, first)
-                    .is_ok_and(|note| listen.tx.capacity() > 1 && listen.tx.try_send(note).is_ok());
+                let routed = project_listen(method, original, tag, &listen.requested, first)
+                    .ok()
+                    .and_then(|note| scrub_note(needles, note))
+                    .is_some_and(|note| {
+                        listen.tx.capacity() > 1 && listen.tx.try_send(note).is_ok()
+                    });
                 if !routed {
                     self.drop_one();
                 }
@@ -353,9 +401,12 @@ impl Taps {
         let Some((tx, watched)) = guard.as_ref() else {
             return false;
         };
-        match project(method, params, None) {
+        match project(method, original, None) {
             Ok(note) => {
-                if watched.admits(&note) && tx.try_send(note).is_err() {
+                if let Some(note) = scrub_note(needles, note)
+                    && watched.admits(&note)
+                    && tx.try_send(note).is_err()
+                {
                     self.drop_one();
                 }
                 true

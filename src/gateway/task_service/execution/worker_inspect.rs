@@ -194,7 +194,7 @@ fn inspect_settled_pinned(
     id: &str,
     mut response: crate::protocol::JsonRpcResponse,
 ) -> (crate::protocol::JsonRpcResponse, Option<Decided>) {
-    if response.error.is_some() || response.egress_scanned {
+    if response.error.is_some() || response.wire_meta.egress_scanned {
         return (response, None);
     }
     let Some(result) = response.result.as_mut() else {
@@ -218,7 +218,8 @@ fn inspect_settled_pinned(
     let before = result.clone();
     let refused = state
         .meta_mcp()
-        .inspect_task_result(&targets, id, result)
+        // Task settlement: the published generation alone.
+        .inspect_task_result((&targets, id), None, result)
         .is_err();
     let rewritten = !refused && *result != before;
     let decided = (refused || rewritten).then(|| Decided {

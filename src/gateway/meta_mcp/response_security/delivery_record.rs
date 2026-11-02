@@ -89,7 +89,7 @@ impl super::super::MetaMcp {
             (
                 outcome,
                 Facts::Answer {
-                    frame_refused: response.delivery_refusal,
+                    frame_refused: response.wire_meta.delivery_refusal,
                 },
             ),
             "transport_finalized",

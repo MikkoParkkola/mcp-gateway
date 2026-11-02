@@ -44,8 +44,12 @@ impl super::WebSocketTransport {
         timeout: Duration,
         protocol_version: Option<String>,
         destination: DestinationPolicy,
+        needles: Option<Arc<crate::security::needles::NeedleSet>>,
     ) -> Result<Arc<Self>> {
         let transport = Self::build(url, headers.clone(), timeout, protocol_version, destination);
+        if let Some(needles) = needles {
+            let _ = transport.inner.needles.set(needles);
+        }
         // Boxed: the TLS upgrade future is large, and inlining it would grow
         // every future that can start a backend (clippy::large_futures).
         Box::pin(transport.connect()).await?;

@@ -82,6 +82,8 @@ impl MetaMcp {
             let cap_disabled = self
                 .kill_switch
                 .record_capability_failure(server, tool, &cap_cfg);
+            drop(cap_cfg);
+            drop(cfg);
             if auto_killed {
                 warn!(server, "Server auto-killed by error budget exhaustion");
             }
@@ -143,7 +145,7 @@ impl MetaMcp {
 
     /// The identity-grant fallback subject for `grant_key`: only an API key's
     /// name may be passed (MIK-8518); every other credential passes `None`.
-    pub(in crate::gateway::meta_mcp) fn grant_subject_from_api_key(
+    pub(in crate::gateway) fn grant_subject_from_api_key(
         grant_key: Option<&str>,
     ) -> Option<GrantSubject> {
         grant_key.and_then(|name| GrantSubject::checked("api_key", name, Some(name.to_string())))
@@ -266,8 +268,12 @@ impl MetaMcp {
         )
     }
 
+    /// The read-only and destructive flags of `server`'s `tool` when it is a
+    /// capability the caller sees. A provider hidden from the caller has none,
+    /// as an unregistered name has none, so its answer's integrity audit
+    /// cannot tell the two apart.
     pub(super) fn capability_context_flags(&self, server: &str, tool: &str) -> (bool, bool) {
-        if let Some(capabilities) = self.get_capabilities()
+        if let Some(capabilities) = self.caller_capabilities()
             && server == capabilities.name
             && let Some(capability) = capabilities.get(tool)
         {

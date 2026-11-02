@@ -167,3 +167,44 @@ async fn a_session_stream_drops_a_note_the_watch_does_not_admit() {
         .expect("the stream ends");
     assert_eq!(end, None, "an unwatched note crossed the channel");
 }
+
+/// T1.27 (DELTA-9): the listener reads the backend's LIVE value set.
+/// A value that joins the set after the set was attached is still removed
+/// from a change notice's URI before the note leaves the transport.
+#[tokio::test]
+async fn a_listen_notice_uri_is_scrubbed_with_the_live_set() {
+    const NEEDLE: &str = "listen-secret-77d1";
+    let url = peer(|id| {
+        let notice = json!({"jsonrpc": "2.0", "method": "notifications/resources/updated",
+            "params": {"uri": format!("file:///x?k={NEEDLE}"),
+                       "_meta": {"io.modelcontextprotocol/subscriptionId": id}}});
+        let end = json!({"jsonrpc": "2.0", "id": id, "result": {"resultType": "complete"}});
+        format!(
+            "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\nconnection: close\r\n\r\n\
+             data: {notice}\n\ndata: {end}\n\n"
+        )
+    })
+    .await;
+    let t = transport(&url);
+    let needles = std::sync::Arc::new(crate::security::needles::NeedleSet::with_grace(
+        Duration::from_secs(3_600),
+    ));
+    t.attach_needles(std::sync::Arc::clone(&needles));
+    // Joins after the attach: a snapshot taken at the attach would miss it.
+    needles.insert("b", NEEDLE);
+    let mut stream = t.listen(req()).await.expect("opened");
+    let note = tokio::time::timeout(Duration::from_secs(20), stream.rx.recv())
+        .await
+        .expect("the notice arrives");
+    let Some(UpstreamNote::Notice { uri: Some(uri), .. }) = note else {
+        panic!("not the notice: {note:?}");
+    };
+    assert!(
+        uri.starts_with("file:///x?k="),
+        "premise: the notice routed: {uri}"
+    );
+    assert!(
+        !uri.contains(NEEDLE),
+        "the notice carried the secret: {uri}"
+    );
+}

@@ -189,7 +189,11 @@ impl crate::gateway::input_bridge::ChallengeGate for BridgeDispatcher<'_> {
             key: crate::security::response_policy::KeyOf::of_client(self.caller.api_key_identity()),
         };
         self.meta
-            .enforce_firewall_challenge(&delivered_challenge(challenge), &targets, &correlation)
+            .enforce_firewall_challenge(
+                &delivered_challenge(challenge),
+                (&targets, &correlation),
+                self.caller.authorizer.generation(),
+            )
             .map_err(
                 |_| crate::gateway::input_bridge::BridgeError::ChallengeRefused {
                     dispatched: false,
