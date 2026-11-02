@@ -147,13 +147,6 @@ fn every_shadow_field_is_escaped() {
             with_command("tool", &format!("np{TOKEN}x tool")),
             with_command("tool", "npx tool"),
         ),
-        (
-            "endpoint",
-            // Unparseable, so redaction's fallback echoes it: the row can
-            // go red.
-            http("tool", &format!("{PAYLOAD}not-a-url")),
-            http("tool", "not-a-url"),
-        ),
     ];
     for (field, hostile, plain) in rows {
         let text = render_shadow_report(&report(&[hostile], config));
@@ -170,6 +163,33 @@ fn every_shadow_field_is_escaped() {
             "{field}: a line was forged: {text:?}"
         );
     }
+}
+
+/// An endpoint the radar cannot parse to an origin is not shown at all, so a
+/// hostile one never reaches the report: no raw character, no forged line,
+/// and none of its text.
+#[test]
+fn an_unparseable_endpoint_is_not_shown() {
+    let config = Path::new("/home/me/gateway.yaml");
+    let hostile = render_shadow_report(&report(
+        &[http("tool", &format!("{PAYLOAD}not-a-url"))],
+        config,
+    ));
+    let plain = render_shadow_report(&report(&[http("tool", "not-a-url")], config));
+    assert_clean("endpoint", &hostile);
+    assert!(
+        !hostile.contains("not-a-url"),
+        "the endpoint was shown: {hostile}"
+    );
+    assert!(
+        !hostile.contains("Endpoint:"),
+        "an endpoint line was printed: {hostile}"
+    );
+    assert_eq!(
+        hostile.lines().count(),
+        plain.lines().count(),
+        "a line was forged: {hostile:?}"
+    );
 }
 
 /// A command holding a hidden character is withheld, never printed
