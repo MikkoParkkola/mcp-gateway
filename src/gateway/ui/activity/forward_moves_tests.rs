@@ -26,8 +26,19 @@ fn suspended(lead: Vec<Rec>) -> Suspended {
     recs.extend(calls(3));
     let w = write(&path, &[recs]);
     let mut search = Search::default();
-    let first = suspend(&log(&path, StreamKind::Activity), &w.marks[w.marks.len() - 3], w.marks.last().unwrap(), &mut search);
-    Suspended { _dir: dir, path, w, search, first }
+    let first = suspend(
+        &log(&path, StreamKind::Activity),
+        &w.marks[w.marks.len() - 3],
+        w.marks.last().unwrap(),
+        &mut search,
+    );
+    Suspended {
+        _dir: dir,
+        path,
+        w,
+        search,
+        first,
+    }
 }
 
 impl Suspended {
@@ -37,7 +48,15 @@ impl Suspended {
 
     fn resume(&mut self) -> ForwardPage {
         let (cursor, stop) = (self.cursor(), self.w.marks.last().unwrap().clone());
-        rows_after(&log(&self.path, StreamKind::Activity), Some(&cursor), Some(&stop), &Access::All, SMALL, &mut self.search).unwrap()
+        rows_after(
+            &log(&self.path, StreamKind::Activity),
+            Some(&cursor),
+            Some(&stop),
+            &Access::All,
+            SMALL,
+            &mut self.search,
+        )
+        .unwrap()
     }
 
     /// Rename the active file to a sealed name and start an empty one.
@@ -94,7 +113,11 @@ fn f9b_a_replaced_file_restarts_and_still_serves_every_row() {
     while pages.last().unwrap().more && pages.len() < 1000 {
         pages.push(s.resume());
     }
-    assert_eq!(counters(&pages), vec![3, 4], "no row skipped after the restart");
+    assert_eq!(
+        counters(&pages),
+        vec![3, 4],
+        "no row skipped after the restart"
+    );
 }
 
 #[test]
@@ -107,11 +130,18 @@ fn f9b_an_in_place_change_to_the_anchor_record_restarts() {
 #[test]
 fn f9b_a_shrink_below_the_offset_restarts() {
     let mut s = suspended(calls(1));
-    let file = std::fs::OpenOptions::new().write(true).open(&s.path).unwrap();
+    let file = std::fs::OpenOptions::new()
+        .write(true)
+        .open(&s.path)
+        .unwrap();
     file.set_len(s.w.at[0].2 + 10).unwrap();
     let next = s.resume();
     assert!(next.restarted, "shorter than the offset");
-    assert!(next.first_read.is_some_and(|o| o < s.first.read_end.unwrap()), "read from the search start");
+    assert!(
+        next.first_read
+            .is_some_and(|o| o < s.first.read_end.unwrap()),
+        "read from the search start"
+    );
 }
 
 #[test]
@@ -120,7 +150,10 @@ fn f9b_an_unreadable_identity_restarts() {
     IDENTITY_FAILS.with(|f| f.set(true));
     let next = s.resume();
     IDENTITY_FAILS.with(|f| f.set(false));
-    assert!(next.restarted, "an identity that cannot be read is never trusted");
+    assert!(
+        next.restarted,
+        "an identity that cannot be read is never trusted"
+    );
 }
 
 #[test]
@@ -137,7 +170,15 @@ fn f9b_retention_removing_the_segment_restarts_into_a_reset() {
     std::fs::remove_file(sealed_path(&path, 1)).unwrap();
     // A decoy in a file at the removed name: the cursor's counter, another hash.
     write_from(&sealed_path(&path, 1), &[calls(2)], 1, 1);
-    let next = rows_after(&l, Some(&w.marks[1]), w.marks.last(), &Access::All, SMALL, &mut search).unwrap();
+    let next = rows_after(
+        &l,
+        Some(&w.marks[1]),
+        w.marks.last(),
+        &Access::All,
+        SMALL,
+        &mut search,
+    )
+    .unwrap();
     assert!(next.restarted, "the segment's identity is gone");
 }
 
@@ -147,7 +188,11 @@ fn e2_with_no_anchor_yet_a_rotation_continues_and_a_replacement_restarts() {
     let saved = rotated.first.read_end.unwrap();
     rotated.rotate();
     let next = rotated.resume();
-    assert_eq!((next.first_read, next.restarted), (Some(saved), false), "rotation");
+    assert_eq!(
+        (next.first_read, next.restarted),
+        (Some(saved), false),
+        "rotation"
+    );
     let mut replaced = suspended(Vec::new());
     replaced.replace_same_bytes();
     assert!(replaced.resume().restarted, "replacement");

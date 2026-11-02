@@ -24,10 +24,20 @@ fn f9c_a_file_swapped_onto_the_path_after_the_identity_check_is_not_read() {
         std::fs::rename(&other, &path).unwrap();
     });
     let pages = finish(&mut s);
-    assert!(pages.iter().all(|p| !p.restarted && !p.reset), "the proven handle is read");
-    assert_eq!(counters(&pages), vec![3, 4], "its rows, not the swapped file's");
     assert!(
-        pages.iter().flat_map(|p| &p.rows).all(|r| r.row["kind"] == "call"),
+        pages.iter().all(|p| !p.restarted && !p.reset),
+        "the proven handle is read"
+    );
+    assert_eq!(
+        counters(&pages),
+        vec![3, 4],
+        "its rows, not the swapped file's"
+    );
+    assert!(
+        pages
+            .iter()
+            .flat_map(|p| &p.rows)
+            .all(|r| r.row["kind"] == "call"),
         "no row from the swapped file"
     );
 }
@@ -45,7 +55,11 @@ fn f9c_a_rename_or_unlink_after_the_open_leaves_the_read_on_the_same_bytes() {
             }
         });
         let pages = finish(&mut s);
-        assert_eq!(counters(&pages).first(), Some(&3), "unlink {unlink}: the handle's bytes");
+        assert_eq!(
+            counters(&pages).first(),
+            Some(&3),
+            "unlink {unlink}: the handle's bytes"
+        );
     }
 }
 
@@ -59,7 +73,15 @@ fn f9e_a_resume_in_a_rotated_segment_crosses_into_the_next_without_restarting() 
     let l = log(&s.path, StreamKind::Activity);
     let mut pages = Vec::new();
     loop {
-        let p = rows_after(&l, Some(&s.cursor()), Some(&stop), &Access::All, SMALL, &mut s.search).unwrap();
+        let p = rows_after(
+            &l,
+            Some(&s.cursor()),
+            Some(&stop),
+            &Access::All,
+            SMALL,
+            &mut s.search,
+        )
+        .unwrap();
         let more = p.more;
         pages.push(p);
         if !more || pages.len() > 1000 {
@@ -80,9 +102,23 @@ fn f11_two_connections_each_resume_their_own_search() {
     let b_cursor = a.w.marks[2].clone();
     let b_first = suspend(&l, &b_cursor, &stop, &mut b_search);
     let a_next = a.resume();
-    let b_next = rows_after(&l, Some(&b_cursor), Some(&stop), &Access::All, SMALL, &mut b_search).unwrap();
-    assert_eq!(a_next.first_read, a.first.read_end, "a resumes at its own offset");
-    assert_eq!(b_next.first_read, b_first.read_end, "b resumes at its own offset");
+    let b_next = rows_after(
+        &l,
+        Some(&b_cursor),
+        Some(&stop),
+        &Access::All,
+        SMALL,
+        &mut b_search,
+    )
+    .unwrap();
+    assert_eq!(
+        a_next.first_read, a.first.read_end,
+        "a resumes at its own offset"
+    );
+    assert_eq!(
+        b_next.first_read, b_first.read_end,
+        "b resumes at its own offset"
+    );
 }
 
 #[test]
@@ -91,12 +127,33 @@ fn f12_a_new_connection_searches_from_its_cursor_not_an_old_offset() {
     let l = log(&s.path, StreamKind::Activity);
     let stop = s.w.marks.last().unwrap().clone();
     let mut fresh = Search::default();
-    let first = rows_after(&l, Some(&s.cursor()), Some(&stop), &Access::All, SMALL, &mut fresh).unwrap();
+    let first = rows_after(
+        &l,
+        Some(&s.cursor()),
+        Some(&stop),
+        &Access::All,
+        SMALL,
+        &mut fresh,
+    )
+    .unwrap();
     assert!(first.first_read.is_some(), "the new connection read");
-    assert!(first.first_read < s.first.read_end, "from the search's start, not the old offset");
+    assert!(
+        first.first_read < s.first.read_end,
+        "from the search's start, not the old offset"
+    );
     let mut pages = vec![first];
     while pages.last().unwrap().more && pages.len() < 1000 {
-        pages.push(rows_after(&l, Some(&s.cursor()), Some(&stop), &Access::All, SMALL, &mut fresh).unwrap());
+        pages.push(
+            rows_after(
+                &l,
+                Some(&s.cursor()),
+                Some(&stop),
+                &Access::All,
+                SMALL,
+                &mut fresh,
+            )
+            .unwrap(),
+        );
     }
     assert!(pages.iter().all(|p| p.bytes_read <= bound(SMALL)));
     assert_eq!(counters(&pages), vec![3, 4]);
@@ -119,7 +176,11 @@ fn f9d_a_file_replaced_on_every_call_restarts_at_most_max_restarts_then_resets()
     assert!(restarts >= 1, "a replacement restarts");
     assert!(restarts <= usize::from(MAX_RESTARTS), "{restarts} restarts");
     assert!(pages.last().unwrap().reset, "then the page resets");
-    assert!(pages.len() <= usize::from(MAX_RESTARTS) + 1, "{} calls", pages.len());
+    assert!(
+        pages.len() <= usize::from(MAX_RESTARTS) + 1,
+        "{} calls",
+        pages.len()
+    );
 }
 
 #[test]

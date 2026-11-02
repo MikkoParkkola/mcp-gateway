@@ -143,7 +143,11 @@ pub(in crate::gateway::ui) fn head(log: &Log<'_>) -> io::Result<Option<Mark>> {
 
 /// The row for an announced record, as a read back gives it, or `None` when
 /// this caller or this stream kind does not get it.
-pub(in crate::gateway::ui) fn frame(log: &Log<'_>, access: &Access, entry: &Value) -> Option<Served> {
+pub(in crate::gateway::ui) fn frame(
+    log: &Log<'_>,
+    access: &Access,
+    entry: &Value,
+) -> Option<Served> {
     let _ = (log, access, entry);
     None
 }

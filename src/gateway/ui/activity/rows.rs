@@ -241,7 +241,10 @@ pub(super) fn owned_by(line: &Line, kind: Kind, issuer: &str, subject: &str) -> 
 
 /// Whether `access` may see `line` of `kind`: the one rule the list, the
 /// export and the stream share.
-#[allow(dead_code, reason = "the list, the export and the stream call it in a later change")]
+#[allow(
+    dead_code,
+    reason = "the list, the export and the stream call it in a later change"
+)]
 pub(super) fn visible(access: &super::access::Access, line: &Line, kind: Kind) -> bool {
     let _ = (access, line, kind);
     true

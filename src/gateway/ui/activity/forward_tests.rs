@@ -104,7 +104,10 @@ fn body(rec: &Rec, counter: u64) -> Option<Value> {
 fn write_from(path: &Path, segments: &[Vec<Rec>], first_seq: u64, first_counter: u64) -> Written {
     let mut prev = "genesis".to_owned();
     let mut counter = first_counter;
-    let mut out = Written { marks: Vec::new(), at: Vec::new() };
+    let mut out = Written {
+        marks: Vec::new(),
+        at: Vec::new(),
+    };
     for (i, seg) in segments.iter().enumerate() {
         let file = if i + 1 == segments.len() {
             path.to_path_buf()
@@ -149,10 +152,18 @@ fn calls(n: usize) -> Vec<Rec> {
 }
 
 fn log(path: &Path, kind: StreamKind) -> Log<'_> {
-    Log { path, kind, generation: 0, secret: None }
+    Log {
+        path,
+        kind,
+        generation: 0,
+        secret: None,
+    }
 }
 
-const WIDE: Budget = Budget { rows: 200, bytes: 8 << 20 };
+const WIDE: Budget = Budget {
+    rows: 200,
+    bytes: 8 << 20,
+};
 
 /// Call until the page no longer says `more`; every page, in order.
 fn drain(
@@ -177,5 +188,8 @@ fn drain(
 }
 
 fn counters(pages: &[ForwardPage]) -> Vec<u64> {
-    pages.iter().flat_map(|p| p.rows.iter().map(|r| r.mark.counter)).collect()
+    pages
+        .iter()
+        .flat_map(|p| p.rows.iter().map(|r| r.mark.counter))
+        .collect()
 }
