@@ -241,6 +241,9 @@ async fn a_reload_rotating_a_leaked_key_ends_its_old_watch() {
         Arc::clone(&state.live_config),
         crate::events::LiveCredentials::default(),
     );
+    // The running config as loaded from the file, so the live table holds
+    // the key before the rotation.
+    reload_keys(&state, dir.path(), &[with(OLD)]).await;
     // The watch as the old secret's caller recorded it: the key's name and
     // its principal.
     let watch = crate::events::ApiKeyRef {
