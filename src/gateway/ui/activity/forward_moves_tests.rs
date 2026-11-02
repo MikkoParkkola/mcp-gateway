@@ -178,9 +178,19 @@ fn f9b_retention_removing_the_segment_restarts_into_a_reset() {
     let l = log(&path, StreamKind::Activity);
     let mut search = Search::default();
     suspend(&l, &w.marks[1], w.marks.last().unwrap(), &mut search);
-    std::fs::remove_file(sealed_path(&path, 1)).unwrap();
-    // A decoy in a file at the removed name: the cursor's counter, another hash.
-    write_from(&sealed_path(&path, 1), &[calls(2)], 1, 1);
+    // Retention takes the segment out of the log. It is kept under another
+    // name so its inode cannot be reused, and a decoy takes its place: the
+    // same bytes, the anchor included, but the cursor's record changed in
+    // place, so a resume that skipped the identity check would reach a cursor
+    // of the same counter and another hash.
+    let seg = sealed_path(&path, 1);
+    let mut bytes = std::fs::read(&seg).unwrap();
+    std::fs::rename(&seg, path.with_extension("retired")).unwrap();
+    let (_, start, end) = w.at[1].clone();
+    let line = &mut bytes[usize::try_from(start).unwrap()..usize::try_from(end).unwrap()];
+    let at = line.windows(4).position(|x| x == b"srv\"").unwrap();
+    line[at..at + 3].copy_from_slice(b"vrs");
+    std::fs::write(&seg, bytes).unwrap();
     let next = rows_after(
         &l,
         Some(&w.marks[1]),
