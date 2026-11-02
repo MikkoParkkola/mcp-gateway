@@ -208,6 +208,12 @@ fn word_count(text: &str, word: &str) -> usize {
         .count()
 }
 
+/// Whether a raise-table needle is a caller row of the helper `name`: a
+/// `via {name}` row.
+pub(super) fn names_caller(needle: &str, name: &str) -> bool {
+    needle.starts_with(&format!("via {name}"))
+}
+
 /// The monitored names a macro's tokens hold, for its `(in macro)` row: a
 /// construction of one of the twelve, `delivery_facts`, `circuit_open` or a
 /// helper's name, each with its count when above one (`Error::Config*2`), so

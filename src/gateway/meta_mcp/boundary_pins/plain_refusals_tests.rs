@@ -8,7 +8,7 @@ use std::collections::BTreeSet;
 
 use super::delivery_framing::CLASSES;
 use super::packaged::crate_root;
-use super::plain_refusals::{ASSOCIATED, Collect, Derived, TWELVE, monitored_tokens};
+use super::plain_refusals::{ASSOCIATED, Collect, Derived, TWELVE, monitored_tokens, names_caller};
 use super::scan::walk;
 
 /// The crate's targets: the lib, the main bin and every `src/bin` bin.
@@ -640,7 +640,7 @@ fn each_raise_helper_has_a_caller_row() {
             !derived.raises.keys().any(|key| {
                 key.split('\t')
                     .nth(2)
-                    .is_some_and(|needle| needle.starts_with(&format!("via {name}")))
+                    .is_some_and(|needle| names_caller(needle, name))
             })
         })
         .collect();
@@ -648,4 +648,27 @@ fn each_raise_helper_has_a_caller_row() {
         unrowed.is_empty(),
         "raise helpers with no caller row: {unrowed:?}"
     );
+}
+
+/// A caller row names its helper as a whole token: `via note_written` is not
+/// a caller of `note`, and a call inside a macro (`withheld_for (in macro)`,
+/// `x,withheld_for*2 (in macro)`) is one.
+#[test]
+fn a_caller_row_names_its_helper_as_a_whole_token() {
+    for (needle, name, want) in [
+        ("via note", "note", true),
+        ("via raise (as value)", "raise", true),
+        ("via note_written", "note", false),
+        ("via notes", "note", false),
+        ("withheld_for (in macro)", "withheld_for", true),
+        (
+            "Error::Config,withheld_for*2 (in macro)",
+            "withheld_for",
+            true,
+        ),
+        ("withheld_for_all (in macro)", "withheld_for", false),
+        ("refused", "refused", false),
+    ] {
+        assert_eq!(names_caller(needle, name), want, "{needle} / {name}");
+    }
 }
