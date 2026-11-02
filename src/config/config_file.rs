@@ -14,6 +14,12 @@ use figment::{Metadata, Profile, Provider};
 
 use crate::Result;
 
+/// Env names the config writer resolves its template's secret slots through
+/// while it validates a save, before any store entry exists. Reserved: a
+/// config file or env file naming one is refused at load, so no config can
+/// reach a slot's stand-in value.
+pub(crate) const PENDING_SLOT_PREFIX: &str = "MCPGW_PENDING_SLOT_";
+
 /// A selected config file and the text it held when it was read.
 #[derive(Debug, Clone)]
 pub(crate) struct ConfigFile {
@@ -26,6 +32,13 @@ impl ConfigFile {
     pub(crate) fn read(path: PathBuf) -> Result<Self> {
         let text =
             super::secret_file::read_secret_file(&path, super::secret_file::SecretFile::Config)?;
+        if text.contains(PENDING_SLOT_PREFIX) {
+            return Err(crate::Error::Config(format!(
+                "Refusing to load {}: names starting {PENDING_SLOT_PREFIX} are reserved for \
+                 the gateway's config writer",
+                path.display()
+            )));
+        }
         Ok(Self { path, text })
     }
 
@@ -51,6 +64,30 @@ impl super::Config {
             super::Expansion::Literal,
         )?;
         Ok((evaluated.config, file.text))
+    }
+
+    /// `text` loaded as the file at `path` would be on a reload against
+    /// `env_paths`, with `pending` names resolving above the env files: the
+    /// config writer's full validation of a template whose secret slots name
+    /// them, so no submitted secret goes through the loader.
+    pub(crate) fn load_pending(
+        path: &Path,
+        text: &str,
+        env_paths: &super::ResolvedEnvFiles,
+        pending: std::collections::BTreeMap<String, String>,
+    ) -> Result<super::Evaluated> {
+        let file = ConfigFile {
+            path: path.to_path_buf(),
+            text: text.to_owned(),
+        };
+        let overlay =
+            super::EnvOverlay::from_paths_checked(env_paths.as_paths())?.with_pending(pending);
+        Self::finish(
+            Some(&file),
+            overlay,
+            env_paths.clone(),
+            super::Expansion::Resolve,
+        )
     }
 
     /// `text` loaded as a config file is, `url` resolved, with no environment

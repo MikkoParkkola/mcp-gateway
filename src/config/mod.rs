@@ -63,6 +63,7 @@ use crate::security::{posture, verify_remote_server_provenance};
 use crate::{Error, Result};
 pub(crate) use backend_transport::transport_key_for;
 use config_file::ConfigFile;
+pub(crate) use config_file::PENDING_SLOT_PREFIX;
 #[cfg(feature = "webui")]
 pub(crate) use pattern_grammar::check_backend_allowed_tools;
 pub(crate) use pattern_grammar::tool_pattern_matches;
@@ -477,6 +478,16 @@ impl Config {
             )));
         }
 
+        // The config writer's pending slot names resolve only inside its own
+        // validation; an env file assigning one could stand in for a secret.
+        if let Some(key) =
+            (overlay.owned_keys().iter()).find(|k| k.starts_with(PENDING_SLOT_PREFIX))
+        {
+            return Err(Error::Config(format!(
+                "Refusing to load config: an env file assigns {key}; names starting \
+                 {PENDING_SLOT_PREFIX} are reserved for the gateway's config writer"
+            )));
+        }
         let figment = match expansion {
             Expansion::Resolve => Self::figment(path, &overlay),
             // A rewrite path round-trips the FILE. Merging `MCP_GATEWAY_*`

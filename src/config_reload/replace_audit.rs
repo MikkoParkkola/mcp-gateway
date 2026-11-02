@@ -16,6 +16,7 @@ use std::time::Duration;
 use super::{FileRevision, Replace, ReplaceError, ReplaceOutcome};
 use crate::config_persistence::lock::Locked;
 use crate::config_reload::ReloadContext;
+use crate::security::TransparencyLogger;
 
 /// What an intent is for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -63,7 +64,74 @@ pub(crate) enum Audit {
     Off,
 }
 
-/// The only way to run the byte writer.
+/// Where this gateway's writes are audited: its audit log, when it has one.
+/// The one place an [`Audit`] is built, so no caller chooses whether its
+/// write is audited.
+pub(crate) struct AuditPosture(Option<Arc<TransparencyLogger>>);
+
+impl AuditPosture {
+    /// The posture of a gateway whose audit log is `log`. Auth on with no
+    /// log is a state startup refuses, so no log here means auth is off.
+    pub(crate) fn of(log: Option<Arc<TransparencyLogger>>) -> Self {
+        Self(log)
+    }
+
+    /// The audit for one operation of `kind`.
+    pub(crate) fn audit(self, kind: IntentKind) -> Audit {
+        match self.0 {
+            Some(log) => Audit::Required {
+                sink: Box::new(LogSink(log)),
+                kind,
+            },
+            None => Audit::Off,
+        }
+    }
+}
+
+/// Intents into the audit log, through its synced append: fsynced whatever
+/// the log's failure policy, and on the tail other processes appended.
+struct LogSink(Arc<TransparencyLogger>);
+
+impl IntentSink for LogSink {
+    fn append(&mut self, intent: &Intent) -> Result<IntentId, String> {
+        let event = match intent.kind {
+            IntentKind::Recovery => "config_recovery_intent",
+            IntentKind::Save => "config_save_intent",
+            IntentKind::Adopt => "config_adopt_intent",
+            IntentKind::Restore => "config_restore_intent",
+        };
+        let mut fields = serde_json::Map::new();
+        fields.insert("event".into(), event.into());
+        fields.insert("base_revision".into(), intent.base.as_str().into());
+        fields.insert("outside_change".into(), intent.outside_change.into());
+        if let Some(IntentId(id)) = &intent.recovery_intent_id {
+            fields.insert("recovery_intent_id".into(), id.as_str().into());
+        }
+        // ponytail: a synced append on the writer's task; spawn_blocking it
+        // if a slow disk ever holds the config lock measurably longer.
+        self.0
+            .append_event_synced(fields, &crate::security::audit::AuditEnvelope::gateway())
+            .map(IntentId)
+            .map_err(|e| e.to_string())
+    }
+}
+
+/// Tests' writer with no audit: production reaches the writer only through
+/// [`replace_audited`] with its posture's audit.
+#[cfg(test)]
+pub(crate) async fn replace_detached(
+    ctx: Arc<ReloadContext>,
+    replace: Replace,
+    wait: Duration,
+) -> Result<ReplaceOutcome, ReplaceError> {
+    replace_audited(ctx, replace, Audit::Off, wait).await
+}
+
+/// The only way to run the byte writer. Invariant (ADR-024): a save's
+/// compute closure produces its bytes through a refusing in-place editor
+/// (the key editor or `edit_text`), never through a `CommentLoss::Rewrite`
+/// render, so a refusal surfaces as [`ReplaceError::Refused`] and nothing
+/// is written.
 pub(crate) async fn replace_audited(
     ctx: Arc<ReloadContext>,
     replace: Replace,

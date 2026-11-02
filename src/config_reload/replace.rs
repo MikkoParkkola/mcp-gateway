@@ -5,7 +5,7 @@
 //! disk whenever that reload refuses.
 //!
 //! Web UI settings saves (a spliced file) and configuration-history restores
-//! (stored bytes) both write through [`replace_detached`]. It refuses a write
+//! (stored bytes) both write through [`replace_audited`]. It refuses a write
 //! made from a stale view of the file, keeps the original in a private copy
 //! with a journal ([`crate::config_persistence::journal`]) until a reload has
 //! accepted the new bytes, and puts the original back on a refused reload or
@@ -179,7 +179,8 @@ pub(crate) enum ReplaceError {
     Stage(String),
     /// Writing the new bytes failed; the original is back.
     Write(String),
-    /// The reload refused the new bytes; the original is back.
+    /// The reload refused the new bytes, or the check of them before any
+    /// entry or write did; the original stands.
     ReloadRefused(String),
     /// Putting the original back failed; the journal stays `staged`.
     RollbackFailed { journal: PathBuf, error: String },
@@ -193,30 +194,10 @@ pub(crate) enum ReplaceError {
     Secrets(SaveError<std::convert::Infallible>),
 }
 
-/// Write `replace` in a task of its own: dropping the caller (a request
+/// The writer's task, in a task of its own: dropping the caller (a request
 /// handler whose client went away) drops only the wait, never a write
-/// between its rename and its reload.
-///
-/// Invariant (ADR-024): a save's compute closure produces its bytes through
-/// a refusing in-place editor (the key editor or `edit_text`), never through
-/// a `CommentLoss::Rewrite` render, so a refusal surfaces as
-/// [`ReplaceError::Refused`] and nothing is written.
-#[cfg_attr(
-    not(any(test, feature = "webui")),
-    expect(
-        dead_code,
-        reason = "first callers: the web UI settings save and the configuration-history restore"
-    )
-)]
-pub(crate) async fn replace_detached(
-    ctx: Arc<ReloadContext>,
-    replace: Replace,
-    wait: Duration,
-) -> Result<ReplaceOutcome, ReplaceError> {
-    audit::replace_audited(ctx, replace, Audit::Off, wait).await
-}
-
-/// The writer's task: [`replace_detached`] and [`replace_audited`](audit::replace_audited) share it.
+/// between its rename and its reload. Reached only through
+/// [`replace_audited`](audit::replace_audited).
 #[cfg_attr(
     not(any(test, feature = "webui")),
     expect(
@@ -241,12 +222,15 @@ async fn spawn_locked(
 
 #[path = "replace_audit.rs"]
 mod audit;
-pub(crate) use audit::{Audit, Intent, IntentSink};
+pub(crate) use audit::{Audit, AuditPosture, Intent, IntentKind, IntentSink, replace_audited};
 #[cfg(test)]
-pub(crate) use audit::{IntentId, IntentKind, replace_audited};
+pub(crate) use audit::{IntentId, replace_detached};
 
 #[path = "replace_slots.rs"]
 mod slots;
+
+#[path = "replace_validate.rs"]
+mod validate;
 use slots::{fill_secrets, fits_when_filled, same_fields};
 
 /// What happens to a replacement's new store entries.
@@ -493,6 +477,8 @@ impl ReloadContext {
         let step = replace.secrets.filter(|step| !step.values.is_empty());
         same_fields(&template, step.as_ref())?;
         fits_when_filled(&template)?;
+        self.validate_template(&target, &template, step.as_ref())
+            .await?;
         let result = match step {
             None => Ok(template.bytes().to_vec()),
             Some(step) => fill_secrets(template, step, deadline, &mut entries).await,

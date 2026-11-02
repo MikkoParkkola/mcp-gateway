@@ -27,8 +27,8 @@ use crate::config::SecretStoreChoice;
 use crate::config_persistence::keyedit::{Segment, SlotId, Template};
 use crate::config_persistence::{NOT_IN_PLACE, edit_text};
 use crate::config_reload::{
-    Expected, FileRevision, RELOAD_LOCK_WAIT, Replace, ReplaceError, ReplaceOutcome, Replaced,
-    SecretStep, replace_detached,
+    AuditPosture, Expected, FileRevision, IntentKind, RELOAD_LOCK_WAIT, Replace, ReplaceError,
+    ReplaceOutcome, Replaced, SecretStep, replace_audited,
 };
 use crate::discovery::DiscoveredServer;
 use crate::discovery::adopt::{AdoptRefusal, Adoption, Literal, adoption, refusals};
@@ -399,9 +399,11 @@ pub(super) async fn adopt_discovery(
         replaced: Replaced::Discard,
         secrets,
     };
+    // Its own intent first on an audited gateway (`config_adopt_intent`).
+    let audit = AuditPosture::of(state.transparency_log.clone()).audit(IntentKind::Adopt);
     answer(
         &name,
-        replace_detached(context, replace, RELOAD_LOCK_WAIT).await,
+        replace_audited(context, replace, audit, RELOAD_LOCK_WAIT).await,
     )
 }
 

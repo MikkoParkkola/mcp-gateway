@@ -424,3 +424,68 @@ fn a_recognisable_secret_appears_in_no_trace_file_or_record() {
         "W20: gateway.yaml carries the secret: {file}"
     );
 }
+
+/// Two API keys whose digests are `a` and `b`, under `auth`.
+fn two_keys(a: &str, b: &str) -> String {
+    format!(
+        "auth:\n  api_keys:\n    - name: one\n      key_sha256: {a}\n    - name: two\n      key_sha256: {b}\nbackends:\n  a:\n    http_url: \"http://127.0.0.1:9/mcp\"\n"
+    )
+}
+
+fn key_slot(at: usize) -> SlotId {
+    SlotId(vec![
+        Segment::Key("auth".to_owned()),
+        Segment::Key("api_keys".to_owned()),
+        Segment::Index(at),
+        Segment::Key("key_sha256".to_owned()),
+    ])
+}
+
+/// W28: each slot is checked on its own stand-in. Two distinct, valid key
+/// digests are saved: one stand-in shared by both slots would make the two
+/// keys one credential, and a stand-in not shaped as a digest would fail the
+/// digest field's own format, so either refuses this save before any entry.
+#[tokio::test]
+async fn distinct_valid_secrets_pass_with_per_slot_sentinels() {
+    let dir = tempfile::tempdir().expect("dir");
+    let path = dir.path().join("gateway.yaml");
+    let digest = |s: &[u8]| format!("\"sha256:{}\"", crate::hashing::sha256_hex(s));
+    write_owner_only(&path, two_keys(&digest(b"old-one"), &digest(b"old-two"))).expect("write");
+    let ctx = context(&path);
+    let store = Counting::new(dir.path());
+    let (one, two) = (key_slot(0), key_slot(1));
+    let text = two_keys(
+        &Template::placeholder_for(&one),
+        &Template::placeholder_for(&two),
+    );
+    let template = Template::from_placeholders(text.into_bytes(), &[one.clone(), two.clone()])
+        .expect("two slots");
+    let value = |s: &[u8]| {
+        WipedBytes::new(format!("sha256:{}", crate::hashing::sha256_hex(s)).into_bytes())
+    };
+    let save = Replace {
+        expected: Expected::Any,
+        compute: Box::new(move |_| Ok(template)),
+        replaced: Replaced::Discard,
+        secrets: Some(SecretStep {
+            vault: Vault::with_lock(dir.path(), dir.path().join("vault.lock")),
+            store: Arc::clone(&store) as Arc<dyn SecretStore + Send + Sync>,
+            values: vec![
+                NewSecretOwned {
+                    field: one.display(),
+                    value: value(b"new-one"),
+                },
+                NewSecretOwned {
+                    field: two.display(),
+                    value: value(b"new-two"),
+                },
+            ],
+        }),
+    };
+
+    replace_detached(ctx, save, WAIT)
+        .await
+        .expect("W28: two distinct valid key digests are saved");
+
+    assert_eq!(store.creates(), 2);
+}

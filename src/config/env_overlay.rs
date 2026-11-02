@@ -434,6 +434,16 @@ impl EnvOverlay {
         &self.owned
     }
 
+    /// This overlay with `pending` names resolving to their values above the
+    /// env files: the config writer's validation of a template, whose secret
+    /// slots name these before any store entry exists. Not owned keys, so no
+    /// restart notice and no reserved-name refusal sees them.
+    #[must_use]
+    pub(crate) fn with_pending(mut self, pending: BTreeMap<String, String>) -> Self {
+        self.vars.extend(pending);
+        self
+    }
+
     /// Whether `path` on disk now differs from what this overlay loaded from
     /// it (#1286).
     ///
