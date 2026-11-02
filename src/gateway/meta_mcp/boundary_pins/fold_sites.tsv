@@ -1,0 +1,31 @@
+# kind	file	function	count	class  (is_error rows)
+# kind	call	file	count  (setter and count rows)
+is_error	src/a2a/translator.rs	error_result	1	other-route
+is_error	src/gateway/meta_mcp/invoke/budget.rs	context_integrity_delivered_result	2	gateway-folded
+is_error	src/gateway/meta_mcp/invoke/errors.rs	dispatch_error_result	1	dispatch-error
+is_error	src/gateway/meta_mcp/invoke/gate.rs	absent_answer	1	gateway-folded
+is_error	src/gateway/meta_mcp/invoke/r2_check.rs	undeclared_key_refusal_through	1	gateway-folded
+is_error	src/gateway/meta_mcp/invoke/side_effect_markers.rs	uncertain_side_effect	1	stored-notice
+is_error	src/gateway/meta_mcp/invoke/side_effect_markers.rs	withheld_side_effect	1	stored-notice
+is_error	src/gateway/router/backend_handlers/key_check.rs	key_refusal	1	other-route
+is_error	src/gateway/task_service/execution/settlement.rs	interrupted_result	1	stored-notice
+setter	folded	src/gateway/delivery_facts.rs	1
+setter	folded	src/gateway/meta_mcp/invoke/bridge_dispatch.rs	1
+setter	folded	src/gateway/meta_mcp/invoke/errors.rs	1
+setter	gateway_folded	src/gateway/meta_mcp/invoke/budget.rs	2
+setter	gateway_folded	src/gateway/meta_mcp/invoke/gate.rs	2
+setter	gateway_folded	src/gateway/meta_mcp/invoke/r2_check.rs	1
+setter	stamp_folded	src/gateway/meta_mcp/response_security.rs	1
+setter	step_carried	src/gateway/meta_mcp/search.rs	1
+setter	step_carried	src/gateway/meta_mcp/search/chain_exec.rs	1
+setter	step_carried	src/playbook/engine/mod.rs	1
+setter	step_tool_failed	src/gateway/meta_mcp/search/chain_exec.rs	1
+setter	step_tool_failed	src/playbook/engine/mod.rs	1
+setter	wrapped_step	src/gateway/meta_mcp/invoke/legacy_bridge.rs	1
+setter	wrapped_step	src/gateway/meta_mcp/search/chain_exec.rs	1
+count	count_answer	src/gateway/health_metrics/layers.rs	2
+count	count_framed	src/gateway/streaming_sse.rs	1
+count	RpcError::of_frame	src/gateway/outbound/http.rs	1
+count	RpcError::of_frame	src/gateway/router/helpers.rs	1
+count	RpcError::of_value	src/gateway/outbound/http.rs	1
+count	RpcError::of_value	src/gateway/router/helpers.rs	1

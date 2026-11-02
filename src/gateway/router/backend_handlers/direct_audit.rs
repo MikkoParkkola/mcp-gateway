@@ -243,6 +243,7 @@ async fn audited_call_judged(
         mut status,
         body: Json(body),
         origin,
+        folded,
     } = answer;
     let mut frame = crate::gateway::outbound::answer_value(
         guard.as_deref(),
@@ -251,7 +252,8 @@ async fn audited_call_judged(
         reads.params.as_ref(),
         hidden.as_ref(),
         origin,
-    );
+    )
+    .folded_by(folded);
     // MIK-7669: the delivery record the meta route writes (`judged_answer`),
     // after the judge and with the answer's `tenant_read` fields in it. The
     // direct route keeps no session, so the session fingerprint is empty.

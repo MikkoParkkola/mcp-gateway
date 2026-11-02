@@ -357,7 +357,14 @@ pub(crate) fn scrub_error(needles: &NeedleSet, error: &mut crate::Error) -> Scru
         return Scrubbed::Clean;
     }
     match error {
+        // A backend's own error carries its text and data as its gateway twin
+        // does: an injected value it echoes is scrubbed, or refused, alike.
         E::JsonRpc {
+            code,
+            message,
+            data,
+        }
+        | E::BackendJsonRpc {
             code,
             message,
             data,
