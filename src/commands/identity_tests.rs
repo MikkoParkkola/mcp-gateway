@@ -164,17 +164,16 @@ async fn the_documented_grant_command_allows_the_api_key_caller_it_names() {
         .await
         .unwrap();
     let request = IdentityGrantRequest {
-        identity: Some(GrantSubject::for_test(
-            "api_key",
-            "alice",
-            Some("alice".to_string()),
-        )),
+        identity: Some(
+            GrantSubject::new("api_key", "alice", Some("alice".to_string()))
+                .expect("names someone"),
+        ),
         agent_id: None,
         capability: "calendar_read_day".to_string(),
         tool: Some("calendar_read_day".to_string()),
         scope: GrantScope::Read,
         exposure: CapabilityExposure::Personal,
-        owner: Some(GrantSubject::for_test("api_key", "alice", None)),
+        owner: Some(GrantSubject::new("api_key", "alice", None).expect("names someone")),
         now: Utc::now(),
     };
 
@@ -248,13 +247,13 @@ async fn a_padded_grant_round_trips_to_its_own_principal() {
 
     let allowed = |id: &str| {
         let request = IdentityGrantRequest {
-            identity: Some(GrantSubject::for_test("mtls", id, None)),
+            identity: Some(GrantSubject::new("mtls", id, None).expect("names someone")),
             agent_id: None,
             capability: "calendar_read_day".to_string(),
             tool: Some("calendar_read_day".to_string()),
             scope: GrantScope::Read,
             exposure: CapabilityExposure::Personal,
-            owner: Some(GrantSubject::for_test("mtls", id, None)),
+            owner: Some(GrantSubject::new("mtls", id, None).expect("names someone")),
             now: Utc::now(),
         };
         store.evaluate(&request).allowed

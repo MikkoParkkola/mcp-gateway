@@ -43,9 +43,8 @@ fn capability_yaml(authority: &str, subject: &str) -> String {
 /// scope, the grant's owner equal to its subject, so the caller's identity
 /// is what admits or refuses.
 fn grant_for(authority: &str, subject: &str) -> IdentityGrant {
-    let grant_subject = GrantSubject::new(authority, subject, None)
-        .ok()
-        .expect("a test grant subject names someone");
+    let grant_subject =
+        GrantSubject::new(authority, subject, None).expect("a test grant subject names someone");
     IdentityGrant {
         grant_id: "g-8518".to_string(),
         subject: grant_subject.clone(),
@@ -259,9 +258,8 @@ async fn a_local_transport_caller_without_a_verified_subject_does_not_match_an_a
 /// the verified-subject arm is untouched by the bug.
 #[tokio::test]
 async fn a_verified_subject_decides_precedence_over_the_api_key_name() {
-    let verified = GrantSubject::new("https://idp.example", "alice", None)
-        .ok()
-        .expect("a verified test subject");
+    let verified =
+        GrantSubject::new("https://idp.example", "alice", None).expect("a verified test subject");
     let ctx = || {
         caller(
             CredentialKind::ApiKey,

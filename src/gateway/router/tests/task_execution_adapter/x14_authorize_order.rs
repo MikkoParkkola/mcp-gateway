@@ -93,7 +93,6 @@ fn surfaced_webhook(meta: MetaMcp) -> MetaMcp {
 async fn ungranted_refusal(idem: &str) {
     let granted = armed(true, false, AuditFailurePolicy::BestEffort, surfaced).await;
     let owner = crate::identity_grants::GrantSubject::new(OWNER.0, OWNER.1, None)
-        .ok()
         .expect("the owner names someone");
     let scope = crate::gateway::meta_mcp::InvokeScope {
         authorizer: &crate::gateway::authz::AllowAll,
