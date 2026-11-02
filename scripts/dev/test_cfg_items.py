@@ -187,6 +187,21 @@ class KnownGaps(unittest.TestCase):
         self.assertEqual(found.items, ())
         self.assertTrue(found.unsure)
 
+    def test_an_item_in_a_function_nested_in_the_broken_one_is_unsure(self):
+        # The broken function's recovery reaches into every function it holds,
+        # and out of an inner broken one into the function around it.
+        broken = " match v {\n Some(raw @ Value::String(_)) => {\n f()\n }\n _ => {}\n }\n"
+        item = " #[cfg(test)]\n probe();\n"
+        for shape, text in {
+            "item in the inner fn": "fn p(v: Value) {\n" + broken + " fn inner() {\n" + item + " }\n}\nfn q() {}\n",
+            "error in the inner fn": "fn p() {\n fn inner(v: Value) {\n" + broken + " }\n" + item + "}\nfn q() {}\n",
+        }.items():
+            with self.subTest(shape=shape):
+                found = G.cfg_items(text, SHORT, path=self.LISTED)
+                self.assertTrue(found.known_gap, found)
+                self.assertEqual(found.items, ())
+                self.assertTrue(found.unsure)
+
     def test_a_listed_error_repeated_is_not_the_known_gap(self):
         text = self.GAP + self.GAP.replace("fn p(", "fn p2(")
         self.assertFalse(G.cfg_items(text, SHORT, path=self.LISTED).known_gap)
