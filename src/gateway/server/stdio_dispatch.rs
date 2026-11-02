@@ -10,6 +10,7 @@ use tracing::debug;
 use super::Gateway;
 use super::StdioNonce;
 use super::stdio_route_stage::RouteStage;
+use super::stdio_single::message_generation;
 use super::{
     STDIO_CREDENTIAL_PRINCIPAL, StdioClient, stdio_catalogue, stdio_delivery,
     stdio_routing_keys_only, stdio_take_merged_client_meta, stdio_tasks,
@@ -618,9 +619,8 @@ impl Gateway {
             // X14's granted retry fields, when it grants: declared ahead of
             // the caller context that borrows them.
             let granted;
-            // The message's own generation: its budgets judge the call from
-            // admission to settlement, whatever a reload publishes meanwhile,
-            // and they belong to the same config as the policy above.
+            // The message's own generation, the policy's config: its budgets
+            // judge the call from admission to settlement across a reload.
             let mut current = None;
             let live = message_generation(meta_mcp, generation, &mut current);
             let mut caller = Self::build_stdio_caller_context(
@@ -794,22 +794,5 @@ impl Gateway {
             .await
         };
         (response, execution)
-    }
-}
-
-/// The generation a stdio message is judged with: the one its line was
-/// pinned to when it was read, or, for a line that carries none, the live
-/// config's current one, read once into `current`.
-fn message_generation<'a>(
-    meta_mcp: &MetaMcp,
-    line: &'a dyn crate::gateway::authz::StdioLine,
-    current: &'a mut Option<Arc<crate::config_reload::Generation>>,
-) -> Option<&'a crate::config_reload::Generation> {
-    match line.generation() {
-        Some(pinned) => Some(pinned),
-        None => {
-            *current = meta_mcp.live_config().map(|live| live.generation());
-            current.as_deref()
-        }
     }
 }

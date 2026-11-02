@@ -85,38 +85,50 @@ fn g2_the_scan_flags_a_none_generation_only() {
 /// The file the stdio messages are dispatched from.
 const STDIO_DISPATCH: &str = "src/gateway/server/stdio_dispatch.rs";
 
-/// Calls of `.live_config()` in the stdio dispatch file.
+/// In the stdio dispatch file: its `.live_config()` calls, and how many
+/// times it calls `message_generation`.
 #[derive(Default)]
-struct LiveReads(Vec<String>);
+struct StdioReads {
+    live: Vec<String>,
+    helper_calls: usize,
+}
 
-impl Sink for LiveReads {
+impl Sink for StdioReads {
     fn expr(&mut self, at: &Place, expr: &syn::Expr) {
-        if let syn::Expr::MethodCall(call) = expr
-            && call.method == "live_config"
-            && at.file.ends_with(STDIO_DISPATCH)
-        {
-            let func = at.func.as_deref().unwrap_or("<module>");
-            self.0.push(format!("{}:{func}", at.file));
+        if !at.file.ends_with(STDIO_DISPATCH) {
+            return;
+        }
+        match expr {
+            syn::Expr::MethodCall(call) if call.method == "live_config" => {
+                let func = at.func.as_deref().unwrap_or("<module>");
+                self.live.push(format!("{}:{func}", at.file));
+            }
+            syn::Expr::Call(call)
+                if matches!(&*call.func, syn::Expr::Path(path)
+                    if path.path.segments.last().is_some_and(|s| s.ident == "message_generation")) =>
+            {
+                self.helper_calls += 1;
+            }
+            _ => {}
         }
     }
 }
 
-/// The stdio dispatch reads no live config: the generation a message is
-/// judged with is its line's, or, for a line that carries none, the one the
-/// line's helper resolves once.
+/// The stdio dispatch reads no live config: both of its caller contexts take
+/// the message's generation through `stdio_single::message_generation`.
 #[test]
 fn g3_stdio_dispatch_reads_the_generation_from_the_message_line() {
-    let mut reads = LiveReads::default();
+    let mut reads = StdioReads::default();
     walk(crate_root(), &ROOTS, &mut reads).expect("the walk reads every module");
-    reads.0.sort();
-    // The helper's own read: a scan that missed the file would find none.
-    assert!(!reads.0.is_empty(), "the scan reached {STDIO_DISPATCH}");
+    reads.live.sort();
     assert!(
-        reads
-            .0
-            .iter()
-            .all(|site| site.ends_with(":message_generation")),
-        "stdio dispatch re-reads the live config outside `message_generation`:\n{}",
-        reads.0.join("\n")
+        reads.live.is_empty(),
+        "stdio dispatch re-reads the live config:\n{}",
+        reads.live.join("\n")
+    );
+    // Also proves the scan reached the file.
+    assert_eq!(
+        reads.helper_calls, 2,
+        "both caller contexts take the message's generation"
     );
 }
