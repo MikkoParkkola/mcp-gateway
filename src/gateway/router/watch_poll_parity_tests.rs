@@ -357,6 +357,21 @@ async fn the_watch_host_admits_only_a_live_granted_key() {
         !host.may_invoke(&holder("k-std", "000000000000".into()), &target, now),
         "the key's name under another digest (re-issued)"
     );
+    // A holder stored before holders were bound to their secret names none:
+    // refused even though its key is live and granted (fail closed).
+    let mut unbound = live("k-std");
+    unbound.api_key.digest_tag = None;
+    assert!(
+        !host.may_invoke(&unbound, &target, now),
+        "a holder naming no secret was polled"
+    );
+    // And one bound to a secret the key no longer accepts is refused too.
+    let mut old_secret = live("k-std");
+    old_secret.api_key.digest_tag = Some("000000000000".into());
+    assert!(
+        !host.may_invoke(&old_secret, &target, now),
+        "a holder bound to a secret its key no longer accepts was polled"
+    );
     assert!(
         !host.may_invoke(&live("k-gone"), &target, now),
         "an unknown key"

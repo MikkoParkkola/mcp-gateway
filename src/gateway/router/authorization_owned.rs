@@ -103,3 +103,7 @@ impl OwnedRouterAuthorizer {
 /// valid as it was (K15).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct KeyGone;
+
+#[cfg(test)]
+#[path = "authorization_rejudge_tests.rs"]
+mod rejudge_tests;
