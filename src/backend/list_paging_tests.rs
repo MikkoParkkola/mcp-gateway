@@ -525,3 +525,6 @@ fn fill_budget_expiry_keeps_pages_and_marks_truncated() {
         "{rendered}"
     );
 }
+
+#[path = "list_drain_origin_tests.rs"]
+mod list_drain_origin;
