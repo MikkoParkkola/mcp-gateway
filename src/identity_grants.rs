@@ -190,6 +190,9 @@ pub mod journal;
 mod journal_tests;
 #[path = "identity_grants_matching.rs"]
 mod matching;
+/// `mcp-gateway upgrade`'s removal of grant rows that name no one.
+#[doc(hidden)]
+pub mod nameless_upgrade;
 pub use matching::GrantAgentKey;
 mod store;
 
