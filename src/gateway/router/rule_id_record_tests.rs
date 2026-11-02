@@ -9,7 +9,7 @@
 use serde_json::json;
 
 use super::{
-    Answer, Fx, Logged, Outcome, Route, call, configured, fixture, injected,
+    Answer, Fx, Logged, Outcome, Route, call, configured, fixture, injected, injected_answer,
     key_admits_policy_denies,
 };
 use crate::config::Config;
