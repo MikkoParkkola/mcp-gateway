@@ -112,6 +112,8 @@ const MAX_RENAME_TRIES: usize = 1024;
 const MARKERS: [&str; 3] = ["[redacted]", "<removed>", "{hidden}"];
 
 /// Whether `value` holds a marker: a redaction next to it could complete it.
+/// Its one caller is config load's refusal of a configured secret value that
+/// holds a marker (`config::secret_ref`); the markers themselves stay private.
 pub(crate) fn contains_marker(value: &str) -> bool {
     MARKERS.iter().any(|marker| value.contains(marker))
 }
