@@ -178,7 +178,8 @@ fn one_line(text: &str, bytes: std::ops::Range<usize>) -> bool {
 /// The byte of the colon after a key ending at `key_end`, on its line.
 fn colon_after(text: &str, key_end: usize) -> Result<usize, ComputeRefusal> {
     let rest = &text[key_end..];
-    let gap = rest.len() - rest.trim_start_matches(' ').len();
+    // Spaces and tabs may separate a key from its colon; a line break never.
+    let gap = rest.len() - rest.trim_start_matches([' ', '\t']).len();
     if rest[gap..].starts_with(':') {
         Ok(key_end + gap)
     } else {

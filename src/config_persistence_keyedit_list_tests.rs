@@ -435,3 +435,26 @@ fn trailing_blank_lines_are_judged_alike_by_the_planner_and_the_deletion() {
     assert!(!out.contains("hi"), "{out}");
     assert!(out.ends_with("  b: 1\n"), "{out}");
 }
+
+/// A tab may separate a key from its colon: such a key is still plain.
+#[test]
+fn a_tab_before_the_colon_keeps_the_key_editable() {
+    let out = edited("auth:\n  scope\t: [\"a\"]\n", &[list("auth.scope", &["x"])]);
+    assert_eq!(out, "auth:\n  scope\t: [\"x\"]\n");
+    let out = edited("auth:\n  scope\t: ~\n", &[list("auth.scope", &["x"])]);
+    assert_eq!(out, "auth:\n  scope\t: [\"x\"]\n");
+}
+
+/// An explicit `? key` refuses under every value shape, the unchanged and
+/// empty ones included: the colon check comes before every branch.
+#[test]
+fn an_explicit_key_refuses_under_every_value_shape() {
+    for value in [": [\"a\"]", ":", ": ~", ": null", ": []", ":\n    - a"] {
+        let original = format!("auth:\n  ? scope\n  {value}\n");
+        assert_refused_by(
+            &original,
+            &[list("auth.scope", &["a"])],
+            "not written plain",
+        );
+    }
+}
