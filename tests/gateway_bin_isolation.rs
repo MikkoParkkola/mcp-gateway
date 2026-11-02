@@ -67,47 +67,50 @@ mod reaped {
     const BOUND: Duration = Duration::from_secs(30);
 
     /// One python process: on SIGTERM it marks `term` in `side`, waits up to
-    /// 5 s for `release` there, marks `exit` and exits 0. `ignore` makes it
-    /// ignore SIGTERM instead.
+    /// 30 s for `release` there, marks `exit` and exits 0. `ignore` makes it
+    /// ignore SIGTERM instead; `exit` makes it exit right after `ready`.
     const CHILD: &str = r#"import os, signal, sys, time
 side = sys.argv[1]
 def mark(name):
     open(os.path.join(side, name), "w").close()
 def term(*_):
     mark("term")
-    deadline = time.time() + 5
+    deadline = time.time() + 30
     while not os.path.exists(os.path.join(side, "release")) and time.time() < deadline:
         time.sleep(0.01)
     mark("exit")
     os._exit(0)
-signal.signal(signal.SIGTERM, signal.SIG_IGN if sys.argv[2:] == ["ignore"] else term)
+signal.signal(signal.SIGTERM, signal.SIG_IGN if sys.argv[2] == "ignore" else term)
 print("ready", flush=True)
+if sys.argv[2] == "exit":
+    os._exit(0)
 while True:
     time.sleep(1)
 "#;
 
     /// A started child that has installed its handler, owning `folder`.
-    async fn started(side: &Path, folder: tempfile::TempDir, ignore: bool) -> (Reaped, u32) {
-        let mut command = tokio::process::Command::new("python3");
-        command.arg("-c").arg(CHILD).arg(side);
-        if ignore {
-            command.arg("ignore");
-        }
-        let mut child = command
+    /// `mode` is `term`, `ignore` or `exit` (see [`CHILD`]). The child is
+    /// owned before the ready wait, so a failed handshake leaks no process.
+    async fn started(side: &Path, folder: tempfile::TempDir, mode: &str) -> (Reaped, u32) {
+        let child = tokio::process::Command::new("python3")
+            .arg("-c")
+            .arg(CHILD)
+            .arg(side)
+            .arg(mode)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .spawn() // spawn-check: not the gateway: the rows' own child
             .expect("python3 starts");
-        let pid = child.id().expect("a live child");
-        let stdout = child.stdout.take().expect("piped stdout");
+        let mut reaped = Reaped::new(child);
+        reaped.owning(folder);
+        let pid = reaped.child_mut().id().expect("a live child");
+        let stdout = reaped.child_mut().stdout.take().expect("piped stdout");
         let mut lines = tokio::io::BufReader::new(stdout).lines();
         let ready = tokio::time::timeout(BOUND, lines.next_line()).await;
         assert!(
             matches!(&ready, Ok(Ok(Some(line))) if line == "ready"),
             "{ready:?}"
         );
-        let mut reaped = Reaped::new(child);
-        reaped.owning(folder);
         (reaped, pid)
     }
 
@@ -153,7 +156,7 @@ while True:
         let side = tempfile::tempdir().expect("a side folder");
         let folder = tempfile::tempdir().expect("an owned folder");
         let owned = folder.path().to_path_buf();
-        let (reaped, pid) = started(side.path(), folder, false).await;
+        let (reaped, pid) = started(side.path(), folder, "term").await;
         let _kill = KillPid(pid);
         let ticks = Arc::new(AtomicU64::new(0));
         let ticker = tokio::spawn({
@@ -202,7 +205,7 @@ while True:
         let side = tempfile::tempdir().expect("a side folder");
         let folder = tempfile::tempdir().expect("an owned folder");
         let owned = folder.path().to_path_buf();
-        let (mut reaped, pid) = started(side.path(), folder, false).await;
+        let (mut reaped, pid) = started(side.path(), folder, "term").await;
         let _kill = KillPid(pid);
         reaped.child_mut().start_kill().expect("SIGKILL");
         let status = tokio::time::timeout(BOUND, reaped.stop())
@@ -217,6 +220,31 @@ while True:
         );
     }
 
+    /// A child that exited by itself before the stop keeps its folder: what it
+    /// started was never told to stop.
+    #[tokio::test]
+    async fn an_exit_before_the_stop_keeps_the_folder() {
+        let side = tempfile::tempdir().expect("a side folder");
+        let folder = tempfile::tempdir().expect("an owned folder");
+        let owned = folder.path().to_path_buf();
+        let (reaped, pid) = started(side.path(), folder, "exit").await;
+        let _kill = KillPid(pid);
+        let gone_by = tokio::time::Instant::now() + BOUND;
+        while alive(pid) && tokio::time::Instant::now() < gone_by {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        let status = tokio::time::timeout(BOUND, reaped.stop())
+            .await
+            .expect("the stop ends");
+        let kept_on_disk = owned.is_dir();
+        let _ = std::fs::remove_dir_all(&owned);
+        assert!(status.success(), "{status}");
+        assert!(
+            kept_on_disk,
+            "an exit the stop did not ask for must not authorise removing the folder"
+        );
+    }
+
     /// A child that ignores SIGTERM: the reap fails the test after its bound,
     /// the child is killed and reaped, and its folder is kept.
     #[tokio::test]
@@ -224,7 +252,7 @@ while True:
         let side = tempfile::tempdir().expect("a side folder");
         let folder = tempfile::tempdir().expect("an owned folder");
         let owned = folder.path().to_path_buf();
-        let (mut reaped, pid) = started(side.path(), folder, true).await;
+        let (mut reaped, pid) = started(side.path(), folder, "ignore").await;
         let _kill = KillPid(pid);
         let reap = tokio::spawn(async move {
             reaped.reap_within(Duration::from_millis(500)).await;
@@ -249,7 +277,7 @@ while True:
         let side = tempfile::tempdir().expect("a side folder");
         let folder = tempfile::tempdir().expect("an owned folder");
         let owned = folder.path().to_path_buf();
-        let (reaped, pid) = started(side.path(), folder, false).await;
+        let (reaped, pid) = started(side.path(), folder, "term").await;
         let _kill = KillPid(pid);
         let stop = tokio::spawn(reaped.stop());
         let termed = appears(&side.path().join("term")).await;
@@ -264,11 +292,12 @@ while True:
 
     /// A stdio backend that starts a descendant ignoring stdin EOF (its pid
     /// in `d.pid`), so only the gateway's own tree stop ends it.
-    const BACKEND: &str = r#"import json, subprocess, sys
+    const BACKEND: &str = r#"import json, os, subprocess, sys
 grandchild = subprocess.Popen(["sleep", "600"], stdin=subprocess.DEVNULL,
                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-with open("d.pid", "w") as f:
+with open("d.pid.tmp", "w") as f:
     f.write(str(grandchild.pid))
+os.replace("d.pid.tmp", "d.pid")
 for line in sys.stdin:
     msg = json.loads(line)
     if "id" not in msg:
@@ -329,6 +358,19 @@ for line in sys.stdin:
             .parse()
             .expect("a pid");
         let _kill = KillPid(grandchild);
+        // The stop must land after the gateway installed its shutdown
+        // handler, which it has once it answers /livez.
+        let live_by = tokio::time::Instant::now() + BOUND;
+        while !super::gateway_bin::logged_port(&root.join("gateway.log"))
+            .is_some_and(super::gateway_bin::answers_livez)
+        {
+            assert!(
+                tokio::time::Instant::now() < live_by,
+                "the gateway never answered /livez\n{}",
+                logs()
+            );
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
 
         let status = tokio::time::timeout(Duration::from_secs(120), reaped.stop())
             .await
