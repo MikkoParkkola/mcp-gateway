@@ -28,7 +28,12 @@ pub(crate) const PENDING_SLOT_PREFIX: &str = "MCPGW_PENDING_SLOT_";
 /// the loader, which reports it.
 pub(crate) fn reserved_slot_reference(text: &str) -> Option<(String, usize)> {
     for (value, line) in crate::yaml::scalars_with_lines(text) {
-        let name = (value.strip_prefix("env:"))
+        // The loader's own parse of `env:NAME`, so the two cannot drift.
+        let env = match super::secret_ref::SecretRef::parse(&value) {
+            super::secret_ref::SecretRef::Env(name) => Some(name),
+            _ => None,
+        };
+        let name = env
             .filter(|name| name.starts_with(PENDING_SLOT_PREFIX))
             .or_else(|| {
                 super::secret_ref::template_names(&value)
