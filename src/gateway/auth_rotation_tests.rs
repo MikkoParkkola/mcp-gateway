@@ -236,6 +236,54 @@ fn provenance_records_a_previous_secret_match() {
     assert_eq!(previous.name(), "ops");
 }
 
+// The tag a holder is bound to is the matched digest's, read at the one mint
+// site: a previous-secret match records the previous digest's tag, and a
+// holder bound from it lives through the grace and ends exactly when the
+// grace does, the same instant the secret itself stops authenticating.
+#[test]
+fn a_previous_secret_match_binds_holders_to_the_previous_digest() {
+    use crate::gateway::auth::KeyBinding;
+    let config = resolved(&[with_principal(
+        key("ops", NEW, Some((OLD, grace_end()))),
+        PRINCIPAL,
+    )]);
+    let (_, current) = config
+        .validate_token_with_origin(NEW)
+        .expect("current secret");
+    let (_, previous) = config
+        .validate_token_with_origin(OLD)
+        .expect("previous secret");
+    assert_eq!(
+        current.expect("an API key").digest_tag(),
+        &hex_of(NEW)[..12]
+    );
+    let previous = previous.expect("an API key");
+    assert_eq!(previous.digest_tag(), &hex_of(OLD)[..12]);
+    let bound = |at| {
+        config
+            .client_for_key_at(
+                "ops",
+                PRINCIPAL,
+                KeyBinding::Secret(previous.digest_tag()),
+                at,
+            )
+            .is_some()
+    };
+    let inside = grace_end() - crate::duration_bound::delta!(minutes, 1);
+    assert!(bound(inside), "inside the grace the holder lives");
+    for at in [
+        grace_end(),
+        grace_end() + crate::duration_bound::delta!(minutes, 1),
+    ] {
+        assert_eq!(
+            bound(at),
+            config.validate_token_at(OLD, at).is_some(),
+            "the holder and the secret end at the same instant"
+        );
+        assert!(!bound(at), "the grace is over");
+    }
+}
+
 // ROT.6: a rotated key's event watches still find it by its principal.
 #[test]
 fn client_for_key_finds_a_rotated_key_by_its_principal() {
