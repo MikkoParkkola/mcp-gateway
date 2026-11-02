@@ -99,9 +99,12 @@ impl MetaMcp {
                 caller.authentication == super::Authentication::Authenticated,
                 caller.credential_principal,
             ))
+            // A live search: the caller authenticated on this request, so the
+            // key is judged as it stands now; no stored holder is involved.
             .map(|(name, principal)| crate::events::ApiKeyRef {
                 name: name.to_owned(),
                 principal: principal.to_owned(),
+                digest_tag: None,
             });
         hub.search(query, limit, |scope| match scope {
             Visibility::Backend(backend) => {

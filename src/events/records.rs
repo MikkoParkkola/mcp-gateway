@@ -205,13 +205,22 @@ impl Credential {
     }
 }
 
-/// An API key as a caller presented it: its configured name and the
-/// principal derived from its secret's digest. A key replaced under the same
-/// name derives another principal, so it no longer matches (I2).
+/// An API key as a caller presented it: its configured name, the
+/// principal derived from its secret's digest, and the fingerprint of the
+/// digest the caller matched. A key replaced under the same name derives
+/// another principal, so it no longer matches (I2); a rotation that keeps the
+/// principal still ends whatever the old secret opened once that secret stops
+/// being valid, because the fingerprint no longer matches a valid digest.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct ApiKeyRef {
     pub name: String,
     pub principal: String,
+    /// The 12-hex fingerprint of the digest that authenticated the caller
+    /// (`crate::gateway::auth::digest_tag_of`). Absent on rows stored before
+    /// holders were bound to their secret: those are refused (fail closed),
+    /// since nothing says which secret opened them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub digest_tag: Option<String>,
 }
 
 // Not derived: the principal is the key's stored digest (MIK-8697).
@@ -220,6 +229,10 @@ impl std::fmt::Debug for ApiKeyRef {
         f.debug_struct("ApiKeyRef")
             .field("name", &self.name)
             .field("principal", &"<redacted>")
+            .field(
+                "digest_tag",
+                &self.digest_tag.as_ref().map(|_| "<redacted>"),
+            )
             .finish()
     }
 }

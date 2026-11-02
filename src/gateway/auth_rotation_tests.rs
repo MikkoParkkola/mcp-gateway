@@ -244,11 +244,15 @@ fn client_for_key_finds_a_rotated_key_by_its_principal() {
         PRINCIPAL,
     )]);
     let inside = grace_end() - crate::duration_bound::delta!(minutes, 1);
-    assert!(config.client_for_key("ops", PRINCIPAL).is_some());
-    assert!(config.client_for_key_at("ops", PRINCIPAL, inside).is_some());
+    assert!(config.client_for_key("ops", PRINCIPAL, None).is_some());
+    assert!(
+        config
+            .client_for_key_at("ops", PRINCIPAL, None, inside)
+            .is_some()
+    );
     let derived = hex_of(NEW)[..12].to_owned();
     assert!(
-        config.client_for_key("ops", &derived).is_none(),
+        config.client_for_key("ops", &derived, None).is_none(),
         "the digest prefix is no longer the key's principal"
     );
 }
@@ -531,7 +535,7 @@ fn a_reissued_key_loaded_from_config_is_another_caller() {
     );
     assert!(
         after
-            .client_for_key("ops", old_caller.principal.storage_form())
+            .client_for_key("ops", old_caller.principal.storage_form(), None)
             .is_none(),
         "a watch stored under the old principal does not follow the name"
     );

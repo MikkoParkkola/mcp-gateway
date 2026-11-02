@@ -54,6 +54,11 @@ fn presented(name: &str, secret: &str) -> ApiKeyRef {
         principal: crate::gateway::auth::principal_of(secret)
             .storage_form()
             .to_owned(),
+        digest_tag: Some(
+            crate::gateway::auth::principal_of(secret)
+                .storage_form()
+                .to_owned(),
+        ),
     }
 }
 

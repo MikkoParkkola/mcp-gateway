@@ -111,6 +111,11 @@ async fn attempt_across_a_reload(after: Config) -> usize {
             principal: crate::gateway::auth::principal_of(SECRET)
                 .storage_form()
                 .to_owned(),
+            digest_tag: Some(
+                crate::gateway::auth::principal_of(SECRET)
+                    .storage_form()
+                    .to_owned(),
+            ),
         });
     });
     let (reached, release) = hub.before_send.arm();

@@ -405,6 +405,11 @@ impl ResolvedAuthConfig {
                 name: key.name.clone(),
                 personal: key.personal,
                 matched_previous_digest: via_previous,
+                digest_tag: super::digest_tag_of(if via_previous {
+                    &key.previous.as_ref()?.digest
+                } else {
+                    &key.digest
+                }),
             }),
         ))
     }
@@ -434,16 +439,28 @@ impl ResolvedAuthConfig {
     /// on its behalf without a request (an event watch's poll). `None` when no
     /// live key matches both, or the key expired: a key re-issued under the
     /// same name has another digest and does not match.
+    ///
+    /// `digest_tag`, when given, is the fingerprint of the secret a stored
+    /// holder was opened with: it must still be the key's current digest, or
+    /// its previous one before the grace ends, so a rotation that drops the
+    /// old secret at once ends what that secret opened.
     pub(crate) fn client_for_key(
         &self,
         name: &str,
         principal: &str,
+        digest_tag: Option<&str>,
     ) -> Option<AuthenticatedClient> {
         let keys = self.api_keys();
         let key = keys
             .iter()
             .find(|k| k.name == name && k.principal().storage_form() == principal)?;
-        (!crate::config::api_key_expired_now(key.expires_at)).then(|| Self::client_of(key))
+        (!crate::config::api_key_expired_now(key.expires_at)
+            && digest_tag.is_none_or(|tag| {
+                secret_still_valid(key, tag, |end| {
+                    !crate::config::api_key_expired_now(Some(end))
+                })
+            }))
+        .then(|| Self::client_of(key))
     }
 
     /// [`Self::client_for_key`] judged at `now`, the caller's reading of the
@@ -452,13 +469,20 @@ impl ResolvedAuthConfig {
         &self,
         name: &str,
         principal: &str,
+        digest_tag: Option<&str>,
         now: chrono::DateTime<chrono::Utc>,
     ) -> Option<AuthenticatedClient> {
         let keys = self.api_keys();
         let key = keys
             .iter()
             .find(|k| k.name == name && k.principal().storage_form() == principal)?;
-        (!crate::config::api_key_expired(key.expires_at, now)).then(|| Self::client_of(key))
+        (!crate::config::api_key_expired(key.expires_at, now)
+            && digest_tag.is_none_or(|tag| {
+                secret_still_valid(key, tag, |end| {
+                    !crate::config::api_key_expired(Some(end), now)
+                })
+            }))
+        .then(|| Self::client_of(key))
     }
 
     /// Check rate limiting for a fully resolved authenticated client.
@@ -554,6 +578,20 @@ const DUMMY_PREVIOUS_DIGEST: [u8; 32] = [0xA5; 32];
 #[cfg(not(test))]
 fn dummy_previous_digest() -> [u8; 32] {
     DUMMY_PREVIOUS_DIGEST
+}
+
+/// Whether the secret fingerprinted `tag` still authenticates as `key`: its
+/// current digest, or its previous one while `in_grace` says the grace runs.
+fn secret_still_valid(
+    key: &ResolvedApiKey,
+    tag: &str,
+    in_grace: impl Fn(chrono::DateTime<chrono::Utc>) -> bool,
+) -> bool {
+    super::digest_tag_of(&key.digest) == tag
+        || key
+            .previous
+            .as_ref()
+            .is_some_and(|p| super::digest_tag_of(&p.digest) == tag && in_grace(p.expires_at))
 }
 
 #[cfg(test)]

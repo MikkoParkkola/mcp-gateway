@@ -429,6 +429,7 @@ async fn watch_poll_admits_the_api_key_for_its_grant() {
         api_key: ApiKeyRef {
             name: KEY.to_string(),
             principal: principal_of(KEY).storage_form().to_owned(),
+            digest_tag: Some(principal_of(KEY).storage_form().to_owned()),
         },
     };
     let target = Target {

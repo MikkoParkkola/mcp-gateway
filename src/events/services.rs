@@ -110,6 +110,29 @@ impl Services {
     }
 }
 
+/// Whether the secret fingerprinted `tag` still authenticates as key `k`:
+/// it is the key's current digest, or its previous one before the grace ends
+/// (ADR-022). A rotation that drops the old secret at once leaves no digest
+/// with that fingerprint, so whatever that secret opened stops here. A key
+/// whose digest is a reference this config read cannot resolve matches no
+/// fingerprint (fail closed).
+fn secret_still_valid(
+    k: &crate::config::ApiKeyConfig,
+    tag: &str,
+    now: Result<DateTime<Utc>, crate::clock::ClockBeforeEpoch>,
+) -> bool {
+    let tag_of = |spec: Option<&str>| {
+        spec.and_then(crate::config::parse_api_key_digest)
+            .map(|digest| crate::gateway::auth::digest_tag_of(&digest))
+    };
+    if tag_of(k.key_sha256.as_deref()).as_deref() == Some(tag) {
+        return true;
+    }
+    tag_of(k.previous_key_sha256.as_deref()).as_deref() == Some(tag)
+        && k.previous_expires_at
+            .is_some_and(|end| now.is_ok_and(|now| now < end))
+}
+
 impl Services {
     /// Whether a subscription made with API key `key` may still see
     /// `backend` under the live config. A key that left the config, expired,
@@ -145,6 +168,11 @@ impl Services {
                     .as_deref()
                     .and_then(crate::config::parse_api_key_digest)
                     .is_some_and(|digest| k.principal_for(&digest).storage_form() == key.principal)
+            })
+            .filter(|k| {
+                key.digest_tag
+                    .as_deref()
+                    .is_none_or(|tag| secret_still_valid(k, tag, now))
             })
             .is_some_and(|k| {
                 backend.is_none_or(|backend| k.backends.iter().any(|b| b == "*" || b == backend))
@@ -190,9 +218,11 @@ impl Services {
     ) -> bool {
         use crate::security::audit::CredentialKind as Kind;
         match sub.credential_kind {
+            // A stored row must name the secret that opened it: one stored
+            // before holders were bound carries no fingerprint and is refused.
             None | Some(Kind::ApiKey) => {
                 sub.legacy_api_key_name.is_none()
-                    && sub.api_key.is_some()
+                    && sub.api_key.as_ref().is_some_and(|k| k.digest_tag.is_some())
                     && self.admits_grant(sub.api_key.as_ref(), backend, Ok(now))
             }
             // No credential was presented: authentication is off.

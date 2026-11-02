@@ -180,6 +180,10 @@ pub(crate) struct NamedApiKey {
     personal: bool,
     /// The key's previous digest matched, not its current one (ADR-022).
     matched_previous_digest: bool,
+    /// The 12-hex fingerprint of the digest that matched, current or
+    /// previous: what a watch or session opened by this request is bound to,
+    /// so it ends when that secret stops being valid. Never the digest.
+    digest_tag: String,
 }
 
 impl NamedApiKey {
@@ -199,6 +203,19 @@ impl NamedApiKey {
     pub(crate) fn matched_previous_digest(&self) -> bool {
         self.matched_previous_digest
     }
+
+    /// The fingerprint of the digest this request matched, taken at the
+    /// match: a holder this request opens is bound to it, never to a later
+    /// read of the key table.
+    pub(crate) fn digest_tag(&self) -> &str {
+        &self.digest_tag
+    }
+}
+
+/// The 12-hex fingerprint a holder is bound to: the same form a derived
+/// principal takes, of the digest the request matched.
+pub(crate) fn digest_tag_of(digest: &[u8; 32]) -> String {
+    principal_of_digest(digest).storage_form().to_owned()
 }
 
 #[path = "auth_resolved.rs"]

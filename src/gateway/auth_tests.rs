@@ -683,7 +683,7 @@ fn a_key_reissued_under_the_same_name_is_another_caller() {
             .live_config
             .generation()
             .auth()
-            .client_for_key("ops", stored.storage_form())
+            .client_for_key("ops", stored.storage_form(), None)
             .is_some()
     );
     let mut reissued = admin_key(false);
@@ -694,7 +694,7 @@ fn a_key_reissued_under_the_same_name_is_another_caller() {
             .live_config
             .generation()
             .auth()
-            .client_for_key("ops", stored.storage_form())
+            .client_for_key("ops", stored.storage_form(), None)
             .is_none()
     );
 }

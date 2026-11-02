@@ -114,6 +114,11 @@ async fn access_lost_during_the_second_verdict_is_not_sent() {
                 principal: crate::gateway::auth::principal_of(SECRET)
                     .storage_form()
                     .to_owned(),
+                digest_tag: Some(
+                    crate::gateway::auth::principal_of(SECRET)
+                        .storage_form()
+                        .to_owned(),
+                ),
             });
         });
         let drive = async {
