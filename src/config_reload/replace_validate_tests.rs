@@ -8,8 +8,11 @@ use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use super::reload_context::replace::{Expected, Replace, Replaced, SecretStep, replace_detached};
-use super::replace_test_support::{START, WAIT, context, read, setup, to};
+use super::reload_context::replace::{
+    Audit, Expected, Intent, IntentId, IntentKind, IntentSink, Replace, ReplaceError, Replaced,
+    SecretStep, replace_audited, replace_detached,
+};
+use super::replace_test_support::{START, WAIT, context, read, refusing_context, setup, to};
 use crate::config_persistence::keyedit::{Segment, SlotId, Template};
 use crate::gateway::test_helpers::write_owner_only;
 use crate::secret_store::{FilesStore, NewSecretOwned, SecretStore, StoreError, StoreKind, Vault};
@@ -271,8 +274,11 @@ fn loud_forms_in(text: &str) -> Vec<&'static str> {
     .collect()
 }
 
-/// A store that refuses every create, with fixed text.
-struct Failing;
+/// A store that refuses every create, with fixed text, counting the tries.
+#[derive(Default)]
+struct Failing {
+    creates: AtomicUsize,
+}
 
 impl SecretStore for Failing {
     fn kind(&self) -> StoreKind {
@@ -288,6 +294,7 @@ impl SecretStore for Failing {
         Ok(false)
     }
     fn create(&self, _: &str, _: &[u8]) -> Result<String, StoreError> {
+        self.creates.fetch_add(1, Ordering::SeqCst);
         Err(StoreError::Failed("the store is broken".to_owned()))
     }
     fn delete(&self, _: &str) -> Result<(), StoreError> {
@@ -295,30 +302,55 @@ impl SecretStore for Failing {
     }
 }
 
-/// The two refusals a writer-level save can reach today with `LOUD`: the
-/// reload's (after the entries) and the store's.
-async fn loud_refusals(dir: &Path) -> Vec<String> {
-    let exposed = format!(
-        "server:\n  public_url: \"https://gw.public.test\"\n{START}  b:\n    http_url: \"http://127.0.0.1:9/mcp\"\n    env:\n      K: {{slot}}\n"
-    );
-    let keys = ["backends", "b", "env", "K"];
-    let mut refusals = Vec::new();
+/// A backend `b` whose env `K` is the secret slot: a save the writer's
+/// checks accept.
+fn standing() -> String {
+    format!("{START}  b:\n    http_url: \"http://127.0.0.1:9/mcp\"\n    env:\n      K: {{slot}}\n")
+}
+
+const LOUD_KEYS: [&str; 4] = ["backends", "b", "env", "K"];
+
+/// The two refusals a save of `LOUD` reaches once the writer's checks accept
+/// it, each through `audit()`: the store's, on its first create, and the
+/// reload's, after the entry exists. Each premise is asserted, so a row on
+/// these never passes on an earlier refusal.
+async fn loud_refusals(dir: &Path, audit: impl Fn() -> Audit) -> Vec<String> {
     let path = dir.join("gateway.yaml");
     write_owner_only(&path, START).expect("write config");
-    let posture = save(dir, Counting::new(dir), &keys, &exposed, LOUD);
-    let failure = replace_detached(context(&path), posture, WAIT)
-        .await
-        .expect_err("the posture refuses");
-    refusals.push(format!("{failure:?}"));
-    let mut broken = save(dir, Counting::new(dir), &keys, &exposed, LOUD);
-    if let Some(step) = broken.secrets.as_mut() {
-        step.store = Arc::new(Failing);
-    }
-    let failure = replace_detached(context(&path), broken, WAIT)
+    let failing = Arc::new(Failing::default());
+    let mut broken = save(dir, Counting::new(dir), &LOUD_KEYS, &standing(), LOUD);
+    broken.secrets.as_mut().expect("a secret step").store = Arc::clone(&failing) as _;
+    let store_refusal = replace_audited(context(&path), broken, audit(), WAIT)
         .await
         .expect_err("the store refuses");
-    refusals.push(format!("{failure:?}"));
-    refusals
+    assert!(
+        matches!(store_refusal, ReplaceError::Secrets(_)),
+        "premise: the store's own refusal: {store_refusal:?}"
+    );
+    assert_eq!(
+        failing.creates.load(Ordering::SeqCst),
+        1,
+        "premise: the save reached the store"
+    );
+    let store = Counting::new(dir);
+    let reload_refusal = replace_audited(
+        refusing_context(&path),
+        save(dir, Arc::clone(&store), &LOUD_KEYS, &standing(), LOUD),
+        audit(),
+        WAIT,
+    )
+    .await
+    .expect_err("the reload refuses");
+    assert!(
+        matches!(reload_refusal, ReplaceError::ReloadRefused(_)),
+        "premise: the reload's refusal after the write: {reload_refusal:?}"
+    );
+    assert_eq!(
+        store.creates(),
+        1,
+        "premise: the entry existed before the reload refused"
+    );
+    vec![format!("{store_refusal:?}"), format!("{reload_refusal:?}")]
 }
 
 /// W6: no refusal message carries the submitted secret in any form. The
@@ -326,7 +358,7 @@ async fn loud_refusals(dir: &Path) -> Vec<String> {
 #[tokio::test]
 async fn no_refusal_message_contains_submitted_secret_bytes() {
     let dir = tempfile::tempdir().expect("dir");
-    for refusal in loud_refusals(dir.path()).await {
+    for refusal in loud_refusals(dir.path(), || Audit::Off).await {
         let leaked = loud_forms_in(&refusal);
         assert!(
             leaked.is_empty(),
@@ -378,18 +410,29 @@ fn a_recognisable_secret_appears_in_no_trace_file_or_record() {
         .on_thread_start(move || std::mem::forget(tracing::dispatcher::set_default(&on_start)))
         .build()
         .expect("runtime");
+    // The refused saves' directory: nothing in it may hold the secret. The
+    // standing save keeps its entry, so it writes into its own.
     let dir = tempfile::tempdir().expect("dir");
+    let kept = tempfile::tempdir().expect("dir");
+    let record = dir.path().join("audit.record");
     let messages = tracing::dispatcher::with_default(&capture, || {
         runtime.block_on(async {
-            let mut seen = loud_refusals(dir.path()).await;
-            let path = dir.path().join("gateway.yaml");
-            let stands = format!(
-                "{START}  b:\n    http_url: \"http://127.0.0.1:9/mcp\"\n    env:\n      K: {{slot}}\n"
-            );
-            let keys = ["backends", "b", "env", "K"];
+            let audited = || Audit::Required {
+                sink: Box::new(FileSink(record.clone())),
+                kind: IntentKind::Save,
+            };
+            let mut seen = loud_refusals(dir.path(), audited).await;
+            let path = kept.path().join("gateway.yaml");
+            write_owner_only(&path, START).expect("write config");
             let saved = replace_detached(
                 context(&path),
-                save(dir.path(), Counting::new(dir.path()), &keys, &stands, LOUD),
+                save(
+                    kept.path(),
+                    Counting::new(kept.path()),
+                    &LOUD_KEYS,
+                    &standing(),
+                    LOUD,
+                ),
                 WAIT,
             )
             .await;
@@ -418,11 +461,44 @@ fn a_recognisable_secret_appears_in_no_trace_file_or_record() {
             "W20: a result carries the secret ({leaked:?}): {message}"
         );
     }
-    let file = read(&dir.path().join("gateway.yaml"));
+    assert!(record.exists(), "premise: the refused saves were audited");
+    for entry in walkdir::WalkDir::new(dir.path())
+        .into_iter()
+        .filter_map(Result::ok)
+    {
+        if !entry.file_type().is_file() {
+            continue;
+        }
+        let bytes = std::fs::read(entry.path()).expect("read file");
+        let leaked = loud_forms_in(&String::from_utf8_lossy(&bytes));
+        assert!(
+            leaked.is_empty(),
+            "W20: {} carries the secret of a refused save ({leaked:?})",
+            entry.path().display()
+        );
+    }
+    let file = read(&kept.path().join("gateway.yaml"));
     assert!(
         loud_forms_in(&file).is_empty(),
         "W20: gateway.yaml carries the secret: {file}"
     );
+}
+
+/// Writes each intent it is handed to `path`, one per line: the record an
+/// audited save leaves, read back by the row.
+struct FileSink(std::path::PathBuf);
+
+impl IntentSink for FileSink {
+    fn append(&mut self, intent: &Intent) -> Result<IntentId, String> {
+        use std::io::Write as _;
+        let mut file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&self.0)
+            .map_err(|e| e.to_string())?;
+        writeln!(file, "{intent:?}").map_err(|e| e.to_string())?;
+        Ok(IntentId("recorded".to_owned()))
+    }
 }
 
 /// Two API keys whose digests are `a` and `b`, under `auth`.
@@ -619,4 +695,41 @@ fn a_plain_scalar_mentioning_the_reserved_prefix_loads() {
     )
     .expect("write config");
     crate::config::Config::load(Some(&path)).expect("a mention without a reference loads");
+}
+
+/// The shared-credential refusal names the two fields and nothing of the
+/// credential: neither the submitted bearer nor its digest.
+#[tokio::test]
+async fn the_shared_credential_refusal_names_fields_not_the_credential() {
+    let dir = tempfile::tempdir().expect("dir");
+    let path = dir.path().join("gateway.yaml");
+    write_owner_only(&path, with_key("")).expect("write config");
+    let refused = replace_detached(
+        context(&path),
+        save(
+            dir.path(),
+            Counting::new(dir.path()),
+            &["auth", "bearer_token"],
+            &with_key("  bearer_token: {slot}\n"),
+            CRED,
+        ),
+        WAIT,
+    )
+    .await
+    .expect_err("one secret would match two credentials");
+
+    let ReplaceError::Refused(message) = refused else {
+        panic!("premise: the shared-credential refusal: {refused:?}");
+    };
+    assert_eq!(
+        message,
+        "Configuration validation error: auth.bearer_token and auth.api_keys['ci'].key_sha256 \
+         are the same credential, so one secret would match both; replace one of them"
+    );
+    let bearer = std::str::from_utf8(CRED).expect("utf-8");
+    let digest = crate::hashing::sha256_hex(CRED);
+    assert!(
+        !message.contains(bearer) && !message.contains(&digest),
+        "the refusal carries the credential or its digest: {message}"
+    );
 }
