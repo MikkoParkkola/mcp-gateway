@@ -23,6 +23,8 @@ pub(crate) use self::http::SlotCredential;
 pub(crate) use self::http::guarded_client;
 #[cfg(any(test, feature = "webui"))]
 pub(crate) use self::http::is_budget_refusal;
+#[cfg(test)]
+pub(crate) use self::http::peer_refusal_for_test;
 #[doc(hidden)]
 pub use self::http::transport_follows_redirect;
 pub(crate) use self::lender::{Lender, LentCredential, Loan, Refusal, SendCheck};

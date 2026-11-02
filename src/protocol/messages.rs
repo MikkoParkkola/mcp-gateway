@@ -57,6 +57,12 @@ pub(crate) struct WireMeta {
     /// `backend_request`, `BackendFailure` only from `Error::origin` through
     /// `of_error`; never on the wire, so no caller can set it.
     pub(crate) origin: Origin,
+    /// Server-owned: a failure this answer carries folded into a tool
+    /// result (an `isError` the gateway made of a dispatch failure), stamped
+    /// from the delivery's facts where the frame is finalised. The error
+    /// count reads it when the frame has no error of its own; never on the
+    /// wire.
+    pub(crate) folded: Option<crate::gateway::health_metrics::RpcError>,
 }
 
 /// Who an error frame blames, for the error count: the gateway's own fault or
