@@ -46,6 +46,7 @@ src/gateway/meta_mcp/invoke/policy.rs	apply_response_gates_effect	refused (as va
 src/gateway/meta_mcp/invoke/policy.rs	apply_response_gates_effect	via insert_noted	1
 src/gateway/meta_mcp/invoke/post_dispatch.rs	attach_tool_error_recovery	via insert_noted	1
 src/gateway/meta_mcp/invoke/post_dispatch.rs	deliver	refused_while_vouched	1
+src/gateway/meta_mcp/invoke/post_dispatch.rs	deliver	via inject_cost_advice	1
 src/gateway/meta_mcp/invoke/post_dispatch.rs	inject_cost_advice	via insert_noted	2
 src/gateway/meta_mcp/invoke/post_dispatch.rs	settle_dispatch_error	via settle_unsent	2
 src/gateway/meta_mcp/invoke/post_dispatch.rs	settle_round	refused_while_vouched	1

@@ -21,7 +21,7 @@ const PENDING: [&str; 2] = ["inv2-credential-miss", "unbindable-confirmation"];
 /// Every `crate::Error` variant that is not one of the twelve: covered by
 /// the refusal scan in `delivery_framing.rs` (`Forbidden`, `GatewayRefused`,
 /// `ResponseFirewallRefused`), or not a gateway decision.
-const OTHER_VARIANTS: [&str; 23] = [
+const OTHER_VARIANTS: [&str; 24] = [
     "Forbidden",
     "ResponseFirewallRefused",
     "AuditUnavailable",
@@ -38,6 +38,7 @@ const OTHER_VARIANTS: [&str; 23] = [
     "AuthorizationPending",
     "Tls",
     "JsonRpc",
+    "BackendJsonRpc",
     "GatewayRefused",
     "JsonRpcRetryable",
     "Io",

@@ -326,10 +326,7 @@ impl Collect {
                     if through && needles.contains(name) {
                         *raises.entry(format!("{key}\t{name}{suffix}")).or_insert(0) += 1;
                     }
-                    if raise_helpers
-                        .iter()
-                        .any(|h| self.names_fn(event, (h.0.as_str(), h.1.as_str())))
-                    {
+                    if self.calls_helper(event, &raise_helpers) {
                         *raises
                             .entry(format!("{key}\tvia {name}{suffix}"))
                             .or_insert(0) += 1;
@@ -347,10 +344,7 @@ impl Collect {
                 Kind::Call {
                     name, method: true, ..
                 } => {
-                    if raise_helpers
-                        .iter()
-                        .any(|h| self.names_fn(event, (h.0.as_str(), h.1.as_str())))
-                    {
+                    if self.calls_helper(event, &raise_helpers) {
                         *raises.entry(format!("{key}\tvia {name}")).or_insert(0) += 1;
                     }
                     if gateway && self.calls_helper(event, &helper_fns) && !is_refusal_name(name) {
