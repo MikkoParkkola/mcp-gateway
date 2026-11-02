@@ -29,7 +29,8 @@ struct OneLog {
     /// Calls that still answer "searching" before the cursor is found.
     searching_calls: usize,
     /// The next call finds the cursor gone.
-    reset_once: bool,
+    /// The call (1-based) on which this log finds its cursor gone.
+    reset_on_call: Option<usize>,
     calls: usize,
 }
 
@@ -75,7 +76,7 @@ impl TwoLogs {
             };
         };
         l.calls += 1;
-        if std::mem::take(&mut l.reset_once) {
+        if l.reset_on_call == Some(l.calls) {
             return Half {
                 reset: true,
                 ..Half::default()
@@ -236,19 +237,18 @@ async fn f9_a_log_still_searching_is_not_counted_at_its_head() {
 
 #[tokio::test(start_paused = true)]
 async fn f10b_one_log_resetting_keeps_the_other_logs_half() {
-    let gov = OneLog {
-        len: 4,
-        reset_once: true,
+    // The invocation log reaches its head on the first page; the governance
+    // log resets on the second, a page with no invocation rows to re-set it.
+    let inv = OneLog {
+        len: 3,
         ..OneLog::default()
     };
-    let fake = TwoLogs::new(
-        OneLog {
-            len: 6,
-            ..OneLog::default()
-        },
-        gov,
-        2,
-    );
+    let gov = OneLog {
+        len: 8,
+        reset_on_call: Some(2),
+        ..OneLog::default()
+    };
+    let fake = TwoLogs::new(inv, gov, 2);
     let resume = LogCursor {
         inv: Some(part(1)),
         gov: Some(part(2)),
@@ -261,12 +261,12 @@ async fn f10b_one_log_resetting_keeps_the_other_logs_half() {
     );
     assert_eq!(
         counters(&out, LogName::Invocation),
-        (2..=6).collect::<Vec<_>>(),
+        vec![2, 3],
         "no replay, no drop"
     );
     assert_eq!(
         merge.delivered().inv,
-        Some(part(6)),
+        Some(part(3)),
         "the invocation half survives the reset"
     );
 }
