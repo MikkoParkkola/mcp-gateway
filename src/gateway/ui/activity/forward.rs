@@ -17,8 +17,8 @@ use std::path::Path;
 use serde_json::Value;
 
 use super::access::Access;
-use super::reader::Which;
-use super::rows::Kind;
+use super::reader::{Limits, Line, WINDOW, Which, read_page};
+use super::rows::{Kind, kind_of, row, visible};
 
 /// After this many restarts in one catch-up, the page ends in `reset`, so a
 /// log replaced on every call cannot hold a stream in catch-up.
@@ -137,10 +137,28 @@ pub(in crate::gateway::ui) fn rows_after(
     Ok(ForwardPage::default())
 }
 
+/// A record's place, from its own counter and entry hash.
+fn mark_of(entry: &Value) -> Option<Mark> {
+    let counter = entry.get("counter")?.as_u64()?;
+    let hash = entry.get("entry_hash")?.as_str()?.strip_prefix("sha256:")?;
+    Some(Mark {
+        counter,
+        hash16: hash.get(..16)?.to_owned(),
+    })
+}
+
 /// The newest kept record's place, visible to the caller or not.
 pub(in crate::gateway::ui) fn head(log: &Log<'_>) -> io::Result<Option<Mark>> {
-    let _ = log;
-    Ok(None)
+    let one = Limits {
+        matches: 1,
+        bytes: 2 * WINDOW,
+    };
+    // Either log reads as the reader's first: only the counter and hash of
+    // its newest line are used here, never its log label.
+    let page = read_page(log.path, None, None, one, |line| {
+        mark_of(&line.entry).is_some()
+    })?;
+    Ok(page.lines.first().and_then(|l| mark_of(&l.entry)))
 }
 
 /// The row for an announced record, as a read back gives it, or `None` when
@@ -150,8 +168,24 @@ pub(in crate::gateway::ui) fn frame(
     access: &Access,
     entry: &Value,
 ) -> Option<Served> {
-    let _ = (log, access, entry);
-    None
+    let line = Line {
+        log: log.kind.log(),
+        entry: entry.clone(),
+        segment: 0,
+    };
+    served(log, access, &line)
+}
+
+/// The row for `line` when this stream kind keeps it and `access` may see it.
+fn served(log: &Log<'_>, access: &Access, line: &Line) -> Option<Served> {
+    let kind = kind_of(line).filter(|k| log.kind.keeps(*k))?;
+    if !visible(access, line, kind) {
+        return None;
+    }
+    Some(Served {
+        mark: mark_of(&line.entry)?,
+        row: row(line, log.secret)?,
+    })
 }
 
 #[cfg(test)]
