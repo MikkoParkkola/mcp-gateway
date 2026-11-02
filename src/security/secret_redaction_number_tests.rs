@@ -53,19 +53,22 @@ fn oracle(needle: &str, number: &Number) -> bool {
     digits.trim_start_matches('-') == value
 }
 
-/// The scrub's verdict on `number` against `needles`, and the oracle's: a
-/// literal (exact JSON scalar equality) first, as the scrub checks it, then
-/// any value equal by the number rules.
-fn verdicts(needles: &[&str], number: &str) -> (bool, bool) {
-    let parsed: Value = serde_json::from_str(number).expect("a JSON number");
-    let Value::Number(n) = &parsed else {
-        panic!("premise: {number} is a number");
-    };
+/// The scrub's verdict on the JSON `scalar` against `needles`, and the
+/// oracle's: a literal (exact JSON scalar equality, as `Value` compares) first,
+/// as the scrub checks it, then, for a number, any value equal by the number
+/// rules.
+fn verdicts(needles: &[&str], scalar: &str) -> (bool, bool) {
+    let parsed: Value = serde_json::from_str(scalar).expect("a JSON scalar");
     let literal = needles
         .iter()
         .filter_map(|needle| serde_json::from_str::<Value>(needle).ok())
+        .filter(|v| !matches!(v, Value::String(_) | Value::Array(_) | Value::Object(_)))
         .any(|literal| literal == parsed);
-    let expected = literal || needles.iter().any(|needle| oracle(needle, n));
+    let by_number = match &parsed {
+        Value::Number(n) => needles.iter().any(|needle| oracle(needle, n)),
+        _ => false,
+    };
+    let expected = literal || by_number;
     let owned: Vec<String> = needles.iter().map(|s| (*s).to_owned()).collect();
     let mut scrubbed = parsed.clone();
     let actual = redact_value_with(&mut scrubbed, &Compiled::new(&owned));
@@ -101,6 +104,11 @@ const NEEDLES: &[&str] = &[
     "123456789012345678901234567890",
     "99999999999999991611392",
     "1e23",
+    "0.0",
+    "-0.0",
+    "true",
+    "false",
+    "null",
 ];
 
 /// Number forms: zero in each sign and form, small and large integers in
@@ -176,6 +184,29 @@ fn mixed_value_sets_match_numbers_as_the_oracle_does() {
     assert!(wrong.is_empty(), "{wrong:#?}");
 }
 
+/// Scalars that are not numbers match a literal needle by exact JSON
+/// equality only, as before.
+#[test]
+fn other_scalars_match_literals_as_the_oracle_does() {
+    let mut wrong = Vec::new();
+    for needle in NEEDLES {
+        for scalar in ["true", "false", "null"] {
+            let (actual, expected) = verdicts(&[needle], scalar);
+            if actual != expected {
+                wrong.push(format!(
+                    "{needle:?} vs {scalar}: scrub {actual}, oracle {expected}"
+                ));
+            }
+        }
+    }
+    assert!(wrong.is_empty(), "{wrong:#?}");
+    assert_eq!(
+        verdicts(&["true"], "true"),
+        (true, true),
+        "premise: a match"
+    );
+}
+
 /// The grid's premise: it holds matches as well as misses, including the
 /// cases the lookup must get right (zero in each sign, the rounding pair).
 #[test]
@@ -188,6 +219,8 @@ fn the_grid_holds_matches_and_misses() {
         ("99999999999999991611392", "1e23", true),
         ("9007199254740993", "9007199254740992", false),
         ("1.5e10", "15000000000", true),
+        ("-0.0", "0.0", true),
+        ("0.0", "-0.0", true),
     ] {
         let (actual, oracle) = verdicts(&[needle], number);
         assert_eq!(
