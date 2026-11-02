@@ -557,7 +557,8 @@ impl LiveConfig {
     }
 
     /// Attach the observer told the incoming generation before each
-    /// publication.
+    /// publication. Cost governance is its one observer.
+    #[cfg(feature = "cost-governance")]
     pub(crate) fn on_publish(&self, observer: crate::observer::ObserverFn<Arc<Generation>>) {
         self.published.set(observer);
     }

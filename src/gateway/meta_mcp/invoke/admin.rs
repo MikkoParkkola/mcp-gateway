@@ -460,6 +460,7 @@ fn cost_section(snap: &crate::cost_accounting::enforcer::EnforcerSnapshot) -> Va
 /// Per budgeted name, the starting figure a reload charged it with today
 /// (its possible earlier spend in the overflow), or null when none above
 /// zero was taken (ADR-023).
+#[cfg(feature = "cost-governance")]
 fn estimated_start(
     limits: &std::collections::HashMap<String, f64>,
     estimates: &std::collections::HashMap<String, f64>,
