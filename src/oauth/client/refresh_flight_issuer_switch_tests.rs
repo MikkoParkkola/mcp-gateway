@@ -554,7 +554,7 @@ async fn an_empty_read_after_a_switch_answers_moved() {
     let dir = tempfile::tempdir().unwrap();
     let cell = Arc::new(SignInStatus::new(SignIn::NeverSignedIn));
     let owned = client(dir.path(), &server).with_sign_in_status(Arc::clone(&cell));
-    let (reached, release) = owned.adopt_pause.arm();
+    let (reached, release) = owned.stored_read_pause.arm();
     let adopt = tokio::task::spawn_blocking(move || owned.adopt_stored_login_for_test());
     within("the adopt parks after its read", reached.notified()).await;
 

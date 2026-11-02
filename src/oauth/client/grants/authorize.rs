@@ -271,7 +271,7 @@ impl OAuthClient {
             .load(&key, &self.resource_url)
             .filter(|token| !token.is_expired());
         #[cfg(all(test, feature = "webui"))]
-        self.adopt_pause.pause_blocking();
+        self.stored_read_pause.pause_blocking();
         // A switch landing between the check above and this read is still a
         // move, not an empty store.
         let Some(token) = stored else {

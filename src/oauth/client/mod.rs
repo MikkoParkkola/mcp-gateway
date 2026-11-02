@@ -87,6 +87,10 @@ pub struct OAuthClient {
     #[cfg(all(test, feature = "webui"))]
     pub(crate) adopt_pause: crate::test_pause::Slot,
 
+    /// Where a test holds a stored-login adopt after its read, before it answers.
+    #[cfg(all(test, feature = "webui"))]
+    pub(crate) stored_read_pause: crate::test_pause::Slot,
+
     /// Where a test holds a publish between its issuer check and its write.
     #[cfg(all(test, feature = "webui"))]
     pub(crate) publish_pause: crate::test_pause::Slot,
@@ -273,6 +277,8 @@ impl OAuthClient {
             rediscovery_pause: crate::test_pause::Slot::default(),
             #[cfg(all(test, feature = "webui"))]
             adopt_pause: crate::test_pause::Slot::default(),
+            #[cfg(all(test, feature = "webui"))]
+            stored_read_pause: crate::test_pause::Slot::default(),
             #[cfg(all(test, feature = "webui"))]
             publish_pause: crate::test_pause::Slot::default(),
             #[cfg(all(test, feature = "webui"))]
