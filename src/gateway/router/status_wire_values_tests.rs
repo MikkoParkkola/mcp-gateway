@@ -15,7 +15,7 @@ use axum::http::Request;
 use serde_json::Value;
 use tower::ServiceExt;
 
-use super::{http_backend_at, scoped_auth_config, test_router_app_state_with_auth_and_config};
+use super::{full_admin_auth_config, http_backend_at, test_router_app_state_with_auth_and_config};
 use crate::backend::Backend;
 use crate::config::{BackendConfig, FailsafeConfig, TransportConfig};
 use crate::failsafe::CircuitState;
@@ -24,7 +24,7 @@ use crate::gateway::router::create_router;
 /// The admin view's row for the one registered backend, `reset` after it trips.
 async fn row_of(backend: Arc<Backend>, act: impl FnOnce(&Backend)) -> Value {
     let (state, _dir) = test_router_app_state_with_auth_and_config(
-        &scoped_auth_config(true),
+        &full_admin_auth_config(),
         crate::config::Config::default(),
     )
     .await;
