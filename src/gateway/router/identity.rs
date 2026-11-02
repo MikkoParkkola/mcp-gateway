@@ -350,12 +350,12 @@ pub(super) fn subject_key(
     let id = if from_cert {
         cert.and_then(cert_subject_id)?
     } else {
-        subject.subject.clone()
+        subject.subject().to_owned()
     };
     Some(format!(
         "subject:{}:{}:{}:{id}",
-        subject.authority.len(),
-        subject.authority,
+        subject.authority().len(),
+        subject.authority(),
         id.len()
     ))
 }
@@ -365,12 +365,10 @@ pub(super) fn subject_key(
 /// shows, which the certificate source no longer makes but which must still
 /// never become a key if handed over with that certificate.
 fn is_this_certificates(subject: &GrantSubject, cert: &CertIdentity) -> bool {
-    subject.authority == MTLS_AUTHORITY
+    subject.authority() == MTLS_AUTHORITY
         && match cert.subject_id() {
-            Some(id) => subject.subject == id,
-            None => {
-                trimmed_non_empty(&cert.display_name).as_deref() == Some(subject.subject.as_str())
-            }
+            Some(id) => subject.subject() == id,
+            None => trimmed_non_empty(&cert.display_name).as_deref() == Some(subject.subject()),
         }
 }
 

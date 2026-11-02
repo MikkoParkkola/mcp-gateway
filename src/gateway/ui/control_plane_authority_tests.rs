@@ -182,8 +182,16 @@ fn a_verified_identity_gets_dispatchs_grant_subject() {
     // Field by field: `GrantSubject` equality ignores the label.
     let (snapshot, dispatch) = (snapshot.expect("a subject"), dispatch.expect("a subject"));
     assert_eq!(
-        (snapshot.authority, snapshot.subject, snapshot.label),
-        (dispatch.authority, dispatch.subject, dispatch.label)
+        (
+            snapshot.authority().to_owned(),
+            snapshot.subject().to_owned(),
+            snapshot.label().map(str::to_owned)
+        ),
+        (
+            dispatch.authority().to_owned(),
+            dispatch.subject().to_owned(),
+            dispatch.label().map(str::to_owned)
+        )
     );
 }
 
@@ -222,7 +230,7 @@ fn a_verified_identity_outranks_the_api_key() {
     let identity = identity_from("https://issuer-matrix");
     let subject = super::caller_grant_subject(Some(&client), Some(&identity)).expect("a subject");
     assert_eq!(
-        (subject.authority.as_str(), subject.subject.as_str()),
+        (subject.authority(), subject.subject()),
         ("https://issuer-matrix", "dev-1")
     );
 }
@@ -235,7 +243,7 @@ fn an_identity_without_an_issuer_falls_back_to_the_api_key() {
     let identity = identity_from("");
     let subject = super::caller_grant_subject(Some(&client), Some(&identity)).expect("a subject");
     assert_eq!(
-        (subject.authority.as_str(), subject.subject.as_str()),
+        (subject.authority(), subject.subject()),
         ("api_key", "agent-key")
     );
 }

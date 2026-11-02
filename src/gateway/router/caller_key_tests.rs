@@ -191,16 +191,10 @@ fn leaf(cn: Option<&str>, san_uri: Option<&str>) -> CertIdentity {
 fn a_certificate_naming_no_subject_has_no_grant_subject() {
     assert_eq!(grant_subject_from_cert_identity(&leaf(None, None)), None);
     let by_cn = grant_subject_from_cert_identity(&leaf(Some("agent-a"), None)).unwrap();
-    assert_eq!(
-        (by_cn.authority.as_str(), by_cn.subject.as_str()),
-        ("mtls", "agent-a")
-    );
+    assert_eq!((by_cn.authority(), by_cn.subject()), ("mtls", "agent-a"));
     let uri = "spiffe://example.test/agent/b";
     let by_uri = grant_subject_from_cert_identity(&leaf(None, Some(uri))).unwrap();
-    assert_eq!(
-        (by_uri.authority.as_str(), by_uri.subject.as_str()),
-        ("mtls", uri)
-    );
+    assert_eq!((by_uri.authority(), by_uri.subject()), ("mtls", uri));
 }
 
 /// MIK-8286 R8 (pins): a certificate that names its subject keeps today's

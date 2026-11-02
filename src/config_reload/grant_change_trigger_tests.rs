@@ -31,7 +31,7 @@ fn changed_subjects_grant(grant_id: &str, subject: &str, capability: &str) -> Id
 }
 
 fn subject_names(subjects: &[GrantSubject]) -> Vec<String> {
-    subjects.iter().map(|s| s.subject.clone()).collect()
+    subjects.iter().map(|s| s.subject().to_owned()).collect()
 }
 
 /// One transition of the grant store, and the subject set it owes the evictor.

@@ -205,11 +205,10 @@ pub(super) fn control_plane_grant_from_identity(
         grant.revoked_at.is_some() || grant.expires_at.is_some_and(|expiry| expiry <= now);
     ControlPlaneGrant {
         grant_id: grant.grant_id,
-        subject_id: grant
-            .subject
-            .label
-            .clone()
-            .unwrap_or_else(|| format!("{}:{}", grant.subject.authority, grant.subject.subject)),
+        subject_id: grant.subject.label().map_or_else(
+            || format!("{}:{}", grant.subject.authority(), grant.subject.subject()),
+            str::to_owned,
+        ),
         server_id: format!("capability:{}", grant.capability),
         tool_id: grant.tool,
         status: if revoked {

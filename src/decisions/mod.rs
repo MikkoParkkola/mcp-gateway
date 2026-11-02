@@ -501,11 +501,11 @@ fn access_key(event: &IdentityGrantAuditEvent) -> Option<(AccessKey, String)> {
     let subject = event
         .subject
         .as_ref()
-        .filter(|s| GrantSubject::checked(&s.authority, &s.subject, None).is_some())?;
+        .filter(|s| GrantSubject::checked(s.authority(), s.subject(), None).is_some())?;
     let agent = event.agent_id.clone().filter(|agent| !agent.is_empty())?;
     let key = AccessKey {
-        authority: subject.authority.clone(),
-        subject: subject.subject.clone(),
+        authority: subject.authority().to_owned(),
+        subject: subject.subject().to_owned(),
         agent,
     };
     Some((key, event.capability.clone()))
