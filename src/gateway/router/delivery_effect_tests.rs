@@ -352,6 +352,13 @@ async fn a_profile_withheld_call_records_refused() {
                 .contains("does not list a tool named `read`"),
             "{route:?} premise: answered as an absent name: {body}"
         );
+        if matches!(route, HttpRoute::Direct) {
+            assert_eq!(
+                body.pointer("/result/isError"),
+                Some(&Value::Bool(true)),
+                "premise: the direct route answers an isError result: {body}"
+            );
+        }
         let row = only_delivery(route, &delivery_rows(&log).await);
         assert_eq!(row["response_effect"], "refused", "{route:?}: {row}");
     }
