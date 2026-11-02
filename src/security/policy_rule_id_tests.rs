@@ -139,8 +139,10 @@ fn tool_policy_entry_bytes_are_pinned() {
     assert_eq!(id("deny", "s:write").as_str(), PINNED_DENY_ID);
 }
 
-/// Pinned from the first green run; a change here rotates every recorded id.
-const PINNED_DENY_ID: &str = "PIN-DENY-ID";
+/// Derived outside the crate, as the firewall pins are: a change here rotates
+/// every recorded id.
+const PINNED_DENY_ID: &str =
+    "tool_policy:be9cca2b38f8d0741548ee610baac19b86f5491ff019564ded015766a175b2fb";
 
 /// The generation compiles both policies keyed, never through the unkeyed
 /// entry points, which name no rule.

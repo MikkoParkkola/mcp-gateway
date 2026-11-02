@@ -169,10 +169,14 @@ fn firewall_rule_bytes_and_id_are_pinned() {
     assert_eq!(id(&maximal).as_str(), MAXIMAL_ID);
 }
 
-/// Pinned from the first green run; a change here rotates every recorded id.
-const MAXIMAL_BYTES: &str = "PIN-MAXIMAL-BYTES";
-const MINIMAL_ID: &str = "PIN-MINIMAL-ID";
-const MAXIMAL_ID: &str = "PIN-MAXIMAL-ID";
+/// Derived outside the crate (HKDF-SHA-256 of the test record key, empty
+/// salt, info `decision.rule_id.v1`; then HMAC-SHA-256 of the bytes): a
+/// change here rotates every recorded id.
+const MAXIMAL_BYTES: &str = r#"{"match":"fs_*","action":"warn","reason":"r","scan":["shell_injection","credentials"],"servers":["fs","db"],"keys":["k2","k1"],"except":[{"tool":"fs_write"},{"server":"db"}],"allowed_roots":["/srv","/data"],"path_args":["path","dest"]}"#;
+const MINIMAL_ID: &str =
+    "firewall:ed196f652ef860c0072a542e91275571c284aeb064c9f3f2e7a67c4afc13fccf";
+const MAXIMAL_ID: &str =
+    "firewall:dd797779ffb5891ea649dcffb8876078aef75aadbe112dcae1f2ce513ae20aa8";
 
 #[test]
 fn two_rules_on_one_key_and_finding_name_the_first_in_rule_order() {
