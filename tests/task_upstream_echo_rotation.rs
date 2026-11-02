@@ -228,3 +228,55 @@ async fn an_unchanged_secret_settles_delivered_and_redacted() {
         );
     }
 }
+
+/// The log line a config reload ends with.
+const RELOADED: &str = "Config reload: complete";
+
+/// Wait for one more completed reload than `before`, bounded.
+async fn reloaded(gateway: &Gateway, before: usize) {
+    let deadline = std::time::Instant::now() + helper::OBSERVE_BOUND;
+    while gateway.logs().matches(RELOADED).count() <= before {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "no config reload completed within {:?}\n{}",
+            helper::OBSERVE_BOUND,
+            gateway.logs()
+        );
+        tokio::time::sleep(helper::POLL_GAP).await;
+    }
+}
+
+/// Control: rotated in the same process by a config reload, then settled
+/// within the grace. The process's redaction set still holds OLD (a value
+/// retires only a grace after its last send), so the echo is redacted.
+/// It is withheld after the fix, as any rotation is; on the line it is
+/// delivered redacted. Either way no value is in the answer or the store.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_secret_rotated_in_one_process_never_reaches_the_answer_or_the_store() {
+    let root = tempfile::Builder::new()
+        .prefix("echo-rotation-reload")
+        .tempdir()
+        .expect("an owned temporary root");
+    let peer = serve_peer(Upstream::Working).await;
+    let client = client();
+    let path = config(root.path(), "gateway.yaml", &peer, Some(OLD));
+    let mut gateway = Gateway::start(root.path(), &path, "gateway.log");
+    gateway.wait_until_ready(&client).await;
+    let task_id = task_id_of(
+        &gateway
+            .post(&client, &task_invoke(1, "echo-rotation-4"))
+            .await,
+    );
+    let before = gateway.logs().matches(RELOADED).count();
+    config(root.path(), "gateway.yaml", &peer, Some(NEW));
+    reloaded(&gateway, before).await;
+    peer.peer.set_payload(echoing(OLD));
+    peer.peer.set(Upstream::Completed);
+    let answer = settled(&gateway, &client, &task_id).await;
+    let row = durable_record(root.path(), &task_id);
+    gateway.terminate().await;
+    for text in [answer.to_string(), row.to_string()] {
+        assert!(!text.contains(OLD), "the old secret was delivered: {text}");
+        assert!(!text.contains(NEW), "the new secret was delivered: {text}");
+    }
+}
