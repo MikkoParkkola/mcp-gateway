@@ -314,6 +314,15 @@ class RequestTimeouts(unittest.TestCase):
         )
         self.assertRefused("let s = wrap(client.get(&url)).timeout(Duration::from_secs(60));", rule=guard.NOT_A_REQUEST)
 
+    def test_a_named_client_or_an_imported_builder_is_a_request(self):
+        for shape in (
+            'let r = http_client.get(&url).timeout({w}).send();',
+            'let c = Client::builder().timeout({w}).build().expect("client");',
+        ):
+            with self.subTest(shape=shape):
+                self.assertPasses(shape.format(w="Duration::from_secs(30)"))
+                self.assertRefused(shape.format(w="Duration::from_millis(500)"))
+
     def test_a_timeout_getter_is_not_a_bound(self):
         self.assertPasses("let d = config.timeout();")
 
