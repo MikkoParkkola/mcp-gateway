@@ -266,11 +266,13 @@ impl OAuthClient {
         let Ok(key) = self.credential_key() else {
             return Adopt::Nothing;
         };
-        let Some(token) = self
+        let stored = self
             .storage
             .load(&key, &self.resource_url)
-            .filter(|token| !token.is_expired())
-        else {
+            .filter(|token| !token.is_expired());
+        #[cfg(all(test, feature = "webui"))]
+        self.adopt_pause.pause_blocking();
+        let Some(token) = stored else {
             return Adopt::Nothing;
         };
         let access = token.access_token.clone();
@@ -280,6 +282,12 @@ impl OAuthClient {
         self.reload_registered_client_id(&key);
         self.publish_token_state(Some(&token));
         Adopt::Took(access)
+    }
+
+    /// [`Self::adopt_stored_login`] for a test that races it.
+    #[cfg(all(test, feature = "webui"))]
+    pub(in crate::oauth::client) fn adopt_stored_login_for_test(&self) -> Adopt {
+        self.adopt_stored_login()
     }
 
     /// The login or refresh that stored this credential may have registered

@@ -544,6 +544,30 @@ async fn a_joiner_with_nothing_stored_after_a_switch_answers_the_sign_in_wait() 
     );
 }
 
+/// A joiner's adopt that reads nothing stored after a sign-in under the other
+/// issuer was confirmed between its issuer check and its read answers
+/// `Moved`, not `Nothing`. Red before the empty read checked the issuer again:
+/// it answered `Nothing`, which a joiner reports as a hard error.
+#[tokio::test]
+async fn an_empty_read_after_a_switch_answers_moved() {
+    let server = TokenServer::start(&[]).await;
+    let dir = tempfile::tempdir().unwrap();
+    let cell = Arc::new(SignInStatus::new(SignIn::NeverSignedIn));
+    let owned = client(dir.path(), &server).with_sign_in_status(Arc::clone(&cell));
+    let (reached, release) = owned.adopt_pause.arm();
+    let adopt = tokio::task::spawn_blocking(move || owned.adopt_stored_login_for_test());
+    within("the adopt parks after its read", reached.notified()).await;
+
+    cell.record_install(OTHER_ISSUER_KEY);
+    release.notify_one();
+
+    assert_eq!(
+        adopt.await.expect("the adopt ran"),
+        Adopt::Moved,
+        "a switch after the check is not read as nothing stored"
+    );
+}
+
 /// A refresh already sent when a sign-in under the other issuer is confirmed:
 /// its answer is not handed back, not cached, and the status stays the new
 /// sign-in's. Red before a refreshed token was cached through the checked
