@@ -18,7 +18,7 @@ use std::sync::atomic::Ordering;
 use serde_json::{Value, json};
 
 use super::direct_guards_fixture::{
-    Answer, Fx, fixture_firewalled_with, post_direct, post_meta_invoke,
+    Answer, Fx, fixture_firewalled_logged, post_direct, post_meta_invoke,
 };
 use crate::config::Config;
 use crate::gateway::meta_mcp::visible::seams;
@@ -80,15 +80,53 @@ fn configured(fx: &Fx, edit: fn(&mut Config)) -> Config {
     config
 }
 
-/// The direct-guards fixture, with its live config installed on the meta
-/// layer too, so the meta layer's published generation is the one a row's
-/// reload writes, not the startup policy's fallback.
-async fn fixture(answer: Answer, rule: Option<FirewallAction>) -> Fx {
-    let fx = fixture_firewalled_with(answer, rule, false).await;
+/// The direct-guards fixture with an audit log on both routes, and its live
+/// config installed on the meta layer too, so the meta layer's published
+/// generation is the one a row's reload writes, not the startup policy's
+/// fallback. The log holds the reason the gateway records for each call.
+struct Logged {
+    fx: Fx,
+    log: std::sync::Arc<crate::security::TransparencyLogger>,
+    _dir: tempfile::TempDir,
+}
+
+impl std::ops::Deref for Logged {
+    type Target = Fx;
+    fn deref(&self) -> &Fx {
+        &self.fx
+    }
+}
+
+async fn fixture(answer: Answer, rule: Option<FirewallAction>) -> Logged {
+    let (dir, log) = super::route_matrix_driver_tests::response::temp_log(None);
+    let meta_log = std::sync::Arc::clone(&log);
+    let fx = fixture_firewalled_logged(answer, rule, std::sync::Arc::clone(&log), |mut meta| {
+        meta.enable_transparency_log(meta_log);
+        meta
+    })
+    .await;
     fx.state
         .meta_mcp
         .set_live_config(std::sync::Arc::clone(&fx.state.live_config));
-    fx
+    Logged { fx, log, _dir: dir }
+}
+
+/// The invocation records in the log so far, once no write is in flight.
+async fn invocations(l: &Logged) -> Vec<Value> {
+    let guard = std::time::Instant::now();
+    while l.log.write_in_flight_for_test() {
+        assert!(
+            guard.elapsed() < std::time::Duration::from_secs(60),
+            "the record never landed"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    std::fs::read_to_string(l.log.path())
+        .unwrap_or_default()
+        .lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .filter(|row| row.get("tool").is_some() && row["event"] != "response_delivery_attempt")
+        .collect()
 }
 
 /// A shell injection the request firewall finds (High).
@@ -98,16 +136,19 @@ fn injected() -> Value {
 }
 
 /// What a call answered: whether it was refused, its error code and refusal
-/// text, and how many backend calls it made.
+/// text, how many backend calls it made, and the deciding check the gateway
+/// recorded for it (the invocation record's `decision.kind`), which tells
+/// refusals apart even when the caller's text cannot.
 #[derive(Debug, PartialEq)]
 struct Outcome {
     refused: bool,
     code: Value,
     message: Value,
     calls: usize,
+    kind: Value,
 }
 
-fn outcome(body: &Value, calls: usize) -> Outcome {
+fn outcome(body: &Value, calls: usize, kind: Value) -> Outcome {
     let refused = body.get("error").is_some()
         || body.pointer("/result/isError").and_then(Value::as_bool) == Some(true);
     let code = body.pointer("/error/code").cloned().unwrap_or(Value::Null);
@@ -121,6 +162,7 @@ fn outcome(body: &Value, calls: usize) -> Outcome {
         code,
         message,
         calls,
+        kind,
     }
 }
 
@@ -189,7 +231,7 @@ async fn meta_raw(fx: &Fx, extra: Value) -> Value {
 /// Call `alpha:read` as `k-std` with `args`, `pinned` current at arrival and
 /// `current` published once the pin is taken.
 async fn call(
-    fx: &Fx,
+    fx: &Logged,
     (route, args): (Route, Value),
     pinned: &Config,
     current: &Config,
@@ -241,13 +283,18 @@ async fn call(
         serde_json::to_value(current).expect("config serialises"),
         "the published config is still the one the reload wrote"
     );
-    outcome(&body, fx.calls.load(Ordering::SeqCst) - before)
+    // The call's own record is the newest invocation in the log.
+    let kind = invocations(fx)
+        .await
+        .last()
+        .map_or(Value::Null, |row| row["decision"]["kind"].clone());
+    outcome(&body, fx.calls.load(Ordering::SeqCst) - before, kind)
 }
 
 /// A request pinned to `a` while `b` is current answers as `a` does, and the
 /// reverse. Returns the answers under `a` and under `b`.
 async fn follows_the_pin(
-    fx: &Fx,
+    fx: &Logged,
     (route, args): (Route, Value),
     a: &Config,
     b: &Config,
@@ -276,13 +323,20 @@ async fn barrier(route: Route) {
     let (under_a, under_b) = follows_the_pin(&fx, (route, json!({"cmd": "x"})), &a, &b).await;
     // Each refuses before the backend, as a withheld tool: a tool the tool
     // policy denies, or the key's scope excludes, is answered as one the
-    // backend does not list, so the refusal never names the rule.
+    // backend does not list, so the refusal never names the rule. The
+    // gateway's own record names it: the tool policy, then the key's scope.
     assert!(
-        under_a.refused && under_a.calls == 0 && says(&under_a, WITHHELD),
+        under_a.refused
+            && under_a.calls == 0
+            && says(&under_a, WITHHELD)
+            && under_a.kind == "tool_policy",
         "{route:?}: {under_a:?}"
     );
     assert!(
-        under_b.refused && under_b.calls == 0 && says(&under_b, WITHHELD),
+        under_b.refused
+            && under_b.calls == 0
+            && says(&under_b, WITHHELD)
+            && under_b.kind == "client_tool_scope",
         "{route:?}: {under_b:?}"
     );
 }
@@ -313,7 +367,10 @@ async fn request_side(route: Route) {
     let warns = configured(&fx, rules_warn);
     let (blocked, passed) = follows_the_pin(&fx, (route, injected()), &blocks, &warns).await;
     assert!(
-        blocked.refused && blocked.calls == 0 && says(&blocked, "Firewall blocked"),
+        blocked.refused
+            && blocked.calls == 0
+            && says(&blocked, "Firewall blocked")
+            && blocked.kind == "firewall",
         "{route:?}: {blocked:?}"
     );
     assert!(
@@ -353,7 +410,10 @@ async fn dispatch_rescan_follows_the_pin() {
     // Each call mints its continuation first: one backend call for the
     // question, and one more only if the retry was sent.
     assert!(
-        blocked.refused && blocked.calls == 1 && says(&blocked, "Firewall blocked"),
+        blocked.refused
+            && blocked.calls == 1
+            && says(&blocked, "Firewall blocked")
+            && blocked.kind == "firewall",
         "{blocked:?}"
     );
     assert!(!passed.refused && passed.calls == 2, "{passed:?}");
