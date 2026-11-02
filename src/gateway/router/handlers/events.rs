@@ -134,12 +134,18 @@ impl Presented {
                 .map(|session_sha256| LiveBinding::DashboardSession { session_sha256 }),
             CredentialKind::None | CredentialKind::LocalTransport | CredentialKind::ApiKey => None,
         };
+        let api_key = api_key(client, self.api_key_digest_tag.as_deref());
+        // A key's holder is bound to the secret that opened it; one with no
+        // matched secret is refused here, never stored to fail later.
+        if api_key.as_ref().is_some_and(|k| k.digest_tag.is_none()) {
+            return Err("the API key's matched secret is not known for this request".to_owned());
+        }
         Ok(crate::events::Credential {
             kind,
             principal: client
                 .map(|c| c.principal.storage_form().to_owned())
                 .unwrap_or_default(),
-            api_key: api_key(client, self.api_key_digest_tag.as_deref()),
+            api_key,
             expires_at,
             binding,
         })
