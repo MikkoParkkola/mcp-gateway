@@ -52,6 +52,10 @@ fn attributing(mut meta: MetaMcp) -> MetaMcp {
         )
         .with_continuations(meta.continuation()),
     )));
+    crate::security::firewall::collusion_live_rig::seed_meta(
+        &meta,
+        &meta.firewall_for_test().expect("set above"),
+    );
     meta
 }
 
@@ -647,6 +651,7 @@ async fn a_replayed_lost_round_notice_puts_nothing_in_the_receipt() {
     );
     let mut meta = MetaMcp::new(registry);
     meta.set_firewall(Some(Arc::clone(&firewall)));
+    crate::security::firewall::collusion_live_rig::seed_meta(&meta, &firewall);
     meta.share_keyring_with_for_test(&firewall);
     let meta = idempotent(meta);
     let who = api_key_caller();

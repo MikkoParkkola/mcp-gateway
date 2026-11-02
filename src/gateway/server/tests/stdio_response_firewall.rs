@@ -104,6 +104,7 @@ impl Stdio {
             tool: TOOL.to_string(),
         }]);
         meta.set_firewall(Some(Arc::clone(&firewall)));
+        crate::security::firewall::collusion_live_rig::seed_meta(&meta, &firewall);
         meta.share_keyring_with_for_test(&firewall);
         Self {
             meta: Arc::new(meta),

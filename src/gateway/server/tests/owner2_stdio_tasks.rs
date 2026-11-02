@@ -135,7 +135,7 @@ pub(crate) async fn fixture_on_with(
         .await
         .expect("the production constructor accepts this configuration")
         .with_data_dir(data.path().to_path_buf())
-        .build_meta_mcp()
+        .build_meta_mcp_published()
         .await
         .expect("the production builder accepts this configuration");
     let tool_policy = built.tool_policy;

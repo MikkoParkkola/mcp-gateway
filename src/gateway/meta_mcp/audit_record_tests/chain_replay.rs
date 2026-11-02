@@ -66,6 +66,10 @@ fn chained_meta(dir: &tempfile::TempDir) -> MetaMcp {
         )
         .with_continuations(meta.continuation()),
     )));
+    crate::security::firewall::collusion_live_rig::seed_meta(
+        &meta,
+        &meta.firewall_for_test().expect("set above"),
+    );
     meta
 }
 

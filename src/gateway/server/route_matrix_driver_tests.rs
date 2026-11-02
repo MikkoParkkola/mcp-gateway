@@ -206,6 +206,7 @@ fn audited_firewall_with(
 fn arm_firewall(firewall: Arc<crate::security::firewall::Firewall>) -> impl FnOnce(&mut MetaMcp) {
     move |meta| {
         meta.share_keyring_with_for_test(&firewall);
+        crate::security::firewall::collusion_live_rig::seed_meta(meta, &firewall);
         meta.set_firewall(Some(firewall));
     }
 }

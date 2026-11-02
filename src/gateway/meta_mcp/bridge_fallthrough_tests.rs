@@ -533,6 +533,7 @@ async fn a_minted_retry_under_a_discovery_name_is_inspected_once_and_unmarked() 
         .with_continuations(Arc::clone(&keys)),
     );
     m.set_firewall(Some(Arc::clone(&firewall)));
+    crate::security::firewall::collusion_live_rig::seed_meta(&m, &firewall);
     m.set_continuation_for_test(keys);
 
     let channel = NoSessionCounted::default();

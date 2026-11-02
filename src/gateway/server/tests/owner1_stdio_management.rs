@@ -160,7 +160,7 @@ async fn managed() -> Managed {
         .await
         .expect("the production constructor accepts this configuration")
         .with_data_dir(data_dir.path().to_path_buf())
-        .build_meta_mcp()
+        .build_meta_mcp_published()
         .await
         .expect("the production builder accepts this configuration");
     Managed {

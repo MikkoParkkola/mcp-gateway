@@ -98,7 +98,7 @@ async fn signing_meta() -> (Arc<MetaMcp>, tempfile::TempDir) {
         .await
         .expect("the config is valid")
         .with_data_dir(data_dir.path().to_path_buf())
-        .build_meta_mcp()
+        .build_meta_mcp_published()
         .await
         .expect("the builder accepts it");
     assert!(built.meta_mcp.signing_enabled(), "the fixture must sign");

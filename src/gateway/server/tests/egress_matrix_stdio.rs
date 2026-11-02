@@ -92,6 +92,7 @@ async fn stdio_on(backend: Arc<Planted>, setup: Setup) -> (Arc<MetaMcp>, Option<
         .with_continuations(meta.continuation()),
     );
     meta.set_firewall(Some(Arc::clone(&firewall)));
+    crate::security::firewall::collusion_live_rig::seed_meta(&meta, &firewall);
     (Arc::new(meta), Some(firewall))
 }
 

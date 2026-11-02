@@ -134,7 +134,7 @@ async fn stdio_tuned(signing: Signing, tune: impl FnOnce(&mut Config, &std::path
         .await
         .expect("the production constructor accepts this configuration")
         .with_data_dir(data_dir.path().to_path_buf())
-        .build_meta_mcp()
+        .build_meta_mcp_published()
         .await
         .expect("the production builder accepts this configuration");
     let denying = Arc::new(ToolPolicy::from_config(&ToolPolicyConfig {
