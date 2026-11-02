@@ -100,6 +100,26 @@ async fn settled(gateway: &Gateway, client: &reqwest::Client, task_id: &str) -> 
     unreachable!("the read loop returns or panics")
 }
 
+/// Wait, bounded, until the task's upstream handle is durable: a restart
+/// before that leaves nothing to recover, and would test nothing.
+async fn captured(root: &std::path::Path, task_id: &str) {
+    let deadline = std::time::Instant::now() + helper::OBSERVE_BOUND;
+    loop {
+        let row = helper::durable_records(root)
+            .into_iter()
+            .find(|row| row.to_string().contains(task_id));
+        if row.is_some_and(|row| row.to_string().contains(helper::HANDLE)) {
+            return;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the task's upstream handle was never captured within {:?}",
+            helper::OBSERVE_BOUND
+        );
+        tokio::time::sleep(helper::POLL_GAP).await;
+    }
+}
+
 /// The settled read and the durable row hold neither value, and the task is
 /// withheld with its fixed reason.
 fn assert_withheld(answer: &Value, row: &Value) {
@@ -141,6 +161,7 @@ async fn a_deferred_result_echoing_a_secret_rotated_across_a_restart_is_withheld
             .post(&client, &task_invoke(1, "echo-rotation-1"))
             .await,
     );
+    captured(root.path(), &task_id).await;
     assert_eq!(
         peer.peer.submissions(),
         1,
@@ -178,6 +199,7 @@ async fn a_deferred_task_with_no_fingerprint_on_a_backend_with_rules_is_withheld
             .post(&client, &task_invoke(1, "echo-rotation-2"))
             .await,
     );
+    captured(root.path(), &task_id).await;
     gateway.terminate_confirmed().await;
 
     let second = config(root.path(), "second.yaml", &peer, Some(NEW));
