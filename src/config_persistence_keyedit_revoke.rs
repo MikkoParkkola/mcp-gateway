@@ -45,7 +45,7 @@ impl Starts {
     fn of(text: &str) -> Self {
         let mut starts = vec![0];
         starts.extend(text.match_indices('\n').map(|(at, _)| at + 1));
-        if starts.last() == Some(&text.len()) && text.len() > 0 {
+        if starts.last() == Some(&text.len()) && !text.is_empty() {
             starts.pop();
         }
         Self(starts)
@@ -122,17 +122,15 @@ fn instructions(
     shared: Option<usize>,
     list_line: Option<usize>,
 ) -> String {
-    let deletion = match shared {
-        Some(line) => {
-            format!("on line {line}, remove the entry with `name: {name}`, keeping the others")
+    let deletion = if let Some(line) = shared {
+        format!("on line {line}, remove the entry with `name: {name}`, keeping the others")
+    } else {
+        let mut d = format!("delete lines {} to {}", lines.start + 1, lines.end);
+        if let Some(list) = list_line {
+            std::fmt::Write::write_fmt(&mut d, format_args!(" and the `api_keys:` line {list}"))
+                .ok();
         }
-        None => {
-            let mut d = format!("delete lines {} to {}", lines.start + 1, lines.end);
-            if let Some(list) = list_line {
-                d.push_str(&format!(" and the `api_keys:` line {list}"));
-            }
-            d
-        }
+        d
     };
     format!(
         "to revoke key `{name}`: set its `expires_at` to now and reload the gateway; \
@@ -152,12 +150,14 @@ pub(super) fn refusal(original: &str, nodes: &[Node], index: usize) -> Option<Co
         p.push(Step::Key("name".into()));
         p
     })
-    .map(|n| {
-        original[n.bytes.clone()]
-            .trim_matches(['"', '\''])
-            .to_owned()
-    })
-    .unwrap_or_else(|| format!("#{index}"));
+    .map_or_else(
+        || format!("#{index}"),
+        |n| {
+            original[n.bytes.clone()]
+                .trim_matches(['"', '\''])
+                .to_owned()
+        },
+    );
     let starts = Starts::of(original);
     let only = nodes
         .iter()
@@ -236,7 +236,7 @@ pub(super) fn may_delete(original: &str, node: &Node, taken: Taken) -> BTreeSet<
         .char_indices()
         .filter(|(_, c)| !c.is_whitespace())
         .map(|(at, _)| starts.line_of(node.start + at))
-        .last()
+        .next_back()
         .unwrap_or(first);
     let mut out: BTreeSet<usize> = (first..=last).collect();
     let mut pending = Vec::new();

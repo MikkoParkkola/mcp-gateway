@@ -290,12 +290,15 @@ fn r4d_deleting_the_last_entry_by_hand_names_the_list_line() {
     let (_, reason) = refused(original, &[revoke(0)]);
     assert!(reason.contains("lines 4 to 5"), "the entry: {reason}");
     assert!(reason.contains("line 3"), "the api_keys line: {reason}");
-    let by_hand: String = original
+    let mut by_hand = String::new();
+    for (_, line) in original
         .lines()
         .enumerate()
         .filter(|(i, _)| ![2, 3, 4].contains(i))
-        .map(|(_, l)| format!("{l}\n"))
-        .collect();
+    {
+        by_hand.push_str(line);
+        by_hand.push('\n');
+    }
     let config: crate::config::AuthConfig = {
         let doc: crate::yaml::Value = crate::yaml::from_str(&by_hand).expect("loads");
         crate::yaml::from_value(doc["auth"].clone()).expect("auth loads")
