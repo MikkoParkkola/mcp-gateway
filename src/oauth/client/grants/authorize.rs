@@ -272,8 +272,14 @@ impl OAuthClient {
             .filter(|token| !token.is_expired());
         #[cfg(all(test, feature = "webui"))]
         self.adopt_pause.pause_blocking();
+        // A switch landing between the check above and this read is still a
+        // move, not an empty store.
         let Some(token) = stored else {
-            return Adopt::Nothing;
+            return if self.issuer_differs() {
+                Adopt::Moved
+            } else {
+                Adopt::Nothing
+            };
         };
         let access = token.access_token.clone();
         if !self.cache_if_current(token.clone()) {
