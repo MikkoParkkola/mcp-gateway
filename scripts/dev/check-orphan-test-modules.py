@@ -425,6 +425,8 @@ def _owner(attr):
         node = node.next_named_sibling
     if node is not None and parent.type == "ordered_field_declaration_list" and node.type == "visibility_modifier":
         node = node.next_named_sibling  # a `pub` tuple field spans through its type
+        while node is not None and node.type in NOT_A_CONSTRUCT:
+            node = node.next_named_sibling
     return node
 
 
@@ -473,11 +475,27 @@ def _walk_cfg(root, src: bytes, is_target):
     def target(text: str) -> bool:
         return any(is_target(p) for p in _cfg_predicates(text))
 
+    def attribute_targets(attr) -> bool:
+        """The attribute is itself `cfg(P)` with a target P: by its own name,
+        never by a `cfg` mentioned inside another attribute's arguments."""
+        inner = next((c for c in attr.named_children if c.type == "attribute"), None)
+        parts = inner.named_children if inner is not None else []
+        if len(parts) != 2 or parts[0].type != "identifier" or parts[1].type != "token_tree":
+            return False
+        if src[parts[0].start_byte : parts[0].end_byte] != b"cfg":
+            return False
+        args = blank(src[parts[1].start_byte : parts[1].end_byte].decode("utf-8", "replace"))[0].strip()
+        return args.startswith("(") and args.endswith(")") and is_target(args[1:-1])
+
     def walk(node, inside_end: int) -> None:
         for child in node.children:
             if child.start_byte < inside_end:
                 continue
-            if child.type in ("attribute_item", "inner_attribute_item") and target(src[child.start_byte : child.end_byte].decode("utf-8", "replace")):
+            if child.type in ("attribute_item", "inner_attribute_item"):
+                # An attribute is metadata, never a code body: a `cfg` named
+                # inside another attribute's arguments marks nothing.
+                if not attribute_targets(child):
+                    continue
                 owner = _owner(child)
                 if owner is None:
                     found.append((child.start_byte, None, node.end_byte, "owner not known"))

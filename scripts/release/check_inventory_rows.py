@@ -119,8 +119,19 @@ def test_lines(lines: list[str], path: str = "") -> set[int]:
     `lines`. This gate looks for product functions, so an unsure case stays
     product code: LEAN_SHORT."""
     gate = orphan_gate()
-    found = gate.cfg_items("\n".join(lines), gate.SafeSide.LEAN_SHORT, path=path, report=PARSE_REPORT)
-    return {n for item in found.items for n in range(item.first_line, item.last_line + 1)}
+    text = "\n".join(lines)
+    found = gate.cfg_items(text, gate.SafeSide.LEAN_SHORT, path=path, report=PARSE_REPORT)
+    # A line is test code only when its first character of code lies inside a
+    # test item: `fn product(#[cfg(test)] probe: ())` shares its line with a
+    # test-only parameter and is still product code.
+    tests: set[int] = set()
+    start = 0
+    for n, line in enumerate(lines, 1):
+        first = start + len(line) - len(line.lstrip())
+        if any(item.start <= first < item.end for item in found.items):
+            tests.add(n)
+        start += len(line) + 1
+    return tests
 
 
 @functools.lru_cache(maxsize=None)
