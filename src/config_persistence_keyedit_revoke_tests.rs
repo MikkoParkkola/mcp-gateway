@@ -606,6 +606,24 @@ fn r14_a_removed_block_scalar_takes_its_trailing_blank_line() {
     assert_eq!(out, "environment: |+\n  staging\nserver:\n  port: 8080\n");
 }
 
+// R15: a nested key whose block scalar's span ends in its sibling's
+// indentation: the removal stops at the scalar's last content line and
+// keeps the sibling.
+#[test]
+fn r15_a_nested_block_scalar_removal_keeps_its_sibling() {
+    let original = "server:\n  motd: |-\n    hi\n  port: 1\n";
+    let motd = (
+        FieldPath(vec![
+            Segment::Key("server".into()),
+            Segment::Key("motd".into()),
+        ]),
+        Change::Remove,
+    );
+    let template = edit_in_place(original, &[motd]).expect("a provable removal");
+    let out = String::from_utf8(template.bytes().to_vec()).expect("utf-8");
+    assert_eq!(out, "server:\n  port: 1\n");
+}
+
 // R10, R10b: removing an element outside `auth.api_keys` gives up.
 #[test]
 fn r10_only_auth_api_keys_elements_are_removed() {
