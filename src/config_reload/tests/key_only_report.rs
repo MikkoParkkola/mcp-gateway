@@ -29,9 +29,12 @@ fn entry(name: &str, extra: &[&str]) -> String {
 }
 
 /// A multi-user auth section: `auth_extra` lines (indented under `auth:`)
-/// before the key list `keys`.
+/// before the key list `keys`; `enabled: true` unless they set it.
 fn file(auth_extra: &[&str], keys: &[String]) -> String {
-    let mut text = String::from("auth:\n  enabled: true\n");
+    let mut text = String::from("auth:\n");
+    if !auth_extra.iter().any(|line| line.starts_with("  enabled:")) {
+        text.push_str("  enabled: true\n");
+    }
     for line in auth_extra {
         text.push_str(line);
         text.push('\n');
@@ -111,7 +114,9 @@ async fn a_key_only_reload_reports_no_restart() {
     for (what, before, after) in edits {
         let outcome = report(&before, &after).await;
         assert!(
-            !outcome.restart_required && outcome.pending_restart_fields.is_empty(),
+            !outcome.restart_required
+                && outcome.pending_restart_fields.is_empty()
+                && !outcome.changes.contains("NOT YET APPLIED"),
             "{what}: reported as waiting for a restart: pending={:?} changes={}",
             outcome.pending_restart_fields,
             outcome.changes
@@ -120,15 +125,18 @@ async fn a_key_only_reload_reports_no_restart() {
 }
 
 /// Any other restart-only `auth` field still reports `auth` as waiting for a
-/// restart, so excluding the key table hides no real restart. (`enabled` and
-/// `single_user` are not here: a change that flips the gateway between one
-/// user and many is refused before any report. `dashboard_session` applies
-/// live and was never reported.)
+/// restart, on its own and in the same edit as a key change, so excluding the
+/// key table hides no real restart. `enabled` and `single_user` are judged
+/// here too: the running settings decide whether keys flip the gateway
+/// between one user and many, so an edit to them that keeps two keys is
+/// applied for the keys and reported for the rest. (`dashboard_session`
+/// applies live and was never reported.)
 #[tokio::test]
 async fn another_auth_field_still_reports_a_restart() {
     let keys = [entry("a", &[]), entry("b", &[])];
+    let more_keys = [entry("a", &[]), entry("b", &[]), entry("c", &[])];
     let before = file(&[], &keys);
-    let groups: [(&str, &[&str]); 3] = [
+    let groups: [(&str, &[&str]); 5] = [
         (
             "bearer_token",
             &["  bearer_token: \"report-bearer-token-0123456789\""],
@@ -141,14 +149,21 @@ async fn another_auth_field_still_reports_a_restart() {
             "client_circuit_breaker",
             &["  client_circuit_breaker:", "    failure_threshold: 9"],
         ),
+        ("enabled", &["  enabled: false"]),
+        ("single_user", &["  single_user: true"]),
     ];
     for (field, lines) in groups {
-        let outcome = report(&before, &file(lines, &keys)).await;
-        assert!(
-            outcome.restart_required && outcome.pending_restart_fields == ["auth"],
-            "{field}: not reported as auth waiting for a restart: pending={:?} changes={}",
-            outcome.pending_restart_fields,
-            outcome.changes
-        );
+        for (with_keys, after) in [
+            ("alone", file(lines, &keys)),
+            ("with a key added", file(lines, &more_keys)),
+        ] {
+            let outcome = report(&before, &after).await;
+            assert!(
+                outcome.restart_required && outcome.pending_restart_fields == ["auth"],
+                "{field} {with_keys}: not reported as auth waiting for a restart: pending={:?} changes={}",
+                outcome.pending_restart_fields,
+                outcome.changes
+            );
+        }
     }
 }
