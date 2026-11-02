@@ -548,6 +548,29 @@ pub(crate) struct CommittedTask {
     /// older row the provenance cannot be established, so its backend output
     /// is not served.
     pub(crate) bindings_recorded: bool,
+    /// An upstream row with no fingerprint of what its dispatch injected (a
+    /// row from before it was recorded): its stored outcome is never served,
+    /// since nothing vouches that the gateway can still redact it.
+    pub(crate) secrets_unvouched: bool,
+}
+
+/// Replace a stored outcome with the fixed withheld answer, leaving the
+/// task's state as it is: what every reader of an unvouched upstream row
+/// gets instead of the result or the error.
+fn withhold_outcome(wire: &mut serde_json::Value) {
+    let reason = crate::gateway::meta_mcp::upstream::SECRETS_WITHHELD;
+    if let Some(result) = wire.get_mut("result") {
+        *result = serde_json::json!({
+            "content": [{"type": "text", "text": reason}],
+            "isError": true,
+        });
+    }
+    if let Some(error) = wire.get_mut("error") {
+        *error = serde_json::json!({
+            "code": crate::error::rpc_codes::INTERNAL_ERROR,
+            "message": reason,
+        });
+    }
 }
 
 impl CommittedTask {
@@ -600,6 +623,9 @@ impl CommittedTask {
                 strip_unnoted(request, |_| false);
             }
         }
+        if self.secrets_unvouched {
+            withhold_outcome(&mut wire);
+        }
         wire
     }
 
@@ -621,6 +647,10 @@ impl CommittedTask {
             gateway_writes: record.gateway_writes.clone(),
             bindings: record.bindings.clone(),
             bindings_recorded: record.version >= BINDING_VERSION,
+            secrets_unvouched: record
+                .upstream
+                .as_ref()
+                .is_some_and(|upstream| upstream.secret_fingerprint.is_none()),
         }
     }
 

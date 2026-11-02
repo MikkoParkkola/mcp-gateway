@@ -242,6 +242,11 @@ impl UpstreamRecovery for NativeUpstreamTasks {
             let Some(backend) = self.eligible(&handle.backend).await else {
                 return UpstreamAnswer::Unavailable;
             };
+            // Before the poll: nothing is sent for a task whose secrets
+            // changed, so its log never meets an old value.
+            if let Some(withheld) = secrets::withheld(&backend, handle) {
+                return withheld;
+            }
             let deadline = deadline.min(backend.request_timeout());
             // The declaration is the transport's, and `tasks/get` is one of the two
             // methods it will carry it on. One attempt, no retry loop, no other
@@ -257,7 +262,13 @@ impl UpstreamRecovery for NativeUpstreamTasks {
             )
             .await
             {
-                Ok(Ok(response)) => read_query(response),
+                // On the terminal answer again: a rotation during the poll.
+                Ok(Ok(response)) => match read_query(response) {
+                    answer @ (UpstreamAnswer::Completed(_) | UpstreamAnswer::Failed(_)) => {
+                        secrets::withheld(&backend, handle).unwrap_or(answer)
+                    }
+                    answer => answer,
+                },
                 Ok(Err(error)) => {
                     tracing::warn!(backend = %handle.backend, %error, "upstream tasks/get unavailable");
                     UpstreamAnswer::Unavailable
@@ -671,6 +682,10 @@ impl MetaMcp {
 /// What a recovered failure says once a gate has acted on its content.
 pub(crate) const RECOVERED_ERROR_WITHHELD: &str =
     "the upstream task failed; its error was withheld by the configured response policy";
+
+#[path = "upstream_secrets.rs"]
+mod secrets;
+pub(crate) use secrets::WITHHELD as SECRETS_WITHHELD;
 
 #[cfg(test)]
 #[path = "upstream/error_policy_tests.rs"]

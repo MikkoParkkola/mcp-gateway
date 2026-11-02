@@ -127,6 +127,79 @@ impl Backend {
         }
     }
 
+    /// What this backend's rules that apply to `tool` resolve to now, as a
+    /// dispatch fingerprints them: the same function and inputs at the
+    /// dispatch and at each check. `None` when a rule cannot resolve (or the
+    /// backend was never stamped with a resolver), which a check treats as a
+    /// mismatch.
+    pub(crate) fn current_secrets(
+        &self,
+        tool: &str,
+    ) -> Option<crate::security::dispatched::Dispatched> {
+        if self.secret_rules_for(tool).is_empty() {
+            return Some(crate::security::dispatched::Dispatched::None);
+        }
+        let resolver = self.secret_resolver.get()?;
+        let pairs =
+            crate::secret_injection::resolved_rules(&self.config.secrets, resolver, tool).ok()?;
+        Some(crate::security::dispatched::Dispatched::of(
+            &self.name, &pairs,
+        ))
+    }
+
+    /// Renew this backend's redaction of every value a call of `tool` with
+    /// `arguments` sends, in the forms the dispatch inserted them: run before
+    /// a deferred task's poll, so an unchanged secret older than the grace is
+    /// still removed from the answer. `false` when the rules cannot be
+    /// applied, which withholds the task.
+    pub(crate) fn renew_needles(&self, tool: &str, arguments: &Value) -> bool {
+        let rules = self.secret_rules_for(tool);
+        if rules.is_empty() {
+            return true;
+        }
+        let Some(resolver) = self.secret_resolver.get() else {
+            return false;
+        };
+        let mut arguments = arguments.clone();
+        if !arguments.is_object() {
+            arguments = Value::Object(serde_json::Map::new());
+        }
+        drop_owned(&self.config.secrets, tool, &mut arguments);
+        let Ok(injection) =
+            inject_rules(&self.config.secrets, resolver, &self.name, tool, arguments)
+        else {
+            return false;
+        };
+        self.insert_sent(&rules, &injection);
+        true
+    }
+
+    /// Insert each value `injection` sends for `rules` into this backend's
+    /// set (or renew it), and name a short one once.
+    fn insert_sent(
+        &self,
+        rules: &[&CredentialRule],
+        injection: &crate::secret_injection::InjectionResult,
+    ) {
+        let Some(needles) = self.needles.get() else {
+            return;
+        };
+        for rule in rules {
+            let sent = match rule.inject_as {
+                InjectTarget::Argument => injection
+                    .arguments
+                    .get(&rule.inject_key)
+                    .and_then(Value::as_str),
+                InjectTarget::Header => injection.headers.get(&rule.inject_key).map(String::as_str),
+                InjectTarget::Query => None,
+            };
+            if let Some(value) = sent {
+                needles.insert(&self.name, value);
+                needles.warn_if_short(&self.name, &rule.name, value);
+            }
+        }
+    }
+
     /// The rules of this backend that apply to `tool`.
     fn secret_rules_for<'a>(&'a self, tool: &str) -> Vec<&'a CredentialRule> {
         self.config
@@ -189,18 +262,7 @@ impl Backend {
                 .and_then(|p| p.get("name"))
                 .and_then(Value::as_str)
         {
-            crate::security::dispatched::record(&self.name, tool, || {
-                if self.secret_rules_for(tool).is_empty() {
-                    return Some(crate::security::dispatched::Dispatched::None);
-                }
-                let resolver = self.secret_resolver.get()?;
-                let pairs =
-                    crate::secret_injection::resolved_rules(&self.config.secrets, resolver, tool)
-                        .ok()?;
-                Some(crate::security::dispatched::Dispatched::of(
-                    &self.name, &pairs,
-                ))
-            });
+            crate::security::dispatched::record(&self.name, tool, || self.current_secrets(tool));
         }
         if method != "tools/call" || self.config.secrets.is_empty() {
             return unchanged(params);
@@ -249,24 +311,7 @@ impl Backend {
         let injection = inject_rules(&self.config.secrets, resolver, &self.name, &tool, owned)?;
         // Every value this send carries joins the backend's set before the
         // send leaves, so its echo is removed from whatever comes back.
-        if let Some(needles) = self.needles.get() {
-            for rule in &rules {
-                let sent = match rule.inject_as {
-                    InjectTarget::Argument => injection
-                        .arguments
-                        .get(&rule.inject_key)
-                        .and_then(Value::as_str),
-                    InjectTarget::Header => {
-                        injection.headers.get(&rule.inject_key).map(String::as_str)
-                    }
-                    InjectTarget::Query => None,
-                };
-                if let Some(value) = sent {
-                    needles.insert(&self.name, value);
-                    needles.warn_if_short(&self.name, &rule.name, value);
-                }
-            }
-        }
+        self.insert_sent(&rules, &injection);
         let owned_headers = rules
             .iter()
             .filter(|rule| matches!(rule.inject_as, InjectTarget::Header))
