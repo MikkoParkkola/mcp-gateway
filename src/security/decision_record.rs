@@ -146,13 +146,16 @@ impl Refused {
 /// One pointer wide, boxed only once a gate notes something: it rides in the
 /// task-local call and route scopes, which move it in and out on every poll,
 /// and a call that is simply allowed notes nothing.
+/// A refusing check and the configured rule that made it, when one did.
+pub(crate) type Refusal = (DecisionKind, Option<crate::security::rule_id::RuleId>);
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct Noted(Option<Box<NotedChecks>>);
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct NotedChecks {
-    refusal: Option<(DecisionKind, Option<String>)>,
-    allow: Option<(DecisionKind, Option<String>)>,
+    refusal: Option<Refusal>,
+    allow: Option<(DecisionKind, Option<crate::security::rule_id::RuleId>)>,
     effect: Option<(Effect, EffectSource)>,
 }
 
@@ -164,7 +167,7 @@ impl Noted {
         noted
     }
 
-    fn refusal(&self) -> Option<&(DecisionKind, Option<String>)> {
+    fn refusal(&self) -> Option<&Refusal> {
         self.0.as_ref()?.refusal.as_ref()
     }
 
@@ -182,19 +185,32 @@ impl Noted {
         self.refusal().map(|(kind, _)| *kind)
     }
 
+    /// The check that refused and its rule, if one did.
+    pub(crate) fn refusal_pair(&self) -> Option<Refusal> {
+        self.refusal().cloned()
+    }
+
     /// The check a request's memo kept for this target: it names the refusal
     /// the record's outcome code came from, so it wins over any later note.
-    pub(crate) fn refused_by_memo(&mut self, kind: DecisionKind) {
-        self.checks().refusal = Some((kind, None));
+    pub(crate) fn refused_by_memo(&mut self, (kind, rule_id): Refusal) {
+        self.checks().refusal = Some((kind, rule_id));
     }
 
     /// The gate that refused; only the first one counts.
-    pub(crate) fn refused(&mut self, kind: DecisionKind, rule_id: Option<String>) {
+    pub(crate) fn refused(
+        &mut self,
+        kind: DecisionKind,
+        rule_id: Option<crate::security::rule_id::RuleId>,
+    ) {
         self.checks().refusal.get_or_insert((kind, rule_id));
     }
 
     /// An explicit allow; only the earliest in check order counts.
-    pub(crate) fn allowed(&mut self, kind: DecisionKind, rule_id: Option<String>) {
+    pub(crate) fn allowed(
+        &mut self,
+        kind: DecisionKind,
+        rule_id: Option<crate::security::rule_id::RuleId>,
+    ) {
         self.checks().allow.get_or_insert((kind, rule_id));
     }
 
@@ -262,7 +278,7 @@ impl Noted {
                 .map(|a| a.pending_restart.iter().map(|f| (*f).to_owned()).collect())
                 .unwrap_or_default(),
             kind,
-            rule_id,
+            rule_id: rule_id.map(|id| id.as_str().to_owned()),
             grant_id: None,
             request_findings: None,
             request_findings_truncated: false,

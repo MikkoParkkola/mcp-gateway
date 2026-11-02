@@ -42,14 +42,6 @@ impl RuleId {
     }
 }
 
-/// A well-formed id belonging to no configured rule. The red-gate stubs name
-/// it wherever a rule is named, so every row fails on its assertion.
-pub(crate) fn stub_id() -> &'static RuleId {
-    static STUB: std::sync::LazyLock<RuleId> =
-        std::sync::LazyLock::new(|| RuleId("stub:000000000000".to_string()));
-    &STUB
-}
-
 #[cfg(test)]
 #[path = "rule_id_tests.rs"]
 mod tests;

@@ -260,6 +260,7 @@ pub(super) async fn require_admin_tool_access(
         status: axum::http::StatusCode::SERVICE_UNAVAILABLE,
         message: error.to_string(),
         kind: DecisionKind::AdminCapability,
+        rule_id: None,
     };
     log.admit().await.map_err(unavailable)?;
     let outcome = match &verdict {
@@ -364,8 +365,11 @@ pub(super) fn decide_tool_target<'a>(
         .and_then(|()| {
             generation
                 .tool_policy()
-                .check(target.server, target.tool)
-                .map_err(|e| refused(DecisionKind::ToolPolicy, e.to_string()))
+                .check_explained(target.server, target.tool)
+                .map(|_| ())
+                .map_err(|(e, rule)| {
+                    refused(DecisionKind::ToolPolicy, e.to_string()).with_rule(rule.cloned())
+                })
         })
         .and_then(|()| {
             client.map_or(Ok(()), |client| {

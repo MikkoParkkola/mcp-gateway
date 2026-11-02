@@ -24,7 +24,7 @@ struct VisibilityMemo {
     /// (`http_nonce_alloc` ALLOC.2).
     carried_credential: Keyed<TargetKey, Box<Carried>>,
     /// MIK-8361: the route stage's refusal code, for the call's one record.
-    denial_code: Keyed<TargetKey, (i32, Option<crate::security::decision_record::DecisionKind>)>,
+    denial_code: Keyed<TargetKey, (i32, Option<crate::security::decision_record::Refusal>)>,
     judged: parking_lot::Mutex<Judged>,
     /// MIK-8392: each target account's liveness, filled once per request by
     /// the async pre-pass and only read after it. Never a [`Visibility`]: an
@@ -514,11 +514,11 @@ pub(crate) fn note_denial_code(
     server: &str,
     tool: &str,
     code: i32,
-    kind: Option<crate::security::decision_record::DecisionKind>,
+    refusal: Option<crate::security::decision_record::Refusal>,
 ) {
     in_memo(|memo| {
         memo.denial_code
-            .first(target_key(server, tool), (code, kind))
+            .first(target_key(server, tool), (code, refusal))
     });
 }
 
@@ -527,32 +527,19 @@ pub(crate) fn denial_code(server: &str, tool: &str) -> Option<i32> {
     kept_denial(server, tool).map(|(code, _)| code)
 }
 
-/// The check [`note_denial_code`] kept for `(server, tool)`, if any.
-pub(crate) fn denial_kind(
-    server: &str,
-    tool: &str,
-) -> Option<crate::security::decision_record::DecisionKind> {
-    kept_denial(server, tool).and_then(|(_, kind)| kind)
-}
-
 /// The check and its rule [`note_denial_code`] kept for `(server, tool)`, as
 /// one pair read in one lookup.
 pub(crate) fn denial(
     server: &str,
     tool: &str,
-) -> Option<(
-    crate::security::decision_record::DecisionKind,
-    Option<crate::security::rule_id::RuleId>,
-)> {
-    kept_denial(server, tool)
-        .and_then(|(_, kind)| kind)
-        .map(|kind| (kind, Some(crate::security::rule_id::stub_id().clone())))
+) -> Option<crate::security::decision_record::Refusal> {
+    kept_denial(server, tool).and_then(|(_, refusal)| refusal)
 }
 
 fn kept_denial(
     server: &str,
     tool: &str,
-) -> Option<(i32, Option<crate::security::decision_record::DecisionKind>)> {
+) -> Option<(i32, Option<crate::security::decision_record::Refusal>)> {
     in_memo(|memo| {
         memo.denial_code
             .get(&target(server, tool) as &(dyn Pair + '_))

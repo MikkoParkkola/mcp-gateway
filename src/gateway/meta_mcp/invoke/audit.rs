@@ -85,9 +85,11 @@ pub(crate) struct DispatchNotes {
 mod decision;
 #[path = "audit_replay.rs"]
 mod replay;
+#[cfg(test)]
+pub(crate) use decision::take_refusal_kind;
 pub(crate) use decision::{
     after_upstream_401, note_declared_effect, note_refused_by, note_send_refusal, take_refusal,
-    take_refusal_kind, take_route_noted, with_route_scope,
+    take_route_noted, with_route_scope,
 };
 
 /// Most process notes one record carries (a playbook may run many).
@@ -525,15 +527,15 @@ impl MetaMcp {
         let outcome = notes.outcome(outcome);
         // A withheld target's record carries the memo's code, so its check.
         if withheld.is_some()
-            && let Some(kind) = args
+            && let Some(refusal) = args
                 .get("server")
                 .and_then(Value::as_str)
                 .zip(args.get("tool").and_then(Value::as_str))
                 .and_then(|(server, tool)| {
-                    crate::gateway::meta_mcp::visible::memo::denial_kind(server, tool)
+                    crate::gateway::meta_mcp::visible::memo::denial(server, tool)
                 })
         {
-            notes.refused_by_memo(kind);
+            notes.refused_by_memo(refusal);
         }
         // Boxed: held across the write, it would grow every dispatch future.
         let decision = Box::new(notes.decided(self, outcome));

@@ -79,10 +79,15 @@ impl MetaMcp {
         tool: &str,
         scope: InvokeScope<'_>,
         session_id: Option<&str>,
-    ) -> std::result::Result<(), (Error, crate::security::decision_record::DecisionKind)> {
+    ) -> std::result::Result<(), (Error, crate::security::decision_record::Refusal)> {
         self.may_invoke_before_grants_explained(server, tool, scope, session_id)?;
         self.identity_grant_rule(server, tool, scope, Emit::Silent)
-            .map_err(|error| (error, crate::security::decision_record::DecisionKind::Grant))
+            .map_err(|error| {
+                (
+                    error,
+                    (crate::security::decision_record::DecisionKind::Grant, None),
+                )
+            })
     }
 
     /// The pieces of [`Self::may_invoke`] before identity grants.
@@ -104,12 +109,15 @@ impl MetaMcp {
         tool: &str,
         scope: InvokeScope<'_>,
         session_id: Option<&str>,
-    ) -> std::result::Result<(), (Error, crate::security::decision_record::DecisionKind)> {
+    ) -> std::result::Result<(), (Error, crate::security::decision_record::Refusal)> {
         self.caller_profile_check(session_id, (server, tool))
             .map_err(|error| {
                 (
                     error,
-                    crate::security::decision_record::DecisionKind::RoutingProfile,
+                    (
+                        crate::security::decision_record::DecisionKind::RoutingProfile,
+                        None,
+                    ),
                 )
             })?;
         // `{}`, never `Null`: invocation builds its target with an empty
@@ -125,21 +133,24 @@ impl MetaMcp {
             .decide(target)
             .emit(Emit::Silent)
             .map_err(|e| {
-                let kind = e.kind;
+                let refusal = (e.kind, e.rule_id);
                 (
                     Error::Forbidden {
                         code: e.code,
                         status: e.status.as_u16(),
                         message: e.message,
                     },
-                    kind,
+                    refusal,
                 )
             })?;
         self.admin_capability_rule(server, tool, scope.is_admin)
             .map_err(|error| {
                 (
                     error,
-                    crate::security::decision_record::DecisionKind::AdminCapability,
+                    (
+                        crate::security::decision_record::DecisionKind::AdminCapability,
+                        None,
+                    ),
                 )
             })
     }

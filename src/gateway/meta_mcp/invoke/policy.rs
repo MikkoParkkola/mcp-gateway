@@ -129,7 +129,7 @@ impl MetaMcp {
         let refusal = authorizer
             .authorize(target)
             .map_err(|e| {
-                super::audit::note_refused_by(e.kind, None);
+                super::audit::note_refused_by(e.kind, e.rule_id.clone());
                 Error::Forbidden {
                     code: e.code,
                     status: e.status.as_u16(),
@@ -388,14 +388,20 @@ impl MetaMcp {
                     server,
                     tool,
                     -32003,
-                    Some(crate::security::decision_record::DecisionKind::BackendScope),
+                    Some((
+                        crate::security::decision_record::DecisionKind::BackendScope,
+                        None,
+                    )),
                 );
             }
             let missing = Err(Error::BackendNotFound(server.to_owned()));
             // Out of scope, the memo's code names its check; otherwise the
             // name matches nothing.
             let mut notes = audit::DispatchNotes::default();
-            notes.refused_by_memo(crate::security::decision_record::DecisionKind::NotFound);
+            notes.refused_by_memo((
+                crate::security::decision_record::DecisionKind::NotFound,
+                None,
+            ));
             self.audit_invocation(&args, session_id, caller, &recorded_trace, missing, notes)
                 .await
         });

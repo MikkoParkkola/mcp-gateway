@@ -248,7 +248,7 @@ fn note_absent(
             name,
             tool,
             -32003,
-            Some(DecisionKind::BackendScope),
+            Some((DecisionKind::BackendScope, None)),
         );
     }
     let kind = if out_of_scope {

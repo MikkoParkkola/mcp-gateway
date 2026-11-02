@@ -507,7 +507,12 @@ impl MetaMcp {
         crate::gateway::meta_mcp::visible::memo::record_absent(server, tool);
         let scoped = self.scoped(caller.scope().authorizer.backend_grant());
         if scoped.absence(server) == Some(Absence::OutOfScope) {
-            note_denial_code(server, tool, -32003, Some(DecisionKind::BackendScope));
+            note_denial_code(
+                server,
+                tool,
+                -32003,
+                Some((DecisionKind::BackendScope, None)),
+            );
             // Outside the key's scope: refused, not merely missing.
             crate::gateway::delivery_facts::withheld();
             crate::gateway::delivery_facts::gateway_folded(-32003);
@@ -633,10 +638,10 @@ impl MetaMcp {
         // Policy, profile, admin rule, grants: known without a catalogue.
         let refused = self
             .may_invoke_explained(server, tool, scope, session_id)
-            .inspect_err(|(refusal, kind)| {
+            .inspect_err(|(error, refusal)| {
                 // The call's one record names it (MIK-8361); a code the route
                 // stage kept first stands.
-                note_denial_code(server, tool, refusal.to_rpc_code(), Some(*kind));
+                note_denial_code(server, tool, error.to_rpc_code(), Some(refusal.clone()));
             })
             .is_err();
         if let Some(cap) = self.caller_capabilities()

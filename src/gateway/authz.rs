@@ -95,11 +95,14 @@ pub struct AuthorizationError {
     pub status: StatusCode,
     pub message: String,
     pub(crate) kind: crate::security::decision_record::DecisionKind,
+    /// The configured rule that refused, for the decision record only, never
+    /// delivered: a refused caller cannot learn which rule blocked it.
+    pub(crate) rule_id: Option<crate::security::rule_id::RuleId>,
 }
 
 #[expect(
     clippy::missing_fields_in_debug,
-    reason = "kind is deliberately left out so no log line can carry it"
+    reason = "kind and rule_id are deliberately left out so no log line can carry them"
 )]
 impl std::fmt::Debug for AuthorizationError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -122,7 +125,15 @@ impl AuthorizationError {
             status: StatusCode::FORBIDDEN,
             message: message.into(),
             kind,
+            rule_id: None,
         }
+    }
+
+    /// This refusal, naming the configured rule that made it.
+    #[must_use]
+    pub(crate) fn with_rule(mut self, rule_id: Option<crate::security::rule_id::RuleId>) -> Self {
+        self.rule_id = rule_id;
+        self
     }
 }
 
@@ -573,13 +584,15 @@ impl ToolAuthorizer for ToolPolicyAuthorizer<'_> {
                 })
                 .and_then(|()| {
                     self.tool_policy
-                        .check(target.server, target.tool)
-                        .map_err(|e| {
+                        .check_explained(target.server, target.tool)
+                        .map(|_| ())
+                        .map_err(|(e, rule)| {
                             AuthorizationError::forbidden(
                                 crate::security::decision_record::DecisionKind::ToolPolicy,
                                 INVALID_REQUEST,
                                 e.to_string(),
                             )
+                            .with_rule(rule.cloned())
                         })
                 }),
         )
