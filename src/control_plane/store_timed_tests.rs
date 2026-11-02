@@ -23,7 +23,7 @@ fn governance_records_are_timed_and_a_mixed_log_verifies() {
         .append_audit(&audit_event(
             "gov-new",
             "bob",
-            ControlPlaneAction::ApproveServer,
+            ControlPlaneAction::MutatePolicy,
         ))
         .unwrap();
 
