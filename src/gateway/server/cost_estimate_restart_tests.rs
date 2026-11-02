@@ -88,9 +88,10 @@ fn first_process(scope: Scope, dir: &std::path::Path) -> PersistedCosts {
 }
 
 /// T8: the estimate is saved apart from real spend and restored apart, so
-/// the judged figure is the estimate plus the real spend, once: $3 + $0.50
-/// + $1 fits a $5 budget (a double count reads $7.50) and not a $4.40 one
-/// (a lost estimate reads $1.50). The totals and the overflow stay as saved.
+/// the judged figure is the estimate plus the real spend, once: $4.50 in
+/// all ($3, $0.50 and the $1 call) fits a $5 budget (a double count reads
+/// $7.50) and not a $4.40 one (a lost estimate reads $1.50). The global
+/// total stays as saved.
 #[test]
 fn t8_the_estimate_is_kept_apart_through_save_and_restore() {
     for scope in [Scope::Tool, Scope::Key] {
@@ -153,7 +154,9 @@ fn t8b_a_corrupt_saved_estimate_restores_nothing() {
 
 /// T8c: an estimated name keeps its restored row through a saturated cap,
 /// though the restarted config does not budget it: the estimates are
-/// restored before the rows, so the name owns its row.
+/// restored before the rows, so the name owns its row. An owned name still
+/// takes a place in the cap, so one filler's spend may restore into the
+/// overflow instead; none is lost.
 #[test]
 fn t8c_an_estimated_name_keeps_its_row_through_a_full_cap() {
     for scope in [Scope::Tool, Scope::Key] {
@@ -162,22 +165,29 @@ fn t8c_an_estimated_name_keeps_its_row_through_a_full_cap() {
         let saved = first_process(scope, dir.path());
         let (_, restored) = boot_cost_governance(&governed(scope, None), dir.path());
         let snap = restored.expect("armed").snapshot();
-        let (rows, overflow, saved_overflow) = match scope {
+        let (rows, overflow, saved_rows, saved_overflow) = match scope {
             Scope::Tool => (
                 snap.tool_daily,
                 snap.tool_overflow_usd,
+                saved
+                    .tool_totals
+                    .values()
+                    .map(|t| t.total_cost_usd)
+                    .sum::<f64>(),
                 saved.tool_overflow_usd,
             ),
             Scope::Key => (
                 snap.key_daily,
                 snap.key_overflow_usd,
+                saved.key_totals.values().sum::<f64>(),
                 saved.key_overflow_usd,
             ),
         };
         assert_eq!(rows.get("target").copied(), Some(0.5), "{scope:?}: its row");
+        let restored_sum = rows.values().sum::<f64>() + overflow;
         assert!(
-            (overflow - saved_overflow).abs() < 1e-9,
-            "{scope:?}: overflow as saved"
+            (restored_sum - (saved_rows + saved_overflow)).abs() < 1e-9,
+            "{scope:?}: every saved dollar restored, in a row or the overflow"
         );
     }
 }

@@ -314,7 +314,8 @@ async fn t7c_spend_in_a_gap_with_no_budget_stays_in_the_row() {
             c.budgets.per_key.remove("target");
         });
         let (_, overflow) = scope.rows(&fx);
-        spend(&fx, scope, "target", 1.0);
+        // Under the live generation, which no longer budgets it.
+        settle(&fx, scope, "target");
         let (rows, overflow_after) = scope.rows(&fx);
         assert_eq!(rows.get("target").copied(), Some(1.0), "{scope:?}: own row");
         assert!((overflow_after - overflow).abs() < 1e-9, "{scope:?}");
@@ -349,7 +350,8 @@ async fn t9e_a_startup_budget_removed_and_re_added_takes_no_figure() {
             c.budgets.per_tool.remove("idle");
             c.budgets.per_key.remove("idle");
         });
-        spend(&fx, scope, "idle", 1.0);
+        // Under the live generation, which no longer budgets it.
+        settle(&fx, scope, "idle");
         assert_eq!(
             scope.rows(&fx).0.get("idle").copied(),
             Some(1.0),
