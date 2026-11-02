@@ -738,3 +738,62 @@ async fn a_login_cancelled_before_registration_opens_no_browser() {
         "no browser opens for a cancelled login"
     );
 }
+
+/// A login whose callback arrives after a sign-in under another issuer was
+/// confirmed redeems nothing: the code exchange spends the login's proof,
+/// which refuses then. Red before the exchange took a spent proof: the old
+/// issuer's code was redeemed.
+#[cfg(feature = "webui")]
+#[tokio::test]
+async fn a_callback_after_a_switch_redeems_nothing() {
+    use super::sign_in::{SignIn, SignInStatus};
+    let dir = tempfile::tempdir().unwrap();
+    let (issuer, forms) = token_endpoint(Some("access-a")).await;
+    let cell = Arc::new(SignInStatus::new(SignIn::NeverSignedIn));
+    let mut client = client(dir.path(), Some(&issuer)).with_sign_in_status(Arc::clone(&cell));
+    let (url_tx, mut url_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+    client.open_browser = Box::new(move |url| url_tx.send(url.to_string()).is_ok());
+    let person = async {
+        let opened = tokio::time::timeout(Duration::from_secs(10), url_rx.recv())
+            .await
+            .expect("the login opens the browser")
+            .expect("an authorization URL");
+        let query: HashMap<String, String> = Url::parse(&opened)
+            .unwrap()
+            .query_pairs()
+            .into_owned()
+            .collect();
+        // The person was slow: a sign-in under another issuer landed first.
+        cell.record_install("cov3-backend-another-issuer");
+        let callback = Url::parse_with_params(
+            &query["redirect_uri"],
+            &[
+                ("code", APPROVED_CODE),
+                ("state", query["state"].as_str()),
+                ("iss", issuer.as_str()),
+            ],
+        )
+        .unwrap();
+        Client::builder()
+            .no_proxy()
+            .build()
+            .unwrap()
+            .get(callback)
+            .send()
+            .await
+            .expect("the callback answers");
+    };
+
+    let (outcome, ()) = tokio::time::timeout(Duration::from_secs(20), async {
+        tokio::join!(client.authorize(), person)
+    })
+    .await
+    .expect("the flow finishes");
+
+    let refused = outcome.expect_err("no token of the old issuer");
+    assert!(
+        matches!(refused, Error::AuthorizationRequired { .. }),
+        "{refused}"
+    );
+    assert!(forms.lock().unwrap().is_empty(), "no code was redeemed");
+}

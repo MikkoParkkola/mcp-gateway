@@ -484,3 +484,106 @@ async fn a_joiner_after_a_switch_answers_the_sign_in_wait() {
         "{refused}"
     );
 }
+
+/// A background renewal holds between its refresh and its client-credentials
+/// grant when a sign-in under the other issuer is confirmed: the grant sends
+/// nothing. Red before the proof was spent at the grant: the renewal's opening
+/// check was reused, and the old issuer's grant was sent.
+#[tokio::test]
+async fn a_renewal_that_spans_a_switch_sends_no_grant() {
+    let server = TokenServer::start(&[]).await;
+    let dir = tempfile::tempdir().unwrap();
+    let cell = Arc::new(SignInStatus::new(SignIn::NeverSignedIn));
+    let mut owned = client(dir.path(), &server).with_sign_in_status(Arc::clone(&cell));
+    owned.auth_metadata.as_mut().unwrap().grant_types_supported =
+        vec!["client_credentials".to_owned()];
+    hold(&owned, &token("a1", None, true));
+    let (reached, release) = owned.renewal_pause.arm();
+    let switch = async {
+        within("the renewal parks before its grant", reached.notified()).await;
+        cell.record_install(OTHER_ISSUER_KEY);
+        release.notify_one();
+    };
+
+    let (renewal, ()) = tokio::join!(owned.attempt_background_renewal(), switch);
+
+    assert!(
+        !matches!(renewal, crate::oauth::client::renewal::Renewal::Renewed),
+        "nothing was renewed"
+    );
+    assert_eq!(server.requests(), 0, "no grant of the old issuer was sent");
+}
+
+/// A joiner whose shared login stored nothing while a sign-in under the other
+/// issuer was confirmed answers the sign-in wait, not a hard error. Red before
+/// the adopt checked the issuer ahead of its load: it answered "the login
+/// stored no token".
+#[tokio::test]
+async fn a_joiner_with_nothing_stored_after_a_switch_answers_the_sign_in_wait() {
+    let server = TokenServer::start(&[]).await;
+    let dir = tempfile::tempdir().unwrap();
+    let cell = Arc::new(SignInStatus::new(SignIn::NeverSignedIn));
+    let gate = Arc::new(crate::oauth::login_gate::LoginGate::default());
+    let crate::oauth::login_gate::Begin::Lead(lead) = gate.begin(None, None) else {
+        panic!("no login in flight, so the test leads");
+    };
+    let owned = client(dir.path(), &server)
+        .with_sign_in_status(Arc::clone(&cell))
+        .with_login_gate(Arc::clone(&gate));
+
+    let (joined, ()) = tokio::join!(owned.authorize_shared(true, None), async {
+        tokio::task::yield_now().await;
+        cell.record_install(OTHER_ISSUER_KEY);
+        lead.end(None);
+    });
+
+    let refused = joined.expect_err("nothing of the old issuer");
+    assert!(
+        matches!(refused, Error::AuthorizationRequired { .. }),
+        "{refused}"
+    );
+}
+
+/// A refresh already sent when a sign-in under the other issuer is confirmed:
+/// its answer is not handed back, not cached, and the status stays the new
+/// sign-in's. Red before a refreshed token was cached through the checked
+/// step: the old issuer's new token stayed cached.
+#[tokio::test]
+async fn a_switch_while_a_refresh_is_in_flight_installs_nothing_old() {
+    let server = TokenServer::start(&[Answer::HoldThenRotate]).await;
+    let dir = tempfile::tempdir().unwrap();
+    let cell = Arc::new(SignInStatus::new(SignIn::NeverSignedIn));
+    let owned = client(dir.path(), &server).with_sign_in_status(Arc::clone(&cell));
+    hold(&owned, &token("a1", Some("r1"), true));
+    let switch = async {
+        server.arrivals(1, HANG_BOUND).await;
+        cell.record_install(OTHER_ISSUER_KEY);
+        cell.set_held(Some(4_000_000_000), false);
+        server.release.notify_one();
+    };
+
+    let (handed, ()) = tokio::join!(headless(&owned), switch);
+
+    assert_eq!(server.requests(), 1, "the refresh was in flight");
+    let refused = handed.expect_err("no old-issuer token after the switch");
+    assert!(
+        matches!(refused, Error::AuthorizationRequired { .. }),
+        "{refused}"
+    );
+    let cached = owned
+        .current_token
+        .read()
+        .as_ref()
+        .map(|token| token.access_token.clone());
+    assert_ne!(
+        cached.as_deref(),
+        Some("a2"),
+        "the old issuer's answer is not cached"
+    );
+    assert!(
+        matches!(cell.snapshot(), SignIn::SignedIn { expires_at: Some(at) }
+            if at == std::time::UNIX_EPOCH + std::time::Duration::from_secs(4_000_000_000)),
+        "the new sign-in's status stands: {:?}",
+        cell.snapshot()
+    );
+}

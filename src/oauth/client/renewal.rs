@@ -73,6 +73,8 @@ impl OAuthClient {
         }
 
         // Headless, for Beeper-style tokens.
+        #[cfg(all(test, feature = "webui"))]
+        self.renewal_pause.pause().await;
         match self.try_client_credentials(allowed).await {
             Ok(_) => Renewal::Renewed,
             Err(e) if is_ssrf_refusal(&e) => self.refused(&e),

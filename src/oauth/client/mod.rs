@@ -91,6 +91,10 @@ pub struct OAuthClient {
     #[cfg(all(test, feature = "webui"))]
     pub(crate) publish_pause: crate::test_pause::Slot,
 
+    /// Where a test holds a background renewal before its client-credentials grant.
+    #[cfg(all(test, feature = "webui"))]
+    pub(crate) renewal_pause: crate::test_pause::Slot,
+
     /// Current token (cached)
     current_token: RwLock<Option<TokenInfo>>,
 
@@ -271,6 +275,8 @@ impl OAuthClient {
             adopt_pause: crate::test_pause::Slot::default(),
             #[cfg(all(test, feature = "webui"))]
             publish_pause: crate::test_pause::Slot::default(),
+            #[cfg(all(test, feature = "webui"))]
+            renewal_pause: crate::test_pause::Slot::default(),
         }
     }
 
