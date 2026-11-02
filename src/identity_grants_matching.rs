@@ -83,6 +83,20 @@ pub(super) fn parse_refusal(
 ) -> String {
     let tree = Tree::parse(content);
     let bare = tree.as_ref().map(Tree::bare_rows).unwrap_or_default();
+    let nameless = tree.as_ref().map(Tree::nameless_rows).unwrap_or_default();
+    if bare.is_empty() && !nameless.is_empty() {
+        let rows: Vec<String> = nameless
+            .iter()
+            .map(|(grant_id, field)| format!("grant '{grant_id}' ({field})"))
+            .collect();
+        return format!(
+            "identity grants file {} names no one in {} row(s): {}. Such a row grants \
+             nothing; `gateway upgrade` removes it, or delete it by hand.",
+            path.display(),
+            rows.len(),
+            rows.join(", "),
+        );
+    }
     if bare.is_empty() {
         let error = match tree {
             Some(Tree::Json(_)) => serde_json::from_str::<super::IdentityGrantFile>(content)
@@ -162,6 +176,45 @@ impl Tree {
                 })
                 .collect(),
         }
+    }
+
+    /// `(grant_id, field)` of every row whose `subject` or `owner` has an
+    /// empty authority or subject: such a row names no one.
+    fn nameless_rows(&self) -> Vec<(String, String)> {
+        let mut out = Vec::new();
+        let mut check = |grant_id: Option<&str>, field: &str, part: Option<(&str, &str)>| {
+            if let Some((authority, subject)) = part
+                && !super::names_someone(authority, subject)
+            {
+                let id = grant_id.unwrap_or("<no grant_id>").to_owned();
+                out.push((id, format!("empty {field}")));
+            }
+        };
+        match self {
+            Self::Json(file) => {
+                for row in json_rows(file) {
+                    let id = row.get("grant_id").and_then(serde_json::Value::as_str);
+                    for field in ["subject", "owner"] {
+                        let part = row.get(field).and_then(|v| {
+                            Some((v.get("authority")?.as_str()?, v.get("subject")?.as_str()?))
+                        });
+                        check(id, field, part);
+                    }
+                }
+            }
+            Self::Yaml(file) => {
+                for row in yaml_rows(file) {
+                    let id = row.get("grant_id").and_then(crate::yaml::Value::as_str);
+                    for field in ["subject", "owner"] {
+                        let part = row.get(field).and_then(|v| {
+                            Some((v.get("authority")?.as_str()?, v.get("subject")?.as_str()?))
+                        });
+                        check(id, field, part);
+                    }
+                }
+            }
+        }
+        out
     }
 
     /// Why the file still fails its typed parse with the bare rows removed,
