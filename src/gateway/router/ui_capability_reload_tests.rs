@@ -103,6 +103,11 @@ async fn t24b_a_capability_reloaded_as_a_write_after_the_gate_is_not_run() {
         1,
         "premise: the UI gate admits a read-only capability and it runs: {status} {body}"
     );
+    assert_ne!(
+        status,
+        StatusCode::CONFLICT,
+        "premise: the read-only call is not refused after it ran: {body}"
+    );
 
     let (fx, caps, base_url, hits) = served().await;
     let reloaded = Arc::new(AtomicBool::new(false));

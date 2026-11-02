@@ -3,8 +3,9 @@
 //! Source-scan pin: every site that folds a dispatch failure into a tool
 //! result (`dispatch_error_result`, `account_refused_fill`) first asks, in
 //! code, whether the failure is a refusal of the caller, which is answered
-//! as itself and never folded. Comments are stripped before matching, so a
-//! predicate named only in a comment does not count. A new fold site fails
+//! as itself and never folded. Comments, string literals and char literals
+//! are blanked before matching (`test_source_text::sanitize`), so a
+//! predicate named only in one of them does not count. A new fold site fails
 //! this row until it is reviewed and listed; the scan covers the module's
 //! child directories too. It checks that the predicate is asked in the
 //! fold's function, not that it guards the same error: the behaviour itself
@@ -32,15 +33,11 @@ const REVIEWED: [(&str, usize); 4] = [
 /// The function a fold inside it is exempt in, by its definition line.
 const EXEMPT_FN: &str = "fn account_refused_fill(";
 
-/// A line's code: what precedes a `//` comment.
-fn code(line: &str) -> &str {
-    line.split("//").next().unwrap_or_default()
-}
-
 /// The fold sites in one file's `text`, counted, and those whose function
 /// never asks the predicate in code above them (as `name:line`).
 fn fold_sites(name: &str, text: &str) -> (usize, Vec<String>) {
-    let lines: Vec<&str> = text.lines().map(code).collect();
+    let code = crate::test_source_text::sanitize(text);
+    let lines: Vec<&str> = code.lines().collect();
     let (mut sites, mut unchecked) = (0, Vec::new());
     for (at, line) in lines.iter().enumerate() {
         if line.contains("fn dispatch_error_result(")
@@ -84,7 +81,7 @@ fn every_fold_site_asks_whether_the_failure_refused_the_caller() {
                 .strip_prefix(&dir)
                 .expect("under invoke")
                 .to_string_lossy()
-                .into_owned();
+                .replace('\\', "/");
             if path.extension().is_none_or(|ext| ext != "rs") || name.contains("tests") {
                 continue;
             }
@@ -110,8 +107,9 @@ fn every_fold_site_asks_whether_the_failure_refused_the_caller() {
     );
 }
 
-/// The scan's own premise: a predicate named only in a comment is not a
-/// check (red), and one asked in code is (control).
+/// The scan's own premise: a predicate named only in a line comment, a
+/// block comment or a string is not a check (red); a `//` inside a string
+/// hides no fold call after it; and one asked in code is (control).
 #[test]
 fn a_predicate_named_only_in_a_comment_is_not_a_check() {
     let commented = "fn settle(e: Error) -> Value {\n    \
@@ -120,6 +118,24 @@ fn a_predicate_named_only_in_a_comment_is_not_a_check() {
     let (sites, unchecked) = fold_sites("commented.rs", commented);
     assert_eq!(sites, 1, "premise: one fold site");
     assert_eq!(unchecked, ["commented.rs:3"], "a comment is not a check");
+
+    let blocked = "fn settle(e: Error) -> Value {\n    \
+                   /* is_authorization_refusal(&e) */\n    \
+                   let note = \"is_authorization_refusal(&e)\";\n    \
+                   dispatch_error_result(&e, tool, server, surface)\n}\n";
+    let (sites, unchecked) = fold_sites("blocked.rs", blocked);
+    assert_eq!(sites, 1, "premise: one fold site");
+    assert_eq!(
+        unchecked,
+        ["blocked.rs:4"],
+        "a block comment or a string is not a check"
+    );
+
+    let url = "fn settle(e: Error) -> Value {\n    \
+               let at = \"http://x\"; dispatch_error_result(&e, tool, server, surface)\n}\n";
+    let (sites, unchecked) = fold_sites("url.rs", url);
+    assert_eq!(sites, 1, "a `//` in a string hides no fold call after it");
+    assert_eq!(unchecked, ["url.rs:2"]);
 
     let asked = "fn settle(e: Error) -> Result<Value> {\n    \
                  if is_authorization_refusal(&e) {\n        return Err(e);\n    }\n    \

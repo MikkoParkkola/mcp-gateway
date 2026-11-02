@@ -584,7 +584,12 @@ async fn a_task_workers_cold_fill_refused_by_the_lender_is_recorded_refused() {
         }
     })
     .await;
-    let worker = settled.unwrap_or_else(|_| worker_records());
+    let worker = settled.unwrap_or_else(|_| {
+        panic!(
+            "the worker's dispatch never settled within 30 s: {:?}",
+            worker_records()
+        )
+    });
     let [invocation, delivery] = worker.as_slice() else {
         panic!(
             "the worker's dispatch is recorded as a refusal, an invocation and a delivery: {worker:?}"
