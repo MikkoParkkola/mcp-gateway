@@ -725,6 +725,7 @@ class TestSection(unittest.TestCase):
         "generic params": "#[cfg(test)]\nasync fn helper<T, U>(t: T, u: U) {{\n{w}\n}}\n",
         "generic return": "#[cfg(test)]\nasync fn helper() -> Result<u8, String> {{\n{w}\nOk(0)\n}}\n",
         "where clause": "#[cfg(test)]\nasync fn helper<T>(t: T)\nwhere\n    T: Send,\n    T: Sync,\n{{\n{w}\n}}\n",
+        "braced const generic": "#[cfg(test)]\nasync fn helper() -> Probe<{{ N }}> {{\n{w}\nProbe\n}}\n",
         "generic impl": "#[cfg(test)]\nimpl<T, U> Probe<T, U> {{\n    async fn helper() {{\n{w}\n    }}\n}}\n",
     }
 
@@ -751,6 +752,7 @@ class TestSection(unittest.TestCase):
         "#[cfg(all(unix, all(test, feature = \"webui\")))]",
         "#[cfg( test )]",
         "#[cfg(all( test ,unix ))]",
+        "#[cfg(any(all(test, unix), all(test, windows)))]",
     )
     NOT_TEST_ONLY_CFGS = (
         '#[cfg(any(test, feature = "firewall"))]',
@@ -758,6 +760,7 @@ class TestSection(unittest.TestCase):
         "#[cfg(not(test))]",
         "#[cfg(all(unix, any(test, windows)))]",
         "#[cfg(feature = \"test\")]",
+        "#[cfg(any(all(test, unix), windows))]",
     )
 
     def test_an_item_under_a_test_only_compound_cfg_is_judged(self):
