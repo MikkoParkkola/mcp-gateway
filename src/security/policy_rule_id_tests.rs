@@ -112,3 +112,54 @@ fn an_unkeyed_policy_names_no_entry() {
     );
     assert!(p.check("s", "x").is_err(), "the public check still refuses");
 }
+
+#[test]
+fn tool_policy_entry_bytes_are_pinned() {
+    let cases = [
+        (("allow", "read_*"), r#"["allow","read_*"]"#),
+        (("deny", "s:write"), r#"["deny","s:write"]"#),
+        (
+            ("builtin_deny", "write_file"),
+            r#"["builtin_deny","write_file"]"#,
+        ),
+        (("default_action", "deny"), r#"["default_action","deny"]"#),
+        (("default_action", "allow"), r#"["default_action","allow"]"#),
+    ];
+    for ((list, pattern), bytes) in cases {
+        assert_eq!(
+            serde_json::to_string(&(list, pattern)).expect("serialises"),
+            bytes
+        );
+    }
+    // The default action's pattern is its serde name.
+    for action in [PolicyAction::Allow, PolicyAction::Deny] {
+        let name = serde_json::to_value(action).expect("serialises");
+        assert!(matches!(name.as_str(), Some("allow" | "deny")), "{name}");
+    }
+    assert_eq!(id("deny", "s:write").as_str(), PINNED_DENY_ID);
+}
+
+/// Pinned from the first green run; a change here rotates every recorded id.
+const PINNED_DENY_ID: &str = "PIN-DENY-ID";
+
+/// The generation compiles both policies keyed, never through the unkeyed
+/// entry points, which name no rule.
+#[test]
+fn the_generation_compiles_only_keyed_policies() {
+    let source = include_str!("../config_reload/generation.rs");
+    let code: String = source
+        .lines()
+        .filter(|line| !line.trim_start().starts_with("//"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        !code.contains("FirewallPolicy::compile("),
+        "an unkeyed firewall compile"
+    );
+    assert!(
+        !code.contains("ToolPolicy::from_config("),
+        "an unkeyed tool-policy compile"
+    );
+    assert!(code.contains("FirewallPolicy::compile_keyed("));
+    assert!(code.contains("ToolPolicy::from_config_keyed("));
+}

@@ -160,21 +160,7 @@ fn firewall_rule_bytes_and_id_are_pinned() {
         serde_json::to_string(&minimal).expect("serialises"),
         r#"{"match":"t","action":"block","reason":null,"scan":[]}"#
     );
-    let maximal = FirewallRule {
-        tool_match: "fs_*".to_string(),
-        action: FirewallAction::Warn,
-        reason: Some("r".to_string()),
-        scan: vec![ScanType::Credentials, ScanType::ShellInjection],
-        servers: Some(vec!["fs".to_string()]),
-        keys: Some(vec!["k".to_string()]),
-        except: Some(vec![RuleException {
-            server: None,
-            tool: Some("fs_read".to_string()),
-            key: None,
-        }]),
-        allowed_roots: Some(vec!["/srv".to_string()]),
-        path_args: Some(vec!["path".to_string()]),
-    };
+    let maximal = maximal();
     assert_eq!(
         serde_json::to_string(&maximal).expect("serialises"),
         MAXIMAL_BYTES
@@ -187,3 +173,80 @@ fn firewall_rule_bytes_and_id_are_pinned() {
 const MAXIMAL_BYTES: &str = "PIN-MAXIMAL-BYTES";
 const MINIMAL_ID: &str = "PIN-MINIMAL-ID";
 const MAXIMAL_ID: &str = "PIN-MAXIMAL-ID";
+
+#[test]
+fn two_rules_on_one_key_and_finding_name_the_first_in_rule_order() {
+    let first = rule("t", &[ScanType::Credentials], FirewallAction::Block);
+    let mut second = first.clone();
+    second.reason = Some("second".to_string());
+    assert_eq!(
+        resolve(&[first.clone(), second], KeyOf::NoKey, &[CREDENTIAL]),
+        (FirewallAction::Block, Some(id(&first)))
+    );
+}
+
+/// Only (key a, shell) and (key b, credential) are rule-decided Blocks, by two
+/// different rules; key-major order meets (a, shell) first, finding-major
+/// order would meet (b, credential) first.
+#[test]
+fn a_sparse_key_by_finding_grid_names_the_key_major_winner() {
+    let mut a_shell = rule("t", &[ScanType::ShellInjection], FirewallAction::Block);
+    a_shell.keys = Some(vec!["a".to_string()]);
+    let mut b_credential = rule("t", &[ScanType::Credentials], FirewallAction::Block);
+    b_credential.keys = Some(vec!["b".to_string()]);
+    let low = |t| (t, Severity::Low);
+    let (action, named) = resolve(
+        &[a_shell.clone(), b_credential],
+        KeyOf::NotKnown,
+        &[low(ScanType::Credentials), low(ScanType::ShellInjection)],
+    );
+    assert_eq!(action, FirewallAction::Block);
+    assert_eq!(named, Some(id(&a_shell)));
+}
+
+#[test]
+fn reordering_a_list_changes_only_that_rules_id() {
+    let base = maximal();
+    let untouched = rule("other", &[], FirewallAction::Block);
+    let mut reordered = base.clone();
+    reordered.scan.reverse();
+    assert_ne!(id(&base), id(&reordered));
+    for edit in [
+        |r: &mut FirewallRule| r.servers.as_mut().expect("servers").reverse(),
+        |r: &mut FirewallRule| r.keys.as_mut().expect("keys").reverse(),
+        |r: &mut FirewallRule| r.except.as_mut().expect("except").reverse(),
+        |r: &mut FirewallRule| r.allowed_roots.as_mut().expect("roots").reverse(),
+        |r: &mut FirewallRule| r.path_args.as_mut().expect("args").reverse(),
+    ] {
+        let mut edited = base.clone();
+        edit(&mut edited);
+        assert_ne!(id(&base), id(&edited));
+    }
+    assert_eq!(id(&untouched), id(&untouched.clone()));
+}
+
+/// Every list holds at least two entries, deliberately unsorted.
+fn maximal() -> FirewallRule {
+    FirewallRule {
+        tool_match: "fs_*".to_string(),
+        action: FirewallAction::Warn,
+        reason: Some("r".to_string()),
+        scan: vec![ScanType::ShellInjection, ScanType::Credentials],
+        servers: Some(vec!["fs".to_string(), "db".to_string()]),
+        keys: Some(vec!["k2".to_string(), "k1".to_string()]),
+        except: Some(vec![
+            RuleException {
+                server: None,
+                tool: Some("fs_write".to_string()),
+                key: None,
+            },
+            RuleException {
+                server: Some("db".to_string()),
+                tool: None,
+                key: None,
+            },
+        ]),
+        allowed_roots: Some(vec!["/srv".to_string(), "/data".to_string()]),
+        path_args: Some(vec!["path".to_string(), "dest".to_string()]),
+    }
+}

@@ -68,3 +68,89 @@ fn a_content_and_a_folder_rule_at_block_name_the_content_rule() {
     assert!(refused);
     assert_eq!(named, Some(id(&content)));
 }
+
+/// A folder rule on `read_file` with `action`, beside a content rule scoped to
+/// credentials with `content`.
+fn folder_and_content(folder: FirewallAction, content: Option<FirewallAction>) -> Fx {
+    Fx::with_rules(|safe| {
+        let mut rules = vec![root_rule("read_file", &[safe], &["path"], folder)];
+        if let Some(action) = content {
+            let mut c = root_rule("read_file", &[], &[], action);
+            c.allowed_roots = None;
+            c.path_args = None;
+            c.scan = vec![ScanType::Credentials];
+            rules.push(c);
+        }
+        rules
+    })
+}
+
+fn token() -> String {
+    format!("ghp_{}", "abcdefghijklmnopqrstuvwxyz1234567890")
+}
+
+#[test]
+fn content_warn_beside_a_folder_block_names_the_folder_rule() {
+    let fx = folder_and_content(FirewallAction::Block, Some(FirewallAction::Warn));
+    let folder = fx.fw.config_for_test().rules[0].clone();
+    let args = json!({"path": fx.path("outside/f"), "note": token()});
+    assert_eq!(decided(&fx, &args), (true, Some(id(&folder))));
+}
+
+#[test]
+fn content_block_beside_a_folder_warn_names_the_content_rule() {
+    let fx = folder_and_content(FirewallAction::Warn, Some(FirewallAction::Block));
+    let content = fx.fw.config_for_test().rules[1].clone();
+    let args = json!({"path": fx.path("outside/f"), "note": token()});
+    assert_eq!(decided(&fx, &args), (true, Some(id(&content))));
+}
+
+#[test]
+fn two_folder_rules_at_block_name_the_first_in_rule_order() {
+    let fx = Fx::with_rules(|safe| {
+        let first = root_rule(
+            "read_file",
+            std::slice::from_ref(&safe),
+            &["path"],
+            FirewallAction::Block,
+        );
+        let mut second = first.clone();
+        second.reason = Some("second".to_string());
+        vec![first, second]
+    });
+    let first = fx.fw.config_for_test().rules[0].clone();
+    assert_eq!(
+        decided(&fx, &json!({"path": fx.path("outside/f")})),
+        (true, Some(id(&first)))
+    );
+}
+
+/// No content rule covers the credential: its High severity blocks.
+#[test]
+fn severity_block_beside_a_folder_block_names_the_folder_rule() {
+    let fx = folder_and_content(FirewallAction::Block, None);
+    let folder = fx.fw.config_for_test().rules[0].clone();
+    let args = json!({"path": fx.path("outside/f"), "note": token()});
+    assert_eq!(decided(&fx, &args), (true, Some(id(&folder))));
+}
+
+#[test]
+fn severity_block_beside_a_folder_warn_names_no_rule() {
+    let fx = folder_and_content(FirewallAction::Warn, None);
+    let args = json!({"path": fx.path("outside/f"), "note": token()});
+    assert_eq!(decided(&fx, &args), (true, None));
+}
+
+#[test]
+fn a_forced_folder_refusal_beside_content_rules_names_the_folder_rule() {
+    for content in [FirewallAction::Block, FirewallAction::Warn] {
+        let fx = folder_and_content(FirewallAction::Block, Some(content));
+        let folder = fx.fw.config_for_test().rules[0].clone();
+        let args = json!({"path": 7, "note": token()});
+        assert_eq!(
+            decided(&fx, &args),
+            (true, Some(id(&folder))),
+            "{content:?}"
+        );
+    }
+}
