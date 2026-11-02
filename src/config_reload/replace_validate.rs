@@ -11,7 +11,7 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use super::{ReplaceError, SecretStep};
-use crate::config::{Config, EnvOverlay, PENDING_SLOT_PREFIX};
+use crate::config::{Config, EnvOverlay, PENDING_SLOT_PREFIX, reserved_slot_reference};
 use crate::config_persistence::keyedit::{Segment, SlotId, Template};
 use crate::config_reload::ReloadContext;
 use crate::config_reload::reload_context::EvaluatedReload;
@@ -98,13 +98,12 @@ impl ReloadContext {
         template: &Template,
         step: Option<&SecretStep>,
     ) -> Result<(), ReplaceError> {
-        if template
-            .bytes()
-            .windows(PENDING_SLOT_PREFIX.len())
-            .any(|w| w == PENDING_SLOT_PREFIX.as_bytes())
-        {
+        // The loader's rule: a reference, never a comment that mentions it.
+        let reserved = std::str::from_utf8(template.bytes()).ok();
+        if let Some((name, line)) = reserved.and_then(reserved_slot_reference) {
             return Err(ReplaceError::Refused(format!(
-                "the new config names {PENDING_SLOT_PREFIX}, a prefix reserved for the config writer"
+                "the new config references {name} on line {line}; names starting \
+                 {PENDING_SLOT_PREFIX} are reserved for the config writer, so rename it"
             )));
         }
         let (refs, pending) = stand_ins(template);

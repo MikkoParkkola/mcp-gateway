@@ -20,6 +20,31 @@ use crate::Result;
 /// reach a slot's stand-in value.
 pub(crate) const PENDING_SLOT_PREFIX: &str = "MCPGW_PENDING_SLOT_";
 
+/// The first reference to a reserved name, with its 1-based line: a scalar,
+/// key or value, that is `env:NAME` or holds `${NAME}`, the two forms the
+/// loader resolves through the overlay (`SecretRef::parse` and the template
+/// expander in `secret_ref.rs`). A comment is no scalar, so text that only
+/// mentions the prefix never matches. Text that does not parse is left to
+/// the loader, which reports it.
+pub(crate) fn reserved_slot_reference(text: &str) -> Option<(String, usize)> {
+    for item in granit_parser::Parser::new_from_str(text) {
+        let (event, span) = item.ok()?;
+        let granit_parser::Event::Scalar(value, ..) = event else {
+            continue;
+        };
+        let name = (value.strip_prefix("env:"))
+            .filter(|name| name.starts_with(PENDING_SLOT_PREFIX))
+            .or_else(|| {
+                super::secret_ref::template_names(&value)
+                    .find(|name| name.starts_with(PENDING_SLOT_PREFIX))
+            });
+        if let Some(name) = name {
+            return Some((name.to_owned(), span.start.line()));
+        }
+    }
+    None
+}
+
 /// A selected config file and the text it held when it was read.
 #[derive(Debug, Clone)]
 pub(crate) struct ConfigFile {
@@ -32,10 +57,11 @@ impl ConfigFile {
     pub(crate) fn read(path: PathBuf) -> Result<Self> {
         let text =
             super::secret_file::read_secret_file(&path, super::secret_file::SecretFile::Config)?;
-        if text.contains(PENDING_SLOT_PREFIX) {
+        if let Some((name, line)) = reserved_slot_reference(&text) {
             return Err(crate::Error::Config(format!(
-                "Refusing to load {}: names starting {PENDING_SLOT_PREFIX} are reserved for \
-                 the gateway's config writer",
+                "Refusing to load {}: line {line} references {name}; names starting \
+                 {PENDING_SLOT_PREFIX} are reserved for the gateway's config writer, so \
+                 rename it",
                 path.display()
             )));
         }
