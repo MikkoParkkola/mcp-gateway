@@ -458,12 +458,18 @@ pub(super) fn may_delete(original: &str, node: &Node, taken: Taken) -> BTreeSet<
             first -= 1;
         }
     }
+    // Comments count as the node's when indented deeper than its dash (an
+    // element) or than its key itself (an entry), as `remove_entry` judges
+    // them: a key's column, not its line's indent, which an explicit `? key`
+    // or a key after a dash would shift.
+    let key_col = node.start - starts.0[key_line];
     let col = match taken {
         Taken::Under => {
             first += 1;
-            node.start - starts.0[key_line]
+            key_col
         }
-        Taken::Element | Taken::Entry => indent(&line(first)),
+        Taken::Entry => key_col,
+        Taken::Element => indent(&line(first)),
     };
     let end = node.end.min(original.len());
     let last = original[node.start..end]

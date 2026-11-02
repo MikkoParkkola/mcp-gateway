@@ -40,7 +40,19 @@ pub(super) fn set(
             "the list's mapping cannot be edited in place",
         ));
     }
-    let Some(key_bytes) = node.key.clone().filter(|k| text[k.clone()] == **key) else {
+    // Plain as written: the key's own text, with nothing but indentation (and
+    // an element's dash) before it on its line, so no anchor, tag or `?`.
+    let undecorated = |k: &std::ops::Range<usize>| {
+        let line_start = text[..k.start].rfind('\n').map_or(0, |n| n + 1);
+        text[line_start..k.start]
+            .chars()
+            .all(|c| c == ' ' || c == '-')
+    };
+    let Some(key_bytes) = node
+        .key
+        .clone()
+        .filter(|k| text[k.clone()] == **key && undecorated(k))
+    else {
         return Err(give_up(
             GiveUp::NotPlainKey,
             "the list's key is not written plain",

@@ -5,6 +5,7 @@
 //! replaced in place, and a block list is rewritten inline at the same place,
 //! changing only that key's lines.
 
+use super::super::GiveUp;
 use super::*;
 
 fn list(dotted: &str, items: &[&str]) -> (FieldPath, Change) {
@@ -364,4 +365,63 @@ fn two_new_elements_by_element_changes_are_still_refused() {
         &[element(2), element(3)],
         "only one new list element",
     );
+}
+
+/// Refused with the machine-readable code `code`, whatever the text says.
+#[track_caller]
+fn assert_code(original: &str, changes: &[(FieldPath, Change)], code: GiveUp) {
+    match edit_in_place(original, changes) {
+        Err(ComputeRefusal::Unprovable { code: got, .. }) if got == code => {}
+        other => panic!("expected Unprovable with {code:?}, got {other:?}"),
+    }
+}
+
+#[test]
+fn refusals_carry_their_codes() {
+    let set = [list("auth.scope", &["x"])];
+    assert_code("auth:\n  scope: &s [\"a\"]\n", &set, GiveUp::Anchor);
+    assert_code("auth:\n  scope:\n    - !tag a\n", &set, GiveUp::Anchor);
+    assert_code("auth:\n  scope: [\"a\",\n    \"b\"]\n", &set, GiveUp::Flow);
+    assert_code("auth:\n  &k scope: [\"a\"]\n", &set, GiveUp::NotPlainKey);
+    assert_code("auth:\n  scope:\n    - a # c\n", &set, GiveUp::Comment);
+}
+
+/// The key must be written plain: an anchor or a tag before it refuses,
+/// though the parser's key span leaves the decoration out.
+#[test]
+fn a_decorated_key_is_refused() {
+    for original in [
+        "auth:\n  &k scope: [\"a\"]\n",
+        "auth:\n  !!str scope: [\"a\"]\n",
+    ] {
+        assert_refused_by(original, &[list("auth.scope", &["x"])], "not written plain");
+    }
+}
+
+/// The deletion proof judges every save now: an explicit `? key` entry's
+/// removal keeps a comment indented less than its key, as before.
+#[test]
+fn removing_an_explicit_key_keeps_a_comment_outside_it() {
+    let original = "? scope\n: old\n # keep\nother: 1\n";
+    let out = edited(original, &[(path("scope"), Change::Remove)]);
+    assert_eq!(out, " # keep\nother: 1\n");
+}
+
+/// The planner and the deletion agree on trailing blank lines: after a block
+/// list rewritten inline, and after a block scalar whose key is removed.
+#[test]
+fn trailing_blank_lines_are_judged_alike_by_the_planner_and_the_deletion() {
+    let out = edited(
+        "auth:\n  scope:\n    - a\n\n  after: 1\n",
+        &[list("auth.scope", &["x"])],
+    );
+    assert_eq!(strings(&out, "auth.scope"), ["x"]);
+    assert!(out.starts_with("auth:\n  scope: [\"x\"]\n"), "{out}");
+    assert!(out.ends_with("  after: 1\n"), "{out}");
+    let out = edited(
+        "a:\n  text: |\n    hi\n\n  b: 1\n",
+        &[(path("a.text"), Change::Remove)],
+    );
+    assert!(!out.contains("hi"), "{out}");
+    assert!(out.ends_with("  b: 1\n"), "{out}");
 }

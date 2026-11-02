@@ -285,10 +285,7 @@ impl Template {
         let text = String::from_utf8(out).map_err(|_| ComputeRefusal::SlotMismatch)?;
         let doc: Value = crate::yaml::from_str(&text).map_err(|_| ComputeRefusal::SlotMismatch)?;
         for (id, _) in &self.slots {
-            let at_path = id.0.iter().fold(&doc, |node, segment| match segment {
-                Segment::Key(key) => &node[key.as_str()],
-                Segment::Index(at) => &node[*at],
-            });
+            let at_path = list::value_at(&doc, &id.0);
             if at_path.as_str() != Some(refs[id].as_str()) {
                 return Err(ComputeRefusal::SlotMismatch);
             }
