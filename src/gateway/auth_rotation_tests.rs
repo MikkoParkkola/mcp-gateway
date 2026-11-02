@@ -257,6 +257,54 @@ fn client_for_key_finds_a_rotated_key_by_its_principal() {
     );
 }
 
+/// A watch poll is bound to the secret it was opened with: after a rotation
+/// that drops that secret at once (a leak) the holder's key no longer
+/// answers, after a routine rotation it answers until the grace ends, and a
+/// holder opened with the new secret answers throughout.
+#[test]
+fn a_watch_holder_follows_the_secret_it_was_opened_with() {
+    let tag = |secret: &str| {
+        crate::gateway::auth::principal_of(secret)
+            .storage_form()
+            .to_owned()
+    };
+    let leaked = resolved(&[with_principal(key("ops", NEW, None), PRINCIPAL)]);
+    assert!(
+        leaked
+            .client_for_key("ops", PRINCIPAL, Some(&tag(OLD)))
+            .is_none(),
+        "a leaked rotation left the old secret's watch polling"
+    );
+    assert!(
+        leaked
+            .client_for_key("ops", PRINCIPAL, Some(&tag(NEW)))
+            .is_some()
+    );
+    let routine = resolved(&[with_principal(
+        key("ops", NEW, Some((OLD, grace_end()))),
+        PRINCIPAL,
+    )]);
+    let inside = grace_end() - crate::duration_bound::delta!(minutes, 1);
+    let after = grace_end() + crate::duration_bound::delta!(minutes, 1);
+    assert!(
+        routine
+            .client_for_key_at("ops", PRINCIPAL, Some(&tag(OLD)), inside)
+            .is_some(),
+        "inside the grace the old secret's watch keeps polling"
+    );
+    assert!(
+        routine
+            .client_for_key_at("ops", PRINCIPAL, Some(&tag(OLD)), after)
+            .is_none(),
+        "after the grace the old secret's watch still polled"
+    );
+    assert!(
+        routine
+            .client_for_key_at("ops", PRINCIPAL, Some(&tag(NEW)), after)
+            .is_some()
+    );
+}
+
 // ROT.5 (b): no code derives a configured key's principal by slicing a digest
 // outside the one function in auth.rs. Whitespace is removed first, so a slice
 // split across lines is still seen; each cfg(test) item is left out.

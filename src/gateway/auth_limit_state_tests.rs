@@ -154,6 +154,39 @@ fn t3_rotation_widens_no_authority() {
     );
 }
 
+/// A session minted under A, bound to A's secret, survives a routine
+/// rotation to B while A is in its grace, and ends once the grace is over or
+/// when the rotation drops A at once (a leak).
+#[test]
+fn a_session_follows_the_secret_that_minted_it() {
+    let runtime = Arc::new(AuthRuntime::default());
+    let before = over(&runtime, vec![key("k", A, Some(P1))]);
+    let minter = quota_of(&before, A);
+    let tag = super::digest_tag_of(&digest(A));
+    let now = crate::clock::utc_now().expect("the test clock reads");
+    let mut routine = key("k", B, Some(P1));
+    routine.previous_key_sha256 = Some(crate::config::api_key_digest_spec(A.as_bytes()));
+    routine.previous_expires_at = Some(now + crate::duration_bound::delta!(minutes, 15));
+    let routine = over(&runtime, vec![routine]);
+    assert!(
+        routine.admin_key_live(&minter, Some(&tag), now),
+        "a routine rotation logged the dashboard out inside the grace"
+    );
+    assert!(
+        !routine.admin_key_live(
+            &minter,
+            Some(&tag),
+            now + crate::duration_bound::delta!(minutes, 16)
+        ),
+        "the session outlived the grace"
+    );
+    let leaked = over(&runtime, vec![key("k", B, Some(P1))]);
+    assert!(
+        !leaked.admin_key_live(&minter, Some(&tag), now),
+        "a leaked rotation left the old secret's session live"
+    );
+}
+
 /// T3b (d1): same secret, principal P1 then P2: the identity changed, so
 /// A's session is not live and the window is fresh.
 #[test]

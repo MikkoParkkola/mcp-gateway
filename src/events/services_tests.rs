@@ -218,6 +218,45 @@ async fn a_subscription_stored_with_a_bare_key_name_is_refused() {
     );
 }
 
+/// A subscription stored before holders were bound to their secret carries
+/// its key's name and principal but no fingerprint: nothing says which secret
+/// opened it, so it is refused (fail closed). The same row with the
+/// fingerprint of the key's current secret is admitted (control).
+#[tokio::test]
+async fn a_subscription_stored_without_its_secret_is_refused() {
+    let row = |tag: Option<String>| {
+        let mut api_key = serde_json::json!({
+            "name": "alice",
+            "principal": crate::gateway::auth::principal_of("s1").storage_form(),
+        });
+        if let Some(tag) = tag {
+            api_key["digest_tag"] = tag.into();
+        }
+        let stored = serde_json::json!({
+            "v": 1, "id": "s", "principal": "p", "api_key": api_key,
+            "url": "https://h/x", "name": "e", "arguments": {}, "secret": "whsec_x",
+            "previous_secret": null, "previous_until": null,
+            "granted_at": "2026-10-01T00:00:00Z", "expires_at": null, "active": true,
+            "failed_since": null, "last_delivery_at": null, "last_error": null
+        });
+        serde_json::from_value::<Subscription>(stored).expect("loads")
+    };
+    let live = services(vec![key("alice", "s1", None)]);
+    assert_eq!(
+        live.admission(&row(None), Some("x")).await,
+        AccessVerdict::Refuses,
+        "a row stored without its secret's fingerprint was admitted"
+    );
+    let tag = crate::gateway::auth::principal_of("s1")
+        .storage_form()
+        .to_owned();
+    assert_eq!(
+        live.admission(&row(Some(tag)), Some("x")).await,
+        AccessVerdict::Admits,
+        "control: the same row bound to the current secret is admitted"
+    );
+}
+
 fn bound(
     kind: crate::security::audit::CredentialKind,
     binding: Option<LiveBinding>,
