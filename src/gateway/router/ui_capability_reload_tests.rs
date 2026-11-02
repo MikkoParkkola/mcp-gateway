@@ -92,7 +92,7 @@ async fn t24b_a_capability_reloaded_as_a_write_after_the_gate_is_not_run() {
     let (fx, caps) = served().await;
     let reloaded = Arc::new(AtomicBool::new(false));
     let flag = Arc::clone(&reloaded);
-    let _armed = crate::gateway::meta_mcp::invoke::ui_gate_seam::after_ui_gate(move || {
+    let _armed = crate::gateway::ui_call::gate_seam::after_gate(move || {
         caps.register_capability(probe(false)).expect("reloaded");
         flag.store(true, Ordering::SeqCst);
     });

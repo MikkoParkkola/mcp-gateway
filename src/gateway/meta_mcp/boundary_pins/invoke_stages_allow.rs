@@ -127,8 +127,7 @@ pub(super) const S5_PRE_SEND_ALLOW: &[&str] = &[
     "self.cache_admits",          // invoke.rs:370
     "crate::gateway::ui_call::gate", // U12: a web UI call's confirm and caller gate, before the cache
     "crate::gateway::ui_call_runs_live", // U12: a web UI call skips the response cache
-    "ui_gate_seam::ui_gate_admitted", // test-only (webui test builds): the hook a row arms after the UI gate
-    "self.serve_cached_response",     // invoke.rs:376
+    "self.serve_cached_response",    // invoke.rs:376
     "nonce_settle::PreSendExit::Served", // invoke.rs:394
     "TracedOutcome::Live", // invoke.rs:355 the refusal and hit exits; listed from the live body, also :396
 ];

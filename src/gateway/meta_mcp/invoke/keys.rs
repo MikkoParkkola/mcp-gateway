@@ -269,8 +269,6 @@ impl MetaMcp {
             );
             return Err(refusal);
         }
-        #[cfg(all(test, feature = "webui"))]
-        ui_gate_seam::ui_gate_admitted();
         // A web UI call runs the tool itself: a stored answer is not a run.
         if read_only
             && !crate::gateway::ui_call_runs_live()
@@ -301,44 +299,5 @@ impl MetaMcp {
             chained,
             read_only,
         }))
-    }
-}
-
-/// Test-only: a hook run once, the next time a call on this thread passes
-/// the web UI gate, so a row can change what the dispatch is about to run
-/// after the gate judged it (a capability reloaded as a write).
-/// Thread-local, like `caller_verdict`'s dispatch seam: rows that arm it run
-/// on a current-thread runtime.
-#[cfg(all(test, feature = "webui"))]
-pub(crate) mod ui_gate_seam {
-    use std::cell::RefCell;
-
-    thread_local! {
-        static AFTER_UI_GATE: RefCell<Option<Box<dyn FnOnce()>>> = RefCell::new(None);
-    }
-
-    /// Clears an unfired hook when dropped, so it cannot fire in a later
-    /// test on the same thread.
-    pub(crate) struct Armed;
-
-    impl Drop for Armed {
-        fn drop(&mut self) {
-            AFTER_UI_GATE.with(|slot| slot.borrow_mut().take());
-        }
-    }
-
-    /// Run `hook` once, the next time a call on this thread passes the UI
-    /// gate, until the returned guard drops.
-    #[must_use]
-    pub(crate) fn after_ui_gate(hook: impl FnOnce() + 'static) -> Armed {
-        AFTER_UI_GATE.with(|slot| *slot.borrow_mut() = Some(Box::new(hook)));
-        Armed
-    }
-
-    /// Called where a call has passed the UI gate.
-    pub(super) fn ui_gate_admitted() {
-        if let Some(hook) = AFTER_UI_GATE.with(|slot| slot.borrow_mut().take()) {
-            hook();
-        }
     }
 }
