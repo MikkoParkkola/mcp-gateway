@@ -578,6 +578,60 @@ class BaseRef(unittest.TestCase):
         self.assertEqual(guard.added_lines(base), {"src/x_tests.rs": {2}})
 
 
+class MethodRowCutover(unittest.TestCase):
+    """MIK-9178: a `.timeout(` row is not NEW only while the base's gate does
+    not judge `.timeout(` methods, read as data from the base's core, and a
+    base the check cannot read that way counts the row as NEW."""
+
+    CORE = "scripts/dev/check_timing_asserts_core.py"
+    ROW = guard.Row(PATH, "case", ".timeout(Duration::from_millis(120))", "the expiry is the behaviour under test")
+    FOUND = [guard.Finding(PATH, "case", ".timeout(Duration::from_millis(120))", 3, 0.12, "under 5 s")]
+
+    def setUp(self):
+        self.scratch = ScratchGit()
+        self.scratch.git("init", "-q")
+        self.refs = {}
+        for name, body in {
+            "pre": "THRESHOLD_S = 5.0\n",
+            "post": "THRESHOLD_S = 5.0\nJUDGES_TIMEOUT_METHOD = True\n",
+            "computed": "JUDGES_TIMEOUT_METHOD = bool(1)\n",
+            "broken": "JUDGES_TIMEOUT_METHOD = (\n",
+        }.items():
+            core = self.scratch.root / self.CORE
+            core.parent.mkdir(parents=True, exist_ok=True)
+            core.write_text(body)
+            self.scratch.git("add", ".")
+            self.scratch.git("commit", "-q", "-m", name)
+            self.refs[name] = self.scratch.git("rev-parse", "HEAD")
+
+    def tearDown(self):
+        self.scratch.close()
+
+    def test_the_marker_is_read_as_data_and_fails_closed(self):
+        expected = {"pre": False, "post": True, "computed": None, "broken": None}
+        for name, want in expected.items():
+            with self.subTest(base=name):
+                self.assertIs(guard.base_judges_timeout_method(self.refs[name]), want)
+        self.assertIsNone(guard.base_judges_timeout_method("no-such-ref"))
+
+    def test_a_method_row_is_new_unless_the_base_did_not_judge_methods(self):
+        for name, new in {"pre": False, "post": True, "computed": True, "broken": True}.items():
+            with self.subTest(base=name):
+                cutover = guard.cutover_rows([self.ROW], guard.base_judges_timeout_method(self.refs[name]))
+                errors = guard.judge(self.FOUND, [self.ROW], [], cutover=cutover)
+                self.assertEqual(any(e.startswith("NEW ROW") for e in errors), new, errors)
+
+    def test_the_cutover_never_admits_another_kind_of_row(self):
+        row = guard.Row(PATH, "case", "assert!( elapsed < Duration::from_millis(1) )", "r")
+        found = [guard.Finding(PATH, "case", row.assertion, 3, 0.001, "under 5 s")]
+        errors = guard.judge(found, [row], [], cutover=guard.cutover_rows([row], False))
+        self.assertTrue(any(e.startswith("NEW ROW") for e in errors), errors)
+
+    def test_this_gate_judges_timeout_methods(self):
+        # Once this lands on the base, every later `.timeout(` row is NEW.
+        self.assertIs(guard.JUDGES_TIMEOUT_METHOD, True)
+
+
 class Lexer(unittest.TestCase):
     """The literal and comment blanking the scan stands on (MIK-8222)."""
 
