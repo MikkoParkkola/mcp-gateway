@@ -370,10 +370,10 @@ pub(crate) struct GrantAllowed {
     stamp: Stamp,
 }
 
-/// When a proof was made: the install count its issuer check saw, or a
-/// web-UI sign-in, which runs under the issuer it just discovered.
+/// How a proof was made: by the issuer check, or for a web-UI sign-in, which
+/// runs under the issuer it just discovered.
 enum Stamp {
-    Checked(u64),
+    Checked,
     #[cfg(feature = "webui")]
     UiSignIn,
 }
@@ -385,18 +385,15 @@ pub(crate) struct Spent {
 }
 
 impl GrantAllowed {
-    /// Spend the proof right before the grant's request. Refused with the
-    /// sign-in wait if a sign-in was installed since the check or the issuers
-    /// now differ; a web-UI sign-in's proof is spent as it is. One await, the
+    /// Spend the proof right before the grant's request: the issuer check runs
+    /// again, so the sign-in wait answers if a sign-in under another issuer
+    /// landed since the proof was made; a web-UI sign-in's proof is spent as
+    /// it is. One await, the
     /// send, still separates this from the answer: a switch in it is caught
     /// where the answer is cached (`cache_if_current`) and handed back.
     pub(super) fn spend(self, client: &OAuthClient) -> crate::Result<Spent> {
         match self.stamp {
-            Stamp::Checked(installed)
-                if client.issuer_differs() || client.installed_now() != installed =>
-            {
-                Err(client.issuer_wait())
-            }
+            Stamp::Checked if client.issuer_differs() => Err(client.issuer_wait()),
             _ => Ok(Spent { _only_here: () }),
         }
     }
@@ -467,7 +464,7 @@ impl OAuthClient {
             return Err(self.issuer_wait());
         }
         Ok(GrantAllowed {
-            stamp: Stamp::Checked(self.installed_now()),
+            stamp: Stamp::Checked,
         })
     }
 
@@ -480,13 +477,6 @@ impl OAuthClient {
         GrantAllowed {
             stamp: Stamp::UiSignIn,
         }
-    }
-
-    /// How many confirmed sign-ins this client's status cell has recorded.
-    fn installed_now(&self) -> u64 {
-        self.sign_in_status
-            .as_ref()
-            .map_or(0, |status| status.installed())
     }
 
     /// The sign-in wait a caller gets while the issuers differ.
