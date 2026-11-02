@@ -59,11 +59,8 @@ impl MetaMcp {
         #[cfg(feature = "cost-governance")]
         if let Some(enforcer) = &self.budget_enforcer {
             let enforcer = Arc::clone(enforcer);
-            live.on_publish(Arc::new(move |(outgoing, incoming)| {
-                enforcer.seed_estimates(
-                    &enforcer.governance(Some(&outgoing)).budgets,
-                    &enforcer.governance(Some(&incoming)).budgets,
-                );
+            live.on_publish(Arc::new(move |incoming| {
+                enforcer.seed_estimates(&enforcer.governance(Some(&incoming)).budgets);
             }));
         }
         let _ = self.startup_live_config.set(live);

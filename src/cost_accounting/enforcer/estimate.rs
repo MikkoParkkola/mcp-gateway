@@ -70,23 +70,21 @@ impl Attribution {
         }
     }
 
-    /// Take `name`'s starting figure as a publication starts budgeting it,
-    /// then own it. Classify, read and own in this order, under the caller's
-    /// ledger lock, so no settle can own the name between them. An owned name
-    /// keeps today's figure, if any: its spend since it was owned is in its row.
+    /// Take an unowned budgeted name's starting figure, then own it.
+    /// Classify, read and own in this order, under the caller's ledger lock,
+    /// so no settle can own the name between them. An owned name takes
+    /// nothing: its spend since it was owned is all in its row, and a figure
+    /// it was given that day stays.
     pub(super) fn seed(&self, name: &str, has_row: bool, overflow: u64, day: Option<u64>) {
-        let taken_today = self
-            .estimate
-            .get(name)
-            .is_some_and(|acc| acc.is_current_on(day));
-        if !self.owns(name) && !taken_today {
-            let figure = if has_row {
-                self.born.get(name).map_or(0, |acc| acc.current_on(day))
-            } else {
-                overflow
-            };
-            self.set(name, figure, day);
+        if self.owns(name) {
+            return;
         }
+        let figure = if has_row {
+            self.born.get(name).map_or(0, |acc| acc.current_on(day))
+        } else {
+            overflow
+        };
+        self.set(name, figure, day);
         self.own(name);
     }
 
@@ -119,16 +117,13 @@ impl super::BudgetEnforcer {
         (tool, key)
     }
 
-    /// A publication replacing `outgoing` budgets with `incoming` ones: each
-    /// name `incoming` starts budgeting takes its starting figure, and every
-    /// `incoming` name is owned from now on. One step under the ledger lock,
-    /// the lock every check and settle takes first, so no settle lands
-    /// between a name's classification and its owning.
-    pub(crate) fn seed_estimates(
-        &self,
-        outgoing: &crate::cost_accounting::config::BudgetLimits,
-        incoming: &crate::cost_accounting::config::BudgetLimits,
-    ) {
+    /// A publication of `incoming` budgets: every name in them not yet owned
+    /// takes its starting figure and is owned from now on. A name budgeted at
+    /// startup or by an earlier publication is owned already and takes none.
+    /// One step under the ledger lock, the lock every check and settle takes
+    /// first, so no settle lands between a name's classification and its
+    /// owning.
+    pub(crate) fn seed_estimates(&self, incoming: &crate::cost_accounting::config::BudgetLimits) {
         let today = self.today().ok();
         let _pending = super::locked(&self.ledger);
         let scopes = [
@@ -136,24 +131,19 @@ impl super::BudgetEnforcer {
                 &self.tool_daily,
                 &self.tool_overflow,
                 &self.tool_attribution,
-                &outgoing.per_tool,
                 &incoming.per_tool,
             ),
             (
                 &self.key_daily,
                 &self.key_overflow,
                 &self.key_attribution,
-                &outgoing.per_key,
                 &incoming.per_key,
             ),
         ];
-        for (rows, overflow, attribution, before, after) in scopes {
+        for (rows, overflow, attribution, budgets) in scopes {
             let overflow = overflow.current_on(today);
-            for name in after.keys().filter(|name| !before.contains_key(*name)) {
+            for name in budgets.keys() {
                 attribution.seed(name, rows.contains_key(name), overflow, today);
-            }
-            for name in after.keys() {
-                attribution.own(name);
             }
         }
     }

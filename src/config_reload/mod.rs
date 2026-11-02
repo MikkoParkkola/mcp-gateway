@@ -221,10 +221,10 @@ pub struct LiveConfig {
     /// send is admitted, so once `set` returns no send is admitted against
     /// the old config (MIK-7907). Always taken before `inner`.
     admission: RwLock<()>,
-    /// Told (outgoing, incoming) before each publication, with no lock held:
-    /// cost governance takes the starting figures of names it starts
+    /// Told the incoming generation before each publication, with no lock
+    /// held: cost governance takes the starting figures of names it starts
     /// budgeting there, before any request can judge with them.
-    published: crate::observer::Observer<(Arc<Generation>, Arc<Generation>)>,
+    published: crate::observer::Observer<Arc<Generation>>,
     /// G5: how many generations this holder has published.
     #[cfg(test)]
     publishes: std::sync::atomic::AtomicU64,
@@ -510,10 +510,7 @@ impl LiveConfig {
         generation: Arc<Generation>,
         applied: impl FnOnce(Option<&Applied>, Vec<&'static str>) -> Option<Arc<Applied>>,
     ) {
-        // Reloads publish one at a time (`lock_reload`), so the generation
-        // read here is the one this publication replaces.
-        self.published
-            .call((self.generation(), Arc::clone(&generation)));
+        self.published.call(Arc::clone(&generation));
         let gate = self.admission.write();
         let old = {
             let mut inner = self.inner.write();
@@ -559,11 +556,9 @@ impl LiveConfig {
         self.set(config);
     }
 
-    /// Attach the observer told (outgoing, incoming) before each publication.
-    pub(crate) fn on_publish(
-        &self,
-        observer: crate::observer::ObserverFn<(Arc<Generation>, Arc<Generation>)>,
-    ) {
+    /// Attach the observer told the incoming generation before each
+    /// publication.
+    pub(crate) fn on_publish(&self, observer: crate::observer::ObserverFn<Arc<Generation>>) {
         self.published.set(observer);
     }
 

@@ -404,10 +404,7 @@ async fn t10e_a_settle_between_the_seed_and_the_swap_counts_once() {
         let mut config = (*live.get()).clone();
         budget(scope, &mut config.cost_governance, "target", 4.5);
         let enforcer = fx.state.meta_mcp.budget_enforcer.as_ref().expect("armed");
-        enforcer.seed_estimates(
-            &before.config().cost_governance.budgets,
-            &config.cost_governance.budgets,
-        );
+        enforcer.seed_estimates(&config.cost_governance.budgets);
         settle_pinned(&fx, scope, "target", &before);
         live.set(config);
         assert!(

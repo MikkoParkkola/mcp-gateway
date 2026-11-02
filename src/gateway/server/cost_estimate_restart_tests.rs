@@ -80,7 +80,7 @@ fn first_process(scope: Scope, dir: &std::path::Path) -> PersistedCosts {
     }
     scope.spend(&enforcer, "target", 3.0);
     let incoming = governed(scope, Some(5.0)).budgets;
-    enforcer.seed_estimates(&BudgetLimits::default(), &incoming);
+    enforcer.seed_estimates(&incoming);
     scope.spend(&enforcer, "target", 0.5);
     let persisted = build_persisted_costs(&enforcer.snapshot_for_save().expect("a readable clock"));
     cost_persistence::save(&dir.join("costs.json"), &persisted).expect("shutdown save");
@@ -207,10 +207,7 @@ fn t8d_a_zero_estimate_survives_a_restart() {
                 scope.spend(&first, &format!("filler-{i}"), 0.01);
             }
             // The overflow is empty: the figure taken is zero.
-            first.seed_estimates(
-                &BudgetLimits::default(),
-                &governed(scope, Some(2.5)).budgets,
-            );
+            first.seed_estimates(&governed(scope, Some(2.5)).budgets);
             let persisted =
                 build_persisted_costs(&first.snapshot_for_save().expect("a readable clock"));
             assert_eq!(scope.estimate(&persisted, "target"), Some(0.0), "{scope:?}");
@@ -229,10 +226,7 @@ fn t8d_a_zero_estimate_survives_a_restart() {
             Some(1.0),
             "{scope:?}: its own row"
         );
-        second.seed_estimates(
-            &BudgetLimits::default(),
-            &governed(scope, Some(2.5)).budgets,
-        );
+        second.seed_estimates(&governed(scope, Some(2.5)).budgets);
         let budgeted = governed(scope, Some(2.5));
         assert!(
             second
