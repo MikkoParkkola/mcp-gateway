@@ -138,9 +138,11 @@ async fn upsert_local_grant(input: LocalGrantInput) -> Result<(PathBuf, Identity
     let owner = match input.owner {
         Some(owner) => Some(parse_subject_spec(&owner, input.owner_label, "owner")?),
         None => Some(GrantSubject::new(
-            subject.authority.clone(),
-            subject.subject.clone(),
-            input.owner_label.or_else(|| subject.label.clone()),
+            subject.authority().to_owned(),
+            subject.subject().to_owned(),
+            input
+                .owner_label
+                .or_else(|| subject.label().map(str::to_owned)),
         )),
     };
     let grant = IdentityGrant {
@@ -422,9 +424,9 @@ fn is_grant_active(grant: &IdentityGrant, now: DateTime<Utc>) -> bool {
 }
 
 fn subject_summary(subject: &GrantSubject) -> String {
-    subject.label.as_ref().map_or_else(
-        || format!("{}:{}", subject.authority, subject.subject),
-        |label| format!("{label} ({}:{})", subject.authority, subject.subject),
+    subject.label().map_or_else(
+        || format!("{}:{}", subject.authority(), subject.subject()),
+        |label| format!("{label} ({}:{})", subject.authority(), subject.subject()),
     )
 }
 

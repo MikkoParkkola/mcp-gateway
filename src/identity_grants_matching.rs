@@ -273,15 +273,17 @@ fn yaml_nameless(row: &crate::yaml::Value) -> Vec<&'static str> {
         .collect()
 }
 
+/// A grants file with its rows naming no one removed, and those rows'
+/// `(grant_id, field)`.
+type Stripped = (super::IdentityGrantFile, Vec<(String, String)>);
+
 /// The grants file in `content` with every row naming no one removed, and
 /// those rows' `(grant_id, field)`; `None` when there is none to remove.
 ///
 /// # Errors
 ///
 /// The rest of the file still fails its typed parse.
-pub(super) fn strip_nameless(
-    content: &str,
-) -> Result<Option<(super::IdentityGrantFile, Vec<(String, String)>)>, String> {
+pub(super) fn strip_nameless(content: &str) -> Result<Option<Stripped>, String> {
     let Some(tree) = Tree::parse(content) else {
         return Ok(None);
     };

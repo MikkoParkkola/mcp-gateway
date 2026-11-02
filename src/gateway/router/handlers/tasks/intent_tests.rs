@@ -164,11 +164,7 @@ fn key_holder(principal: &str) -> AuthenticatedClient {
 }
 
 fn named(subject: &str) -> GrantSubject {
-    GrantSubject {
-        authority: "corp-sso".to_string(),
-        subject: subject.to_string(),
-        label: None,
-    }
+    GrantSubject::new("corp-sso".to_string(), subject.to_string(), None)
 }
 
 /// MIK-7967: distinct keys own apart, a proven subject splits one shared key,

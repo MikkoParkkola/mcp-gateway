@@ -118,16 +118,16 @@ async fn grant_command_rejects_duplicate_without_replace() {
 #[test]
 fn subject_parser_keeps_colons_after_a_builtin_authority() {
     let mtls = parse_subject_spec("mtls:spiffe://corp/agent", None, "subject").unwrap();
-    assert_eq!(mtls.authority, "mtls");
-    assert_eq!(mtls.subject, "spiffe://corp/agent");
+    assert_eq!(mtls.authority(), "mtls");
+    assert_eq!(mtls.subject(), "spiffe://corp/agent");
 
     let key = parse_subject_spec("api_key:team:alice", None, "subject").unwrap();
-    assert_eq!(key.authority, "api_key");
-    assert_eq!(key.subject, "team:alice");
+    assert_eq!(key.authority(), "api_key");
+    assert_eq!(key.subject(), "team:alice");
 
     let agent = parse_subject_spec("agent_oauth:urn:corp:bot", None, "subject").unwrap();
-    assert_eq!(agent.authority, "agent_oauth");
-    assert_eq!(agent.subject, "urn:corp:bot");
+    assert_eq!(agent.authority(), "agent_oauth");
+    assert_eq!(agent.subject(), "urn:corp:bot");
 }
 
 #[test]
@@ -139,9 +139,9 @@ fn subject_parser_keeps_url_authority() {
     )
     .unwrap();
 
-    assert_eq!(subject.authority, "https://issuer.example");
-    assert_eq!(subject.subject, "alice-sub");
-    assert_eq!(subject.label.as_deref(), Some("Alice"));
+    assert_eq!(subject.authority(), "https://issuer.example");
+    assert_eq!(subject.subject(), "alice-sub");
+    assert_eq!(subject.label(), Some("Alice"));
 }
 
 /// `grant_input` is the `docs/identity_grants.md` CLI example. The gateway
@@ -211,7 +211,7 @@ fn an_unqualified_agent_flag_is_refused_naming_both_prefixes() {
 #[test]
 fn padded_ids_are_written_verbatim() {
     let subject = parse_subject_spec("mtls: admin ", None, "subject").unwrap();
-    assert_eq!(subject.subject, " admin ");
+    assert_eq!(subject.subject(), " admin ");
 
     let agent = parse_agent_binding(Some("jwt: runner ".to_string()), false).unwrap();
     let expected = GrantAgentKey {
@@ -221,7 +221,7 @@ fn padded_ids_are_written_verbatim() {
     assert_eq!(agent, GrantAgent::Exact(expected));
 
     let owner = parse_subject_spec("jwt: runner", None, "owner").unwrap();
-    assert_eq!(owner.subject, " runner");
+    assert_eq!(owner.subject(), " runner");
 
     let padded_source = parse_agent_binding(Some("  jwt: runner ".to_string()), false);
     let GrantAgent::Exact(key) = padded_source.unwrap() else {

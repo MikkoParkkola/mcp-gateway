@@ -50,11 +50,7 @@ fn key_holder(secret: &str) -> AuthenticatedClient {
 }
 
 fn proven_subject() -> GrantSubject {
-    GrantSubject {
-        authority: "proxy".to_string(),
-        subject: "alice".to_string(),
-        label: None,
-    }
+    GrantSubject::new("proxy".to_string(), "alice".to_string(), None)
 }
 
 fn verified() -> VerifiedIdentity {
@@ -68,11 +64,7 @@ fn verified() -> VerifiedIdentity {
 }
 
 fn mtls_subject(subject: &str) -> GrantSubject {
-    GrantSubject {
-        authority: "mtls".to_string(),
-        subject: subject.to_string(),
-        label: None,
-    }
+    GrantSubject::new("mtls".to_string(), subject.to_string(), None)
 }
 
 fn spiffe_cert() -> CertIdentity {

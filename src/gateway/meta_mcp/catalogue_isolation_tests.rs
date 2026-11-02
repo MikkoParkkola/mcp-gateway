@@ -442,11 +442,11 @@ fn result_cache_keys_separate_callers_and_keep_one_caller_stable() {
         caller_cache_principal(
             None,
             None,
-            Some(&crate::identity_grants::GrantSubject {
-                authority: authority.to_string(),
-                subject: subject.to_string(),
-                label: None,
-            }),
+            Some(&crate::identity_grants::GrantSubject::new(
+                authority.to_string(),
+                subject.to_string(),
+                None,
+            )),
             None,
             Authentication::Anonymous,
         )

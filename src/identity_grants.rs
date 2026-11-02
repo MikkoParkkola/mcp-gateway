@@ -45,12 +45,12 @@ pub enum EmptyIdentity {
 #[serde(try_from = "RawGrantSubject")]
 pub struct GrantSubject {
     /// Identity authority, such as an issuer URL or local authority name.
-    pub authority: String,
+    authority: String,
     /// Stable subject identifier inside the authority namespace.
-    pub subject: String,
+    subject: String,
     /// Optional operator-facing label. Display only: never part of identity.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub label: Option<String>,
+    label: Option<String>,
 }
 
 /// A grant subject as written, before its check.
