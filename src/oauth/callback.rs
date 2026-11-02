@@ -478,6 +478,7 @@ async fn handle_callback(
     // #143 — structured telemetry: successful callback event.
     let code_len = code.len();
     let tx = state.tx.take();
+    let page = state.page.html().to_string();
     drop(state);
     info!(
         event = "oauth.callback.success",
@@ -494,7 +495,7 @@ async fn handle_callback(
         let _ = tx.send(result);
     }
 
-    Html(state.page.html().to_string()).into_response()
+    Html(page).into_response()
 }
 
 fn escape_html(input: &str) -> String {
