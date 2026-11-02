@@ -685,6 +685,7 @@ class TestSection(unittest.TestCase):
     # Each layout puts product code after an early test-only item.
     EARLY = {
         "test-only fn": "#[cfg(test)]\nfn helper() {}",
+        "test-only const fn": "#[cfg(test)]\nconst fn helper() -> u8 {\n    0\n}",
         "test-only use": "#[cfg(test)]\nuse crate::fixture::Probe;",
         "path module": '#[cfg(test)]\n#[path = "x_tests.rs"]\nmod tests;',
         "inline module": "#[cfg(test)]\nmod tests {\n    fn helper() {}\n}",
@@ -727,6 +728,8 @@ class TestSection(unittest.TestCase):
         "where clause": "#[cfg(test)]\nasync fn helper<T>(t: T)\nwhere\n    T: Send,\n    T: Sync,\n{{\n{w}\n}}\n",
         "braced const generic": "#[cfg(test)]\nasync fn helper() -> Probe<{{ N }}> {{\n{w}\nProbe\n}}\n",
         "braced const generic impl": "#[cfg(test)]\nimpl Probe<{{ 1 + 1 }}> {{\n    async fn helper() {{\n{w}\n    }}\n}}\n",
+        "shift in a const generic": "#[cfg(test)]\nasync fn helper() -> Probe<{{ 8 >> 1 }}> {{\n{w}\nProbe\n}}\n",
+        "comparison in a const generic": "#[cfg(test)]\nasync fn helper() -> Probe<{{ if A > B {{ 1 }} else {{ 2 }} }}> {{\n{w}\nProbe\n}}\n",
         "generic impl": "#[cfg(test)]\nimpl<T, U> Probe<T, U> {{\n    async fn helper() {{\n{w}\n    }}\n}}\n",
     }
 
@@ -760,6 +763,15 @@ class TestSection(unittest.TestCase):
         )
         self.assertEqual(len(self.timeouts(text)), 1, text)
         self.assertTrue(self.new(text), text)
+
+    def test_a_nested_comment_inside_a_test_fn_keeps_its_whole_body(self):
+        text = (
+            "#[cfg(test)]\nmod tests {\n    #[tokio::test]\n    async fn case() {\n"
+            "        /* outer /* inner */ } */\n"
+            "        tokio::time::sleep(Duration::from_millis(1500)).await;\n"
+            "        assert!(cancels() == 1);\n    }\n}\n"
+        )
+        self.assertIn(guard.SLEEP, [f.rule for f in self.new(text)], text)
 
     def test_a_second_test_item_after_product_code_is_judged(self):
         text = (
