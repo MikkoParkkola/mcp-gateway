@@ -773,6 +773,22 @@ class TestSection(unittest.TestCase):
         )
         self.assertIn(guard.SLEEP, [f.rule for f in self.new(text)], text)
 
+    SLEEP_WINDOW = "tokio::time::sleep(Duration::from_millis(1500)).await;\nassert!(cancels() == 1);"
+
+    def test_the_sleep_shape_is_judged_in_a_generic_headed_test_fn(self):
+        for header in ("async fn case() -> Probe<{ 1 + 1 }>", "async fn case<T, U>()", "async fn case() -> Probe<{ 8 >> 1 }>"):
+            with self.subTest(header=header):
+                text = f"#[cfg(test)]\nmod tests {{\n    #[tokio::test]\n    {header} {{\n{self.SLEEP_WINDOW}\n    }}\n}}\n"
+                self.assertIn(guard.SLEEP, [f.rule for f in self.new(text)], text)
+
+    def test_a_quote_inside_a_nested_comment_hides_no_code(self):
+        text = (
+            "#[cfg(test)]\nmod tests {\n    async fn case() {\n"
+            '        /* outer /* inner */ " */\n'
+            f"{self.WINDOW}\n    }}\n}}\n"
+        )
+        self.assertEqual(len(self.timeouts(text)), 1, text)
+
     def test_a_second_test_item_after_product_code_is_judged(self):
         text = (
             "#[cfg(test)]\nfn early() {}\n\nasync fn product() {\n" + self.WINDOW + "\n}\n\n"
