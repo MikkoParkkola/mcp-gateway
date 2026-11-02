@@ -208,3 +208,6 @@ async fn a_successful_result_is_still_cached() {
         "the second identical success is served from the cache"
     );
 }
+
+#[path = "response_cache_origin_tests.rs"]
+mod response_cache_origin;

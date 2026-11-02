@@ -199,7 +199,9 @@ impl Sink for Found {
             ) => {
                 note_builder(&mut self.builders, &format!("JsonRpcResponse::{name}"));
             }
-            (Some("Error"), "json_rpc") => note_builder(&mut self.builders, "Error::json_rpc"),
+            (Some("Error"), "json_rpc" | "backend_json_rpc") => {
+                note_builder(&mut self.builders, &format!("Error::{name}"));
+            }
             (_, builder) if BUILDERS.contains(&builder) => {
                 note_builder(&mut self.builders, builder);
             }

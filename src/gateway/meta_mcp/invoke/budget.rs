@@ -279,6 +279,10 @@ impl MetaMcp {
         original: &Value,
     ) -> (Value, Option<ResponseEffect>) {
         let Some(delivered) = evaluation.transformed.delivered.clone() else {
+            // The gateway's own withhold, answered as a tool result.
+            crate::gateway::delivery_facts::gateway_folded(
+                crate::error::rpc_codes::INVALID_REQUEST,
+            );
             let withheld = json!({
                 "isError": true,
                 "content": [{
@@ -323,6 +327,9 @@ impl MetaMcp {
         let malformed = result_type.is_some_and(|value| !value.is_string())
             || is_error.is_some_and(|value| !value.is_boolean());
         if malformed {
+            // The gateway's refusal of a malformed round, answered as a tool
+            // result.
+            crate::gateway::delivery_facts::gateway_folded(crate::error::rpc_codes::INTERNAL_ERROR);
             let refused = json!({
                 "content": [{
                     "type": "text",

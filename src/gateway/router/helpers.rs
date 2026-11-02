@@ -190,6 +190,9 @@ pub(crate) struct RpcHttp {
     pub(crate) status: StatusCode,
     pub(crate) body: Json<Value>,
     pub(crate) origin: Origin,
+    /// The failure the answer carries folded into a tool result, from its
+    /// frame (`wire_meta.folded`).
+    pub(crate) folded: Option<RpcError>,
 }
 
 impl RpcHttp {
@@ -199,6 +202,7 @@ impl RpcHttp {
             status,
             body: Json(body),
             origin: Origin::Gateway,
+            folded: None,
         }
     }
 }
@@ -210,13 +214,14 @@ impl From<(StatusCode, Json<Value>)> for RpcHttp {
             status,
             body,
             origin: Origin::Gateway,
+            folded: None,
         }
     }
 }
 
 impl IntoResponse for RpcHttp {
     fn into_response(self) -> axum::response::Response {
-        let marker = RpcError::of_value(&self.body.0, self.origin);
+        let marker = RpcError::of_value(&self.body.0, self.origin, self.folded);
         let mut response = (self.status, self.body).into_response();
         if let Some(marker) = marker {
             response.extensions_mut().insert(marker);
@@ -243,6 +248,7 @@ pub(super) fn build_http_response(rpc: &Egressed, status: StatusCode) -> RpcHttp
         status,
         body: Json(frame.to_value_lossy()),
         origin: frame.wire_meta.origin,
+        folded: frame.wire_meta.folded,
     }
 }
 

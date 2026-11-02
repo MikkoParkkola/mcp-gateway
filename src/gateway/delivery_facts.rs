@@ -101,6 +101,15 @@ pub(crate) struct DeliveryFacts {
     last_step: LastStep,
     /// What this delivery's backend sends did.
     sends: Sends,
+    /// The failure this delivery's answer carries folded into a tool result,
+    /// for the error count: the worst noted (the gateway's own over a
+    /// backend failure over a backend's answer).
+    folded: Option<RpcError>,
+    /// The latest composite step's fold, until the composite carries it
+    /// (`step_carried`), ends on it (`composite_ended`) or moves past it.
+    last_step_folded: Option<RpcError>,
+    /// Whose failure the error about to be delivered is (`wrapped_step`).
+    error_of: ErrorOf,
 }
 
 /// What the injected-value scrub did during a delivery.
@@ -132,6 +141,18 @@ struct Sends {
     refused_before: bool,
 }
 
+/// Whose failure the error about to be delivered is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ErrorOf {
+    /// Its own: counted with the error's own origin.
+    Own,
+    /// The step the composite ended on, which it wraps in an error with
+    /// `code`: counted with that step's fold while the delivered error is
+    /// still that wrapper. An error that replaced it (an audit outage's
+    /// -32005) carries another code and counts as itself.
+    EndedStep { code: i32 },
+}
+
 /// How a composite's latest step ended, for the composite's own record.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum LastStep {
@@ -152,7 +173,31 @@ impl Default for DeliveryFacts {
             lone_target: false,
             last_step: LastStep::Settled,
             sends: Sends::default(),
+            folded: None,
+            last_step_folded: None,
+            error_of: ErrorOf::Own,
         }
+    }
+}
+
+use crate::gateway::health_metrics::{Origin, RpcError};
+
+/// How much a fold weighs: the gateway's own failure over a backend failure
+/// over a backend's answer, so the order of folds cannot lower the count.
+const fn weight(origin: Origin) -> u8 {
+    match origin {
+        Origin::Backend => 0,
+        Origin::BackendFailure => 1,
+        Origin::Gateway => 2,
+    }
+}
+
+/// The worse of two folds; the first on a tie.
+fn worst(kept: Option<RpcError>, new: Option<RpcError>) -> Option<RpcError> {
+    match (kept, new) {
+        (Some(k), Some(n)) if weight(n.origin) > weight(k.origin) => Some(n),
+        (None, n) => n,
+        (k, _) => k,
     }
 }
 
@@ -228,11 +273,14 @@ pub(crate) async fn step<F: std::future::Future>(future: F) -> F::Output {
         lone_target: true,
         ..nested_cell()
     };
-    let (output, refused) = FACTS
+    let (output, refused, folded, error_of) = FACTS
         .scope(RefCell::new(cell), async {
             let output = future.await;
-            let refused = FACTS.with(|cell| cell.borrow().refused());
-            (output, refused)
+            let (refused, folded, error_of) = FACTS.with(|cell| {
+                let cell = cell.borrow();
+                (cell.refused(), cell.folded, cell.error_of)
+            });
+            (output, refused, folded, error_of)
         })
         .await;
     with(|facts| {
@@ -241,6 +289,11 @@ pub(crate) async fn step<F: std::future::Future>(future: F) -> F::Output {
         } else {
             LastStep::Settled
         };
+        // Only the latest step's fold: a later step replaces it, and so
+        // does whether the step's error wraps it (the bridge's -32003 inside
+        // a single execute), which the delivered error then counts as.
+        facts.last_step_folded = folded;
+        facts.error_of = error_of;
     });
     output
 }
@@ -256,7 +309,100 @@ pub(crate) fn refused_before_step() {
 /// `continue`, or its `retry` once attempts run out): that step's refusal is
 /// no longer what the composite can end on.
 pub(crate) fn step_absorbed() {
-    with(|facts| facts.last_step = LastStep::Settled);
+    with(|facts| {
+        facts.last_step = LastStep::Settled;
+        // A failure carried past and not reported is not the answer's, and
+        // the wrapper built for it is not what is delivered.
+        facts.last_step_folded = None;
+        facts.error_of = ErrorOf::Own;
+    });
+}
+
+/// The composite's latest step was a tool result reporting its own failure,
+/// which the composite wraps in an error of its own (a playbook's
+/// `tool_error`): the step's fold if it had one, else the tool's failure,
+/// the backend's; the wrapper is counted as that step's.
+pub(crate) fn step_tool_failed() {
+    with(|facts| {
+        if facts.last_step_folded.is_none() {
+            facts.last_step_folded = Some(RpcError {
+                code: crate::error::rpc_codes::INTERNAL_ERROR,
+                origin: Origin::Backend,
+            });
+        }
+        facts.error_of = ErrorOf::EndedStep {
+            code: crate::error::rpc_codes::INTERNAL_ERROR,
+        };
+    });
+}
+
+/// Note a failure this delivery's answer carries folded into a tool result
+/// (an `isError` result the gateway made of a dispatch failure, or one it
+/// wrote itself): the error count reads it when the answer has no error of
+/// its own. The worst noted wins.
+pub(crate) fn folded(marker: RpcError) {
+    with(|facts| facts.folded = worst(facts.folded, Some(marker)));
+}
+
+/// [`folded`] for an `isError` result the gateway wrote itself (a refusal
+/// answered as a tool result): counted as the gateway's, with `code`.
+pub(crate) fn gateway_folded(code: i32) {
+    folded(RpcError {
+        code,
+        origin: Origin::Gateway,
+    });
+}
+
+/// The composite's answer carries its latest step's outcome (a playbook
+/// reporting a step it continued past, a single-tool execute delivering its
+/// step's answer as its own): `error`, the step's typed failure, unless it
+/// wraps the step's fold (`wrapped_step`, `step_tool_failed`) or there is
+/// none; then the step's fold. A typed error that replaced the step's folded
+/// answer (a gate's refusal) is counted as itself. Call before
+/// [`step_absorbed`].
+pub(crate) fn step_carried(error: Option<&crate::Error>) {
+    with(|facts| {
+        let fold = facts.last_step_folded.take();
+        let own = error.map(|e| RpcError {
+            code: e.to_rpc_code(),
+            origin: e.origin(),
+        });
+        let carried = match facts.error_of {
+            ErrorOf::EndedStep { .. } => fold.or(own),
+            ErrorOf::Own => own.or(fold),
+        };
+        facts.folded = worst(facts.folded, carried);
+    });
+}
+
+/// The error about to be delivered wraps the step the composite ended on (a
+/// playbook's `tool_error`, a chain's step failure, the bridge's refusal):
+/// it is counted with the origin of the failure folded into this delivery.
+pub(crate) fn wrapped_step(code: i32) {
+    with(|facts| facts.error_of = ErrorOf::EndedStep { code });
+}
+
+/// Stamp what this delivery's facts say about folded failures on `frame`,
+/// where the frame is finalised for delivery: a frame with no error carries
+/// the fold; a frame whose error is still the wrapper of the step the
+/// composite ended on (same code) is counted with that fold's origin. A
+/// frame's own error otherwise wins, a replacing one included.
+pub(crate) fn stamp_folded(frame: &mut crate::protocol::JsonRpcResponse) {
+    let Ok((folded, error_of)) = FACTS.try_with(|cell| {
+        let cell = cell.borrow();
+        (cell.folded, cell.error_of)
+    }) else {
+        return;
+    };
+    if frame.error.is_none() {
+        frame.wire_meta.folded = folded;
+    } else if let ErrorOf::EndedStep { code } = error_of
+        && frame.error.as_ref().is_some_and(|e| e.code == code)
+        && !frame.wire_meta.delivery_refusal
+        && let Some(folded) = folded
+    {
+        frame.wire_meta.origin = folded.origin;
+    }
 }
 
 /// How a composite ended.
@@ -293,6 +439,12 @@ pub(crate) fn composite_ended(end: CompositeEnd) {
     with(|facts| {
         if end == CompositeEnd::Failed && facts.last_step == LastStep::Refused {
             facts.effect = facts.effect.max(ResponseEffect::Refused);
+        }
+        // A composite that fails ends on its latest step's fold; one that
+        // succeeds carries only the failures it reported.
+        let ended_on = facts.last_step_folded.take();
+        if end == CompositeEnd::Failed {
+            facts.folded = worst(facts.folded, ended_on);
         }
     });
 }
@@ -572,3 +724,7 @@ mod send_tests;
 #[cfg(test)]
 #[path = "delivery_facts_calls_tests.rs"]
 mod calls_tests;
+
+#[cfg(test)]
+#[path = "delivery_facts_fold_tests.rs"]
+mod fold_tests;

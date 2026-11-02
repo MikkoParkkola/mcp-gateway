@@ -156,6 +156,8 @@ mod dispatch_parity_tests;
 #[cfg(all(test, feature = "webui"))]
 mod e5_dashboard_session_tests;
 
+#[cfg(all(test, feature = "metrics"))]
+mod backend_origin_count_tests;
 #[cfg(all(test, feature = "firewall"))]
 mod egress_matrix_tests;
 #[cfg(test)]

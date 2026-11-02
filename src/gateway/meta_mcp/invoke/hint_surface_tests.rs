@@ -107,3 +107,28 @@ fn a_backends_plain_recovery_does_not_suppress_the_gateway_hint() {
         "the gateway's hint was suppressed: {delivered}"
     );
 }
+
+/// C3 and C4: a backend's own JSON-RPC error is classed and worded as its
+/// gateway twin: a backend error with the backend's message, on the hint and
+/// on the wire.
+#[test]
+fn a_backends_own_error_is_classed_and_worded_as_its_twin() {
+    let backend = crate::Error::backend_json_rpc(crate::protocol::JsonRpcError {
+        code: -32001,
+        message: "backend says no".to_owned(),
+        data: None,
+    });
+    let (category, detail) = super::classify_dispatch_error(&backend);
+    assert!(
+        matches!(
+            category,
+            crate::gateway::recovery::ErrorCategory::BackendError
+        ),
+        "{category:?}"
+    );
+    assert_eq!(detail, "backend says no");
+    assert_eq!(
+        crate::gateway::meta_mcp::signing::wire_error_message(&backend),
+        "backend says no"
+    );
+}
