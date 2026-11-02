@@ -25,6 +25,7 @@ use crate::gateway::meta_mcp::support::{
 };
 use crate::gateway::recovery::{MetaSurface, RecoveryContext, recovery_for_surface};
 use crate::idempotency::IdempotencyReservation;
+use crate::protocol::JsonRpcError;
 use crate::security::http_diagnostics::is_upstream_unauthorized;
 use crate::{Error, Result};
 
@@ -123,8 +124,21 @@ impl MetaMcp {
         // MIK-8139: the account marker rides on the backend's own error, so
         // it is honoured only when the shared screen passes that error clean;
         // otherwise the error becomes the result the gates and firewall read.
-        if crate::personal_accounts::refusal::marked(&e).is_some()
-            && self.backend_error_screens_clean(server, tool, &e)
+        if let Error::JsonRpc {
+            code,
+            message,
+            data,
+        } = &e
+            && crate::personal_accounts::refusal::marked(&e).is_some()
+            && self.marked_error_screens_clean(
+                server,
+                tool,
+                JsonRpcError {
+                    code: *code,
+                    message: message.clone(),
+                    data: data.clone(),
+                },
+            )
         {
             // Settled like every dispatched failure (ADR-012). A marked refusal
             // comes only from `after_upstream_401`, on an upstream 401: one a

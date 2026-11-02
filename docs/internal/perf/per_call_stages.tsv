@@ -212,7 +212,7 @@ src/gateway/meta_mcp/invoke/dispatch_guards.rs	is_firewall_refusal	-	on-path, un
 src/gateway/meta_mcp/invoke/dispatch_guards.rs	new	-	on-path, untimed: cost-governance admission with a budget enforcer; the harness configures no enforcer
 src/gateway/meta_mcp/invoke/dispatch_guards.rs	of	http_invoke_tiny	classifies every meta dispatch outcome
 src/gateway/meta_mcp/invoke/egress.rs	admit	-	on-path, untimed: backend notifications streamed during a call only; the timed backend emits none
-src/gateway/meta_mcp/invoke/egress.rs	backend_error_screens_clean	-	on-path, untimed: marked account refusals on dispatch errors only; the timed rows succeed
+src/gateway/meta_mcp/invoke/egress.rs	marked_error_screens_clean	-	on-path, untimed: marked account refusals on dispatch errors only; the timed rows succeed
 src/gateway/meta_mcp/invoke/egress.rs	bind	http_invoke_tiny	bound to the authenticated caller once per HTTP request's notification scope
 src/gateway/meta_mcp/invoke/egress.rs	content_refuses	-	on-path, untimed: error frames and non-tools/call answers; a tools/call result met these checks at dispatch
 src/gateway/meta_mcp/invoke/egress.rs	content_refuses_value	-	on-path, untimed: undeclared-key refusals only; the timed arguments are declared

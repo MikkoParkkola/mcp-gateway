@@ -382,29 +382,16 @@ impl MetaMcp {
         self.scan_error(error, &at)
     }
 
-    /// Whether `e`, a `JsonRpc` error carrying the account mark, passes the
-    /// scan untouched; any other error is the gateway's own. Its one caller
-    /// asks only after `marked`, which reads `JsonRpc` alone: a backend's own
-    /// error is folded into a tool result and screened by the result gates.
-    pub(crate) fn backend_error_screens_clean(
+    /// Whether `error`, the body of an `Error::JsonRpc` carrying the account
+    /// mark, passes the scan untouched. Only that error is screened here: a
+    /// backend's own error is folded into a tool result and screened by the
+    /// result gates.
+    pub(crate) fn marked_error_screens_clean(
         &self,
         server: &str,
         tool: &str,
-        e: &crate::Error,
+        mut error: JsonRpcError,
     ) -> bool {
-        let crate::Error::JsonRpc {
-            code,
-            message,
-            data,
-        } = e
-        else {
-            return true;
-        };
-        let mut error = JsonRpcError {
-            code: *code,
-            message: message.clone(),
-            data: data.clone(),
-        };
         // A classification probe: nothing it finds or rewrites is delivered.
         crate::gateway::delivery_facts::suspended(|| {
             self.scan_backend_error((server, tool, tool), (None, None), &mut error)
