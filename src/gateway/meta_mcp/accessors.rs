@@ -56,6 +56,10 @@ impl MetaMcp {
     pub(crate) fn set_live_config(&self, live: Arc<crate::config_reload::LiveConfig>) {
         // A name a publication starts budgeting takes its starting figure
         // before any request can judge with the new budgets (ADR-023).
+        // invariant: every name a published generation budgets is owned, and
+        // a figure is stored only with ownership; the seed relies on it to
+        // take a figure exactly once. Pinned by
+        // `every_budgeted_name_is_owned_through_reloads`.
         #[cfg(feature = "cost-governance")]
         if let Some(enforcer) = &self.budget_enforcer {
             let enforcer = Arc::clone(enforcer);

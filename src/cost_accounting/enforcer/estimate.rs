@@ -148,3 +148,36 @@ impl super::BudgetEnforcer {
         }
     }
 }
+
+#[cfg(test)]
+impl super::BudgetEnforcer {
+    /// The invariant the starting figures rest on: every name `budgets`
+    /// budgets is owned, and every stored figure belongs to an owned name.
+    /// The names breaking it, if any.
+    pub(crate) fn ownership_gap(
+        &self,
+        budgets: &crate::cost_accounting::config::BudgetLimits,
+    ) -> Vec<String> {
+        let mut gap = Vec::new();
+        for (scope, attribution, names) in [
+            ("tool", &self.tool_attribution, &budgets.per_tool),
+            ("key", &self.key_attribution, &budgets.per_key),
+        ] {
+            for name in names.keys().chain(
+                attribution
+                    .estimate
+                    .iter()
+                    .map(|e| e.key().clone())
+                    .collect::<Vec<_>>()
+                    .iter(),
+            ) {
+                if !attribution.owns(name) {
+                    gap.push(format!("{scope}:{name}"));
+                }
+            }
+        }
+        gap.sort();
+        gap.dedup();
+        gap
+    }
+}

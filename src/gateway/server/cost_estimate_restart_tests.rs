@@ -107,6 +107,12 @@ fn t8_the_estimate_is_kept_apart_through_save_and_restore() {
 
         let (_, fits) = boot_cost_governance(&governed(scope, Some(5.0)), dir.path());
         let fits = fits.expect("armed");
+        // Restore keeps the invariant: a restored figure's name is owned.
+        assert_eq!(
+            fits.ownership_gap(&governed(scope, Some(5.0)).budgets),
+            Vec::<String>::new(),
+            "{scope:?}"
+        );
         assert!(scope.admits(&fits, "target"), "{scope:?}: 3 + 0.5 + 1 < 5");
         let snap = fits.snapshot();
         assert!(
@@ -164,7 +170,14 @@ fn t8c_an_estimated_name_keeps_its_row_through_a_full_cap() {
         let dir = tempfile::tempdir().expect("tempdir");
         let saved = first_process(scope, dir.path());
         let (_, restored) = boot_cost_governance(&governed(scope, None), dir.path());
-        let snap = restored.expect("armed").snapshot();
+        let restored = restored.expect("armed");
+        // A restored figure's name is owned, though nothing budgets it.
+        assert_eq!(
+            restored.ownership_gap(&BudgetLimits::default()),
+            Vec::<String>::new(),
+            "{scope:?}"
+        );
+        let snap = restored.snapshot();
         let (rows, overflow, saved_rows, saved_overflow) = match scope {
             Scope::Tool => (
                 snap.tool_daily,

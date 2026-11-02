@@ -418,3 +418,42 @@ async fn t10e_a_settle_between_the_seed_and_the_swap_counts_once() {
         );
     }
 }
+
+/// The invariant the starting figures rest on, pinned where ownership is
+/// created (startup, each publication): every name the live generation
+/// budgets is owned, and every stored figure belongs to an owned name. A
+/// budgeted name without ownership would take no figure and could settle
+/// into the overflow; the checks that once masked that are gone.
+#[tokio::test]
+async fn every_budgeted_name_is_owned_through_reloads() {
+    for scope in [Scope::Tool, Scope::Key] {
+        let _clock = at_secs(T);
+        let fx = fixture(&governance(|c| budget(scope, c, "startup", 5.0))).await;
+        scope.fill(&fx, CAP);
+        spend(&fx, scope, "late", 2.0);
+        let enforcer = fx.state.meta_mcp.budget_enforcer.as_ref().expect("armed");
+        let gap = || {
+            let generation = fx.state.live_config.generation();
+            enforcer.ownership_gap(&enforcer.governance(Some(&generation)).budgets)
+        };
+        assert_eq!(gap(), Vec::<String>::new(), "{scope:?}: at startup");
+        reload(&fx, |c| budget(scope, c, "added", 5.0));
+        assert_eq!(gap(), Vec::<String>::new(), "{scope:?}: a name added");
+        reload(&fx, |c| {
+            c.budgets.per_tool.remove("startup");
+            c.budgets.per_key.remove("startup");
+            budget(scope, c, "second", 5.0);
+        });
+        assert_eq!(
+            gap(),
+            Vec::<String>::new(),
+            "{scope:?}: one removed, one added"
+        );
+        reload(&fx, |c| c.enabled = false);
+        assert_eq!(
+            gap(),
+            Vec::<String>::new(),
+            "{scope:?}: governance off, startup budgets back"
+        );
+    }
+}
