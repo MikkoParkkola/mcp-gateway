@@ -339,10 +339,10 @@ for line in sys.stdin:
         }
         let survived = alive(grandchild);
         let _ = std::fs::remove_dir_all(&root);
-        assert!(status.success(), "the gateway drains on SIGTERM: {status}");
         assert!(
-            !survived,
-            "the backend's descendant {grandchild} outlived the gateway's stop"
+            status.success() && !survived,
+            "the gateway drains on SIGTERM ({status}) and its backend's descendant \
+             {grandchild} is gone (still alive: {survived})"
         );
     }
 }
