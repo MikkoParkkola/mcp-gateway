@@ -119,6 +119,8 @@ pub(crate) enum Change {
     Secret(SlotId),
     /// The field's key is deleted.
     Remove,
+    /// The field becomes exactly these strings, written as one inline list.
+    List(Vec<String>),
 }
 
 /// Why an edit was refused. Nothing is written for any of them.
@@ -305,6 +307,9 @@ pub(crate) fn edit_in_place(
 ) -> Result<Template, ComputeRefusal> {
     whole_file_is_plain(original)?;
     no_overlap(changes)?;
+    if changes.iter().any(|(_, c)| matches!(c, Change::List(_))) {
+        return Err(unprovable("a whole-list set is not written yet"));
+    }
     for (path, change) in changes {
         // A slot is named by its own field's path, never another's.
         if let Change::Secret(id) = change
@@ -480,12 +485,22 @@ fn rendered(change: &Change) -> Option<String> {
         Change::Set(Scalar::Bool(b)) => b.to_string(),
         Change::Set(Scalar::Num(n)) => float_text(n.0),
         Change::Secret(id) => quoted_placeholder(id),
+        Change::List(items) => inline_list(items),
         Change::Remove => return None,
     })
 }
 
 /// A float always written with a decimal point, so it reads back as a
 /// float: `2.0`, `1.0e300`.
+/// `items` as one inline list of double-quoted strings: `["a", "b"]`, `[]`.
+fn inline_list(items: &[String]) -> String {
+    let quoted: Vec<String> = items
+        .iter()
+        .map(|item| crate::yaml::double_quoted(item))
+        .collect();
+    format!("[{}]", quoted.join(", "))
+}
+
 fn float_text(value: f64) -> String {
     let shortest = format!("{value:?}");
     if shortest.contains('.') {
@@ -653,6 +668,12 @@ fn expected_value(change: &Change) -> Option<Value> {
         Change::Set(Scalar::Bool(b)) => Value::from(*b),
         Change::Set(Scalar::Num(n)) => Value::from(n.0),
         Change::Secret(id) => Value::from(placeholder(id)),
+        Change::List(items) => Value::Sequence(
+            items
+                .iter()
+                .map(|item| Value::from(item.as_str()))
+                .collect(),
+        ),
         Change::Remove => return None,
     })
 }
