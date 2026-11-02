@@ -170,6 +170,8 @@ impl FileControlPlaneStore {
     /// audit lock. Re-syncs the chain tail from disk under the lock (so separate
     /// processes never write the same counter) and fsyncs for durability.
     pub(super) fn append_audit_locked(&self, event: &ControlPlaneAuditEvent) -> StoreResult<()> {
+        #[cfg(test)]
+        super::audit::pin_written_action(event.action);
         // Timed like every other record, so Activity can merge config changes
         // with calls; records written before this have no time.
         let mut fields = audit_fields(event);
