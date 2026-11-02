@@ -271,3 +271,33 @@ fn a_refused_scrub_sends_the_status_only_notification_and_says_why() {
         "the log carries stored output: {logs}"
     );
 }
+
+/// Stored task output the scrub redacts is not the stored text any more, so
+/// the scan says it was rewritten: a notification carrying it commits no
+/// relay receipts for the original. Output with nothing to remove still
+/// reads as delivered.
+#[tokio::test]
+async fn a_stored_output_the_scrub_redacts_reads_as_rewritten() {
+    use super::invoke::egress::EgressOutcome;
+    let dir = tempfile::tempdir().expect("tempdir");
+    let (meta, registry) = gateway_with_alpha(&dir);
+    registry.mark_for_test("alpha", MARKED);
+    let marked = completed(&format!("done {MARKED}"));
+    let mut value = marked.delivered_wire();
+    assert_eq!(
+        meta.scan_stored_task(&marked, None, &mut value),
+        EgressOutcome::Rewritten,
+        "a redacted stored output read as delivered: {value}"
+    );
+    assert!(
+        !value.to_string().contains(MARKED),
+        "premise: the value was removed: {value}"
+    );
+    let clean = completed("done, nothing secret");
+    let mut value = clean.delivered_wire();
+    assert_eq!(
+        meta.scan_stored_task(&clean, None, &mut value),
+        EgressOutcome::Delivered,
+        "clean stored output read as rewritten: {value}"
+    );
+}
