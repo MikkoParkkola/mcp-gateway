@@ -462,14 +462,15 @@ fn a_recognisable_secret_appears_in_no_trace_file_or_record() {
         );
     }
     assert!(record.exists(), "premise: the refused saves were audited");
-    for entry in walkdir::WalkDir::new(dir.path())
-        .into_iter()
-        .filter_map(Result::ok)
-    {
+    // A directory or file the walk cannot read fails the row: skipping it
+    // would pass on exactly what it never looked at.
+    for entry in walkdir::WalkDir::new(dir.path()) {
+        let entry = entry.unwrap_or_else(|e| panic!("W20: the walk could not read {e}"));
         if !entry.file_type().is_file() {
             continue;
         }
-        let bytes = std::fs::read(entry.path()).expect("read file");
+        let bytes = std::fs::read(entry.path())
+            .unwrap_or_else(|e| panic!("W20: {} could not be read: {e}", entry.path().display()));
         let leaked = loud_forms_in(&String::from_utf8_lossy(&bytes));
         assert!(
             leaked.is_empty(),
