@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! Readers of the decision object (MIK-8914 API2A.3, .4, .5, .7, .9, .19).
+//! Readers of the decision object: the evidence, the rule filter, and the
+//! receipt's line for each piece a record does not carry.
 
 use serde_json::{Value, json};
 
