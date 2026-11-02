@@ -80,6 +80,8 @@ pub(in crate::gateway::ui) struct Budget {
 /// catch-up and dropped with it.
 #[derive(Debug, Default)]
 pub(in crate::gateway::ui) struct Search {
+    /// Where the last call stopped, when it stopped short.
+    at: Option<place::Place>,
     /// Restarts in this catch-up. Kept apart from the suspended position,
     /// which a restart discards.
     restarts: u8,
@@ -128,13 +130,142 @@ pub(in crate::gateway::ui) fn rows_after(
     budget: Budget,
     search: &mut Search,
 ) -> io::Result<ForwardPage> {
-    let _ = (log, cursor, stop, access, budget, search.restarts);
-    #[cfg(test)]
-    {
-        tests::after_identity();
-        let _ = tests::identity_fails();
+    let mut page = ForwardPage::default();
+    let Some(stop) = stop else {
+        // An empty log: nothing to read up to.
+        search.at = None;
+        return Ok(page);
+    };
+    let saved = search.at.take().filter(|p| p.continues(cursor));
+    let resumed = match &saved {
+        Some(p) => place::resume(log, p, &mut page.anchor_bytes)?,
+        None => None,
+    };
+    if saved.is_some() && resumed.is_none() {
+        search.restarts += 1;
+        if search.restarts > MAX_RESTARTS {
+            page.reset = true;
+            page.bytes_read = page.anchor_bytes;
+            return Ok(page);
+        }
+        page.restarted = true;
     }
-    Ok(ForwardPage::default())
+    let started = match resumed {
+        Some(r) => Some(r),
+        None => place::start(log, cursor, &mut page.bytes_read)?,
+    };
+    let Some((file, mut at)) = started else {
+        page.reset = true;
+        page.bytes_read += page.anchor_bytes;
+        return Ok(page);
+    };
+    page.first_read = Some(at.offset);
+    let mut scan = scan::Scan::new(file, at.offset, at.mode, budget.bytes);
+    let mut spent = 0;
+    let outcome = loop {
+        let step = scan.next()?;
+        let anchor = match &step {
+            scan::Step::Record { anchor, .. } => Some(*anchor),
+            _ => None,
+        };
+        match step {
+            scan::Step::Record { entry, .. } => {
+                at.anchor = anchor;
+                let Some(mark) = mark_of(&entry) else {
+                    continue;
+                };
+                if !at.found {
+                    // `start` guarantees a cursor here.
+                    let Some(c) = cursor else {
+                        break Outcome::Reset;
+                    };
+                    match mark.counter.cmp(&c.counter) {
+                        std::cmp::Ordering::Less => continue,
+                        std::cmp::Ordering::Equal if mark.hash16 == c.hash16 => {
+                            at.found = true;
+                            at.last = Some(mark);
+                            continue;
+                        }
+                        _ => break Outcome::Reset,
+                    }
+                }
+                if mark.counter > stop.counter {
+                    break Outcome::Done;
+                }
+                let line = Line {
+                    log: log.kind.log(),
+                    entry,
+                    segment: at.seq,
+                };
+                if let Some(row) = served(log, access, &line) {
+                    page.rows.push(row);
+                }
+                at.last = Some(mark.clone());
+                if mark == *stop {
+                    break Outcome::Done;
+                }
+                if page.rows.len() >= budget.rows {
+                    break Outcome::More;
+                }
+            }
+            scan::Step::Unreadable => {}
+            scan::Step::Budget => break Outcome::More,
+            scan::Step::End => {
+                let later = place::segments(log.path)?.into_iter().find(|s| *s > at.seq);
+                let opened = match later {
+                    Some(seq) => place::open(log.path, seq)?.map(|(f, id)| (f, seq, id)),
+                    None => None,
+                };
+                let Some((next, seq, id)) = opened else {
+                    // The log ends here: a cursor not yet found is ahead of it.
+                    break if at.found {
+                        Outcome::Done
+                    } else {
+                        Outcome::Reset
+                    };
+                };
+                spent += scan.read;
+                at = at.at_start(seq, id);
+                let left = budget.bytes.saturating_sub(spent);
+                scan = scan::Scan::new(next, 0, scan::Mode::Boundary, left);
+            }
+        }
+    };
+    at.offset = scan.offset;
+    at.mode = scan.mode;
+    page.read_end = Some(scan.offset);
+    page.bytes_read += spent + scan.read + page.anchor_bytes;
+    match outcome {
+        Outcome::Reset => {
+            page.reset = true;
+            search.at = None;
+        }
+        Outcome::Done => {
+            page.next = at.last.clone();
+            search.at = None;
+        }
+        Outcome::More => {
+            page.more = true;
+            page.searching = !at.found;
+            page.next = if at.found {
+                at.last.clone()
+            } else {
+                cursor.cloned()
+            };
+            search.at = Some(at);
+        }
+    }
+    Ok(page)
+}
+
+/// How a call ended.
+enum Outcome {
+    /// The stop was reached, or the log ended.
+    Done,
+    /// A budget ended it; the place is saved.
+    More,
+    /// The cursor's row is gone, or its hash differs.
+    Reset,
 }
 
 /// A record's place, from its own counter and entry hash.
@@ -187,6 +318,11 @@ fn served(log: &Log<'_>, access: &Access, line: &Line) -> Option<Served> {
         row: row(line, log.secret)?,
     })
 }
+
+#[path = "forward_place.rs"]
+mod place;
+#[path = "forward_scan.rs"]
+mod scan;
 
 #[cfg(test)]
 #[path = "forward_tests.rs"]

@@ -78,7 +78,7 @@ pub(super) fn open(path: &Path, seq: u64) -> io::Result<Option<(File, FileId)>> 
 /// The counter of a segment's first line, when that line is a record.
 /// Returns the bytes read too.
 fn first_counter(file: &File) -> io::Result<(Option<u64>, u64)> {
-    let mut scan = Scan::new(file, 0, Mode::Boundary, ASSEMBLY_WINDOW);
+    let mut scan = Scan::new(file.try_clone()?, 0, Mode::Boundary, ASSEMBLY_WINDOW);
     let counter = match scan.next()? {
         Step::Record { entry, .. } => mark_of(&entry).map(|m| m.counter),
         _ => None,
@@ -170,5 +170,11 @@ pub(super) fn resume(
             return Ok(None);
         }
     }
-    Ok(Some((file, Place { seq, ..place.clone() })))
+    Ok(Some((
+        file,
+        Place {
+            seq,
+            ..place.clone()
+        },
+    )))
 }

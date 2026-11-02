@@ -64,8 +64,8 @@ pub(super) enum Step {
 }
 
 /// One segment's forward scan.
-pub(super) struct Scan<'f> {
-    file: &'f File,
+pub(super) struct Scan {
+    file: File,
     pub(super) offset: u64,
     pub(super) mode: Mode,
     /// Bytes this scan consumed.
@@ -73,8 +73,8 @@ pub(super) struct Scan<'f> {
     budget: u64,
 }
 
-impl<'f> Scan<'f> {
-    pub(super) fn new(file: &'f File, offset: u64, mode: Mode, budget: u64) -> Self {
+impl Scan {
+    pub(super) fn new(file: File, offset: u64, mode: Mode, budget: u64) -> Self {
         Self {
             file,
             offset,
@@ -86,7 +86,7 @@ impl<'f> Scan<'f> {
 
     /// Up to `limit` bytes from the offset, through the next newline.
     fn line(&self, limit: u64) -> io::Result<Vec<u8>> {
-        let mut f = self.file;
+        let mut f = &self.file;
         f.seek(SeekFrom::Start(self.offset))?;
         let mut buf = Vec::new();
         BufReader::new(f.take(limit)).read_until(b'\n', &mut buf)?;
