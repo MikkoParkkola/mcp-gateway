@@ -5,6 +5,7 @@
 
 use super::*;
 
+#[path = "forward_handles_tests.rs"]
 mod handles;
 
 /// A log with its cursor (record 2) past a junk run, in the active file, and
