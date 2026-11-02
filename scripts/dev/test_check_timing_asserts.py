@@ -300,6 +300,20 @@ class RequestTimeouts(unittest.TestCase):
         body = self.BUILDER.format(w="Duration::from_secs(30)") + "\nlet s = events.timeout(Duration::from_secs(30));"
         self.assertRefused(body, rule=guard.NOT_A_REQUEST)
 
+    def test_spacing_or_a_comment_before_the_parenthesis_is_read(self):
+        for call in (".timeout (Duration::from_millis(500))", ".timeout /* why */ (Duration::from_millis(500))"):
+            with self.subTest(call=call):
+                (found,) = self.scan(f'let c = reqwest::Client::builder(){call}.build().expect("client");')
+                # One allowlist key whatever the spacing.
+                self.assertEqual(found.assertion, ".timeout(Duration::from_millis(500))")
+
+    def test_reqwest_inside_an_argument_does_not_make_a_request(self):
+        self.assertRefused(
+            "let s = tokio_stream::iter([reqwest::Client::new()]).timeout(Duration::from_secs(60));",
+            rule=guard.NOT_A_REQUEST,
+        )
+        self.assertRefused("let s = wrap(client.get(&url)).timeout(Duration::from_secs(60));", rule=guard.NOT_A_REQUEST)
+
     def test_a_timeout_getter_is_not_a_bound(self):
         self.assertPasses("let d = config.timeout();")
 
