@@ -7,7 +7,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::super::delivery_framing::is_refusal_name;
-use super::{ASSOCIATED, Collect, Event, FACTS, FACTS_FILE, Kind, monitored_tokens};
+use super::{ASSOCIATED, Collect, Event, FACTS, FACTS_FILE, Kind, monitored_tokens, whole_words};
 
 /// Effect writers that are not call needles: `step` scopes one composite
 /// step and notes its outcome; the step's own raise is the row.
@@ -113,15 +113,10 @@ fn macro_needles(
     )
 }
 
-/// How often `name` is called in macro tokens: the word, then `(`.
+/// How often `name` is called in macro tokens: the whole word, then `(`.
 fn called_count(tokens: &str, name: &str) -> usize {
-    let ident = |c: char| c.is_alphanumeric() || c == '_';
-    tokens
-        .match_indices(name)
-        .filter(|(at, _)| {
-            !tokens[..*at].chars().next_back().is_some_and(ident)
-                && tokens[at + name.len()..].trim_start().starts_with('(')
-        })
+    whole_words(tokens, name)
+        .filter(|at| tokens[at + name.len()..].trim_start().starts_with('('))
         .count()
 }
 

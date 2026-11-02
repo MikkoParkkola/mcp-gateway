@@ -197,21 +197,35 @@ fn all_exprs(expr: &syn::Expr, into: &mut HashSet<usize>) {
     syn::visit::Visit::visit_expr(&mut Gather(into), expr);
 }
 
-/// How often `word` occurs in `text` with no identifier character either side.
-fn word_count(text: &str, word: &str) -> usize {
+/// Where `word` occurs in `text` as a whole token: no identifier character
+/// either side. The one word boundary the macro and caller rows share.
+pub(super) fn whole_words<'t>(text: &'t str, word: &'t str) -> impl Iterator<Item = usize> + 't {
     let ident = |c: Option<char>| c.is_some_and(|c| c.is_alphanumeric() || c == '_');
     text.match_indices(word)
-        .filter(|(at, _)| {
+        .map(|(at, _)| at)
+        .filter(move |at| {
             !ident(text[..*at].chars().next_back())
                 && !ident(text[at + word.len()..].chars().next())
         })
-        .count()
 }
 
-/// Whether a raise-table needle is a caller row of the helper `name`: a
-/// `via {name}` row.
+/// How often `word` occurs in `text` as a whole token.
+fn word_count(text: &str, word: &str) -> usize {
+    whole_words(text, word).count()
+}
+
+/// Whether a raise-table needle is a caller row of the helper `name`, naming
+/// it as a whole token: a `via {name}` row, or a macro row listing it
+/// (`{name} (in macro)`, `{name}*{n} (in macro)`).
 pub(super) fn names_caller(needle: &str, name: &str) -> bool {
-    needle.starts_with(&format!("via {name}"))
+    let via = needle
+        .strip_prefix("via ")
+        .is_some_and(|rest| whole_words(rest, name).any(|at| at == 0));
+    let in_macro = needle.strip_suffix(" (in macro)").is_some_and(|list| {
+        list.split(',')
+            .any(|item| item.split('*').next() == Some(name))
+    });
+    via || in_macro
 }
 
 /// The monitored names a macro's tokens hold, for its `(in macro)` row: a
