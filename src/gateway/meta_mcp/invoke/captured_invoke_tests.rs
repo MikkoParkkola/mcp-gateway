@@ -240,6 +240,7 @@ async fn call_alpha(
         task: None,
         era: crate::protocol::meta::Era::Legacy,
         channel: &crate::gateway::input_bridge::NoClientChannel,
+        generation: None,
     };
 
     meta.invoke_tool(
