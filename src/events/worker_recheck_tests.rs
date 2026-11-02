@@ -488,10 +488,10 @@ impl crate::events::EventSource for Open {
 }
 
 /// A subscription stored before holders were bound to their secret names no
-/// secret. Its first check after the upgrade is terminal: nothing is sent and
-/// the row is deleted, though its key is live, the same end a removed key's
-/// row meets at that check. The control, bound to the key's current secret,
-/// is sent and kept.
+/// secret. Its first check after the upgrade is terminal: nothing is sent,
+/// the attempt is recorded `access_revoked`, and the row is deleted, though
+/// its key is live. The control, bound to the key's current secret, is sent
+/// and kept.
 #[tokio::test]
 async fn a_subscription_stored_without_its_secret_is_deleted_at_its_first_check() {
     for tagged in [true, false] {
@@ -533,5 +533,12 @@ async fn a_subscription_stored_without_its_secret_is_deleted_at_its_first_check(
             !tagged,
             "deleted only when unbound (tagged {tagged})"
         );
+        if !tagged {
+            // Refused before any send: the attempt's own record ends
+            // `access_revoked`, and no `sending` record was written.
+            let log = std::fs::read_to_string(dir.path().join("audit.jsonl")).unwrap_or_default();
+            assert!(log.contains("\"status\":\"access_revoked\""), "{log}");
+            assert!(!log.contains("\"status\":\"sending\""), "{log}");
+        }
     }
 }
