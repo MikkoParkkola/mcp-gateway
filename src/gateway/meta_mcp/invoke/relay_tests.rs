@@ -754,3 +754,6 @@ mod live_funnel;
 
 #[path = "relay_live_witness_tests.rs"]
 mod live_witness;
+
+#[path = "relay_unpublished_tests.rs"]
+mod unpublished;
