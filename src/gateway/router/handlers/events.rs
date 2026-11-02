@@ -233,6 +233,7 @@ mod tests {
             identity: None,
             session_sha256: Some("s".to_owned()),
             bearer_sha256: None,
+            api_key_digest_tag: None,
         };
         let session = client(CredentialKind::DashboardSession, true);
         let refused = presented.credential(Some(&session), &state);
@@ -255,6 +256,7 @@ mod tests {
             identity: None,
             session_sha256: None,
             bearer_sha256: digest.clone(),
+            api_key_digest_tag: None,
         };
         assert_eq!(
             with.static_bearer_binding(),

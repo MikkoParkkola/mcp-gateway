@@ -294,6 +294,7 @@ async fn a_poll_runs_only_what_the_executor_finds_read_only() {
             .client_for_key(
                 "k-budget",
                 crate::gateway::auth::principal_of("k-budget").storage_form(),
+                None,
             )
             .expect("the fixture key is live");
         let polled = super::super::watch_poll::poll_capability(

@@ -374,6 +374,7 @@ mod mik_8659_dashboard_tests {
         let response = super::dashboard_link(
             axum::extract::State(Arc::clone(&state)),
             axum::extract::Extension(state.live_config.generation()),
+            None,
             super::super::guard::Guard::for_route(
                 crate::gateway::routes::UI_DASHBOARD_LINK,
                 &axum::http::Method::POST,
@@ -418,8 +419,8 @@ mod mik_8659_dashboard_tests {
             )
             .expect("fixture auth resolves"),
         );
-        let real = auth_config
-            .validate_token(secret)
+        let (real, named) = auth_config
+            .validate_token_with_origin(secret)
             .expect("admin key validates");
         // K13: an API-key client with no quota identity cannot bind the link
         // to its key, so the mint fails closed rather than minting a link no
@@ -441,6 +442,9 @@ mod mik_8659_dashboard_tests {
         let response = super::dashboard_link(
             axum::extract::State(Arc::clone(&state)),
             axum::extract::Extension(state.live_config.generation()),
+            // The match's own record, so the refusal is the missing quota
+            // identity's, not a missing secret binding's.
+            named.clone().map(axum::extract::Extension),
             super::super::guard::Guard::for_route(
                 crate::gateway::routes::UI_DASHBOARD_LINK,
                 &axum::http::Method::POST,
@@ -452,6 +456,28 @@ mod mik_8659_dashboard_tests {
             response.status(),
             axum::http::StatusCode::FORBIDDEN,
             "an unbindable API-key client minted a link"
+        );
+        // A client with its quota identity but no record of which secret it
+        // matched cannot be bound to that secret either: fail closed.
+        let response = super::dashboard_link(
+            axum::extract::State(Arc::clone(&state)),
+            axum::extract::Extension(state.live_config.generation()),
+            None,
+            super::super::guard::Guard::for_route(
+                crate::gateway::routes::UI_DASHBOARD_LINK,
+                &axum::http::Method::POST,
+                Some(
+                    auth_config
+                        .validate_token(secret)
+                        .expect("admin key validates"),
+                ),
+            ),
+        )
+        .await;
+        assert_eq!(
+            response.status(),
+            axum::http::StatusCode::FORBIDDEN,
+            "an API-key client with no matched secret minted a link"
         );
     }
 }

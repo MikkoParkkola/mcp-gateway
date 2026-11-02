@@ -188,13 +188,13 @@ fn a_clock_before_the_epoch_refuses_a_live_key_on_its_behalf() {
     let config = digest_key(Some(ahead));
     let principal = &hex_of(KEY)[..12];
     assert!(
-        config.client_for_key("ops", principal).is_some(),
+        config.client_for_key("ops", principal, None).is_some(),
         "control: a key expiring in an hour resolves on the real clock"
     );
 
     let _clock = crate::clock::test_clock::before_epoch();
     assert!(
-        config.client_for_key("ops", principal).is_none(),
+        config.client_for_key("ops", principal, None).is_none(),
         "an unreadable clock resolved an API key's caller"
     );
 }
@@ -212,7 +212,9 @@ fn a_key_is_judged_at_the_callers_reading() {
     let principal = &hex_of(KEY)[..12];
     let _clock = crate::clock::test_clock::before_epoch();
     assert!(
-        config.client_for_key_at("ops", principal, now).is_some(),
+        config
+            .client_for_key_at("ops", principal, None, now)
+            .is_some(),
         "refused at a reading before its expiry"
     );
     assert!(
@@ -220,6 +222,7 @@ fn a_key_is_judged_at_the_callers_reading() {
             .client_for_key_at(
                 "ops",
                 principal,
+                None,
                 now + crate::duration_bound::delta!(hours, 2)
             )
             .is_none(),

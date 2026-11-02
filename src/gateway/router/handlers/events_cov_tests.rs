@@ -30,6 +30,7 @@ fn presented(facts: Option<CredentialFacts>, session_sha256: Option<String>) -> 
         identity: None,
         session_sha256,
         bearer_sha256: None,
+        api_key_digest_tag: None,
     }
 }
 
