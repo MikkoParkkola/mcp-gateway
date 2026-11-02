@@ -282,9 +282,10 @@ async fn send_with_retry_records_transport_failures() {
 
     assert!(health.is_healthy(), "fresh tracker is healthy");
     for _ in 0..3 {
+        // A refused connect fails at once; the bound only guards a hang.
         let req = client
             .get(&url)
-            .timeout(std::time::Duration::from_millis(200));
+            .timeout(std::time::Duration::from_secs(10));
         let resp = send_with_retry(req, "test", false, &health).await;
         assert!(resp.is_err(), "connect to a refused port must fail");
     }
