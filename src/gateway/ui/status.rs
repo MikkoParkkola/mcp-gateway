@@ -22,12 +22,7 @@ pub(super) async fn status(
 ) -> Json<Value> {
     // Open to every caller that reaches it; the answer is shaped by caller.
     let _ = guard.admit();
-    let access = access_report::report(
-        &state,
-        &generation,
-        guard.client.as_ref(),
-        guard.identity.as_ref(),
-    );
+    let access = access_report::report(&generation, guard.client.as_ref(), guard.identity.as_ref());
     let client = guard.client;
     let view = if is_admin(client.as_ref()) {
         StatusView::Full
