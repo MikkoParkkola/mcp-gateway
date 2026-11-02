@@ -6,7 +6,8 @@
 //! Decided row by row from [`super::access_table`], with the same verdicts the
 //! routes enforce: the admin needs through [`super::guard::decide`], Activity
 //! through its own resolver, the control plane through its actor and RBAC.
-//! Each row reads the role mapping from the source its route reads.
+//! Every row reads the role mapping of the request's pinned generation, as
+//! its route does (ADR-023).
 
 use serde_json::{Value, json};
 
@@ -15,7 +16,6 @@ use super::guard;
 use crate::config_reload::Generation;
 use crate::control_plane::{ControlPlaneAction, ControlPlaneRbac};
 use crate::gateway::auth::AuthenticatedClient;
-use crate::gateway::router::AppState;
 use crate::key_server::oidc::VerifiedIdentity;
 
 /// The caller, as the report judges it.
@@ -27,7 +27,6 @@ struct Caller<'a> {
 /// The `access` report for this caller, or `None` for an auth-on caller with
 /// no credential (it reaches status only through a public path).
 pub(super) fn report(
-    state: &AppState,
     generation: &Generation,
     client: Option<&AuthenticatedClient>,
     identity: Option<&VerifiedIdentity>,
@@ -38,8 +37,8 @@ pub(super) fn report(
         return None;
     }
     let caller = Caller { client, identity };
-    let live = state.live_config.get();
-    let admits = |row: &Row| admits(row, &caller, (&live, generation));
+    let mapping = &generation.config().control_plane.role_mapping;
+    let admits = |row: &Row| admits(row, &caller, mapping);
     let pages: Vec<Value> = PAGES
         .iter()
         .map(|&page| page_report(page, auth_on, &admits))
@@ -104,26 +103,17 @@ fn reason(page: Page, auth_on: bool, admits: &dyn Fn(&Row) -> bool) -> &'static 
 fn admits(
     row: &Row,
     caller: &Caller<'_>,
-    (live, generation): (&crate::config::Config, &Generation),
+    mapping: &crate::control_plane::role_mapping::ControlPlaneRoleMappingConfig,
 ) -> bool {
     match row.need {
-        Need::ActivityReader => super::activity::access::resolve(
-            caller.client,
-            caller.identity,
-            &live.control_plane.role_mapping,
-        )
-        .is_ok(),
+        Need::ActivityReader => {
+            super::activity::access::resolve(caller.client, caller.identity, mapping).is_ok()
+        }
         Need::ControlPlane(check) => {
             // The control plane's layer refuses an unauthenticated caller first.
             if !caller.client.is_some_and(|c| c.authenticated) {
                 return false;
             }
-            // The snapshot reads the pinned generation's mapping; the other
-            // control-plane routes read the live config.
-            let mapping = match check {
-                CpCheck::Read => &generation.config().control_plane.role_mapping,
-                CpCheck::Action(_) | CpCheck::FromBody(_) => &live.control_plane.role_mapping,
-            };
             let actor = super::control_plane::mutations::actor_from_client(
                 caller.client,
                 caller.identity,

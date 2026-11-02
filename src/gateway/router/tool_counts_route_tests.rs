@@ -118,6 +118,9 @@ async fn t1_every_tool_carries_both_windows() {
         let obj = tool.as_object().expect("an entry");
         assert!(obj.contains_key("calls_24h"), "{tool}");
         assert!(obj.contains_key("calls_prev_24h"), "{tool}");
+        for key in ["calls_1h", "calls_prev_1h", "calls_series"] {
+            assert!(obj.contains_key(key), "{key}: {tool}");
+        }
     }
     let counted = entry(&body, "beta", "tool-7");
     assert_eq!(counted["calls_24h"], 3, "{counted}");
@@ -224,4 +227,69 @@ async fn t4_status_without_a_counter_store_reads_null() {
     assert_eq!(alpha.get("calls_prev_24h"), Some(&Value::Null));
     let root = body.as_object().expect("an object");
     assert_eq!(root.get("counts_since"), Some(&Value::Null));
+}
+
+/// H8: each tool carries the completed hour, the hour before and a 12-point
+/// series in order, aligned to `series_start`. Expectations come from the
+/// route's own `series_start`, so a half-hour tick between recording and
+/// reading cannot make the row flaky.
+#[tokio::test]
+async fn h8_tools_carry_the_hour_windows_and_series() {
+    const HALF: u64 = 1_800;
+    let (state, store, _dir) = state(true, &["alpha"], 2, true).await;
+    let store = store.expect("a store");
+    let before = now();
+    let nb = before / HALF;
+    // One call in the current half hour too: it belongs to the last point
+    // and to neither hour, so an hour that took the partial bucket fails.
+    let recorded = [(nb, 4), (nb - 1, 3), (nb - 3, 1), (nb - 6, 2)];
+    for (bucket, times) in recorded {
+        record(&store, "alpha", "tool-1", bucket * HALF + 5, times);
+    }
+    let (status, body) = get(&state, "/ui/api/tools", Some(SECRET)).await;
+    assert_eq!(status, StatusCode::OK);
+    let start = body["series_start"].as_i64().expect("a series start");
+    let first_of = |t: u64| i64::try_from((t / HALF - 11) * HALF).unwrap();
+    assert!(
+        (first_of(before)..=first_of(now())).contains(&start) && start % 1_800 == 0,
+        "series_start {start} is not the request's 12th bucket back"
+    );
+    let first = u64::try_from(start).expect("after the epoch") / HALF;
+    let mut series = [0_usize; 12];
+    for (bucket, times) in recorded {
+        if let Some(slot) = bucket.checked_sub(first).filter(|i| *i < 12) {
+            series[usize::try_from(slot).unwrap()] += times;
+        }
+    }
+    let tool = entry(&body, "alpha", "tool-1");
+    assert_eq!(tool["calls_series"], json!(series), "{tool}");
+    assert_eq!(tool["calls_1h"], series[9] + series[10], "{tool}");
+    assert_eq!(tool["calls_prev_1h"], series[7] + series[8], "{tool}");
+    assert_ne!(tool["calls_1h"], tool["calls_prev_1h"], "{tool}");
+    assert_ne!(tool["calls_1h"], 0, "{tool}");
+    let quiet = entry(&body, "alpha", "tool-0");
+    assert_eq!(
+        quiet["calls_series"],
+        Value::Array(vec![json!(0); 12]),
+        "{quiet}"
+    );
+}
+
+/// H9: no counter store: the hour windows are null, the series is 12 nulls,
+/// and `series_start` is null.
+#[tokio::test]
+async fn h9_without_a_counter_store_the_hour_fields_are_null() {
+    let (state, _, _dir) = state(true, &["alpha"], 1, false).await;
+    let (_, body) = get(&state, "/ui/api/tools", Some(SECRET)).await;
+    let tool = entry(&body, "alpha", "tool-0");
+    // get(), not indexing: a missing key must not pass as null.
+    assert_eq!(tool.get("calls_1h"), Some(&Value::Null), "{tool}");
+    assert_eq!(tool.get("calls_prev_1h"), Some(&Value::Null), "{tool}");
+    assert_eq!(
+        tool["calls_series"],
+        Value::Array(vec![Value::Null; 12]),
+        "{tool}"
+    );
+    let root = body.as_object().expect("an object");
+    assert_eq!(root.get("series_start"), Some(&Value::Null));
 }

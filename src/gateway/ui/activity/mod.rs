@@ -20,7 +20,7 @@ mod seek;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use axum::extract::{Path, Query, State};
+use axum::extract::{Extension, Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
@@ -34,6 +34,7 @@ use self::rows::{FeedOutcome, Filter, kind_of, owned_by, row};
 use super::AppState;
 use super::errors::{auth_required, flat_error};
 use super::guard::Guard;
+use crate::config_reload::Generation;
 use crate::gateway::routes;
 
 /// Rows per page unless the caller asks for fewer or more.
@@ -119,10 +120,14 @@ fn refused(r: Refused) -> Response {
     }
 }
 
-/// The caller's access and the logs to read, or the refusal.
-fn admit(state: &AppState, guard: &Guard) -> Result<(Access, Logs), Early> {
-    let config = state.live_config.get();
-    let mapping = &config.control_plane.role_mapping;
+/// The caller's access and the logs to read, or the refusal. The role is the
+/// one the request's pinned generation maps (ADR-023).
+fn admit(
+    state: &AppState,
+    generation: &Generation,
+    guard: &Guard,
+) -> Result<(Access, Logs), Early> {
+    let mapping = &generation.config().control_plane.role_mapping;
     let access = guard.admit_activity(|client, identity| {
         access::resolve(client, identity, mapping).map_err(|r| Box::new(refused(r)))
     })?;
@@ -163,10 +168,11 @@ async fn blocking(read: impl FnOnce() -> Response + Send + 'static) -> Response 
 
 async fn list(
     State(state): State<Arc<AppState>>,
+    Extension(generation): Extension<Arc<Generation>>,
     guard: Guard,
     Query(query): Query<ListQuery>,
 ) -> Response {
-    match admit(&state, &guard) {
+    match admit(&state, &generation, &guard) {
         Ok((access, logs)) => blocking(move || list_page(&logs, &access, &query)).await,
         Err(r) => *r,
     }
@@ -178,10 +184,11 @@ fn not_kept() -> Response {
 
 async fn receipt_route(
     State(state): State<Arc<AppState>>,
+    Extension(generation): Extension<Arc<Generation>>,
     guard: Guard,
     Path(id): Path<String>,
 ) -> Response {
-    let (access, logs) = match admit(&state, &guard) {
+    let (access, logs) = match admit(&state, &generation, &guard) {
         Ok(admitted) => admitted,
         Err(r) => return *r,
     };
@@ -357,10 +364,11 @@ fn filters_sent(q: &ListQuery) -> Value {
 
 async fn export_route(
     State(state): State<Arc<AppState>>,
+    Extension(generation): Extension<Arc<Generation>>,
     guard: Guard,
     Query(query): Query<ExportQuery>,
 ) -> Response {
-    let (access, logs) = match admit(&state, &guard) {
+    let (access, logs) = match admit(&state, &generation, &guard) {
         Ok(admitted) => admitted,
         Err(r) => return *r,
     };
