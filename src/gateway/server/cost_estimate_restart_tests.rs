@@ -150,3 +150,93 @@ fn t8b_a_corrupt_saved_estimate_restores_nothing() {
         }
     }
 }
+
+/// T8c: an estimated name keeps its restored row through a saturated cap,
+/// though the restarted config does not budget it: the estimates are
+/// restored before the rows, so the name owns its row.
+#[test]
+fn t8c_an_estimated_name_keeps_its_row_through_a_full_cap() {
+    for scope in [Scope::Tool, Scope::Key] {
+        let _clock = at_secs(T);
+        let dir = tempfile::tempdir().expect("tempdir");
+        let saved = first_process(scope, dir.path());
+        let (_, restored) = boot_cost_governance(&governed(scope, None), dir.path());
+        let snap = restored.expect("armed").snapshot();
+        let (rows, overflow, saved_overflow) = match scope {
+            Scope::Tool => (
+                snap.tool_daily,
+                snap.tool_overflow_usd,
+                saved.tool_overflow_usd,
+            ),
+            Scope::Key => (
+                snap.key_daily,
+                snap.key_overflow_usd,
+                saved.key_overflow_usd,
+            ),
+        };
+        assert_eq!(rows.get("target").copied(), Some(0.5), "{scope:?}: its row");
+        assert!(
+            (overflow - saved_overflow).abs() < 1e-9,
+            "{scope:?}: overflow as saved"
+        );
+    }
+}
+
+/// T8d: a zero figure is saved and restored as taken: after a restart with
+/// the budget removed, the name's spend lands in its own row, and budgeting
+/// it again on the same day takes no figure from the overflow.
+#[test]
+fn t8d_a_zero_estimate_survives_a_restart() {
+    for scope in [Scope::Tool, Scope::Key] {
+        let _clock = at_secs(T);
+        let dir = tempfile::tempdir().expect("tempdir");
+        {
+            let (_, first) = boot_cost_governance(&governed(scope, None), dir.path());
+            let first = first.expect("armed");
+            for i in 0..CAP {
+                scope.spend(&first, &format!("filler-{i}"), 0.01);
+            }
+            // The overflow is empty: the figure taken is zero.
+            first.seed_estimates(
+                &BudgetLimits::default(),
+                &governed(scope, Some(2.5)).budgets,
+            );
+            let persisted =
+                build_persisted_costs(&first.snapshot_for_save().expect("a readable clock"));
+            assert_eq!(scope.estimate(&persisted, "target"), Some(0.0), "{scope:?}");
+            cost_persistence::save(&dir.path().join("costs.json"), &persisted).expect("save");
+        }
+        let (_, second) = boot_cost_governance(&governed(scope, None), dir.path());
+        let second = second.expect("armed");
+        scope.spend(&second, "unrelated", 2.0);
+        scope.spend(&second, "target", 1.0);
+        let rows = match scope {
+            Scope::Tool => second.snapshot().tool_daily,
+            Scope::Key => second.snapshot().key_daily,
+        };
+        assert_eq!(
+            rows.get("target").copied(),
+            Some(1.0),
+            "{scope:?}: its own row"
+        );
+        second.seed_estimates(
+            &BudgetLimits::default(),
+            &governed(scope, Some(2.5)).budgets,
+        );
+        let budgeted = governed(scope, Some(2.5));
+        assert!(
+            second
+                .check_under(
+                    &budgeted,
+                    if matches!(scope, Scope::Tool) {
+                        "target"
+                    } else {
+                        "read"
+                    },
+                    matches!(scope, Scope::Key).then_some("target")
+                )
+                .allowed,
+            "{scope:?}: 1 + 0 + 1 < 2.5; a re-taken figure reads 2 more"
+        );
+    }
+}
