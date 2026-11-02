@@ -44,8 +44,8 @@ const SCRUBBED_EXITS: &[(&str, &str, usize, &str)] = &[
     (
         "src/gateway/meta_mcp/call_dispatch/task_intake.rs",
         "scrub_stored(",
-        2,
-        "a repeated keyed task (BeginOutcome::Existing), both conversions",
+        1,
+        "a repeated keyed task (BeginOutcome::Existing)",
     ),
 ];
 

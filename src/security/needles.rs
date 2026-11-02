@@ -87,6 +87,11 @@ pub(crate) struct NeedleSet {
     /// until each is installed: room made by retirement goes to them first,
     /// and an unrelated value never clears the refusal alone.
     owed: parking_lot::Mutex<Vec<String>>,
+    /// A sent value a full set refused: the refusal holds until there is room.
+    refused_sent: AtomicBool,
+    /// An owed value dropped from configuration before it was installed is
+    /// protected only by the refusal, which holds until its grace has passed.
+    refuse_until: parking_lot::Mutex<Option<tokio::time::Instant>>,
     /// Bumped whenever `values` gains or loses a value.
     version: std::sync::atomic::AtomicU64,
     /// The live values compiled once, swapped when the list changes or its
@@ -127,6 +132,8 @@ impl NeedleSet {
             overflowed: AtomicBool::new(false),
             short_warned: parking_lot::Mutex::default(),
             owed: parking_lot::Mutex::default(),
+            refused_sent: AtomicBool::new(false),
+            refuse_until: parking_lot::Mutex::default(),
             version: std::sync::atomic::AtomicU64::new(0),
             compiled: RwLock::new(None),
         }
@@ -165,10 +172,10 @@ impl NeedleSet {
         }
     }
 
-    /// Pushes a value not yet held, dropping retired values first; past the
-    /// bound the set fails closed and keeps every value it holds. Whether
-    /// this refusal is the first since the set last had room: the caller
-    /// warns once its guard is dropped, never while holding it.
+    /// Pushes a value not yet held, after [`Self::settle`]; past the bound
+    /// the set fails closed and keeps every value it holds. Whether this
+    /// refusal is the first since the set last had room: the caller warns
+    /// once its guard is dropped, never while holding it.
     #[must_use]
     fn admit(
         &self,
@@ -177,6 +184,37 @@ impl NeedleSet {
         lifetime: Lifetime,
         now: tokio::time::Instant,
     ) -> bool {
+        self.settle(values, now);
+        if values.iter().any(|held| held.value == value) {
+            // It was owed, and the settle installed it.
+            return false;
+        }
+        if values.len() >= MAX_NEEDLES {
+            if lifetime == Lifetime::Configured {
+                let mut owed = self.owed.lock();
+                if !owed.iter().any(|due| due == value) {
+                    owed.push(value.to_owned());
+                }
+            } else {
+                self.refused_sent.store(true, Ordering::SeqCst);
+            }
+            return !self.overflowed.swap(true, Ordering::SeqCst);
+        }
+        values.push(Held {
+            value: value.to_owned(),
+            encoded: percent_forms(value),
+            last_sent: now,
+            lifetime,
+        });
+        self.version.fetch_add(1, Ordering::SeqCst);
+        false
+    }
+
+    /// Drops retired values, installs owed values while there is room, and
+    /// lifts the refusal once nothing is owed, a refused sent value has room
+    /// and no dropped owed value is inside its grace. Whether the set still
+    /// refuses.
+    fn settle(&self, values: &mut Vec<Held>, now: tokio::time::Instant) -> bool {
         let before = values.len();
         values.retain(|held| !self.retired(held, now));
         if values.len() != before {
@@ -195,26 +233,19 @@ impl NeedleSet {
                 self.version.fetch_add(1, Ordering::SeqCst);
             }
         }
-        if values.len() >= MAX_NEEDLES {
-            if lifetime == Lifetime::Configured && !owed.iter().any(|due| due == value) {
-                owed.push(value.to_owned());
-            }
-            return !self.overflowed.swap(true, Ordering::SeqCst);
+        if values.len() < MAX_NEEDLES {
+            self.refused_sent.store(false, Ordering::SeqCst);
         }
-        // Room again, and every configured value is in: answers flow again.
-        self.overflowed.store(false, Ordering::SeqCst);
-        if values.iter().any(|held| held.value == value) {
-            // It was owed, and the catch-up above installed it.
-            return false;
+        let mut until = self.refuse_until.lock();
+        if until.is_some_and(|deadline| now > deadline) {
+            *until = None;
         }
-        values.push(Held {
-            value: value.to_owned(),
-            encoded: percent_forms(value),
-            last_sent: now,
-            lifetime,
-        });
-        self.version.fetch_add(1, Ordering::SeqCst);
-        false
+        let refusing =
+            !owed.is_empty() || until.is_some() || self.refused_sent.load(Ordering::SeqCst);
+        if !refusing {
+            self.overflowed.store(false, Ordering::SeqCst);
+        }
+        refusing
     }
 
     /// The one warning a set that has just filled up gives.
@@ -271,10 +302,15 @@ impl NeedleSet {
         let now = tokio::time::Instant::now();
         let mut changed = false;
         let mut overflowed = false;
-        // A value no longer configured is no longer owed.
-        self.owed
-            .lock()
-            .retain(|due| wanted.contains(&due.as_str()));
+        // A value no longer configured is no longer owed; one never installed
+        // is protected only by the refusal, until its grace has passed.
+        let mut owed = self.owed.lock();
+        let before = owed.len();
+        owed.retain(|due| wanted.contains(&due.as_str()));
+        if owed.len() != before {
+            *self.refuse_until.lock() = Some(now + self.grace);
+        }
+        drop(owed);
         for held in values.iter_mut() {
             if held.lifetime == Lifetime::Configured && !wanted.contains(&held.value.as_str()) {
                 held.lifetime = Lifetime::Grace;
@@ -295,6 +331,8 @@ impl NeedleSet {
             }
             overflowed |= self.admit(&mut values, value, Lifetime::Configured, now);
         }
+        // An unpinning alone can lift the refusal: nothing else would.
+        self.settle(&mut values, now);
         if changed {
             self.version.fetch_add(1, Ordering::SeqCst);
         }
@@ -321,8 +359,14 @@ impl NeedleSet {
     }
 
     /// Whether the set refused a value: every frame is then withheld.
+    /// A set past its bound is settled first, so one that no send reaches
+    /// any more (a removed backend's) recovers once its values retire.
     pub(crate) fn overflowed(&self) -> bool {
-        self.overflowed.load(Ordering::SeqCst)
+        if !self.overflowed.load(Ordering::SeqCst) {
+            return false;
+        }
+        let mut values = self.values.write();
+        self.settle(&mut values, tokio::time::Instant::now())
     }
 
     /// The values still inside their grace. A retired value is not removed

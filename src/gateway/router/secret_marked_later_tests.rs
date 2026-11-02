@@ -124,3 +124,18 @@ async fn a_direct_route_keyed_repeat_is_redacted_when_served() {
         "premise: the repeat came from a store"
     );
 }
+
+/// A fresh keyed task holds no stored output: while a value set refuses,
+/// its creation is still acknowledged, never answered with the refusal.
+#[tokio::test]
+async fn a_fresh_keyed_task_is_acknowledged_while_a_value_set_refuses() {
+    let calls = Calls::default();
+    let url = echo_server(Arc::clone(&calls), Reply::Echo).await;
+    let fx = fixture_with_secrets_over_http(Vec::new(), url).await;
+    fx.state.backends.overflow_for_test("alpha");
+    let (id, made) = submit_task(&fx, "idem-fresh-while-refusing").await;
+    assert!(
+        made.get("error").is_none() && !id.is_empty(),
+        "the creation was answered with the refusal: {made}"
+    );
+}

@@ -146,13 +146,9 @@ impl MetaMcp {
                     .defer_or_serve_existing(id, tool_name, &targets, held, caller)
                     .await;
             }
-            Ok(outcome) => {
-                let mut answer = invoke::ask_if_refused_submit(caller, outcome).into_response(id);
-                // An existing task's stored output is scrubbed on the way out
-                // against the values current now; a fresh one has none yet.
-                let _ = self.backends.scrub_stored(&mut answer);
-                answer
-            }
+            // Never `Existing` (served above): the gateway's own answer, with
+            // no stored output to scrub.
+            Ok(outcome) => invoke::ask_if_refused_submit(caller, outcome).into_response(id),
             Err(crate::gateway::task_service::ServiceError::AuditUnavailable) => {
                 error_response_preserving_status(id, &crate::Error::AuditUnavailable)
             }
