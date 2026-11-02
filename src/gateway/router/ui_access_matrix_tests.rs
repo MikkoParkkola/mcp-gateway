@@ -222,7 +222,7 @@ async fn fixture(kind: Gateway, store: bool) -> Fixture {
 
 /// An invocation log holding one call by [`DEV`], one by [`OTHER_DEV`] and one
 /// by a key, chained and hashed like the logger's, opened as the server would.
-fn seed_log(state: &mut Arc<AppState>) -> (tempfile::TempDir, String) {
+pub(super) fn seed_log(state: &mut Arc<AppState>) -> (tempfile::TempDir, String) {
     use crate::security::transparency_log::TransparencyLogConfig;
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("audit.jsonl");

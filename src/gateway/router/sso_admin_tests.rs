@@ -263,6 +263,13 @@ async fn standing_of(
 
 #[path = "sso_admin_tests/cells.rs"]
 mod cells;
+/// A key-server caller's admin flag follows the request's pinned mapping.
+#[path = "sso_admin_tests/pinned_admin.rs"]
+mod pinned_admin;
+/// Activity's admin shortcut follows the pinned mapping too.
+#[cfg(feature = "webui")]
+#[path = "sso_admin_tests/activity_pin.rs"]
+mod activity_pin;
 
 // Its helpers serve the UI cells, so the module needs the UI.
 #[cfg(feature = "webui")]
