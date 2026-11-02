@@ -719,6 +719,30 @@ class TestSection(unittest.TestCase):
         self.assertEqual(len(self.timeouts(text)), 1, text)
         self.assertTrue(self.new(text), text)
 
+    # A comma in a generic header or a `where` clause is inside the item: the
+    # item ends at its block, so code in its body is still judged.
+    GENERIC = {
+        "generic params": "#[cfg(test)]\nasync fn helper<T, U>(t: T, u: U) {{\n{w}\n}}\n",
+        "generic return": "#[cfg(test)]\nasync fn helper() -> Result<u8, String> {{\n{w}\nOk(0)\n}}\n",
+        "where clause": "#[cfg(test)]\nasync fn helper<T>(t: T)\nwhere\n    T: Send,\n    T: Sync,\n{{\n{w}\n}}\n",
+        "generic impl": "#[cfg(test)]\nimpl<T, U> Probe<T, U> {{\n    async fn helper() {{\n{w}\n    }}\n}}\n",
+    }
+
+    def test_a_comma_in_a_generic_header_does_not_end_the_item(self):
+        for name, shape in self.GENERIC.items():
+            with self.subTest(shape=name):
+                text = "fn product() {}\n\n" + shape.format(w=self.WINDOW)
+                self.assertEqual(len(self.timeouts(text)), 1, text)
+                self.assertTrue(self.new(text), text)
+
+    def test_a_second_test_item_after_product_code_is_judged(self):
+        text = (
+            "#[cfg(test)]\nfn early() {}\n\nasync fn product() {\n" + self.WINDOW + "\n}\n\n"
+            "#[cfg(test)]\nmod tests {\n    async fn case() {\n" + self.WINDOW + "\n    }\n}\n"
+        )
+        self.assertEqual([f.fn for f in self.timeouts(text)], ["case"], text)
+        self.assertEqual({f.fn for f in self.new(text)} - {""}, {"case"}, text)
+
     def test_a_product_file_without_test_items_has_no_test_code(self):
         self.assertEqual(self.timeouts(self.product_after("fn other() {}")), [])
 
