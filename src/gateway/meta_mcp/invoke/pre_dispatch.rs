@@ -72,7 +72,9 @@ impl MetaMcp {
         crate::security::decision_record::EffectSource,
     )> {
         use crate::security::decision_record::{Effect, EffectSource};
-        if let Some(capabilities) = self.get_capabilities()
+        // The caller's view, as cache_admits reads it: a provider hidden
+        // from this caller is an unregistered name, never its definition.
+        if let Some(capabilities) = self.caller_capabilities()
             && server == capabilities.name
             && let Some(definition) = capabilities.get(tool)
         {
