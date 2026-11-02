@@ -146,9 +146,11 @@ struct Outcome {
     message: Value,
     calls: usize,
     kind: Value,
+    /// The record's `decision.rule_id`: the configured rule that decided.
+    rule: Value,
 }
 
-fn outcome(body: &Value, calls: usize, kind: Value) -> Outcome {
+fn outcome(body: &Value, calls: usize, (kind, rule): (Value, Value)) -> Outcome {
     let refused = body.get("error").is_some()
         || body.pointer("/result/isError").and_then(Value::as_bool) == Some(true);
     let code = body.pointer("/error/code").cloned().unwrap_or(Value::Null);
@@ -163,6 +165,7 @@ fn outcome(body: &Value, calls: usize, kind: Value) -> Outcome {
         message,
         calls,
         kind,
+        rule,
     }
 }
 
@@ -294,8 +297,11 @@ async fn call(
             rows.len() - recorded
         );
     };
-    let kind = row["decision"]["kind"].clone();
-    outcome(&body, fx.calls.load(Ordering::SeqCst) - before, kind)
+    let decided = (
+        row["decision"]["kind"].clone(),
+        row["decision"]["rule_id"].clone(),
+    );
+    outcome(&body, fx.calls.load(Ordering::SeqCst) - before, decided)
 }
 
 /// A request pinned to `a` while `b` is current answers as `a` does, and the
@@ -523,3 +529,7 @@ async fn a_queued_task_is_not_judged_by_the_startup_rules() {
         "{got}"
     );
 }
+
+/// The rule each recording site names (keyed rule ids).
+#[path = "rule_id_record_tests.rs"]
+mod rule_ids;
