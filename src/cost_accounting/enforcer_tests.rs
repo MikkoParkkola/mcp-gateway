@@ -155,21 +155,21 @@ fn daily_accumulator_add_increases_current() {
 fn evaluate_alerts_selects_highest_matching_threshold() {
     // spend=0.09, limit=0.10 → 90% → highest rule that fires is Notify(80)
     let e = enforcer_with(true, Some(0.10), &[], &[], &[]);
-    let action = e.evaluate_alerts(0.09, 0.10);
+    let action = evaluate_alerts(&e.config.alerts, 0.09, 0.10);
     assert_eq!(action, Some(AlertAction::Notify));
 }
 
 #[test]
 fn evaluate_alerts_returns_block_at_100_percent() {
     let e = enforcer_with(true, Some(0.10), &[], &[], &[]);
-    let action = e.evaluate_alerts(0.10, 0.10);
+    let action = evaluate_alerts(&e.config.alerts, 0.10, 0.10);
     assert_eq!(action, Some(AlertAction::Block));
 }
 
 #[test]
 fn evaluate_alerts_returns_none_below_50_percent() {
     let e = enforcer_with(true, Some(1.0), &[], &[], &[]);
-    let action = e.evaluate_alerts(0.40, 1.0);
+    let action = evaluate_alerts(&e.config.alerts, 0.40, 1.0);
     assert_eq!(action, None);
 }
 

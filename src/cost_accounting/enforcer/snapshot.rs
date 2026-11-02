@@ -7,6 +7,7 @@ use std::collections::HashMap;
 
 use dashmap::DashMap;
 
+use super::super::config::{AlertRule, CostGovernanceConfig};
 use super::super::persistence::EnforcerSaveSnapshot;
 use super::{
     AlertAction, BudgetEnforcer, DailyAccumulator, EnforcerSnapshot, add_capped, rows, usd,
@@ -127,7 +128,14 @@ impl BudgetEnforcer {
     /// Snapshot current accumulator state for the UI endpoint.
     #[must_use]
     pub fn snapshot(&self) -> EnforcerSnapshot {
-        self.snapshot_at(crate::clock::unix_secs().ok())
+        self.snapshot_under(&self.config)
+    }
+
+    /// [`Self::snapshot`] reporting the limits of `governance`, the config one
+    /// response is built from.
+    #[must_use]
+    pub(crate) fn snapshot_under(&self, governance: &CostGovernanceConfig) -> EnforcerSnapshot {
+        self.snapshot_at(crate::clock::unix_secs().ok(), governance)
     }
 
     /// A snapshot to persist, stamped from the wall clock. On a clock before
@@ -138,13 +146,17 @@ impl BudgetEnforcer {
     ) -> Result<EnforcerSaveSnapshot, crate::clock::ClockBeforeEpoch> {
         let taken_at = crate::clock::unix_secs()?;
         Ok(EnforcerSaveSnapshot::from_snapshot(
-            self.snapshot_at(Some(taken_at)),
+            self.snapshot_at(Some(taken_at), &self.config),
             taken_at,
             self.day_basis_at(taken_at),
         ))
     }
 
-    fn snapshot_at(&self, taken_at: Option<u64>) -> EnforcerSnapshot {
+    fn snapshot_at(
+        &self,
+        taken_at: Option<u64>,
+        governance: &CostGovernanceConfig,
+    ) -> EnforcerSnapshot {
         let today = taken_at.map(|secs| self.day_key(secs));
         let global_daily_usd = usd(self.global_daily.current_on(today));
 
@@ -154,42 +166,40 @@ impl BudgetEnforcer {
 
         EnforcerSnapshot {
             global_daily_usd,
-            global_daily_limit: self.config.budgets.daily,
+            global_daily_limit: governance.budgets.daily,
             tool_daily,
-            tool_limits: self.config.budgets.per_tool.clone(),
+            tool_limits: governance.budgets.per_tool.clone(),
             taken_at,
             key_daily,
-            key_limits: self.config.budgets.per_key.clone(),
+            key_limits: governance.budgets.per_key.clone(),
             tool_overflow_usd: usd(self.tool_overflow.current_on(today)),
             key_overflow_usd: usd(self.key_overflow.current_on(today)),
         }
     }
+}
 
-    // ── Private helpers ───────────────────────────────────────────────────────
-
-    /// Find the highest-threshold alert rule whose `at_percent` threshold
-    /// is satisfied by `spend / limit * 100`.
-    ///
-    /// Uses `f64` comparison to avoid integer truncation errors near thresholds
-    /// (e.g. 99.7 % must not be cast to 99 and miss the 100 % block rule).
-    pub(super) fn evaluate_alerts(&self, spend: f64, limit: f64) -> Option<AlertAction> {
-        if limit <= 0.0 {
-            return None;
-        }
-        let percent = spend / limit * 100.0;
-        let mut best: Option<AlertAction> = None;
-        let mut best_threshold = 0.0_f64;
-
-        for rule in &self.config.alerts {
-            let threshold = f64::from(rule.at_percent);
-            if percent >= threshold && threshold >= best_threshold {
-                best = Some(rule.action);
-                best_threshold = threshold;
-            }
-        }
-
-        best
+/// Find the highest-threshold alert rule whose `at_percent` threshold
+/// is satisfied by `spend / limit * 100`.
+///
+/// Uses `f64` comparison to avoid integer truncation errors near thresholds
+/// (e.g. 99.7 % must not be cast to 99 and miss the 100 % block rule).
+pub(super) fn evaluate_alerts(alerts: &[AlertRule], spend: f64, limit: f64) -> Option<AlertAction> {
+    if limit <= 0.0 {
+        return None;
     }
+    let percent = spend / limit * 100.0;
+    let mut best: Option<AlertAction> = None;
+    let mut best_threshold = 0.0_f64;
+
+    for rule in alerts {
+        let threshold = f64::from(rule.at_percent);
+        if percent >= threshold && threshold >= best_threshold {
+            best = Some(rule.action);
+            best_threshold = threshold;
+        }
+    }
+
+    best
 }
 
 fn daily_usd(map: &DashMap<String, DailyAccumulator>, today: Option<u64>) -> HashMap<String, f64> {

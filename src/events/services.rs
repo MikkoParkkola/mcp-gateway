@@ -437,10 +437,15 @@ impl Services {
         }
         let tool = format!("events:{name}");
         registry.register_from_capability(&tool, cost);
-        let verdict = enforcer.check(&tool, key);
+        // Not request-scoped: one generation per charge, for the check and the
+        // settlement alike.
+        let generation = self.live.generation();
+        let governance = enforcer.governance(Some(&generation));
+        let verdict = enforcer.check_under(governance, &tool, key);
         if verdict.allowed {
             // Spent and released in one step (MIK-7903).
-            enforcer.settle(verdict.hold.as_deref(), &tool, key, verdict.cost_usd);
+            let hold = verdict.hold.as_deref();
+            enforcer.settle_under(governance, hold, (&tool, key), verdict.cost_usd);
         }
         verdict.allowed
     }
