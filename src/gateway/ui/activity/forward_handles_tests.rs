@@ -61,23 +61,16 @@ fn f9e_a_resume_in_a_rotated_segment_crosses_into_the_next_without_restarting() 
     let w = write_from(&s.path, &[next], 2, 5);
     let stop = w.marks.last().unwrap().clone();
     let l = log(&s.path, StreamKind::Activity);
-    let mut pages = Vec::new();
-    loop {
-        let p = rows_after(
-            &l,
-            Some(&s.cursor()),
-            Some(&stop),
-            &Access::All,
-            SMALL,
-            &mut s.search,
-        )
-        .unwrap();
-        let more = p.more;
-        pages.push(p);
-        if !more || pages.len() > 1000 {
-            break;
-        }
-    }
+    // Each call passes the last page's `next`, as the merge loop does.
+    let cursor = s.cursor();
+    let pages = drain(
+        &l,
+        Some(&cursor),
+        Some(&stop),
+        &Access::All,
+        SMALL,
+        &mut s.search,
+    );
     assert!(pages.iter().all(|p| !p.restarted), "no restart on crossing");
     assert_eq!(counters(&pages), vec![3, 4, 5, 6]);
 }
