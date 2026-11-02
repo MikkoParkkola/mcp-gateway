@@ -96,6 +96,7 @@ async fn dispatch_doc_example(scope: &str, read_only: bool) -> Result<serde_json
         confirmation: ConfirmationChannel::Unavailable,
         era: crate::protocol::meta::Era::Legacy,
         channel: &crate::gateway::input_bridge::NoClientChannel,
+        generation: None,
     };
     let result = meta
         .invoke_tool(

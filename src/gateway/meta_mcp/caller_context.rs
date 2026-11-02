@@ -124,6 +124,15 @@ pub struct MetaMcpCallerContext<'a> {
     /// channel that refuses rather than an absent one every read site must
     /// remember to check.
     pub channel: &'a dyn crate::gateway::input_bridge::ClientChannel,
+    /// The configuration generation this request is pinned to: cost governance
+    /// judges its budgets and alerts with this one from admission to
+    /// settlement, whatever a reload publishes meanwhile (ADR-023).
+    ///
+    /// `None` is a call with no pinned generation; it judges with the live
+    /// config's current one. Production sites always pin one
+    /// (`boundary_pins::pinned_generation`).
+    #[cfg_attr(not(feature = "cost-governance"), allow(dead_code))]
+    pub(crate) generation: Option<&'a crate::config_reload::Generation>,
 }
 
 impl<'a> MetaMcpCallerContext<'a> {
@@ -242,6 +251,7 @@ impl<'a> MetaMcpCallerContext<'a> {
             task: None,
             era: self.era,
             channel: self.channel,
+            generation: self.generation,
         }
     }
 }
