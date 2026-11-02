@@ -264,3 +264,82 @@ async fn a_chokepoint_refusal_after_the_gate_fills_keeps_the_nonce() {
     )
     .expect_err("the gate's fill keeps the nonce spent");
 }
+
+/// The chokepoint's folder check, called directly: the route scan refuses an
+/// outside path first, so no end-to-end row reaches it (defence in depth).
+/// Dispatched arguments are scanned as `Arguments` and judged; a retry's
+/// answers are scanned as `Answers` and never path-checked. Mutant M5b, the
+/// arguments labelled as answers, must turn this red.
+#[cfg(feature = "firewall")]
+#[test]
+fn the_chokepoint_judges_dispatched_arguments_not_answers() {
+    use std::sync::Arc;
+
+    use serde_json::json;
+
+    use super::{Outbound, Source};
+    use crate::backend::{Backend, BackendRegistry};
+    use crate::config::{BackendConfig, FailsafeConfig, TransportConfig};
+    use crate::gateway::meta_mcp::InvokeScope;
+    use crate::gateway::router::CallerStanding;
+    use crate::security::firewall::{
+        Firewall, FirewallAction, FirewallConfig, FirewallRule, plain_rule,
+    };
+
+    let dir = crate::test_tempdir::tempdir();
+    for sub in ["safe", "outside"] {
+        std::fs::create_dir(dir.path().join(sub)).expect("mkdir");
+    }
+    let path = |rel: &str| dir.path().join(rel).to_string_lossy().into_owned();
+    let registry = Arc::new(BackendRegistry::new());
+    let stdio = TransportConfig::Stdio {
+        command: "true".to_string(),
+        cwd: None,
+        protocol_version: None,
+    };
+    let fs = Arc::new(Backend::new(
+        "fs",
+        BackendConfig {
+            transport: stdio,
+            ..BackendConfig::default()
+        },
+        &FailsafeConfig::default(),
+        std::time::Duration::from_secs(60),
+    ));
+    assert!(registry.register(Arc::clone(&fs)));
+    let mut meta = MetaMcp::new(Arc::clone(&registry));
+    let rule = FirewallRule {
+        allowed_roots: Some(vec![path("safe")]),
+        path_args: Some(vec!["path".to_string()]),
+        ..plain_rule("read_file", FirewallAction::Block)
+    };
+    let config = FirewallConfig {
+        rules: vec![rule],
+        ..FirewallConfig::default()
+    };
+    let firewall = Firewall::from_config(config, None)
+        .with_continuations(meta.continuation())
+        .with_registries(Arc::clone(&registry), meta.capability_slot());
+    meta.set_firewall(Some(Arc::new(firewall)));
+
+    let send = |arguments: &serde_json::Value, answers: Option<&serde_json::Value>| {
+        let outbound = Outbound {
+            arguments,
+            answers,
+            backend: Some(&fs),
+        };
+        let scope = InvokeScope::allow_all(CallerStanding::Standard);
+        meta.rescan_outbound(scope, None, ("fs", "read_file"), &outbound, Source::Invoke)
+    };
+    let outside = json!({"path": path("outside/f")});
+    let inside = json!({"path": path("safe/f")});
+    let refused = send(&outside, None).expect_err("outside arguments are refused");
+    assert!(
+        refused.to_string().contains("path_outside_root"),
+        "judged by the folder check: {refused}"
+    );
+    send(&inside, None).expect("inside arguments pass");
+    // A retry's answers carry no path argument and are not path-checked.
+    let answers = json!({"approval": "yes"});
+    send(&inside, Some(&answers)).expect("a retry of an inside call passes");
+}

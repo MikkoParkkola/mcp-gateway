@@ -80,6 +80,8 @@ mod direct_guards;
 
 #[cfg(test)]
 mod adapter_get_rollback_tests;
+#[cfg(all(test, feature = "firewall"))]
+mod allowed_root_watch_tests;
 #[cfg(test)]
 mod audit_degraded_tests;
 /// MIK-8392.STORED.1 T10: a revoked account's stored task read.
@@ -156,6 +158,8 @@ mod dispatch_parity_tests;
 #[cfg(all(test, feature = "webui"))]
 mod e5_dashboard_session_tests;
 
+#[cfg(all(test, feature = "metrics"))]
+mod backend_origin_count_tests;
 #[cfg(all(test, feature = "firewall"))]
 mod egress_matrix_tests;
 #[cfg(test)]
@@ -252,6 +256,9 @@ mod delivery_effect_tests;
 /// A delivery record joins its invocation by trace, on both routes.
 #[cfg(all(test, feature = "firewall"))]
 mod delivery_trace_join_tests;
+/// The direct route records no declared effect yet (pinned absence).
+#[cfg(test)]
+mod direct_effect_absent_tests;
 /// A late refusal keeps its own code, and its run keeps the key.
 #[cfg(all(test, feature = "firewall"))]
 mod late_refusal_lease_tests;

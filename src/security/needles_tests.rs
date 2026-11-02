@@ -354,6 +354,98 @@ fn a_supported_version_holding_a_value_is_refused() {
     );
 }
 
+/// A backend's own JSON-RPC error that echoes an injected value is scrubbed as
+/// its gateway twin is, in each place it can carry it: an echo in the message
+/// or the data is redacted and the error stays the backend's, its code kept;
+/// an echo in the code cannot be redacted, so the error is refused with the
+/// gateway's own refusal. The value never reaches the caller. Mutant m22 (the
+/// backend variant listed with the errors that carry nothing to scrub) turns
+/// it red.
+#[test]
+fn a_backends_own_error_echoing_a_value_is_scrubbed() {
+    let backend = |code: i32, message: &str, data: Option<serde_json::Value>| {
+        Err(crate::Error::backend_json_rpc(
+            crate::protocol::JsonRpcError {
+                code,
+                message: message.to_owned(),
+                data,
+            },
+        ))
+    };
+    let needles = NeedleSet::with_grace(GRACE);
+    needles.insert("b", "token-one-value");
+    needles.insert("c", "-32077");
+    for (name, answer) in [
+        (
+            "message",
+            backend(-32001, "backend refused token-one-value", None),
+        ),
+        (
+            "data",
+            backend(
+                -32001,
+                "backend refused",
+                Some(serde_json::json!({"echo": "token-one-value", "keep": "plain"})),
+            ),
+        ),
+    ] {
+        let answer = super::scrub_answer(&needles, answer);
+        let text = format!("{answer:?}");
+        assert!(!text.contains("token-one-value"), "{name}: {text}");
+        // The frame a client is sent, data included, carries no value either.
+        let error = answer.as_ref().expect_err("an error answer");
+        let frame = serde_json::to_string(&crate::protocol::JsonRpcResponse::of_error(
+            Some(crate::protocol::RequestId::Number(1)),
+            error,
+        ))
+        .expect("the frame serialises");
+        assert!(!frame.contains("token-one-value"), "{name}: {frame}");
+        let Err(crate::Error::BackendJsonRpc {
+            code: -32001,
+            message,
+            data,
+        }) = answer
+        else {
+            panic!("{name}: the backend's error, scrubbed: {text}");
+        };
+        // Only the value goes: the rest of the error reaches the caller.
+        assert!(message.starts_with("backend refused"), "{name}: {message}");
+        if name == "data" {
+            assert_eq!(message, "backend refused", "the message carried no value");
+            let data = data.expect("the data is kept");
+            assert_eq!(data["keep"], "plain", "{data}");
+            assert!(data["echo"].is_string(), "{data}");
+        } else {
+            assert_ne!(
+                message, "backend refused ",
+                "the value is replaced, not cut"
+            );
+            assert_eq!(data, None);
+        }
+    }
+    let answer = super::scrub_answer(&needles, backend(-32077, "backend refused", None));
+    let text = format!("{answer:?}");
+    assert!(!text.contains("32077"), "code: {text}");
+    assert!(
+        matches!(answer, Err(crate::Error::JsonRpc { code: -32603, .. })),
+        "code: the gateway's refusal: {text}"
+    );
+}
+
+/// A backend's own error carrying the scrub's exact refusal code and text is
+/// still the backend's: it never reads as the gateway's echo refusal, and
+/// it counts as the backend's.
+#[test]
+fn a_backend_sending_the_refusal_text_is_not_the_gateways_refusal() {
+    let backend = crate::Error::backend_json_rpc(crate::protocol::JsonRpcError {
+        code: super::REFUSAL_CODE,
+        message: super::ECHO_REFUSAL.to_owned(),
+        data: None,
+    });
+    assert!(!super::is_echo_refusal(&backend), "{backend:?}");
+    assert_eq!(backend.origin(), crate::protocol::Origin::Backend);
+}
+
 /// Review A-F1: the RFC 3986 spelling (space as `%20`) and lowercase hex are
 /// matched as well as the form spelling.
 #[test]

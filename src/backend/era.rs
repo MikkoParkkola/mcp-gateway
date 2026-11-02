@@ -127,7 +127,11 @@ pub(super) fn unless_retired(entry: &PooledEntry, step: &mut dyn FnMut()) -> boo
 pub(super) fn refusal_code(answer: &Result<JsonRpcResponse>) -> Option<i32> {
     match answer {
         Ok(response) => response.error.as_ref().map(|error| error.code),
-        Err(Error::JsonRpc { code, .. } | Error::JsonRpcRetryable { code, .. }) => Some(*code),
+        Err(
+            Error::JsonRpc { code, .. }
+            | Error::BackendJsonRpc { code, .. }
+            | Error::JsonRpcRetryable { code, .. },
+        ) => Some(*code),
         Err(_) => None,
     }
 }
@@ -533,6 +537,19 @@ mod tests {
     use super::*;
     use crate::protocol::era::UNSUPPORTED_PROTOCOL_VERSION;
     use crate::protocol::meta::ADDED_IN_2026_07_28;
+
+    /// C1: a backend's refusal on a non-retry status arrives as its own
+    /// variant and still reads as the same code: dropping its arm would score
+    /// a declining peer as a transport fault and tear it down.
+    #[test]
+    fn a_backends_own_refusal_reads_as_its_code() {
+        let refused = Err(Error::backend_json_rpc(crate::protocol::JsonRpcError {
+            code: METHOD_NOT_FOUND,
+            message: "method not found".into(),
+            data: None,
+        }));
+        assert_eq!(refusal_code(&refused), Some(METHOD_NOT_FOUND));
+    }
 
     /// Both carriages of a refusal must reach the probe as the same code.
     ///

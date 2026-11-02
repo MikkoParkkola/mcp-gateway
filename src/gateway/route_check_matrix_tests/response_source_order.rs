@@ -303,7 +303,7 @@ fn replay_and_cache_hit_reach_the_tail() {
     let text = source(hit);
     let served = only(
         &text,
-        "return Some(GuardedValue::from_cache(cached).augment(|v| {",
+        "return Some(GuardedValue::from_cache(cached, hit).augment(|v| {",
         hit,
     );
     let stamped = served

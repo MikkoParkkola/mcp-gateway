@@ -66,9 +66,9 @@ src/config_reload/reload_context.rs	reload_transaction	refuse_before_apply	1	fee
 src/config_reload/reload_context.rs	reload_transaction	reload_refusal	1	feeds	a reload refusal gateway_reload_config answers; reload_config raises only for the posture refusal
 src/config_reload/reload_context.rs	reload_transaction	restart_only_refusal	1	feeds	a reload refusal gateway_reload_config answers; reload_config raises only for the posture refusal
 src/config_reload/reload_context.rs	with_pending_restart	next_start_refusal	1	not-delivered	restart advice inside a reload answer
-src/error.rs	to_rpc_code	http_is_backend_refusal	1	not-delivered	predicate: picks the JSON-RPC code for a backend's HTTP refusal
 src/error_origin.rs	http_is_backend_refusal	is_deterministic_refusal	1	not-delivered	predicate
 src/error_origin.rs	origin	http_is_backend_refusal	1	not-delivered	predicate: names who refused, for the error-count metric
+src/error_origin.rs	to_rpc_code	http_is_backend_refusal	1	not-delivered	predicate: picks the JSON-RPC code for a backend's HTTP refusal
 src/error_origin.rs	origin	is_echo_refusal	1	not-delivered	predicate: counts the scrub's retryable refusal as the gateway's, for the error-count metric
 src/events/rpc_held.rs	cap_refusal_for	cap_refusal	1	no-record	an events subscription cap, not a call delivery
 src/events/worker.rs	retry_unsent	retry_after_refusal	1	no-record	event delivery
