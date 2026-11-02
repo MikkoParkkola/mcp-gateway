@@ -1,0 +1,382 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+//! Readers of the decision object: the evidence, the rule filter, and the
+//! receipt's line for each piece a record does not carry.
+
+use serde_json::{Value, json};
+
+use super::read::{
+    DECIDED_CACHE_COPIED, DECIDED_CACHE_NOT_REDECIDED, DECIDED_FRESH, DECIDED_REPLAYED,
+    EVIDENCE_FIELDS, FLAGS_NOT_SET, NO_FINDINGS, NOT_RECORDED_BY_VERSION, NOT_RECORDED_FOR_CALL,
+    RULE_NOT_RECORDED, UNDECLARED, decided_line, decision_evidence, effect_line, findings_line,
+    flags_line, matches_rule, rule_line,
+};
+use super::{Decided, Decision, DecisionFinding, DecisionKind, Effect, EffectSource};
+
+/// A v2 decision with every field this version writes.
+fn full() -> Decision {
+    Decision {
+        v: 2,
+        config_revision: Some("rev-a".into()),
+        running_revision: None,
+        pending_restart: vec![],
+        kind: DecisionKind::Grant,
+        rule_id: Some("grant:abc".into()),
+        grant_id: Some("g-dev".into()),
+        request_findings: Some(vec![DecisionFinding {
+            scan_type: "shell_injection".into(),
+            severity: "high".into(),
+            location: "request_args".into(),
+        }]),
+        request_findings_truncated: false,
+        declared_effect: Some(Effect::ReadOnly),
+        declared_effect_source: Some(EffectSource::ToolAnnotation),
+        decided: Decided::Fresh,
+    }
+}
+
+/// A recorded entry carrying `decision`, or no decision when `None`.
+fn entry(decision: Option<&Decision>) -> Value {
+    let mut e = json!({"kind": "invocation", "counter": 7});
+    if let Some(d) = decision {
+        e["decision"] = serde_json::to_value(d).expect("serialise");
+    }
+    e
+}
+
+#[test]
+fn a_record_without_a_decision_reads_no_evidence() {
+    assert_eq!(decision_evidence(&entry(None)), None);
+}
+
+#[test]
+fn a_v2_record_reads_its_decision_evidence() {
+    let d = full();
+    assert_eq!(decision_evidence(&entry(Some(&d))), Some(d));
+}
+
+#[test]
+fn matches_rule_returns_exactly_that_rules_records() {
+    let rule = |id: Option<&str>| Decision {
+        rule_id: id.map(str::to_owned),
+        ..full()
+    };
+    let log = [
+        entry(Some(&rule(Some("firewall:a")))),
+        entry(Some(&rule(Some("firewall:b")))),
+        entry(Some(&rule(Some("tool_policy:c")))),
+        entry(Some(&rule(Some("firewall:b")))),
+        entry(Some(&rule(None))),
+        entry(None),
+    ];
+    let hits: Vec<usize> = log
+        .iter()
+        .enumerate()
+        .filter(|(_, e)| matches_rule(e, "firewall:b"))
+        .map(|(i, _)| i)
+        .collect();
+    assert_eq!(hits, vec![1, 3]);
+}
+
+#[test]
+fn a_kind_only_record_reads_rule_not_recorded() {
+    let kind_only = Decision {
+        rule_id: None,
+        ..full()
+    };
+    assert_eq!(rule_line(&kind_only), Some(RULE_NOT_RECORDED));
+    assert_eq!(RULE_NOT_RECORDED, "rule not recorded for this check");
+    assert_eq!(rule_line(&full()), None);
+}
+
+#[test]
+fn absent_flags_read_not_set_by_this_rule() {
+    assert_eq!(flags_line(&full()), FLAGS_NOT_SET);
+    assert_eq!(FLAGS_NOT_SET, "not set by this rule");
+}
+
+#[test]
+fn findings_absent_on_a_v1_record_read_not_recorded_by_this_version() {
+    let v1 = Decision {
+        v: 1,
+        request_findings: None,
+        ..full()
+    };
+    assert_eq!(findings_line(&v1), Some(NOT_RECORDED_BY_VERSION));
+    assert_eq!(
+        NOT_RECORDED_BY_VERSION,
+        "not recorded by this gateway version"
+    );
+}
+
+#[test]
+fn findings_absent_on_a_v2_record_read_not_recorded_for_this_call() {
+    let v2 = Decision {
+        request_findings: None,
+        ..full()
+    };
+    assert_eq!(findings_line(&v2), Some(NOT_RECORDED_FOR_CALL));
+    assert_eq!(NOT_RECORDED_FOR_CALL, "not recorded for this call");
+}
+
+#[test]
+fn an_empty_findings_list_reads_none() {
+    let clean = Decision {
+        request_findings: Some(vec![]),
+        ..full()
+    };
+    assert_eq!(findings_line(&clean), Some(NO_FINDINGS));
+    assert_eq!(NO_FINDINGS, "none");
+    assert_eq!(findings_line(&full()), None, "a list to show needs no line");
+}
+
+#[test]
+fn effect_absent_on_a_v1_record_read_not_recorded_by_this_version() {
+    let v1 = Decision {
+        v: 1,
+        declared_effect: None,
+        declared_effect_source: None,
+        ..full()
+    };
+    assert_eq!(effect_line(&v1), Some(NOT_RECORDED_BY_VERSION));
+}
+
+#[test]
+fn effect_absent_on_a_v2_record_read_not_recorded_for_this_call() {
+    let v2 = Decision {
+        declared_effect: None,
+        declared_effect_source: None,
+        ..full()
+    };
+    assert_eq!(effect_line(&v2), Some(NOT_RECORDED_FOR_CALL));
+}
+
+#[test]
+fn effect_undeclared_reads_the_tool_declared_no_effect() {
+    let undeclared = Decision {
+        declared_effect: Some(Effect::Undeclared),
+        ..full()
+    };
+    assert_eq!(effect_line(&undeclared), Some(UNDECLARED));
+    assert_eq!(UNDECLARED, "the tool declared no effect");
+    assert_eq!(
+        effect_line(&full()),
+        None,
+        "a declared read-only effect needs no line"
+    );
+}
+
+#[test]
+fn the_reader_field_names_are() {
+    assert_eq!(
+        EVIDENCE_FIELDS,
+        ["kind", "rule", "grant", "flags", "findings", "effect"]
+    );
+}
+
+#[test]
+fn r1_a_malformed_decision_reads_no_evidence_and_matches_no_rule() {
+    let kind = serde_json::to_value(DecisionKind::Grant).unwrap();
+    // Every field in declaration order: serde would read it as the struct.
+    let positional = json!([
+        2,
+        null,
+        null,
+        [],
+        kind,
+        "grant:abc",
+        null,
+        null,
+        false,
+        null,
+        null,
+        "fresh"
+    ]);
+    let mut array_finding = serde_json::to_value(full()).unwrap();
+    array_finding["request_findings"] = json!([["shell_injection", "high", "request_args"]]);
+    for bad in [
+        json!("grant"),
+        json!(null),
+        json!({}),
+        json!([]),
+        positional,
+        array_finding,
+        json!({"v": "two", "rule_id": "grant:abc"}),
+        json!({"v": 2, "kind": "no_such_kind", "rule_id": "grant:abc"}),
+        json!({"v": 2, "rule_id": "grant:abc", "decided": "fresh"}),
+    ] {
+        let e = json!({"counter": 7, "decision": bad});
+        assert_eq!(decision_evidence(&e), None, "{bad}");
+        assert!(!matches_rule(&e, "grant:abc"), "{bad}");
+    }
+}
+
+#[test]
+fn r1_a_hand_written_v2_record_and_a_later_one_with_an_unknown_field_read_fully() {
+    let kind = serde_json::to_value(DecisionKind::Grant).unwrap();
+    let raw = json!({
+        "v": 2, "config_revision": "rev-a", "running_revision": "rev-b",
+        "pending_restart": ["listen"], "kind": kind, "rule_id": "grant:abc",
+        "grant_id": "g-dev",
+        "request_findings": [{"scan_type": "shell_injection", "severity": "high",
+                              "location": "request_args"}],
+        "request_findings_truncated": true, "declared_effect": "may_write",
+        "declared_effect_source": "capability_definition", "decided": "replayed"});
+    let want = Decision {
+        running_revision: Some("rev-b".into()),
+        pending_restart: vec!["listen".into()],
+        request_findings_truncated: true,
+        declared_effect: Some(Effect::MayWrite),
+        declared_effect_source: Some(EffectSource::CapabilityDefinition),
+        decided: Decided::Replayed,
+        ..full()
+    };
+    let read = |d: &Value| decision_evidence(&json!({"counter": 7, "decision": d}));
+    assert_eq!(read(&raw), Some(want.clone()));
+    let mut later = raw.clone();
+    later["v"] = 3.into();
+    later["added_later"] = "ignored".into();
+    assert_eq!(read(&later), Some(Decision { v: 3, ..want }));
+}
+
+#[test]
+fn matches_rule_needs_the_whole_rule_id() {
+    let e = entry(Some(&full()));
+    for partial in ["grant:", "grant:ab", "", "GRANT:ABC", "grant:abc "] {
+        assert!(!matches_rule(&e, partial), "{partial:?}");
+    }
+}
+
+#[test]
+fn version_0_reads_not_recorded_by_this_gateway_version() {
+    let v0 = Decision {
+        v: 0,
+        request_findings: None,
+        declared_effect: None,
+        declared_effect_source: None,
+        ..full()
+    };
+    assert_eq!(findings_line(&v0), Some(NOT_RECORDED_BY_VERSION));
+    assert_eq!(effect_line(&v0), Some(NOT_RECORDED_BY_VERSION));
+}
+
+#[test]
+fn r1_raw_v1_json_reads_without_findings_or_effect() {
+    let kind = serde_json::to_value(DecisionKind::Grant).unwrap();
+    let e = json!({"counter": 7, "decision": {
+        "v": 1, "kind": kind, "rule_id": "grant:abc", "decided": "fresh"}});
+    let d = decision_evidence(&e).expect("a v1 decision is evidence");
+    assert_eq!(
+        (d.v, d.request_findings.clone(), d.declared_effect),
+        (1, None, None)
+    );
+    assert_eq!(
+        findings_line(&d),
+        Some("not recorded by this gateway version")
+    );
+    assert!(matches_rule(&e, "grant:abc"));
+}
+
+#[test]
+fn r1_a_later_version_reads_as_version_2() {
+    let v3 = Decision { v: 3, ..full() };
+    assert_eq!(decision_evidence(&entry(Some(&v3))), Some(v3.clone()));
+    let none = Decision {
+        request_findings: None,
+        declared_effect: None,
+        declared_effect_source: None,
+        ..v3
+    };
+    assert_eq!(findings_line(&none), Some("not recorded for this call"));
+    assert_eq!(effect_line(&none), Some("not recorded for this call"));
+}
+
+#[test]
+fn r2_matches_rule_is_false_for_an_unknown_rule_and_without_a_decision() {
+    let e = entry(Some(&full()));
+    assert!(matches_rule(&e, "grant:abc"));
+    assert!(!matches_rule(&e, "grant:other"));
+    assert!(!matches_rule(&entry(None), "grant:abc"));
+}
+
+#[test]
+fn r3_a_missing_rule_id_reads_the_same_at_every_version() {
+    for v in [1, 2] {
+        let d = Decision {
+            v,
+            rule_id: None,
+            ..full()
+        };
+        assert_eq!(
+            rule_line(&d),
+            Some("rule not recorded for this check"),
+            "v{v}"
+        );
+    }
+}
+
+#[test]
+fn r5_flags_read_not_set_by_this_rule_for_every_decision() {
+    let decisions = [
+        full(),
+        Decision { v: 1, ..full() },
+        Decision {
+            rule_id: None,
+            ..full()
+        },
+    ];
+    for d in decisions {
+        assert_eq!(flags_line(&d), "not set by this rule");
+    }
+}
+
+#[test]
+fn r6_each_way_of_deciding_reads_its_own_line() {
+    let line = |decided| decided_line(&Decision { decided, ..full() });
+    assert_eq!(line(Decided::Fresh), "decided for this call");
+    assert_eq!(
+        line(Decided::CacheHitCopied),
+        "served from cache with the decision it was stored with"
+    );
+    assert_eq!(
+        line(Decided::CacheHitNotRedecided),
+        "served from cache, not re-decided; read-only calls only"
+    );
+    assert_eq!(line(Decided::Replayed), "replayed from a stored result");
+    assert_eq!(
+        [
+            DECIDED_FRESH,
+            DECIDED_CACHE_COPIED,
+            DECIDED_CACHE_NOT_REDECIDED,
+            DECIDED_REPLAYED
+        ],
+        [
+            line(Decided::Fresh),
+            line(Decided::CacheHitCopied),
+            line(Decided::CacheHitNotRedecided),
+            line(Decided::Replayed),
+        ]
+    );
+}
+
+#[test]
+fn r6_a_replay_and_a_cache_hit_keep_their_declared_effect() {
+    // A replay may stand in for a stored write; a cache hit not decided
+    // again only for a read-only call.
+    for (decided, effect) in [
+        (Decided::Replayed, Effect::MayWrite),
+        (Decided::CacheHitNotRedecided, Effect::ReadOnly),
+    ] {
+        let d = Decision {
+            decided,
+            declared_effect: Some(effect),
+            ..full()
+        };
+        let back = decision_evidence(&entry(Some(&d))).expect("evidence");
+        assert_eq!(
+            (back.decided, back.declared_effect),
+            (decided, Some(effect))
+        );
+        assert_eq!(effect_line(&back), None, "a declared effect needs no line");
+    }
+}
