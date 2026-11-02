@@ -237,7 +237,7 @@ fn t3c_adopting_the_derived_principal_changes_nothing() {
 fn t3d_narrowing_the_key_ends_its_session() {
     let runtime = Arc::new(AuthRuntime::default());
     let before = over(&runtime, vec![key("k", A, Some(P1))]);
-    let minter = quota_of(&before, A);
+    let minter = minter_of(&before, A);
     let now = crate::clock::utc_now().expect("the test clock reads");
     assert!(
         before.admin_key_live(&minter, now),
@@ -247,7 +247,7 @@ fn t3d_narrowing_the_key_ends_its_session() {
     narrowed.backends = vec!["alpha".to_string()];
     let after = over(&runtime, vec![narrowed]);
     assert!(
-        quota_of(&after, A) == minter,
+        minter_of(&after, A) == minter,
         "premise: the same key, only narrowed"
     );
     assert!(
