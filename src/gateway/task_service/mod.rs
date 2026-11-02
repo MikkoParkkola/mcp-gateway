@@ -17,6 +17,9 @@ mod store;
 #[cfg(test)]
 mod store_tests;
 
+#[cfg(test)]
+mod delivery_pin_tests;
+
 mod service;
 
 #[cfg(test)]
