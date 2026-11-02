@@ -587,3 +587,37 @@ async fn a_switch_while_a_refresh_is_in_flight_installs_nothing_old() {
         cell.snapshot()
     );
 }
+
+/// A background renewal reads its client's registration when it spends its
+/// proof, not when it took it: a sign-in under the same issuer that
+/// re-registered the client meanwhile is the id the grant sends. Red before
+/// the grant reloaded the registration: the old in-memory id was sent.
+#[tokio::test]
+async fn a_renewal_sends_the_registration_current_at_its_grant() {
+    let server = TokenServer::start(&[]).await;
+    let dir = tempfile::tempdir().unwrap();
+    let cell = Arc::new(SignInStatus::new(SignIn::NeverSignedIn));
+    let mut owned = client(dir.path(), &server).with_sign_in_status(Arc::clone(&cell));
+    owned.auth_metadata.as_mut().unwrap().grant_types_supported =
+        vec!["client_credentials".to_owned()];
+    *owned.client_id_source.write() = Some(ClientIdSource::Registered);
+    hold(&owned, &token("a1", None, true));
+    let key = owned.credential_key().unwrap();
+    let (reached, release) = owned.renewal_pause.arm();
+    let reregister = async {
+        within("the renewal parks before its grant", reached.notified()).await;
+        owned
+            .storage
+            .save_client_id(&key, RESOURCE, "rotated-client")
+            .unwrap();
+        release.notify_one();
+    };
+
+    let (_renewal, ()) = tokio::join!(owned.attempt_background_renewal(), reregister);
+
+    assert_eq!(
+        *server.client_ids.lock().unwrap(),
+        vec!["rotated-client".to_owned()],
+        "the grant sends the registration current at its request"
+    );
+}
