@@ -50,6 +50,8 @@ async fn plan_state(
                     servers: None,
                     keys: None,
                     except: None,
+                    allowed_roots: None,
+                    path_args: None,
                 }],
                 collusion: CollusionConfig {
                     action: CollusionAction::Block,

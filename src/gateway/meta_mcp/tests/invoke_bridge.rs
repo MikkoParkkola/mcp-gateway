@@ -254,6 +254,8 @@ async fn a_dispatched_round_refused_by_the_firewall_settles_the_key_as_a_refusal
                     servers: None,
                     keys: None,
                     except: None,
+                    allowed_roots: None,
+                    path_args: None,
                 }],
                 ..FirewallConfig::default()
             },
