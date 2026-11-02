@@ -325,9 +325,9 @@ struct Scan<'a> {
 /// to it by exact JSON equality (5, -5, 5.0, a value past u64) is equal to it
 /// by value too, so [`NumberIndex`] redacts it. That holds only while
 /// `serde_json`'s `arbitrary_precision` feature is off, which
-/// `an_integer_past_u64_reads_as_a_float` (secret_redaction_number_tests.rs)
+/// `an_integer_past_u64_reads_as_a_float` (`secret_redaction_number_tests.rs`)
 /// and `g5_numbers_read_without_arbitrary_precision`
-/// (firewall/redactor_gate_tests.rs) pin. Turning it on means re-checking
+/// (`firewall/redactor_gate_tests.rs`) pin. Turning it on means re-checking
 /// this.
 #[derive(Clone, Copy, Default)]
 struct Literals {
