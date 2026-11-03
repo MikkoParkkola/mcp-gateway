@@ -159,7 +159,9 @@ fn p8_8b_prime_a_dropped_plain_copy_stays_dropped() {
 #[test]
 fn p8_8c_a_saturated_caller_is_unattributed() {
     let bound = u64::try_from(OVERFLOW_PAIRS_PER_CALLER).expect("small");
-    let run = |sources: u64| {
+    // `flowed`: the reload adds `ov:*`'s flow; `ov:*` stays listed either
+    // way, so an allow at the bound is the flow's alone.
+    let run = |sources: u64, flowed: bool| {
         let (rig, t, now) = (rig(&["fill:*", "ov:*"]), one_fp(0), Instant::now());
         let g0 = rig.generation();
         fill_cap(&rig, &g0, "carol", &t, now);
@@ -167,12 +169,13 @@ fn p8_8c_a_saturated_caller_is_unattributed() {
             record(&rig, &g0, (&format!("ov:{i}"), "carol"), &t, now);
         }
         rig.reload(|c| {
-            c.security.firewall.collusion.sources = vec!["fill:*".to_string()];
-            c.security
-                .firewall
-                .collusion
-                .allowed_flows
-                .push(flow("ov:*", EGRESS));
+            if flowed {
+                c.security
+                    .firewall
+                    .collusion
+                    .allowed_flows
+                    .push(flow("ov:*", EGRESS));
+            }
         });
         let verdict = bob(&rig, &rig.generation(), &t, now);
         (verdict, detector(&rig).overflow_unattributed(&t, "carol"))
@@ -180,7 +183,12 @@ fn p8_8c_a_saturated_caller_is_unattributed() {
     // One source short of saturation the pairs are all kept, so the caller is
     // attributed and the flows decide: on base every overflow is unattributed
     // and refuses, which is what this row's control pins.
-    let (verdict, unattributed) = run(bound);
+    let (unflowed, _) = run(bound, false);
+    assert!(
+        unflowed.is_some(),
+        "P8.8c control: without the flow the bound's pairs are not refused"
+    );
+    let (verdict, unattributed) = run(bound, true);
     assert!(
         !unattributed,
         "P8.8c control: exactly the bound is held attributed, not unattributed"
@@ -189,7 +197,7 @@ fn p8_8c_a_saturated_caller_is_unattributed() {
         verdict, None,
         "P8.8c control: exactly the bound is allowed by its flows"
     );
-    let (verdict, unattributed) = run(bound + 1);
+    let (verdict, unattributed) = run(bound + 1, true);
     assert!(
         unattributed,
         "P8.8c: past the bound is not marked unattributed"
