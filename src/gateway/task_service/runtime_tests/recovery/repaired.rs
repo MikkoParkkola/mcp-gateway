@@ -15,7 +15,7 @@ use super::*;
 /// its own row.
 #[tokio::test]
 async fn a_repaired_row_is_readable_without_a_restart() {
-    let root = tempfile::tempdir().unwrap();
+    let root = Arc::new(tempfile::tempdir().unwrap());
     let dir = root.path().join("tasks");
     let (seeded, originals) = sealed_rows(&dir).await;
 
@@ -43,6 +43,7 @@ async fn a_repaired_row_is_readable_without_a_restart() {
     .await
     .expect("startup does not hang")
     .expect("sealed rows never stop startup");
+    restored.keep_test_dir(Arc::clone(&root));
     assert_eq!(restored.skipped_records().sealed, 3);
 
     let sweep = executor
@@ -210,9 +211,10 @@ fn repair(originals: &[(std::path::PathBuf, Vec<u8>)]) {
 /// that. Mutant: the raw read restored.
 #[tokio::test]
 async fn t14b_a_repaired_live_row_is_settled_at_the_frozen_store_time() {
-    let root = tempfile::tempdir().unwrap();
+    let root = Arc::new(tempfile::tempdir().unwrap());
     let dir = root.path().join("tasks");
     let (seeded, originals, restored, executor, heard) = sealed_runtime(&dir).await;
+    restored.keep_test_dir(Arc::clone(&root));
     let frozen =
         crate::clock::utc_now().expect("host clock") + crate::duration_bound::delta!(hours, 2);
     restored.store.set_clock_for_test(Some(frozen));
@@ -250,9 +252,10 @@ async fn t14b_a_repaired_live_row_is_settled_at_the_frozen_store_time() {
 /// a raw 1969-or-now read anyway.
 #[tokio::test]
 async fn t14b_a_repaired_live_row_stays_sealed_while_the_store_clock_is_unreadable() {
-    let root = tempfile::tempdir().unwrap();
+    let root = Arc::new(tempfile::tempdir().unwrap());
     let dir = root.path().join("tasks");
     let (_, originals, restored, executor, _heard) = sealed_runtime(&dir).await;
+    restored.keep_test_dir(Arc::clone(&root));
     restored
         .store
         .set_clock_for_test(Some(chrono::DateTime::from_timestamp(-1, 0).unwrap()));
