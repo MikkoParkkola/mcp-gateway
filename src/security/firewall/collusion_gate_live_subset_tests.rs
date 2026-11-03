@@ -24,7 +24,10 @@ fn without_middle(pieces: &[String]) -> String {
 /// current generation.
 fn reported(rig: &Rig, who: &str, subset: &str) -> bool {
     let verdict = rig.relays(who, ("alpha", "send"), subset, &rig.generation());
-    !verdict.findings.is_empty()
+    verdict
+        .findings
+        .iter()
+        .any(|f| f.scan_type == crate::security::firewall::ScanType::CollusionRelay)
 }
 
 /// SG5: under a startup `off` switched to `observe` by a reload, alice is

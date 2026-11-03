@@ -58,6 +58,10 @@ fn a_seam_leaves_only_by_a_flow_every_contributor_allows() {
         egress(&det, 0b01, now).is_some(),
         "beta's text left by a flow only alpha's may take"
     );
+    assert!(
+        egress(&det, 0b10, now).is_some(),
+        "alpha's text left by a flow only beta's may take"
+    );
 }
 
 /// The same seam delivered again keeps its masks: a repeat never widens
