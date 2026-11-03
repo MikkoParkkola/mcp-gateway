@@ -106,8 +106,8 @@ impl Binding {
             Some((name, owned)) if name == "DashMap" => Self::Map {
                 owned: owned && !by_ref,
             },
-            Some((name, _)) if name.starts_with(char::is_uppercase) => Self::Typed(name),
-            _ => Self::Other,
+            Some((name, _)) => Self::Typed(name),
+            None => Self::Other,
         }
     }
 }
@@ -188,6 +188,7 @@ impl super::Scan<'_> {
                     return self.self_ty.clone();
                 }
                 match self.env.get(&id) {
+                    Some(Binding::Typed(t)) if t == "Self" => self.self_ty.clone(),
                     Some(Binding::Typed(t)) => Some(t),
                     _ => None,
                 }
@@ -202,11 +203,24 @@ impl super::Scan<'_> {
     /// `for e in m.iter()`, whose items are guards whatever the pattern keeps.
     pub(super) fn iterates_dashmap(&self, expr: &syn::Expr) -> bool {
         match expr {
+            syn::Expr::Paren(p) => self.iterates_dashmap(&p.expr),
             syn::Expr::Reference(r) => self.is_map(&r.expr).is_some(),
             syn::Expr::MethodCall(m) if m.method == "iter" || m.method == "iter_mut" => {
                 self.is_map(&m.receiver).is_some()
             }
             other => self.is_map(other) == Some(false),
+        }
+    }
+
+    /// Every name a condition's `let`s bind, a let-chain's included.
+    pub(super) fn shadow_cond(&self, cond: &syn::Expr) {
+        match cond {
+            syn::Expr::Let(l) => self.shadow(&l.pat),
+            syn::Expr::Binary(b) if matches!(b.op, syn::BinOp::And(_)) => {
+                self.shadow_cond(&b.left);
+                self.shadow_cond(&b.right);
+            }
+            _ => {}
         }
     }
 
@@ -223,7 +237,7 @@ impl super::Scan<'_> {
     pub(super) fn bind_let(&self, pat: &syn::Pat, init: Option<&syn::Expr>) {
         let binding = match pat {
             syn::Pat::Type(t) => match &*t.pat {
-                syn::Pat::Ident(id) => Some((
+                syn::Pat::Ident(id) if id.subpat.is_none() => Some((
                     id.ident.to_string(),
                     Binding::of_type(&t.ty, id.by_ref.is_some()),
                 )),

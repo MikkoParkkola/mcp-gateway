@@ -259,14 +259,22 @@ impl Scan<'_> {
                     if scrutinee && !is_err_arm(&a.pat) {
                         inner.extend(bound_names(&a.pat));
                     }
-                    self.acquires(&a.body, &inner)
+                    self.env.push();
+                    self.shadow(&a.pat);
+                    let yields = self.acquires(&a.body, &inner);
+                    self.env.pop();
+                    yields
                 })
             }
             syn::Expr::If(i) => {
-                self.block_yields(&i.then_branch, held)
-                    || i.else_branch
-                        .as_ref()
-                        .is_some_and(|(_, e)| self.acquires(e, held))
+                self.env.push();
+                self.shadow_cond(&i.cond);
+                let then = self.block_yields(&i.then_branch, held);
+                self.env.pop();
+                then || i
+                    .else_branch
+                    .as_ref()
+                    .is_some_and(|(_, e)| self.acquires(e, held))
             }
             _ => false,
         }

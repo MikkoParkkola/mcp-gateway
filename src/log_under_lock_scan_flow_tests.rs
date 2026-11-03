@@ -25,19 +25,12 @@ impl super::Scan<'_> {
         self.env.pop();
     }
 
-    /// `while let p = e { .. }`: an acquiring `e` holds `p` in the body.
+    /// `while let p = e { .. }`: an acquiring `e` holds `p` in the body; a
+    /// let-chain holds each of its `let`s, as an `if` does.
     pub(super) fn while_loop(&mut self, w: &syn::ExprWhile, held: &[String]) {
         let mut inner = held.to_vec();
         self.env.push();
-        if let syn::Expr::Let(l) = &*w.cond {
-            self.expr(&l.expr, held);
-            if self.acquires(&l.expr, held) {
-                inner.extend(bound_names(&l.pat));
-            }
-            self.shadow(&l.pat);
-        } else {
-            self.expr(&w.cond, held);
-        }
+        self.cond(&w.cond, held, &mut inner);
         self.block(&w.body, inner);
         self.env.pop();
     }
