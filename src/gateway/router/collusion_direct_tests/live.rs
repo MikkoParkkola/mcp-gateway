@@ -246,11 +246,9 @@ async fn sg7_a_read_admitted_under_off_is_held_once_observe_is_published() {
     relay_witness_hook::arm(move || publish(&state, CollusionAction::Observe));
     fx.read(Some("a")).await;
     assert_sent_as("SG7: ", &fx, &fx.send(Some("b"), PROSE).await, 1);
-    let audited = std::fs::read_to_string(&log).unwrap_or_default();
-    assert!(
-        audited.contains("collusion_relay"),
-        "SG7: the relay left no audited finding: {audited}"
-    );
+    let audited = std::fs::read_to_string(&log).expect("the audit log is written");
+    let relays = audited.lines().filter(|l| l.contains("collusion_relay")).count();
+    assert_eq!(relays, 1, "SG7: not one audited relay finding: {audited}");
 }
 
 /// R4.3b: the route's funnel records under the generation its caller
