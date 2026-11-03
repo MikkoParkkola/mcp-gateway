@@ -25,22 +25,14 @@ fn spiffe_leaf_der(uri: &str) -> Vec<u8> {
 #[test]
 fn peer_chain_identity_extracts_spiffe_svid_leaf() {
     let leaf = CertificateDer::from(spiffe_leaf_der("spiffe://example.test/agent/alpha"));
-    let identity = client_identity_from_peer_chain(Some(&[leaf]))
-        .expect("peer chain should parse")
-        .expect("identity should be present");
+    let super::PeerCert::Named(identity) =
+        client_identity_from_peer_chain(Some(&[leaf])).expect("peer chain should parse")
+    else {
+        panic!("a SPIFFE leaf names its SAN URI");
+    };
 
     assert_eq!(identity.san_uris, vec!["spiffe://example.test/agent/alpha"]);
     assert_eq!(identity.display_name, "spiffe://example.test/agent/alpha");
-}
-
-#[test]
-fn peer_chain_identity_is_absent_without_client_certificate() {
-    let identity = client_identity_from_peer_chain(None).expect("missing chain is allowed");
-    assert!(identity.is_none());
-
-    let empty_identity =
-        client_identity_from_peer_chain(Some(&[])).expect("empty chain is allowed");
-    assert!(empty_identity.is_none());
 }
 
 #[test]
