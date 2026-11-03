@@ -137,6 +137,26 @@ impl AuthorizationError {
     }
 }
 
+/// The tool policy on `target`, as every transport's authorizer judges it: a
+/// refusal is `-32600` and names the policy entry that made it, for the
+/// decision record only.
+pub(crate) fn tool_policy_refusal(
+    policy: &crate::security::ToolPolicy,
+    target: ToolTarget<'_>,
+) -> Result<(), AuthorizationError> {
+    policy
+        .check_explained(target.server, target.tool)
+        .map(|_| ())
+        .map_err(|(e, rule)| {
+            AuthorizationError::forbidden(
+                crate::security::decision_record::DecisionKind::ToolPolicy,
+                INVALID_REQUEST,
+                e.to_string(),
+            )
+            .with_rule(rule.cloned())
+        })
+}
+
 /// The caller's backend scope: whether an API key or key-server token may
 /// reach `server` at all.
 ///
@@ -582,19 +602,7 @@ impl ToolAuthorizer for ToolPolicyAuthorizer<'_> {
                         e.clone(),
                     )
                 })
-                .and_then(|()| {
-                    self.tool_policy
-                        .check_explained(target.server, target.tool)
-                        .map(|_| ())
-                        .map_err(|(e, rule)| {
-                            AuthorizationError::forbidden(
-                                crate::security::decision_record::DecisionKind::ToolPolicy,
-                                INVALID_REQUEST,
-                                e.to_string(),
-                            )
-                            .with_rule(rule.cloned())
-                        })
-                }),
+                .and_then(|()| tool_policy_refusal(self.tool_policy, target)),
         )
     }
 

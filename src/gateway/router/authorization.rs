@@ -343,21 +343,6 @@ fn refused(kind: DecisionKind, message: impl Into<String>) -> AuthorizationError
     AuthorizationError::forbidden(kind, INVALID_REQUEST, message)
 }
 
-/// The generation's tool policy on `target`; a refusal names the entry that
-/// made it.
-fn tool_policy_check(
-    generation: &crate::config_reload::Generation,
-    target: ToolTarget<'_>,
-) -> Result<(), AuthorizationError> {
-    generation
-        .tool_policy()
-        .check_explained(target.server, target.tool)
-        .map(|_| ())
-        .map_err(|(e, rule)| {
-            refused(DecisionKind::ToolPolicy, e.to_string()).with_rule(rule.cloned())
-        })
-}
-
 /// The HTTP invocation predicate, with its audit records deferred.
 ///
 /// The one definition of what an HTTP caller may invoke: the router pre-check,
@@ -377,7 +362,7 @@ pub(super) fn decide_tool_target<'a>(
     let early = validate_tool_name(target.tool)
         .map_err(|e| refused(DecisionKind::Syntax, e.clone()))
         .and_then(|()| crate::gateway::authz::authorize_backend(client, target.server))
-        .and_then(|()| tool_policy_check(generation, target))
+        .and_then(|()| crate::gateway::authz::tool_policy_refusal(generation.tool_policy(), target))
         .and_then(|()| {
             client.map_or(Ok(()), |client| {
                 client
