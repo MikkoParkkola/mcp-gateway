@@ -195,13 +195,17 @@ fn p8_10d_a_seam_keeps_its_contributors_exact_facts() {
         .collect();
     let pair =
         |a: &str, af: bool, b: &str, bf: bool| vec![(a.to_string(), af), (b.to_string(), bf)];
-    assert!(
-        facts.contains(&pair("alpha:a", true, "beta:b", false)),
-        "P8.10d seam A: {facts:?}"
-    );
-    assert!(
-        facts.contains(&pair("beta:b", false, "gamma:c", false)),
-        "P8.10d seam B: {facts:?}"
+    // Exactly the two seams: an extra receipt with a merged or wrong fact
+    // list fails here instead of passing beside the right ones.
+    let mut facts = facts;
+    facts.sort();
+    assert_eq!(
+        facts,
+        [
+            pair("alpha:a", true, "beta:b", false),
+            pair("beta:b", false, "gamma:c", false)
+        ],
+        "P8.10d: seams A and B, each with its own facts"
     );
     assert!(refused(&rig, 0, ("gamma", "send")), "seam A refused");
     assert!(!refused(&rig, 1, ("gamma", "send")), "seam B allowed");
