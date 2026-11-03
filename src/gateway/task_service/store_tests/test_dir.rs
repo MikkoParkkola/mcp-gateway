@@ -40,12 +40,14 @@ async fn a_planted_late_write_after_test_end_leaves_no_folder() {
 
 /// The openers that start task workers, recovery, an expiry sweep or the
 /// events runtime: a test that calls one owns a writer that can outlive it.
-const WORKER_OPENERS: [&str; 6] = [
+const WORKER_OPENERS: [&str; 7] = [
     "open_runtime(",
     "open_runtime_with_admission(",
     "open_runtime_with_recovery(",
     "stdio_tasks::open(",
     "TaskExecutor::new(",
+    // The server tests' reopen of a stdio store, as the next process would.
+    "reopen_stdio_store(",
     // The events hub's runtime: fan-out, delivery and the startup replay
     // that rewrites subscription rows.
     "hub.start(",

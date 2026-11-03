@@ -495,7 +495,7 @@ async fn stdio_eof_releases_the_store_lease_before_returning() {
         .expect("EOF returns within the bound")
         .expect("no panic")
         .expect("run_stdio_on returns Ok");
-    let reopened = reopen(&config).await;
+    let reopened = reopen_stdio_store(&config).await;
     if let Ok((service, _)) = &reopened {
         service.keep_test_dir(Arc::clone(&store));
     }
@@ -572,7 +572,7 @@ async fn a_legacy_task_member_is_answered_synchronously() {
 }
 
 /// Open the stdio store `config` names, as the next process would.
-pub(super) async fn reopen(
+pub(super) async fn reopen_stdio_store(
     config: &Config,
 ) -> Result<
     (
@@ -737,7 +737,7 @@ async fn eof_drains_a_running_task_before_returning() {
         .expect("EOF returns once the task settled")
         .expect("no panic")
         .expect("run_stdio_on returns Ok");
-    let (service, _executor) = reopen(&config)
+    let (service, _executor) = reopen_stdio_store(&config)
         .await
         .expect("the lease is free once run_stdio_on returned");
     service.keep_test_dir(Arc::clone(&store));
