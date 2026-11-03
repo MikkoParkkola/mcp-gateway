@@ -190,6 +190,28 @@ fn an_unnameable_certificate_is_not_a_principal() {
     );
 }
 
+/// A SAN URI or CN of only whitespace names no one, so it never becomes an
+/// mTLS principal: a blank SAN URI does not shadow a real CN, and a blank CN
+/// alone is no principal.
+#[test]
+fn a_blank_san_uri_or_common_name_is_not_a_principal() {
+    for (san, cn) in [(&["  "][..], None), (&[][..], Some(" \t "))] {
+        let identity = extract_agent_identity(&HeaderMap::new(), None, Some(&cert(san, cn)), None);
+        assert!(identity.proven.is_none(), "{san:?} {cn:?}: {identity:?}");
+    }
+    let identity = extract_agent_identity(
+        &HeaderMap::new(),
+        None,
+        Some(&cert(&[" "], Some("agent-cn"))),
+        None,
+    );
+    assert_eq!(
+        identity.proven_id(),
+        Some("agent-cn"),
+        "a blank SAN URI is skipped"
+    );
+}
+
 /// Anchor: funded change 2, rows 7-8. mTLS outranks a verified JWT, and the
 /// JWT is kept as secondary proof rather than discarded — without that
 /// field the promise to audit it is unimplementable.
