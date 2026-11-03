@@ -536,3 +536,7 @@ pub fn remove_nameless_grant_rows(
         .map(|row| (row.grant_id, row.field))
         .collect())
 }
+
+#[cfg(test)]
+#[path = "cli_support_grant_rows_tests.rs"]
+mod grant_rows_tests;
