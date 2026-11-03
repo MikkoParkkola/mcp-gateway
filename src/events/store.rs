@@ -258,14 +258,28 @@ pub(crate) struct Store {
     /// in memory.
     #[cfg(test)]
     fail_next_dead_sync: std::sync::atomic::AtomicBool,
+    /// Test-only: the temporary directory this store lives in, held until
+    /// the store's last handle drops, so a write still in flight when its
+    /// test ends lands in a directory that is then removed with it.
+    #[cfg(test)]
+    test_dir: std::sync::OnceLock<std::sync::Arc<tempfile::TempDir>>,
 }
 
 impl Store {
     /// Test-only: hold a share of the temporary directory this store lives
-    /// in until the last handle to the store drops.
-    // STUB: holds nothing yet; the row below is red against it.
+    /// in until the last handle to the store drops. A second call must name
+    /// the same directory: keeping a different one would leave this one
+    /// unowned.
     #[cfg(test)]
-    pub(crate) fn keep_test_dir(&self, _dir: std::sync::Arc<tempfile::TempDir>) {}
+    pub(crate) fn keep_test_dir(&self, dir: std::sync::Arc<tempfile::TempDir>) {
+        if let Err(other) = self.test_dir.set(dir) {
+            let kept = self.test_dir.get().expect("set");
+            assert!(
+                std::sync::Arc::ptr_eq(kept, &other),
+                "a store keeps one test directory"
+            );
+        }
+    }
 
     /// The next row generation. Checked: running out is an error, never a
     /// wrap that could repeat a generation a judgement still holds.
@@ -332,6 +346,8 @@ impl Store {
             generation: std::sync::atomic::AtomicU64::new(loaded),
             #[cfg(test)]
             fail_next_dead_sync: std::sync::atomic::AtomicBool::new(false),
+            #[cfg(test)]
+            test_dir: std::sync::OnceLock::new(),
         };
         if let Some(now) = now {
             let mut state = store.state.lock();
