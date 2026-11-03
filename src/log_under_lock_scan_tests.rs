@@ -443,37 +443,8 @@ impl Scan<'_> {
             syn::Expr::Async(b) => self.block(&b.block, held.to_vec()),
             syn::Expr::Unsafe(b) => self.block(&b.block, held.to_vec()),
             syn::Expr::Loop(l) => self.block(&l.body, held.to_vec()),
-            syn::Expr::ForLoop(l) => {
-                self.expr(&l.expr, held);
-                let mut inner = held.to_vec();
-                if self.acquires(&l.expr, held) {
-                    inner.extend(bound_names(&l.pat));
-                }
-                // Iterating a map holds a shard lock for the whole body,
-                // whatever the pattern binds: `for _ in m` too.
-                if self.iterates_dashmap(&l.expr) {
-                    inner.push("<map iteration>".into());
-                }
-                self.env.push();
-                self.shadow(&l.pat);
-                self.block(&l.body, inner);
-                self.env.pop();
-            }
-            syn::Expr::While(w) => {
-                let mut inner = held.to_vec();
-                self.env.push();
-                if let syn::Expr::Let(l) = &*w.cond {
-                    self.expr(&l.expr, held);
-                    if self.acquires(&l.expr, held) {
-                        inner.extend(bound_names(&l.pat));
-                    }
-                    self.shadow(&l.pat);
-                } else {
-                    self.expr(&w.cond, held);
-                }
-                self.block(&w.body, inner);
-                self.env.pop();
-            }
+            syn::Expr::ForLoop(l) => self.for_loop(l, held),
+            syn::Expr::While(w) => self.while_loop(w, held),
             syn::Expr::If(i) => {
                 let mut inner = held.to_vec();
                 self.env.push();
@@ -484,21 +455,7 @@ impl Scan<'_> {
                     self.expr(e, held);
                 }
             }
-            syn::Expr::Match(m) => {
-                self.expr(&m.expr, held);
-                let scrutinee_holds = self.acquires(&m.expr, held);
-                for arm in &m.arms {
-                    let mut inner = held.to_vec();
-                    if scrutinee_holds && !is_err_arm(&arm.pat) {
-                        inner.extend(bound_names(&arm.pat));
-                        inner.push("<match scrutinee>".into());
-                    }
-                    self.env.push();
-                    self.shadow(&arm.pat);
-                    self.expr(&arm.body, &inner);
-                    self.env.pop();
-                }
-            }
+            syn::Expr::Match(m) => self.match_arms(m, held),
             syn::Expr::Closure(c) => {
                 self.env.push();
                 for input in &c.inputs {
@@ -752,6 +709,9 @@ mod binding;
 
 #[path = "log_under_lock_scan_types_tests.rs"]
 mod types;
+
+#[path = "log_under_lock_scan_flow_tests.rs"]
+mod flow;
 
 #[path = "log_under_lock_allowed_tests.rs"]
 mod allowed;

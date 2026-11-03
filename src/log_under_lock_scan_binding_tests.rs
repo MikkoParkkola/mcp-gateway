@@ -48,120 +48,123 @@ fn rows(cases: &[(&str, &str, usize)]) {
     assert!(wrong.is_empty(), "rows wrong:\n{}", wrong.join("\n"));
 }
 
+/// Forms that reach a map through a local binding, and shadows of it.
+const SCAN1: &[(&str, &str, usize)] = &[
+    (
+        "T3 for over a local",
+        "impl R { fn f(&self) { let b = &self.backends; for e in b { warn!(\"x\"); } } }",
+        1,
+    ),
+    (
+        "T3 iter on a local",
+        "impl R { fn f(&self) { let b = &self.backends; for e in b.iter() { warn!(\"x\"); } } }",
+        1,
+    ),
+    (
+        "T3 via an unresolved receiver",
+        "fn f(x: &Unknown) { let b = &x.backends; for e in b.iter() { warn!(\"x\"); } }",
+        1,
+    ),
+    (
+        "T3 bare binding",
+        "impl R { fn f(&self) { let b = self.backends; for e in b.iter() { warn!(\"x\"); } } }",
+        1,
+    ),
+    (
+        "T4 reborrow",
+        "impl R { fn f(&self) { let b = &self.backends; let c = &*b; for e in c.iter() { warn!(\"x\"); } } }",
+        1,
+    ),
+    (
+        "T4 move",
+        "impl R { fn f(&self) { let b = &self.backends; let c = b; for e in c.iter() { warn!(\"x\"); } } }",
+        1,
+    ),
+    (
+        "T5 parameter",
+        "fn f(m: &DashMap<K, V>) { for e in m.iter() { warn!(\"x\"); } }",
+        1,
+    ),
+    (
+        "T5 annotated let, opaque initializer",
+        "fn f(src: S) { let m: &DashMap<K, V> = src; for e in m.iter() { warn!(\"x\"); } }",
+        1,
+    ),
+    (
+        "wildcard over iter",
+        "impl R { fn f(&self) { for _ in self.backends.iter() { warn!(\"x\"); } } }",
+        1,
+    ),
+    (
+        "wildcard over a field",
+        "impl R { fn f(&self) { for _ in &self.backends { warn!(\"x\"); } } }",
+        1,
+    ),
+    (
+        "wildcard over a local",
+        "impl R { fn f(&self) { let b = &self.backends; for _ in b { warn!(\"x\"); } } }",
+        1,
+    ),
+    (
+        "shadow C to R by let",
+        "fn f(c: &C, r: &R) { let c = r; for e in &c.backends { warn!(\"x\"); } }",
+        1,
+    ),
+    (
+        "shadow by a loop variable",
+        "fn f(c: &C, rs: &[R]) { for c in rs { for e in &c.backends { warn!(\"x\"); } } }",
+        1,
+    ),
+    (
+        "self-referencing shadow, R",
+        "impl R { fn f(&self, c: &R) { let c = &c.backends; for e in c { warn!(\"x\"); } } }",
+        1,
+    ),
+    (
+        "a map local in a nested block",
+        "impl R { fn f(&self, ok: bool) { let b = &self.backends; if ok { for e in b.iter() { warn!(\"x\"); } } } }",
+        1,
+    ),
+    (
+        "an Arc field",
+        "impl A { fn f(&self) { for e in self.backends.iter() { warn!(\"x\"); } } }",
+        1,
+    ),
+    (
+        "a closure capture",
+        "impl R { fn f(&self) { let b = &self.backends; let g = || { for e in b.iter() { warn!(\"x\"); } }; } }",
+        1,
+    ),
+    (
+        "a guard out of a block expression",
+        "impl R { fn f(&self, k: K) { let g = { let b = &self.backends; b.get(&k) }; warn!(\"x\"); } }",
+        1,
+    ),
+    (
+        "a ref parameter borrows the map",
+        "fn f(ref m: DashMap<K, V>) { for e in m { warn!(\"x\"); } }",
+        1,
+    ),
+    (
+        "shadow by if let",
+        "fn f(c: &C, rs: &[R]) { if let Some(c) = rs.first() { for e in &c.backends { warn!(\"x\"); } } }",
+        1,
+    ),
+    (
+        "shadow by a match arm",
+        "fn f(c: &C, r: Option<&R>) { match r { Some(c) => { for e in &c.backends { warn!(\"x\"); } } None => {} } }",
+        1,
+    ),
+    (
+        "shadow by a closure parameter",
+        "fn f(c: &C) { let g = |c| { for e in &c.backends { warn!(\"x\"); } }; }",
+        1,
+    ),
+];
+
 #[test]
 fn scan1_a_dashmap_reached_through_a_binding_is_still_a_map() {
-    rows(&[
-        (
-            "T3 for over a local",
-            "impl R { fn f(&self) { let b = &self.backends; for e in b { warn!(\"x\"); } } }",
-            1,
-        ),
-        (
-            "T3 iter on a local",
-            "impl R { fn f(&self) { let b = &self.backends; for e in b.iter() { warn!(\"x\"); } } }",
-            1,
-        ),
-        (
-            "T3 via an unresolved receiver",
-            "fn f(x: &Unknown) { let b = &x.backends; for e in b.iter() { warn!(\"x\"); } }",
-            1,
-        ),
-        (
-            "T3 bare binding",
-            "impl R { fn f(&self) { let b = self.backends; for e in b.iter() { warn!(\"x\"); } } }",
-            1,
-        ),
-        (
-            "T4 reborrow",
-            "impl R { fn f(&self) { let b = &self.backends; let c = &*b; for e in c.iter() { warn!(\"x\"); } } }",
-            1,
-        ),
-        (
-            "T4 move",
-            "impl R { fn f(&self) { let b = &self.backends; let c = b; for e in c.iter() { warn!(\"x\"); } } }",
-            1,
-        ),
-        (
-            "T5 parameter",
-            "fn f(m: &DashMap<K, V>) { for e in m.iter() { warn!(\"x\"); } }",
-            1,
-        ),
-        (
-            "T5 annotated let, opaque initializer",
-            "fn f(src: S) { let m: &DashMap<K, V> = src; for e in m.iter() { warn!(\"x\"); } }",
-            1,
-        ),
-        (
-            "wildcard over iter",
-            "impl R { fn f(&self) { for _ in self.backends.iter() { warn!(\"x\"); } } }",
-            1,
-        ),
-        (
-            "wildcard over a field",
-            "impl R { fn f(&self) { for _ in &self.backends { warn!(\"x\"); } } }",
-            1,
-        ),
-        (
-            "wildcard over a local",
-            "impl R { fn f(&self) { let b = &self.backends; for _ in b { warn!(\"x\"); } } }",
-            1,
-        ),
-        (
-            "shadow C to R by let",
-            "fn f(c: &C, r: &R) { let c = r; for e in &c.backends { warn!(\"x\"); } }",
-            1,
-        ),
-        (
-            "shadow by a loop variable",
-            "fn f(c: &C, rs: &[R]) { for c in rs { for e in &c.backends { warn!(\"x\"); } } }",
-            1,
-        ),
-        (
-            "self-referencing shadow, R",
-            "impl R { fn f(&self, c: &R) { let c = &c.backends; for e in c { warn!(\"x\"); } } }",
-            1,
-        ),
-        (
-            "a map local in a nested block",
-            "impl R { fn f(&self, ok: bool) { let b = &self.backends; if ok { for e in b.iter() { warn!(\"x\"); } } } }",
-            1,
-        ),
-        (
-            "an Arc field",
-            "impl A { fn f(&self) { for e in self.backends.iter() { warn!(\"x\"); } } }",
-            1,
-        ),
-        (
-            "a closure capture",
-            "impl R { fn f(&self) { let b = &self.backends; let g = || { for e in b.iter() { warn!(\"x\"); } }; } }",
-            1,
-        ),
-        (
-            "a guard out of a block expression",
-            "impl R { fn f(&self, k: K) { let g = { let b = &self.backends; b.get(&k) }; warn!(\"x\"); } }",
-            1,
-        ),
-        (
-            "a ref parameter borrows the map",
-            "fn f(ref m: DashMap<K, V>) { for e in m { warn!(\"x\"); } }",
-            1,
-        ),
-        (
-            "shadow by if let",
-            "fn f(c: &C, rs: &[R]) { if let Some(c) = rs.first() { for e in &c.backends { warn!(\"x\"); } } }",
-            1,
-        ),
-        (
-            "shadow by a match arm",
-            "fn f(c: &C, r: Option<&R>) { match r { Some(c) => { for e in &c.backends { warn!(\"x\"); } } None => {} } }",
-            1,
-        ),
-        (
-            "shadow by a closure parameter",
-            "fn f(c: &C) { let g = |c| { for e in &c.backends { warn!(\"x\"); } }; }",
-            1,
-        ),
-    ]);
+    rows(SCAN1);
 }
 
 #[test]
