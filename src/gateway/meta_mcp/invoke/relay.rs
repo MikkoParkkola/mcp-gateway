@@ -239,9 +239,12 @@ impl super::BridgeDispatcher<'_> {
         // Test builds: the witness hook runs before the first generation read on this route.
         #[cfg(all(test, feature = "firewall"))]
         crate::security::firewall::relay_witness_hook::run();
+        // Every round is judged under the generation the call was admitted
+        // under, never one published between rounds.
+        let pinned = self.caller.authorizer.generation();
         let Some(refused) = self
             .meta
-            .relay_refusal(None, self.relay, audit, target, &egress)
+            .relay_refusal(pinned, self.relay, audit, target, &egress)
         else {
             return Ok(());
         };
