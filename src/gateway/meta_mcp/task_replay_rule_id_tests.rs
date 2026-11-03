@@ -26,13 +26,13 @@ fn policy() -> ToolPolicy {
     )
 }
 
-fn expected() -> Option<(DecisionKind, Option<RuleId>)> {
+fn expected() -> (DecisionKind, Option<RuleId>) {
     let key = crate::gateway::record_principal::test_record_key().rule_id_key();
     let bytes = serde_json::to_vec(&("deny", "alpha:read")).expect("serialises");
-    Some((
+    (
         DecisionKind::ToolPolicy,
         Some(RuleId::of("tool_policy", &key, &bytes)),
-    ))
+    )
 }
 
 fn alpha() -> Arc<Backend> {
@@ -79,7 +79,7 @@ async fn a_replay_refused_with_its_backend_notes_the_rule() {
         take_refusal()
     })
     .await;
-    assert_eq!(noted, expected());
+    assert_eq!(noted, Some(expected()));
 }
 
 #[tokio::test]
@@ -95,5 +95,5 @@ async fn a_replay_refused_without_a_registry_backend_notes_the_rule() {
         take_refusal()
     })
     .await;
-    assert_eq!(noted, expected());
+    assert_eq!(noted, Some(expected()));
 }

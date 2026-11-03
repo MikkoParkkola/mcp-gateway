@@ -5,7 +5,7 @@
 //! A firewall rule with `allowed_roots` and `path_args` confines the named path
 //! arguments of the calls it covers to those folders. The check runs on the
 //! exact string the backend receives, before dispatch, from both firewall
-//! entry points (`check_request_keyed` and `rescan`).
+//! entry points (`check_request_keyed` and `rescan_attributed`).
 //!
 //! This commit is inert scaffolding: the types and signatures exist so the
 //! rows can be written against them, and `root_check` decides nothing yet.
@@ -106,7 +106,7 @@ impl super::Firewall {
     }
 }
 
-/// What `rescan` is looking at: the dispatched arguments, or a bridge retry's
+/// What `rescan_attributed` is looking at: the dispatched arguments, or a bridge retry's
 /// answers. The folder check runs on the arguments only; content scanning runs
 /// on both.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

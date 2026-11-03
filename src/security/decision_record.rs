@@ -180,11 +180,6 @@ impl Noted {
         self.refusal().is_some()
     }
 
-    /// The check that refused, if one did.
-    pub(crate) fn refusal_kind(&self) -> Option<DecisionKind> {
-        self.refusal().map(|(kind, _)| *kind)
-    }
-
     /// The check that refused and its rule, if one did.
     pub(crate) fn refusal_pair(&self) -> Option<Refusal> {
         self.refusal().cloned()

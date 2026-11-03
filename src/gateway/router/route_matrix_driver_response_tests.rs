@@ -545,7 +545,7 @@ async fn a_relay_refusal_records_no_rule() {
         .lines()
         .filter_map(|line| serde_json::from_str::<Value>(line).ok())
         .filter(|row| row.get("tool").is_some() && row["event"] != "response_delivery_attempt")
-        .last()
+        .next_back()
         .expect("the relayed call's record");
     assert_eq!(refused["decision"]["kind"], "firewall", "{refused}");
     assert!(refused["decision"].get("rule_id").is_none(), "{refused}");

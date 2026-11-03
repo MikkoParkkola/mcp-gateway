@@ -331,7 +331,7 @@ impl Firewall {
     }
 
     /// The stateless content scan of a request's arguments, shared by
-    /// admission (`check_request`) and the dispatch chokepoint (`rescan`) so
+    /// admission (`check_request`) and the dispatch chokepoint (`rescan_attributed`) so
     /// the two cannot diverge as scanners change. Records nothing.
     ///
     /// `scan_requests` names one control — argument content scanning — and
@@ -368,20 +368,9 @@ impl Firewall {
     /// retry's answers: the folder check runs on the arguments only.
     /// `backend` is the instance the send will use, so a reload between the
     /// route scan and the send cannot split what was checked from what is sent.
-    pub(crate) fn rescan(
-        &self,
-        policy: &FirewallPolicy,
-        target: RuleTarget<'_>,
-        args: &Value,
-        subject: ScanSubject,
-        backend: Option<&crate::backend::Backend>,
-    ) -> FirewallVerdict {
-        self.rescan_attributed(policy, target, args, subject, backend)
-            .0
-    }
-
-    /// [`Self::rescan`], with the rule that decided the verdict when a
-    /// configured rule did; for the decision record only.
+    ///
+    /// Also returns the rule that decided the verdict when a configured rule
+    /// did, for the decision record only.
     pub(crate) fn rescan_attributed(
         &self,
         policy: &FirewallPolicy,
@@ -525,7 +514,7 @@ impl Firewall {
         let (server, tool) = (target.server.label(), target.tool);
 
         // 1. Content scan (input patterns, memory poisoning), shared with the
-        //    dispatch chokepoint's `rescan`.
+        //    dispatch chokepoint's `rescan_attributed`.
         let mut findings = self.content_findings(tool, args);
 
         // 2. Anomaly detection (`anomaly_gate.rs`). Empty is not an identity:
@@ -550,7 +539,7 @@ impl Firewall {
         // principal as the anomaly detector, over an explicit window.
         let budget_refuse = self.check_budget(anomaly_identity, server, tool, &mut findings);
 
-        // The folder check (allowed_root.rs), the same helper `rescan` calls.
+        // The folder check (allowed_root.rs), the same helper `rescan_attributed` calls.
         let roots = allowed_root::root_check(self, policy, target, args, backend);
         let (content_action, content_rule) = Self::resolve_attributed(policy, target, &findings);
         let ((rooted_action, rooted_rule), root_findings) =
