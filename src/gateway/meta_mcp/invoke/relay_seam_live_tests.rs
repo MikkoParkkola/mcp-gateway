@@ -145,10 +145,11 @@ fn p8_10b_contributors_removed_release_the_seam() {
 
 /// P8.10c: seams past the composite bound are judged by the lists in force,
 /// not merged on the key they shared when recorded. Eighteen distinct
-/// contributor sets (steps `t0..t18`, one seam per adjacent pair); seams 16
-/// and 17 overflow the sixteen composites. A source listed for seam 16 only
-/// refuses it and not seam 17; removing it releases both. RED on base at the
-/// G1 "refused": the reload is ignored.
+/// contributor sets (steps `t0..t18`, one seam per adjacent pair), recorded
+/// in the lexical order of their members: `t7+t8` and `t8+t9` (seams 7 and
+/// 8) come 17th and 18th and overflow the sixteen composites. `alpha:t7`
+/// listed refuses seam 7 and not seam 8; removing it releases both. RED on
+/// base at the G1 "refused": the reload is ignored.
 #[test]
 fn p8_10c_overflow_seams_follow_the_lists_in_force() {
     const TOOLS: [&str; 19] = [
@@ -158,15 +159,15 @@ fn p8_10c_overflow_seams_follow_the_lists_in_force() {
     let steps: Vec<Step> = TOOLS.iter().map(|t| ("alpha", *t, false)).collect();
     let rig = Rig::new(config(Block, &[], vec![]));
     deliver_plan(&rig, &rig.generation(), &steps);
-    rig.reload(|c| c.security.firewall.collusion.sources = vec!["alpha:t16".to_string()]);
+    rig.reload(|c| c.security.firewall.collusion.sources = vec!["alpha:t7".to_string()]);
     assert!(
-        refused(&rig, 16, ("gamma", "send")),
+        refused(&rig, 7, ("gamma", "send")),
         "P8.10c: the listed contributor's seam is not refused"
     );
-    assert!(!refused(&rig, 17, ("gamma", "send")), "the other seam");
+    assert!(!refused(&rig, 8, ("gamma", "send")), "the other seam");
     rig.reload(|c| c.security.firewall.collusion.sources = vec![]);
-    assert!(!refused(&rig, 16, ("gamma", "send")), "released");
-    assert!(!refused(&rig, 17, ("gamma", "send")), "released");
+    assert!(!refused(&rig, 7, ("gamma", "send")), "released");
+    assert!(!refused(&rig, 8, ("gamma", "send")), "released");
 }
 
 /// P8.10d: each seam keeps its own contributors' exact facts. The first
