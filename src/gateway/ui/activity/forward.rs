@@ -17,6 +17,7 @@
 //! active file, which reads that file's first line (at most one capped line)
 //! each time the active file is opened. Opening a sealed segment reads nothing.
 
+use std::fs::File;
 use std::io;
 use std::path::Path;
 
@@ -129,7 +130,7 @@ pub(in crate::gateway::ui) struct Diagnostics {
 
 /// Rows after `cursor` up to and including `stop`, oldest first. `None` for
 /// `cursor` starts at the log's oldest kept record.
-pub(in crate::gateway::ui) fn rows_after(
+pub(super) fn rows_after(
     log: &Log<'_>,
     cursor: Option<&Mark>,
     stop: Option<&Mark>,
@@ -143,27 +144,7 @@ pub(in crate::gateway::ui) fn rows_after(
         search.at = None;
         return Ok(page);
     };
-    let saved = search.at.take().filter(|p| p.continues(cursor));
-    let resumed = match &saved {
-        Some(p) => place::resume(log, p, &mut page.diag.anchor_bytes)?,
-        None => None,
-    };
-    if saved.is_some() && resumed.is_none() {
-        search.restarts += 1;
-        if search.restarts > MAX_RESTARTS {
-            page.reset = true;
-            page.diag.bytes_read = page.diag.anchor_bytes;
-            return Ok(page);
-        }
-        page.diag.restarted = true;
-    }
-    let started = match resumed {
-        Some(r) => Some(r),
-        None => place::start(log, cursor)?,
-    };
-    let Some((file, mut at)) = started else {
-        page.reset = true;
-        page.diag.bytes_read += page.diag.anchor_bytes;
+    let Some((file, mut at)) = begin(log, cursor, search, &mut page)? else {
         return Ok(page);
     };
     let mut scan = scan::Scan::new(file, at.offset, at.mode, budget.bytes)?;
@@ -250,6 +231,40 @@ pub(in crate::gateway::ui) fn rows_after(
     page.diag.bytes_read += spent + scan.read + page.diag.anchor_bytes;
     settle(&mut page, search, at, outcome, cursor);
     Ok(page)
+}
+
+/// Where this call starts: its suspended place when that still holds, else a
+/// fresh search from the oldest segment. `None` when the page is a reset: too
+/// many restarts, or no place to start from.
+fn begin(
+    log: &Log<'_>,
+    cursor: Option<&Mark>,
+    search: &mut Search,
+    page: &mut ForwardPage,
+) -> io::Result<Option<(File, place::Place)>> {
+    let saved = search.at.take().filter(|p| p.continues(cursor));
+    let resumed = match &saved {
+        Some(p) => place::resume(log, p, &mut page.diag.anchor_bytes)?,
+        None => None,
+    };
+    if saved.is_some() && resumed.is_none() {
+        search.restarts += 1;
+        if search.restarts > MAX_RESTARTS {
+            page.reset = true;
+            page.diag.bytes_read = page.diag.anchor_bytes;
+            return Ok(None);
+        }
+        page.diag.restarted = true;
+    }
+    let started = match resumed {
+        Some(r) => Some(r),
+        None => place::start(log, cursor)?,
+    };
+    if started.is_none() {
+        page.reset = true;
+        page.diag.bytes_read += page.diag.anchor_bytes;
+    }
+    Ok(started)
 }
 
 /// Record how a call ended, and keep its place only when it stopped short.
