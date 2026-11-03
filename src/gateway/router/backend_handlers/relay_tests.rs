@@ -261,10 +261,28 @@ async fn staging_a_catalogue_result_classifies_while_the_firewall_is_on() {
         crate::gateway::router::tests::test_router_app_state_with_auth(&AuthConfig::default())
             .await;
     let keys = inactive.meta_mcp.continuation();
+    let off = FirewallConfig::default();
+    // Pinned, so a changed default cannot turn this into an on-staging row.
+    assert_eq!(
+        off.collusion.action,
+        crate::security::firewall::CollusionAction::Off,
+        "premise: the leg's action is off"
+    );
+    assert_eq!(
+        inactive
+            .live_config
+            .get()
+            .security
+            .firewall
+            .collusion
+            .action,
+        crate::security::firewall::CollusionAction::Off,
+        "premise: the generation staged under is off"
+    );
     Arc::get_mut(&mut inactive)
         .expect("state is unique")
         .firewall = Some(Arc::new(
-        Firewall::from_config(FirewallConfig::default(), None).with_continuations(keys),
+        Firewall::from_config(off, None).with_continuations(keys),
     ));
     assert!(
         inactive
