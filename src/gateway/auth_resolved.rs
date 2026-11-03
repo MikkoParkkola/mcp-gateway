@@ -213,6 +213,25 @@ impl ResolvedAuthConfig {
         })
     }
 
+    /// This table with `edit` applied to its resolved keys, every other
+    /// setting kept: the key table a reload of an edited key list publishes,
+    /// for test fixtures whose `config.auth` does not carry their keys.
+    #[cfg(test)]
+    pub(crate) fn with_keys_edited(&self, edit: impl FnOnce(&mut Vec<ResolvedApiKey>)) -> Self {
+        let mut api_keys = self.api_keys.clone();
+        edit(&mut api_keys);
+        Self {
+            enabled: self.enabled,
+            bearer_token: self.bearer_token.clone(),
+            bearer_quota_principal: self.bearer_quota_principal.clone(),
+            api_keys,
+            public_paths: self.public_paths.clone(),
+            client_circuit_breaker: self.client_circuit_breaker.clone(),
+            runtime: Arc::clone(&self.runtime),
+            record_key: Arc::clone(&self.record_key),
+        }
+    }
+
     /// Create resolved config from `AuthConfig`.
     ///
     /// Panics if a configured environment-backed secret is missing, or if

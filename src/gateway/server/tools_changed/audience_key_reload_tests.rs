@@ -30,15 +30,41 @@ async fn push(w: &World, backend: &str) {
     w.state.subscriptions.publish_for_backend(note, backend);
 }
 
-/// Reload the key table with `edit` applied to `k-std`, or with `k-std`
-/// removed when `edit` returns false. The other keys stay, so the gateway
-/// stays multi-user and the reload is accepted.
-fn reload_k_std(w: &World, edit: impl Fn(&mut crate::config::ApiKeyConfig) -> bool) {
-    w.state.live_config.edit(|c| {
-        c.auth
-            .api_keys
-            .retain_mut(|key| key.name != "k-std" || edit(key));
-    });
+/// Publish a key table with `edit` applied to `k-std`, or with `k-std`
+/// removed when `edit` returns false, as a reload of an edited key list
+/// does. The other keys stay, so the gateway stays multi-user. Asserts the
+/// published table changed, so no row can pass or fail on a reload that did
+/// not happen.
+fn reload_k_std(w: &World, edit: impl Fn(&mut crate::gateway::auth::ResolvedApiKey) -> bool) {
+    let live = &w.state.live_config;
+    let published = live.generation();
+    let before: Vec<(String, Vec<String>)> = published
+        .auth()
+        .api_keys()
+        .iter()
+        .map(|k| (k.name.clone(), k.backends.clone()))
+        .collect();
+    assert!(
+        before.iter().any(|(name, _)| name == "k-std"),
+        "premise: k-std is a key"
+    );
+    let auth = published
+        .auth()
+        .with_keys_edited(|keys| keys.retain_mut(|key| key.name != "k-std" || edit(key)));
+    live.publish(std::sync::Arc::new(
+        crate::config_reload::Generation::prepare_startup(
+            (*live.get()).clone(),
+            std::sync::Arc::new(auth),
+        ),
+    ));
+    let after: Vec<(String, Vec<String>)> = live
+        .generation()
+        .auth()
+        .api_keys()
+        .iter()
+        .map(|k| (k.name.clone(), k.backends.clone()))
+        .collect();
+    assert_ne!(before, after, "the reload changed the key table");
 }
 
 /// STREAM.1: a key a reload removes has its held streams' next ordinary
