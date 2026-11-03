@@ -10,6 +10,12 @@
 //! the segment's file identity read from the opened handle, the log's rewrite
 //! generation, the file's length, and the hash of the last whole record before
 //! the offset.
+//!
+//! The bound on one call's reads: its byte budget, plus at most one record
+//! within the log's cap (a record is never split across calls), plus the
+//! anchor's re-read, plus the shared segment opener's identity check of the
+//! active file, which reads that file's first line (at most one capped line)
+//! each time the active file is opened. Opening a sealed segment reads nothing.
 
 use std::io;
 use std::path::Path;
