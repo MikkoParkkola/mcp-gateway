@@ -166,8 +166,10 @@ async fn cell(who: Who, store: bool) -> String {
     )
 }
 
-/// The policy queue item an unscoped reader gets while sanitization is off.
-const SANITIZE_ITEM: &str = "policy:local:input_sanitization:not_enforced";
+/// The policy queue items an unscoped reader gets: sanitization is off in
+/// the fixture, and SSRF protection is off in every router fixture.
+const SANITIZE_ITEM: &str =
+    "policy:local:input_sanitization:not_enforced;policy:local:ssrf_protection:not_enforced";
 
 /// What each caller is shown, without and with the seeded store. An
 /// unscoped caller keeps today's snapshot, its own rows only when it reads
