@@ -173,23 +173,6 @@ fn signatures(items: &[syn::Item]) -> Vec<&syn::Signature> {
     out
 }
 
-/// Fields and bindings in a file whose type names `DashMap`.
-fn dashmaps(file: &syn::File) -> HashSet<String> {
-    let mut names = HashSet::new();
-    for item in all_items(&file.items) {
-        if let syn::Item::Struct(s) = item {
-            for f in &s.fields {
-                if type_names(&f.ty).iter().any(|n| n == "DashMap")
-                    && let Some(id) = &f.ident
-                {
-                    names.insert(id.to_string());
-                }
-            }
-        }
-    }
-    names
-}
-
 fn last_segment(path: &syn::Path) -> String {
     path.segments
         .last()
@@ -198,16 +181,6 @@ fn last_segment(path: &syn::Path) -> String {
 }
 
 /// The name a receiver ends in: `self.cache` and `cache` are both `cache`.
-/// `self.map` or `&self.map`, through parentheses: a field, not a local.
-fn is_field_access(expr: &syn::Expr) -> bool {
-    match expr {
-        syn::Expr::Field(_) => true,
-        syn::Expr::Paren(p) => is_field_access(&p.expr),
-        syn::Expr::Reference(r) => is_field_access(&r.expr),
-        _ => false,
-    }
-}
-
 fn receiver_name(expr: &syn::Expr) -> Option<String> {
     match expr {
         syn::Expr::Field(f) => match &f.member {
@@ -224,29 +197,111 @@ fn receiver_name(expr: &syn::Expr) -> Option<String> {
 /// One file's scan state.
 struct Scan<'k> {
     known: &'k Known,
-    /// `DashMap` fields of every scanned file: a field is often declared in
-    /// another file than the one that locks it. Matched only against a field
-    /// access (`self.map`), since a local of the same name is another value.
-    crate_maps: &'k HashSet<String>,
-    /// `DashMap` fields of this file, matched against any receiver.
-    file_maps: HashSet<String>,
+    /// Struct fields of every scanned file: a field is often declared in
+    /// another file than the one that locks it.
+    fields: &'k types::Fields,
+    /// What each local name is bound to, scope by scope.
+    env: types::Env,
+    /// The type `self` names in the impl being walked.
+    self_ty: Option<String>,
     file: String,
     func: String,
     hits: Vec<Hit>,
 }
 
 impl Scan<'_> {
-    /// Whether `expr` names a `DashMap`: a field of any file, or a name of this file's.
-    fn is_map(&self, expr: &syn::Expr) -> bool {
-        let field = is_field_access(expr);
-        receiver_name(expr)
-            .is_some_and(|n| self.file_maps.contains(&n) || (field && self.crate_maps.contains(&n)))
+    /// `Some(owned)` when `expr` is a `DashMap`, judged by type: a map local,
+    /// or a field whose receiver resolves to a struct declaring it a map. A
+    /// receiver whose type is not written down falls back to the crate-wide
+    /// field-name rule, which fails closed.
+    fn is_map(&self, expr: &syn::Expr) -> Option<bool> {
+        match expr {
+            syn::Expr::Paren(p) => self.is_map(&p.expr),
+            syn::Expr::Reference(r) => self.is_map(&r.expr).map(|_| false),
+            syn::Expr::Unary(u) if matches!(u.op, syn::UnOp::Deref(_)) => {
+                self.is_map(&u.expr).map(|_| false)
+            }
+            syn::Expr::Path(p) => match self.env.get(&p.path.get_ident()?.to_string()) {
+                Some(types::Binding::Map { owned }) => Some(owned),
+                _ => None,
+            },
+            syn::Expr::Field(f) => {
+                let syn::Member::Named(field) = &f.member else {
+                    return None;
+                };
+                let owner = self.receiver_type(&f.base);
+                self.fields
+                    .is_map(owner.as_deref(), &field.to_string())
+                    .then_some(false)
+            }
+            _ => None,
+        }
     }
 
-    /// `for e in &self.map` over a `DashMap`: each item holds a shard lock.
-    /// Only in a loop: a `let m = &self.map;` holds nothing.
+    /// The struct a receiver expression is typed as, when that is written down.
+    fn receiver_type(&self, expr: &syn::Expr) -> Option<String> {
+        match expr {
+            syn::Expr::Paren(p) => self.receiver_type(&p.expr),
+            syn::Expr::Reference(r) => self.receiver_type(&r.expr),
+            syn::Expr::Unary(u) => self.receiver_type(&u.expr),
+            syn::Expr::Path(p) => {
+                let id = p.path.get_ident()?.to_string();
+                if id == "self" {
+                    return self.self_ty.clone();
+                }
+                match self.env.get(&id) {
+                    Some(types::Binding::Typed(t)) => Some(t),
+                    _ => None,
+                }
+            }
+            _ => None,
+        }
+    }
+
+    /// `for e in m` over a `DashMap`: each item holds a shard lock for the
+    /// loop's body. `for e in &m` always; `for e in m` unless `m` is owned,
+    /// since consuming a map yields owned pairs and holds nothing.
     fn iterates_dashmap(&self, expr: &syn::Expr) -> bool {
-        matches!(expr, syn::Expr::Reference(_)) && self.is_map(expr)
+        match expr {
+            syn::Expr::Reference(r) => self.is_map(&r.expr).is_some(),
+            other => self.is_map(other) == Some(false),
+        }
+    }
+
+    /// Every name `pat` binds stops meaning what it meant outside.
+    fn shadow(&self, pat: &syn::Pat) {
+        for name in bound_names(pat) {
+            self.env.bind(name, types::Binding::Other);
+        }
+    }
+
+    /// Bind a `let`, judging its initializer before the new name exists, so
+    /// `let c = &c.backends;` reads the old `c`. A written type wins over the
+    /// initializer; a `ref` binding borrows; a plain move keeps ownership.
+    fn bind_let(&self, pat: &syn::Pat, init: Option<&syn::Expr>) {
+        let binding = match pat {
+            syn::Pat::Type(t) => match &*t.pat {
+                syn::Pat::Ident(id) => Some((
+                    id.ident.to_string(),
+                    types::Binding::of_type(&t.ty, id.by_ref.is_some()),
+                )),
+                _ => None,
+            },
+            syn::Pat::Ident(id) if id.subpat.is_none() => {
+                let map = init.and_then(|e| self.is_map(e));
+                Some((
+                    id.ident.to_string(),
+                    map.map_or(types::Binding::Other, |owned| types::Binding::Map {
+                        owned: owned && id.by_ref.is_none(),
+                    }),
+                ))
+            }
+            _ => None,
+        };
+        match binding {
+            Some((name, b)) => self.env.bind(name, b),
+            None => self.shadow(pat),
+        }
     }
 
     /// Whether `expr` yields a guard, given the bindings already `held`.
@@ -259,7 +314,7 @@ impl Scan<'_> {
                 let name = m.method.to_string();
                 (m.args.is_empty() && ACQUIRE.contains(&name.as_str()))
                     || self.known.methods.contains(&name)
-                    || (DASHMAP_REFS.contains(&name.as_str()) && self.is_map(&m.receiver))
+                    || (DASHMAP_REFS.contains(&name.as_str()) && self.is_map(&m.receiver).is_some())
                     || (PEEL.contains(&name.as_str()) && self.acquires(&m.receiver, held))
             }
             syn::Expr::Call(c) => {
@@ -310,19 +365,25 @@ impl Scan<'_> {
         }
     }
 
-    /// Whether a block's result is a guard, counting guards its own `let`s take.
+    /// Whether a block's result is a guard, counting guards its own `let`s
+    /// take, with its own bindings in scope.
     fn block_yields(&self, block: &syn::Block, held: &[String]) -> bool {
         let mut inner = held.to_vec();
+        self.env.push();
         for stmt in &block.stmts {
-            if let syn::Stmt::Local(l) = stmt
-                && l.init
+            if let syn::Stmt::Local(l) = stmt {
+                if l.init
                     .as_ref()
                     .is_some_and(|i| self.acquires(&i.expr, &inner))
-            {
-                inner.extend(bound_names(&l.pat));
+                {
+                    inner.extend(bound_names(&l.pat));
+                }
+                self.bind_let(&l.pat, l.init.as_ref().map(|i| &*i.expr));
             }
         }
-        matches!(block.stmts.last(), Some(syn::Stmt::Expr(e, None)) if self.acquires(e, &inner))
+        let yields = matches!(block.stmts.last(), Some(syn::Stmt::Expr(e, None)) if self.acquires(e, &inner));
+        self.env.pop();
+        yields
     }
 }
 
@@ -426,8 +487,10 @@ impl Scan<'_> {
             .push((self.file.clone(), self.func.clone(), what.to_owned()));
     }
 
-    /// Walk `block` with `held` guards in force from outside it.
+    /// Walk `block` with `held` guards in force from outside it. Its bindings
+    /// end with it.
     fn block(&mut self, block: &syn::Block, mut held: Vec<String>) {
+        self.env.push();
         for stmt in &block.stmts {
             match stmt {
                 syn::Stmt::Local(local) => {
@@ -447,6 +510,7 @@ impl Scan<'_> {
                             }
                         }
                     }
+                    self.bind_let(&local.pat, local.init.as_ref().map(|i| &*i.expr));
                 }
                 syn::Stmt::Expr(e, _) => {
                     if let Some(name) = dropped(e) {
@@ -459,6 +523,7 @@ impl Scan<'_> {
                 syn::Stmt::Item(item) => self.item(item),
             }
         }
+        self.env.pop();
     }
 
     fn mac(&mut self, mac: &syn::Macro, held: &[String]) {
@@ -489,27 +554,40 @@ impl Scan<'_> {
             syn::Expr::ForLoop(l) => {
                 self.expr(&l.expr, held);
                 let mut inner = held.to_vec();
-                if self.acquires(&l.expr, held) || self.iterates_dashmap(&l.expr) {
+                if self.acquires(&l.expr, held) {
                     inner.extend(bound_names(&l.pat));
                 }
+                // Iterating a map holds a shard lock for the whole body,
+                // whatever the pattern binds: `for _ in m` too.
+                if self.iterates_dashmap(&l.expr) {
+                    inner.push("<map iteration>".into());
+                }
+                self.env.push();
+                self.shadow(&l.pat);
                 self.block(&l.body, inner);
+                self.env.pop();
             }
             syn::Expr::While(w) => {
                 let mut inner = held.to_vec();
+                self.env.push();
                 if let syn::Expr::Let(l) = &*w.cond {
                     self.expr(&l.expr, held);
                     if self.acquires(&l.expr, held) {
                         inner.extend(bound_names(&l.pat));
                     }
+                    self.shadow(&l.pat);
                 } else {
                     self.expr(&w.cond, held);
                 }
                 self.block(&w.body, inner);
+                self.env.pop();
             }
             syn::Expr::If(i) => {
                 let mut inner = held.to_vec();
+                self.env.push();
                 self.cond(&i.cond, held, &mut inner);
                 self.block(&i.then_branch, inner);
+                self.env.pop();
                 if let Some((_, e)) = &i.else_branch {
                     self.expr(e, held);
                 }
@@ -523,10 +601,20 @@ impl Scan<'_> {
                         inner.extend(bound_names(&arm.pat));
                         inner.push("<match scrutinee>".into());
                     }
+                    self.env.push();
+                    self.shadow(&arm.pat);
                     self.expr(&arm.body, &inner);
+                    self.env.pop();
                 }
             }
-            syn::Expr::Closure(c) => self.expr(&c.body, held),
+            syn::Expr::Closure(c) => {
+                self.env.push();
+                for input in &c.inputs {
+                    self.shadow(input);
+                }
+                self.expr(&c.body, held);
+                self.env.pop();
+            }
             syn::Expr::MethodCall(m) => {
                 if !held.is_empty() && m.method == "emit" && m.args.is_empty() {
                     self.hit("PendingLogs::emit");
@@ -575,6 +663,7 @@ impl Scan<'_> {
                 if self.acquires(&l.expr, held) {
                     inner.extend(bound_names(&l.pat));
                 }
+                self.shadow(&l.pat);
             }
             syn::Expr::Binary(b) if matches!(b.op, syn::BinOp::And(_)) => {
                 self.cond(&b.left, held, inner);
@@ -613,6 +702,11 @@ impl Scan<'_> {
         match item {
             syn::Item::Fn(f) => self.func(&f.sig, &f.block),
             syn::Item::Impl(i) => {
+                // `self` in this impl is a value of its self type.
+                let outer = std::mem::replace(
+                    &mut self.self_ty,
+                    types::head_of(&i.self_ty).map(|(name, _)| name),
+                );
                 for ii in &i.items {
                     if let syn::ImplItem::Fn(f) = ii
                         && !has_cfg_test(&f.attrs)
@@ -620,6 +714,7 @@ impl Scan<'_> {
                         self.func(&f.sig, &f.block);
                     }
                 }
+                self.self_ty = outer;
             }
             syn::Item::Trait(t) => {
                 for ti in &t.items {
@@ -645,14 +740,24 @@ impl Scan<'_> {
     fn func(&mut self, sig: &syn::Signature, body: &syn::Block) {
         let outer = std::mem::replace(&mut self.func, sig.ident.to_string());
         let mut held = Vec::new();
+        self.env.push();
         for input in &sig.inputs {
-            if let syn::FnArg::Typed(t) = input
-                && mentions_guard(&t.ty, self.known)
-            {
-                held.extend(bound_names(&t.pat));
+            if let syn::FnArg::Typed(t) = input {
+                if mentions_guard(&t.ty, self.known) {
+                    held.extend(bound_names(&t.pat));
+                }
+                // A parameter is bound by its written type.
+                match &*t.pat {
+                    syn::Pat::Ident(id) => self.env.bind(
+                        id.ident.to_string(),
+                        types::Binding::of_type(&t.ty, id.by_ref.is_some()),
+                    ),
+                    other => self.shadow(other),
+                }
             }
         }
         self.block(body, held);
+        self.env.pop();
         self.func = outer;
     }
 }
@@ -689,13 +794,14 @@ fn has_cfg_test(attrs: &[syn::Attribute]) -> bool {
 fn scan(files: &[(String, syn::File)]) -> Vec<Hit> {
     let parsed: Vec<syn::File> = files.iter().map(|(_, f)| f.clone()).collect();
     let known = learn(&parsed);
-    let maps: HashSet<String> = parsed.iter().flat_map(dashmaps).collect();
+    let fields = types::Fields::learn(&parsed);
     let mut hits = Vec::new();
     for (name, file) in files {
         let mut s = Scan {
             known: &known,
-            crate_maps: &maps,
-            file_maps: dashmaps(file),
+            fields: &fields,
+            env: types::Env::default(),
+            self_ty: None,
             file: name.clone(),
             func: String::new(),
             hits: Vec::new(),
@@ -751,6 +857,9 @@ mod g0;
 
 #[path = "log_under_lock_scan_binding_tests.rs"]
 mod binding;
+
+#[path = "log_under_lock_scan_types_tests.rs"]
+mod types;
 
 #[path = "log_under_lock_allowed_tests.rs"]
 mod allowed;
