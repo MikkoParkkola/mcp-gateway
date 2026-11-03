@@ -560,8 +560,10 @@ pub(crate) trait StdioLine: Sync {
     fn tool_policy(&self) -> &crate::security::ToolPolicy;
     /// The generation the line is judged under.
     fn generation(&self) -> Option<&crate::config_reload::Generation>;
-    /// The same generation, shared, for a reader that outlives the borrow.
-    fn pinned(&self) -> Option<std::sync::Arc<crate::config_reload::Generation>>;
+    /// The generation a reader that outlives the borrow judges the line
+    /// under. Never absent: a catalogue read has no fallback to the config
+    /// published later.
+    fn pinned(&self) -> std::sync::Arc<crate::config_reload::Generation>;
 }
 
 impl StdioLine for std::sync::Arc<crate::config_reload::Generation> {
@@ -571,8 +573,8 @@ impl StdioLine for std::sync::Arc<crate::config_reload::Generation> {
     fn generation(&self) -> Option<&crate::config_reload::Generation> {
         Some(self)
     }
-    fn pinned(&self) -> Option<std::sync::Arc<crate::config_reload::Generation>> {
-        Some(std::sync::Arc::clone(self))
+    fn pinned(&self) -> std::sync::Arc<crate::config_reload::Generation> {
+        std::sync::Arc::clone(self)
     }
 }
 
@@ -584,8 +586,10 @@ impl StdioLine for std::sync::Arc<crate::security::ToolPolicy> {
     fn generation(&self) -> Option<&crate::config_reload::Generation> {
         None
     }
-    fn pinned(&self) -> Option<std::sync::Arc<crate::config_reload::Generation>> {
-        None
+    /// A test's bare policy carries no config: its catalogue reads are
+    /// judged under the default one.
+    fn pinned(&self) -> std::sync::Arc<crate::config_reload::Generation> {
+        crate::config_reload::LiveConfig::new(crate::config::Config::default()).generation()
     }
 }
 

@@ -8,7 +8,7 @@
 #[test]
 fn the_catalogue_caller_uses_the_stdio_session_id() {
     assert_eq!(
-        super::operator(None).session,
+        super::operator(default_generation()).session,
         super::super::STDIO_SESSION_ID
     );
 }
@@ -26,7 +26,7 @@ async fn a_method_outside_the_catalogue_is_refused() {
             method,
             crate::protocol::RequestId::Number(7),
             None,
-            None,
+            default_generation(),
         )
         .await;
         assert!(answer.result.is_none(), "{method}: no result");
@@ -61,4 +61,9 @@ fn t1a_stdio_caller_has_no_api_key_identity() {
         Some(expected),
         "stdio charges its nonce"
     );
+}
+
+/// The default config's generation, for a read that needs one.
+fn default_generation() -> std::sync::Arc<crate::config_reload::Generation> {
+    crate::config_reload::LiveConfig::new(crate::config::Config::default()).generation()
 }

@@ -48,7 +48,7 @@ async fn stdio_catalogue_serves_the_operator_the_account_backend() {
             method,
             RequestId::Number(1),
             params(method).as_ref(),
-            None,
+            generation(),
         )
         .await;
     }
@@ -82,7 +82,7 @@ async fn stdio_catalogue_output_is_unchanged_for_a_non_account_backend() {
     for method in METHODS {
         let p = params(method);
         let id = || RequestId::Number(1);
-        let via_stdio = dispatch(&meta, method, id(), p.as_ref(), None).await;
+        let via_stdio = dispatch(&meta, method, id(), p.as_ref(), generation()).await;
         let no_client = match method {
             "prompts/list" => meta.handle_prompts_list(id(), p.as_ref(), None, None).await,
             "prompts/get" => meta.handle_prompts_get(id(), p.as_ref(), None, None).await,
@@ -111,4 +111,9 @@ async fn stdio_catalogue_output_is_unchanged_for_a_non_account_backend() {
         Vec::new(),
         "nothing may reach the backend"
     );
+}
+
+/// The default config's generation: these rows judge no relay.
+fn generation() -> std::sync::Arc<crate::config_reload::Generation> {
+    crate::config_reload::LiveConfig::new(crate::config::Config::default()).generation()
 }
