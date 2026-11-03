@@ -253,3 +253,58 @@ fn the_error_author_is_private_record_state() {
         "the snapshot carries no author: {set}"
     );
 }
+
+/// A row's fingerprint survives a store rewrite as written: absent loads as
+/// the legacy `None`, this build writes it back as `"missing"`, and a
+/// written fingerprint keeps its string. A legacy upstream row stays
+/// unvouched however often it is rewritten, so its stored outcome is never
+/// served after a write-back.
+#[test]
+fn a_legacy_upstream_row_stays_unvouched_after_a_rewrite() {
+    use super::Vouching;
+    use crate::security::dispatched::MISSING;
+    let reload = |record: &Record| -> Record {
+        serde_json::from_value(serde_json::to_value(record).expect("a row serializes"))
+            .expect("a written row loads")
+    };
+    let task = || Task::create("slow_job").expect("the test clock reads after 1970");
+
+    let mut absent = serde_json::to_value(row(&task(), TARGET_VERSION, Some(upstream(DIGEST))))
+        .expect("a row serializes");
+    absent["upstream"]
+        .as_object_mut()
+        .expect("an upstream object")
+        .remove("secretFingerprint");
+    let legacy: Record = serde_json::from_value(absent).expect("a legacy row loads");
+    let fingerprint = |record: &Record| {
+        record
+            .upstream
+            .as_ref()
+            .expect("an upstream row")
+            .secret_fingerprint
+            .clone()
+    };
+    assert_eq!(
+        fingerprint(&legacy),
+        None,
+        "absent loads as the legacy state"
+    );
+    assert_eq!(
+        CommittedTask::of(task(), &legacy).vouching,
+        Vouching::Unvouched
+    );
+
+    let rewritten = reload(&legacy);
+    assert_eq!(fingerprint(&rewritten).as_deref(), Some(MISSING));
+    assert_eq!(
+        CommittedTask::of(task(), &rewritten).vouching,
+        Vouching::Unvouched,
+        "a rewritten legacy row is still unvouched"
+    );
+
+    let mut written = upstream(DIGEST);
+    written.secret_fingerprint = Some("hmac:0a1b".to_owned());
+    let kept = reload(&row(&task(), TARGET_VERSION, Some(written)));
+    assert_eq!(fingerprint(&kept).as_deref(), Some("hmac:0a1b"));
+    assert_eq!(CommittedTask::of(task(), &kept).vouching, Vouching::Vouched);
+}
