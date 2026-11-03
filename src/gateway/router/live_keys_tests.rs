@@ -305,9 +305,13 @@ async fn k5_a_rotation_written_by_reload_honours_its_grace() {
 }
 
 /// `keys` under `security.posture: hardened`, the posture the `kind` row's
-/// gateway runs with: a reload that changed it would be refused.
+/// gateway runs with (a reload that changed it would be refused), with the
+/// signing secret hardened requires.
 fn hardened(keys: &[ApiKeyConfig]) -> String {
-    format!("security:\n  posture: hardened\n{}", file_text(keys))
+    format!(
+        "security:\n  posture: hardened\n  message_signing:\n    shared_secret: \"k5-hardened-signing-secret-0123456789\"\n{}",
+        file_text(keys)
+    )
 }
 
 /// K5 `kind` (MIK-9255.IDENT.6), observed through the one behaviour that
@@ -317,14 +321,16 @@ fn hardened(keys: &[ApiKeyConfig]) -> String {
 /// on the next call, and one that makes it shared again refuses it.
 #[tokio::test]
 async fn k5_a_key_kind_changed_by_reload_applies_on_the_next_call() {
-    let mut config = crate::config::Config::default();
-    config.security.posture = crate::security::SecurityPosture::Hardened;
-    let (state, _store) = super::tests::test_router_app_state_with_auth_and_config(
-        &auth(vec![key(KEPT, None)]),
-        config,
-    )
-    .await;
+    // Started from the same file text its reloads write, loaded as startup
+    // loads it, so the reloads differ from it in the key alone.
     let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("gateway.yaml");
+    crate::gateway::test_helpers::write_owner_only(&path, hardened(&[key(KEPT, None)]))
+        .expect("write");
+    let config = crate::config::Config::load(Some(&path)).expect("the hardened config loads");
+    let auth = config.auth.clone();
+    let (state, _store) =
+        super::tests::test_router_app_state_with_auth_and_config(&auth, config).await;
     assert_eq!(
         status(&state, "/mcp", KEPT).await,
         StatusCode::FORBIDDEN,
