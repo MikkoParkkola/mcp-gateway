@@ -115,6 +115,28 @@ async fn relay_held_across(s: &mut Session, path: &Path, to: &str) -> Value {
     held_across(s, path, to, ("tools/call", invoke)).await
 }
 
+/// The operator's relay line, sent and answered with no pause: judged under
+/// the generation published when it is read.
+async fn relay_now(s: &mut Session) -> Value {
+    let invoke = json!({"name": "gateway_invoke",
+                        "arguments": {"server": "alpha", "tool": "send", "arguments": {"text": PROSE}}});
+    let line = s.send("tools/call", invoke).await;
+    s.answer(line).await
+}
+
+/// A `-32002` relay refusal, not some other refusal under the same code.
+fn assert_relay_refused(answer: &Value, row: &str) {
+    assert_eq!(
+        answer["error"]["code"], -32002,
+        "{row}: not refused: {answer}"
+    );
+    let message = answer["error"]["message"].as_str().unwrap_or_default();
+    assert!(
+        message.contains("Relay detection blocked"),
+        "{row}: not the relay refusal: {answer}"
+    );
+}
+
 /// As [`relay_held_across`], for any relaying `method` line.
 async fn held_across(s: &mut Session, path: &Path, to: &str, line: (&str, Value)) -> Value {
     let (method, params) = line;
@@ -145,11 +167,19 @@ async fn t4a_a_held_stdio_line_read_under_block_still_refuses() {
     write_action(&path, "block");
     let (mut s, sends) = session(dir.path(), &path).await;
     let answer = relay_held_across(&mut s, &path, "off").await;
-    assert_eq!(
-        answer["error"]["code"], -32002,
-        "T4a: not refused: {answer}"
-    );
+    assert_relay_refused(&answer, "T4a");
     assert_eq!(sends.load(Ordering::SeqCst), 0, "the backend was called");
+    // A line read after the reload follows the published `off`.
+    let fresh = relay_now(&mut s).await;
+    assert!(
+        fresh.get("error").is_none(),
+        "T4a: a fresh line under off refused: {fresh}"
+    );
+    assert_eq!(
+        sends.load(Ordering::SeqCst),
+        1,
+        "the fresh line was not sent"
+    );
 }
 
 /// T4b: a line read under `off`, `block` published while it is held:
@@ -169,6 +199,11 @@ async fn t4b_a_held_stdio_line_read_under_off_still_sends() {
         1,
         "the backend was not called"
     );
+    // Control: detection is still armed; a line read under the published
+    // `block` is refused.
+    let fresh = relay_now(&mut s).await;
+    assert_relay_refused(&fresh, "T4b control");
+    assert_eq!(sends.load(Ordering::SeqCst), 1, "the fresh line was sent");
 }
 
 /// T4c: as T4a on the stdio catalogue: a `prompts/get` line carrying the read
@@ -182,9 +217,6 @@ async fn t4c_a_held_stdio_catalogue_line_read_under_block_still_refuses() {
     let (mut s, sends) = session(dir.path(), &path).await;
     let read = json!({"name": "alpha/summary", "arguments": {"text": PROSE}});
     let answer = held_across(&mut s, &path, "off", ("prompts/get", read)).await;
-    assert_eq!(
-        answer["error"]["code"], -32002,
-        "T4c: not refused: {answer}"
-    );
+    assert_relay_refused(&answer, "T4c");
     assert_eq!(sends.load(Ordering::SeqCst), 0, "the backend was asked");
 }
