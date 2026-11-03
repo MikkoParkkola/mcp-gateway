@@ -35,13 +35,17 @@ fn occurrences(needle: &str) -> Vec<(String, usize)> {
     rust_files(&root.join("src"), &mut files);
     let mut found: Vec<(String, usize)> = files
         .iter()
-        // Test files only: a production name may contain "test" (attestation).
+        // Test files and test directories only, by suffix: a production name
+        // may contain "test" (attestation).
         .filter(|path| {
-            let name = path
-                .file_name()
-                .map(|n| n.to_string_lossy().into_owned())
-                .unwrap_or_default();
-            !name.ends_with("_tests.rs") && !path.components().any(|c| c.as_os_str() == "tests")
+            !path
+                .strip_prefix(root)
+                .unwrap_or(path)
+                .components()
+                .any(|c| {
+                    let part = c.as_os_str().to_string_lossy();
+                    part == "tests" || part.ends_with("_tests") || part.ends_with("_tests.rs")
+                })
         })
         .filter_map(|path| {
             let text = std::fs::read_to_string(path).ok()?;
@@ -72,8 +76,10 @@ fn only_the_named_serve_sites_send_a_stored_task() {
 
 #[test]
 fn nothing_but_delivered_wire_projects_a_stored_task() {
+    // Any receiver, not only `self.task`: a reader holding the task under
+    // another name would bypass the gate the same way.
     assert_eq!(
-        occurrences("self.task.wire()"),
+        occurrences(".wire()"),
         vec![("src/gateway/task_service/record.rs".to_owned(), 1)],
         "a stored task projected outside delivered_wire skips the withheld gate"
     );

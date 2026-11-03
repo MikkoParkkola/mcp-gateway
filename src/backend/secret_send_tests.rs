@@ -369,3 +369,43 @@ fn an_argument_rule_refuses_arguments_that_are_not_an_object() {
         "the refusal echoed the value: {error}"
     );
 }
+
+/// What a deferred task's poll renews: each value the dispatch sent, in the
+/// form it was sent, so an unchanged secret older than its grace is still
+/// removed from the answer. Without the renewal the same value retires.
+#[tokio::test(start_paused = true)]
+async fn a_renewal_keeps_an_unchanged_value_redacted_past_its_grace() {
+    use crate::security::needles::{NeedleSet, scrub_text};
+    const GRACE: Duration = Duration::from_secs(60);
+    let backend = backend(
+        http(),
+        vec![rule(InjectTarget::Header, "X-Api-Key", SECRET)],
+        true,
+    );
+    let needles = Arc::new(NeedleSet::with_grace(GRACE));
+    backend.stamp_needles(Arc::clone(&needles));
+    let arguments = json!({"q": "kept"});
+    send(
+        &backend,
+        json!({"name": "read", "arguments": arguments}),
+        Vec::new(),
+    )
+    .expect("sent");
+    let echoed = || {
+        let mut text = format!("echo {SECRET}");
+        scrub_text(&needles, &mut text);
+        text.contains(SECRET)
+    };
+    assert!(!echoed(), "premise: a sent value is redacted");
+
+    tokio::time::advance(GRACE - Duration::from_secs(10)).await;
+    assert!(backend.renew_needles("read", &arguments));
+    tokio::time::advance(GRACE - Duration::from_secs(10)).await;
+    assert!(
+        !echoed(),
+        "a renewed value is redacted past the dispatch's grace"
+    );
+
+    tokio::time::advance(GRACE + Duration::from_secs(1)).await;
+    assert!(echoed(), "premise: an unrenewed value retires on its grace");
+}
