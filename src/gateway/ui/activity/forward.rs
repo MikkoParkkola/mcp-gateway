@@ -172,7 +172,13 @@ pub(super) fn rows_after(
                         std::cmp::Ordering::Less => continue,
                         std::cmp::Ordering::Equal if mark.hash16 == c.hash16 => {
                             at.found = true;
+                            // A cursor at the stop is caught up: what follows
+                            // the stop, a gap included, is a later call's.
+                            let caught_up = mark == *stop;
                             at.last = Some(mark);
+                            if caught_up {
+                                break Outcome::Done;
+                            }
                             continue;
                         }
                         _ => break Outcome::Reset,
