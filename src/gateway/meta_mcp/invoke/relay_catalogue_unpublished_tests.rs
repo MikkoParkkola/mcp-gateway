@@ -55,3 +55,34 @@ fn an_unpublished_gateway_refuses_catalogue_relays_naming_the_cause() {
     );
     assert_eq!(fired.load(Ordering::SeqCst), 1, "the unpublished path ran");
 }
+
+/// The counterpart: once a live config is published, the same read with text
+/// nobody was delivered is let through, so the refusal above is the missing
+/// config's, not a catalogue path that refuses everything.
+#[test]
+fn a_published_gateway_lets_an_unrelayed_catalogue_read_through() {
+    let rig = Rig::new(config(CollusionAction::Block, &["alpha:read"], vec![]));
+    let mut meta = MetaMcp::new(Arc::new(crate::backend::BackendRegistry::new()));
+    meta.set_firewall(Some(Arc::clone(&rig.firewall)));
+    crate::security::firewall::collusion_live_rig::seed_meta(&meta, &rig.firewall);
+    rig.deliver("alice", ("alpha", "read"), &plain(PROSE), &rig.generation());
+    let bob = CatalogueCaller {
+        key: "bob".to_string(),
+        keyed: true,
+        name: "bob".to_string(),
+        session: "s".to_string(),
+        generation: None,
+    };
+    let params = json!({"name": "summary", "arguments": {"text": "the north slope"}});
+    let refusal = meta.catalogue_refusal(
+        Some(&bob),
+        "alpha",
+        "prompts/get",
+        &params,
+        &RequestId::Number(1),
+    );
+    assert!(
+        refusal.is_none(),
+        "an unrelayed read was refused: {refusal:?}"
+    );
+}
