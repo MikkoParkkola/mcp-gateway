@@ -241,6 +241,68 @@ async fn meta_retry_round_relay_refused() {
     );
 }
 
+/// M3 under a reload: the call is admitted under `block` and `off` is
+/// published at round one's witness seam. Round two, carrying what `alice`
+/// was delivered, is judged under the generation the call pinned, so it is
+/// still refused; reading the generation published at its own check would
+/// send it.
+#[tokio::test]
+async fn meta_retry_round_admitted_under_block_a_later_off_still_refuses() {
+    use crate::security::firewall::relay_witness_hook;
+    let (meta, firewall, calls) =
+        meta_asking(json!({"method": "roots/list"}), vec!["asks:*".to_string()]);
+    seed_alice(&firewall);
+    let live = meta.live_config().expect("seeded");
+    let (pinned, admitted) = (live.generation(), live.seq());
+    let policy = crate::security::ToolPolicy::default();
+    let authorizer = crate::gateway::authz::ToolPolicyAuthorizer {
+        tool_policy: &policy,
+        generation: Some(&pinned),
+    };
+    let reached = relay_witness_hook::reached();
+    let hook_live = Arc::clone(&live);
+    relay_witness_hook::arm(move || {
+        let mut config = (*hook_live.get()).clone();
+        config.security.firewall.collusion.action = CollusionAction::Off;
+        hook_live.set(config);
+    });
+    let relaying = Replying {
+        reply: roots(PROSE),
+    };
+    let retry = keyed("key-m3-reload");
+    let bob = MetaMcpCallerContext {
+        authorizer: &authorizer,
+        ..caller("bob", &json!({"roots": {}}), Era::Legacy, &relaying, &retry)
+    };
+    let result = crate::gateway::delivery_facts::scope(meta.invoke_tool(
+        &args(&json!({})),
+        Some("session-m3-reload"),
+        &bob,
+    ))
+    .await;
+    // Round one's check and round two's: the reload preceded round two's.
+    assert_eq!(
+        relay_witness_hook::reached(),
+        reached + 2,
+        "a round's check did not run"
+    );
+    assert_eq!(
+        live.seq(),
+        admitted + 1,
+        "the hook's reload did not publish"
+    );
+    assert_eq!(
+        code_of(&result),
+        Some(-32002),
+        "round two not refused: {result:?}"
+    );
+    assert_eq!(
+        calls.lock().len(),
+        1,
+        "the relaying round reached the backend"
+    );
+}
+
 /// M6: an elicitation prompt bridged to `alice` is a delivery, classified by
 /// the gateway (no `sources`): `bob` sending its text is refused.
 #[tokio::test]
