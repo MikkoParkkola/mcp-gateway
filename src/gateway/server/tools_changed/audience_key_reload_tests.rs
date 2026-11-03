@@ -8,24 +8,25 @@
 use super::audience_fixture::{World, tool};
 use crate::gateway::streaming::TaggedNotification;
 
-/// An ordinary backend notification (not a tool-list change) that both
-/// channels carry: `subscriptions/listen` here subscribes to resource-list
-/// changes.
-const UPDATED: &str = "notifications/resources/list_changed";
+/// The ordinary backend notification (not a tool-list change) each channel
+/// carries: the GET stream relays any backend notification, while
+/// `subscriptions/listen` here subscribes to resource-list changes only.
+const GET_NOTE: &str = "notifications/resources/updated";
+const LISTEN_NOTE: &str = "notifications/resources/list_changed";
 
-/// Push one ordinary notification from `backend` into both channels.
+/// Push one ordinary notification from `backend` into each channel.
 async fn push(w: &World, backend: &str) {
-    let note = serde_json::json!({"jsonrpc": "2.0", "method": UPDATED});
     let tagged = TaggedNotification {
         source: backend.to_string(),
         event_type: "message".to_string(),
-        data: note.clone(),
+        data: serde_json::json!({"jsonrpc": "2.0", "method": GET_NOTE}),
         event_id: None,
     };
     w.state
         .multiplexer
         .broadcast_to_backend(&tagged, backend)
         .await;
+    let note = serde_json::json!({"jsonrpc": "2.0", "method": LISTEN_NOTE});
     w.state.subscriptions.publish_for_backend(note, backend);
 }
 
@@ -50,11 +51,11 @@ async fn stream1_a_removed_key_ends_its_held_streams() {
     let (mut get, mut listen) = (w.sse("k-std").await, w.listen("k-std").await);
     push(&w, "alpha").await;
     assert!(
-        get.frames(&w).await.iter().any(|m| m == UPDATED),
+        get.frames(&w).await.iter().any(|m| m == GET_NOTE),
         "premise: GET delivered"
     );
     assert!(
-        listen.frames(&w).await.iter().any(|m| m == UPDATED),
+        listen.frames(&w).await.iter().any(|m| m == LISTEN_NOTE),
         "premise: listen delivered"
     );
 
@@ -81,11 +82,11 @@ async fn stream3_a_removed_grant_withholds_that_backend_only() {
     let (mut get, mut listen) = (w.sse("k-std").await, w.listen("k-std").await);
     push(&w, "alpha").await;
     assert!(
-        get.frames(&w).await.iter().any(|m| m == UPDATED),
+        get.frames(&w).await.iter().any(|m| m == GET_NOTE),
         "premise: GET delivered"
     );
     assert!(
-        listen.frames(&w).await.iter().any(|m| m == UPDATED),
+        listen.frames(&w).await.iter().any(|m| m == LISTEN_NOTE),
         "premise: listen delivered"
     );
 
@@ -95,20 +96,20 @@ async fn stream3_a_removed_grant_withholds_that_backend_only() {
     });
     push(&w, "alpha").await;
     assert!(
-        !get.frames(&w).await.iter().any(|m| m == UPDATED),
+        !get.frames(&w).await.iter().any(|m| m == GET_NOTE),
         "STREAM.3: GET delivered a backend the key lost"
     );
     assert!(
-        !listen.frames(&w).await.iter().any(|m| m == UPDATED),
+        !listen.frames(&w).await.iter().any(|m| m == LISTEN_NOTE),
         "STREAM.3: listen delivered a backend the key lost"
     );
     push(&w, "beta").await;
     assert!(
-        get.frames(&w).await.iter().any(|m| m == UPDATED),
+        get.frames(&w).await.iter().any(|m| m == GET_NOTE),
         "STREAM.3: GET lost beta too"
     );
     assert!(
-        listen.frames(&w).await.iter().any(|m| m == UPDATED),
+        listen.frames(&w).await.iter().any(|m| m == LISTEN_NOTE),
         "STREAM.3: listen lost beta too"
     );
 }
