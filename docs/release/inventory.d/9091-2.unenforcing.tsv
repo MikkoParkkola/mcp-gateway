@@ -1,0 +1,1 @@
+src/personal_accounts/refusal.rs	body	1	Copies the marked refusal's code, text and data into a JSON-RPC body for the offer screen; decides nothing.
