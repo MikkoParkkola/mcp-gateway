@@ -144,7 +144,7 @@ fn a_row_serves_backend_output_by_status() {
         gateway_writes: crate::gateway::gateway_writes::WriteRecord::default(),
         bindings: Vec::new(),
         bindings_recorded: true,
-        secrets: crate::gateway::task_service::Vouching::Vouched,
+        vouching: crate::gateway::task_service::Vouching::Vouched,
     };
     let working = Task::create("t").expect("the test clock reads after 1970");
     let mut completed = working.clone();

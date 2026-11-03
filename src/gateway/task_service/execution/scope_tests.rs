@@ -22,7 +22,7 @@ fn a_retry_that_finds_a_completed_task_delivers_its_result_private() {
         gateway_writes: crate::gateway::gateway_writes::WriteRecord::default(),
         bindings: Vec::new(),
         bindings_recorded: true,
-        secrets: crate::gateway::task_service::Vouching::Vouched,
+        vouching: crate::gateway::task_service::Vouching::Vouched,
     };
 
     // No sealed question in this task, so no holds to carry.

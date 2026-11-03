@@ -556,7 +556,7 @@ pub(crate) struct CommittedTask {
     /// row's dispatch injected. An upstream row with no fingerprint (from
     /// before it was recorded) is `Unvouched`: its stored outcome is never
     /// served.
-    pub(crate) secrets: Vouching,
+    pub(crate) vouching: Vouching,
 }
 
 /// Whether a stored task's outcome may be served as stored.
@@ -637,7 +637,7 @@ impl CommittedTask {
                 strip_unnoted(request, |_| false);
             }
         }
-        if self.secrets == Vouching::Unvouched {
+        if self.vouching == Vouching::Unvouched {
             withhold_outcome(&mut wire);
         }
         wire
@@ -661,7 +661,7 @@ impl CommittedTask {
             gateway_writes: record.gateway_writes.clone(),
             bindings: record.bindings.clone(),
             bindings_recorded: record.version >= BINDING_VERSION,
-            secrets: if record
+            vouching: if record
                 .upstream
                 .as_ref()
                 .is_some_and(|upstream| upstream.secret_fingerprint.is_none())
