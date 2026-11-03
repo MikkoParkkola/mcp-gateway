@@ -26,7 +26,8 @@ const PROSE: &str = "The orchard ledger for the north slope records seven rows o
     August, and which crew pruned the older trees after the second frost. It closes with the \
     count of crates sent to the cooperative press and a note about the broken ladder by the barn.";
 
-/// A backend `alpha` that serves every `tools/call` and counts those.
+/// A backend `alpha` that serves every `tools/call` and `prompts/get` and
+/// counts those.
 struct Counting(Arc<AtomicUsize>);
 
 #[async_trait::async_trait]
@@ -41,8 +42,8 @@ impl crate::transport::Transport for Counting {
             let tool = json!({"name": "send", "description": "A tool.", "inputSchema": {"type": "object"}});
             return Ok(JsonRpcResponse::success(id, json!({"tools": [tool]})));
         }
-        // Only the relayed call counts, not the gateway's own probes.
-        if method == "tools/call" {
+        // Only a relayed call or prompt read counts, not the gateway's own probes.
+        if method == "tools/call" || method == "prompts/get" {
             self.0.fetch_add(1, Ordering::SeqCst);
         }
         let sent = json!({"content": [{"type": "text", "text": "sent"}], "isError": false});
@@ -109,14 +110,16 @@ async fn publish(s: &mut Session, path: &Path, action: &str) {
 /// The operator's relay line is held at the dispatch pause while `to` is
 /// published by a reload on the same session, then released; the answer.
 async fn relay_held_across(s: &mut Session, path: &Path, to: &str) -> Value {
+    let invoke = json!({"name": "gateway_invoke",
+                        "arguments": {"server": "alpha", "tool": "send", "arguments": {"text": PROSE}}});
+    held_across(s, path, to, ("tools/call", invoke)).await
+}
+
+/// As [`relay_held_across`], for any relaying `method` line.
+async fn held_across(s: &mut Session, path: &Path, to: &str, line: (&str, Value)) -> Value {
+    let (method, params) = line;
     let (reached, release) = s.hold.arm();
-    let held = s
-        .send(
-            "tools/call",
-            json!({"name": "gateway_invoke",
-                   "arguments": {"server": "alpha", "tool": "send", "arguments": {"text": PROSE}}}),
-        )
-        .await;
+    let held = s.send(method, params).await;
     crate::test_pause::within("the held line reaches the pause", reached.notified()).await;
     publish(s, path, to).await;
     let want = if to == "block" {
@@ -166,4 +169,22 @@ async fn t4b_a_held_stdio_line_read_under_off_still_sends() {
         1,
         "the backend was not called"
     );
+}
+
+/// T4c: as T4a on the stdio catalogue: a `prompts/get` line carrying the read
+/// text, read under `block`, `off` published while it is held: still refused
+/// with -32002, and the backend is not asked for the prompt.
+#[tokio::test]
+async fn t4c_a_held_stdio_catalogue_line_read_under_block_still_refuses() {
+    let dir = tempfile::tempdir().expect("a private folder");
+    let path = dir.path().join("gateway.yaml");
+    write_action(&path, "block");
+    let (mut s, sends) = session(dir.path(), &path).await;
+    let read = json!({"name": "alpha/summary", "arguments": {"text": PROSE}});
+    let answer = held_across(&mut s, &path, "off", ("prompts/get", read)).await;
+    assert_eq!(
+        answer["error"]["code"], -32002,
+        "T4c: not refused: {answer}"
+    );
+    assert_eq!(sends.load(Ordering::SeqCst), 0, "the backend was asked");
 }
