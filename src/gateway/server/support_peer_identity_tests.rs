@@ -46,6 +46,16 @@ fn a_certificate_with_a_common_name_is_named() {
     assert!(matches!(peer, PeerCert::Named(_)), "{peer:?}");
 }
 
+/// A common name of only spaces names no one, like an empty one.
+#[test]
+fn a_blank_common_name_is_nameless() {
+    let leaf = self_signed(|p| {
+        p.distinguished_name.push(rcgen::DnType::CommonName, "   ");
+    });
+    let peer = client_identity_from_peer_chain(Some(&[leaf])).expect("parses");
+    assert!(matches!(peer, PeerCert::Nameless), "{peer:?}");
+}
+
 #[tokio::test]
 async fn a_nameless_peer_never_reaches_the_inner_service() {
     let reached = Arc::new(AtomicUsize::new(0));
