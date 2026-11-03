@@ -241,6 +241,14 @@ fn p8_11_an_effective_off_checks_nothing() {
     let rig = Rig::new(cfg);
     let g0 = rig.generation();
     rig.deliver("alice", READ, &plain(PROSE), &g0);
+    // Control: under `block` the same relay is refused and audited, so the
+    // log is written and read back before `off` is judged.
+    let control = rig.relays("bob", SEND, PROSE, &g0);
+    assert!(refused(&control), "P8.11 control: not refused: {control:?}");
+    let audited = || std::fs::read_to_string(&log).expect("the audit log is written");
+    let relays = |text: &str| text.matches("collusion_relay").count();
+    let before = relays(&audited());
+    assert!(before > 0, "P8.11 control: the refusal was not audited");
     rig.reload(|c| c.security.firewall.collusion.action = Off);
     let g1 = rig.generation();
     let keyed = rig.relays("bob", SEND, PROSE, &g1);
@@ -261,11 +269,8 @@ fn p8_11_an_effective_off_checks_nothing() {
         unkeyed.allowed && unkeyed.findings.is_empty(),
         "P8.11: {unkeyed:?}"
     );
-    let audited = std::fs::read_to_string(&log).unwrap_or_default();
-    assert!(
-        !audited.contains("collusion_relay"),
-        "P8.11: audited: {audited}"
-    );
+    let after = audited();
+    assert_eq!(relays(&after), before, "P8.11: audited under off: {after}");
 }
 
 /// P8.13: a live `block` applies, and a later detector edit keeps it
