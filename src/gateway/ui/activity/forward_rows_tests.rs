@@ -431,10 +431,12 @@ fn head_of_a_log_ending_in_a_long_unreadable_tail_is_an_error_not_empty() {
 fn a_gap_that_holds_the_stop_resets() {
     let d = dir();
     let path = d.path().join("inv.jsonl");
-    let w = write(&path, &vec![calls(2); 4]);
+    // Three segments with the middle one gone: the active file takes the next
+    // number, so only the counter jump shows the gap, and the stop (counter 4)
+    // was in it.
+    let w = write(&path, &vec![calls(2); 3]);
     std::fs::remove_file(sealed_path(&path, 2)).unwrap();
     let l = log(&path, StreamKind::Activity);
-    // The stop (counter 4) was in the removed segment.
     let pages = drain(
         &l,
         Some(&w.marks[0]),
@@ -444,6 +446,10 @@ fn a_gap_that_holds_the_stop_resets() {
         &mut Search::default(),
     );
     assert!(pages.iter().any(|p| p.reset), "not Done past a lost stop");
+    assert!(
+        !counters(&pages).contains(&5),
+        "no row past the gap is served"
+    );
 }
 
 #[test]
