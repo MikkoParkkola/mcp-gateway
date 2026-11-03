@@ -171,6 +171,17 @@ impl MetaMcp {
         {
             return Err(e);
         }
+        // A refusal of the caller (the per-user lender refusing the send, a
+        // refused shared slot) is answered as the refusal it is, as the
+        // direct route answers it, never as a backend error to retry. A
+        // playbook step records it only while the plan still vouches for
+        // its answer, as the dispatch-time backstop does.
+        if super::gate::is_authorization_refusal(&e) {
+            if crate::playbook::current_step().is_some() {
+                crate::gateway::delivery_facts::refused_while_vouched();
+            }
+            return Err(e);
+        }
         // The error budget already counted this failure (the shared
         // accounting stage).  The idempotency reservation is left
         // for the commit below unless it was released or settled above.

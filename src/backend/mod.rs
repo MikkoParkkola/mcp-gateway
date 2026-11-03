@@ -169,6 +169,10 @@ pub struct Backend {
     /// recorded for this backend's target (the pre-pass never ran).
     #[cfg(test)]
     pub(crate) unfilled_outcome_reads: std::sync::atomic::AtomicUsize,
+    /// Test-only: loans this backend's lent-only slots refused
+    /// (`lend_to_slot`), counted per binding, so a row reads its caller's own.
+    #[cfg(test)]
+    pub(crate) lend_refusals: parking_lot::Mutex<std::collections::HashMap<String, usize>>,
     /// Consecutive health-probe answers this peer declined to serve
     /// (MIK-7217, OUTBOUND.2).
     ///
