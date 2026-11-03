@@ -120,7 +120,7 @@ impl CertIdentity {
     ///
     /// Returns `Error::Config` if the certificate cannot be parsed or has
     /// a malformed subject DN.
-    pub(crate) fn from_der(der: &[u8]) -> Result<Option<Self>> {
+    pub fn from_der(der: &[u8]) -> Result<Option<Self>> {
         let identity = Self::parse(der)?;
         Ok(identity.subject_id().is_some().then_some(identity))
     }

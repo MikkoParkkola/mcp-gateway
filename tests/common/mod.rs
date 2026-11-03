@@ -252,11 +252,7 @@ pub async fn post_proven(
         .expect("request");
     request
         .extensions_mut()
-        .insert(mcp_gateway::mtls::identity::CertIdentity {
-            common_name: Some(subject.to_string()),
-            display_name: "cosmetic".to_string(),
-            ..Default::default()
-        });
+        .insert(cert_identity(Some(subject), None));
     let response = create_router(Arc::clone(state))
         .oneshot(request)
         .await
@@ -325,4 +321,30 @@ pub fn auth_with(keys: Vec<ApiKeyConfig>, bearer: Option<&str>) -> AuthConfig {
         single_user: false,
         dashboard_session: mcp_gateway::config::DashboardSessionConfig::default(),
     }
+}
+
+/// A real certificate's identity, through the checked parser.
+fn cert_identity(
+    common_name: Option<&str>,
+    san_uri: Option<&str>,
+) -> mcp_gateway::mtls::identity::CertIdentity {
+    let mut params = rcgen::CertificateParams::new(Vec::<String>::new()).expect("params");
+    params.distinguished_name = rcgen::DistinguishedName::new();
+    if let Some(cn) = common_name {
+        params
+            .distinguished_name
+            .push(rcgen::DnType::CommonName, cn);
+    }
+    if let Some(uri) = san_uri {
+        params.subject_alt_names = vec![rcgen::SanType::URI(uri.try_into().expect("an ia5 uri"))];
+    }
+    let key = rcgen::KeyPair::generate().expect("key");
+    let der = params
+        .self_signed(&key)
+        .expect("self-signed")
+        .der()
+        .to_vec();
+    mcp_gateway::mtls::identity::CertIdentity::from_der(&der)
+        .expect("parses")
+        .expect("names someone")
 }
