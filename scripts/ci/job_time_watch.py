@@ -99,6 +99,13 @@ def self_test() -> int:
     assert warnings([job("macOS shard z", "2026-11-02T20:00:00Z", "2026-11-02T22:00:00Z")], "macOS shard ", 150) == []
     prefix, limit = job_limit("macos-shards")
     assert prefix == "macOS shard " and limit > 0, (prefix, limit)
+    # Advisory: anything that goes wrong reading the run is a warning, exit 0.
+    saved = {k: os.environ.pop(k, None) for k in ("GITHUB_REPOSITORY", "GITHUB_RUN_ID", "GITHUB_RUN_ATTEMPT")}
+    try:
+        assert run("macos-shards") == 0, "a run with no Actions environment did not exit 0"
+        assert run("no-such-job") == 0, "a job key missing from ci.yml did not exit 0"
+    finally:
+        os.environ.update({k: v for k, v in saved.items() if v is not None})
     print("job_time_watch self-test: ok")
     return 0
 
