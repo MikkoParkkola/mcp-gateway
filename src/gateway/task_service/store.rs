@@ -183,10 +183,18 @@ pub(crate) struct TaskStore(Arc<Shared>);
 
 impl TaskStore {
     /// Test-only: hold a share of the temporary directory this store lives in
-    /// until the last handle to the store drops (see `Shared::test_dir`).
+    /// until the last handle to the store drops (see `Shared::test_dir`). A
+    /// second call must name the same directory: keeping a different one
+    /// would leave this one unowned.
     #[cfg(test)]
     pub(crate) fn keep_test_dir(&self, dir: Arc<tempfile::TempDir>) {
-        let _ = self.0.test_dir.set(dir);
+        if let Err(other) = self.0.test_dir.set(dir) {
+            let kept = self.0.test_dir.get().expect("set");
+            assert!(
+                Arc::ptr_eq(kept, &other),
+                "a store keeps one test directory"
+            );
+        }
     }
 
     pub(super) async fn open(path: &Path, limits: StoreLimits) -> Result<Self, StoreError> {

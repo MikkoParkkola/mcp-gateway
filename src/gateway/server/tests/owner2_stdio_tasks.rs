@@ -87,7 +87,7 @@ pub(crate) struct Fixture {
     pub(super) rounds: Arc<AtomicUsize>,
     /// `security.sanitize_input` as `run_stdio_on` reads it from the config.
     sanitize: crate::gateway::server::stdio_single::InputSanitizing,
-    pub(super) store: tempfile::TempDir,
+    pub(super) store: Arc<tempfile::TempDir>,
     pub(super) expiry: Option<crate::gateway::task_service::execution::ExpirySweep>,
     _data: tempfile::TempDir,
 }
@@ -111,7 +111,7 @@ pub(crate) async fn fixture_on_with(
     policy: Option<ToolPolicyConfig>,
     configure: impl FnOnce(&mut Config),
 ) -> Fixture {
-    let store = tempfile::tempdir().expect("store root");
+    let store = Arc::new(tempfile::tempdir().expect("store root"));
     let mut config = Config::default();
     config.tasks.store_dir = store.path().display().to_string();
     config.backends.insert(
@@ -152,6 +152,7 @@ pub(crate) async fn fixture_on_with(
     )
     .await
     .expect("the stdio store opens");
+    tasks.service.keep_test_dir(Arc::clone(&store));
     Fixture {
         tasks,
         meta: built.meta_mcp,
@@ -442,7 +443,7 @@ async fn a_stdio_task_runs_under_the_current_tool_policy() {
 async fn stdio_eof_releases_the_store_lease_before_returning() {
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
     let (url, _rounds) = backend().await;
-    let store = tempfile::tempdir().expect("store root");
+    let store = Arc::new(tempfile::tempdir().expect("store root"));
     let mut config = Config::default();
     config.tasks.store_dir = store.path().display().to_string();
     config.backends.insert(
@@ -495,6 +496,9 @@ async fn stdio_eof_releases_the_store_lease_before_returning() {
         .expect("no panic")
         .expect("run_stdio_on returns Ok");
     let reopened = reopen(&config).await;
+    if let Ok((service, _)) = &reopened {
+        service.keep_test_dir(Arc::clone(&store));
+    }
     assert!(
         reopened.is_ok(),
         "the lease is free once run_stdio_on returned"
@@ -662,7 +666,7 @@ pub(super) async fn held_backend() -> (
 async fn eof_drains_a_running_task_before_returning() {
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
     let (url, mut arrived, release) = held_backend().await;
-    let store = tempfile::tempdir().expect("store root");
+    let store = Arc::new(tempfile::tempdir().expect("store root"));
     let mut config = Config::default();
     config.tasks.store_dir = store.path().display().to_string();
     config.server.shutdown_timeout = Duration::from_secs(20);
@@ -736,6 +740,7 @@ async fn eof_drains_a_running_task_before_returning() {
     let (service, _executor) = reopen(&config)
         .await
         .expect("the lease is free once run_stdio_on returned");
+    service.keep_test_dir(Arc::clone(&store));
     let task = service
         .get(LOCAL_OPERATOR_PRINCIPAL, &id)
         .expect("the local operator's task is in its store");

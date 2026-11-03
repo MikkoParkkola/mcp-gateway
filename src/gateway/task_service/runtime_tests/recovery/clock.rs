@@ -13,7 +13,7 @@ use crate::gateway::task_service::{TaskStatus, open_runtime_with_recovery};
 #[tokio::test]
 async fn t11_recovery_on_an_unreadable_store_clock_leaves_the_row_for_the_next_pass() {
     // GIVEN: an interrupted, never-dispatched row from a previous process
-    let root = tempfile::tempdir().unwrap();
+    let root = Arc::new(tempfile::tempdir().unwrap());
     let dir = root.path().join("tasks");
     let row = vec![("x11", Seed::Undispatched, rows().remove(0).2)];
     let seeded = timeout(BUDGET, seed_store(&dir, row))
@@ -39,12 +39,14 @@ async fn t11_recovery_on_an_unreadable_store_clock_leaves_the_row_for_the_next_p
     .await
     .expect("startup does not hang");
     if let Ok((service, _)) = attempt {
+        service.keep_test_dir(Arc::clone(&root));
         service.shutdown().await.expect("custody released");
     }
     // THEN: the row is exactly as the previous process left it
     let reader = TaskService::open(&dir, StoreLimits::default(), fresh_admission())
         .await
         .expect("the store reopens");
+    reader.keep_test_dir(Arc::clone(&root));
     let untouched = reader.get(OWNER, &seeded[0].id).expect("still readable");
     assert_eq!(untouched.task.status(), TaskStatus::Working);
     assert_eq!(untouched.revision, seeded[0].revision, "no rewrite");
@@ -59,6 +61,7 @@ async fn t11_recovery_on_an_unreadable_store_clock_leaves_the_row_for_the_next_p
     )
     .await
     .expect("a readable clock recovers");
+    service.keep_test_dir(Arc::clone(&root));
     let settled = service.get(OWNER, &seeded[0].id).expect("readable");
     assert!(judge(&seeded[0], &settled.task, settled.revision).is_empty());
     service.shutdown().await.expect("custody released");

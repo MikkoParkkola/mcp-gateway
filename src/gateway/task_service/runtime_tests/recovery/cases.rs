@@ -5,7 +5,7 @@ use std::ops::ControlFlow;
 
 #[tokio::test]
 async fn startup_settles_every_interrupted_row_by_what_its_record_can_prove() {
-    let root = tempfile::tempdir().unwrap();
+    let root = Arc::new(tempfile::tempdir().unwrap());
     let dir = root.path().join("tasks");
     let seeded = timeout(BUDGET, seed_store(&dir, rows()))
         .await
@@ -27,6 +27,7 @@ async fn startup_settles_every_interrupted_row_by_what_its_record_can_prove() {
     .await
     .expect("startup does not hang")
     .expect("startup imports and recovers the durable store");
+    restored.keep_test_dir(Arc::clone(&root));
 
     let mut problems = Vec::new();
     for row in &seeded {
@@ -90,7 +91,7 @@ async fn startup_settles_every_interrupted_row_by_what_its_record_can_prove() {
 
 #[tokio::test]
 async fn a_second_startup_rewrites_nothing_the_first_one_recovered() {
-    let root = tempfile::tempdir().unwrap();
+    let root = Arc::new(tempfile::tempdir().unwrap());
     let dir = root.path().join("tasks");
     let seeded = timeout(
         BUDGET,
@@ -121,6 +122,7 @@ async fn a_second_startup_rewrites_nothing_the_first_one_recovered() {
         .await
         .expect("the first startup does not hang")
         .expect("the first startup recovers");
+        restored.keep_test_dir(Arc::clone(&root));
         for row in &seeded {
             let committed = restored
                 .get(OWNER, &row.id)
@@ -151,6 +153,7 @@ async fn a_second_startup_rewrites_nothing_the_first_one_recovered() {
     .await
     .expect("the second startup does not hang")
     .expect("the second startup opens the recovered store");
+    again.keep_test_dir(Arc::clone(&root));
     let mut problems = Vec::new();
     for (row, (revision, wire)) in seeded.iter().zip(&after_first) {
         let committed = again.get(OWNER, &row.id).expect("readable after restart");
@@ -177,7 +180,7 @@ async fn a_second_startup_rewrites_nothing_the_first_one_recovered() {
     reason = "one end-to-end recovery scenario read as a single sequence"
 )]
 async fn a_recovered_task_still_answers_the_owner_and_key_that_created_it() {
-    let root = tempfile::tempdir().unwrap();
+    let root = Arc::new(tempfile::tempdir().unwrap());
     let dir = root.path().join("tasks");
     let seeded = timeout(
         BUDGET,
@@ -209,6 +212,7 @@ async fn a_recovered_task_still_answers_the_owner_and_key_that_created_it() {
     .await
     .expect("startup does not hang")
     .expect("startup recovers the durable store");
+    restored.keep_test_dir(Arc::clone(&root));
 
     let owner_view = restored
         .get(OWNER, &row.id)
@@ -298,7 +302,7 @@ async fn a_recovered_task_still_answers_the_owner_and_key_that_created_it() {
 #[tokio::test]
 async fn a_task_settled_during_recovery_is_published() {
     use crate::gateway::task_service::open_runtime_with_recovery;
-    let root = tempfile::tempdir().unwrap();
+    let root = Arc::new(tempfile::tempdir().unwrap());
     let dir = root.path().join("tasks");
     let seeded = timeout(BUDGET, seed_store(&dir, rows()))
         .await
@@ -332,6 +336,7 @@ async fn a_task_settled_during_recovery_is_published() {
     .await
     .expect("startup does not hang")
     .expect("startup recovers the durable store");
+    restored.keep_test_dir(Arc::clone(&root));
     timeout(BUDGET, restored.shutdown())
         .await
         .expect("shutdown does not hang")
@@ -353,7 +358,7 @@ async fn a_task_settled_during_recovery_is_published() {
 /// sweep lifts the seal once the file is gone.
 #[tokio::test]
 async fn recovery_beside_a_sealed_row_settles_and_keeps_keys() {
-    let root = tempfile::tempdir().unwrap();
+    let root = Arc::new(tempfile::tempdir().unwrap());
     let dir = root.path().join("tasks");
     let seeded = timeout(
         BUDGET,
@@ -392,6 +397,7 @@ async fn recovery_beside_a_sealed_row_settles_and_keeps_keys() {
     .await
     .expect("startup does not hang")
     .expect("a sealed row never stops startup");
+    restored.keep_test_dir(Arc::clone(&root));
     assert_eq!(restored.skipped_records().sealed, 1);
     assert!(
         restored.get(OWNER, &row.id).is_ok(),
