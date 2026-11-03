@@ -119,3 +119,35 @@ fn a_blank_subject_row_is_removed_like_an_empty_one() {
         }]
     );
 }
+
+/// A nameless row can shadow an earlier row with its id (the loader keeps the
+/// last row per id), so removing it would grant what it denied: refused, with
+/// nothing written.
+#[test]
+fn a_nameless_row_shadowing_a_valid_row_with_its_id_is_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("identity-grants.yaml");
+    let shadow = ROW_OK.replace("g-ok", "g-empty");
+    let body = format!("schema_version: identity_grants.v1\ngrants:\n{shadow}{ROW_EMPTY}");
+    crate::gateway::test_helpers::write_owner_only(&path, &body).unwrap();
+    let error = remove_nameless_rows(&path, &dir.path().join("b"), |_: &Path, _: &str| {
+        panic!("a refused cleanup writes nothing")
+    })
+    .unwrap_err();
+    assert!(error.to_string().contains("g-empty"), "{error}");
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), body);
+}
+
+/// A file of another schema version is not rewritten through this one's model.
+#[test]
+fn a_file_of_another_schema_version_is_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("identity-grants.yaml");
+    let body = format!("schema_version: identity_grants.v2\ngrants:\n{ROW_OK}{ROW_EMPTY}");
+    crate::gateway::test_helpers::write_owner_only(&path, &body).unwrap();
+    let error = remove_nameless_rows(&path, &dir.path().join("b"), |_: &Path, _: &str| {
+        panic!("a refused cleanup writes nothing")
+    })
+    .unwrap_err();
+    assert!(error.to_string().contains("identity_grants.v2"), "{error}");
+}
