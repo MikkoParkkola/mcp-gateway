@@ -62,10 +62,21 @@ def job_limit(key: str) -> tuple[str, float]:
 
 
 def run(key: str) -> int:
+    """Advisory: any failure to read ci.yml or the run is a warning, exit 0."""
+    try:
+        return watch(key)
+    except Exception as error:  # noqa: BLE001 - warn-only by design
+        print(f"::warning::{key}: the limit watch could not run, so no limit was watched: {error!r}"[:300])
+        return 0
+
+
+def watch(key: str) -> int:
     prefix, limit = job_limit(key)
     path = (f"repos/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{os.environ['GITHUB_RUN_ID']}"
             f"/attempts/{os.environ['GITHUB_RUN_ATTEMPT']}/jobs?per_page=100")
-    got = subprocess.run(["gh", "api", "--paginate", path, "--jq", ".jobs[]"], capture_output=True, text=True)
+    got = subprocess.run(
+        ["gh", "api", "--paginate", path, "--jq", ".jobs[]"], capture_output=True, text=True, timeout=120
+    )
     if got.returncode != 0:
         print(f"::warning::{key}: could not read this run's jobs, so no limit was watched: {got.stderr.strip()[:200]}")
         return 0

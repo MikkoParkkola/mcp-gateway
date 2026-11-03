@@ -826,6 +826,10 @@ jobs:
       # takes the train with it: warn at 80%, never fail.
       - name: Warn when a macOS shard used over 80% of its time limit
         if: always()
+        # Advisory: a failed install or read must not turn this check red,
+        # nor hold it.
+        continue-on-error: true
+        timeout-minutes: 5
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
