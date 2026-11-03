@@ -145,12 +145,16 @@ impl Default for AuthConfig {
 
 impl AuthConfig {
     /// This section as a reload compares it for "restart required": without
-    /// `dashboard_session`, which is read on every session check and so
-    /// applies live. Field order is fixed and there are no maps, so plain
+    /// the two parts that apply live. `dashboard_session` is read on every
+    /// session check. `api_keys` is rebuilt whole by the reload's key swap,
+    /// every field of every key, the way startup builds it (a change that
+    /// would flip the gateway between one user and many is refused before
+    /// this compares). Field order is fixed and there are no maps, so plain
     /// JSON is canonical.
     pub(crate) fn restart_only_json(&self) -> String {
         let view = Self {
             dashboard_session: DashboardSessionConfig::default(),
+            api_keys: Vec::new(),
             ..self.clone()
         };
         serde_json::to_string(&view).unwrap_or_default()
