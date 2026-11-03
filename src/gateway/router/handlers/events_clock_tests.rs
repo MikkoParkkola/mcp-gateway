@@ -33,6 +33,7 @@ async fn t8_a_dashboard_subscription_on_an_unreadable_clock_is_refused_with_the_
         identity: None,
         session_sha256: Some("session-digest".to_owned()),
         bearer_sha256: None,
+        api_key_digest_tag: None,
     };
     let caller = dashboard_client();
     // WHEN: the credential is taken on a clock before 1970

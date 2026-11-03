@@ -32,11 +32,15 @@ pub use quota::QuotaPrincipal;
 #[path = "auth_api_key.rs"]
 mod api_key;
 pub use api_key::ResolvedApiKey;
-pub(crate) use api_key::{PreviousDigest, refuse_shared_digests};
+#[cfg(test)]
+pub(crate) use api_key::secret_tag;
+pub(crate) use api_key::{PreviousDigest, digest_tag_of, refuse_shared_digests, tag_still_valid};
 #[path = "auth_dashboard.rs"]
 mod dashboard;
 pub use dashboard::DashboardBootstrap;
-pub(crate) use dashboard::{Bound, Now, Redeem, Redemption, SessionCheck, SessionLimits, Touch};
+pub(crate) use dashboard::{
+    Bound, MintingKey, Now, Redeem, Redemption, SessionCheck, SessionLimits, Touch,
+};
 #[path = "auth_bootstrap.rs"]
 mod bootstrap;
 #[path = "auth_handoff.rs"]
@@ -174,12 +178,28 @@ impl std::fmt::Debug for ResolvedAuthConfig {
 /// written against these names, so if any other code could build one — from a
 /// header, from `AuthenticatedClient::name`, from an OIDC subject — the
 /// allow-list would be satisfiable by an identity that never presented the key.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub(crate) struct NamedApiKey {
     name: String,
     personal: bool,
     /// The key's previous digest matched, not its current one (ADR-022).
     matched_previous_digest: bool,
+    /// The fingerprint ([`digest_tag_of`]) of the digest that matched,
+    /// current or previous: what a watch or session opened by this request is bound to,
+    /// so it ends when that secret stops being valid. Never the digest.
+    digest_tag: String,
+}
+
+// The tag fingerprints a secret: redacted, as `ApiKeyRef` redacts it.
+impl std::fmt::Debug for NamedApiKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("NamedApiKey")
+            .field("name", &self.name)
+            .field("personal", &self.personal)
+            .field("matched_previous_digest", &self.matched_previous_digest)
+            .field("digest_tag", &"<redacted>")
+            .finish()
+    }
 }
 
 impl NamedApiKey {
@@ -199,10 +219,18 @@ impl NamedApiKey {
     pub(crate) fn matched_previous_digest(&self) -> bool {
         self.matched_previous_digest
     }
+
+    /// The fingerprint of the digest this request matched, taken at the
+    /// match: a holder this request opens is bound to it, never to a later
+    /// read of the key table.
+    pub(crate) fn digest_tag(&self) -> &str {
+        &self.digest_tag
+    }
 }
 
 #[path = "auth_resolved.rs"]
 mod resolved;
+pub(crate) use resolved::KeyBinding;
 
 /// Carries the matched key's provenance with the request, so downstream checks
 /// read it rather than re-derive it. A request that presented a rotated key's
@@ -389,70 +417,14 @@ impl AuthenticatedClient {
     }
 }
 
-/// Name of the browser session cookie the dashboard bootstrap sets.
-///
-/// A browser cannot attach an `Authorization` header to a navigation, so a
-/// bearer token alone leaves the dashboard unusable however correct the
-/// credential is. The gateway prints a one-time link; opening it exchanges the
-/// credential for this cookie and redirects, so the token never lingers in the
-/// address bar, the history, or a `Referer`.
-pub const SESSION_COOKIE: &str = "mcp_gateway_session";
-
-/// The session limits in force now: read from the live config, so a reload
-/// applies to sessions already open.
-pub(super) fn session_limits(state: &AuthState) -> SessionLimits {
-    SessionLimits::from(&state.live_config.get().auth.dashboard_session)
-}
-
-/// The `Set-Cookie` value for `handle`; an empty handle with `max_age` 0
-/// clears it.
-///
-/// `Secure` whenever this listener speaks TLS, or a proxy terminates it in
-/// front. Without it a downgrade puts the cookie on the wire; with a
-/// plain-HTTP loopback listener the attribute would stop the cookie being sent
-/// at all, so it is conditional rather than unconditional.
-pub(crate) fn session_cookie(handle: &str, max_age: u64, secure: bool) -> String {
-    let secure = if secure { " Secure;" } else { "" };
-    format!(
-        "{SESSION_COOKIE}={handle}; HttpOnly;{secure} SameSite=Strict; Path=/; Max-Age={max_age}"
-    )
-}
-
-/// Whether browsers reach this gateway over HTTPS, so its cookies must be
-/// `Secure`: a TLS listener, or a `public_url` behind a TLS-terminating proxy.
-///
-/// TLS is read from the RUNNING listener (restart-only); `public_url` from the
-/// live config, which a reload applies.
-pub(crate) fn cookies_are_secure(live: &crate::config_reload::LiveConfig) -> bool {
-    live.running().mtls.enabled
-        || live
-            .get()
-            .server
-            .public_url
-            .as_deref()
-            .is_some_and(is_https_url)
-}
-
-/// `true` for a URL whose scheme is `https`, in any letter case.
-///
-/// Parses with the same WHATWG URL parser `origin_guard::public_url_parts` and
-/// `cleartext::public_url_host` already use, rather than a byte prefix: the
-/// scheme is case-insensitive (RFC 3986 section 3.1) and the parser also
-/// trims leading and trailing spaces and C0 controls, so `url.starts_with("https://")` rejects
-/// values the rest of the gateway accepts — leaving cookies without `Secure`
-/// behind a front end this parser agrees is HTTPS. Shared by the cookie
-/// security check, the startup-banner link refusal and the OIDC
-/// issuer/`jwks_uri` checks, so one fix covers all of them.
-pub(crate) fn is_https_url(url: &str) -> bool {
-    url::Url::parse(url).is_ok_and(|u| u.scheme() == "https")
-}
-
-/// Whether a session cookie set or cleared now must be `Secure`: the listener
-/// speaks TLS, or the live config names an HTTPS `public_url` (a reload may add
-/// or remove one, so it is read per response, never snapshotted).
-pub(crate) fn cookie_secure(state: &AuthState) -> bool {
-    state.tls_enabled || cookies_are_secure(&state.live_config)
-}
+#[path = "auth_cookies.rs"]
+mod cookies;
+pub use cookies::SESSION_COOKIE;
+pub(super) use cookies::session_limits;
+pub(crate) use cookies::{cookie_secure, is_https_url, session_cookie};
+// Outside this module only the web UI asks; `cookie_secure` asks it inside.
+#[cfg(feature = "webui")]
+pub(crate) use cookies::cookies_are_secure;
 
 /// Who a dashboard-session action is attributed to in the audit log: the same
 /// identity the middleware gives a valid session.
