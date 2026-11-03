@@ -21,10 +21,10 @@ fn agent(quota: &str) -> OAuthAgentIdentity {
 }
 
 fn cert(quota: &str) -> CertIdentity {
-    CertIdentity {
+    crate::mtls::identity::CertIdentity::for_test(crate::mtls::identity::CertFields {
         quota_principal: Some(QuotaPrincipal::configured_bearer(quota)),
-        ..CertIdentity::default()
-    }
+        ..Default::default()
+    })
 }
 
 #[tokio::test]

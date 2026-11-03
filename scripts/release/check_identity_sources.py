@@ -36,7 +36,7 @@ ALLOWED = {
     ("src/key_server/oidc_identity.rs", "checked", "VerifiedIdentity {"): "the checked constructor",
     ("src/identity_grants.rs", "new", "GrantSubject {"): "the one literal; `checked` wraps it",
     ("src/identity_grants.rs", "checked", "GrantSubject::new("): "the checked constructor",
-    ("src/mtls/identity.rs", "parse", "CertIdentity {"): "the production parser; `from_der` refuses what it builds when it names no one",
+    ("src/mtls/identity/cert.rs", "parse", "CertIdentity {"): "the production parser; `from_der` refuses what it builds when it names no one",
 }
 # Grant-file RULE targets (operator input, not a caller identity): the CLI is
 # the binary crate and cannot see the crate-internal `checked`.

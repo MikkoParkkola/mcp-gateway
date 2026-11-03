@@ -540,7 +540,7 @@ async fn nameless_certificates_never_share_a_cached_personal_result() {
         axum::serve(listener, app).await.unwrap();
     });
     let dir = tempfile::TempDir::new().unwrap();
-    let placeholder = nameless_cert().display_name;
+    let placeholder = nameless_cert().display_name().to_owned();
     std::fs::write(
         dir.path().join("placeholder_probe.yaml"),
         personal_probe("placeholder_probe", &placeholder, port),

@@ -26,10 +26,10 @@ fn credential(secret: &str) -> AuthenticatedClient {
 /// to the caller key (the display name becomes the owner).
 #[test]
 fn certificates_naming_no_subject_never_share_a_cancel_owner() {
-    let cert = CertIdentity {
+    let cert = crate::mtls::identity::CertIdentity::for_test(crate::mtls::identity::CertFields {
         display_name: "<unknown>".to_owned(),
         ..Default::default()
-    };
+    });
     let shown = GrantSubject::new("mtls", "<unknown>", None);
     let (one, two) = (credential("k1"), credential("k2"));
     let key = |client| mcp_cancel_key((Some(&shown), Some(&cert), client), "", &json!(7));

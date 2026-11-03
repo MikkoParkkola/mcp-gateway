@@ -33,13 +33,13 @@ pub(super) fn header(name: &str, value: &str) -> HeaderMap {
 }
 
 fn cert(san: &[&str], cn: Option<&str>) -> crate::mtls::identity::CertIdentity {
-    crate::mtls::identity::CertIdentity {
+    crate::mtls::identity::CertIdentity::for_test(crate::mtls::identity::CertFields {
         common_name: cn.map(String::from),
         san_uris: san.iter().map(|s| (*s).to_string()).collect(),
         // Deliberately set: the selection rule must never reach it.
         display_name: "cosmetic-display-name".to_string(),
         ..Default::default()
-    }
+    })
 }
 
 pub(super) fn proven(id: &str, proof: ProofSource) -> AgentIdentity {

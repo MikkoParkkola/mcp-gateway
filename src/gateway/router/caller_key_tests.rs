@@ -17,12 +17,12 @@ fn credential(secret: &str) -> AuthenticatedClient {
 }
 
 fn cert(san_uri: Option<&str>, cn: Option<&str>, display: &str) -> CertIdentity {
-    CertIdentity {
+    crate::mtls::identity::CertIdentity::for_test(crate::mtls::identity::CertFields {
         san_uris: san_uri.map(str::to_string).into_iter().collect(),
         common_name: cn.map(str::to_string),
         display_name: display.to_string(),
         ..Default::default()
-    }
+    })
 }
 
 fn subject(authority: &str, id: &str) -> GrantSubject {

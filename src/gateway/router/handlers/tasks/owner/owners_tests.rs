@@ -76,25 +76,25 @@ fn mtls_subject(subject: &str) -> GrantSubject {
 }
 
 fn spiffe_cert() -> CertIdentity {
-    CertIdentity {
+    crate::mtls::identity::CertIdentity::for_test(crate::mtls::identity::CertFields {
         common_name: None,
         organizational_unit: None,
         san_uris: vec!["spiffe://a".to_string()],
         san_dns_names: Vec::new(),
         display_name: String::new(),
         quota_principal: None,
-    }
+    })
 }
 
 fn nameless_cert() -> CertIdentity {
-    CertIdentity {
+    crate::mtls::identity::CertIdentity::for_test(crate::mtls::identity::CertFields {
         common_name: None,
         organizational_unit: None,
         san_uris: Vec::new(),
         san_dns_names: Vec::new(),
         display_name: "Display".to_string(),
         quota_principal: None,
-    }
+    })
 }
 
 struct Fixtures {

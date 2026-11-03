@@ -510,12 +510,12 @@ async fn authz_10_certificate_policy_refuses_and_permits_a_playbook_step() {
         state_mut.mtls_policy = Arc::clone(&policy);
     }
     let client = scoped_client("scoped", vec!["*".into()], None);
-    let cert = CertIdentity {
+    let cert = crate::mtls::identity::CertIdentity::for_test(crate::mtls::identity::CertFields {
         quota_principal: None,
         common_name: Some("trusted-machine".to_string()),
         display_name: "trusted-machine".to_string(),
-        ..CertIdentity::default()
-    };
+        ..Default::default()
+    });
 
     let refused = Box::pin(run_step_with_identity(
         &state,

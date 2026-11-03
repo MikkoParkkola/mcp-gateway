@@ -52,11 +52,15 @@ async fn send(state: &Arc<AppState>, proof: Proof, body: &Value) -> Value {
             });
         }
         Proof::Cert(san) => {
-            request.extensions_mut().insert(CertIdentity {
-                san_uris: vec![san.to_string()],
-                display_name: "certificate".to_string(),
-                ..Default::default()
-            });
+            request
+                .extensions_mut()
+                .insert(crate::mtls::identity::CertIdentity::for_test(
+                    crate::mtls::identity::CertFields {
+                        san_uris: vec![san.to_string()],
+                        display_name: "certificate".to_string(),
+                        ..Default::default()
+                    },
+                ));
         }
     }
     let response = create_router(Arc::clone(state))

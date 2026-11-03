@@ -31,8 +31,8 @@ fn peer_chain_identity_extracts_spiffe_svid_leaf() {
         panic!("a SPIFFE leaf names its SAN URI");
     };
 
-    assert_eq!(identity.san_uris, vec!["spiffe://example.test/agent/alpha"]);
-    assert_eq!(identity.display_name, "spiffe://example.test/agent/alpha");
+    assert_eq!(identity.san_uris(), ["spiffe://example.test/agent/alpha"]);
+    assert_eq!(identity.display_name(), "spiffe://example.test/agent/alpha");
 }
 
 #[test]
@@ -49,15 +49,16 @@ fn peer_chain_identity_rejects_malformed_certificate() {
 async fn peer_cert_identity_service_inserts_identity_extension() {
     use tower::ServiceExt;
 
-    let identity = CertIdentity {
-        san_uris: vec!["spiffe://example.test/agent/alpha".to_owned()],
-        display_name: "spiffe://example.test/agent/alpha".to_owned(),
-        ..CertIdentity::default()
-    };
+    let identity =
+        crate::mtls::identity::CertIdentity::for_test(crate::mtls::identity::CertFields {
+            san_uris: vec!["spiffe://example.test/agent/alpha".to_owned()],
+            display_name: "spiffe://example.test/agent/alpha".to_owned(),
+            ..Default::default()
+        });
     let echo = axum::Router::new().route(
         "/",
         axum::routing::get(|cert: Option<axum::Extension<CertIdentity>>| async move {
-            cert.map(|axum::Extension(cert)| cert.display_name)
+            cert.map(|axum::Extension(cert)| cert.display_name().to_owned())
                 .unwrap_or_default()
         }),
     );
@@ -69,7 +70,7 @@ async fn peer_cert_identity_service_inserts_identity_extension() {
     let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
         .await
         .unwrap();
-    assert_eq!(bytes, identity.display_name.as_bytes());
+    assert_eq!(bytes, identity.display_name().as_bytes());
 }
 
 /// Behind an HTTPS `public_url` in any letter case, matching the cookie's
@@ -254,7 +255,7 @@ mod mtls_listener {
                     seen.fetch_add(1, Ordering::SeqCst);
                     async move {
                         identity
-                            .and_then(|Extension(id)| id.common_name)
+                            .and_then(|Extension(id)| id.common_name().map(str::to_owned))
                             .unwrap_or_else(|| "none".to_owned())
                     }
                 }),

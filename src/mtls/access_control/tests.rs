@@ -11,14 +11,14 @@ fn identity(
     san_uris: &[&str],
     san_dns: &[&str],
 ) -> CertIdentity {
-    CertIdentity {
+    crate::mtls::identity::CertIdentity::for_test(crate::mtls::identity::CertFields {
         common_name: cn.map(str::to_owned),
         organizational_unit: ou.map(str::to_owned),
         san_uris: san_uris.iter().map(|s| (*s).to_owned()).collect(),
         san_dns_names: san_dns.iter().map(|s| (*s).to_owned()).collect(),
         display_name: cn.unwrap_or("<unknown>").to_owned(),
         quota_principal: None,
-    }
+    })
 }
 
 #[allow(clippy::too_many_arguments)]
