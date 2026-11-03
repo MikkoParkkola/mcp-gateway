@@ -321,7 +321,7 @@ pub(crate) fn grant_subject_from_verified_identity(
 /// runs; this is the layer behind it.
 fn grant_subject_from_cert_identity(identity: &CertIdentity) -> Option<GrantSubject> {
     let subject = cert_subject_id(identity)?;
-    let label = trimmed_non_empty(&identity.display_name);
+    let label = trimmed_non_empty(identity.display_name());
 
     GrantSubject::checked(MTLS_AUTHORITY, subject, label)
 }
@@ -369,7 +369,7 @@ fn is_this_certificates(subject: &GrantSubject, cert: &CertIdentity) -> bool {
         && match cert.subject_id() {
             Some(id) => subject.subject == id,
             None => {
-                trimmed_non_empty(&cert.display_name).as_deref() == Some(subject.subject.as_str())
+                trimmed_non_empty(cert.display_name()).as_deref() == Some(subject.subject.as_str())
             }
         }
 }
