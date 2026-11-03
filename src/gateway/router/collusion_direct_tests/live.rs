@@ -247,7 +247,10 @@ async fn sg7_a_read_admitted_under_off_is_held_once_observe_is_published() {
     fx.read(Some("a")).await;
     assert_sent_as("SG7: ", &fx, &fx.send(Some("b"), PROSE).await, 1);
     let audited = std::fs::read_to_string(&log).expect("the audit log is written");
-    let relays = audited.lines().filter(|l| l.contains("collusion_relay")).count();
+    let relays = audited
+        .lines()
+        .filter(|l| l.contains("collusion_relay"))
+        .count();
     assert_eq!(relays, 1, "SG7: not one audited relay finding: {audited}");
 }
 
