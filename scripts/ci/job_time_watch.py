@@ -3,10 +3,13 @@
 # SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 """Warn when a shard job of this run used over 80% of its time limit.
 
-A shard creeping toward its `timeout-minutes` is cut off mid-test one day,
-taking the merge train with it. This warns (never fails: one slow runner
-must not void a green train) for each job of `<job-key>`'s matrix past 80%
-of its ci.yml limit, and names any job or run it cannot read.
+A shard that creeps toward its `timeout-minutes` gets cut off mid-test one
+day, and takes the whole merge train with it. This prints a GitHub
+`::warning::` for each job of `<job-key>`'s matrix whose wall clock passed
+80% of that job's limit in .github/workflows/ci.yml, so the next one is
+seen before it cuts a train off. It warns, never fails: failing would void
+a green train for one slow runner. A job it cannot read is named in a
+warning too, never skipped silently.
 
   job_time_watch.py <job-key>     read this run attempt's jobs (needs gh,
                                   GH_TOKEN with actions: read)
