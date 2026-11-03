@@ -168,9 +168,13 @@ async fn a_withheld_stdio_tool_policy_refusal_keeps_its_rule_id() {
         tool_policy: &policy,
         generation: None,
     };
-    let (_, noted) = route_stage_as(&authorizer, &[target(false)], || {
-        crate::gateway::meta_mcp::visible::memo::denial("alpha", "read")
-    })
+    // Inside the route scope the stdio dispatch opens around the route stage
+    // (stdio_dispatch.rs), where the refusal's note lands.
+    let (_, noted) = crate::gateway::meta_mcp::invoke::audit::with_route_scope(route_stage_as(
+        &authorizer,
+        &[target(false)],
+        || crate::gateway::meta_mcp::visible::memo::denial("alpha", "read"),
+    ))
     .await;
     let bytes = serde_json::to_vec(&("deny", "alpha:read")).expect("serialises");
     let expected = crate::security::rule_id::RuleId::of("tool_policy", &key, &bytes);
