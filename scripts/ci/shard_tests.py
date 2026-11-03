@@ -88,8 +88,6 @@ KNOWN_LEFTOVERS: list[tuple[str, str, int, str]] = [
      "(transparency_log::bounded_tests, identity_propagation::audit_fail_closed, "
      "signing_allocation_tests::withheld_parity_stdio, hardened_signing_e2e, "
      "mik_7272_task_1_acs)"),
-    (_TMP, r"stdio/task-[0-9a-f-]{36}\.json", 1,
-     "a stdio task record written after its test's temp dir is gone"),
     (_TMP,
      r"\.mcp-gateway/protocol-revision-telemetry/(\.window\.lock|window\.json)"
      r"|\.mcp-gateway/record-principal\.key|tasks/stdio/store\.lease|inner\.yaml"
@@ -109,7 +107,6 @@ KNOWN_LEFTOVERS: list[tuple[str, str, int, str]] = [
 # matches none of these.
 LEFTOVER_CEILING: dict[tuple[str, str], int] = {
     (r"\.tmp[A-Za-z0-9]{6}", r"audit\.jsonl\.hwm"): 3,
-    (r"\.tmp[A-Za-z0-9]{6}", r"stdio/task-[0-9a-f-]{36}\.json"): 1,
     (r"\.tmp[A-Za-z0-9]{6}",
      r"\.mcp-gateway/protocol-revision-telemetry/(\.window\.lock|window\.json)"
      r"|\.mcp-gateway/record-principal\.key|tasks/stdio/store\.lease|inner\.yaml"
@@ -357,7 +354,7 @@ def self_test() -> int:
         "the count bounds a source"
     assert all(n <= LEFTOVER_CEILING.get((p, h), 0) for p, h, n, _ in KNOWN_LEFTOVERS), \
         "KNOWN_LEFTOVERS may only shrink"
-    hwm, task = ["audit.jsonl.hwm"], ["stdio/task-0b1c2d3e-4f50-6172-8394-a5b6c7d8e9f0.json"]
+    hwm = ["audit.jsonl.hwm"]
     home = [".mcp-gateway/protocol-revision-telemetry/window.json", "tasks/stdio/store.lease"]
     control = [".gateway.yaml.lock", ".mcp-gateway/transparency/transparency.jsonl",
                "gateway-control-plane/audit.jsonl"]
@@ -371,8 +368,18 @@ def self_test() -> int:
     # tolerated.
     gone = ["oauth_test_no_token", "chain-test-0b1c", "http_transport_tls_guard", "stdio-tail-1"]
     assert unexpected({n: ["tokens"] for n in gone}) == sorted(gone), gone
+    # A test's task store or events store keeps its folder until its last
+    # write, so a task record or an events-store file in a plain temp folder
+    # is a leak: none is tolerated, not even alone or beside an audit file.
+    stores = [["stdio/task-0b1c2d3e-4f50-6172-8394-a5b6c7d8e9f0.json"],
+              ["tasks/task-0b1c2d3e-4f50-6172-8394-a5b6c7d8e9f0.json"],
+              ["subs/sub_u1_pt.json"], ["outbox/evt_0b1c.json"],
+              ["dead/evt_0b1c.json"], ["verified/0b1c.json"],
+              ["audit.jsonl.hwm", "subs/sub_u1_pt.json"]]
+    for files in stores:
+        assert unexpected({".tmpAb12Cd": files}) == [".tmpAb12Cd"], files
     # Each known source is tolerated up to its own count.
-    for files, most in ((hwm, 3), (task, 1), (home, 3), (control, 3), (full, 3)):
+    for files, most in ((hwm, 3), (home, 3), (control, 3), (full, 3)):
         names = [f".tmpAb12C{i}" for i in range(most + 1)]
         assert unexpected({n: files for n in names}) == [names[-1]], (files, most)
     # A plain temp folder is tolerated only for what a known source writes: a
