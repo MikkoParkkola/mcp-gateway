@@ -102,12 +102,7 @@ async fn k5_a_principal_written_by_reload_keys_the_next_record() {
     };
     let before = principal_of(&call_whos(&fx).await);
 
-    reload(
-        &fx,
-        dir.path(),
-        admin_key_yaml(ADMIN, Some("k5-explicit-principal")),
-    )
-    .await;
+    reload(&fx, dir.path(), admin_key_yaml(ADMIN, Some("0123456789ab"))).await;
     let after = principal_of(&call_whos(&fx).await);
     assert_ne!(
         after, before,
@@ -116,12 +111,7 @@ async fn k5_a_principal_written_by_reload_keys_the_next_record() {
 
     // The same principal written again keys the same record: the change
     // above is the field, not the reload itself.
-    reload(
-        &fx,
-        dir.path(),
-        admin_key_yaml(ADMIN, Some("k5-explicit-principal")),
-    )
-    .await;
+    reload(&fx, dir.path(), admin_key_yaml(ADMIN, Some("0123456789ab"))).await;
     assert_eq!(
         principal_of(&call_whos(&fx).await),
         after,

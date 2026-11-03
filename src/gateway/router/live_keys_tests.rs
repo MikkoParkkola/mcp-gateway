@@ -79,8 +79,13 @@ fn reloader(state: &Arc<super::AppState>, path: &std::path::Path) -> ReloadConte
 
 /// Reload `keys` from a file into `state`.
 async fn reload_keys(state: &Arc<super::AppState>, dir: &std::path::Path, keys: &[ApiKeyConfig]) {
+    reload_text(state, dir, file_text(keys)).await;
+}
+
+/// Reload the config `text` into `state`.
+async fn reload_text(state: &Arc<super::AppState>, dir: &std::path::Path, text: String) {
     let path = dir.join("gateway.yaml");
-    crate::gateway::test_helpers::write_owner_only(&path, file_text(keys)).expect("write");
+    crate::gateway::test_helpers::write_owner_only(&path, text).expect("write");
     reloader(state, &path)
         .reload_outcome()
         .await
@@ -299,6 +304,12 @@ async fn k5_a_rotation_written_by_reload_honours_its_grace() {
     );
 }
 
+/// `keys` under `security.posture: hardened`, the posture the `kind` row's
+/// gateway runs with: a reload that changed it would be refused.
+fn hardened(keys: &[ApiKeyConfig]) -> String {
+    format!("security:\n  posture: hardened\n{}", file_text(keys))
+}
+
 /// K5 `kind` (MIK-9255.IDENT.6), observed through the one behaviour that
 /// reads it: under `security.posture: hardened` a shared key is refused for
 /// want of a per-caller identity and a personal one is not
@@ -324,14 +335,14 @@ async fn k5_a_key_kind_changed_by_reload_applies_on_the_next_call() {
         kind: crate::config::ApiKeyKind::Personal,
         ..key(KEPT, None)
     };
-    reload_keys(&state, dir.path(), &[personal]).await;
+    reload_text(&state, dir.path(), hardened(&[personal])).await;
     let got = status(&state, "/mcp", KEPT).await;
     assert!(
         got != StatusCode::FORBIDDEN && got != StatusCode::UNAUTHORIZED && !got.is_server_error(),
         "the key made personal by reload is still refused: {got}"
     );
 
-    reload_keys(&state, dir.path(), &[key(KEPT, None)]).await;
+    reload_text(&state, dir.path(), hardened(&[key(KEPT, None)])).await;
     assert_eq!(
         status(&state, "/mcp", KEPT).await,
         StatusCode::FORBIDDEN,
