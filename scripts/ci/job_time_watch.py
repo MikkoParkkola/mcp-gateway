@@ -26,8 +26,6 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-import yaml
-
 ROOT = Path(__file__).resolve().parents[2]
 SHARE = 0.8
 
@@ -59,6 +57,8 @@ def warnings(jobs: list[dict], prefix: str, limit: float) -> list[str]:
 
 def job_limit(key: str) -> tuple[str, float]:
     """(name prefix, timeout-minutes) of ci.yml job `key`."""
+    import yaml  # here, not at the top: a failed PyYAML install is a warning, not a crash
+
     job = yaml.safe_load((ROOT / ".github" / "workflows" / "ci.yml").read_text())["jobs"][key]
     return job["name"].split("${{")[0], float(job["timeout-minutes"])
 
