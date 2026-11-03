@@ -261,6 +261,12 @@ pub(crate) struct Store {
 }
 
 impl Store {
+    /// Test-only: hold a share of the temporary directory this store lives
+    /// in until the last handle to the store drops.
+    // STUB: holds nothing yet; the row below is red against it.
+    #[cfg(test)]
+    pub(crate) fn keep_test_dir(&self, _dir: std::sync::Arc<tempfile::TempDir>) {}
+
     /// The next row generation. Checked: running out is an error, never a
     /// wrap that could repeat a generation a judgement still holds.
     pub(super) fn next_generation(&self) -> std::io::Result<u64> {
@@ -748,6 +754,9 @@ impl Store {
     }
 }
 
+#[cfg(test)]
+#[path = "store_test_dir_tests.rs"]
+mod test_dir_tests;
 #[cfg(test)]
 #[path = "store_tests.rs"]
 mod tests;

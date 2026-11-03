@@ -10,7 +10,7 @@
 )]
 use super::*;
 
-const CAPS: Caps = Caps {
+pub(super) const CAPS: Caps = Caps {
     per_principal: 100,
     global: 100,
 };
@@ -25,7 +25,7 @@ const TAIL: TailPolicy = TailPolicy {
     max_per_principal: 2,
 };
 
-fn sub(principal: &str, url: &str, now: DateTime<Utc>) -> Subscription {
+pub(super) fn sub(principal: &str, url: &str, now: DateTime<Utc>) -> Subscription {
     Subscription {
         generation: 0,
         incarnation: 0,
