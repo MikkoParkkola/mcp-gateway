@@ -481,7 +481,7 @@ pub fn describe_skipped(outcomes: &[Outcome]) -> String {
 #[path = "cli_support_tests.rs"]
 mod tests;
 
-/// Whether [`remove_nameless_grant_rows`] writes, for the binary's `gateway
+/// Whether [`remove_nameless_grant_rows`] writes, for the binary's `mcp-gateway
 /// upgrade` command only.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GrantCleanup {
@@ -491,7 +491,7 @@ pub enum GrantCleanup {
     DryRun,
 }
 
-/// For the binary's `gateway upgrade` command only. Removes every row of the
+/// For the binary's `mcp-gateway upgrade` command only. Removes every row of the
 /// identity-grants file at `path` whose subject or owner names no one, after
 /// backing the file up to `<path>.bak.pre-4.0.0`; the rewrite is atomic, and
 /// a file with no such row (or no file) is left untouched. Returns each

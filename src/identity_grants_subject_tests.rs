@@ -71,7 +71,7 @@ fn grants_yaml(subject: &str, owner: &str) -> String {
 }
 
 /// An empty subject or owner in a grants file grants nothing, so loading it
-/// refuses, naming the path and the rule id; `gateway upgrade` removes such rows.
+/// refuses, naming the path and the rule id; `mcp-gateway upgrade` removes such rows.
 #[tokio::test]
 async fn a_grants_yaml_naming_no_one_is_refused_with_its_path_and_rule_id() {
     for (subject, owner) in [("", "alice"), ("alice", "")] {
@@ -134,7 +134,7 @@ async fn the_nameless_file_refusal_reads_exactly() {
         error,
         format!(
             "identity grants file {} names no one in 1 row(s): grant 'g-empty' (empty subject). \
-             Such a row grants nothing; `gateway upgrade` removes it, or delete it by hand.",
+             Such a row grants nothing; `mcp-gateway upgrade` removes it, or delete it by hand.",
             path.display()
         )
     );
@@ -194,4 +194,20 @@ fn a_capability_owner_naming_no_one_is_refused() {
             "{owner}: {error}"
         );
     }
+}
+
+/// A second defect behind a nameless row is named in the same refusal.
+#[tokio::test]
+async fn a_second_defect_behind_a_nameless_row_is_named_too() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("grants.yaml");
+    let bad = "- grant_id: g-bad\n  subject:\n    authority: api_key\n    subject: bob\n  agent: any\n  capability: calendar_read\n  scope: everything\n  provenance: p\n  reason: r\n";
+    let body = format!("{}{bad}", grants_yaml("", "alice"));
+    crate::gateway::test_helpers::write_owner_only(&path, body).unwrap();
+    let error = super::read_identity_grants_file(&path).await.unwrap_err();
+    assert!(error.contains("names no one in 1 row(s)"), "{error}");
+    assert!(
+        error.contains("Apart from those rows the file also fails to parse"),
+        "{error}"
+    );
 }

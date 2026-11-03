@@ -89,9 +89,15 @@ pub(super) fn parse_refusal(
             .iter()
             .map(|(grant_id, field)| format!("grant '{grant_id}' (empty {field})"))
             .collect();
+        // A second defect behind those rows is named too, or `upgrade`
+        // would be advised for a file it cannot rewrite.
+        let remainder = strip_nameless(content)
+            .err()
+            .map(|e| format!(" Apart from those rows the file also fails to parse: {e}"))
+            .unwrap_or_default();
         return format!(
             "identity grants file {} names no one in {} row(s): {}. Such a row grants \
-             nothing; `gateway upgrade` removes it, or delete it by hand.",
+             nothing; `mcp-gateway upgrade` removes it, or delete it by hand.{remainder}",
             path.display(),
             rows.len(),
             rows.join(", "),
