@@ -152,9 +152,14 @@ async fn r43b_prime_a_block_published_before_delivery_stores_a_replay_entry() {
     let fx = live_fixture(CollusionAction::Off).await;
     reload(&fx, CollusionAction::Block);
     let key = keyed_chain(&fx, "r43bp-a").await;
+    let (digests, _) = firewall(&fx).replay_digests(&key).expect(
+        "R4.3b′ A: no replay entry under the Sync key though `block` was current at delivery",
+    );
     assert!(
-        firewall(&fx).replay_digests(&key).is_some(),
-        "R4.3b′ A: no replay entry under the Sync key though `block` was current at delivery"
+        digests
+            .iter()
+            .any(|d| d.label.is_some() && (d.server.as_str(), d.tool.as_str()) == ("alpha", "read")),
+        "R4.3b′ A: the entry holds no in-plan, labelled alpha:read receipt"
     );
 }
 

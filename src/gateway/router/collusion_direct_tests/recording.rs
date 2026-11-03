@@ -149,4 +149,22 @@ async fn off_checks_nothing() {
         .expect("built whatever the action");
     assert_eq!(detector.tracked_fingerprints(), 0, "the read was recorded");
     assert_sent(&fx, &fx.send(Some("b"), PROSE).await, 1);
+
+    // Control: the same read under `block` is recorded, so the count moves.
+    let control = fixture(Setup {
+        action: CollusionAction::Block,
+        ..Setup::default()
+    })
+    .await;
+    control.read(Some("a")).await;
+    let recorded = control
+        .state
+        .firewall
+        .as_ref()
+        .unwrap()
+        .collusion_detector();
+    assert!(
+        recorded.expect("built").tracked_fingerprints() > 0,
+        "A14 control: a read under block was not recorded"
+    );
 }

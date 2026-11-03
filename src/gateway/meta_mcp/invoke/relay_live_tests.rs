@@ -224,7 +224,8 @@ async fn r4_2_a_steady_off_stages_facts_and_records_nothing() {
     let tracked = lm
         .firewall()
         .collusion_detector()
-        .map_or(0, |d| d.tracked_fingerprints());
+        .expect("the firewall builds a detector under `off`")
+        .tracked_fingerprints();
     assert_eq!(tracked, 0, "R4.2: a steady `off` recorded");
 }
 
