@@ -267,13 +267,29 @@ async fn r4_3b_the_route_funnel_records_under_the_captured_generation() {
     })
     .await;
     let (admit, capture) = (Arc::clone(&fx.state), Arc::clone(&fx.state));
-    relay_witness_hook::arm(move || publish(&admit, CollusionAction::Block));
-    commit_capture_hook::arm(move || publish(&capture, CollusionAction::Off));
+    // The publish count each hook's reload left: this row's, in this order.
+    let (witnessed, captured) = (Rc::new(Cell::new(0)), Rc::new(Cell::new(0)));
+    let (w, c) = (Rc::clone(&witnessed), Rc::clone(&captured));
+    let start = fx.state.live_config.seq();
+    relay_witness_hook::arm(move || {
+        publish(&admit, CollusionAction::Block);
+        w.set(admit.live_config.seq());
+    });
+    commit_capture_hook::arm(move || {
+        publish(&capture, CollusionAction::Off);
+        c.set(capture.live_config.seq());
+    });
     fx.read(Some("a")).await;
+    assert_eq!(
+        witnessed.get(),
+        start + 1,
+        "the witness hook's reload was not the read's first"
+    );
+    assert_eq!(
+        captured.get(),
+        start + 2,
+        "the capture hook did not reload after the witness hook"
+    );
     publish(&fx.state, CollusionAction::Block);
     assert_refused_as("R4.3b: ", &fx, &fx.send(Some("b"), PROSE).await, 0);
-    assert!(
-        commit_capture_hook::reached() >= 1,
-        "the capture hook never ran"
-    );
 }
