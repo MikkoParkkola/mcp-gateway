@@ -17,6 +17,8 @@ warning too, never skipped silently.
 """
 from __future__ import annotations
 
+import contextlib
+import io
 import json
 import os
 import subprocess
@@ -117,6 +119,47 @@ def self_test() -> int:
         assert run("no-such-job") == 0, "a job key missing from ci.yml did not exit 0"
     finally:
         os.environ.update({k: v for k, v in saved.items() if v is not None})
+    # Each way the gh read can go wrong is a named warning and exit 0.
+    env = {"GITHUB_REPOSITORY": "o/r", "GITHUB_RUN_ID": "1", "GITHUB_RUN_ATTEMPT": "1"}
+    saved_env = {k: os.environ.get(k) for k in env}
+    real_run = subprocess.run
+
+    def stubbed(behaviour) -> tuple[int, str]:
+        def fake(*args, **kwargs):
+            if behaviour == "timeout":
+                raise subprocess.TimeoutExpired(args[0], kwargs.get("timeout"))
+            if behaviour == "nonzero":
+                return subprocess.CompletedProcess(args[0], 1, "", "HTTP 502")
+            return subprocess.CompletedProcess(args[0], 0, "{not json\n", "")
+        subprocess.run = fake
+        out = io.StringIO()
+        try:
+            with contextlib.redirect_stdout(out):
+                rc = run("macos-shards")
+        finally:
+            subprocess.run = real_run
+        return rc, out.getvalue()
+
+    os.environ.update(env)
+    try:
+        for behaviour, says in (
+            ("timeout", "could not run, so no limit was watched: TimeoutExpired"),
+            ("nonzero", "could not read this run's jobs, so no limit was watched: HTTP 502"),
+            ("malformed", "could not run, so no limit was watched: JSONDecodeError"),
+        ):
+            rc, printed = stubbed(behaviour)
+            assert rc == 0 and says in printed, (behaviour, rc, printed)
+    finally:
+        for k, v in saved_env.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+    # PyYAML missing (its install failed): the script itself still exits 0.
+    blocked = ("import sys, runpy; sys.modules['yaml'] = None; sys.argv = [sys.argv[1], 'macos-shards']; "
+               "runpy.run_path(sys.argv[0], run_name='__main__')")
+    got = real_run([sys.executable, "-I", "-c", blocked, __file__], capture_output=True, text=True, timeout=60)
+    assert got.returncode == 0 and "could not run" in got.stdout, (got.returncode, got.stdout, got.stderr[-300:])
     print("job_time_watch self-test: ok")
     return 0
 
