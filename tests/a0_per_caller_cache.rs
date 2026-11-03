@@ -14,6 +14,8 @@
 #[path = "common/flags_off.rs"]
 mod flags_off;
 use flags_off::flags_off;
+#[path = "common/cert_identity.rs"]
+mod cert_identity;
 #[path = "common/record_key.rs"]
 mod record_key;
 
@@ -299,7 +301,7 @@ fn with_key(key: &'static str) -> Caller {
 
 fn mtls(san: &str) -> Caller {
     Caller {
-        cert: Some(cert_identity(None, Some(san))),
+        cert: Some(cert_identity::cert_identity(None, Some(san))),
         ..Caller::default()
     }
 }
@@ -795,27 +797,4 @@ async fn direct_route_same_caller_still_deduplicates() {
         direct_pair(Setup::two_keys(false), with_key(ALICE), with_key(ALICE)).await;
     assert_eq!(calls, 1, "the keyed repeat ran twice: {second}");
     assert_eq!(delivery(&second).as_deref(), Some("call-1"));
-}
-
-/// A real certificate's identity, through the checked parser.
-fn cert_identity(common_name: Option<&str>, san_uri: Option<&str>) -> CertIdentity {
-    let mut params = rcgen::CertificateParams::new(Vec::<String>::new()).expect("params");
-    params.distinguished_name = rcgen::DistinguishedName::new();
-    if let Some(cn) = common_name {
-        params
-            .distinguished_name
-            .push(rcgen::DnType::CommonName, cn);
-    }
-    if let Some(uri) = san_uri {
-        params.subject_alt_names = vec![rcgen::SanType::URI(uri.try_into().expect("an ia5 uri"))];
-    }
-    let key = rcgen::KeyPair::generate().expect("key");
-    let der = params
-        .self_signed(&key)
-        .expect("self-signed")
-        .der()
-        .to_vec();
-    CertIdentity::from_der(&der)
-        .expect("parses")
-        .expect("names someone")
 }
