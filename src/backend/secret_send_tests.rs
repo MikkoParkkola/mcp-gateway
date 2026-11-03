@@ -377,6 +377,8 @@ fn an_argument_rule_refuses_arguments_that_are_not_an_object() {
 async fn a_renewal_keeps_an_unchanged_value_redacted_past_its_grace() {
     use crate::security::needles::{NeedleSet, scrub_text};
     const GRACE: Duration = Duration::from_secs(60);
+    // Inside one grace, and two of them together past it.
+    const STEP: Duration = Duration::from_secs(50);
     let backend = backend(
         http(),
         vec![rule(InjectTarget::Header, "X-Api-Key", SECRET)],
@@ -398,9 +400,9 @@ async fn a_renewal_keeps_an_unchanged_value_redacted_past_its_grace() {
     };
     assert!(!echoed(), "premise: a sent value is redacted");
 
-    tokio::time::advance(GRACE - Duration::from_secs(10)).await;
+    tokio::time::advance(STEP).await;
     assert!(backend.renew_needles("read", &arguments));
-    tokio::time::advance(GRACE - Duration::from_secs(10)).await;
+    tokio::time::advance(STEP).await;
     assert!(
         !echoed(),
         "a renewed value is redacted past the dispatch's grace"

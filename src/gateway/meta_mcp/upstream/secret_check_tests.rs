@@ -37,18 +37,17 @@ impl crate::transport::Transport for Peer {
         _params: Option<Value>,
     ) -> crate::Result<crate::protocol::JsonRpcResponse> {
         self.seen.lock().push(method.to_owned());
-        let result = match method {
-            "server/discover" => json!({"capabilities": {"extensions": {
+        let result = if method == "server/discover" {
+            json!({"capabilities": {"extensions": {
                 "io.modelcontextprotocol/tasks": {}
-            }}}),
-            _ => {
-                if let Some(next) = &self.rotate {
-                    self.env.set(Arc::clone(next));
-                }
-                json!({"taskId": "t1", "status": "completed", "result": {
-                    "content": [{"type": "text", "text": format!("echo {VALUE}")}]
-                }})
+            }}})
+        } else {
+            if let Some(next) = &self.rotate {
+                self.env.set(Arc::clone(next));
             }
+            json!({"taskId": "t1", "status": "completed", "result": {
+                "content": [{"type": "text", "text": format!("echo {VALUE}")}]
+            }})
         };
         Ok(crate::protocol::JsonRpcResponse::success_serialized(
             crate::protocol::RequestId::Number(1),
@@ -77,7 +76,7 @@ impl crate::transport::Transport for Peer {
 
 fn overlay(dir: &tempfile::TempDir, name: &str, value: &str) -> Arc<EnvOverlay> {
     let path = dir.path().join(name);
-    crate::gateway::test_helpers::write_owner_only(&path, &format!("POLL_CHECK_KEY={value}\n"))
+    crate::gateway::test_helpers::write_owner_only(&path, format!("POLL_CHECK_KEY={value}\n"))
         .expect("the env file is written");
     Arc::new(EnvOverlay::from_paths(&[path]))
 }
