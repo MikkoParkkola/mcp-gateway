@@ -199,12 +199,8 @@ fn a_blank_san_uri_or_common_name_is_not_a_principal() {
         let identity = extract_agent_identity(&HeaderMap::new(), None, Some(&cert(san, cn)), None);
         assert!(identity.proven.is_none(), "{san:?} {cn:?}: {identity:?}");
     }
-    let identity = extract_agent_identity(
-        &HeaderMap::new(),
-        None,
-        Some(&cert(&[" "], Some("agent-cn"))),
-        None,
-    );
+    let c = cert(&[" "], Some("agent-cn"));
+    let identity = extract_agent_identity(&HeaderMap::new(), None, Some(&c), None);
     assert_eq!(
         identity.proven_id(),
         Some("agent-cn"),
