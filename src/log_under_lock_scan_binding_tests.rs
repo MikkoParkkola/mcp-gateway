@@ -160,6 +160,31 @@ const SCAN1: &[(&str, &str, usize)] = &[
         "fn f(c: &C) { let g = |c| { for e in &c.backends { warn!(\"x\"); } }; }",
         1,
     ),
+    (
+        "shadow by a match arm that yields a guard",
+        "fn f(c: &C, r: Option<&R>) { let g = match r { Some(c) => c.backends.get(&0), None => None }; warn!(\"x\"); }",
+        1,
+    ),
+    (
+        "shadow by an if let that yields a guard",
+        "fn f(c: &C, r: Option<&R>) { let g = if let Some(c) = r { c.backends.get(&0) } else { None }; warn!(\"x\"); }",
+        1,
+    ),
+    (
+        "shadow by a while-let chain",
+        "fn f(c: &C, rs: &[R]) { while let Some(c) = rs.first() && true { for e in &c.backends { warn!(\"x\"); } break; } }",
+        1,
+    ),
+    (
+        "wildcard over a parenthesized iter",
+        "fn f(m: &DashMap<K, V>) { for _ in (m.iter()) { warn!(\"x\"); } }",
+        1,
+    ),
+    (
+        "shadow by an annotated at-pattern",
+        "fn f(c: &C, r: &R) { let whole @ (c,): (&R,) = (r,); for e in &c.backends { warn!(\"x\"); } }",
+        1,
+    ),
 ];
 
 #[test]
@@ -226,6 +251,16 @@ fn scan2_a_plain_map_of_a_dashmaps_name_is_not_a_map() {
             0,
         ),
         (
+            "a struct named with a leading underscore",
+            "struct _C { backends: HashMap<K, V> } fn f(c: &_C) { for _ in &c.backends { warn!(\"x\"); } }",
+            0,
+        ),
+        (
+            "a receiver typed Self in impl C",
+            "impl C { fn f(c: &Self) { for e in &c.backends { warn!(\"x\"); } } }",
+            0,
+        ),
+        (
             "a Vec of maps is not a map",
             "fn f(w: &W2) { for e in &w.backends { warn!(\"x\"); } }",
             0,
@@ -254,5 +289,13 @@ fn scan2_a_plain_map_of_a_dashmaps_name_is_not_a_map() {
         ),
         1,
         "a duplicate struct name"
+    );
+    // The same, the map's declaration learned first.
+    assert_eq!(
+        planted(&format!(
+            "struct C {{ backends: DashMap<K, V> }} {MAPS} fn f(c: &C) {{ for e in &c.backends {{ warn!(\"x\"); }} }}"
+        )),
+        1,
+        "a duplicate struct name, the map first"
     );
 }
