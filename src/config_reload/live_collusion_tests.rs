@@ -11,6 +11,21 @@ use crate::security::firewall::{AllowedFlow, CollusionAction};
 
 type Edit = fn(&mut Config);
 
+/// `running` with `edit` applied; panics when the edit changes nothing, so
+/// no row passes on a no-op (a default that already equals the edit).
+fn edited(running: &Config, name: &str, edit: Edit) -> Config {
+    let mut wanted = running.clone();
+    edit(&mut wanted);
+    let collusion =
+        |c: &Config| serde_json::to_value(&c.security.firewall.collusion).expect("serializes");
+    assert_ne!(
+        collusion(&wanted),
+        collusion(running),
+        "premise: collusion.{name} edit is a no-op"
+    );
+    wanted
+}
+
 /// The restart-pending sections after publishing `wanted` over `running`.
 fn pending(running: &Config, wanted: Config) -> Vec<&'static str> {
     let live = LiveConfig::new(running.clone());
@@ -62,13 +77,26 @@ const DETECTOR: [(&str, Edit); 3] = [
 fn f6_1_a_live_collusion_field_alone_is_not_restart_pending() {
     for (name, edit) in LIVE {
         let running = Config::default();
-        let mut wanted = running.clone();
-        edit(&mut wanted);
+        let wanted = edited(&running, name, edit);
         assert!(
             !pending(&running, wanted).contains(&"security"),
             "F6.1: a change to collusion.{name} alone is restart-pending"
         );
     }
+}
+
+/// F6.1b: all four live fields edited in one reload are not restart-pending.
+#[test]
+fn f6_1b_all_live_collusion_fields_together_are_not_restart_pending() {
+    let running = Config::default();
+    let mut wanted = running.clone();
+    for (_, edit) in LIVE {
+        edit(&mut wanted);
+    }
+    assert!(
+        !pending(&running, wanted).contains(&"security"),
+        "F6.1b: the four live fields together are restart-pending"
+    );
 }
 
 /// F6.2: a detector parameter, alone or beside a live field, needs a
@@ -77,8 +105,7 @@ fn f6_1_a_live_collusion_field_alone_is_not_restart_pending() {
 fn f6_2_a_detector_parameter_stays_restart_pending() {
     for (name, edit) in DETECTOR {
         let running = Config::default();
-        let mut alone = running.clone();
-        edit(&mut alone);
+        let alone = edited(&running, name, edit);
         assert!(
             pending(&running, alone).contains(&"security"),
             "F6.2: collusion.{name} alone is not restart-pending"
@@ -93,16 +120,17 @@ fn f6_2_a_detector_parameter_stays_restart_pending() {
     }
 }
 
-/// F6.3: with the firewall off, the detector does not run the edit, so a live
-/// field still needs a restart. GREEN pin on base.
+/// F6.3: with the firewall off, the detector does not run the edit, so each
+/// live field still needs a restart. GREEN pin on base.
 #[test]
 fn f6_3_a_live_field_with_the_firewall_off_is_restart_pending() {
     let mut running = Config::default();
     running.security.firewall.enabled = false;
-    let mut wanted = running.clone();
-    LIVE[1].1(&mut wanted);
-    assert!(
-        pending(&running, wanted).contains(&"security"),
-        "F6.3: a live field applied with the firewall off"
-    );
+    for (name, edit) in LIVE {
+        let wanted = edited(&running, name, edit);
+        assert!(
+            pending(&running, wanted).contains(&"security"),
+            "F6.3: collusion.{name} applied with the firewall off"
+        );
+    }
 }

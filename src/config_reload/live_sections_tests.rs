@@ -49,9 +49,9 @@ fn r1_a_security_flag_only_edit_is_not_restart_pending() {
     );
 }
 
-// R2: every other security field stays restart-pending, including the
-// collusion lists, which stay restart-only until their evidence is judged
-// against the current rules.
+// R2: every other security field stays restart-pending. The four live
+// collusion fields (action and the three lists) are not among them: they
+// apply on reload (`live_collusion_tests.rs`).
 #[test]
 fn r2_any_other_security_field_stays_restart_pending() {
     let running = Config::default();
