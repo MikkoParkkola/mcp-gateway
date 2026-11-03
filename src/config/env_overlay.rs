@@ -572,11 +572,6 @@ impl EnvOverlay {
             .collect()
     }
 
-    /// The first env file whose own bytes substitute a key these same files
-    /// define, with the key named.
-    ///
-    /// Scans the buffers the parser consumed, never the paths again.
-    #[must_use]
     /// Where `key` is first assigned, in application order: the env file and
     /// the 1-based line, read from the bytes the overlay was parsed from.
     pub(crate) fn assignment_of(&self, key: &str) -> Option<(PathBuf, usize)> {
@@ -592,6 +587,11 @@ impl EnvOverlay {
         })
     }
 
+    /// The first env file whose own bytes substitute a key these same files
+    /// define, with the key named.
+    ///
+    /// Scans the buffers the parser consumed, never the paths again.
+    #[must_use]
     pub(crate) fn substitution_naming_owned_key(&self) -> Option<(PathBuf, String)> {
         self.sources.iter().find_map(|(path, text)| {
             substitution_naming_defined_key(text, &self.owned).map(|key| (path.clone(), key))
