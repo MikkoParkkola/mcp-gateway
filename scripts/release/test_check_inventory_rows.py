@@ -67,6 +67,13 @@ class Repo:
         check = getattr(rows, "test_file_problems", lambda _base, _head: [])
         return check("base", "HEAD")
 
+    def stale(self) -> list[tuple[str, str, int]] | None:
+        """Rows the change adds that name no function at its head. None on a
+        script without the check, so a red row fails at its own assertion."""
+        rows.ROOT = self.root
+        check = getattr(rows, "stale_rows", lambda _base, _head: None)
+        return check("base", "HEAD")
+
 
 class CheckInventoryRows(unittest.TestCase):
     def setUp(self) -> None:
@@ -207,6 +214,39 @@ class CheckInventoryRows(unittest.TestCase):
         self.repo.write("src/oauth/mod.rs", "pub fn existing() {}\nfn helper() {}\n")
         self.repo.commit("add")
         self.assertEqual(self.repo.missing(), ["helper"])
+
+
+class StaleRows(unittest.TestCase):
+    """A row the change adds must name a function its head has: a row left
+    behind by a rename or a deletion vouches for nothing."""
+
+    def setUp(self) -> None:
+        self.repo = Repo()
+        self.addCleanup(self.repo.dir.cleanup)
+
+    def test_an_added_row_naming_no_function_fails(self) -> None:
+        self.repo.write(rows.UNENFORCING, UNENFORCING_HEADER + "src/oauth/mod.rs\tgone\t1\tr\n")
+        self.repo.commit("add")
+        self.assertEqual(self.repo.stale(), [("src/oauth/mod.rs", "gone", 1)])
+
+    def test_an_added_row_past_the_last_occurrence_fails(self) -> None:
+        self.repo.write(rows.UNENFORCING, UNENFORCING_HEADER + "src/oauth/mod.rs\texisting\t2\tr\n")
+        self.repo.commit("add")
+        self.assertEqual(self.repo.stale(), [("src/oauth/mod.rs", "existing", 2)])
+
+    def test_an_added_row_naming_a_function_passes(self) -> None:
+        self.repo.write(rows.UNENFORCING, UNENFORCING_HEADER + "src/oauth/mod.rs\texisting\t1\tr\n")
+        self.repo.commit("add")
+        self.assertEqual(self.repo.stale(), [])
+
+    def test_a_row_the_base_already_had_is_not_judged(self) -> None:
+        self.repo.git("checkout", "-q", "base")
+        self.repo.write(rows.UNENFORCING, UNENFORCING_HEADER + "src/oauth/mod.rs\tgone\t1\tr\n")
+        self.repo.commit("older stale row")
+        self.repo.git("checkout", "-q", "-B", "change")
+        self.repo.write("src/oauth/mod.rs", "pub fn existing() {}\npub fn other() {}\n")
+        self.repo.commit("change")
+        self.assertEqual(self.repo.stale(), [])
 
 
 class TestNamedFiles(unittest.TestCase):
