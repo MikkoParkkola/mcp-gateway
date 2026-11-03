@@ -40,6 +40,8 @@ const MIN_KEY_BYTES: usize = 32;
 const RECORD_DOMAIN: &[u8] = b"mcp-gateway/record-principal/v1";
 /// Domain label of the subscription-alias derivation.
 const SUBSCRIPTION_DOMAIN: &[u8] = b"mcp-gateway/subscription/v1";
+/// Domain label of the shadow radar's endpoint-id derivation.
+const SHADOW_ENDPOINT_DOMAIN: &[u8] = b"mcp-gateway/shadow-endpoint/v1";
 
 /// `HMAC(key, domain || 0x00 || value)`, truncated to `hex_len` hex digits.
 fn keyed(key: &RecordPrincipalKey, domain: &[u8], value: &str, hex_len: usize) -> String {
@@ -90,6 +92,39 @@ impl RecordPrincipalKey {
             .expect("32 bytes is well within HKDF-SHA256's 8160-byte max output");
         key
     }
+}
+
+/// The record key, only read: the configured reference, resolved through
+/// `overlay` as the gateway resolves it, else the key file in `data_dir`.
+/// `Ok(None)` when neither is there: a reader that must create nothing never
+/// falls back to creating it.
+///
+/// # Errors
+///
+/// When the configured reference or the key file is there but cannot be read
+/// or is not a key.
+pub(crate) fn read_key(
+    configured: Option<&str>,
+    overlay: &crate::config::EnvOverlay,
+    data_dir: &Path,
+) -> crate::Result<Option<RecordPrincipalKey>> {
+    let text = crate::config::read_record_key_text(
+        configured,
+        overlay,
+        &data_dir.join(KEY_FILE),
+        KEY_FIELD,
+    )?;
+    text.map(|text| RecordPrincipalKey::from_text(&text))
+        .transpose()
+}
+
+/// A key drawn for one use and held in memory only: never written, never
+/// logged (the type has no `Debug`). For a report that must not create key
+/// material where none exists; ids under it hold for that report alone.
+pub(crate) fn one_run_key() -> RecordPrincipalKey {
+    use rand::RngExt as _;
+    let bytes: [u8; 32] = rand::rng().random();
+    RecordPrincipalKey(bytes.to_vec())
 }
 
 /// The record key: `configured` (a `SecretRef`) when set, else the fallback file
@@ -211,6 +246,13 @@ fn is_keyed_owner(rest: &str) -> bool {
     rest.strip_prefix(KEYED_OWNER_MARK).is_some_and(|rf| {
         rf.len() == 12 && rf.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
     })
+}
+
+/// The shadow radar's id part for a found server's URL: keyed, so a report
+/// shows nothing of the URL's path and an id cannot be used to test a guess
+/// at it, and stable for as long as the record key is.
+pub(crate) fn shadow_endpoint_id(key: &RecordPrincipalKey, normalised_url: &str) -> String {
+    keyed(key, SHADOW_ENDPOINT_DOMAIN, normalised_url, 16)
 }
 
 /// The keyed alias of a stored subscription id: the client-facing handle.

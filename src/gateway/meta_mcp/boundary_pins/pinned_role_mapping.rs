@@ -13,16 +13,17 @@
 //! check: a mapping read routed through a helper in another function is
 //! missed, as an alias is missed in the other pins.
 //!
-//! One judge must read the live mapping for good: the judge of a delivery
+//! One judge reads the current mapping for good: the judge of a delivery
 //! with no request behind it, `auth_live::current_caller`, which stream
 //! rechecks reach through `current_client` and the view judge and the UI
 //! stream call directly. It judges each delivery by the generation current
-//! then, so a role removed by a reload stops a stream already open. Today it reaches the
-//! mapping through `key_server_credential`, which the request path shares, so
-//! that function's one row covers both callers until the request path moves
-//! to the pinned generation. The change that moves it deletes that row, or
-//! rewrites it as the delivery judge's if this function is left reading the
-//! live mapping for the judge alone.
+//! then, so a role removed by a reload stops a stream already open; a stream's
+//! open counts as its first delivery. It takes that generation once and hands
+//! it to `key_server_credential`, which the request path calls with the
+//! request's pinned generation, so neither function reads both fields and
+//! neither needs a row. This scan cannot see which generation a caller passes
+//! in: the auth rows (`router::sso_admin_tests::pinned_admin` and the
+//! re-validation row beside it) are the guard for that.
 
 use super::packaged::crate_root;
 use super::scan::{Place, Sink, walk};
@@ -32,14 +33,7 @@ const ROOTS: [&str; 3] = ["src/lib.rs", "src/main.rs", "src/bin/provenance-eval.
 /// Production functions that may read the live role mapping: (file,
 /// function, why). Each row must match a function that reads both, so a row
 /// cannot outlive its site.
-const ALLOW: &[(&str, &str, &str)] = &[(
-    "src/gateway/auth_live.rs",
-    "key_server_credential",
-    "pending: the admin flag set at authentication reads the live mapping for \
-     the request path and the delivery judge alike; the change that moves the \
-     request path to the pinned generation deletes this row, or rewrites it \
-     as the delivery judge's if this function keeps reading for the judge alone",
-)];
+const ALLOW: &[(&str, &str, &str)] = &[];
 
 /// The two fields, read as `.name` in a macro's arguments. Those are tokens,
 /// not expressions, so the walk never reports them as field reads. The

@@ -120,11 +120,12 @@ impl MetaMcp {
         // Sent nothing (no counted send, and a pre-dispatch error or a refusal
         // the backend's own send recorded): the one rule for releasing a key.
         let unsent = crate::gateway::delivery_facts::unsent(&e);
-        // MIK-8139: the account marker rides on the backend's own error, so
-        // it is honoured only when the shared screen passes that error clean;
-        // otherwise the error becomes the result the gates and firewall read.
-        if crate::personal_accounts::refusal::marked(&e).is_some()
-            && self.backend_error_screens_clean(server, tool, &e)
+        // The account-marked refusal is honoured only when the shared screen
+        // passes its body clean; otherwise it becomes the result the gates and
+        // firewall read. A backend's own error is never marked: it is folded
+        // below and screened by the result gates.
+        if let Some(marked) = crate::personal_accounts::refusal::marked(&e)
+            && self.marked_error_screens_clean(server, tool, &marked)
         {
             // Settled like every dispatched failure (ADR-012). A marked refusal
             // comes only from `after_upstream_401`, on an upstream 401: one a
@@ -169,6 +170,17 @@ impl MetaMcp {
         if crate::playbook::current_step().is_some()
             && crate::personal_accounts::refusal::transient_data(&e).is_some()
         {
+            return Err(e);
+        }
+        // A refusal of the caller (the per-user lender refusing the send, a
+        // refused shared slot) is answered as the refusal it is, as the
+        // direct route answers it, never as a backend error to retry. A
+        // playbook step records it only while the plan still vouches for
+        // its answer, as the dispatch-time backstop does.
+        if super::gate::is_authorization_refusal(&e) {
+            if crate::playbook::current_step().is_some() {
+                crate::gateway::delivery_facts::refused_while_vouched();
+            }
             return Err(e);
         }
         // The error budget already counted this failure (the shared

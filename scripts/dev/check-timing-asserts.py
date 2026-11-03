@@ -85,7 +85,9 @@ from pathlib import Path
 
 from check_timing_asserts_core import (
     HANG_BOUND_HOME,
+    PARSE_REPORT,
     THRESHOLD_S,
+    _cfg_rules,
     Finding,
     Row,
     Scope,
@@ -355,6 +357,7 @@ def main(argv: list[str] | None = None) -> int:
     for line in errors:
         print(line)
     print(f"{len(found)} timing asserts or timeouts under {THRESHOLD_S:g} s or unresolvable, {len(rows)} allowlisted.")
+    print(_cfg_rules().parse_error_summary(PARSE_REPORT))
     return 1 if errors else 0
 
 

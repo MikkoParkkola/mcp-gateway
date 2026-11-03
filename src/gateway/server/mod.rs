@@ -18,6 +18,8 @@ mod collusion_share_tests;
 mod construct;
 mod control_plane_store;
 #[cfg(all(test, feature = "cost-governance"))]
+mod cost_estimate_restart_tests;
+#[cfg(all(test, feature = "cost-governance"))]
 mod cost_restart_tests;
 #[cfg(all(test, feature = "cost-governance"))]
 mod cost_save_stamp_tests;

@@ -99,27 +99,37 @@ fn g2_the_scan_flags_a_none_generation_only() {
 
 /// The file the stdio messages are dispatched from.
 const STDIO_DISPATCH: &str = "src/gateway/server/stdio_dispatch.rs";
+/// The file holding `message_generation`, the one sanctioned live read.
+const STDIO_SINGLE: &str = "src/gateway/server/stdio_single.rs";
 
-/// In the stdio dispatch file: its `.live_config()` calls, and how many
-/// times it calls `message_generation`.
+/// In the stdio dispatch and entry files: every `.live_config()` call
+/// outside `message_generation`, how many times the dispatch calls that
+/// helper, and how many live reads the helper itself makes.
 #[derive(Default)]
 struct StdioReads {
     live: Vec<String>,
     helper_calls: usize,
+    helper_reads: usize,
 }
 
 impl Sink for StdioReads {
     fn expr(&mut self, at: &Place, expr: &syn::Expr) {
-        if !at.file.ends_with(STDIO_DISPATCH) {
+        let dispatch = at.file.ends_with(STDIO_DISPATCH);
+        if !dispatch && !at.file.ends_with(STDIO_SINGLE) {
             return;
         }
+        let func = at.func.as_deref().unwrap_or("<module>");
         match expr {
             syn::Expr::MethodCall(call) if call.method == "live_config" => {
-                let func = at.func.as_deref().unwrap_or("<module>");
-                self.live.push(format!("{}:{func}", at.file));
+                if !dispatch && func == "message_generation" {
+                    self.helper_reads += 1;
+                } else {
+                    self.live.push(format!("{}:{func}", at.file));
+                }
             }
             syn::Expr::Call(call)
-                if matches!(&*call.func, syn::Expr::Path(path)
+                if dispatch
+                    && matches!(&*call.func, syn::Expr::Path(path)
                     if path.path.segments.last().is_some_and(|s| s.ident == "message_generation")) =>
             {
                 self.helper_calls += 1;
@@ -129,8 +139,9 @@ impl Sink for StdioReads {
     }
 }
 
-/// The stdio dispatch reads no live config: both of its caller contexts take
-/// the message's generation through `stdio_single::message_generation`.
+/// The stdio dispatch and entry files read no live config except inside
+/// `stdio_single::message_generation`, which both of the dispatch's caller
+/// contexts call to take the message's generation.
 #[test]
 fn g3_stdio_dispatch_reads_the_generation_from_the_message_line() {
     let mut reads = StdioReads::default();
@@ -138,7 +149,7 @@ fn g3_stdio_dispatch_reads_the_generation_from_the_message_line() {
     reads.live.sort();
     assert!(
         reads.live.is_empty(),
-        "stdio dispatch re-reads the live config:\n{}",
+        "stdio re-reads the live config outside message_generation:\n{}",
         reads.live.join("\n")
     );
     // Also proves the scan reached the file.
@@ -146,4 +157,5 @@ fn g3_stdio_dispatch_reads_the_generation_from_the_message_line() {
         reads.helper_calls, 2,
         "both caller contexts take the message's generation"
     );
+    assert_eq!(reads.helper_reads, 1, "the helper's one sanctioned read");
 }

@@ -54,6 +54,19 @@ impl MetaMcp {
 
     /// Startup's live config; a second call keeps the first.
     pub(crate) fn set_live_config(&self, live: Arc<crate::config_reload::LiveConfig>) {
+        // A name a publication starts budgeting takes its starting figure
+        // before any request can judge with the new budgets (ADR-023).
+        // invariant: every name a published generation budgets is owned, and
+        // a figure is stored only with ownership; the seed relies on it to
+        // take a figure exactly once. Pinned by
+        // `every_budgeted_name_is_owned_through_reloads`.
+        #[cfg(feature = "cost-governance")]
+        if let Some(enforcer) = &self.budget_enforcer {
+            let enforcer = Arc::clone(enforcer);
+            live.on_publish(Arc::new(move |incoming| {
+                enforcer.seed_estimates(&enforcer.governance(Some(&incoming)).budgets);
+            }));
+        }
         let _ = self.startup_live_config.set(live);
     }
 
@@ -205,6 +218,24 @@ impl MetaMcp {
     /// is ignored.
     pub(crate) fn set_decisions(&self, decisions: Arc<crate::decisions::Shared>) {
         let _ = self.decisions.set(decisions);
+    }
+
+    /// Attach the shared discovery cache. Called once by the HTTP server; a
+    /// second call is ignored.
+    pub(crate) fn set_discovery_cache(
+        &self,
+        cache: Arc<crate::discovery::listing::DiscoveryCache>,
+    ) {
+        let _ = self.discovery_cache.set(cache);
+    }
+
+    /// The shared discovery cache, when the server attached one: read at
+    /// request time, so a router built before it (or without it) answers
+    /// "unavailable" rather than scanning on its own.
+    pub(crate) fn discovery_cache(
+        &self,
+    ) -> Option<&Arc<crate::discovery::listing::DiscoveryCache>> {
+        self.discovery_cache.get()
     }
 
     /// The decision set, when the server attached one.
