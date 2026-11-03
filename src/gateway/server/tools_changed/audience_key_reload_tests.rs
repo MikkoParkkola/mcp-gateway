@@ -199,3 +199,51 @@ async fn a_key_that_lost_a_backend_lists_none_of_its_tools() {
         "a key that lost alpha still lists alpha's tools: {after:?}"
     );
 }
+
+/// Whether a `tools/call` answer reports success.
+fn succeeded(answer: &serde_json::Value) -> bool {
+    answer.get("error").is_none() && answer["result"]["isError"] != serde_json::json!(true)
+}
+
+/// A key a reload takes `alpha` away from can no longer call `alpha`'s
+/// tools, by the surfaced name or through `gateway_invoke`.
+#[cfg(feature = "spec-preview")]
+#[tokio::test]
+async fn a_key_that_lost_a_backend_cannot_call_its_tools() {
+    let w = World::start().await;
+    w.alpha_answers_calls(vec![tool("read", "r")]);
+    let _session = w.legacy_owned("calls", "k-std").await;
+    let invoke = serde_json::json!({
+        "name": "gateway_invoke",
+        "arguments": { "server": "alpha", "tool": "read", "arguments": {} }
+    });
+    let before = w
+        .post_in("k-std", "calls", "tools/call", invoke.clone())
+        .await;
+    assert!(
+        succeeded(&before),
+        "premise: k-std may call alpha's read: {before}"
+    );
+
+    reload_k_std(&w, |key| {
+        key.backends = vec!["beta".to_string()];
+        true
+    });
+    let invoked = w.post_in("k-std", "calls", "tools/call", invoke).await;
+    assert!(
+        !succeeded(&invoked),
+        "gateway_invoke still reaches alpha: {invoked}"
+    );
+    let direct = w
+        .post_in(
+            "k-std",
+            "calls",
+            "tools/call",
+            serde_json::json!({"name": "read", "arguments": {}}),
+        )
+        .await;
+    assert!(
+        !succeeded(&direct),
+        "the surfaced read still reaches alpha: {direct}"
+    );
+}
