@@ -53,6 +53,42 @@ pub struct CertIdentity {
 }
 
 impl CertIdentity {
+    /// Certificate Common Name (CN).
+    #[must_use]
+    pub fn common_name(&self) -> Option<&str> {
+        self.common_name.as_deref()
+    }
+
+    /// First Organisational Unit (OU) in the subject.
+    #[must_use]
+    pub fn organizational_unit(&self) -> Option<&str> {
+        self.organizational_unit.as_deref()
+    }
+
+    /// Subject Alternative Name URI entries (e.g. SPIFFE IDs).
+    #[must_use]
+    pub fn san_uris(&self) -> &[String] {
+        &self.san_uris
+    }
+
+    /// Subject Alternative Name DNS entries.
+    #[must_use]
+    pub fn san_dns_names(&self) -> &[String] {
+        &self.san_dns_names
+    }
+
+    /// Human-readable label for logs and audit events.
+    #[must_use]
+    pub fn display_name(&self) -> &str {
+        &self.display_name
+    }
+
+    /// Nonce-quota bucket, derived from the whole certificate DER.
+    #[must_use]
+    pub fn quota_principal(&self) -> Option<&QuotaPrincipal> {
+        self.quota_principal.as_ref()
+    }
+
     /// The subject this certificate names, verbatim: its first SAN URI that is
     /// not empty or only whitespace, else such a CN. `None` when it has
     /// neither: such a
