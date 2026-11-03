@@ -11,11 +11,11 @@ use std::path::Path;
 /// A row the upgrade removed: its id and the field that named no one. Never
 /// any other content of the row.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Removed {
+pub(crate) struct Removed {
     /// The row's `grant_id`.
-    pub grant_id: String,
+    pub(crate) grant_id: String,
     /// `"subject"` or `"owner"`.
-    pub field: String,
+    pub(crate) field: String,
 }
 
 /// Remove every row naming no one from the grants file at `path`, backing the
@@ -25,7 +25,7 @@ pub struct Removed {
 /// # Errors
 ///
 /// A read, parse or write failure. A failed rewrite leaves the original.
-pub fn remove_nameless_rows(
+pub(crate) fn remove_nameless_rows(
     path: &Path,
     backup: &Path,
     write: impl Fn(&Path, &str) -> std::io::Result<()>,

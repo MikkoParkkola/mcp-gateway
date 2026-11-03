@@ -480,3 +480,31 @@ pub fn describe_skipped(outcomes: &[Outcome]) -> String {
 #[cfg(test)]
 #[path = "cli_support_tests.rs"]
 mod tests;
+
+/// For the binary's `gateway upgrade` command only. Removes every row of the
+/// identity-grants file at `path` whose subject or owner names no one, after
+/// backing the file up to `<path>.bak.pre-4.0.0`; the rewrite is atomic, and
+/// a file with no such row (or no file) is left untouched. Returns each
+/// removed row as `(grant id, field)`, never any other content of the row.
+///
+/// # Errors
+///
+/// A read, parse or write failure. A failed rewrite leaves the original.
+pub fn remove_nameless_grant_rows(
+    path: &std::path::Path,
+) -> std::io::Result<Vec<(String, String)>> {
+    let mut backup = path.as_os_str().to_owned();
+    backup.push(".bak.pre-4.0.0");
+    let removed = crate::identity_grants::nameless_upgrade::remove_nameless_rows(
+        path,
+        std::path::Path::new(&backup),
+        |target, text| {
+            crate::config_persistence::write_text_atomic(target, text)
+                .map_err(std::io::Error::other)
+        },
+    )?;
+    Ok(removed
+        .into_iter()
+        .map(|row| (row.grant_id, row.field))
+        .collect())
+}

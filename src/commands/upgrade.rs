@@ -135,22 +135,11 @@ fn migrate_4_0_0_nameless_grants(data_dir: &Path) -> std::io::Result<()> {
     let path = super::identity::expand_home_path(Path::new(
         configured.as_deref().unwrap_or(DEFAULT_GRANTS_PATH),
     ));
-    let mut backup = path.clone().into_os_string();
-    backup.push(".bak.pre-4.0.0");
-    let removed = mcp_gateway::identity_grants::nameless_upgrade::remove_nameless_rows(
-        &path,
-        Path::new(&backup),
-        |target, text| {
-            mcp_gateway::config_persistence::write_text_atomic(target, text)
-                .map_err(std::io::Error::other)
-        },
-    )?;
-    for row in &removed {
+    let removed = mcp_gateway::cli_support::remove_nameless_grant_rows(&path)?;
+    for (grant_id, field) in &removed {
         eprintln!(
-            "migration v4.0.0: removed grant '{}' from {}: its {} names no one, so it granted nothing",
-            row.grant_id,
+            "migration v4.0.0: removed grant '{grant_id}' from {}: its {field} names no one, so it granted nothing",
             path.display(),
-            row.field
         );
     }
     Ok(())
