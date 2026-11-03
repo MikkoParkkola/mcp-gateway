@@ -128,12 +128,19 @@ async fn cell(who: Who, store: bool) -> String {
     let (code, body) = send(&router, get(who, routes::UI_CONTROL_PLANE)).await;
     let body: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
     let view = &body["view"];
-    let len = |list: &str| view[list].as_array().map_or(0, Vec::len);
-    let sorted = |list: &Value, field: &str, keep: &dyn Fn(&str) -> bool| {
-        let mut ids: Vec<&str> = list
+    // A list the answer leaves out reads MISSING, never as empty: a dropped
+    // field must move a cell, not pass as "shown none".
+    let len = |list: &str| {
+        view[list]
             .as_array()
-            .into_iter()
-            .flatten()
+            .map_or_else(|| "MISSING".to_string(), |items| items.len().to_string())
+    };
+    let sorted = |list: &Value, field: &str, keep: &dyn Fn(&str) -> bool| {
+        let Some(items) = list.as_array() else {
+            return "MISSING".to_string();
+        };
+        let mut ids: Vec<&str> = items
+            .iter()
             .filter_map(|item| item[field].as_str())
             .filter(|id| keep(id))
             .collect();
@@ -148,13 +155,20 @@ async fn cell(who: Who, store: bool) -> String {
     let counts = &body["inventory_counts"];
     let consistent = counts["shadow_assets"] == radar["summary"]["unmanaged_total"]
         && counts["shadow_high_or_critical_assets"] == radar["summary"]["high_or_critical_total"];
-    let radar = if radar["scan_status"] == "out_of_scope" {
-        format!("out_of_scope:withheld={}", withheld(radar))
-    } else {
-        "ran".to_string()
+    // Only the two statuses a run produces read "ran"; any other status is
+    // printed as itself, so an unknown one moves the cell.
+    let radar = match radar["scan_status"].as_str() {
+        Some("out_of_scope") => format!("out_of_scope:withheld={}", withheld(radar)),
+        Some("ok" | "unavailable") => "ran".to_string(),
+        other => format!("status:{other:?}"),
     };
+    let all_principals = &body["authorizations"]["read_all_principals"];
+    let all_principals = format!(
+        "{}/{}",
+        all_principals["allowed"], all_principals["reason_code"]
+    );
     format!(
-        "{}|grants:{}|policies:{}|audit:{targets}|queue:{queue}|radar:{radar}|counts:{}/{}/{consistent}|cov:{}/{}/{}",
+        "{}|grants:{}|policies:{}|audit:{targets}|queue:{queue}|radar:{radar}|counts:{}/{}/{consistent}|cov:{}/{}/{}|all:{all_principals}",
         code.as_u16(),
         len("grants"),
         len("policies"),
@@ -166,6 +180,9 @@ async fn cell(who: Who, store: bool) -> String {
     )
 }
 
+/// Every seeded event's target, sorted, as an all-principals reader sees them.
+const ALL_EVENTS: &str = "backend:alpha;backend:beta;grant-dev;grant-seeded";
+
 /// The policy queue items an unscoped reader gets: sanitization is off in
 /// the fixture, and SSRF protection is off in every router fixture.
 const SANITIZE_ITEM: &str =
@@ -176,25 +193,24 @@ const SANITIZE_ITEM: &str =
 /// no other principal's; a scoped one is shown no grant, no policy, no store
 /// audit event, no queue item for either and no radar, whatever its role.
 fn expected(who: Who) -> [String; 2] {
-    let unscoped = |grants: usize, audit: &str| {
+    let unscoped = |grants: usize, audit: &str, all: &str| {
         let events = audit.split(';').filter(|t| !t.is_empty()).count();
         [("", 0), (audit, events)].map(|(audit, events)| {
             format!(
-                "200|grants:{grants}|policies:2|audit:{audit}|queue:{SANITIZE_ITEM}|radar:ran|counts:2/{events}/true|cov:{}/true/{}",
+                "200|grants:{grants}|policies:2|audit:{audit}|queue:{SANITIZE_ITEM}|radar:ran|counts:2/{events}/true|cov:{}/true/{}|all:{all}",
                 grants > 0,
                 events > 0
             )
         })
     };
     let scoped = || {
-        let cell = "200|grants:0|policies:0|audit:|queue:|radar:out_of_scope:withheld=true|counts:0/0/true|cov:false/false/false";
+        let cell = "200|grants:0|policies:0|audit:|queue:|radar:out_of_scope:withheld=true|counts:0/0/true|cov:false/false/false|all:false/\"CONTROL_BACKEND_SCOPE\"";
         [cell.to_string(), cell.to_string()]
     };
     match who {
-        Who::AdminKey | Who::Auditor | Who::UiAdminKey => {
-            unscoped(2, "backend:alpha;backend:beta;grant-dev;grant-seeded")
-        }
-        Who::Developer => unscoped(1, "grant-dev"),
+        Who::AdminKey | Who::UiAdminKey => unscoped(2, ALL_EVENTS, r#"true/"CONTROL_RBAC_ADMIN""#),
+        Who::Auditor => unscoped(2, ALL_EVENTS, r#"true/"CONTROL_RBAC_AUDITOR_READ""#),
+        Who::Developer => unscoped(1, "grant-dev", r#"false/"CONTROL_RBAC_ACTION_DENIED""#),
         Who::ScopedKey
         | Who::ScopedAuditor
         | Who::ScopedDeveloper
