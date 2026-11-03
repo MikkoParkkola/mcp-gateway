@@ -21,8 +21,14 @@ async fn a_method_outside_the_catalogue_is_refused() {
         crate::backend::BackendRegistry::new(),
     ));
     for method in ["tools/call", "sampling/createMessage"] {
-        let answer =
-            super::dispatch(&meta, method, crate::protocol::RequestId::Number(7), None).await;
+        let answer = super::dispatch(
+            &meta,
+            method,
+            crate::protocol::RequestId::Number(7),
+            None,
+            None,
+        )
+        .await;
         assert!(answer.result.is_none(), "{method}: no result");
         let error = answer.error.unwrap_or_else(|| panic!("{method}: refused"));
         assert_eq!(error.code, -32601, "{method}");
