@@ -198,10 +198,14 @@ impl super::Scan<'_> {
 
     /// `for e in m` over a `DashMap`: each item holds a shard lock for the
     /// loop's body. `for e in &m` always; `for e in m` unless `m` is owned,
-    /// since consuming a map yields owned pairs and holds nothing.
+    /// since consuming a map yields owned pairs and holds nothing; and
+    /// `for e in m.iter()`, whose items are guards whatever the pattern keeps.
     pub(super) fn iterates_dashmap(&self, expr: &syn::Expr) -> bool {
         match expr {
             syn::Expr::Reference(r) => self.is_map(&r.expr).is_some(),
+            syn::Expr::MethodCall(m) if m.method == "iter" || m.method == "iter_mut" => {
+                self.is_map(&m.receiver).is_some()
+            }
             other => self.is_map(other) == Some(false),
         }
     }
