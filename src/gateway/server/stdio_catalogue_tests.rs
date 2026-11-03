@@ -7,7 +7,10 @@
 /// session's other rows.
 #[test]
 fn the_catalogue_caller_uses_the_stdio_session_id() {
-    assert_eq!(super::operator().session, super::super::STDIO_SESSION_ID);
+    assert_eq!(
+        super::operator(None).session,
+        super::super::STDIO_SESSION_ID
+    );
 }
 
 /// MIK-8195 W4: the catalogue relay answers only its own methods. Anything

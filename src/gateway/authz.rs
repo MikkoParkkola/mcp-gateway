@@ -560,6 +560,8 @@ pub(crate) trait StdioLine: Sync {
     fn tool_policy(&self) -> &crate::security::ToolPolicy;
     /// The generation the line is judged under.
     fn generation(&self) -> Option<&crate::config_reload::Generation>;
+    /// The same generation, shared, for a reader that outlives the borrow.
+    fn pinned(&self) -> Option<std::sync::Arc<crate::config_reload::Generation>>;
 }
 
 impl StdioLine for std::sync::Arc<crate::config_reload::Generation> {
@@ -569,6 +571,9 @@ impl StdioLine for std::sync::Arc<crate::config_reload::Generation> {
     fn generation(&self) -> Option<&crate::config_reload::Generation> {
         Some(self)
     }
+    fn pinned(&self) -> Option<std::sync::Arc<crate::config_reload::Generation>> {
+        Some(std::sync::Arc::clone(self))
+    }
 }
 
 #[cfg(test)]
@@ -577,6 +582,9 @@ impl StdioLine for std::sync::Arc<crate::security::ToolPolicy> {
         self
     }
     fn generation(&self) -> Option<&crate::config_reload::Generation> {
+        None
+    }
+    fn pinned(&self) -> Option<std::sync::Arc<crate::config_reload::Generation>> {
         None
     }
 }

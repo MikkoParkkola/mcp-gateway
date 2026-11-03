@@ -23,9 +23,9 @@ pub(crate) struct CatalogueCaller {
     /// The session the read arrived on, for the audit record's session
     /// fingerprint (MIK-7832).
     pub(crate) session: String,
-    /// The generation the read's request pinned on arrival; `None` for a
-    /// caller that has none (the stdio operator), judged then under the
-    /// generation published at the check.
+    /// The generation the read's request pinned on arrival (an HTTP request's,
+    /// a stdio line's). `None` only for a test's own caller, judged then under
+    /// the generation published at the check.
     pub(crate) generation: Option<std::sync::Arc<crate::config_reload::Generation>>,
 }
 
