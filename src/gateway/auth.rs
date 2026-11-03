@@ -614,10 +614,12 @@ async fn authenticate_request(
     mut request: Request<Body>,
     next: Next,
 ) -> Response {
-    let Some(pinned) = live::pinned_auth(&request) else {
+    // One generation judges the request: its keys, its `auth` settings and
+    // the role mapping a key-server caller's admin flag comes from.
+    let Some(generation) = crate::gateway::router::pinned_generation(request.extensions()) else {
         return live::unpinned();
     };
-    let auth_config = &*pinned;
+    let auth_config = &**generation.auth();
     let path = request.uri().path();
 
     // A public path skips the credential REQUIREMENT, not the credential. An
@@ -640,7 +642,7 @@ async fn authenticate_request(
         // the anonymous identity — and with it the anonymous quota, which any
         // unauthenticated flood can exhaust. Unrecognised input still falls
         // through to the anonymous identity below, exactly as before.
-        match key_server_credential(&state, &presented).await {
+        match key_server_credential(&state, &generation, &presented).await {
             live::KsCredential::Credential(found) => {
                 let (client, identity, via) = *found;
                 debug!(client = %client.name, path = %path, "Public path authenticated via {via}");
@@ -702,7 +704,9 @@ async fn authenticate_request(
     // 2. Try the key server: temporary token, then delegated OIDC bearer. The
     //    verified subject is bound into request extensions so downstream grant
     //    evaluation can scope capabilities to the caller identity.
-    if let live::KsCredential::Credential(found) = key_server_credential(&state, token).await {
+    if let live::KsCredential::Credential(found) =
+        key_server_credential(&state, &generation, token).await
+    {
         let (client, identity, via) = *found;
         if let Some(deny) = client_preflight(auth_config, &client, path) {
             return deny;
