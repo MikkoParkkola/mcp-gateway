@@ -316,6 +316,27 @@ def missing_rows(base: str, head: str) -> list[tuple[str, str, int, int]]:
     return [f for f in added_functions(base, head) if (f[0], f[1], f[3]) not in known]
 
 
+def stale_rows(base: str, head: str) -> list[tuple[str, str, int]]:
+    """Rows `head` adds since its merge-base with `base` that name no such
+    function (or occurrence) at `head`: (file, fn, occurrence). A row left by
+    a rename or a deletion vouches for nothing. Only added rows: an older one
+    is retired with the code it named, so `--all` judges none."""
+    if base == ALL:
+        return []
+    head = git("rev-parse", head).strip()
+    merge_base = git("merge-base", base, head).strip()
+    added = set()
+    for ledger_path in (INVENTORY, UNENFORCING):
+        added |= rows(head, ledger_path) - rows(merge_base, ledger_path)
+    stale = []
+    for path, name, nth in sorted(added):
+        pattern = re.compile(r"\bfn\s+" + re.escape(name) + r"\b")
+        lines = (show(head, path) or "").splitlines()
+        if sum(1 for text in lines if pattern.search(text)) < nth:
+            stale.append((path, name, nth))
+    return stale
+
+
 def main(argv: list[str]) -> int:
     if len(argv) not in (2, 3):
         print(__doc__, file=sys.stderr)
@@ -326,10 +347,12 @@ def main(argv: list[str]) -> int:
         broken = ledger.overlap(list(ledger_rows(ROOT, resolved, INVENTORY)), list(ledger_rows(ROOT, resolved, UNENFORCING)))
         missing = missing_rows(argv[1], head)
         misnamed = test_file_problems(argv[1], resolved)
+        stale = stale_rows(argv[1], resolved)
     except ledger.LedgerError as error:
         broken = error.problems
         missing = []
         misnamed = []
+        stale = []
     for problem in broken:
         print(f"inventory: {problem}")
     if broken:
@@ -350,7 +373,11 @@ def main(argv: list[str]) -> int:
             "docs/release/inventory.d/<pr>.critical.tsv (it enforces) or "
             "docs/release/inventory.d/<pr>.unenforcing.tsv (it does not, with a reason)."
         )
-    if misnamed or missing:
+    for path, name, nth in stale:
+        print(f"stale inventory row: {path} fn {name} (occurrence {nth}) is not at head")
+    if stale:
+        print(f"{len(stale)} added row(s) name no function at head. Delete each, or name the function that replaced it.")
+    if misnamed or missing or stale:
         return 1
     scope = "on the COV.3 paths" if argv[1] == ALL else "added on the COV.3 paths"
     print(f"every function {scope} has a row")
