@@ -19,7 +19,7 @@ pub enum EmptyIdentity {
 
 /// Stable subject identity used by grant evaluation.
 ///
-/// Equality is `(authority, subject)` only; see `identity_grants_matching.rs`.
+/// Equality is `(authority, subject)` only; see its `PartialEq` impl.
 /// Read from bytes only through [`RawGrantSubject`], so a subject that names
 /// no one is refused wherever it is deserialized, whatever holds it.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -121,4 +121,25 @@ impl GrantSubject {
 /// refusal is its own check (`CertIdentity::subject_id`).
 pub(crate) fn names_someone(authority: &str, subject: &str) -> bool {
     !authority.trim().is_empty() && !subject.trim().is_empty()
+}
+
+// Identity is `(authority, subject)`. The label is whatever each side had to
+// hand — an API key's name at runtime, a person's name in a grant file — so
+// comparing it made correctly written grants deny. Every owner and grant
+// comparison routes through this impl, which is why it lives on the type.
+impl PartialEq for GrantSubject {
+    fn eq(&self, other: &Self) -> bool {
+        self.authority == other.authority && self.subject == other.subject
+    }
+}
+
+impl Eq for GrantSubject {}
+
+// Must hash exactly what `eq` compares, or a set or map keyed by subject
+// would hold one identity twice.
+impl std::hash::Hash for GrantSubject {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.authority.hash(state);
+        self.subject.hash(state);
+    }
 }

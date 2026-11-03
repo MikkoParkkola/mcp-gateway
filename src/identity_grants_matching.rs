@@ -4,7 +4,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::{GrantAgent, GrantScope, GrantSubject};
+use super::{GrantAgent, GrantScope};
 use crate::capability::CapabilityDefinition;
 use crate::security::{OwnedProvenAgentId, ProofSource};
 
@@ -320,27 +320,6 @@ fn bare_yaml_id(row: &crate::yaml::Value) -> Option<&str> {
         crate::yaml::Value::Tagged(tagged) if tagged.tag == "exact" => tagged.value.as_str(),
         agent @ crate::yaml::Value::Mapping(_) => agent.get("exact")?.as_str(),
         _ => None,
-    }
-}
-
-// Identity is `(authority, subject)`. The label is whatever each side had to
-// hand — an API key's name at runtime, a person's name in a grant file — so
-// comparing it made correctly written grants deny. Every owner and grant
-// comparison routes through this impl, which is why it lives on the type.
-impl PartialEq for GrantSubject {
-    fn eq(&self, other: &Self) -> bool {
-        self.authority == other.authority && self.subject == other.subject
-    }
-}
-
-impl Eq for GrantSubject {}
-
-// Must hash exactly what `eq` compares, or a set or map keyed by subject
-// would hold one identity twice.
-impl std::hash::Hash for GrantSubject {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.authority.hash(state);
-        self.subject.hash(state);
     }
 }
 

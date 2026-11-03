@@ -344,7 +344,12 @@ fn a_label_mismatch_alone_does_not_deny() {
     // name, an email claim); the grant file's label is what the operator
     // typed. They routinely differ, and identity is (authority, subject).
     let mut row = grant();
-    row.subject.label = Some("Alice Example".to_string());
+    row.subject = GrantSubject::new(
+        row.subject.authority(),
+        row.subject.subject(),
+        Some("Alice Example".to_string()),
+    )
+    .expect("names someone");
     row.owner = Some(row.subject.clone());
     let store = LocalIdentityGrantStore::from_grants(vec![row]);
 
@@ -548,9 +553,13 @@ fn caller_identity_constructors_refuse_an_identity_that_names_no_one() {
     let named = GrantSubject::new("https://idp.example", " alice ", Some("A".into()))
         .ok()
         .unwrap();
-    assert_eq!(named.authority, "https://idp.example");
-    assert_eq!(named.subject, " alice ", "verified bytes are never trimmed");
-    assert_eq!(named.label.as_deref(), Some("A"));
+    assert_eq!(named.authority(), "https://idp.example");
+    assert_eq!(
+        named.subject(),
+        " alice ",
+        "verified bytes are never trimmed"
+    );
+    assert_eq!(named.label(), Some("A"));
 
     let id = |issuer: &str, subject: &str| {
         VerifiedIdentity::checked(
