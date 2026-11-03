@@ -704,6 +704,10 @@ mod login_scope_tests;
 mod cancel_delivery_tests;
 
 #[cfg(test)]
+#[path = "upstream/secret_check_tests.rs"]
+mod secret_check_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
