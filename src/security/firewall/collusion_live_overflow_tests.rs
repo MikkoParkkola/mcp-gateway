@@ -394,21 +394,44 @@ fn o5_1_the_byte_bound_marks_saturation_before_the_pair_count() {
     );
 }
 
-/// O5.3: the last reference frees an interned source. RED on base at the
-/// first assertion: the stub interns nothing.
+/// O5.3: an interned source is freed with its last holder, not before.
+/// Carol and dave each hold `ov:z` as an overflow pair on their own text,
+/// recorded 300 s apart: once carol's lapses dave's still holds the name;
+/// once dave's lapses the table frees it.
 #[test]
 fn o5_3_the_last_reference_frees_the_interned_source() {
-    let (rig, t, now) = (rig(&["fill:*", "ov:*"]), one_fp(0), Instant::now());
+    let rig = rig(&["fill:*", "ov:*"]);
+    let (t0, t1, now) = (one_fp(0), one_fp(1), Instant::now());
     let g = rig.generation();
-    let before = detector(&rig).interned_sources_for_test();
-    record(&rig, &g, ("ov:z", "carol"), &t, now);
+    assert!(!detector(&rig).interns_for_test("ov:z"), "premise");
+    fill_cap(&rig, &g, "carol", &t0, now);
+    record(&rig, &g, ("ov:z", "carol"), &t0, now);
+    fill_cap(&rig, &g, "dave", &t1, plus(now, 300));
+    record(&rig, &g, ("ov:z", "dave"), &t1, plus(now, 300));
     assert_eq!(
-        detector(&rig).interned_sources_for_test(),
-        before + 1,
-        "O5.3: the interned source count did not rise by one"
+        pairs(&rig, &t0, "carol"),
+        [("ov:z".to_string(), false)],
+        "premise: carol's pair"
     );
-    let _ = bob(&rig, &rig.generation(), &t, plus(now, 601));
-    assert_eq!(detector(&rig).interned_sources_for_test(), before, "O5.3");
+    assert_eq!(
+        pairs(&rig, &t1, "dave"),
+        [("ov:z".to_string(), false)],
+        "premise: dave's pair"
+    );
+    let _ = bob(&rig, &g, &t0, plus(now, 601));
+    assert!(
+        pairs(&rig, &t0, "carol").is_empty(),
+        "premise: carol's record lapsed"
+    );
+    assert!(
+        detector(&rig).interns_for_test("ov:z"),
+        "O5.3: freed while dave still holds it"
+    );
+    let _ = bob(&rig, &g, &t1, plus(now, 901));
+    assert!(
+        !detector(&rig).interns_for_test("ov:z"),
+        "O5.3: not freed after its last holder lapsed"
+    );
 }
 
 /// Retention at the cap uses the lists of the generation the record is made

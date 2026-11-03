@@ -75,9 +75,9 @@ impl Interned {
         self.0.retain(|name| Arc::strong_count(name) > 1);
     }
 
-    /// Names some record still holds.
+    /// Whether the table still holds `name`, whoever else does.
     #[cfg(test)]
-    pub(super) fn len(&self) -> usize {
-        self.0.iter().filter(|n| Arc::strong_count(n) > 1).count()
+    pub(super) fn holds(&self, name: &str) -> bool {
+        self.0.contains(name)
     }
 }

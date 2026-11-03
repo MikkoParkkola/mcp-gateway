@@ -66,9 +66,9 @@ impl CollusionDetector {
         (most, state.budget.total)
     }
 
-    /// Source names some record holds now (tests only).
-    pub(crate) fn interned_sources_for_test(&self) -> usize {
-        self.state.lock().interned.len()
+    /// Whether the intern table still holds `source` (tests only).
+    pub(crate) fn interns_for_test(&self, source: &str) -> bool {
+        self.state.lock().interned.holds(source)
     }
 }
 
