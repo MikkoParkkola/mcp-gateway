@@ -39,8 +39,7 @@ NEW_IS_CHECKED = "new is the checked constructor (names_someone)"
 # (file, enclosing fn, construct) -> why it may build an identity directly.
 ALLOWED = {
     ("src/key_server/oidc_identity.rs", "checked", "VerifiedIdentity {"): "the checked constructor",
-    ("src/identity_grants.rs", "new", "GrantSubject {"): "the one literal; `checked` wraps it",
-    ("src/identity_grants.rs", "checked", "GrantSubject::new("): "the checked constructor",
+    ("src/identity_grants/subject.rs", "new", "GrantSubject {"): "the one literal, in the checked constructor",
     ("src/mtls/identity.rs", "from_der", "CertIdentity {"): "the production parser",
     ("src/decisions/mod.rs", "access_key", "GrantSubject::new("): NEW_IS_CHECKED,
     ("src/decisions/mod.rs", "covered", "GrantSubject::new("): NEW_IS_CHECKED,
@@ -54,7 +53,7 @@ ALLOWED = {
     ("src/gateway/ui/admin_audit.rs", "recorded", "GrantSubject::new("): NEW_IS_CHECKED,
     ("src/gateway/ui/events.rs", "admitted", "GrantSubject::new("): NEW_IS_CHECKED,
     ("src/gateway/ui/tool_call.rs", "via_label", "GrantSubject::new("): NEW_IS_CHECKED,
-    ("src/identity_grants.rs", "try_from", "GrantSubject::new("): NEW_IS_CHECKED,
+    ("src/identity_grants/subject.rs", "try_from", "GrantSubject::new("): NEW_IS_CHECKED,
 }
 # Grant-file RULE targets (operator input, not a caller identity): the CLI is
 # the binary crate and cannot see the crate-internal `checked`.

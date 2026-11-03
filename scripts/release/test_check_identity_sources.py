@@ -147,11 +147,11 @@ class RealTree(unittest.TestCase):
             found = {v.split(": ", 1)[0].rsplit(":", 1)[0] + " " + v.split("`")[3]
                      for v in cis.violations(HERE.parents[1])}
             self.assertEqual(found, {
-                "src/identity_grants.rs new",
+                "src/identity_grants/subject.rs new",
                 "src/key_server/oidc_identity.rs checked", "src/mtls/identity.rs from_der",
                 # GrantSubject::new is checked; each call site is listed
                 # until the rule is retired.
-                "src/identity_grants.rs try_from",
+                "src/identity_grants/subject.rs try_from",
                 "src/decisions/mod.rs access_key", "src/decisions/mod.rs covered",
                 "src/decisions/mod.rs denial_from_record",
                 "src/gateway/meta_mcp/invoke/budget.rs grant_subject_from_api_key",
