@@ -221,7 +221,7 @@ fn other_scalars_match_literals_as_the_oracle_does() {
 
 /// A value that reads as a JSON number is matched by the number rules alone,
 /// with no literal check: a result equal to it by exact JSON equality is
-/// still redacted, in each form, past u64, below i64::MIN and underflowing
+/// still redacted, in each form, past u64, below `i64::MIN` and underflowing
 /// to zero included.
 #[test]
 fn a_literal_number_value_is_redacted_by_the_number_rules() {
