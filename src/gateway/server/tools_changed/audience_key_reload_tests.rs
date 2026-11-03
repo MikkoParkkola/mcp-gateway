@@ -147,3 +147,55 @@ async fn stream2_a_lost_backend_owes_one_list_hint_then_stays_quiet() {
         "STREAM.2: listen heard a backend it lost"
     );
 }
+
+/// The names `tools/list` shows `bearer` in its own legacy session `id`.
+async fn listed(w: &World, bearer: &str, id: &str) -> Vec<String> {
+    let _session = w.legacy_owned(id, bearer).await;
+    let answer = w
+        .post_in(bearer, id, "tools/list", serde_json::json!({}))
+        .await;
+    answer["result"]["tools"]
+        .as_array()
+        .unwrap_or_else(|| panic!("a tools/list answer: {answer}"))
+        .iter()
+        .filter_map(|tool| tool["name"].as_str().map(str::to_owned))
+        .collect()
+}
+
+/// A key a reload takes `alpha` away from lists none of `alpha`'s tools,
+/// surfaced ones included, exactly as a key that never had it.
+#[tokio::test]
+async fn a_key_that_lost_a_backend_lists_none_of_its_tools() {
+    let w = World::start().await;
+    w.store_shared("alpha", vec![tool("read", "r"), tool("write", "w")]);
+    w.settle().await;
+    let alpha_tools = |names: &[String]| {
+        names
+            .iter()
+            .filter(|n| *n == "read" || *n == "write")
+            .cloned()
+            .collect::<Vec<_>>()
+    };
+    let before = listed(&w, "k-std", "before").await;
+    assert!(
+        !alpha_tools(&before).is_empty(),
+        "premise: k-std lists alpha's surfaced tools: {before:?}"
+    );
+    let narrow = listed(&w, "k-narrow", "narrow").await;
+    assert_eq!(
+        alpha_tools(&narrow),
+        Vec::<String>::new(),
+        "control: k-narrow lists none: {narrow:?}"
+    );
+
+    reload_k_std(&w, |key| {
+        key.backends = vec!["beta".to_string()];
+        true
+    });
+    let after = listed(&w, "k-std", "after").await;
+    assert_eq!(
+        alpha_tools(&after),
+        Vec::<String>::new(),
+        "a key that lost alpha still lists alpha's tools: {after:?}"
+    );
+}
