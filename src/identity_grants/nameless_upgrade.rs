@@ -43,6 +43,30 @@ pub(crate) fn remove_nameless_rows(
     else {
         return Ok(Vec::new());
     };
+    if file.schema_version != super::IDENTITY_GRANTS_FILE_SCHEMA_VERSION {
+        return Err(std::io::Error::other(format!(
+            "identity grants file {} has schema version '{}', not '{}'; it was left as is",
+            path.display(),
+            file.schema_version,
+            super::IDENTITY_GRANTS_FILE_SCHEMA_VERSION
+        )));
+    }
+    // The loader keeps the last row per id, so a nameless row may shadow an
+    // earlier row with its id: removing it would grant what it denied.
+    let shadowed: Vec<&str> = removed
+        .iter()
+        .map(|(grant_id, _)| grant_id.as_str())
+        .filter(|id| file.grants.iter().any(|g| g.grant_id == *id))
+        .collect();
+    if !shadowed.is_empty() {
+        return Err(std::io::Error::other(format!(
+            "identity grants file {}: grant id(s) {} appear more than once, and a row naming \
+             no one shadows another; removing it would grant access the file denied. It was \
+             left as is: remove the duplicate by hand.",
+            path.display(),
+            shadowed.join(", ")
+        )));
+    }
     let text = super::grants_text(path, &file).map_err(std::io::Error::other)?;
     // The original first: a rewrite that fails after it leaves both the
     // backup and, by the atomic replace, the original itself.

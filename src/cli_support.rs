@@ -489,14 +489,25 @@ mod tests;
 ///
 /// # Errors
 ///
-/// A read, parse or write failure. A failed rewrite leaves the original.
+/// A read, parse or write failure (a failed rewrite leaves the original); or
+/// a refusal, with nothing written: the file is of another schema version, or
+/// a row to remove shares its id with a row that stays.
 pub fn remove_nameless_grant_rows(
     path: &std::path::Path,
 ) -> std::io::Result<Vec<(String, String)>> {
+    // As a CLI grant change does: the real file (a symlinked path stays a
+    // link), under the journal lock, so a concurrent change is not lost.
+    let path = crate::identity_grants::journal::resolved(path);
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+    let _lock = crate::fs_lock::ExclusiveFileLock::acquire(
+        &crate::identity_grants::journal::lock_path(&path),
+    )?;
     let mut backup = path.as_os_str().to_owned();
     backup.push(".bak.pre-4.0.0");
     let removed = crate::identity_grants::nameless_upgrade::remove_nameless_rows(
-        path,
+        &path,
         std::path::Path::new(&backup),
         |target, text| {
             crate::config_persistence::write_text_atomic(target, text)
