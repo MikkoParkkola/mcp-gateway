@@ -5,7 +5,9 @@
 
 use tempfile::TempDir;
 
-use super::{SemVer, UpgradeContext, check_upgrade, read_stamp, stamp_path, write_stamp};
+use super::{
+    MIGRATIONS, SemVer, UpgradeContext, check_upgrade, read_stamp, stamp_path, write_stamp,
+};
 
 /// The stamp a 4.0.0 binary writes: major.minor.patch pinned to the literal
 /// 4.0.0, plus the manifest's own prerelease (`4.0.0-beta.1` on the beta,
@@ -46,12 +48,17 @@ fn upgrading_a_3x_install_stamps_the_full_binary_version() {
 
 #[test]
 fn a_4_0_0_migration_reaches_a_beta_install_and_not_a_final_one() {
+    let all = MIGRATIONS
+        .iter()
+        .filter(|m| m.applies_below == "4.0.0")
+        .count();
+    assert!(all > 0);
     assert_eq!(
         gated_on_4_0_0("4.0.0-beta.1"),
-        1,
+        all,
         "beta install must migrate"
     );
-    assert_eq!(gated_on_4_0_0("4.0.0-rc.1"), 1, "rc install must migrate");
+    assert_eq!(gated_on_4_0_0("4.0.0-rc.1"), all, "rc install must migrate");
     assert_eq!(
         gated_on_4_0_0("4.0.0"),
         0,

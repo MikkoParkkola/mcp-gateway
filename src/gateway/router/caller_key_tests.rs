@@ -46,6 +46,7 @@ fn u1_the_encoding_is_length_prefixed_and_tagged() {
 
 // U2: a subject key never equals a credential key, and no two distinct
 // subjects collide, even for inputs built to collide under a naive join.
+// (An empty authority or subject is no subject at all: it cannot be built.)
 #[test]
 fn u2_no_two_distinct_callers_share_a_key() {
     let adversarial = [
@@ -53,8 +54,6 @@ fn u2_no_two_distinct_callers_share_a_key() {
         ("a", "b:c"),
         ("a:b", "c"),
         ("a:1:b", "c"),
-        ("", "x"),
-        ("x", ""),
         ("1", "1:1:1"),
     ];
     let mut seen = std::collections::HashMap::new();

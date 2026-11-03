@@ -30,11 +30,14 @@ pub fn remove_nameless_rows(
     backup: &Path,
     write: impl Fn(&Path, &str) -> std::io::Result<()>,
 ) -> std::io::Result<Vec<Removed>> {
-    let content = match std::fs::read_to_string(path) {
-        Ok(content) => content,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-        Err(error) => return Err(error),
-    };
+    // The loader's own mode-checked read: a file it would refuse to load is
+    // not rewritten either.
+    let content =
+        match crate::config::read_checked_file(path, crate::config::CheckedFile::IdentityGrants) {
+            Ok(content) => content,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(error) => return Err(error),
+        };
     let Some((file, removed)) =
         super::matching::strip_nameless(&content).map_err(std::io::Error::other)?
     else {

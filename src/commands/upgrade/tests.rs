@@ -206,11 +206,21 @@ fn backup_config_preserves_content() {
 #[test]
 fn migrations_registry_registers_each_ceiling_once() {
     // GIVEN: the MIGRATIONS registry
-    // WHEN/THEN: one entry per release that needs a migration, in order.
-    // A ceiling registered twice would run its notice twice on one upgrade.
-    assert_eq!(MIGRATIONS.len(), 2);
-    assert_eq!(MIGRATIONS[0].applies_below, "3.0.0");
-    assert_eq!(MIGRATIONS[1].applies_below, "4.0.0");
+    // WHEN/THEN: one notice per release that has one, in order, and each
+    // file-rewriting migration once. A notice registered twice under one
+    // ceiling would print twice on one upgrade.
+    let ceilings: Vec<_> = MIGRATIONS
+        .iter()
+        .map(|m| (m.applies_below, m.writes))
+        .collect();
+    assert_eq!(
+        ceilings,
+        [
+            ("3.0.0", Writes::Nothing),
+            ("4.0.0", Writes::Nothing),
+            ("4.0.0", Writes::OwnFile),
+        ]
+    );
 }
 
 #[test]
@@ -225,8 +235,8 @@ fn pre_3_0_0_stamp_has_every_migration_applicable() {
         quiet: true,
     };
     // WHEN: applicable migrations are collected
-    // THEN: both notices apply — the install predates each ceiling
-    assert_eq!(ctx.applicable_migrations().len(), 2);
+    // THEN: every migration applies — the install predates each ceiling
+    assert_eq!(ctx.applicable_migrations().len(), MIGRATIONS.len());
 }
 
 #[test]
@@ -242,10 +252,10 @@ fn stamp_at_3_0_0_leaves_only_the_4_0_0_notice_applicable() {
     };
     // WHEN: applicable migrations are collected
     // THEN: the 3.0.0 notice is done with — `applies_below` is a strict upper
-    // bound (idempotency guard) — and only the 4.0.0 notice remains
+    // bound (idempotency guard) — and only the 4.0.0 migrations remain
     let applicable = ctx.applicable_migrations();
-    assert_eq!(applicable.len(), 1);
-    assert_eq!(applicable[0].applies_below, "4.0.0");
+    assert!(!applicable.is_empty());
+    assert!(applicable.iter().all(|m| m.applies_below == "4.0.0"));
 }
 
 // ── what's new ───────────────────────────────────────────────────────────
@@ -575,8 +585,8 @@ fn notice_only_upgrade_leaves_no_config_backup() {
         "a notice-only upgrade must not write a config backup"
     );
     assert!(
-        MIGRATIONS.iter().all(|m| m.notice),
-        "this test is only meaningful while every registered migration is a notice"
+        MIGRATIONS.iter().all(|m| m.writes != Writes::Config),
+        "this test is only meaningful while no registered migration rewrites gateway.yaml"
     );
 }
 

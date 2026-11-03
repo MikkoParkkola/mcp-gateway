@@ -27,7 +27,11 @@ async fn the_upgrade_removes_a_nameless_grant_row_from_the_configured_grants() {
         .find(|m| m.description.contains("names no one"))
         .expect("registered");
     assert_eq!(migration.applies_below, "4.0.0");
-    assert!(!migration.notice, "it edits a file");
+    assert_eq!(
+        migration.writes,
+        super::Writes::OwnFile,
+        "it backs up its own file"
+    );
     (migration.apply)(dir.path()).unwrap();
 
     let read = mcp_gateway::identity_grants::read_identity_grants_file(&grants)

@@ -56,11 +56,28 @@ pub struct Migration {
     pub description: &'static str,
     /// Apply the migration; receives the gateway data directory (`~/.mcp-gateway/`).
     pub apply: fn(&Path) -> std::io::Result<()>,
-    /// `true` when the migration only tells the operator something and leaves
-    /// every file alone. A notice earns no config backup. It is addressed to a
-    /// person and goes to stderr, so `--quiet` does NOT silence it: the startup
-    /// path always runs quiet, and suppressing notices there delivered none.
-    pub notice: bool,
+    /// What it writes, which decides whether `gateway.yaml` is backed up first.
+    pub writes: Writes,
+}
+
+/// What a migration writes. Only a migration that rewrites `gateway.yaml`
+/// earns a config backup: any other would leave an unexplained
+/// `gateway.yaml.bak.<version>` behind for a file nothing touched.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Writes {
+    /// A notice: it tells the operator something and leaves every file alone.
+    /// It is addressed to a person and goes to stderr, so `--quiet` does NOT
+    /// silence it: the startup path always runs quiet, and suppressing notices
+    /// there delivered none.
+    Nothing,
+    /// Rewrites `gateway.yaml`, which is copied to `gateway.yaml.bak.<old>` first.
+    #[expect(
+        dead_code,
+        reason = "no registered migration rewrites gateway.yaml yet"
+    )]
+    Config,
+    /// Rewrites a file of its own and backs that file up itself.
+    OwnFile,
 }
 
 /// All registered migrations in ascending `applies_below` order.
@@ -82,19 +99,19 @@ static MIGRATIONS: &[Migration] = &[
         applies_below: "3.0.0",
         description: "v3.0.0: informational per-user OAuth isolation notice (config unchanged)",
         apply: migrate_3_0_0_multi_user_notice,
-        notice: true,
+        writes: Writes::Nothing,
     },
     Migration {
         applies_below: "4.0.0",
         description: "v4.0.0: informational breaking-change notice (config unchanged)",
         apply: migrate_4_0_0_release_notice,
-        notice: true,
+        writes: Writes::Nothing,
     },
     Migration {
         applies_below: "4.0.0",
         description: "v4.0.0: remove identity-grant rows whose subject or owner names no one",
         apply: migrate_4_0_0_nameless_grants,
-        notice: false,
+        writes: Writes::OwnFile,
     },
 ];
 
@@ -426,10 +443,7 @@ impl UpgradeContext<'_> {
         let migrations = self.applicable_migrations();
         let count = migrations.len();
 
-        // A notice writes nothing, so backing the config up would leave an
-        // unexplained gateway.yaml.bak.<version> behind for an upgrade that
-        // touched only the version stamp.
-        if !self.dry_run && migrations.iter().any(|m| !m.notice) {
+        if !self.dry_run && migrations.iter().any(|m| m.writes == Writes::Config) {
             backup_config(self.data_dir, &self.old_ver.to_string())?;
         }
 
