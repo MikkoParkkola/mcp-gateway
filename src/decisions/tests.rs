@@ -641,8 +641,20 @@ fn a_record_naming_no_one_reads_back_as_no_request() {
         };
         fields
     };
-    assert!(super::denial_from_record(&record("https://idp.example", "alice")).is_some());
-    for (authority, subject) in [("", ""), ("https://idp.example", ""), ("", "alice")] {
+    // Golden: the projected subject is the recorded pair, exactly.
+    let read = super::denial_from_record(&record("https://idp.example", " alice "))
+        .and_then(|event| event.subject)
+        .expect("names someone");
+    assert_eq!(
+        serde_json::to_string(&read).unwrap(),
+        r#"{"authority":"https://idp.example","subject":" alice "}"#
+    );
+    for (authority, subject) in [
+        ("", ""),
+        ("https://idp.example", ""),
+        ("", "alice"),
+        ("https://idp.example", "  "),
+    ] {
         assert!(
             super::denial_from_record(&record(authority, subject)).is_none(),
             "({authority:?}, {subject:?}) names no one"

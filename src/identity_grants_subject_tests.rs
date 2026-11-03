@@ -121,3 +121,77 @@ fn blank_names_no_one_and_other_values_stay_verbatim() {
     let kept = GrantSubject::new("api_key", " admin ", None).expect("names someone");
     assert_eq!(kept.subject(), " admin ");
 }
+
+/// Golden: the whole refusal for a grants file whose only defect is a row
+/// naming no one.
+#[tokio::test]
+async fn the_nameless_file_refusal_reads_exactly() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("grants.yaml");
+    crate::gateway::test_helpers::write_owner_only(&path, grants_yaml("", "alice")).unwrap();
+    let error = super::read_identity_grants_file(&path).await.unwrap_err();
+    assert_eq!(
+        error,
+        format!(
+            "identity grants file {} names no one in 1 row(s): grant 'g-empty' (empty subject). \
+             Such a row grants nothing; `gateway upgrade` removes it, or delete it by hand.",
+            path.display()
+        )
+    );
+}
+
+/// Golden: a file with a bare agent id and a row naming no one names the
+/// bare row, then says what still fails once it is set aside.
+#[tokio::test]
+async fn a_nameless_row_behind_a_bare_one_is_the_remainder_error() {
+    let row = |id: &str, subject: &str, agent: &str| {
+        format!(
+            r#"{{"grant_id":"{id}","subject":{{"authority":"api_key","subject":"{subject}"}},"agent":{agent},"capability":"calendar_read","scope":"execute","provenance":"p","reason":"r"}}"#
+        )
+    };
+    let body = format!(
+        r#"{{"schema_version":"identity_grants.v1","grants":[{},{}]}}"#,
+        row("g-bare", "alice", r#"{"exact":"agent-1"}"#),
+        row("g-empty", "", r#""any""#),
+    );
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("grants.json");
+    crate::gateway::test_helpers::write_owner_only(&path, body).unwrap();
+    let error = super::read_identity_grants_file(&path).await.unwrap_err();
+    let head = format!(
+        "identity grants file {} keys 1 agent binding(s) by a bare id, which does not say \
+         which proof source it came from: grant 'g-bare' (exact agent-1).",
+        path.display()
+    );
+    assert!(error.starts_with(&head), "{error}");
+    assert!(
+        error.ends_with(
+            "The gateway will not choose. Apart from those rows the file also fails to parse: \
+             the identity's subject is empty"
+        ),
+        "{error}"
+    );
+}
+
+/// A capability whose owner names no one is refused, saying which part is
+/// empty; the loader names the file beside this error.
+#[test]
+fn a_capability_owner_naming_no_one_is_refused() {
+    for (owner, part) in [
+        ("{authority: api_key, subject: \"\"}", "subject"),
+        ("{authority: \" \", subject: alice}", "authority"),
+    ] {
+        let yaml = format!(
+            "name: owned\ndescription: d\nmetadata:\n  exposure: personal\n  identity_owner: {owner}\n\
+             cache:\n  ttl: 60\n  strategy: memory\nproviders:\n  primary:\n    service: rest\n    config:\n      base_url: https://api.invalid\n      path: /x\n"
+        );
+        let error = crate::capability::parse_capability(&yaml)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("Failed to parse capability YAML")
+                && error.contains(&format!("the identity's {part} is empty")),
+            "{owner}: {error}"
+        );
+    }
+}

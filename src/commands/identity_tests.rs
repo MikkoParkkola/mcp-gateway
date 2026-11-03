@@ -319,3 +319,19 @@ fn a_cut_identity_cell_fits_its_column() {
         "abcdefghijklmnopqrstuvwxy...|abcdefghijklmnopqrstu...|short           |ééééééééééééééééééééé...|"
     );
 }
+
+/// Golden: an empty pair on the command line is refused naming the flag.
+#[test]
+fn an_empty_subject_spec_is_refused_naming_the_flag() {
+    for (spec, field, said) in [
+        ("api_key:", "subject", "subject cannot be empty"),
+        ("api_key:   ", "owner", "owner cannot be empty"),
+        (":alice", "subject", "subject cannot be empty"),
+    ] {
+        assert_eq!(
+            parse_subject_spec(spec, None, field).unwrap_err(),
+            said,
+            "{spec}"
+        );
+    }
+}
