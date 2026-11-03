@@ -71,10 +71,6 @@ pub enum Writes {
     /// there delivered none.
     Nothing,
     /// Rewrites `gateway.yaml`, which is copied to `gateway.yaml.bak.<old>` first.
-    #[expect(
-        dead_code,
-        reason = "no registered migration rewrites gateway.yaml yet"
-    )]
     Config,
     /// Rewrites a file of its own and backs that file up itself.
     OwnFile,
