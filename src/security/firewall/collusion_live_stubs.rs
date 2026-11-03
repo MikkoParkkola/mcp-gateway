@@ -18,23 +18,40 @@ impl CollusionDetector {
         text: &str,
         caller: &str,
     ) -> Vec<(std::sync::Arc<str>, bool)> {
-        let principal = self.digest(caller);
-        let state = self.state.lock();
         let mut pairs: Vec<_> = self
-            .fingerprints(text)
-            .iter()
-            .filter_map(|fp| match state.entries.get(fp) {
-                Some(Entry {
-                    holders: Holders::Tracked(t),
-                    ..
-                }) => Some(t.pairs_of(principal)),
-                _ => None,
-            })
+            .overflow_pairs_by_fingerprint(text, caller)
+            .into_iter()
             .flatten()
             .collect();
         pairs.sort_unstable();
         pairs.dedup();
         pairs
+    }
+
+    /// `caller`'s overflow pairs on each fingerprint of `text`, in
+    /// fingerprint order, each sorted; empty for a fingerprint without a
+    /// tracked entry (tests only).
+    pub(crate) fn overflow_pairs_by_fingerprint(
+        &self,
+        text: &str,
+        caller: &str,
+    ) -> Vec<Vec<(std::sync::Arc<str>, bool)>> {
+        let principal = self.digest(caller);
+        let state = self.state.lock();
+        self.fingerprints(text)
+            .iter()
+            .map(|fp| match state.entries.get(fp) {
+                Some(Entry {
+                    holders: Holders::Tracked(t),
+                    ..
+                }) => {
+                    let mut pairs = t.pairs_of(principal);
+                    pairs.sort_unstable();
+                    pairs
+                }
+                _ => Vec::new(),
+            })
+            .collect()
     }
 
     /// Whether `caller`'s overflow for a fingerprint of `text` is marked

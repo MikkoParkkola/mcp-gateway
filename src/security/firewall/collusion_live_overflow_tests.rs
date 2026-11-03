@@ -57,6 +57,18 @@ fn bob(rig: &Rig, g: &Generation, text: &str, at: Instant) -> Option<&'static st
         .map(|f| f.reason.label())
 }
 
+/// `caller`'s pairs on each fingerprint of `text`, from `d`.
+fn pairs_by_fp(d: &CollusionDetector, text: &str, caller: &str) -> Vec<Vec<(String, bool)>> {
+    d.overflow_pairs_by_fingerprint(text, caller)
+        .into_iter()
+        .map(|fp| {
+            fp.into_iter()
+                .map(|(s, inferred)| (s.to_string(), inferred))
+                .collect()
+        })
+        .collect()
+}
+
 fn pairs(rig: &Rig, text: &str, caller: &str) -> Vec<(String, bool)> {
     detector(rig)
         .overflow_pairs_of(text, caller)
@@ -297,7 +309,14 @@ fn pair_charges() -> (usize, usize) {
     d.record_delivery_under(g.collusion_view(), ("ov:00", false), "x", &first, now);
     let mid = d.overflow_bytes().1;
     d.record_delivery_under(g.collusion_view(), ("ov:00", false), "x", &second, now);
-    (mid - before, d.overflow_bytes().1 - mid)
+    let (c_new, c_fp) = (mid - before, d.overflow_bytes().1 - mid);
+    // The second pair shares the interned name: it is charged once.
+    assert_eq!(
+        c_new,
+        c_fp + "ov:00".len(),
+        "a shared source name is charged twice"
+    );
+    (c_new, c_fp)
 }
 
 /// The budget run: a total of `K` first-pair charges, callers `c0..` each
@@ -325,6 +344,18 @@ fn run_budget(text_of: fn(u64) -> String, per_caller: impl Fn(usize, usize) -> u
         let src = format!("ov:0{i}");
         d.record_delivery_under(g0.collusion_view(), (&src, false), &caller, &text, now);
     }
+    // Before any reload: the first caller's pair is held on every fingerprint
+    // of its text, and the total stays within the budget.
+    let kept = vec![("ov:00".to_string(), false)];
+    let fps = pairs_by_fp(&d, &text_of(1), "c0");
+    assert!(
+        !fps.is_empty() && fps.iter().all(|fp| *fp == kept),
+        "P8.8d: the first caller's pair was not kept on every fingerprint: {fps:?}"
+    );
+    assert!(
+        d.overflow_bytes().1 <= K * c_new,
+        "P8.8d: over the total budget"
+    );
     rig.reload(|c| c.security.firewall.collusion.sources = vec!["fill:*".to_string()]);
     let g1 = rig.generation();
     let first = d.check_egress_under(g1.collusion_view(), "bob", EGRESS, &text_of(1), now);
@@ -492,10 +523,11 @@ fn o5_2a_retention_uses_the_recording_generations_lists() {
 fn o5_2a_counts_per_fingerprint_not_per_delivery() {
     let text = two_fp(0);
     let (rig, counted) = retention_under_the_recording_lists(&text);
+    let pair = vec![("src:p".to_string(), false)];
     assert_eq!(
-        pairs(&rig, &text, "carol"),
-        [("src:p".to_string(), false)],
-        "O5.2a (two fingerprints): carol's overflow pair is not (src:p, non-inferred)"
+        pairs_by_fp(detector(&rig), &text, "carol"),
+        [pair.clone(), pair],
+        "O5.2a (two fingerprints): carol's overflow pair is not (src:p, non-inferred) on each"
     );
     // `capped` is the exact per-detector total of drops and overflows: one
     // of each per fingerprint; the metric's `bound` label separates them.
