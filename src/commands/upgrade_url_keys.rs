@@ -34,16 +34,17 @@ pub fn run_upgrade_with_config(
         return ExitCode::FAILURE;
     }
     let mut blocking = 0;
-    if let Some(path) = super::super::doctor::resolve_config_path(config).filter(|p| p.exists()) {
-        let mode = if dry_run {
-            RewriteMode::DryRun
-        } else {
-            RewriteMode::Apply
-        };
-        match rewrite_url_aliases_in(&path, mode) {
+    let found = super::super::doctor::resolve_config_path(config).filter(|p| p.exists());
+    let mode = if dry_run {
+        RewriteMode::DryRun
+    } else {
+        RewriteMode::Apply
+    };
+    if let Some(path) = found.as_deref() {
+        match rewrite_url_aliases_in(path, mode) {
             Ok(rewrite) => {
                 if !quiet {
-                    for line in url_report(&path, &rewrite, mode) {
+                    for line in url_report(path, &rewrite, mode) {
                         println!("{line}");
                     }
                 }
@@ -55,10 +56,18 @@ pub fn run_upgrade_with_config(
             }
         }
     }
+    let cleanup = match mode {
+        RewriteMode::Apply => mcp_gateway::cli_support::GrantCleanup::Apply,
+        RewriteMode::DryRun => mcp_gateway::cli_support::GrantCleanup::DryRun,
+    };
+    let grants_clean = super::grant_rows::clean_grant_rows(found.as_deref(), cleanup);
     // The stamp and data migrations run either way, so a rerun after the hand
     // fix has nothing left to do; the exit status still says the config will
     // not load (MIK-8044).
     let code = super::run_upgrade_command(dry_run, quiet, data_dir);
+    if !grants_clean {
+        return ExitCode::FAILURE;
+    }
     if blocking == 0 {
         return code;
     }

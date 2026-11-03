@@ -481,11 +481,22 @@ pub fn describe_skipped(outcomes: &[Outcome]) -> String {
 #[path = "cli_support_tests.rs"]
 mod tests;
 
+/// Whether [`remove_nameless_grant_rows`] writes, for the binary's `gateway
+/// upgrade` command only.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GrantCleanup {
+    /// Back the file up and remove the rows.
+    Apply,
+    /// Report the rows it would remove; write nothing.
+    DryRun,
+}
+
 /// For the binary's `gateway upgrade` command only. Removes every row of the
 /// identity-grants file at `path` whose subject or owner names no one, after
 /// backing the file up to `<path>.bak.pre-4.0.0`; the rewrite is atomic, and
 /// a file with no such row (or no file) is left untouched. Returns each
-/// removed row as `(grant id, field)`, never any other content of the row.
+/// removed row (or, in a dry run, each row it would remove) as
+/// `(grant id, field)`, never any other content of the row.
 ///
 /// # Errors
 ///
@@ -494,6 +505,7 @@ mod tests;
 /// a row to remove shares its id with a row that stays.
 pub fn remove_nameless_grant_rows(
     path: &std::path::Path,
+    mode: GrantCleanup,
 ) -> std::io::Result<Vec<(String, String)>> {
     // As a CLI grant change does: the real file (a symlinked path stays a
     // link), under the journal lock, so a concurrent change is not lost.
@@ -501,17 +513,22 @@ pub fn remove_nameless_grant_rows(
     if !path.exists() {
         return Ok(Vec::new());
     }
-    let _lock = crate::fs_lock::ExclusiveFileLock::acquire(
-        &crate::identity_grants::journal::lock_path(&path),
-    )?;
+    // A dry run writes nothing, not even the lock file.
+    let _lock = match mode {
+        GrantCleanup::Apply => Some(crate::fs_lock::ExclusiveFileLock::acquire(
+            &crate::identity_grants::journal::lock_path(&path),
+        )?),
+        GrantCleanup::DryRun => None,
+    };
     let mut backup = path.as_os_str().to_owned();
     backup.push(".bak.pre-4.0.0");
     let removed = crate::identity_grants::nameless_upgrade::remove_nameless_rows(
         &path,
         std::path::Path::new(&backup),
-        |target, text| {
-            crate::config_persistence::write_text_atomic(target, text)
-                .map_err(std::io::Error::other)
+        |target, text| match mode {
+            GrantCleanup::Apply => crate::config_persistence::write_text_atomic(target, text)
+                .map_err(std::io::Error::other),
+            GrantCleanup::DryRun => Ok(()),
         },
     )?;
     Ok(removed
