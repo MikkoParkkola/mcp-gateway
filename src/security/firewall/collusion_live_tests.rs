@@ -508,6 +508,7 @@ fn o5_2b_a_replay_re_decides_retention_under_the_current_lists() {
     let alice = super::RelayCaller::Keyed("alice");
     let detector = rig.firewall.collusion_detector().expect("block runs one");
     let before = detector.capped();
+    let own_dropped = detector.bound_for_test("record_dropped");
     #[cfg(feature = "metrics")]
     let dropped = super::collusion_live_rig::bound_count("record_dropped");
     rig.firewall
@@ -531,6 +532,13 @@ fn o5_2b_a_replay_re_decides_retention_under_the_current_lists() {
         detector.capped() - before,
         1,
         "O5.2b: one record not counted"
+    );
+    // This detector's own split: the process-wide metric below can move
+    // under another test's drop.
+    assert_eq!(
+        detector.bound_for_test("record_dropped") - own_dropped,
+        1,
+        "O5.2b: the replayed receipt was not this detector's one record_dropped"
     );
     #[cfg(feature = "metrics")]
     assert!(

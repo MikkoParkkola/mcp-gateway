@@ -83,6 +83,11 @@ impl CollusionDetector {
         (most, state.budget.total)
     }
 
+    /// Records capped under `bound` on this detector (tests only).
+    pub(crate) fn bound_for_test(&self, bound: &str) -> u64 {
+        self.bounds.lock().get(bound).copied().unwrap_or(0)
+    }
+
     /// Whether the intern table still holds `source` (tests only).
     pub(crate) fn interns_for_test(&self, source: &str) -> bool {
         self.state.lock().interned.holds(source)

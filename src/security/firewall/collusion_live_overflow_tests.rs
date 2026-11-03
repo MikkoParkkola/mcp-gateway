@@ -468,8 +468,9 @@ fn o5_3_the_last_reference_frees_the_interned_source() {
 /// Retention at the cap uses the lists of the generation the record is made
 /// under: lists change before recording; under cap pressure the source listed
 /// now overflows and the one no longer listed is dropped. Returns what the
-/// detector counted for the two records (`fingerprints` each).
-fn retention_under_the_recording_lists(text: &str) -> (Rig, u64) {
+/// detector counted for the two records (`fingerprints` each), and of those
+/// the records this detector counted dropped and overflowed.
+fn retention_under_the_recording_lists(text: &str) -> (Rig, u64, (u64, u64)) {
     let (rig, now) = (rig(&["fill:*", "src:s"]), Instant::now());
     rig.reload(|c| {
         c.security.firewall.collusion.sources = vec!["fill:*".to_string(), "src:p".to_string()];
@@ -477,6 +478,8 @@ fn retention_under_the_recording_lists(text: &str) -> (Rig, u64) {
     let g1 = rig.generation();
     fill_cap(&rig, &g1, "carol", text, now);
     let before = detector(&rig).capped();
+    let own = |bound| detector(&rig).bound_for_test(bound);
+    let own_before = (own("record_dropped"), own("record_overflow"));
     #[cfg(feature = "metrics")]
     let (dropped, overflowed) = (
         bound_count("record_dropped"),
@@ -485,6 +488,10 @@ fn retention_under_the_recording_lists(text: &str) -> (Rig, u64) {
     record(&rig, &g1, ("src:s", "carol"), text, now);
     record(&rig, &g1, ("src:p", "carol"), text, now);
     let counted = detector(&rig).capped() - before;
+    let split = (
+        own("record_dropped") - own_before.0,
+        own("record_overflow") - own_before.1,
+    );
     #[cfg(feature = "metrics")]
     {
         assert!(
@@ -496,7 +503,7 @@ fn retention_under_the_recording_lists(text: &str) -> (Rig, u64) {
             "O5.2a: the overflowed record was not counted as record_overflow"
         );
     }
-    (rig, counted)
+    (rig, counted, split)
 }
 
 /// O5.2a, one fingerprint: the listed source overflows as a pair, the other
@@ -504,7 +511,12 @@ fn retention_under_the_recording_lists(text: &str) -> (Rig, u64) {
 #[test]
 fn o5_2a_retention_uses_the_recording_generations_lists() {
     let text = one_fp(0);
-    let (rig, counted) = retention_under_the_recording_lists(&text);
+    let (rig, counted, split) = retention_under_the_recording_lists(&text);
+    assert_eq!(
+        split,
+        (1, 1),
+        "O5.2a: not one record_dropped and one record_overflow"
+    );
     assert_eq!(
         pairs(&rig, &text, "carol"),
         [("src:p".to_string(), false)],
@@ -522,7 +534,12 @@ fn o5_2a_retention_uses_the_recording_generations_lists() {
 #[test]
 fn o5_2a_counts_per_fingerprint_not_per_delivery() {
     let text = two_fp(0);
-    let (rig, counted) = retention_under_the_recording_lists(&text);
+    let (rig, counted, split) = retention_under_the_recording_lists(&text);
+    assert_eq!(
+        split,
+        (2, 2),
+        "O5.2a: not one record_dropped and one record_overflow per fingerprint"
+    );
     let pair = vec![("src:p".to_string(), false)];
     assert_eq!(
         pairs_by_fp(detector(&rig), &text, "carol"),

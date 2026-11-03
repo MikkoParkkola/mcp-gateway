@@ -236,6 +236,10 @@ pub(crate) struct CollusionDetector {
     /// Records that did not fit a caller's cap or the pool: plain ones
     /// dropped, sensitive ones kept as overflow (`MIK-8123`).
     capped: AtomicU64,
+    /// `capped` by bound label, on this detector alone: the metric is
+    /// process-wide, shared with every other test (tests only).
+    #[cfg(test)]
+    bounds: Mutex<std::collections::HashMap<&'static str, u64>>,
     source_truncated: AtomicU64,
     /// Pool records allowed across every fingerprint.
     pool_capacity: usize,
@@ -298,6 +302,8 @@ impl CollusionDetector {
             state: Mutex::new(State::default()),
             evicted: AtomicU64::new(0),
             capped: AtomicU64::new(0),
+            #[cfg(test)]
+            bounds: Mutex::default(),
             source_truncated: AtomicU64::new(0),
             pool_capacity: holders::EXTRA_RECORD_POOL,
             views: budget::ViewLimits::new(),
@@ -511,6 +517,10 @@ impl CollusionDetector {
         };
         if let Some(bound) = bound {
             self.capped.fetch_add(1, Ordering::Relaxed);
+            #[cfg(test)]
+            {
+                *self.bounds.lock().entry(bound).or_default() += 1;
+            }
             telemetry_metrics::counter!(CAPACITY_METRIC, "bound" => bound).increment(1);
         }
         let holders = if tracked.callers() >= self.params.common_principals {
