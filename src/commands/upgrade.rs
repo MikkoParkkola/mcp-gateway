@@ -56,24 +56,11 @@ pub struct Migration {
     pub description: &'static str,
     /// Apply the migration; receives the gateway data directory (`~/.mcp-gateway/`).
     pub apply: fn(&Path) -> std::io::Result<()>,
-    /// What it writes, which decides whether `gateway.yaml` is backed up first.
-    pub writes: Writes,
-}
-
-/// What a migration writes. Only a migration that rewrites `gateway.yaml`
-/// earns a config backup: any other would leave an unexplained
-/// `gateway.yaml.bak.<version>` behind for a file nothing touched.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Writes {
-    /// A notice: it tells the operator something and leaves every file alone.
-    /// It is addressed to a person and goes to stderr, so `--quiet` does NOT
-    /// silence it: the startup path always runs quiet, and suppressing notices
-    /// there delivered none.
-    Nothing,
-    /// Rewrites `gateway.yaml`, which is copied to `gateway.yaml.bak.<old>` first.
-    Config,
-    /// Rewrites a file of its own and backs that file up itself.
-    OwnFile,
+    /// `true` when the migration only tells the operator something and leaves
+    /// every file alone. A notice earns no config backup. It is addressed to a
+    /// person and goes to stderr, so `--quiet` does NOT silence it: the startup
+    /// path always runs quiet, and suppressing notices there delivered none.
+    pub notice: bool,
 }
 
 /// All registered migrations in ascending `applies_below` order.
@@ -95,55 +82,15 @@ static MIGRATIONS: &[Migration] = &[
         applies_below: "3.0.0",
         description: "v3.0.0: informational per-user OAuth isolation notice (config unchanged)",
         apply: migrate_3_0_0_multi_user_notice,
-        writes: Writes::Nothing,
+        notice: true,
     },
     Migration {
         applies_below: "4.0.0",
         description: "v4.0.0: informational breaking-change notice (config unchanged)",
         apply: migrate_4_0_0_release_notice,
-        writes: Writes::Nothing,
-    },
-    Migration {
-        applies_below: "4.0.0",
-        description: "v4.0.0: remove identity-grant rows whose subject or owner names no one",
-        apply: migrate_4_0_0_nameless_grants,
-        writes: Writes::OwnFile,
+        notice: true,
     },
 ];
-
-// ── 4.0.0 migration: grant rows that name no one ──────────────────────────────
-// 4.0.0 refuses a grants file whose subject or owner has an empty authority or
-// subject: such a row matches no caller, so it grants nothing. Removing it
-// changes no access decision, and the file loads again.
-
-/// The default grants path, as `IdentityGrantsConfig::default()` has it.
-const DEFAULT_GRANTS_PATH: &str = "~/.mcp-gateway/identity-grants.yaml";
-
-/// Remove the rows naming no one from the configured grants file, backed up
-/// first, reporting each by rule id and field. A file with none is untouched.
-fn migrate_4_0_0_nameless_grants(data_dir: &Path) -> std::io::Result<()> {
-    let configured = std::fs::read_to_string(data_dir.join("gateway.yaml"))
-        .ok()
-        .and_then(|text| crate::yaml::from_str::<crate::yaml::Value>(&text).ok())
-        .and_then(|yaml| {
-            yaml.get("security")?
-                .get("identity_grants")?
-                .get("path")?
-                .as_str()
-                .map(str::to_owned)
-        });
-    let path = super::identity::expand_home_path(Path::new(
-        configured.as_deref().unwrap_or(DEFAULT_GRANTS_PATH),
-    ));
-    let removed = mcp_gateway::cli_support::remove_nameless_grant_rows(&path)?;
-    for (grant_id, field) in &removed {
-        eprintln!(
-            "migration v4.0.0: removed grant '{grant_id}' from {}: its {field} names no one, so it granted nothing",
-            path.display(),
-        );
-    }
-    Ok(())
-}
 
 // ── 3.0.0 migration: multi-user-default posture notice ─────────────────────────
 //
@@ -428,7 +375,10 @@ impl UpgradeContext<'_> {
         let migrations = self.applicable_migrations();
         let count = migrations.len();
 
-        if !self.dry_run && migrations.iter().any(|m| m.writes == Writes::Config) {
+        // A notice writes nothing, so backing the config up would leave an
+        // unexplained gateway.yaml.bak.<version> behind for an upgrade that
+        // touched only the version stamp.
+        if !self.dry_run && migrations.iter().any(|m| !m.notice) {
             backup_config(self.data_dir, &self.old_ver.to_string())?;
         }
 
@@ -626,9 +576,6 @@ mod upgrade_notice_tests;
 #[path = "upgrade_webhook_notice_tests.rs"]
 mod upgrade_webhook_notice_tests;
 
-#[cfg(test)]
-#[path = "upgrade_nameless_grants_tests.rs"]
-mod nameless_grants_tests;
 #[cfg(test)]
 #[path = "upgrade_prerelease_tests.rs"]
 mod prerelease_tests;
