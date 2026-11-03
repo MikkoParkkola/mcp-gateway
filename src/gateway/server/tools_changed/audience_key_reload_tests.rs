@@ -273,3 +273,95 @@ async fn a_key_that_lost_a_backend_cannot_call_its_tools() {
         "the surfaced read still reaches alpha: {direct}"
     );
 }
+
+/// Reload through the real file path: write the published config with
+/// `k-std` edited (the security flags off, as the fixture runs) to a
+/// `gateway.yaml` and reload it through a `ReloadContext`, as the file
+/// watcher and the reload meta-tool do. Asserts the published key table
+/// changed.
+async fn file_reload_k_std(w: &World, edit: impl Fn(&mut crate::config::ApiKeyConfig) -> bool) {
+    let live = &w.state.live_config;
+    let table = |live: &crate::config_reload::LiveConfig| -> Vec<(String, Vec<String>)> {
+        live.generation()
+            .auth()
+            .api_keys()
+            .iter()
+            .map(|k| (k.name.clone(), k.backends.clone()))
+            .collect()
+    };
+    let before = table(live);
+    let mut auth = live.get().auth.clone();
+    assert!(
+        auth.api_keys.iter().any(|k| k.name == "k-std"),
+        "premise: the running config holds k-std"
+    );
+    auth.api_keys
+        .retain_mut(|key| key.name != "k-std" || edit(key));
+    let doc = serde_json::json!({
+        "security": { "sanitize_input": false, "ssrf_protection": false },
+        "auth": auth,
+    });
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("gateway.yaml");
+    crate::gateway::test_helpers::write_owner_only(&path, doc.to_string()).expect("write");
+    crate::config_reload::ReloadContext::new(
+        path,
+        std::sync::Arc::clone(live),
+        std::sync::Arc::clone(&w.state.backends),
+        crate::config::FailsafeConfig::default(),
+        std::time::Duration::from_secs(60),
+    )
+    .expect("the registry pairs with the config")
+    .reload_outcome()
+    .await
+    .expect("the key edit applies");
+    assert_ne!(before, table(live), "the file reload changed the key table");
+}
+
+/// The deciding row, through the real file reload: a key whose grant for
+/// `alpha` the reload removes lists none of `alpha`'s tools and cannot call
+/// them; a key that never had `alpha` is refused the same call.
+#[cfg(feature = "spec-preview")]
+#[tokio::test]
+async fn file_reload_a_key_that_lost_a_backend_neither_lists_nor_calls_it() {
+    let w = World::start().await;
+    w.alpha_answers_calls(vec![tool("read", "r"), tool("write", "w")]);
+    w.store_shared("alpha", vec![tool("read", "r"), tool("write", "w")]);
+    w.settle().await;
+    let invoke = serde_json::json!({
+        "name": "gateway_invoke",
+        "arguments": { "server": "alpha", "tool": "read", "arguments": {} }
+    });
+    let _narrow = w.legacy_owned("narrow-call", "k-narrow").await;
+    let refused = w
+        .post_in("k-narrow", "narrow-call", "tools/call", invoke.clone())
+        .await;
+    assert!(
+        !succeeded(&refused),
+        "control: a key without alpha is refused: {refused}"
+    );
+    let _std = w.legacy_owned("std-call", "k-std").await;
+    let before = w
+        .post_in("k-std", "std-call", "tools/call", invoke.clone())
+        .await;
+    assert!(
+        succeeded(&before),
+        "premise: k-std may call alpha: {before}"
+    );
+
+    file_reload_k_std(&w, |key| {
+        key.backends = vec!["beta".to_string()];
+        true
+    })
+    .await;
+    let names = listed(&w, "k-std", "after-file").await;
+    assert!(
+        !names.iter().any(|n| n == "read" || n == "write"),
+        "after a file reload k-std still lists alpha's tools: {names:?}"
+    );
+    let after = w.post_in("k-std", "std-call", "tools/call", invoke).await;
+    assert!(
+        !succeeded(&after),
+        "after a file reload k-std still calls alpha: {after}"
+    );
+}

@@ -88,8 +88,13 @@ async fn fixture_with(
     ));
     let gateway_key_pair = Arc::new(GatewayKeyPair::generate().expect("gateway key generation"));
 
+    // The running config carries the auth it was resolved from, as a started
+    // gateway's does, so a reload of an edited key list is judged against it.
     let live_config = Arc::new(crate::config_reload::LiveConfig::with_auth(
-        crate::config_reload::flags_off(crate::config::Config::default()),
+        crate::config_reload::flags_off(crate::config::Config {
+            auth: auth.clone(),
+            ..crate::config::Config::default()
+        }),
         Arc::clone(&auth_config),
     ));
     let subscriptions = test_subscriptions(&live_config, key_server.clone(), &agent_auth);
