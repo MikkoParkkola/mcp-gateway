@@ -123,9 +123,11 @@ def self_test() -> int:
     env = {"GITHUB_REPOSITORY": "o/r", "GITHUB_RUN_ID": "1", "GITHUB_RUN_ATTEMPT": "1"}
     saved_env = {k: os.environ.get(k) for k in env}
     real_run = subprocess.run
+    bounds: list = []
 
     def stubbed(behaviour) -> tuple[int, str]:
         def fake(*args, **kwargs):
+            bounds.append(kwargs.get("timeout"))
             if behaviour == "timeout":
                 raise subprocess.TimeoutExpired(args[0], kwargs.get("timeout"))
             if behaviour == "nonzero":
@@ -149,6 +151,8 @@ def self_test() -> int:
         ):
             rc, printed = stubbed(behaviour)
             assert rc == 0 and says in printed, (behaviour, rc, printed)
+        # Every gh read is bounded, so a hung gh cannot hold the check.
+        assert bounds and all(b for b in bounds), f"gh called without a timeout: {bounds}"
     finally:
         for k, v in saved_env.items():
             if v is None:
@@ -159,7 +163,8 @@ def self_test() -> int:
     blocked = ("import sys, runpy; sys.modules['yaml'] = None; sys.argv = [sys.argv[1], 'macos-shards']; "
                "runpy.run_path(sys.argv[0], run_name='__main__')")
     got = real_run([sys.executable, "-I", "-c", blocked, __file__], capture_output=True, text=True, timeout=60)
-    assert got.returncode == 0 and "could not run" in got.stdout, (got.returncode, got.stdout, got.stderr[-300:])
+    assert got.returncode == 0 and "could not run" in got.stdout and "ModuleNotFoundError" in got.stdout, (
+        got.returncode, got.stdout, got.stderr[-300:])
     print("job_time_watch self-test: ok")
     return 0
 
