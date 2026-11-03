@@ -221,7 +221,8 @@ fn other_scalars_match_literals_as_the_oracle_does() {
 
 /// A value that reads as a JSON number is matched by the number rules alone,
 /// with no literal check: a result equal to it by exact JSON equality is
-/// still redacted, in each form, past u64 included.
+/// still redacted, in each form, past u64, below i64::MIN and underflowing
+/// to zero included.
 #[test]
 fn a_literal_number_value_is_redacted_by_the_number_rules() {
     for (needle, scalar) in [
@@ -229,13 +230,28 @@ fn a_literal_number_value_is_redacted_by_the_number_rules() {
         ("-5", "-5"),
         ("5.0", "5.0"),
         ("-0.0", "-0.0"),
+        ("-0", "-0"),
         ("18446744073709551616", "18446744073709551616"),
+        // Below i64::MIN: both sides read it as a float.
+        ("-9223372036854775809", "-9223372036854775809"),
+        // Underflows to 0.0 on both sides.
+        ("1e-400", "1e-400"),
+        ("1e2", "1e2"),
+        ("-18446744073709551616", "-18446744073709551616"),
+        ("-9223372036854775808", "-9223372036854775808"),
+        ("18446744073709551615", "18446744073709551615"),
+        (" 5\n", "5"),
     ] {
         assert_eq!(
             verdicts(&[needle], scalar),
             (true, true),
             "{needle:?} vs {scalar}"
         );
+    }
+    // Across forms the scrub agrees with the oracle, whatever it answers.
+    for (needle, scalar) in [("-0", "0"), ("1e-400", "0.0"), ("1e-400", "-0.0")] {
+        let (actual, expected) = verdicts(&[needle], scalar);
+        assert_eq!(actual, expected, "{needle:?} vs {scalar}");
     }
 }
 
