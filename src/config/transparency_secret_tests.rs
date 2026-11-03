@@ -326,26 +326,3 @@ fn an_all_zero_key_is_refused() {
         "not the weak-key refusal: {text}"
     );
 }
-
-/// Startup's half of the audit posture: auth on with the audit log off is
-/// refused by the loader serve starts from (`Config::load_evaluated`, through
-/// `load_for_serve`), so no running gateway has auth on and no log.
-#[test]
-fn auth_on_with_the_audit_log_off_is_refused_at_load() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let path = dir.path().join("gateway.yaml");
-    let digest = crate::hashing::sha256_hex(b"zq-startup-pin-key");
-    write_0600(
-        &path,
-        &format!(
-            "auth:\n  enabled: true\n  api_keys:\n    - name: ci\n      key_sha256: \"sha256:{digest}\"\nsecurity:\n  transparency_log:\n    enabled: false\n"
-        ),
-    );
-    let refused = Config::load_evaluated(Some(&path))
-        .expect_err("auth on without an audit log is refused at load")
-        .to_string();
-    assert!(
-        refused.contains("security.transparency_log must be enabled"),
-        "the refusal names the audit log: {refused}"
-    );
-}

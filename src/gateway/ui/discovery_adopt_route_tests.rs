@@ -509,10 +509,17 @@ async fn with_auth_on_and_no_audit_log_an_adopt_is_refused() {
 
     let (status, body) = route.adopt(true, &id, &revision).await;
 
-    assert_ne!(
-        status,
-        StatusCode::CREATED,
-        "auth is on with no audit log, yet the adopt was written: {body}"
+    assert_eq!(
+        (status, &body["error"]),
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            &Value::from("audit_log_required")
+        ),
+        "the adopt was not refused for the missing audit log: {body}"
+    );
+    assert_eq!(
+        body["message"], "auth is on but no audit log is configured; config writes are refused",
+        "{body}"
     );
     assert_eq!(
         route.bytes(),
@@ -523,27 +530,5 @@ async fn with_auth_on_and_no_audit_log_an_adopt_is_refused() {
         route.entries(),
         0,
         "the refused adopt created a store entry"
-    );
-    // The answer quotes no reason, so the reason is read from the write the
-    // route makes.
-    let context = route
-        .state
-        .meta_mcp
-        .reload_context()
-        .expect("reload context");
-    let replace = Replace {
-        expected: Expected::Any,
-        compute: Box::new(|_| Err("not reached".to_owned())),
-        replaced: Replaced::Discard,
-        secrets: None,
-    };
-    let refused = write_audited(&route.state, context, replace).await;
-    assert!(
-        matches!(
-            &refused,
-            Err(ReplaceError::Refused(why))
-                if why == "auth is on but no audit log is configured; config writes are refused"
-        ),
-        "the adopt was refused for another reason: {refused:?}"
     );
 }

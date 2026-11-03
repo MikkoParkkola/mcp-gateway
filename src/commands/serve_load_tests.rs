@@ -162,3 +162,26 @@ fn validate_and_doctor_never_reach_the_startup_recovery() {
         }
     }
 }
+
+/// Startup's half of the audit posture: serve's own load refuses auth on
+/// with the audit log off, so no running gateway has auth on and no log.
+#[test]
+fn serve_refuses_auth_on_with_the_audit_log_off() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("gateway.yaml");
+    let digest = hex::encode(sha2::Sha256::digest(b"zq-startup-pin-key"));
+    write_private(
+        &path,
+        &format!(
+            "auth:\n  enabled: true\n  api_keys:\n    - name: ci\n      key_sha256: \"sha256:{digest}\"\nsecurity:\n  transparency_log:\n    enabled: false\n"
+        ),
+    );
+    let refused = super::load_for_serve(Some(&path))
+        .err()
+        .expect("serve refuses auth on without an audit log")
+        .to_string();
+    assert!(
+        refused.contains("security.transparency_log must be enabled"),
+        "the refusal names the audit log: {refused}"
+    );
+}
