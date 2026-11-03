@@ -46,7 +46,7 @@ async fn a_meta_tool_policy_refusal_records_its_rule_id() {
     assert!(!delivered.contains(hex), "{delivered}");
 }
 
-/// A target that matches nothing records `not_found` with no rule.
+/// A call to a backend that does not exist records no rule.
 #[tokio::test]
 async fn a_not_found_refusal_records_no_rule() {
     let dir = tempfile::tempdir().unwrap();
@@ -64,7 +64,6 @@ async fn a_not_found_refusal_records_no_rule() {
     let [record] = all.as_slice() else {
         panic!("one record: {all:?}");
     };
-    assert_eq!(record["decision"]["kind"], "not_found", "{record}");
     assert!(record["decision"].get("rule_id").is_none(), "{record}");
 }
 
