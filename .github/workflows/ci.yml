@@ -119,9 +119,18 @@ jobs:
         run: scripts/dev/check-commit-message-hygiene.sh "origin/${{ github.base_ref }}..HEAD"
       # A function added on the seven COV.3 paths needs its inventory row in the
       # same change; without one the coverage grade cannot see it (MIK-8169).
+      # The check finds test items with tree-sitter, from the gates' own
+      # hash-locked environment (scripts/gate-env).
+      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+        with:
+          version: "0.13.1"
+      - name: The gates' pinned environment
+        env:
+          UV_MALWARE_CHECK: "1"
+        run: uv sync --locked --project scripts/gate-env
       - name: Every added COV.3 function has an inventory row (MIK-8169)
         if: github.event_name == 'pull_request'
-        run: python3 scripts/release/check_inventory_rows.py "origin/${{ github.base_ref }}"
+        run: scripts/gate-env/.venv/bin/python scripts/release/check_inventory_rows.py "origin/${{ github.base_ref }}"
       # A caller identity is built only by its checked constructor, so one that
       # names no one can never be made (MIK-8286, identity-collapse).
       - name: Caller identities are built only through their checked constructors (MIK-8286)
@@ -129,7 +138,7 @@ jobs:
       # Every function on the COV.3 paths has a row, whenever it was added
       # (MIK-8195).
       - name: Every function on the COV.3 paths has an inventory row (MIK-8195)
-        run: python3 scripts/release/check_inventory_rows.py --all
+        run: scripts/gate-env/.venv/bin/python scripts/release/check_inventory_rows.py --all
       # A new stage on the tools/call path gets a per-call timing row or a
       # stated reason (MIK-8014); the gate's verdict rules have their own test.
       - name: Every tools/call path function has a per-call stage (MIK-8014)
@@ -1314,8 +1323,15 @@ jobs:
         run: python3 scripts/release/test_critical_function_coverage.py
       - name: Test the critical path coverage grader
         run: python3 scripts/release/test_critical_path_coverage.py
+      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+        with:
+          version: "0.13.1"
+      - name: The gates' pinned environment (the inventory check reads Rust with tree-sitter)
+        env:
+          UV_MALWARE_CHECK: "1"
+        run: uv sync --locked --project scripts/gate-env
       - name: Test the inventory-row check (MIK-8169)
-        run: python3 scripts/release/test_check_inventory_rows.py
+        run: scripts/gate-env/.venv/bin/python scripts/release/test_check_inventory_rows.py
       - name: Test the inventory ledger and its fragments (MIK-8279)
         run: python3 scripts/release/test_inventory_ledger.py
       - name: Test the coverage grade download pruning
@@ -1526,8 +1542,17 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+      # The gate reads Rust items with tree-sitter, from the gates' own
+      # hash-locked environment (scripts/gate-env), never the system Python.
+      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+        with:
+          version: "0.13.1"
+      - name: The gates' pinned environment
+        env:
+          UV_MALWARE_CHECK: "1"
+        run: uv sync --locked --project scripts/gate-env
       - name: Check the guard refuses what it claims to
-        run: python3 scripts/dev/test_check_timing_asserts.py
+        run: scripts/gate-env/.venv/bin/python scripts/dev/test_check_timing_asserts.py
       - name: Check the tree and the allowlist against the previous tip
         if: github.event_name != 'pull_request'
         # The frozen design's base outside a PR: the tip this push replaced,
@@ -1539,10 +1564,10 @@ jobs:
           if [ -z "$base" ] || [ "$base" = "0000000000000000000000000000000000000000" ]; then
             base="HEAD^"
           fi
-          python3 scripts/dev/check-timing-asserts.py --base "$base"
+          scripts/gate-env/.venv/bin/python scripts/dev/check-timing-asserts.py --base "$base"
       - name: Check the tree and the allowlist against the base
         if: github.event_name == 'pull_request'
-        run: python3 scripts/dev/check-timing-asserts.py --base "origin/${{ github.base_ref }}"
+        run: scripts/gate-env/.venv/bin/python scripts/dev/check-timing-asserts.py --base "origin/${{ github.base_ref }}"
 
   request-panics:
     name: No new request-path panic site without an invariant (MIK-8691)
@@ -1556,10 +1581,19 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+      # The scanner finds test items with tree-sitter, from the gates' own
+      # hash-locked environment (scripts/gate-env), never the system Python.
+      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+        with:
+          version: "0.13.1"
+      - name: The gates' pinned environment
+        env:
+          UV_MALWARE_CHECK: "1"
+        run: uv sync --locked --project scripts/gate-env
       - name: Check the guard refuses what it claims to
-        run: python3 scripts/ci/check-request-panics.py --self-test
+        run: scripts/gate-env/.venv/bin/python scripts/ci/check-request-panics.py --self-test
       - name: No new panic site without an invariant
-        run: python3 scripts/ci/check-request-panics.py
+        run: scripts/gate-env/.venv/bin/python scripts/ci/check-request-panics.py
       - name: The baseline only shrinks against the previous tip
         if: github.event_name != 'pull_request'
         env:
@@ -1569,10 +1603,10 @@ jobs:
           if [ -z "$base" ] || [ "$base" = "0000000000000000000000000000000000000000" ]; then
             base="HEAD^"
           fi
-          python3 scripts/ci/check-request-panics.py --base "$base"
+          scripts/gate-env/.venv/bin/python scripts/ci/check-request-panics.py --base "$base"
       - name: The baseline only shrinks against the base
         if: github.event_name == 'pull_request'
-        run: python3 scripts/ci/check-request-panics.py --base "origin/${{ github.base_ref }}"
+        run: scripts/gate-env/.venv/bin/python scripts/ci/check-request-panics.py --base "origin/${{ github.base_ref }}"
 
   orphan-test-modules:
     name: Orphan test modules (MIK-7538)
@@ -1599,6 +1633,19 @@ jobs:
       # These pin both, and a guard that cannot fail is the thing it guards.
       - name: Check the guard catches what it claims to
         run: python3 scripts/dev/test_check_orphan_test_modules.py
+      # The shared cfg item finder the Rust-reading gates use: tree-sitter,
+      # from the gates' own hash-locked environment.
+      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+        with:
+          version: "0.13.1"
+      - name: The gates' pinned environment
+        env:
+          UV_MALWARE_CHECK: "1"
+        run: uv sync --locked --project scripts/gate-env
+      - name: Check the cfg item finder marks what it claims to
+        run: scripts/gate-env/.venv/bin/python scripts/dev/test_cfg_items.py
+      - name: Check the gate environment check refuses without installing
+        run: python3 scripts/dev/test_gate_env_python.py
       - name: MCP events OAuth shim rows
         run: python3 scripts/dev/test_mcp_events_oauth_shim.py
       - name: MCP events fail-fast harness rows
