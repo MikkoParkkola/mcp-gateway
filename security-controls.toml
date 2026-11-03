@@ -53,6 +53,10 @@ module = "src/security/decision_record.rs"
 reason = "the decision object a record carries (which check decided, config revision); it records a verdict, it refuses no request"
 
 [[coverage.not_a_control]]
+module = "src/security/decision_record_read.rs"
+reason = "reads a recorded decision object back for the receipt and the rule filter, and words what a record lacks; it reads, it refuses no request"
+
+[[coverage.not_a_control]]
 module = "src/security/response_policy.rs"
 reason = "server-owned correlation shared by the response path and the transport adapters; a helper, not a gate"
 

@@ -28,6 +28,9 @@ pub(super) struct Presented {
     session_sha256: Option<String>,
     /// The static bearer's full digest (MIK-7889); the principal is 48 bits.
     bearer_sha256: Option<String>,
+    /// The fingerprint of the API key digest this request matched, from the
+    /// one mint site: what a holder it opens is bound to.
+    api_key_digest_tag: Option<String>,
 }
 
 impl Presented {
@@ -39,6 +42,9 @@ impl Presented {
             session_sha256: crate::gateway::auth::session_cookie_value(request.headers())
                 .map(|handle| crate::hashing::sha256_hex(handle.as_bytes())),
             bearer_sha256: crate::gateway::auth::presented_bearer_sha256(request.headers()),
+            api_key_digest_tag: extensions
+                .get::<crate::gateway::auth::NamedApiKey>()
+                .map(|key| key.digest_tag().to_owned()),
         }
     }
 
@@ -128,12 +134,18 @@ impl Presented {
                 .map(|session_sha256| LiveBinding::DashboardSession { session_sha256 }),
             CredentialKind::None | CredentialKind::LocalTransport | CredentialKind::ApiKey => None,
         };
+        let api_key = api_key(client, self.api_key_digest_tag.as_deref());
+        // A key's holder is bound to the secret that opened it; one with no
+        // matched secret is refused here, never stored to fail later.
+        if api_key.as_ref().is_some_and(|k| k.digest_tag.is_none()) {
+            return Err("the API key's matched secret is not known for this request".to_owned());
+        }
         Ok(crate::events::Credential {
             kind,
             principal: client
                 .map(|c| c.principal.storage_form().to_owned())
                 .unwrap_or_default(),
-            api_key: api_key(client),
+            api_key,
             expires_at,
             binding,
         })
@@ -145,11 +157,13 @@ impl Presented {
 /// the live re-check to read (design §3.7).
 fn api_key(
     client: Option<&crate::gateway::auth::AuthenticatedClient>,
+    digest_tag: Option<&str>,
 ) -> Option<crate::events::ApiKeyRef> {
     client.and_then(|c| {
         c.api_key_identity().map(|name| crate::events::ApiKeyRef {
             name: name.to_owned(),
             principal: c.principal.storage_form().to_owned(),
+            digest_tag: digest_tag.map(str::to_owned),
         })
     })
 }
@@ -225,6 +239,7 @@ mod tests {
             identity: None,
             session_sha256: Some("s".to_owned()),
             bearer_sha256: None,
+            api_key_digest_tag: None,
         };
         let session = client(CredentialKind::DashboardSession, true);
         let refused = presented.credential(Some(&session), &state);
@@ -247,6 +262,7 @@ mod tests {
             identity: None,
             session_sha256: None,
             bearer_sha256: digest.clone(),
+            api_key_digest_tag: None,
         };
         assert_eq!(
             with.static_bearer_binding(),
@@ -269,20 +285,32 @@ mod tests {
     /// against; a key-server token or the static bearer carries none.
     #[test]
     fn only_an_authenticated_api_key_is_kept_for_the_live_re_check() {
-        let key = api_key(Some(&client(CredentialKind::ApiKey, true))).expect("an API key");
+        let key = api_key(
+            Some(&client(CredentialKind::ApiKey, true)),
+            Some("0a1b2c3d4e5f"),
+        )
+        .expect("an API key");
         assert_eq!(key.name, "alice");
         assert_eq!(
             key.principal,
             crate::gateway::auth::principal_of("secret").storage_form()
+        );
+        assert_eq!(
+            key.digest_tag.as_deref(),
+            Some("0a1b2c3d4e5f"),
+            "the match's fingerprint is kept"
         );
         for kind in [
             CredentialKind::KeyServerToken,
             CredentialKind::OidcBearer,
             CredentialKind::StaticBearer,
         ] {
-            assert_eq!(api_key(Some(&client(kind, true))), None, "{kind:?}");
+            assert_eq!(api_key(Some(&client(kind, true)), None), None, "{kind:?}");
         }
-        assert_eq!(api_key(Some(&client(CredentialKind::ApiKey, false))), None);
-        assert_eq!(api_key(None), None);
+        assert_eq!(
+            api_key(Some(&client(CredentialKind::ApiKey, false)), None),
+            None
+        );
+        assert_eq!(api_key(None, None), None);
     }
 }

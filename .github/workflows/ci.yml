@@ -756,7 +756,11 @@ jobs:
     name: macOS shard ${{ matrix.shard }}
     if: ${{ !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) && !(github.event_name == 'push' && github.ref == 'refs/heads/docs/ranking-1-release-line') && (github.event_name != 'pull_request' || (startsWith(github.head_ref, 'train/') && github.event.pull_request.head.repo.full_name == github.repository)) }}
     runs-on: macos-latest
-    timeout-minutes: 90
+    # The two lib shards each compile the `--lib` test binary from cold (every
+    # shard missed the cache on the last three trains): 19 to 86 min, before
+    # 8 to 23 min of tests. At 90 a slow runner cut off a train mid-test. This
+    # comes back down when the shards run binaries built once in one job.
+    timeout-minutes: 150
     strategy:
       fail-fast: false
       matrix:
