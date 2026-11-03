@@ -157,15 +157,7 @@ async fn mtls_denied_backend_is_not_named() {
             .to_string(),
         ))
         .expect("request");
-    request
-        .extensions_mut()
-        .insert(crate::mtls::identity::CertIdentity::for_test(
-            crate::mtls::identity::CertFields {
-                common_name: Some("agent".to_string()),
-                display_name: "agent".to_string(),
-                ..Default::default()
-            },
-        ));
+    request.extensions_mut().insert(agent_cert());
     let response = router.oneshot(request).await.expect("router answers");
     let body: Value = serde_json::from_slice(
         &to_bytes(response.into_body(), usize::MAX)
@@ -341,15 +333,7 @@ async fn post_cert_headers(
                 .to_string(),
         ))
         .expect("request");
-    request
-        .extensions_mut()
-        .insert(crate::mtls::identity::CertIdentity::for_test(
-            crate::mtls::identity::CertFields {
-                common_name: Some("agent".to_string()),
-                display_name: "agent".to_string(),
-                ..Default::default()
-            },
-        ));
+    request.extensions_mut().insert(agent_cert());
     let response = router
         .clone()
         .oneshot(request)
@@ -539,11 +523,7 @@ type Rule = (
 /// it is not hidden.
 #[tokio::test]
 async fn listed_and_not_hidden_agree_for_every_caller() {
-    let cert = crate::mtls::identity::CertIdentity::for_test(crate::mtls::identity::CertFields {
-        common_name: Some("agent".to_string()),
-        display_name: "agent".to_string(),
-        ..Default::default()
-    });
+    let cert = agent_cert();
     let rules: [Rule; 4] = [
         ((&["*"], &["*"]), (&["beta"], &[])),
         ((&["*"], &["*"]), (&[], &["alpha_write"])),

@@ -81,7 +81,7 @@ impl CertIdentity {
     /// not empty or only whitespace, else such a CN. `None` when it has
     /// neither: such a
     /// certificate names nobody, and its display name is a placeholder every
-    /// such certificate shares, so it is never an identity (MIK-8286).
+    /// such certificate shares, so it is never an identity.
     pub(crate) fn subject_id(&self) -> Option<&str> {
         self.san_uris
             .iter()
