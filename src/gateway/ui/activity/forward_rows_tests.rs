@@ -453,6 +453,28 @@ fn a_gap_that_holds_the_stop_resets() {
 }
 
 #[test]
+fn a_cursor_at_the_stop_is_done_whatever_follows_it() {
+    // The client is caught up: a gap past the stop is not its concern.
+    let d = dir();
+    let path = d.path().join("inv.jsonl");
+    let w = write(&path, &vec![calls(2); 3]);
+    std::fs::remove_file(sealed_path(&path, 2)).unwrap();
+    let l = log(&path, StreamKind::Activity);
+    let page = rows_after(
+        &l,
+        Some(&w.marks[1]),
+        Some(&w.marks[1]),
+        &Access::All,
+        WIDE,
+        &mut Search::default(),
+    )
+    .unwrap();
+    assert!(!page.reset, "a caught-up cursor does not reset");
+    assert!(page.rows.is_empty());
+    assert_eq!(page.next.as_ref(), Some(&w.marks[1]));
+}
+
+#[test]
 fn a_fresh_read_never_starts_past_an_unreadable_oldest_segment() {
     let d = dir();
     let path = d.path().join("inv.jsonl");
