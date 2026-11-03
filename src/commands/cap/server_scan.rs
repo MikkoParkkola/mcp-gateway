@@ -103,28 +103,32 @@ async fn cap_discover_shadow(
     let compare_config_path =
         gateway_config.unwrap_or_else(|| std::path::PathBuf::from("gateway.yaml"));
 
-    let registered_names: std::collections::HashSet<String> =
-        if let Ok(config) = mcp_gateway::config::Config::load(Some(&compare_config_path)) {
-            config.backends.into_keys().collect()
-        } else {
-            // Config not found or unreadable — all discovered servers are unregistered.
-            eprintln!(
-                "⚠️  Could not load gateway config from '{}'; \
-                 treating all discovered servers as unregistered.",
-                compare_config_path.display()
-            );
-            std::collections::HashSet::new()
-        };
+    let loaded = mcp_gateway::config::Config::load(Some(&compare_config_path)).ok();
+    let registered_names: std::collections::HashSet<String> = if let Some(config) = &loaded {
+        config.backends.keys().cloned().collect()
+    } else {
+        // Config not found or unreadable — all discovered servers are unregistered.
+        eprintln!(
+            "⚠️  Could not load gateway config from '{}'; \
+             treating all discovered servers as unregistered.",
+            compare_config_path.display()
+        );
+        std::collections::HashSet::new()
+    };
 
     let shadow_servers: Vec<_> = discovered
         .iter()
         .filter(|s| !registered_names.contains(&s.name))
         .cloned()
         .collect();
+    // The record key is only read here, never created: a report keys its
+    // URL asset ids with the gateway's key, or says they are for this run.
     let report = ShadowScanReport::from_discovered(
         &discovered,
         &registered_names,
         Some(&compare_config_path),
+        loaded.as_ref(),
+        &mcp_gateway::config_persistence::gateway_data_dir(),
     );
     let adoptable_names: std::collections::HashSet<&str> = report
         .assets

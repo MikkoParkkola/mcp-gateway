@@ -115,7 +115,7 @@ pub(crate) async fn poll_capability(
     let live = owned.host().upgrade().ok_or(PollRefused::Dispatch)?;
     let generation = live.generation();
     let authorizer = live.authorizer(owned.authorizer(), &generation);
-    let caller = owned.dispatch_context(&live, &authorizer);
+    let caller = owned.dispatch_context(&live, &authorizer, &generation);
     // Read-only, and credential-free for a shared poller, by the definition
     // the executor runs, not only by the catalogue the source read before.
     let response = crate::capability::read_only_call_as(
@@ -174,14 +174,17 @@ impl GatewayWatchHost {
     }
 
     /// The live caller the holder's key authenticates as now, by the key
-    /// table current at this poll; `None` when the key is gone, expired or
-    /// was re-issued (another digest), by reload too.
+    /// table current at this poll; `None` when the key is gone, expired, was
+    /// re-issued (another digest), or no longer accepts the secret the holder
+    /// was opened with, by reload too. A holder stored before holders were
+    /// bound to their secret names none and is refused (fail closed).
     fn client(state: &AppState, holder: &Holder) -> Option<AuthenticatedClient> {
-        state
-            .live_config
-            .generation()
-            .auth()
-            .client_for_key(&holder.api_key.name, &holder.api_key.principal)
+        let tag = holder.api_key.digest_tag.as_deref()?;
+        state.live_config.generation().auth().client_for_key(
+            &holder.api_key.name,
+            &holder.api_key.principal,
+            crate::gateway::auth::KeyBinding::Secret(tag),
+        )
     }
 }
 
@@ -215,9 +218,15 @@ impl WatchHost for GatewayWatchHost {
         // key and the policy that judges it. The key's expiry on the caller's
         // reading, never a second read (MIK-8202).
         let generation = state.live_config.generation();
+        // The secret the holder was opened with must still be valid; a holder
+        // that names none is refused (fail closed).
+        let Some(tag) = holder.api_key.digest_tag.as_deref() else {
+            return false;
+        };
         let Some(client) = generation.auth().client_for_key_at(
             &holder.api_key.name,
             &holder.api_key.principal,
+            crate::gateway::auth::KeyBinding::Secret(tag),
             now,
         ) else {
             return false;

@@ -120,3 +120,65 @@ fn key_without_backends_warns_once() {
 fn no_env() -> crate::config::EnvOverlay {
     crate::config::EnvOverlay::none()
 }
+
+/// The UI's scope for each key shape: an admin key with an empty list is a
+/// UI-wide admin that calls no backend; a non-empty list without `*` narrows
+/// the UI, admin or not; a non-admin empty list reaches nothing.
+#[cfg(feature = "webui")]
+#[test]
+fn the_ui_scope_of_each_key_shape() {
+    use crate::gateway::authz::BackendGrant;
+    let table = resolved(vec![
+        key("admin-empty", &[], true),
+        key("admin-alpha", &["alpha"], true),
+        key("plain-empty", &[], false),
+    ]);
+    let ui = |name: &str| {
+        let client = table
+            .validate_token(&format!("{name}-secret"))
+            .expect("key is valid");
+        (
+            BackendGrant::for_ui(Some(&client)).admits("alpha"),
+            BackendGrant::for_ui(Some(&client)).admits("beta"),
+            client.can_access_backend("alpha"),
+        )
+    };
+    assert_eq!(
+        ui("admin-empty"),
+        (true, true, false),
+        "UI-wide, calls none"
+    );
+    assert_eq!(ui("admin-alpha"), (true, false, true), "narrowed to alpha");
+    assert_eq!(ui("plain-empty"), (false, false, false), "reaches nothing");
+}
+
+/// The UI's membership test and MCP dispatch's agree for every grant shape,
+/// so the two cannot drift apart while dispatch keeps its own.
+#[cfg(feature = "webui")]
+#[test]
+fn grant_admits_agrees_with_can_access_backend() {
+    use crate::gateway::authz::BackendGrant;
+    let shapes: [&[&str]; 5] = [&["*"], &[], &["alpha"], &["alpha", "beta"], &["alpha", "*"]];
+    let keys = shapes
+        .iter()
+        .enumerate()
+        .flat_map(|(i, shape)| {
+            [false, true].map(|admin| key(&format!("shape{i}-{admin}"), shape, admin))
+        })
+        .collect::<Vec<_>>();
+    let names: Vec<String> = keys.iter().map(|k| k.name.clone()).collect();
+    let table = resolved(keys);
+    for name in names {
+        let client = table
+            .validate_token(&format!("{name}-secret"))
+            .expect("key is valid");
+        for backend in ["alpha", "beta", "gamma", "*", ""] {
+            assert_eq!(
+                BackendGrant::of(Some(&client)).admits(backend),
+                client.can_access_backend(backend),
+                "{name} ({:?}) on {backend:?}",
+                client.backends
+            );
+        }
+    }
+}

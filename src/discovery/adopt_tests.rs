@@ -187,11 +187,7 @@ fn a_harmless_mixed_value_refuses_with_the_remedy() {
         refusals(&server),
         one(AdoptRefusal::LiteralInTemplate, "env.PATH")
     );
-    let report = ShadowScanReport::from_discovered(
-        &[server],
-        &HashSet::new(),
-        Some(Path::new("gateway.yaml")),
-    );
+    let report = keyed_report(&[server], &HashSet::new(), Some(Path::new("gateway.yaml")));
     let risk = report.assets[0]
         .risks
         .iter()
@@ -431,11 +427,7 @@ fn any_query_refuses_without_echoing_it() {
             one(AdoptRefusal::CredentialInUrl, "url"),
             "{url}"
         );
-        let report = ShadowScanReport::from_discovered(
-            &[server],
-            &HashSet::new(),
-            Some(Path::new("gateway.yaml")),
-        );
+        let report = keyed_report(&[server], &HashSet::new(), Some(Path::new("gateway.yaml")));
         let risk = report.assets[0]
             .risks
             .iter()
@@ -461,7 +453,7 @@ fn a_url_without_a_query_is_adoptable() {
 #[test]
 fn the_radar_offers_adoption_only_where_the_rule_allows() {
     let action = |entry: &Value| {
-        let report = ShadowScanReport::from_discovered(
+        let report = keyed_report(
             &[find(entry)],
             &HashSet::new(),
             Some(Path::new("gateway.yaml")),
@@ -526,4 +518,18 @@ fn discovery_scans_no_network() {
             );
         }
     }
+}
+
+/// A report keyed by the test record key.
+fn keyed_report(
+    discovered: &[DiscoveredServer],
+    registered: &HashSet<String>,
+    gateway_config: Option<&Path>,
+) -> ShadowScanReport {
+    ShadowScanReport::from_discovered_keyed(
+        discovered,
+        registered,
+        gateway_config,
+        &crate::gateway::record_principal::test_record_key(),
+    )
 }

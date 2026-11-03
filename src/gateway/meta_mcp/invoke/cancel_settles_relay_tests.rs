@@ -62,6 +62,7 @@ async fn modern(
         confirmation: crate::gateway::destructive_confirmation::ConfirmationChannel::Unavailable,
         era: crate::protocol::meta::Era::Modern,
         channel: client,
+        generation: None,
     };
     let args = json!({"server": "svc", "tool": "act", "arguments": {}});
     meta.invoke_tool(&args, Some("session-relay"), &context)

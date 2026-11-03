@@ -7,8 +7,9 @@ from __future__ import annotations
 
 import bisect
 import functools
+import importlib.util
 import re
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 from typing import NamedTuple
 
 THRESHOLD_S = 5.0
@@ -68,8 +69,19 @@ def blank_strings_and_comments(text: str) -> str:
             j = text.find("\n", i)
             i = n if j < 0 else j
         elif tok == "/*":
-            j = text.find("*/", i + 2)
-            j = n if j < 0 else j + 2
+            # Block comments nest in Rust: a `*/` closes only its own `/*`.
+            depth, j = 0, i
+            while j < n:
+                opener, closer = text.find("/*", j), text.find("*/", j)
+                if closer < 0:
+                    j = n
+                    break
+                if 0 <= opener < closer:
+                    depth, j = depth + 1, opener + 2
+                else:
+                    depth, j = depth - 1, closer + 2
+                    if depth == 0:
+                        break
             out.append("\n" * text.count("\n", i, j))
             i = j
         elif tok not in ('"', "'"):
@@ -384,13 +396,37 @@ FAILS_ON_EXPIRY = re.compile(r"\s*\.await\s*" + CONSUMED)
 LET_BOUND = re.compile(r"let\s+(?:mut\s+)?(\w+)\s*(?::[^=;]+)?=\s*$")
 
 
-def test_start(path: str, code: str) -> int | None:
-    """Where test code starts in `code`: all of a test file, or from a product
-    file's first `#[cfg(test)]` on (its inline test module). None: no tests."""
+@functools.lru_cache(maxsize=1)
+def _cfg_rules():
+    """scripts/dev/check-orphan-test-modules.py: the one test-only cfg
+    judgement and the parser-backed cfg item finder, shared with the other
+    gates."""
+    spec = importlib.util.spec_from_file_location(
+        "orphan_gate_cfg", Path(__file__).resolve().parent / "check-orphan-test-modules.py"
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+# Which files the finder parsed with errors, for the line the gate prints.
+PARSE_REPORT: dict[str, tuple[bool, bool]] = {}
+
+
+@functools.lru_cache(maxsize=4096)
+def test_lines(path: str, text: str) -> frozenset[int]:
+    """The lines of `text` that hold test code: every line of a test path;
+    else each line of an item under a test-only cfg, by its own extent, as
+    the shared parser finds it. This gate looks for test code, so an unsure
+    case (a file it cannot read cleanly, a cfg inside a macro body) is test
+    code: LEAN_LONG. A line shared by a test item and product code counts as
+    test."""
+    count = text.count("\n") + 1
     if TEST_FILE.search(path):
-        return 0
-    m = re.search(r"#\[cfg\(test\)\]", code)
-    return m.start() if m else None
+        return frozenset(range(1, count + 1))
+    rules = _cfg_rules()
+    found = rules.cfg_items(text, rules.SafeSide.LEAN_LONG, path=path, report=PARSE_REPORT)
+    return frozenset(n for item in found.items for n in range(item.first_line, item.last_line + 1))
 
 
 def scan_timeouts(
@@ -410,8 +446,8 @@ def scan_timeouts(
     judged: it expects the window to pass.
     """
     code = blank_strings_and_comments(text)
-    start = test_start(path, code)
-    if start is None:
+    tested = test_lines(path, text)
+    if not tested:
         return []
     file_consts = {m.group(2): m.group(3) for m in CONST.finditer(code)}
     # A file textually `include!`d into another shares that file's items.
@@ -423,7 +459,9 @@ def scan_timeouts(
     imports = imports_of(code)
     fns = [(m.start(), m.group(1)) for m in FN.finditer(code)]
     found = []
-    for m in TIMEOUT.finditer(code, start):
+    for m in TIMEOUT.finditer(code):
+        if code.count("\n", 0, m.start()) + 1 not in tested:
+            continue
         depth, end = 1, m.end()
         while end < len(code) and depth:
             depth += {"(": 1, ")": -1}.get(code[end], 0)

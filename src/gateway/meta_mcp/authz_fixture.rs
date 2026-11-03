@@ -158,6 +158,7 @@ pub(in crate::gateway::meta_mcp) fn ctx(
         task: None,
         era: crate::protocol::meta::Era::Legacy,
         channel: &crate::gateway::input_bridge::NoClientChannel,
+        generation: None,
     }
 }
 

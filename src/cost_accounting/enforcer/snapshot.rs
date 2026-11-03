@@ -7,6 +7,7 @@ use std::collections::HashMap;
 
 use dashmap::DashMap;
 
+use super::super::config::{AlertRule, CostGovernanceConfig};
 use super::super::persistence::EnforcerSaveSnapshot;
 use super::{
     AlertAction, BudgetEnforcer, DailyAccumulator, EnforcerSnapshot, add_capped, rows, usd,
@@ -39,6 +40,35 @@ impl BudgetEnforcer {
             }
         }
         let day = Some(day);
+        // The overflow first, so a row restored after it records it as the
+        // overflow at its creation; then the estimates, so an estimated name
+        // owns its row before the rows go through the cap (ADR-023).
+        let tool_overflow = saved_micro("overflow", "tool", persisted.tool_overflow_usd);
+        self.global_daily.add_on(day, tool_overflow);
+        self.tool_overflow.add_on(day, tool_overflow);
+        self.key_overflow.add_on(
+            day,
+            saved_micro("overflow", "key", persisted.key_overflow_usd),
+        );
+        for (attribution, saved, kind) in [
+            (
+                &self.tool_attribution,
+                &persisted.tool_estimate,
+                "tool estimate",
+            ),
+            (
+                &self.key_attribution,
+                &persisted.key_estimate,
+                "key estimate",
+            ),
+        ] {
+            for (name, &usd_value) in saved {
+                if let Some(micro) = saved_figure(kind, name, usd_value) {
+                    attribution.set(name, micro, day);
+                    attribution.own(name);
+                }
+            }
+        }
         // Through the cap: a snapshot saved before the cap existed may hold
         // more names than it allows. Filed under the snapshot's own day, so
         // spend restored on a clock before 1970 still counts once the clock
@@ -59,13 +89,6 @@ impl BudgetEnforcer {
                 add_capped(self.key_maps(), key, &budgets.per_key, spent, day);
             }
         }
-        let tool_overflow = saved_micro("overflow", "tool", persisted.tool_overflow_usd);
-        self.global_daily.add_on(day, tool_overflow);
-        self.tool_overflow.add_on(day, tool_overflow);
-        self.key_overflow.add_on(
-            day,
-            saved_micro("overflow", "key", persisted.key_overflow_usd),
-        );
     }
 
     /// The day key to file `persisted` under, or `None` when it is from an
@@ -112,6 +135,7 @@ impl BudgetEnforcer {
             &self.tool_daily,
             &self.tool_overflow,
             &self.tool_overflow_swept,
+            &self.tool_attribution,
         )
     }
 
@@ -121,13 +145,21 @@ impl BudgetEnforcer {
             &self.key_daily,
             &self.key_overflow,
             &self.key_overflow_swept,
+            &self.key_attribution,
         )
     }
 
     /// Snapshot current accumulator state for the UI endpoint.
     #[must_use]
     pub fn snapshot(&self) -> EnforcerSnapshot {
-        self.snapshot_at(crate::clock::unix_secs().ok())
+        self.snapshot_under(&self.config)
+    }
+
+    /// [`Self::snapshot`] reporting the limits of `governance`, the config one
+    /// response is built from.
+    #[must_use]
+    pub(crate) fn snapshot_under(&self, governance: &CostGovernanceConfig) -> EnforcerSnapshot {
+        self.snapshot_at(crate::clock::unix_secs().ok(), governance)
     }
 
     /// A snapshot to persist, stamped from the wall clock. On a clock before
@@ -138,13 +170,17 @@ impl BudgetEnforcer {
     ) -> Result<EnforcerSaveSnapshot, crate::clock::ClockBeforeEpoch> {
         let taken_at = crate::clock::unix_secs()?;
         Ok(EnforcerSaveSnapshot::from_snapshot(
-            self.snapshot_at(Some(taken_at)),
+            self.snapshot_at(Some(taken_at), &self.config),
             taken_at,
             self.day_basis_at(taken_at),
         ))
     }
 
-    fn snapshot_at(&self, taken_at: Option<u64>) -> EnforcerSnapshot {
+    fn snapshot_at(
+        &self,
+        taken_at: Option<u64>,
+        governance: &CostGovernanceConfig,
+    ) -> EnforcerSnapshot {
         let today = taken_at.map(|secs| self.day_key(secs));
         let global_daily_usd = usd(self.global_daily.current_on(today));
 
@@ -154,42 +190,49 @@ impl BudgetEnforcer {
 
         EnforcerSnapshot {
             global_daily_usd,
-            global_daily_limit: self.config.budgets.daily,
+            global_daily_limit: governance.budgets.daily,
             tool_daily,
-            tool_limits: self.config.budgets.per_tool.clone(),
+            tool_limits: governance.budgets.per_tool.clone(),
             taken_at,
             key_daily,
-            key_limits: self.config.budgets.per_key.clone(),
+            key_limits: governance.budgets.per_key.clone(),
             tool_overflow_usd: usd(self.tool_overflow.current_on(today)),
             key_overflow_usd: usd(self.key_overflow.current_on(today)),
+            tool_estimate: in_usd(self.tool_attribution.estimates_on(today)),
+            key_estimate: in_usd(self.key_attribution.estimates_on(today)),
+        }
+    }
+}
+
+/// Find the highest-threshold alert rule whose `at_percent` threshold
+/// is satisfied by `spend / limit * 100`.
+///
+/// Uses `f64` comparison to avoid integer truncation errors near thresholds
+/// (e.g. 99.7 % must not be cast to 99 and miss the 100 % block rule).
+pub(super) fn evaluate_alerts(alerts: &[AlertRule], spend: f64, limit: f64) -> Option<AlertAction> {
+    if limit <= 0.0 {
+        return None;
+    }
+    let percent = spend / limit * 100.0;
+    let mut best: Option<AlertAction> = None;
+    let mut best_threshold = 0.0_f64;
+
+    for rule in alerts {
+        let threshold = f64::from(rule.at_percent);
+        if percent >= threshold && threshold >= best_threshold {
+            best = Some(rule.action);
+            best_threshold = threshold;
         }
     }
 
-    // ── Private helpers ───────────────────────────────────────────────────────
+    best
+}
 
-    /// Find the highest-threshold alert rule whose `at_percent` threshold
-    /// is satisfied by `spend / limit * 100`.
-    ///
-    /// Uses `f64` comparison to avoid integer truncation errors near thresholds
-    /// (e.g. 99.7 % must not be cast to 99 and miss the 100 % block rule).
-    pub(super) fn evaluate_alerts(&self, spend: f64, limit: f64) -> Option<AlertAction> {
-        if limit <= 0.0 {
-            return None;
-        }
-        let percent = spend / limit * 100.0;
-        let mut best: Option<AlertAction> = None;
-        let mut best_threshold = 0.0_f64;
-
-        for rule in &self.config.alerts {
-            let threshold = f64::from(rule.at_percent);
-            if percent >= threshold && threshold >= best_threshold {
-                best = Some(rule.action);
-                best_threshold = threshold;
-            }
-        }
-
-        best
-    }
+fn in_usd(figures: Vec<(String, u64)>) -> HashMap<String, f64> {
+    figures
+        .into_iter()
+        .map(|(name, micro)| (name, usd(micro)))
+        .collect()
 }
 
 fn daily_usd(map: &DashMap<String, DailyAccumulator>, today: Option<u64>) -> HashMap<String, f64> {
@@ -206,9 +249,15 @@ fn daily_usd(map: &DashMap<String, DailyAccumulator>, today: Option<u64>) -> Has
 /// `u64::MAX`, so a counter that saturated legitimately restores saturated
 /// (its USD value times 1e6 rounds to 2^64; the cast saturates it back).
 fn saved_micro(kind: &str, row: &str, usd_value: f64) -> u64 {
+    saved_figure(kind, row, usd_value).unwrap_or(0)
+}
+
+/// `usd_value` in micro-USD, or `None`, with a warning, for a value no run
+/// could have saved: a refusal, told apart from a valid zero.
+fn saved_figure(kind: &str, row: &str, usd_value: f64) -> Option<u64> {
     if usd_value.is_finite() && usd_value >= 0.0 && usd_value <= usd(u64::MAX) {
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-        return (usd_value * 1_000_000.0).round() as u64;
+        return Some((usd_value * 1_000_000.0).round() as u64);
     }
     tracing::warn!(
         target: "mcp_gateway::cost_accounting::enforcer",
@@ -218,5 +267,5 @@ fn saved_micro(kind: &str, row: &str, usd_value: f64) -> u64 {
         usd = usd_value,
         "Saved daily total is out of range; restoring it as zero"
     );
-    0
+    None
 }

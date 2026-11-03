@@ -251,6 +251,43 @@ pr_body_case home_path fail 'Built in /Users/mikko/github/mcp-gateway.'
 pr_body_case agent_config fail 'See $HOME/.claude/rules for the gate.'
 pr_body_case private_address fail 'Measured against 100.64.1.2.'
 pr_body_case learning_rule_is_not_a_name pass 'Uses a Hebbian decay for ranking.'
+# Internal process references: a row of the findings register, a lead's or
+# operator's ruling. Ordinary uses of the words pass.
+pr_body_case register_row fail 'The remaining gap is register row 397.'
+pr_body_case register_rows fail 'Deferred as register rows 418-420.'
+pr_body_case row_of_the_register fail 'Recorded as row 397 of the register.'
+pr_body_case register_colon_rows fail 'Declined and recorded in the register: rows 350 and 351.'
+pr_body_case register_comma_row fail 'Recorded in the not-fixed register, row 383.'
+pr_body_case lead_ruling fail 'Per the lead ruling 2026-11-02, the route stays.'
+pr_body_case operators_ruling fail "Follows the operator's ruling on retention."
+pr_body_case cpu_register pass 'Reads the register of the CPU.'
+pr_body_case register_count pass 'The cache registers 3 entries per row.'
+pr_body_case ruling_in_prose pass 'A ruling on the wire format is still open.'
+# Ordinary prose the review round named: hardware and data registers, a
+# sentence boundary, the verb "ruling out", and a court ruling.
+pr_body_case register_file_row pass 'Fix reads from row 3 of the register file.'
+pr_body_case voter_register_row pass 'Skip voter register row 3 when its identifier is empty.'
+pr_body_case register_then_row pass 'Adds a button to register. Row 3 of the results table now shows latency.'
+pr_body_case operator_ruling_out pass 'Fix the comparison operator ruling out valid zero values.'
+pr_body_case lead_ruling_out pass 'With the lead ruling out a DNS cause, this change focuses on the TLS path.'
+pr_body_case court_ruling pass 'Summarises the lead ruling in Smith v Jones for the compliance note.'
+# Internal citations in other spellings.
+pr_body_case row_colon fail 'Deferred in the findings register, row: 397.'
+pr_body_case typographic_possessive fail 'Per the lead’s ruling, retain the route.'
+pr_body_case adjective_register fail 'Recorded as row 397 in the not-fixed register.'
+pr_body_case register_entry fail 'See register entry 397.'
+pr_body_case ruling_letter fail 'Per lead ruling B, the twelve variants stay.'
+# The refusal names its reason.
+pr_body_reason_case() {
+  local name="$1" body="$2" reason="$3" out
+  out="$(PR_BODY="$body" bash "$source_repo/scripts/dev/check-pr-body-hygiene.sh" 2>&1 >/dev/null || true)"
+  if [[ "$out" != *"$reason"* ]]; then
+    printf 'FAIL pr_body_%s: the refusal does not name %q: %s\n' "$name" "$reason" "$out" >&2
+    failures=$((failures + 1))
+  fi
+}
+pr_body_reason_case register_row_reason 'See register row 397.' 'register-row'
+pr_body_reason_case ruling_reason 'Lead ruling 2026-11-02.' 'ruling'
 # An explicitly empty body (PR_BODY set to "") passes: it cannot leak
 # anything, and CI always sets the variable. No body at all (PR_BODY unset,
 # no file) is a misused call, refused rather than read as empty and clean.

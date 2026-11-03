@@ -233,20 +233,37 @@ READ_BACKS = {
 
 
 def carriers(texts: dict[str, str]) -> set[str]:
-    """The identity types, plus every struct with a field of one (to a fixed point)."""
+    """Every name that may denote a caller identity, to a fixed point: the
+    identity types; a struct, enum or union serde can build (a derive or a
+    manual `impl Deserialize`) whose item, header and generic defaults
+    included, names one; a `use ... X as N` of one; a `type N = ...` whose
+    item names one. Names, never resolved paths: two types sharing a name
+    both count, so a namesake can only add a flag, never hide one. A site
+    that is flagged without reading an identity is listed in READ_BACKS."""
     found = set(TYPES)
+    manual = {
+        m.group(1)
+        for code in texts.values()
+        for m in re.finditer(r"\bimpl\b[^{;]*\bDeserialize\b[^{;]*\bfor\s+(?:[\w:]+::)?(?:r#)?(\w+)", code)
+    }
     while True:
         grown = set(found)
+        word = re.compile(r"\b(?:" + "|".join(map(re.escape, sorted(found))) + r")\b")
         for code in texts.values():
-            for sm in re.finditer(r"\b(?:struct|enum)\s+(\w+)[^{;(]*[{(]", code):
-                # Only types serde can build from bytes carry an identity in.
+            for sm in re.finditer(r"\b(?:struct|enum|union)\s+(?:r#)?(\w+)", code):
                 before = re.sub(r"pub(\([^)]*\))?\s*$", "", code[: sm.start()].rstrip()).rstrip()
                 derives = ATTR_BLOCK.search(before)
-                if not (derives and "Deserialize" in derives.group(0)):
+                if not (derives and "Deserialize" in derives.group(0)) and sm.group(1) not in manual:
                     continue
-                body = code[sm.end() - 1 : block_end(code, sm.end() - 1)]
-                if any(re.search(r"\b" + re.escape(t) + r"\b", body) for t in found):
+                if word.search(code[sm.end() : block_end(code, sm.end())]):
                     grown.add(sm.group(1))
+            for um in re.finditer(r"\buse\b[^;]*;", code):
+                for am in re.finditer(r"\b(?:r#)?(\w+)\s+as\s+(?:r#)?(\w+)\b", um.group(0)):
+                    if am.group(1) in found:
+                        grown.add(am.group(2))
+            for tm in re.finditer(r"\btype\s+(?:r#)?(\w+)", code):
+                if word.search(code[tm.end() : block_end(code, tm.end())]):
+                    grown.add(tm.group(1))
         if grown == found:
             return found
         found = grown
@@ -261,7 +278,8 @@ def unreached(root: Path, files: dict[Path, bool]) -> list[str]:
     )
 
 
-def violations(root: Path) -> list[str]:
+def scan(root: Path) -> tuple[list[str], set[tuple[str, str]]]:
+    """The violations in the tree at `root`, and every read-back site it flags."""
     root = root.resolve()
     files = module_files(root)
     found = [f"{rel}: not reached from any crate root; cannot tell production from test" for rel in unreached(root, files)]
@@ -272,6 +290,7 @@ def violations(root: Path) -> list[str]:
     }
     carrier = carriers(texts)
     names = re.compile(r"\b(" + "|".join(sorted(carrier)) + r")\b")
+    flagged: set[tuple[str, str]] = set()
     for rel, code in sorted(texts.items()):
         gated = gated_spans(code)
         for m in RENAMED.finditer(code):
@@ -294,9 +313,11 @@ def violations(root: Path) -> list[str]:
             header = code[fm[-1].start() : code.find("{", fm[-1].end())] if fm else ""
             signature = header.split("->", 1)[1] if "->" in header else ""
             scope = code[stmt_start : stmt_end if stmt_end > 0 else len(code)] + signature
-            if names.search(scope) and (rel, fn) not in READ_BACKS:
-                line = code.count("\n", 0, m.start()) + 1
-                found.append(f"{rel}:{line}: fn `{fn or '<module>'}` deserializes a caller identity (or a struct carrying one) and is not a listed read-back")
+            if names.search(scope):
+                flagged.add((rel, fn))
+                if (rel, fn) not in READ_BACKS:
+                    line = code.count("\n", 0, m.start()) + 1
+                    found.append(f"{rel}:{line}: fn `{fn or '<module>'}` deserializes a caller identity (or a struct carrying one) and is not a listed read-back")
         hits = []
         for construct in CONSTRUCTS:
             if construct.endswith("{"):
@@ -319,12 +340,26 @@ def violations(root: Path) -> list[str]:
                 continue
             line = code.count("\n", 0, at) + 1
             found.append(f"{rel}:{line}: `{construct}` in fn `{fn or '<module>'}` builds an identity outside its checked constructor")
-    return found
+    return found, flagged
+
+
+def violations(root: Path) -> list[str]:
+    return scan(root)[0]
+
+
+def stale_read_backs(flagged: set[tuple[str, str]]) -> list[str]:
+    """READ_BACKS rows the repository scan no longer flags. A stale row left in
+    place would silently admit whatever that fn deserializes next."""
+    return [
+        f"{rel}: listed read-back `{fn}` is no longer a flagged site; remove its READ_BACKS row"
+        for rel, fn in sorted(set(READ_BACKS) - flagged)
+    ]
 
 
 def main(argv: list[str]) -> int:
     root = Path(argv[1]) if len(argv) > 1 else Path(__file__).resolve().parents[2]
-    bad = violations(root)
+    found, flagged = scan(root)
+    bad = found + stale_read_backs(flagged)
     for line in bad:
         print(line)
     if bad:

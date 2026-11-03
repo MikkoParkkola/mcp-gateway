@@ -491,6 +491,14 @@ pub(super) fn scoped_auth_config(admin: bool) -> AuthConfig {
     }
 }
 
+/// The `scoped-key` admin with every backend in its scope (`backends: ["*"]`):
+/// the caller that sees every registered server on the UI routes.
+pub(super) fn full_admin_auth_config() -> AuthConfig {
+    let mut auth = scoped_auth_config(true);
+    auth.api_keys[0].backends = vec!["*".to_string()];
+    auth
+}
+
 struct RouterNotificationTestTransport {
     request_methods: Mutex<Vec<String>>,
     notify_methods: Mutex<Vec<String>>,
