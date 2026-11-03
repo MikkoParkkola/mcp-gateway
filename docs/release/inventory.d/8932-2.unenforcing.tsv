@@ -1,1 +1,0 @@
-src/gateway/router/backend_handlers/relay.rs	witness_seam	1	Returns its argument unchanged; test builds also reach the witness hook here. It decides nothing about who may call a route or what it returns.
