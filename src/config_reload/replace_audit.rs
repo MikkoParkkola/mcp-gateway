@@ -79,7 +79,8 @@ impl GatewayAuth {
 }
 
 /// The refusal of a write on a gateway with auth on and no audit log.
-const NO_AUDIT_LOG: &str = "auth is on but no audit log is configured; config writes are refused";
+pub(crate) const NO_AUDIT_LOG: &str =
+    "auth is on but no audit log is configured; config writes are refused";
 
 /// Where this gateway's writes are audited: its audit log, when it has one.
 /// The one place an [`Audit`] is built, so no caller chooses whether its

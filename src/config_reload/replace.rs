@@ -224,7 +224,7 @@ async fn spawn_locked(
 mod audit;
 pub(crate) use audit::{Audit, Intent, IntentSink};
 #[cfg(feature = "webui")]
-pub(crate) use audit::{AuditPosture, GatewayAuth};
+pub(crate) use audit::{AuditPosture, GatewayAuth, NO_AUDIT_LOG};
 #[cfg(test)]
 pub(crate) use audit::{IntentId, replace_detached};
 #[cfg(any(test, feature = "webui"))]

@@ -27,8 +27,8 @@ use crate::config::SecretStoreChoice;
 use crate::config_persistence::keyedit::{Segment, SlotId, Template};
 use crate::config_persistence::{NOT_IN_PLACE, edit_text};
 use crate::config_reload::{
-    AuditPosture, Expected, FileRevision, GatewayAuth, IntentKind, RELOAD_LOCK_WAIT, Replace,
-    ReplaceError, ReplaceOutcome, Replaced, SecretStep, replace_audited,
+    AuditPosture, Expected, FileRevision, GatewayAuth, IntentKind, NO_AUDIT_LOG, RELOAD_LOCK_WAIT,
+    Replace, ReplaceError, ReplaceOutcome, Replaced, SecretStep, replace_audited,
 };
 use crate::discovery::DiscoveredServer;
 use crate::discovery::adopt::{AdoptRefusal, Adoption, Literal, adoption, refusals};
@@ -127,6 +127,12 @@ pub(super) fn answer(name: &str, written: Result<ReplaceOutcome, ReplaceError>) 
         Err(ReplaceError::Refused(why)) if why == NOT_IN_PLACE => (
             StatusCode::CONFLICT,
             Json(json!({"error": "not_in_place", "message": NOT_IN_PLACE})),
+        )
+            .into_response(),
+        // The gateway's own posture, fixed text: the operator can act on it.
+        Err(ReplaceError::Refused(why)) if why == NO_AUDIT_LOG => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({"error": "audit_log_required", "message": NO_AUDIT_LOG})),
         )
             .into_response(),
         Err(ReplaceError::Refused(_)) => failed("refused"),
