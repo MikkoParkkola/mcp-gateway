@@ -37,7 +37,7 @@ fn row(task: Task, notes: Vec<Value>) -> CommittedTask {
         bindings: Vec::new(),
         // M2: only a bindings-recorded row is served at all.
         bindings_recorded: true,
-        secrets_unvouched: false,
+        secrets: crate::gateway::task_service::Vouching::Vouched,
     }
 }
 
@@ -285,7 +285,7 @@ fn an_unvouched_upstream_row_is_served_withheld_never_its_outcome() {
         done.delivered_wire().to_string().contains(echoed),
         "premise: a vouched row serves its result"
     );
-    done.secrets_unvouched = true;
+    done.secrets = crate::gateway::task_service::Vouching::Unvouched;
     let served = done.delivered_wire();
     assert!(!served.to_string().contains(echoed), "{served}");
     assert!(served.to_string().contains(reason), "{served}");
@@ -303,7 +303,7 @@ fn an_unvouched_upstream_row_is_served_withheld_never_its_outcome() {
     })
     .expect("a live task fails");
     let mut failed = row(task, Vec::new());
-    failed.secrets_unvouched = true;
+    failed.secrets = crate::gateway::task_service::Vouching::Unvouched;
     let served = failed.delivered_wire();
     assert!(!served.to_string().contains(echoed), "{served}");
     assert_eq!(served["error"]["message"], json!(reason), "{served}");

@@ -202,6 +202,10 @@ pub(crate) struct UpstreamRecord {
 
 /// A row this build writes always names its fingerprint: a legacy `None`
 /// rewritten is stored as missing, which still withholds.
+#[allow(
+    clippy::ref_option,
+    reason = "serde's serialize_with hands the field over by reference"
+)]
 fn fingerprint_or_missing<S: serde::Serializer>(
     value: &Option<String>,
     serializer: S,
@@ -548,10 +552,20 @@ pub(crate) struct CommittedTask {
     /// older row the provenance cannot be established, so its backend output
     /// is not served.
     pub(crate) bindings_recorded: bool,
-    /// An upstream row with no fingerprint of what its dispatch injected (a
-    /// row from before it was recorded): its stored outcome is never served,
-    /// since nothing vouches that the gateway can still redact it.
-    pub(crate) secrets_unvouched: bool,
+    /// Whether anything vouches that the gateway can still redact what this
+    /// row's dispatch injected. An upstream row with no fingerprint (from
+    /// before it was recorded) is `Unvouched`: its stored outcome is never
+    /// served.
+    pub(crate) secrets: Vouching,
+}
+
+/// Whether a stored task's outcome may be served as stored.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Vouching {
+    /// Served as stored.
+    Vouched,
+    /// Served withheld: nothing vouches for what its dispatch injected.
+    Unvouched,
 }
 
 /// Replace a stored outcome with the fixed withheld answer, leaving the
@@ -623,7 +637,7 @@ impl CommittedTask {
                 strip_unnoted(request, |_| false);
             }
         }
-        if self.secrets_unvouched {
+        if self.secrets == Vouching::Unvouched {
             withhold_outcome(&mut wire);
         }
         wire
@@ -647,10 +661,15 @@ impl CommittedTask {
             gateway_writes: record.gateway_writes.clone(),
             bindings: record.bindings.clone(),
             bindings_recorded: record.version >= BINDING_VERSION,
-            secrets_unvouched: record
+            secrets: if record
                 .upstream
                 .as_ref()
-                .is_some_and(|upstream| upstream.secret_fingerprint.is_none()),
+                .is_some_and(|upstream| upstream.secret_fingerprint.is_none())
+            {
+                Vouching::Unvouched
+            } else {
+                Vouching::Vouched
+            },
         }
     }
 

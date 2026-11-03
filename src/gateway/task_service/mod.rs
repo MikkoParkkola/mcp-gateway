@@ -50,7 +50,9 @@ pub(crate) use execution::{
     CancelDelivery, InputOutcome, OwnedAdmissionRequest, OwnedCallerContext, TaskCall,
     UpstreamAnswer, UpstreamHandle, UpstreamRecovery,
 };
-pub(crate) use record::{CommittedTask, ErrorAuthor, SurfacedKind, SurfacedTarget, Target};
+pub(crate) use record::{
+    CommittedTask, ErrorAuthor, SurfacedKind, SurfacedTarget, Target, Vouching,
+};
 // The router's settle rows name it; production stays inside the service.
 #[cfg(test)]
 pub(crate) use record::Provenance;

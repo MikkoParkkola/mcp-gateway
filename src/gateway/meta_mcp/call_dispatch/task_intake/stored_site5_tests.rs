@@ -29,7 +29,7 @@ fn stored(task: &Task) -> Held<CommittedTask> {
             gateway_writes: crate::gateway::gateway_writes::WriteRecord::default(),
             bindings: Vec::new(),
             bindings_recorded: true,
-            secrets_unvouched: false,
+            secrets: crate::gateway::task_service::Vouching::Vouched,
         },
         CarriedHolds::none(),
     )

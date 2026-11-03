@@ -52,6 +52,7 @@ fn upstream_for(binding: &TaskBinding, handle: &str) -> UpstreamRecord {
         tool: "create".into(),
         arguments: json!({"sku": "x"}),
         operation_digest: binding.operation().to_owned(),
+        secret_fingerprint: Some("none".to_owned()),
     }
 }
 
