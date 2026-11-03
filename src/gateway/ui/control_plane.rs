@@ -171,7 +171,8 @@ async fn control_plane_snapshot(
         (&actor, grant_subject.as_ref()),
         now,
     );
-    let shadow_radar = if is_scoped(client.as_ref()) {
+    let scoped = is_scoped(client.as_ref());
+    let shadow_radar = if scoped {
         ControlPlaneShadowRadar::out_of_scope()
     } else {
         local_shadow_radar(&state).await
@@ -202,6 +203,7 @@ async fn control_plane_snapshot(
                 .map_or(ControlPlaneBaseSource::Default, |base| base.source),
             store_read_degraded,
             export_configured: state.export_status.is_some(),
+            scoped,
         },
     );
     Json(response).into_response()
