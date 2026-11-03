@@ -554,8 +554,8 @@ pub(crate) struct CommittedTask {
     pub(crate) bindings_recorded: bool,
     /// Whether anything vouches that the gateway can still redact what this
     /// row's dispatch injected. An upstream row with no fingerprint (from
-    /// before it was recorded) is `Unvouched`: its stored outcome is never
-    /// served.
+    /// before it was recorded, or such a row rewritten as `missing`) is
+    /// `Unvouched`: its stored outcome is never served.
     pub(crate) vouching: Vouching,
 }
 
@@ -602,8 +602,8 @@ impl CommittedTask {
     }
 
     /// The stored task as a delivery serves it: every serve site
-    /// (`tasks/get`, a repeat, a notification) sends this, never
-    /// `task.wire()` alone, and before any egress scan reads it.
+    /// (`tasks/get`, a repeat, a notification) sends this, never the
+    /// task's bare `Task::wire` projection, and before any egress scan reads it.
     ///
     /// Each gateway-only member the row's write record does not claim is
     /// removed from the result, `error.data` and every parked input request.
@@ -661,11 +661,15 @@ impl CommittedTask {
             gateway_writes: record.gateway_writes.clone(),
             bindings: record.bindings.clone(),
             bindings_recorded: record.version >= BINDING_VERSION,
-            vouching: if record
-                .upstream
-                .as_ref()
-                .is_some_and(|upstream| upstream.secret_fingerprint.is_none())
-            {
+            // A legacy row rewritten by this build stores `missing`, so both
+            // forms are unvouched; a `missing` row this build captured was
+            // already withheld at its settlement.
+            vouching: if record.upstream.as_ref().is_some_and(|upstream| {
+                matches!(
+                    upstream.secret_fingerprint.as_deref(),
+                    None | Some(crate::security::dispatched::MISSING)
+                )
+            }) {
                 Vouching::Unvouched
             } else {
                 Vouching::Vouched
