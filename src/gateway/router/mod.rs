@@ -262,6 +262,9 @@ mod direct_effect_absent_tests;
 /// A late refusal keeps its own code, and its run keeps the key.
 #[cfg(all(test, feature = "firewall"))]
 mod late_refusal_lease_tests;
+/// A send refusal releases its call's key only when nothing was sent.
+#[cfg(test)]
+mod lend_key_tests;
 /// A lent-only call carrying no credential records `refused`.
 #[cfg(test)]
 mod lend_refusal_tests;
@@ -418,6 +421,9 @@ pub(crate) mod tests;
 mod trace_span;
 #[cfg(test)]
 mod trace_span_tests;
+/// T24 through the route: a capability reloaded as a write is not run.
+#[cfg(all(test, feature = "webui"))]
+mod ui_capability_reload_tests;
 #[cfg(all(test, feature = "webui"))]
 mod ui_tool_call_cell_tests;
 #[cfg(all(test, feature = "webui"))]

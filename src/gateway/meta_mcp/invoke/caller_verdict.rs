@@ -377,6 +377,12 @@ impl MetaMcp {
                 ..
             }) => {
                 witness.spend();
+                // A refusal of the caller is answered as itself (r2_check).
+                if super::gate::is_authorization_refusal(&error) {
+                    self.count_refused_fill(server, tool, &error, std::time::Instant::now());
+                    super::audit::note_send_refusal(&error);
+                    return Err(error);
+                }
                 let checked = (std::time::Instant::now(), surface);
                 let value = self.account_refused_fill(server, tool, &error, checked);
                 if crate::personal_accounts::refusal::marked(&error).is_some() {
