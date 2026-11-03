@@ -483,6 +483,70 @@ async fn a_cold_fill_refused_by_the_lender_is_a_refusal_under_standard() {
     assert_cold_fill_refusal(crate::config::InputSchemaEnforcement::Standard).await;
 }
 
+/// The value of the first series of `metric` whose labels hold every one of
+/// `labels`, in rendered Prometheus text; 0 when there is none yet.
+#[cfg(feature = "metrics")]
+fn series_value(text: &str, metric: &str, labels: &[&str]) -> f64 {
+    text.lines()
+        .find(|line| {
+            line.strip_prefix(metric)
+                .is_some_and(|rest| rest.starts_with('{'))
+                && labels.iter().all(|label| line.contains(label))
+        })
+        .and_then(|line| line.rsplit(' ').next())
+        .and_then(|n| n.parse::<f64>().ok())
+        .unwrap_or(0.0)
+}
+
+/// LEND.6: a refusal left out of the error budget is still a recorded
+/// invocation: the invocation counter (status `error`) and the duration
+/// histogram each count it. Other rows here refuse calls to the same backend
+/// in parallel, and every one is an error, so each counter rises by at least
+/// this row's one call.
+#[cfg(feature = "metrics")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_meta_lend_refusal_is_still_recorded_as_an_invocation() {
+    crate::metrics::install();
+    let (url, calls) = peer().await;
+    let mint = FixedMint {
+        headers: vec![],
+        expires_at: i64::MAX,
+    };
+    let (router, _dirs) = gateway(url, mint).await;
+    let server = format!("server=\"{BACKEND}\"");
+    let read = || {
+        let text = crate::metrics::render();
+        (
+            series_value(
+                &text,
+                "mcp_tool_invocations_total",
+                &[&server, "status=\"error\""],
+            ),
+            series_value(
+                &text,
+                "mcp_tool_invocation_duration_seconds_count",
+                &[&server],
+            ),
+        )
+    };
+    let (invocations, durations) = read();
+    let (status, answer) = invoke(&router).await;
+    assert!(
+        answer.to_string().contains("this call carried none"),
+        "premise: the lender's refusal: {status} {answer}"
+    );
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+    let (invocations_after, durations_after) = read();
+    assert!(
+        invocations_after >= invocations + 1.0,
+        "the refusal is an invocation with status error: {invocations} -> {invocations_after}"
+    );
+    assert!(
+        durations_after >= durations + 1.0,
+        "the refusal's duration is recorded: {durations} -> {durations_after}"
+    );
+}
+
 /// LEND.6, end to end: refusals the real per-user lender makes, on either
 /// route, record nothing in the backend's or the tool's error-budget
 /// window, so no number of them can disable the tool for every caller.
