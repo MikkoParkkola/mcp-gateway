@@ -157,3 +157,54 @@ async fn r43b_prime_a_block_published_before_delivery_stores_a_replay_entry() {
         "R4.3b′ A: no replay entry under the Sync key though `block` was current at delivery"
     );
 }
+
+/// Publish `action` from the witness hook: inside the chain, after the
+/// request was admitted and before its delivery is recorded. Returns the
+/// hook's reach count before arming.
+fn reload_in_chain(fx: &Fixture, action: CollusionAction) -> u32 {
+    use crate::security::firewall::relay_witness_hook;
+    let live = std::sync::Arc::clone(&fx.state.live_config);
+    let reached = relay_witness_hook::reached();
+    relay_witness_hook::arm(move || {
+        let mut cfg = (*live.get()).clone();
+        cfg.security.firewall.collusion.action = action;
+        live.set(cfg);
+    });
+    reached
+}
+
+/// Case B inside the chain: admitted under the startup `block`, `off`
+/// published between admission and delivery: the delivery stores no entry.
+/// Recording under the admission generation would store one.
+#[tokio::test]
+async fn r43b_prime_c_off_published_after_admission_stores_no_replay_entry() {
+    let fx = live_fixture(CollusionAction::Block).await;
+    let reached = reload_in_chain(&fx, CollusionAction::Off);
+    let key = keyed_chain(&fx, "r43bp-c").await;
+    assert!(
+        crate::security::firewall::relay_witness_hook::reached() > reached,
+        "premise: the chain never reached the witness hook"
+    );
+    assert!(
+        firewall(&fx).replay_digests(&key).is_none(),
+        "R4.3b′ C: an entry was stored though `off` was current at delivery"
+    );
+}
+
+/// Case A inside the chain: admitted under the startup `off`, `block`
+/// published between admission and delivery: the delivery stores an entry.
+/// Recording under the admission generation would store none.
+#[tokio::test]
+async fn r43b_prime_d_block_published_after_admission_stores_a_replay_entry() {
+    let fx = live_fixture(CollusionAction::Off).await;
+    let reached = reload_in_chain(&fx, CollusionAction::Block);
+    let key = keyed_chain(&fx, "r43bp-d").await;
+    assert!(
+        crate::security::firewall::relay_witness_hook::reached() > reached,
+        "premise: the chain never reached the witness hook"
+    );
+    assert!(
+        firewall(&fx).replay_digests(&key).is_some(),
+        "R4.3b′ D: no entry though `block` was current at delivery"
+    );
+}
