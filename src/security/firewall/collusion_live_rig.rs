@@ -333,10 +333,11 @@ pub(crate) fn one_fp(i: u64) -> String {
 }
 
 /// A text of 49 normalised characters: two overlapping k-grams, so with every
-/// k-gram kept it is two fingerprints. Unique per `i`, and disjoint from every
-/// other `i` and from every [`one_fp`] text.
+/// k-gram kept it is two fingerprints. Its first window starts with `t` and
+/// its second ends with `u`, so neither is all digits (no [`one_fp`] text)
+/// and no window of one `i` is a window of another.
 pub(crate) fn two_fp(i: u64) -> String {
-    format!("{i:0>48}9")
+    format!("t{i:0>47}u")
 }
 
 /// The value of `mcp_gateway_collusion_capacity_total{bound}`, 0 while absent.
