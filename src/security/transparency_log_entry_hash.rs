@@ -83,6 +83,7 @@ pub fn verify_entry_sig(
         .map_err(|_| format!("entry_hash is not 32 bytes: {entry_hash}"))?;
 
     let msg = sig_message(&hash_arr, key_id);
+    // invariant: HMAC-SHA256 takes a key of any length, so this cannot fail.
     let mut mac = HmacSha256::new_from_slice(secret).expect("HMAC accepts any key length");
     mac.update(&msg);
     mac.verify_slice(&sig_bytes)
