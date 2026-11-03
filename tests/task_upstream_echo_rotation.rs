@@ -15,6 +15,10 @@
 #[path = "common/yaml.rs"]
 mod yaml;
 
+#[allow(
+    dead_code,
+    reason = "the recovery targets' shared helper; this target uses the restart, peer and store parts"
+)]
 #[path = "task_upstream_recovery/helper.rs"]
 mod helper;
 

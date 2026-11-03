@@ -419,9 +419,9 @@ fn without_ansi(line: &str) -> String {
 
 /// Every durable record body, parsed. The store is the assertion surface for
 /// the handle/marker/version table.
-#[expect(
+#[allow(
     dead_code,
-    reason = "store assertion surface; no case in this target reads the records yet"
+    reason = "store assertion surface; only the echo-rotation target reads every record"
 )]
 pub fn durable_records(root: &Path) -> Vec<Value> {
     let Ok(entries) = std::fs::read_dir(store_dir(root)) else {
