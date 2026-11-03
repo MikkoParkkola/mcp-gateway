@@ -225,6 +225,13 @@ pub(super) static ROWS: &[Row] = &[
     ),
     row(routes::UI_DECISIONS, Get, Admin(AdminRequired), &[], false),
     row(
+        routes::UI_DECISIONS_COUNT,
+        Get,
+        Admin(AdminRequired),
+        &[],
+        false,
+    ),
+    row(
         routes::UI_REFUSALS,
         Get,
         Admin(Forbidden),

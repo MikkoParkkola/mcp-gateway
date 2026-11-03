@@ -207,7 +207,7 @@ pub(super) fn tracked_sections(running: &Config, wanted: &Config) -> Vec<(&'stat
     }
 
     let mut sections = sections![
-        "auth" => auth, // first: compared below without `dashboard_session`
+        "auth" => auth, // first: compared below without its live parts
         "mtls" => mtls,
         "key_server" => key_server,
         "agent_auth" => agent_auth,

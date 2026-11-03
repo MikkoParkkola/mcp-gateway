@@ -131,8 +131,11 @@ pub(crate) async fn current_caller(
         identity,
         agent: agent.clone(),
     };
-    // A held credential has no request: it is judged by the key table
-    // current at this delivery, so a key removed by reload stops here.
+    // A held credential has no request: it is judged by the generation
+    // current at this delivery, its key table and its role mapping alike, so
+    // a key or an admin rule removed by reload stops here. One snapshot,
+    // taken before any key-server verification: a reload landing during it
+    // applies from the next delivery.
     let generation = state.live_config.generation();
     let auth_config = generation.auth();
     if !auth_config.enabled {
@@ -161,7 +164,7 @@ pub(crate) async fn current_caller(
     if let Some((client, _)) = auth_config.validate_token_with_origin(token) {
         return Some(found(client, None));
     }
-    match key_server_credential(state, token).await {
+    match key_server_credential(state, &generation, token).await {
         KsCredential::Credential(held) => return Some(found(held.0, Some(held.1.identity))),
         // A recognised credential that names no one is dead, never the
         // anonymous client (MIK-8286).
@@ -232,7 +235,11 @@ pub(crate) async fn delivery(
 ///
 /// The `via` label exists only so each caller keeps its own log line; it is a
 /// fixed string, never anything the caller sent.
-pub(super) async fn key_server_credential(state: &AuthState, token: &str) -> KsCredential {
+pub(super) async fn key_server_credential(
+    state: &AuthState,
+    generation: &crate::config_reload::Generation,
+    token: &str,
+) -> KsCredential {
     use crate::key_server::KeyServerLookup;
     let Some(ks) = state.key_server.as_ref() else {
         return KsCredential::NotOurs;
@@ -259,10 +266,15 @@ pub(super) async fn key_server_credential(state: &AuthState, token: &str) -> KsC
         }
         KeyServerLookup::Absent => return KsCredential::NotOurs,
     };
-    // E1-a: admin comes from the live role mapping on every request; no mint
-    // site stores it, so a reload that removes the rule revokes it.
-    let config = state.live_config.get();
-    client.admin = config.control_plane.role_mapping.grants_admin(&identity);
+    // Admin comes from the role mapping of `generation`: the one pinned on the
+    // request, or for a held credential the one current at this delivery. No
+    // mint site stores it, so a reload that removes the rule revokes it from
+    // the next request or delivery.
+    client.admin = generation
+        .config()
+        .control_plane
+        .role_mapping
+        .grants_admin(&identity);
     let expires_at = exp
         .and_then(|s| i64::try_from(s).ok())
         .and_then(|s| chrono::DateTime::from_timestamp(s, 0));

@@ -885,6 +885,16 @@ class TestSection(unittest.TestCase):
                 self.assertEqual(self.timeouts(text), [], text)
                 self.assertEqual(self.new(text), [], text)
 
+    def test_an_unsure_file_is_judged_as_test_code_throughout(self):
+        # The parser cannot read this file cleanly (a cfg on a struct-pattern
+        # field), so it is unsure as a whole; this gate looks for test code,
+        # so all of it is judged (LEAN_LONG).
+        text = (
+            "fn p(s: S) {\n    let S {\n        #[cfg(feature = \"x\")]\n        a,\n        b,\n    } = s;\n}\n"
+            f"#[cfg(test)]\nfn helper() {{}}\n\nasync fn product() {{\n{self.WINDOW}\n}}\n"
+        )
+        self.assertEqual(len(self.timeouts(text)), 1, text)
+
     def test_a_product_file_without_test_items_has_no_test_code(self):
         self.assertEqual(self.timeouts(self.product_after("fn other() {}")), [])
 

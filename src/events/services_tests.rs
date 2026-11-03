@@ -54,6 +54,7 @@ fn presented(name: &str, secret: &str) -> ApiKeyRef {
         principal: crate::gateway::auth::principal_of(secret)
             .storage_form()
             .to_owned(),
+        digest_tag: Some(crate::gateway::auth::secret_tag(secret)),
     }
 }
 
@@ -733,3 +734,6 @@ fn an_event_charge_after_a_lowering_reload_meets_the_new_budget() {
         "2 of the reloaded budget 1"
     );
 }
+
+#[path = "services_binding_tests.rs"]
+mod binding;

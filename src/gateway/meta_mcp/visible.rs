@@ -573,7 +573,6 @@ pub(crate) mod seams {
     /// request's generation, before any layer after the pin runs: a reload
     /// the hook publishes is current for authentication and every check that
     /// follows, while the request carries the generation pinned before it.
-    #[cfg(feature = "firewall")]
     pub(crate) fn after_pin(hook: impl FnOnce() + 'static) {
         AFTER_PIN.with(|slot| *slot.borrow_mut() = Some(Box::new(hook)));
     }
