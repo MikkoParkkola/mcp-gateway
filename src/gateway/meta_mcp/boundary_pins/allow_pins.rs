@@ -35,8 +35,16 @@ fn banned() -> &'static [String] {
 fn the_banned_names_are_read_from_the_config_span() {
     let names = banned();
     assert!(names.len() >= 20, "too few names read: {names:?}");
-    for name in ["get", "stop_all", "stop_all_by", "resolve_propagation_headers"] {
-        assert!(names.iter().any(|n| n == name), "{name} not read: {names:?}");
+    for name in [
+        "get",
+        "stop_all",
+        "stop_all_by",
+        "resolve_propagation_headers",
+    ] {
+        assert!(
+            names.iter().any(|n| n == name),
+            "{name} not read: {names:?}"
+        );
     }
 }
 
