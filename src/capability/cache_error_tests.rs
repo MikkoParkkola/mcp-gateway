@@ -83,7 +83,7 @@ providers:
 /// A context the capability cache will key: a caller, a known revision, a
 /// routing profile and a policy epoch (the CACHE.4 conditions).
 fn cacheable_context() -> CapabilityExecutionContext {
-    let mut context = CapabilityExecutionContext::with_caller_identity(GrantSubject::new(
+    let mut context = CapabilityExecutionContext::with_caller_identity(GrantSubject::for_test(
         "cloudflare_access",
         "alice",
         None,

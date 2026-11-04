@@ -69,7 +69,7 @@ fn seed(state: &AppState) {
         .set_identity_grants(LocalIdentityGrantStore::from_grants(GRANTS.iter().map(
             |(grant_id, authority, sub, label)| IdentityGrant {
                 grant_id: (*grant_id).to_string(),
-                subject: GrantSubject::new(*authority, *sub, label.map(str::to_string)),
+                subject: GrantSubject::for_test(*authority, *sub, label.map(str::to_string)),
                 agent: GrantAgent::Any,
                 capability: "matrix-capability".to_string(),
                 tool: None,
