@@ -58,9 +58,14 @@ fn body(source: &str, start: usize) -> &str {
 
 /// A code line that touches the live config or a generation itself.
 fn reads_directly(line: &str) -> bool {
-    ["generation", "live_config", "check_relay", "relay_block_message"]
-        .iter()
-        .any(|read| line.contains(read))
+    [
+        "generation",
+        "live_config",
+        "check_relay",
+        "relay_block_message",
+    ]
+    .iter()
+    .any(|read| line.contains(read))
 }
 
 /// The names of production functions whose body reads a generation itself,
@@ -79,7 +84,10 @@ fn readers() -> &'static std::collections::HashSet<String> {
         let mut names = std::collections::HashSet::new();
         for path in files {
             let shown = path.display().to_string();
-            if shown.contains("_tests") || shown.contains("/tests/") || shown.contains("test_support") {
+            if shown.contains("_tests")
+                || shown.contains("/tests/")
+                || shown.contains("test_support")
+            {
                 continue;
             }
             let source = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{e}"));
@@ -236,7 +244,9 @@ fn a_generation_reading_refusal_before_the_hook_is_still_a_read() {
                   let _ = relay_refusal(policy);\n}\n";
     let found = check_sites("row", source);
     assert!(
-        found.as_ref().is_err_and(|e| e.contains("found after `let _ = firewall_refusal(policy);`")),
+        found
+            .as_ref()
+            .is_err_and(|e| e.contains("found after `let _ = firewall_refusal(policy);`")),
         "a refusal helper before the hook went unseen: {found:?}"
     );
 }
@@ -251,7 +261,9 @@ fn a_call_to_a_function_reading_the_generation_is_a_read() {
                   let _ = generation;\n}\n";
     let found = check_sites("row", source);
     assert!(
-        found.as_ref().is_err_and(|e| e.contains("withheld_verdict")),
+        found
+            .as_ref()
+            .is_err_and(|e| e.contains("withheld_verdict")),
         "a call into a generation read before the hook went unseen: {found:?}"
     );
 }
