@@ -123,6 +123,11 @@ async fn a_loose_recovery_file_is_never_restored(loose: fn(&Path) -> std::path::
     .await;
 
     let failure = result.expect_err("a refused recovery file was restored");
+    // The guard's own refusal, not some other failure of the write.
+    assert!(
+        matches!(failure, ReplaceError::ConfigRefused(_)),
+        "{failure:?}"
+    );
     assert_eq!(read(&path), START, "the planted original was restored");
     assert!(
         journal::journal_path(&path).exists(),
