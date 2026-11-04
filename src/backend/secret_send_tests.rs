@@ -454,3 +454,94 @@ async fn a_deferring_send_resolves_its_rules_once() {
         "the slot fingerprints the value sent"
     );
 }
+
+/// Rules that do not apply to the tool, or resolve empty, sit between the
+/// applying ones: the fingerprint, the injection and the redaction set each
+/// take exactly the applying, non-empty values, each from its own rule.
+#[tokio::test]
+async fn a_deferring_send_keeps_each_value_with_its_own_rule() {
+    use crate::security::dispatched::{Dispatched, Slot, scope};
+    use crate::security::needles::{NeedleSet, scrub_text};
+    const ARG: &str = "mixed-argument-secret-77d0";
+    const HEAD: &str = "mixed-header-secret-77d0";
+    const OTHER: &str = "mixed-other-tool-secret-77d0";
+    let mut argument = rule(InjectTarget::Argument, "api_key", ARG);
+    argument.name = "arg".to_owned();
+    let mut other = rule(InjectTarget::Argument, "other_key", OTHER);
+    other.name = "other".to_owned();
+    other.tools = vec!["write".to_owned()];
+    let mut empty = rule(
+        InjectTarget::Argument,
+        "empty_key",
+        "{env.MIXED_RULES_NEVER_SET_77d0:-}",
+    );
+    empty.name = "empty".to_owned();
+    let mut header = rule(InjectTarget::Header, "X-Api-Key", HEAD);
+    header.name = "head".to_owned();
+    let backend = backend(http(), vec![argument, other, empty, header], true);
+    let needles = Arc::new(NeedleSet::default());
+    backend.stamp_needles(Arc::clone(&needles));
+    let slot = Arc::new(Slot::armed_for("svc", "read"));
+    let (params, headers) = scope(Arc::clone(&slot), async {
+        send(
+            &backend,
+            json!({"name": "read", "arguments": {}}),
+            Vec::new(),
+        )
+        .expect("sent")
+    })
+    .await;
+    assert_eq!(
+        slot.value(),
+        Some(Dispatched::of(
+            "svc",
+            &[
+                ("arg".to_owned(), ARG.to_owned()),
+                ("head".to_owned(), HEAD.to_owned()),
+            ]
+        ))
+    );
+    let arguments = params.and_then(|p| p.get("arguments").cloned());
+    assert_eq!(
+        arguments,
+        Some(json!({"api_key": ARG})),
+        "only the applying argument"
+    );
+    assert!(
+        headers
+            .iter()
+            .any(|(name, value)| name == "X-Api-Key" && value == HEAD)
+    );
+    for (value, held) in [(ARG, true), (HEAD, true), (OTHER, false)] {
+        let mut text = format!("echo {value}");
+        scrub_text(&needles, &mut text);
+        assert_eq!(!text.contains(value), held, "{value}: {text}");
+    }
+}
+
+/// A call whose rules fail both to resolve and to inject reports the
+/// resolution failure: every rule is resolved before any is injected, so a
+/// dispatch never injects from a partial resolution.
+#[test]
+fn a_resolution_failure_is_reported_before_an_injection_refusal() {
+    let mut bad_header = rule(InjectTarget::Header, "X-Api-Key", "bad\nvalue");
+    bad_header.name = "first".to_owned();
+    let mut unresolvable = rule(
+        InjectTarget::Argument,
+        "api_key",
+        "{env.PRECEDENCE_NEVER_SET_77d0}",
+    );
+    unresolvable.name = "second".to_owned();
+    let backend = backend(http(), vec![bad_header, unresolvable], true);
+    let error = send(
+        &backend,
+        json!({"name": "read", "arguments": {}}),
+        Vec::new(),
+    )
+    .expect_err("refused");
+    let text = error.to_string();
+    assert!(
+        text.contains("Failed to resolve credential 'second'"),
+        "{text}"
+    );
+}
