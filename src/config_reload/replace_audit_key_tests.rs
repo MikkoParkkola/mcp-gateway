@@ -33,12 +33,18 @@ fn posture(dir: &tempfile::TempDir) -> (Arc<crate::security::TransparencyLogger>
     (log, posture)
 }
 
-/// The one record `log` holds.
+/// The one intent record `log` holds (a new log opens with its own
+/// segment record first).
 fn only_record(log: &crate::security::TransparencyLogger) -> Value {
     let records: Vec<Value> = std::fs::read_to_string(log.path())
         .expect("the log was written")
         .lines()
-        .map(|line| serde_json::from_str(line).expect("a JSON record"))
+        .map(|line| serde_json::from_str::<Value>(line).expect("a JSON record"))
+        .filter(|record| {
+            record["event"]
+                .as_str()
+                .is_some_and(|event| event.ends_with("_intent"))
+        })
         .collect();
     assert_eq!(records.len(), 1, "{records:?}");
     records.into_iter().next().expect("one record")

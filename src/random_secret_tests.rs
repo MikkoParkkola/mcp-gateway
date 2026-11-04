@@ -117,9 +117,10 @@ fn random_secret_is_called_only_where_listed() {
         .into_iter()
         .filter(|(file, _)| file != "src/random_secret.rs")
         .filter_map(|(file, code)| {
-            // The shared fn always takes a prefix literal, so `random_secret("`
-            // names it and not another module's own `random_secret()`.
-            let count = code.matches("random_secret(\"").count();
+            // Every caller names the shared fn by its path, so the count
+            // never takes in another module's own `random_secret()`. String
+            // literals are blanked in `code`, so the prefix cannot be matched.
+            let count = code.matches("random_secret::random_secret(").count();
             (count > 0).then_some((file, count))
         })
         .collect();
