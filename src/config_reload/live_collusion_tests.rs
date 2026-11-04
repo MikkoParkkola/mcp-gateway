@@ -71,6 +71,32 @@ const DETECTOR: [(&str, Edit); 3] = [
     }),
 ];
 
+/// F6.0: the two tables hold four live and three detector fields, and
+/// together name each collusion field once, so no row loses a field.
+#[test]
+fn f6_0_the_tables_name_every_collusion_field_once() {
+    assert_eq!((LIVE.len(), DETECTOR.len()), (4, 3), "F6.0: table lengths");
+    let mut named: Vec<&str> = LIVE
+        .iter()
+        .chain(&DETECTOR)
+        .map(|(name, _)| *name)
+        .collect();
+    named.sort_unstable();
+    let config = serde_json::to_value(crate::security::firewall::CollusionConfig::default())
+        .expect("serializes");
+    let mut fields: Vec<&str> = config
+        .as_object()
+        .expect("an object")
+        .keys()
+        .map(String::as_str)
+        .collect();
+    fields.sort_unstable();
+    assert_eq!(
+        named, fields,
+        "F6.0: the tables do not name each field once"
+    );
+}
+
 /// F6.1: each live collusion field alone is not restart-pending. RED on
 /// base: the flag that says the gate reads them live is off.
 #[test]
