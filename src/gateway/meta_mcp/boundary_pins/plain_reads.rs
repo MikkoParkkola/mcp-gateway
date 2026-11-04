@@ -444,39 +444,10 @@ fn an_alias_bound_twice_in_one_file_fails_the_walk() {
 /// escape the inventory.
 #[test]
 fn the_walk_roots_are_the_cargo_targets() {
-    let root = crate_root();
-    let manifest = std::fs::read_to_string(root.join("Cargo.toml")).expect("Cargo.toml");
-    let mut targets = vec!["src/lib.rs".to_owned()];
-    let mut in_bin = false;
-    for line in manifest.lines().map(str::trim) {
-        if line.starts_with('[') {
-            in_bin = line == "[[bin]]";
-        } else if in_bin
-            && let Some(path) = line
-                .strip_prefix("path")
-                .map(str::trim_start)
-                .and_then(|rest| rest.strip_prefix('='))
-        {
-            targets.push(path.trim().trim_matches('"').to_owned());
-        }
-    }
-    let autobins = !manifest
-        .lines()
-        .any(|l| l.trim().replace(' ', "") == "autobins=false");
-    if autobins && let Ok(entries) = std::fs::read_dir(root.join("src/bin")) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            let name = entry.file_name().to_string_lossy().into_owned();
-            if path.extension().is_some_and(|e| e == "rs") {
-                targets.push(format!("src/bin/{name}"));
-            } else if path.join("main.rs").is_file() {
-                targets.push(format!("src/bin/{name}/main.rs"));
-            }
-        }
-    }
-    targets.sort();
-    targets.dedup();
-    let mut roots: Vec<String> = ROOTS.iter().map(|r| (*r).to_owned()).collect();
-    roots.sort();
-    assert_eq!(roots, targets, "ROOTS must list every Cargo target");
+    let roots: std::collections::BTreeSet<String> = ROOTS.iter().map(|r| (*r).to_owned()).collect();
+    assert_eq!(
+        roots,
+        super::plain_refusals_tests::crate_targets(crate_root()),
+        "ROOTS must list every Cargo target"
+    );
 }
