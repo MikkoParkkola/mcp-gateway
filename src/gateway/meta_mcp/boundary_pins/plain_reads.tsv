@@ -33,10 +33,10 @@ src/config/record_key.rs	sync_dir	File::open	1	no-content	opens a directory only
 src/config/secret_file.rs	open_for_guarded_read	.open	1	guard	Windows: the config guard's open; the DACL and owner are judged on this handle before its bytes are read
 src/config/secret_file.rs	open_for_guarded_read	open_nonblocking	1	guard	the config guard: type, mode and owner are judged on this handle before its bytes are read
 src/config_persistence_atomic.rs	apply_inherited_mode	open_nonblocking	1	no-content	opens the write target only to probe its ACL; no bytes are read
-src/config_persistence_atomic.rs	copy_keeping_access	File::open	1	backup-copy	Windows: upgrade copies gateway.yaml to gateway.yaml.bak.<version> (and config export a client config) with the source access list, so the copy is no less protected; nothing reads a backup back (Unix uses fs::copy, unseen here)
-src/config_persistence_atomic.rs	copy_keeping_access	fs::copy	1	backup-copy	Unix: upgrade copies gateway.yaml to gateway.yaml.bak.<version> (and config export a client config) with fs::copy, which keeps the mode, so the copy is no less protected; nothing reads a backup back
-src/config_persistence_atomic.rs	create_scratch	.open	1	write-only	creates the atomic writer's owner-only scratch file; reads nothing
-src/config_persistence_atomic.rs	finish_kept	.open	1	write-only	creates the scratch that keeps the target's access list; reads nothing
+src/config_persistence_atomic.rs	copy_keeping_access	File::open	1	backup-copy	Windows: copies gateway.yaml to gateway.yaml.bak.<version> for upgrade, which nothing in the gateway reads back, and a third-party client config to its backup for config export, which rollback_client_config restores; the copy keeps the source's access, so it is no less protected
+src/config_persistence_atomic.rs	copy_keeping_access	fs::copy	1	backup-copy	Unix (fs::copy keeps the mode): copies gateway.yaml to gateway.yaml.bak.<version> for upgrade, which nothing in the gateway reads back, and a third-party client config to its backup for config export, which rollback_client_config restores; the copy keeps the source's access, so it is no less protected
+src/config_persistence_atomic.rs	create_scratch	.open	1	write-only	creates the atomic writer's scratch file (create_new): owner-only for a private write, the process default for an inherit write; reads nothing
+src/config_persistence_atomic.rs	finish_kept	.open	1	write-only	Windows: creates the scratch (create_new) on a volume that keeps no access lists; reads nothing
 src/config_persistence_atomic_windows.rs	prepare	.open	1	no-content	Windows: opens the write target with READ_CONTROL only, to copy its access list; no bytes are read
 src/config_persistence_journal.rs	sync_dir_of	File::open	1	no-content	opens a directory only to fsync it or list it; no file bytes are read
 src/config_persistence_lock.rs	keep_private	.open	1	no-content	opens the config lock sidecar to hold the lock; its bytes are never read
