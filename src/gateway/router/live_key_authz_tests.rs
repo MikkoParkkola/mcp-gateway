@@ -241,9 +241,9 @@ async fn k5_a_rate_limit_changed_by_reload_applies_and_keeps_its_usage() {
     let dir = tempfile::tempdir().expect("tempdir");
     // The running table as a reload writes it, before the spend.
     reload(&state, dir.path(), entry(1, "")).await;
-    assert_ne!(
+    assert_eq!(
         ping(&state, SECRET).await,
-        StatusCode::TOO_MANY_REQUESTS,
+        StatusCode::OK,
         "premise: one request"
     );
     assert_eq!(
@@ -265,11 +265,21 @@ async fn k5_a_rate_limit_changed_by_reload_applies_and_keeps_its_usage() {
         "a reload that kept the rate handed back the spent request"
     );
 
-    // The new rate applies.
+    // The new rate applies: admitted, not merely "not throttled".
     reload(&state, dir.path(), entry(1000, "")).await;
-    assert_ne!(
+    for _ in 0..2 {
+        assert_eq!(
+            ping(&state, SECRET).await,
+            StatusCode::OK,
+            "the rate raised by reload still refuses"
+        );
+    }
+
+    // And a rate lowered by reload throttles again.
+    reload(&state, dir.path(), entry(1, "")).await;
+    assert_eq!(
         ping(&state, SECRET).await,
         StatusCode::TOO_MANY_REQUESTS,
-        "the rate raised by reload still refuses"
+        "the rate lowered by reload still admits"
     );
 }
