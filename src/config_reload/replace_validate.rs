@@ -1,0 +1,136 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+//! Full validation before any entry: the new bytes go through the reload's
+//! own load and refusals with each secret slot standing in as a reserved
+//! `env:` name, so a save the reload would refuse creates no store entry.
+//! No submitted secret goes through the loader; the one check that needs a
+//! real value (one secret matching two credentials) runs here on it, and
+//! its message names fields, never values.
+
+use std::collections::BTreeMap;
+use std::path::Path;
+
+use super::{ReplaceError, SecretStep};
+use crate::config::{Config, EnvOverlay, PENDING_SLOT_PREFIX, reserved_slot_reference};
+use crate::config_persistence::keyedit::{Segment, SlotId, Template};
+use crate::config_reload::ReloadContext;
+use crate::config_reload::reload_context::EvaluatedReload;
+
+/// Each slot's `env:` reference and the stand-in its name resolves to: a
+/// fresh random value per slot per save, so two slots never stand in as
+/// the same credential, shaped so a digest field still parses as one.
+pub(super) fn stand_ins(
+    template: &Template,
+) -> (BTreeMap<SlotId, String>, BTreeMap<String, String>) {
+    let (mut refs, mut pending) = (BTreeMap::new(), BTreeMap::new());
+    for (n, id) in template.slot_ids().enumerate() {
+        let name = format!("{PENDING_SLOT_PREFIX}{n}");
+        refs.insert(id.clone(), format!("env:{name}"));
+        pending.insert(name, stand_in(id));
+    }
+    (refs, pending)
+}
+
+fn stand_in(id: &SlotId) -> String {
+    let digest = matches!(id.0.last(), Some(Segment::Key(key)) if key.ends_with("key_sha256"));
+    if digest {
+        format!("sha256:{}", hex::encode(rand::random::<[u8; 32]>()))
+    } else {
+        format!("mcpgw-pending-{}", hex::encode(rand::random::<[u8; 16]>()))
+    }
+}
+
+/// One submitted bearer token that is also an API key's credential in the
+/// config the save makes: one secret would match two credentials (ADR-022).
+fn refuse_shared_credentials(
+    step: &SecretStep,
+    config: &Config,
+    overlay: &EnvOverlay,
+) -> Result<(), ReplaceError> {
+    // ponytail: the bearer slot only; an API key slot's digest is checked
+    // against the others once the save core's field table names key slots.
+    let Some(bearer) = step.values.iter().find(|v| v.field == "auth.bearer_token") else {
+        return Ok(());
+    };
+    // Not text: the loader refuses it after the write, with its own message.
+    let Ok(bearer) = std::str::from_utf8(bearer.value.as_bytes()) else {
+        return Ok(());
+    };
+    let keys: Vec<_> = (config.auth.api_keys.iter())
+        .filter_map(|key| {
+            let current = key.resolve_digest(overlay).ok()?;
+            let previous = key.resolve_previous_digest(overlay).ok()?;
+            Some((key.name.as_str(), current, previous))
+        })
+        .collect();
+    crate::gateway::auth::refuse_shared_digests(Some(bearer), keys)
+        .map_err(|e| ReplaceError::Refused(e.to_string()))
+}
+
+impl ReloadContext {
+    /// The refusals the reload transaction answers before it applies
+    /// anything, in its order, for a candidate the config writer validates
+    /// before any store entry exists. The reload still runs them again on the
+    /// written bytes; this only refuses earlier.
+    fn refuse_candidate(&self, evaluated: EvaluatedReload) -> std::result::Result<(), String> {
+        if let Some(refusal) =
+            crate::security::posture::reload_refusal(self.live_config.running(), &evaluated.config)
+        {
+            return Err(refusal);
+        }
+        self.restart_only_refusal(&evaluated)?;
+        if evaluated.patch.is_empty() {
+            return Ok(());
+        }
+        self.refuse_before_apply(&evaluated.config, &evaluated.patch)?;
+        self.live_config
+            .prepare(evaluated.config, &evaluated.overlay)
+            .map(drop)
+            .map_err(|reason| crate::config_reload::reload_context::nothing_published(&reason))
+    }
+
+    /// Refuse `template`, before any entry exists, when the reload would
+    /// refuse it: its load, the posture, restart-only fields, the checks
+    /// before apply and the generation build, on stand-ins for its secrets.
+    pub(super) async fn validate_template(
+        &self,
+        target: &Path,
+        template: &Template,
+        step: Option<&SecretStep>,
+    ) -> Result<(), ReplaceError> {
+        // The loader's rule: a reference, never a comment that mentions it.
+        let reserved = std::str::from_utf8(template.bytes()).ok();
+        if let Some((name, line)) = reserved.and_then(reserved_slot_reference) {
+            return Err(ReplaceError::Refused(format!(
+                "the new config references {name} on line {line}; names starting \
+                 {PENDING_SLOT_PREFIX} are reserved for the config writer, so rename it"
+            )));
+        }
+        let (refs, pending) = stand_ins(template);
+        let text = template.clone().fill(&refs).map_err(|_| {
+            ReplaceError::Refused("the new config's secret slots could not be checked".to_string())
+        })?;
+        let text = String::from_utf8(text).map_err(|_| {
+            ReplaceError::Refused("the new gateway.yaml is not UTF-8 text".to_string())
+        })?;
+        let (file, env_paths) = (target.to_path_buf(), self.env.env_paths().clone());
+        let evaluated = tokio::task::spawn_blocking(move || {
+            Config::load_pending(&file, &text, &env_paths, pending)
+        })
+        .await
+        .map_err(|e| ReplaceError::Failed(format!("the config check task failed: {e}")))?
+        .map_err(|e| ReplaceError::ReloadRefused(format!("Failed to parse config: {e}")))?;
+        if let Some(step) = step {
+            refuse_shared_credentials(step, &evaluated.config, &evaluated.overlay)?;
+        }
+        let patch = crate::config_reload::compute_diff(&self.live_config.get(), &evaluated.config);
+        self.refuse_candidate(EvaluatedReload {
+            config: evaluated.config,
+            patch,
+            overlay: evaluated.overlay,
+            secret_refs: evaluated.secret_refs,
+            inputs: evaluated.inputs,
+        })
+        .map_err(ReplaceError::ReloadRefused)
+    }
+}

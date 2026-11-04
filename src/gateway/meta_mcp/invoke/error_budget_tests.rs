@@ -531,6 +531,33 @@ fn caller_refusals_leave_a_seeded_window_unchanged() {
     );
 }
 
+/// LEND.6: a refusal of the caller left out of the budget is still counted,
+/// once, under the suppression counter's `refused` reason.
+#[cfg(feature = "metrics")]
+#[test]
+fn a_caller_refusal_increments_the_refused_counter_exactly_once() {
+    crate::metrics::install();
+    let m = MetaMcp::new(Arc::new(BackendRegistry::new()));
+    m.record_error_budget(
+        "lend6-refused",
+        "tool",
+        BudgetOutcome::of_error(&lend_refusal()),
+    );
+    let text = crate::metrics::render();
+    let lines: Vec<&str> = text
+        .lines()
+        .filter(|line| {
+            line.starts_with("mcp_error_budget_suppressed_total")
+                && line.contains("server=\"lend6-refused\"")
+        })
+        .collect();
+    let [line] = lines.as_slice() else {
+        panic!("one suppressed series for the server: {lines:?}\n{text}");
+    };
+    assert!(line.contains("reason=\"refused\""), "{line}");
+    assert_eq!(line.rsplit(' ').next(), Some("1"), "{line}");
+}
+
 /// A backend's own JSON-RPC error and the same error the gateway built get the
 /// same budget class for every code: the budget reads neither variant by its
 /// code, only the gateway's throttles and a rate-limit message. Fails if one

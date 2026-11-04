@@ -39,6 +39,7 @@ async fn two_hop_chain_verifies_at_the_client() {
             Some("client-nonce-h1"),
             "{route:?}: own challenge"
         );
+        d.stop().await;
     }
 }
 
@@ -51,6 +52,7 @@ async fn require_refuses_a_tampered_upstream_signature() {
         let response = call(&d, route, Some("n-h2")).await;
         assert_refused(&response, "BadSignature");
         assert_eq!(upstream.calls().len(), 1, "{route:?}");
+        d.stop().await;
     }
 }
 
@@ -71,6 +73,7 @@ async fn verify_marks_a_tampered_upstream_unverified() {
             Err("unverified"),
             "{route:?}"
         );
+        d.stop().await;
     }
 }
 
@@ -101,6 +104,7 @@ async fn require_refuses_each_bad_upstream_chain() {
             upstream.set_mode(mode);
             let response = call(&d, route, Some("n-bad")).await;
             assert_refused(&response, rule);
+            d.stop().await;
         }
     }
 }
@@ -122,6 +126,7 @@ async fn verify_declares_an_absent_upstream_chain() {
             Err("unverified"),
             "{route:?}"
         );
+        d.stop().await;
     }
 }
 
@@ -133,6 +138,7 @@ async fn the_configured_replay_window_is_the_one_applied() {
     config["security"]["message_signing"]["replay_window"] = json!(30);
     let d = HttpGateway::start(config).await;
     assert_refused(&call(&d, Route::Invoke, Some("n-w")).await, "Stale");
+    d.stop().await;
 }
 
 /// E1: enforcement does not wait for a client to ask for a chain.
@@ -152,5 +158,6 @@ async fn require_enforces_without_a_client_nonce() {
             ok.get("result").is_some() && chain_len(&ok) == 0,
             "{route:?}: {ok}"
         );
+        d.stop().await;
     }
 }

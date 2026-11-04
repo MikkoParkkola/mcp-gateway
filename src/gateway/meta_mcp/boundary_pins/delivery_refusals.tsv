@@ -67,6 +67,12 @@ src/config_reload/reload_context.rs	with_pending_restart	next_start_refusal	1	no
 src/config_reload/reload_context_refusals.rs	refuse_before_apply	refuse_capability_name_clash	1	no-record	config reload
 src/config_reload/reload_context_refusals.rs	refuse_before_apply	reload_binding_refusal	1	feeds	a reload refusal gateway_reload_config answers; not a posture refusal, so recorded as no policy decision
 src/config_reload/reload_context_refusals.rs	refuse_before_apply	reload_posture_refusal	1	feeds	the posture refusal reload_config raises refused for
+src/config_reload/replace_validate.rs	refuse_candidate	refuse_before_apply	1	no-record	config write: the reload's own checks on the new bytes, before any secret entry; the reload runs them again
+src/config_reload/replace_validate.rs	refuse_candidate	reload_refusal	1	no-record	config write: the reload's own checks on the new bytes, before any secret entry; the reload runs them again
+src/config_reload/replace_validate.rs	refuse_candidate	restart_only_refusal	1	no-record	config write: the reload's own checks on the new bytes, before any secret entry; the reload runs them again
+src/config_reload/replace_validate.rs	refuse_shared_credentials	refuse_shared_digests	1	no-record	config write: a new bearer that is an API key's credential, before any secret entry
+src/config_reload/replace_validate.rs	validate_template	refuse_candidate	1	no-record	config write: the reload's own checks on the new bytes, before any secret entry; the reload runs them again
+src/config_reload/replace_validate.rs	validate_template	refuse_shared_credentials	1	no-record	config write: a new bearer that is an API key's credential, before any secret entry
 src/error_origin.rs	http_is_backend_refusal	is_deterministic_refusal	1	not-delivered	predicate
 src/error_origin.rs	origin	http_is_backend_refusal	1	not-delivered	predicate: names who refused, for the error-count metric
 src/error_origin.rs	to_rpc_code	http_is_backend_refusal	1	not-delivered	predicate: picks the JSON-RPC code for a backend's HTTP refusal

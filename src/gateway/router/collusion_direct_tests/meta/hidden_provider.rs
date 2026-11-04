@@ -14,11 +14,11 @@ const UNREGISTERED: &str = "gamma";
 /// so a certificate subject never makes the two callers one principal.
 fn cert_of(who: &str) -> crate::mtls::CertIdentity {
     let name = format!("agent-{who}");
-    crate::mtls::CertIdentity {
+    crate::mtls::identity::CertIdentity::for_test(crate::mtls::identity::CertFields {
         common_name: Some(name.clone()),
         display_name: name,
         ..Default::default()
-    }
+    })
 }
 
 /// An env key no fixture sets: the keyed capability's credential.
@@ -64,7 +64,7 @@ fn admit_both() -> crate::mtls::MtlsPolicy {
     use crate::mtls::config::{CertMatchConfig, MtlsConfig, PolicyRuleConfig, ToolScopeConfig};
     let admit_all = |who: &str| PolicyRuleConfig {
         match_criteria: CertMatchConfig {
-            cn: cert_of(who).common_name,
+            cn: cert_of(who).common_name().map(str::to_owned),
             ..Default::default()
         },
         allow: ToolScopeConfig {

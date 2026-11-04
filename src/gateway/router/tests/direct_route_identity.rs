@@ -133,11 +133,13 @@ fn direct_route_call_proven(
     let mut request = direct_route_call(declared);
     request
         .extensions_mut()
-        .insert(crate::mtls::identity::CertIdentity {
-            common_name: Some(subject.to_string()),
-            display_name: "cosmetic".to_string(),
-            ..Default::default()
-        });
+        .insert(crate::mtls::identity::CertIdentity::for_test(
+            crate::mtls::identity::CertFields {
+                common_name: Some(subject.to_string()),
+                display_name: "cosmetic".to_string(),
+                ..Default::default()
+            },
+        ));
     request
 }
 

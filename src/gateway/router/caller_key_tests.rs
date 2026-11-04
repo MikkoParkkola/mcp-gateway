@@ -17,16 +17,16 @@ fn credential(secret: &str) -> AuthenticatedClient {
 }
 
 fn cert(san_uri: Option<&str>, cn: Option<&str>, display: &str) -> CertIdentity {
-    CertIdentity {
+    crate::mtls::identity::CertIdentity::for_test(crate::mtls::identity::CertFields {
         san_uris: san_uri.map(str::to_string).into_iter().collect(),
         common_name: cn.map(str::to_string),
         display_name: display.to_string(),
         ..Default::default()
-    }
+    })
 }
 
 fn subject(authority: &str, id: &str) -> GrantSubject {
-    GrantSubject::new(authority, id, None)
+    GrantSubject::for_test(authority, id, None)
 }
 
 // U1: the byte-exact encoding (design F2).
@@ -46,6 +46,7 @@ fn u1_the_encoding_is_length_prefixed_and_tagged() {
 
 // U2: a subject key never equals a credential key, and no two distinct
 // subjects collide, even for inputs built to collide under a naive join.
+// (An empty authority or subject is no subject at all: it cannot be built.)
 #[test]
 fn u2_no_two_distinct_callers_share_a_key() {
     let adversarial = [
@@ -53,8 +54,6 @@ fn u2_no_two_distinct_callers_share_a_key() {
         ("a", "b:c"),
         ("a:b", "c"),
         ("a:1:b", "c"),
-        ("", "x"),
-        ("x", ""),
         ("1", "1:1:1"),
     ];
     let mut seen = std::collections::HashMap::new();
@@ -116,7 +115,7 @@ fn u3_a_certificate_naming_no_subject_is_no_subject_key() {
     );
     // Defence in depth: a placeholder subject handed over with that
     // certificate is re-derived from the certificate, and still names no one.
-    let placeholder = GrantSubject::new("mtls", "<unknown>", None);
+    let placeholder = GrantSubject::for_test("mtls", "<unknown>", None);
     assert_eq!(caller_key(Some(&placeholder), Some(&c), None), "");
 }
 
@@ -163,9 +162,8 @@ fn token_exchange_keeps_bucket() {
     assert_eq!(before, after, "a new token split one subject's bucket");
 }
 
-/// A real leaf, parsed by `CertIdentity::from_der`, with the given CN and
-/// SAN URI (either may be absent).
-fn leaf(cn: Option<&str>, san_uri: Option<&str>) -> CertIdentity {
+/// A real leaf's DER, with the given CN and SAN URI (either may be absent).
+fn leaf_der(cn: Option<&str>, san_uri: Option<&str>) -> Vec<u8> {
     use rcgen::string::Ia5String;
     use rcgen::{CertificateParams, DistinguishedName, DnType, KeyPair, SanType};
     let mut params = CertificateParams::default();
@@ -179,8 +177,13 @@ fn leaf(cn: Option<&str>, san_uri: Option<&str>) -> CertIdentity {
         .into_iter()
         .collect();
     let key_pair = KeyPair::generate().expect("key generation failed");
-    let der = params.self_signed(&key_pair).expect("cert").der().to_vec();
-    CertIdentity::from_der(&der).expect("parses")
+    params.self_signed(&key_pair).expect("cert").der().to_vec()
+}
+
+/// [`leaf_der`] parsed unchecked: one row needs the identity of a
+/// certificate that names no one, which `from_der` refuses.
+fn leaf(cn: Option<&str>, san_uri: Option<&str>) -> CertIdentity {
+    CertIdentity::parse_for_test(&leaf_der(cn, san_uri)).expect("parses")
 }
 
 /// MIK-8286 R1a: a certificate with neither a SAN URI nor a CN has no grant
@@ -189,18 +192,20 @@ fn leaf(cn: Option<&str>, san_uri: Option<&str>) -> CertIdentity {
 /// display-name fallback restored.
 #[test]
 fn a_certificate_naming_no_subject_has_no_grant_subject() {
+    // Reachable: the parser refuses such a certificate, so no caller is built.
+    assert!(
+        CertIdentity::from_der(&leaf_der(None, None))
+            .expect("parses")
+            .is_none(),
+        "from_der refuses a certificate that names no one"
+    );
+    // Defence in depth: were one built anyway, it would have no grant subject.
     assert_eq!(grant_subject_from_cert_identity(&leaf(None, None)), None);
     let by_cn = grant_subject_from_cert_identity(&leaf(Some("agent-a"), None)).unwrap();
-    assert_eq!(
-        (by_cn.authority.as_str(), by_cn.subject.as_str()),
-        ("mtls", "agent-a")
-    );
+    assert_eq!((by_cn.authority(), by_cn.subject()), ("mtls", "agent-a"));
     let uri = "spiffe://example.test/agent/b";
     let by_uri = grant_subject_from_cert_identity(&leaf(None, Some(uri))).unwrap();
-    assert_eq!(
-        (by_uri.authority.as_str(), by_uri.subject.as_str()),
-        ("mtls", uri)
-    );
+    assert_eq!((by_uri.authority(), by_uri.subject()), ("mtls", uri));
 }
 
 /// MIK-8286 R8 (pins): a certificate that names its subject keeps today's

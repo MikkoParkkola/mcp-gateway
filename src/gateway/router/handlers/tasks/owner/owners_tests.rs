@@ -50,11 +50,7 @@ fn key_holder(secret: &str) -> AuthenticatedClient {
 }
 
 fn proven_subject() -> GrantSubject {
-    GrantSubject {
-        authority: "proxy".to_string(),
-        subject: "alice".to_string(),
-        label: None,
-    }
+    GrantSubject::for_test("proxy".to_string(), "alice".to_string(), None)
 }
 
 fn verified() -> VerifiedIdentity {
@@ -68,33 +64,29 @@ fn verified() -> VerifiedIdentity {
 }
 
 fn mtls_subject(subject: &str) -> GrantSubject {
-    GrantSubject {
-        authority: "mtls".to_string(),
-        subject: subject.to_string(),
-        label: None,
-    }
+    GrantSubject::for_test("mtls".to_string(), subject.to_string(), None)
 }
 
 fn spiffe_cert() -> CertIdentity {
-    CertIdentity {
+    crate::mtls::identity::CertIdentity::for_test(crate::mtls::identity::CertFields {
         common_name: None,
         organizational_unit: None,
         san_uris: vec!["spiffe://a".to_string()],
         san_dns_names: Vec::new(),
         display_name: String::new(),
         quota_principal: None,
-    }
+    })
 }
 
 fn nameless_cert() -> CertIdentity {
-    CertIdentity {
+    crate::mtls::identity::CertIdentity::for_test(crate::mtls::identity::CertFields {
         common_name: None,
         organizational_unit: None,
         san_uris: Vec::new(),
         san_dns_names: Vec::new(),
         display_name: "Display".to_string(),
         quota_principal: None,
-    }
+    })
 }
 
 struct Fixtures {

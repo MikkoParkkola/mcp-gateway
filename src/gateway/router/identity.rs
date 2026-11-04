@@ -220,7 +220,7 @@ fn trusted_proxy_identity(
         HEADER_GATEWAY_IDENTITY_SUBJECT,
         HEADER_IDENTITY_MAX_LEN,
     )?
-    .and_then(|subject| GrantSubject::checked(config.authority.clone(), subject, label));
+    .and_then(|subject| GrantSubject::new(config.authority.clone(), subject, label).ok());
     Ok(subject.map(|subject| HeaderAdmission::Proxy { subject, peer }))
 }
 
@@ -310,7 +310,7 @@ pub(crate) fn grant_subject_from_verified_identity(
     let label = trimmed_non_empty(&identity.email)
         .or_else(|| identity.name.as_deref().and_then(trimmed_non_empty));
 
-    GrantSubject::checked(identity.issuer.clone(), identity.subject.clone(), label)
+    GrantSubject::new(identity.issuer.clone(), identity.subject.clone(), label).ok()
 }
 
 /// A certificate's grant subject: the subject it names, or none. A
@@ -321,9 +321,9 @@ pub(crate) fn grant_subject_from_verified_identity(
 /// runs; this is the layer behind it.
 fn grant_subject_from_cert_identity(identity: &CertIdentity) -> Option<GrantSubject> {
     let subject = cert_subject_id(identity)?;
-    let label = trimmed_non_empty(&identity.display_name);
+    let label = trimmed_non_empty(identity.display_name());
 
-    GrantSubject::checked(MTLS_AUTHORITY, subject, label)
+    GrantSubject::new(MTLS_AUTHORITY, subject, label).ok()
 }
 
 /// The authority every certificate-derived grant subject carries.
@@ -350,12 +350,12 @@ pub(super) fn subject_key(
     let id = if from_cert {
         cert.and_then(cert_subject_id)?
     } else {
-        subject.subject.clone()
+        subject.subject().to_owned()
     };
     Some(format!(
         "subject:{}:{}:{}:{id}",
-        subject.authority.len(),
-        subject.authority,
+        subject.authority().len(),
+        subject.authority(),
         id.len()
     ))
 }
@@ -365,12 +365,10 @@ pub(super) fn subject_key(
 /// shows, which the certificate source no longer makes but which must still
 /// never become a key if handed over with that certificate.
 fn is_this_certificates(subject: &GrantSubject, cert: &CertIdentity) -> bool {
-    subject.authority == MTLS_AUTHORITY
+    subject.authority() == MTLS_AUTHORITY
         && match cert.subject_id() {
-            Some(id) => subject.subject == id,
-            None => {
-                trimmed_non_empty(&cert.display_name).as_deref() == Some(subject.subject.as_str())
-            }
+            Some(id) => subject.subject() == id,
+            None => trimmed_non_empty(cert.display_name()).as_deref() == Some(subject.subject()),
         }
 }
 
@@ -454,7 +452,7 @@ fn grant_subject_from_oauth_agent(identity: &OAuthAgentIdentity) -> Option<Grant
     let subject = Some(identity.client_id.clone()).filter(|id| !id.is_empty())?;
     let label = trimmed_non_empty(&identity.agent_name);
 
-    GrantSubject::checked("agent_oauth", subject, label)
+    GrantSubject::new("agent_oauth", subject, label).ok()
 }
 
 fn trimmed_non_empty(value: &str) -> Option<String> {

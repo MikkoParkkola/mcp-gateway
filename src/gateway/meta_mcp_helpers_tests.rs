@@ -112,19 +112,6 @@ fn extract_bool_or_ignores_non_bool_values() {
     ));
 }
 
-// ── extract_u64_or ───────────────────────────────────────────────────
-
-#[test]
-fn extract_u64_or_respects_custom_value_and_default() {
-    assert_eq!(extract_u64_or(&json!({"limit": 25}), "limit", 10), 25);
-    assert_eq!(extract_u64_or(&json!({}), "limit", 10), 10);
-}
-
-#[test]
-fn extract_u64_or_ignores_non_integer_values() {
-    assert_eq!(extract_u64_or(&json!({"limit": "many"}), "limit", 10), 10);
-}
-
 // ── build_initialize_result ─────────────────────────────────────────
 
 const TEST_INSTRUCTIONS: &str = "test instructions";

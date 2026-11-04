@@ -8,7 +8,7 @@ use crate::gateway::session_id::SessionOwner;
 
 fn subject_labelled(subject: &str, label: Option<&str>) -> ViewSubject {
     ViewSubject {
-        grant_subject: Some(crate::identity_grants::GrantSubject::new(
+        grant_subject: Some(crate::identity_grants::GrantSubject::for_test(
             "proxy",
             subject,
             label.map(str::to_owned),

@@ -25,22 +25,14 @@ fn spiffe_leaf_der(uri: &str) -> Vec<u8> {
 #[test]
 fn peer_chain_identity_extracts_spiffe_svid_leaf() {
     let leaf = CertificateDer::from(spiffe_leaf_der("spiffe://example.test/agent/alpha"));
-    let identity = client_identity_from_peer_chain(Some(&[leaf]))
-        .expect("peer chain should parse")
-        .expect("identity should be present");
+    let super::PeerCert::Named(identity) =
+        client_identity_from_peer_chain(Some(&[leaf])).expect("peer chain should parse")
+    else {
+        panic!("a SPIFFE leaf names its SAN URI");
+    };
 
-    assert_eq!(identity.san_uris, vec!["spiffe://example.test/agent/alpha"]);
-    assert_eq!(identity.display_name, "spiffe://example.test/agent/alpha");
-}
-
-#[test]
-fn peer_chain_identity_is_absent_without_client_certificate() {
-    let identity = client_identity_from_peer_chain(None).expect("missing chain is allowed");
-    assert!(identity.is_none());
-
-    let empty_identity =
-        client_identity_from_peer_chain(Some(&[])).expect("empty chain is allowed");
-    assert!(empty_identity.is_none());
+    assert_eq!(identity.san_uris(), ["spiffe://example.test/agent/alpha"]);
+    assert_eq!(identity.display_name(), "spiffe://example.test/agent/alpha");
 }
 
 #[test]
@@ -57,19 +49,20 @@ fn peer_chain_identity_rejects_malformed_certificate() {
 async fn peer_cert_identity_service_inserts_identity_extension() {
     use tower::ServiceExt;
 
-    let identity = CertIdentity {
-        san_uris: vec!["spiffe://example.test/agent/alpha".to_owned()],
-        display_name: "spiffe://example.test/agent/alpha".to_owned(),
-        ..CertIdentity::default()
-    };
+    let identity =
+        crate::mtls::identity::CertIdentity::for_test(crate::mtls::identity::CertFields {
+            san_uris: vec!["spiffe://example.test/agent/alpha".to_owned()],
+            display_name: "spiffe://example.test/agent/alpha".to_owned(),
+            ..Default::default()
+        });
     let echo = axum::Router::new().route(
         "/",
         axum::routing::get(|cert: Option<axum::Extension<CertIdentity>>| async move {
-            cert.map(|axum::Extension(cert)| cert.display_name)
+            cert.map(|axum::Extension(cert)| cert.display_name().to_owned())
                 .unwrap_or_default()
         }),
     );
-    let app = PeerCertIdentityLayer::new(Some(identity.clone())).layer(echo);
+    let app = PeerCertIdentityLayer::new(PeerCert::Named(identity.clone())).layer(echo);
     let response = app
         .oneshot(Request::get("/").body(axum::body::Body::empty()).unwrap())
         .await
@@ -77,7 +70,7 @@ async fn peer_cert_identity_service_inserts_identity_extension() {
     let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
         .await
         .unwrap();
-    assert_eq!(bytes, identity.display_name.as_bytes());
+    assert_eq!(bytes, identity.display_name().as_bytes());
 }
 
 /// Behind an HTTPS `public_url` in any letter case, matching the cookie's
@@ -205,6 +198,12 @@ mod mtls_listener {
             write(&leaf(&root, "operator", &[], 1), "client");
             write(&leaf(&root, "auditor", &[], 1), "auditor");
             write(&leaf(&other, "stranger", &[], 1), "stranger");
+            // Its only name is a DNS SAN (the issuer always writes a CN, here
+            // empty): the TLS layer accepts it, and it names no one.
+            write(&leaf(&root, "", &["client.example"], 1), "dnsonly");
+            // A CN of only spaces: it named someone before 4.0.0 (the check
+            // did not trim) and names no one now.
+            write(&leaf(&root, "   ", &[], 1), "blank");
             Self { dir }
         }
 
@@ -262,7 +261,7 @@ mod mtls_listener {
                     seen.fetch_add(1, Ordering::SeqCst);
                     async move {
                         identity
-                            .and_then(|Extension(id)| id.common_name)
+                            .and_then(|Extension(id)| id.common_name().map(str::to_owned))
                             .unwrap_or_else(|| "none".to_owned())
                     }
                 }),
@@ -322,6 +321,44 @@ mod mtls_listener {
             .expect("serve_tls returns after shutdown")
             .expect("task joins");
         assert!(ended.is_ok(), "{ended:?}");
+    }
+
+    /// A client certificate the TLS layer accepts but that names no one (a
+    /// DNS SAN only) gets the unauthenticated answer over a real handshake,
+    /// not a dropped connection, and never reaches the handler. This guards
+    /// behaviour the gateway already had; the blank-CN row below is the one
+    /// this change moves.
+    #[tokio::test]
+    async fn a_dns_only_client_certificate_is_answered_unauthenticated() {
+        let pki = Pki::new();
+        let s = serve(pki.config(true)).await;
+        let response = pki
+            .client(Some("dnsonly"))
+            .get(&s.url)
+            .send()
+            .await
+            .expect("the connection is answered, not dropped");
+        assert_eq!(response.status(), 401);
+        assert_eq!(s.hits.load(Ordering::SeqCst), 0, "the handler never ran");
+        s.handle.graceful_shutdown(Some(Duration::from_secs(5)));
+    }
+
+    /// A certificate whose CN is only spaces names no one: over a real
+    /// handshake it gets the unauthenticated answer, where it used to reach
+    /// the handler as the subject "   ".
+    #[tokio::test]
+    async fn a_blank_common_name_certificate_is_answered_unauthenticated() {
+        let pki = Pki::new();
+        let s = serve(pki.config(true)).await;
+        let response = pki
+            .client(Some("blank"))
+            .get(&s.url)
+            .send()
+            .await
+            .expect("the connection is answered, not dropped");
+        assert_eq!(response.status(), 401);
+        assert_eq!(s.hits.load(Ordering::SeqCst), 0, "the handler never ran");
+        s.handle.graceful_shutdown(Some(Duration::from_secs(5)));
     }
 
     /// G-TLS (MIK-8377): a real handshake hands the request the client
@@ -433,8 +470,8 @@ mod mtls_listener {
     }
 }
 
-/// A leaf with no CN and no SAN URI, parsed by the production parser.
-fn nameless_leaf() -> CertIdentity {
+/// A leaf with no CN and no SAN URI, through the production peer-chain parse.
+fn nameless_leaf() -> PeerCert {
     let mut params = CertificateParams::default();
     params.distinguished_name = DistinguishedName::new();
     let key_pair = KeyPair::generate().expect("key generation failed");
@@ -443,7 +480,10 @@ fn nameless_leaf() -> CertIdentity {
         .expect("cert generation failed")
         .der()
         .to_vec();
-    CertIdentity::from_der(&der).expect("a nameless leaf still parses")
+    let peer =
+        client_identity_from_peer_chain(Some(&[der.into()])).expect("a nameless leaf still parses");
+    assert!(matches!(peer, PeerCert::Nameless), "{peer:?}");
+    peer
 }
 
 /// MIK-8286 R3: a client certificate that names no subject is a presented
@@ -465,7 +505,7 @@ async fn a_nameless_client_certificate_is_refused_before_anything_runs() {
             async { "ok" }
         }),
     );
-    let app = PeerCertIdentityLayer::new(Some(nameless_leaf())).layer(inner);
+    let app = PeerCertIdentityLayer::new(nameless_leaf()).layer(inner);
     let request = Request::get("/health")
         .body(axum::body::Body::empty())
         .unwrap();

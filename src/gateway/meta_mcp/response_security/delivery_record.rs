@@ -237,8 +237,8 @@ async fn append_delivery_attempt(
     who.credential_kind = Some(credential.kind);
     who.principal = credential.principal;
     if let Some(grant) = correlation.subject {
-        who.authority = Some(grant.authority.clone());
-        who.subject = Some(grant.subject.clone());
+        who.authority = Some(grant.authority().to_owned());
+        who.subject = Some(grant.subject().to_owned());
     }
     // The invocation's own trace when one answered; absent, the
     // envelope's fallback traces the record as before.
