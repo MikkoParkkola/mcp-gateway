@@ -652,7 +652,9 @@ mod plan_tests {
         assert_eq!(
             graceful_ending(Duration::from_secs(30), true),
             Ending::Graceful {
-                eof: waits.saturating_sub(waits / 3),
+                eof: waits
+                    .checked_sub(waits / 3)
+                    .expect("a third never exceeds the whole"),
                 term: waits / 3,
             }
         );
