@@ -317,7 +317,7 @@ def stale_rows(base: str, head: str) -> list[tuple[str, str, int]]:
     # The grader's own resolver, over each file's code with comments and
     # literals blanked (read once per file): a `fn <name>` left in a comment
     # or a string keeps no row alive.
-    code = {path: blanked((show(head, path) or "").splitlines()) for path, _, _ in added}
+    code = {path: blanked((show(head, path) or "").splitlines()) for path in {row[0] for row in added}}
     return [
         (path, name, nth)
         for path, name, nth in sorted(added)
