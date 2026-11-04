@@ -101,13 +101,14 @@ fn production_sources() -> Vec<(String, String)> {
 
 /// The production callers of `random_secret`, both crates:
 /// `gateway init`'s admin token (binary), the auto bearer, the key server's
-/// bearer, the dashboard's session values. The create route joins at S5 and
+/// bearer, the dashboard's session values, the OAuth client's PKCE verifier. The create route joins at S5 and
 /// rotate in C2; any other caller fails here until it is reviewed and named.
 const CALLERS: &[(&str, usize)] = &[
     ("src/commands/mod.rs", 1),
     ("src/config/features/auth.rs", 1),
     ("src/gateway/auth_dashboard.rs", 1),
     ("src/key_server/store.rs", 1),
+    ("src/oauth/client/mod.rs", 1),
 ];
 
 #[test]
@@ -116,7 +117,9 @@ fn random_secret_is_called_only_where_listed() {
         .into_iter()
         .filter(|(file, _)| file != "src/random_secret.rs")
         .filter_map(|(file, code)| {
-            let count = code.matches("random_secret(").count();
+            // The shared fn always takes a prefix literal, so `random_secret("`
+            // names it and not another module's own `random_secret()`.
+            let count = code.matches("random_secret(\"").count();
             (count > 0).then_some((file, count))
         })
         .collect();
