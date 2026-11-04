@@ -37,3 +37,8 @@ pub(super) async fn read_policies(State(state): State<Arc<AppState>>, guard: Gua
 pub(super) fn read_model(_config: &Config) -> Value {
     json!({ "tool_policy": {}, "finding_rules": [] })
 }
+
+/// The scan types the screen offers, in `ScanType` order.
+pub(super) fn offered_types() -> Vec<&'static str> {
+    Vec::new()
+}

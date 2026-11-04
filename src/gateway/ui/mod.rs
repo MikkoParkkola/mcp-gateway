@@ -33,6 +33,8 @@ mod keys;
 mod overview;
 mod policies;
 #[cfg(test)]
+mod policies_shadow_tests;
+#[cfg(test)]
 mod policies_tests;
 mod preview;
 mod preview_identity;

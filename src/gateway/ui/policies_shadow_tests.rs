@@ -1,0 +1,229 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+//! The Policies read model's shadowing, reported per scan type and
+//! conservatively, and where a scoped finding rule applies differently.
+
+use serde_json::json;
+
+use super::policies::read_model;
+use super::policies_tests::{path, rule, rules, shadowed};
+
+fn sh(ty: &str, by: &[usize]) -> (String, Vec<String>) {
+    (ty.to_owned(), by.iter().map(|i| path(*i)).collect())
+}
+
+/// R3a: an earlier unscoped `*` rule shadows a later rule for the type both
+/// decide.
+#[test]
+fn r3a_a_star_rule_shadows_a_later_rule() {
+    let model = read_model(&rules(json!([
+        { "match": "*", "action": "warn", "scan": ["pii"] },
+        { "match": "send_*", "action": "block", "scan": ["pii"] }
+    ])));
+    assert_eq!(shadowed(&model, 1), vec![sh("pii", &[0])]);
+    assert_eq!(shadowed(&model, 0), vec![]);
+}
+
+/// R3b: an identical match shadows, each type reported.
+#[test]
+fn r3b_an_identical_match_shadows_each_type() {
+    let model = read_model(&rules(json!([
+        { "match": "send_*", "action": "warn", "scan": ["pii", "credentials"] },
+        { "match": "send_*", "action": "block", "scan": ["pii", "credentials"] }
+    ])));
+    assert_eq!(
+        shadowed(&model, 1),
+        vec![sh("credentials", &[0]), sh("pii", &[0])]
+    );
+}
+
+/// R3c: not reported for a partial overlap, disjoint types, an earlier rule
+/// with `servers`, `keys` or `except`, an earlier root rule, or a later root
+/// rule behind a `*` rule.
+#[test]
+fn r3c_what_is_not_shadowing() {
+    let later = json!({ "match": "send_mail", "action": "block", "scan": ["pii"] });
+    for earlier in [
+        json!({ "match": "send_*", "action": "warn", "scan": ["pii"] }),
+        json!({ "match": "*", "action": "warn", "scan": ["credentials"] }),
+        json!({ "match": "*", "action": "warn", "scan": ["pii"], "servers": ["a"] }),
+        json!({ "match": "*", "action": "warn", "scan": ["pii"], "keys": ["k"] }),
+        json!({ "match": "*", "action": "warn", "scan": ["pii"], "except": [{ "tool": "t" }] }),
+        json!({ "match": "*", "action": "block", "allowed_roots": ["/srv"], "path_args": ["p"] }),
+    ] {
+        let model = read_model(&rules(json!([earlier.clone(), later.clone()])));
+        assert_eq!(shadowed(&model, 1), vec![], "{earlier}");
+    }
+    let model = read_model(&rules(json!([
+        { "match": "*", "action": "warn" },
+        { "match": "*", "action": "block", "allowed_roots": ["/srv"], "path_args": ["p"] }
+    ])));
+    assert_eq!(shadowed(&model, 1), vec![], "a root rule is never shadowed");
+}
+
+/// R3d: per type: behind an earlier `pii` rule, a later rule deciding `pii`
+/// and `credentials` is shadowed for `pii` only.
+#[test]
+fn r3d_shadowing_is_per_type() {
+    let model = read_model(&rules(json!([
+        { "match": "*", "action": "warn", "scan": ["pii"] },
+        { "match": "*", "action": "block", "scan": ["pii", "credentials"] }
+    ])));
+    assert_eq!(shadowed(&model, 1), vec![sh("pii", &[0])]);
+}
+
+/// The offered types, in `ScanType` order: every type but the two the
+/// folder check alone produces.
+const OFFERED: [&str; 11] = [
+    "credentials",
+    "pii",
+    "prompt_injection",
+    "shell_injection",
+    "path_traversal",
+    "sql_injection",
+    "sequence_anomaly",
+    "memory_poisoning",
+    "cross_tenant_reach",
+    "budget_exceeded",
+    "collusion_relay",
+];
+
+/// R2g: the offered set is every `ScanType` but the output-only ones.
+#[test]
+fn r2g_the_offered_types() {
+    assert_eq!(super::policies::offered_types(), OFFERED);
+}
+
+/// R3e: an empty `scan` decides every offered type: behind an empty-scan
+/// `*` rule, an empty-scan rule is shadowed for every offered type, and a
+/// `pii` rule for `pii` alone.
+#[test]
+fn r3e_an_empty_scan_decides_every_offered_type() {
+    let model = read_model(&rules(json!([
+        { "match": "*", "action": "warn" },
+        { "match": "*", "action": "block" },
+        { "match": "send_*", "action": "block", "scan": ["pii"] }
+    ])));
+    let every: Vec<_> = OFFERED.iter().map(|t| sh(t, &[0])).collect();
+    assert_eq!(shadowed(&model, 1), every);
+    assert_eq!(shadowed(&model, 2), vec![sh("pii", &[0, 1])]);
+}
+
+/// R3f: A's action and reason do not matter, nor does B's scoping.
+#[test]
+fn r3f_shadow_eligibility_is_not_editability() {
+    for earlier in [
+        json!({ "match": "*", "action": "allow", "scan": ["pii"] }),
+        json!({ "match": "*", "action": "block", "scan": ["pii"], "reason": "r" }),
+    ] {
+        let model = read_model(&rules(json!([
+            earlier.clone(),
+            { "match": "send_*", "action": "warn", "scan": ["pii"], "servers": ["mail"] }
+        ])));
+        assert_eq!(shadowed(&model, 1), vec![sh("pii", &[0])], "{earlier}");
+    }
+}
+
+/// R3g: order: a later `*` rule shadows nothing earlier.
+#[test]
+fn r3g_a_later_rule_never_shadows_an_earlier_one() {
+    let model = read_model(&rules(json!([
+        { "match": "send_*", "action": "block", "scan": ["pii"] },
+        { "match": "*", "action": "warn", "scan": ["pii"] }
+    ])));
+    assert_eq!(shadowed(&model, 0), vec![]);
+}
+
+/// R3h: every eligible earlier rule is listed, earliest first; a type
+/// repeated in a `scan` list is reported once.
+#[test]
+fn r3h_every_shadower_once_per_type() {
+    let model = read_model(&rules(json!([
+        { "match": "*", "action": "warn", "scan": ["pii", "pii"] },
+        { "match": "send_*", "action": "warn", "scan": ["pii"] },
+        { "match": "send_*", "action": "block", "scan": ["pii", "pii"] }
+    ])));
+    assert_eq!(shadowed(&model, 2), vec![sh("pii", &[0, 1])]);
+}
+
+/// R3i: with the firewall off, an earlier `*` rule with a present-but-empty
+/// `servers`, `keys` or `except` shadows nothing.
+#[test]
+fn r3i_present_but_empty_scoping_does_not_shadow() {
+    for field in ["servers", "keys", "except"] {
+        let mut earlier = json!({ "match": "*", "action": "warn", "scan": ["pii"] });
+        earlier[field] = json!([]);
+        let mut config = rules(json!([
+            earlier,
+            { "match": "send_*", "action": "block", "scan": ["pii"] }
+        ]));
+        config.security.firewall.enabled = false;
+        assert_eq!(shadowed(&read_model(&config), 1), vec![], "{field}");
+    }
+}
+
+/// The surfaces where a rule's key is not known.
+const KEY_NOT_KNOWN: [&str; 7] = [
+    "event_delivery",
+    "task_settlement",
+    "outbound_rescan",
+    "backend_error",
+    "notification",
+    "stored_task",
+    "discovery",
+];
+/// The surfaces where a rule's backend is expanded over the registry.
+const BACKEND_EXPANDED: [&str; 4] = [
+    "notification",
+    "stored_task",
+    "discovery",
+    "aggregate_answer",
+];
+
+/// R9a, R9b, R9d, R9e: a rule scoped by key lists the key-not-known
+/// surfaces; by server, the expanded-backend ones; both, both; an unscoped
+/// rule, and an `except` entry naming only a tool, neither.
+#[test]
+fn r9_where_a_scoped_rule_applies_differently() {
+    let cases = [
+        (json!({ "keys": ["k"] }), true, false),
+        (json!({ "except": [{ "key": "k" }] }), true, false),
+        (json!({ "servers": ["a"] }), false, true),
+        (json!({ "except": [{ "server": "a" }] }), false, true),
+        (json!({ "keys": ["k"], "servers": ["a"] }), true, true),
+        (
+            json!({ "except": [{ "key": "k", "server": "a" }] }),
+            true,
+            true,
+        ),
+        (json!({}), false, false),
+        (json!({ "except": [{ "tool": "t" }] }), false, false),
+    ];
+    for (scope, keyed, served) in cases {
+        let mut shape = json!({ "match": "*", "action": "block", "scan": ["pii"] });
+        for (k, v) in scope.as_object().expect("an object") {
+            shape[k] = v.clone();
+        }
+        let model = read_model(&rules(json!([shape.clone()])));
+        let differs = &rule(&model, 0)["scope_differs"];
+        let expect = |on: bool, list: &[&str]| if on { json!(list) } else { json!([]) };
+        assert_eq!(
+            differs["key_not_known"],
+            expect(keyed, &KEY_NOT_KNOWN),
+            "{shape}"
+        );
+        assert_eq!(
+            differs["backend_expanded"],
+            expect(served, &BACKEND_EXPANDED),
+            "{shape}"
+        );
+    }
+    // R9e: present-but-empty scoping annotates as present (firewall off).
+    let mut config =
+        rules(json!([{ "match": "*", "action": "block", "scan": ["pii"], "keys": [] }]));
+    config.security.firewall.enabled = false;
+    assert_eq!(
+        rule(&read_model(&config), 0)["scope_differs"]["key_not_known"],
+        json!(KEY_NOT_KNOWN)
+    );
+}
