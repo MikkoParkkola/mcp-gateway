@@ -13,7 +13,9 @@ use super::reload_context::replace::{
 };
 #[cfg(unix)]
 use super::replace_test_support::context;
-use super::replace_test_support::{NEXT, START, WAIT, names, read, running_has_b, setup, to};
+use super::replace_test_support::{
+    NEXT, START, WAIT, names, read, running_has_b, setup, setup_refusing_reload, to,
+};
 use super::*;
 use crate::config::Config;
 use crate::fs_lock::ExclusiveFileLock;
@@ -127,18 +129,17 @@ async fn kept_beside_leaves_the_replaced_bytes() {
     }
 }
 
-/// T8b: a reload refused by the posture check rolls the file back byte for
-/// byte; the running config never changed and no journal is left.
+/// T8b: a reload that refuses the written bytes rolls them back byte for
+/// byte; the running config never changed and no journal is left. The bytes
+/// pass the writer's own checks first: a posture refusal now stops before
+/// the write (`replace_validate_tests`).
 #[tokio::test]
 async fn a_refused_reload_rolls_the_file_back() {
-    // A public URL over open tools: the posture check refuses the reload
-    // (as in `tests/posture_refusal.rs`).
-    const EXPOSED: &str = "server:\n  public_url: \"https://gw.example.com\"\nbackends:\n  a:\n    http_url: \"http://127.0.0.1:9/mcp\"\n  b:\n    http_url: \"http://127.0.0.1:9/mcp\"\n";
-    let (dir, path, ctx) = setup();
+    let (dir, path, ctx) = setup_refusing_reload();
 
     let failure = replace_detached(
         Arc::clone(&ctx),
-        to(Expected::Any, EXPOSED, Replaced::Discard),
+        to(Expected::Any, NEXT, Replaced::Discard),
         WAIT,
     )
     .await

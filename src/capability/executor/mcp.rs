@@ -372,10 +372,10 @@ pub(crate) fn principal(
     if let Some(subject) = context.caller_identity.as_ref() {
         return Ok(format!(
             "grant:{}:{}:{}:{}",
-            subject.authority.len(),
-            subject.authority,
-            subject.subject.len(),
-            subject.subject
+            subject.authority().len(),
+            subject.authority(),
+            subject.subject().len(),
+            subject.subject()
         ));
     }
     // An API-key caller named by nothing above: its credential owner key

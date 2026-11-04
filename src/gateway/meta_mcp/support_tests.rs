@@ -41,7 +41,7 @@ fn verified(subject: &str) -> crate::key_server::oidc::VerifiedIdentity {
 #[test]
 fn retry_identity_suffix_uses_the_binding_when_propagation_is_on() {
     let alice = verified("alice");
-    let subject = crate::identity_grants::GrantSubject::new("mtls", "alice", None);
+    let subject = crate::identity_grants::GrantSubject::for_test("mtls", "alice", None);
     let suffix = suffix(Some("idp:1:a:3:mem"), Some(&alice), Some(&subject));
 
     assert_eq!(suffix.as_deref(), Some("|idp:13:idp:1:a:3:mem"));
@@ -63,7 +63,7 @@ fn retry_identity_suffix_falls_back_to_the_verified_then_grant_subject() {
         "a binding and an actor id with identical text must stay distinct"
     );
 
-    let subject = crate::identity_grants::GrantSubject::new("mtls", "b", None);
+    let subject = crate::identity_grants::GrantSubject::for_test("mtls", "b", None);
     assert_eq!(
         suffix(None, None, Some(&subject)).as_deref(),
         Some("|grant:4:mtls:1:b")

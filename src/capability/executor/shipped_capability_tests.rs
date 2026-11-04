@@ -58,7 +58,7 @@ fn executor_with_projects(projects: &Path) -> CapabilityExecutor {
 
 fn caller() -> CapabilityExecutionContext {
     CapabilityExecutionContext {
-        caller_identity: Some(GrantSubject::new("test", "designer", None)),
+        caller_identity: Some(GrantSubject::for_test("test", "designer", None)),
         ..CapabilityExecutionContext::default()
     }
 }

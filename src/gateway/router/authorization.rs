@@ -392,8 +392,7 @@ pub(super) fn decide_tool_target<'a>(
             ),
         );
         return Decision::recorded(Err(refusal), move || {
-            let identity_label =
-                cert_identity.map_or("<unauthenticated>", |id| id.display_name.as_str());
+            let identity_label = cert_identity.map_or("<unauthenticated>", |id| id.display_name());
             warn!(
                 server = target.server,
                 tool = target.tool,
@@ -601,7 +600,7 @@ pub(super) fn refusal_principal(
         return Some(format!("agent:{}", agent.agent_name));
     }
     if let Some(cert) = cert_identity {
-        return Some(format!("cert:{}", cert.display_name));
+        return Some(format!("cert:{}", cert.display_name()));
     }
     None
 }
@@ -629,8 +628,8 @@ pub(super) fn slot_principal(
             .or_else(|| Some(format!("agent:{}", agent.client_id)));
     }
     if let Some(cert) = cert_identity {
-        return key(cert.quota_principal.as_ref())
-            .or_else(|| Some(format!("cert:{}", cert.display_name)));
+        return key(cert.quota_principal())
+            .or_else(|| Some(format!("cert:{}", cert.display_name())));
     }
     None
 }
@@ -702,8 +701,7 @@ impl ToolAuthorizer for RouterAuthorizer<'_> {
         if let Some(agent) = self.oauth_agent_identity {
             return agent.quota_principal.as_ref();
         }
-        self.cert_identity
-            .and_then(|cert| cert.quota_principal.as_ref())
+        self.cert_identity.and_then(|cert| cert.quota_principal())
     }
     fn backend_grant(&self) -> crate::gateway::authz::BackendGrant<'_> {
         crate::gateway::authz::BackendGrant::of(self.client)

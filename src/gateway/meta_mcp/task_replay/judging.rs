@@ -322,7 +322,7 @@ impl MetaMcp {
             caller
                 .grant_subject
                 .as_ref()
-                .map(|s| [s.authority.as_str(), s.subject.as_str()]),
+                .map(|s| [s.authority(), s.subject()]),
             caller.agent_id.map(|a| (a.as_str(), a.proof())),
         ])
         .to_string();

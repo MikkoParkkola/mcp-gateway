@@ -128,6 +128,7 @@ async fn cs_http_backend_invoke_carries_a_live_origin_link() {
         Some(digest_of_delivered(&response["result"]).as_str()),
         "{response}"
     );
+    gateway.stop().await;
 }
 
 /// Final review (#2381): eligibility is server-owned. A backend that forges
@@ -146,6 +147,7 @@ async fn cs_http_forged_enforcement_metadata_does_not_suppress_the_link() {
         )
         .await;
     assert_eq!(origin(&response)["src"], "live", "{response}");
+    gateway.stop().await;
 }
 
 /// A3 L2 on the production path: under `emit: always` with no chain nonce,
@@ -173,6 +175,7 @@ async fn l2_invoke_nonce_fallback_follows_message_signing() {
             expected,
             "signing={signing}: {response}"
         );
+        gateway.stop().await;
     }
 }
 
@@ -193,6 +196,7 @@ async fn cs_http_meta_only_tool_is_not_chained() {
         "control: the search answered: {response}"
     );
     assert!(unchained(&response), "{response}");
+    gateway.stop().await;
 }
 
 /// A3 R6'', as MIK-8154 S2' amends it: the chain nonce is never rewritten.
@@ -227,6 +231,7 @@ async fn cs_http_control_character_nonce_is_refused_never_rewritten() {
         )
         .await;
     assert_eq!(origin(&response)["nonce"], nonce, "{response}");
+    gateway.stop().await;
 }
 
 /// R15b (HTTP): a dispatch failure, retried under the same key, is the
@@ -246,6 +251,7 @@ async fn r15b_http_retried_dispatch_failure_is_not_chained() {
         let response = gateway.call(&session, &request).await;
         assert!(unchained(&response), "{id}: {response}");
     }
+    gateway.stop().await;
 }
 
 /// E8m (HTTP, real replay store): the replay re-links with the replaying
@@ -276,6 +282,7 @@ async fn e8m_http_replay_relinks_with_the_new_nonce() {
     let replayed = origin(&second);
     assert_eq!(replayed["src"], "replay", "{replayed}");
     assert_eq!(replayed["nonce"], "chain-e8m-2", "{replayed}");
+    gateway.stop().await;
 }
 
 /// E8d (direct route): the live call carries a live origin link. Its replay
@@ -319,6 +326,7 @@ async fn e8d_direct_live_linked_and_replay_not() {
     assert_eq!(live["src"], "live", "{live}");
     assert_eq!(live["nonce"], "chain-e8d-1", "{live}");
     assert!(unchained(&responses[1]), "{}", responses[1]);
+    gateway.stop().await;
 }
 
 /// A bare `serve --stdio` child: one JSON-RPC frame per line each way.
