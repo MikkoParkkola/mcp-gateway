@@ -15,12 +15,20 @@ use super::create_router;
 use super::ui_tool_call_tests::{ADMIN, Fx, SERVER, fixture, invoke, post_mcp, sent};
 use crate::config_reload::ReloadContext;
 
+/// The settings `fixture` runs with that a loaded file would otherwise
+/// change: it is built from `Config::default()` with the request-path
+/// security flags off, and a reload applies those flags live (ADR-023). Kept
+/// in every reload so the reload differs from the running config in the key
+/// alone, and a refusal is the field's, not the flags'.
+const FIXTURE_SETTINGS: &str =
+    "default_routing_profile: \"\"\nsecurity:\n  sanitize_input: false\n  ssrf_protection: false\n";
+
 /// The admin key `fixture` starts with, as a reload writes it, with `fields`
 /// (each a line already indented under the entry) in place of its defaults.
 fn admin_key_yaml(fields: &[&str]) -> String {
     let digest = crate::config::api_key_digest_spec(ADMIN.as_bytes());
     let mut text = format!(
-        "auth:\n  enabled: true\n  api_keys:\n    - name: {ADMIN}\n      key_sha256: \"{digest}\"\n"
+        "{FIXTURE_SETTINGS}auth:\n  enabled: true\n  api_keys:\n    - name: {ADMIN}\n      key_sha256: \"{digest}\"\n"
     );
     let has = |name: &str| fields.iter().any(|f| f.trim_start().starts_with(name));
     if !has("backends:") {
