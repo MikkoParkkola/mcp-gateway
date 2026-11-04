@@ -785,8 +785,8 @@ pub use reload_context::ReloadContext;
 pub(crate) use reload_context::SurfacedHook;
 #[cfg(feature = "webui")]
 pub(crate) use reload_context::replace::{
-    AuditPosture, Expected, FileRevision, GatewayAuth, IntentKind, NO_AUDIT_LOG, Replace,
-    ReplaceError, ReplaceOutcome, Replaced, SecretStep, replace_audited,
+    AuditPosture, BackendOp, Expected, FileRevision, GatewayAuth, IntentKind, NO_AUDIT_LOG,
+    Replace, ReplaceError, ReplaceOutcome, Replaced, SecretStep, replace_audited,
 };
 #[cfg(test)]
 use reload_context::{

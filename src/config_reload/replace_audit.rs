@@ -19,7 +19,7 @@ use crate::config_reload::ReloadContext;
 use crate::security::TransparencyLogger;
 
 /// What an intent is for.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum IntentKind {
     /// Recovering a crashed write, or paying an owed reload, before the
     /// operation that found it pending.
@@ -30,6 +30,29 @@ pub(crate) enum IntentKind {
     Adopt,
     /// A configuration-history restore.
     Restore,
+    /// A web UI backend route's edit of one backend, named, never a value.
+    Backend {
+        operation: BackendOp,
+        backend: String,
+    },
+}
+
+/// Which backend route an intent is for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum BackendOp {
+    Add,
+    Remove,
+    Update,
+}
+
+impl BackendOp {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Add => "add",
+            Self::Remove => "remove",
+            Self::Update => "update",
+        }
+    }
 }
 
 /// The id an intent was appended under; its outcome record carries it.
@@ -96,6 +119,13 @@ impl AuditPosture {
         Self { log, auth }
     }
 
+    /// Whether a write on this posture must append its intent: the gateway
+    /// has an audit log, or has auth on and so refuses every write without
+    /// one.
+    pub(crate) fn requires_audit(&self) -> bool {
+        self.log.is_some() || self.auth == GatewayAuth::On
+    }
+
     /// The audit for one operation of `kind`. Auth on with no audit log is
     /// refused here as well as at startup: an authenticated gateway never
     /// writes its config unaudited.
@@ -117,14 +147,19 @@ struct LogSink(Arc<TransparencyLogger>);
 
 impl IntentSink for LogSink {
     fn append(&mut self, intent: &Intent) -> Result<IntentId, String> {
-        let event = match intent.kind {
+        let event = match &intent.kind {
             IntentKind::Recovery => "config_recovery_intent",
             IntentKind::Save => "config_save_intent",
             IntentKind::Adopt => "config_adopt_intent",
             IntentKind::Restore => "config_restore_intent",
+            IntentKind::Backend { .. } => "config_backend_intent",
         };
         let mut fields = serde_json::Map::new();
         fields.insert("event".into(), event.into());
+        if let IntentKind::Backend { operation, backend } = &intent.kind {
+            fields.insert("operation".into(), operation.as_str().into());
+            fields.insert("backend".into(), backend.as_str().into());
+        }
         fields.insert("base_revision".into(), intent.base.as_str().into());
         fields.insert("outside_change".into(), intent.outside_change.into());
         if let Some(IntentId(id)) = &intent.recovery_intent_id {
