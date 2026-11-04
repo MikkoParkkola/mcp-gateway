@@ -214,6 +214,15 @@ impl DeliveryFacts {
         self.effect == ResponseEffect::Refused
     }
 
+    /// The code of the gateway's own fold: the code a refusal it answered as
+    /// a tool result was built with (`gateway_folded`). `None` when nothing
+    /// was folded or the worst fold is a backend's.
+    pub(crate) fn gateway_fold_code(&self) -> Option<i32> {
+        self.folded
+            .filter(|fold| fold.origin == Origin::Gateway)
+            .map(|fold| fold.code)
+    }
+
     /// The strongest effect: this cell's own, raised to `Rewritten` when the
     /// scrub redacted anything during the call.
     fn effect(&self) -> ResponseEffect {
