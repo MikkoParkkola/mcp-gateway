@@ -1,3 +1,3 @@
-src/backend/registry.rs	stop_all_by	statement	Lifecycle	stop_allx1
+src/backend/registry_stop.rs	stop_all_by	statement	Lifecycle	stop_allx1
 src/gateway/server/run.rs	run	statement	Lifecycle	stop_all_byx1
 src/gateway/server/stdio_shutdown.rs	stdio_teardown	statement	Lifecycle	stop_all_byx1
