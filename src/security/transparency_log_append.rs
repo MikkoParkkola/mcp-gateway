@@ -131,8 +131,8 @@ impl Subscribers {
     }
 
     /// Take the active file's current end as this writer's baseline: when a
-    /// reader subscribes, and after a rebuild (whose own write may fail, so
-    /// no write would record the new file's end). A cut found on the way is
+    /// reader subscribes, and after a rotation or a rebuild (whose own write
+    /// may fail, so no write would record the new file's end). A cut found on the way is
     /// raised first, so a later baseline never hides an earlier cut.
     fn rebaseline(&self, inner: &Inner) {
         if let Ok(meta) = inner.file.metadata() {
@@ -507,6 +507,7 @@ impl TransparencyLogger {
         inner.last_entry_hash = r.last_entry_hash;
         inner.seg = r.seg;
         inner.seg.id = file_id(&inner.file)?;
+        self.subscribers.rebaseline(inner);
         self.mark_hwm(inner, path, true);
         telemetry_metrics::counter!("mcp_audit_rotations_total").increment(1);
         if self.config.rotation.on_disk_full == OnDiskFull::ExpireOldest
