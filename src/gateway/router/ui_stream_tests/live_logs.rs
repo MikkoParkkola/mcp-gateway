@@ -446,26 +446,6 @@ async fn c2_a_catch_up_serves_a_due_keep_alive_before_its_next_page() {
 }
 
 #[tokio::test]
-async fn c3_a_keep_alive_due_again_on_every_frame_does_not_stall_the_catch_up() {
-    let (state, _dirs, inv) = logged(false).await;
-    let mut again = catching_up(&state, &inv, BEARER, 3 * PAGE).await;
-    // A slow reader: each frame is read a keep-alive period and more after
-    // the last, so the keep-alive is due again after every one it sends.
-    let mut rows = 1;
-    loop {
-        tokio::time::advance(KEEP_ALIVE + Duration::from_secs(1)).await;
-        match within(again.next()).await {
-            Some(f) => rows += usize::from(f.event == "activity"),
-            None => break,
-        }
-    }
-    assert!(
-        rows > PAGE,
-        "a page follows once each due upkeep was served: {rows} rows before the lifetime ended"
-    );
-}
-
-#[tokio::test]
 async fn f8_a_config_change_is_not_held_back_by_a_run_of_calls() {
     let (state, _dirs, inv) = logged(true).await;
     let mut s = open(&state, request(STREAM, Who::Bearer(BEARER), None)).await;

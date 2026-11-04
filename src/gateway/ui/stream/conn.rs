@@ -308,37 +308,53 @@ async fn drive(
     sent.deliver(conn, &first).await?;
     let mut keep = interval_at(Instant::now() + KEEP_ALIVE, KEEP_ALIVE);
     keep.set_missed_tick_behavior(MissedTickBehavior::Delay);
+    let mut served = Upkeeps::default();
     loop {
         // Biased: whatever is already due (the client gone, the lifetime, a
         // check, a keep-alive, a snapshot) is served first, one per pass, and
-        // with a scan pending a page is read only on a pass where nothing was
-        // due, so a catch-up delays upkeep by one page at most. The page is
+        // with a scan pending a page is read only on a pass where nothing
+        // servable was due, each upkeep served at most once between pages
+        // (`servable`), so a catch-up delays upkeep by one page at most and
+        // upkeep delays a page by one round of it at most. The page is
         // read after the race, never cancelled; the live receives wait until
         // the scan ends.
         let scan = (0..2).find(|&i| logs[i].as_ref().is_some_and(LogMerge::scanning));
+        let phase = if scan.is_some() {
+            Phase::CatchUp
+        } else {
+            Phase::Live
+        };
+        if phase == Phase::Live {
+            served = Upkeeps::default();
+        }
+        let may = servable(served, phase);
         let [activity, config] = &mut logs;
         let pass = tokio::select! {
             biased;
             () = conn.tx.closed() => return Ok(End::ClientGone),
             () = tokio::time::sleep_until(deadline) => return Ok(End::Lifetime),
-            _ = recheck.tick() => {
+            _ = recheck.tick(), if may.recheck => {
                 if let Err(end) = conn.upkeep().await { return Ok(end); }
+                served.recheck = true;
                 Pass::Upkept
             }
-            _ = keep.tick() => {
+            _ = keep.tick(), if may.keep => {
                 conn.send(Bytes::from_static(b": keep-alive\n\n")).await?;
+                served.keep = true;
                 Pass::Upkept
             }
-            changed = rx.changed() => {
+            changed = rx.changed(), if may.snapshot => {
                 changed.map_err(|_| End::ClientGone)?;
                 let snap = rx.borrow_and_update().clone();
                 sent.deliver(conn, &snap).await?;
+                served.snapshot = true;
                 Pass::Upkept
             }
             () = std::future::ready(()), if scan.is_some() => Pass::Page,
             (i, out) = live_either(activity, config), if scan.is_none() => Pass::Live(i, out),
         };
         if let (Pass::Page, Some(i)) = (&pass, scan) {
+            served = Upkeeps::default();
             conn.require_entitled().await?;
             let step = match logs[i].as_mut() {
                 Some(m) => m.step().await,
@@ -357,6 +373,48 @@ async fn drive(
             // the page.
             Pass::Upkept | Pass::Page => {}
         }
+    }
+}
+
+/// Whether a catch-up page is pending on this pass.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Phase {
+    /// No scan pending: the stream follows the live logs.
+    Live,
+    /// A scan is pending: its next page follows the due upkeep.
+    CatchUp,
+}
+
+/// One flag per upkeep: a recheck, a keep-alive, a snapshot.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct Upkeeps {
+    recheck: bool,
+    keep: bool,
+    snapshot: bool,
+}
+
+impl Upkeeps {
+    const ALL: Self = Self {
+        recheck: true,
+        keep: true,
+        snapshot: true,
+    };
+}
+
+/// Which upkeeps the next pass may serve, given those `served` since the
+/// last page. Following the live logs, every one. During a catch-up, each at
+/// most once between pages: an upkeep that falls due again while it is
+/// served (a recheck slower than its period, a snapshot faster than the
+/// reader) cannot hold the next page back, which follows once nothing
+/// servable is due.
+fn servable(served: Upkeeps, phase: Phase) -> Upkeeps {
+    match phase {
+        Phase::Live => Upkeeps::ALL,
+        Phase::CatchUp => Upkeeps {
+            recheck: !served.recheck,
+            keep: !served.keep,
+            snapshot: !served.snapshot,
+        },
     }
 }
 
