@@ -302,9 +302,26 @@ fn r1e_coverage_agrees_with_the_real_matcher() {
             let (mut both, mut deny_only) = (false, false);
             // Every name in both roles: a server named like a tool prefix
             // (server `b`, tool `run`: `b:run` starts with `b`) is a pair too.
-            let names: Vec<&str> = SERVERS.iter().chain(TOOLS.iter()).copied().collect();
-            for &s in &names {
-                for &t in &names {
+            // The fixed names, both entries' literals, their parts either
+            // side of every `:`, and each of those with a character added.
+            let mut names: Vec<String> = SERVERS
+                .iter()
+                .chain(TOOLS.iter())
+                .map(|n| (*n).to_owned())
+                .collect();
+            for entry in [deny, allow] {
+                let literal = entry.strip_suffix('*').unwrap_or(entry);
+                names.push(literal.to_owned());
+                for (i, _) in literal.match_indices(':') {
+                    names.push(literal[..i].to_owned());
+                    names.push(literal[i + 1..].to_owned());
+                }
+            }
+            let suffixed: Vec<String> = names.iter().map(|n| format!("{n}q")).collect();
+            names.extend(suffixed);
+            for s in &names {
+                for t in &names {
+                    let (s, t) = (s.as_str(), t.as_str());
                     if matches(deny, s, t) {
                         if matches(allow, s, t) {
                             both = true;

@@ -255,7 +255,18 @@ fn constructions(needle: &str) -> std::collections::BTreeMap<String, usize> {
     let mut found = std::collections::BTreeMap::new();
     for file in files {
         let text = std::fs::read_to_string(&file).expect("read");
-        let production = text.split("#[cfg(test)]\nmod ").next().unwrap_or_default();
+        // Cut at the first inline test module (`#[cfg(test)]` then a `mod`
+        // line opening a block); a `mod x_tests;` declaration is not one.
+        let cut = text
+            .match_indices("#[cfg(test)]\nmod ")
+            .find(|(i, _)| {
+                text[*i..]
+                    .lines()
+                    .nth(1)
+                    .is_some_and(|l| l.trim_end().ends_with('{'))
+            })
+            .map_or(text.len(), |(i, _)| i);
+        let production = &text[..cut];
         let count = production
             .lines()
             .map(str::trim_start)

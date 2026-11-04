@@ -314,6 +314,7 @@ fn paths() -> Vec<&'static str> {
         routes::UI_REFUSALS,
         routes::UI_DECISIONS,
         routes::UI_DECISIONS_COUNT,
+        routes::UI_POLICIES,
         routes::UI_GATEWAY,
         routes::UI_KEYS,
         routes::UI_CONFIG,
