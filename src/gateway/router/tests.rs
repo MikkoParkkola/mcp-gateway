@@ -50,7 +50,6 @@ mod mcp_malformed_hardened;
 #[cfg(feature = "firewall")]
 mod meta_firewall_verdict;
 pub(super) mod meta_fixture;
-pub(crate) use meta_fixture::RunningAuth;
 mod meta_state_fixtures;
 mod order2_fsm;
 // pub(crate): the route-check matrix drives TaskSubmit x Authorize through
@@ -342,31 +341,18 @@ pub(super) async fn test_router_app_state_with_auth_and_key_server(
 /// the listener registry and the request middleware share it (MIK-8377).
 pub(crate) async fn audience_state(
     auth: &AuthConfig,
-    agents: (
-        Option<Arc<crate::key_server::KeyServer>>,
-        Option<Arc<AgentRegistry>>,
-    ),
-    configure: impl FnOnce(MetaMcp) -> MetaMcp,
-) -> (Arc<AppState>, FixtureDir) {
-    audience_state_with(auth, agents, configure, meta_fixture::RunningAuth::Resolved).await
-}
-
-/// [`audience_state`], choosing whether the running config carries `auth`.
-pub(crate) async fn audience_state_with(
-    auth: &AuthConfig,
     (key_server, agents): (
         Option<Arc<crate::key_server::KeyServer>>,
         Option<Arc<AgentRegistry>>,
     ),
     configure: impl FnOnce(MetaMcp) -> MetaMcp,
-    running: meta_fixture::RunningAuth,
 ) -> (Arc<AppState>, FixtureDir) {
     let agent_auth = match agents {
         Some(registry) => AgentAuthState::new(true, registry),
         None => AgentAuthState::new(false, Arc::new(AgentRegistry::new())),
     };
     meta_fixture::test_router_app_state_with_meta_and_agent_auth(
-        auth, key_server, agent_auth, configure, running,
+        auth, key_server, agent_auth, configure,
     )
     .await
 }

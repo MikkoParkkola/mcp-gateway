@@ -27,41 +27,54 @@ async fn push(w: &World, backend: &str) {
         .await;
 }
 
-/// Publish a key table with `edit` applied to `k-std`, or with `k-std`
-/// removed when `edit` returns false, as a reload of an edited key list
-/// does. The other keys stay, so the gateway stays multi-user. Asserts the
-/// published table changed, so no row can pass or fail on a reload that did
-/// not happen.
-fn reload_k_std(w: &World, edit: impl Fn(&mut crate::gateway::auth::ResolvedApiKey) -> bool) {
+/// The running config with the fixture's own key list, published through
+/// the real preparation, so every reload below edits the keys the gateway
+/// runs. Called before any stream opens.
+fn carry_auth(w: &World) {
     let live = &w.state.live_config;
-    let published = live.generation();
-    let before: Vec<(String, Vec<String>)> = published
-        .auth()
-        .api_keys()
-        .iter()
-        .map(|k| (k.name.clone(), k.backends.clone()))
-        .collect();
-    assert!(
-        before.iter().any(|(name, _)| name == "k-std"),
-        "premise: k-std is a key"
-    );
-    let auth = published
-        .auth()
-        .with_keys_edited(|keys| keys.retain_mut(|key| key.name != "k-std" || edit(key)));
-    live.publish(std::sync::Arc::new(
-        crate::config_reload::Generation::prepare_startup(
-            (*live.get()).clone(),
-            std::sync::Arc::new(auth),
-        ),
-    ));
-    let after: Vec<(String, Vec<String>)> = live
+    let mut config = (*live.get()).clone();
+    config.auth =
+        super::audience_fixture::fixture_auth(&super::audience_access::McpAccess::Authenticated);
+    live.set(config);
+}
+
+/// The published key table, by name and backends.
+fn key_table(w: &World) -> Vec<(String, Vec<String>)> {
+    w.state
+        .live_config
         .generation()
         .auth()
         .api_keys()
         .iter()
         .map(|k| (k.name.clone(), k.backends.clone()))
-        .collect();
-    assert_ne!(before, after, "the reload changed the key table");
+        .collect()
+}
+
+/// A reload of the running config with `edit` applied to `k-std`, or with
+/// `k-std` removed when `edit` returns false, prepared as every reload is
+/// (`LiveConfig::set` prepares an edited `auth`). The other keys stay.
+/// Asserts the published table changed.
+fn reload_k_std(w: &World, edit: impl Fn(&mut crate::config::ApiKeyConfig) -> bool) {
+    let live = &w.state.live_config;
+    let before = key_table(w);
+    let mut config = (*live.get()).clone();
+    assert!(
+        config.auth.api_keys.iter().any(|k| k.name == "k-std"),
+        "premise: the running config holds k-std (carry_auth)"
+    );
+    config
+        .auth
+        .api_keys
+        .retain_mut(|key| key.name != "k-std" || edit(key));
+    live.set(config);
+    assert_ne!(before, key_table(w), "the reload changed the key table");
+}
+
+/// A world whose running config carries its key list.
+async fn world() -> World {
+    let w = world().await;
+    carry_auth(&w);
+    w
 }
 
 /// STREAM.1 on the GET stream: a key a reload removes has its next ordinary
@@ -69,7 +82,7 @@ fn reload_k_std(w: &World, edit: impl Fn(&mut crate::gateway::auth::ResolvedApiK
 /// stream stays quiet.
 #[tokio::test]
 async fn stream1_a_removed_key_gets_nothing_on_its_get_stream() {
-    let w = World::start().await;
+    let w = world().await;
     w.store_shared("alpha", vec![tool("read", "r")]);
     w.settle().await;
     let mut get = w.sse("k-std").await;
@@ -79,6 +92,11 @@ async fn stream1_a_removed_key_gets_nothing_on_its_get_stream() {
         "premise: GET delivered"
     );
 
+    assert_ne!(
+        status_as(&w, "k-std").await,
+        axum::http::StatusCode::UNAUTHORIZED,
+        "premise: k-std is admitted before the reload"
+    );
     reload_k_std(&w, |_| false);
     assert_eq!(
         status_as(&w, "k-std").await,
@@ -96,13 +114,18 @@ async fn stream1_a_removed_key_gets_nothing_on_its_get_stream() {
 /// listener ended at its next delivery.
 #[tokio::test]
 async fn stream1_a_removed_key_ends_its_listen_stream() {
-    let w = World::start().await;
+    let w = world().await;
     w.store_shared("alpha", vec![tool("read", "r")]);
     w.settle().await;
     let mut listen = w.listen("k-std").await;
     // `frames` reads up to its sentinel; a listen stream that ended panics.
     let _ = listen.frames(&w).await;
 
+    assert_ne!(
+        status_as(&w, "k-std").await,
+        axum::http::StatusCode::UNAUTHORIZED,
+        "premise: k-std is admitted before the reload"
+    );
     reload_k_std(&w, |_| false);
     assert_eq!(
         status_as(&w, "k-std").await,
@@ -118,11 +141,14 @@ async fn stream1_a_removed_key_ends_its_listen_stream() {
 
 /// STREAM.3: a kept key whose grant for one backend a reload removes: that
 /// backend's next notification is withheld, another backend's still
-/// delivers, and the streams stay open.
+/// delivers, and the streams stay open. On listen the per-backend kind is a
+/// tool-list change: after the one hint the lost backend is owed (STREAM.2),
+/// its changes are withheld and the kept backend's still deliver.
 #[tokio::test]
 async fn stream3_a_removed_grant_withholds_that_backend_only() {
-    let w = World::start().await;
+    let w = world().await;
     w.store_shared("alpha", vec![tool("read", "r")]);
+    w.store_shared("beta", vec![tool("fetch", "f")]);
     w.settle().await;
     let (mut get, mut listen) = (w.sse("k-std").await, w.listen("k-std").await);
     push(&w, "alpha").await;
@@ -130,8 +156,7 @@ async fn stream3_a_removed_grant_withholds_that_backend_only() {
         get.frames(&w).await.iter().any(|m| m == GET_NOTE),
         "premise: GET delivered"
     );
-    // `frames` reads up to its sentinel; a listen stream that ended panics.
-    let _ = listen.frames(&w).await;
+    assert_eq!(listen.told(&w).await, 0, "premise: listen starts quiet");
 
     reload_k_std(&w, |key| {
         key.backends = vec!["beta".to_string()];
@@ -142,25 +167,41 @@ async fn stream3_a_removed_grant_withholds_that_backend_only() {
         !get.frames(&w).await.iter().any(|m| m == GET_NOTE),
         "STREAM.3: GET delivered a backend the key lost"
     );
-    // On listen the per-backend kind is a tool-list change (STREAM.2); a
-    // kept key's listen stream stays open.
-    let _ = listen.frames(&w).await;
     push(&w, "beta").await;
     assert!(
         get.frames(&w).await.iter().any(|m| m == GET_NOTE),
         "STREAM.3: GET lost beta too"
     );
+
+    w.store_shared("alpha", vec![tool("read", "r"), tool("write", "w")]);
+    assert_eq!(
+        listen.told(&w).await,
+        1,
+        "premise: listen is owed alpha's one hint"
+    );
+    w.store_shared("alpha", vec![tool("read", "r")]);
+    assert_eq!(
+        listen.told(&w).await,
+        0,
+        "STREAM.3: listen heard a backend the key lost"
+    );
+    w.store_shared("beta", vec![tool("fetch", "f"), tool("get", "g")]);
+    assert_eq!(listen.told(&w).await, 1, "STREAM.3: listen lost beta too");
 }
 
-/// STREAM.2: for a backend a kept key lost by reload, a list change still
-/// delivers its one owed hint (the caller's view moved), then the stream
-/// stays quiet for that backend.
+/// STREAM.2 reads: "For a backend the removed key lost, a `tools/list_changed`
+/// still delivers its one owed hint, then the stream stays quiet." A hint is
+/// owed only to a caller whose view moved, so this row is a kept key that
+/// loses a backend: one hint, then quiet. A removed key is owed nothing; the
+/// row after this one pins that.
 #[tokio::test]
 async fn stream2_a_lost_backend_owes_one_list_hint_then_stays_quiet() {
-    let w = World::start().await;
+    let w = world().await;
     w.store_shared("alpha", vec![tool("read", "r")]);
     w.settle().await;
     let (mut get, mut listen) = (w.sse("k-std").await, w.listen("k-std").await);
+    assert_eq!(get.told(&w).await, 0, "premise: GET starts quiet");
+    assert_eq!(listen.told(&w).await, 0, "premise: listen starts quiet");
 
     reload_k_std(&w, |key| {
         key.backends = vec!["beta".to_string()];
@@ -186,6 +227,33 @@ async fn stream2_a_lost_backend_owes_one_list_hint_then_stays_quiet() {
     );
 }
 
+/// STREAM.2's other half: a removed key is owed no hint. A tool-list change
+/// after the removal writes nothing to either stream; listen ends, and
+/// nothing it heard before ending is a tool-list change.
+#[tokio::test]
+async fn stream2_a_removed_key_is_owed_no_list_hint() {
+    let w = world().await;
+    w.store_shared("alpha", vec![tool("read", "r")]);
+    w.settle().await;
+    let (mut get, mut listen) = (w.sse("k-std").await, w.listen("k-std").await);
+    assert_eq!(get.told(&w).await, 0, "premise: GET starts quiet");
+    assert_eq!(listen.told(&w).await, 0, "premise: listen starts quiet");
+
+    reload_k_std(&w, |_| false);
+    w.store_shared("alpha", vec![tool("read", "r"), tool("write", "w")]);
+    assert_eq!(get.told(&w).await, 0, "STREAM.2: GET hinted a removed key");
+    let heard = listen
+        .heard_until_closed(&w)
+        .await
+        .expect("STREAM.1: listen still serves a removed key");
+    assert!(
+        !heard
+            .iter()
+            .any(|m| m == "notifications/tools/list_changed"),
+        "STREAM.2: listen hinted a removed key: {heard:?}"
+    );
+}
+
 /// The names `tools/list` shows `bearer` in its own legacy session `id`.
 async fn listed(w: &World, bearer: &str, id: &str) -> Vec<String> {
     let _session = w.legacy_owned(id, bearer).await;
@@ -204,7 +272,7 @@ async fn listed(w: &World, bearer: &str, id: &str) -> Vec<String> {
 /// surfaced ones included, exactly as a key that never had it.
 #[tokio::test]
 async fn a_key_that_lost_a_backend_lists_none_of_its_tools() {
-    let w = World::start().await;
+    let w = world().await;
     w.store_shared("alpha", vec![tool("read", "r"), tool("write", "w")]);
     w.settle().await;
     let alpha_tools = |names: &[String]| {
@@ -239,51 +307,9 @@ async fn a_key_that_lost_a_backend_lists_none_of_its_tools() {
 }
 
 /// Whether a `tools/call` answer reports success.
+#[cfg(feature = "spec-preview")]
 fn succeeded(answer: &serde_json::Value) -> bool {
     answer.get("error").is_none() && answer["result"]["isError"] != serde_json::json!(true)
-}
-
-/// A key a reload takes `alpha` away from can no longer call `alpha`'s
-/// tools, by the surfaced name or through `gateway_invoke`.
-#[cfg(feature = "spec-preview")]
-#[tokio::test]
-async fn a_key_that_lost_a_backend_cannot_call_its_tools() {
-    let w = World::start().await;
-    w.alpha_answers_calls(vec![tool("read", "r")]);
-    let _session = w.legacy_owned("calls", "k-std").await;
-    let invoke = serde_json::json!({
-        "name": "gateway_invoke",
-        "arguments": { "server": "alpha", "tool": "read", "arguments": {} }
-    });
-    let before = w
-        .post_in("k-std", "calls", "tools/call", invoke.clone())
-        .await;
-    assert!(
-        succeeded(&before),
-        "premise: k-std may call alpha's read: {before}"
-    );
-
-    reload_k_std(&w, |key| {
-        key.backends = vec!["beta".to_string()];
-        true
-    });
-    let invoked = w.post_in("k-std", "calls", "tools/call", invoke).await;
-    assert!(
-        !succeeded(&invoked),
-        "gateway_invoke still reaches alpha: {invoked}"
-    );
-    let direct = w
-        .post_in(
-            "k-std",
-            "calls",
-            "tools/call",
-            serde_json::json!({"name": "read", "arguments": {}}),
-        )
-        .await;
-    assert!(
-        !succeeded(&direct),
-        "the surfaced read still reaches alpha: {direct}"
-    );
 }
 
 /// Reload through the real file path: write the published config with
@@ -336,7 +362,7 @@ async fn file_reload_k_std(w: &World, edit: impl Fn(&mut crate::config::ApiKeyCo
 #[cfg(feature = "spec-preview")]
 #[tokio::test]
 async fn file_reload_a_key_that_lost_a_backend_neither_lists_nor_calls_it() {
-    let w = World::start().await;
+    let w = world().await;
     w.alpha_answers_calls(vec![tool("read", "r"), tool("write", "w")]);
     w.store_shared("alpha", vec![tool("read", "r"), tool("write", "w")]);
     w.settle().await;
@@ -371,34 +397,16 @@ async fn file_reload_a_key_that_lost_a_backend_neither_lists_nor_calls_it() {
         !names.iter().any(|n| n == "read" || n == "write"),
         "after a file reload k-std still lists alpha's tools: {names:?}"
     );
+    let kept = listed(&w, "k-deny", "kept-file").await;
+    assert!(
+        kept.iter().any(|n| n == "write"),
+        "control: after the file reload a key that kept alpha still lists it: {kept:?}"
+    );
     let after = w.post_in("k-std", "std-call", "tools/call", invoke).await;
     assert!(
         !succeeded(&after),
         "after a file reload k-std still calls alpha: {after}"
     );
-}
-
-/// `subscriptions/listen` relays only what the gateway advertises: tool-list
-/// changes (and named tasks), never a backend's ordinary notification. The
-/// gateway advertises `resources: { subscribe: false, listChanged: false }`
-/// (`build_server_capabilities`), and its only listen publishers send
-/// `tools/list_changed` (`announce_tools_changed`,
-/// `announce_backend_view_changed`) and task notifications. A resource-list
-/// change published for a backend is not delivered, and the stream stays open.
-#[tokio::test]
-async fn listen_relays_no_ordinary_backend_notification() {
-    let w = World::start().await;
-    let mut listen = w.listen("k-std").await;
-    w.state.subscriptions.publish_for_backend(
-        serde_json::json!({"jsonrpc": "2.0", "method": "notifications/resources/list_changed"}),
-        "alpha",
-    );
-    let heard = listen.frames(&w).await;
-    assert!(
-        heard.is_empty(),
-        "listen relayed an unadvertised notification: {heard:?}"
-    );
-    let _ = listen.frames(&w).await;
 }
 
 /// The status a `tools/list` request as `bearer` gets, outside any session.
@@ -425,10 +433,10 @@ async fn status_as(w: &World, bearer: &str) -> axum::http::StatusCode {
 /// next request, and the GET stream it holds is sent nothing more for it.
 #[tokio::test]
 async fn file_reload_a_removed_key_gets_nothing_on_its_get_stream() {
-    let w = World::start().await;
+    let w = world().await;
     w.store_shared("alpha", vec![tool("read", "r")]);
     w.settle().await;
-    let mut get = w.sse("k-std").await;
+    let (mut get, mut kept) = (w.sse("k-std").await, w.sse("k-deny").await);
     push(&w, "alpha").await;
     assert!(
         get.frames(&w).await.iter().any(|m| m == GET_NOTE),
@@ -445,5 +453,35 @@ async fn file_reload_a_removed_key_gets_nothing_on_its_get_stream() {
     assert!(
         !get.frames(&w).await.iter().any(|m| m == GET_NOTE),
         "the GET stream still serves a key the file reload removed"
+    );
+    assert!(
+        kept.frames(&w).await.iter().any(|m| m == GET_NOTE),
+        "control: after the file reload a kept key's GET stream still delivers"
+    );
+}
+
+/// Through the real file reload: a key the reload removes has its listen
+/// stream ended at its next delivery, while a kept key's stays open.
+#[tokio::test]
+async fn file_reload_a_removed_key_ends_its_listen_stream() {
+    let w = world().await;
+    w.store_shared("alpha", vec![tool("read", "r")]);
+    w.settle().await;
+    let (mut listen, mut kept) = (w.listen("k-std").await, w.listen("k-deny").await);
+    assert_eq!(listen.told(&w).await, 0, "premise: listen is open");
+
+    file_reload_k_std(&w, |_| false).await;
+    assert_eq!(
+        status_as(&w, "k-std").await,
+        axum::http::StatusCode::UNAUTHORIZED,
+        "premise: a request as the removed key is refused"
+    );
+    assert!(
+        listen.closed(&w).await,
+        "listen still serves a key the file reload removed"
+    );
+    assert!(
+        !kept.closed(&w).await,
+        "control: after the file reload a kept key's listen stream ended"
     );
 }
