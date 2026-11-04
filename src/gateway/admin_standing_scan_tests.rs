@@ -40,7 +40,7 @@ const ADMIN_READERS: &[(&str, &str, usize, &str)] = &[
     ),
     (
         ".admin",
-        "src/gateway/auth.rs",
+        "src/gateway/auth_caller.rs",
         1,
         "the accessor: AuthenticatedClient::admin_standing",
     ),

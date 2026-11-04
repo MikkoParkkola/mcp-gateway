@@ -148,7 +148,7 @@ class RealTree(unittest.TestCase):
                      for v in cis.violations(HERE.parents[1])}
             self.assertEqual(found, {
                 "src/identity_grants/subject.rs new",
-                "src/key_server/oidc_identity.rs checked", "src/mtls/identity.rs from_der",
+                "src/key_server/oidc_identity.rs checked", "src/mtls/identity/cert.rs parse",
                 # GrantSubject::new is checked; each call site is listed
                 # until the rule is retired.
                 "src/identity_grants/subject.rs try_from",

@@ -29,13 +29,13 @@ const ROOTS: [&str; 3] = ["src/lib.rs", "src/main.rs", "src/bin/provenance-eval.
 /// (`ApiKey` or `principal`), and why it may stay.
 const ALLOWLIST: &[(&str, &str, &str, &str)] = &[
     (
-        "src/gateway/auth.rs",
+        "src/gateway/auth_caller.rs",
         "api_key_name",
         "ApiKey",
         "the one predicate",
     ),
     (
-        "src/gateway/auth.rs",
+        "src/gateway/auth_caller.rs",
         "authenticated_principal",
         "principal",
         "the one predicate",

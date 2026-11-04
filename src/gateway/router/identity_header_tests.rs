@@ -532,16 +532,16 @@ fn textwrap_dedent(block: &str) -> String {
 /// the certificate that carries the bare name.
 #[test]
 fn cert_subject_id_keeps_padding() {
-    let cn = crate::mtls::identity::CertIdentity {
+    let cn = crate::mtls::identity::CertIdentity::for_test(crate::mtls::identity::CertFields {
         common_name: Some(" admin ".to_string()),
         ..Default::default()
-    };
+    });
     assert_eq!(cert_subject_id(&cn).as_deref(), Some(" admin "));
 
-    let san = crate::mtls::identity::CertIdentity {
+    let san = crate::mtls::identity::CertIdentity::for_test(crate::mtls::identity::CertFields {
         san_uris: vec![" spiffe://cluster/admin ".to_string()],
         ..Default::default()
-    };
+    });
     assert_eq!(
         cert_subject_id(&san).as_deref(),
         Some(" spiffe://cluster/admin ")
@@ -553,10 +553,10 @@ fn cert_subject_id_keeps_padding() {
 #[test]
 fn cert_subject_id_keeps_long_san_whole() {
     let long = format!("spiffe://cluster/{}", "a".repeat(HEADER_IDENTITY_MAX_LEN));
-    let san = crate::mtls::identity::CertIdentity {
+    let san = crate::mtls::identity::CertIdentity::for_test(crate::mtls::identity::CertFields {
         san_uris: vec![long.clone()],
         ..Default::default()
-    };
+    });
     assert_eq!(cert_subject_id(&san), Some(long));
 }
 
@@ -587,34 +587,42 @@ fn oauth_agent_grant_subject_keeps_padding() {
 /// agent identity does: the first non-empty SAN URI, else the CN (#2285).
 #[test]
 fn cert_subject_id_skips_an_empty_first_san_like_agent_identity() {
-    let cert = crate::mtls::identity::CertIdentity {
+    let cert = crate::mtls::identity::CertIdentity::for_test(crate::mtls::identity::CertFields {
         san_uris: vec![String::new(), "spiffe://cluster/b".to_string()],
         common_name: Some("c".to_string()),
         ..Default::default()
-    };
+    });
     assert_eq!(
         cert_subject_id(&cert).as_deref(),
         Some("spiffe://cluster/b")
     );
 
-    // Non-empty, not non-blank: a whitespace SAN is itself the subject.
-    let blank = crate::mtls::identity::CertIdentity {
+    // A whitespace-only SAN names no one, like an empty one: the next is the
+    // subject.
+    let blank = crate::mtls::identity::CertIdentity::for_test(crate::mtls::identity::CertFields {
         san_uris: vec![" ".to_string(), "spiffe://cluster/b".to_string()],
-        ..cert.clone()
-    };
-    assert_eq!(cert_subject_id(&blank).as_deref(), Some(" "));
+        common_name: Some("c".to_string()),
+        ..Default::default()
+    });
+    assert_eq!(
+        cert_subject_id(&blank).as_deref(),
+        Some("spiffe://cluster/b")
+    );
 
-    let empty_sans = crate::mtls::identity::CertIdentity {
-        san_uris: vec![String::new(), String::new()],
-        ..cert.clone()
-    };
+    let empty_sans =
+        crate::mtls::identity::CertIdentity::for_test(crate::mtls::identity::CertFields {
+            san_uris: vec![String::new(), String::new()],
+            common_name: Some("c".to_string()),
+            ..Default::default()
+        });
     assert_eq!(cert_subject_id(&empty_sans).as_deref(), Some("c"));
 
-    let nothing = crate::mtls::identity::CertIdentity {
-        san_uris: vec![String::new()],
-        common_name: Some(String::new()),
-        ..cert
-    };
+    let nothing =
+        crate::mtls::identity::CertIdentity::for_test(crate::mtls::identity::CertFields {
+            san_uris: vec![String::new()],
+            common_name: Some(String::new()),
+            ..Default::default()
+        });
     assert_eq!(cert_subject_id(&nothing), None);
 }
 
