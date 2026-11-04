@@ -72,7 +72,13 @@ fn occurrences(name: &str) -> Vec<(String, usize)> {
             let code =
                 crate::test_source_text::sanitize(&crate::test_source_text::production_text(&text));
             let count = path_uses(&code, name);
-            let relative = path.strip_prefix(root).ok()?.to_string_lossy().into_owned();
+            // '/' on every platform: the table names files as the repository
+            // does, and Windows walks them as `src\gateway\...`.
+            let relative = path
+                .strip_prefix(root)
+                .ok()?
+                .to_string_lossy()
+                .replace('\\', "/");
             (count > 0).then_some((relative, count))
         })
         .collect();
