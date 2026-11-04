@@ -36,6 +36,9 @@ use self::guard::Refusal;
 pub(crate) use self::guard::StreamHub;
 #[cfg(test)]
 pub(crate) use self::guard::{MAX_PER_CREDENTIAL, MAX_UI_STREAMS};
+/// One log's broadcast capacity, for the rows that must burst past it.
+#[cfg(test)]
+pub(crate) const BROADCAST: usize = feed::BROADCAST;
 use self::id::StreamId;
 use super::activity::access::Access;
 use super::errors::{auth_required, flat_error};

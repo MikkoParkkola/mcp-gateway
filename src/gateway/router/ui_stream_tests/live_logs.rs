@@ -358,8 +358,9 @@ async fn s1d_a_burst_past_the_broadcast_capacity_arrives_exactly_once_in_order()
     let mut s = open(&state, request(STREAM, Who::Bearer(BEARER), None)).await;
     within(s.until("hello")).await;
     // Nothing reads the stream while the burst is written: the appends must
-    // still complete, and the stream falls behind its broadcast.
-    let burst = 1_100;
+    // still complete, and the stream falls behind its broadcast. Sized from
+    // the capacity, so a larger broadcast still leaves this row lagging.
+    let burst = crate::gateway::ui::stream::BROADCAST + 76;
     for n in 0..burst {
         call(&inv, "srv", n);
     }
