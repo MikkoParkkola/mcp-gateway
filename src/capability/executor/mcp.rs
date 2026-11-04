@@ -64,6 +64,8 @@ pub(crate) struct McpChildren {
     /// Bumped on every unload, reload and quarantine; see
     /// `CapabilityExecutionContext::mcp_generation`.
     generations: Mutex<HashMap<String, u64>>,
+    /// The gateway's stop deadline, joined by every child backend built here.
+    pub(super) stop_deadline: std::sync::OnceLock<Arc<crate::transport::StopDeadline>>,
 }
 
 /// Decrements a child's in-flight count when a call ends, however it ends.
@@ -136,6 +138,9 @@ impl McpChildren {
                 stale.extend(map.remove(&victim));
             }
             let (backend, workdir) = start()?;
+            if let Some(deadline) = self.stop_deadline.get() {
+                let _ = backend.stop_deadline.set(Arc::clone(deadline));
+            }
             map.insert(
                 key.clone(),
                 Child {

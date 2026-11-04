@@ -61,6 +61,9 @@ pub(crate) async fn within_stop_deadline<F: std::future::Future>(
 pub(crate) struct StopDeadline {
     /// Nanoseconds after [`STOP_EPOCH`]; `u64::MAX` while unset.
     at: std::sync::atomic::AtomicU64,
+    /// Every graceful handover under this deadline, so the stop can wait for
+    /// their kills before it returns; finished ones are pruned on each add.
+    handed: parking_lot::Mutex<Vec<watch::Receiver<Reaped>>>,
 }
 
 /// The fixed origin [`StopDeadline`] counts from.
@@ -70,6 +73,7 @@ impl Default for StopDeadline {
     fn default() -> Self {
         Self {
             at: std::sync::atomic::AtomicU64::new(u64::MAX),
+            handed: parking_lot::Mutex::default(),
         }
     }
 }
@@ -81,6 +85,21 @@ impl StopDeadline {
         let nanos = deadline.saturating_duration_since(*STOP_EPOCH).as_nanos();
         let nanos = u64::try_from(nanos).unwrap_or(u64::MAX - 1);
         self.at.fetch_min(nanos, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// Track a graceful handover, so [`Self::wait_handed`] covers it.
+    fn track(&self, handed: watch::Receiver<Reaped>) {
+        let mut all = self.handed.lock();
+        all.retain(|receiver| *receiver.borrow() == Reaped::Pending);
+        all.push(handed);
+    }
+
+    /// Wait, up to `deadline`, for every tracked handover to be ended: a tree
+    /// an earlier close handed over may still be in its waits, and its kill
+    /// must land before the gateway returns.
+    pub(crate) async fn wait_handed(&self, deadline: tokio::time::Instant) {
+        let all = self.handed.lock().clone();
+        wait_reaped(all, None, deadline).await;
     }
 
     /// The deadline, once set.
@@ -361,10 +380,21 @@ impl super::StdioTransport {
             if let Some(tree) = slot.tree.as_mut() {
                 tree.set_ending(ending, self.stop_deadline.get().cloned());
             }
-            slot.take_for_reaper();
+            let handed = slot.take_for_reaper();
+            self.track_graceful(ending, handed.as_ref());
         }
         self.shutdown.lock().cancel();
         self.pending.clear();
+    }
+
+    /// A graceful handover joins the gateway's stop deadline's list, so the
+    /// gateway stop waits for its kill (an immediate one needs no wait).
+    fn track_graceful(&self, ending: Ending, handed: Option<&watch::Receiver<Reaped>>) {
+        if let (Ending::Graceful { .. }, Some(handed), Some(deadline)) =
+            (ending, handed, self.stop_deadline.get())
+        {
+            deadline.track(handed.clone());
+        }
     }
 
     /// Join the gateway stop deadline of the backend that owns this
@@ -416,6 +446,7 @@ impl super::StdioTransport {
                 tree.set_ending(ending, self.stop_deadline.get().cloned());
             }
             let mine = slot.take_for_reaper();
+            self.track_graceful(ending, mine.as_ref());
             (mine, slot.outstanding())
         };
         let deadline = tokio::time::Instant::now()

@@ -639,6 +639,12 @@ impl BackendRegistry {
         *self.stopping.read()
     }
 
+    /// The stop deadline this registry's backends share, for backends built
+    /// outside it (the capability executor's MCP children).
+    pub(crate) fn stop_deadline(&self) -> Arc<crate::transport::StopDeadline> {
+        Arc::clone(&self.stop_deadline)
+    }
+
     /// [`Self::stop_all`], planned to end by `deadline`: the deadline is set
     /// first, so a stdio tree already in its exit waits is cut to it too, and
     /// each close plans its own waits to fit.
@@ -656,6 +662,9 @@ impl BackendRegistry {
                 .collect(),
         );
         crate::transport::within_stop_deadline(deadline, self.stop_all()).await;
+        // Trees handed over gracefully before this stop (an idle close, a
+        // restart) are cut to `deadline` by the reaper; wait for their kills.
+        self.stop_deadline.wait_handed(deadline).await;
     }
 
     /// Stop all backends, concurrently.
