@@ -46,10 +46,8 @@ impl BudgetEnforcer {
         let tool_overflow = saved_micro("overflow", "tool", persisted.tool_overflow_usd);
         self.global_daily.add_on(day, tool_overflow);
         self.tool_overflow.add_on(day, tool_overflow);
-        self.key_overflow.add_on(
-            day,
-            saved_micro("overflow", "key", persisted.key_overflow_usd),
-        );
+        let key_overflow = saved_micro("overflow", "key", persisted.key_overflow_usd);
+        self.key_overflow.add_on(day, key_overflow);
         for (attribution, saved, kind) in [
             (
                 &self.tool_attribution,
@@ -67,6 +65,17 @@ impl BudgetEnforcer {
                     attribution.set(name, micro, day);
                     attribution.own(name);
                 }
+            }
+        }
+        // Every name the saving process owned is owned again before the rows
+        // go through the cap, so its row survives a full cap: ownership is
+        // never released within a process, and a restart carries it on.
+        for (attribution, saved) in [
+            (&self.tool_attribution, &persisted.tool_owned),
+            (&self.key_attribution, &persisted.key_owned),
+        ] {
+            for name in saved.iter().flatten() {
+                attribution.own(name);
             }
         }
         // Through the cap: a snapshot saved before the cap existed may hold
@@ -87,6 +96,70 @@ impl BudgetEnforcer {
             let spent = saved_micro("key", key, usd);
             if spent > 0 {
                 add_capped(self.key_maps(), key, &budgets.per_key, spent, day);
+            }
+        }
+        self.restore_attribution(persisted, day, (tool_overflow, key_overflow));
+    }
+
+    /// After the rows: the saved creation figures, then the seed of each name
+    /// the startup config budgets that the saving process did not own, taken
+    /// as a reload would take it (RESTORE.7). The overflow figures are the
+    /// saved ones, read before the rows could spill into the overflow.
+    fn restore_attribution(
+        &self,
+        persisted: &super::super::persistence::PersistedCosts,
+        day: Option<u64>,
+        (tool_overflow, key_overflow): (u64, u64),
+    ) {
+        let scopes = [
+            (
+                &self.tool_attribution,
+                &self.tool_daily,
+                &persisted.tool_born,
+                &persisted.tool_owned,
+                &self.config.budgets.per_tool,
+                tool_overflow,
+                "tool born",
+            ),
+            (
+                &self.key_attribution,
+                &self.key_daily,
+                &persisted.key_born,
+                &persisted.key_owned,
+                &self.config.budgets.per_key,
+                key_overflow,
+                "key born",
+            ),
+        ];
+        for (attribution, rows, born, owned, budgets, overflow, kind) in scopes {
+            // A file saved before the field existed keeps the figures the
+            // restore recorded (the restored overflow, an upper bound).
+            let saved_born: Option<Vec<(String, u64)>> = born.as_ref().map(|map| {
+                map.iter()
+                    .filter_map(|(name, &usd)| {
+                        saved_figure(kind, name, usd).map(|m| (name.clone(), m))
+                    })
+                    .collect()
+            });
+            if let Some(saved_born) = &saved_born {
+                attribution.restore_born(saved_born, day);
+            }
+            // A file saved before the owned names existed seeds nothing.
+            let Some(owned) = owned else { continue };
+            for name in budgets.keys() {
+                if owned.contains(name) || attribution.has_estimate(name) {
+                    continue;
+                }
+                let figure = if rows.contains_key(name) {
+                    saved_born
+                        .iter()
+                        .flatten()
+                        .find(|(n, _)| n == name)
+                        .map_or(0, |(_, micro)| *micro)
+                } else {
+                    overflow
+                };
+                attribution.set(name, figure, day);
             }
         }
     }
@@ -169,11 +242,21 @@ impl BudgetEnforcer {
         &self,
     ) -> Result<EnforcerSaveSnapshot, crate::clock::ClockBeforeEpoch> {
         let taken_at = crate::clock::unix_secs()?;
-        Ok(EnforcerSaveSnapshot::from_snapshot(
+        // One hold of the ledger lock across every capture, the lock a seed
+        // holds while it classifies, reads and owns: a save never records a
+        // name as owned without the figure that seed gave it (ADR-023).
+        let _ledger = super::locked(&self.ledger);
+        let today = Some(self.day_key(taken_at));
+        let mut save = EnforcerSaveSnapshot::from_snapshot(
             self.snapshot_at(Some(taken_at), &self.config),
             taken_at,
             self.day_basis_at(taken_at),
-        ))
+        );
+        save.tool_owned = self.tool_attribution.owned_names();
+        save.key_owned = self.key_attribution.owned_names();
+        save.tool_born = in_usd(self.tool_attribution.born_on(today));
+        save.key_born = in_usd(self.key_attribution.born_on(today));
+        Ok(save)
     }
 
     fn snapshot_at(
