@@ -274,6 +274,7 @@ fn g_logsites_every_production_logger_is_keyed_or_never_keys() {
         "src/gateway/router/direct_guards_fixture_quota.rs", // direct_guards_fixture.rs
         "src/gateway/router/stored_replay_liveness_idp_fixture.rs", // its _tests.rs
         "src/gateway/server/tools_changed/audience_fixture.rs", // tools_changed.rs
+        "src/gateway/ui/backends/signin_fixture.rs", // ui/backends/signin.rs
     ];
     const OPENERS: &[&str] = &[
         "src/gateway/server/build_meta.rs",

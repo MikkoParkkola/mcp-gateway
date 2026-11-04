@@ -366,6 +366,20 @@ pub(super) static ROWS: &[Row] = &[
         false,
     ),
     row(
+        routes::UI_BACKEND_SIGNIN,
+        Post,
+        Admin(AdminRequired),
+        &[(Page::Servers, Tab::Actions)],
+        false,
+    ),
+    row(
+        routes::UI_BACKEND_SIGNIN_CONFIRM,
+        Post,
+        Admin(AdminRequired),
+        &[(Page::Servers, Tab::Actions)],
+        false,
+    ),
+    row(
         routes::UI_DISCOVERY,
         Get,
         Admin(AdminRequired),

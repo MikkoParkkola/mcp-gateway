@@ -334,6 +334,8 @@ fn paths() -> Vec<&'static str> {
         routes::UI_BACKENDS,
         routes::UI_BACKEND,
         routes::UI_BACKEND_REVIVE,
+        routes::UI_BACKEND_SIGNIN,
+        routes::UI_BACKEND_SIGNIN_CONFIRM,
         routes::UI_REGISTRY,
         routes::UI_DISCOVERY,
         routes::UI_DISCOVERY_ADOPT,
