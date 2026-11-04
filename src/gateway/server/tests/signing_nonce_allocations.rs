@@ -6,11 +6,11 @@
 //! What is measured: every real allocation made on this thread while
 //! `Gateway::dispatch_single_staged` — the function the serve loop calls,
 //! boxed as the loop boxes it, not a duplicate validator — runs to completion
-//! on a prepared 1 MiB or 3 MiB request, its answer then settled as
-//! `dispatch_single_for_client` settles it (MIK-8400). Runtime, gateway,
-//! backend, payload and expectations are built
-//! before the scope opens; every assertion and every formatted message happens
-//! after it closes.
+//! on a prepared 1 MiB or 3 MiB request, its answer then judged, recorded and
+//! its receipts committed by `Gateway::judge_and_commit`, the loop's own tail
+//! (MIK-8400). Runtime, gateway, backend, read judge, payload and
+//! expectations are built before the scope opens; every assertion and every
+//! formatted message happens after it closes.
 //!
 //! COLD and WARM mean what they say here. A refusal populates nothing — the
 //! qualified-observer gate already established that refusals leave the nonce
@@ -40,6 +40,8 @@
 //!   grown past it (MIK-8400).
 
 use serde_json::{Value, json};
+
+use crate::gateway::outbound::StdioReads;
 
 use super::alloc_meter::{LARGE_BYTES, Measured, measure, measure_async};
 use super::signing_nonce_allocations_support::{
@@ -123,14 +125,30 @@ async fn dispatch(fixture: &Fixture, request: Value) -> Value {
     .expect("a request carrying an id must produce a response")
 }
 
+/// What the serve loop holds before a request's task starts
+/// (`stdio_loop.rs`): the read judge, built once per loop, and the params it
+/// keeps only when it judges. Prepared before any meter opens.
+fn served_inputs(fixture: &Fixture, request: &Value) -> (StdioReads, Option<Value>) {
+    let reads = fixture.meta.stdio_reads();
+    let params = reads
+        .judges()
+        .then(|| request.get("params").cloned())
+        .flatten();
+    (reads, params)
+}
+
 /// The dispatch inside the serve loop's own box of it (`stdio_loop.rs`):
-/// `dispatch_single_staged` boxed whole, then its answer settled as
-/// `dispatch_single_for_client` settles it (no frame judge in this fixture).
-/// The loop wraps that box in two more layers this does not run: the
-/// notification-streaming future and the sealed-hold scope's own box. Both
-/// are inert on a refusal (no notification, no hold), but a large allocation
-/// of theirs is outside these readings.
-async fn dispatch_as_served(fixture: &Fixture, request: Value) -> Value {
+/// `dispatch_single_staged` boxed whole, then its answer judged, recorded,
+/// settled and its receipts committed by `Gateway::judge_and_commit`, the
+/// production tail. The loop wraps the box in two more layers this does not
+/// run: the notification-streaming future and the sealed-hold scope's own
+/// box. Both are inert on a refusal (no notification, no hold), but a large
+/// allocation of theirs is outside these readings.
+async fn dispatch_as_served(
+    fixture: &Fixture,
+    (reads, params): (&StdioReads, Option<&Value>),
+    request: Value,
+) -> Value {
     let (answer, staged) = Box::pin(super::super::Gateway::dispatch_single_staged(
         &fixture.meta,
         &fixture.tool_policy,
@@ -140,14 +158,17 @@ async fn dispatch_as_served(fixture: &Fixture, request: Value) -> Value {
     ))
     .await;
     let answer = answer.expect("a request carrying an id must produce a response");
-    let frame = answer.delivered_unjudged(&fixture.meta, SESSION).await;
-    // As `judge_and_commit` commits (`stdio_delivery.rs`): under the
-    // generation published now, which is an `Arc` clone, never a new one.
-    fixture.meta.commit_staged(staged, frame.delivers_result());
-    frame
-        .stdio_value()
-        .map(std::borrow::Cow::into_owned)
-        .expect("a refusal is delivered as a frame")
+    super::super::Gateway::judge_and_commit(
+        &fixture.meta,
+        reads,
+        SESSION,
+        (answer, params, None),
+        staged,
+    )
+    .await
+    .stdio_value()
+    .map(std::borrow::Cow::into_owned)
+    .expect("a refusal is delivered as a frame")
 }
 
 fn assert_refusal(phase: &str, response: &Value, expected: (i64, &str)) {
@@ -202,8 +223,11 @@ fn refusal_cold_and_warm(payload_bytes: usize, nonce: Option<Value>, expected: (
             "the fixture must serve the cold reading first"
         );
 
-        let (cold_response, cold) =
-            measure_async(|| dispatch_as_served(&fixture, cold_request)).await;
+        let (cold_reads, cold_params) = served_inputs(&fixture, &cold_request);
+        let (cold_response, cold) = measure_async(|| {
+            dispatch_as_served(&fixture, (&cold_reads, cold_params.as_ref()), cold_request)
+        })
+        .await;
         assert_refusal("cold", &cold_response, expected);
         assert_eq!(
             fixture.backend.tools_call_count(),
@@ -228,8 +252,11 @@ fn refusal_cold_and_warm(payload_bytes: usize, nonce: Option<Value>, expected: (
             "the admitted call must have reached the real backend"
         );
 
-        let (warm_response, warm) =
-            measure_async(|| dispatch_as_served(&fixture, warm_request)).await;
+        let (warm_reads, warm_params) = served_inputs(&fixture, &warm_request);
+        let (warm_response, warm) = measure_async(|| {
+            dispatch_as_served(&fixture, (&warm_reads, warm_params.as_ref()), warm_request)
+        })
+        .await;
         assert_refusal("warm", &warm_response, expected);
         assert_eq!(
             fixture.backend.tools_call_count(),
@@ -266,8 +293,15 @@ fn replay_under_budget(payload_bytes: usize) {
             "the admitted call must have reached the real backend"
         );
 
-        let (response, measured) =
-            measure_async(|| dispatch_as_served(&fixture, replay_request)).await;
+        let (replay_reads, replay_params) = served_inputs(&fixture, &replay_request);
+        let (response, measured) = measure_async(|| {
+            dispatch_as_served(
+                &fixture,
+                (&replay_reads, replay_params.as_ref()),
+                replay_request,
+            )
+        })
+        .await;
 
         assert_refusal("replay", &response, REPLAYED_NONCE);
         assert_eq!(
