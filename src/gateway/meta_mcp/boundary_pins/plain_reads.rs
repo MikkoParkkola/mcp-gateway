@@ -34,7 +34,7 @@ const CLASSES: [&str; 3] = [
 ];
 
 /// Known gaps, each closed by deleting its slug once its last row flips.
-const PENDING: [&str; 1] = ["doctor-config-reread"];
+const PENDING: [&str; 2] = ["config-backup-copy", "doctor-config-reread"];
 
 #[derive(Default)]
 struct Found {
