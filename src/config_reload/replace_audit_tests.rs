@@ -639,3 +639,45 @@ async fn the_whole_file_write_on_an_audited_gateway_recovers_nothing() {
     );
     assert!(!running_has_b(&ctx), "the crashed bytes were loaded");
 }
+
+/// M8: the old mutate path reads the gateway's audit posture live. A context
+/// whose reporting carries an audit log is audited even with no recovery
+/// sink installed, so the mutate is refused and recovers nothing.
+#[tokio::test]
+async fn the_mutate_path_reads_the_live_audit_posture() {
+    let (dir, path, _) = setup();
+    let log = Arc::new(
+        crate::security::TransparencyLogger::open(Arc::new(
+            crate::security::transparency_log::TransparencyLogConfig {
+                enabled: true,
+                path: dir
+                    .path()
+                    .join("audit.jsonl")
+                    .to_string_lossy()
+                    .into_owned(),
+                key_id: "posture".to_string(),
+                ..Default::default()
+            },
+        ))
+        .expect("log opens"),
+    );
+    let reporting = super::refusals::ReloadReporting::default().with_audit_log(Some(log));
+    let ctx = Arc::new(unshared(&path).with_reporting(reporting));
+    crashed_after_rename(&path, NEXT);
+
+    let result = ctx
+        .mutate_and_reload_outcome_within(&path, WAIT, |_: &mut crate::config::Config| {
+            Ok::<(), String>(())
+        })
+        .await;
+
+    assert!(
+        result.is_err(),
+        "the mutate path wrote on an audited gateway"
+    );
+    assert_eq!(read(&path), NEXT, "the mutate path recovered unaudited");
+    assert!(
+        journal::journal_path(&path).exists(),
+        "the mutate path settled the journal unaudited"
+    );
+}
