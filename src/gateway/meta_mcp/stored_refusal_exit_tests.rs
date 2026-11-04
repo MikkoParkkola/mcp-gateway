@@ -49,7 +49,13 @@ async fn read(meta: &MetaMcp, stored: &CommittedTask) -> (bool, Option<Value>) {
     })
     .await;
     written.expect("the slot's records are written");
-    (answer.is_some(), answer.and_then(|a| a.refused_by_json()))
+    (
+        answer.is_some(),
+        answer
+            .as_ref()
+            .and_then(super::task_replay::StoredAnswer::refused_by)
+            .map(|r| serde_json::to_value(r).expect("RefusedBy serialises")),
+    )
 }
 
 /// Alice's gateway, with the endpoint it serves through: held by the row,

@@ -42,6 +42,10 @@ pub(crate) enum DecisionKind {
     Unrecorded,
     /// The target matches nothing: no backend or tool by that name.
     NotFound,
+    /// A stored task result is not served under the bindings that produced
+    /// it: no recorded targets, no recorded bindings, or a binding that has
+    /// changed since (MIK-9191).
+    Provenance,
 }
 
 /// What the tool's own annotations say the call could change. A claim by the
@@ -152,6 +156,25 @@ pub(crate) type Refusal = (DecisionKind, Option<crate::security::rule_id::RuleId
 /// A check's outcome with the refusing check's pair (MIK-9191): its plain
 /// form notes the pair; a stored read records it.
 pub(crate) type Explained = std::result::Result<(), (crate::Error, Refusal)>;
+
+/// The refusal a refused stored-task delivery's record names (MIK-9191):
+/// the check that refused it and, when a configured rule decided, that
+/// rule's id. Never delivered to the caller.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(crate) struct RefusedBy {
+    pub kind: DecisionKind,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rule_id: Option<String>,
+}
+
+impl From<Refusal> for RefusedBy {
+    fn from((kind, rule_id): Refusal) -> Self {
+        Self {
+            kind,
+            rule_id: rule_id.map(|id| id.as_str().to_owned()),
+        }
+    }
+}
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct Noted(Option<Box<NotedChecks>>);
