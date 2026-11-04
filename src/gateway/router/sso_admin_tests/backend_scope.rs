@@ -270,10 +270,11 @@ async fn a_role_admin_task_ends_when_a_reload_removes_its_admin_rule() {
     assert!(wrong.is_empty(), "{}", wrong.join("\n"));
 }
 
-/// Every admin meta-tool, called plainly and as a task, is refused in the
-/// admin-denial shape to both backend-scoped admins and listed to none of
-/// them; an unscoped admin key is listed every one. Kill, revive, reload
+/// Every admin meta-tool is refused in the admin-denial shape to both
+/// backend-scoped admins and listed to none of them. Kill, revive, reload
 /// config, reload capabilities, stats and webhook status are gateway-wide.
+/// The task-call form is the adapter suite's row
+/// `a_backend_scoped_admin_is_refused_every_admin_tool_as_a_task`.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn every_admin_meta_tool_refuses_a_backend_scoped_admin() {
     let gw = scoped_gateway(&[ADMIN_GROUP_RULE]).await;
@@ -314,40 +315,15 @@ async fn every_admin_meta_tool_refuses_a_backend_scoped_admin() {
             wrong.push(format!("{who}: listed {shown:?}"));
         }
         for tool in crate::gateway::router::ADMIN_META_TOOLS {
-            for task in [false, true] {
-                let mut params = json!({"name": tool, "arguments": {"server": "alpha"}});
-                if task {
-                    // A task call declares the tasks extension, as a modern
-                    // client does; without it the request is refused before
-                    // any admin check.
-                    params["task"] = json!({});
-                    params["_meta"] = json!({
-                        "io.modelcontextprotocol/protocolVersion": "2026-07-28",
-                        "io.modelcontextprotocol/clientCapabilities": {
-                            "extensions": { "io.modelcontextprotocol/tasks": {} }
-                        },
-                        "io.modelcontextprotocol/clientInfo": { "name": "scope", "version": "1.0.0" }
-                    });
-                }
-                let mut request = rpc(&bearer, "tools/call", &params);
-                if task {
-                    // The modern transport's headers, matching the body's.
-                    let headers = request.headers_mut();
-                    headers.insert("mcp-protocol-version", "2026-07-28".parse().unwrap());
-                    headers.insert("mcp-method", "tools/call".parse().unwrap());
-                    headers.insert("mcp-name", tool.parse().unwrap());
-                }
-                let (status, body) = send(&gw.state, request).await;
-                let refused = status == StatusCode::FORBIDDEN
-                    && body["error"]["code"] == -32600
-                    && body["error"]["message"]
-                        .as_str()
-                        .is_some_and(|m| m.contains("requires admin access"));
-                if !refused {
-                    wrong.push(format!(
-                        "{who}: {tool} (task {task}) answered {status} {body}"
-                    ));
-                }
+            let params = json!({"name": tool, "arguments": {"server": "alpha"}});
+            let (status, body) = send(&gw.state, rpc(&bearer, "tools/call", &params)).await;
+            let refused = status == StatusCode::FORBIDDEN
+                && body["error"]["code"] == -32600
+                && body["error"]["message"]
+                    .as_str()
+                    .is_some_and(|m| m.contains("requires admin access"));
+            if !refused {
+                wrong.push(format!("{who}: {tool} answered {status} {body}"));
             }
         }
     }
