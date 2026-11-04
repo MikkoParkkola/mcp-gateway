@@ -172,6 +172,7 @@ pub async fn state(f: Fixture) -> (Arc<AppState>, tempfile::TempDir) {
         )),
         export_status: None,
         transparency_log: None,
+        governance_log: None,
         dashboard_bootstrap: Arc::new(mcp_gateway::gateway::auth::DashboardBootstrap::new()),
         tasks,
         task_executor,
