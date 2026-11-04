@@ -17,10 +17,11 @@ use crate::gateway::test_helpers::write_owner_only;
 const TOKEN: &str = "configured-token-4e7d19a0c2b8";
 
 /// A config whose one backend, `b`, sends header `X-Key: <value>`.
+/// Single-quoted: a double-quoted scalar reads a Windows path's `\U` as an escape.
 fn config(value: &str) -> String {
     format!(
         "backends:\n  b:\n    http_url: \"http://127.0.0.1:9/mcp\"\n    headers:\n      \
-         X-Key: \"{value}\"\n"
+         X-Key: '{value}'\n"
     )
 }
 

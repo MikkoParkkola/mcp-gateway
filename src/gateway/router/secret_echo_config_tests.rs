@@ -52,10 +52,11 @@ fn config(dir: &Path, backend: &str, env_body: &str) -> PathBuf {
     let env = dir.join("gateway.env");
     crate::gateway::test_helpers::write_owner_only(&env, env_body).expect("write the env file");
     let path = dir.join("gateway.yaml");
+    // Single-quoted: a double-quoted scalar reads a Windows path's `\U` as an escape.
     crate::gateway::test_helpers::write_owner_only(
         &path,
         format!(
-            "env_files:\n  - \"{}\"\nbackends:\n  echoes:\n    timeout: 10s\n{backend}",
+            "env_files:\n  - '{}'\nbackends:\n  echoes:\n    timeout: 10s\n{backend}",
             env.display()
         ),
     )
