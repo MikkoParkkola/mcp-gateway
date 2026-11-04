@@ -53,7 +53,8 @@ impl Backend {
                 )));
             }
             cleanups.live.retain(|weak| weak.strong_count() > 0);
-            cleanups.live.push(Arc::downgrade(&transport));
+            let live: Arc<dyn crate::transport::LiveTree> = transport.clone();
+            cleanups.live.push(Arc::downgrade(&live));
         }
         super::package_cache::start_with_repair(&transport).await?;
         Ok(transport)

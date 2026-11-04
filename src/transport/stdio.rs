@@ -497,7 +497,7 @@ impl Transport for StdioTransport {
 mod child_tree;
 #[path = "stdio_reaper.rs"]
 mod reaper;
-pub(crate) use reaper::{StopDeadline, stop_deadline, within_stop_deadline};
+pub(crate) use reaper::{LiveTree, StopDeadline, stop_deadline, within_stop_deadline};
 #[cfg(test)]
 pub(crate) use reaper::KILL_RESERVE as KILL_RESERVE_FOR_TEST;
 #[path = "stdio_tree.rs"]

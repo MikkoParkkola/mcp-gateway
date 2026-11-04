@@ -38,7 +38,7 @@ pub use self::stdio::{
     CEILING_MAX_FRAME_BYTES, DEFAULT_MAX_FRAME_BYTES, MIN_MAX_FRAME_BYTES, StdioTransport,
     isolated_package_manager_env,
 };
-pub(crate) use self::stdio::{StopDeadline, stop_deadline, within_stop_deadline};
+pub(crate) use self::stdio::{LiveTree, StopDeadline, stop_deadline, within_stop_deadline};
 #[cfg(test)]
 pub(crate) use self::stdio::KILL_RESERVE_FOR_TEST;
 pub use self::websocket::McpFrame;

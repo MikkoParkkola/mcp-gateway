@@ -199,7 +199,10 @@ fn an_executor_built_backend_joins_the_gateway_stop_deadline() {
         )
         .expect("the child is built");
     drop(lease);
-    let joined = backend.stop_deadline.get().expect("the child joined a stop deadline");
+    let joined = backend
+        .stop_deadline
+        .get()
+        .expect("the child joined a stop deadline");
     assert!(
         Arc::ptr_eq(joined, &deadline),
         "the child joined the gateway's stop deadline"

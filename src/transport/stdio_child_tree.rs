@@ -313,9 +313,7 @@ impl ChildTree {
         // deadline with the reap's own reserve left.
         let mut grace = grace;
         if let Some(cut) = self.stop_deadline.as_ref().and_then(|d| d.get()) {
-            let cut = cut
-                .checked_sub(super::reaper::KILL_RESERVE)
-                .unwrap_or(now);
+            let cut = cut.checked_sub(super::reaper::KILL_RESERVE).unwrap_or(now);
             grace.kill_at = grace.kill_at.min(cut);
             grace.term_at = grace.term_at.min(grace.kill_at);
         }

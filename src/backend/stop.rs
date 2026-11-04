@@ -21,8 +21,8 @@ impl Backend {
     /// taken from the pool: [`Self::stop`] still closes every transport under
     /// its own deadline, and each close waits for the reap this started.
     pub(crate) fn retire_now(&self) {
-        for transport in self.live_stdio() {
-            transport.kill_tree_now();
+        for tree in self.live_stdio() {
+            tree.kill_now();
         }
     }
 
@@ -32,13 +32,13 @@ impl Backend {
     /// stdio order planned to fit `budget`. The async stop that follows only
     /// waits for those reaps.
     pub(crate) fn hand_over_now(&self, budget: Duration) {
-        for transport in self.live_stdio() {
-            transport.hand_over_gracefully_now(budget);
+        for tree in self.live_stdio() {
+            tree.hand_over_gracefully(budget);
         }
     }
 
     /// Latch `stopping` and take every live stdio transport, pooled or not.
-    fn live_stdio(&self) -> Vec<Arc<crate::transport::StdioTransport>> {
+    fn live_stdio(&self) -> Vec<Arc<dyn crate::transport::LiveTree>> {
         let mut cleanups = self.replaced_transport_cleanups.lock();
         cleanups.stopping = true;
         cleanups

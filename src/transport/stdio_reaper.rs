@@ -84,7 +84,8 @@ impl StopDeadline {
     pub(crate) fn move_earlier(&self, deadline: Instant) {
         let nanos = deadline.saturating_duration_since(*STOP_EPOCH).as_nanos();
         let nanos = u64::try_from(nanos).unwrap_or(u64::MAX - 1);
-        self.at.fetch_min(nanos, std::sync::atomic::Ordering::SeqCst);
+        self.at
+            .fetch_min(nanos, std::sync::atomic::Ordering::SeqCst);
     }
 
     /// Track a graceful handover, so [`Self::wait_handed`] covers it.
@@ -108,6 +109,25 @@ impl StopDeadline {
             u64::MAX => None,
             nanos => Some(*STOP_EPOCH + Duration::from_nanos(nanos)),
         }
+    }
+}
+
+/// What a backend does to a live stdio transport's tree without a runtime,
+/// through a trait object so the backend's types stay shallow.
+pub(crate) trait LiveTree: Send + Sync {
+    /// End the tree at once (a dead backend, a revocation).
+    fn kill_now(&self);
+    /// Hand the tree to the reaper with the graceful order fitted to `budget`.
+    fn hand_over_gracefully(&self, budget: Duration);
+}
+
+impl LiveTree for super::StdioTransport {
+    fn kill_now(&self) {
+        self.retire_tree_now();
+    }
+
+    fn hand_over_gracefully(&self, budget: Duration) {
+        self.hand_over_gracefully_now(budget);
     }
 }
 
@@ -369,7 +389,7 @@ impl super::StdioTransport {
     /// retire the slot (a start finishing later installs nothing), close
     /// stdin, and hand the tree to the reaper with the MCP stdio order
     /// planned to fit `budget`. A later `close` waits for that reap.
-    pub(crate) fn hand_over_gracefully_now(&self, budget: Duration) {
+    fn hand_over_gracefully_now(&self, budget: Duration) {
         self.connected
             .store(false, std::sync::atomic::Ordering::SeqCst);
         let ending = graceful_ending(budget, self.close_stdin_now());
@@ -603,7 +623,10 @@ mod plan_tests {
     #[test]
     fn every_callers_plan_fits_its_budget() {
         let callers = [
-            ("shutdown, default shutdown_timeout", Duration::from_secs(30)),
+            (
+                "shutdown, default shutdown_timeout",
+                Duration::from_secs(30),
+            ),
             ("shutdown, short shutdown_timeout", Duration::from_secs(9)),
             ("eviction close_stage", Duration::from_secs(10)),
             ("restart close_stage", Duration::from_secs(10)),

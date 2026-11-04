@@ -300,7 +300,11 @@ fn a_second_earlier_stop_deadline_takes_effect_and_a_later_one_does_not() {
         "the earlier stop took effect"
     );
     deadline.move_earlier(now + Duration::from_secs(60));
-    assert_eq!(deadline.get(), Some(earlier), "a later stop changes nothing");
+    assert_eq!(
+        deadline.get(),
+        Some(earlier),
+        "a later stop changes nothing"
+    );
 }
 
 /// T6: a second close sends nothing and keeps the first status.
