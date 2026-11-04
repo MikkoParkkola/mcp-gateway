@@ -50,6 +50,14 @@ pub(crate) enum SecretFile {
     RecoveryFile,
 }
 
+/// The Windows DACL refusal of a replace journal or staged original: the
+/// guard's `head` and the refusals it `found`, then the guidance, never an
+/// icacls repair. Platform-neutral, so every platform's tests read it.
+#[cfg(any(windows, test))]
+fn recovery_acl_refusal(head: &str, found: &str) -> String {
+    format!("{head} ({found}). {RECOVERY_FILE_FIX}")
+}
+
 /// What a refused replace journal or staged original gets instead of an
 /// owner or mode fix: the one place this guidance is written.
 const RECOVERY_FILE_FIX: &str = "Both the replace journal and its staged original are \
@@ -300,7 +308,7 @@ fn check_acl(
     // A recovery file gets the guard's facts and no repair line: an icacls
     // repair would make the next recovery restore a plant.
     let text = if what == SecretFile::RecoveryFile {
-        format!("{head} ({found:?}). {RECOVERY_FILE_FIX}")
+        recovery_acl_refusal(&head, &format!("{found:?}"))
     } else {
         format!("{head}{}", refusal_detail(&shown, &found, what.protects()))
     };
@@ -622,6 +630,42 @@ mod tests;
 #[cfg(test)]
 #[path = "secret_file_population_tests.rs"]
 mod population_tests;
+
+/// The Windows DACL refusal text for a recovery file, read on every platform.
+#[cfg(test)]
+mod recovery_text_tests {
+    /// No icacls repair and no owner change for a journal or staged original
+    /// another account may have planted; the untrusted, move-aside guidance
+    /// instead, after the guard's own facts.
+    #[test]
+    fn the_windows_recovery_file_refusal_gives_no_acl_repair() {
+        let head = r"Refusing to load replace journal or staged original C:\gw\.gateway.yaml.replace-journal";
+        let found = r#"[ForeignSid("S-1-1-0"), NotProtected]"#;
+
+        let text = super::recovery_acl_refusal(head, found);
+
+        let lower = text.to_lowercase();
+        for advice in [
+            "icacls",
+            "/grant",
+            "/reset",
+            "/setowner",
+            "takeown",
+            "chown",
+            "chmod",
+            "fix: ",
+        ] {
+            assert!(
+                !lower.contains(advice),
+                "the refusal advises {advice:?}: {text}"
+            );
+        }
+        assert!(text.starts_with(head), "the guard's facts are gone: {text}");
+        assert!(text.contains(found), "the found refusals are gone: {text}");
+        assert!(lower.contains("untrusted"), "{text}");
+        assert!(lower.contains("move both files aside"), "{text}");
+    }
+}
 
 // Unix-only (W-L8): FIFO and device-file fixtures (`mkfifo`, `/dev/null`).
 #[cfg(all(test, unix))]
