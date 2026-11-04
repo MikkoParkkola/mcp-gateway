@@ -88,8 +88,8 @@ mod replay;
 #[cfg(test)]
 pub(crate) use decision::take_refusal_kind;
 pub(crate) use decision::{
-    after_upstream_401, note_declared_effect, note_refused_by, note_send_refusal, take_refusal,
-    take_route_noted, with_route_scope,
+    after_upstream_401, note_declared_effect, note_refused_by, note_send_refusal, noted,
+    take_refusal, take_route_noted, with_route_scope,
 };
 
 /// Most process notes one record carries (a playbook may run many).
