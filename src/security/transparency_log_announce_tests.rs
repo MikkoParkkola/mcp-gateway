@@ -132,8 +132,6 @@ fn h1_the_seal_and_the_expiry_record_are_announced() {
     }
     append(&log, i);
     let told = told.lock().unwrap();
-    let event_of =
-        |r: &Map<String, Value>| r.get("event").and_then(Value::as_str).map(str::to_owned);
     assert!(
         told.iter()
             .any(|(r, _, _)| event_of(r).as_deref() == Some(EV_SEALED))
