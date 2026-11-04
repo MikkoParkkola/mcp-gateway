@@ -113,18 +113,27 @@ fn a_dry_run_checks_grants_when_the_config_loads_as_it_stands() {
 
 /// Today's behaviour, pinned so a change to it is a visible decision: a
 /// config the rewrite changes but cannot make load still defers in the dry
-/// run, and the applying run refuses the config, one run later.
+/// run, and the applying run refuses to save the rewritten config, which
+/// does not parse, one run later; the file is left as it was.
 #[test]
 fn a_config_no_rewrite_makes_load_defers_in_a_dry_run_and_fails_the_apply() {
     let extra = format!("{REFUSING}{BAD_PORT}");
     let (code, printed) = run(ROW_OK, &extra, &["--dry-run"]);
     assert_eq!(code, Some(0), "{printed}");
     assert_eq!(line(&printed, DEFERRED), DEFERRED);
-    let (code, printed) = run(ROW_OK, &extra, &[]);
-    assert_eq!(code, Some(1), "{printed}");
+    let s = setup(ROW_OK, &extra);
+    let before = std::fs::read_to_string(&s.config).unwrap();
+    let out = upgrade(&s, &[]);
+    let printed = text(&out);
+    assert_eq!(out.status.code(), Some(1), "{printed}");
     assert!(
-        line(&printed, CONFIG_ERROR).starts_with(CONFIG_ERROR),
+        line(&printed, "does not parse as a config").starts_with("Error: Not saved: "),
         "{printed}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&s.config).unwrap(),
+        before,
+        "nothing is saved"
     );
 }
 
