@@ -204,11 +204,11 @@ impl crate::transport::Transport for RefusedAtSend {
 }
 
 /// A refusal raised at the send on the meta route (`gateway_invoke`): the
-/// route answers it as an error result, not a refusal, but the gateway's
-/// lender refused the call, so its record must never read `default_allow`.
-/// The check is about the caller's own credential, which no decision kind
-/// names yet: kind `unrecorded`. Flips to that kind when an identity-standing
-/// kind is added.
+/// route answers it as the refusal it is (-32001, as the direct route does),
+/// never folded into an error result to retry. The gateway's lender refused
+/// the call, so its record must never read `default_allow`. The check is
+/// about the caller's own credential, which no decision kind names yet: kind
+/// `unrecorded`. Flips to that kind when an identity-standing kind is added.
 #[tokio::test]
 async fn a_send_refusal_on_the_meta_route_records_unrecorded() {
     let dir = tempfile::tempdir().unwrap();
@@ -216,14 +216,18 @@ async fn a_send_refusal_on_the_meta_route_records_unrecorded() {
     let who = api_key_caller();
     let caller = context(&AllowAll, &who);
     let args = json!({"server": "alpha", "tool": "read", "arguments": {}});
-    let answer = meta
-        .invoke_tool(&args, None, &caller)
-        .await
-        .expect("the meta route answers the refusal as an error result");
-    assert!(
-        answer.to_string().contains("per-user send refused"),
-        "{answer}"
-    );
+    let answer = meta.invoke_tool(&args, None, &caller).await;
+    match &answer {
+        Err(crate::Error::Forbidden {
+            code: -32001,
+            message,
+            ..
+        }) => assert!(
+            message.contains("per-user send refused"),
+            "the lender's own refusal: {message}"
+        ),
+        other => panic!("the meta route answers the refusal as itself: {other:?}"),
+    }
     let mut all = records(&dir);
     assert_eq!(all.len(), 1, "{all:?}");
     let record = all.remove(0);

@@ -256,6 +256,8 @@ test.describe('phone menu', () => {
 
 test.describe('route line', () => {
   test('F8 the current station is copper and the To do badge follows the count', async ({ page }) => {
+    // Nothing to decide: no badge. (A count the shell cannot read shows "?", T7.)
+    await page.route('**/ui/api/decisions/count', (r) => r.fulfill({ json: { count: 0, revision: 'r0' } }));
     await page.goto('/ui/servers/status');
     await shellReady(page);
     const copper = await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--color-accent-default').trim());

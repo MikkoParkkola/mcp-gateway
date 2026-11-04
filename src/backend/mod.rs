@@ -52,8 +52,12 @@ mod runtime_launch;
 mod secret_send;
 mod send_scope;
 // The web UI's status rows are its only reader.
+mod auth_wait;
 #[cfg(feature = "webui")]
 pub(crate) mod server_state;
+#[cfg(feature = "webui")]
+pub(crate) mod sign_in_flow;
+mod sign_in_state;
 mod status;
 mod stdio_start;
 mod stop;
@@ -169,6 +173,10 @@ pub struct Backend {
     /// recorded for this backend's target (the pre-pass never ran).
     #[cfg(test)]
     pub(crate) unfilled_outcome_reads: std::sync::atomic::AtomicUsize,
+    /// Test-only: loans this backend's lent-only slots refused
+    /// (`lend_to_slot`), counted per binding, so a row reads its caller's own.
+    #[cfg(test)]
+    pub(crate) lend_refusals: parking_lot::Mutex<std::collections::HashMap<String, usize>>,
     /// Consecutive health-probe answers this peer declined to serve
     /// (MIK-7217, OUTBOUND.2).
     ///
@@ -312,6 +320,8 @@ pub struct Backend {
     /// The one interactive login at a time every start of this backend
     /// shares (MIK-7982).
     pub(crate) login_gate: Arc<crate::oauth::login_gate::LoginGate>,
+    /// Everything this backend keeps about signing in.
+    pub(crate) sign_in: sign_in_state::SignInState,
     /// A test's pause point in an HTTP start, after it read the policy it
     /// builds under and before it builds anything from it or
     /// [`Backend::begin_connecting`] checks and marks.

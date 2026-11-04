@@ -32,4 +32,21 @@ pub(super) const ROWS: &[Row] = &[
         Payload::None,
         [401, 403, 403, 400],
     ),
+    // src/gateway/ui/backends/signin.rs (start_sign_in; an admin bearer has no
+    // dashboard session, so the admin cell is the session refusal)
+    row(
+        "/ui/api/backends/{name}/signin",
+        Method::POST,
+        "/ui/api/backends/docs/signin",
+        Payload::Json("{}"),
+        [401, 403, 403, 403],
+    ),
+    // signin.rs (confirm_sign_in; same session rule as the start)
+    row(
+        "/ui/api/backends/{name}/signin/confirm",
+        Method::POST,
+        "/ui/api/backends/docs/signin/confirm",
+        Payload::Json(r#"{"attempt_id":"a","decision":"cancel"}"#),
+        [401, 403, 403, 403],
+    ),
 ];

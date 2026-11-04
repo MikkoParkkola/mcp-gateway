@@ -21,6 +21,7 @@ pub(crate) const OAUTH_AUTHORIZATION_WINDOW: std::time::Duration =
     std::time::Duration::from_secs(300);
 
 mod authorize;
+pub(super) use authorize::Adopt;
 
 /// Build a token from a token endpoint's answer, first refusing an
 /// oversized `expires_in` (MIK-8207).
@@ -54,7 +55,10 @@ impl OAuthClient {
     /// Returns `Ok(token)` only when the authorization server explicitly lists
     /// `"client_credentials"` in `grant_types_supported` — so we never try it
     /// against a server that won't accept it.
-    pub(super) async fn try_client_credentials(&self) -> Result<String> {
+    pub(super) async fn try_client_credentials(
+        &self,
+        allowed: super::sign_in::GrantAllowed,
+    ) -> Result<String> {
         let auth_meta = self.auth_meta()?;
 
         if !auth_meta
@@ -67,13 +71,19 @@ impl OAuthClient {
             ));
         }
 
+        // The registration as stored now, as a refresh reads it: a sign-in
+        // under this issuer may have re-registered the client since.
+        let key = self.credential_key()?;
+        self.reload_registered_client_id(&key);
         let client_id = self
             .client_id
             .read()
             .clone()
             .ok_or_else(|| Error::OAuth("No client ID for client_credentials".to_string()))?;
 
-        let params = self.client_credentials_params(&client_id);
+        // Spent right before the request: a sign-in elsewhere since the proof
+        // was taken sends nothing.
+        let params = self.client_credentials_params(allowed.spend(self)?, &client_id);
 
         // One clock reading dates the token this request returns; a clock that
         // cannot be read (before 1970) refuses before anything is sent
@@ -112,7 +122,7 @@ impl OAuthClient {
         let token = token_from_answer(&auth_meta.token_endpoint, token_response, now)?;
 
         self.save_issued(&token).await?;
-        *self.current_token.write() = Some(token.clone());
+        self.cache_if_current(token.clone());
 
         info!(backend = %self.backend_name, "Token renewed via client_credentials");
         Ok(token.access_token)
@@ -166,6 +176,7 @@ impl OAuthClient {
     /// Form parameters for the `refresh_token` grant (RFC 6749 §6 + RFC 8707).
     pub(super) fn refresh_params(
         &self,
+        _spent: super::sign_in::Spent,
         refresh_token: &str,
         client_id: &str,
     ) -> Vec<(&'static str, String)> {
@@ -186,7 +197,11 @@ impl OAuthClient {
     /// Form parameters for the `client_credentials` grant (RFC 6749 §4.4 +
     /// RFC 8707). No `client_secret` is added here: this path historically
     /// authenticates public/dynamically-registered clients without one.
-    pub(super) fn client_credentials_params(&self, client_id: &str) -> Vec<(&'static str, String)> {
+    pub(super) fn client_credentials_params(
+        &self,
+        _spent: super::sign_in::Spent,
+        client_id: &str,
+    ) -> Vec<(&'static str, String)> {
         let mut params = vec![
             ("grant_type", "client_credentials".to_string()),
             ("client_id", client_id.to_string()),
@@ -204,6 +219,7 @@ impl OAuthClient {
     /// Exchange authorization code for tokens
     pub(super) async fn exchange_code(
         &self,
+        _spent: super::sign_in::Spent,
         code: &str,
         redirect_uri: &str,
         code_verifier: &str,
@@ -288,7 +304,7 @@ impl OAuthClient {
             Refreshed::Adopted(access) => Ok(access),
             Refreshed::Exchanged(token) => {
                 let access = token.access_token.clone();
-                *self.current_token.write() = Some(token);
+                self.cache_if_current(token);
                 info!(backend = %self.backend_name, "Token refreshed successfully");
                 Ok(access)
             }
@@ -437,6 +453,9 @@ impl OAuthClient {
     fn store_issued_locked(&self, key: &str, token: &TokenInfo) -> Result<()> {
         let key = key.to_string();
         self.storage.save(&key, &self.resource_url, token)?;
+        // Every successful save tells the status, so a login or a grant that
+        // installs a token no longer leaves the backend reading as signed out.
+        self.publish_token_state(Some(token));
         // A token a login issues was never marked in flight, so a damaged
         // sidecar's lost marker cannot name it (MIK-8091). Rewrite the sidecar
         // clean, keeping the rotation observation, or every fresh token would
@@ -474,10 +493,14 @@ impl OAuthClient {
                 || cached.expires_at != stored.expires_at
                 || cached.refresh_token != stored.refresh_token
         });
-        if fresher {
-            self.adopt_stored_login()
-        } else {
-            None
+        if !fresher {
+            return None;
+        }
+        // A moved install is not a token to adopt; the request that follows
+        // refuses it.
+        match self.adopt_stored_login() {
+            Adopt::Took(access) => Some(access),
+            Adopt::Moved | Adopt::Nothing => None,
         }
     }
 
@@ -487,11 +510,139 @@ impl OAuthClient {
     /// exchange, which have no window of their own, end at the deadline.
     pub(crate) async fn authorize_until_by(
         &self,
+        allowed: super::sign_in::GrantAllowed,
         cancel: &tokio_util::sync::CancellationToken,
         listeners: Option<tokio_util::sync::DropGuard>,
         deadline: Option<tokio::time::Instant>,
     ) -> Result<String> {
+        // Boxed: a login is rare, and the future of its callback server, PKCE
+        // and exchange must not sit inline in every start path that awaits it.
+        let token = Box::pin(self.issue_token(allowed, cancel, listeners, deadline, None)).await?;
+        // Store and cache the token, under the same cancel and the window.
+        self.save_issued_until(&token, cancel, deadline).await?;
+        self.cache_if_current(token.clone());
+
+        Ok(token.access_token)
+    }
+
+    /// A web-UI sign-in: the link goes to `ui`, and the token is held unsaved
+    /// until the person confirms. `deadline` bounds the wait for the callback;
+    /// the redemption gets [`SIGN_IN_CONFIRM_WINDOW`](super::sign_in::SIGN_IN_CONFIRM_WINDOW).
+    #[cfg(feature = "webui")]
+    pub(crate) async fn authorize_for_ui(
+        &self,
+        cancel: &tokio_util::sync::CancellationToken,
+        listeners: Option<tokio_util::sync::DropGuard>,
+        deadline: tokio::time::Instant,
+        ui: super::sign_in::UiSink,
+    ) -> Result<super::sign_in::PendingGrant> {
+        let allowed = Self::ui_sign_in();
+        let token =
+            Box::pin(self.issue_token(allowed, cancel, listeners, Some(deadline), Some(ui)))
+                .await?;
+        Ok(super::sign_in::PendingGrant::from_token(token))
+    }
+
+    /// Save the grant a person just confirmed, cache it and publish the
+    /// sign-in status. The grant becomes a `TokenInfo` only here, with the
+    /// exchange's own expiry.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the clock cannot be read, a lock is busy past
+    /// `deadline`, or the write fails; nothing is cached then.
+    #[cfg(feature = "webui")]
+    pub(crate) async fn save_confirmed(
+        &self,
+        grant: super::sign_in::PendingGrant,
+        cancel: &tokio_util::sync::CancellationToken,
+        deadline: tokio::time::Instant,
+    ) -> Result<()> {
+        let token = grant.into_token();
+        self.save_issued_until(&token, cancel, Some(deadline))
+            .await?;
+        *self.current_token.write() = Some(token);
+        // The file is durable: tell every client of this backend, then
+        // publish, so the status is checked against this install's key.
+        if let (Some(status), Ok(key)) = (&self.sign_in_status, self.credential_key()) {
+            self.installed_seen.store(
+                status.record_install(&key),
+                std::sync::atomic::Ordering::SeqCst,
+            );
+        }
+        self.publish_sign_in();
+        Ok(())
+    }
+
+    /// A CLI or startup login's link: open the browser and announce it.
+    fn show_link_at_terminal(&self, auth_url_str: &str) {
+        // The link carries the state and the PKCE challenge: the log keeps the
+        // endpoint and path only.
+        info!(
+            url = %crate::security::sanitize::redact_url_keep_path(auth_url_str),
+            "Opening browser for authorization"
+        );
+        if !(self.open_browser)(auth_url_str) {
+            warn!("Failed to open browser automatically");
+        }
+        // Always, on stderr: a launcher that started can still
+        // be blocked (an endpoint-security tool may stop it), and stdout
+        // is the stdio transport's JSON-RPC stream.
+        (self.announce)(auth_url_str);
+    }
+
+    /// The client id a login registers (or reuses) with the callback URL it
+    /// bound. A cancel or the deadline during registration ends it there, and
+    /// a cancel that lands as registration completes still wins; the caller
+    /// closes the listener on an error.
+    async fn register_for_login(
+        &self,
+        cancel: &tokio_util::sync::CancellationToken,
+        deadline: Option<tokio::time::Instant>,
+        callback_url: &str,
+    ) -> Result<String> {
+        let cancelled = || Error::AuthorizationCancelled {
+            backend: self.backend_name().to_string(),
+        };
+        // A registration that observes the cancel, as the real one does: the
+        // pause ends when the login is cancelled.
+        #[cfg(all(test, feature = "webui"))]
+        tokio::select! {
+            biased;
+            () = cancel.cancelled() => {}
+            () = self.registration_pause.pause() => {}
+        }
+        let registered = tokio::select! {
+            biased;
+            () = cancel.cancelled() => Err(cancelled()),
+            () = crate::oauth::login_gate::past(deadline) => Err(self.incomplete()),
+            registered = self.ensure_client_id_with_redirect(callback_url) => registered,
+        };
+        registered.and_then(|id| {
+            if cancel.is_cancelled() {
+                Err(cancelled())
+            } else {
+                Ok(id)
+            }
+        })
+    }
+
+    /// Everything of a login up to and including the redemption of its code:
+    /// the callback server, PKCE, the link, the callback and the exchange. It
+    /// saves nothing; the caller decides what to do with the token.
+    async fn issue_token(
+        &self,
+        allowed: super::sign_in::GrantAllowed,
+        cancel: &tokio_util::sync::CancellationToken,
+        listeners: Option<tokio_util::sync::DropGuard>,
+        deadline: Option<tokio::time::Instant>,
+        ui: Option<super::sign_in::Hook>,
+    ) -> Result<TokenInfo> {
         let auth_meta = self.auth_meta()?;
+        // A UI sign-in's link goes to its route; nothing else sees it.
+        let held_for_ui = ui.is_some();
+        let confirm_window = super::sign_in::confirm_window_of(ui.as_ref());
+        let (link_tx, callback_tx) = super::sign_in::split_hook(ui);
 
         // Generate PKCE parameters
         let (code_verifier, code_challenge) = generate_pkce();
@@ -501,7 +652,13 @@ impl OAuthClient {
 
         // Start callback server FIRST to get the actual callback URL
         // This must happen BEFORE client registration so we know the port
-        let mut callback_server = callback::start_callback_server(
+        let page = if held_for_ui {
+            callback::SuccessPage::ConfirmInDashboard
+        } else {
+            callback::SuccessPage::Close
+        };
+        let mut callback_server = callback::start_callback_server_with(
+            page,
             state.clone(),
             self.callback_host.as_deref(),
             self.callback_port,
@@ -516,23 +673,9 @@ impl OAuthClient {
             backend: self.backend_name().to_string(),
         };
 
-        // Now ensure we have a client ID, passing the actual callback URL for
-        // registration. A cancel during registration ends it there: no
-        // browser opens, and the listener is closed before this returns.
-        let registered = tokio::select! {
-            biased;
-            () = cancel.cancelled() => Err(cancelled()),
-            () = crate::oauth::login_gate::past(deadline) => Err(self.incomplete()),
-            registered = self.ensure_client_id_with_redirect(&callback_url) => registered,
-        };
-        // A cancel that lands as registration completes still wins.
-        let registered = registered.and_then(|id| {
-            if cancel.is_cancelled() {
-                Err(cancelled())
-            } else {
-                Ok(id)
-            }
-        });
+        let registered = self
+            .register_for_login(cancel, deadline, &callback_url)
+            .await;
         let client_id = match registered {
             Ok(client_id) => client_id,
             Err(e) => {
@@ -550,17 +693,14 @@ impl OAuthClient {
             &code_challenge,
         )?;
 
-        // Open browser
         let auth_url_str = auth_url.to_string();
-        info!(url = %auth_url_str, "Opening browser for authorization");
-
-        if !(self.open_browser)(&auth_url_str) {
-            warn!("Failed to open browser automatically");
+        if let Some(link) = link_tx {
+            // The route that started this login gets the link, once; no
+            // browser opens, nothing is logged and nothing is announced.
+            let _ = link.send(auth_url_str);
+        } else {
+            self.show_link_at_terminal(&auth_url_str);
         }
-        // Always, on stderr (MIK-8197): a launcher that started can still be
-        // blocked (an endpoint-security tool may stop it), and stdout is the
-        // stdio transport's JSON-RPC stream.
-        eprintln!("\nIf no browser opened, authorize this client by visiting:\n{auth_url_str}\n");
 
         // Wait for callback
         let (actual_callback_url, callback_result) = callback_server
@@ -593,22 +733,30 @@ impl OAuthClient {
             Error::OAuth(mismatch)
         })?;
 
+        // A UI sign-in's route learns the callback landed, and the person's
+        // confirm window starts: the redemption of the code is held to it.
+        if let Some(callback) = callback_tx {
+            let _ = callback.send(());
+        }
+        let exchange_by = if held_for_ui {
+            Some(tokio::time::Instant::now() + confirm_window)
+        } else {
+            deadline
+        };
+
         // Exchange code for token. Cancel first (MIK-8339): a restart or stop
         // ends a login stalled here. The exchange itself is bounded by the
         // OAuth client's own request timeout (destination.rs), and by a
-        // detached step's deadline.
+        // detached step's deadline. The proof is spent first: a sign-in under
+        // another issuer during the callback wait redeems nothing.
+        let spent = allowed.spend(self)?;
         let token = tokio::select! {
             biased;
             () = cancel.cancelled() => return Err(cancelled()),
-            () = crate::oauth::login_gate::past(deadline) => return Err(self.incomplete()),
-            token = self.exchange_code(&callback_result.code, &actual_callback_url, &code_verifier) => token?,
+            () = crate::oauth::login_gate::past(exchange_by) => return Err(self.incomplete()),
+            token = self.exchange_code(spent, &callback_result.code, &actual_callback_url, &code_verifier) => token?,
         };
-
-        // Store and cache the token, under the same cancel and the window.
-        self.save_issued_until(&token, cancel, deadline).await?;
-        *self.current_token.write() = Some(token.clone());
-
-        Ok(token.access_token)
+        Ok(token)
     }
 }
 
@@ -623,6 +771,9 @@ impl super::refresh_flight::RefreshCaller for OAuthClient {
         _stored: &TokenInfo,
         sent: &str,
     ) -> Result<super::refresh_flight::RefreshRequest> {
+        // Under the flight: an install that moved while this refresh waited
+        // for the lock sends nothing.
+        let proof = self.issuer_current()?.spend(self)?;
         let auth_meta = self.auth_meta()?;
         let key = self.credential_key()?;
         self.reload_registered_client_id(&key);
@@ -632,12 +783,13 @@ impl super::refresh_flight::RefreshCaller for OAuthClient {
             .clone()
             .ok_or_else(|| Error::OAuth("No client ID".to_string()))?;
         Ok(super::refresh_flight::RefreshRequest {
-            params: self.refresh_params(sent, &client_id),
+            params: self.refresh_params(proof, sent, &client_id),
             http: self.refresh_client_for(&auth_meta.token_endpoint)?,
             endpoint: auth_meta.token_endpoint.clone(),
             destination: self.destination,
             route: self.refresh_route,
             finish: Box::new(std::convert::identity),
+            settled: self.settled_publisher(&key),
         })
     }
 }
