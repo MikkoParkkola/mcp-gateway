@@ -239,6 +239,17 @@ async fn call(
     pinned: &Config,
     current: &Config,
 ) -> Outcome {
+    call_as(fx, (route, args), pinned, Some(current)).await
+}
+
+/// [`call`], with `current` published after the pin; `None` publishes
+/// nothing, so the request runs under the one generation it pinned.
+async fn call_as(
+    fx: &Logged,
+    (route, args): (Route, Value),
+    pinned: &Config,
+    current: Option<&Config>,
+) -> Outcome {
     fx.state.live_config.set(pinned.clone());
     let before = fx.calls.load(Ordering::SeqCst);
     // A retry's continuation is minted first, under the pinned configuration,
@@ -259,15 +270,18 @@ async fn call(
     // measured request's own.
     let recorded = invocations(fx).await.len();
     let fired = Rc::new(Cell::new(false));
-    let (live, next, flag) = (
-        std::sync::Arc::clone(&fx.state.live_config),
-        current.clone(),
-        Rc::clone(&fired),
-    );
-    seams::after_pin(move || {
-        live.set(next);
-        flag.set(true);
-    });
+    if let Some(current) = current {
+        let (live, next, flag) = (
+            std::sync::Arc::clone(&fx.state.live_config),
+            current.clone(),
+            Rc::clone(&fired),
+        );
+        seams::after_pin(move || {
+            live.set(next);
+            flag.set(true);
+        });
+    }
+    let unchanged = fx.state.live_config.generation();
     let body = match route {
         Route::Direct => {
             post_direct(fx, "alpha", "k-std", "read", args, None, None)
@@ -283,12 +297,19 @@ async fn call(
             meta_raw(fx, json!({"requestState": state, "inputResponses": args})).await
         }
     };
-    assert!(fired.get(), "the reload published after the pin");
-    assert_eq!(
-        serde_json::to_value(&*fx.state.live_config.get()).expect("config serialises"),
-        serde_json::to_value(current).expect("config serialises"),
-        "the published config is still the one the reload wrote"
-    );
+    if let Some(current) = current {
+        assert!(fired.get(), "the reload published after the pin");
+        assert_eq!(
+            serde_json::to_value(&*fx.state.live_config.get()).expect("config serialises"),
+            serde_json::to_value(current).expect("config serialises"),
+            "the published config is still the one the reload wrote"
+        );
+    } else {
+        assert!(
+            std::sync::Arc::ptr_eq(&unchanged, &fx.state.live_config.generation()),
+            "no generation was published during the request"
+        );
+    }
     // The measured request leaves exactly one invocation record: its own.
     let rows = invocations(fx).await;
     let [row] = &rows[recorded..] else {

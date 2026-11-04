@@ -133,21 +133,79 @@ fn leaky_answer() -> serde_json::Value {
     json!({"content": [{"type": "text", "text": format!("token {token}")}], "isError": false})
 }
 
-/// A response-firewall block names no rule: response attribution is not
-/// recorded, so a response verdict cannot borrow a request rule's id. Judged
-/// under one generation, and under a pinned generation that differs from the
-/// published one (the stronger of two answer policies decides).
+/// Two rules for `read`: `shell` scans the request for shell injection,
+/// `credentials` scans the answer for credentials.
+fn split_rules(c: &mut Config, shell: FirewallAction, credentials: FirewallAction) {
+    let base = c
+        .security
+        .firewall
+        .rules
+        .first()
+        .cloned()
+        .expect("the fixture's rule");
+    let with = |action, scan| FirewallRule {
+        action,
+        scan: vec![scan],
+        ..base.clone()
+    };
+    c.security.firewall.rules = vec![
+        with(shell, crate::security::firewall::ScanType::ShellInjection),
+        with(
+            credentials,
+            crate::security::firewall::ScanType::Credentials,
+        ),
+    ];
+}
+
+/// The request's shell rule warns, so the call goes on; the answer's
+/// credential rule blocks.
+fn request_warns_answer_blocks(c: &mut Config) {
+    split_rules(c, FirewallAction::Warn, FirewallAction::Block);
+}
+
+/// Both rules warn: neither side refuses.
+fn both_warn(c: &mut Config) {
+    split_rules(c, FirewallAction::Warn, FirewallAction::Warn);
+}
+
+/// The request's shell rule blocks: the control that the request carries a
+/// finding a rule decides.
+fn request_blocks(c: &mut Config) {
+    split_rules(c, FirewallAction::Block, FirewallAction::Block);
+}
+
+/// A response-firewall block names no rule, though the request beside it had
+/// a finding a configured rule decided: response attribution is not
+/// recorded, so the response verdict cannot borrow the request rule's id.
+/// Judged under one generation with no reload, and under a pinned generation
+/// that differs from the published one (the stronger answer policy decides).
 async fn response_block(route: Route) {
     let fx = fixture(Answer::Built(leaky_answer), Some(FirewallAction::Block)).await;
-    let blocks = configured(&fx, super::rules_block);
-    let warns = configured(&fx, super::rules_warn);
-    for (pinned, current) in [(&blocks, &blocks), (&blocks, &warns), (&warns, &blocks)] {
-        let got = call(&fx, (route, json!({"cmd": "x"})), pinned, current).await;
+    let blocks = configured(&fx, request_warns_answer_blocks);
+    let warns = configured(&fx, both_warn);
+    // Control: the request's shell rule matches this request and is named
+    // when it decides.
+    let control = configured(&fx, request_blocks);
+    let got = super::call_as(&fx, (route, injected()), &control, None).await;
+    let shell = firewall_id(&fx, &control.security.firewall.rules[0]);
+    assert!(got.refused && got.calls == 0, "{route:?}: control: {got:?}");
+    assert_eq!(got.rule, json!(shell.as_str()), "{route:?}: control");
+    let shell = firewall_id(&fx, &blocks.security.firewall.rules[0]);
+    let cases = [
+        (&blocks, None),
+        (&blocks, Some(&warns)),
+        (&warns, Some(&blocks)),
+    ];
+    for (pinned, current) in cases {
+        let got = super::call_as(&fx, (route, injected()), pinned, current).await;
+        let case = (route, current.is_some());
         assert!(
-            got.refused,
-            "{route:?}: premise, the answer is blocked: {got:?}"
+            got.refused && got.calls == 1 && got.kind == "firewall",
+            "{case:?}: premise, the sent request's answer is blocked: {got:?}"
         );
-        assert!(got.rule.is_null(), "{route:?}: {got:?}");
+        assert!(got.rule.is_null(), "{case:?}: {got:?}");
+        let hex = shell.as_str().trim_start_matches("firewall:");
+        assert!(!delivered(&got).contains(hex), "{case:?}: {got:?}");
     }
 }
 
@@ -163,7 +221,8 @@ async fn a_response_firewall_block_records_no_rule_on_the_direct_route() {
 
 /// A stored task read back after a reload whose tool policy denies its tool
 /// is refused at the `tasks/get` (register row 425's designed path): the
-/// refusal's message carries no rule id, and a record names the deny entry.
+/// refusal's message carries no rule id, and the read's record names the
+/// deny entry.
 #[tokio::test(flavor = "current_thread")]
 async fn a_task_refused_by_the_tool_policy_delivers_no_rule_id() {
     let fx = fixture(Answer::Ok, None).await;
@@ -178,11 +237,13 @@ async fn a_task_refused_by_the_tool_policy_delivers_no_rule_id() {
     let expected = tool_policy_id(&fx, "deny", "alpha:read");
     let hex = expected.as_str().trim_start_matches("tool_policy:");
     assert!(!got.to_string().contains(hex), "{got}");
+    // The read is the last request, so its record is the last one: a record
+    // the worker's own refusal wrote cannot stand in for it.
     let recorded = super::invocations(&fx).await;
-    assert!(
-        recorded
-            .iter()
-            .any(|row| row["decision"]["rule_id"] == json!(expected.as_str())),
-        "no record names the deny entry: {recorded:?}"
+    let read = recorded.last().expect("the read's record");
+    assert_eq!(
+        (&read["decision"]["kind"], &read["decision"]["rule_id"]),
+        (&json!("tool_policy"), &json!(expected.as_str())),
+        "the read's record names the deny entry: {recorded:?}"
     );
 }
