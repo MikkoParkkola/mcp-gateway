@@ -99,5 +99,7 @@ async fn a_cache_hit_of_a_rewritten_answer_records_no_rewrite() {
         hit["content"], first["content"],
         "the hit serves the stored, rewritten answer"
     );
-    assert_ne!(hit_effect, Some("rewritten".into()), "{hit}");
+    // A served stored answer is not this request's: its record states no
+    // effect at all, so neither `rewritten` nor `delivered`.
+    assert_eq!(hit_effect, None, "{hit}");
 }
