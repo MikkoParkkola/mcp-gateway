@@ -84,3 +84,28 @@ fn upgrade_fails_when_the_grants_file_is_missing() {
         ExitCode::FAILURE
     );
 }
+
+/// A config the upgrade still rewrites (here a removed key) does not load as
+/// it stands, so a dry run defers the grants check instead of failing on the
+/// config, and the run that applies the rewrite checks them.
+#[test]
+fn a_pending_rewrite_defers_the_grants_check_to_the_applying_run() {
+    let dir = tempfile::tempdir().unwrap();
+    let (_, config, data) = install(dir.path(), &format!("{ROW_OK}{ROW_EMPTY}"));
+    let text = std::fs::read_to_string(&config).unwrap();
+    mcp_gateway::gateway::test_helpers::write_owner_only(
+        &config,
+        &format!("{text}meta_mcp:\n  cache_tools: true\n"),
+    )
+    .unwrap();
+    assert_eq!(
+        run_upgrade_with_config(true, true, Some(&data), Some(&config)),
+        ExitCode::SUCCESS,
+        "the dry run reports the rewrite, not a config that cannot load yet"
+    );
+    assert_eq!(
+        run_upgrade_with_config(false, true, Some(&data), Some(&config)),
+        ExitCode::FAILURE,
+        "the applying run loads the rewritten config and checks its grants"
+    );
+}
