@@ -81,16 +81,16 @@ async fn a_tree_in_its_waits_is_killed_by_a_later_gateway_stop_deadline() {
     let (w, t) = started(&resists_term(), None).await;
     let child = descendant(w.path()).await;
     let pid = leader(&t).await;
-    let deadline = Arc::new(super::super::reaper::StopDeadline::default());
+    let deadline = Arc::new(super::super::super::reaper::StopDeadline::default());
     t.attach_stop_deadline(Arc::clone(&deadline));
     let own_plan_end = tokio::time::Instant::now() + Duration::from_secs(120);
     let closing = Arc::clone(&t);
     let close = tokio::spawn(async move {
-        super::super::reaper::within_stop_deadline(own_plan_end, closing.close()).await
+        super::super::super::reaper::within_stop_deadline(own_plan_end, closing.close()).await
     });
     poll_until("the tree is handed over", || t.child.lock().tree.is_none()).await;
     let started_at = std::time::Instant::now();
-    let cut = super::super::reaper::KILL_RESERVE + Duration::from_secs(1);
+    let cut = super::super::super::reaper::KILL_RESERVE + Duration::from_secs(1);
     deadline.move_earlier(started_at + cut);
     assert_killed(pid).await;
     assert!(
@@ -107,17 +107,17 @@ async fn a_tree_in_its_waits_is_killed_by_a_later_gateway_stop_deadline() {
 /// (a tree already handed over is killed on the reaper's next step) and a
 /// tree still in its slot is killed at once by the transport. No pid is
 /// signalled from test code: a reaped pid may name someone else's group.
-struct EndOnDrop(Arc<StdioTransport>, Arc<super::super::reaper::StopDeadline>);
+struct EndOnDrop(Arc<StdioTransport>, Arc<super::super::super::reaper::StopDeadline>);
 
 impl EndOnDrop {
     /// A guard over `t`, with a fresh stop deadline attached to it.
     fn new(t: &Arc<StdioTransport>) -> Self {
-        let deadline = Arc::new(super::super::reaper::StopDeadline::default());
+        let deadline = Arc::new(super::super::super::reaper::StopDeadline::default());
         t.attach_stop_deadline(Arc::clone(&deadline));
         Self(Arc::clone(t), deadline)
     }
 
-    fn deadline(&self) -> &Arc<super::super::reaper::StopDeadline> {
+    fn deadline(&self) -> &Arc<super::super::super::reaper::StopDeadline> {
         &self.1
     }
 }
@@ -137,7 +137,7 @@ const MARKS_TERM: &str = "trap 'echo termed > term.mark' TERM\nwhile :; do sleep
 async fn close_under(t: &Arc<StdioTransport>, own_plan_end: tokio::time::Instant) {
     let closing = Arc::clone(t);
     tokio::spawn(async move {
-        super::super::reaper::within_stop_deadline(own_plan_end, closing.close()).await
+        super::super::super::reaper::within_stop_deadline(own_plan_end, closing.close()).await
     });
     poll_until("the tree is handed over", || t.child.lock().tree.is_none()).await;
 }
@@ -147,7 +147,7 @@ async fn close_under(t: &Arc<StdioTransport>, own_plan_end: tokio::time::Instant
 async fn cut_close(t: &Arc<StdioTransport>, end: &EndOnDrop, cut_in: Duration) -> Pid {
     let pid = leader(t).await;
     close_under(t, tokio::time::Instant::now() + Duration::from_secs(120)).await;
-    let cut = std::time::Instant::now() + super::super::reaper::KILL_RESERVE + cut_in;
+    let cut = std::time::Instant::now() + super::super::super::reaper::KILL_RESERVE + cut_in;
     end.deadline().move_earlier(cut);
     pid
 }
@@ -194,7 +194,7 @@ async fn a_short_cut_drops_an_earlier_uncut_sigterm() {
     let (w, t) = started(MARKS_TERM, None).await;
     let end = EndOnDrop::new(&t);
     let pid = leader(&t).await;
-    let reserve = super::super::reaper::KILL_RESERVE;
+    let reserve = super::super::super::reaper::KILL_RESERVE;
     // The cut is set before the close, so the handover's first step applies it.
     end.deadline()
         .move_earlier(std::time::Instant::now() + reserve + Duration::from_millis(295));
@@ -215,7 +215,7 @@ async fn a_short_cut_drops_an_earlier_uncut_sigterm() {
 /// tracks.
 fn hand_over_gracefully(
     t: &StdioTransport,
-    deadline: &Arc<super::super::reaper::StopDeadline>,
+    deadline: &Arc<super::super::super::reaper::StopDeadline>,
 ) -> usize {
     let mut slot = t.child.lock();
     let mut tree = slot.tree.take().expect("a started tree");
@@ -265,7 +265,7 @@ async fn a_handover_whose_deadline_already_passed_is_tracked() {
 /// one leaves it, so a second stop can shorten the waits, never extend them.
 #[test]
 fn a_second_earlier_stop_deadline_takes_effect_and_a_later_one_does_not() {
-    let deadline = super::super::reaper::StopDeadline::default();
+    let deadline = super::super::super::reaper::StopDeadline::default();
     assert_eq!(deadline.get(), None, "unset until a stop");
     let now = std::time::Instant::now();
     deadline.move_earlier(now + Duration::from_secs(30));
