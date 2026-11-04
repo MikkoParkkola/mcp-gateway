@@ -14,10 +14,7 @@ use crate::backend::BackendRegistry;
 use crate::config::{Config, EnvOverlay, LiveEnv, ResolvedEnvFiles};
 use crate::security::{posture, ssrf::DestinationPolicy};
 
-use super::{
-    ConfigPatch, IdentityGrantSink, LiveConfig, POSTURE_REFUSED_PREFIX, ReloadOutcome,
-    SHUTDOWN_ABORTED_ERROR, apply_patch, compute_diff,
-};
+use super::{IdentityGrantSink, LiveConfig, ReloadOutcome, SHUTDOWN_ABORTED_ERROR, apply_patch};
 
 #[path = "reload_context_write.rs"]
 mod write_api;
@@ -28,129 +25,16 @@ mod lock_api;
 #[path = "replace.rs"]
 pub(crate) mod replace;
 
-/// A candidate config, evaluated against the recorded env files.
-pub(super) struct EvaluatedReload {
-    pub(super) config: Config,
-    /// May be empty: the env files can change while the config file does not.
-    pub(super) patch: ConfigPatch,
-    pub(super) overlay: Arc<EnvOverlay>,
-    /// Every `env:NAME` the config references, resolved or not.
-    pub(super) secret_refs: std::collections::BTreeSet<String>,
-    /// What this evaluation read; digested when it is published.
-    pub(super) inputs: super::revision::RawInputs,
-}
+#[path = "reload_context_evaluate.rs"]
+mod evaluate;
 
-pub(super) fn load_config_patch(
-    config_path: &std::path::Path,
-    live_config: &Arc<LiveConfig>,
-    env: &LiveEnv,
-) -> std::result::Result<EvaluatedReload, String> {
-    let old_config = live_config.get();
-    // The recorded paths, never `new_config.env_files`: `~` resolved once at
-    // startup, and resolving the spelling again could open a different file.
-    // A malformed line is an error here rather than a warning, so a reload
-    // against a half-read env file is refused instead of published.
-    let evaluated = Config::load_with_overlay(Some(config_path), env.env_paths())
-        .map_err(|e| format!("Failed to parse config: {e}"))?;
-    let patch = compute_diff(&old_config, &evaluated.config);
+#[path = "reload_context_refusals.rs"]
+mod refusals;
 
-    Ok(EvaluatedReload {
-        config: evaluated.config,
-        patch,
-        overlay: evaluated.overlay,
-        secret_refs: evaluated.secret_refs,
-        inputs: evaluated.inputs,
-    })
-}
-
-/// Startup-only environment keys no config field names.
-///
-/// The attestation signer is built once, during startup, straight off the
-/// overlay — these names appear in no config file, so a rotation is invisible
-/// both to the config diff and to the config's own `env:` references.
-pub(super) const IMPLICIT_STARTUP_ENV_KEYS: &[&str] = &[
-    crate::attestation::wiring::ATTESTATION_MODE_ENV,
-    crate::attestation::wiring::ATTESTATION_SIGNING_KEY_ENV,
-    crate::attestation::wiring::ATTESTATION_KEY_ID_ENV,
-    crate::attestation::wiring::ATTESTATION_AUDIENCE_ENV,
-    crate::trust::provenance_public::PROVENANCE_SEED_ENV,
-    crate::trust::provenance_public::PROVENANCE_KEY_ID_ENV,
-];
-
-/// A refused preparation's answer: the reason, and that the reload changed
-/// nothing.
-fn nothing_published(reason: &str) -> String {
-    format!(
-        "{POSTURE_REFUSED_PREFIX} {reason} No backend was started or stopped, and no \
-         configuration was published."
-    )
-}
-
-/// Startup-only environment keys a restart would read differently.
-///
-/// Two kinds, and neither is visible in the config diff:
-///
-/// * a rotated `env:NAME` secret. The holder that consumed it — a
-///   `ResolvedAuthConfig`, an agent's HS256 key — is built once at startup and
-///   nothing rebuilds it, so the running process keeps the old value.
-/// * a `HOME` that no longer resolves where it did at startup, when an env-file
-///   entry was spelled with `~`. A restart resolves that entry against the new
-///   home and opens a different file.
-///
-/// The `HOME` rule is deliberately conservative: any assignment of `HOME` by
-/// either run's env files, or any change in the value they leave standing, is
-/// reported. The notice is never absent when a restart would read different
-/// files, and it does not clear: a config whose env files assign `HOME` beside
-/// a `~` entry reports `HOME` on every reload, and restarting does not settle
-/// it, because the next startup's env files assign it again. It says a restart
-/// *could* read different files, never that one is outstanding.
-///
-/// It has to be, because the question the rule is really answering — would a
-/// restart open different files than startup did — cannot be answered from
-/// values. `~` in entry N is expanded against the `HOME` in force at THAT point
-/// in the sequence (`Config::evaluate`), so an env file can move where a later
-/// entry is read while a file after it restores the final value, leaving both
-/// runs equal on every value comparison. Answering exactly would mean expanding
-/// `~` a second time, which the design forbids. Both runs' assignments count:
-/// deleting the move leaves nothing to notice on the reload side, and the
-/// restored value can equal the process environment's, so only startup's own
-/// assignment records that the expansion base was ever moved.
-///
-/// The accepted cost is a notice that fires when nothing moved — re-stating an
-/// unchanged `HOME` beside a `~` entry (ENVFILE.19g). Reordering is not this
-/// rule's to catch: an edit to the `env_files` list is reported as `env_files`.
-///
-/// Names only. The values are secrets and a reload report is not a place to
-/// print one.
-pub(super) fn changed_startup_env_keys(env: &LiveEnv, evaluated: &EvaluatedReload) -> Vec<String> {
-    let startup = env.startup();
-    let keys: std::collections::BTreeSet<String> = evaluated
-        .secret_refs
-        .iter()
-        .map(String::as_str)
-        .chain(IMPLICIT_STARTUP_ENV_KEYS.iter().copied())
-        .filter(|name| startup.resolve(name) != evaluated.overlay.resolve(name))
-        .map(ToString::to_string)
-        .collect();
-    let mut keys: Vec<String> = keys.into_iter().collect();
-    keys.extend(evaluated.overlay.rotated_secret_files(startup));
-    // A `~` entry is expanded against the `HOME` in force AT THAT POINT in the
-    // sequence (`Config::evaluate`), not the one left standing at the end, so
-    // an env file can move where a LATER entry reads while the final value is
-    // restored and compares equal (ENVFILE.19i). Comparing values alone cannot
-    // see that, and neither can the reload overlay alone: deleting the move
-    // leaves nothing there to notice, and the value it restored may be the
-    // process environment's own (ENVFILE.19j). Either run's assignment counts,
-    // so the notice never clears for such a config — see the fn doc.
-    if env.env_paths().has_tilde_entry()
-        && (startup.assigns("HOME")
-            || evaluated.overlay.assigns("HOME")
-            || startup.resolve("HOME") != evaluated.overlay.resolve("HOME"))
-    {
-        keys.push("HOME".to_string());
-    }
-    keys
-}
+#[cfg(test)]
+pub(super) use evaluate::IMPLICIT_STARTUP_ENV_KEYS;
+use evaluate::nothing_published;
+pub(super) use evaluate::{EvaluatedReload, changed_startup_env_keys, load_config_patch};
 
 // ============================================================================
 // ReloadContext — imperative reload handle for the meta-tool
@@ -423,30 +307,6 @@ impl ReloadContext {
         self.reload_outcome().await.map(|outcome| outcome.changes)
     }
 
-    /// The capabilities section applies only at restart, so the attached
-    /// capability backend keeps its name through a reload that renames it. A
-    /// backend registered under that name would be judged as itself and
-    /// answered by the capability; load refuses the pair, and so does this.
-    fn refuse_capability_name_clash(&self, patch: &ConfigPatch) -> std::result::Result<(), String> {
-        let Some(cap) = self.capabilities.as_ref() else {
-            return Ok(());
-        };
-        let Some((name, _)) = patch
-            .backends_added
-            .iter()
-            .chain(&patch.backends_modified)
-            .find(|(name, _)| *name == cap.name)
-        else {
-            return Ok(());
-        };
-        Err(format!(
-            "{POSTURE_REFUSED_PREFIX} backends.{name} has the name of the running capability \
-             backend, and a capabilities.name change applies only at restart. Restart first, \
-             or rename the backend. No backend was started or stopped, and no configuration \
-             was published."
-        ))
-    }
-
     /// Reload the config file and return a structured outcome for callers/UI.
     ///
     /// # Errors
@@ -550,118 +410,6 @@ impl ReloadContext {
             None => None,
         };
         Ok(outcome)
-    }
-
-    /// The refusals a reload answers before `apply_patch` stops or starts any
-    /// backend: each says nothing was started, stopped or published.
-    fn refuse_before_apply(
-        &self,
-        new_config: &Config,
-        patch: &ConfigPatch,
-    ) -> std::result::Result<(), String> {
-        // Before `apply_patch`, which stops and starts backends: a refusal that
-        // ran after it could not say nothing was applied. And before the
-        // publish, which is what the origin gate would re-read.
-        if let Some(refusal) =
-            crate::gateway::reload_posture_refusal(self.live_config.running(), new_config)
-        {
-            // What a restart does with this same file is the operator's next
-            // decision, and it differs. A file that also enables authentication
-            // is right on a restart and only wrong to apply live; a file that
-            // just declares the name refuses at the next start, planned or not.
-            let restart = if refusal.restart_would_also_refuse {
-                "This configuration is on disk, so the next start, including an \
-                 unplanned one, will refuse to serve. Revert it, or close the \
-                 tool paths."
-            } else {
-                // "accepts", not "is safe". The one file that reaches this
-                // branch while still leaving the tools open is the one that
-                // sets the escape hatch, and calling that safe would have the
-                // gateway endorse a choice the operator made deliberately and
-                // owns.
-                // "would not refuse it for this reason", not "accepts it".
-                // `network_bind_refusal` is the only question asked here; a
-                // restart still reads the whole file and can fail on a missing
-                // env: reference, an unreadable certificate, or anything else
-                // validation catches. Promising acceptance is how an operator
-                // restarts a working gateway into a different outage — the same
-                // overclaiming that cost this message three earlier rewrites.
-                "A restart would not refuse it for this reason, and applies the \
-                 parts a reload cannot."
-            };
-            // Two bounded facts, and no summary of "what is still in force".
-            //
-            // The clause that kept being wrong went out with its cause. Env
-            // files once reached the PROCESS environment inside `Config::load`
-            // before it returned, so a refused candidate had already mutated
-            // the process that refused it — that is the defect MIK-7256 names,
-            // and it is closed: the candidate's env files build an `EnvOverlay`
-            // that is published only on success (`self.env.set(overlay)`, below
-            // and unreachable from this path), the overlay parses in memory
-            // (`dotenvy::from_read_iter`, `src/config/env_overlay.rs:362`)
-            // rather than through `dotenvy::dotenv`, and `rg set_var src/` is
-            // empty.
-            //
-            // Say that, not "impossible". `#![deny(unsafe_code)]` is not
-            // `forbid`, an `#[allow]` overrides it, and neither binds a
-            // dependency. What holds this closed is the ABSENT call site plus
-            // the parse path — a switch to `dotenvy::from_path` would reopen
-            // it, and that is the line to watch.
-            //
-            // The summary is still not written, for a different reason: this
-            // check asks `network_bind_refusal` and nothing else, while a
-            // restart reads the whole file. Claiming more than the two facts
-            // below is how a security message starts the next report.
-            return Err(format!(
-                "{POSTURE_REFUSED_PREFIX} {} No backend was started or stopped, \
-                 and no configuration was published. {restart}",
-                refusal.reason
-            ));
-        }
-
-        // A changed account binding cannot reuse the credentials minted under
-        // the descriptor it replaces: the descriptor's authority, resource,
-        // issuer, client id and requested scopes define the account key and the
-        // descriptor revision every existing lease carries. Eager replacement
-        // of those is not implemented in this slice, so this refuses and
-        // mutates nothing rather than pretending a live replacement happened.
-        // Compared against what is RUNNING, so it stays true until a restart.
-        if let Some(reason) = crate::config::account_bindings::reload_binding_refusal(
-            self.live_config.running(),
-            new_config,
-        ) {
-            return Err(format!(
-                "{POSTURE_REFUSED_PREFIX} {reason} No backend was started or stopped, and no \
-                 configuration was published."
-            ));
-        }
-
-        self.refuse_capability_name_clash(patch)
-    }
-
-    /// A refusal when `evaluated` changes a security field only a restart
-    /// applies: message signing, the signature chain or the record key.
-    fn restart_only_refusal(&self, evaluated: &EvaluatedReload) -> std::result::Result<(), String> {
-        let (running, proposed) = (&self.live_config.running().security, &evaluated.config);
-        let (env, overlay) = (self.env.startup(), &evaluated.overlay);
-        let signing = (running.message_signing)
-            .restart_changed_field(&proposed.security.message_signing, env, overlay)
-            .map_err(|error| error.to_string())?;
-        let (was, now) = (&running.signature_chain, &proposed.security.signature_chain);
-        let chain =
-            crate::config::SignatureChainConfig::restart_changed_field(was.as_ref(), now.as_ref());
-        // MIK-8697: the record key keys every record and subscription handle
-        // for the process's lifetime, so a changed reference waits for a restart.
-        let record_key = (running.record_principal_key != proposed.security.record_principal_key)
-            .then(|| "record_principal_key".to_owned());
-        let field = (signing.map(|f| format!("message_signing.{f}")))
-            .or_else(|| chain.map(|f| format!("signature_chain.{f}")))
-            .or(record_key);
-        field.map_or(Ok(()), |field| {
-            Err(format!(
-                "config reload refused: security.{field} requires restart"
-            ))
-        })
     }
 
     async fn reload_transaction(
