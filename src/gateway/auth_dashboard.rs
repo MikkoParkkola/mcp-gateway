@@ -56,7 +56,29 @@ struct Handoff {
 #[derive(Debug, Clone, Default)]
 pub(crate) struct Bound {
     pub(crate) not_after: Option<SystemTime>,
-    pub(crate) key: Option<crate::gateway::auth::QuotaPrincipal>,
+    pub(crate) key: Option<MintingKey>,
+}
+
+/// The API key a link, code or session was minted by: the key, by its
+/// quota identity, and the fingerprint of the secret the minting request
+/// matched. Both are always present, so a key-bound session is always bound
+/// to its secret: it lives while that secret is still valid, a routine
+/// rotation keeps it through the grace, and one that drops the secret at once
+/// ends it.
+#[derive(Clone, PartialEq, Eq)]
+pub(crate) struct MintingKey {
+    pub(crate) quota: crate::gateway::auth::QuotaPrincipal,
+    pub(crate) digest_tag: String,
+}
+
+// The tag fingerprints a secret: redacted, as `ApiKeyRef` redacts it.
+impl std::fmt::Debug for MintingKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MintingKey")
+            .field("quota", &self.quota)
+            .field("digest_tag", &"<redacted>")
+            .finish()
+    }
 }
 
 impl Bound {

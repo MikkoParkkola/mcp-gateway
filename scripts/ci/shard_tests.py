@@ -7,7 +7,8 @@ The Tests, Windows check and macOS check suites run as shards. Each shard is
 a plain `cargo test` over a subset of test targets. The shards of one OS are
 exact complements of the command that job ran before sharding:
 
-- the library is split by a libtest filter and the matching `--skip`;
+- the library is split by a libtest filter and the matching `--skip`, or run
+  whole in one shard (macOS);
 - the integration targets are split by `--test` glob classes `[a-l]*` and
   `[!a-l]*`, or taken whole (`*`) where the OS runs a single integration shard.
 
@@ -60,9 +61,12 @@ SHARDS: dict[str, dict[str, list[tuple[str, list[str], list[str], int]]]] = {
         "int-a": [("suite", ["--bins", "--test", GLOB_A], [], 763)],
         "int-b": [("suite", ["--test", GLOB_B], [], 1238)],
     },
+    # macOS runs the library as one shard: each shard compiles the `--lib`
+    # test binary from cold, and with about two macOS runners a third job
+    # queues behind the others. One build and both halves' tests (floors
+    # 5352 + 6942) beat two builds.
     "macos": {
-        "lib-a": [(*_LIB_A, 5352)],
-        "lib-b": [(*_LIB_B, 6942)],
+        "lib": [("suite", ["--lib"], [], 12294)],
         "int": [("suite", ["--bins", "--test", GLOB_ALL], [], 2205), ("doc", ["--doc"], [], 55)],
     },
 }
@@ -93,11 +97,13 @@ KNOWN_LEFTOVERS: list[tuple[str, str, int, str]] = [
     (_TMP,
      r"\.mcp-gateway/protocol-revision-telemetry/(\.window\.lock|window\.json)"
      r"|\.mcp-gateway/record-principal\.key|tasks/stdio/store\.lease|inner\.yaml"
-     r"|\.gateway\.yaml\.lock|\.mcp-gateway/transparency/transparency\.jsonl"
-     r"|gateway-control-plane/audit\.jsonl", 3,
+     r"|\.gateway\.yaml\.lock|\.mcp-gateway/transparency/transparency\.jsonl(\.hwm|\.lock)?"
+     r"|gateway-control-plane/audit\.jsonl(\.hwm|\.lock)?"
+     r"|\.mcp-gateway/tasks/task-[0-9a-f-]{36}\.json|serve\.log", 3,
      "the home of a gateway an integration test spawned, written after the "
      "test's temp dir is gone: its telemetry window, record key and stdio "
-     "lease, or its config lock, transparency log and control-plane audit; "
+     "lease, or its config lock, transparency log and control-plane audit, "
+     "or a full home with its task record and serve log (CI job 125219817324); "
      "the tests' wait for that gateway removes it; up to three in one int-a "
      "run (CI job 125058531711)"),
 ]
@@ -111,8 +117,9 @@ LEFTOVER_CEILING: dict[tuple[str, str], int] = {
     (r"\.tmp[A-Za-z0-9]{6}",
      r"\.mcp-gateway/protocol-revision-telemetry/(\.window\.lock|window\.json)"
      r"|\.mcp-gateway/record-principal\.key|tasks/stdio/store\.lease|inner\.yaml"
-     r"|\.gateway\.yaml\.lock|\.mcp-gateway/transparency/transparency\.jsonl"
-     r"|gateway-control-plane/audit\.jsonl"): 3,
+     r"|\.gateway\.yaml\.lock|\.mcp-gateway/transparency/transparency\.jsonl(\.hwm|\.lock)?"
+     r"|gateway-control-plane/audit\.jsonl(\.hwm|\.lock)?"
+     r"|\.mcp-gateway/tasks/task-[0-9a-f-]{36}\.json|serve\.log"): 3,
 }
 
 HEADER = re.compile(r"^\s*(Running|Doc-tests) ")
@@ -358,6 +365,10 @@ def self_test() -> int:
     home = [".mcp-gateway/protocol-revision-telemetry/window.json", "tasks/stdio/store.lease"]
     control = [".gateway.yaml.lock", ".mcp-gateway/transparency/transparency.jsonl",
                "gateway-control-plane/audit.jsonl"]
+    full = [".mcp-gateway/tasks/task-981b20ff-769a-4959-92ed-26da6107c4bf.json",
+            *(f".mcp-gateway/transparency/transparency.jsonl{x}" for x in ("", ".hwm", ".lock")),
+            *(f"gateway-control-plane/audit.jsonl{x}" for x in ("", ".hwm", ".lock")),
+            "serve.log"]
     # A leaked TempLog folder is never one of the tolerated plain temp dirs.
     assert unexpected({"audit-log-Ab12Cd": hwm, ".tmpAb12Cd": hwm}) == ["audit-log-Ab12Cd"]
     # The families whose tests now use their own temp folders are no longer
@@ -365,14 +376,15 @@ def self_test() -> int:
     gone = ["oauth_test_no_token", "chain-test-0b1c", "http_transport_tls_guard", "stdio-tail-1"]
     assert unexpected({n: ["tokens"] for n in gone}) == sorted(gone), gone
     # Each known source is tolerated up to its own count.
-    for files, most in ((hwm, 3), (task, 1), (home, 3), (control, 3)):
+    for files, most in ((hwm, 3), (task, 1), (home, 3), (control, 3), (full, 3)):
         names = [f".tmpAb12C{i}" for i in range(most + 1)]
         assert unexpected({n: files for n in names}) == [names[-1]], (files, most)
     # A plain temp folder is tolerated only for what a known source writes: a
     # stray file, a known file beside a stray one, an empty folder and a plain
     # file all fail, though each has a tolerated name.
     for files in (["other.db"], [*hwm, "other.db"], [*home, "keys/secret.pem"],
-                  [*control, "gateway-control-plane/other.jsonl"], []):
+                  [*control, "gateway-control-plane/other.jsonl"],
+                  [*full, "serve.log.1"], [*full, ".mcp-gateway/tasks/task-x.json"], []):
         assert unexpected({".tmpAb12Cd": files}) == [".tmpAb12Cd"], files
     # The same check end to end: a run that leaves a generically named temp
     # folder holding a stray file turns red on it.

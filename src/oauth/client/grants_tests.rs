@@ -233,6 +233,33 @@ fn a_stored_token_equal_to_the_live_cached_one_is_not_adopted() {
     );
 }
 
+/// A stored token fresher than the cached one, but no longer in the store when
+/// the adopt reads it: nothing is adopted and the refresh goes ahead.
+#[test]
+fn a_fresher_token_the_store_no_longer_holds_is_not_adopted() {
+    let dir = tempfile::tempdir().unwrap();
+    let client = client(dir.path(), "https://as.example", &[]);
+    let gone = live_token("gone-access");
+
+    assert_eq!(RefreshCaller::adopt(&client, Some(&gone)), None);
+    assert!(client.current_token.read().is_none(), "nothing cached");
+}
+
+/// Before discovery there is no issuer to key the store by, so a stored-login
+/// adopt reads nothing.
+#[cfg(feature = "webui")]
+#[test]
+fn a_stored_login_adopt_before_discovery_reads_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut client = client(dir.path(), "https://as.example", &[]);
+    client.auth_metadata = None;
+
+    assert_eq!(
+        client.adopt_stored_login_for_test(),
+        crate::oauth::client::grants::Adopt::Nothing
+    );
+}
+
 // ---------------------------------------------------------------------------
 // try_client_credentials
 // ---------------------------------------------------------------------------
@@ -245,7 +272,9 @@ async fn a_grant_before_initialize_is_refused_as_not_initialized() {
     let mut client = client(dir.path(), "https://as.example", &["client_credentials"]);
     client.auth_metadata = None;
 
-    let refused = client.try_client_credentials().await;
+    let refused = client
+        .try_client_credentials(client.issuer_current().unwrap())
+        .await;
 
     let Err(error) = refused else {
         panic!("a refusal: {refused:?}");
@@ -259,7 +288,9 @@ async fn client_credentials_is_refused_when_the_server_does_not_advertise_it() {
     let dir = tempfile::tempdir().unwrap();
     let client = client(dir.path(), "https://as.example", &["authorization_code"]);
 
-    let refused = client.try_client_credentials().await;
+    let refused = client
+        .try_client_credentials(client.issuer_current().unwrap())
+        .await;
 
     assert!(
         matches!(refused, Err(Error::OAuth(ref m)) if m == "Server does not support client_credentials grant"),
@@ -275,7 +306,9 @@ async fn a_refused_client_credentials_request_is_an_oauth_error() {
     let issuer = token_endpoint(401, r#"{"error":"invalid_client"}"#).await;
     let client = client(dir.path(), &issuer, &["client_credentials"]);
 
-    let refused = client.try_client_credentials().await;
+    let refused = client
+        .try_client_credentials(client.issuer_current().unwrap())
+        .await;
 
     let Err(Error::OAuth(message)) = refused else {
         panic!("an OAuth error: {refused:?}");
@@ -296,7 +329,9 @@ async fn an_unparseable_client_credentials_answer_is_an_oauth_error() {
     let issuer = token_endpoint(200, r#"{"not":"a token"}"#).await;
     let client = client(dir.path(), &issuer, &["client_credentials"]);
 
-    let refused = client.try_client_credentials().await;
+    let refused = client
+        .try_client_credentials(client.issuer_current().unwrap())
+        .await;
 
     assert!(
         matches!(refused, Err(Error::OAuth(ref m)) if m.starts_with("Failed to parse credentials response")),
@@ -322,7 +357,9 @@ async fn an_oversized_expires_in_is_refused_on_the_client_credentials_grant() {
     .await;
     let client = client(dir.path(), &issuer, &["client_credentials"]);
 
-    let refused = client.try_client_credentials().await;
+    let refused = client
+        .try_client_credentials(client.issuer_current().unwrap())
+        .await;
 
     let expected = format!(
         "the token endpoint {issuer} answered expires_in {}, more than 100 years; \
@@ -353,7 +390,10 @@ fn a_granted_client_credentials_token_is_stored_and_logged() {
         )
         .await;
         let client = client(dir.path(), &issuer, &["client_credentials"]);
-        let access = client.try_client_credentials().await.unwrap();
+        let access = client
+            .try_client_credentials(client.issuer_current().unwrap())
+            .await
+            .unwrap();
         (access, client, issuer)
     });
 
@@ -380,7 +420,12 @@ fn a_refused_code_exchange_logs_its_status_and_is_an_oauth_error() {
         let issuer = token_endpoint(400, r#"{"error":"invalid_grant"}"#).await;
         let client = client(dir.path(), &issuer, &[]);
         client
-            .exchange_code("code", "http://127.0.0.1:9/cb", "verifier")
+            .exchange_code(
+                client.issuer_current().unwrap().spend(&client).unwrap(),
+                "code",
+                "http://127.0.0.1:9/cb",
+                "verifier",
+            )
             .await
     });
 
@@ -402,7 +447,12 @@ async fn an_unparseable_code_exchange_answer_is_an_oauth_error() {
     let client = client(dir.path(), &issuer, &[]);
 
     let refused = client
-        .exchange_code("code", "http://127.0.0.1:9/cb", "verifier")
+        .exchange_code(
+            client.issuer_current().unwrap().spend(&client).unwrap(),
+            "code",
+            "http://127.0.0.1:9/cb",
+            "verifier",
+        )
         .await;
 
     assert!(
@@ -424,7 +474,12 @@ async fn an_oversized_expires_in_is_refused_on_the_code_exchange() {
     let client = client(dir.path(), &issuer, &[]);
 
     let refused = client
-        .exchange_code("code", "http://127.0.0.1:9/cb", "verifier")
+        .exchange_code(
+            client.issuer_current().unwrap().spend(&client).unwrap(),
+            "code",
+            "http://127.0.0.1:9/cb",
+            "verifier",
+        )
         .await;
 
     let expected = format!(
@@ -452,7 +507,12 @@ fn a_successful_code_exchange_logs_whether_a_refresh_token_came() {
         .await;
         let client = client(dir.path(), &issuer, &[]);
         client
-            .exchange_code("code", "http://127.0.0.1:9/cb", "verifier")
+            .exchange_code(
+                client.issuer_current().unwrap().spend(&client).unwrap(),
+                "code",
+                "http://127.0.0.1:9/cb",
+                "verifier",
+            )
             .await
             .unwrap()
     });
@@ -575,7 +635,9 @@ async fn an_unreadable_clock_sends_no_token_request() {
 
     let refused = {
         let _clock = crate::clock::test_clock::before_epoch();
-        client.try_client_credentials().await
+        client
+            .try_client_credentials(client.issuer_current().unwrap())
+            .await
     };
 
     let Err(Error::OAuth(message)) = refused else {
@@ -624,7 +686,12 @@ async fn an_unreadable_clock_sends_no_code_exchange() {
     let refused = {
         let _clock = crate::clock::test_clock::before_epoch();
         client
-            .exchange_code("code", "http://127.0.0.1:9/cb", "verifier")
+            .exchange_code(
+                client.issuer_current().unwrap().spend(&client).unwrap(),
+                "code",
+                "http://127.0.0.1:9/cb",
+                "verifier",
+            )
             .await
     };
 

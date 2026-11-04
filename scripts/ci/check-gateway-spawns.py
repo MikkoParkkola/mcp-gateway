@@ -106,7 +106,7 @@ PENDING = frozenset({
 PENDING_CEILING = 39
 
 
-def violations(root):
+def violations(root, pending=PENDING):
     root = pathlib.Path(root)
     if not (root / "tests").is_dir():
         raise SystemExit(f"FAIL: {root / 'tests'} is not a directory; nothing was checked")
@@ -119,7 +119,7 @@ def violations(root):
             text = path.read_text(encoding="utf-8")
             lines = text.splitlines()
             unwrapped = unwrapped_spawns(text, lines) if GATEWAY_COMMAND.search(text) else []
-            if relative in PENDING:
+            if relative in pending:
                 if not unwrapped:
                     found.append(f"{relative}:1: listed in PENDING with no unwrapped spawn left; remove it")
             else:
@@ -160,7 +160,7 @@ def self_test():
         "tests/bulk_renamed.rs": 'command.envs(std::env::var_os("UserProfile").map(|p| ("MCP_GATEWAY_TEST_HOME_DIR", p)));\n',
         "tests/bare_spawn.rs": "let c = gateway_bin::command(h, i);\nlet child = c.spawn().unwrap();\n",
         "tests/spawn_no_reason.rs": "let c = gateway_bin::command(h, i);\nc.spawn() // spawn-check: waits for exit:\n;\n",
-        sorted(PENDING)[0]: "let c = gateway_bin::command(h, i);\nlet r = gateway_bin::Reaped::new(c.spawn().unwrap());\n",
+        "tests/pending_done.rs": "let c = gateway_bin::command(h, i);\nlet r = gateway_bin::Reaped::new(c.spawn().unwrap());\n",
     }
     clean = {
         HELPER: 'pub fn path() -> &\'static str { env!("CARGO_BIN_EXE_mcp-gateway") }\ncommand.env_clear();\n',
@@ -181,12 +181,18 @@ def self_test():
         for name, text in {**planted, **clean}.items():
             (root / name).parent.mkdir(parents=True, exist_ok=True)
             (root / name).write_text(text, encoding="utf-8")
-        got = violations(root)
+        got = violations(root, pending={"tests/pending_done.rs", "tests/pending_open.rs"})
+        (root / "tests/pending_open.rs").write_text(
+            "let c = gateway_bin::command(h, i);\nlet child = c.spawn().unwrap();\n", encoding="utf-8")
+        assert "tests/pending_open.rs:2: spawns outside gateway_bin::Reaped" not in violations(
+            root, pending={"tests/pending_open.rs"}), "a listed file is exempt"
+        assert "tests/pending_open.rs:2: spawns outside gateway_bin::Reaped" in violations(
+            root, pending=frozenset()), "an empty list exempts nothing"
     flagged = {line.split(":")[0] for line in got}
     assert flagged == set(planted), got
     assert "tests/home.rs:1: sets or removes an isolation variable" in got, got
     assert "tests/bare_spawn.rs:2: spawns outside gateway_bin::Reaped" in got, got
-    assert f"{sorted(PENDING)[0]}:1: listed in PENDING with no unwrapped spawn left; remove it" in got, got
+    assert "tests/pending_done.rs:1: listed in PENDING with no unwrapped spawn left; remove it" in got, got
     assert len(PENDING) <= PENDING_CEILING, "PENDING may only shrink"
     with tempfile.TemporaryDirectory() as tmp:
         try:

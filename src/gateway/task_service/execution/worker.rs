@@ -229,7 +229,9 @@ async fn run_dispatched(
     // Held through the call and an upstream job's follow, released before
     // settling: a parked round ends this worker, and its caller is idle then.
     let key_hold = intent.owned.hold_caller_key(&state);
-    let caller = intent.owned.dispatch_context(&state, &authorizer);
+    let caller = intent
+        .owned
+        .dispatch_context(&state, &authorizer, &generation);
     let session_id = intent.owned.session_id().map(str::to_owned);
 
     let submission = job

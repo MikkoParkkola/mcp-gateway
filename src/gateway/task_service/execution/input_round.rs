@@ -348,7 +348,7 @@ async fn dispatch(
     };
     let authorizer = state.authorizer(rejudged.as_ref().unwrap_or(owned.authorizer()), &generation);
     let _key_hold = owned.hold_caller_key(state);
-    let caller = owned.dispatch_context_retrying(state, &authorizer, retry);
+    let caller = owned.dispatch_context_retrying(state, &authorizer, (retry, &generation));
     // `redeeming_dispatch` has checked the surfaced target holds. The pin
     // covers the readmission as well as the dispatch.
     let meta = state.meta_mcp();

@@ -85,6 +85,14 @@ fn breaker_open(cfg: &ResolvedAuthConfig, secret: &str) -> bool {
     cfg.client_circuit_state(&client) == Some(crate::failsafe::CircuitState::Open)
 }
 
+/// The minting key a session opened with `secret` is bound to.
+fn minter_of(cfg: &ResolvedAuthConfig, secret: &str) -> super::MintingKey {
+    super::MintingKey {
+        quota: quota_of(cfg, secret),
+        digest_tag: super::digest_tag_of(&digest(secret)),
+    }
+}
+
 fn quota_of(cfg: &ResolvedAuthConfig, secret: &str) -> super::QuotaPrincipal {
     cfg.validate_token(secret)
         .expect("the key validates")
@@ -141,7 +149,7 @@ fn t2c_derived_rotation_has_no_breaker() {
 fn t3_rotation_widens_no_authority() {
     let runtime = Arc::new(AuthRuntime::default());
     let before = over(&runtime, vec![key("k", A, Some(P1))]);
-    let minter = quota_of(&before, A);
+    let minter = minter_of(&before, A);
     let now = crate::clock::utc_now().expect("the test clock reads");
     assert!(
         before.admin_key_live(&minter, now),
@@ -154,13 +162,41 @@ fn t3_rotation_widens_no_authority() {
     );
 }
 
+/// A session minted under A, bound to A's secret, survives a routine
+/// rotation to B while A is in its grace, and ends once the grace is over or
+/// when the rotation drops A at once (a leak).
+#[test]
+fn a_session_follows_the_secret_that_minted_it() {
+    let runtime = Arc::new(AuthRuntime::default());
+    let before = over(&runtime, vec![key("k", A, Some(P1))]);
+    let minter = minter_of(&before, A);
+    let now = crate::clock::utc_now().expect("the test clock reads");
+    let mut routine = key("k", B, Some(P1));
+    routine.previous_key_sha256 = Some(crate::config::api_key_digest_spec(A.as_bytes()));
+    routine.previous_expires_at = Some(now + crate::duration_bound::delta!(minutes, 15));
+    let routine = over(&runtime, vec![routine]);
+    assert!(
+        routine.admin_key_live(&minter, now),
+        "a routine rotation logged the dashboard out inside the grace"
+    );
+    assert!(
+        !routine.admin_key_live(&minter, now + crate::duration_bound::delta!(minutes, 16)),
+        "the session outlived the grace"
+    );
+    let leaked = over(&runtime, vec![key("k", B, Some(P1))]);
+    assert!(
+        !leaked.admin_key_live(&minter, now),
+        "a leaked rotation left the old secret's session live"
+    );
+}
+
 /// T3b (d1): same secret, principal P1 then P2: the identity changed, so
 /// A's session is not live and the window is fresh.
 #[test]
 fn t3b_a_changed_principal_ends_the_session_and_the_window() {
     let runtime = Arc::new(AuthRuntime::default());
     let before = over(&runtime, vec![key("k", A, Some(P1))]);
-    let minter = quota_of(&before, A);
+    let minter = minter_of(&before, A);
     spend(&before, A);
     let after = over(&runtime, vec![key("k", A, Some(P2))]);
     assert!(
@@ -179,7 +215,7 @@ fn t3b_a_changed_principal_ends_the_session_and_the_window() {
 fn t3c_adopting_the_derived_principal_changes_nothing() {
     let runtime = Arc::new(AuthRuntime::default());
     let before = over(&runtime, vec![key("k", A, None)]);
-    let minter = quota_of(&before, A);
+    let minter = minter_of(&before, A);
     spend(&before, A);
     let after = over(&runtime, vec![key("k", A, Some(&derived(A)))]);
     assert!(
@@ -192,6 +228,73 @@ fn t3c_adopting_the_derived_principal_changes_nothing() {
     assert!(
         !admits(&after, A),
         "adopting the derived principal reset the window"
+    );
+}
+
+/// T3d: a reload that narrows an admin key to some backends ends what it
+/// minted: a dashboard session is unscoped, and a scoped key may not hold one.
+#[test]
+fn t3d_narrowing_the_key_ends_its_session() {
+    let runtime = Arc::new(AuthRuntime::default());
+    let before = over(&runtime, vec![key("k", A, Some(P1))]);
+    let minter = minter_of(&before, A);
+    let now = crate::clock::utc_now().expect("the test clock reads");
+    assert!(
+        before.admin_key_live(&minter, now),
+        "premise: live on A's table"
+    );
+    let mut narrowed = key("k", A, Some(P1));
+    narrowed.backends = vec!["alpha".to_string()];
+    let after = over(&runtime, vec![narrowed]);
+    assert!(
+        minter_of(&after, A) == minter,
+        "premise: the same key, only narrowed"
+    );
+    assert!(
+        !after.admin_key_live(&minter, now),
+        "a session outlived its key's narrowing"
+    );
+}
+
+/// A load warns once per admin key with a non-empty list without `*`, naming
+/// it and what its UI scope becomes; an unscoped admin key, an admin key with
+/// an empty list (a UI-wide admin) and a scoped non-admin key are silent.
+#[test]
+fn a_scoped_admin_key_warns_at_load() {
+    let mut scoped_admin = key("scoped-admin", A, None);
+    scoped_admin.backends = vec!["alpha".to_string()];
+    let mut scoped_plain = key("scoped-plain", B, None);
+    scoped_plain.admin = false;
+    scoped_plain.backends = vec!["alpha".to_string()];
+    let full_admin = key("full-admin", "matrix-third-secret", None);
+    let mut ui_admin = key("ui-admin", "matrix-fourth-secret", None);
+    ui_admin.backends = Vec::new();
+    let ((), warned) = crate::test_log_capture::capture_warnings(|| {
+        let _ = over(
+            &Arc::new(AuthRuntime::default()),
+            vec![scoped_admin, scoped_plain, full_admin, ui_admin],
+        );
+    });
+    let lines: Vec<&str> = warned
+        .lines()
+        .filter(|l| l.contains("admin API key lists only some backends"))
+        .collect();
+    assert_eq!(
+        lines.len(),
+        1,
+        "one warning, for the scoped admin: {warned}"
+    );
+    assert!(
+        lines[0].contains("scoped-admin"),
+        "the key is named: {warned}"
+    );
+    assert!(
+        lines[0].contains("backends: [\"*\"]"),
+        "the fix is named: {warned}"
+    );
+    assert!(
+        lines[0].contains("Activity and status in the web UI show it only those"),
+        "the UI scope is named: {warned}"
     );
 }
 

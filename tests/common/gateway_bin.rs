@@ -205,6 +205,8 @@ pub struct Reaped {
     folders: Vec<tempfile::TempDir>,
     /// Set by a reap that saw the gateway exit by itself after its SIGTERM.
     drained: bool,
+    /// The first reap's exit status; a later reap returns it unchanged.
+    first_exit: Option<std::process::ExitStatus>,
 }
 
 /// How long a gateway may drain after SIGTERM: above its own serial
@@ -219,6 +221,7 @@ impl Reaped {
             child,
             folders: Vec::new(),
             drained: false,
+            first_exit: None,
         }
     }
 
@@ -242,24 +245,34 @@ impl Reaped {
 
     /// [`Self::reap`] with its own bound, for a row that tests the bound.
     pub async fn reap_within(&mut self, bound: std::time::Duration) -> std::process::ExitStatus {
+        if let Some(status) = self.first_exit {
+            return status;
+        }
         let started = std::time::Instant::now();
-        // `id()` is None once the child was reaped: a pid a reap released is
-        // never signalled, since the OS may have handed it to another process.
-        let signalled = self.child.id().is_some() && self.terminate();
+        let pid = self.child.id();
+        // A child that already exited is not drained by this stop: whatever
+        // it started was never told to stop. Its zombie still takes a signal,
+        // so the check comes first. `id()` is None once the child was reaped:
+        // a pid a reap released is never signalled, since the OS may have
+        // handed it to another process.
+        let running = matches!(self.child.try_wait(), Ok(None));
+        let signalled = running && self.terminate();
         let Ok(waited) = tokio::time::timeout(bound, self.child.wait()).await else {
             let _ = self.child.start_kill();
             let _ = tokio::time::timeout(KILL_BOUND, self.child.wait()).await;
             self.drained = false;
             panic!(
-                "the gateway did not exit within {bound:?} of its stop; killed it and kept {}",
+                "the gateway (pid {pid:?}) did not exit within {bound:?} of its stop; \
+                 killed it and kept {}",
                 self.kept()
             );
         };
         let status = waited.expect("the gateway's exit status");
         self.drained = signalled && exited_by_itself(status);
+        self.first_exit = Some(status);
         let elapsed = started.elapsed();
         if elapsed > std::time::Duration::from_secs(1) {
-            eprintln!("gateway_bin: the gateway took {elapsed:?} to stop ({status})");
+            eprintln!("gateway_bin: the gateway (pid {pid:?}) took {elapsed:?} to stop ({status})");
         }
         status
     }

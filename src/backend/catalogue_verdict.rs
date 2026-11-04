@@ -32,25 +32,37 @@ pub(crate) enum CatalogueVerdict {
     Unknown,
 }
 
-/// A fill that failed, answered by F13's own table so the verdict refuses
-/// exactly what the argument-key check would: the slot's failsafe always;
-/// under `closed`, a backend that could not be reached or is waiting for a
-/// login. Anything else vouches for nothing ([`CatalogueVerdict::Unknown`]),
-/// and the argument-key check decides, as before.
+/// A fill that failed, answered by F13's own table ([`fill_error_answers`])
+/// so the verdict refuses exactly what the argument-key check would.
+/// Anything else vouches for nothing ([`CatalogueVerdict::Unknown`]), and
+/// the argument-key check decides, as before.
 fn refused_fill(
     mode: InputSchemaEnforcement,
     error: crate::Error,
 ) -> crate::Result<CatalogueVerdict> {
+    if fill_error_answers(mode, &error) {
+        Err(error)
+    } else {
+        Ok(CatalogueVerdict::Unknown)
+    }
+}
+
+/// F13's one table of the fill failures that answer the call themselves,
+/// read by the verdict above and the argument-key check alike: the slot's
+/// failsafe and admission (no transport constructs these), a refusal of the
+/// caller (the per-user lender refusing the fill's send, a refused shared
+/// slot: never "schema unreadable"), and, under `closed`, a backend that
+/// could not be reached or is waiting for a login.
+pub(super) fn fill_error_answers(mode: InputSchemaEnforcement, error: &crate::Error) -> bool {
     match error {
-        e @ (crate::Error::CircuitOpen { .. }
+        crate::Error::CircuitOpen { .. }
         | crate::Error::RateLimited(_)
-        | crate::Error::IdentitySlotsExhausted { .. }) => Err(e),
-        e if mode == InputSchemaEnforcement::Closed
-            && (is_transport_failure(&e) || e.is_authorization_wait()) =>
-        {
-            Err(e)
+        | crate::Error::IdentitySlotsExhausted { .. }
+        | crate::Error::Forbidden { .. } => true,
+        e => {
+            mode == InputSchemaEnforcement::Closed
+                && (is_transport_failure(e) || e.is_authorization_wait())
         }
-        _ => Ok(CatalogueVerdict::Unknown),
     }
 }
 

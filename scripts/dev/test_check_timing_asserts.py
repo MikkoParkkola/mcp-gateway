@@ -268,6 +268,82 @@ class Timeouts(unittest.TestCase):
 HANG = {"HANG_BOUND": [("src/gateway/mod.rs", "Duration::from_secs(30)")]}
 
 
+class RequestTimeouts(unittest.TestCase):
+    """An HTTP client's `.timeout(D)` bounds the request on the real clock:
+    a slow answer under load fails the test, as `timeout(W, f)` does."""
+
+    scan, assertRefused, assertPasses = Timeouts.scan, Timeouts.assertRefused, Timeouts.assertPasses
+
+    BUILDER = 'let c = reqwest::Client::builder().timeout({w}).build().expect("client");'
+    REQUEST = 'let r = client.get(&url).timeout({w}).send().await.expect("answers");'
+
+    def test_a_short_request_timeout_is_judged(self):
+        for shape in (self.BUILDER, self.REQUEST, 'let r = gateway\n    .client\n    .post(&url)\n    .timeout({w})\n    .send();'):
+            with self.subTest(shape=shape):
+                self.assertRefused(shape.format(w="Duration::from_millis(500)"))
+                self.assertPasses(shape.format(w="Duration::from_secs(5)"))
+
+    def test_a_named_window_resolves_as_for_timeout(self):
+        prelude = "const PROBE: Duration = Duration::from_secs(2);"
+        (found,) = self.scan(self.BUILDER.format(w="PROBE"), prelude=prelude)
+        self.assertEqual((found.rule, found.window), ("under 5 s", 2.0))
+
+    def test_an_unresolved_request_window_fails_closed(self):
+        self.assertRefused(self.BUILDER.format(w="window()"), rule="unresolvable window")
+
+    def test_a_timeout_method_not_known_as_a_request_is_listed_at_any_window(self):
+        for w in ("Duration::from_millis(500)", "Duration::from_secs(60)"):
+            with self.subTest(w=w):
+                self.assertRefused(f"let s = events.timeout({w});", rule=guard.NOT_A_REQUEST)
+
+    def test_the_receiver_is_read_within_its_own_statement(self):
+        body = self.BUILDER.format(w="Duration::from_secs(30)") + "\nlet s = events.timeout(Duration::from_secs(30));"
+        self.assertRefused(body, rule=guard.NOT_A_REQUEST)
+
+    def test_spacing_or_a_comment_before_the_parenthesis_is_read(self):
+        for call in (".timeout (Duration::from_millis(500))", ".timeout /* why */ (Duration::from_millis(500))"):
+            with self.subTest(call=call):
+                (found,) = self.scan(f'let c = reqwest::Client::builder(){call}.build().expect("client");')
+                # One allowlist key whatever the spacing.
+                self.assertEqual(found.assertion, ".timeout(Duration::from_millis(500))")
+
+    def test_reqwest_inside_an_argument_does_not_make_a_request(self):
+        self.assertRefused(
+            "let s = tokio_stream::iter([reqwest::Client::new()]).timeout(Duration::from_secs(60));",
+            rule=guard.NOT_A_REQUEST,
+        )
+        self.assertRefused("let s = wrap(client.get(&url)).timeout(Duration::from_secs(60));", rule=guard.NOT_A_REQUEST)
+
+    def test_a_named_client_or_an_imported_builder_is_a_request(self):
+        for shape in (
+            'let r = http_client.get(&url).timeout({w}).send();',
+            'let c = Client::builder().timeout({w}).build().expect("client");',
+        ):
+            with self.subTest(shape=shape):
+                self.assertPasses(shape.format(w="Duration::from_secs(30)"))
+                self.assertRefused(shape.format(w="Duration::from_millis(500)"))
+
+    def test_a_timeout_getter_is_not_a_bound(self):
+        self.assertPasses("let d = config.timeout();")
+
+    def test_a_range_before_the_timeout_function_is_not_a_method(self):
+        self.assertPasses("let r = 0.. timeout(Duration::from_secs(5), f()).await.expect(\"x\");")
+
+    def test_a_request_timeout_in_product_code_is_not_judged(self):
+        # Beside a test item, so the file holds test code and is scanned.
+        text = "fn product() {\n" + self.BUILDER.format(w="Duration::from_millis(500)") + "\n}\n#[cfg(test)]\nfn helper() {}\n"
+        self.assertEqual(guard.scan_timeouts("src/x.rs", text, {}, {}), [])
+
+    def test_a_paused_clock_is_not_judged(self):
+        text = "#[tokio::test(start_paused = true)]\nasync fn paused() {\n" + self.BUILDER.format(w="Duration::from_millis(1)") + "\n}\n"
+        self.assertEqual(guard.scan_timeouts("src/x_tests.rs", text, {}, {}), [])
+
+    def test_a_new_request_timeout_meets_the_floor(self):
+        text = "#[tokio::test]\nasync fn case() {\n" + self.BUILDER.format(w="Duration::from_secs(5)") + "\n}\n"
+        found = guard.scan_new("src/x_tests.rs", text, HANG, {}, set(range(1, 6)))
+        self.assertEqual([f.rule for f in found], [guard.FLOOR], found)
+
+
 class NewCode(unittest.TestCase):
     """The 10 s floor and the PR-C rules judge only new or changed spans (MIK-8247, MIK-8288)."""
 
@@ -530,6 +606,61 @@ class BaseRef(unittest.TestCase):
         self.assertEqual(guard.added_lines(base), {"src/x_tests.rs": {2}})
 
 
+class MethodRowCutover(unittest.TestCase):
+    """A `.timeout(` row is not NEW only while the base's gate does
+    not judge `.timeout(` methods, read as data from the base's core, and a
+    base the check cannot read that way counts the row as NEW."""
+
+    CORE = "scripts/dev/check_timing_asserts_core.py"
+    ROW = guard.Row(PATH, "case", ".timeout(Duration::from_millis(120))", "the expiry is the behaviour under test")
+    FOUND = [guard.Finding(PATH, "case", ".timeout(Duration::from_millis(120))", 3, 0.12, "under 5 s")]
+
+    def setUp(self):
+        self.scratch = ScratchGit()
+        self.scratch.git("init", "-q")
+        self.refs = {}
+        for name, body in {
+            "pre": "THRESHOLD_S = 5.0\n",
+            "post": "THRESHOLD_S = 5.0\nJUDGES_TIMEOUT_METHOD = True\n",
+            "computed": "JUDGES_TIMEOUT_METHOD = bool(1)\n",
+            "broken": "JUDGES_TIMEOUT_METHOD = (\n",
+            "zero": "JUDGES_TIMEOUT_METHOD = 0\n",
+        }.items():
+            core = self.scratch.root / self.CORE
+            core.parent.mkdir(parents=True, exist_ok=True)
+            core.write_text(body)
+            self.scratch.git("add", ".")
+            self.scratch.git("commit", "-q", "-m", name)
+            self.refs[name] = self.scratch.git("rev-parse", "HEAD")
+
+    def tearDown(self):
+        self.scratch.close()
+
+    def test_the_marker_is_read_as_data_and_fails_closed(self):
+        expected = {"pre": False, "post": True, "computed": None, "broken": None, "zero": None}
+        for name, want in expected.items():
+            with self.subTest(base=name):
+                self.assertIs(guard.base_judges_timeout_method(self.refs[name]), want)
+        self.assertIsNone(guard.base_judges_timeout_method("no-such-ref"))
+
+    def test_a_method_row_is_new_unless_the_base_did_not_judge_methods(self):
+        for name, new in {"pre": False, "post": True, "computed": True, "broken": True}.items():
+            with self.subTest(base=name):
+                cutover = guard.cutover_rows([self.ROW], guard.base_judges_timeout_method(self.refs[name]))
+                errors = guard.judge(self.FOUND, [self.ROW], [], cutover=cutover)
+                self.assertEqual(any(e.startswith("NEW ROW") for e in errors), new, errors)
+
+    def test_the_cutover_never_admits_another_kind_of_row(self):
+        row = guard.Row(PATH, "case", "assert!( elapsed < Duration::from_millis(1) )", "r")
+        found = [guard.Finding(PATH, "case", row.assertion, 3, 0.001, "under 5 s")]
+        errors = guard.judge(found, [row], [], cutover=guard.cutover_rows([row], False))
+        self.assertTrue(any(e.startswith("NEW ROW") for e in errors), errors)
+
+    def test_this_gate_judges_timeout_methods(self):
+        # Once this lands on the base, every later `.timeout(` row is NEW.
+        self.assertIs(guard.JUDGES_TIMEOUT_METHOD, True)
+
+
 class Lexer(unittest.TestCase):
     """The literal and comment blanking the scan stands on (MIK-8222)."""
 
@@ -669,6 +800,234 @@ class NamedShapeSpans(unittest.TestCase):
     def test_a_typed_literal_field_is_a_number(self):
         self.assertRefused("let c = C { timeout_ms: 300_u64 };", guard.FIELD, attrs="")
         self.assertPasses("let c = C { timeout_ms: 30_000_u64 };", attrs="")
+
+
+class TestSection(unittest.TestCase):
+    """Test code in a product file is the `#[cfg(test)]` item that holds it,
+    not everything after the file's first `#[cfg(test)]` line: product code
+    after an early test-only item is product code, and code inside a test
+    item is still judged."""
+
+    WINDOW = 'timeout(Duration::from_millis(100), f()).await.expect("x");'
+
+    def product_after(self, early: str) -> str:
+        return f"{early}\n\nasync fn product() {{\n{self.WINDOW}\n}}\n"
+
+    # Each layout puts product code after an early test-only item.
+    EARLY = {
+        "test-only fn": "#[cfg(test)]\nfn helper() {}",
+        "test-only const fn": "#[cfg(test)]\nconst fn helper() -> u8 {\n    0\n}",
+        "test-only use": "#[cfg(test)]\nuse crate::fixture::Probe;",
+        "path module": '#[cfg(test)]\n#[path = "x_tests.rs"]\nmod tests;',
+        "inline module": "#[cfg(test)]\nmod tests {\n    fn helper() {}\n}",
+    }
+
+    def timeouts(self, text):
+        return guard.scan_timeouts("src/x.rs", text, {}, {})
+
+    def new(self, text):
+        lines = set(range(1, text.count("\n") + 2))
+        return guard.scan_new("src/x.rs", text, HANG, {}, lines)
+
+    def test_product_code_after_an_early_test_item_is_not_test_code(self):
+        for name, early in self.EARLY.items():
+            with self.subTest(layout=name):
+                text = self.product_after(early)
+                self.assertEqual(self.timeouts(text), [], text)
+                self.assertEqual(self.new(text), [], text)
+
+    def test_code_inside_a_test_module_is_judged(self):
+        text = f"fn product() {{}}\n\n#[cfg(test)]\nmod tests {{\n    async fn case() {{\n{self.WINDOW}\n    }}\n}}\n"
+        self.assertEqual(len(self.timeouts(text)), 1, text)
+        self.assertTrue(self.new(text), text)
+
+    def test_code_inside_a_test_only_fn_is_judged(self):
+        text = f"fn product() {{}}\n\n#[cfg(test)]\nasync fn helper() {{\n{self.WINDOW}\n}}\n"
+        self.assertEqual(len(self.timeouts(text)), 1, text)
+        self.assertTrue(self.new(text), text)
+
+    def test_a_test_module_that_never_closes_holds_the_rest_of_the_file(self):
+        text = f"#[cfg(test)]\nmod tests {{\n    fn helper() {{}}\n\nasync fn case() {{\n{self.WINDOW}\n}}\n"
+        self.assertEqual(len(self.timeouts(text)), 1, text)
+        self.assertTrue(self.new(text), text)
+
+    # A comma in a generic header or a `where` clause is inside the item: the
+    # item ends at its block, so code in its body is still judged.
+    GENERIC = {
+        "generic params": "#[cfg(test)]\nasync fn helper<T, U>(t: T, u: U) {{\n{w}\n}}\n",
+        "generic return": "#[cfg(test)]\nasync fn helper() -> Result<u8, String> {{\n{w}\nOk(0)\n}}\n",
+        "where clause": "#[cfg(test)]\nasync fn helper<T>(t: T)\nwhere\n    T: Send,\n    T: Sync,\n{{\n{w}\n}}\n",
+        "braced const generic": "#[cfg(test)]\nasync fn helper() -> Probe<{{ N }}> {{\n{w}\nProbe\n}}\n",
+        "braced const generic impl": "#[cfg(test)]\nimpl Probe<{{ 1 + 1 }}> {{\n    async fn helper() {{\n{w}\n    }}\n}}\n",
+        "shift in a const generic": "#[cfg(test)]\nasync fn helper() -> Probe<{{ 8 >> 1 }}> {{\n{w}\nProbe\n}}\n",
+        "comparison in a const generic": "#[cfg(test)]\nasync fn helper() -> Probe<{{ if A > B {{ 1 }} else {{ 2 }} }}> {{\n{w}\nProbe\n}}\n",
+        "generic impl": "#[cfg(test)]\nimpl<T, U> Probe<T, U> {{\n    async fn helper() {{\n{w}\n    }}\n}}\n",
+    }
+
+    def test_a_comma_in_a_generic_header_does_not_end_the_item(self):
+        for name, shape in self.GENERIC.items():
+            with self.subTest(shape=name):
+                text = "fn product() {}\n\n" + shape.format(w=self.WINDOW)
+                self.assertEqual(len(self.timeouts(text)), 1, text)
+                self.assertTrue(self.new(text), text)
+
+    def test_a_test_only_let_is_judged_to_its_semicolon(self):
+        window = self.WINDOW.rstrip(";")
+        text = f"async fn product() {{\n    #[cfg(test)]\n    let x = {{ 0 }} + {window};\n}}\n"
+        self.assertEqual(len(self.timeouts(text)), 1, text)
+
+    def test_a_test_only_let_runs_past_a_cast_after_its_block(self):
+        window = self.WINDOW.rstrip(";")
+        text = f"async fn product() {{\n    #[cfg(test)]\n    let x = {{ 0 }} as u64\n        + {window};\n}}\n"
+        self.assertEqual(len(self.timeouts(text)), 1, text)
+
+    def test_a_test_only_let_runs_past_a_range_after_its_block(self):
+        window = self.WINDOW.rstrip(";")
+        text = f"async fn product() {{\n    #[cfg(test)]\n    let r = {{ 0 }}\n        .. {window};\n}}\n"
+        self.assertEqual(len(self.timeouts(text)), 1, text)
+
+    def test_an_outer_test_cfg_makes_the_whole_file_test_code(self):
+        text = f"#![cfg(test)]\n\nfn first() {{}}\n\nasync fn helper() {{\n{self.WINDOW}\n}}\n"
+        self.assertEqual(len(self.timeouts(text)), 1, text)
+
+    ELAPSED = "assert!(start.elapsed() < Duration::from_secs(9));"
+
+    def test_new_code_judges_an_elapsed_assert_only_in_test_code(self):
+        product = f"#[cfg(test)]\nfn helper() {{}}\n\nfn product() {{\n{self.ELAPSED}\n}}\n"
+        self.assertEqual(self.new(product), [], product)
+        inside = f"#[cfg(test)]\nmod tests {{\n    fn case() {{\n{self.ELAPSED}\n    }}\n}}\n"
+        self.assertIn(guard.FLOOR, [f.rule for f in self.new(inside)], inside)
+
+    def test_full_mode_still_judges_an_elapsed_assert_anywhere(self):
+        text = "fn product() {\nassert!(start.elapsed() < Duration::from_millis(100));\n}\n"
+        self.assertEqual(len(guard.scan_text("src/x.rs", text, {})), 1, text)
+
+    def test_a_restricted_visibility_fn_with_a_where_comma_is_judged(self):
+        text = (
+            "fn product() {}\n\n#[cfg(test)]\npub(crate) async fn helper<T>()\nwhere\n    T: Send,\n    T: Sync,\n{\n"
+            + self.WINDOW + "\n}\n"
+        )
+        self.assertEqual(len(self.timeouts(text)), 1, text)
+
+    def test_a_test_only_field_runs_past_a_cast_after_its_block(self):
+        window = self.WINDOW.rstrip(";").removesuffix('.expect("x")')
+        text = (
+            "fn product() {\n    let c = C {\n        #[cfg(test)]\n        x: { 0 } as u64\n"
+            f'            + {window}.expect("x"),\n        y: 1,\n    }};\n}}\n'
+        )
+        self.assertEqual(len(self.timeouts(text)), 1, text)
+
+    def test_a_comparison_in_a_test_only_statement_does_not_hold_product_code(self):
+        text = (
+            "async fn product() {\n    #[cfg(test)]\n    if 1 < 2 {\n        probe();\n    }\n"
+            f"{self.WINDOW}\n}}\n"
+        )
+        self.assertEqual(self.timeouts(text), [], text)
+
+    def test_a_test_only_field_with_nested_generics_ends_at_its_comma(self):
+        text = (
+            "fn product() {\n    let c = C {\n        #[cfg(test)]\n"
+            "        probe: make::<Map<A, B>>(),\n        timeout_ms: 50,\n    };\n}\n"
+        )
+        self.assertEqual(self.new(text), [], text)
+
+    def test_a_line_shared_by_a_test_item_and_product_code_is_judged(self):
+        text = f"#[cfg(test)] fn a() {{}} async fn product() {{ {self.WINDOW} }}\n"
+        self.assertEqual(len(self.timeouts(text)), 1, text)
+
+    def test_a_nested_block_comment_does_not_end_a_test_module(self):
+        text = (
+            "fn product() {}\n\n#[cfg(test)]\nmod tests {\n    /* outer /* inner */ } */\n"
+            f"    async fn case() {{\n{self.WINDOW}\n    }}\n}}\n"
+        )
+        self.assertEqual(len(self.timeouts(text)), 1, text)
+        self.assertTrue(self.new(text), text)
+
+    def test_a_nested_comment_inside_a_test_fn_keeps_its_whole_body(self):
+        text = (
+            "#[cfg(test)]\nmod tests {\n    #[tokio::test]\n    async fn case() {\n"
+            "        /* outer /* inner */ } */\n"
+            "        tokio::time::sleep(Duration::from_millis(1500)).await;\n"
+            "        assert!(cancels() == 1);\n    }\n}\n"
+        )
+        self.assertIn(guard.SLEEP, [f.rule for f in self.new(text)], text)
+
+    SLEEP_WINDOW = "tokio::time::sleep(Duration::from_millis(1500)).await;\nassert!(cancels() == 1);"
+
+    def test_the_sleep_shape_is_judged_in_a_generic_headed_test_fn(self):
+        for header in ("async fn case() -> Probe<{ 1 + 1 }>", "async fn case<T, U>()", "async fn case() -> Probe<{ 8 >> 1 }>"):
+            with self.subTest(header=header):
+                text = f"#[cfg(test)]\nmod tests {{\n    #[tokio::test]\n    {header} {{\n{self.SLEEP_WINDOW}\n    }}\n}}\n"
+                self.assertIn(guard.SLEEP, [f.rule for f in self.new(text)], text)
+
+    def test_a_quote_inside_a_nested_comment_hides_no_code(self):
+        text = (
+            "#[cfg(test)]\nmod tests {\n    async fn case() {\n"
+            '        /* outer /* inner */ " */\n'
+            f"{self.WINDOW}\n    }}\n}}\n"
+        )
+        self.assertEqual(len(self.timeouts(text)), 1, text)
+
+    def test_a_second_test_item_after_product_code_is_judged(self):
+        text = (
+            "#[cfg(test)]\nfn early() {}\n\nasync fn product() {\n" + self.WINDOW + "\n}\n\n"
+            "#[cfg(test)]\nmod tests {\n    async fn case() {\n" + self.WINDOW + "\n    }\n}\n"
+        )
+        self.assertEqual([f.fn for f in self.timeouts(text)], ["case"], text)
+        self.assertEqual({f.fn for f in self.new(text)} - {""}, {"case"}, text)
+
+    # A compound cfg is test-only when a bare `test` sits under `all(..)` alone
+    # (no `any` or `not` above it): the item is compiled only in tests.
+    TEST_ONLY_CFGS = (
+        '#[cfg(all(test, feature = "firewall"))]',
+        "#[cfg(all(unix, test))]",
+        "#[cfg(all(unix, all(test, feature = \"webui\")))]",
+        "#[cfg( test )]",
+        "#[cfg(all( test ,unix ))]",
+        "#[cfg(any(all(test, unix), all(test, windows)))]",
+    )
+    NOT_TEST_ONLY_CFGS = (
+        '#[cfg(any(test, feature = "firewall"))]',
+        "#[cfg(all(not(test), unix))]",
+        "#[cfg(not(test))]",
+        "#[cfg(all(unix, any(test, windows)))]",
+        "#[cfg(feature = \"test\")]",
+        "#[cfg(any(all(test, unix), windows))]",
+    )
+
+    def test_an_item_under_a_test_only_compound_cfg_is_judged(self):
+        for cfg in self.TEST_ONLY_CFGS:
+            with self.subTest(cfg=cfg):
+                text = f"fn product() {{}}\n\n{cfg}\nmod tests {{\n    async fn case() {{\n{self.WINDOW}\n    }}\n}}\n"
+                self.assertEqual(len(self.timeouts(text)), 1, text)
+                self.assertTrue(self.new(text), text)
+
+    def test_product_code_after_a_test_only_compound_cfg_item_is_not_test_code(self):
+        for cfg in self.TEST_ONLY_CFGS:
+            with self.subTest(cfg=cfg):
+                text = self.product_after(f"{cfg}\nfn helper() {{}}")
+                self.assertEqual(self.timeouts(text), [], text)
+                self.assertEqual(self.new(text), [], text)
+
+    def test_an_item_under_a_cfg_that_also_builds_outside_tests_is_product_code(self):
+        for cfg in self.NOT_TEST_ONLY_CFGS:
+            with self.subTest(cfg=cfg):
+                text = f"{cfg}\nmod m {{\n    async fn product() {{\n{self.WINDOW}\n    }}\n}}\n"
+                self.assertEqual(self.timeouts(text), [], text)
+                self.assertEqual(self.new(text), [], text)
+
+    def test_an_unsure_file_is_judged_as_test_code_throughout(self):
+        # The parser cannot read this file cleanly (a cfg on a struct-pattern
+        # field), so it is unsure as a whole; this gate looks for test code,
+        # so all of it is judged (LEAN_LONG).
+        text = (
+            "fn p(s: S) {\n    let S {\n        #[cfg(feature = \"x\")]\n        a,\n        b,\n    } = s;\n}\n"
+            f"#[cfg(test)]\nfn helper() {{}}\n\nasync fn product() {{\n{self.WINDOW}\n}}\n"
+        )
+        self.assertEqual(len(self.timeouts(text)), 1, text)
+
+    def test_a_product_file_without_test_items_has_no_test_code(self):
+        self.assertEqual(self.timeouts(self.product_after("fn other() {}")), [])
 
 
 if __name__ == "__main__":

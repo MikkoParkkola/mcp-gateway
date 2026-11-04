@@ -392,6 +392,8 @@ pub(super) fn build_persisted_costs(
         tool_overflow_usd: snap.tool_overflow_usd,
         key_overflow_usd: snap.key_overflow_usd,
         day_basis: snap.day_basis.clone(),
+        tool_estimate: snap.tool_estimate.clone(),
+        key_estimate: snap.key_estimate.clone(),
     }
 }
 

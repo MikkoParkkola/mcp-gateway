@@ -369,3 +369,9 @@ mod more;
 
 #[path = "backend_origin_count_plan_tests.rs"]
 mod plan;
+
+#[path = "backend_origin_signal_tests.rs"]
+mod signal;
+
+#[path = "backend_origin_bytes_tests.rs"]
+mod bytes;
