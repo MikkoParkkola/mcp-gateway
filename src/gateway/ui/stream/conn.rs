@@ -11,13 +11,18 @@ use serde_json::{Value, json};
 use tokio::sync::mpsc;
 use tokio::time::{Instant, MissedTickBehavior, interval_at};
 
+use super::activity_source::ActivitySource;
 use super::guard::{Guard, Snapshot};
-use super::id::StreamId;
+use super::id::{LogCursor, StreamId};
+use super::merge::{LogMerge, Out};
 use super::sent::Sent;
 use super::watcher;
-use crate::gateway::auth::AuthState;
 use crate::gateway::auth::live::{HeldCredential, current_caller};
+use crate::gateway::auth::{AuthState, AuthenticatedClient};
 use crate::gateway::router::AppState;
+use crate::gateway::ui::activity::access::{self, Access};
+use crate::gateway::ui::activity::forward::StreamKind;
+use crate::key_server::oidc::VerifiedIdentity;
 
 /// A comment frame this often keeps proxies from closing an idle stream.
 pub(super) const KEEP_ALIVE: Duration = Duration::from_secs(15);
@@ -40,6 +45,10 @@ pub(super) struct Conn {
     pub(super) auth: AuthState,
     pub(super) held: Option<HeldCredential>,
     pub(super) kinds: Vec<&'static str>,
+    /// The caller's Activity access at connect, `None` when Activity refuses
+    /// it. Every entitlement check resolves it again and ends the stream when
+    /// it differs.
+    pub(super) access: Option<Access>,
     pub(super) admin: bool,
     /// The caller's `auth` member of the status payload, fixed at connect.
     pub(super) facts: Value,
@@ -55,6 +64,9 @@ pub(super) enum End {
     CredentialChanged,
     ValidationTimeout,
     Lifetime,
+    /// A log source closed or failed, or a reset's replay reset again: the
+    /// client reconnects with its id.
+    LogEnded,
 }
 
 /// One SSE frame as bytes.
@@ -136,20 +148,126 @@ impl Conn {
         {
             std::future::pending::<()>().await;
         }
-        match current_caller(&self.auth, self.held.as_ref()).await {
-            Some(caller) => super::kinds_for(&caller.client) == self.kinds,
-            None => false,
-        }
+        let Some(caller) = current_caller(&self.auth, self.held.as_ref()).await else {
+            return false;
+        };
+        let access = activity_access(&self.state, &caller.client, caller.identity.as_ref());
+        super::kinds_for(&caller.client, access.as_ref(), &self.state) == self.kinds
+            && access == self.access
     }
 }
 
-/// Run the connection until it ends; `resumed` is for the debug log only,
-/// because snapshot kinds always resend their latest state.
-pub(super) async fn run(conn: Conn, boot: u64, resumed: bool) {
+/// The caller's Activity access under the live config's role mapping, as the
+/// list resolves it: `None` when Activity refuses the caller. A scoped key's
+/// backend list is sorted, so reordering it in the config is no change.
+pub(super) fn activity_access(
+    state: &AppState,
+    client: &AuthenticatedClient,
+    identity: Option<&VerifiedIdentity>,
+) -> Option<Access> {
+    let config = state.live_config.get();
+    let mut access =
+        access::resolve(Some(client), identity, &config.control_plane.role_mapping).ok()?;
+    if let Access::Scoped { backends, .. } = &mut access {
+        backends.sort();
+        backends.dedup();
+    }
+    Some(access)
+}
+
+/// The log kinds a merge serves, by index: activity (invocation log), config
+/// (governance log).
+const LOG_KINDS: [&str; 2] = ["activity", "config"];
+
+type Merge = LogMerge<ActivitySource>;
+
+/// A merge per advertised log kind, each over its own log and its own half of
+/// the cursor. A reconnect resumes a half it carries; a half it does not
+/// carry starts at that log's head, never at its oldest record.
+async fn merges(conn: &Conn, resume: Option<&LogCursor>) -> [Option<Merge>; 2] {
+    let mut out = [None, None];
+    let Some(access) = conn.access.clone() else {
+        return out;
+    };
+    let paths = [
+        conn.state.transparency_log.as_ref().map(|l| l.path()),
+        conn.state.governance_log.as_ref().map(|l| l.path()),
+    ];
+    let kinds = [StreamKind::Activity, StreamKind::Config];
+    for (i, path) in paths.into_iter().enumerate() {
+        let Some(path) = path.filter(|_| conn.kinds.contains(&LOG_KINDS[i])) else {
+            continue;
+        };
+        let source = Arc::new(ActivitySource::new(Arc::clone(&conn.state), kinds[i], path));
+        let half = resume.and_then(|c| match i {
+            0 => c.inv.clone().map(|m| LogCursor {
+                inv: Some(m),
+                gov: None,
+            }),
+            _ => c.gov.clone().map(|m| LogCursor {
+                inv: None,
+                gov: Some(m),
+            }),
+        });
+        out[i] = Some(LogMerge::connect(source, access.clone(), half).await);
+    }
+    out
+}
+
+/// What the connection has delivered across both logs.
+fn delivered(logs: &[Option<Merge>; 2]) -> LogCursor {
+    LogCursor {
+        inv: logs[0].as_ref().and_then(|m| m.delivered().inv.clone()),
+        gov: logs[1].as_ref().and_then(|m| m.delivered().gov.clone()),
+    }
+}
+
+/// One live step of a merge, or never when the kind has none.
+async fn live(merge: &mut Option<Merge>) -> Option<Vec<Out>> {
+    match merge {
+        Some(m) => m.step().await,
+        None => std::future::pending().await,
+    }
+}
+
+/// Write one step's outputs, oldest first. Each is acknowledged before it is
+/// framed, so its id carries the position that includes it; a write that
+/// fails ends the connection, whose client resumes from its last id.
+async fn write(
+    conn: &Conn,
+    sent: &mut Sent,
+    logs: &mut [Option<Merge>; 2],
+    i: usize,
+    outs: Vec<Out>,
+) -> Result<(), End> {
+    for out in outs {
+        if let Some(m) = logs[i].as_mut() {
+            m.ack(&out);
+        }
+        let cursor = delivered(logs);
+        match out {
+            Out::Row(row) => {
+                sent.log_event(conn, LOG_KINDS[i], cursor, &row.data)
+                    .await?
+            }
+            Out::Reset => {
+                let data = json!({ "kind": LOG_KINDS[i] });
+                sent.log_event(conn, "reset", cursor, &data).await?;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Run the connection until it ends. `resume` is the log position a
+/// reconnect carried; snapshot kinds always resend their latest state.
+pub(super) async fn run(conn: Conn, boot: u64, resume: Option<LogCursor>) {
     let hub = conn.state.dashboard_bootstrap.stream_hub();
     let mut rx = hub.subscribe();
-    tracing::debug!(resumed, kinds = ?conn.kinds, "ui stream: open");
-    let end = drive(&conn, boot, &mut rx).await.unwrap_or_else(|end| end);
+    tracing::debug!(resumed = resume.is_some(), kinds = ?conn.kinds, "ui stream: open");
+    let end = drive(&conn, boot, &mut rx, resume.as_ref())
+        .await
+        .unwrap_or_else(|end| end);
     tracing::debug!(?end, "ui stream: closed");
     drop(conn.guard);
 }
@@ -158,8 +276,13 @@ async fn drive(
     conn: &Conn,
     boot: u64,
     rx: &mut tokio::sync::watch::Receiver<Snapshot>,
+    resume: Option<&LogCursor>,
 ) -> Result<End, End> {
     let mut sent = Sent::new(boot);
+    // Subscribed and their heads read before `hello`: a row written after
+    // this is delivered.
+    let mut logs = merges(conn, resume).await;
+    sent.set_cursor(delivered(&logs));
     let start = Instant::now();
     let deadline = start + MAX_LIFETIME;
     let mut recheck = interval_at(start + RECHECK, RECHECK);
@@ -170,18 +293,45 @@ async fn drive(
     sent.deliver(conn, &first).await?;
     let mut keep = interval_at(Instant::now() + KEEP_ALIVE, KEEP_ALIVE);
     loop {
-        tokio::select! {
+        // Catch-up: a merge with a scan pending reads one page to its end,
+        // outside the timer race, after its entitlement is checked again.
+        if let Some(i) = (0..2).find(|&i| logs[i].as_ref().is_some_and(LogMerge::scanning)) {
+            conn.require_entitled().await?;
+            let step = match logs[i].as_mut() {
+                Some(m) => m.step().await,
+                None => None,
+            };
+            let Some(outs) = step else {
+                return Ok(End::LogEnded);
+            };
+            write(conn, &mut sent, &mut logs, i, outs).await?;
+            continue;
+        }
+        let [activity, config] = &mut logs;
+        let stepped = tokio::select! {
+            out = live(activity) => Some((0, out)),
+            out = live(config) => Some((1, out)),
             () = conn.tx.closed() => return Ok(End::ClientGone),
             () = tokio::time::sleep_until(deadline) => return Ok(End::Lifetime),
             _ = recheck.tick() => {
                 if let Err(end) = conn.upkeep().await { return Ok(end); }
+                None
             }
-            _ = keep.tick() => conn.send(Bytes::from_static(b": keep-alive\n\n")).await?,
+            _ = keep.tick() => {
+                conn.send(Bytes::from_static(b": keep-alive\n\n")).await?;
+                None
+            }
             changed = rx.changed() => {
                 changed.map_err(|_| End::ClientGone)?;
                 let snap = rx.borrow_and_update().clone();
                 sent.deliver(conn, &snap).await?;
+                None
             }
+        };
+        match stepped {
+            Some((_, None)) => return Ok(End::LogEnded),
+            Some((i, Some(outs))) => write(conn, &mut sent, &mut logs, i, outs).await?,
+            None => {}
         }
     }
 }
