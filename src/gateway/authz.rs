@@ -593,6 +593,43 @@ impl StdioLine for std::sync::Arc<crate::security::ToolPolicy> {
     }
 }
 
+/// A test's stdio line, pinned as the serve loop pins one when it reads it:
+/// the generation `meta` publishes now with `policy` as its tool policy (its
+/// keys kept), or, for a gateway that publishes none, the default config
+/// with it. Never a bare policy judged under no generation.
+#[cfg(test)]
+pub(crate) fn test_line(
+    meta: &crate::gateway::meta_mcp::MetaMcp,
+    policy: &crate::security::ToolPolicyConfig,
+) -> std::sync::Arc<crate::config_reload::Generation> {
+    use crate::config_reload::LiveConfig;
+    let Some(published) = meta.current_generation() else {
+        let mut config = crate::config::Config::default();
+        config.security.tool_policy = policy.clone();
+        return LiveConfig::new(config).generation();
+    };
+    let mut config = (**published.config()).clone();
+    config.security.tool_policy = policy.clone();
+    LiveConfig::with_auth(config, std::sync::Arc::clone(published.auth())).generation()
+}
+
+/// [`test_line`] under the default tool policy.
+#[cfg(test)]
+pub(crate) fn default_line(
+    meta: &crate::gateway::meta_mcp::MetaMcp,
+) -> std::sync::Arc<crate::config_reload::Generation> {
+    test_line(meta, &crate::security::ToolPolicyConfig::default())
+}
+
+/// The generation a published test gateway serves a stdio line under.
+#[cfg(test)]
+pub(crate) fn published_line(
+    meta: &crate::gateway::meta_mcp::MetaMcp,
+) -> std::sync::Arc<crate::config_reload::Generation> {
+    meta.current_generation()
+        .expect("the fixture publishes a generation")
+}
+
 pub(crate) struct ToolPolicyAuthorizer<'a> {
     pub(crate) tool_policy: &'a crate::security::ToolPolicy,
     /// The generation the call is judged under; `tool_policy` is its policy.

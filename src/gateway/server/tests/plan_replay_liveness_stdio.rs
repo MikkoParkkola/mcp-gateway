@@ -55,7 +55,6 @@ async fn p4_stdio_keyed_playbook_replay_after_revocation_is_refused() {
         backend.store_shared_tools_for_test(vec![tool]);
     }
     let meta = Arc::new(meta);
-    let policy = Arc::new(crate::security::ToolPolicy::default());
     let mtls = Arc::new(crate::mtls::MtlsPolicy::from_config(
         &crate::mtls::MtlsConfig::default(),
     ));
@@ -64,9 +63,15 @@ async fn p4_stdio_keyed_playbook_replay_after_revocation_is_refused() {
         gateway
             .answer_next(json!({"content": [{"type": "text", "text": MARKER}], "isError": false}));
     }
-    let first = Gateway::dispatch_single(&meta, &policy, &mtls, &keyed_playbook("p4"), session)
-        .await
-        .expect("a response");
+    let first = Gateway::dispatch_single(
+        &meta,
+        &crate::gateway::authz::default_line(&meta),
+        &mtls,
+        &keyed_playbook("p4"),
+        session,
+    )
+    .await
+    .expect("a response");
     assert!(
         first.to_string().contains(MARKER),
         "premise: the plan ran: {first}"
@@ -74,9 +79,15 @@ async fn p4_stdio_keyed_playbook_replay_after_revocation_is_refused() {
     let sent = gateway.tool_calls().len();
     let entered = crate::gateway::meta_mcp::plan_entries::count(&meta);
     gateway.revoke_operator_grant().await;
-    let again = Gateway::dispatch_single(&meta, &policy, &mtls, &keyed_playbook("p4"), session)
-        .await
-        .expect("a response");
+    let again = Gateway::dispatch_single(
+        &meta,
+        &crate::gateway::authz::default_line(&meta),
+        &mtls,
+        &keyed_playbook("p4"),
+        session,
+    )
+    .await
+    .expect("a response");
     assert!(
         !again.to_string().contains(MARKER),
         "P4: the stored plan output was served after revocation: {again}"
@@ -118,7 +129,6 @@ async fn p4u_stdio_unavailable_replay_answers_the_live_twin_with_its_data() {
         backend.store_shared_tools_for_test(vec![tool]);
     }
     let meta = Arc::new(meta);
-    let policy = Arc::new(crate::security::ToolPolicy::default());
     let mtls = Arc::new(crate::mtls::MtlsPolicy::from_config(
         &crate::mtls::MtlsConfig::default(),
     ));
@@ -127,9 +137,15 @@ async fn p4u_stdio_unavailable_replay_answers_the_live_twin_with_its_data() {
         gateway
             .answer_next(json!({"content": [{"type": "text", "text": MARKER}], "isError": false}));
     }
-    let first = Gateway::dispatch_single(&meta, &policy, &mtls, &keyed_playbook("p4u"), session)
-        .await
-        .expect("a response");
+    let first = Gateway::dispatch_single(
+        &meta,
+        &crate::gateway::authz::default_line(&meta),
+        &mtls,
+        &keyed_playbook("p4u"),
+        session,
+    )
+    .await
+    .expect("a response");
     assert!(
         first.to_string().contains(MARKER),
         "premise: the plan ran: {first}"
@@ -137,18 +153,28 @@ async fn p4u_stdio_unavailable_replay_answers_the_live_twin_with_its_data() {
     let sent = gateway.tool_calls().len();
     let entered = crate::gateway::meta_mcp::plan_entries::count(&meta);
     gateway.fail_custody_for_test(true);
-    let mut again =
-        Gateway::dispatch_single(&meta, &policy, &mtls, &keyed_playbook("p4u"), session)
-            .await
-            .expect("a response");
+    let mut again = Gateway::dispatch_single(
+        &meta,
+        &crate::gateway::authz::default_line(&meta),
+        &mtls,
+        &keyed_playbook("p4u"),
+        session,
+    )
+    .await
+    .expect("a response");
     let replay_sends = gateway.tool_calls().len() - sent;
     // mProceed is killed only by this entries count: a fall-through to the
     // live run refuses the same way and sends nothing. Keep it.
     let replay_entries = crate::gateway::meta_mcp::plan_entries::count(&meta) - entered;
-    let mut live =
-        Gateway::dispatch_single(&meta, &policy, &mtls, &keyed_playbook("p4u-live"), session)
-            .await
-            .expect("a response");
+    let mut live = Gateway::dispatch_single(
+        &meta,
+        &crate::gateway::authz::default_line(&meta),
+        &mtls,
+        &keyed_playbook("p4u-live"),
+        session,
+    )
+    .await
+    .expect("a response");
     assert_eq!(
         live.pointer("/error/code"),
         Some(&json!(-32603)),
@@ -180,7 +206,6 @@ const REPLAY: &str = "Nonce replay detected";
 /// playbook engine armed.
 struct Signed {
     meta: Arc<crate::gateway::meta_mcp::MetaMcp>,
-    policy: Arc<crate::security::ToolPolicy>,
     mtls: Arc<crate::mtls::MtlsPolicy>,
     /// Last: it owns the Meta-MCP's audit log, which must outlive every
     /// field above that holds the logger.
@@ -214,7 +239,6 @@ fn signed() -> Signed {
     Signed {
         gateway,
         meta: Arc::new(meta),
-        policy: Arc::new(crate::security::ToolPolicy::default()),
         mtls: Arc::new(crate::mtls::MtlsPolicy::from_config(
             &crate::mtls::MtlsConfig::default(),
         )),
@@ -226,7 +250,8 @@ async fn signed_send(fx: &Signed, key: &str, nonce: &str) -> Value {
     let mut request = keyed_playbook(key);
     request["params"]["_meta"][crate::gateway::meta_mcp::signing::NONCE_META] = json!(nonce);
     let session = super::super::STDIO_SESSION_ID;
-    Gateway::dispatch_single(&fx.meta, &fx.policy, &fx.mtls, &request, session)
+    let line = crate::gateway::authz::default_line(&fx.meta);
+    Gateway::dispatch_single(&fx.meta, &line, &fx.mtls, &request, session)
         .await
         .expect("a response")
 }
