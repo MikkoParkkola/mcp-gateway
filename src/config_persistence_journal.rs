@@ -195,9 +195,14 @@ pub(crate) fn finish(target: &Path) -> std::io::Result<()> {
 ///
 /// # Errors
 ///
-/// A journal that cannot be acted on: unreadable, of an unknown version,
-/// naming another file, or `staged` with its original gone or not matching
-/// its digest. Nothing is changed, and the message says what to do by hand.
+/// [`NotRecovered::Refused`] when the config guard refuses the journal or the
+/// staged original; [`NotRecovered::Failed`] for a journal that cannot be
+/// acted on otherwise: unreadable, of an unknown version, naming another file,
+/// or `staged` with its original gone or not matching its digest. Then
+/// nothing is changed, and the message says what to do by hand. One `Failed`
+/// comes after a change: the original was restored but its journal could not
+/// be removed, so the file did change and no write proceeds until the journal
+/// is gone.
 pub(crate) fn recover(config: &Path) -> Result<Recovered, NotRecovered> {
     let target = resolved(config);
     let path = journal_path(&target);
