@@ -507,6 +507,12 @@ static DIAG_OPENERS: std::sync::Mutex<Option<std::collections::HashMap<std::path
 #[cfg(test)]
 pub(crate) fn diag_note_open(path: &Path) {
     let name = std::thread::current().name().unwrap_or("unnamed").to_owned();
+    // The raw handle, not eprintln!: the test harness captures only the
+    // macros, so this line reaches the CI log for every test.
+    {
+        use std::io::Write as _;
+        let _ = writeln!(std::io::stderr(), "DIAG-OPEN {} {name}", path.display());
+    }
     DIAG_OPENERS
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
