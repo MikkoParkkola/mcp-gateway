@@ -579,6 +579,9 @@ pub fn write_config_text(path: &Path, yaml: &str) -> Result<(), String> {
 }
 
 #[cfg(test)]
+#[path = "config_persistence_cli_recovery_tests.rs"]
+mod cli_recovery_tests;
+#[cfg(test)]
 #[path = "config_persistence_tests.rs"]
 mod tests;
 
