@@ -225,7 +225,8 @@ async fn a_config_that_is_not_utf8_creates_no_entry() {
 
 /// A staged original that is not UTF-8 (staged before the writer read
 /// through the guard) is refused, and the refusal says so and gives the
-/// by-hand step: compare it with gateway.yaml, then delete the journal.
+/// by-hand step: both files untrusted, gateway.yaml checked against a
+/// known-good copy, both moved aside before a retry.
 #[tokio::test]
 async fn a_staged_original_that_is_not_utf8_names_encoding_and_the_manual_step() {
     use crate::config_persistence::journal;
@@ -249,13 +250,10 @@ async fn a_staged_original_that_is_not_utf8_names_encoding_and_the_manual_step()
     );
     let text = format!("{failure:?}");
     assert!(text.contains("UTF-8"), "{text}");
-    assert!(
-        text.contains("compare") && text.contains("then delete the journal"),
-        "{text}"
-    );
+    assert_safe_recovery_advice(&text);
     assert!(!text.contains(&*dir.path().to_string_lossy()), "{text}");
     assert_eq!(read(&path), START);
-    // The evidence the by-hand step needs is kept, byte for byte.
+    // Both files are kept byte for byte, for the operator to move aside.
     assert_eq!(
         std::fs::read(journal::original_path(&path)).expect("staged original"),
         staged,

@@ -368,16 +368,18 @@ impl NotRecovered {
     }
 }
 
-/// A replace journal or its staged original the config guard refused. The
-/// guard's text names the file and the fix, so it goes to the log; the
-/// answer says what happened without a path, so no caller can echo one.
+/// A replace journal or its staged original the config guard refused. Either
+/// may be another account's plant with a matching digest, so the answer never
+/// says to fix their owner or mode, retry with them in place, or restore from
+/// them: it calls both untrusted and says to move both aside before a retry.
+/// The guard's text, which names the file, goes to the log only.
 fn guard_refused(why: &str) -> String {
     tracing::warn!(detail = %why, "a replace journal or its staged original was refused by the config guard");
-    "a pending config recovery was not run: its replace journal or staged original is a file the \
-     config guard refuses (another account could change it, it is not a regular file, or it is \
-     not UTF-8 text), so nothing was restored; fix it as the gateway log says and retry, or \
-     compare the staged original with gateway.yaml by hand before restoring anything, then \
-     delete the journal"
+    "a pending config recovery was not run: its replace journal and staged original are \
+     untrusted, because the config guard refuses one of them (another account could have planted \
+     or changed it, it is not a regular file, or it is not UTF-8 text), so nothing was restored. \
+     Leave their owner and mode alone: fixing them would make the next recovery restore them. \
+     Check gateway.yaml against a known-good copy, move both files aside, then retry"
         .to_owned()
 }
 
