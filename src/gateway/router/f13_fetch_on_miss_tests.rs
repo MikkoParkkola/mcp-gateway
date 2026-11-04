@@ -415,56 +415,6 @@ fn counted(rendered: &str, fragments: &[&str]) -> bool {
         !l.starts_with('#') && !l.ends_with(" 0") && fragments.iter().all(|f| l.contains(f))
     })
 }
-/// T1/T2 body: alpha's `PerUser` slot is cold, `closed`, nested invented key.
-async fn cold_per_user_refuses(route: Route) {
-    let gw = per_user(&["alpha"]).await;
-    let (_, body) = call(&gw.router, route, "edit", &nested_invented(), Some("alpha")).await;
-    let alpha = &gw.slots[0];
-    assert!(
-        refused_with(&body, "edits[0].type"),
-        "{route:?}: forwarded instead of refused: {body}"
-    );
-    assert_eq!(
-        alpha.lists(),
-        1,
-        "{route:?}: alpha's slot was not listed once"
-    );
-    assert_eq!(
-        alpha.calls() + gw.shared.calls(),
-        0,
-        "{route:?}: the backend saw the call"
-    );
-}
-
-/// F13-T1: cold `PerUser` slot on the Meta-MCP route (`gateway_invoke`):
-/// refused after one `tools/list`, zero `tools/call`. Red on base: the check
-/// counts `input_schema_unknown` and forwards, and no list is sent.
-#[tokio::test]
-async fn f13_t1_cold_per_user_meta_refuses_after_one_list() {
-    cold_per_user_refuses(Route::Meta).await;
-}
-
-/// F13-T2: T1 on the direct `/mcp/edits` route. Red on base: forwarded
-/// unchecked, no list sent.
-#[tokio::test]
-async fn f13_t2_cold_per_user_direct_refuses_after_one_list() {
-    cold_per_user_refuses(Route::Direct).await;
-}
-
-/// F13-T8b (and T1's `Shared` form): `Shared` slot, no caller credential,
-/// cold, `closed`, on both routes: exactly one `tools/list`, then judged.
-/// Red on base: no list, forwarded.
-#[tokio::test]
-async fn f13_t8b_cold_shared_no_credential_lists_once_then_judges() {
-    for route in [Route::Meta, Route::Direct] {
-        let fx = cold(InputSchemaEnforcement::Closed, ListMode::Serve).await;
-        let (_, body) = call(&fx.router, route, "edit", &nested_invented(), None).await;
-        assert!(refused_with(&body, "edits[0].type"), "{route:?}: {body}");
-        assert_eq!(fx.rec.lists(), 1, "{route:?}");
-        assert_eq!(fx.rec.calls(), 0, "{route:?}: the backend saw the call");
-    }
-}
-
 /// F13-T3: 16 concurrent cold calls send exactly one `tools/list` (the fill
 /// is single-flight), and every call is refused. Red on base: zero lists.
 #[tokio::test]
@@ -504,38 +454,6 @@ async fn f13_waiters_on_a_hanging_list_share_one_bounded_fill() {
     assert_eq!(fx.rec.lists(), 1, "not single-flight");
     assert_eq!(fx.rec.calls(), 0, "a cold call reached the backend");
     assert!(results.iter().all(|(_, b)| as_dispatch(b)));
-}
-
-/// F13-T4, transport failure: `closed` the dispatch's error (A3), no call,
-/// `fetch_failed`; `standard` forwards, `unknown`; `off` never lists.
-#[cfg(feature = "metrics")]
-#[test]
-fn f13_t4_failed_fetch_per_mode() {
-    let row = |mode| {
-        metered(async move {
-            let fx = cold(mode, ListMode::Fail).await;
-            let args = nested_invented();
-            let (_, body) = call(&fx.router, Route::Direct, "edit", &args, None).await;
-            (body, fx.rec.lists(), fx.rec.calls())
-        })
-    };
-    let ((body, lists, calls), rendered) = row(InputSchemaEnforcement::Closed);
-    assert!(as_dispatch(&body), "closed: {body}");
-    assert_eq!((lists, calls), (1, 0), "closed");
-    let label = "input_schema_fetch_failed";
-    assert!(kind_counted(&rendered, label), "{label}: {rendered}");
-    let label = "input_schema_refused_unavailable";
-    assert!(!kind_counted(&rendered, label), "{label}: {rendered}");
-    let ((body, lists, calls), rendered) = row(InputSchemaEnforcement::Standard);
-    assert!(!is_error(&body), "standard: {body}");
-    assert_eq!((lists, calls), (1, 1), "standard");
-    assert!(
-        kind_counted(&rendered, "input_schema_unknown"),
-        "{rendered}"
-    );
-    let ((body, lists, calls), _) = row(InputSchemaEnforcement::Off);
-    assert!(!is_error(&body), "off: {body}");
-    assert_eq!((lists, calls), (0, 1), "off must not fetch");
 }
 
 /// F13-T7: fresh complete slot, invented tool name, 5 calls: zero
@@ -593,163 +511,12 @@ async fn f13_t7b_tool_added_upstream_is_judged_after_refetch() {
     assert_eq!(fx.rec.calls(), 1);
 }
 
-/// F13-T10b: complete slot, invented name, `standard`: MIK-8361 answers text A,
-/// never forwarded, counted `input_schema_refused_absent` and no other kind.
-#[cfg(feature = "metrics")]
-#[test]
-fn f13_t10b_absent_forward_is_its_own_label() {
-    let ((body, rec), rendered) = metered(async {
-        let fx = build(Setup {
-            config: BackendConfig {
-                input_schema_enforcement: InputSchemaEnforcement::Standard,
-                ..BackendConfig::default()
-            },
-            warm: true,
-            ..Setup::default()
-        })
-        .await;
-        let (_, body) = call(&fx.router, Route::Direct, "nosuch", &json!({}), None).await;
-        (body, fx.rec)
-    });
-    let absent = crate::backend::text_absent("nosuch");
-    assert!(refused_with(&body, &absent), "{body}");
-    assert_eq!(rec.calls(), 0, "a complete list's lack must not forward");
-    let counted = |k: &str| kind_counted(&rendered, k);
-    let refused = counted("input_schema_refused_absent");
-    let others = counted("input_schema_absent_forward") || counted("input_schema_unknown");
-    assert!(refused && !others, "{rendered}");
-}
-
-/// F13-T11: the first cold call carries its `Mcp-Param-*` mirror, because the
-/// fill warmed the slot `param_header_set` reads. Red on base: the slot is
-/// cold at dispatch, so the first call carries no mirror.
-#[tokio::test]
-async fn f13_t11_first_cold_call_carries_its_param_mirror() {
-    let fx = cold(InputSchemaEnforcement::Closed, ListMode::Serve).await;
-    let schema = json!({"type": "object", "properties": {
-        "edits": {"type": "array"},
-        "note": {"type": "string", "x-mcp-header": "Note"}
-    }});
-    fx.rec.serve(json!([tool("edit", &schema)]));
-    let args = json!({"edits": [], "note": "n1"});
-    let (_, body) = call(&fx.router, Route::Direct, "edit", &args, None).await;
-    assert!(!is_error(&body), "{body}");
-    let sent = fx.rec.headers_of("tools/call");
-    assert_eq!(sent.len(), 1, "{body}");
-    let mirrored = has_header(&sent[0], "Mcp-Param-Note", "n1");
-    assert!(mirrored, "the first call carried no mirror: {sent:?}");
-}
-
-/// F13-T9 (A3), on both routes: alpha's slot is warm with a schema that
-/// declares `zzextra`; beta's is cold and its catalogue does not. Beta's cold
-/// call fetches with beta's own minted token and is judged against beta's
-/// schema. Red on base: beta's slot is never listed and the call forwards.
-#[tokio::test]
-async fn f13_t9_cold_caller_fetches_its_own_catalogue_with_its_own_token() {
-    for route in [Route::Meta, Route::Direct] {
-        let gw = per_user(&["alpha", "beta"]).await;
-        let (alpha, beta) = (&gw.slots[0], &gw.slots[1]);
-        let with_extra = json!({"type": "object", "properties": {
-            "edits": {"type": "array"}, "zzextra": {"type": "integer"}}});
-        let without = json!({"type": "object", "properties": {"edits": {"type": "array"}}});
-        alpha.serve(json!([tool("edit", &with_extra)]));
-        beta.serve(json!([tool("edit", &without)]));
-        let list = json!({"jsonrpc": "2.0", "id": 33, "method": "tools/list"});
-        let (status, _) = post(&gw.router, "/mcp/edits", &list, Some("alpha")).await;
-        assert_eq!(status, StatusCode::OK);
-        assert_eq!(alpha.lists(), 1, "{route:?}: alpha did not warm its slot");
-
-        let args = json!({"edits": [], "zzextra": 1});
-        let (_, body) = call(&gw.router, route, "edit", &args, Some("beta")).await;
-        assert!(refused_with(&body, "zzextra"), "{route:?}: {body}");
-        assert_eq!(beta.lists(), 1, "{route:?}: beta's slot was not listed");
-        let token = beta.headers_of("tools/list");
-        let as_beta = has_header(&token[0], "Authorization", "Bearer minted-for-beta");
-        assert!(
-            as_beta,
-            "{route:?}: beta's list was not fetched as beta: {token:?}"
-        );
-        let calls = beta.calls() + alpha.calls() + gw.shared.calls();
-        assert_eq!((calls, gw.shared.lists()), (0, 0), "{route:?}");
-    }
-}
-
-/// F13-T12: open breaker, cold, `closed`: fails with no list and counts
-/// `input_schema_fill_refused{reason="circuit"}` (a label base lacks).
-#[cfg(feature = "metrics")]
-#[test]
-fn f13_t12_open_breaker_refuses_the_fill_and_counts_it() {
-    let ((status, body, rec), rendered) = metered(async {
-        let fx = cold(InputSchemaEnforcement::Closed, ListMode::Serve).await;
-        fx.backend.trip_circuit_breaker_for_test();
-        let (status, body) =
-            call(&fx.router, Route::Direct, "edit", &nested_invented(), None).await;
-        let refused = fx.rec.lists();
-        // A refusal stamps no cooldown (M11b): once the breaker closes, a call lists.
-        fx.backend.reset_circuit_breaker();
-        let _ = call(&fx.router, Route::Direct, "edit", &nested_invented(), None).await;
-        (status, body, (refused, fx.rec.lists(), fx.rec.calls()))
-    });
-    assert!(failed(status, &body), "{body}");
-    assert_eq!(rec, (0, 1, 0), "lists at refusal, after reset; calls");
-    assert!(
-        counted(&rendered, &["input_schema_fill_refused", "circuit"]),
-        "the fill-origin refusal was not counted: {rendered}"
-    );
-}
-
 /// Failsafe with a breaker of `threshold` and a 500 ms reset timeout.
 fn breaker(threshold: u32) -> FailsafeConfig {
     let mut failsafe = FailsafeConfig::default();
     failsafe.circuit_breaker.failure_threshold = threshold;
     failsafe.circuit_breaker.reset_timeout = Duration::from_millis(500);
     failsafe
-}
-
-/// F13-T12b: one token, cold, `closed`, a valid call: the fill spends it on one
-/// list and the dispatch is rate-limited (base: no list, the dispatch runs).
-#[tokio::test]
-async fn f13_t12b_one_token_is_spent_by_the_fill() {
-    let mut failsafe = FailsafeConfig::default();
-    failsafe.rate_limit.enabled = true;
-    failsafe.rate_limit.requests_per_second = 1;
-    failsafe.rate_limit.burst_size = 1;
-    let fx = build(Setup {
-        failsafe,
-        ..Setup::default()
-    })
-    .await;
-    let (status, body) = call(
-        &fx.router,
-        Route::Direct,
-        "edit",
-        &json!({"edits": []}),
-        None,
-    )
-    .await;
-    assert_eq!(fx.rec.lists(), 1, "the fill did not run: {body}");
-    assert_eq!(fx.rec.calls(), 0, "the dispatch got a token: {body}");
-    assert!(failed(status, &body), "{body}");
-}
-
-/// F13-T12c: threshold 1, one cold `closed` call with a failing list fails as
-/// a dispatch (A3), sends no `tools/call` and opens the breaker. Red on base:
-/// the call is forwarded and the list failure is never observed.
-#[tokio::test]
-async fn f13_t12c_failed_fill_trips_the_breaker() {
-    let fx = build(Setup {
-        failsafe: breaker(1),
-        list: ListMode::Fail,
-        ..Setup::default()
-    })
-    .await;
-    let (_, body) = call(&fx.router, Route::Direct, "edit", &nested_invented(), None).await;
-    assert!(as_dispatch(&body), "{body}");
-    assert_eq!(fx.rec.calls(), 0, "the call was forwarded");
-    assert!(
-        fx.backend.is_circuit_tripped(),
-        "the failed fill was not recorded"
-    );
 }
 
 /// F13-T12e: half-open breaker, cold, `closed`, failing list: the dispatch's
@@ -796,3 +563,10 @@ async fn f13_t12g_start_failure_answers_as_dispatch_and_is_recorded() {
         "the start failure was not recorded"
     );
 }
+
+#[path = "f13_fetch_on_miss_breaker_tests.rs"]
+mod breaker_tests;
+#[path = "f13_fetch_on_miss_catalogue_tests.rs"]
+mod catalogue_tests;
+#[path = "f13_fetch_on_miss_cold_slot_tests.rs"]
+mod cold_slot_tests;
