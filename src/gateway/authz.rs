@@ -621,3 +621,7 @@ impl ToolAuthorizer for ToolPolicyAuthorizer<'_> {
         None
     }
 }
+
+#[cfg(test)]
+#[path = "authz_rule_id_tests.rs"]
+mod rule_id_tests;
