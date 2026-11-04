@@ -7,9 +7,10 @@ use super::*;
 
 #[tokio::test]
 async fn dispatch_single_reuses_shared_request_parser_for_missing_id() {
+    let meta = test_meta_mcp();
     let response = Gateway::dispatch_single(
-        &test_meta_mcp(),
-        &crate::gateway::authz::default_line(&test_meta_mcp()),
+        &meta,
+        &crate::gateway::authz::default_line(&meta),
         &test_mtls_policy(),
         &json!({"jsonrpc": "2.0", "method": "ping"}),
         "stdio-session",
@@ -24,9 +25,10 @@ async fn dispatch_single_reuses_shared_request_parser_for_missing_id() {
 #[tokio::test]
 async fn stdio_initialize_records_requested_revision() {
     let before = crate::protocol_revision_telemetry::global_snapshot();
+    let meta = test_meta_mcp();
     let response = Gateway::dispatch_single(
-        &test_meta_mcp(),
-        &crate::gateway::authz::default_line(&test_meta_mcp()),
+        &meta,
+        &crate::gateway::authz::default_line(&meta),
         &test_mtls_policy(),
         &json!({
             "jsonrpc": "2.0",
@@ -71,9 +73,10 @@ async fn a_saved_stdio_observation_is_operator_readable() {
     ));
     Gateway::persist_stdio_protocol_telemetry(&sink);
 
+    let meta = test_meta_mcp();
     Gateway::dispatch_single_for_client(
-        &test_meta_mcp(),
-        &crate::gateway::authz::default_line(&test_meta_mcp()),
+        &meta,
+        &crate::gateway::authz::default_line(&meta),
         &test_mtls_policy(),
         json!({
             "jsonrpc": "2.0",
@@ -300,9 +303,10 @@ async fn ac_confirm_1a_stdio_refuses_a_destructive_call_it_cannot_confirm() {
 
 #[tokio::test]
 async fn ac_discover_1_stdio_dispatch_answers_server_discover() {
+    let meta = test_meta_mcp();
     let response = Gateway::dispatch_single(
-        &test_meta_mcp(),
-        &crate::gateway::authz::default_line(&test_meta_mcp()),
+        &meta,
+        &crate::gateway::authz::default_line(&meta),
         &test_mtls_policy(),
         &json!({"jsonrpc": "2.0", "id": 1, "method": "server/discover"}),
         "stdio-session",
@@ -334,9 +338,10 @@ async fn ac_discover_2_stdio_discovery_needs_no_prior_initialize() {
     // The session argument is what the transport supplies today; the point
     // is that no `initialize` ran before this call, and discovery answers
     // anyway. Under 2026-07-28 there is no handshake to run.
+    let meta = test_meta_mcp();
     let response = Gateway::dispatch_single(
-        &test_meta_mcp(),
-        &crate::gateway::authz::default_line(&test_meta_mcp()),
+        &meta,
+        &crate::gateway::authz::default_line(&meta),
         &test_mtls_policy(),
         &json!({"jsonrpc": "2.0", "id": 7, "method": "server/discover"}),
         "never-initialized",
@@ -364,9 +369,10 @@ async fn stdio_tools_list_is_observed_at_the_assembly_site() {
     let unfiltered = ListFilters::default();
     let before = global_shadow_count(unfiltered);
 
+    let meta = test_meta_mcp();
     Gateway::dispatch_single(
-        &test_meta_mcp(),
-        &crate::gateway::authz::default_line(&test_meta_mcp()),
+        &meta,
+        &crate::gateway::authz::default_line(&meta),
         &test_mtls_policy(),
         &json!({"jsonrpc": "2.0", "id": 9, "method": "tools/list"}),
         "stdio-session-obs-2",
@@ -507,9 +513,10 @@ async fn authz_22_stdio_is_not_refused_by_certificate_policy() {
 async fn dispatch_batch_returns_invalid_request_for_empty_batch() {
     // Boxed: the dispatch future carries the whole request path and sits
     // just over the `large_futures` threshold on the test stack.
+    let meta = test_meta_mcp();
     let responses = Box::pin(Gateway::dispatch_batch(
-        &test_meta_mcp(),
-        &crate::gateway::authz::default_line(&test_meta_mcp()),
+        &meta,
+        &crate::gateway::authz::default_line(&meta),
         &test_mtls_policy(),
         json!([]),
         "stdio-session",

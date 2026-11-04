@@ -18,9 +18,10 @@ const REMOVED: [&str; 4] = [
 /// One stdio request through the real dispatch, as a client with
 /// `server.modern_protocol` = `modern`.
 pub(super) async fn send(modern: bool, request: Value) -> Option<Value> {
+    let meta = test_meta_mcp();
     Gateway::dispatch_single_for_client(
-        &test_meta_mcp(),
-        &crate::gateway::authz::default_line(&test_meta_mcp()),
+        &meta,
+        &crate::gateway::authz::default_line(&meta),
         &test_mtls_policy(),
         request,
         super::super::StdioClient {
