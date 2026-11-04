@@ -114,9 +114,9 @@ impl Peer {
         *self.state.lock() = next;
     }
 
-    #[expect(
+    #[allow(
         dead_code,
-        reason = "peer payload override; no case in this target sets a custom payload yet"
+        reason = "only the echo-rotation target sets a custom payload"
     )]
     pub fn set_payload(&self, payload: Value) {
         *self.payload.lock() = payload;
@@ -312,6 +312,17 @@ pub struct Fixture<'a> {
 }
 
 pub fn write_config(root: &Path, fixture: &Fixture<'_>) -> PathBuf {
+    write_config_with(root, fixture, |_| {})
+}
+
+/// [`write_config`], with `edit` applied to the config before it is written:
+/// how a target adds what only it varies (a backend's secret rule).
+#[allow(dead_code, reason = "only the echo-rotation target edits the config")]
+pub fn write_config_with(
+    root: &Path,
+    fixture: &Fixture<'_>,
+    edit: impl FnOnce(&mut Config),
+) -> PathBuf {
     let mut config = Config::default();
     config.server.host = "127.0.0.1".to_string();
     // Port 0: the child binds a port of the OS's choosing (#2513).
@@ -359,6 +370,7 @@ pub fn write_config(root: &Path, fixture: &Fixture<'_>) -> PathBuf {
         );
     }
 
+    edit(&mut config);
     let yaml =
         crate::yaml::to_string(&config).expect("the gateway's own config type serializes to YAML");
     let path = root.join(fixture.name);
@@ -407,9 +419,9 @@ fn without_ansi(line: &str) -> String {
 
 /// Every durable record body, parsed. The store is the assertion surface for
 /// the handle/marker/version table.
-#[expect(
+#[allow(
     dead_code,
-    reason = "store assertion surface; no case in this target reads the records yet"
+    reason = "store assertion surface; only the echo-rotation target reads every record"
 )]
 pub fn durable_records(root: &Path) -> Vec<Value> {
     let Ok(entries) = std::fs::read_dir(store_dir(root)) else {

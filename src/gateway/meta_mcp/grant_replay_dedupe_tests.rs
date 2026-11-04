@@ -39,6 +39,7 @@ fn finished_task() -> CommittedTask {
         gateway_writes: crate::gateway::gateway_writes::WriteRecord::default(),
         bindings: Vec::new(),
         bindings_recorded: true,
+        vouching: crate::gateway::task_service::Vouching::Vouched,
     }
 }
 

@@ -17,6 +17,9 @@ mod store;
 #[cfg(test)]
 mod store_tests;
 
+#[cfg(test)]
+mod delivery_pin_tests;
+
 mod service;
 
 #[cfg(test)]
@@ -47,6 +50,8 @@ pub(crate) use execution::{
     CancelDelivery, InputOutcome, OwnedAdmissionRequest, OwnedCallerContext, TaskCall,
     UpstreamAnswer, UpstreamHandle, UpstreamRecovery,
 };
+#[cfg(test)]
+pub(crate) use record::Vouching;
 pub(crate) use record::{CommittedTask, ErrorAuthor, SurfacedKind, SurfacedTarget, Target};
 // The router's settle rows name it; production stays inside the service.
 #[cfg(test)]
