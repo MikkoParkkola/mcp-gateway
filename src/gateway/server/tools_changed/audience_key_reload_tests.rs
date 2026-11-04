@@ -72,7 +72,7 @@ fn reload_k_std(w: &World, edit: impl Fn(&mut crate::config::ApiKeyConfig) -> bo
 
 /// A world whose running config carries its key list.
 async fn world() -> World {
-    let w = world().await;
+    let w = World::start().await;
     carry_auth(&w);
     w
 }
