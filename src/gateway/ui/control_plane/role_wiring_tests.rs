@@ -1,12 +1,14 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 use super::actor_from_client;
+use crate::config::{KeyServerPolicyConfig, PolicyMatchConfig, PolicyScopesConfig};
 use crate::control_plane::{
     ControlPlaneAction, ControlPlaneRbac, ControlPlaneRole, ControlPlaneRoleMappingConfig,
     ControlPlaneRoleRule,
 };
 use crate::gateway::auth::AuthenticatedClient;
 use crate::key_server::oidc::VerifiedIdentity;
+use crate::key_server::policy::{PolicyEngine, RequestedScopes, ScopeRefusal};
 
 fn client(admin: bool) -> AuthenticatedClient {
     AuthenticatedClient {
@@ -190,8 +192,6 @@ fn a_key_only_callers_default_group_grants_nothing() {
         "from the admin flag alone"
     );
 
-    use crate::config::{KeyServerPolicyConfig, PolicyMatchConfig, PolicyScopesConfig};
-    use crate::key_server::policy::{PolicyEngine, RequestedScopes, ScopeRefusal};
     let engine = PolicyEngine::new(vec![KeyServerPolicyConfig {
         match_criteria: PolicyMatchConfig {
             issuer: "https://idp".to_string(),
