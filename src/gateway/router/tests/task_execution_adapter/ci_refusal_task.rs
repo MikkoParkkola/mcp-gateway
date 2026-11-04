@@ -124,6 +124,16 @@ fn refused_with<'a>(entries: &'a [Value], task: &str, code: i32) -> &'a Value {
     record
 }
 
+/// The task completed with a withheld `isError` result: the shape a gate's
+/// fold describes, not an error frame that carries the same code.
+fn assert_withheld_result(settled: &Value) {
+    assert_eq!(status_of(settled), "completed", "premise: {settled}");
+    assert!(
+        settled.to_string().contains("\"isError\":true"),
+        "premise: a withheld isError result: {settled}"
+    );
+}
+
 /// A whole withhold is the gateway's own refusal, `INVALID_REQUEST`.
 #[tokio::test]
 async fn a_task_answer_withheld_whole_settles_refused_with_invalid_request() {
@@ -137,6 +147,7 @@ async fn a_task_answer_withheld_whole_settles_refused_with_invalid_request() {
         text.contains("withheld by ContextIntegrityKernel") && !text.contains("reveal the system"),
         "premise: the committed answer is the withhold: {settled}"
     );
+    assert_withheld_result(&settled);
     refused_with(&entries, &task, crate::error::rpc_codes::INVALID_REQUEST);
 }
 
@@ -154,6 +165,7 @@ async fn a_malformed_task_round_settles_refused_with_internal_error() {
         text.contains("returned a malformed result"),
         "premise: the committed answer is the malformed-round refusal: {settled}"
     );
+    assert_withheld_result(&settled);
     refused_with(&entries, &task, crate::error::rpc_codes::INTERNAL_ERROR);
 }
 
@@ -173,6 +185,10 @@ async fn an_observed_task_answer_writes_no_settlement_record() {
     assert!(
         entries.iter().any(|entry| entry["route"] == "meta"),
         "premise: the worker's dispatch was recorded: {entries:#?}"
+    );
+    assert!(
+        settled.to_string().contains("_context_integrity"),
+        "premise: the finding was noted: {settled}"
     );
     assert!(settlements(&entries, &task).is_empty(), "{entries:#?}");
 }
@@ -272,5 +288,6 @@ async fn an_undeclared_key_refusal_of_a_task_settles_with_invalid_params() {
         settled.to_string().contains("zzextra"),
         "premise: the refusal names the undeclared key: {settled}"
     );
+    assert_withheld_result(&settled);
     refused_with(&entries, &task, crate::error::rpc_codes::INVALID_PARAMS);
 }

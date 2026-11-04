@@ -422,13 +422,17 @@ mod tests {
     #[tokio::test]
     async fn each_dispatch_reads_its_own_cell() {
         let ((), refused) = dispatched_in_cell(async {
+            delivery_facts::gateway_folded(-32603);
             delivery_facts::refused(());
         })
         .await;
-        assert_eq!(refused, Some(cell(true, None)));
+        assert_eq!(refused, Some(cell(true, Some(-32603))));
+        // A later attempt inherits neither the refusal nor its withheld code.
         let ((), clean) = dispatched_in_cell(async {}).await;
         assert_eq!(clean, Some(cell(false, None)));
+        // Nor does a dispatch inside a cell that already holds both.
         let ((), inner) = delivery_facts::scope(async {
+            delivery_facts::gateway_folded(-32602);
             delivery_facts::refused(());
             dispatched_in_cell(async {}).await
         })

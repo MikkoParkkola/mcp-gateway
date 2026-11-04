@@ -146,13 +146,7 @@ pub(crate) struct MockBackend {
 impl MockBackend {
     /// A backend that answers every call the same way, immediately.
     pub(crate) fn answering(answer: Answer) -> Arc<Self> {
-        Arc::new(Self {
-            calls: AtomicUsize::new(0),
-            seen: Mutex::new(Vec::new()),
-            answer,
-            gate: None,
-            input_schema: json!({ "type": "object" }),
-        })
+        Self::answering_declaring(answer, json!({ "type": "object" }))
     }
 
     /// [`Self::answering`], listing [`TOOL`] with `input_schema` instead of the

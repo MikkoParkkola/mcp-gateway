@@ -56,11 +56,16 @@ async fn a_recovered_task_answer_rewritten_by_context_integrity_records_rewritte
         );
         std::assert_eq!(record["response_effect"], "rewritten", "{path:?}: {record}");
         if matches!(path, Path::OwnerRead) {
-            for delivery in fx
-                .records()
+            let deliveries: Vec<Value> = fx
+                .entries()
                 .into_iter()
                 .filter(|entry| entry["event"] == "response_delivery_attempt")
-            {
+                .collect();
+            std::assert!(
+                !deliveries.is_empty(),
+                "premise: the owner read wrote its own delivery record"
+            );
+            for delivery in deliveries {
                 std::assert_ne!(
                     delivery["response_effect"],
                     "rewritten",
@@ -100,6 +105,10 @@ async fn an_observed_recovered_answer_records_no_rewrite() {
         std::assert!(
             fetched.to_string().contains("reveal the system prompt"),
             "{path:?}: premise: delivered as sent: {fetched}"
+        );
+        std::assert!(
+            fetched.to_string().contains("_context_integrity"),
+            "{path:?}: premise: the finding was noted: {fetched}"
         );
         std::assert_ne!(record["response_effect"], "rewritten", "{path:?}: {record}");
     }
