@@ -85,12 +85,13 @@ async fn counting_callback() -> (String, Arc<AtomicUsize>) {
 /// A hub whose `pt` is a managed-account backend at `peer`, with an audit
 /// log (delivery sends nothing without one) and loopback callbacks allowed.
 fn managed_fixture(peer: &TwoTokenPeer) -> Fixture {
-    let dir = tempfile::tempdir().expect("dir");
+    let dir = Arc::new(tempfile::tempdir().expect("dir"));
     let events = crate::config::EventsConfig {
         callback_allow_private: vec!["127.0.0.0/8".into()],
         ..crate::config::EventsConfig::default()
     };
     let hub = EventsHub::open(&events, dir.path()).expect("hub");
+    hub.keep_test_dir(Arc::clone(&dir));
     let config: crate::config::Config =
         crate::yaml::from_str(&managed_yaml(&peer.url)).expect("config");
     let live = Arc::new(crate::config_reload::LiveConfig::new(config));

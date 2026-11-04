@@ -12,7 +12,7 @@ use super::*;
 /// enough that no refusal can come from it.
 #[tokio::test]
 async fn expiry_deletes_every_expired_terminal_row_with_its_key_and_capacity() {
-    let root = tempfile::tempdir().unwrap();
+    let root = Arc::new(tempfile::tempdir().unwrap());
     let dir = root.path().join("tasks");
     let admission = fresh_admission();
     let limits = StoreLimits {
@@ -28,6 +28,7 @@ async fn expiry_deletes_every_expired_terminal_row_with_its_key_and_capacity() {
     )
     .await
     .expect("the runtime opens");
+    service.keep_test_dir(Arc::clone(&root));
     let workers = Arc::new(Semaphore::new(8));
 
     let rows = [
@@ -124,7 +125,7 @@ async fn expiry_deletes_every_expired_terminal_row_with_its_key_and_capacity() {
     reason = "one end-to-end sweep scenario across four retention reasons and two passes; splitting it would hide that retention is observed across real sweeps, not asserted piecemeal"
 )]
 async fn expiry_retains_unexpired_null_ttl_and_live_rows_across_real_sweeps() {
-    let root = tempfile::tempdir().unwrap();
+    let root = Arc::new(tempfile::tempdir().unwrap());
     let dir = root.path().join("tasks");
     let admission = fresh_admission();
     let (service, executor) = open_runtime_with_admission(
@@ -136,6 +137,7 @@ async fn expiry_retains_unexpired_null_ttl_and_live_rows_across_real_sweeps() {
     )
     .await
     .expect("the runtime opens");
+    service.keep_test_dir(Arc::clone(&root));
     let workers = Arc::new(Semaphore::new(8));
 
     // Retained for four different reasons. The two live rows are past their TTL
@@ -269,7 +271,7 @@ async fn expiry_retains_unexpired_null_ttl_and_live_rows_across_real_sweeps() {
     reason = "a single scenario walking a parked commit through poll, release, join, restart and reopen; splitting it would separate assertions from the shared in-flight state they depend on"
 )]
 async fn guard_shutdown_joins_an_in_flight_sweep_before_the_store_closes() {
-    let root = tempfile::tempdir().unwrap();
+    let root = Arc::new(tempfile::tempdir().unwrap());
     let dir = root.path().join("tasks");
     let admission = fresh_admission();
     let (service, executor) = open_runtime_with_admission(
@@ -281,6 +283,7 @@ async fn guard_shutdown_joins_an_in_flight_sweep_before_the_store_closes() {
     )
     .await
     .expect("the runtime opens");
+    service.keep_test_dir(Arc::clone(&root));
     let workers = Arc::new(Semaphore::new(4));
     let row = seed(
         &service,
@@ -379,6 +382,7 @@ async fn guard_shutdown_joins_an_in_flight_sweep_before_the_store_closes() {
     )
     .await
     .expect("the released directory opens again");
+    reopened.keep_test_dir(Arc::clone(&root));
     assert!(
         matches!(reopened.get(OWNER, &row.id), Err(ServiceError::NotFound)),
         "the expired record came back after a restart"
@@ -404,7 +408,7 @@ async fn a_zero_expiry_interval_is_refused() {
             if message == "tasks.expiry_interval must be nonzero"),
         "config validation must reject the zero expiry interval specifically"
     );
-    let root = tempfile::tempdir().unwrap();
+    let root = Arc::new(tempfile::tempdir().unwrap());
     let dir = root.path().join("tasks");
     let (service, executor) = open_runtime_with_admission(
         &dir,
@@ -415,6 +419,7 @@ async fn a_zero_expiry_interval_is_refused() {
     )
     .await
     .expect("the runtime opens");
+    service.keep_test_dir(Arc::clone(&root));
 
     assert!(
         matches!(
@@ -435,7 +440,7 @@ async fn a_zero_expiry_interval_is_refused() {
 /// pass reads an unreadable clock as the far future.
 #[tokio::test]
 async fn a_clock_before_the_epoch_expires_nothing() {
-    let root = tempfile::tempdir().unwrap();
+    let root = Arc::new(tempfile::tempdir().unwrap());
     let dir = root.path().join("tasks");
     let (service, executor) = open_runtime_with_admission(
         &dir,
@@ -446,6 +451,7 @@ async fn a_clock_before_the_epoch_expires_nothing() {
     )
     .await
     .expect("the runtime opens");
+    service.keep_test_dir(Arc::clone(&root));
     let workers = Arc::new(Semaphore::new(8));
     let done = seed(
         &service,
@@ -518,7 +524,7 @@ async fn a_clock_before_the_epoch_expires_nothing() {
 /// exactly that. True since P1; pins it against a raw chrono read.
 #[tokio::test]
 async fn t14_the_sweep_stamps_an_expired_round_close_at_the_stores_time() {
-    let root = tempfile::tempdir().unwrap();
+    let root = Arc::new(tempfile::tempdir().unwrap());
     let dir = root.path().join("tasks");
     let (service, executor) = open_runtime_with_admission(
         &dir,
@@ -529,6 +535,7 @@ async fn t14_the_sweep_stamps_an_expired_round_close_at_the_stores_time() {
     )
     .await
     .expect("the runtime opens");
+    service.keep_test_dir(Arc::clone(&root));
     let heard = Arc::new(Mutex::new(
         Vec::<(String, TaskStatus, chrono::DateTime<Utc>)>::new(),
     ));
