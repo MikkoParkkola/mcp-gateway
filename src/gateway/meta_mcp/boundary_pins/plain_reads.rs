@@ -7,12 +7,15 @@
 //! root, skipping test-only code by cfg.
 //!
 //! A read is a call to a path ending in `fs::read`, `fs::read_to_string` or
-//! `fs::copy` (std, tokio or async-std), `File::open`, or `open_nonblocking`,
-//! and every `OpenOptions::new` or `File::options`, which is how a held or
-//! chained open starts. A name a `use` binds under `fs`, bare or renamed, is
-//! resolved first; an `fs` glob import binds names the walk cannot see, so it
-//! is a row of its own. Not seen: a read through a helper of another name;
-//! those helpers are rows themselves where they read.
+//! `fs::copy` (std, tokio or async-std), `File::open` or `open_nonblocking`,
+//! and every `.open(` method call: a method call carries no type, so each one
+//! (an `OpenOptions` value inline or held, `File::options`, anything else
+//! named `open`) is a counted site of its own. A name a `use` binds, bare,
+//! renamed or through a module another `use` bound, is resolved first. The
+//! walk fails outright on a `use` it cannot resolve: an `fs` glob, or one
+//! name bound to two different paths in one file where one leads under `fs`.
+//! Not seen: a read through a helper of another name (those helpers are rows
+//! themselves where they read) and reads inside macro token streams.
 //!
 //! Regenerating the table is a reviewed diff, never a silent refresh: run
 //! this test, copy the printed table, and classify every new row.
@@ -51,11 +54,13 @@ const PENDING: [&str; 0] = [];
 struct Found {
     /// Every call by path: (file, fn, path segments as written).
     calls: Vec<(String, String, Vec<String>)>,
-    /// Per file, each name a `use` binds to something under `fs`: the local
-    /// name and the `fs` path it stands for (`fs`, `fs::read`, `fs::File`).
-    aliases: BTreeMap<String, BTreeMap<String, Vec<String>>>,
-    /// `fs` glob imports, which bind names the walk cannot see: (file, fn).
-    globs: Vec<(String, String)>,
+    /// Every `.open(` method call: (file, fn). A method call has no type, so
+    /// each one is a site, whatever it opens.
+    opens: Vec<(String, String)>,
+    /// Per file, every name a `use` binds and the path it was written with.
+    uses: BTreeMap<String, Vec<(String, Vec<String>)>>,
+    /// `use` globs, as written: (file, path).
+    globs: Vec<(String, Vec<String>)>,
 }
 
 /// The plain read `segments` names, if it is one.
@@ -63,9 +68,9 @@ fn read_callee(segments: &[String]) -> Option<String> {
     let last = segments.last()?.as_str();
     let owner = segments.len().checked_sub(2).map(|i| segments[i].as_str());
     match (owner, last) {
-        (Some("fs"), "read" | "read_to_string" | "copy")
-        | (Some("File"), "open" | "options")
-        | (Some("OpenOptions"), "new") => Some(format!("{}::{last}", owner.unwrap_or_default())),
+        (Some("fs"), "read" | "read_to_string" | "copy") | (Some("File"), "open") => {
+            Some(format!("{}::{last}", owner.unwrap_or_default()))
+        }
         (_, "open_nonblocking") => Some("open_nonblocking".to_owned()),
         _ => None,
     }
@@ -125,52 +130,119 @@ impl Sink for Found {
         let mut found = Vec::new();
         bindings(&item.tree, &mut Vec::new(), &mut found);
         for (full, local) in found {
-            let under_fs = full.len() >= 2 && is_fs(&full[..2]);
             match local {
-                None if under_fs && full.len() == 2 => {
-                    self.globs.push((at.file.clone(), func_of(at)));
-                }
-                Some(local) if under_fs => {
-                    let mut target = vec!["fs".to_owned()];
-                    target.extend(full[2..].iter().cloned());
-                    self.aliases
+                None => self.globs.push((at.file.clone(), full)),
+                Some(local) if local != "_" => {
+                    self.uses
                         .entry(at.file.clone())
                         .or_default()
-                        .insert(local, target);
+                        .push((local, full));
                 }
-                _ => {}
+                Some(_) => {}
             }
         }
     }
 
     fn expr(&mut self, at: &Place, expr: &syn::Expr) {
-        let syn::Expr::Call(call) = expr else {
-            return;
-        };
-        let syn::Expr::Path(path) = &*call.func else {
-            return;
-        };
-        let segments: Vec<String> = path
-            .path
-            .segments
-            .iter()
-            .map(|s| s.ident.to_string())
-            .collect();
-        self.calls.push((at.file.clone(), func_of(at), segments));
+        match expr {
+            syn::Expr::MethodCall(call) if call.method == "open" => {
+                self.opens.push((at.file.clone(), func_of(at)));
+            }
+            syn::Expr::Call(call) => {
+                if let syn::Expr::Path(path) = &*call.func {
+                    let segments = path.path.segments.iter().map(|s| s.ident.to_string());
+                    self.calls
+                        .push((at.file.clone(), func_of(at), segments.collect()));
+                }
+            }
+            _ => {}
+        }
     }
 }
 
+/// `path` with a leading name a `use` in the same file bound replaced by
+/// what it stands for, until it starts at a crate; `None` when it does not
+/// lead under `fs`.
+fn resolved_fs(path: &[String], bound: &BTreeMap<String, Vec<String>>) -> Option<Vec<String>> {
+    let mut path = path.to_vec();
+    // Each step replaces the first segment; a cycle cannot outlast the names.
+    for _ in 0..=bound.len() {
+        if path.len() >= 2 && is_fs(&path[..2]) {
+            let mut fs = vec!["fs".to_owned()];
+            fs.extend(path[2..].iter().cloned());
+            return Some(fs);
+        }
+        let first = path.first()?;
+        let target = bound.get(first)?;
+        path = target.iter().chain(&path[1..]).cloned().collect();
+    }
+    None
+}
+
+/// Every read row, by `file\tfn\tcallee` and its count. Panics, failing the
+/// pin outright, on a `use` the walk cannot resolve: an `fs` glob, or a name
+/// bound to two different paths in one file where one of them is under
+/// `fs` (the later binding would hide reads through the earlier one).
 fn found_in(root: &Path, roots: &[&str]) -> Vec<String> {
     let mut found = Found::default();
     walk(root, roots, &mut found).expect("the crate walks");
+    let mut unresolved = Vec::new();
+    // Per file: each bound name and what it was first written as; a later
+    // binding of the same name to another path is checked once all are in.
+    let mut written: BTreeMap<String, BTreeMap<String, Vec<String>>> = BTreeMap::new();
+    let mut rebound = Vec::new();
+    for (file, uses) in &found.uses {
+        let names = written.entry(file.clone()).or_default();
+        for (local, full) in uses {
+            match names.get(local) {
+                Some(seen) if seen != full => rebound.push((file, local, seen.clone(), full)),
+                Some(_) => {}
+                None => {
+                    names.insert(local.clone(), full.clone());
+                }
+            }
+        }
+    }
+    for (file, local, seen, full) in rebound {
+        let names = &written[file];
+        let (first, later) = (resolved_fs(&seen, names), resolved_fs(full, names));
+        if first != later && (first.is_some() || later.is_some()) {
+            unresolved.push(format!(
+                "{file}: `{local}` is bound to both {} and {}",
+                seen.join("::"),
+                full.join("::")
+            ));
+        }
+    }
+    // Only names that lead under `fs` once resolved stand for an `fs` path.
+    let fs_names: BTreeMap<String, BTreeMap<String, Vec<String>>> = written
+        .iter()
+        .map(|(file, names)| {
+            let resolved = names
+                .iter()
+                .filter_map(|(local, full)| Some((local.clone(), resolved_fs(full, names)?)))
+                .collect();
+            (file.clone(), resolved)
+        })
+        .collect();
+    for (file, path) in &found.globs {
+        let names = written.get(file).cloned().unwrap_or_default();
+        if resolved_fs(path, &names).is_some() {
+            unresolved.push(format!(
+                "{file}: `use {}::*` binds names the walk cannot see; import each one",
+                path.join("::")
+            ));
+        }
+    }
+    assert!(
+        unresolved.is_empty(),
+        "fs imports the walk cannot resolve: {unresolved:#?}"
+    );
     let mut reads: BTreeMap<String, usize> = BTreeMap::new();
+    let empty = BTreeMap::new();
     for (file, func, segments) in &found.calls {
-        // A name a `use` bound under `fs` stands for its `fs` path.
-        let resolved = match found
-            .aliases
-            .get(file)
-            .and_then(|names| names.get(segments.first()?))
-        {
+        let names = fs_names.get(file).unwrap_or(&empty);
+        let resolved = match segments.first().and_then(|first| names.get(first)) {
             Some(target) => target.iter().chain(&segments[1..]).cloned().collect(),
             None => segments.clone(),
         };
@@ -180,10 +252,8 @@ fn found_in(root: &Path, roots: &[&str]) -> Vec<String> {
                 .or_default() += 1;
         }
     }
-    for (file, func) in &found.globs {
-        *reads
-            .entry(format!("{file}\t{func}\tuse fs::*"))
-            .or_default() += 1;
+    for (file, func) in &found.opens {
+        *reads.entry(format!("{file}\t{func}\t.open")).or_default() += 1;
     }
     reads.iter().map(|(key, n)| format!("{key}\t{n}")).collect()
 }
