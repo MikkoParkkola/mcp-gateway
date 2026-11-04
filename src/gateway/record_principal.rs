@@ -43,6 +43,10 @@ const SUBSCRIPTION_DOMAIN: &[u8] = b"mcp-gateway/subscription/v1";
 /// Domain label of the shadow radar's endpoint-id derivation.
 const SHADOW_ENDPOINT_DOMAIN: &[u8] = b"mcp-gateway/shadow-endpoint/v1";
 
+/// Domain label of the UI sign-in owner tag.
+#[cfg(feature = "webui")]
+const SIGN_IN_OWNER_DOMAIN: &[u8] = b"mcp-gateway/sign-in-owner/v1";
+
 /// `HMAC(key, domain || 0x00 || value)`, truncated to `hex_len` hex digits.
 fn keyed(key: &RecordPrincipalKey, domain: &[u8], value: &str, hex_len: usize) -> String {
     let mut message = Vec::with_capacity(domain.len() + 1 + value.len());
@@ -258,6 +262,21 @@ pub(crate) fn shadow_endpoint_id(key: &RecordPrincipalKey, normalised_url: &str)
 /// The keyed alias of a stored subscription id: the client-facing handle.
 pub(crate) fn subscription_alias(key: &RecordPrincipalKey, stored_id: &str) -> String {
     keyed(key, SUBSCRIPTION_DOMAIN, stored_id, 16)
+}
+
+/// The secret-free owner tag of a UI sign-in: the keyed digest of the
+/// dashboard session `handle`, so the raw handle is never stored. Compare two
+/// tags with [`same_owner`].
+#[cfg(feature = "webui")]
+pub(crate) fn sign_in_owner(key: &RecordPrincipalKey, handle: &str) -> String {
+    keyed(key, SIGN_IN_OWNER_DOMAIN, handle, 32)
+}
+
+/// Whether two owner tags are equal, without leaking where they differ.
+#[cfg(feature = "webui")]
+pub(crate) fn same_owner(a: &str, b: &str) -> bool {
+    use subtle::ConstantTimeEq as _;
+    a.as_bytes().ct_eq(b.as_bytes()).into()
 }
 
 #[cfg(test)]

@@ -270,7 +270,7 @@ impl Backend {
             denial_reasons: plan
                 .map(|p| p.denied.iter().map(|d| d.reason).collect())
                 .unwrap_or_default(),
-            auth_wait: entry.auth_wait.load(Ordering::Relaxed),
+            auth_wait: self.needs_sign_in(),
             breaker: breaker.state,
             retry_after: std::time::Duration::from_millis(breaker.retry_after_ms),
             healthy: health.healthy,

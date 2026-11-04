@@ -700,7 +700,11 @@ async fn a_login_save_waits_for_a_running_refresh() {
         .await
         .expect("the refresh reached its save");
     *flight.save_gate.lock() = None;
-    let login = tokio::spawn(async move { login.try_client_credentials().await });
+    let login = tokio::spawn(async move {
+        login
+            .try_client_credentials(login.issuer_current().unwrap())
+            .await
+    });
     server.arrivals(2, Duration::from_secs(5)).await;
     // An unlocked save finishes well inside this window; a locked one never
     // does while the refresh is parked.
@@ -734,6 +738,9 @@ mod lease_bound_renewal;
 #[path = "refresh_flight_sharing_tests.rs"]
 mod sharing;
 
+#[cfg(feature = "webui")]
+#[path = "refresh_flight_issuer_switch_tests.rs"]
+mod issuer_switch;
 #[path = "refresh_flight_outcome_tests.rs"]
 mod outcome;
 
