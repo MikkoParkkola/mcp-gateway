@@ -206,14 +206,19 @@ async fn task_runs_after(gw: &Gateway, token: &str, before: &[&str], after: &[&s
     );
     let held = crate::gateway::auth::live::held_credential(&headers);
     let auth = crate::gateway::router::build_auth_state(&gw.state);
-    let client = crate::gateway::auth::live::current_client(&auth, held.as_ref())
+    let caller = crate::gateway::auth::live::current_caller(&auth, held.as_ref())
         .await
         .expect("the token authenticates");
-    let owned = crate::gateway::router::OwnedRouterAuthorizer::capture(Some(&client), None, None);
+    let owned =
+        crate::gateway::router::OwnedRouterAuthorizer::capture(Some(&caller.client), None, None);
     set_rules(&gw.state, after);
     let host = crate::gateway::task_service::host::LiveHost::Http(Arc::clone(&gw.state));
-    host.rejudge(&owned, &gw.state.live_config.generation())
-        .is_ok()
+    host.rejudge(
+        &owned,
+        caller.identity.as_ref(),
+        &gw.state.live_config.generation(),
+    )
+    .is_ok()
 }
 
 /// A role-admin key-server task caller is re-judged under the current role

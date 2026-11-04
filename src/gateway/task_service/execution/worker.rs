@@ -220,7 +220,11 @@ async fn run_dispatched(
     let generation = state.generation();
     // K15: the key that queued this task, as the current table holds it. A
     // refusal is the dispatch's answer below, before anything is sent.
-    let (rejudged, key_refused) = match state.rejudge(intent.owned.authorizer(), &generation) {
+    let (rejudged, key_refused) = match state.rejudge(
+        intent.owned.authorizer(),
+        intent.owned.verified_identity(),
+        &generation,
+    ) {
         Ok(rejudged) => (rejudged, None),
         Err(refused) => (None, Some(refused)),
     };

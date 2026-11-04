@@ -341,6 +341,13 @@ impl AuthenticatedClient {
         crate::gateway::authz::admin_standing(self.admin, &self.backends)
     }
 
+    /// Whether this client holds the gateway-wide admin powers: an admin
+    /// scoped to every backend (MIK-9158).
+    #[must_use]
+    pub(crate) fn is_gateway_admin(&self) -> bool {
+        self.admin_standing() == crate::gateway::authz::AdminStanding::Gateway
+    }
+
     /// Check if this client can access a backend
     #[must_use]
     pub fn can_access_backend(&self, backend: &str) -> bool {

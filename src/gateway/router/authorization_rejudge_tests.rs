@@ -43,16 +43,23 @@ fn queued_work_runs_only_under_the_exact_credential_it_was_admitted_with() {
     let owned = OwnedRouterAuthorizer::capture(Some(&client), None, None);
     let now = crate::clock::utc_now().ok();
     assert!(
-        matches!(owned.rejudged(&admitted, now), Ok(Some(_))),
+        matches!(
+            owned.rejudged(&admitted, None, &Default::default(), now),
+            Ok(Some(_))
+        ),
         "control: the unchanged key runs its queued work"
     );
     assert_eq!(
-        owned.rejudged(&table(B, None), now).err(),
+        owned
+            .rejudged(&table(B, None), None, &Default::default(), now)
+            .err(),
         Some(KeyGone),
         "a key re-issued under the same principal ran the old secret's work"
     );
     assert_eq!(
-        owned.rejudged(&table(B, Some(A)), now).err(),
+        owned
+            .rejudged(&table(B, Some(A)), None, &Default::default(), now)
+            .err(),
         Some(KeyGone),
         "a rotated key ran work admitted under its previous secret"
     );
@@ -88,11 +95,16 @@ fn queued_work_ends_when_its_key_steps_down_from_gateway_admin() {
     let owned = OwnedRouterAuthorizer::capture(Some(&client), None, None);
     let now = crate::clock::utc_now().ok();
     assert!(
-        matches!(owned.rejudged(&admin_table(&[]), now), Ok(Some(_))),
+        matches!(
+            owned.rejudged(&admin_table(&[]), None, &Default::default(), now),
+            Ok(Some(_))
+        ),
         "control: an admin key with no backends keeps gateway-wide standing"
     );
     assert_eq!(
-        owned.rejudged(&admin_table(&["alpha"]), now).err(),
+        owned
+            .rejudged(&admin_table(&["alpha"]), None, &Default::default(), now)
+            .err(),
         Some(KeyGone),
         "an admin key narrowed to [alpha] ran work admitted under gateway-wide admin"
     );
