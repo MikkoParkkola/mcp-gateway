@@ -102,6 +102,12 @@ impl Subscribers {
             return;
         }
         let Ok(Value::Object(record)) = serde_json::from_str::<Value>(line) else {
+            // Every reader of the file counts this line unreadable too; a
+            // stream crosses it in catch-up like any unreadable line.
+            tracing::warn!(
+                counter,
+                "audit log: a written record did not parse back; not announced"
+            );
             return;
         };
         let generation = self.generation.load(std::sync::atomic::Ordering::Acquire);
@@ -110,9 +116,25 @@ impl Subscribers {
         }
     }
 
-    fn raise_generation(&self) {
-        self.generation
-            .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+    /// `check` names what found the rewrite, for the operator.
+    fn raise_generation(&self, check: &'static str) {
+        let now = self
+            .generation
+            .fetch_add(1, std::sync::atomic::Ordering::AcqRel)
+            + 1;
+        tracing::warn!(
+            check,
+            generation = now,
+            "audit log: the log this writer extends was rewritten"
+        );
+    }
+
+    /// Take the active file's current end as this writer's baseline: after a
+    /// rotation or a rebuild, and when a reader subscribes.
+    fn rebaseline(&self, inner: &Inner) {
+        if let Ok(meta) = inner.file.metadata() {
+            self.record_end(inner.seg.id, meta.len());
+        }
     }
 
     /// Before a write: the active file `id` holds `len` bytes. Shorter than
@@ -123,7 +145,7 @@ impl Subscribers {
             .lock()
             .is_ok_and(|end| end.is_some_and(|(at, end)| at == id && len < end));
         if cut {
-            self.raise_generation();
+            self.raise_generation("shrink");
         }
     }
 
@@ -153,6 +175,11 @@ impl TransparencyLogger {
     pub(crate) fn subscribe_all(&self, reader: AllReader) {
         if let Ok(mut readers) = self.subscribers.all.write() {
             readers.push(reader);
+        }
+        // The shrink check's baseline from now: a file cut after this reader
+        // subscribed is caught even before this writer's next record.
+        if let Ok(inner) = self.inner.lock() {
+            self.subscribers.rebaseline(&inner);
         }
     }
 }
@@ -254,15 +281,17 @@ impl TransparencyLogger {
         let r = recover(path, &self.config, g, self.now())?;
         // A finding this writer already holds is never forgotten (#2294).
         let known = inner.seg.hwm_missing_at;
-        // A tail below this writer's last record: the log it extends was
-        // replaced or restored, so positions in it no longer hold.
-        if r.counter < inner.counter {
-            self.subscribers.raise_generation();
+        // A tail that is not this writer's last record: the log it extends
+        // was replaced, restored, forked or emptied, or recovery wrote its
+        // own records over a cut. Positions in it no longer hold.
+        if r.counter != inner.counter || r.last_entry_hash != inner.last_entry_hash {
+            self.subscribers.raise_generation("tail");
         }
         inner.file = r.file;
         inner.counter = r.counter;
         inner.last_entry_hash = r.last_entry_hash;
         inner.seg = r.seg;
+        self.subscribers.rebaseline(inner);
         if let Some(at) = known {
             inner.seg.hwm_missing_at = Some(inner.seg.hwm_missing_at.map_or(at, |e| e.min(at)));
         }
@@ -474,6 +503,7 @@ impl TransparencyLogger {
         inner.last_entry_hash = r.last_entry_hash;
         inner.seg = r.seg;
         inner.seg.id = file_id(&inner.file)?;
+        self.subscribers.rebaseline(inner);
         self.mark_hwm(inner, path, true);
         telemetry_metrics::counter!("mcp_audit_rotations_total").increment(1);
         if self.config.rotation.on_disk_full == OnDiskFull::ExpireOldest
