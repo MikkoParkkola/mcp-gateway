@@ -312,6 +312,12 @@ impl EventsHub {
         self.store.keep_test_dir(dir);
     }
 
+    /// Test-only: the gateway opened this hub's store, not a test.
+    #[cfg(test)]
+    pub(crate) fn opened_by_gateway(&self) {
+        self.store.opened_by_gateway();
+    }
+
     fn open_with(
         config: &EventsConfig,
         store_dir: &Path,

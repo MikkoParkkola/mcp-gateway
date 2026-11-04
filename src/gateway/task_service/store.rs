@@ -191,6 +191,18 @@ impl TaskStore {
         self.0.test_dir.keep(dir, &self.0.dir);
     }
 
+    /// Test-only: see [`crate::test_dir_keep::TestDirKeep::opened_by_gateway`].
+    #[cfg(test)]
+    pub(crate) fn opened_by_gateway(&self) {
+        self.0.test_dir.opened_by_gateway();
+    }
+
+    /// Test-only: see [`crate::test_dir_keep::TestDirKeep::assert_kept`].
+    #[cfg(test)]
+    pub(crate) fn assert_test_dir_kept(&self, worker: &str) {
+        self.0.test_dir.assert_kept(worker);
+    }
+
     pub(super) async fn open(path: &Path, limits: StoreLimits) -> Result<Self, StoreError> {
         let dir = path.to_owned();
         let opened = dir.clone();

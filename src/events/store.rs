@@ -279,6 +279,18 @@ impl Store {
         self.test_dir.keep(dir, &self.subs_dir);
     }
 
+    /// Test-only: see [`crate::test_dir_keep::TestDirKeep::opened_by_gateway`].
+    #[cfg(test)]
+    pub(crate) fn opened_by_gateway(&self) {
+        self.test_dir.opened_by_gateway();
+    }
+
+    /// Test-only: see [`crate::test_dir_keep::TestDirKeep::assert_kept`].
+    #[cfg(test)]
+    pub(crate) fn assert_test_dir_kept(&self, worker: &str) {
+        self.test_dir.assert_kept(worker);
+    }
+
     /// The next row generation. Checked: running out is an error, never a
     /// wrap that could repeat a generation a judgement still holds.
     pub(super) fn next_generation(&self) -> std::io::Result<u64> {
