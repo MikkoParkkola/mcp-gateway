@@ -10,6 +10,7 @@ use super::support::*;
 use crate::context_integrity::{
     ContextIntegrityDecisionKind, ContextIntegrityKernel, ContextIntegrityPolicy,
 };
+use crate::gateway::meta_mcp::MetaMcp;
 use pretty_assertions::assert_eq;
 
 /// An instruction the untrusted-instruction classifier finds.
@@ -23,7 +24,7 @@ fn enforcing(decision: ContextIntegrityDecisionKind) -> ContextIntegrityPolicy {
     }
 }
 
-fn answering(extra: Value) -> Answer {
+fn answering(extra: &Value) -> Answer {
     let mut result = json!({"content": [{"type": "text", "text": INJECTED}], "isError": false});
     if let (Some(result), Some(extra)) = (result.as_object_mut(), extra.as_object()) {
         result.extend(extra.clone());
@@ -37,6 +38,17 @@ async fn settled_under(
     policy: ContextIntegrityPolicy,
     answer: Answer,
 ) -> (String, Value, Vec<Value>) {
+    Box::pin(settled_with(answer, move |meta| {
+        meta.with_context_integrity_kernel(ContextIntegrityKernel::new(policy))
+    }))
+    .await
+}
+
+/// [`settled_under`] with the gateway armed by `arm` instead of a policy.
+async fn settled_with(
+    answer: Answer,
+    arm: impl FnOnce(MetaMcp) -> MetaMcp + Send + 'static,
+) -> (String, Value, Vec<Value>) {
     use crate::gateway::router::route_matrix_driver_tests::response::{delivery_rows, temp_log};
     let (_dir, log) = temp_log(None);
     let logged = Arc::clone(&log);
@@ -44,7 +56,7 @@ async fn settled_under(
         &two_principal_auth(),
         None,
         move |meta| {
-            let mut meta = meta.with_context_integrity_kernel(ContextIntegrityKernel::new(policy));
+            let mut meta = arm(meta);
             meta.enable_transparency_log(logged);
             meta
         },
@@ -103,7 +115,7 @@ fn refused_with<'a>(entries: &'a [Value], task: &str, code: i32) -> &'a Value {
 async fn a_task_answer_withheld_whole_settles_refused_with_invalid_request() {
     let (task, settled, entries) = Box::pin(settled_under(
         enforcing(ContextIntegrityDecisionKind::Deny),
-        answering(json!({})),
+        answering(&json!({})),
     ))
     .await;
     let text = settled.to_string();
@@ -120,7 +132,7 @@ async fn a_task_answer_withheld_whole_settles_refused_with_invalid_request() {
 async fn a_malformed_task_round_settles_refused_with_internal_error() {
     let (task, settled, entries) = Box::pin(settled_under(
         enforcing(ContextIntegrityDecisionKind::Strip),
-        answering(json!({"resultType": 7})),
+        answering(&json!({"resultType": 7})),
     ))
     .await;
     let text = settled.to_string();
@@ -137,7 +149,7 @@ async fn a_malformed_task_round_settles_refused_with_internal_error() {
 async fn an_observed_task_answer_writes_no_settlement_record() {
     let (task, settled, entries) = Box::pin(settled_under(
         ContextIntegrityPolicy::monitor_only(),
-        answering(json!({})),
+        answering(&json!({})),
     ))
     .await;
     assert!(
@@ -149,4 +161,37 @@ async fn an_observed_task_answer_writes_no_settlement_record() {
         "premise: the worker's dispatch was recorded: {entries:#?}"
     );
     assert!(settlements(&entries, &task).is_empty(), "{entries:#?}");
+}
+
+/// The assumption the fix rests on: a response-firewall refusal of a task
+/// answer settles as an error frame (the task fails with -32600), never as a
+/// withheld `isError` result. The settlement takes an error frame's own code
+/// before any gateway fold, so no earlier fold can lend it a wrong code. If the
+/// firewall ever answers with a withheld result instead, this row fails.
+#[tokio::test]
+async fn a_firewall_refused_task_answer_settles_as_an_error_frame() {
+    let key = ["AKIA", "IOSFODNN7", "EXAMPLE"].concat();
+    let answer = Answer::Result(json!({
+        "content": [{"type": "text", "text": format!("AWS_ACCESS_KEY_ID={key}")}],
+        "isError": false
+    }));
+    let (task, settled, entries) = Box::pin(settled_with(answer, |mut meta| {
+        meta.enable_response_inspection_action_mode();
+        meta
+    }))
+    .await;
+    assert!(
+        !settled.to_string().contains(&key),
+        "premise: refused: {settled}"
+    );
+    assert_eq!(
+        status_of(&settled),
+        "failed",
+        "an error frame fails the task: {settled}"
+    );
+    assert!(
+        !settled.to_string().contains("\"isError\":true"),
+        "not a withheld isError result: {settled}"
+    );
+    refused_with(&entries, &task, crate::error::rpc_codes::INVALID_REQUEST);
 }
