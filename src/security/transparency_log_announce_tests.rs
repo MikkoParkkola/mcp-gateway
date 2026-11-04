@@ -115,7 +115,22 @@ fn h1_the_seal_and_the_expiry_record_are_announced() {
     let path = log_path(&dir);
     let log = TransparencyLogger::open(cfg(&path, 1, false)).unwrap();
     let told = listen(&log);
-    rotate_n(&log, &path, 3);
+    let event_of =
+        |r: &Map<String, Value>| r.get("event").and_then(Value::as_str).map(str::to_owned);
+    // With one segment retained, each rotation expires the one before it, so
+    // the segment count never grows: append until an expiry is announced.
+    let mut i = 0;
+    while !told
+        .lock()
+        .unwrap()
+        .iter()
+        .any(|(r, _, _)| event_of(r).as_deref() == Some(EV_EXPIRED))
+    {
+        append(&log, i);
+        i += 1;
+        assert!(i < 2_000, "no expiry was announced");
+    }
+    append(&log, i);
     let told = told.lock().unwrap();
     let event_of =
         |r: &Map<String, Value>| r.get("event").and_then(Value::as_str).map(str::to_owned);
