@@ -213,6 +213,60 @@ const ADMIN_READERS: &[(&str, &str, usize, &str)] = &[
         1,
         "a doc comment naming key_server.admin",
     ),
+    (
+        "CallerStanding::Admin",
+        "src/gateway/meta_mcp/handlers.rs",
+        1,
+        "the embedder's unscoped tools/list, no request caller",
+    ),
+    (
+        "CallerStanding::Admin",
+        "src/gateway/meta_mcp/list_paging_e2e.rs",
+        3,
+        "a cfg(test) module the file-name filter does not see",
+    ),
+    (
+        "CallerStanding::Admin",
+        "src/gateway/meta_mcp/search_disclosure_e2e_discovery.rs",
+        4,
+        "a cfg(test) module the file-name filter does not see",
+    ),
+    (
+        "CallerStanding::Admin",
+        "src/gateway/meta_mcp/search_disclosure_e2e_guide.rs",
+        6,
+        "a cfg(test) module the file-name filter does not see",
+    ),
+    (
+        "CallerStanding::Admin",
+        "src/gateway/meta_mcp/spec_preview.rs",
+        7,
+        "its cfg(test) rows",
+    ),
+    (
+        "CallerStanding::Admin",
+        "src/gateway/meta_mcp/visibility.rs",
+        2,
+        "InvokeScope::unscoped: the operator's view at a given standing",
+    ),
+    (
+        "CallerStanding::Admin",
+        "src/gateway/router/authorization.rs",
+        1,
+        "CallerStanding::of: Admin only from Gateway",
+    ),
+    (
+        "CallerStanding::Admin",
+        "src/gateway/router/handlers.rs",
+        1,
+        "events listing: of_client compared with Admin",
+    ),
+    (
+        "CallerStanding::Admin",
+        "src/gateway/server/mod.rs",
+        1,
+        "stdio: the spawning client is the operator",
+    ),
 ];
 
 const NEEDLES: &[&str] = &[
@@ -221,7 +275,12 @@ const NEEDLES: &[&str] = &[
     "grants_admin(",
     "CallerStanding::of(",
     "CallerStanding::of_client(",
+    "CallerStanding::Admin",
+    DESTRUCTURED,
 ];
+
+/// Not a literal needle: a struct pattern binding an `admin` field.
+const DESTRUCTURED: &str = "{ admin, .. }";
 
 /// Whether `path`, relative to the crate, is test-only source.
 fn test_only(path: &std::path::Path) -> bool {
@@ -257,6 +316,9 @@ fn production_sources(
 /// Occurrences of `needle` in `text`. `.admin` counts only the whole field
 /// name, so `.admin_standing()` and `.admin_token` are not reads of the flag.
 fn count(text: &str, needle: &str) -> usize {
+    if needle == DESTRUCTURED {
+        return destructured_admin(text);
+    }
     if needle != ".admin" {
         return text.matches(needle).count();
     }
@@ -268,6 +330,60 @@ fn count(text: &str, needle: &str) -> usize {
                 .is_none_or(|c| !(c.is_alphanumeric() || c == '_'))
         })
         .count()
+}
+
+/// Struct patterns that bind an `admin` field and end in a rest pattern:
+/// `{ admin, .. }`, `{ admin: flag, .. }`, `{ admin: _, .. }`. A struct
+/// literal with update syntax (`{ admin: true, ..base }`) is a write and does
+/// not end in a bare `..`. A pattern naming every field without `..` is not
+/// found: the clients have too many fields for that to be written by hand.
+fn destructured_admin(text: &str) -> usize {
+    let bytes = text.as_bytes();
+    text.match_indices("admin")
+        .filter(|(at, _)| {
+            let before = text[..*at].chars().next_back();
+            if before.is_some_and(|c| c.is_alphanumeric() || matches!(c, '_' | '.' | '"')) {
+                return false;
+            }
+            let after = text[at + "admin".len()..].trim_start();
+            let field =
+                after.starts_with(',') || (after.starts_with(':') && !after.starts_with("::"));
+            field
+                && enclosing_group(bytes, *at)
+                    .is_some_and(|(open, close)| text[open + 1..close].trim_end().ends_with(".."))
+        })
+        .count()
+}
+
+/// The `{ .. }` group around byte `at`, by brace depth.
+fn enclosing_group(bytes: &[u8], at: usize) -> Option<(usize, usize)> {
+    let mut depth = 0usize;
+    let open = (0..at).rev().find(|&i| match bytes[i] {
+        b'}' => {
+            depth += 1;
+            false
+        }
+        b'{' if depth == 0 => true,
+        b'{' => {
+            depth -= 1;
+            false
+        }
+        _ => false,
+    })?;
+    let mut depth = 0usize;
+    let close = (open + 1..bytes.len()).find(|&i| match bytes[i] {
+        b'{' => {
+            depth += 1;
+            false
+        }
+        b'}' if depth == 0 => true,
+        b'}' => {
+            depth -= 1;
+            false
+        }
+        _ => false,
+    })?;
+    Some((open, close))
 }
 
 fn found_in(
