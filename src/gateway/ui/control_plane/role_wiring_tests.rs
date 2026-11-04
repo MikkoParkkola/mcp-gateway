@@ -163,6 +163,7 @@ fn role_mapping_reload_revokes_admin_without_restart() {
 /// A key whose `backends` names some backends, for the scope rows below.
 fn client_on(admin: bool, backends: &[&str]) -> AuthenticatedClient {
     AuthenticatedClient {
+        principal: crate::gateway::record_principal::InternalPrincipal::new(String::new()),
         backends: backends.iter().map(|b| (*b).to_string()).collect(),
         ..client(admin)
     }
