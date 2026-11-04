@@ -12,9 +12,9 @@
 //! budgets of one message under two configs.
 //!
 //! The relay witness on a catalogue read takes the generation its
-//! `CatalogueCaller` carries, and one with none judges under the generation
-//! published at the check; so no production `CatalogueCaller` writes
-//! `generation: None` either.
+//! `CatalogueCaller` carries; outside tests its `CatalogueGeneration` has
+//! only the pinned case, so the compiler refuses a fallback, and the scan
+//! below still flags a `generation: None` written there.
 //!
 //! Syntax scan, per struct expression whose path ends in `MetaMcpCallerContext`
 //! or `CatalogueCaller`.

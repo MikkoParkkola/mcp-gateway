@@ -608,7 +608,7 @@ mod staging;
 pub(crate) use seams::noting_plan_members;
 pub(crate) use seams::{note_plan_member, pointer_token};
 
-pub(crate) use catalogue::{CatalogueCaller, as_caller};
+pub(crate) use catalogue::{CatalogueCaller, CatalogueGeneration, as_caller};
 #[cfg(feature = "firewall")]
 pub(crate) use delivered::strip_gateway_stamps;
 pub(crate) use delivered::{AnswerShape, GatewayStamps};

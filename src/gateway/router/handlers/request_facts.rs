@@ -62,6 +62,6 @@ pub(super) fn catalogue_caller(
         keyed,
         name: client.map_or_else(|| "anonymous".to_owned(), |c| c.name.clone()),
         session: session_id.to_owned(),
-        generation: Some(std::sync::Arc::clone(generation)),
+        generation: super::relay::CatalogueGeneration::Pinned(std::sync::Arc::clone(generation)),
     }
 }

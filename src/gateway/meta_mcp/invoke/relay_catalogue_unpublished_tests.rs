@@ -10,7 +10,7 @@ use std::sync::atomic::Ordering;
 use serde_json::json;
 
 use super::super::staging;
-use super::CatalogueCaller;
+use super::{CatalogueCaller, CatalogueGeneration};
 use crate::gateway::meta_mcp::MetaMcp;
 use crate::protocol::RequestId;
 use crate::security::firewall::CollusionAction;
@@ -34,7 +34,7 @@ fn an_unpublished_gateway_refuses_catalogue_relays_naming_the_cause() {
         keyed: true,
         name: "bob".to_string(),
         session: "s".to_string(),
-        generation: None,
+        generation: CatalogueGeneration::PublishedAtCheck,
     };
     let params = json!({"name": "summary", "arguments": {"text": PROSE}});
     let refusal = meta.catalogue_refusal(
@@ -71,7 +71,7 @@ fn a_published_gateway_lets_an_unrelayed_catalogue_read_through() {
         keyed: true,
         name: "bob".to_string(),
         session: "s".to_string(),
-        generation: None,
+        generation: CatalogueGeneration::PublishedAtCheck,
     };
     let params = json!({"name": "summary", "arguments": {"text": "the north slope"}});
     let refusal = meta.catalogue_refusal(
