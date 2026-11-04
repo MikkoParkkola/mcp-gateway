@@ -72,9 +72,10 @@ fn hub_over_detected_backend(
 /// before its send while the transport publishes each of `flips` in turn;
 /// the posts its callback got.
 async fn attempt_across_flips(flips: &[Option<bool>]) -> usize {
-    let dir = tempfile::tempdir().expect("dir");
+    let dir = Arc::new(tempfile::tempdir().expect("dir"));
     let services = logged_services(dir.path());
     let (hub, transport) = hub_over_detected_backend(dir.path(), &services);
+    hub.keep_test_dir(Arc::clone(&dir));
     let (port, accepted) = counting_callback().await;
     queued_with(&hub, port, "evt_x", NAME, |_, _| {});
     let (reached, release) = hub.before_send.arm();
@@ -166,9 +167,10 @@ async fn within(limit: Duration, done: impl Fn() -> bool) -> bool {
 /// publishes a new flavour returns without waiting on the send's network I/O.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_detection_does_not_wait_for_a_send_in_flight() {
-    let dir = tempfile::tempdir().expect("dir");
+    let dir = Arc::new(tempfile::tempdir().expect("dir"));
     let services = Arc::new(logged_services(dir.path()));
     let (hub, transport) = hub_over_detected_backend(dir.path(), &services);
+    hub.keep_test_dir(Arc::clone(&dir));
     let (port, connections, ended) = silent_callback().await;
     queued_with(&hub, port, "evt_x", NAME, |_, _| {});
     let attempt = tokio::spawn({

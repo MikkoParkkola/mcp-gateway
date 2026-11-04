@@ -191,9 +191,11 @@ async fn a_restarted_one_target_plan_receipts_nothing_whole() {
         _store: first_store,
         ..
     } = first;
-    let tasks_dir = first_store.path().join("tasks");
     drop(first_state);
-    let restarted =
-        state_over_tasks(rig(PROSE, OTHER_PROSE, Some(&one_target)).await, tasks_dir).await;
+    let restarted = state_over_tasks(
+        rig(PROSE, OTHER_PROSE, Some(&one_target)).await,
+        &first_store,
+    )
+    .await;
     renews_nothing_after_reopen(&restarted, &task, 330).await;
 }

@@ -16,7 +16,9 @@ use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
 use super::super::task_runtime::{self, ShutdownBudget};
-use super::owner2_stdio_tasks::{BACKEND, dispatch, fixture_on, held_backend, modern_call, reopen};
+use super::owner2_stdio_tasks::{
+    BACKEND, dispatch, fixture_on, held_backend, modern_call, reopen_stdio_store,
+};
 use crate::config::{BackendConfig, Config, TransportConfig};
 use crate::gateway::Gateway;
 use crate::gateway::meta_mcp::LOCAL_OPERATOR_PRINCIPAL;
@@ -112,9 +114,10 @@ async fn a_drain_timeout_cancels_the_running_worker_before_the_store_closes() {
         "no worker of the shut-down executor still holds its task"
     );
 
-    let (service, _executor) = reopen(&store_config(fixture.store.path()))
+    let (service, _executor) = reopen_stdio_store(&store_config(fixture.store.path()))
         .await
         .expect("the lease is free once shutdown returned");
+    service.keep_test_dir(Arc::clone(&fixture.store));
     assert_recovered_and_left_alone(&service, &id, &release).await;
 }
 
@@ -150,7 +153,7 @@ fn stdio_eof_cancels_a_task_that_outlasts_the_drain() {
 
 async fn eof_with_a_held_task() {
     let (url, mut arrived, release) = held_backend().await;
-    let store = tempfile::tempdir().expect("store root");
+    let store = Arc::new(tempfile::tempdir().expect("store root"));
     let mut config = store_config(store.path());
     config.server.shutdown_timeout = Duration::from_secs(1);
     config.backends.insert(
@@ -208,9 +211,10 @@ async fn eof_with_a_held_task() {
         .expect("no panic")
         .expect("run_stdio_on returns Ok");
 
-    let (service, _executor) = reopen(&config)
+    let (service, _executor) = reopen_stdio_store(&config)
         .await
         .expect("the lease is free once run_stdio_on returned");
+    service.keep_test_dir(Arc::clone(&store));
     assert_recovered_and_left_alone(&service, &id, &release).await;
 }
 

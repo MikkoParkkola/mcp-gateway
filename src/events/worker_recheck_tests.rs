@@ -93,8 +93,9 @@ impl crate::events::EventSource for Parking {
 #[tokio::test]
 async fn access_lost_during_the_second_verdict_is_not_sent() {
     for revoke in [false, true] {
-        let dir = tempfile::tempdir().expect("dir");
+        let dir = Arc::new(tempfile::tempdir().expect("dir"));
         let hub = open_hub(dir.path());
+        hub.keep_test_dir(Arc::clone(&dir));
         let source = Arc::new(Parking {
             asked: AtomicUsize::new(0),
             reached: tokio::sync::Notify::new(),
@@ -215,16 +216,18 @@ async fn an_attempt_waits_on_a_silent_catalogue_once() {
     const NAME: &str = "backend.b.resource_updated";
     let uri = serde_json::json!({"uri": "file:///a"});
 
-    let dir = tempfile::tempdir().expect("dir");
+    let dir = Arc::new(tempfile::tempdir().expect("dir"));
     let probe = open_hub(dir.path());
+    probe.keep_test_dir(Arc::clone(&dir));
     let once = silent_backend(&probe).await;
     let source = probe.source_offering(NAME).expect("offered");
     let _ = source.authorize("p", NAME, &uri).await;
     let one_lookup = once.load(Ordering::SeqCst);
     assert!(one_lookup >= 1, "the lookup reached the backend");
 
-    let dir = tempfile::tempdir().expect("dir");
+    let dir = Arc::new(tempfile::tempdir().expect("dir"));
     let hub = open_hub(dir.path());
+    hub.keep_test_dir(Arc::clone(&dir));
     let connections = silent_backend(&hub).await;
     let services = logged_services(dir.path());
     let (port, _accepted) = counting_callback().await;
@@ -254,8 +257,9 @@ async fn a_refusal_after_the_tenant_read_record_releases_the_frame() {
     use crate::security::firewall::tenant_guard::{CrossTenantReads, TenantGuardConfig};
     use crate::security::firewall::{Firewall, FirewallConfig};
 
-    let dir = tempfile::tempdir().expect("dir");
+    let dir = Arc::new(tempfile::tempdir().expect("dir"));
     let hub = open_hub(dir.path());
+    hub.keep_test_dir(Arc::clone(&dir));
     let source = Arc::new(AfterTenantRecord {
         log: dir.path().join("audit.jsonl"),
         asked: AtomicUsize::new(0),
@@ -315,8 +319,9 @@ async fn the_lookup_budget_is_per_attempt() {
     use crate::events::upstream_listener::FAILED_LOOKUP;
     const NAME: &str = "backend.b.resource_updated";
     let uri = serde_json::json!({"uri": "file:///a"});
-    let dir = tempfile::tempdir().expect("dir");
+    let dir = Arc::new(tempfile::tempdir().expect("dir"));
     let hub = open_hub(dir.path());
+    hub.keep_test_dir(Arc::clone(&dir));
     let connections = silent_backend(&hub).await;
     let source = hub.source_offering(NAME).expect("offered");
     let ask = || source.authorize("p", NAME, &uri);
@@ -400,8 +405,9 @@ impl crate::events::EventSource for AfterTenantRecord {
 #[tokio::test]
 async fn a_subscription_expiring_during_the_second_verdict_is_not_sent() {
     for expire in [false, true] {
-        let dir = tempfile::tempdir().expect("dir");
+        let dir = Arc::new(tempfile::tempdir().expect("dir"));
         let hub = open_hub(dir.path());
+        hub.keep_test_dir(Arc::clone(&dir));
         let source = Arc::new(Parking {
             asked: AtomicUsize::new(0),
             reached: tokio::sync::Notify::new(),
@@ -495,8 +501,9 @@ impl crate::events::EventSource for Open {
 #[tokio::test]
 async fn a_subscription_stored_without_its_secret_is_deleted_at_its_first_check() {
     for tagged in [true, false] {
-        let dir = tempfile::tempdir().expect("dir");
+        let dir = Arc::new(tempfile::tempdir().expect("dir"));
         let hub = open_hub(dir.path());
+        hub.keep_test_dir(Arc::clone(&dir));
         hub.register_source(Arc::new(Open) as Arc<dyn crate::events::EventSource>);
         let services = logged_services(dir.path());
         services.live.set(keyed());

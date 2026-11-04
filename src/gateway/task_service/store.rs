@@ -175,7 +175,7 @@ struct Shared {
     /// removed; a worker's late write landing mid-removal left the folder behind.
     /// Declared last, so the lease above is closed first.
     #[cfg(test)]
-    test_dir: std::sync::OnceLock<Arc<tempfile::TempDir>>,
+    test_dir: crate::test_dir_keep::TestDirKeep,
 }
 
 #[derive(Clone)]
@@ -183,10 +183,24 @@ pub(crate) struct TaskStore(Arc<Shared>);
 
 impl TaskStore {
     /// Test-only: hold a share of the temporary directory this store lives in
-    /// until the last handle to the store drops (see `Shared::test_dir`).
+    /// until the last handle to the store drops (see `Shared::test_dir`). A
+    /// second call must name the same directory: keeping a different one
+    /// would leave this one unowned.
     #[cfg(test)]
     pub(crate) fn keep_test_dir(&self, dir: Arc<tempfile::TempDir>) {
-        let _ = self.0.test_dir.set(dir);
+        self.0.test_dir.keep(dir, &self.0.dir);
+    }
+
+    /// Test-only: see [`crate::test_dir_keep::TestDirKeep::opened_by_gateway`].
+    #[cfg(test)]
+    pub(crate) fn opened_by_gateway(&self) {
+        self.0.test_dir.opened_by_gateway();
+    }
+
+    /// Test-only: see [`crate::test_dir_keep::TestDirKeep::assert_kept`].
+    #[cfg(test)]
+    pub(crate) fn assert_test_dir_kept(&self, worker: &str) {
+        self.0.test_dir.assert_kept(worker);
     }
 
     pub(super) async fn open(path: &Path, limits: StoreLimits) -> Result<Self, StoreError> {
@@ -221,7 +235,7 @@ impl TaskStore {
             seams: input::TestSeams::default(),
             temp: AtomicU64::new(0),
             #[cfg(test)]
-            test_dir: std::sync::OnceLock::new(),
+            test_dir: crate::test_dir_keep::TestDirKeep::default(),
         })))
     }
 

@@ -1,12 +1,14 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 use super::actor_from_client;
+use crate::config::{KeyServerPolicyConfig, PolicyMatchConfig, PolicyScopesConfig};
 use crate::control_plane::{
     ControlPlaneAction, ControlPlaneRbac, ControlPlaneRole, ControlPlaneRoleMappingConfig,
     ControlPlaneRoleRule,
 };
 use crate::gateway::auth::AuthenticatedClient;
 use crate::key_server::oidc::VerifiedIdentity;
+use crate::key_server::policy::{PolicyEngine, RequestedScopes, ScopeRefusal};
 
 fn client(admin: bool) -> AuthenticatedClient {
     AuthenticatedClient {
@@ -155,5 +157,65 @@ fn role_mapping_reload_revokes_admin_without_restart() {
         after.role,
         ControlPlaneRole::Viewer,
         "a removed admin rule must stop granting Admin after reload"
+    );
+}
+
+/// A key-only caller's default group (`local-admins`, `local-viewers`) is a
+/// display label, never an authorization input: a role rule naming it grants
+/// a key-only caller nothing, and a key-server policy naming it matches only
+/// an identity that itself carries the group. Pinned because the backend
+/// scope's safety for key-only callers rests on nothing authorizing by group.
+#[test]
+fn a_key_only_callers_default_group_grants_nothing() {
+    let rule = |group: &str| ControlPlaneRoleRule {
+        issuer: "https://idp".to_string(),
+        group: Some(group.to_string()),
+        email: None,
+        domain: None,
+        role: ControlPlaneRole::Admin,
+    };
+    let mapping = ControlPlaneRoleMappingConfig {
+        rules: vec![rule("local-admins"), rule("local-viewers")],
+    };
+    let viewer = actor_from_client(Some(&client(false)), None, &mapping);
+    assert_eq!(viewer.group_ids, ["local-viewers"]);
+    assert_eq!(
+        viewer.role,
+        ControlPlaneRole::Viewer,
+        "a rule naming the default group"
+    );
+    let admin = actor_from_client(Some(&client(true)), None, &mapping);
+    assert_eq!(admin.group_ids, ["local-admins"]);
+    assert_eq!(
+        admin.role,
+        ControlPlaneRole::Admin,
+        "from the admin flag alone"
+    );
+
+    let engine = PolicyEngine::new(vec![KeyServerPolicyConfig {
+        match_criteria: PolicyMatchConfig {
+            issuer: "https://idp".to_string(),
+            group: Some("local-admins".to_string()),
+            ..PolicyMatchConfig::default()
+        },
+        scopes: PolicyScopesConfig {
+            backends: vec!["*".to_string()],
+            tools: vec!["*".to_string()],
+            rate_limit: 100,
+        },
+    }]);
+    let requested = RequestedScopes::default();
+    assert_eq!(
+        engine
+            .resolve_scopes(&identity("https://idp", &[]), &requested)
+            .err(),
+        Some(ScopeRefusal::Denied),
+        "only an identity's own groups match"
+    );
+    assert!(
+        engine
+            .resolve_scopes(&identity("https://idp", &["local-admins"]), &requested)
+            .is_ok(),
+        "control: the rule matches an identity carrying the group"
     );
 }
