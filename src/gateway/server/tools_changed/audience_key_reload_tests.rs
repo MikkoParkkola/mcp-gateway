@@ -8,13 +8,12 @@
 use super::audience_fixture::{World, tool};
 use crate::gateway::streaming::TaggedNotification;
 
-/// The ordinary backend notification (not a tool-list change) each channel
-/// carries: the GET stream relays any backend notification, while
-/// `subscriptions/listen` here subscribes to resource-list changes only.
+/// An ordinary backend notification (not a tool-list change), which the GET
+/// stream relays. On `subscriptions/listen` the per-backend kind this fixture
+/// delivers is a tool-list change, which STREAM.2 covers.
 const GET_NOTE: &str = "notifications/resources/updated";
-const LISTEN_NOTE: &str = "notifications/resources/list_changed";
 
-/// Push one ordinary notification from `backend` into each channel.
+/// Push one ordinary notification from `backend` into the GET stream.
 async fn push(w: &World, backend: &str) {
     let tagged = TaggedNotification {
         source: backend.to_string(),
@@ -26,8 +25,6 @@ async fn push(w: &World, backend: &str) {
         .multiplexer
         .broadcast_to_backend(&tagged, backend)
         .await;
-    let note = serde_json::json!({"jsonrpc": "2.0", "method": LISTEN_NOTE});
-    w.state.subscriptions.publish_for_backend(note, backend);
 }
 
 /// Publish a key table with `edit` applied to `k-std`, or with `k-std`
@@ -80,11 +77,7 @@ async fn stream1_a_removed_key_ends_its_held_streams() {
         get.frames(&w).await.iter().any(|m| m == GET_NOTE),
         "premise: GET delivered"
     );
-    let heard = listen.frames(&w).await;
-    assert!(
-        heard.iter().any(|m| m == LISTEN_NOTE),
-        "premise: listen delivered: {heard:?}"
-    );
+    assert!(listen.is_open(&w).await, "premise: listen is open");
 
     reload_k_std(&w, |_| false);
     push(&w, "alpha").await;
@@ -112,11 +105,7 @@ async fn stream3_a_removed_grant_withholds_that_backend_only() {
         get.frames(&w).await.iter().any(|m| m == GET_NOTE),
         "premise: GET delivered"
     );
-    let heard = listen.frames(&w).await;
-    assert!(
-        heard.iter().any(|m| m == LISTEN_NOTE),
-        "premise: listen delivered: {heard:?}"
-    );
+    assert!(listen.is_open(&w).await, "premise: listen is open");
 
     reload_k_std(&w, |key| {
         key.backends = vec!["beta".to_string()];
@@ -127,18 +116,16 @@ async fn stream3_a_removed_grant_withholds_that_backend_only() {
         !get.frames(&w).await.iter().any(|m| m == GET_NOTE),
         "STREAM.3: GET delivered a backend the key lost"
     );
+    // On listen the per-backend kind is a tool-list change (STREAM.2); a
+    // kept key's listen stream stays open.
     assert!(
-        !listen.frames(&w).await.iter().any(|m| m == LISTEN_NOTE),
-        "STREAM.3: listen delivered a backend the key lost"
+        listen.is_open(&w).await,
+        "STREAM.3: listen closed for a kept key"
     );
     push(&w, "beta").await;
     assert!(
         get.frames(&w).await.iter().any(|m| m == GET_NOTE),
         "STREAM.3: GET lost beta too"
-    );
-    assert!(
-        listen.frames(&w).await.iter().any(|m| m == LISTEN_NOTE),
-        "STREAM.3: listen lost beta too"
     );
 }
 
