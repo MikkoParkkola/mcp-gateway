@@ -3,8 +3,10 @@
 # SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 # Unpacks every coverage shard's bundle into target/llvm-cov-target for one
 # `cargo llvm-cov report`. Fails when an expected shard's bundle is missing, or when two
-# shards built different binaries under one name: report would read one of them, and the
-# other's counters would no longer match it. Usage: coverage_shard_merge.sh <shard>...
+# shards built one binary with different coverage sections: report would read one of them,
+# and the other's counters would no longer match it. Bytes outside those sections may
+# differ between builds (a constant generated at build time) without changing the mapping.
+# Usage: coverage_shard_merge.sh <shard>...
 set -euo pipefail
 t=target/llvm-cov-target
 mkdir -p "$t"
@@ -15,10 +17,10 @@ for shard in "$@"; do
     echo "::error::shard $shard: bundle missing"; exit 1; }
   while read -r sum path; do
     if [ -n "${seen[$path]:-}" ] && [ "${seen[$path]}" != "$sum" ]; then
-      echo "::error::$path differs between shards (${seen[$path]} vs $sum)"; exit 1
+      echo "::error::$path: coverage sections differ between shards (${seen[$path]} vs $sum)"; exit 1
     fi
     seen[$path]=$sum
-  done < <(grep -E '^[0-9a-f]{64}  ' "$b/manifest.txt")
+  done < <(grep -E '^(cov|file):[0-9a-f]{64}  ' "$b/manifest.txt")
   tar -C "$t" -xf "$b/files.tar"
   mv "$t"/profraw/*.profraw "$t"/
   rmdir "$t/profraw"

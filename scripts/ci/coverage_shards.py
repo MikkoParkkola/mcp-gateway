@@ -111,6 +111,60 @@ def run(n: int, shard: str, program: tuple[str, ...] = ("cargo",)) -> int:
     return rc
 
 
+# The sections a profile is mapped through: two builds of one binary whose bytes differ
+# only elsewhere (a constant a dependency generates at build time, and so the build id)
+# map the same counters to the same functions.
+COVERAGE_SECTIONS = ("__llvm_covfun", "__llvm_covmap", "__llvm_prf_names", "__llvm_prf_data")
+
+
+def digest(data: bytes) -> str:
+    """The sha256 of an ELF64 file's coverage sections, by name and in order; of the
+    whole file, marked `file:`, when it is not ELF64 or has none of them."""
+    import hashlib
+    import struct
+
+    whole = "file:" + hashlib.sha256(data).hexdigest()
+    if data[:4] != b"\x7fELF" or len(data) < 64 or data[4] != 2:
+        return whole
+    shoff, = struct.unpack_from("<Q", data, 0x28)
+    shentsize, shnum, shstrndx = struct.unpack_from("<HHH", data, 0x3A)
+    heads = [struct.unpack_from("<IIQQQQ", data, shoff + i * shentsize) for i in range(shnum)]
+    names = heads[shstrndx][4]
+    found = {}
+    for name, kind, _flags, _addr, off, size in heads:
+        label = data[names + name:data.index(b"\0", names + name)].decode("latin-1")
+        if label in COVERAGE_SECTIONS:
+            found[label] = b"" if kind == 8 else data[off:off + size]  # NOBITS: no bytes
+    if not found:
+        return whole
+    h = hashlib.sha256()
+    for label in COVERAGE_SECTIONS:
+        body = found.get(label)
+        h.update(f"{label}:{-1 if body is None else len(body)}\n".encode())
+        h.update(body or b"")
+    return "cov:" + h.hexdigest()
+
+
+def elf(sections: list[tuple[str, bytes]]) -> bytes:
+    """A minimal ELF64 file holding `sections`, for the self-test."""
+    import struct
+
+    names = b"\0" + b"".join(n.encode() + b"\0" for n, _ in sections) + b".shstrtab\0"
+    body, entries, off = b"", [], 64
+    for i, (n, data) in enumerate(sections):
+        entries.append((names.index(n.encode() + b"\0"), 1, off + len(body), len(data)))
+        body += data
+    entries.append((names.index(b".shstrtab\0"), 3, off + len(body), len(names)))
+    body += names
+    shoff = off + len(body)
+    head = b"\x7fELF\x02\x01\x01" + b"\0" * 9 + struct.pack(
+        "<HHIQQQIHHHHHH", 2, 62, 1, 0, 0, shoff, 0, 64, 0, 0, 64, len(entries) + 1, len(entries))
+    table = b"\0" * 64 + b"".join(
+        struct.pack("<IIQQQQIIQQ", name, kind, 0, 0, o, size, 0, 0, 1, 0)
+        for name, kind, o, size in entries)
+    return head + body + table
+
+
 def self_test() -> int:
     def target(kind: str, name: str, test: bool = True) -> dict:
         return {"kind": [kind], "name": name, "test": test}
@@ -154,6 +208,16 @@ def self_test() -> int:
     # Glob classes match case-sensitively, as cargo does: an upper-case first
     # letter falls in [!a-l]* and only there.
     assert owners(PLANS[4], "test", "Lower_upper_A") == ["int-b"]
+    # Two builds differing only outside the coverage sections digest alike; a different
+    # coverage mapping, a missing section or a non-ELF file does not.
+    cov = [("__llvm_covfun", b"FUN"), ("__llvm_covmap", b"MAP"), (".rodata", b"seed-1")]
+    one = elf(cov)
+    other = elf([*cov[:2], (".rodata", b"seed-2")])
+    assert one != other and digest(one) == digest(other) and digest(one).startswith("cov:")
+    assert digest(elf([("__llvm_covfun", b"FUX"), *cov[1:]])) != digest(one)
+    assert digest(elf([cov[0], cov[2]])) != digest(one), "a missing section counts"
+    assert digest(b"#!/bin/sh\n").startswith("file:")
+    assert digest(elf([(".rodata", b"x")])).startswith("file:"), "no coverage sections"
     print("coverage_shards self-test: ok")
     return 0
 
@@ -161,6 +225,12 @@ def self_test() -> int:
 def main(argv: list[str]) -> int:
     if argv[1:] == ["--self-test"]:
         return self_test()
+    if len(argv) >= 2 and argv[1] == "digest":
+        # `digest <file>...`, in sha256sum's layout: "<digest>  <path>".
+        for path in argv[2:]:
+            with open(path, "rb") as f:
+                print(f"{digest(f.read())}  {path}")
+        return 0
     if len(argv) == 3 and argv[1] == "plan" and argv[2].isdigit() and int(argv[2]) in PLANS:
         print(json.dumps(sorted(PLANS[int(argv[2])])))
         return 0

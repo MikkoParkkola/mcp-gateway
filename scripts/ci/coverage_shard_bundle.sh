@@ -5,8 +5,10 @@
 # name so two runners' files never collide (a profile is named by binary and process id),
 # and every instrumented executable `cargo llvm-cov report` would read, in a tar that keeps
 # the executable bit report needs. Writes bundle/: files.tar, run.log, manifest.txt
-# (sizes, the executables' sha256). Usage: coverage_shard_bundle.sh <shard>
+# (sizes, each executable's coverage digest from coverage_shards.py).
+# Usage: coverage_shard_bundle.sh <shard>
 set -euo pipefail
+here=$(cd "$(dirname "$0")" && pwd)
 shard=$1
 t=target/llvm-cov-target
 rm -rf bundle && mkdir -p bundle/profraw
@@ -31,7 +33,7 @@ cp run.log bundle/run.log
   echo "profiles $n"
   echo "executables $(tr -cd '\0' < bundle/executables.list | wc -c)"
   echo "tar_bytes $(wc -c < bundle/files.tar | tr -d ' ')"
-  (cd "$t" && xargs -0 sha256sum < "$OLDPWD/bundle/executables.list")
+  (cd "$t" && xargs -0 python3 "$here/coverage_shards.py" digest < "$OLDPWD/bundle/executables.list")
 } > bundle/manifest.txt
 rm bundle/executables.list
 head -4 bundle/manifest.txt | sed "s/^/::notice::/"
