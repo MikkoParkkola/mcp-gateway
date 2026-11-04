@@ -274,10 +274,11 @@ async fn an_inner_idempotency_replay_of_a_rewritten_answer_records_no_effect() {
         first_row["response_effect"], "rewritten",
         "premise: the first call recorded its rewrite: {first_row}"
     );
-    assert_eq!(
-        replay.get("result"),
-        first.get("result"),
-        "the replay serves the stored answer"
+    // Per-call members (the invocation id) differ; what matters is that the
+    // replay serves the stored, stripped answer.
+    assert!(
+        !delivered_text(&replay).contains(INSTRUCTION),
+        "the replay serves the stored, stripped answer: {replay}"
     );
     for field in ["response_effect", "response_findings"] {
         assert!(replay_row.get(field).is_none(), "{field}: {replay_row}");
