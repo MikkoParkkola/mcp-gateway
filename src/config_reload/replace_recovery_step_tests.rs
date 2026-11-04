@@ -47,12 +47,12 @@ fn forbids(clause: &str) -> bool {
     lower.contains("do not") || lower.contains("nothing")
 }
 
-/// The unsafe advice `clause` gives, if any. Paths are left out: the
-/// journal's own name holds "replace".
+/// The unsafe advice `clause` gives, if any. Paths and identifiers are left
+/// out: the journal's own name holds "replace", and `all_renamed` "rename".
 fn unsafe_in(clause: &str) -> Vec<&'static str> {
     let words = clause
         .split_whitespace()
-        .filter(|w| !w.contains('/'))
+        .filter(|w| !w.contains('/') && !w.contains('_'))
         .collect::<Vec<_>>()
         .join(" ")
         .to_lowercase();
