@@ -138,11 +138,14 @@ async fn a_capability_changed_while_down_reaches_the_decisions_after_http_startu
         backend.initial_scan_complete()
     })
     .await;
+    // Snapshotted inside `mark_initial_scan_complete`, before the flag is
+    // visible: deterministic whatever the check's timing.
     assert_eq!(
-        recorded(meta),
-        vec![changed],
-        "recorded by the time the scan reports complete"
+        backend.records_at_scan_complete.get(),
+        Some(&1),
+        "recorded before the scan was marked complete"
     );
+    assert_eq!(recorded(meta), vec![changed]);
 
     let _set = crate::gateway::ui::decisions::start_with_source(
         meta,
