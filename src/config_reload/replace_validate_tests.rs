@@ -198,10 +198,7 @@ fn lines_where(hit: impl Fn(&str) -> bool) -> Vec<String> {
 
 /// As [`lines_where`], only in the files `keep` accepts, given each file's
 /// `src`-relative path and its text.
-fn lines_where_in(
-    keep: impl Fn(&str, &str) -> bool,
-    hit: impl Fn(&str) -> bool,
-) -> Vec<String> {
+fn lines_where_in(keep: impl Fn(&str, &str) -> bool, hit: impl Fn(&str) -> bool) -> Vec<String> {
     let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
     let mut files = Vec::new();
     super::replace_audit_tests::production_sources(&src, &mut files);
