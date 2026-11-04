@@ -53,7 +53,7 @@ src/gateway/meta_mcp/session_tools.rs	set_state	Error::Protocol(..)	1	not-a-deci
 src/gateway/meta_mcp/task_confirmation.rs	challenge	via refuse (closure)	1	not-a-decision	the gateway cannot hold a confirmation open (clock, slot capacity, grant mint): an availability failure
 src/gateway/meta_mcp/task_confirmation.rs	challenge	via refuse (closure)	2	not-a-decision	the gateway cannot hold a confirmation open (clock, slot capacity, grant mint): an availability failure
 src/gateway/meta_mcp/task_confirmation.rs	challenge	via refuse (closure)	3	not-a-decision	the gateway cannot hold a confirmation open (clock, slot capacity, grant mint): an availability failure
-src/gateway/meta_mcp/task_confirmation.rs	confirm_destructive_task_with	via refuse (closure)	1	pending:unbindable-confirmation	a destructive call refused for a caller the gateway cannot name; nothing raises
+src/gateway/meta_mcp/task_confirmation.rs	confirm_destructive_task_with	via refuse (closure)	1	recorded	src/gateway/meta_mcp/task_confirmation.rs::confirm_destructive_task_with
 src/gateway/meta_mcp/task_confirmation.rs	confirm_destructive_task_with	via refuse (closure)	2	not-a-decision	client-protocol rejection: answers sent with no confirmation grant
 src/gateway/meta_mcp/task_confirmation/helpers.rs	refuse_grant	via refuse (closure)	1	feeds	built by a refuse_* function the refusal scan classifies at each call (not-a-decision)
 src/gateway/meta_mcp/task_replay/judging.rs	unknown_server_refusal	Error::BackendNotFound(..)	1	feeds	built by a refusal-named function the refusal scan classifies at each call
