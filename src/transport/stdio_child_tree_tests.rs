@@ -18,7 +18,7 @@ use std::time::Duration;
 use rustix::process::{Pid, WaitId, WaitIdOptions, waitid};
 
 use super::super::{PROTOCOL_VERSION, StdioTransport};
-use super::{ChildTree, Counts, Leader, REAP_DEADLINE, Reap, native_child};
+use super::{ChildTree, Counts, Ending, Leader, REAP_DEADLINE, Reap, native_child};
 use crate::transport::Transport;
 
 const ROW_LIMIT: Duration = Duration::from_secs(5);
@@ -334,6 +334,46 @@ async fn a_cut_under_the_minimum_phase_skips_sigterm() {
         !w.path().join("term.mark").exists(),
         "a SIGTERM was sent with no time left to act on it"
     );
+}
+
+/// Hand `t`'s tree straight to the reaper with a graceful ending under
+/// `deadline`, as a close does; returns how many handovers the deadline then
+/// tracks.
+fn hand_over_gracefully(t: &StdioTransport, deadline: &Arc<super::super::reaper::StopDeadline>) -> usize {
+    let mut slot = t.child.lock();
+    let mut tree = slot.tree.take().expect("a started tree");
+    let ending = Ending::Graceful {
+        eof: Duration::from_secs(60),
+        term: Duration::from_secs(30),
+    };
+    tree.set_ending(ending, Some(Arc::clone(deadline)));
+    let _ = slot.track(tree);
+    deadline.handed_len()
+}
+
+/// A graceful handover joins its gateway stop deadline in the handover
+/// itself, before its first step: no window in which a stop's snapshot can
+/// miss a handover that is already in its waits.
+#[tokio::test]
+async fn a_graceful_handover_joins_its_stop_deadline_in_the_handover() {
+    let (_w, t) = started(&resists_term(), None).await;
+    let pid = leader(&t).await;
+    let deadline = Arc::new(super::super::reaper::StopDeadline::default());
+    assert_eq!(hand_over_gracefully(&t, &deadline), 1, "the handover is tracked");
+    deadline.move_earlier(std::time::Instant::now());
+    assert_killed(pid).await;
+}
+
+/// The same when the first step already ends the tree (its deadline has
+/// passed): it is tracked, so a stop's wait sees it, whichever step ends it.
+#[tokio::test]
+async fn a_handover_ended_on_its_first_step_is_tracked_too() {
+    let (_w, t) = started(&resists_term(), None).await;
+    let pid = leader(&t).await;
+    let deadline = Arc::new(super::super::reaper::StopDeadline::default());
+    deadline.move_earlier(std::time::Instant::now());
+    assert_eq!(hand_over_gracefully(&t, &deadline), 1, "the handover is tracked");
+    assert_killed(pid).await;
 }
 
 /// A second gateway stop with an earlier deadline moves it earlier; a later

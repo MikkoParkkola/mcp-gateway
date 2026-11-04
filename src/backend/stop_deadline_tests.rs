@@ -40,10 +40,40 @@ while True:
 /// otherwise run on, holding whatever it inherited.
 struct KillGroupOnDrop(Pid);
 
+impl KillGroupOnDrop {
+    /// Whether the guard may signal the group: only while its leader is still
+    /// this process's child, unreaped (a reaped pid may name someone else's
+    /// group by now).
+    fn may_signal(&self) -> bool {
+        true
+    }
+}
+
 impl Drop for KillGroupOnDrop {
     fn drop(&mut self) {
-        let _ = rustix::process::kill_process_group(self.0, rustix::process::Signal::KILL);
+        if self.may_signal() {
+            let _ = rustix::process::kill_process_group(self.0, rustix::process::Signal::KILL);
+        }
     }
+}
+
+/// The guard does not signal a group whose leader the reaper already reaped:
+/// its pid may have been reused.
+#[tokio::test]
+async fn the_guard_does_not_signal_a_reaped_group() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let backend = stays(dir.path(), "reaped");
+    backend.ensure_started().await.expect("the backend starts");
+    let pid = leader_pid(dir.path());
+    let guard = KillGroupOnDrop(pid);
+    assert!(guard.may_signal(), "a running leader may be signalled");
+    backend.stop().await.expect("stop");
+    let by = std::time::Instant::now() + Duration::from_secs(15);
+    while kernel_view(pid).is_some() {
+        assert!(std::time::Instant::now() < by, "the leader was never reaped");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert!(!guard.may_signal(), "a reaped leader's pid is not signalled");
 }
 
 /// `Some(false)` running, `Some(true)` exited unreaped, `None` reaped.

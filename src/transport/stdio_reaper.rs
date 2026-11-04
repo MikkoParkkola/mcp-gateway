@@ -95,6 +95,12 @@ impl StopDeadline {
         all.push(handed);
     }
 
+    /// How many handovers are tracked, finished or not.
+    #[cfg(test)]
+    pub(crate) fn handed_len(&self) -> usize {
+        self.handed.lock().len()
+    }
+
     /// Wait, up to `deadline`, for every tracked handover to be ended: a tree
     /// an earlier close handed over may still be in its waits, and its kill
     /// must land before the gateway returns.
