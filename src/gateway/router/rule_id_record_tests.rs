@@ -226,10 +226,11 @@ async fn a_response_firewall_block_records_no_rule_on_the_direct_route() {
     Box::pin(response_block(Route::Direct)).await;
 }
 
-/// A stored task read back after a reload whose tool policy denies its tool
-/// is refused at the `tasks/get` (register row 425's designed path): the
-/// refusal's message carries no rule id, and the read's record names the
-/// deny entry.
+/// A task whose tool the policy denies once it is published before dispatch:
+/// the worker's dispatch is refused, and its invocation record (tool `read`,
+/// decided fresh) names the deny entry. The `tasks/get` that reads the task
+/// back is refused too, with a message that carries no rule id; that read
+/// writes no invocation record, only one refused delivery record.
 #[tokio::test(flavor = "current_thread")]
 async fn a_task_refused_by_the_tool_policy_delivers_no_rule_id() {
     let fx = fixture(Answer::Ok, None).await;
@@ -244,21 +245,34 @@ async fn a_task_refused_by_the_tool_policy_delivers_no_rule_id() {
     let expected = tool_policy_id(&fx, "deny", "alpha:read");
     let hex = expected.as_str().trim_start_matches("tool_policy:");
     assert!(!got.to_string().contains(hex), "{got}");
-    // The read's record is the one that hashes the answer the read
-    // delivered, so a record another request wrote, before or after the
-    // read, cannot stand in for it.
-    let delivered = format!("sha256:{}", crate::hashing::canonical_json_sha256(&got));
+    // The worker's dispatch: the one invocation record, named by its tool.
     let recorded = super::invocations(&fx).await;
-    let reads: Vec<_> = recorded
-        .iter()
-        .filter(|row| row["response_hash"] == json!(delivered))
-        .collect();
-    let [read] = reads.as_slice() else {
-        panic!("wanted one record of the read's answer: {recorded:?}");
+    let [dispatch] = recorded.as_slice() else {
+        panic!("wanted the worker's one invocation record: {recorded:?}");
     };
     assert_eq!(
-        (&read["decision"]["kind"], &read["decision"]["rule_id"]),
-        (&json!("tool_policy"), &json!(expected.as_str())),
-        "the read's record names the deny entry: {read}"
+        (&dispatch["tool"], &dispatch["decision"]["decided"]),
+        (&json!("read"), &json!("fresh")),
+        "{dispatch}"
     );
+    assert_eq!(
+        (
+            &dispatch["decision"]["kind"],
+            &dispatch["decision"]["rule_id"]
+        ),
+        (&json!("tool_policy"), &json!(expected.as_str())),
+        "the dispatch record names the deny entry: {dispatch}"
+    );
+    // The read: exactly one refused `tasks/get` delivery record.
+    let log = std::fs::read_to_string(fx.log.path()).unwrap_or_default();
+    let reads: Vec<serde_json::Value> = log
+        .lines()
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .filter(|row| {
+            row["event"] == "response_delivery_attempt"
+                && row["tool"] == "tasks/get"
+                && row["response_effect"] == "refused"
+        })
+        .collect();
+    assert_eq!(reads.len(), 1, "one refused read: {reads:?}");
 }
