@@ -13,7 +13,8 @@
 //! named `open`) is a counted site of its own. A name a `use` binds, bare,
 //! renamed or through a module another `use` bound, is resolved first. The
 //! walk fails outright on a `use` it cannot resolve: an `fs` glob, or one
-//! name bound to two different paths in one file where one leads under `fs`.
+//! name bound to two different paths in one file where one is something a
+//! read goes through (the `fs` module, a read function, `File`, `OpenOptions`).
 //! Not seen: a read through a helper of another name (those helpers are rows
 //! themselves where they read) and reads inside macro token streams.
 //!
@@ -181,8 +182,9 @@ fn resolved_fs(path: &[String], bound: &BTreeMap<String, Vec<String>>) -> Option
 
 /// Every read row, by `file\tfn\tcallee` and its count. Panics, failing the
 /// pin outright, on a `use` the walk cannot resolve: an `fs` glob, or a name
-/// bound to two different paths in one file where one of them is under
-/// `fs` (the later binding would hide reads through the earlier one).
+/// bound to two different paths in one file where one of them is something
+/// a read goes through (the later binding would hide reads through the
+/// earlier one).
 fn found_in(root: &Path, roots: &[&str]) -> Vec<String> {
     let mut found = Found::default();
     walk(root, roots, &mut found).expect("the crate walks");
@@ -206,7 +208,20 @@ fn found_in(root: &Path, roots: &[&str]) -> Vec<String> {
     for (file, local, seen, full) in rebound {
         let names = &written[file];
         let (first, later) = (resolved_fs(&seen, names), resolved_fs(full, names));
-        if first != later && (first.is_some() || later.is_some()) {
+        // Only a binding a read can go through hides one: the `fs` module,
+        // a read function, `File` or `OpenOptions` (a cfg split binding
+        // `rename` to `fs::rename` on one platform hides nothing).
+        let hides_a_read = |target: &Option<Vec<String>>| {
+            target.as_deref().is_some_and(|t| match t {
+                [fs] => fs == "fs",
+                [_, name] => matches!(
+                    name.as_str(),
+                    "read" | "read_to_string" | "copy" | "File" | "OpenOptions"
+                ),
+                _ => false,
+            })
+        };
+        if first != later && (hides_a_read(&first) || hides_a_read(&later)) {
             unresolved.push(format!(
                 "{file}: `{local}` is bound to both {} and {}",
                 seen.join("::"),
