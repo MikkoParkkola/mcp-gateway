@@ -2,11 +2,16 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! K5 completeness: every `ApiKeyConfig` field has a row showing that a reload
 //! changing it applies on the next call, or a stated reason it has none. A new
-//! field fails to compile in `FIELDS`'s destructure until it is named, a field
-//! named there but left out of the table fails the struct comparison, and a
-//! row deleted or renamed fails the row lookup.
+//! field fails to compile in `fields`'s destructure until it is named, and a
+//! field named there but left out of the table fails the struct comparison.
+//! A row counts only while it runs and is about its field: a top-level test
+//! with no `#[ignore]` or `#[cfg]` of its own, in a file `router/mod.rs`
+//! declares, whose doc comment names the field in backticks. So a row
+//! deleted, renamed, ignored, unregistered or mapped to the wrong field
+//! fails. (The row modules are `cfg(test)`, some also `webui`: the pin checks
+//! the declaration, not the features a run enables.)
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::config::ApiKeyConfig;
 
@@ -31,6 +36,9 @@ const ROW_FILES: [(&str, &str); 3] = [
 ];
 
 const STRUCT_FILE: &str = include_str!("../../../../src/config/features/api_key.rs");
+
+/// The module file declaring the row files.
+const ROUTER_MOD: &str = include_str!("../../../../src/gateway/router/mod.rs");
 
 /// What pins one field's reload.
 enum Pin {
@@ -158,27 +166,76 @@ fn declared_fields(source: &str) -> BTreeSet<String> {
         .collect()
 }
 
-/// The top-level test functions of one file.
-fn tests_in(source: &str) -> BTreeSet<String> {
+fn named(attr: &syn::Attribute, name: &str) -> bool {
+    attr.path().segments.last().is_some_and(|s| s.ident == name)
+}
+
+/// The top-level test functions of one file that run (no `#[ignore]` or
+/// `#[cfg]` of their own), each with its doc comment.
+fn tests_in(source: &str) -> BTreeMap<String, String> {
     let file = syn::parse_file(source).expect("a row file parses");
     file.items
         .iter()
         .filter_map(|item| match item {
             syn::Item::Fn(f)
-                if f.attrs
-                    .iter()
-                    .any(|a| a.path().segments.last().is_some_and(|s| s.ident == "test")) =>
+                if f.attrs.iter().any(|a| named(a, "test"))
+                    && !f
+                        .attrs
+                        .iter()
+                        .any(|a| named(a, "ignore") || named(a, "cfg")) =>
             {
-                Some(f.sig.ident.to_string())
+                let doc: Vec<String> = f
+                    .attrs
+                    .iter()
+                    .filter(|a| named(a, "doc"))
+                    .filter_map(|a| match &a.meta {
+                        syn::Meta::NameValue(syn::MetaNameValue {
+                            value:
+                                syn::Expr::Lit(syn::ExprLit {
+                                    lit: syn::Lit::Str(s),
+                                    ..
+                                }),
+                            ..
+                        }) => Some(s.value()),
+                        _ => None,
+                    })
+                    .collect();
+                Some((f.sig.ident.to_string(), doc.join(" ")))
             }
             _ => None,
         })
         .collect()
 }
 
-/// Each `Row` pin whose test is not in its file, and each exemption that
-/// states no reason.
-fn missing_rows(files: &[(&str, &str)], fields: &[(&'static str, Pin)]) -> Vec<String> {
+/// The `mod name;` declarations of a module file.
+fn declared_modules(source: &str) -> BTreeSet<String> {
+    let file = syn::parse_file(source).expect("router/mod.rs parses");
+    file.items
+        .iter()
+        .filter_map(|item| match item {
+            syn::Item::Mod(m) if m.content.is_none() => Some(m.ident.to_string()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The module name of a row file under `src/gateway/router/`.
+fn module_of(file: &str) -> &str {
+    file.rsplit('/')
+        .next()
+        .and_then(|name| name.strip_suffix(".rs"))
+        .expect("a row file path")
+}
+
+/// Each `Row` pin whose test does not count (missing, not run, in an
+/// undeclared file, or not naming its field), and each exemption that states
+/// no reason.
+fn missing_rows(
+    files: &[(&str, &str)],
+    modules: &str,
+    fields: &[(&'static str, Pin)],
+) -> Vec<String> {
+    let declared = declared_modules(modules);
     fields
         .iter()
         .filter_map(|(field, pin)| match pin {
@@ -187,8 +244,15 @@ fn missing_rows(files: &[(&str, &str)], fields: &[(&'static str, Pin)]) -> Vec<S
                     .iter()
                     .find(|(name, _)| name == file)
                     .unwrap_or_else(|| panic!("{file} is not a row file"));
-                (!tests_in(text).contains(*row))
-                    .then(|| format!("{field}: {file} has no test `{row}`"))
+                let tests = tests_in(text);
+                if !declared.contains(module_of(file)) {
+                    Some(format!("{field}: router/mod.rs does not declare {file}"))
+                } else if let Some(doc) = tests.get(*row) {
+                    (!doc.contains(&format!("`{field}`")))
+                        .then(|| format!("{field}: `{row}`'s doc does not name `{field}`"))
+                } else {
+                    Some(format!("{field}: {file} has no running test `{row}`"))
+                }
             }
             Pin::Exempt(why) => why
                 .trim()
@@ -208,7 +272,7 @@ fn every_key_field_maps_to_a_reload_row_or_an_exemption() {
         declared_fields(STRUCT_FILE),
         "the table and ApiKeyConfig's fields differ"
     );
-    let missing = missing_rows(&ROW_FILES, &fields);
+    let missing = missing_rows(&ROW_FILES, ROUTER_MOD, &fields);
     assert!(
         missing.is_empty(),
         "a key field's reload row is gone:\n{}",
@@ -216,17 +280,42 @@ fn every_key_field_maps_to_a_reload_row_or_an_exemption() {
     );
 }
 
-/// The pin's own proof: a deleted row and an untested function are caught,
-/// and a struct field is read by name.
+/// The pin's own proof: a row deleted, untested, ignored, cfg-gated,
+/// unregistered or about another field is caught, and so is an exemption with
+/// no reason; a struct field is read by name.
 #[test]
 fn a_deleted_row_is_caught() {
     let fields = vec![("admin", Pin::Row(AUTHZ, "k5_row"))];
-    let present = "#[tokio::test]\nasync fn k5_row() {}\n";
-    assert!(missing_rows(&[(AUTHZ, present)], &fields).is_empty());
-    let untested = "async fn k5_row() {}\n";
-    assert_eq!(missing_rows(&[(AUTHZ, untested)], &fields).len(), 1);
-    assert_eq!(missing_rows(&[(AUTHZ, "")], &fields).len(), 1);
-    assert_eq!(missing_rows(&[], &[("key", Pin::Exempt(" "))]).len(), 1);
+    let module = "#[cfg(test)]\nmod live_key_authz_tests;\n";
+    let row = |attrs: &str, doc: &str| format!("/// {doc}\n{attrs}\nasync fn k5_row() {{}}\n");
+    let caught = |text: &str, modules: &str| missing_rows(&[(AUTHZ, text)], modules, &fields).len();
+    assert_eq!(caught(&row("#[tokio::test]", "K5 `admin`"), module), 0);
+    assert_eq!(caught("", module), 1, "deleted");
+    assert_eq!(caught(&row("", "K5 `admin`"), module), 1, "not a test");
+    assert_eq!(
+        caught(&row("#[tokio::test]\n#[ignore]", "K5 `admin`"), module),
+        1,
+        "ignored"
+    );
+    assert_eq!(
+        caught(&row("#[tokio::test]\n#[cfg(any())]", "K5 `admin`"), module),
+        1,
+        "cfg-gated"
+    );
+    assert_eq!(
+        caught(&row("#[tokio::test]", "K5 `admin`"), "mod other;\n"),
+        1,
+        "unregistered"
+    );
+    assert_eq!(
+        caught(&row("#[tokio::test]", "K5 `backends`"), module),
+        1,
+        "another field"
+    );
+    assert_eq!(
+        missing_rows(&[], module, &[("key", Pin::Exempt(" "))]).len(),
+        1
+    );
     assert_eq!(
         declared_fields("pub struct ApiKeyConfig { pub a: u8, b: u8 }"),
         BTreeSet::from(["a".to_owned(), "b".to_owned()])
