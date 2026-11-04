@@ -163,3 +163,18 @@ fn a_generation_reading_refusal_before_the_hook_is_still_a_read() {
         "a refusal helper before the hook went unseen: {found:?}"
     );
 }
+
+/// A call to a function whose body reads the generation is a read, however
+/// the function is named: here the withheld verdict, which authorizes against
+/// the request's generation.
+#[test]
+fn a_call_to_a_function_reading_the_generation_is_a_read() {
+    let source = "fn route() {\n    let _ = direct_preflight::withheld_verdict(state, auth);\n    \
+                  crate::security::firewall::relay_witness_hook::run();\n    \
+                  let _ = generation;\n}\n";
+    let found = check_sites("row", source);
+    assert!(
+        found.as_ref().is_err_and(|e| e.contains("withheld_verdict")),
+        "a call into a generation read before the hook went unseen: {found:?}"
+    );
+}
