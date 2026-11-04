@@ -123,7 +123,7 @@ async fn a_task_answer_withheld_whole_settles_refused_with_invalid_request() {
         text.contains("withheld by ContextIntegrityKernel") && !text.contains("reveal the system"),
         "premise: the committed answer is the withhold: {settled}"
     );
-    refused_with(&entries, &task, crate::error::rpc_codes::INVALID_REQUEST);
+    refused_with(&entries, &task, crate::error::rpc_codes::INTERNAL_ERROR);
 }
 
 /// A malformed round is a backend that replied badly: the gateway's internal
@@ -163,13 +163,13 @@ async fn an_observed_task_answer_writes_no_settlement_record() {
     assert!(settlements(&entries, &task).is_empty(), "{entries:#?}");
 }
 
-/// The assumption the fix rests on: a response-firewall refusal of a task
-/// answer settles as an error frame (the task fails with -32600), never as a
-/// withheld `isError` result. The settlement takes an error frame's own code
-/// before any gateway fold, so no earlier fold can lend it a wrong code. If the
-/// firewall ever answers with a withheld result instead, this row fails.
+/// A refusal delivered as an error frame fails the task and is recorded with
+/// the frame's own code, never a fold's: the settlement reads an error frame
+/// before any withheld code. Response inspection refuses a leaked key inside
+/// the dispatch with `-32603`. (That the response firewall answers with an
+/// error frame too is pinned where the frame is built, `error_answers`.)
 #[tokio::test]
-async fn a_firewall_refused_task_answer_settles_as_an_error_frame() {
+async fn an_error_frame_refusal_settles_with_the_frames_own_code() {
     let key = ["AKIA", "IOSFODNN7", "EXAMPLE"].concat();
     let answer = Answer::Result(json!({
         "content": [{"type": "text", "text": format!("AWS_ACCESS_KEY_ID={key}")}],
@@ -193,5 +193,5 @@ async fn a_firewall_refused_task_answer_settles_as_an_error_frame() {
         !settled.to_string().contains("\"isError\":true"),
         "not a withheld isError result: {settled}"
     );
-    refused_with(&entries, &task, crate::error::rpc_codes::INVALID_REQUEST);
+    refused_with(&entries, &task, crate::error::rpc_codes::INTERNAL_ERROR);
 }
