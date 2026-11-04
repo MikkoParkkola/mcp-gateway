@@ -89,7 +89,7 @@ impl StopDeadline {
     }
 
     /// Track a graceful handover, so [`Self::wait_handed`] covers it.
-    fn track(&self, handed: watch::Receiver<Reaped>) {
+    pub(super) fn track(&self, handed: watch::Receiver<Reaped>) {
         let mut all = self.handed.lock();
         all.retain(|receiver| *receiver.borrow() == Reaped::Pending);
         all.push(handed);
@@ -235,6 +235,11 @@ fn start_once(
 /// Needs no runtime and never blocks.
 pub(super) fn hand_over(tree: ChildTree) -> watch::Receiver<Reaped> {
     let (done, receiver) = watch::channel(Reaped::Pending);
+    // A graceful handover joins its gateway stop deadline before its first
+    // step, so no stop's snapshot can miss a tree already in its waits.
+    if let Some(deadline) = tree.graceful_deadline() {
+        deadline.track(receiver.clone());
+    }
     let mut job = Job { tree, done };
     // The first step runs here, on the caller's thread, not on the reaper's:
     // for an `Ending::Now` tree it sends the ownership-checked group signal
@@ -406,21 +411,10 @@ impl super::StdioTransport {
             if let Some(tree) = slot.tree.as_mut() {
                 tree.set_ending(ending, self.stop_deadline.get().cloned());
             }
-            let handed = slot.take_for_reaper();
-            self.track_graceful(ending, handed.as_ref());
+            let _ = slot.take_for_reaper();
         }
         self.shutdown.lock().cancel();
         self.pending.clear();
-    }
-
-    /// A graceful handover joins the gateway's stop deadline's list, so the
-    /// gateway stop waits for its kill (an immediate one needs no wait).
-    fn track_graceful(&self, ending: Ending, handed: Option<&watch::Receiver<Reaped>>) {
-        if let (Ending::Graceful { .. }, Some(handed), Some(deadline)) =
-            (ending, handed, self.stop_deadline.get())
-        {
-            deadline.track(handed.clone());
-        }
     }
 
     /// Join the gateway stop deadline of the backend that owns this
@@ -472,7 +466,6 @@ impl super::StdioTransport {
                 tree.set_ending(ending, self.stop_deadline.get().cloned());
             }
             let mine = slot.take_for_reaper();
-            self.track_graceful(ending, mine.as_ref());
             (mine, slot.outstanding())
         };
         let deadline = tokio::time::Instant::now()

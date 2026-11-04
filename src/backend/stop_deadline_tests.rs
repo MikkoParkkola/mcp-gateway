@@ -45,7 +45,7 @@ impl KillGroupOnDrop {
     /// this process's child, unreaped (a reaped pid may name someone else's
     /// group by now).
     fn may_signal(&self) -> bool {
-        true
+        kernel_view(self.0).is_some()
     }
 }
 

@@ -285,6 +285,19 @@ async fn a_tree_in_its_waits_is_killed_by_a_later_gateway_stop_deadline() {
     gone(child).await;
 }
 
+/// SIGKILLs a row's backend group when the row ends, while its leader is still
+/// this process's unreaped child, so a red run leaks no backend built to
+/// ignore signals.
+struct KillGroupOnDrop(Pid);
+
+impl Drop for KillGroupOnDrop {
+    fn drop(&mut self) {
+        if kernel_view(self.0).is_some() {
+            let _ = rustix::process::kill_process_group(self.0, rustix::process::Signal::KILL);
+        }
+    }
+}
+
 /// A backend that ignores EOF, records each SIGTERM in `term.mark`, and runs
 /// on: only the kill ends it.
 const MARKS_TERM: &str = "trap 'echo termed > term.mark' TERM\nwhile :; do sleep 0.05; done";
@@ -313,6 +326,7 @@ async fn cut_close(t: &Arc<StdioTransport>, cut_in: Duration) -> Pid {
 async fn a_cut_stop_still_sends_sigterm_before_the_kill() {
     let (w, t) = started(MARKS_TERM, None).await;
     let pid = cut_close(&t, Duration::from_secs(3)).await;
+    let _reap = KillGroupOnDrop(pid);
     assert_killed(pid).await;
     assert_eq!(
         std::fs::read_to_string(w.path().join("term.mark"))
@@ -329,6 +343,7 @@ async fn a_cut_stop_still_sends_sigterm_before_the_kill() {
 async fn a_cut_under_the_minimum_phase_skips_sigterm() {
     let (w, t) = started(MARKS_TERM, None).await;
     let pid = cut_close(&t, Duration::from_millis(50)).await;
+    let _reap = KillGroupOnDrop(pid);
     assert_killed(pid).await;
     assert!(
         !w.path().join("term.mark").exists(),
@@ -339,7 +354,10 @@ async fn a_cut_under_the_minimum_phase_skips_sigterm() {
 /// Hand `t`'s tree straight to the reaper with a graceful ending under
 /// `deadline`, as a close does; returns how many handovers the deadline then
 /// tracks.
-fn hand_over_gracefully(t: &StdioTransport, deadline: &Arc<super::super::reaper::StopDeadline>) -> usize {
+fn hand_over_gracefully(
+    t: &StdioTransport,
+    deadline: &Arc<super::super::reaper::StopDeadline>,
+) -> usize {
     let mut slot = t.child.lock();
     let mut tree = slot.tree.take().expect("a started tree");
     let ending = Ending::Graceful {
@@ -358,6 +376,7 @@ fn hand_over_gracefully(t: &StdioTransport, deadline: &Arc<super::super::reaper:
 async fn a_graceful_handover_joins_its_stop_deadline_in_the_handover() {
     let (_w, t) = started(&resists_term(), None).await;
     let pid = leader(&t).await;
+    let _reap = KillGroupOnDrop(pid);
     let deadline = Arc::new(super::super::reaper::StopDeadline::default());
     assert_eq!(hand_over_gracefully(&t, &deadline), 1, "the handover is tracked");
     deadline.move_earlier(std::time::Instant::now());
@@ -370,6 +389,7 @@ async fn a_graceful_handover_joins_its_stop_deadline_in_the_handover() {
 async fn a_handover_ended_on_its_first_step_is_tracked_too() {
     let (_w, t) = started(&resists_term(), None).await;
     let pid = leader(&t).await;
+    let _reap = KillGroupOnDrop(pid);
     let deadline = Arc::new(super::super::reaper::StopDeadline::default());
     deadline.move_earlier(std::time::Instant::now());
     assert_eq!(hand_over_gracefully(&t, &deadline), 1, "the handover is tracked");

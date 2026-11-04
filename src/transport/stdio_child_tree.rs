@@ -273,6 +273,15 @@ impl ChildTree {
         self.stop_deadline = stop_deadline;
     }
 
+    /// The gateway stop deadline this tree's graceful ending runs under, if
+    /// it has both.
+    pub(super) fn graceful_deadline(&self) -> Option<std::sync::Arc<super::reaper::StopDeadline>> {
+        match self.ending {
+            Ending::Graceful { .. } => self.stop_deadline.clone(),
+            Ending::Now => None,
+        }
+    }
+
     /// SIGTERM to the group, under the same ownership check as every other
     /// group signal (Unix). `false` when ownership could not be shown this
     /// step, so the caller tries again; an exited leader needs no SIGTERM.
