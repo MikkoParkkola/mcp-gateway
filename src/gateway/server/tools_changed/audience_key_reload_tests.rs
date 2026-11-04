@@ -81,6 +81,11 @@ async fn stream1_a_removed_key_ends_its_held_streams() {
     let _ = listen.frames(&w).await;
 
     reload_k_std(&w, |_| false);
+    assert_eq!(
+        status_as(&w, "k-std").await,
+        axum::http::StatusCode::UNAUTHORIZED,
+        "premise: a request as the removed key is refused"
+    );
     push(&w, "alpha").await;
     assert!(
         !get.is_open(&w).await,
@@ -375,4 +380,51 @@ async fn listen_relays_no_ordinary_backend_notification() {
         "listen relayed an unadvertised notification: {heard:?}"
     );
     let _ = listen.frames(&w).await;
+}
+
+/// The status a `tools/list` request as `bearer` gets, outside any session.
+async fn status_as(w: &World, bearer: &str) -> axum::http::StatusCode {
+    use tower::ServiceExt as _;
+    let request = axum::http::Request::builder()
+        .method("POST")
+        .uri("/mcp")
+        .header("authorization", format!("Bearer {bearer}"))
+        .header("content-type", "application/json")
+        .body(axum::body::Body::from(
+            serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}).to_string(),
+        ))
+        .expect("a request");
+    w.router
+        .clone()
+        .oneshot(request)
+        .await
+        .expect("served")
+        .status()
+}
+
+/// Through the real file reload: a key the reload removes is refused on its
+/// next request, and the GET stream it holds ends instead of writing on.
+#[tokio::test]
+async fn file_reload_a_removed_key_ends_its_get_stream() {
+    let w = World::start().await;
+    w.store_shared("alpha", vec![tool("read", "r")]);
+    w.settle().await;
+    let mut get = w.sse("k-std").await;
+    push(&w, "alpha").await;
+    assert!(
+        get.frames(&w).await.iter().any(|m| m == GET_NOTE),
+        "premise: GET delivered"
+    );
+
+    file_reload_k_std(&w, |_| false).await;
+    assert_eq!(
+        status_as(&w, "k-std").await,
+        axum::http::StatusCode::UNAUTHORIZED,
+        "premise: a request as the removed key is refused"
+    );
+    push(&w, "alpha").await;
+    assert!(
+        !get.is_open(&w).await,
+        "the GET stream still serves a key the file reload removed"
+    );
 }
