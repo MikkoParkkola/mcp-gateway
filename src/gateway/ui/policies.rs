@@ -181,10 +181,3 @@ fn witnesses(entries: &[&str]) -> (Vec<String>, Vec<String>) {
     tools.dedup();
     (servers, tools)
 }
-
-/// The scan types the screen offers, in `ScanType` order: every type a
-/// rule's `scan` may list.
-#[cfg(test)]
-pub(super) fn offered_types() -> Vec<String> {
-    super::policies_rules::offered_names()
-}

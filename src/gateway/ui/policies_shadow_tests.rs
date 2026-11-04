@@ -73,7 +73,7 @@ fn r3d_shadowing_is_per_type() {
 }
 
 /// The offered types, in `ScanType` order: every type but the two the
-/// folder check alone produces.
+/// folder check alone produces (R3e pins the set).
 const OFFERED: [&str; 11] = [
     "credentials",
     "pii",
@@ -87,12 +87,6 @@ const OFFERED: [&str; 11] = [
     "budget_exceeded",
     "collusion_relay",
 ];
-
-/// R2g: the offered set is every `ScanType` but the output-only ones.
-#[test]
-fn r2g_the_offered_types() {
-    assert_eq!(super::policies::offered_types(), OFFERED);
-}
 
 /// R3e: an empty `scan` decides every offered type: behind an empty-scan
 /// `*` rule, an empty-scan rule is shadowed for every offered type, and a

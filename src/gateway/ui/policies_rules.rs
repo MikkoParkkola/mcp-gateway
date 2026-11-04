@@ -53,12 +53,6 @@ pub(super) fn offered() -> Vec<ScanType> {
         .collect()
 }
 
-/// The offered types' config spellings.
-#[cfg(test)]
-pub(super) fn offered_names() -> Vec<String> {
-    offered().into_iter().map(name).collect()
-}
-
 /// A scan type's config spelling.
 fn name(t: ScanType) -> String {
     serde_json::to_value(t)
