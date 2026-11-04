@@ -84,6 +84,9 @@ async fn task_recovery_requests_never_run_where_a_login_may_begin() {
     let handle = UpstreamHandle {
         backend: "peer".to_string(),
         handle: "t1".to_string(),
+        tool: String::new(),
+        arguments: serde_json::Value::Null,
+        fingerprint: Some("none".to_owned()),
     };
 
     // An ordinary caller's scope, where a login may begin.
@@ -153,6 +156,9 @@ async fn a_cancel_waits_for_an_oauth_backend_start_in_flight() {
     let handle = UpstreamHandle {
         backend: "peer".to_string(),
         handle: "t1".to_string(),
+        tool: String::new(),
+        arguments: serde_json::Value::Null,
+        fingerprint: Some("none".to_owned()),
     };
     let entry = backend.shared_entry_for_test();
     let start_in_flight = entry.start_lock.lock().await;

@@ -288,6 +288,14 @@ impl DrainOutcome {
 pub(crate) struct UpstreamHandle {
     pub backend: String,
     pub handle: String,
+    /// The original call's tool and arguments: what a query re-derives the
+    /// sent forms of the dispatch's secrets from, to renew their redaction.
+    pub tool: String,
+    pub arguments: serde_json::Value,
+    /// The stored fingerprint of what the dispatch injected
+    /// (`security::dispatched`); `None` for a row from before it existed,
+    /// which is withheld.
+    pub fingerprint: Option<String>,
 }
 
 /// What one bounded read-only query learned.
