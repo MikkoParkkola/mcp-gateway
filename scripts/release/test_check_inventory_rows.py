@@ -284,6 +284,22 @@ class MainReportsEveryDiagnostic(unittest.TestCase):
         self.assertIn("unsure as a whole: src/oauth/mod.rs", out)
         self.assertIn(f"inventory: {rows.UNENFORCING}:2: the reason must not be empty", out)
 
+    def test_a_second_run_in_one_process_reports_only_its_own_files(self) -> None:
+        # The first run parses a broken file; the second, on another change,
+        # must not still count it.
+        self.repo.write("src/oauth/mod.rs", "pub fn existing() {}\npub mod broken;\n")
+        self.repo.write("src/oauth/broken.rs", "const X: u8 = ;\n")
+        self.repo.commit("add")
+        _, first = self.repo.main()
+        self.assertIn("unsure as a whole: src/oauth/broken.rs", first)
+        clean = Repo()
+        self.addCleanup(clean.dir.cleanup)
+        clean.write("src/oauth/mod.rs", "pub fn existing() {}\n// a note\n")
+        clean.commit("add")
+        code, second = clean.main()
+        self.assertEqual(code, 0, second)
+        self.assertIn("cfg items: 1 files parsed, 0 with parse errors", second)
+
 
 class StaleRows(unittest.TestCase):
     """A row the change adds must name a function its head has: a row left

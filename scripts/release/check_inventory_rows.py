@@ -110,7 +110,8 @@ def bodyless(lines: list[str], line: int) -> bool:
     return False
 
 
-# Which files the finder parsed with errors, for the line the gate prints.
+# Which files the finder parsed with errors, for the line the gate prints;
+# cleared at the start of each `main` run.
 PARSE_REPORT: dict[str, tuple[bool, bool]] = {}
 
 
@@ -329,6 +330,8 @@ def main(argv: list[str]) -> int:
         print(__doc__, file=sys.stderr)
         return 2
     head = argv[2] if len(argv) == 3 else "HEAD"
+    # One run's files: a second run in the same process reports only its own.
+    PARSE_REPORT.clear()
     try:
         resolved = git("rev-parse", head).strip()
         broken = ledger.overlap(list(ledger_rows(ROOT, resolved, INVENTORY)), list(ledger_rows(ROOT, resolved, UNENFORCING)))
