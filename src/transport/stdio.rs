@@ -486,7 +486,7 @@ impl Transport for StdioTransport {
     }
 
     async fn close(&self) -> Result<()> {
-        self.shut().await;
+        self.shut(reaper::StopKind::Graceful).await;
         Ok(())
     }
 }
@@ -495,6 +495,7 @@ impl Transport for StdioTransport {
 mod child_tree;
 #[path = "stdio_reaper.rs"]
 mod reaper;
+pub(crate) use reaper::{stop_deadline, within_stop_deadline};
 #[path = "stdio_tree.rs"]
 mod tree;
 // Only the unix frame tests build a tree by hand (MIK-8360).

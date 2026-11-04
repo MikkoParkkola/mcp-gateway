@@ -212,24 +212,20 @@ impl Backend {
     /// the writer mutex, which a request blocked writing to a child that has
     /// stopped reading can hold indefinitely, and HTTP closes its sessions one
     /// after another. Without a bound here one wedged backend hangs gateway
-    /// shutdown forever - and stopping backends concurrently does not help,
-    /// because joining them waits for the slowest.
+    /// shutdown forever. The closes run together, so every pooled child gets
+    /// its EOF at once and their exit waits overlap rather than add up. The
+    /// stage ends at the caller's stop deadline when there is one (a gateway
+    /// shutdown), else after `budget`; each close plans its waits to fit.
     pub(super) async fn close_pooled_transports(
         &self,
         transports: Vec<Arc<dyn Transport>>,
         budget: Duration,
     ) {
-        let until = tokio::time::Instant::now() + budget;
-        for transport in transports {
-            let remaining = until.saturating_duration_since(tokio::time::Instant::now());
-            if remaining.is_zero() {
-                warn!(
-                    backend = %self.name,
-                    "Ran out of time closing pooled transports; abandoning the rest"
-                );
-                return;
-            }
-            match tokio::time::timeout(remaining, transport.close()).await {
+        let until = crate::transport::stop_deadline()
+            .unwrap_or_else(|| tokio::time::Instant::now() + budget);
+        let closes = transports.into_iter().map(|transport| async move {
+            let close = crate::transport::within_stop_deadline(until, transport.close());
+            match tokio::time::timeout_at(until, close).await {
                 Ok(Err(error)) => {
                     warn!(backend = %self.name, %error, "Failed to close pooled transport");
                 }
@@ -241,7 +237,8 @@ impl Backend {
                 }
                 Ok(Ok(())) => {}
             }
-        }
+        });
+        futures::future::join_all(closes).await;
     }
 
     /// Wait for starts that were already under way when shutdown began.

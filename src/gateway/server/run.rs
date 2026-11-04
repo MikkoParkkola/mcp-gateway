@@ -685,11 +685,14 @@ impl Gateway {
         // Stop all backends, after their warmers can no longer start one.
         info!("Shutting down backends...");
         warmer.cancel().await;
+        // One deadline for the whole stage: each stdio backend gets its EOF,
+        // then SIGTERM, then the kill, planned to end by then.
+        let stop_deadline = tokio::time::Instant::now() + self.config.server.shutdown_timeout;
         #[allow(
             clippy::disallowed_methods,
             reason = "Lifecycle: gateway startup, wiring or shutdown; no caller request"
         )]
-        self.backends.stop_all().await;
+        crate::transport::within_stop_deadline(stop_deadline, self.backends.stop_all()).await;
 
         Ok(())
     }

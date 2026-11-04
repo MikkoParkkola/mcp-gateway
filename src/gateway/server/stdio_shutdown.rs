@@ -180,10 +180,15 @@ impl Gateway {
         {
             warn!(error = %e, "Personal account custody shutdown failed");
         }
+        // The backends' waits are planned to end by the teardown deadline (or
+        // shutdown_timeout from now, if sooner), so their kill lands before
+        // this process returns.
+        let stop_deadline = deadline.min(Instant::now() + self.config.server.shutdown_timeout);
         #[allow(
             clippy::disallowed_methods,
             reason = "Lifecycle: gateway startup, wiring or shutdown; no caller request"
         )]
-        bounded_step(deadline, "backend stop", self.backends.stop_all()).await;
+        let stop = crate::transport::within_stop_deadline(stop_deadline, self.backends.stop_all());
+        bounded_step(deadline, "backend stop", stop).await;
     }
 }

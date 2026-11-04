@@ -29,6 +29,12 @@ pub(super) struct ChildTree {
     status: Option<ExitStatus>,
     /// When the reaper first stepped this tree, and how far it got (MIK-7923).
     reaping: Option<(std::time::Instant, ReapPhase)>,
+    /// How the reaper ends this tree; consumed by its first step.
+    ending: Ending,
+    /// The exit wait before the kill, once a graceful ending has started.
+    grace: Option<Grace>,
+    #[cfg(all(test, unix))]
+    pub(super) term_signals_sent: usize,
     #[cfg(test)]
     pub(super) group_signals_sent: usize,
     #[cfg(all(test, unix))]
@@ -50,6 +56,40 @@ pub(super) struct ChildTree {
     /// (MIK-8360).
     #[cfg(test)]
     pub(super) hold_for_test: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+}
+
+/// How a tree handed to the reaper is ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Ending {
+    /// The kill at once: a dead or unresponsive backend, a dropped transport.
+    Now,
+    /// The MCP stdio order first (spec 2025-06-18, Lifecycle > Shutdown >
+    /// stdio): stdin is already closed; wait up to `eof` for the leader to
+    /// exit, then SIGTERM the group (Unix) and wait up to `term`, then the
+    /// kill. A leader that exits in either wait goes straight to the kill,
+    /// which sweeps what is left of its group.
+    Graceful {
+        eof: std::time::Duration,
+        term: std::time::Duration,
+    },
+}
+
+impl Ending {
+    /// The longest the waits before the kill can take.
+    pub(super) fn waits(self) -> std::time::Duration {
+        match self {
+            Self::Now => std::time::Duration::ZERO,
+            Self::Graceful { eof, term } => eof + term,
+        }
+    }
+}
+
+/// The waits of a graceful ending, as instants from its first step.
+#[derive(Debug, Clone, Copy)]
+struct Grace {
+    term_at: std::time::Instant,
+    kill_at: std::time::Instant,
+    term_sent: bool,
 }
 
 /// What the kernel says about the leader, without reaping it.
@@ -132,6 +172,10 @@ impl ChildTree {
             signals_closed: false,
             status: None,
             reaping: None,
+            ending: Ending::Now,
+            grace: None,
+            #[cfg(all(test, unix))]
+            term_signals_sent: 0,
             #[cfg(test)]
             group_signals_sent: 0,
             #[cfg(all(test, unix))]
@@ -214,6 +258,72 @@ impl ChildTree {
         self.send_group_signal();
     }
 
+    /// Choose how the reaper ends this tree; set before the handover.
+    pub(super) fn set_ending(&mut self, ending: Ending) {
+        self.ending = ending;
+    }
+
+    /// SIGTERM to the group, under the same ownership check as every other
+    /// group signal (Unix). `false` when ownership could not be shown this
+    /// step, so the caller tries again; an exited leader needs no SIGTERM.
+    #[cfg(unix)]
+    fn send_group_term(&mut self) -> bool {
+        if self.signals_closed {
+            return true;
+        }
+        match (self.leader_state(), self.pid) {
+            (Leader::Running, Some(pid)) => {
+                let _ = rustix::process::kill_process_group(pid, rustix::process::Signal::TERM);
+                #[cfg(test)]
+                {
+                    self.term_signals_sent += 1;
+                }
+                true
+            }
+            (Leader::Zombie | Leader::Gone, _) => true,
+            (Leader::Running | Leader::Unproven, _) => false,
+        }
+    }
+
+    /// One step of a graceful ending's waits; `true` while it still waits.
+    /// Ends (and the kill follows) once the leader exits or `kill_at` passes.
+    fn in_grace(&mut self, now: std::time::Instant) -> bool {
+        let grace = match (self.grace.take(), self.ending) {
+            (Some(grace), _) => grace,
+            (None, Ending::Graceful { eof, term }) => Grace {
+                term_at: now + eof,
+                kill_at: now + eof + term,
+                term_sent: false,
+            },
+            (None, Ending::Now) => return false,
+        };
+        self.ending = Ending::Now;
+        if self.exited() {
+            return false;
+        }
+        if now >= grace.kill_at {
+            tracing::warn!(
+                pid = self.wrapper.id(),
+                "stdio backend did not exit within its stop budget; killing its group"
+            );
+            return false;
+        }
+        #[cfg_attr(not(unix), allow(unused_mut))]
+        let mut grace = grace;
+        #[cfg(unix)]
+        if now >= grace.term_at && !grace.term_sent {
+            grace.term_sent = self.send_group_term();
+            if grace.term_sent {
+                tracing::warn!(
+                    pid = self.wrapper.id(),
+                    "stdio backend did not exit after its stdin closed; sent SIGTERM"
+                );
+            }
+        }
+        self.grace = Some(grace);
+        true
+    }
+
     /// End the tree and reap the leader, one non-blocking step at a time, for
     /// the reaper thread
     /// (MIK-7923, design P3): it needs no runtime, never sleeps and never
@@ -231,6 +341,9 @@ impl ChildTree {
             .as_ref()
             .is_some_and(|held| held.load(std::sync::atomic::Ordering::SeqCst))
         {
+            return Reap::Pending;
+        }
+        if self.reaping.is_none() && self.in_grace(now) {
             return Reap::Pending;
         }
         let (started, phase) = if let Some(state) = self.reaping {

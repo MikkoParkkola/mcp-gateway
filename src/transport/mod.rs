@@ -34,6 +34,7 @@ pub(crate) use self::lender::count_refusal;
 #[cfg(test)]
 pub(crate) use self::stdio::assigned_package_cache_dir;
 pub(crate) use self::stdio::isolated_env_and_assigned_cache;
+pub(crate) use self::stdio::{stop_deadline, within_stop_deadline};
 pub use self::stdio::{
     CEILING_MAX_FRAME_BYTES, DEFAULT_MAX_FRAME_BYTES, MIN_MAX_FRAME_BYTES, StdioTransport,
     isolated_package_manager_env,
