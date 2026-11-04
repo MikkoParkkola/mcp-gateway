@@ -155,3 +155,30 @@ async fn a_stop_stuck_on_a_lifecycle_lock_ends_at_its_deadline() {
         started.elapsed()
     );
 }
+
+/// A graceful handover that comes after the gateway stop returned (an idle
+/// release racing the return) is killed on its first step: the stop leaves
+/// its deadline at the moment it ended.
+#[tokio::test]
+async fn a_handover_after_the_gateway_stop_returns_is_killed_at_once() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let registry = BackendRegistry::new();
+    let child = stays(dir.path(), "capability:late");
+    let _ = child.stop_deadline.set(registry.stop_deadline());
+    child.ensure_started().await.expect("the child starts");
+    let pid = leader_pid(dir.path());
+    let _reap = KillGroupOnDrop(pid);
+    // Nothing registered: the stop returns at once, its deadline far off.
+    registry
+        .stop_all_by(tokio::time::Instant::now() + Duration::from_secs(60))
+        .await;
+    child.hand_over_now(Duration::from_secs(120));
+    let by = std::time::Instant::now() + Duration::from_secs(5);
+    while kernel_view(pid) == Some(false) {
+        assert!(
+            std::time::Instant::now() < by,
+            "a handover after the stop returned was left in its waits"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}

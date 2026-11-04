@@ -285,6 +285,56 @@ async fn a_tree_in_its_waits_is_killed_by_a_later_gateway_stop_deadline() {
     gone(child).await;
 }
 
+/// A backend that ignores EOF, records each SIGTERM in `term.mark`, and runs
+/// on: only the kill ends it.
+const MARKS_TERM: &str = "trap 'echo termed > term.mark' TERM\nwhile :; do sleep 0.05; done";
+
+/// Close `t` under a long plan of its own, then cut it with a gateway stop
+/// deadline `cut_in` (plus the reap reserve) from now; returns the leader.
+async fn cut_close(t: &Arc<StdioTransport>, cut_in: Duration) -> Pid {
+    let pid = leader(t).await;
+    let deadline = Arc::new(super::super::reaper::StopDeadline::default());
+    t.attach_stop_deadline(Arc::clone(&deadline));
+    let own_plan_end = tokio::time::Instant::now() + Duration::from_secs(120);
+    let closing = Arc::clone(t);
+    tokio::spawn(async move {
+        super::super::reaper::within_stop_deadline(own_plan_end, closing.close()).await
+    });
+    poll_until("the tree is handed over", || t.child.lock().tree.is_none()).await;
+    deadline.move_earlier(std::time::Instant::now() + super::super::reaper::KILL_RESERVE + cut_in);
+    pid
+}
+
+/// A gateway stop that cuts a tree's waits short still sends SIGTERM before
+/// the kill when what is left leaves room for both: the rest is split as the
+/// plan was, its last third after SIGTERM.
+#[tokio::test]
+async fn a_cut_stop_still_sends_sigterm_before_the_kill() {
+    let (w, t) = started(MARKS_TERM, None).await;
+    let pid = cut_close(&t, Duration::from_secs(3)).await;
+    assert_killed(pid).await;
+    assert_eq!(
+        std::fs::read_to_string(w.path().join("term.mark"))
+            .ok()
+            .as_deref(),
+        Some("termed\n"),
+        "the cut stop killed the backend without a SIGTERM first"
+    );
+}
+
+/// A cut that leaves under the minimum phase skips SIGTERM: the kill comes
+/// at the cut, with nothing sent for a wait too short to use.
+#[tokio::test]
+async fn a_cut_under_the_minimum_phase_skips_sigterm() {
+    let (w, t) = started(MARKS_TERM, None).await;
+    let pid = cut_close(&t, Duration::from_millis(50)).await;
+    assert_killed(pid).await;
+    assert!(
+        !w.path().join("term.mark").exists(),
+        "a SIGTERM was sent with no time left to act on it"
+    );
+}
+
 /// A second gateway stop with an earlier deadline moves it earlier; a later
 /// one leaves it, so a second stop can shorten the waits, never extend them.
 #[test]
