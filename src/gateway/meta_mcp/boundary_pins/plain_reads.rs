@@ -74,6 +74,9 @@ fn read_callee(segments: &[String]) -> Option<String> {
         (Some("fs"), "read" | "read_to_string" | "copy") | (Some("File"), "open") => {
             Some(format!("{}::{last}", owner.unwrap_or_default()))
         }
+        // `OpenOptions::open(&options, path)` is `options.open(path)` written
+        // as a path call: the same site, counted with the method opens.
+        (Some("OpenOptions"), "open") => Some(".open".to_owned()),
         (_, "open_nonblocking") => Some("open_nonblocking".to_owned()),
         _ => None,
     }
