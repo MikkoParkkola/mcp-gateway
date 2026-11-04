@@ -141,11 +141,25 @@ pub fn recover_before_start(config: &Path) -> Result<(), String> {
 /// Take the config lock for a CLI write, waiting up to [`CLI_LOCK_WAIT`].
 /// The holder reads and writes the lock's target, never `path` again: a
 /// symlink at `path` re-pointed meanwhile would name another file.
+///
+/// A pending journal (a gateway write that failed and could not roll back)
+/// is refused, not recovered: the CLI holds no audit sink, so its recovery
+/// would go unrecorded. Starting or reloading the gateway recovers it.
 fn cli_lock(path: &Path) -> Result<lock::Locked, String> {
-    lock::lock_config_blocking(path, Instant::now() + CLI_LOCK_WAIT, |lock| {
-        say_waiting(path, lock);
-    })
-    .map_err(|e| not_locked(path, e))
+    let locked =
+        lock::lock_config_blocking_deferred(path, Instant::now() + CLI_LOCK_WAIT, |lock| {
+            say_waiting(path, lock);
+        })
+        .map_err(|e| not_locked(path, e))?;
+    if locked.journal_pending {
+        return Err(format!(
+            "Not saved: {} has a write the gateway left pending ({}); start or reload the \
+             gateway, which recovers it with an audit record, then run this command again.",
+            path.display(),
+            journal::journal_path(&locked.target).display()
+        ));
+    }
+    Ok(locked)
 }
 
 /// How long a synchronous writer (the CLI) waits for another writer's
