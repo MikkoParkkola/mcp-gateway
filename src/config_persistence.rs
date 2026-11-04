@@ -127,6 +127,7 @@ pub fn recover_before_start(config: &Path) -> Result<(), String> {
             "{} has a pending write and another writer holds its lock; start again when it finishes",
             config.display()
         )),
+        Err(lock::NotLocked::Refused(message)) => Err(message),
         Err(lock::NotLocked::Failed(message)) => Err(match lock::no_writer_possible(config) {
             Some(why) => format!(
                 "a pending write's journal {} sits beside {}, which this gateway cannot lock ({why}); resolve the pending write from the writable side",
@@ -221,7 +222,9 @@ fn not_locked(path: &Path, e: lock::NotLocked) -> String {
             "Not saved: {} is locked by another writer; retry.",
             path.display()
         ),
-        lock::NotLocked::Failed(message) => format!("Not saved: {message}"),
+        lock::NotLocked::Failed(message) | lock::NotLocked::Refused(message) => {
+            format!("Not saved: {message}")
+        }
     }
 }
 

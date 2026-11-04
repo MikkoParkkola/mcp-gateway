@@ -294,6 +294,13 @@ impl ReloadContext {
         })
         .await
         .map_err(|e| ReplaceError::Failed(format!("the recovery task failed: {e}")))?
-        .map_err(ReplaceError::Failed)
+        .map_err(|e| match e {
+            crate::config_persistence::journal::NotRecovered::Refused(why) => {
+                ReplaceError::ConfigRefused(why)
+            }
+            crate::config_persistence::journal::NotRecovered::Failed(why) => {
+                ReplaceError::Failed(why)
+            }
+        })
     }
 }

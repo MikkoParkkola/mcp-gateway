@@ -444,6 +444,7 @@ impl ReloadContext {
             match e {
                 NotLocked::Busy => ReplaceError::Busy,
                 NotLocked::Failed(message) => ReplaceError::Failed(message),
+                NotLocked::Refused(message) => ReplaceError::ConfigRefused(message),
             }
         })?;
         let target = locked.target.clone();
@@ -678,7 +679,7 @@ impl ReloadContext {
             Ok(_) => error,
             Err(rollback) => ReplaceError::RollbackFailed {
                 journal: journal::journal_path(target),
-                error: rollback,
+                error: rollback.into_message(),
             },
         }
     }

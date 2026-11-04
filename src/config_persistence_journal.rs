@@ -198,7 +198,7 @@ pub(crate) fn finish(target: &Path) -> std::io::Result<()> {
 /// A journal that cannot be acted on: unreadable, of an unknown version,
 /// naming another file, or `staged` with its original gone or not matching
 /// its digest. Nothing is changed, and the message says what to do by hand.
-pub(crate) fn recover(config: &Path) -> Result<Recovered, String> {
+pub(crate) fn recover(config: &Path) -> Result<Recovered, NotRecovered> {
     let target = resolved(config);
     let path = journal_path(&target);
     let original = original_path(&target);
@@ -218,23 +218,23 @@ pub(crate) fn recover(config: &Path) -> Result<Recovered, String> {
             let _ = remove_if_present(&original);
             return Ok(Recovered::Nothing);
         }
-        Err(UnreadConfig::Refused(why)) => return Err(guard_refused(&why)),
+        Err(UnreadConfig::Refused(why)) => return Err(NotRecovered::Refused(guard_refused(&why))),
         Err(UnreadConfig::Failed(e)) => {
-            return Err(format!(
+            return Err(NotRecovered::Failed(format!(
                 "{} cannot be read ({e}); {}",
                 path.display(),
                 manual()
-            ));
+            )));
         }
     };
     if journal.target != target {
-        return Err(format!(
+        return Err(NotRecovered::Failed(format!(
             "{} names {}, not {}; {}",
             path.display(),
             journal.target.display(),
             target.display(),
             manual()
-        ));
+        )));
     }
     let recovered = match journal.state {
         State::Staged => {
@@ -248,32 +248,36 @@ pub(crate) fn recover(config: &Path) -> Result<Recovered, String> {
             let bytes = match crate::config::read_config_text(&original) {
                 Ok(Some(text)) => text.into_bytes(),
                 Ok(None) => {
-                    return Err(format!(
+                    return Err(NotRecovered::Failed(format!(
                         "{} cannot be read (it is gone); {}",
                         original.display(),
                         manual()
-                    ));
+                    )));
                 }
-                Err(UnreadConfig::Refused(why)) => return Err(guard_refused(&why)),
+                Err(UnreadConfig::Refused(why)) => {
+                    return Err(NotRecovered::Refused(guard_refused(&why)));
+                }
                 Err(UnreadConfig::Failed(e)) => {
-                    return Err(format!(
+                    return Err(NotRecovered::Failed(format!(
                         "{} cannot be read ({e}); {}",
                         original.display(),
                         manual()
-                    ));
+                    )));
                 }
             };
             if crate::hashing::sha256_hex(&bytes) != journal.original_revision {
-                return Err(format!(
+                return Err(NotRecovered::Failed(format!(
                     "{} does not match the digest its journal {} records, so it was not restored; compare it with {} by hand before restoring anything, then delete the journal",
                     original.display(),
                     path.display(),
                     target.display()
-                ));
+                )));
             }
             write_atomic(&target, &bytes, FileMode::Private, Symlink::Replace)
                 .and_then(|()| sync_dir_of(&target))
-                .map_err(|e| format!("restoring {} failed: {e}", target.display()))?;
+                .map_err(|e| {
+                    NotRecovered::Failed(format!("restoring {} failed: {e}", target.display()))
+                })?;
             Recovered::RolledBack
         }
         State::AllRenamed => Recovered::KeptNew,
@@ -285,11 +289,11 @@ pub(crate) fn recover(config: &Path) -> Result<Recovered, String> {
             // retries, and restoring the same original again is harmless.
             // The file did change, so a running gateway still owes a reload.
             note_restored(&target);
-            return Err(format!(
+            return Err(NotRecovered::Failed(format!(
                 "{} was restored, but its journal {} could not be removed ({e}); no config write proceeds until it is: delete the journal",
                 target.display(),
                 path.display()
-            ));
+            )));
         }
         // An `all_renamed` journal left behind only keeps the current file.
         tracing::warn!(error = %e, journal = %path.display(), "cleaning up a recovered replace journal failed; the next config write retries");
@@ -338,6 +342,25 @@ fn read(path: &Path) -> Result<Option<Journal>, UnreadConfig> {
         )));
     }
     Ok(Some(journal))
+}
+
+/// Why [`recover`] did not run a pending recovery.
+#[derive(Debug)]
+pub(crate) enum NotRecovered {
+    /// The config guard refused the journal or the staged original. The text
+    /// names no path; the guard's own text went to the log.
+    Refused(String),
+    /// Anything else; the message says what to do by hand.
+    Failed(String),
+}
+
+impl NotRecovered {
+    /// The message, whichever kind it is.
+    pub(crate) fn into_message(self) -> String {
+        match self {
+            Self::Refused(message) | Self::Failed(message) => message,
+        }
+    }
 }
 
 /// A replace journal or its staged original the config guard refused. The
