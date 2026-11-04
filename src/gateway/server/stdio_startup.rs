@@ -120,3 +120,7 @@ fn key_error(error: &str) -> crate::Error {
 #[cfg(test)]
 #[path = "stdio_startup_tests.rs"]
 mod stdio_startup_tests;
+
+#[cfg(test)]
+#[path = "stdio_startup_pin_tests.rs"]
+mod stdio_startup_pin_tests;
