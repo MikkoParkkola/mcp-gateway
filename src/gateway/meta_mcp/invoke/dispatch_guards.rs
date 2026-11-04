@@ -169,7 +169,7 @@ impl MetaMcp {
             .map_err(super::audit::noted)
     }
 
-    /// [`Self::admit_target`], with the refusing check's pair.
+    /// [`Self::admit_target`], with the refusing check's pair and no note.
     pub(crate) fn admit_target_explained(
         &self,
         call: &BackendCall<'_>,
@@ -190,7 +190,7 @@ impl MetaMcp {
             .map_err(super::audit::noted)
     }
 
-    /// [`Self::admit_named_target`], with the refusing check's pair.
+    /// [`Self::admit_named_target`], with the refusing check's pair and no note.
     pub(in crate::gateway::meta_mcp) fn admit_named_target_explained(
         &self,
         call: &BackendCall<'_>,
@@ -261,7 +261,7 @@ impl MetaMcp {
             .map_err(super::audit::noted)
     }
 
-    /// [`Self::admit_backend_wide`], with the refusing check's pair.
+    /// [`Self::admit_backend_wide`], with the refusing check's pair and no note.
     fn admit_backend_wide_explained(
         &self,
         server: &str,
@@ -294,7 +294,7 @@ impl MetaMcp {
             .map_err(super::audit::noted)
     }
 
-    /// [`Self::admit_enabled_capability`], with the refusing check's pair.
+    /// [`Self::admit_enabled_capability`], with the refusing check's pair and no note.
     fn admit_enabled_capability_explained(
         &self,
         server: &str,

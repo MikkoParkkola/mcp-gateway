@@ -46,8 +46,9 @@ async fn read_after(fx: &Logged, key: &str, change: impl FnOnce(&Logged)) -> Val
     let id = super::submit_task(fx, key, json!({})).await;
     let first = super::settled_task(fx, &id).await;
     assert!(
-        first.get("error").is_none(),
-        "premise: the first read is delivered: {first}"
+        first.get("error").is_none()
+            && first.pointer("/result/status").and_then(Value::as_str) == Some("completed"),
+        "premise: the task completed and its first read is delivered: {first}"
     );
     let _ = super::invocations(fx).await;
     assert!(refused_reads(fx).is_empty(), "premise: nothing refused yet");
