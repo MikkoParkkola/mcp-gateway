@@ -71,7 +71,7 @@ const ADMIN_READERS: &[(&str, &str, usize, &str)] = &[
     (
         ".admin",
         "src/gateway/auth_resolved.rs",
-        5,
+        4,
         "key config into the client, the load warning, session liveness through authz::admin_standing",
     ),
     (".admin", "src/gateway/authz.rs", 1, "BackendGrant::for_ui"),
