@@ -301,7 +301,7 @@ fn a_keys_scoped_rule_applies_to_its_key_only_rescan() {
     let fw = firewall(&json!([{"match": "*", "scan": ["shell_injection"],
                               "action": "allow", "keys": ["k1"]}]));
     let rescan = |key| {
-        fw.rescan(
+        fw.rescan_attributed(
             fw.startup_policy(),
             RuleTarget {
                 server: ServerOf::Backend("a"),
@@ -312,6 +312,7 @@ fn a_keys_scoped_rule_applies_to_its_key_only_rescan() {
             super::ScanSubject::Arguments,
             None,
         )
+        .0
         .action
     };
     assert_eq!(rescan(KeyOf::Key("k1")), FirewallAction::Allow);

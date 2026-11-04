@@ -42,6 +42,10 @@ pub(crate) enum DecisionKind {
     Unrecorded,
     /// The target matches nothing: no backend or tool by that name.
     NotFound,
+    /// A stored task result is not served under the bindings that produced
+    /// it: no recorded targets, no recorded bindings, or a binding that has
+    /// changed since.
+    Provenance,
 }
 
 /// What the tool's own annotations say the call could change. A claim by the
@@ -146,13 +150,39 @@ impl Refused {
 /// One pointer wide, boxed only once a gate notes something: it rides in the
 /// task-local call and route scopes, which move it in and out on every poll,
 /// and a call that is simply allowed notes nothing.
+/// A refusing check and the configured rule that made it, when one did.
+pub(crate) type Refusal = (DecisionKind, Option<crate::security::rule_id::RuleId>);
+
+/// A check's outcome with the refusing check's pair: its plain
+/// form notes the pair; a stored read records it.
+pub(crate) type Explained = std::result::Result<(), (crate::Error, Refusal)>;
+
+/// The refusal a refused stored-task delivery's record names:
+/// the check that refused it and, when a configured rule decided, that
+/// rule's id. Never delivered to the caller.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(crate) struct RefusedBy {
+    pub kind: DecisionKind,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rule_id: Option<String>,
+}
+
+impl From<Refusal> for RefusedBy {
+    fn from((kind, rule_id): Refusal) -> Self {
+        Self {
+            kind,
+            rule_id: rule_id.map(|id| id.as_str().to_owned()),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct Noted(Option<Box<NotedChecks>>);
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct NotedChecks {
-    refusal: Option<(DecisionKind, Option<String>)>,
-    allow: Option<(DecisionKind, Option<String>)>,
+    refusal: Option<Refusal>,
+    allow: Option<(DecisionKind, Option<crate::security::rule_id::RuleId>)>,
     effect: Option<(Effect, EffectSource)>,
 }
 
@@ -164,7 +194,7 @@ impl Noted {
         noted
     }
 
-    fn refusal(&self) -> Option<&(DecisionKind, Option<String>)> {
+    fn refusal(&self) -> Option<&Refusal> {
         self.0.as_ref()?.refusal.as_ref()
     }
 
@@ -177,24 +207,32 @@ impl Noted {
         self.refusal().is_some()
     }
 
-    /// The check that refused, if one did.
-    pub(crate) fn refusal_kind(&self) -> Option<DecisionKind> {
-        self.refusal().map(|(kind, _)| *kind)
+    /// The check that refused and its rule, if one did.
+    pub(crate) fn refusal_pair(&self) -> Option<Refusal> {
+        self.refusal().cloned()
     }
 
     /// The check a request's memo kept for this target: it names the refusal
     /// the record's outcome code came from, so it wins over any later note.
-    pub(crate) fn refused_by_memo(&mut self, kind: DecisionKind) {
-        self.checks().refusal = Some((kind, None));
+    pub(crate) fn refused_by_memo(&mut self, (kind, rule_id): Refusal) {
+        self.checks().refusal = Some((kind, rule_id));
     }
 
     /// The gate that refused; only the first one counts.
-    pub(crate) fn refused(&mut self, kind: DecisionKind, rule_id: Option<String>) {
+    pub(crate) fn refused(
+        &mut self,
+        kind: DecisionKind,
+        rule_id: Option<crate::security::rule_id::RuleId>,
+    ) {
         self.checks().refusal.get_or_insert((kind, rule_id));
     }
 
     /// An explicit allow; only the earliest in check order counts.
-    pub(crate) fn allowed(&mut self, kind: DecisionKind, rule_id: Option<String>) {
+    pub(crate) fn allowed(
+        &mut self,
+        kind: DecisionKind,
+        rule_id: Option<crate::security::rule_id::RuleId>,
+    ) {
         self.checks().allow.get_or_insert((kind, rule_id));
     }
 
@@ -262,7 +300,7 @@ impl Noted {
                 .map(|a| a.pending_restart.iter().map(|f| (*f).to_owned()).collect())
                 .unwrap_or_default(),
             kind,
-            rule_id,
+            rule_id: rule_id.map(|id| id.as_str().to_owned()),
             grant_id: None,
             request_findings: None,
             request_findings_truncated: false,

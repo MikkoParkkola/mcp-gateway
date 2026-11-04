@@ -115,6 +115,7 @@ fn the_raise_set_is_every_effect_writer() {
             "outlet",
             "raise",
             "refused",
+            "refused_by",
             "refused_while_vouched",
             "withheld"
         ]),

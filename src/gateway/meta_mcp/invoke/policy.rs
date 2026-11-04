@@ -23,39 +23,39 @@ impl MetaMcp {
         session_id: Option<&str>,
         caller: &crate::gateway::meta_mcp::MetaMcpCallerContext<'_>,
     ) -> Result<()> {
+        self.check_invocation_policy_explained(args, session_id, caller)
+            .map_err(audit::noted)
+    }
+
+    /// [`Self::check_invocation_policy`], with the refusing check's pair and
+    /// no note: a stored read records the pair of the check that
+    /// refused it, never a note another check left.
+    pub(crate) fn check_invocation_policy_explained(
+        &self,
+        args: &Value,
+        session_id: Option<&str>,
+        caller: &crate::gateway::meta_mcp::MetaMcpCallerContext<'_>,
+    ) -> crate::security::decision_record::Explained {
+        use crate::security::decision_record::DecisionKind;
         // A missing target is the request's shape.
-        let required = |key| {
-            extract_required_str(args, key).inspect_err(|_| {
-                super::audit::note_refused_by(
-                    crate::security::decision_record::DecisionKind::Syntax,
-                    None,
-                );
-            })
-        };
+        let required =
+            |key| extract_required_str(args, key).map_err(|e| (e, (DecisionKind::Syntax, None)));
         let server = required("server")?;
         let tool = required("tool")?;
-        self.authorize_invocation(args, caller)?;
-        crate::gateway::meta_mcp::visible::memo::refuse_withheld(server, tool)?;
+        self.authorize_target_explained(args, (server, tool), caller)?;
+        crate::gateway::meta_mcp::visible::absent::refuse_withheld_explained(server, tool)?;
         if let Err(reason) = validate_tool_name(tool) {
-            super::audit::note_refused_by(
-                crate::security::decision_record::DecisionKind::Syntax,
-                None,
-            );
-            return Err(Error::Protocol(format!(
-                "Invalid tool name '{tool}': {reason}"
-            )));
+            return Err((
+                Error::Protocol(format!("Invalid tool name '{tool}': {reason}")),
+                (DecisionKind::Syntax, None),
+            ));
         }
         self.check_attestation(
             args,
             caller.agent_id.map(crate::security::ProvenAgentId::as_str),
             "gateway_invoke",
         )
-        .inspect_err(|_| {
-            super::audit::note_refused_by(
-                crate::security::decision_record::DecisionKind::Attestation,
-                None,
-            );
-        })?;
+        .map_err(|e| (e, (DecisionKind::Attestation, None)))?;
         // S1 (kill switch, capability disable, session profile) is shared with
         // the per-backend route; every admission path reaches it through here.
         // MIK-8439/8475: on a per-user backend or an account-bearing
@@ -74,31 +74,38 @@ impl MetaMcp {
         };
         let view = self.scoped(caller.scope().authorizer.backend_grant());
         if self.defers_error_rate_cooldown(&view, server, tool) {
-            self.admit_named_target(&call)
+            self.admit_named_target_explained(&call)
         } else {
-            self.admit_target(&call)
+            self.admit_target_explained(&call)
         }
-        .map_err(|refusal| self.withheld_as_undefined((server, tool), session_id, refusal))?;
+        .map_err(|(refusal, pair)| {
+            (
+                self.withheld_as_undefined((server, tool), session_id, refusal),
+                pair,
+            )
+        })?;
         // #2445: a withheld tool is refused here, ahead of every replay layer.
         let backend = self
             .scoped(caller.scope().authorizer.backend_grant())
             .scoped_get(server);
         match backend.and_then(|b| b.blocked_tool_refusal(None, tool).map(|r| (b, r))) {
-            Some((backend, refusal)) => {
-                super::audit::note_refused_by(backend.blocked_tool_kind(tool), None);
-                Err(Error::Protocol(refusal))
-            }
+            Some((backend, refusal)) => Err((
+                Error::Protocol(refusal),
+                (backend.blocked_tool_kind(tool), None),
+            )),
             None => Ok(()),
         }
     }
 
-    pub(in crate::gateway::meta_mcp) fn authorize_invocation(
+    /// The authorization chokepoint for `server`'s `tool`, read from `args`:
+    /// the authorizer, the admin-capability rule and the identity grants,
+    /// with the refusing check's pair.
+    pub(in crate::gateway::meta_mcp) fn authorize_target_explained(
         &self,
         args: &Value,
+        (server, tool): (&str, &str),
         caller: &crate::gateway::meta_mcp::MetaMcpCallerContext<'_>,
-    ) -> Result<()> {
-        let server = extract_required_str(args, "server")?;
-        let tool = extract_required_str(args, "tool")?;
+    ) -> crate::security::decision_record::Explained {
         // === THE AUTHORIZATION CHOKEPOINT (MIK-7252) ===
         //
         // Every meta-layer dispatch passes through here: a surfaced tool, a
@@ -130,32 +137,36 @@ impl MetaMcp {
         let refusal = authorizer
             .authorize(target)
             .map_err(|e| {
-                super::audit::note_refused_by(e.kind, None);
-                Error::Forbidden {
+                let pair = (e.kind, e.rule_id.clone());
+                let error = Error::Forbidden {
                     code: e.code,
                     status: e.status.as_u16(),
                     message: e.message,
-                }
+                };
+                (error, pair)
             })
             .and_then(|()| {
                 self.admin_capability_rule(server, tool, caller.is_admin)
-                    .inspect_err(|_| {
-                        super::audit::note_refused_by(
-                            crate::security::decision_record::DecisionKind::AdminCapability,
-                            None,
-                        );
+                    .map_err(|e| {
+                        (
+                            e,
+                            (
+                                crate::security::decision_record::DecisionKind::AdminCapability,
+                                None,
+                            ),
+                        )
                     })
             });
-        if let Err(e) = refusal {
+        if let Err((e, pair)) = refusal {
             let (transport, name) = (authorizer.transport(), authorizer.caller_name());
             crate::gateway::authz::audit_refusal(transport, name, server, tool, &e.to_string());
-            return Err(e);
+            return Err((e, pair));
         }
         // Identity grants are the same decision as the authorizer above, taken
         // here with every other refusal because the response cache and the
         // idempotency short-circuit both return below this point: a gate under
         // a cache read decides nothing on a hit.
-        self.identity_grant_rule(server, tool, caller.scope(), Emit::Audit)
+        self.identity_grant_rule_explained(server, tool, caller.scope(), Emit::Audit)
     }
 
     /// Validate the per-action attestation token presented at `boundary`
@@ -389,14 +400,20 @@ impl MetaMcp {
                     server,
                     tool,
                     -32003,
-                    Some(crate::security::decision_record::DecisionKind::BackendScope),
+                    Some((
+                        crate::security::decision_record::DecisionKind::BackendScope,
+                        None,
+                    )),
                 );
             }
             let missing = Err(Error::BackendNotFound(server.to_owned()));
             // Out of scope, the memo's code names its check; otherwise the
             // name matches nothing.
             let mut notes = audit::DispatchNotes::default();
-            notes.refused_by_memo(crate::security::decision_record::DecisionKind::NotFound);
+            notes.refused_by_memo((
+                crate::security::decision_record::DecisionKind::NotFound,
+                None,
+            ));
             self.audit_invocation(&args, session_id, caller, &recorded_trace, missing, notes)
                 .await
         });
@@ -671,3 +688,7 @@ fn note_response_gate() {
         None,
     );
 }
+
+#[cfg(test)]
+#[path = "ci_rewrite_gate_tests.rs"]
+mod ci_rewrite_gate_tests;
