@@ -97,20 +97,10 @@ impl MetaMcp {
         }
     }
 
-    pub(in crate::gateway::meta_mcp) fn authorize_invocation(
-        &self,
-        args: &Value,
-        caller: &crate::gateway::meta_mcp::MetaMcpCallerContext<'_>,
-    ) -> Result<()> {
-        let server = extract_required_str(args, "server")?;
-        let tool = extract_required_str(args, "tool")?;
-        self.authorize_target_explained(args, (server, tool), caller)
-            .map_err(audit::noted)
-    }
-
-    /// [`Self::authorize_invocation`] for a target already read from `args`,
+    /// The authorization chokepoint for `server`'s `tool`, read from `args`:
+    /// the authorizer, the admin-capability rule and the identity grants,
     /// with the refusing check's pair (MIK-9191).
-    fn authorize_target_explained(
+    pub(in crate::gateway::meta_mcp) fn authorize_target_explained(
         &self,
         args: &Value,
         (server, tool): (&str, &str),
