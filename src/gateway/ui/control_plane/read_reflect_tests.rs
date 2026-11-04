@@ -2,10 +2,9 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 use super::merge_store_into_snapshot;
 use crate::control_plane::{
-    AuditFilter, AuditPage, ControlPlaneAction, ControlPlaneActor, ControlPlaneAuditEvent,
-    ControlPlaneGrant, ControlPlaneGrantStatus, ControlPlanePolicy, ControlPlaneRole,
-    ControlPlaneRollbackPlan, ControlPlaneSnapshot, ControlPlaneStore, InMemoryControlPlaneStore,
-    StoreError, StoreResult,
+    AuditFilter, ControlPlaneAction, ControlPlaneActor, ControlPlaneAuditEvent, ControlPlaneGrant,
+    ControlPlaneGrantStatus, ControlPlanePolicy, ControlPlaneRole, ControlPlaneRollbackPlan,
+    ControlPlaneSnapshot, ControlPlaneStore, InMemoryControlPlaneStore,
 };
 
 fn auditor() -> ControlPlaneActor {
@@ -14,41 +13,6 @@ fn auditor() -> ControlPlaneActor {
         display_name: "auditor".to_string(),
         role: ControlPlaneRole::Auditor,
         group_ids: vec![],
-    }
-}
-
-/// A store whose every read fails — used to prove the degraded flag.
-struct FailingStore;
-impl ControlPlaneStore for FailingStore {
-    fn list_grants(&self) -> StoreResult<Vec<ControlPlaneGrant>> {
-        Err(StoreError::Corrupt("boom".to_string()))
-    }
-    fn get_grant(&self, _id: &str) -> StoreResult<Option<ControlPlaneGrant>> {
-        Err(StoreError::Corrupt("boom".to_string()))
-    }
-    fn put_grant(&self, _grant: ControlPlaneGrant) -> StoreResult<()> {
-        Err(StoreError::Corrupt("boom".to_string()))
-    }
-    fn delete_grant(&self, _id: &str) -> StoreResult<()> {
-        Err(StoreError::Corrupt("boom".to_string()))
-    }
-    fn list_policies(&self) -> StoreResult<Vec<ControlPlanePolicy>> {
-        Err(StoreError::Corrupt("boom".to_string()))
-    }
-    fn get_policy(&self, _id: &str) -> StoreResult<Option<ControlPlanePolicy>> {
-        Err(StoreError::Corrupt("boom".to_string()))
-    }
-    fn put_policy(&self, _policy: ControlPlanePolicy) -> StoreResult<()> {
-        Err(StoreError::Corrupt("boom".to_string()))
-    }
-    fn delete_policy(&self, _id: &str) -> StoreResult<()> {
-        Err(StoreError::Corrupt("boom".to_string()))
-    }
-    fn append_audit(&self, _event: &ControlPlaneAuditEvent) -> StoreResult<()> {
-        Err(StoreError::Corrupt("boom".to_string()))
-    }
-    fn read_audit(&self, _filter: &AuditFilter) -> StoreResult<AuditPage> {
-        Err(StoreError::Corrupt("boom".to_string()))
     }
 }
 
@@ -177,7 +141,7 @@ fn read_only_view_omits_store_only_grants_and_policies() {
 #[test]
 fn store_read_failure_marks_degraded() {
     let mut snapshot = ControlPlaneSnapshot::default();
-    let degraded = merge_store_into_snapshot(&FailingStore, &mut snapshot);
+    let degraded = merge_store_into_snapshot(&crate::control_plane::FailingStore, &mut snapshot);
     assert!(degraded, "a failing store read must report degraded");
 }
 
