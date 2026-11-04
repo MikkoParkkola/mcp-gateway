@@ -176,7 +176,8 @@ fn tests_in(source: &str) -> BTreeSet<String> {
         .collect()
 }
 
-/// Each `Row` pin whose test is not in its file.
+/// Each `Row` pin whose test is not in its file, and each exemption that
+/// states no reason.
 fn missing_rows(files: &[(&str, &str)], fields: &[(&'static str, Pin)]) -> Vec<String> {
     fields
         .iter()
@@ -189,7 +190,10 @@ fn missing_rows(files: &[(&str, &str)], fields: &[(&'static str, Pin)]) -> Vec<S
                 (!tests_in(text).contains(*row))
                     .then(|| format!("{field}: {file} has no test `{row}`"))
             }
-            Pin::Exempt(_) => None,
+            Pin::Exempt(why) => why
+                .trim()
+                .is_empty()
+                .then(|| format!("{field}: exempt with no reason")),
         })
         .collect()
 }
@@ -222,6 +226,7 @@ fn a_deleted_row_is_caught() {
     let untested = "async fn k5_row() {}\n";
     assert_eq!(missing_rows(&[(AUTHZ, untested)], &fields).len(), 1);
     assert_eq!(missing_rows(&[(AUTHZ, "")], &fields).len(), 1);
+    assert_eq!(missing_rows(&[], &[("key", Pin::Exempt(" "))]).len(), 1);
     assert_eq!(
         declared_fields("pub struct ApiKeyConfig { pub a: u8, b: u8 }"),
         BTreeSet::from(["a".to_owned(), "b".to_owned()])
