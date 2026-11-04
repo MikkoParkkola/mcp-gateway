@@ -49,6 +49,21 @@ async fn settled_with(
     answer: Answer,
     arm: impl FnOnce(MetaMcp) -> MetaMcp + Send + 'static,
 ) -> (String, Value, Vec<Value>) {
+    Box::pin(settled_on(
+        (MockBackend::answering(answer), 1),
+        json!({}),
+        arm,
+    ))
+    .await
+}
+
+/// [`settled_with`] against `mock`, the task calling the tool with `arguments`
+/// and the backend called `sends` times.
+async fn settled_on(
+    (mock, sends): (Arc<MockBackend>, usize),
+    arguments: Value,
+    arm: impl FnOnce(MetaMcp) -> MetaMcp + Send + 'static,
+) -> (String, Value, Vec<Value>) {
     use crate::gateway::router::route_matrix_driver_tests::response::{delivery_rows, temp_log};
     let (_dir, log) = temp_log(None);
     let logged = Arc::clone(&log);
@@ -62,15 +77,14 @@ async fn settled_with(
         },
     )
     .await;
-    let mock = MockBackend::answering(answer);
     register(&state, BACKEND, &mock);
-    let created = post(&state, "key-a", task_invoke(2, "ci-refusal", json!({}))).await;
+    let created = post(&state, "key-a", task_invoke(2, "ci-refusal", arguments)).await;
     let task = task_id(&created);
     let settled = poll_until_terminal(&state, "key-a", &task).await;
     assert_eq!(
         mock.calls(),
-        1,
-        "premise: the worker reached the backend once"
+        sends,
+        "premise: the backend was called {sends} times"
     );
     let _ = delivery_rows(&log).await;
     let entries = std::fs::read_to_string(log.path())
@@ -238,4 +252,25 @@ async fn a_firewall_refused_task_answer_settles_as_an_error_frame() {
         "not a withheld result: {settled}"
     );
     refused_with(&entries, &task, crate::error::rpc_codes::INVALID_REQUEST);
+}
+
+/// R10-key: a task call carrying an argument key the tool's declared schema
+/// does not name is refused inside the worker's dispatch with the gate's own
+/// `-32602`, answered as a withheld result, and its settlement records that
+/// code, not the firewall's.
+#[tokio::test]
+async fn an_undeclared_key_refusal_of_a_task_settles_with_invalid_params() {
+    let declared = json!({
+        "type": "object",
+        "properties": {"q": {"type": "string"}},
+        "additionalProperties": false
+    });
+    let mock = MockBackend::answering_declaring(Answer::ok(), declared);
+    let (task, settled, entries) =
+        Box::pin(settled_on((mock, 0), json!({"zzextra": 1}), |meta| meta)).await;
+    assert!(
+        settled.to_string().contains("zzextra"),
+        "premise: the refusal names the undeclared key: {settled}"
+    );
+    refused_with(&entries, &task, crate::error::rpc_codes::INVALID_PARAMS);
 }
