@@ -317,7 +317,17 @@ async fn every_admin_meta_tool_refuses_a_backend_scoped_admin() {
             for task in [false, true] {
                 let mut params = json!({"name": tool, "arguments": {"server": "alpha"}});
                 if task {
+                    // A task call declares the tasks extension, as a modern
+                    // client does; without it the request is refused before
+                    // any admin check.
                     params["task"] = json!({});
+                    params["_meta"] = json!({
+                        "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+                        "io.modelcontextprotocol/clientCapabilities": {
+                            "extensions": { "io.modelcontextprotocol/tasks": {} }
+                        },
+                        "io.modelcontextprotocol/clientInfo": { "name": "scope", "version": "1.0.0" }
+                    });
                 }
                 let (status, body) = send(&gw.state, rpc(&bearer, "tools/call", &params)).await;
                 let refused = status == StatusCode::FORBIDDEN
