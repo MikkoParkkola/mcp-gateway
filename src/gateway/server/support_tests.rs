@@ -198,6 +198,9 @@ mod mtls_listener {
             write(&leaf(&root, "operator", &[], 1), "client");
             write(&leaf(&root, "auditor", &[], 1), "auditor");
             write(&leaf(&other, "stranger", &[], 1), "stranger");
+            // Its only name is a DNS SAN (the issuer always writes a CN, here
+            // empty): the TLS layer accepts it, and it names no one.
+            write(&leaf(&root, "", &["client.example"], 1), "dnsonly");
             Self { dir }
         }
 
@@ -315,6 +318,24 @@ mod mtls_listener {
             .expect("serve_tls returns after shutdown")
             .expect("task joins");
         assert!(ended.is_ok(), "{ended:?}");
+    }
+
+    /// A client certificate the TLS layer accepts but that names no one (a
+    /// DNS SAN only) gets the unauthenticated answer over a real handshake,
+    /// not a dropped connection, and never reaches the handler.
+    #[tokio::test]
+    async fn a_dns_only_client_certificate_is_answered_unauthenticated() {
+        let pki = Pki::new();
+        let s = serve(pki.config(true)).await;
+        let response = pki
+            .client(Some("dnsonly"))
+            .get(&s.url)
+            .send()
+            .await
+            .expect("the connection is answered, not dropped");
+        assert_eq!(response.status(), 401);
+        assert_eq!(s.hits.load(Ordering::SeqCst), 0, "the handler never ran");
+        s.handle.graceful_shutdown(Some(Duration::from_secs(5)));
     }
 
     /// G-TLS (MIK-8377): a real handshake hands the request the client
