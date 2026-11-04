@@ -42,6 +42,20 @@ impl Gateway {
     pub(super) fn dispatched(&self) -> usize {
         self.caller.calls() + self.shared.calls()
     }
+
+    /// Every record both of the gateway's audit logs hold so far.
+    pub(super) fn audit_records(&self) -> Vec<serde_json::Value> {
+        self._audit
+            .iter()
+            .flat_map(|log| {
+                std::fs::read_to_string(log.path())
+                    .unwrap_or_default()
+                    .lines()
+                    .filter_map(|line| serde_json::from_str(line).ok())
+                    .collect::<Vec<_>>()
+            })
+            .collect()
+    }
 }
 
 pub(super) async fn gateway(
