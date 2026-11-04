@@ -191,17 +191,6 @@ pub(crate) fn recover(config: &Path) -> Result<Recovered, String> {
     let target = resolved(config);
     let path = journal_path(&target);
     let original = original_path(&target);
-    // State-neutral: the journal may be unreadable (and so `all_renamed`),
-    // name another file, or sit beside a missing or wrong original, so the
-    // step never says to put the original back unconditionally.
-    let manual = || {
-        format!(
-            "nothing was changed; inspect the journal {journal} before touching {target}: if its state is staged, restore the staged original {original} over {target} only if its SHA-256 matches the journal's original_revision, then delete the journal; if its state is all_renamed, only delete the journal",
-            journal = path.display(),
-            target = target.display(),
-            original = original.display(),
-        )
-    };
     let journal = match read(&path) {
         Ok(journal) => journal,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
@@ -210,21 +199,25 @@ pub(crate) fn recover(config: &Path) -> Result<Recovered, String> {
             let _ = remove_if_present(&original);
             return Ok(Recovered::Nothing);
         }
+        // Its state is unknown, and it may be `all_renamed`: the step is
+        // conditional on what the operator finds in it.
         Err(e) => {
             return Err(format!(
-                "{} cannot be read ({e}); {}",
-                path.display(),
-                manual()
+                "{journal} cannot be read ({e}); nothing was changed. Its state is unknown, so leave {target} as it is until you have inspected the journal. If it names {target} and its state is staged, restore the staged original {original} over {target} only if its SHA-256 matches the journal's original_revision, then delete the journal; if its state is all_renamed, only delete the journal; if it names another file, restore nothing over {target}",
+                journal = path.display(),
+                target = target.display(),
+                original = original.display(),
             ));
         }
     };
+    // Another file's journal says nothing about this one: no restore over it,
+    // and the journal stays until that file is resolved.
     if journal.target != target {
         return Err(format!(
-            "{} names {}, not {}; {}",
-            path.display(),
-            journal.target.display(),
-            target.display(),
-            manual()
+            "{journal} names {other}, not {target}; nothing was changed. Resolve that journal for {other} first: restore nothing over {target}, and do not delete the journal",
+            journal = path.display(),
+            other = journal.target.display(),
+            target = target.display(),
         ));
     }
     let recovered = match journal.state {
@@ -233,8 +226,14 @@ pub(crate) fn recover(config: &Path) -> Result<Recovered, String> {
             if let Some(fault::Fault::Pause(pause)) = fault::get(&target) {
                 pause.enter_and_wait();
             }
+            // No original to restore: the file is checked by hand.
             let bytes = std::fs::read(&original).map_err(|e| {
-                format!("{} cannot be read ({e}); {}", original.display(), manual())
+                format!(
+                    "{original} cannot be read ({e}); nothing was changed. Do not restore it: check {target} by hand against the change that was being made, then delete the journal {journal}",
+                    original = original.display(),
+                    target = target.display(),
+                    journal = path.display(),
+                )
             })?;
             if crate::hashing::sha256_hex(&bytes) != journal.original_revision {
                 return Err(format!(
