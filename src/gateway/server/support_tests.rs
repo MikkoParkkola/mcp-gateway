@@ -201,6 +201,9 @@ mod mtls_listener {
             // Its only name is a DNS SAN (the issuer always writes a CN, here
             // empty): the TLS layer accepts it, and it names no one.
             write(&leaf(&root, "", &["client.example"], 1), "dnsonly");
+            // A CN of only spaces: it named someone before 4.0.0 (the check
+            // did not trim) and names no one now.
+            write(&leaf(&root, "   ", &[], 1), "blank");
             Self { dir }
         }
 
@@ -322,13 +325,33 @@ mod mtls_listener {
 
     /// A client certificate the TLS layer accepts but that names no one (a
     /// DNS SAN only) gets the unauthenticated answer over a real handshake,
-    /// not a dropped connection, and never reaches the handler.
+    /// not a dropped connection, and never reaches the handler. This guards
+    /// behaviour the gateway already had; the blank-CN row below is the one
+    /// this change moves.
     #[tokio::test]
     async fn a_dns_only_client_certificate_is_answered_unauthenticated() {
         let pki = Pki::new();
         let s = serve(pki.config(true)).await;
         let response = pki
             .client(Some("dnsonly"))
+            .get(&s.url)
+            .send()
+            .await
+            .expect("the connection is answered, not dropped");
+        assert_eq!(response.status(), 401);
+        assert_eq!(s.hits.load(Ordering::SeqCst), 0, "the handler never ran");
+        s.handle.graceful_shutdown(Some(Duration::from_secs(5)));
+    }
+
+    /// A certificate whose CN is only spaces names no one: over a real
+    /// handshake it gets the unauthenticated answer, where it used to reach
+    /// the handler as the subject "   ".
+    #[tokio::test]
+    async fn a_blank_common_name_certificate_is_answered_unauthenticated() {
+        let pki = Pki::new();
+        let s = serve(pki.config(true)).await;
+        let response = pki
+            .client(Some("blank"))
             .get(&s.url)
             .send()
             .await
