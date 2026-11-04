@@ -284,6 +284,7 @@ src/gateway/server/tools_changed/audience_ear.rs	closed	-	test-only (the module 
 src/gateway/server/tools_changed/audience_ear.rs	drop	-	test-only (the module is cfg(test))
 src/gateway/server/tools_changed/audience_ear.rs	expect_event	-	test-only (the module is cfg(test))
 src/gateway/server/tools_changed/audience_ear.rs	frames	-	test-only (the module is cfg(test))
+src/gateway/server/tools_changed/audience_ear.rs	heard_until_closed	-	test-only (the module is cfg(test))
 src/gateway/server/tools_changed/audience_ear.rs	is_open	-	test-only (the module is cfg(test))
 src/gateway/server/tools_changed/audience_ear.rs	legacy_owned	-	test-only (the module is cfg(test))
 src/gateway/server/tools_changed/audience_ear.rs	legacy_with	-	test-only (the module is cfg(test))
