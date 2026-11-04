@@ -222,9 +222,13 @@ async fn an_idempotency_replay_of_a_rewritten_answer_records_no_rewrite() {
             first.get("result"),
             "{route:?}: the replay serves the stored answer"
         );
-        assert_ne!(
-            replay_row["response_effect"], "rewritten",
-            "{route:?}: {replay_row}"
-        );
+        // A replay is not this request's answer: its record states no effect
+        // and no findings, so neither `rewritten` nor `delivered`.
+        for field in ["response_effect", "response_findings"] {
+            assert!(
+                replay_row.get(field).is_none(),
+                "{route:?}: {field}: {replay_row}"
+            );
+        }
     }
 }

@@ -91,7 +91,8 @@ async fn a_malformed_result_under_enforcement_is_withheld_not_rewritten() {
         "premise: refused as malformed: {value}"
     );
     assert_eq!(gate, GateEffect::Withheld, "{value}");
-    assert_ne!(effect, Some("rewritten".into()), "{value}");
+    // The verdict member the gate attached is the cell's only effect.
+    assert_eq!(effect, Some("annotated".into()), "{value}");
 }
 
 /// A composite's step: the plan's record is unvouched before any step runs,
