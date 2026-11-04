@@ -168,6 +168,16 @@ async fn a1d_a_narrowed_backend_list_ends_the_stream_with_its_kinds_unchanged() 
     // A reload that narrows the scoped key: a whole new auth section, so the
     // generation builds a new key table, as a reload of the file does.
     state.live_config.edit(|c| c.auth = auth(&["a"]));
+    // The premise, so a setup that narrows nothing fails here, loudly, and not
+    // as a stream that never ends.
+    let published = state.live_config.get();
+    let key = published
+        .auth
+        .api_keys
+        .iter()
+        .find(|k| k.name == SCOPED_ADMIN)
+        .expect("the reload publishes the scoped key");
+    assert_eq!(key.backends, vec!["a".to_string()], "the key is narrowed");
     assert!(
         s.ended_within(REVOKED_WITHIN).await,
         "the narrowed access ended the stream"
