@@ -483,7 +483,11 @@ async fn a_config_others_can_write_is_refused_at_the_writers_read() {
     for path in paths_of(&route) {
         assert!(!body.to_string().contains(&path), "the answer names {path}");
     }
-    assert_eq!(route.bytes(), EMPTY.as_bytes(), "the refused file was written");
+    assert_eq!(
+        route.bytes(),
+        EMPTY.as_bytes(),
+        "the refused file was written"
+    );
     assert_eq!(route.entries(), 0, "a refused write left a store entry");
     let mode = std::fs::metadata(route.config())
         .expect("config stat")
