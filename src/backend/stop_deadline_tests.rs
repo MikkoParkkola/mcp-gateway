@@ -148,9 +148,7 @@ async fn a_stop_stuck_on_a_lifecycle_lock_ends_at_its_deadline() {
     // lifecycle budget (15 s) for it.
     let _held = backend.lifecycle.write().await;
     let started = tokio::time::Instant::now();
-    registry
-        .stop_all_by(started + Duration::from_secs(1))
-        .await;
+    registry.stop_all_by(started + Duration::from_secs(1)).await;
     assert!(
         started.elapsed() < Duration::from_secs(5),
         "the stop outran its deadline: {:?}",
