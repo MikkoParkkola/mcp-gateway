@@ -241,3 +241,112 @@ async fn a_gateway_with_no_governance_log_serves_activity_without_config() {
     call(&inv, "srv", 1);
     assert!(within(s.until("activity")).await.json().is_object());
 }
+
+/// The counter an activity frame's id carries for the invocation log.
+fn inv_counter(f: &Frame) -> u64 {
+    f.part('i')
+        .and_then(|p| p.split('-').next()?.parse().ok())
+        .expect("the id carries the invocation position")
+}
+
+#[tokio::test]
+async fn a1e_a_stream_whose_key_is_removed_ends_at_the_next_check() {
+    let (state, _dirs, _inv) = logged(true).await;
+    tokio::time::pause();
+    let mut s = open(&state, request(STREAM, Who::Bearer(SCOPED_ADMIN), None)).await;
+    within(s.until("hello")).await;
+    state.live_config.edit(|c| {
+        c.auth = AuthConfig {
+            api_keys: vec![standard_key()],
+            ..auth(&["a"])
+        };
+    });
+    let published = state.live_config.get();
+    assert!(
+        published
+            .auth
+            .api_keys
+            .iter()
+            .all(|k| k.name != SCOPED_ADMIN),
+        "the premise: the key is gone from the published config"
+    );
+    assert!(
+        s.ended_within(REVOKED_WITHIN).await,
+        "no caller ends the stream"
+    );
+}
+
+#[tokio::test]
+async fn r1_a_gone_cursor_resets_then_replays_the_log_from_its_oldest_record() {
+    let (state, _dirs, inv) = logged(true).await;
+    let mut s = open(&state, request(STREAM, Who::Bearer(BEARER), None)).await;
+    within(s.until("hello")).await;
+    for n in 1..=3 {
+        call(&inv, "srv", n);
+    }
+    let first = within(s.until("activity")).await;
+    let id = first.id.clone().unwrap();
+    drop(s);
+    // The same counter with a hash no record has: the cursor's row is gone.
+    let counter = inv_counter(&first);
+    let stale = id.replace(
+        &first.part('i').unwrap(),
+        &format!("{counter}-ffffffffffffffff"),
+    );
+    let mut again = open(&state, request(STREAM, Who::Bearer(BEARER), Some(&stale))).await;
+    within(again.until("hello")).await;
+    let reset = within(again.until("reset")).await;
+    assert_eq!(reset.json()["kind"], "activity");
+    let mut seen = Vec::new();
+    for _ in 0..3 {
+        seen.push(inv_counter(&within(again.until("activity")).await));
+    }
+    assert!(
+        seen.windows(2).all(|w| w[0] < w[1]) && seen.contains(&counter),
+        "the replay from the oldest record holds the gone cursor's call: {seen:?}"
+    );
+}
+
+#[tokio::test]
+async fn f7_the_activity_stream_never_carries_a_config_record_from_its_log() {
+    let (state, _dirs, inv) = logged(true).await;
+    let mut s = open(&state, request(STREAM, Who::Bearer(BEARER), None)).await;
+    within(s.until("hello")).await;
+    // A well-formed config record in the invocation log, then a call.
+    inv.append_event(
+        serde_json::json!({"kind": "config", "change": 1})
+            .as_object()
+            .cloned()
+            .unwrap(),
+        &crate::security::audit::AuditEnvelope::gateway(),
+    )
+    .unwrap();
+    call(&inv, "srv", 1);
+    let event = within(s.until("activity")).await;
+    assert!(
+        event.data.contains("tool_1"),
+        "the first activity frame is the call, not the config record: {}",
+        event.data
+    );
+}
+
+#[tokio::test]
+async fn s1d_a_burst_past_the_broadcast_capacity_arrives_exactly_once_in_order() {
+    let (state, _dirs, inv) = logged(true).await;
+    let mut s = open(&state, request(STREAM, Who::Bearer(BEARER), None)).await;
+    within(s.until("hello")).await;
+    // Nothing reads the stream while the burst is written: the appends must
+    // still complete, and the stream falls behind its broadcast.
+    let burst = 1_100;
+    for n in 0..burst {
+        call(&inv, "srv", n);
+    }
+    let mut seen = Vec::with_capacity(burst);
+    while seen.len() < burst {
+        seen.push(inv_counter(&within(s.until("activity")).await));
+    }
+    assert!(
+        seen.windows(2).all(|w| w[1] == w[0] + 1),
+        "every call once, in counter order, across the lag"
+    );
+}
