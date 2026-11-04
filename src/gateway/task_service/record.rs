@@ -601,6 +601,14 @@ impl CommittedTask {
             )
     }
 
+    /// Whether every read of this row is served the withheld answer in
+    /// place of its stored outcome (see [`Self::delivered_wire`]): nothing
+    /// of the stored result or error reaches the caller, so nothing of it
+    /// may be receipted as delivered.
+    pub(crate) fn withholds_outcome(&self) -> bool {
+        self.vouching == Vouching::Unvouched
+    }
+
     /// The stored task as a delivery serves it: every serve site
     /// (`tasks/get`, a repeat, a notification) sends this, never the
     /// task's bare `Task::wire` projection, and before any egress scan reads it.
@@ -637,7 +645,7 @@ impl CommittedTask {
                 strip_unnoted(request, |_| false);
             }
         }
-        if self.vouching == Vouching::Unvouched {
+        if self.withholds_outcome() {
             withhold_outcome(&mut wire);
         }
         wire
