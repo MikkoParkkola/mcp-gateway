@@ -450,12 +450,26 @@ fn h2_a_cut_after_a_rotation_whose_write_failed_raises_it() {
         assert!(i < 1_000, "no rotation happened");
     }
     log.on_rotation_window(Box::new(|_: &TransparencyLogger| {}));
-    let before = told.lock().unwrap().last().map_or(0, |t| t.2);
+    assert_eq!(
+        log.write_faults_fired(),
+        1,
+        "the armed fault, and nothing else, failed it"
+    );
+    assert!(
+        !super::super::segments::list_segments(&path)
+            .unwrap()
+            .is_empty(),
+        "a rotation happened"
+    );
+    assert!(
+        told.lock().unwrap().iter().all(|t| t.2 == 0),
+        "the rotation and its failed write raised nothing"
+    );
     cut_in_half(&path);
     append(&log, 1);
     assert_eq!(
         told.lock().unwrap().last().unwrap().2,
-        before + 1,
+        1,
         "the cut of the new segment raised the generation once"
     );
 }
