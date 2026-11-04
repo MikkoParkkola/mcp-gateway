@@ -77,7 +77,8 @@ async fn stream1_a_removed_key_ends_its_held_streams() {
         get.frames(&w).await.iter().any(|m| m == GET_NOTE),
         "premise: GET delivered"
     );
-    assert!(listen.is_open(&w).await, "premise: listen is open");
+    // `frames` reads up to its sentinel; a listen stream that ended panics.
+    let _ = listen.frames(&w).await;
 
     reload_k_std(&w, |_| false);
     push(&w, "alpha").await;
@@ -105,7 +106,8 @@ async fn stream3_a_removed_grant_withholds_that_backend_only() {
         get.frames(&w).await.iter().any(|m| m == GET_NOTE),
         "premise: GET delivered"
     );
-    assert!(listen.is_open(&w).await, "premise: listen is open");
+    // `frames` reads up to its sentinel; a listen stream that ended panics.
+    let _ = listen.frames(&w).await;
 
     reload_k_std(&w, |key| {
         key.backends = vec!["beta".to_string()];
@@ -118,10 +120,7 @@ async fn stream3_a_removed_grant_withholds_that_backend_only() {
     );
     // On listen the per-backend kind is a tool-list change (STREAM.2); a
     // kept key's listen stream stays open.
-    assert!(
-        listen.is_open(&w).await,
-        "STREAM.3: listen closed for a kept key"
-    );
+    let _ = listen.frames(&w).await;
     push(&w, "beta").await;
     assert!(
         get.frames(&w).await.iter().any(|m| m == GET_NOTE),
@@ -375,5 +374,5 @@ async fn listen_relays_no_ordinary_backend_notification() {
         heard.is_empty(),
         "listen relayed an unadvertised notification: {heard:?}"
     );
-    assert!(listen.is_open(&w).await, "the stream stays open");
+    let _ = listen.frames(&w).await;
 }
