@@ -214,9 +214,10 @@ fn a_staged_rewrite_is_not_an_outbox_record() {
 
 #[tokio::test]
 async fn a_test_source_plugs_in_without_core_changes() {
-    let dir = tempfile::tempdir().expect("dir");
+    let dir = Arc::new(tempfile::tempdir().expect("dir"));
     let config = crate::config::EventsConfig::default();
     let hub = EventsHub::open(&config, dir.path()).expect("hub");
+    hub.keep_test_dir(Arc::clone(&dir));
     let probe = Arc::new(Probe::default());
     hub.register_source(probe.clone());
     assert!(
@@ -272,6 +273,7 @@ async fn a_test_source_plugs_in_without_core_changes() {
     subscribe(&hub, "p1").await;
     drop(hub);
     let hub = EventsHub::open(&config, dir.path()).expect("reopened hub");
+    hub.keep_test_dir(Arc::clone(&dir));
     let again = Arc::new(Probe::default());
     hub.register_source(again.clone());
     hub.start(services());
@@ -308,9 +310,10 @@ fn event() -> SourceEvent {
 /// attempt per replay, not one per row.
 #[tokio::test]
 async fn a_refused_replay_is_attempted_once_per_key() {
-    let dir = tempfile::tempdir().expect("dir");
+    let dir = Arc::new(tempfile::tempdir().expect("dir"));
     let config = crate::config::EventsConfig::default();
     let hub = EventsHub::open(&config, dir.path()).expect("hub");
+    hub.keep_test_dir(Arc::clone(&dir));
     let probe = Arc::new(Probe::default());
     hub.register_source(probe.clone());
     for p in ["p1", "p2", "p3"] {
@@ -319,6 +322,7 @@ async fn a_refused_replay_is_attempted_once_per_key() {
     }
     drop(hub);
     let hub = EventsHub::open(&config, dir.path()).expect("reopened");
+    hub.keep_test_dir(Arc::clone(&dir));
     let again = Arc::new(Probe::default());
     again.refuse_start.store(true, Ordering::SeqCst);
     hub.register_source(again.clone());
@@ -331,18 +335,20 @@ async fn a_refused_replay_is_attempted_once_per_key() {
 /// is not retried every sweep.
 #[tokio::test]
 async fn a_sweep_does_not_retry_another_kinds_refused_start() {
-    let dir = tempfile::tempdir().expect("dir");
+    let dir = Arc::new(tempfile::tempdir().expect("dir"));
     let config = crate::config::EventsConfig::default();
     let other = || Probe {
         kind: Some(SourceKind::TaskSettled),
         ..Probe::default()
     };
     let hub = EventsHub::open(&config, dir.path()).expect("hub");
+    hub.keep_test_dir(Arc::clone(&dir));
     hub.register_source(Arc::new(other()));
     seed_verified(&hub, &config, "p1");
     subscribe(&hub, "p1").await;
     drop(hub);
     let hub = EventsHub::open(&config, dir.path()).expect("reopened");
+    hub.keep_test_dir(Arc::clone(&dir));
     let again = Arc::new(other());
     again.refuse_start.store(true, Ordering::SeqCst);
     hub.register_source(again.clone());
@@ -363,9 +369,10 @@ async fn a_sweep_does_not_retry_another_kinds_refused_start() {
 /// Replacing a source stops what the old one started and starts the new.
 #[tokio::test]
 async fn a_replaced_source_hands_its_keys_over() {
-    let dir = tempfile::tempdir().expect("dir");
+    let dir = Arc::new(tempfile::tempdir().expect("dir"));
     let config = crate::config::EventsConfig::default();
     let hub = EventsHub::open(&config, dir.path()).expect("hub");
+    hub.keep_test_dir(Arc::clone(&dir));
     hub.start(services());
     let old = Arc::new(Probe::default());
     hub.register_source(old.clone());
@@ -388,9 +395,10 @@ async fn a_replaced_source_hands_its_keys_over() {
 /// upstream work.
 #[tokio::test]
 async fn a_source_refusal_at_fan_out_ends_the_subscription() {
-    let dir = tempfile::tempdir().expect("dir");
+    let dir = Arc::new(tempfile::tempdir().expect("dir"));
     let config = crate::config::EventsConfig::default();
     let hub = EventsHub::open(&config, dir.path()).expect("hub");
+    hub.keep_test_dir(Arc::clone(&dir));
     let probe = Arc::new(Probe::default());
     hub.register_source(probe.clone());
     seed_verified(&hub, &config, "p1");
@@ -478,7 +486,7 @@ async fn a_test_source_event_reaches_a_receiver() {
     use base64::Engine as _;
     use hmac::{KeyInit as _, Mac as _};
     let rx = receiver().await;
-    let dir = tempfile::tempdir().expect("dir");
+    let dir = Arc::new(tempfile::tempdir().expect("dir"));
     let config = crate::config::EventsConfig {
         callback_allow_private: vec!["127.0.0.0/8".to_owned()],
         // A first attempt lost to a loaded runner is retried within the wait.
@@ -486,6 +494,7 @@ async fn a_test_source_event_reaches_a_receiver() {
         ..crate::config::EventsConfig::default()
     };
     let hub = EventsHub::open_trusting(&config, dir.path(), rx.root.clone()).expect("hub");
+    hub.keep_test_dir(Arc::clone(&dir));
     let probe = Arc::new(Probe::default());
     hub.register_source(probe.clone());
     seed_verified_at(&hub, &config, "p1", &rx.url);
@@ -584,8 +593,9 @@ async fn a_test_source_event_reaches_a_receiver() {
 /// reconciliation decides once it reads.
 #[tokio::test]
 async fn a_clock_before_the_epoch_keeps_an_undone_start() {
-    let dir = tempfile::tempdir().expect("dir");
+    let dir = Arc::new(tempfile::tempdir().expect("dir"));
     let hub = EventsHub::open(&crate::config::EventsConfig::default(), dir.path()).expect("hub");
+    hub.keep_test_dir(Arc::clone(&dir));
     let probe = Arc::new(Probe::default());
     hub.register_source(probe.clone());
     let key = (

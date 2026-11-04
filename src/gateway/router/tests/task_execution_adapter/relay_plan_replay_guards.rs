@@ -179,7 +179,11 @@ async fn on_gateway_over_off(
 /// `tasks_dir`, whose first custodian was dropped: G32's restart
 /// and G25-T's reopen, by `state_with_record_budget`'s runtime swap.
 /// The custody lease frees with the old state, so the open retries.
-pub(super) async fn state_over_tasks(second: Rig, tasks_dir: std::path::PathBuf) -> Arc<AppState> {
+pub(super) async fn state_over_tasks(
+    second: Rig,
+    store: &crate::gateway::router::tests::FixtureDir,
+) -> Arc<AppState> {
+    let tasks_dir = store.path().join("tasks");
     let Rig { state, .. } = second;
     let mut app = Arc::try_unwrap(state).unwrap_or_else(|_| panic!("fixture state is exclusive"));
     let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
@@ -204,6 +208,7 @@ pub(super) async fn state_over_tasks(second: Rig, tasks_dir: std::path::PathBuf)
             ),
         }
     };
+    runtime.0.keep_test_dir(Arc::clone(store));
     (app.tasks, app.task_executor) = runtime;
     Arc::new(app)
 }
@@ -505,9 +510,8 @@ async fn g32_a_restarted_gateway_stages_nothing_counted_absent() {
         _store: first_store,
         ..
     } = first;
-    let tasks_dir = first_store.path().join("tasks");
     drop(first_state);
-    let restarted = state_over_tasks(rig(PROSE, OTHER_PROSE, None).await, tasks_dir).await;
+    let restarted = state_over_tasks(rig(PROSE, OTHER_PROSE, None).await, &first_store).await;
     renews_nothing_after_reopen(&restarted, &task, 321).await;
 }
 
@@ -546,9 +550,8 @@ async fn g25_a_detection_off_plan_task_renews_nothing_once_detection_is_on() {
         .drain(std::time::Duration::from_secs(10))
         .await;
     assert!(joined.is_clean(), "the workers must finish: {joined:?}");
-    let tasks_dir = off_store.path().join("tasks");
     drop(off);
-    let on = state_over_tasks(rig(PROSE, OTHER_PROSE, Some(&playbook())).await, tasks_dir).await;
+    let on = state_over_tasks(rig(PROSE, OTHER_PROSE, Some(&playbook())).await, &off_store).await;
     renews_nothing_after_reopen(&on, &task, 250).await;
     assert!(
         !probe_refused(&on, "key-b", 253, SUGGEST).await,

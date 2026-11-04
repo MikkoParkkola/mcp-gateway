@@ -88,12 +88,13 @@ impl EventSource for Gated {
 /// One attempt of a queued `probe.gate` event, paused just before its send
 /// while a reload publishes `after` and returns; the posts its callback got.
 async fn attempt_across_a_reload(after: Config) -> usize {
-    let dir = tempfile::tempdir().expect("dir");
+    let dir = Arc::new(tempfile::tempdir().expect("dir"));
     let config = crate::config::EventsConfig {
         callback_allow_private: vec!["127.0.0.0/8".into()],
         ..crate::config::EventsConfig::default()
     };
     let hub = EventsHub::open(&config, dir.path()).expect("hub");
+    hub.keep_test_dir(Arc::clone(&dir));
     let services = logged_services(dir.path());
     services.live.set(self::config(true));
     let source = Arc::new(Gated {
@@ -154,12 +155,13 @@ async fn a_reload_that_keeps_the_backend_before_the_send_still_sends() {
 /// A `backend.x.tools_changed` attempt paused before its send while backend
 /// `x` leaves the registry (`remove`) or stays; the posts its callback got.
 async fn backend_attempt_across_a_removal(remove: bool) -> usize {
-    let dir = tempfile::tempdir().expect("dir");
+    let dir = Arc::new(tempfile::tempdir().expect("dir"));
     let config = crate::config::EventsConfig {
         callback_allow_private: vec!["127.0.0.0/8".into()],
         ..crate::config::EventsConfig::default()
     };
     let hub = EventsHub::open(&config, dir.path()).expect("hub");
+    hub.keep_test_dir(Arc::clone(&dir));
     let services = logged_services(dir.path());
     let names = Arc::new(parking_lot::Mutex::new(vec!["x".to_owned()]));
     let live = Arc::clone(&names);
@@ -311,12 +313,13 @@ async fn within(limit: Duration, done: impl Fn() -> bool) -> bool {
 /// network I/O: the gate is released before the POST.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_reload_waits_for_an_admission_but_not_for_the_send() {
-    let dir = tempfile::tempdir().expect("dir");
+    let dir = Arc::new(tempfile::tempdir().expect("dir"));
     let config = crate::config::EventsConfig {
         callback_allow_private: vec!["127.0.0.0/8".into()],
         ..crate::config::EventsConfig::default()
     };
     let hub = EventsHub::open(&config, dir.path()).expect("hub");
+    hub.keep_test_dir(Arc::clone(&dir));
     let services = Arc::new(logged_services(dir.path()));
     let (inside_tx, inside) = std::sync::mpsc::sync_channel(1);
     let (go, go_rx) = std::sync::mpsc::channel();

@@ -20,6 +20,8 @@ const IDLE: Duration = Duration::from_secs(5);
 impl EventsHub {
     /// Run the worker until the runtime stops.
     pub(in crate::events) async fn deliver_forever(self: Arc<Self>, services: &Arc<Services>) {
+        #[cfg(test)]
+        self.store.assert_test_dir_kept("the events worker");
         let slots = Arc::new(Semaphore::new(self.config.max_in_flight));
         // On tokio's clock, so a paused test clock can pin the cadence; it
         // reads the same monotonic time as `std::time::Instant` otherwise.

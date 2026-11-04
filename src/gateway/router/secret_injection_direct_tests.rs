@@ -10,7 +10,6 @@ use serde_json::json;
 
 use super::direct_continuation_tests::call;
 use super::direct_guards_fixture::fixture_with_secrets;
-#[cfg(feature = "firewall")]
 use super::direct_guards_fixture::{initialize, post_meta_invoke, send_with_headers};
 use crate::secret_injection::{CredentialRule, CredentialType, InjectTarget};
 
@@ -147,7 +146,6 @@ async fn the_direct_route_applies_a_header_rule() {
 /// `fs_lock` lock file is `*.lock`, and the task store's lease is
 /// `store.lease` (`task_service/store.rs`, custody state, never a record); no
 /// store's data file has either name.
-#[cfg(feature = "firewall")]
 pub(super) fn files_under(dir: &std::path::Path) -> Vec<(std::path::PathBuf, Vec<u8>)> {
     let mut files = Vec::new();
     for entry in std::fs::read_dir(dir).expect("the store directory reads") {
@@ -167,7 +165,6 @@ pub(super) fn files_under(dir: &std::path::Path) -> Vec<(std::path::PathBuf, Vec
 
 /// Whether `error` is Windows' lock violation (os error 33) on a lock
 /// sidecar: a `*.lock` file or the task store's `store.lease`.
-#[cfg(feature = "firewall")]
 fn locked_sidecar(path: &std::path::Path, error: &std::io::Error) -> bool {
     let sidecar = path
         .extension()
@@ -177,7 +174,6 @@ fn locked_sidecar(path: &std::path::Path, error: &std::io::Error) -> bool {
 }
 
 /// Whether `bytes` holds `text`.
-#[cfg(feature = "firewall")]
 pub(super) fn holds(bytes: &[u8], text: &str) -> bool {
     bytes
         .windows(text.len())
@@ -185,7 +181,6 @@ pub(super) fn holds(bytes: &[u8], text: &str) -> bool {
 }
 
 /// The `_meta` of a modern call that declares the tasks extension.
-#[cfg(feature = "firewall")]
 fn task_meta() -> serde_json::Value {
     json!({
         "io.modelcontextprotocol/protocolVersion": "2026-07-28",
@@ -196,7 +191,6 @@ fn task_meta() -> serde_json::Value {
 
 /// Submits `gateway_invoke read` on `alpha` as a task under idempotency key
 /// `key`: the task id and the creating answer.
-#[cfg(feature = "firewall")]
 pub(super) async fn submit_task(
     fx: &super::direct_guards_fixture::Fx,
     key: &str,
@@ -210,8 +204,11 @@ pub(super) async fn submit_task(
         ("mcp-method", "tools/call"),
         ("mcp-name", "gateway_invoke"),
     ];
-    let (_, made) =
-        send_with_headers(fx, "/mcp", "k-std", "tools/call", task, None, &headers).await;
+    // Bounded as the polling is, so a stalled submit fails the row promptly.
+    let submit = send_with_headers(fx, "/mcp", "k-std", "tools/call", task, None, &headers);
+    let (_, made) = tokio::time::timeout(std::time::Duration::from_secs(30), submit)
+        .await
+        .expect("the task submission answered within the bound");
     let id = made
         .pointer("/result/task/taskId")
         .or_else(|| made.pointer("/result/taskId"))
@@ -222,7 +219,6 @@ pub(super) async fn submit_task(
 }
 
 /// Polls task `id` until it leaves `working`; it must have completed.
-#[cfg(feature = "firewall")]
 pub(super) async fn finished_task(
     fx: &super::direct_guards_fixture::Fx,
     id: &str,
@@ -256,7 +252,6 @@ pub(super) async fn finished_task(
 
 /// How many `tools/call`s reached the backend, and whether the last carried
 /// the secret.
-#[cfg(feature = "firewall")]
 fn sends(fx: &super::direct_guards_fixture::Fx) -> (usize, bool) {
     let seen = fx.seen.lock().expect("recorder");
     let last = seen
@@ -269,7 +264,6 @@ fn sends(fx: &super::direct_guards_fixture::Fx) -> (usize, bool) {
 /// keeps: not the answer, not a repeat the idempotency cache serves, not a
 /// task's answer or a resubmitted task, not the task store on disk, and not
 /// the audit log. Each sink is first shown to have recorded the call.
-#[cfg(feature = "firewall")]
 #[tokio::test]
 async fn the_secret_is_sent_and_nothing_answered_or_kept_holds_it() {
     let audit_dir = tempfile::tempdir().expect("audit directory");
@@ -327,10 +321,29 @@ async fn the_secret_is_sent_and_nothing_answered_or_kept_holds_it() {
         .collect();
     assert!(kept.is_empty(), "a stored file holds the secret: {kept:?}");
 
-    let audited = std::fs::read(&audit).expect("the audit log was written");
-    assert!(
-        holds(&audited, "alpha"),
-        "premise: the audit log recorded the call"
-    );
-    assert!(!holds(&audited, SECRET), "the audit log holds the secret");
+    // The audit log is the firewall's: only a firewall build writes it.
+    #[cfg(feature = "firewall")]
+    {
+        let audited = std::fs::read_to_string(&audit).expect("the audit log was written");
+        let rows: Vec<serde_json::Value> = audited
+            .lines()
+            .map(|line| serde_json::from_str(line).expect("one audit row per line"))
+            .collect();
+        // The call's own record, not any row that mentions the server: an
+        // allowed call writes its `request` row (a `dispatch` row is written
+        // only for a warn or a block).
+        assert!(
+            rows.iter().any(|row| row["event"] == "request"
+                && row["server"] == "alpha"
+                && row["tool"] == "read"),
+            "premise: the audit log recorded the call to alpha's read: {rows:?}"
+        );
+        let held: Vec<_> = rows
+            .iter()
+            .filter(|row| row.to_string().contains(SECRET))
+            .collect();
+        assert!(held.is_empty(), "an audit row holds the secret: {held:?}");
+    }
+    #[cfg(not(feature = "firewall"))]
+    let _ = audit;
 }

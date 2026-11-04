@@ -488,9 +488,10 @@ async fn t1de_control_principal_yields_an_api_key_ref() {
 /// `name`, and report whether the hook's search path shows it to a caller
 /// `{Authenticated, ApiKey, name, principal}`.
 async fn events_search_visible(name: &str, principal: Option<&str>) -> bool {
-    let dir = tempfile::TempDir::new().expect("temp store");
+    let dir = std::sync::Arc::new(tempfile::TempDir::new().expect("temp store"));
     let hub = crate::events::EventsHub::open(&crate::config::EventsConfig::default(), dir.path())
         .expect("hub");
+    hub.keep_test_dir(std::sync::Arc::clone(&dir));
     hub.install_backend_source(std::sync::Arc::new(|| vec!["alpha".to_owned()]));
     let live = std::sync::Arc::new(crate::config_reload::LiveConfig::new(
         crate::config::Config::default(),
