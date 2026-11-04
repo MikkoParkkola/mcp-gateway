@@ -83,7 +83,7 @@ mod bounded;
 #[path = "transparency_log_hwm_scan.rs"]
 mod hwm_scan;
 #[path = "transparency_log_rotation.rs"]
-mod rotation;
+pub(crate) mod rotation;
 /// Test seam for the write-fault injector, for tests outside this module.
 #[cfg(test)]
 pub(crate) mod rotation_fault {
