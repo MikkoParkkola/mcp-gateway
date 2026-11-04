@@ -1,0 +1,393 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+//! A name budgeted for the first time at a restart starts from the overflow
+//! spend it may have made that day, as a reload would start it: the save
+//! records the owned names and each row's creation figure (ADR-023).
+
+use super::cost_estimate_restart_tests::{CAP, Scope, T, governed};
+use super::persistence::boot_cost_governance;
+use super::support::build_persisted_costs;
+use crate::clock::test_clock::at_secs;
+use crate::cost_accounting::enforcer::BudgetEnforcer;
+use crate::cost_accounting::persistence::{self as cost_persistence, PersistedCosts};
+
+/// A first process that never budgets `target`: the map full, then $3 of
+/// `target`'s spend in the overflow. Returns what its shutdown save writes.
+fn unbudgeted_first_process(scope: Scope, dir: &std::path::Path) -> PersistedCosts {
+    let (_, enforcer) = boot_cost_governance(&governed(scope, None), dir);
+    let enforcer = enforcer.expect("enabled governance builds an enforcer");
+    for i in 0..CAP {
+        scope.spend(&enforcer, &format!("filler-{i}"), 0.01);
+    }
+    scope.spend(&enforcer, "target", 3.0);
+    let persisted = build_persisted_costs(&enforcer.snapshot_for_save().expect("a readable clock"));
+    cost_persistence::save(&dir.join("costs.json"), &persisted).expect("shutdown save");
+    persisted
+}
+
+/// The saved overflow and `target`'s saved row in `scope`.
+fn saved_figures(scope: Scope, saved: &PersistedCosts) -> (f64, Option<f64>) {
+    match scope {
+        Scope::Tool => (
+            saved.tool_overflow_usd,
+            saved.tool_totals.get("target").map(|t| t.total_cost_usd),
+        ),
+        Scope::Key => (
+            saved.key_overflow_usd,
+            saved.key_totals.get("target").copied(),
+        ),
+    }
+}
+
+/// `target`'s estimate in a restarted enforcer's snapshot, in `scope`.
+fn restored_estimate(scope: Scope, enforcer: &BudgetEnforcer) -> Option<f64> {
+    let snap = enforcer.snapshot();
+    match scope {
+        Scope::Tool => snap.tool_estimate.get("target").copied(),
+        Scope::Key => snap.key_estimate.get("target").copied(),
+    }
+}
+
+/// RESTORE.4: a name the restarted config budgets for the first time starts
+/// from the overflow spend it may have made that day, as a reload would
+/// start it. $3 sits in the overflow and `target` has no row. Restarted with
+/// `target` budgeted at $3.50, a $1 call is judged on $3 + $1 and refused
+/// (on its row alone it reads $1 and is admitted); at $4.50 it is admitted.
+/// The seed is an estimate apart from real spend: no row appears, and the
+/// global total stays as saved.
+fn restore4(scope: Scope) {
+    let _clock = at_secs(T);
+    let dir = tempfile::tempdir().expect("tempdir");
+    let saved = unbudgeted_first_process(scope, dir.path());
+    assert_eq!(
+        saved_figures(scope, &saved),
+        (3.0, None),
+        "{scope:?}: premise: $3 in the overflow, no row for target"
+    );
+
+    let (_, tight) = boot_cost_governance(&governed(scope, Some(3.5)), dir.path());
+    let tight = tight.expect("armed");
+    assert!(
+        !scope.admits(&tight, "target"),
+        "{scope:?}: a $1 call on $3 of earlier overflow spend fits a $3.50 budget"
+    );
+    assert_eq!(
+        restored_estimate(scope, &tight),
+        Some(3.0),
+        "{scope:?}: seeded with the overflow"
+    );
+    let snap = tight.snapshot();
+    let row = match scope {
+        Scope::Tool => snap.tool_daily.get("target").copied(),
+        Scope::Key => snap.key_daily.get("target").copied(),
+    };
+    assert_eq!(
+        row.unwrap_or(0.0),
+        0.0,
+        "{scope:?}: the seed is not real spend"
+    );
+    let saved_global: f64 = saved
+        .tool_totals
+        .values()
+        .map(|t| t.total_cost_usd)
+        .sum::<f64>()
+        + saved.tool_overflow_usd;
+    assert!(
+        (snap.global_daily_usd - saved_global).abs() < 1e-9,
+        "{scope:?}: global {} as saved {saved_global}",
+        snap.global_daily_usd
+    );
+
+    let (_, roomy) = boot_cost_governance(&governed(scope, Some(4.5)), dir.path());
+    assert!(
+        scope.admits(&roomy.expect("armed"), "target"),
+        "{scope:?}: 3 + 1 fits $4.50"
+    );
+}
+
+#[test]
+fn restore4_tool() {
+    restore4(Scope::Tool);
+}
+
+#[test]
+fn restore4_key() {
+    restore4(Scope::Key);
+}
+
+/// A first process where `target` gains a row after the overflow began, as
+/// T7b builds it: the map full, $2 of an unrelated name's spend in the
+/// overflow, a publication that budgets `filler-0` (so a place frees), then
+/// $0.50 of `target` settled under it (its row is born with $2 in the
+/// overflow), then $1 more of the unrelated name in the overflow ($3).
+fn born_first_process(scope: Scope, dir: &std::path::Path) -> PersistedCosts {
+    let (_, enforcer) = boot_cost_governance(&governed(scope, None), dir);
+    let enforcer = enforcer.expect("enabled governance builds an enforcer");
+    for i in 0..CAP {
+        scope.spend(&enforcer, &format!("filler-{i}"), 0.01);
+    }
+    scope.spend(&enforcer, "unrelated", 2.0);
+    let mut published = governed(scope, None);
+    scope
+        .limits(&mut published.budgets)
+        .insert("filler-0".to_owned(), 50.0);
+    enforcer.seed_estimates(&published.budgets);
+    let names = match scope {
+        Scope::Tool => ("target", None),
+        Scope::Key => ("read", Some("target")),
+    };
+    enforcer.settle_under(&published, None, names, 0.5);
+    scope.spend(&enforcer, "unrelated", 1.0);
+    let persisted = build_persisted_costs(&enforcer.snapshot_for_save().expect("a readable clock"));
+    cost_persistence::save(&dir.join("costs.json"), &persisted).expect("shutdown save");
+    persisted
+}
+
+/// RESTORE.7, a name with a restored row: it is seeded with the overflow at
+/// its row's creation that day ($2), not the overflow at the save ($3).
+/// Restarted with `target` budgeted at $3.00, a $1 call is judged on
+/// 2 + 0.5 + 1 = 3.5 and refused (on its row alone it reads 1.5); at $4.00
+/// it is admitted, which a seed from the overflow total (4.5) refuses.
+fn restore7_row(scope: Scope) {
+    let _clock = at_secs(T);
+    let dir = tempfile::tempdir().expect("tempdir");
+    let saved = born_first_process(scope, dir.path());
+    assert_eq!(
+        saved_figures(scope, &saved),
+        (3.0, Some(0.5)),
+        "{scope:?}: premise: $3 in the overflow, $0.50 in target's row"
+    );
+
+    let (_, tight) = boot_cost_governance(&governed(scope, Some(3.0)), dir.path());
+    let tight = tight.expect("armed");
+    assert!(
+        !scope.admits(&tight, "target"),
+        "{scope:?}: 2 + 0.5 + 1 = 3.5 fits a $3.00 budget"
+    );
+    assert_eq!(
+        restored_estimate(scope, &tight),
+        Some(2.0),
+        "{scope:?}: seeded with the born figure"
+    );
+    let (_, roomy) = boot_cost_governance(&governed(scope, Some(4.0)), dir.path());
+    assert!(
+        scope.admits(&roomy.expect("armed"), "target"),
+        "{scope:?}: 3.5 fits $4.00 (an overflow seed reads 4.5)"
+    );
+}
+
+#[test]
+fn restore7_row_tool() {
+    restore7_row(Scope::Tool);
+}
+
+#[test]
+fn restore7_row_key() {
+    restore7_row(Scope::Key);
+}
+
+/// A hand-built file for `scope`: `saved_at` today, `overflow` in the
+/// overflow, an `owned` set and `born` figures when given, an `estimate`
+/// for `target` when given, and `rows` of real spend.
+struct File {
+    overflow: f64,
+    owned: Option<Vec<&'static str>>,
+    born: Option<Vec<(&'static str, f64)>>,
+    estimate: Option<f64>,
+    rows: Vec<(&'static str, f64)>,
+}
+
+impl File {
+    fn write(&self, scope: Scope, dir: &std::path::Path) {
+        let mut costs = PersistedCosts {
+            saved_at: T,
+            day_basis: Some("local".to_owned()),
+            ..PersistedCosts::default()
+        };
+        let owned = self
+            .owned
+            .as_ref()
+            .map(|names| names.iter().map(|n| (*n).to_owned()).collect());
+        let born = self.born.as_ref().map(|figures| {
+            figures
+                .iter()
+                .map(|(n, usd)| ((*n).to_owned(), *usd))
+                .collect()
+        });
+        let estimate: std::collections::HashMap<String, f64> = self
+            .estimate
+            .map(|usd| ("target".to_owned(), usd))
+            .into_iter()
+            .collect();
+        for (name, usd) in &self.rows {
+            match scope {
+                Scope::Tool => {
+                    let total = crate::cost_accounting::persistence::ToolTotal {
+                        call_count: 1,
+                        total_cost_usd: *usd,
+                        avg_cost_usd: *usd,
+                    };
+                    costs.tool_totals.insert((*name).to_owned(), total);
+                }
+                Scope::Key => {
+                    costs.key_totals.insert((*name).to_owned(), *usd);
+                }
+            }
+        }
+        match scope {
+            Scope::Tool => {
+                costs.tool_overflow_usd = self.overflow;
+                costs.tool_owned = owned;
+                costs.tool_born = born;
+                costs.tool_estimate = estimate;
+            }
+            Scope::Key => {
+                costs.key_overflow_usd = self.overflow;
+                costs.key_owned = owned;
+                costs.key_born = born;
+                costs.key_estimate = estimate;
+            }
+        }
+        cost_persistence::save(&dir.join("costs.json"), &costs).expect("save");
+    }
+}
+
+/// RESTORE.7: with no restored row the seed is the saved overflow, even when
+/// a creation figure was saved for the name: $3, not $2. At $3.50 a $1 call
+/// reads 3 + 1 and is refused (a seed from the creation figure reads 3).
+fn restore7_born_no_row(scope: Scope) {
+    let _clock = at_secs(T);
+    let dir = tempfile::tempdir().expect("tempdir");
+    File {
+        overflow: 3.0,
+        owned: Some(vec![]),
+        born: Some(vec![("target", 2.0)]),
+        estimate: None,
+        rows: vec![],
+    }
+    .write(scope, dir.path());
+    let (_, restarted) = boot_cost_governance(&governed(scope, Some(3.5)), dir.path());
+    let restarted = restarted.expect("armed");
+    assert!(
+        !scope.admits(&restarted, "target"),
+        "{scope:?}: 3 + 1 > 3.5"
+    );
+    assert_eq!(restored_estimate(scope, &restarted), Some(3.0), "{scope:?}");
+}
+
+#[test]
+fn restore7_born_no_row_tool() {
+    restore7_born_no_row(Scope::Tool);
+}
+
+#[test]
+fn restore7_born_no_row_key() {
+    restore7_born_no_row(Scope::Key);
+}
+
+/// RESTORE.6: a file saved before the owned names existed restores as
+/// today: its overflow and rows come back, and nothing is seeded.
+#[test]
+fn restore6_an_old_file_seeds_nothing() {
+    for scope in [Scope::Tool, Scope::Key] {
+        let _clock = at_secs(T);
+        let dir = tempfile::tempdir().expect("tempdir");
+        File {
+            overflow: 3.0,
+            owned: None,
+            born: None,
+            estimate: None,
+            rows: vec![("other", 1.0)],
+        }
+        .write(scope, dir.path());
+        let (_, restarted) = boot_cost_governance(&governed(scope, Some(3.5)), dir.path());
+        let restarted = restarted.expect("armed");
+        let snap = restarted.snapshot();
+        let (overflow, other) = match scope {
+            Scope::Tool => (
+                snap.tool_overflow_usd,
+                snap.tool_daily.get("other").copied(),
+            ),
+            Scope::Key => (snap.key_overflow_usd, snap.key_daily.get("other").copied()),
+        };
+        assert_eq!(
+            (overflow, other),
+            (3.0, Some(1.0)),
+            "{scope:?}: premise: restored"
+        );
+        assert_eq!(
+            restored_estimate(scope, &restarted),
+            None,
+            "{scope:?}: not seeded"
+        );
+        assert!(
+            scope.admits(&restarted, "target"),
+            "{scope:?}: judged on 0 + 1"
+        );
+    }
+}
+
+/// RESTORE.5: a name budgeted before and after the restart is not seeded,
+/// though the overflow holds $3: at $1.50 a $1 call is admitted.
+#[test]
+fn restore5_an_idle_budgeted_name_is_not_seeded() {
+    for scope in [Scope::Tool, Scope::Key] {
+        let _clock = at_secs(T);
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (_, first) = boot_cost_governance(&governed(scope, Some(1.5)), dir.path());
+        let first = first.expect("armed");
+        for i in 0..CAP {
+            scope.spend(&first, &format!("filler-{i}"), 0.01);
+        }
+        scope.spend(&first, "other", 3.0);
+        let saved = build_persisted_costs(&first.snapshot_for_save().expect("a readable clock"));
+        cost_persistence::save(&dir.path().join("costs.json"), &saved).expect("save");
+        assert_eq!(saved_figures(scope, &saved).0, 3.0, "{scope:?}: premise");
+
+        let (_, restarted) = boot_cost_governance(&governed(scope, Some(1.5)), dir.path());
+        let restarted = restarted.expect("armed");
+        assert_eq!(restored_estimate(scope, &restarted), None, "{scope:?}");
+        assert!(scope.admits(&restarted, "target"), "{scope:?}: 0 + 1 < 1.5");
+    }
+}
+
+/// RESTORE.5: a snapshot from an earlier day restores and seeds nothing.
+#[test]
+fn restore5_an_earlier_day_seeds_nothing() {
+    for scope in [Scope::Tool, Scope::Key] {
+        let dir = tempfile::tempdir().expect("tempdir");
+        {
+            let _yesterday = at_secs(T - 86_400);
+            unbudgeted_first_process(scope, dir.path());
+        }
+        let _clock = at_secs(T);
+        let (_, restarted) = boot_cost_governance(&governed(scope, Some(3.5)), dir.path());
+        let restarted = restarted.expect("armed");
+        let snap = restarted.snapshot();
+        assert_eq!(snap.global_daily_usd, 0.0, "{scope:?}: nothing restored");
+        assert_eq!(restored_estimate(scope, &restarted), None, "{scope:?}");
+    }
+}
+
+/// D4: a name with a restored estimate is not seeded again even when the
+/// saved owned set lacks it (a hand-edited or mixed file): it keeps $1.50,
+/// distinct from its creation figure ($2) and the overflow ($3).
+#[test]
+fn restore7_a_restored_estimate_is_kept() {
+    for scope in [Scope::Tool, Scope::Key] {
+        let _clock = at_secs(T);
+        let dir = tempfile::tempdir().expect("tempdir");
+        File {
+            overflow: 3.0,
+            owned: Some(vec![]),
+            born: Some(vec![("target", 2.0)]),
+            estimate: Some(1.5),
+            rows: vec![],
+        }
+        .write(scope, dir.path());
+        let (_, restarted) = boot_cost_governance(&governed(scope, Some(3.0)), dir.path());
+        let restarted = restarted.expect("armed");
+        assert_eq!(restored_estimate(scope, &restarted), Some(1.5), "{scope:?}");
+        assert!(scope.admits(&restarted, "target"), "{scope:?}: 1.5 + 1 < 3");
+    }
+}
