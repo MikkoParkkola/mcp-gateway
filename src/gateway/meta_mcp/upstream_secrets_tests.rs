@@ -119,3 +119,51 @@ fn a_rule_that_cannot_resolve_at_the_check_is_withheld() {
         );
     }
 }
+
+/// Two rules writing the same argument: the call sends only the later one,
+/// but the check renews every resolved value, so a value overwritten in
+/// this order and sent in another (the rules reordered since the dispatch,
+/// which leaves the fingerprint as it was) is still redacted.
+#[test]
+fn a_matched_check_renews_every_resolved_value_not_only_the_one_sent() {
+    use crate::security::needles::{NeedleSet, scrub_text};
+    const FIRST: &str = "overwritten-secret-3a19";
+    const SECOND: &str = "winning-secret-3a19";
+    let mut first = rule(FIRST);
+    first.inject_as = InjectTarget::Argument;
+    first.inject_key = "api_key".to_owned();
+    let mut second = first.clone();
+    second.name = "api2".to_owned();
+    second.value = SECOND.to_owned();
+    let backend = backend(vec![first, second]);
+    let needles = Arc::new(NeedleSet::default());
+    backend.stamp_needles(Arc::clone(&needles));
+    let stored = Dispatched::of(
+        "svc",
+        &[
+            ("api".to_owned(), FIRST.to_owned()),
+            ("api2".to_owned(), SECOND.to_owned()),
+        ],
+    )
+    .stored();
+    assert!(
+        withheld(&backend, &handle(Some(stored))).is_none(),
+        "premise: it matches"
+    );
+    for value in [FIRST, SECOND] {
+        let mut text = format!("echo {value}");
+        scrub_text(&needles, &mut text);
+        assert!(!text.contains(value), "{value} was not renewed: {text}");
+    }
+}
+
+/// One check resolves the backend's rules once: the fingerprint it compares
+/// and the values it renews are the same resolution, so a rotation between
+/// two lookups cannot match one value and renew another.
+#[test]
+fn a_check_resolves_the_rules_once() {
+    let backend = backend(vec![rule(VALUE)]);
+    let before = crate::secrets::lookup_probe::calls();
+    assert!(withheld(&backend, &handle(Some(dispatched()))).is_none());
+    assert_eq!(crate::secrets::lookup_probe::calls() - before, 1);
+}

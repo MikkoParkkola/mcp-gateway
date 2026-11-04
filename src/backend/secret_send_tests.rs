@@ -411,3 +411,23 @@ async fn a_renewal_keeps_an_unchanged_value_redacted_past_its_grace() {
     tokio::time::advance(GRACE + Duration::from_secs(1)).await;
     assert!(echoed(), "premise: an unrenewed value retires on its grace");
 }
+
+/// A dispatch resolves its rules once: what it fingerprints for a deferred
+/// task and what it injects are the same values, so a rotation between two
+/// lookups cannot fingerprint one value and send another.
+#[test]
+fn a_send_resolves_its_rules_once() {
+    let backend = backend(
+        http(),
+        vec![rule(InjectTarget::Header, "X-Api-Key", SECRET)],
+        true,
+    );
+    let before = crate::secrets::lookup_probe::calls();
+    send(
+        &backend,
+        json!({"name": "read", "arguments": {}}),
+        Vec::new(),
+    )
+    .expect("sent");
+    assert_eq!(crate::secrets::lookup_probe::calls() - before, 1);
+}

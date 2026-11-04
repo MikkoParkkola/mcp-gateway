@@ -184,11 +184,12 @@ async fn a_deferred_result_echoing_a_secret_rotated_across_a_restart_is_withheld
     assert_withheld(&answer, &row);
 }
 
-/// A task captured while its backend had no secret rule carries no
-/// fingerprint. After a restart that adds a rule, nothing says what its
-/// dispatch injected: it is withheld, not delivered.
+/// A task stored with no fingerprint member at all, as a 4.0 pre-release
+/// build wrote it, is withheld at its recovery read: nothing says what its
+/// dispatch injected. The backend has no rule before or after, so a stored
+/// `"none"` would have been delivered; only the absent member withholds.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_deferred_task_with_no_fingerprint_on_a_backend_with_rules_is_withheld() {
+async fn a_deferred_task_stored_without_a_fingerprint_is_withheld() {
     let root = tempfile::Builder::new()
         .prefix("echo-rotation-absent")
         .tempdir()
@@ -205,11 +206,26 @@ async fn a_deferred_task_with_no_fingerprint_on_a_backend_with_rules_is_withheld
     );
     captured(root.path(), &task_id).await;
     gateway.terminate_confirmed().await;
+    let mut legacy = durable_record(root.path(), &task_id);
+    assert_eq!(
+        legacy["upstream"]["secretFingerprint"],
+        json!("none"),
+        "premise: this build wrote the member"
+    );
+    legacy["upstream"]
+        .as_object_mut()
+        .expect("an upstream descriptor")
+        .remove("secretFingerprint");
+    std::fs::write(
+        helper::store_dir(root.path()).join(format!("{task_id}.json")),
+        serde_json::to_vec(&legacy).expect("the record serializes"),
+    )
+    .expect("the record is rewritten in place");
 
-    let second = config(root.path(), "second.yaml", &peer, Some(NEW));
+    let second = config(root.path(), "second.yaml", &peer, None);
     let mut restarted = Gateway::start(root.path(), &second, "second.log");
     restarted.wait_until_ready(&client).await;
-    peer.peer.set_payload(echoing(NEW));
+    peer.peer.set_payload(echoing(OLD));
     peer.peer.set(Upstream::Completed);
     let answer = settled(&restarted, &client, &task_id).await;
     let row = durable_record(root.path(), &task_id);
