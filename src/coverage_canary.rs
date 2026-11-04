@@ -13,7 +13,8 @@ pub(crate) fn coverage_canary() -> u8 {
     1
 }
 
-/// Keeps the canary in every binary whatever the linker or codegen settings drop:
-/// referenced here, never called, so its count stays zero.
+/// Asks the compiler to keep the canary in the object file: referenced here,
+/// never called, so its count stays zero. The linker may still drop it; that
+/// the merged report does hold it is what the merge job's canary check proves.
 #[used]
 static COVERAGE_CANARY: fn() -> u8 = coverage_canary;
