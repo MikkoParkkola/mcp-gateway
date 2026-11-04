@@ -326,7 +326,7 @@ async fn personal_capability_missing_identity_denies_before_auth_lookup() {
 async fn personal_capability_owner_mismatch_denies_before_auth_lookup() {
     let executor = CapabilityExecutor::new();
     let cap = personal_auth_capability();
-    let context = CapabilityExecutionContext::with_caller_identity(GrantSubject::new(
+    let context = CapabilityExecutionContext::with_caller_identity(GrantSubject::for_test(
         "cloudflare_access",
         "other-user",
         Some("other@example.com".to_string()),
@@ -346,7 +346,7 @@ async fn personal_capability_owner_mismatch_denies_before_auth_lookup() {
 async fn personal_capability_matching_owner_reaches_auth_lookup() {
     let executor = CapabilityExecutor::new();
     let cap = personal_auth_capability();
-    let context = CapabilityExecutionContext::with_caller_identity(GrantSubject::new(
+    let context = CapabilityExecutionContext::with_caller_identity(GrantSubject::for_test(
         "cloudflare_access",
         "owner-1",
         Some("owner@example.com".to_string()),

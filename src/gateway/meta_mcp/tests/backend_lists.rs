@@ -593,7 +593,7 @@ async fn meta_with_staged_cache_entry(dir: &tempfile::TempDir) -> (MetaMcp, Stri
         GrantScope, GrantSubject, IdentityGrant, LocalIdentityGrantStore,
     };
 
-    let subject = GrantSubject::new("cloudflare_access", "user-123", None);
+    let subject = GrantSubject::for_test("cloudflare_access", "user-123", None);
     let grant = IdentityGrant {
         grant_id: "grant-user-123-calendar".to_string(),
         subject: subject.clone(),
@@ -669,7 +669,7 @@ providers:
     // `GrantSubject` — the same one `grant_ctx` builds — namespaced by the
     // one production helper rather than a second spelling of it here.
     let staged_subject =
-        crate::identity_grants::GrantSubject::new("cloudflare_access", "user-123", None);
+        crate::identity_grants::GrantSubject::for_test("cloudflare_access", "user-123", None);
     let anon = super::Authentication::Anonymous;
     let staged_principal =
         super::support::caller_cache_principal(None, None, Some(&staged_subject), None, anon);
@@ -706,7 +706,7 @@ fn grant_ctx(agent_id: &'static str) -> crate::gateway::meta_mcp::MetaMcpCallerC
             crate::security::ProofSource::MutualTls,
         )),
         agent_declared: None,
-        grant_subject: Some(crate::identity_grants::GrantSubject::new(
+        grant_subject: Some(crate::identity_grants::GrantSubject::for_test(
             "cloudflare_access",
             "user-123",
             None,

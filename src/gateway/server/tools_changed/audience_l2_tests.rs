@@ -155,7 +155,7 @@ auth:\n  required: false\n  type: none\n",
 /// The adapter user `alice`'s grant on `alice_cal`.
 fn alice_grant() -> crate::identity_grants::LocalIdentityGrantStore {
     use crate::identity_grants::{GrantAgent, GrantScope, GrantSubject, IdentityGrant};
-    let alice = GrantSubject::new(adapter_authority(), "alice", None);
+    let alice = GrantSubject::for_test(adapter_authority(), "alice", None);
     crate::identity_grants::LocalIdentityGrantStore::from_grants([IdentityGrant {
         grant_id: "g-alice".to_string(),
         subject: alice.clone(),

@@ -119,7 +119,7 @@ fn a_binding_or_a_grant_subject_beats_the_credential_digest() {
     };
     assert_eq!(principal(&cap, &bound, true).unwrap(), "idp:4:bind");
     let granted = CapabilityExecutionContext {
-        caller_identity: Some(GrantSubject::new("test", "alice", None)),
+        caller_identity: Some(GrantSubject::for_test("test", "alice", None)),
         ..api_key("abc")
     };
     let grant_only = caller("alice");

@@ -113,7 +113,7 @@ fn subjects_proven_behind_one_shared_key_stay_apart() {
     let by_subject = |subject: &str| {
         source_fingerprint(
             crate::gateway::meta_mcp::MetaMcpCallerContext {
-                grant_subject: Some(crate::identity_grants::GrantSubject::new(
+                grant_subject: Some(crate::identity_grants::GrantSubject::for_test(
                     "local", subject, None,
                 )),
                 ..shared()

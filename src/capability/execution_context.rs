@@ -647,7 +647,7 @@ mod tests {
     #[test]
     fn oauth_isolation_allows_personal_capability_with_matching_caller_identity() {
         let cap = google_calendar_capability(false, true);
-        let context = CapabilityExecutionContext::with_caller_identity(GrantSubject::new(
+        let context = CapabilityExecutionContext::with_caller_identity(GrantSubject::for_test(
             "cloudflare_access",
             "owner-1",
             None,
@@ -665,7 +665,7 @@ mod tests {
         // is whatever its transport supplied. Only (authority, subject) is
         // identity, so the two labels differing must not refuse the owner.
         let cap = google_calendar_capability(false, true);
-        let context = CapabilityExecutionContext::with_caller_identity(GrantSubject::new(
+        let context = CapabilityExecutionContext::with_caller_identity(GrantSubject::for_test(
             "cloudflare_access",
             "owner-1",
             Some("owner@example.com".to_string()),
