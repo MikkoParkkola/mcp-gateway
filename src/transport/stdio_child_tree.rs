@@ -275,7 +275,9 @@ impl ChildTree {
 
     /// The gateway stop deadline this tree's graceful ending runs under, if
     /// it has both.
-    pub(super) fn graceful_deadline(&self) -> Option<std::sync::Arc<super::reaper::StopDeadline>> {
+    pub(super) fn graceful_deadline(
+        &self,
+    ) -> Option<std::sync::Arc<super::reaper::StopDeadline>> {
         match self.ending {
             Ending::Graceful { .. } => self.stop_deadline.clone(),
             Ending::Now => None,
