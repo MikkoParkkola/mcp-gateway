@@ -269,3 +269,60 @@ async fn a_role_admin_task_ends_when_a_reload_removes_its_admin_rule() {
     }
     assert!(wrong.is_empty(), "{}", wrong.join("\n"));
 }
+
+/// Every admin meta-tool, called plainly and as a task, is refused in the
+/// admin-denial shape to both backend-scoped admins and listed to none of
+/// them; an unscoped admin key is listed every one. Kill, revive, reload
+/// config, reload capabilities, stats and webhook status are gateway-wide.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn every_admin_meta_tool_refuses_a_backend_scoped_admin() {
+    let gw = scoped_gateway(&[ADMIN_GROUP_RULE]).await;
+    let scoped_token = gw.a.token("admin-a", &["ops-admins"], &json!({}));
+    let listed = |body: &Value| -> Vec<String> {
+        body["result"]["tools"]
+            .as_array()
+            .expect("a tool list")
+            .iter()
+            .filter_map(|t| t["name"].as_str())
+            .filter(|name| crate::gateway::router::ADMIN_META_TOOLS.contains(name))
+            .map(str::to_owned)
+            .collect()
+    };
+    let (_, all) = send(&gw.state, rpc(ADMIN_KEY, "tools/list", &json!({}))).await;
+    assert_eq!(
+        listed(&all).len(),
+        crate::gateway::router::ADMIN_META_TOOLS.len(),
+        "control: an unscoped admin key is listed every admin tool: {all}"
+    );
+    let mut wrong = Vec::new();
+    for (who, bearer) in [
+        ("admin key, [alpha]", SCOPED_ADMIN_KEY.to_string()),
+        ("role-admin token, [alpha]", scoped_token),
+    ] {
+        let (_, list) = send(&gw.state, rpc(&bearer, "tools/list", &json!({}))).await;
+        let shown = listed(&list);
+        if !shown.is_empty() {
+            wrong.push(format!("{who}: listed {shown:?}"));
+        }
+        for tool in crate::gateway::router::ADMIN_META_TOOLS {
+            for task in [false, true] {
+                let mut params = json!({"name": tool, "arguments": {"server": "alpha"}});
+                if task {
+                    params["task"] = json!({});
+                }
+                let (status, body) = send(&gw.state, rpc(&bearer, "tools/call", &params)).await;
+                let refused = status == StatusCode::FORBIDDEN
+                    && body["error"]["code"] == -32600
+                    && body["error"]["message"]
+                        .as_str()
+                        .is_some_and(|m| m.contains("requires admin access"));
+                if !refused {
+                    wrong.push(format!(
+                        "{who}: {tool} (task {task}) answered {status} {body}"
+                    ));
+                }
+            }
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
