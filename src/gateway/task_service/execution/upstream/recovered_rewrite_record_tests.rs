@@ -83,10 +83,15 @@ async fn recovery_record(reply: Reply) -> Value {
         "premise: the recovery settled"
     );
     let text = std::fs::read_to_string(log_dir.path().join("audit.jsonl")).unwrap_or_default();
-    text.lines()
+    let records: Vec<Value> = text
+        .lines()
         .filter_map(|line| serde_json::from_str::<Value>(line).ok())
-        .find(|entry| entry["route"] == "task_recovery")
-        .unwrap_or_else(|| panic!("a task_recovery record: {text}"))
+        .filter(|entry| entry["route"] == "task_recovery")
+        .collect();
+    let [record] = records.as_slice() else {
+        panic!("premise: exactly one task_recovery record: {text}");
+    };
+    record.clone()
 }
 
 #[tokio::test]
