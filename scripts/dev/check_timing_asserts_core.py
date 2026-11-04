@@ -394,6 +394,21 @@ TEST_FILE = re.compile(r"(^tests/|/tests/|_tests/|_tests\.rs$|/tests\.rs$)")
 CONSUMED = r"(?:\.\s*(?:expect|unwrap)\s*\(|\?|\.\s*unwrap_or_else\(\s*\|[^|]*\|\s*panic!)"
 FAILS_ON_EXPIRY = re.compile(r"\s*\.await\s*" + CONSUMED)
 LET_BOUND = re.compile(r"let\s+(?:mut\s+)?(\w+)\s*(?::[^=;]+)?=\s*$")
+# A method-style `.timeout(D)`: on an HTTP client or request it bounds the
+# request on the real clock.
+# Not the second dot of a range (`.. timeout(W, f)` is the free function).
+# Comments are blanked first, so `.timeout /* why */ (D)` reads as spacing.
+METHOD_TIMEOUT = re.compile(r"(?<!\.)\.\s*timeout\s*\(")
+# The receivers read as an HTTP client or request: a chain built through
+# `reqwest::` or an imported `Client::builder()` / `Client::new()`, or an
+# HTTP verb called on a value named `client` or `*_client`.
+REQUEST_RECEIVER = re.compile(
+    r"reqwest::|\bClient::(?:builder|new)\s*\(|\b\w*client\s*\.\s*(?:get|post|put|patch|delete|head|request)\s*\("
+)
+NOT_A_REQUEST = "a .timeout( method not known as a request timeout"
+# Read as data from a base revision's copy of this file (never run): a
+# `.timeout(` allowlist row is new only when the base's gate judged them.
+JUDGES_TIMEOUT_METHOD = True
 
 
 @functools.lru_cache(maxsize=1)
@@ -437,7 +452,9 @@ def scan_timeouts(
     threshold: float = THRESHOLD_S,
 ) -> list[Finding]:
     """Every `timeout(W, f)` in test code whose expiry fails the test, when W is
-    under 5 s or does not resolve (MIK-8247).
+    under 5 s or does not resolve (MIK-8247); and every HTTP client or request
+    `.timeout(D)` in test code under 5 s or unresolved, with any other
+    `.timeout(D)` listed whatever its window.
 
     Fails the test: the Result is consumed by `.expect`, `.unwrap`, `?` or
     `.unwrap_or_else(|_| panic!(..))`, straight after `.await` or through a
@@ -496,11 +513,67 @@ def scan_timeouts(
                 "unresolvable window" if seconds is None else "under 5 s",
             )
         )
+    for m in METHOD_TIMEOUT.finditer(code):
+        line = code.count("\n", 0, m.start()) + 1
+        args, end = call_args(code, m.end() - 1)
+        # A getter (`config.timeout()`) reads a bound; it does not set one.
+        if line not in tested or not args.strip():
+            continue
+        at = bisect.bisect_left(fns, (m.start(),)) - 1
+        fn_start, fn = fns[at] if at >= 0 else (0, "<file>")
+        if paused_clock(code, fn_start, fns[at + 1][0] if at + 1 < len(fns) else len(code)):
+            continue
+        lets, _, _ = bindings(code[fn_start : m.start()])
+        value = resolve(args, Scope(path, lets, file_consts, tree_consts, imports))
+        seconds = None if value is None else value[0]
+        if REQUEST_RECEIVER.search(chain_only(receiver(code, m.start()))):
+            if seconds is not None and seconds >= threshold:
+                continue
+            rule = "unresolvable window" if seconds is None else "under 5 s"
+        else:
+            # Without types, what this `.timeout(` bounds is not known: it is
+            # listed at any window, so a person judges it; never passed.
+            rule = NOT_A_REQUEST
+        # One allowlist key whatever the spacing around the parenthesis.
+        found.append(Finding(path, fn, f".timeout({' '.join(args.split())})", line, seconds, rule))
     return found
+
+
+def receiver(code: str, dot: int) -> str:
+    """The method chain before the `.` at `dot`, back to the start of its
+    statement, argument or field: `reqwest::Client::builder().no_proxy()`."""
+    i, depth = dot - 1, 0
+    while i >= 0:
+        c = code[i]
+        if c in ")]":
+            depth += 1
+        elif c in "([":
+            if depth == 0:
+                break
+            depth -= 1
+        elif c in ";{}," and depth == 0:
+            break
+        i -= 1
+    return code[i + 1 : dot]
 
 
 TOKIO_INSTANT_IMPORT = re.compile(r"use\s+tokio::time::(?:Instant\b|\{[^}]*\bInstant\b)")
 STD_INSTANT_IMPORT = re.compile(r"use\s+std::time::(?:Instant\b|\{[^}]*\bInstant\b)")
+
+
+def chain_only(chain: str) -> str:
+    """`chain` with the insides of its brackets emptied: the evidence that a
+    receiver is an HTTP client is in the chain itself, never in an argument
+    (`iter([reqwest::Client::new()]).timeout(..)` is a stream)."""
+    out, depth = [], 0
+    for c in chain:
+        if c in ")]":
+            depth -= 1
+        if depth == 0:
+            out.append(c)
+        if c in "([":
+            depth += 1
+    return "".join(out)
 
 
 def tokio_measured(side: str, lets: dict[str, str], code: str) -> bool:
