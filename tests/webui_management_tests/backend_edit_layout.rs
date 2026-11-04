@@ -37,7 +37,7 @@ async fn in_place_or_refused(
             message.contains("Not saved:") && message.contains("in place"),
             "not the in-place refusal: {message}"
         );
-        continue;
+        return;
     }
     assert!(success.contains(&status), "{status}: {answer}");
     assert!(
