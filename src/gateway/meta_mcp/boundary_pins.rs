@@ -35,7 +35,7 @@ mod plain_refusals;
 mod plain_refusals_fixtures;
 mod plain_refusals_tests;
 mod presend_exits;
-mod raw_kill_pins;
+mod raw_kill_pin_tests;
 mod response_funnels;
 mod scan;
 mod scan_tests;

@@ -381,7 +381,11 @@ async fn a_short_cut_drops_an_earlier_uncut_sigterm() {
     // The cut is set before the close, so the handover's first step applies it.
     end.deadline()
         .move_earlier(std::time::Instant::now() + reserve + Duration::from_millis(295));
-    close_under(&t, tokio::time::Instant::now() + reserve + Duration::from_millis(330)).await;
+    close_under(
+        &t,
+        tokio::time::Instant::now() + reserve + Duration::from_millis(330),
+    )
+    .await;
     assert_killed(pid).await;
     assert!(
         !w.path().join("term.mark").exists(),
