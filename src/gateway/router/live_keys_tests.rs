@@ -92,8 +92,12 @@ async fn reload_text(state: &Arc<super::AppState>, dir: &std::path::Path, text: 
         .expect("the key edit applies");
 }
 
-/// The status `secret` gets on `path`.
-async fn status(state: &Arc<super::AppState>, path: &str, secret: &str) -> StatusCode {
+/// One `ping` with `secret` on `path`, through `router`.
+async fn send(
+    router: &axum::Router,
+    path: &str,
+    secret: &str,
+) -> axum::http::Response<axum::body::Body> {
     let body = serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": "ping"});
     let request = axum::http::Request::post(path)
         .header("authorization", format!("Bearer {secret}"))
@@ -101,27 +105,21 @@ async fn status(state: &Arc<super::AppState>, path: &str, secret: &str) -> Statu
         .header("accept", "application/json, text/event-stream")
         .body(axum::body::Body::from(body.to_string()))
         .expect("a request");
-    create_router(Arc::clone(state))
-        .oneshot(request)
+    router.clone().oneshot(request).await.expect("a response")
+}
+
+/// The status `secret` gets on `path` (the body is left unread: an accepted
+/// call may answer with a stream).
+async fn status(state: &Arc<super::AppState>, path: &str, secret: &str) -> StatusCode {
+    send(&create_router(Arc::clone(state)), path, secret)
         .await
-        .expect("a response")
         .status()
 }
 
 /// The status and body `secret` gets on `path`, for rows that must tell one
 /// 403 from another.
 async fn answer(state: &Arc<super::AppState>, path: &str, secret: &str) -> (StatusCode, String) {
-    let body = serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": "ping"});
-    let request = axum::http::Request::post(path)
-        .header("authorization", format!("Bearer {secret}"))
-        .header("content-type", "application/json")
-        .header("accept", "application/json, text/event-stream")
-        .body(axum::body::Body::from(body.to_string()))
-        .expect("a request");
-    let response = create_router(Arc::clone(state))
-        .oneshot(request)
-        .await
-        .expect("a response");
+    let response = send(&create_router(Arc::clone(state)), path, secret).await;
     let status = response.status();
     let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
         .await
@@ -268,22 +266,30 @@ async fn k5_a_key_digest_changed_by_reload_applies_on_the_next_call() {
         "precondition: the key works before the reload"
     );
 
+    let built_before = create_router(Arc::clone(&state));
     let rotated = ApiKeyConfig {
         key_sha256: Some(crate::config::api_key_digest_spec(ROTATED.as_bytes())),
         ..key(KEPT, None)
     };
     reload_keys(&state, dir.path(), &[rotated]).await;
 
-    let got = status(&state, "/mcp", ROTATED).await;
-    assert!(
-        got != StatusCode::UNAUTHORIZED && !got.is_server_error(),
-        "the new digest was not accepted: {got}"
-    );
-    assert_eq!(
-        status(&state, "/mcp", KEPT).await,
-        StatusCode::UNAUTHORIZED,
-        "the old digest still works after the reload"
-    );
+    // Through a router built before the reload, too: one that captured the
+    // key table when it was built would still judge by the old one.
+    for (router, which) in [
+        (built_before, "the router built before the reload"),
+        (create_router(Arc::clone(&state)), "a router built after it"),
+    ] {
+        let got = send(&router, "/mcp", ROTATED).await.status();
+        assert!(
+            got != StatusCode::UNAUTHORIZED && !got.is_server_error(),
+            "{which}: the new digest was not accepted: {got}"
+        );
+        assert_eq!(
+            send(&router, "/mcp", KEPT).await.status(),
+            StatusCode::UNAUTHORIZED,
+            "{which}: the old digest still works after the reload"
+        );
+    }
 }
 
 /// K5 `previous_key_sha256` with `previous_expires_at` (MIK-9255.IDENT.3): a
@@ -355,6 +361,12 @@ async fn k5_a_key_kind_changed_by_reload_applies_on_the_next_call() {
     let refused = |(status, body): &(StatusCode, String)| {
         *status == StatusCode::FORBIDDEN && body.contains(super::hardened_identity::REFUSAL)
     };
+    // Past authentication and past the identity check: a later check may
+    // still refuse the call (hardened turns signing on), which is not this
+    // field's concern.
+    let admitted = |answer: &(StatusCode, String)| {
+        answer.0 != StatusCode::UNAUTHORIZED && !answer.0.is_server_error() && !refused(answer)
+    };
     // Control: a gateway started with the key already personal admits it,
     // so a refusal after the reload below is the reload's, not the fixture's.
     {
@@ -373,8 +385,8 @@ async fn k5_a_key_kind_changed_by_reload_applies_on_the_next_call() {
             super::tests::test_router_app_state_with_auth_and_config(&control_auth, control).await;
         let got = answer(&started_personal, "/mcp", KEPT).await;
         assert!(
-            !refused(&got),
-            "control: a key started personal is refused for want of an identity: {got:?}"
+            admitted(&got),
+            "control: a key started personal is not admitted: {got:?}"
         );
     }
     let before = answer(&state, "/mcp", KEPT).await;
@@ -390,8 +402,8 @@ async fn k5_a_key_kind_changed_by_reload_applies_on_the_next_call() {
     reload_text(&state, dir.path(), hardened(&[personal])).await;
     let made_personal = answer(&state, "/mcp", KEPT).await;
     assert!(
-        !refused(&made_personal),
-        "the key made personal by reload is still refused for want of an identity: {made_personal:?}"
+        admitted(&made_personal),
+        "the key made personal by reload is not admitted: {made_personal:?}"
     );
 
     reload_text(&state, dir.path(), hardened(&[key(KEPT, None)])).await;
