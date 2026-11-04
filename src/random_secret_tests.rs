@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! The shared credential generator: its output, its lack of state, and the
-//! closed list of production code allowed to call it (MIK-9223 S1).
+//! closed list of production code allowed to call it.
 
 use std::path::{Path, PathBuf};
 
@@ -99,7 +99,7 @@ fn production_sources() -> Vec<(String, String)> {
         .collect()
 }
 
-/// The production callers of `random_secret`, both crates (MIK-9223 G2):
+/// The production callers of `random_secret`, both crates:
 /// `gateway init`'s admin token (binary), the auto bearer, the key server's
 /// bearer, the dashboard's session values. The create route joins at S5 and
 /// rotate in C2; any other caller fails here until it is reviewed and named.
