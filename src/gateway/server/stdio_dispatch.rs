@@ -154,7 +154,7 @@ impl Gateway {
                     }
                     m @ ("tasks/get" | "tasks/update" | "tasks/cancel") => {
                         let retry = crate::protocol::mrtr::RetryFields::from_params(params);
-                        let live = Some(generation.generation());
+                        let pinned = Some(generation.generation());
                         let caller = Self::build_stdio_caller_context(
                             true,
                             None,
@@ -162,7 +162,7 @@ impl Gateway {
                             &retry,
                             &request_shape,
                             client,
-                            (meta_mcp.record_key(), live),
+                            (meta_mcp.record_key(), pinned),
                         );
                         let shape = &request_shape;
                         stdio_tasks::serve(client.tasks, m, id, params, shape, &caller, session_id)
@@ -620,7 +620,7 @@ impl Gateway {
             let granted;
             // The message's own generation, the policy's config: its budgets
             // judge the call from admission to settlement across a reload.
-            let live = Some(generation.generation());
+            let pinned = Some(generation.generation());
             let mut caller = Self::build_stdio_caller_context(
                 is_modern,
                 protocol_revision_owned.as_deref(),
@@ -628,7 +628,7 @@ impl Gateway {
                 &retry,
                 request_shape,
                 client,
-                (meta_mcp.record_key(), live),
+                (meta_mcp.record_key(), pinned),
             );
             // The signing nonce is admitted before the route stage, so a bad
             // nonce is refused without paying for the payload
