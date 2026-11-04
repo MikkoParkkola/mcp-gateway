@@ -394,7 +394,7 @@ async fn admission_refusal_frees_nonce(
             crate::gateway::record_principal::RecordPrincipal::none(),
             crate::gateway::meta_mcp::Authentication::Anonymous,
             crate::security::audit::CredentialKind::None,
-            false,
+            crate::gateway::authz::AdminStanding::None,
             crate::protocol::meta::Declared::NONE,
             None,
             None,

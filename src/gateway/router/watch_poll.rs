@@ -105,7 +105,7 @@ pub(crate) async fn poll_capability(
         ),
         crate::gateway::meta_mcp::Authentication::of(Some(client)),
         crate::security::audit::CredentialKind::of(Some(client)),
-        client.admin,
+        client.admin_standing(),
         crate::protocol::meta::Declared::default(),
         None,
         None,
