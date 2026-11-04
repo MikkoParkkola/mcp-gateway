@@ -555,3 +555,69 @@ mod start_tests {
         assert!(cell.get().is_some());
     }
 }
+
+/// Every caller's stop budget yields a plan that fits it, by construction.
+#[cfg(test)]
+mod plan_tests {
+    use super::{DEFAULT_STOP_BUDGET, Ending, KILL_RESERVE, MIN_PHASE, graceful_ending};
+    use std::time::Duration;
+
+    fn total(ending: Ending) -> Duration {
+        ending.waits() + KILL_RESERVE
+    }
+
+    /// One row per caller: a gateway shutdown at the default and at a short
+    /// `shutdown_timeout`, eviction and restart (`close_stage`), a close with
+    /// no caller budget, and a budget at the reserve.
+    #[test]
+    fn every_callers_plan_fits_its_budget() {
+        let callers = [
+            ("shutdown, default shutdown_timeout", Duration::from_secs(30)),
+            ("shutdown, short shutdown_timeout", Duration::from_secs(9)),
+            ("eviction close_stage", Duration::from_secs(10)),
+            ("restart close_stage", Duration::from_secs(10)),
+            ("no caller budget", DEFAULT_STOP_BUDGET),
+            ("at the reserve", KILL_RESERVE),
+        ];
+        for (caller, budget) in callers {
+            for stdin_closed in [true, false] {
+                let ending = graceful_ending(budget, stdin_closed);
+                assert!(
+                    ending == Ending::Now || total(ending) <= budget,
+                    "{caller}: plan {ending:?} exceeds its budget {budget:?}"
+                );
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_split_keeps_the_reserve_and_gives_a_third_to_sigterm() {
+        assert_eq!(
+            graceful_ending(Duration::from_secs(30), true),
+            Ending::Graceful {
+                eof: Duration::from_secs(16),
+                term: Duration::from_secs(7),
+            }
+        );
+        // Stdin a writer still holds: no EOF wait, SIGTERM at once.
+        assert_eq!(
+            graceful_ending(Duration::from_secs(10), false),
+            Ending::Graceful {
+                eof: Duration::ZERO,
+                term: Duration::from_secs(3),
+            }
+        );
+    }
+
+    #[test]
+    fn a_budget_at_or_under_the_reserve_kills_at_once() {
+        assert_eq!(graceful_ending(KILL_RESERVE, true), Ending::Now);
+        assert_eq!(graceful_ending(Duration::ZERO, true), Ending::Now);
+        assert_eq!(
+            graceful_ending(KILL_RESERVE + MIN_PHASE / 2, true),
+            Ending::Now,
+            "waits under the minimum phase are skipped"
+        );
+    }
+}
