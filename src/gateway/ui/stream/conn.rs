@@ -292,25 +292,17 @@ async fn drive(
     conn.send(hello_frame(&hello)).await?;
     sent.deliver(conn, &first).await?;
     let mut keep = interval_at(Instant::now() + KEEP_ALIVE, KEEP_ALIVE);
+    keep.set_missed_tick_behavior(MissedTickBehavior::Delay);
     loop {
-        // Catch-up: a merge with a scan pending reads one page to its end,
-        // outside the timer race, after its entitlement is checked again.
-        if let Some(i) = (0..2).find(|&i| logs[i].as_ref().is_some_and(LogMerge::scanning)) {
-            conn.require_entitled().await?;
-            let step = match logs[i].as_mut() {
-                Some(m) => m.step().await,
-                None => None,
-            };
-            let Some(outs) = step else {
-                return Ok(End::LogEnded);
-            };
-            write(conn, &mut sent, &mut logs, i, outs).await?;
-            continue;
-        }
+        // With a scan pending, every pass reads one page, after the race has
+        // served whatever is already due (the client gone, the lifetime, a
+        // check, a keep-alive, a snapshot): biased, so a catch-up delays it
+        // by one page at most. The page is read after the race, never
+        // cancelled; the live receives wait until the scan ends.
+        let scan = (0..2).find(|&i| logs[i].as_ref().is_some_and(LogMerge::scanning));
         let [activity, config] = &mut logs;
         let stepped = tokio::select! {
-            out = live(activity) => Some((0, out)),
-            out = live(config) => Some((1, out)),
+            biased;
             () = conn.tx.closed() => return Ok(End::ClientGone),
             () = tokio::time::sleep_until(deadline) => return Ok(End::Lifetime),
             _ = recheck.tick() => {
@@ -327,7 +319,22 @@ async fn drive(
                 sent.deliver(conn, &snap).await?;
                 None
             }
+            () = std::future::ready(()), if scan.is_some() => None,
+            out = live(activity), if scan.is_none() => Some((0, out)),
+            out = live(config), if scan.is_none() => Some((1, out)),
         };
+        if let Some(i) = scan {
+            conn.require_entitled().await?;
+            let step = match logs[i].as_mut() {
+                Some(m) => m.step().await,
+                None => None,
+            };
+            let Some(outs) = step else {
+                return Ok(End::LogEnded);
+            };
+            write(conn, &mut sent, &mut logs, i, outs).await?;
+            continue;
+        }
         match stepped {
             Some((_, None)) => return Ok(End::LogEnded),
             Some((i, Some(outs))) => write(conn, &mut sent, &mut logs, i, outs).await?,
