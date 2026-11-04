@@ -580,3 +580,31 @@ async fn an_unchanged_save_records_no_intent() {
         "an unchanged save left an operation intent"
     );
 }
+
+/// The older mutate path on an audited gateway: its lock never recovers a
+/// pending journal unaudited. The write is refused before any lock, so the
+/// crashed bytes and the journal stay and nothing is loaded.
+#[tokio::test]
+async fn the_mutate_path_on_an_audited_gateway_recovers_nothing() {
+    let (_dir, path, ctx) = setup();
+    crashed_after_rename(&path, NEXT);
+    let recorder = Recorder::new(&path, false);
+    ctx.set_recovery_audit(Box::new(recorder.clone()));
+
+    let result = ctx
+        .mutate_and_reload_outcome_within(&path, WAIT, |_: &mut crate::config::Config| {
+            Ok::<(), String>(())
+        })
+        .await;
+
+    assert!(
+        result.is_err(),
+        "the mutate path wrote on an audited gateway"
+    );
+    assert_eq!(read(&path), NEXT, "the mutate path recovered unaudited");
+    assert!(
+        journal::journal_path(&path).exists(),
+        "the mutate path settled the journal unaudited"
+    );
+    assert!(!running_has_b(&ctx), "the crashed bytes were loaded");
+}

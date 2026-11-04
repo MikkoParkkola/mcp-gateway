@@ -595,6 +595,10 @@ pub(super) use crate::config::backend_add::validate_backend_name;
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+#[path = "backends_audit_tests.rs"]
+mod audit_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::gateway::ui::backend_ops::resolve_parts;
