@@ -374,32 +374,106 @@ async fn s1d_a_burst_past_the_broadcast_capacity_arrives_exactly_once_in_order()
     );
 }
 
+use crate::gateway::ui::stream::{KEEP_ALIVE, PAGE};
+
+/// A stream reconnected `behind` calls back, on a paused clock, with its
+/// catch-up under way: its first catch-up row is read, so the stream is
+/// inside its first page with the rest of that page still to send.
+async fn catching_up(
+    state: &Arc<AppState>,
+    inv: &TransparencyLogger,
+    who: &str,
+    behind: usize,
+) -> Open {
+    let mut s = open(state, request(STREAM, Who::Bearer(who), None)).await;
+    within(s.until("hello")).await;
+    call(inv, "a", 0);
+    let id = within(s.until("activity")).await.id.expect("an id");
+    drop(s);
+    for n in 1..=behind {
+        call(inv, "a", n);
+    }
+    tokio::time::pause();
+    let mut again = open(state, request(STREAM, Who::Bearer(who), Some(&id))).await;
+    within(again.until("hello")).await;
+    within(again.until("activity")).await;
+    again
+}
+
 #[tokio::test]
 async fn c1_a_catch_up_still_ends_at_its_lifetime_between_pages() {
     let (state, _dirs, inv) = logged(false).await;
-    let mut s = open(&state, request(STREAM, Who::Bearer(BEARER), None)).await;
-    within(s.until("hello")).await;
-    call(&inv, "srv", 0);
-    let id = within(s.until("activity")).await.id.expect("an id");
-    drop(s);
-    // Four catch-up pages of 200 rows behind the resumed id.
-    let behind = 800;
-    for n in 1..=behind {
-        call(&inv, "srv", n);
-    }
-    tokio::time::pause();
-    let mut again = open(&state, request(STREAM, Who::Bearer(BEARER), Some(&id))).await;
-    within(again.until("hello")).await;
-    // Past the stream's one-hour lifetime, while its catch-up runs: the
-    // stream holds one unread frame, so it is at most on its first page.
-    tokio::time::advance(Duration::from_secs(3_601)).await;
-    let mut caught_up = 0;
-    while let Some(f) = within(again.next()).await {
-        caught_up += usize::from(f.event == "activity");
+    let behind = 4 * PAGE;
+    let mut again = catching_up(&state, &inv, BEARER, behind).await;
+    // On to the one-hour lifetime and past it, reading as the clock moves:
+    // steps shorter than a stalled write's limit, so only the lifetime can
+    // end the stream, and it must do so at a page boundary.
+    let mut rows = 1;
+    loop {
+        tokio::time::advance(Duration::from_secs(10)).await;
+        match within(again.next()).await {
+            Some(f) => rows += usize::from(f.event == "activity"),
+            None => break,
+        }
     }
     assert!(
-        caught_up < 2 * 200,
-        "the lifetime ends the stream at a page boundary, not after the whole catch-up: {caught_up} of {behind} rows sent"
+        rows < behind && rows % PAGE == 0,
+        "the lifetime ends the catch-up at a page boundary: {rows} of {behind} rows sent"
+    );
+}
+
+#[tokio::test]
+async fn c2_a_catch_up_serves_a_due_keep_alive_before_its_next_page() {
+    let (state, _dirs, inv) = logged(false).await;
+    let mut again = catching_up(&state, &inv, BEARER, 3 * PAGE).await;
+    // A keep-alive and a recheck both fall due inside the first page.
+    tokio::time::advance(KEEP_ALIVE + Duration::from_secs(1)).await;
+    let mut rows = 1;
+    loop {
+        let f = within(again.next())
+            .await
+            .expect("the stream is still open");
+        match f.event.as_str() {
+            "comment" => break,
+            "activity" => rows += 1,
+            _ => {}
+        }
+    }
+    assert!(
+        rows <= PAGE,
+        "the due keep-alive is sent when the first page ends, before the next one: after {rows} rows"
+    );
+}
+
+#[tokio::test]
+async fn f8_a_config_change_is_not_held_back_by_a_run_of_calls() {
+    let (state, _dirs, inv) = logged(true).await;
+    let mut s = open(&state, request(STREAM, Who::Bearer(BEARER), None)).await;
+    within(s.until("hello")).await;
+    // Every one of these is queued before the stream reads any: a run of
+    // calls with one config change in the middle.
+    for n in 0..50 {
+        call(&inv, "srv", n);
+    }
+    config_change(&state);
+    for n in 50..100 {
+        call(&inv, "srv", n);
+    }
+    let mut before = 0;
+    within(async {
+        loop {
+            let f = s.next().await.expect("the stream is still open");
+            match f.event.as_str() {
+                "config" => break,
+                "activity" => before += 1,
+                _ => {}
+            }
+        }
+    })
+    .await;
+    assert!(
+        before < 100,
+        "the config change arrives among the calls, not after every one of them: {before} calls first"
     );
 }
 
@@ -493,25 +567,8 @@ async fn s1f_a_fresh_stream_starts_at_the_head_not_the_oldest_record() {
 #[tokio::test]
 async fn a1g_a_demotion_during_a_catch_up_sends_no_more_of_its_page() {
     let (state, _dirs, inv) = logged(true).await;
-    let mut s = open(&state, request(STREAM, Who::Bearer(SCOPED_ADMIN), None)).await;
-    within(s.until("hello")).await;
-    call(&inv, "a", 0);
-    let id = within(s.until("activity")).await.id.expect("an id");
-    drop(s);
-    // Two catch-up pages of 200 rows, every one on a backend the key keeps.
-    for n in 1..=400 {
-        call(&inv, "a", n);
-    }
-    tokio::time::pause();
-    let mut again = open(
-        &state,
-        request(STREAM, Who::Bearer(SCOPED_ADMIN), Some(&id)),
-    )
-    .await;
-    within(again.until("hello")).await;
-    // The first catch-up row: the stream is now inside its first page, past
-    // the check before it, with the rest of that page still to send.
-    within(again.until("activity")).await;
+    // Two catch-up pages, every row on a backend the key keeps.
+    let mut again = catching_up(&state, &inv, SCOPED_ADMIN, 2 * PAGE).await;
     state.live_config.edit(|c| c.auth = auth(&["a"]));
     let published = state.live_config.get();
     let key = published

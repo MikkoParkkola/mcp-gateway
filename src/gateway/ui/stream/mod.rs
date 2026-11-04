@@ -39,6 +39,12 @@ pub(crate) use self::guard::{MAX_PER_CREDENTIAL, MAX_UI_STREAMS};
 /// One log's broadcast capacity, for the rows that must burst past it.
 #[cfg(test)]
 pub(crate) const BROADCAST: usize = feed::BROADCAST;
+/// Rows in one catch-up page, for the rows that must span pages.
+#[cfg(test)]
+pub(crate) const PAGE: usize = merge::PAGE;
+/// The keep-alive cadence, for the rows that wait one out.
+#[cfg(test)]
+pub(crate) const KEEP_ALIVE: std::time::Duration = conn::KEEP_ALIVE;
 use self::id::StreamId;
 use super::activity::access::Access;
 use super::errors::{auth_required, flat_error};
