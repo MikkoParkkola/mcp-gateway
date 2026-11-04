@@ -57,3 +57,43 @@ fn queued_work_runs_only_under_the_exact_credential_it_was_admitted_with() {
         "a rotated key ran work admitted under its previous secret"
     );
 }
+
+/// The key under secret `A`, admin over `backends`.
+fn admin_table(backends: &[&str]) -> ResolvedAuthConfig {
+    let key = ApiKeyConfig {
+        name: "ops".to_owned(),
+        key_sha256: Some(api_key_digest_spec(A.as_bytes())),
+        principal: Some(PRINCIPAL.to_owned()),
+        backends: backends.iter().map(|b| (*b).to_owned()).collect(),
+        admin: true,
+        ..Default::default()
+    };
+    let auth = AuthConfig {
+        enabled: true,
+        api_keys: vec![key],
+        ..AuthConfig::default()
+    };
+    ResolvedAuthConfig::try_from_config(
+        &auth,
+        &EnvOverlay::none(),
+        crate::gateway::record_principal::TEST_RECORD_KEY,
+    )
+    .expect("the table resolves")
+}
+
+#[test]
+fn queued_work_ends_when_its_key_steps_down_from_gateway_admin() {
+    let admitted = admin_table(&["*"]);
+    let client = admitted.validate_token(A).expect("A authenticates");
+    let owned = OwnedRouterAuthorizer::capture(Some(&client), None, None);
+    let now = crate::clock::utc_now().ok();
+    assert!(
+        matches!(owned.rejudged(&admin_table(&[]), now), Ok(Some(_))),
+        "control: an admin key with no backends keeps gateway-wide standing"
+    );
+    assert_eq!(
+        owned.rejudged(&admin_table(&["alpha"]), now).err(),
+        Some(KeyGone),
+        "an admin key narrowed to [alpha] ran work admitted under gateway-wide admin"
+    );
+}
