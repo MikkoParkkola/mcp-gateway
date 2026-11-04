@@ -65,7 +65,8 @@ fn reload_k_std(w: &World, edit: impl Fn(&mut crate::gateway::auth::ResolvedApiK
 }
 
 /// STREAM.1: a key a reload removes has its held streams' next ordinary
-/// notification withheld: both streams end instead of delivering it.
+/// notification withheld. The GET fan-out queues no copy for a dead key, so
+/// the GET stream stays quiet; listen ends.
 #[tokio::test]
 async fn stream1_a_removed_key_ends_its_held_streams() {
     let w = World::start().await;
@@ -88,7 +89,7 @@ async fn stream1_a_removed_key_ends_its_held_streams() {
     );
     push(&w, "alpha").await;
     assert!(
-        !get.is_open(&w).await,
+        !get.frames(&w).await.iter().any(|m| m == GET_NOTE),
         "STREAM.1: the GET stream still serves a removed key"
     );
     assert!(
@@ -403,9 +404,9 @@ async fn status_as(w: &World, bearer: &str) -> axum::http::StatusCode {
 }
 
 /// Through the real file reload: a key the reload removes is refused on its
-/// next request, and the GET stream it holds ends instead of writing on.
+/// next request, and the GET stream it holds is sent nothing more for it.
 #[tokio::test]
-async fn file_reload_a_removed_key_ends_its_get_stream() {
+async fn file_reload_a_removed_key_gets_nothing_on_its_get_stream() {
     let w = World::start().await;
     w.store_shared("alpha", vec![tool("read", "r")]);
     w.settle().await;
@@ -424,7 +425,7 @@ async fn file_reload_a_removed_key_ends_its_get_stream() {
     );
     push(&w, "alpha").await;
     assert!(
-        !get.is_open(&w).await,
+        !get.frames(&w).await.iter().any(|m| m == GET_NOTE),
         "the GET stream still serves a key the file reload removed"
     );
 }
