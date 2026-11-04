@@ -685,8 +685,9 @@ mod tests {
     /// replace journal over an unparseable candidate and refuses, leaving the
     /// file, the journal and the staged original as they were. The CLI holds
     /// no audit sink, so it does not recover; a gateway reload does, and
-    /// records it when the gateway keeps an audit log. The journal is planted by hand in
-    /// its on-disk form, so this also pins that format.
+    /// records it when the gateway keeps an audit log. The refusal checks only
+    /// that a journal exists; the on-disk format is pinned by the startup
+    /// recovery row in `serve_load_tests`.
     #[test]
     fn remove_refuses_a_crashed_byte_write_and_leaves_it_pending() {
         use sha2::Digest as _;
@@ -712,7 +713,9 @@ mod tests {
         )
         .unwrap();
 
-        let _ = run_remove_command("b", &config, CommentLoss::Refuse);
+        let code = run_remove_command("b", &config, CommentLoss::Refuse);
+
+        assert_eq!(code, ExitCode::FAILURE, "the refusal fails the command");
 
         assert_eq!(
             std::fs::read_to_string(&config).unwrap(),

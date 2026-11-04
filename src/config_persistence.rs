@@ -351,7 +351,8 @@ where
     // Advisory only: a file that does not load is refused before the lock
     // file is made, so the refusal leaves the directory as it was. The load
     // under the lock is the authoritative one. Skipped while a replace journal
-    // is pending: the lock recovers the file before that load.
+    // is pending: the file may be a refused candidate, and `cli_lock` refuses
+    // the write without loading it.
     if !journal::exists(path) {
         load_existing_or_default(path)
             .map_err(|e| format!("Failed to load {}: {e}", path.display()))?;
