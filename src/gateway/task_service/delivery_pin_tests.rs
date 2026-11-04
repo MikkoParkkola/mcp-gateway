@@ -27,9 +27,28 @@ fn rust_files(dir: &Path, out: &mut Vec<std::path::PathBuf>) {
     }
 }
 
-/// Every production occurrence of `needle`, as (file relative to the crate,
-/// count), test items blanked.
-fn occurrences(needle: &str) -> Vec<(String, usize)> {
+/// How often `code` names the item `name` through a path or a receiver: the
+/// whole identifier right after a `.` or a `::`, whitespace allowed between.
+/// A method call, a UFCS call and a function reference all count, whatever
+/// their spacing; a definition (`fn name`), a variable or a longer name
+/// that contains it does not.
+fn path_uses(code: &str, name: &str) -> usize {
+    let ident = |c: char| c.is_alphanumeric() || c == '_';
+    code.match_indices(name)
+        .filter(|(at, _)| {
+            let before = &code[..*at];
+            let after = &code[at + name.len()..];
+            let whole = !before.ends_with(ident) && !after.starts_with(ident);
+            let reached = before.trim_end();
+            whole && (reached.ends_with('.') || reached.ends_with("::"))
+        })
+        .count()
+}
+
+/// Every production use of the item `name` (see [`path_uses`]), as (file
+/// relative to the crate, count): test items, comments and string literals
+/// blanked first.
+fn occurrences(name: &str) -> Vec<(String, usize)> {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let mut files = Vec::new();
     rust_files(&root.join("src"), &mut files);
@@ -49,15 +68,24 @@ fn occurrences(needle: &str) -> Vec<(String, usize)> {
         })
         .filter_map(|path| {
             let text = std::fs::read_to_string(path).ok()?;
-            let count = crate::test_source_text::production_text(&text)
-                .matches(needle)
-                .count();
+            let code =
+                crate::test_source_text::sanitize(&crate::test_source_text::production_text(&text));
+            let count = path_uses(&code, name);
             let relative = path.strip_prefix(root).ok()?.to_string_lossy().into_owned();
             (count > 0).then_some((relative, count))
         })
         .collect();
     found.sort();
     found
+}
+
+/// The matcher itself: every call shape counts, nothing else does.
+#[test]
+fn every_call_shape_of_the_projection_is_counted() {
+    let code = "a.wire(); b . wire (); Task::wire(&t); map(Task::wire); x.delivered_wire(); \
+                fn wire(&self) {} let wire = 1; rewire(); a.wire_json(); s.task.wire()";
+    assert_eq!(path_uses(code, "wire"), 5);
+    assert_eq!(path_uses(code, "delivered_wire"), 1);
 }
 
 #[test]
@@ -68,7 +96,7 @@ fn only_the_named_serve_sites_send_a_stored_task() {
         .collect();
     want.sort();
     assert_eq!(
-        occurrences(".delivered_wire()"),
+        occurrences("delivered_wire"),
         want,
         "a new reader of a stored task: route it through delivered_wire's gate and name it here"
     );
@@ -79,7 +107,7 @@ fn nothing_but_delivered_wire_projects_a_stored_task() {
     // Any receiver, not only `self.task`: a reader holding the task under
     // another name would bypass the gate the same way.
     assert_eq!(
-        occurrences(".wire()"),
+        occurrences("wire"),
         vec![("src/gateway/task_service/record.rs".to_owned(), 1)],
         "a stored task projected outside delivered_wire skips the withheld gate"
     );
