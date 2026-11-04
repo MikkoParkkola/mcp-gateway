@@ -110,6 +110,9 @@ pub(crate) struct DeliveryFacts {
     last_step_folded: Option<RpcError>,
     /// Whose failure the error about to be delivered is (`wrapped_step`).
     error_of: ErrorOf,
+    /// The check that refused a stored task's answer, and its rule when a
+    /// configured rule decided: the first one raised.
+    refused_by: Option<crate::security::decision_record::RefusedBy>,
 }
 
 /// What the injected-value scrub did during a delivery.
@@ -176,6 +179,7 @@ impl Default for DeliveryFacts {
             folded: None,
             last_step_folded: None,
             error_of: ErrorOf::Own,
+            refused_by: None,
         }
     }
 }
@@ -470,6 +474,15 @@ pub(crate) fn raise(effect: ResponseEffect) {
     with(|facts| facts.effect = facts.effect.max(effect));
 }
 
+/// A stored task's answer refused by `refused_by`'s check: raise `Refused`
+/// and keep the check for the delivery record; the first one stands.
+pub(crate) fn refused_by(refused_by: crate::security::decision_record::RefusedBy) {
+    with(|facts| {
+        facts.effect = facts.effect.max(ResponseEffect::Refused);
+        facts.refused_by.get_or_insert(refused_by);
+    });
+}
+
 /// A gateway refusal decided at a delivering site: raise `Refused` and hand
 /// the error on unchanged.
 pub(crate) fn refused<E>(error: E) -> E {
@@ -676,10 +689,12 @@ pub(crate) fn record_fields(
             .load(std::sync::atomic::Ordering::SeqCst);
         if effect == ResponseEffect::Refused || echoed {
             fields.insert("response_effect".into(), effect.as_str().into());
+            insert_refused_by(facts, fields);
         }
         return;
     }
     fields.insert("response_effect".into(), effect.as_str().into());
+    insert_refused_by(facts, fields);
     if !facts.scanned {
         fields.insert("response_findings".into(), Value::Null);
         return;
@@ -705,9 +720,22 @@ pub(crate) fn record_fields(
     }
 }
 
+/// `refused_by`, beside `response_effect` in every branch that writes it.
+fn insert_refused_by(facts: &DeliveryFacts, fields: &mut Map<String, Value>) {
+    if let Some(refused_by) = &facts.refused_by {
+        // invariant: a kind and an optional string always serialise.
+        let value = serde_json::to_value(refused_by).expect("RefusedBy serialises");
+        fields.insert("refused_by".into(), value);
+    }
+}
+
 #[cfg(test)]
 #[path = "delivery_facts_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "delivery_facts_refused_by_tests.rs"]
+mod refused_by_tests;
 
 #[cfg(test)]
 #[path = "delivery_facts_withheld_tests.rs"]
