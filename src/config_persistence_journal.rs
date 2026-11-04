@@ -21,6 +21,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use super::atomic::{FileMode, Symlink, write_atomic};
+use crate::config::UnreadConfig;
 use crate::identity_grants::journal::resolved;
 
 const VERSION: u32 = 1;
@@ -150,7 +151,17 @@ pub(crate) fn begin(target: &Path, original_revision: String) -> std::io::Result
 )]
 pub(crate) fn mark_all_renamed(target: &Path) -> std::io::Result<()> {
     let path = journal_path(target);
-    let mut journal = read(&path)?;
+    let mut journal = match read(&path) {
+        Ok(Some(journal)) => journal,
+        Ok(None) => return Err(std::io::ErrorKind::NotFound.into()),
+        Err(UnreadConfig::Refused(why)) => {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                guard_refused(&why),
+            ));
+        }
+        Err(UnreadConfig::Failed(why)) => return Err(std::io::Error::other(why)),
+    };
     journal.state = State::AllRenamed;
     let bytes = serde_json::to_vec(&journal).map_err(std::io::Error::other)?;
     write_atomic(&path, &bytes, FileMode::Private, Symlink::Replace)?;
@@ -200,14 +211,15 @@ pub(crate) fn recover(config: &Path) -> Result<Recovered, String> {
         )
     };
     let journal = match read(&path) {
-        Ok(journal) => journal,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+        Ok(Some(journal)) => journal,
+        Ok(None) => {
             // A staged copy with no journal is a crash before the journal
             // existed: the file was never replaced.
             let _ = remove_if_present(&original);
             return Ok(Recovered::Nothing);
         }
-        Err(e) => {
+        Err(UnreadConfig::Refused(why)) => return Err(guard_refused(&why)),
+        Err(UnreadConfig::Failed(e)) => {
             return Err(format!(
                 "{} cannot be read ({e}); {}",
                 path.display(),
@@ -230,9 +242,27 @@ pub(crate) fn recover(config: &Path) -> Result<Recovered, String> {
             if let Some(fault::Fault::Pause(pause)) = fault::get(&target) {
                 pause.enter_and_wait();
             }
-            let bytes = std::fs::read(&original).map_err(|e| {
-                format!("{} cannot be read ({e}); {}", original.display(), manual())
-            })?;
+            // The bytes restored as gateway.yaml: read through the config
+            // guard, so a staged original another account could plant or
+            // change, with a digest to match, is never restored.
+            let bytes = match crate::config::read_config_text(&original) {
+                Ok(Some(text)) => text.into_bytes(),
+                Ok(None) => {
+                    return Err(format!(
+                        "{} cannot be read (it is gone); {}",
+                        original.display(),
+                        manual()
+                    ));
+                }
+                Err(UnreadConfig::Refused(why)) => return Err(guard_refused(&why)),
+                Err(UnreadConfig::Failed(e)) => {
+                    return Err(format!(
+                        "{} cannot be read ({e}); {}",
+                        original.display(),
+                        manual()
+                    ));
+                }
+            };
             if crate::hashing::sha256_hex(&bytes) != journal.original_revision {
                 return Err(format!(
                     "{} does not match the digest its journal {} records, so it was not restored; compare it with {} by hand before restoring anything, then delete the journal",
@@ -293,16 +323,32 @@ pub(crate) fn take_restored(config: &Path) -> bool {
         .is_some_and(|set| set.remove(&target))
 }
 
-fn read(path: &Path) -> std::io::Result<Journal> {
+/// The journal at `path`, read through the config guard (it decides which
+/// bytes are restored as gateway.yaml); `None` when there is none.
+fn read(path: &Path) -> Result<Option<Journal>, UnreadConfig> {
+    let Some(text) = crate::config::read_config_text(path)? else {
+        return Ok(None);
+    };
     let journal: Journal =
-        serde_json::from_slice(&std::fs::read(path)?).map_err(std::io::Error::other)?;
+        serde_json::from_str(&text).map_err(|e| UnreadConfig::Failed(e.to_string()))?;
     if journal.version != VERSION {
-        return Err(std::io::Error::other(format!(
+        return Err(UnreadConfig::Failed(format!(
             "journal version {} is not {VERSION}",
             journal.version
         )));
     }
-    Ok(journal)
+    Ok(Some(journal))
+}
+
+/// A replace journal or its staged original the config guard refused. The
+/// guard's text names the file and the fix, so it goes to the log; the
+/// answer says what happened without a path, so no caller can echo one.
+fn guard_refused(why: &str) -> String {
+    tracing::warn!(detail = %why, "a replace journal or its staged original was refused by the config guard");
+    "a pending config recovery was not run: its journal or staged original is a file the config \
+     guard refuses (another account could change it, or it is not a regular file); fix it as the \
+     gateway log says, then retry"
+        .to_owned()
 }
 
 fn remove_if_present(path: &Path) -> std::io::Result<()> {

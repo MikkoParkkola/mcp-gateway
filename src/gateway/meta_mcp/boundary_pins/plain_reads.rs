@@ -23,10 +23,16 @@ use super::scan::{Place, Sink, walk};
 const ROOTS: [&str; 3] = ["src/lib.rs", "src/main.rs", "src/bin/provenance-eval.rs"];
 
 /// What a plain read site opens.
-const CLASSES: [&str; 3] = [
+const CLASSES: [&str; 5] = [
     // The config guard's own open: the one place gateway.yaml is opened to
-    // be read.
+    // be read for anything that writes.
     "guard",
+    // Reads gateway.yaml for a command that writes nothing from it (a
+    // report, a notice, a dry run); the reason says what the bytes feed.
+    "read-only",
+    // Copies gateway.yaml to a backup with the source's own access; nothing
+    // in the gateway reads the backup back.
+    "backup-copy",
     // Reads a file that is not gateway.yaml; the reason names it.
     "not-config",
     // Opens a path without reading its bytes (a directory to sync, a probe).
@@ -34,7 +40,7 @@ const CLASSES: [&str; 3] = [
 ];
 
 /// Known gaps, each closed by deleting its slug once its last row flips.
-const PENDING: [&str; 2] = ["config-backup-copy", "doctor-config-reread"];
+const PENDING: [&str; 0] = [];
 
 #[derive(Default)]
 struct Found {

@@ -18,19 +18,18 @@ src/commands/kubernetes.rs	read_plan	fs::read_to_string	1	not-config	Kubernetes 
 src/commands/mod.rs	read_ca_files	fs::read_to_string	1	not-config	the CA certificate (public); the CA key goes through load_private_key
 src/commands/protocol_import.rs	preview_plan_from_file	fs::read_to_string	1	not-config	protocol import plan input
 src/commands/ranking.rs	evaluate_ranking_file	fs::read_to_string	1	not-config	ranking evaluation input
-src/commands/regular_file.rs	read_regular_text	open_nonblocking	1	pending:doctor-config-reread	doctor rereads gateway.yaml for its key names after Config::load read it through the guard; the lib has no public guarded text read, so the fix waits on a decision
+src/commands/regular_file.rs	read_regular_text	open_nonblocking	1	read-only	doctor reads gateway.yaml for its key names (a report row) and the upgrade dry run for its URL-key report; neither writes, and the real rewrite reads under the lock through the guard
 src/commands/trust.rs	read_card_file	fs::read_to_string	1	not-config	agent card file input
 src/commands/trust/baseline.rs	read_lab_baseline	fs::read_to_string	1	not-config	trust lab baseline input
 src/commands/trust/baseline.rs	read_lab_registry_manifest	fs::read_to_string	1	not-config	trust lab registry manifest input
 src/commands/trust/lab.rs	read_active_fixture_spec	fs::read_to_string	1	not-config	trust lab fixture spec input
+src/commands/upgrade.rs	migrate_3_0_0_multi_user_notice	fs::read_to_string	1	read-only	the 3.0.0 notice parses gateway.yaml for its auth posture and prints a notice; it writes nothing (the stamp written after it carries no config bytes)
 src/commands/upgrade.rs	read_stamp	fs::read_to_string	1	not-config	version.stamp beside gateway.yaml
 src/config/mod.rs	prepare	File::open	1	no-content	opens the selected config only to word a permission error; the guarded read then reads it
 src/config/record_key.rs	sync_dir	File::open	1	no-content	opens a directory only to fsync it or list it; no file bytes are read
 src/config/secret_file.rs	open_for_guarded_read	open_nonblocking	1	guard	the config guard: type, mode and owner are judged on this handle before its bytes are read
 src/config_persistence_atomic.rs	apply_inherited_mode	open_nonblocking	1	no-content	opens the write target only to probe its ACL; no bytes are read
-src/config_persistence_atomic.rs	copy_keeping_access	File::open	1	pending:config-backup-copy	upgrade copies gateway.yaml to its .bak keeping the source access list (Windows here; Unix uses fs::copy, which this scan does not see); nothing parses or trusts the copy; whether it goes through the guard waits on a decision
-src/config_persistence_journal.rs	read	fs::read	1	not-config	the replace journal JSON beside gateway.yaml; no mode or owner check (an open question for the config-read-guard family)
-src/config_persistence_journal.rs	recover	fs::read	1	not-config	the staged original, checked only against the journal digest before it is restored as gateway.yaml; no mode or owner check (an open question for the config-read-guard family)
+src/config_persistence_atomic.rs	copy_keeping_access	File::open	1	backup-copy	Windows: upgrade copies gateway.yaml to gateway.yaml.bak.<version> (and config export a client config) with the source access list, so the copy is no less protected; nothing reads a backup back (Unix uses fs::copy, unseen here)
 src/config_persistence_journal.rs	sync_dir_of	File::open	1	no-content	opens a directory only to fsync it or list it; no file bytes are read
 src/config_reload/grant_audit_plan.rs	save	File::open	1	no-content	opens a directory only to fsync it or list it; no file bytes are read
 src/control_plane/export.rs	deliver	File::open	1	no-content	opens a directory only to fsync it or list it; no file bytes are read

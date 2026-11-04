@@ -695,10 +695,12 @@ mod tests {
         std::fs::write(&config, "backends: [not: yaml\n").unwrap();
         let target = std::fs::canonicalize(&config).unwrap();
         let staged = target.with_file_name(".gateway.yaml.replace-original");
-        std::fs::write(&staged, original).unwrap();
+        // Owner-only, as the writer stages it: recovery reads both files
+        // through the config guard.
+        mcp_gateway::gateway::test_helpers::write_owner_only(&staged, original).unwrap();
         let journal = target.with_file_name(".gateway.yaml.replace-journal");
         let revision = hex::encode(sha2::Sha256::digest(original.as_bytes()));
-        std::fs::write(
+        mcp_gateway::gateway::test_helpers::write_owner_only(
             &journal,
             serde_json::json!({
                 "version": 1,

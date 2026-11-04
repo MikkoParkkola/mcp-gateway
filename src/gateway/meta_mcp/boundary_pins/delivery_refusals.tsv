@@ -37,7 +37,7 @@ src/capability/executor/jsonrpc.rs	execute	refuse_loopback_name	1	pending:capabi
 src/capability/executor/mcp.rs	execute_mcp	refuse_egress	1	pending:capability-refusals	an MCP capability naming a network destination; fixed by the capability-refusals follow-up
 src/capability/loader.rs	load_capability_file	refuse_unloadable	1	no-record	capability load
 src/capability/openapi/convert.rs	fetch_error_message	ssrf_refusal	1	no-record	OpenAPI import (admin UI), not a call
-src/commands/config_write.rs	rewrite_url_aliases_in	refuse_unreadable	1	no-record	a CLI config rewrite
+src/commands/config_write.rs	rewrite_url_aliases_in	refuse_unreadable	2	no-record	a CLI config rewrite
 src/config/env_provider.rs	data	refuse_backend_url	1	no-record	config load
 src/config/features/api_key.rs	validate_distinct_principals	refuse_shared_digests	1	no-record	config load
 src/config/features/api_key.rs	validate_distinct_principals	refuse_shared_principals	1	no-record	config load
