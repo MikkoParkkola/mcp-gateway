@@ -208,8 +208,13 @@ async fn r43b_prime_d_block_published_after_admission_stores_a_replay_entry() {
         crate::security::firewall::relay_witness_hook::reached() > reached,
         "premise: the chain never reached the witness hook"
     );
+    let (digests, _) = firewall(&fx)
+        .replay_digests(&key)
+        .expect("R4.3b′ D: no entry though `block` was current at delivery");
     assert!(
-        firewall(&fx).replay_digests(&key).is_some(),
-        "R4.3b′ D: no entry though `block` was current at delivery"
+        digests
+            .iter()
+            .any(|d| d.label.is_some() && (d.server.as_str(), d.tool.as_str()) == ("alpha", "read")),
+        "R4.3b′ D: the entry holds no in-plan, labelled alpha:read receipt"
     );
 }
