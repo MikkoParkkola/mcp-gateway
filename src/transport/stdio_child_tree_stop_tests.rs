@@ -107,7 +107,10 @@ async fn a_tree_in_its_waits_is_killed_by_a_later_gateway_stop_deadline() {
 /// (a tree already handed over is killed on the reaper's next step) and a
 /// tree still in its slot is killed at once by the transport. No pid is
 /// signalled from test code: a reaped pid may name someone else's group.
-struct EndOnDrop(Arc<StdioTransport>, Arc<super::super::super::reaper::StopDeadline>);
+struct EndOnDrop(
+    Arc<StdioTransport>,
+    Arc<super::super::super::reaper::StopDeadline>,
+);
 
 impl EndOnDrop {
     /// A guard over `t`, with a fresh stop deadline attached to it.
