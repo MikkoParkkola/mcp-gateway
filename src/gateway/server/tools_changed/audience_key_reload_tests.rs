@@ -319,15 +319,7 @@ fn succeeded(answer: &serde_json::Value) -> bool {
 /// changed.
 async fn file_reload_k_std(w: &World, edit: impl Fn(&mut crate::config::ApiKeyConfig) -> bool) {
     let live = &w.state.live_config;
-    let table = |live: &crate::config_reload::LiveConfig| -> Vec<(String, Vec<String>)> {
-        live.generation()
-            .auth()
-            .api_keys()
-            .iter()
-            .map(|k| (k.name.clone(), k.backends.clone()))
-            .collect()
-    };
-    let before = table(live);
+    let before = key_table(w);
     let mut auth = live.get().auth.clone();
     assert!(
         auth.api_keys.iter().any(|k| k.name == "k-std"),
@@ -353,7 +345,11 @@ async fn file_reload_k_std(w: &World, edit: impl Fn(&mut crate::config::ApiKeyCo
     .reload_outcome()
     .await
     .expect("the key edit applies");
-    assert_ne!(before, table(live), "the file reload changed the key table");
+    assert_ne!(
+        before,
+        key_table(w),
+        "the file reload changed the key table"
+    );
 }
 
 /// The deciding row, through the real file reload: a key whose grant for
@@ -402,6 +398,16 @@ async fn file_reload_a_key_that_lost_a_backend_neither_lists_nor_calls_it() {
         kept.iter().any(|n| n == "write"),
         "control: after the file reload a key that kept alpha still lists it: {kept:?}"
     );
+    let _kept = w.legacy_owned("kept-call", "k-deny").await;
+    let write = serde_json::json!({
+        "name": "gateway_invoke",
+        "arguments": { "server": "alpha", "tool": "write", "arguments": {} }
+    });
+    let kept_call = w.post_in("k-deny", "kept-call", "tools/call", write).await;
+    assert!(
+        succeeded(&kept_call),
+        "control: after the file reload a key that kept alpha still calls it: {kept_call}"
+    );
     let after = w.post_in("k-std", "std-call", "tools/call", invoke).await;
     assert!(
         !succeeded(&after),
@@ -441,6 +447,10 @@ async fn file_reload_a_removed_key_gets_nothing_on_its_get_stream() {
     assert!(
         get.frames(&w).await.iter().any(|m| m == GET_NOTE),
         "premise: GET delivered"
+    );
+    assert!(
+        kept.frames(&w).await.iter().any(|m| m == GET_NOTE),
+        "premise: the kept key's GET delivered"
     );
 
     file_reload_k_std(&w, |_| false).await;
