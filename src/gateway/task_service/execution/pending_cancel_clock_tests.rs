@@ -55,7 +55,7 @@ pub(super) struct Reopened {
     pub(super) id: String,
     /// The row's cancel state when the first gateway stopped.
     pub(super) claimed_dark: Option<UpstreamCancelState>,
-    _dir: tempfile::TempDir,
+    _dir: Arc<tempfile::TempDir>,
 }
 
 impl Reopened {

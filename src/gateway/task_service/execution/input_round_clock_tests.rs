@@ -3,6 +3,8 @@
 //! `readable_now`'s two stops on a clock before 1970 (MIK-8202): the task's
 //! row is gone, and the cancel sender is dropped. Paused time; no wall clock.
 
+use std::sync::Arc;
+
 use super::{ClockWait, readable_now};
 use crate::gateway::task_service::StoreLimits;
 use crate::gateway::task_service::TaskStore;
