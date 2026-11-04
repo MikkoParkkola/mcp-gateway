@@ -35,6 +35,17 @@ while True:
     time.sleep(0.05)
 "#;
 
+/// Kills [`PEER`]'s whole group when the row ends, so a red run (a stop that
+/// never killed it) leaks no backend: one that ignores EOF and SIGTERM would
+/// otherwise run on, holding whatever it inherited.
+struct KillGroupOnDrop(Pid);
+
+impl Drop for KillGroupOnDrop {
+    fn drop(&mut self) {
+        let _ = rustix::process::kill_process_group(self.0, rustix::process::Signal::KILL);
+    }
+}
+
 /// `Some(false)` running, `Some(true)` exited unreaped, `None` reaped.
 fn kernel_view(pid: Pid) -> Option<bool> {
     let options = WaitIdOptions::EXITED | WaitIdOptions::NOHANG | WaitIdOptions::NOWAIT;
@@ -84,6 +95,7 @@ async fn a_gateway_stop_waits_for_an_idle_released_child_to_be_killed() {
     let _ = child.stop_deadline.set(registry.stop_deadline());
     child.ensure_started().await.expect("the child starts");
     let pid = leader_pid(dir.path());
+    let _reap = KillGroupOnDrop(pid);
 
     // Let go while idle, with a long plan of its own.
     child.hand_over_now(Duration::from_secs(120));
@@ -108,6 +120,7 @@ async fn a_restart_of_a_backend_that_ignores_every_signal_completes_in_bound() {
     let backend = stays(dir.path(), "stays");
     backend.ensure_started().await.expect("the backend starts");
     let old = leader_pid(dir.path());
+    let _reap = KillGroupOnDrop(old);
     // The close budget, plus room for the new child's start on a loaded host.
     let bound = backend.budgets.close_stage + Duration::from_secs(10);
     let restarted = tokio::time::timeout(bound, backend.force_restart())
