@@ -290,7 +290,7 @@ async fn readyz_recovers_after_a_probe_overruns_its_bound() {
     let (status, body) = readyz_body(&fx).await;
     assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "premise: {body}");
     assert!(body.contains("stalled"), "the overrun is named: {body}");
-    gate.release();
+    fx.log.release_and_drain(gate).await;
     until_recovered(&fx.log, || ready(&fx)).await;
 }
 
@@ -337,7 +337,7 @@ async fn stalled_append_times_out_with_503_and_readyz_reports_stalled() {
     let (status, body) = readyz_body(&fx).await;
     assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
     assert_eq!(body, "audit log unavailable: stalled");
-    release.release();
+    fx.log.release_and_drain(release).await;
 }
 
 /// F20 T1 `BestEffort`: results are delivered during a stall, the second call
@@ -359,7 +359,7 @@ async fn best_effort_stall_delivers_result_and_stays_ready() {
         "the second call waited for the held write"
     );
     assert_eq!(readyz(&fx).await, StatusCode::OK);
-    release.release();
+    fx.log.release_and_drain(release).await;
 }
 
 /// F20 T6. The delivery-attempt append is bounded too: a stall answers 503
@@ -401,7 +401,7 @@ async fn delivery_attempt_append_is_bounded() {
     // A 503 with the write still held is the bound.
     assert_audit_unavailable(&response, "stalled delivery");
     assert!(fx.log.is_stalled());
-    release.release();
+    fx.log.release_and_drain(release).await;
 }
 
 /// F20 T3 / #1133 fail-fast. The invocation append stalls and the call is
@@ -455,7 +455,9 @@ async fn withheld_call_leaves_no_delivery_attempt_row() {
         fx.log.is_stalled(),
         "the delivery append waited for the held write"
     );
-    release.release();
+    // The delivery append was refused at once, so the released write is the
+    // only one in flight: once it is out, the log is final.
+    fx.log.release_and_drain(release).await;
     let rows = || -> Vec<Value> {
         std::fs::read_to_string(fx.log.path())
             .unwrap_or_default()
@@ -463,17 +465,6 @@ async fn withheld_call_leaves_no_delivery_attempt_row() {
             .filter_map(|l| serde_json::from_str(l).ok())
             .collect()
     };
-    // The delivery append was refused at once, so the released write is the
-    // only one in flight: once it is out of the kernel, the log is final.
-    // Real time here is only a hang guard.
-    let guard = std::time::Instant::now();
-    while fx.log.write_in_flight_for_test() {
-        assert!(
-            guard.elapsed() < Duration::from_secs(60),
-            "the released write never landed"
-        );
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
     let rows = rows();
     assert!(
         rows.iter().any(|r| r.get("request_hash").is_some()),

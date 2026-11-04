@@ -238,8 +238,11 @@ pub(crate) fn trace_of(record: &Value) -> Option<&str> {
 }
 
 /// Put `log` in the stalled state: arm a stuck write and let one bounded
-/// append time out on it. Returns the release for the end of the cell.
-pub(crate) async fn stall_log(log: &Arc<TransparencyLogger>) -> Box<dyn FnOnce() + Send> {
+/// append time out on it. Returns the stall, for
+/// [`TransparencyLogger::release_and_drain`] at the end of the cell.
+pub(crate) async fn stall_log(
+    log: &Arc<TransparencyLogger>,
+) -> crate::security::transparency_log::rotation::StallRelease {
     let gate = log.stall_next_write_for_test(std::time::Duration::from_millis(100));
     let fields: serde_json::Map<String, Value> =
         [("kind".to_string(), Value::from("d3a_stall_probe"))]
@@ -253,5 +256,5 @@ pub(crate) async fn stall_log(log: &Arc<TransparencyLogger>) -> Box<dyn FnOnce()
         timed_out.is_err() && log.is_stalled(),
         "the probe append must stall the log"
     );
-    Box::new(move || gate.release())
+    gate
 }

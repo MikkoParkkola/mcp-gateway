@@ -152,7 +152,7 @@ async fn unslotted_check_on_stalled_log_is_bounded() {
     while log.refused_under_stall_for_test() == 0 && Instant::now() < deadline {
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
-    release();
+    log.release_and_drain(release).await;
     assert!(
         log.refused_under_stall_for_test() >= 1,
         "the spawned record write went through the bounded path"
@@ -290,7 +290,9 @@ fn stalled_log_bounds_the_decision_write() {
             // that waited on the stall never answers: the hang guard below
             // fails it, and `refused` names the bounded path (MIK-8222).
             let answer = call.await.expect("the call task completes");
-            gate.release();
+            // Drained before the scenario's folder drops: the released write
+            // would otherwise rewrite `.hwm` while the folder is removed.
+            log.release_and_drain(gate).await;
             (answer, log.refused_under_stall_for_test())
         });
         let _ = sent.send(outcome);
