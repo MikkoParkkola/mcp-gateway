@@ -462,3 +462,57 @@ async fn with_auth_on_and_no_audit_log_a_backend_add_is_refused() {
     );
     assert_eq!(gateway.text(), START, "the refused add wrote");
 }
+
+/// A comment-loss refusal names the comment lines under a fixed
+/// `gateway.yaml` label, never the server's filesystem path.
+#[tokio::test]
+async fn a_comment_loss_refusal_names_lines_not_the_server_path() {
+    let gateway = Audited::new().await;
+    let flow = "# top\nbackends: {a: {http_url: \"http://127.0.0.1:9/mcp\"}}\n";
+    write_owner_only(gateway.config(), flow).expect("flow-style file");
+    let (status, body) = gateway.update("a", "edited").await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    let message = body.to_string();
+    assert!(message.contains("line 1"), "{message}");
+    assert!(message.contains("gateway.yaml"), "{message}");
+    let dir = gateway.dir.path().display().to_string();
+    assert!(!message.contains(&dir), "the server path leaked: {message}");
+    assert_eq!(gateway.text(), flow, "the refused edit wrote");
+}
+
+/// gateway.yaml deleted after the route's own check, while the writer waits
+/// for the config lock: the writer's read finds it gone, and the answer is
+/// the same 409 `no_config_file` the check gives.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_config_deleted_under_the_writer_answers_no_config_file() {
+    let gateway = Arc::new(Audited::new().await);
+    let lock = crate::config_persistence::lock::lock_path(
+        &crate::identity_grants::journal::resolved(&gateway.config()),
+    );
+    let held = crate::fs_lock::ExclusiveFileLock::try_acquire(&lock).expect("hold the lock");
+    let baseline = crate::fs_lock::lock_attempts(&lock);
+    let writing = Arc::clone(&gateway);
+    let update = tokio::spawn(async move { writing.update("a", "edited").await });
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while crate::fs_lock::lock_attempts(&lock) <= baseline {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the writer never tried the config lock"
+        );
+        tokio::task::yield_now().await;
+    }
+    std::fs::remove_file(gateway.config()).expect("delete under the writer");
+    drop(held);
+
+    let (status, body) = update.await.expect("the update task");
+
+    assert_eq!(
+        (status, &body["error"], &body["message"]),
+        (
+            StatusCode::CONFLICT,
+            &Value::from("no_config_file"),
+            &Value::from(NO_CONFIG_FILE)
+        ),
+        "{body}"
+    );
+}
