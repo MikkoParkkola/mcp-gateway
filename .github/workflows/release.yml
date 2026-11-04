@@ -519,6 +519,10 @@ jobs:
       - name: Upgrade npm CLI for OIDC trusted publishing
         run: npm install -g npm@latest
 
+      # A wrapper whose binary check fails its tests is never published.
+      - name: Test the wrapper's release-binary check
+        run: node --test npm/run.test.js
+
       - name: Sync npm package version to git tag
         working-directory: npm
         env:
