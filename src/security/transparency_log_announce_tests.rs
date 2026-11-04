@@ -329,7 +329,7 @@ fn h2_a_same_counter_fork_raises_the_generation() {
 }
 
 #[test]
-fn h2_a_new_segment_cut_after_a_rotation_raises_the_generation() {
+fn h2_a_new_segment_cut_after_its_first_record_raises_the_generation() {
     let dir = tempfile::tempdir().unwrap();
     let path = log_path(&dir);
     let log = TransparencyLogger::open(cfg(&path, 12, false)).unwrap();

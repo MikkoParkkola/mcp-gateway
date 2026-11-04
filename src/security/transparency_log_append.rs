@@ -95,12 +95,10 @@ impl Subscribers {
     /// `counter`. The written line is parsed back, so the record is exactly
     /// what was persisted; nothing is parsed while no reader listens.
     fn announce(&self, line: &str, counter: u64) {
-        let Ok(readers) = self.all.read() else {
-            return;
-        };
-        if readers.is_empty() {
+        if !self.all.read().is_ok_and(|readers| !readers.is_empty()) {
             return;
         }
+        // Parsed, and any failure logged, before the readers' lock is taken.
         let Ok(Value::Object(record)) = serde_json::from_str::<Value>(line) else {
             // Every reader of the file counts this line unreadable too; a
             // stream crosses it in catch-up like any unreadable line.
@@ -111,6 +109,9 @@ impl Subscribers {
             return;
         };
         let generation = self.generation.load(std::sync::atomic::Ordering::Acquire);
+        let Ok(readers) = self.all.read() else {
+            return;
+        };
         for reader in readers.iter() {
             reader(&record, counter, generation);
         }
@@ -129,8 +130,9 @@ impl Subscribers {
         );
     }
 
-    /// Take the active file's current end as this writer's baseline: after a
-    /// rotation or a rebuild, and when a reader subscribes.
+    /// Take the active file's current end as this writer's baseline when a
+    /// reader subscribes. After a rotation or a rebuild the call's own write
+    /// records the new segment's end, so no other baseline is needed.
     fn rebaseline(&self, inner: &Inner) {
         if let Ok(meta) = inner.file.metadata() {
             self.record_end(inner.seg.id, meta.len());
@@ -291,7 +293,6 @@ impl TransparencyLogger {
         inner.counter = r.counter;
         inner.last_entry_hash = r.last_entry_hash;
         inner.seg = r.seg;
-        self.subscribers.rebaseline(inner);
         if let Some(at) = known {
             inner.seg.hwm_missing_at = Some(inner.seg.hwm_missing_at.map_or(at, |e| e.min(at)));
         }
@@ -503,7 +504,6 @@ impl TransparencyLogger {
         inner.last_entry_hash = r.last_entry_hash;
         inner.seg = r.seg;
         inner.seg.id = file_id(&inner.file)?;
-        self.subscribers.rebaseline(inner);
         self.mark_hwm(inner, path, true);
         telemetry_metrics::counter!("mcp_audit_rotations_total").increment(1);
         if self.config.rotation.on_disk_full == OnDiskFull::ExpireOldest
