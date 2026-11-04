@@ -134,3 +134,26 @@ async fn a_restart_of_a_backend_that_ignores_every_signal_completes_in_bound() {
     );
     backend.stop().await.expect("stop");
 }
+
+/// A backend whose stop waits on its lifecycle lock (a restart holding it)
+/// cannot hold the gateway stop past its deadline: `stop_all_by` gives up at
+/// the deadline and retires what is left.
+#[tokio::test]
+async fn a_stop_stuck_on_a_lifecycle_lock_ends_at_its_deadline() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let registry = BackendRegistry::new();
+    let backend = stays(dir.path(), "stuck");
+    assert!(registry.register(Arc::clone(&backend)), "registered");
+    // As a restart in flight holds it; `Backend::stop` waits up to its
+    // lifecycle budget (15 s) for it.
+    let _held = backend.lifecycle.write().await;
+    let started = tokio::time::Instant::now();
+    registry
+        .stop_all_by(started + Duration::from_secs(1))
+        .await;
+    assert!(
+        started.elapsed() < Duration::from_secs(5),
+        "the stop outran its deadline: {:?}",
+        started.elapsed()
+    );
+}

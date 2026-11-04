@@ -665,7 +665,13 @@ impl BackendRegistry {
             clippy::disallowed_methods,
             reason = "Lifecycle: gateway startup, wiring or shutdown; no caller request"
         )]
-        crate::transport::within_stop_deadline(deadline, self.stop_all()).await;
+        let stop = crate::transport::within_stop_deadline(deadline, self.stop_all());
+        // Bounded by the deadline as a whole: a backend waiting on a restart's
+        // lifecycle lock cannot outrun the stage. What it leaves running is
+        // retired by `_sweep` when this returns.
+        if tokio::time::timeout_at(deadline, stop).await.is_err() {
+            warn!("backend stop did not finish by its deadline; retiring what is left");
+        }
         // Trees handed over gracefully before this stop (an idle close, a
         // restart) are cut to `deadline` by the reaper; wait for their kills.
         self.stop_deadline.wait_handed(deadline).await;
