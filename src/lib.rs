@@ -43,6 +43,8 @@ pub mod cli_support;
 mod clock;
 #[doc(hidden)]
 pub mod config;
+#[cfg(coverage)]
+mod coverage_canary;
 #[doc(hidden)]
 pub mod config_persistence;
 #[doc(hidden)]

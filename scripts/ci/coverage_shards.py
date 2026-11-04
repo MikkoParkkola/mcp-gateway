@@ -117,6 +117,39 @@ def run(n: int, shard: str, program: tuple[str, ...] = ("cargo",)) -> int:
 COVERAGE_SECTIONS = ("__llvm_covfun", "__llvm_covmap", "__llvm_prf_names", "__llvm_prf_data")
 
 
+# A function compiled only under coverage and never called (src/coverage_canary.rs). A
+# report that dropped functions no test reached (a merge from profiles alone, or with a
+# part's binaries lost) drops it too.
+CANARY_FILE = "src/coverage_canary.rs"
+CANARY_FN = "coverage_canary"
+
+
+def canary(lcov: str) -> list[str]:
+    """The problems with the canary in an lcov report: empty when the canary's file is
+    there with its function recorded (FN) at a count of 0 (FNDA) and every line at 0."""
+    inside, found, named, problems = False, False, False, []
+    for line in lcov.splitlines():
+        if line.startswith("SF:"):
+            path = line[3:].strip().replace("\\", "/")
+            inside = path == CANARY_FILE or path.endswith("/" + CANARY_FILE)
+            found = found or inside
+        elif not inside:
+            continue
+        elif line.startswith("FN:") and CANARY_FN in line:
+            named = True
+        elif line.startswith("FNDA:"):
+            count, name = line[5:].split(",", 1)
+            if CANARY_FN in name and int(count) != 0:
+                problems.append(f"canary called {count} times")
+        elif line.startswith("DA:") and int(line[3:].split(",")[1]) != 0:
+            problems.append(f"canary line {line[3:].split(',')[0]} covered")
+    if not found:
+        return [f"{CANARY_FILE} is not in the report"]
+    if not named:
+        problems.append(f"{CANARY_FN} has no FN record")
+    return problems
+
+
 def digest(data: bytes) -> str:
     """The sha256 of an ELF64 file's coverage sections, by name and in order; of the
     whole file, marked `file:`, when it is not ELF64 or has none of them."""
@@ -218,6 +251,15 @@ def self_test() -> int:
     assert digest(elf([cov[0], cov[2]])) != digest(one), "a missing section counts"
     assert digest(b"#!/bin/sh\n").startswith("file:")
     assert digest(elf([(".rodata", b"x")])).startswith("file:"), "no coverage sections"
+    # The canary: present at zero passes; absent, unnamed or reached fails.
+    sf = f"SF:/home/runner/work/g/g/{CANARY_FILE}\n"
+    other = "SF:/home/runner/work/g/g/src/lib.rs\nFN:3,_RNv4lib\nFNDA:0,_RNv4lib\nDA:3,0\nend_of_record\n"
+    good = other + sf + f"FN:5,_RNvCs1_11mcp_gateway15{CANARY_FN}\nFNDA:0,_RNvCs1_11mcp_gateway15{CANARY_FN}\nDA:5,0\nDA:6,0\nend_of_record\n"
+    assert canary(good) == [], canary(good)
+    assert canary(other) == [f"{CANARY_FILE} is not in the report"]
+    assert canary(good.replace("FNDA:0,_RNvCs1", "FNDA:2,_RNvCs1").replace("DA:6,0", "DA:6,2")) == \
+        ["canary called 2 times", "canary line 6 covered"]
+    assert canary(other + sf + "DA:5,0\nend_of_record\n") == [f"{CANARY_FN} has no FN record"]
     print("coverage_shards self-test: ok")
     return 0
 
@@ -225,6 +267,11 @@ def self_test() -> int:
 def main(argv: list[str]) -> int:
     if argv[1:] == ["--self-test"]:
         return self_test()
+    if len(argv) == 3 and argv[1] == "canary":
+        problems = canary(open(argv[2], encoding="utf-8", errors="replace").read())
+        for p in problems:
+            print(f"::error::coverage canary: {p}")
+        return 1 if problems else 0
     if len(argv) >= 2 and argv[1] == "digest":
         # `digest <file>...`, in sha256sum's layout: "<digest>  <path>".
         for path in argv[2:]:
