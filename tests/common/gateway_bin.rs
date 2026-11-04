@@ -192,3 +192,166 @@ pub fn answers_livez(port: u16) -> bool {
         && stream.read_to_string(&mut answer).is_ok()
         && answer.starts_with("HTTP/1.1 200")
 }
+
+/// A spawned gateway together with every folder it, or a backend it started,
+/// writes into. Folders are removed only after the gateway drained on a
+/// SIGTERM and exited by itself: then its own shutdown has ended its
+/// backends' process trees. After a kill, a signal death, a panic or a stop
+/// that never finished, the folders are kept on disk and named on stderr,
+/// since a backend may still be writing; the CI temp-folder guard then fails
+/// on them instead of on a half-removed folder.
+pub struct Reaped {
+    child: tokio::process::Child,
+    folders: Vec<tempfile::TempDir>,
+    /// Set by a reap that saw the gateway exit by itself after its SIGTERM.
+    drained: bool,
+    /// The first reap's exit status; a later reap returns it unchanged.
+    first_exit: Option<std::process::ExitStatus>,
+}
+
+/// How long a gateway may drain after SIGTERM: above its own serial
+/// shutdown phases, as the helpers this replaces allowed.
+const EXIT_BOUND: std::time::Duration = std::time::Duration::from_secs(90);
+/// How long a killed child may take to be reaped.
+const KILL_BOUND: std::time::Duration = std::time::Duration::from_secs(5);
+
+impl Reaped {
+    pub fn new(child: tokio::process::Child) -> Self {
+        Self {
+            child,
+            folders: Vec::new(),
+            drained: false,
+            first_exit: None,
+        }
+    }
+
+    /// Hands `folder` to the gateway's owner, so it is removed after the
+    /// gateway, never before.
+    pub fn owning(&mut self, folder: tempfile::TempDir) -> &Path {
+        self.folders.push(folder);
+        self.folders.last().expect("just pushed").path()
+    }
+
+    /// The child, for a row that kills it on purpose or reads its pipes.
+    pub fn child_mut(&mut self) -> &mut tokio::process::Child {
+        &mut self.child
+    }
+
+    /// Ends the gateway the way an operator does and waits for it; the
+    /// folders stay. Fails the test if it does not exit within the bound.
+    pub async fn reap(&mut self) -> std::process::ExitStatus {
+        self.reap_within(EXIT_BOUND).await
+    }
+
+    /// [`Self::reap`] with its own bound, for a row that tests the bound.
+    pub async fn reap_within(&mut self, bound: std::time::Duration) -> std::process::ExitStatus {
+        if let Some(status) = self.first_exit {
+            return status;
+        }
+        let started = std::time::Instant::now();
+        let pid = self.child.id();
+        // A child that already exited is not drained by this stop: whatever
+        // it started was never told to stop. Its zombie still takes a signal,
+        // so the check comes first. `id()` is None once the child was reaped:
+        // a pid a reap released is never signalled, since the OS may have
+        // handed it to another process.
+        let running = matches!(self.child.try_wait(), Ok(None));
+        let signalled = running && self.terminate();
+        let Ok(waited) = tokio::time::timeout(bound, self.child.wait()).await else {
+            let _ = self.child.start_kill();
+            let _ = tokio::time::timeout(KILL_BOUND, self.child.wait()).await;
+            self.drained = false;
+            panic!(
+                "the gateway (pid {pid:?}) did not exit within {bound:?} of its stop; \
+                 killed it and kept {}",
+                self.kept()
+            );
+        };
+        let status = waited.expect("the gateway's exit status");
+        self.drained = signalled && exited_by_itself(status);
+        self.first_exit = Some(status);
+        let elapsed = started.elapsed();
+        if elapsed > std::time::Duration::from_secs(1) {
+            eprintln!("gateway_bin: the gateway (pid {pid:?}) took {elapsed:?} to stop ({status})");
+        }
+        status
+    }
+
+    /// Reaps the gateway, then removes its folders if it drained.
+    pub async fn stop(mut self) -> std::process::ExitStatus {
+        let status = self.reap().await;
+        if self.drained {
+            self.folders.clear();
+        }
+        status
+    }
+
+    /// Asks the gateway to drain; whether the request was delivered.
+    #[cfg(unix)]
+    fn terminate(&mut self) -> bool {
+        let Some(pid) = self
+            .child
+            .id()
+            .and_then(|id| i32::try_from(id).ok())
+            .and_then(rustix::process::Pid::from_raw)
+        else {
+            return false;
+        };
+        rustix::process::kill_process(pid, rustix::process::Signal::TERM).is_ok()
+    }
+
+    /// Windows has no SIGTERM; ending the gateway ends the Job object that
+    /// holds its backends.
+    #[cfg(not(unix))]
+    fn terminate(&mut self) -> bool {
+        self.child.start_kill().is_ok()
+    }
+
+    /// Keeps every folder on disk and lists them.
+    fn kept(&mut self) -> String {
+        let kept: Vec<String> = self
+            .folders
+            .drain(..)
+            .map(|folder| folder.keep().display().to_string())
+            .collect();
+        kept.join(", ")
+    }
+}
+
+#[cfg(unix)]
+fn exited_by_itself(status: std::process::ExitStatus) -> bool {
+    status.code().is_some()
+}
+
+#[cfg(not(unix))]
+fn exited_by_itself(_status: std::process::ExitStatus) -> bool {
+    true
+}
+
+impl Drop for Reaped {
+    fn drop(&mut self) {
+        if self.child.id().is_some() {
+            // A coverage build writes its profile only on a clean exit, so it
+            // gets the drain first; the kill below is the backstop.
+            if std::env::var_os("LLVM_PROFILE_FILE").is_some() && self.terminate() {
+                wait_blocking(&mut self.child, std::time::Duration::from_secs(10));
+            }
+            let _ = self.child.start_kill();
+            wait_blocking(&mut self.child, KILL_BOUND);
+        }
+        if !self.drained && !self.folders.is_empty() {
+            eprintln!(
+                "gateway_bin: a gateway ended without a drained stop; kept {}",
+                self.kept()
+            );
+        }
+    }
+}
+
+/// Polls `child` until it is reaped or `bound` passes, without a runtime.
+fn wait_blocking(child: &mut tokio::process::Child, bound: std::time::Duration) {
+    let deadline = std::time::Instant::now() + bound;
+    while matches!(child.try_wait(), Ok(None)) && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+}

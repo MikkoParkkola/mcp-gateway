@@ -20,6 +20,8 @@ const CAPABILITIES: &str = "tests/webui_management_tests/capabilities.rs";
 const UI_TOOL_CALL: &str = "src/gateway/router/ui_tool_call_tests.rs";
 const ADOPT_ROUTE: &str = "tests/discovery_adopt_route.rs";
 const DECISIONS_ROUTE: &str = "src/gateway/ui/decisions_tests.rs";
+const SIGN_IN: &str = "src/gateway/ui/backends/signin_tests.rs";
+const DISCOVERY_WIRING: &str = "src/gateway/ui/discovery_wiring_tests.rs";
 const CP_WRITES: &[Citation] = &[(
     CP_AUTHORITY,
     "admin_grant_and_policy_writes_are_refused_and_point_at_config",
@@ -33,6 +35,22 @@ const CP_WRITES: &[Citation] = &[(
 type Citation = (&'static str, &'static str);
 
 const SERVED_BY: &[(&str, Method, &[Citation])] = &[
+    // An admin bearer has no dashboard session, so the table's admin answer
+    // is 403 dashboard_session_required; these tests sign in from a dashboard
+    // session and pin the served start, confirm and cancel.
+    (
+        "/ui/api/backends/{name}/signin",
+        Method::POST,
+        &[(SIGN_IN, "start_returns_the_link_once_with_no_store")],
+    ),
+    (
+        "/ui/api/backends/{name}/signin/confirm",
+        Method::POST,
+        &[
+            (SIGN_IN, "owner_confirm_saves_and_clears_its_wait"),
+            (SIGN_IN, "owner_cancel_discards_the_pending_token"),
+        ],
+    ),
     // The table sends no If-Match, so its admin answer is 428; these tests
     // send the base and pin the served save and delete.
     (
@@ -55,6 +73,26 @@ const SERVED_BY: &[(&str, Method, &[Citation])] = &[
         &[(
             DECISIONS_ROUTE,
             "an_admin_is_served_the_open_decisions_and_no_one_else",
+        )],
+    ),
+    // As the list: the table's fixture never starts the set, so its admin
+    // answer is 503; this test starts it and pins the served count.
+    (
+        "/ui/api/decisions/count",
+        Method::GET,
+        &[(
+            DECISIONS_ROUTE,
+            "the_count_is_the_lists_length_and_revision_for_an_admin_only",
+        )],
+    ),
+    // The table's fixture attaches no discovery cache, so its admin answer
+    // is 503; this test attaches one and pins the served 200.
+    (
+        "/ui/api/discovery",
+        Method::GET,
+        &[(
+            DISCOVERY_WIRING,
+            "the_production_router_reads_the_cache_from_meta_mcp",
         )],
     ),
     (

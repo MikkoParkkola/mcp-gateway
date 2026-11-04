@@ -3,7 +3,7 @@
 //! MIK-8197: the authorization URL reaches the browser as one verbatim
 //! argument, through no shell, and only when it is https or loopback http.
 
-use super::{launch_command, launchable, open_browser};
+use super::{announce_to, launch_command, launchable, open_browser};
 
 const AUTHORIZE: &str =
     "https://as.example/authorize?response_type=code&client_id=c&state=s&echo=pwned&c=%41^x,y%22";
@@ -77,27 +77,21 @@ fn unix_hands_the_url_as_its_one_argument() {
     assert_eq!(args, [AUTHORIZE]);
 }
 
-/// `MIK-8197.PROMPT`: the "visit this URL" prompt is shown whether or not a
-/// launcher started (one an endpoint-security tool stops leaves no failed
-/// spawn), on stderr. clippy's `print_stdout` deny in grants.rs keeps it off
-/// stdout; this pins that it is printed unconditionally, outside the
-/// failed-launch branch.
+/// P4: the prompt goes to the writer it is given with the link inside it, and
+/// `announce_on_stderr` hands it the process's stderr (stdout is the stdio
+/// transport's JSON-RPC stream, and clippy's `print_stdout` deny keeps it off
+/// there).
 #[test]
-fn the_manual_prompt_is_always_printed() {
-    let grants = include_str!("grants.rs");
-    let launch = grants
-        .find("(self.open_browser)(&auth_url_str)")
-        .expect("the launch call");
-    let rest = &grants[launch..];
-    let branch_end = rest
-        .find("\n        }\n")
-        .expect("the failed-launch branch ends");
-    let prompt = rest
-        .find("eprintln!(\"\\nIf no browser opened, authorize this client by visiting:")
-        .expect("the prompt");
+fn the_manual_prompt_names_the_link_and_goes_to_the_writer_given() {
+    let mut out = Vec::new();
+
+    announce_to(&mut out, AUTHORIZE);
+
+    let text = String::from_utf8(out).expect("the prompt is text");
+    assert!(text.contains("If no browser opened, authorize this client by visiting:"));
     assert!(
-        prompt > branch_end,
-        "the prompt sits after the failed-launch branch, not inside it"
+        text.contains(AUTHORIZE),
+        "the link is in the prompt: {text}"
     );
 }
 

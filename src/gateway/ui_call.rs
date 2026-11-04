@@ -224,7 +224,48 @@ pub(crate) fn gate(
     }
     confirmed(&call, declared_read_only)?;
     call.gated.store(true, Ordering::SeqCst);
+    #[cfg(test)]
+    gate_seam::admitted();
     Ok(())
+}
+
+/// Test-only: a hook run once, the next time a call on this thread passes
+/// [`gate`], so a row can change what the dispatch is about to run after the
+/// gate judged it (a capability reloaded as a write). The same shape as
+/// `caller_verdict`'s dispatch seam: thread-local, so rows that arm it run on
+/// a current-thread runtime. Never built outside tests.
+#[cfg(test)]
+pub(crate) mod gate_seam {
+    use std::cell::RefCell;
+
+    thread_local! {
+        static AFTER_GATE: RefCell<Option<Box<dyn FnOnce()>>> = RefCell::new(None);
+    }
+
+    /// Clears an unfired hook when dropped, so it cannot fire in a later
+    /// test on the same thread.
+    pub(crate) struct Armed;
+
+    impl Drop for Armed {
+        fn drop(&mut self) {
+            AFTER_GATE.with(|slot| slot.borrow_mut().take());
+        }
+    }
+
+    /// Run `hook` once, the next time a call on this thread passes the gate,
+    /// until the returned guard drops.
+    #[must_use]
+    pub(crate) fn after_gate(hook: impl FnOnce() + 'static) -> Armed {
+        AFTER_GATE.with(|slot| *slot.borrow_mut() = Some(Box::new(hook)));
+        Armed
+    }
+
+    /// Called where a call has passed the gate.
+    pub(super) fn admitted() {
+        if let Some(hook) = AFTER_GATE.with(|slot| slot.borrow_mut().take()) {
+            hook();
+        }
+    }
 }
 
 /// The capability executor's arm: `read_only` is the definition it is about
@@ -330,5 +371,37 @@ mod refusal_effect_tests {
             admit_send(("srv", "tool")).expect("the send is admitted");
         });
         assert_eq!(admitted.await, "delivered");
+    }
+}
+
+/// The gate's test hook is never built outside tests: its call in [`gate`]
+/// and its module each carry `#[cfg(test)]` on the line above.
+#[cfg(test)]
+mod gate_seam_tests {
+    #[test]
+    fn the_gate_hook_is_built_only_in_tests() {
+        let source = include_str!("ui_call.rs");
+        let lines: Vec<&str> = source.lines().collect();
+        let gated = |needle: &str| {
+            let at = lines
+                .iter()
+                .position(|line| line.trim_start() == needle)
+                .unwrap_or_else(|| panic!("`{needle}` is not in ui_call.rs"));
+            assert_eq!(
+                lines[at - 1].trim(),
+                "#[cfg(test)]",
+                "`{needle}` is built outside tests"
+            );
+        };
+        gated("gate_seam::admitted();");
+        gated("pub(crate) mod gate_seam {");
+        assert_eq!(
+            lines
+                .iter()
+                .filter(|line| line.trim_start() == "gate_seam::admitted();")
+                .count(),
+            1,
+            "the hook is called from one place, the gate"
+        );
     }
 }

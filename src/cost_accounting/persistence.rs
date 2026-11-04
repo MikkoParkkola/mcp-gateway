@@ -11,6 +11,41 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
+/// A name-to-USD map read entry by entry: an entry that is not a number
+/// (a NaN or infinity is saved as `null`, or a hand edit) is dropped with a
+/// warning, so one bad figure never costs the whole file and its spend.
+#[cfg(feature = "cost-governance")]
+fn lenient_figures<'de, D>(deserializer: D) -> Result<HashMap<String, f64>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    // The map itself may be damaged too (`null`, or not an object): read it
+    // as no figures rather than fail the file.
+    let serde_json::Value::Object(raw) = serde_json::Value::deserialize(deserializer)? else {
+        tracing::warn!(
+            target: "mcp_gateway::cost_accounting::enforcer",
+            file = "costs.json",
+            "Saved starting figures are not a map; restoring none"
+        );
+        return Ok(HashMap::new());
+    };
+    Ok(raw
+        .into_iter()
+        .filter_map(|(name, value)| {
+            let figure = value.as_f64();
+            if figure.is_none() {
+                tracing::warn!(
+                    target: "mcp_gateway::cost_accounting::enforcer",
+                    file = "costs.json",
+                    name,
+                    "Saved starting figure is not a number; restoring it as none"
+                );
+            }
+            figure.map(|usd| (name, usd))
+        })
+        .collect())
+}
+
 // ── PersistedCosts ────────────────────────────────────────────────────────────
 
 /// Today's spend as of `saved_at`, persisted so a restart keeps the daily
@@ -37,6 +72,14 @@ pub struct PersistedCosts {
     /// value also counts a UTC day, with a warning, so its spend is kept.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub day_basis: Option<String>,
+    /// The starting figure (USD) a reload charged each per-tool name it
+    /// started budgeting with that day, zeros included: kept apart from
+    /// `tool_totals`, never added into them on restore (ADR-023).
+    #[serde(default, deserialize_with = "lenient_figures")]
+    pub tool_estimate: HashMap<String, f64>,
+    /// The same for per-key names, apart from `key_totals`.
+    #[serde(default, deserialize_with = "lenient_figures")]
+    pub key_estimate: HashMap<String, f64>,
 }
 
 /// Spend for a single tool on the day of `saved_at`.
@@ -86,6 +129,9 @@ pub(crate) struct EnforcerSaveSnapshot {
     pub(crate) key_overflow_usd: f64,
     /// Copied into `PersistedCosts.day_basis`.
     pub(crate) day_basis: Option<String>,
+    /// Copied into `PersistedCosts.tool_estimate` / `key_estimate`.
+    pub(crate) tool_estimate: HashMap<String, f64>,
+    pub(crate) key_estimate: HashMap<String, f64>,
 }
 
 #[cfg(feature = "cost-governance")]
@@ -104,6 +150,8 @@ impl EnforcerSaveSnapshot {
             tool_overflow_usd: snap.tool_overflow_usd,
             key_overflow_usd: snap.key_overflow_usd,
             day_basis,
+            tool_estimate: snap.tool_estimate,
+            key_estimate: snap.key_estimate,
         }
     }
 }

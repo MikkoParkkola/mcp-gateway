@@ -452,7 +452,27 @@ fn cost_section(snap: &crate::cost_accounting::enforcer::EnforcerSnapshot) -> Va
         "key_daily_spend": snap.key_daily,
         "tool_overflow_spend_usd": snap.tool_overflow_usd,
         "key_overflow_spend_usd": snap.key_overflow_usd,
+        "tool_estimated_start_usd": estimated_start(&snap.tool_limits, &snap.tool_estimate),
+        "key_estimated_start_usd": estimated_start(&snap.key_limits, &snap.key_estimate),
     })
+}
+
+/// Per budgeted name, the starting figure a reload charged it with today
+/// (its possible earlier spend in the overflow), or null when none above
+/// zero was taken (ADR-023).
+#[cfg(feature = "cost-governance")]
+fn estimated_start(
+    limits: &std::collections::HashMap<String, f64>,
+    estimates: &std::collections::HashMap<String, f64>,
+) -> Value {
+    limits
+        .keys()
+        .map(|name| {
+            let figure = estimates.get(name).copied().filter(|usd| *usd > 0.0);
+            (name.clone(), json!(figure))
+        })
+        .collect::<serde_json::Map<_, _>>()
+        .into()
 }
 
 #[cfg(all(test, feature = "cost-governance"))]
@@ -472,10 +492,40 @@ mod cost_section_tests {
             taken_at: Some(0),
             tool_overflow_usd: 1.25,
             key_overflow_usd: 0.5,
+            tool_estimate: std::collections::HashMap::new(),
+            key_estimate: std::collections::HashMap::new(),
         };
         let section = cost_section(&snap);
         assert_eq!(section["tool_overflow_spend_usd"], 1.25);
         assert_eq!(section["key_overflow_spend_usd"], 0.5);
+    }
+
+    /// Each budgeted name reports the starting figure a reload charged it
+    /// with, or null when none above zero was taken.
+    #[test]
+    fn the_cost_section_reports_each_estimated_start() {
+        let names = |pairs: &[(&str, f64)]| -> std::collections::HashMap<String, f64> {
+            pairs.iter().map(|(n, v)| ((*n).to_owned(), *v)).collect()
+        };
+        let snap = EnforcerSnapshot {
+            global_daily_usd: 0.0,
+            global_daily_limit: None,
+            tool_daily: names(&[]),
+            tool_limits: names(&[("seeded", 5.0), ("zero", 5.0), ("plain", 5.0)]),
+            key_daily: names(&[]),
+            key_limits: names(&[("k", 2.0)]),
+            taken_at: Some(0),
+            tool_overflow_usd: 3.0,
+            key_overflow_usd: 0.0,
+            tool_estimate: names(&[("seeded", 3.0), ("zero", 0.0)]),
+            key_estimate: names(&[("k", 1.5)]),
+        };
+        let section = cost_section(&snap);
+        let tools = &section["tool_estimated_start_usd"];
+        assert_eq!(tools["seeded"], 3.0, "{section}");
+        assert!(tools["zero"].is_null(), "{section}");
+        assert!(tools["plain"].is_null(), "{section}");
+        assert_eq!(section["key_estimated_start_usd"]["k"], 1.5, "{section}");
     }
 }
 

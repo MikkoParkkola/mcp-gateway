@@ -73,6 +73,7 @@ async fn an_owner_scoped_occurrence_still_needs_its_callers_access() {
         sub.api_key = Some(crate::events::records::ApiKeyRef {
             name: "gone".to_owned(),
             principal: "000000000000".to_owned(),
+            digest_tag: Some("000000000000".to_owned()),
         });
     });
     hub.attempt(&services, "evt_owner_key").await;

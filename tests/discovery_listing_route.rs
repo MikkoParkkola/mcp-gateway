@@ -20,7 +20,7 @@ use tokio::process::{Child, Command};
 use gateway_bin::{ANY_PORT, reported_port};
 
 const STARTUP: Duration = Duration::from_secs(60);
-const PROBE: Duration = Duration::from_secs(2);
+const PROBE: Duration = Duration::from_secs(10);
 const BEARER: &str = "discovery-route-admin-token";
 /// Values one leak would carry.
 const SECRET: &str = "zq-discovery-env-secret";

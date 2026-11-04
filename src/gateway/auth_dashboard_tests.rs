@@ -434,7 +434,7 @@ fn k13_tables(
     secret: &str,
 ) -> (
     crate::gateway::auth::ResolvedAuthConfig,
-    crate::gateway::auth::QuotaPrincipal,
+    crate::gateway::auth::MintingKey,
     crate::gateway::auth::ResolvedAuthConfig,
 ) {
     let with = crate::gateway::auth::ResolvedAuthConfig::from_config(
@@ -454,6 +454,10 @@ fn k13_tables(
     let key = with
         .validate_token(secret)
         .and_then(|client| client.quota_principal)
+        .map(|quota| crate::gateway::auth::MintingKey {
+            quota,
+            digest_tag: crate::gateway::auth::secret_tag(secret),
+        })
         .expect("the key has a quota identity");
     let without = crate::gateway::auth::ResolvedAuthConfig::from_config(
         &crate::config::AuthConfig::default(),

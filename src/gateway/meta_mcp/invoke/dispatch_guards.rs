@@ -76,6 +76,7 @@ pub(crate) enum DirectOutcome {
     Success { spend: bool },
     Failure { spend: bool },
     IgnoredRateLimit { spend: bool },
+    IgnoredRefusal { spend: bool },
 }
 
 impl DirectOutcome {
@@ -115,6 +116,7 @@ impl DirectOutcome {
             BudgetOutcome::Success => Self::Success { spend },
             BudgetOutcome::Failure => Self::Failure { spend },
             BudgetOutcome::IgnoredRateLimit => Self::IgnoredRateLimit { spend },
+            BudgetOutcome::IgnoredRefusal => Self::IgnoredRefusal { spend },
         }
     }
 
@@ -123,6 +125,7 @@ impl DirectOutcome {
             Self::Success { spend } => (BudgetOutcome::Success, spend),
             Self::Failure { spend } => (BudgetOutcome::Failure, spend),
             Self::IgnoredRateLimit { spend } => (BudgetOutcome::IgnoredRateLimit, spend),
+            Self::IgnoredRefusal { spend } => (BudgetOutcome::IgnoredRefusal, spend),
         }
     }
 }

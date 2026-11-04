@@ -12,8 +12,8 @@ use std::time::Duration;
 
 use super::*;
 
-const RESOURCE: &str = "https://backend.example.com/mcp";
-const BACKEND: &str = "cov3-backend";
+pub(crate) const RESOURCE: &str = "https://backend.example.com/mcp";
+pub(crate) const BACKEND: &str = "cov3-backend";
 const CLIENT_ID: &str = "cov3-client";
 /// The code the person at the browser approves: distinctive, so a log search
 /// for it cannot match anything else.
@@ -24,7 +24,7 @@ type Forms = Arc<Mutex<Vec<HashMap<String, String>>>>;
 
 /// A token endpoint on loopback. `Some(token)` answers with that access token;
 /// `None` refuses every request with `invalid_grant`.
-async fn token_endpoint(answer: Option<&'static str>) -> (String, Forms) {
+pub(crate) async fn token_endpoint(answer: Option<&'static str>) -> (String, Forms) {
     token_endpoint_issuing(answer, Some("r-next")).await
 }
 
@@ -71,7 +71,16 @@ async fn token_endpoint_issuing(
 
 /// A client whose authorization server is `issuer`, with a configured client
 /// id (no registration) and a loopback callback on a port the OS picks.
-fn client(dir: &std::path::Path, issuer: Option<&str>) -> OAuthClient {
+pub(crate) fn client(dir: &std::path::Path, issuer: Option<&str>) -> OAuthClient {
+    client_on(dir, issuer, "127.0.0.1")
+}
+
+/// [`client`] with its callback server on `callback_host`.
+pub(crate) fn client_on(
+    dir: &std::path::Path,
+    issuer: Option<&str>,
+    callback_host: &str,
+) -> OAuthClient {
     let storage = Arc::new(TokenStorage::new(dir.to_path_buf()).unwrap());
     let mut client = OAuthClient::new(
         Client::builder().no_proxy().build().unwrap(),
@@ -81,7 +90,7 @@ fn client(dir: &std::path::Path, issuer: Option<&str>) -> OAuthClient {
         storage,
         OAuthClientConfig {
             client_id: Some(CLIENT_ID.to_string()),
-            callback_host: Some("127.0.0.1".to_string()),
+            callback_host: Some(callback_host.to_string()),
             ..OAuthClientConfig::default()
         },
     );
@@ -134,7 +143,10 @@ enum Browser {
 /// Run the flow while playing the person at the browser: read the URL it
 /// hands over, then call its callback with `code`, the URL's own state and
 /// `iss`. Returns the flow's outcome and the authorization URL's query.
-async fn approve(client: &mut OAuthClient, iss: &str) -> (Result<String>, HashMap<String, String>) {
+pub(crate) async fn approve(
+    client: &mut OAuthClient,
+    iss: &str,
+) -> (Result<String>, HashMap<String, String>) {
     approve_via(client, iss, Entry::Authorize, Browser::Opens).await
 }
 
@@ -272,6 +284,27 @@ async fn the_authorization_code_never_reaches_the_log() {
             "the authorization code was logged: {log}"
         );
     }
+}
+
+// P2: a launcher that fails (or one an endpoint-security tool stops) leaves the
+// prompt printed all the same, once. P1 (the launcher succeeds, once) is
+// `a_cli_flow_announces_the_link_once`; P3 (a UI flow prints none) is
+// `a_ui_flow_never_announces_the_link_at_the_terminal`.
+#[tokio::test]
+async fn a_failed_launcher_still_announces_the_link_once() {
+    let dir = tempfile::tempdir().unwrap();
+    let (issuer, _forms) = token_endpoint(Some("access-a")).await;
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let recorder = Arc::clone(&seen);
+    let mut client = client(dir.path(), Some(&issuer)).with_announce(Arc::new(move |url: &str| {
+        recorder.lock().unwrap().push(url.to_owned());
+    }));
+
+    let (outcome, query) =
+        approve_via(&mut client, &issuer, Entry::Authorize, Browser::Fails).await;
+
+    outcome.expect("the flow completes by hand");
+    assert_eq!(*seen.lock().unwrap(), vec![query["__url"].clone()]);
 }
 
 #[tokio::test]
@@ -704,4 +737,63 @@ async fn a_login_cancelled_before_registration_opens_no_browser() {
         !opened.load(std::sync::atomic::Ordering::SeqCst),
         "no browser opens for a cancelled login"
     );
+}
+
+/// A login whose callback arrives after a sign-in under another issuer was
+/// confirmed redeems nothing: the code exchange spends the login's proof,
+/// which refuses then. Red before the exchange took a spent proof: the old
+/// issuer's code was redeemed.
+#[cfg(feature = "webui")]
+#[tokio::test]
+async fn a_callback_after_a_switch_redeems_nothing() {
+    use super::sign_in::{SignIn, SignInStatus};
+    let dir = tempfile::tempdir().unwrap();
+    let (issuer, forms) = token_endpoint(Some("access-a")).await;
+    let cell = Arc::new(SignInStatus::new(SignIn::NeverSignedIn));
+    let mut client = client(dir.path(), Some(&issuer)).with_sign_in_status(Arc::clone(&cell));
+    let (url_tx, mut url_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+    client.open_browser = Box::new(move |url| url_tx.send(url.to_string()).is_ok());
+    let person = async {
+        let opened = tokio::time::timeout(Duration::from_secs(10), url_rx.recv())
+            .await
+            .expect("the login opens the browser")
+            .expect("an authorization URL");
+        let query: HashMap<String, String> = Url::parse(&opened)
+            .unwrap()
+            .query_pairs()
+            .into_owned()
+            .collect();
+        // The person was slow: a sign-in under another issuer landed first.
+        cell.record_install("cov3-backend-another-issuer");
+        let callback = Url::parse_with_params(
+            &query["redirect_uri"],
+            &[
+                ("code", APPROVED_CODE),
+                ("state", query["state"].as_str()),
+                ("iss", issuer.as_str()),
+            ],
+        )
+        .unwrap();
+        Client::builder()
+            .no_proxy()
+            .build()
+            .unwrap()
+            .get(callback)
+            .send()
+            .await
+            .expect("the callback answers");
+    };
+
+    let (outcome, ()) = tokio::time::timeout(Duration::from_secs(20), async {
+        tokio::join!(client.authorize(), person)
+    })
+    .await
+    .expect("the flow finishes");
+
+    let refused = outcome.expect_err("no token of the old issuer");
+    assert!(
+        matches!(refused, Error::AuthorizationRequired { .. }),
+        "{refused}"
+    );
+    assert!(forms.lock().unwrap().is_empty(), "no code was redeemed");
 }
