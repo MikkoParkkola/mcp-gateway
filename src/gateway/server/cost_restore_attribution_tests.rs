@@ -606,7 +606,7 @@ fn restore2_an_absent_born_map_differs_from_an_empty_one() {
 /// less: at $4 a $1 call reads 3 + 0.5 + 1 and is refused, where a dropped
 /// figure (1.5) or the corrupt one read as born 2 (3.5) would admit it.
 #[test]
-fn restore2_a_corrupt_creation_figure_is_dropped() {
+fn restore2_a_corrupt_creation_figure_charges_the_overflow() {
     for scope in [Scope::Tool, Scope::Key] {
         for bad in [serde_json::Value::Null, (-1.0).into(), 1.0e14.into()] {
             let _clock = at_secs(T);

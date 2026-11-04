@@ -157,6 +157,8 @@ impl BudgetEnforcer {
                     continue;
                 }
                 let figure = match (&saved_born, rows.contains_key(name)) {
+                    // A present map lists every row created after the
+                    // overflow began; a row missing from it began with none.
                     (Some(saved), true) => saved.get(name).copied().unwrap_or(0),
                     (None, true) | (_, false) => overflow,
                 };
