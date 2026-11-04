@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! Every production reader of a caller's admin standing, inventoried
-//! (MIK-9158): the raw `admin` flag, the role mapping's admin answers and the
+//! Every production reader of a caller's admin standing, inventoried: the
+//! raw `admin` flag, the role mapping's admin answers and the
 //! `CallerStanding` constructors. A gateway-wide power reads `Gateway`; admin
 //! breadth inside a backend scope reads `InScope` too. A new reader fails the
 //! scan until it is listed here with the standing it reads.

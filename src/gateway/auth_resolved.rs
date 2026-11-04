@@ -58,7 +58,7 @@ fn resolve_api_keys(
 }
 
 /// An admin key whose list names some backends holds no gateway-wide admin
-/// power and sees only those backends in the web UI (MIK-9158): say so at
+/// power and sees only those backends in the web UI: say so at
 /// each load, so an operator who meant full admin learns it at startup rather
 /// than from a refused call. An empty list is a UI-wide
 /// admin that calls no backend, and is not warned here.

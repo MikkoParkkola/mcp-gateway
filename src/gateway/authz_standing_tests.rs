@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! The admin standing rule over every key shape (MIK-9158).
+//! The admin standing rule over every key shape.
 
 use super::{AdminStanding, admin_standing};
 

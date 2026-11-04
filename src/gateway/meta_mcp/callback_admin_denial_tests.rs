@@ -88,7 +88,7 @@ async fn non_admin_callback_registration_is_refused_as_forbidden() {
     );
 }
 
-/// Admin breadth inside the scope (MIK-9158 ruling b): an admin scoped to
+/// Admin breadth inside the scope: an admin scoped to
 /// some backends keeps the admin-only capabilities on a backend it reaches.
 /// The backend check runs first, so the rule reads `InScope` as admin.
 #[tokio::test]

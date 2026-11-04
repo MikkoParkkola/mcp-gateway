@@ -37,7 +37,7 @@ type GrantVerdict = (IdentityGrantRequest, IdentityGrantEvaluation);
 pub struct InvokeScope<'a> {
     /// The per-transport invocation predicate.
     pub authorizer: &'a (dyn ToolAuthorizer + Sync),
-    /// The caller's admin standing (MIK-9158): `Gateway` for gateway-wide
+    /// The caller's admin standing: `Gateway` for gateway-wide
     /// powers; `InScope` also reaches admin breadth inside its backends.
     pub(crate) admin: crate::gateway::authz::AdminStanding,
     /// The caller's display name, for guards and audit; never a grant subject (MIK-8518).

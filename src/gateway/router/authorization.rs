@@ -209,7 +209,7 @@ impl CallerStanding {
     }
 
     /// The single conversion from an admin standing: the admin meta-tools are
-    /// gateway-wide powers, so only `Gateway` holds them (MIK-9158).
+    /// gateway-wide powers, so only `Gateway` holds them.
     #[must_use]
     pub(crate) fn of(standing: AdminStanding) -> Self {
         if standing == AdminStanding::Gateway {

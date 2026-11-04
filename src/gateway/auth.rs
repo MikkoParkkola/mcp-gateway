@@ -332,7 +332,7 @@ pub struct AuthenticatedClient {
 }
 
 impl AuthenticatedClient {
-    /// This client's admin standing (MIK-9158): with the rule in
+    /// This client's admin standing: with the rule in
     /// [`crate::gateway::authz::admin_standing`], the one reader of `admin`
     /// for authorization. Gateway-wide powers need `Gateway`; admin breadth
     /// inside the scope reads `InScope` too.
@@ -342,7 +342,7 @@ impl AuthenticatedClient {
     }
 
     /// Whether this client holds the gateway-wide admin powers: an admin
-    /// scoped to every backend (MIK-9158).
+    /// scoped to every backend.
     #[must_use]
     pub(crate) fn is_gateway_admin(&self) -> bool {
         self.admin_standing() == crate::gateway::authz::AdminStanding::Gateway

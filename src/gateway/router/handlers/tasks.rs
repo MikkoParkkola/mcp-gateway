@@ -55,7 +55,7 @@ pub(super) struct TaskIntentRequest<'a> {
     pub agent_declared: Option<crate::security::DeclaredAgentLabel<'a>>,
     /// Grant subject the worker re-authorizes against.
     pub grant_subject: Option<crate::identity_grants::GrantSubject>,
-    /// The caller's admin standing on this gateway (MIK-9158).
+    /// The caller's admin standing on this gateway.
     pub(crate) admin: crate::gateway::authz::AdminStanding,
     /// What this caller may invoke: a surfaced name withheld from it makes no
     /// task (MIK-8340).

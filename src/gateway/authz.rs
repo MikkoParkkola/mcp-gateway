@@ -213,7 +213,7 @@ impl<'a> BackendGrant<'a> {
     }
 }
 
-/// How far a caller's admin flag reaches (MIK-9158). Declared lowest first,
+/// How far a caller's admin flag reaches. Declared lowest first,
 /// so the derived order is the rank: a step down is `fresh < captured`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum AdminStanding {

@@ -69,7 +69,7 @@ impl OwnedRouterAuthorizer {
     ///
     /// A key-server or OIDC caller holds admin by `mapping`, not by a key
     /// entry: its standing is recomputed from its verified `identity` under
-    /// the current mapping, and any step down ends the work (MIK-9158).
+    /// the current mapping, and any step down ends the work.
     /// `Ok(None)`: nothing to redo, the captured caller stands.
     pub(crate) fn rejudged(
         &self,
@@ -106,7 +106,7 @@ impl OwnedRouterAuthorizer {
                 keys.client_for_key_at(name, client.principal.storage_form(), binding, at)
             })
             // Standing only ever falls on a running task: any step down
-            // Gateway > InScope > None ends it (MIK-9158).
+            // Gateway > InScope > None ends it.
             .filter(|fresh| fresh.admin_standing() >= client.admin_standing())
             .ok_or(KeyGone)?;
         Ok(Some(Self {

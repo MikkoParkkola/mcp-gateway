@@ -405,7 +405,7 @@ pub(super) fn apply_mutation(
 /// key is `Admin` and any other caller `Viewer`. `Auditor` is otherwise only
 /// an explicit role rule, since it reads every principal's rows.
 ///
-/// `Admin` is gateway-wide (MIK-9158): a caller whose UI scope is not every
+/// `Admin` is gateway-wide: a caller whose UI scope is not every
 /// backend, by its key or its token's policy, is capped at `Auditor`, read
 /// breadth that the scoped snapshot bounds to its backends.
 pub(in crate::gateway::ui) fn actor_from_client(

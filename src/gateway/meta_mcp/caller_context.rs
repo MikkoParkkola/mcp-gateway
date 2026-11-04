@@ -71,7 +71,7 @@ pub struct MetaMcpCallerContext<'a> {
     pub(crate) stdio_nonce: Option<&'a crate::gateway::server::StdioNonce>,
     /// The caller's `router::identity::caller_key`, set by HTTP only; see `experiment_key`.
     pub(crate) caller_key: Option<&'a str>,
-    /// The caller's admin standing (MIK-9158): meta-tools with admin-only PARAMETERS cannot be gated by
+    /// The caller's admin standing: meta-tools with admin-only PARAMETERS cannot be gated by
     /// the tool-name allow-list in `router::authorization`, which knows only whole tools.
     pub(crate) admin: crate::gateway::authz::AdminStanding,
     /// The meta-tool surface this request asked for; recovery hints follow it (MIK-7974).
