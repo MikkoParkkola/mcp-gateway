@@ -10,13 +10,13 @@ use std::sync::{Arc, Mutex};
 use serde_json::json;
 use tokio::sync::broadcast;
 
-use super::id::{LogCursor, LogName, LogPart};
+use super::id::{LogCursor, LogName, Mark};
 use super::merge::{Appended, LogMerge, LogSource, Out, Page, Reset, Row};
 
 const HASH: &str = "0123456789abcdef";
 
-fn part(n: u64) -> LogPart {
-    LogPart {
+fn part(n: u64) -> Mark {
+    Mark {
         counter: n,
         hash16: HASH.to_owned(),
     }
@@ -38,7 +38,7 @@ struct OneLog {
 #[derive(Default)]
 struct Half {
     rows: Vec<Row>,
-    next: Option<LogPart>,
+    next: Option<Mark>,
     more: bool,
     reset: bool,
     searching: bool,
@@ -66,7 +66,7 @@ impl TwoLogs {
     }
 
     /// One log's half of a page.
-    fn half(&self, log: LogName, from: Option<&LogPart>, stop: Option<&LogPart>) -> Half {
+    fn half(&self, log: LogName, from: Option<&Mark>, stop: Option<&Mark>) -> Half {
         let mut logs = self.logs.lock().unwrap();
         let l = &mut logs[log as usize];
         let Some(stop) = stop else {

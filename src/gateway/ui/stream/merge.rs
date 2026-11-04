@@ -20,7 +20,7 @@ use serde_json::Value;
 use tokio::sync::broadcast;
 use tokio::time::Instant;
 
-use super::id::{LogCursor, LogName, LogPart};
+use super::id::{LogCursor, LogName, Mark};
 
 /// Rows per catch-up page, the list's maximum page size.
 pub(super) const PAGE: usize = 200;
@@ -33,7 +33,7 @@ pub(super) const LAG_WINDOW: std::time::Duration = std::time::Duration::from_sec
 #[derive(Clone, Debug, PartialEq)]
 pub(super) struct Row {
     pub(super) log: LogName,
-    pub(super) part: LogPart,
+    pub(super) part: Mark,
     pub(super) data: Value,
 }
 
@@ -43,7 +43,7 @@ pub(super) struct Appended {
     pub(super) log: LogName,
     /// The announced row's position and hash; the announcing hook fills it,
     /// so a row hidden from this caller still moves the view's `seen` mark.
-    pub(super) part: LogPart,
+    pub(super) part: Mark,
     /// Per log, in memory, starting at 0, and comparable only within one
     /// subscription. The source raises it when the log gets a new file id,
     /// when the file shrinks below its last write, and when a resync's tail
@@ -239,7 +239,7 @@ impl<S: LogSource> LogMerge<S> {
         let Some(r) = &self.recovery else {
             return self.delivered.clone();
         };
-        let pick = |d: &Option<LogPart>, r: &Option<LogPart>| match (d, r) {
+        let pick = |d: &Option<Mark>, r: &Option<Mark>| match (d, r) {
             (Some(d), Some(r)) if r.counter > d.counter => Some(r.clone()),
             (None, r) => r.clone(),
             (d, _) => d.clone(),
@@ -255,7 +255,7 @@ impl<S: LogSource> LogMerge<S> {
         self.too_slow
     }
 
-    fn slot(&mut self, log: LogName) -> &mut Option<LogPart> {
+    fn slot(&mut self, log: LogName) -> &mut Option<Mark> {
         match log {
             LogName::Invocation => &mut self.delivered.inv,
             LogName::Governance => &mut self.delivered.gov,
@@ -338,7 +338,7 @@ impl<S: LogSource> LogMerge<S> {
 
     /// Whether a scan cursor has caught up with the captured head in both logs.
     fn reached_head(&self, next: &LogCursor) -> bool {
-        let at = |head: &Option<LogPart>, pos: &Option<LogPart>| {
+        let at = |head: &Option<Mark>, pos: &Option<Mark>| {
             head.as_ref()
                 .is_none_or(|h| pos.as_ref().is_some_and(|p| p.counter >= h.counter))
         };
@@ -380,7 +380,7 @@ enum Order {
     Gap,
 }
 
-fn classify(seen: Option<&LogPart>, part: &LogPart) -> Order {
+fn classify(seen: Option<&Mark>, part: &Mark) -> Order {
     match seen {
         Some(s)
             if part.counter < s.counter
