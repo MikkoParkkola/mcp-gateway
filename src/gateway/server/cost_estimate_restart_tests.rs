@@ -386,3 +386,53 @@ fn t8g_a_null_estimate_map_restores_as_no_figures() {
     );
     assert!(snap.tool_estimate.is_empty(), "{snap:?}");
 }
+
+/// A first process that never budgets `target`: the map full, then $3 of
+/// `target`'s spend in the overflow. Returns what its shutdown save writes.
+fn unbudgeted_first_process(scope: Scope, dir: &std::path::Path) -> PersistedCosts {
+    let (_, enforcer) = boot_cost_governance(&governed(scope, None), dir);
+    let enforcer = enforcer.expect("enabled governance builds an enforcer");
+    for i in 0..CAP {
+        scope.spend(&enforcer, &format!("filler-{i}"), 0.01);
+    }
+    scope.spend(&enforcer, "target", 3.0);
+    let persisted = build_persisted_costs(&enforcer.snapshot_for_save().expect("a readable clock"));
+    cost_persistence::save(&dir.join("costs.json"), &persisted).expect("shutdown save");
+    persisted
+}
+
+/// RESTORE.4: a name the restarted config budgets for the first time starts
+/// from the overflow spend it may have made that day, as a reload would
+/// start it. $3 sits in the overflow and `target` has no row; restarted with
+/// `target` budgeted at $3.50, a $1 call is judged on $3 + $1 and refused
+/// (judged on its row alone it reads $1 and is admitted).
+#[test]
+fn restore4_a_name_first_budgeted_at_restart_starts_from_its_overflow_spend() {
+    for scope in [Scope::Tool, Scope::Key] {
+        let _clock = at_secs(T);
+        let dir = tempfile::tempdir().expect("tempdir");
+        let saved = unbudgeted_first_process(scope, dir.path());
+        let (overflow, row) = match scope {
+            Scope::Tool => (
+                saved.tool_overflow_usd,
+                saved.tool_totals.get("target").map(|t| t.total_cost_usd),
+            ),
+            Scope::Key => (
+                saved.key_overflow_usd,
+                saved.key_totals.get("target").copied(),
+            ),
+        };
+        assert_eq!(
+            overflow, 3.0,
+            "{scope:?}: premise: $3 saved in the overflow"
+        );
+        assert_eq!(row, None, "{scope:?}: premise: target has no saved row");
+
+        let (_, restarted) = boot_cost_governance(&governed(scope, Some(3.5)), dir.path());
+        let restarted = restarted.expect("armed");
+        assert!(
+            !scope.admits(&restarted, "target"),
+            "{scope:?}: a $1 call on $3 of earlier overflow spend fits a $3.50 budget"
+        );
+    }
+}
