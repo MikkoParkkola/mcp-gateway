@@ -177,8 +177,7 @@ fn serve_refuses_auth_on_with_the_audit_log_off() {
         ),
     );
     let refused = super::load_for_serve(Some(&path))
-        .err()
-        .expect("serve refuses auth on without an audit log")
+        .expect_err("serve refuses auth on without an audit log")
         .to_string();
     assert!(
         refused.contains("security.transparency_log must be enabled"),
