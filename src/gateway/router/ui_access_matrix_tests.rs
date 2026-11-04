@@ -805,7 +805,6 @@ mod report;
 #[path = "ui_backend_scope_tests.rs"]
 mod backend_scope;
 
-/// Each UI role check against the mapping pinned on the request, through the
-/// same fixture.
+/// Each UI role check against the mapping pinned on the request, through the same fixture.
 #[path = "ui_pinned_mapping_tests.rs"]
 mod pinned_mapping;
