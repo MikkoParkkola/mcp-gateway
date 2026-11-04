@@ -37,11 +37,11 @@ fn alpha() -> VerifiedIdentity {
 }
 
 fn cert() -> crate::mtls::CertIdentity {
-    crate::mtls::CertIdentity {
+    crate::mtls::identity::CertIdentity::for_test(crate::mtls::identity::CertFields {
         common_name: Some("agent".to_string()),
         display_name: "agent".to_string(),
         ..Default::default()
-    }
+    })
 }
 
 /// The per-user gateway in `warmth`, under an mTLS rule that allows only

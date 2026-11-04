@@ -112,11 +112,15 @@ async fn send_cert(fx: &Fx, method: &str, name: &str, params: Value) -> Value {
         ))
         .expect("request");
     let mut request = request;
-    request.extensions_mut().insert(crate::mtls::CertIdentity {
-        common_name: Some("agent".to_string()),
-        display_name: "agent".to_string(),
-        ..Default::default()
-    });
+    request
+        .extensions_mut()
+        .insert(crate::mtls::identity::CertIdentity::for_test(
+            crate::mtls::identity::CertFields {
+                common_name: Some("agent".to_string()),
+                display_name: "agent".to_string(),
+                ..Default::default()
+            },
+        ));
     let response = fx.router.clone().oneshot(request).await.expect("answers");
     let bytes = to_bytes(response.into_body(), usize::MAX)
         .await
@@ -577,11 +581,15 @@ async fn send_as(fx: &Fx, bearer: &str, method: &str, name: &str, params: Value)
             json!({"jsonrpc": "2.0", "id": 1, "method": method, "params": params}).to_string(),
         ))
         .expect("request");
-    request.extensions_mut().insert(crate::mtls::CertIdentity {
-        common_name: Some("agent".to_string()),
-        display_name: "agent".to_string(),
-        ..Default::default()
-    });
+    request
+        .extensions_mut()
+        .insert(crate::mtls::identity::CertIdentity::for_test(
+            crate::mtls::identity::CertFields {
+                common_name: Some("agent".to_string()),
+                display_name: "agent".to_string(),
+                ..Default::default()
+            },
+        ));
     let response = fx.router.clone().oneshot(request).await.expect("answers");
     let bytes = to_bytes(response.into_body(), usize::MAX)
         .await

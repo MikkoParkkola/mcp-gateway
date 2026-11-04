@@ -170,6 +170,7 @@ async fn each_surface_advertises_only_what_it_delivers() {
             "{surface}: flags {FLAGS:?} must be {expected:?}; got {capabilities}"
         );
     }
+    gateway.stop().await;
 }
 
 const DELIVERY_SOURCE: &str = include_str!("f24_tools_changed_delivery.rs");

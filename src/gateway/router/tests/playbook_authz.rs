@@ -484,8 +484,8 @@ async fn authz_3a_global_policy_does_not_refuse_a_permitted_tool() {
 /// identity actually arrived.
 #[tokio::test]
 async fn authz_10_certificate_policy_refuses_and_permits_a_playbook_step() {
+    use crate::mtls::MtlsPolicy;
     use crate::mtls::config::{CertMatchConfig, MtlsConfig, PolicyRuleConfig, ToolScopeConfig};
-    use crate::mtls::{CertIdentity, MtlsPolicy};
 
     let policy = Arc::new(MtlsPolicy::from_config(&MtlsConfig {
         enabled: true,
@@ -510,12 +510,12 @@ async fn authz_10_certificate_policy_refuses_and_permits_a_playbook_step() {
         state_mut.mtls_policy = Arc::clone(&policy);
     }
     let client = scoped_client("scoped", vec!["*".into()], None);
-    let cert = CertIdentity {
+    let cert = crate::mtls::identity::CertIdentity::for_test(crate::mtls::identity::CertFields {
         quota_principal: None,
         common_name: Some("trusted-machine".to_string()),
         display_name: "trusted-machine".to_string(),
-        ..CertIdentity::default()
-    };
+        ..Default::default()
+    });
 
     let refused = Box::pin(run_step_with_identity(
         &state,
