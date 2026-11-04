@@ -181,10 +181,26 @@ fn detect_multi_user_posture(yaml: &crate::yaml::Value) -> MultiUserPosture {
 // an oversight.
 #[allow(clippy::unnecessary_wraps)]
 fn migrate_3_0_0_multi_user_notice(data_dir: &Path) -> std::io::Result<()> {
+    let Some(posture) = multi_user_posture(data_dir) else {
+        return Ok(());
+    };
+    match posture {
+        // Printed for the same reason as the 4.0.0 notice: a log filter must
+        // not be able to swallow a one-time message addressed to a person.
+        MultiUserPosture::Undeclared => eprintln!("{NOTICE_MULTI_USER_DEFAULT}"),
+        MultiUserPosture::AuthDisabled => eprintln!("{NOTICE_AUTH_DISABLED}"),
+        MultiUserPosture::AlreadyDeclared => tracing::info!("{NOTICE_ALREADY_CONFIGURED}"),
+    }
+    Ok(())
+}
+
+/// The posture of the config in `data_dir`; `None` when there is none to
+/// read or it does not parse, so no notice is printed.
+fn multi_user_posture(data_dir: &Path) -> Option<MultiUserPosture> {
     let path = data_dir.join("gateway.yaml");
     let Ok(text) = std::fs::read_to_string(&path) else {
         // No config file at this location: nothing to detect, nothing to warn about.
-        return Ok(());
+        return None;
     };
     let Ok(yaml) = crate::yaml::from_str::<crate::yaml::Value>(&text) else {
         // Config::load() will surface the real parse error at startup; the
@@ -193,17 +209,9 @@ fn migrate_3_0_0_multi_user_notice(data_dir: &Path) -> std::io::Result<()> {
             path = %path.display(),
             "migration v3.0.0: could not parse gateway.yaml for posture detection — skipping notice"
         );
-        return Ok(());
+        return None;
     };
-
-    match detect_multi_user_posture(&yaml) {
-        // Printed for the same reason as the 4.0.0 notice: a log filter must
-        // not be able to swallow a one-time message addressed to a person.
-        MultiUserPosture::Undeclared => eprintln!("{NOTICE_MULTI_USER_DEFAULT}"),
-        MultiUserPosture::AuthDisabled => eprintln!("{NOTICE_AUTH_DISABLED}"),
-        MultiUserPosture::AlreadyDeclared => tracing::info!("{NOTICE_ALREADY_CONFIGURED}"),
-    }
-    Ok(())
+    Some(detect_multi_user_posture(&yaml))
 }
 
 // ── 4.0.0 migration: breaking-change notice ───────────────────────────────────

@@ -326,3 +326,19 @@ fn an_upgrade_refuses_a_config_others_can_write() {
     let mode = std::fs::metadata(&path).expect("stat").permissions().mode();
     assert_eq!(mode & 0o777, 0o660, "the refused file was rewritten");
 }
+
+/// A dry run reads the config through the same guard: a gateway.yaml another
+/// account can change is refused before its text is parsed or reported.
+#[cfg(unix)]
+#[test]
+fn a_dry_run_refuses_a_config_others_can_write() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = config_in(dir.path());
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o660)).expect("chmod");
+
+    let rewrite = rewrite_url_aliases_in(&path, RewriteMode::DryRun);
+
+    assert!(rewrite.is_err(), "the refused file was read and reported");
+    assert_eq!(std::fs::read_to_string(&path).expect("read back"), CONFIG);
+}

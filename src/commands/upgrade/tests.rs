@@ -612,3 +612,31 @@ which is not one of the binary's subcommands: {known:?}"
         }
     }
 }
+
+/// The 3.0.0 notice reads gateway.yaml through the guard every loader uses:
+/// a file another account can change is never parsed, so no posture is read
+/// from it, and the file keeps its bytes and mode.
+#[cfg(unix)]
+#[test]
+fn the_posture_notice_never_reads_a_config_others_can_write() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let dir = TempDir::new().unwrap();
+    let yaml = dir.path().join("gateway.yaml");
+    let original = "auth:\n  enabled: true\n";
+    mcp_gateway::gateway::test_helpers::write_owner_only(&yaml, original).unwrap();
+    assert_eq!(
+        multi_user_posture(dir.path()),
+        Some(MultiUserPosture::Undeclared),
+        "the owner-only file is read"
+    );
+    std::fs::set_permissions(&yaml, std::fs::Permissions::from_mode(0o660)).unwrap();
+
+    assert_eq!(
+        multi_user_posture(dir.path()),
+        None,
+        "the refused file was read"
+    );
+    assert_eq!(std::fs::read_to_string(&yaml).unwrap(), original);
+    let mode = std::fs::metadata(&yaml).unwrap().permissions().mode();
+    assert_eq!(mode & 0o777, 0o660);
+}
