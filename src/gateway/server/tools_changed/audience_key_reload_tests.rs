@@ -80,9 +80,10 @@ async fn stream1_a_removed_key_ends_its_held_streams() {
         get.frames(&w).await.iter().any(|m| m == GET_NOTE),
         "premise: GET delivered"
     );
+    let heard = listen.frames(&w).await;
     assert!(
-        listen.frames(&w).await.iter().any(|m| m == LISTEN_NOTE),
-        "premise: listen delivered"
+        heard.iter().any(|m| m == LISTEN_NOTE),
+        "premise: listen delivered: {heard:?}"
     );
 
     reload_k_std(&w, |_| false);
@@ -111,9 +112,10 @@ async fn stream3_a_removed_grant_withholds_that_backend_only() {
         get.frames(&w).await.iter().any(|m| m == GET_NOTE),
         "premise: GET delivered"
     );
+    let heard = listen.frames(&w).await;
     assert!(
-        listen.frames(&w).await.iter().any(|m| m == LISTEN_NOTE),
-        "premise: listen delivered"
+        heard.iter().any(|m| m == LISTEN_NOTE),
+        "premise: listen delivered: {heard:?}"
     );
 
     reload_k_std(&w, |key| {
