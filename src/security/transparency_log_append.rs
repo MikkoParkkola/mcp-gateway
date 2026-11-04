@@ -130,12 +130,13 @@ impl Subscribers {
         );
     }
 
-    /// Take the active file's current end as this writer's baseline when a
-    /// reader subscribes. After a rotation or a rebuild the call's own write
-    /// records the new segment's end, so no other baseline is needed.
-    #[cfg(feature = "webui")]
+    /// Take the active file's current end as this writer's baseline: when a
+    /// reader subscribes, and after a rebuild (whose own write may fail, so
+    /// no write would record the new file's end). A cut found on the way is
+    /// raised first, so a later baseline never hides an earlier cut.
     fn rebaseline(&self, inner: &Inner) {
         if let Ok(meta) = inner.file.metadata() {
+            self.check_end(inner.seg.id, meta.len());
             self.record_end(inner.seg.id, meta.len());
         }
     }
@@ -294,6 +295,7 @@ impl TransparencyLogger {
         inner.counter = r.counter;
         inner.last_entry_hash = r.last_entry_hash;
         inner.seg = r.seg;
+        self.subscribers.rebaseline(inner);
         if let Some(at) = known {
             inner.seg.hwm_missing_at = Some(inner.seg.hwm_missing_at.map_or(at, |e| e.min(at)));
         }
