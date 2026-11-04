@@ -40,7 +40,7 @@ async fn a_planted_late_write_after_test_end_leaves_no_folder() {
 
 /// The openers that start task workers, recovery, an expiry sweep or the
 /// events runtime: a test that calls one owns a writer that can outlive it.
-const WORKER_OPENERS: [&str; 7] = [
+const WORKER_OPENERS: [&str; 9] = [
     "open_runtime(",
     "open_runtime_with_admission(",
     "open_runtime_with_recovery(",
@@ -51,13 +51,23 @@ const WORKER_OPENERS: [&str; 7] = [
     // The events hub's runtime: fan-out, delivery and the startup replay
     // that rewrites subscription rows.
     "hub.start(",
+    // Events delivery driven directly: an attempt settles its record and
+    // rewrites its subscription's status on the blocking pool.
+    "deliver_forever(",
+    ".attempt(&",
 ];
 
-/// Test files that name an opener without starting a store, with why.
-const NO_STORE: &[(&str, &str)] = &[(
-    "src/gateway/task_service/runtime_tests/admission_clock.rs",
-    "names open_runtime in a source string it checks; opens no store",
-)];
+/// Test files that name an opener but start no unkept store, with why.
+const NO_STORE: &[(&str, &str)] = &[
+    (
+        "src/events/worker_settle_dir_tests.rs",
+        "opens its hub through worker_fixtures_tests::delivery_hub, which keeps the folder",
+    ),
+    (
+        "src/gateway/task_service/runtime_tests/admission_clock.rs",
+        "names open_runtime in a source string it checks; opens no store",
+    ),
+];
 
 /// Whether `text` starts a worker-bearing store and never keeps its folder.
 fn unkept(text: &str) -> bool {
