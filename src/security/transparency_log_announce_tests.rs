@@ -399,12 +399,12 @@ fn h2_a_second_reader_subscribing_after_a_cut_does_not_hide_it() {
         append(&log, i);
     }
     cut_in_half(&path);
-    let _second = listen(&log);
+    let second = listen(&log);
     append(&log, 3);
-    assert!(
-        first.lock().unwrap().last().unwrap().2 > 0,
-        "the cut before the second subscribe still raises the generation"
-    );
+    // The second subscribe found the cut and raised the generation once; both
+    // readers see that record with it.
+    assert_eq!(first.lock().unwrap().last().unwrap().2, 1);
+    assert_eq!(second.lock().unwrap().last().unwrap().2, 1);
 }
 
 #[test]
@@ -430,5 +430,32 @@ fn h2_a_cut_after_a_rebuild_whose_write_failed_raises_it() {
         told.last().unwrap().2,
         2,
         "one rise for the replaced tail, one for the cut: {told:?}"
+    );
+}
+
+#[test]
+fn h2_a_cut_after_a_rotation_whose_write_failed_raises_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = log_path(&dir);
+    let log = TransparencyLogger::open(cfg(&path, 12, false)).unwrap();
+    let told = listen(&log);
+    // Inside the rotation, after the rename: the record that triggered it
+    // fails to write, so no write records the new segment's end.
+    log.on_rotation_window(Box::new(|l: &TransparencyLogger| {
+        l.arm_write_fault(Some(WriteFault::WriteError));
+    }));
+    let mut i = 0;
+    while log.log_invocation("s", "c", "srv", "t", "a", "b").is_ok() {
+        i += 1;
+        assert!(i < 1_000, "no rotation happened");
+    }
+    log.on_rotation_window(Box::new(|_: &TransparencyLogger| {}));
+    let before = told.lock().unwrap().last().map_or(0, |t| t.2);
+    cut_in_half(&path);
+    append(&log, 1);
+    assert_eq!(
+        told.lock().unwrap().last().unwrap().2,
+        before + 1,
+        "the cut of the new segment raised the generation once"
     );
 }
