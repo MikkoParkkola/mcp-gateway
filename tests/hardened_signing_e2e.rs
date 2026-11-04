@@ -574,7 +574,7 @@ async fn listed_private_backend_tool_call_is_served() {
             config["security"]["hardened"] = json!({"private_backends": [BACKEND]});
         }
         let gateway = HttpGateway::start_owning(config, &[], vec![home]).await;
-        let stack = Stack { gateway, backend };
+        let stack = Stack { backend, gateway };
         let nonce = if listed {
             "listed-call"
         } else {
