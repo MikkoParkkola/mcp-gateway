@@ -26,29 +26,33 @@ fn a_log_kind_not_advertised_gets_no_merge() {
 
 #[test]
 fn during_a_catch_up_each_upkeep_runs_once_between_pages() {
-    let all = Upkeeps::ALL;
-    assert_eq!(
-        servable(all, Phase::CatchUp),
-        Upkeeps::default(),
-        "every upkeep served this gap: none is servable, so the page is next"
-    );
-    assert_eq!(
-        servable(Upkeeps::default(), Phase::CatchUp),
-        all,
-        "a fresh gap: every due upkeep runs before the page"
-    );
-    let keep_only = Upkeeps {
-        keep: true,
-        ..Upkeeps::default()
+    let u = |recheck, keep, snapshot| Upkeeps {
+        recheck,
+        keep,
+        snapshot,
     };
-    assert_eq!(
-        servable(keep_only, Phase::CatchUp),
-        Upkeeps { keep: false, ..all },
-        "a keep-alive already sent this gap waits for the page"
-    );
-    assert_eq!(
-        servable(all, Phase::Live),
-        all,
-        "following the live logs, nothing is capped"
-    );
+    // Every combination of what was served this gap: (served, servable
+    // during a catch-up). Written out, so a swapped flag cannot pass.
+    let table = [
+        (u(false, false, false), u(true, true, true)),
+        (u(true, false, false), u(false, true, true)),
+        (u(false, true, false), u(true, false, true)),
+        (u(false, false, true), u(true, true, false)),
+        (u(true, true, false), u(false, false, true)),
+        (u(true, false, true), u(false, true, false)),
+        (u(false, true, true), u(true, false, false)),
+        (u(true, true, true), u(false, false, false)),
+    ];
+    for (served, during_catch_up) in table {
+        assert_eq!(
+            servable(served, Phase::CatchUp),
+            during_catch_up,
+            "a catch-up after serving {served:?}"
+        );
+        assert_eq!(
+            servable(served, Phase::Live),
+            u(true, true, true),
+            "the live logs cap nothing, whatever was served: {served:?}"
+        );
+    }
 }
