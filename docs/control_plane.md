@@ -131,7 +131,7 @@ or SIEM/OTel sinks.
 - `auditor`: read-only inventory/evidence role, over every principal's grants and audit events.
 - `viewer`: a caller no role rule maps (an API key without admin rights, or a signed-in identity no rule matches). Reads inventory/evidence, but only its own grants and audit events.
 
-Admin, security reviewer and auditor read every principal's grants and audit events in the snapshot; viewer and developer read only rows about themselves (grants under their own subject, events they performed). `auditor` is only ever an explicit role rule. A key's backend scope bounds every role: a key whose `backends` names some backends (admin or not, whatever its identity maps to) sees only those backends, and no identity grant, local policy, store audit event or shadow-radar discovery, since each is gateway-wide; its radar reads `scan_status: "out_of_scope"`.
+Admin, security reviewer and auditor read every principal's grants and audit events in the snapshot; viewer and developer read only rows about themselves (grants under their own subject, events they performed). `auditor` is only ever an explicit role rule. A key's backend scope bounds every role, whatever its identity maps to. A key whose `backends` names some backends (admin or not) sees only those backends, and a non-admin key with an empty `backends` sees none. Either is shown no identity grant, local policy, store audit event or shadow-radar discovery, since each is gateway-wide, and its radar reads `scan_status: "out_of_scope"`.
 
 All mutations require an audit event whose actor, action, and target match the requested mutation, plus a rollback plan.
 

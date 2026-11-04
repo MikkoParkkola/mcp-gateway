@@ -162,13 +162,46 @@ async fn cell(who: Who, store: bool) -> String {
         Some("ok" | "unavailable") => "ran".to_string(),
         other => format!("status:{other:?}"),
     };
+    // Every inventory count, so a figure derived before narrowing moves the
+    // cell. The two shadow counts read the host's real scan when it ran.
+    let ran = radar == "ran";
+    let field = |name: &str| {
+        let value = &counts[name];
+        if value.is_u64() {
+            value.to_string()
+        } else {
+            format!("MISSING:{name}")
+        }
+    };
+    let inventory = [
+        "servers",
+        "tools",
+        "trust_cards",
+        "trust_evaluations",
+        "requested_grants",
+        "policies",
+        "users",
+        "groups",
+        "runtime_health",
+        "audit_events",
+        "shadow_assets",
+        "shadow_high_or_critical_assets",
+    ]
+    .map(|name| {
+        if ran && name.starts_with("shadow_") {
+            "-".to_string()
+        } else {
+            field(name)
+        }
+    })
+    .join("/");
     let all_principals = &body["authorizations"]["read_all_principals"];
     let all_principals = format!(
         "{}/{}",
         all_principals["allowed"], all_principals["reason_code"]
     );
     format!(
-        "{}|grants:{}|policies:{}|audit:{targets}|queue:{queue}|radar:{radar}|counts:{}/{}/{consistent}|cov:{}/{}/{}|all:{all_principals}",
+        "{}|grants:{}|policies:{}|audit:{targets}|queue:{queue}|radar:{radar}|counts:{}/{}/{consistent}|cov:{}/{}/{}|all:{all_principals}|inv:{inventory}",
         code.as_u16(),
         len("grants"),
         len("policies"),
@@ -193,31 +226,39 @@ const SANITIZE_ITEM: &str =
 /// no other principal's; a scoped one is shown no grant, no policy, no store
 /// audit event, no queue item for either and no radar, whatever its role.
 fn expected(who: Who) -> [String; 2] {
-    let unscoped = |grants: usize, audit: &str, all: &str| {
+    // servers/tools/trust_cards/trust_evaluations/requested_grants/policies/
+    // users/groups/runtime_health/audit_events/shadow_assets/shadow_high.
+    let inventory =
+        |servers: usize, policies: usize, groups: usize, events: usize, shadow: &str| {
+            format!("{servers}/0/0/0/0/{policies}/1/{groups}/{servers}/{events}/{shadow}")
+        };
+    let unscoped = |grants: usize, audit: &str, all: &str, groups: usize| {
         let events = audit.split(';').filter(|t| !t.is_empty()).count();
         [("", 0), (audit, events)].map(|(audit, events)| {
             format!(
-                "200|grants:{grants}|policies:2|audit:{audit}|queue:{SANITIZE_ITEM}|radar:ran|counts:2/{events}/true|cov:{}/true/{}|all:{all}",
+                "200|grants:{grants}|policies:2|audit:{audit}|queue:{SANITIZE_ITEM}|radar:ran|counts:2/{events}/true|cov:{}/true/{}|all:{all}|inv:{}",
                 grants > 0,
-                events > 0
+                events > 0,
+                inventory(2, 2, groups, events, "-/-"),
             )
         })
     };
-    let scoped = || {
-        let cell = "200|grants:0|policies:0|audit:|queue:|radar:out_of_scope:withheld=true|counts:0/0/true|cov:false/false/false|all:false/\"CONTROL_BACKEND_SCOPE\"";
-        [cell.to_string(), cell.to_string()]
+    let scoped = |servers: usize, groups: usize| {
+        let cell = format!(
+            "200|grants:0|policies:0|audit:|queue:|radar:out_of_scope:withheld=true|counts:0/0/true|cov:false/false/false|all:false/\"CONTROL_BACKEND_SCOPE\"|inv:{}",
+            inventory(servers, 0, groups, 0, "0/0"),
+        );
+        [cell.clone(), cell]
     };
     match who {
-        Who::AdminKey | Who::UiAdminKey => unscoped(2, ALL_EVENTS, r#"true/"CONTROL_RBAC_ADMIN""#),
-        Who::Auditor => unscoped(2, ALL_EVENTS, r#"true/"CONTROL_RBAC_AUDITOR_READ""#),
-        Who::Developer => unscoped(1, "grant-dev", r#"false/"CONTROL_RBAC_ACTION_DENIED""#),
-        Who::ScopedKey
-        | Who::ScopedAuditor
-        | Who::ScopedDeveloper
-        | Who::ScopedRoleAdmin
-        | Who::ScopedAdminKey
-        | Who::EmptyAuditor
-        | Who::EmptyRoleAdmin => scoped(),
+        Who::AdminKey | Who::UiAdminKey => {
+            unscoped(2, ALL_EVENTS, r#"true/"CONTROL_RBAC_ADMIN""#, 0)
+        }
+        Who::Auditor => unscoped(2, ALL_EVENTS, r#"true/"CONTROL_RBAC_AUDITOR_READ""#, 1),
+        Who::Developer => unscoped(1, "grant-dev", r#"false/"CONTROL_RBAC_ACTION_DENIED""#, 1),
+        Who::ScopedKey | Who::ScopedAdminKey => scoped(1, 0),
+        Who::ScopedAuditor | Who::ScopedDeveloper | Who::ScopedRoleAdmin => scoped(1, 1),
+        Who::EmptyAuditor | Who::EmptyRoleAdmin => scoped(0, 1),
     }
 }
 
