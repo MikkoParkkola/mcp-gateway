@@ -21,6 +21,14 @@ Test code is a test path, or an item under a test-only cfg by its own extent
 gate's shared judgement); a line shared with product code counts as test.
 A const reaches a file `include!`d by the file that defines it.
 
+An HTTP client's or request's `.timeout(D)` in test code bounds
+the request on the real clock, so a slow answer under load fails the test:
+refused under 5 s or unresolved, under 10 s in new code. It is a request
+timeout when its method chain (not its arguments) is built through
+`reqwest::` or `Client::builder()`/`Client::new()`, or calls an HTTP verb on
+a value named `client` or `*_client`; any other `.timeout(D)` is listed whatever
+its window, since without types what it bounds is not known.
+
 New or changed test code (`--base`) meets stricter rules: an elapsed bound or
 failing timeout under 10 s (the floor); a `sleep` used as a window; a timeout
 expected to elapse, then asserted; a poll budget under 10 s; a short product
@@ -52,9 +60,8 @@ quietly. And, for MIK-8360 (none is lexical; the fix pattern follows each):
   message (messages are blanked): assert the error kind or cause instead;
 - `ttl`, `interval` and `period` fields: legitimate when waited out by event,
   refused only beside a waited real-clock sleep (the product-timer rule);
-- a bare `.timeout(D)` method (an HTTP client's request timeout): 77 test
-  sites at MIK-8360's base, too many to gate without a separate decision;
-  a short one bounds the success path, so prefer the 10 s floor;
+- `.connect_timeout(D)` and `.read_timeout(D)`: none in test code when
+  `.timeout(D)` was first judged; a short one would bound a request the same way;
 - a sleep used as a window inside a helper whose caller holds the assert
   (MIK-8354's `short_window`): the rule looks for the assert in the same fn.
 
@@ -85,6 +92,7 @@ from pathlib import Path
 
 from check_timing_asserts_core import (
     HANG_BOUND_HOME,
+    NOT_A_REQUEST,
     PARSE_REPORT,
     THRESHOLD_S,
     _cfg_rules,

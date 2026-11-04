@@ -56,13 +56,15 @@ impl Default for Setup {
 }
 
 pub(super) struct Routes {
-    pub(super) dir: tempfile::TempDir,
     /// Kept alive for the rows: it owns the registry both firewalls read.
     _gateway: Gateway,
     pub(super) meta: Arc<MetaMcp>,
     pub(super) state: Arc<AppState>,
     log: PathBuf,
     _store: std::sync::Arc<tempfile::TempDir>,
+    /// The gateway's config and data directory. Declared last, so it drops
+    /// after everything above that writes into it (fields drop in order).
+    pub(super) dir: tempfile::TempDir,
 }
 
 impl Routes {
