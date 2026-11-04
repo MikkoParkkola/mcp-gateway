@@ -652,7 +652,7 @@ mod plan_tests {
         assert_eq!(
             graceful_ending(Duration::from_secs(30), true),
             Ending::Graceful {
-                eof: waits - waits / 3,
+                eof: waits.saturating_sub(waits / 3),
                 term: waits / 3,
             }
         );
