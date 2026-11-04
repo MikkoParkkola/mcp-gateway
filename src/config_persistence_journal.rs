@@ -368,9 +368,11 @@ impl NotRecovered {
 /// answer says what happened without a path, so no caller can echo one.
 fn guard_refused(why: &str) -> String {
     tracing::warn!(detail = %why, "a replace journal or its staged original was refused by the config guard");
-    "a pending config recovery was not run: its journal or staged original is a file the config \
-     guard refuses (another account could change it, or it is not a regular file); fix it as the \
-     gateway log says, then retry"
+    "a pending config recovery was not run: its replace journal or staged original is a file the \
+     config guard refuses (another account could change it, it is not a regular file, or it is \
+     not UTF-8 text), so nothing was restored; fix it as the gateway log says and retry, or \
+     compare the staged original with gateway.yaml by hand before restoring anything, then \
+     delete the journal"
         .to_owned()
 }
 
