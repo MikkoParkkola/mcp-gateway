@@ -219,6 +219,16 @@ pub(super) fn audit_actions(dir: &std::path::Path, action: &str) -> Vec<serde_js
         .collect()
 }
 
+/// A hub for delivery rows, over `dir`, with loopback callbacks allowed.
+// STUB: does not hand the hub its folder yet; the settle row is red.
+pub(super) fn delivery_hub(dir: &Arc<tempfile::TempDir>) -> Arc<EventsHub> {
+    let config = crate::config::EventsConfig {
+        callback_allow_private: vec!["127.0.0.0/8".into()],
+        ..crate::config::EventsConfig::default()
+    };
+    EventsHub::open(&config, dir.path()).expect("hub")
+}
+
 pub(super) fn config_default() -> crate::config::EventsConfig {
     crate::config::EventsConfig::default()
 }

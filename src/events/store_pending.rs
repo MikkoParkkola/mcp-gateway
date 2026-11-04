@@ -366,6 +366,10 @@ impl Store {
         };
         // The subscription's delivery history is a status line: a failed
         // write of it never undoes the settlement.
+        #[cfg(test)]
+        if status_line.is_some() {
+            self.before_touch.pause_blocking();
+        }
         let touched = status_line.map(|(delivered, error)| {
             self.touch(&mut state, &sub_id, |s| {
                 if delivered && now.is_some() {

@@ -263,6 +263,10 @@ pub(crate) struct Store {
     /// test ends lands in a directory that is then removed with it.
     #[cfg(test)]
     test_dir: std::sync::OnceLock<std::sync::Arc<tempfile::TempDir>>,
+    /// Test-only: one settle pauses before it rewrites the subscription's
+    /// delivery status line, the last write a delivery makes.
+    #[cfg(test)]
+    pub(crate) before_touch: crate::test_pause::Slot,
 }
 
 impl Store {
@@ -348,6 +352,8 @@ impl Store {
             fail_next_dead_sync: std::sync::atomic::AtomicBool::new(false),
             #[cfg(test)]
             test_dir: std::sync::OnceLock::new(),
+            #[cfg(test)]
+            before_touch: crate::test_pause::Slot::default(),
         };
         if let Some(now) = now {
             let mut state = store.state.lock();
