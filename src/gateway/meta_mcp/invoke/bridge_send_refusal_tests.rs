@@ -274,9 +274,14 @@ impl Transport for RefusedAtSend {
 /// One `gateway_invoke` of `book` on a backend that refuses its call at the
 /// send; the answer and the calls that reached the send.
 async fn invoke_refused() -> (crate::Result<Value>, usize) {
+    invoke_refused_on("refused").await
+}
+
+/// [`invoke_refused`] on a backend named `name`.
+async fn invoke_refused_on(name: &str) -> (crate::Result<Value>, usize) {
     let calls = Arc::new(AtomicUsize::new(0));
     let backend = Arc::new(Backend::new(
-        "refused",
+        name,
         BackendConfig::default(),
         &FailsafeConfig::default(),
         Duration::from_secs(300),
@@ -288,9 +293,49 @@ async fn invoke_refused() -> (crate::Result<Value>, usize) {
     let _ = registry.register(backend);
     let meta = MetaMcp::new(registry);
     let caller = ctx(&AllowAll);
-    let args = json!({"server": "refused", "tool": "book", "arguments": {}});
+    let args = json!({"server": name, "tool": "book", "arguments": {}});
     let answer = meta.invoke_tool(&args, None, &caller).await;
     (answer, calls.load(Ordering::SeqCst))
+}
+
+/// LEND.6: a send refused at the dispatch, left out of the error budget, is
+/// still a recorded invocation: the invocation counter (status `error`) and
+/// the duration histogram each count it, once. The backend's name is the
+/// row's own, since the metrics are process-wide.
+#[cfg(feature = "metrics")]
+#[tokio::test]
+async fn a_dispatch_refused_at_its_send_is_still_recorded_as_an_invocation() {
+    use crate::metrics::series_value;
+    const ALONE: &str = "refused-metrics";
+    crate::metrics::install();
+    let server = format!("server=\"{ALONE}\"");
+    let read = || {
+        let text = crate::metrics::render();
+        (
+            series_value(
+                &text,
+                "mcp_tool_invocations_total",
+                &[&server, "status=\"error\""],
+            ),
+            series_value(
+                &text,
+                "mcp_tool_invocation_duration_seconds_count",
+                &[&server],
+            ),
+        )
+    };
+    assert_eq!(read(), (0.0, 0.0), "premise: no series for the backend yet");
+    let (answer, calls) = invoke_refused_on(ALONE).await;
+    assert_eq!(calls, 1, "premise: the call reached its send: {answer:?}");
+    assert!(
+        matches!(answer, Err(crate::Error::Forbidden { code: -32001, .. })),
+        "premise: the send's refusal: {answer:?}"
+    );
+    assert_eq!(
+        read(),
+        (1.0, 1.0),
+        "one invocation with status error, and its duration"
+    );
 }
 
 /// The first dispatch's fold site: a call refused at its send is answered as
