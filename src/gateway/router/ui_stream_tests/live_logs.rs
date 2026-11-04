@@ -30,19 +30,24 @@ fn scoped_admin(backends: &[&str]) -> ApiKeyConfig {
     }
 }
 
+/// The bearer, the standard key, and the scoped admin key over `backends`.
+fn auth(backends: &[&str]) -> AuthConfig {
+    AuthConfig {
+        enabled: true,
+        bearer_token: Some(BEARER.to_string()),
+        api_keys: vec![standard_key(), scoped_admin(backends)],
+        public_paths: vec!["/health".to_string()],
+        ..AuthConfig::default()
+    }
+}
+
 /// A gateway writing both logs (`governance` false: no governance log), with
 /// the bearer, the standard key and a scoped admin key over `a` and `b`.
 async fn logged(governance: bool) -> (Arc<AppState>, impl Sized, Arc<TransparencyLogger>) {
     let dir = Arc::new(tempfile::tempdir().unwrap());
     let inv = logger(&dir, "invocation.jsonl");
     let gov = governance.then(|| logger(&dir, "governance.jsonl"));
-    let auth = AuthConfig {
-        enabled: true,
-        bearer_token: Some(BEARER.to_string()),
-        api_keys: vec![standard_key(), scoped_admin(&["a", "b"])],
-        public_paths: vec!["/health".to_string()],
-        ..AuthConfig::default()
-    };
+    let auth = auth(&["a", "b"]);
     let (state, fixture_dir) = super::super::tests::meta_fixture::test_router_app_state_with_logs(
         &auth,
         Some(Arc::clone(&inv)),
@@ -160,13 +165,9 @@ async fn a1d_a_narrowed_backend_list_ends_the_stream_with_its_kinds_unchanged() 
     tokio::time::pause();
     let mut s = open(&state, request(STREAM, Who::Bearer(SCOPED_ADMIN), None)).await;
     within(s.until("hello")).await;
-    state.live_config.edit(|c| {
-        for key in &mut c.auth.api_keys {
-            if key.name == SCOPED_ADMIN {
-                key.backends = vec!["a".to_string()];
-            }
-        }
-    });
+    // A reload that narrows the scoped key: a whole new auth section, so the
+    // generation builds a new key table, as a reload of the file does.
+    state.live_config.edit(|c| c.auth = auth(&["a"]));
     assert!(
         s.ended_within(REVOKED_WITHIN).await,
         "the narrowed access ended the stream"
