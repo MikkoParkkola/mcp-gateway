@@ -124,3 +124,39 @@ async fn a_revoked_grant_is_named_on_every_poll() {
         );
     }
 }
+
+/// A result recorded under an account binding the target no longer runs
+/// under (it now runs under none): refused as rebound, -32603, for
+/// provenance.
+#[tokio::test]
+async fn a_rebound_result_is_refused_for_provenance() {
+    let dir = tempfile::tempdir().unwrap();
+    let (_endpoint, meta) = alice_gateway(&dir).await;
+    let stored = CommittedTask {
+        bindings: vec![(
+            CAPS.to_owned(),
+            PERSONAL.to_owned(),
+            Some("another-account#fp".to_owned()),
+        )],
+        ..finished_task()
+    };
+    let alice = api_key("alice");
+    let caller = context(&alice);
+    let (answer, written, _) = with_grant_slot(meta.transparency_logger.as_ref(), async {
+        meta.refuse_stored_delivery(&RequestId::Number(1), &stored, None, Some("s"), &caller)
+    })
+    .await;
+    written.expect("the slot's records are written");
+    let answer = answer.expect("a rebound result is refused");
+    let refused_by = answer
+        .refused_by()
+        .map(|r| serde_json::to_value(r).expect("RefusedBy serialises"));
+    let response = answer.into_response();
+    let error = response.error.as_ref().expect("an error answer");
+    assert_eq!(error.code, -32603, "the rebound refusal: {error:?}");
+    assert!(
+        error.message.contains("different account"),
+        "rebound, not legacy: {error:?}"
+    );
+    assert_eq!(refused_by, Some(json!({"kind": "provenance"})));
+}

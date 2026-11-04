@@ -38,6 +38,11 @@ fn refused_reads(fx: &Logged) -> Vec<Value> {
 /// Run a task to completion under the fixture's admitting policy and read
 /// it once, delivered; publish `then`; read it again. The second answer.
 async fn read_after_reload(fx: &Logged, key: &str, then: fn(&mut Config)) -> Value {
+    read_after(fx, key, |fx| fx.state.live_config.set(configured(fx, then))).await
+}
+
+/// [`read_after_reload`] with `change` made between the two reads.
+async fn read_after(fx: &Logged, key: &str, change: impl FnOnce(&Logged)) -> Value {
     let id = super::submit_task(fx, key, json!({})).await;
     let first = super::settled_task(fx, &id).await;
     assert!(
@@ -46,7 +51,7 @@ async fn read_after_reload(fx: &Logged, key: &str, then: fn(&mut Config)) -> Val
     );
     let _ = super::invocations(fx).await;
     assert!(refused_reads(fx).is_empty(), "premise: nothing refused yet");
-    fx.state.live_config.set(configured(fx, then));
+    change(fx);
     let got = super::read_task(fx, &id).await;
     let _ = super::invocations(fx).await;
     got
@@ -140,4 +145,40 @@ async fn a_stored_read_outside_the_keys_tools_names_the_tool_scope() {
     let fx = fixture(super::Answer::Ok, None).await;
     let got = read_after_reload(&fx, "stored-tools", key_allows_another_tool).await;
     assert_eq!(kind_only(&fx, &got), json!({"kind": "client_tool_scope"}));
+}
+
+/// `alpha`'s `read` withheld by the descriptor gate after the task ran: the
+/// read is refused at the visibility exit, named by the descriptor block.
+#[tokio::test(flavor = "current_thread")]
+async fn a_stored_read_of_a_descriptor_blocked_tool_names_the_block() {
+    let fx = fixture(super::Answer::Ok, None).await;
+    let got = read_after(&fx, "stored-descriptor", |fx| {
+        fx.state
+            .backends
+            .get("alpha")
+            .expect("the fixture's backend")
+            .block_descriptor_for_test("read");
+    })
+    .await;
+    assert_eq!(kind_only(&fx, &got), json!({"kind": "descriptor_block"}));
+}
+
+/// `alpha`'s shared catalogue, after the task ran, lists `read` with an input
+/// schema that is not an object's (CAP-003): the read is refused at the
+/// visibility exit for its schema, recorded under the descriptor block.
+#[tokio::test(flavor = "current_thread")]
+async fn a_stored_read_of_a_tool_with_a_broken_schema_names_the_block() {
+    let fx = fixture(super::Answer::Ok, None).await;
+    let got = read_after(&fx, "stored-schema", |fx| {
+        let tool: crate::protocol::Tool =
+            serde_json::from_value(json!({"name": "read", "inputSchema": {"type": "string"}}))
+                .expect("a tool");
+        fx.state
+            .backends
+            .get("alpha")
+            .expect("the fixture's backend")
+            .store_shared_tools_for_test(vec![tool]);
+    })
+    .await;
+    assert_eq!(kind_only(&fx, &got), json!({"kind": "descriptor_block"}));
 }
