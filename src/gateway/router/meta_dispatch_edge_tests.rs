@@ -37,3 +37,21 @@ async fn a_body_that_fails_to_read_is_a_parse_error() {
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert_eq!(body.0["error"]["code"], -32700, "{}", body.0);
 }
+
+/// The gateway does not check meta-tool arguments against the advertised
+/// schema, so a `limit` outside 1 to 25 reaches the handler, which clamps it,
+/// rather than being refused on the way in.
+#[tokio::test]
+async fn an_out_of_range_search_limit_is_answered_not_refused() {
+    let fx = fixture(Answer::Ok, |_| {}).await;
+    for limit in [0, 1000] {
+        let params = json!({
+            "name": "gateway_search_tools",
+            "arguments": {"query": "read", "limit": limit},
+        });
+        let (status, body) = send(&fx, "/mcp", "k-std", "tools/call", params, None).await;
+        assert_eq!(status, StatusCode::OK, "limit {limit}: {body}");
+        assert!(body["error"].is_null(), "limit {limit}: {body}");
+        assert_ne!(body["result"]["isError"], json!(true), "limit {limit}: {body}");
+    }
+}
