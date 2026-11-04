@@ -70,10 +70,16 @@ async fn the_guard_does_not_signal_a_reaped_group() {
     backend.stop().await.expect("stop");
     let by = std::time::Instant::now() + Duration::from_secs(15);
     while kernel_view(pid).is_some() {
-        assert!(std::time::Instant::now() < by, "the leader was never reaped");
+        assert!(
+            std::time::Instant::now() < by,
+            "the leader was never reaped"
+        );
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
-    assert!(!guard.may_signal(), "a reaped leader's pid is not signalled");
+    assert!(
+        !guard.may_signal(),
+        "a reaped leader's pid is not signalled"
+    );
 }
 
 /// `Some(false)` running, `Some(true)` exited unreaped, `None` reaped.

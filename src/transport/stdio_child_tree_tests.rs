@@ -378,7 +378,11 @@ async fn a_graceful_handover_joins_its_stop_deadline_in_the_handover() {
     let pid = leader(&t).await;
     let _reap = KillGroupOnDrop(pid);
     let deadline = Arc::new(super::super::reaper::StopDeadline::default());
-    assert_eq!(hand_over_gracefully(&t, &deadline), 1, "the handover is tracked");
+    assert_eq!(
+        hand_over_gracefully(&t, &deadline),
+        1,
+        "the handover is tracked"
+    );
     deadline.move_earlier(std::time::Instant::now());
     assert_killed(pid).await;
 }
@@ -392,7 +396,11 @@ async fn a_handover_ended_on_its_first_step_is_tracked_too() {
     let _reap = KillGroupOnDrop(pid);
     let deadline = Arc::new(super::super::reaper::StopDeadline::default());
     deadline.move_earlier(std::time::Instant::now());
-    assert_eq!(hand_over_gracefully(&t, &deadline), 1, "the handover is tracked");
+    assert_eq!(
+        hand_over_gracefully(&t, &deadline),
+        1,
+        "the handover is tracked"
+    );
     assert_killed(pid).await;
 }
 
