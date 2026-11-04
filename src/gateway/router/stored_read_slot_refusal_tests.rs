@@ -25,8 +25,8 @@ fn alpha_breaks_the_schema(gw: &Gateway) {
 fn read_record(gw: &Gateway) -> Value {
     gw.audit_records()
         .into_iter()
-        .filter(|row| row["event"] == "response_delivery_attempt" && row["tool"] == "tasks/get")
-        .last()
+        .rev()
+        .find(|row| row["event"] == "response_delivery_attempt" && row["tool"] == "tasks/get")
         .expect("the read's delivery record")
 }
 

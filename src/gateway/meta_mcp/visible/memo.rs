@@ -4,7 +4,6 @@
 //! way to read or write them, and every accessor the rest of the gateway uses.
 //! A task worker's judgement ([`Judged`]) lives beside it.
 
-use super::absent::absent_name;
 use super::deferred::{DeferredReplay, DeferredReplayKey};
 use super::{Visibility, Withholding};
 
@@ -573,7 +572,7 @@ pub(crate) async fn with_visibility_memo<F: std::future::Future>(request: F) -> 
 ///
 /// # Errors
 ///
-/// [`absent_name`] when the memo records `server`'s `tool` as withheld.
+/// [`absent_name`](super::absent::absent_name) when the memo records `server`'s `tool` as withheld.
 pub(crate) fn refuse_withheld(server: &str, tool: &str) -> crate::Result<()> {
     absent_if_withheld(recorded_visibility(server, tool), tool)
 }
@@ -584,7 +583,7 @@ pub(crate) fn refuse_withheld(server: &str, tool: &str) -> crate::Result<()> {
 ///
 /// # Errors
 ///
-/// [`absent_name`] when `judged` is withheld.
+/// [`absent_name`](super::absent::absent_name) when `judged` is withheld.
 pub(crate) fn absent_if_withheld(judged: Option<Visibility>, tool: &str) -> crate::Result<()> {
     super::absent::absent_if_withheld_explained(judged, tool)
         .map_err(crate::gateway::meta_mcp::invoke::audit::noted)

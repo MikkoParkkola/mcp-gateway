@@ -35,7 +35,7 @@ pub(super) struct Gateway {
     /// Every credential resolution the gateway made.
     pub(super) mints: Arc<AtomicUsize>,
     _store: crate::gateway::router::tests::FixtureDir,
-    _audit: [TempLog; 2],
+    audit_logs: [TempLog; 2],
 }
 
 impl Gateway {
@@ -45,7 +45,7 @@ impl Gateway {
 
     /// Every record both of the gateway's audit logs hold so far.
     pub(super) fn audit_records(&self) -> Vec<serde_json::Value> {
-        self._audit
+        self.audit_logs
             .iter()
             .flat_map(|log| {
                 std::fs::read_to_string(log.path())
@@ -154,7 +154,7 @@ pub(super) async fn gateway_tuned(
         shared,
         mints,
         _store: store,
-        _audit: audit,
+        audit_logs: audit,
     }
 }
 
