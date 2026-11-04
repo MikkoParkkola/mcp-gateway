@@ -31,13 +31,16 @@ fn call(fx: &Fx, target: RuleTarget<'_>, args: &Value) -> Seen {
         "id-1",
         sender.as_deref(),
     );
-    let rescanned = fx.fw.rescan(
-        fx.fw.startup_policy(),
-        target,
-        args,
-        ScanSubject::Arguments,
-        sender.as_deref(),
-    );
+    let rescanned = fx
+        .fw
+        .rescan_attributed(
+            fx.fw.startup_policy(),
+            target,
+            args,
+            ScanSubject::Arguments,
+            sender.as_deref(),
+        )
+        .0;
     let (a, r) = (seen(&admitted), seen(&rescanned));
     assert_eq!(a, r, "admission and rescan disagree on {target:?}");
     a

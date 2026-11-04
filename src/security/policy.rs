@@ -99,6 +99,77 @@ pub struct ToolPolicy {
     deny_prefixes: Vec<String>,
     /// Whether to log denied invocations.
     log_denied: bool,
+    /// Each entry's keyed id, on a policy compiled with a rule key.
+    ids: Option<Box<PolicyIds>>,
+}
+
+/// Which list an entry was configured in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum List {
+    Allow,
+    Deny,
+    BuiltinDeny,
+}
+
+impl List {
+    const fn name(self) -> &'static str {
+        match self {
+            Self::Allow => "allow",
+            Self::Deny => "deny",
+            Self::BuiltinDeny => "builtin_deny",
+        }
+    }
+}
+
+/// One prefix entry: its list, the prefix with its star stripped, where it
+/// was configured, and its id.
+#[derive(Debug)]
+struct PrefixEntry {
+    list: List,
+    prefix: String,
+    at: usize,
+    id: crate::security::rule_id::RuleId,
+}
+
+/// The ids of a keyed policy, kept beside the match sets: the sets decide,
+/// these only name what decided. Exact patterns are looked up by name, as the
+/// match sets look them up, and only the prefixes are scanned, as the match
+/// sets scan them; `at` is the configured position, so a tie resolves to the
+/// entry configured first.
+#[derive(Debug)]
+struct PolicyIds {
+    /// Exact patterns by name: each name's entries across the lists.
+    exact: std::collections::HashMap<String, Vec<(List, usize, crate::security::rule_id::RuleId)>>,
+    prefixes: Vec<PrefixEntry>,
+    default_action: crate::security::rule_id::RuleId,
+}
+
+impl PolicyIds {
+    /// The entry of `list` that decides `tool`: an exact match before a
+    /// prefix, a longer prefix before a shorter one, then configured order.
+    fn deciding(
+        &self,
+        list: List,
+        tool: &str,
+        qualified: &str,
+    ) -> Option<&crate::security::rule_id::RuleId> {
+        let exact = [tool, qualified]
+            .into_iter()
+            .filter_map(|name| self.exact.get(name))
+            .flatten()
+            .filter(|(of, _, _)| *of == list)
+            .min_by_key(|(_, at, _)| *at);
+        if let Some((_, _, id)) = exact {
+            return Some(id);
+        }
+        self.prefixes
+            .iter()
+            .filter(|e| {
+                e.list == list && (tool.starts_with(&e.prefix) || qualified.starts_with(&e.prefix))
+            })
+            .min_by_key(|e| (std::cmp::Reverse(e.prefix.len()), e.at))
+            .map(|e| &e.id)
+    }
 }
 
 impl ToolPolicy {
@@ -143,6 +214,7 @@ impl ToolPolicy {
             deny_exact,
             deny_prefixes,
             log_denied: config.log_denied,
+            ids: None,
         }
     }
 
@@ -158,18 +230,85 @@ impl ToolPolicy {
     ///
     /// Returns `Error::Protocol` if the tool is denied by policy.
     pub fn check(&self, server: &str, tool: &str) -> Result<()> {
-        if !self.enabled {
-            return Ok(());
+        self.check_explained(server, tool)
+            .map(|_| ())
+            .map_err(|(error, _)| error)
+    }
+
+    /// The policy compiled with rule ids under `key`: the entry that decided a
+    /// call can then be named in its decision record.
+    #[must_use]
+    pub(crate) fn from_config_keyed(
+        config: &ToolPolicyConfig,
+        key: &crate::security::rule_id::RuleKey,
+    ) -> Self {
+        let id = |list: &str, pattern: &str| {
+            // invariant: a pair of strings always serialises.
+            let bytes = serde_json::to_vec(&(list, pattern)).expect("a pair of strings serialises");
+            crate::security::rule_id::RuleId::of("tool_policy", key, &bytes)
+        };
+        let mut exact: std::collections::HashMap<_, Vec<_>> = std::collections::HashMap::new();
+        let mut prefixes = Vec::new();
+        let builtin = DEFAULT_DENIED_PATTERNS.iter().map(|p| (*p).to_string());
+        let lists = config
+            .allow
+            .iter()
+            .cloned()
+            .map(|p| (List::Allow, p))
+            .chain(config.deny.iter().cloned().map(|p| (List::Deny, p)))
+            .chain(
+                builtin
+                    .filter(|_| config.use_default_deny)
+                    .map(|p| (List::BuiltinDeny, p)),
+            );
+        for (at, (list, pattern)) in lists.enumerate() {
+            // The pattern is hashed as written, before its star is stripped.
+            let rule = id(list.name(), &pattern);
+            match pattern.strip_suffix('*') {
+                Some(prefix) => prefixes.push(PrefixEntry {
+                    list,
+                    prefix: prefix.to_string(),
+                    at,
+                    id: rule,
+                }),
+                None => exact.entry(pattern).or_default().push((list, at, rule)),
+            }
         }
+        let action = match config.default_action {
+            PolicyAction::Allow => "allow",
+            PolicyAction::Deny => "deny",
+        };
+        Self {
+            ids: Some(Box::new(PolicyIds {
+                exact,
+                prefixes,
+                default_action: id("default_action", action),
+            })),
+            ..Self::from_config(config)
+        }
+    }
 
+    /// [`Self::check`], naming the entry that decided: an explicit allow on
+    /// `Ok`, the refusing deny or default action on `Err`. Ids are present only
+    /// on a policy compiled with [`Self::from_config_keyed`].
+    pub(crate) fn check_explained(
+        &self,
+        server: &str,
+        tool: &str,
+    ) -> std::result::Result<
+        Option<&crate::security::rule_id::RuleId>,
+        (Error, Option<&crate::security::rule_id::RuleId>),
+    > {
+        if !self.enabled {
+            return Ok(None);
+        }
         let qualified = format!("{server}:{tool}");
-
+        let ids = self.ids.as_deref();
         // Check allow list first (takes precedence)
         if self.is_allowed(tool, &qualified) {
-            return Ok(());
+            return Ok(ids.and_then(|ids| ids.deciding(List::Allow, tool, &qualified)));
         }
-
-        // Check deny list
+        // Check deny list: a configured deny is named over a builtin one.
         if self.is_denied(tool, &qualified) {
             if self.log_denied {
                 tracing::warn!(
@@ -178,14 +317,20 @@ impl ToolPolicy {
                     "Tool invocation denied by policy"
                 );
             }
-            return Err(Error::Protocol(format!(
-                "Tool '{tool}' on server '{server}' is blocked by security policy"
-            )));
+            let id = ids.and_then(|ids| {
+                ids.deciding(List::Deny, tool, &qualified)
+                    .or_else(|| ids.deciding(List::BuiltinDeny, tool, &qualified))
+            });
+            return Err((
+                Error::Protocol(format!(
+                    "Tool '{tool}' on server '{server}' is blocked by security policy"
+                )),
+                id,
+            ));
         }
-
         // Apply default action
         match self.default_action {
-            PolicyAction::Allow => Ok(()),
+            PolicyAction::Allow => Ok(None),
             PolicyAction::Deny => {
                 if self.log_denied {
                     tracing::warn!(
@@ -194,9 +339,12 @@ impl ToolPolicy {
                         "Tool invocation denied by default policy"
                     );
                 }
-                Err(Error::Protocol(format!(
-                    "Tool '{tool}' on server '{server}' is not in the allow list"
-                )))
+                Err((
+                    Error::Protocol(format!(
+                        "Tool '{tool}' on server '{server}' is not in the allow list"
+                    )),
+                    ids.map(|ids| &ids.default_action),
+                ))
             }
         }
     }
@@ -420,3 +568,7 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "policy_rule_id_tests.rs"]
+mod rule_id_tests;
