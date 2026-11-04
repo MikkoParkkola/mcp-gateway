@@ -9,8 +9,8 @@ use std::path::Path;
 use serde_json::{Map, Value};
 
 use super::rotation::{
-    EV_EXPIRED, EV_SEALED, MAX_RECORD_BYTES, OversizedRecord, file_id, housekeeping, now_secs,
-    open_after_seal, path_id, record_head, recover, seal_of,
+    EV_EXPIRED, EV_SEALED, FileId, MAX_RECORD_BYTES, OversizedRecord, file_id, housekeeping,
+    now_secs, open_after_seal, path_id, record_head, recover, seal_of,
 };
 use super::segments::{self, HighWater, Segment};
 use super::{Inner, TransparencyLogger, chain_line, read_last_nonempty_line};
@@ -49,22 +49,39 @@ pub(crate) type AllReader = std::sync::Arc<dyn Fn(&Map<String, Value>, u64, u64)
 /// the record off without waiting (a `try_send` into a bounded queue, or an
 /// insert taking no other lock): one that blocks holds up every write. It
 /// must not append to this log.
+///
+/// All-records readers ([`AllReader`]) follow the same rule, and are told of
+/// every record written through `write_record`: caller
+/// appends, the rotation's seal and retention's expiry record. The records
+/// the rotation module writes itself (the next segment's open record,
+/// recovery's own records) are not announced, so a reader sees a counter gap
+/// after a rotation and must catch up from the file.
 #[derive(Default)]
-pub(crate) struct Subscribers(std::sync::RwLock<Vec<(String, Subscriber)>>);
+pub(crate) struct Subscribers {
+    by_kind: std::sync::RwLock<Vec<(String, Subscriber)>>,
+    all: std::sync::RwLock<Vec<AllReader>>,
+    /// Raised when the log this writer extends is no longer the one it wrote:
+    /// a rebuild found the counter moved back, or the active file was cut in
+    /// place. A rotation does not raise it. In memory, from 0 at open.
+    generation: std::sync::atomic::AtomicU64,
+    /// The active file this writer last wrote, by identity, and its length
+    /// after that write: the same file found shorter was cut in place.
+    last_end: std::sync::Mutex<Option<(FileId, u64)>>,
+}
 
 impl Subscribers {
     fn wants(&self, fields: &Map<String, Value>) -> bool {
         let Some(kind) = fields.get("kind").and_then(Value::as_str) else {
             return false;
         };
-        self.0
+        self.by_kind
             .read()
             .is_ok_and(|readers| readers.iter().any(|(wanted, _)| wanted == kind))
     }
 
     fn publish(&self, fields: &Map<String, Value>, entry_hash: &str, counter: u64) {
         let kind = fields.get("kind").and_then(Value::as_str);
-        let Ok(readers) = self.0.read() else {
+        let Ok(readers) = self.by_kind.read() else {
             return;
         };
         for (wanted, reader) in readers.iter() {
@@ -73,13 +90,56 @@ impl Subscribers {
             }
         }
     }
+
+    /// Tell every all-records reader of `line`, the record just written at
+    /// `counter`. The written line is parsed back, so the record is exactly
+    /// what was persisted; nothing is parsed while no reader listens.
+    fn announce(&self, line: &str, counter: u64) {
+        let Ok(readers) = self.all.read() else {
+            return;
+        };
+        if readers.is_empty() {
+            return;
+        }
+        let Ok(Value::Object(record)) = serde_json::from_str::<Value>(line) else {
+            return;
+        };
+        let generation = self.generation.load(std::sync::atomic::Ordering::Acquire);
+        for reader in readers.iter() {
+            reader(&record, counter, generation);
+        }
+    }
+
+    fn raise_generation(&self) {
+        self.generation
+            .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+    }
+
+    /// Before a write: the active file `id` holds `len` bytes. Shorter than
+    /// this writer left the same file means it was cut in place.
+    fn check_end(&self, id: FileId, len: u64) {
+        let cut = self
+            .last_end
+            .lock()
+            .is_ok_and(|end| end.is_some_and(|(at, end)| at == id && len < end));
+        if cut {
+            self.raise_generation();
+        }
+    }
+
+    /// After a write: the active file `id` now ends at `end`.
+    fn record_end(&self, id: FileId, end: u64) {
+        if let Ok(mut last) = self.last_end.lock() {
+            *last = Some((id, end));
+        }
+    }
 }
 
 impl TransparencyLogger {
     /// Tell `reader` of every record of `kind` written from now on.
     #[cfg(feature = "webui")]
     pub(crate) fn subscribe(&self, kind: &str, reader: Subscriber) {
-        if let Ok(mut readers) = self.subscribers.0.write() {
+        if let Ok(mut readers) = self.subscribers.by_kind.write() {
             readers.push((kind.to_string(), reader));
         }
     }
@@ -90,7 +150,11 @@ impl TransparencyLogger {
         dead_code,
         reason = "the live stream's activity and config sources read it when they land"
     )]
-    pub(crate) fn subscribe_all(&self, _reader: AllReader) {}
+    pub(crate) fn subscribe_all(&self, reader: AllReader) {
+        if let Ok(mut readers) = self.subscribers.all.write() {
+            readers.push(reader);
+        }
+    }
 }
 
 impl TransparencyLogger {
@@ -190,6 +254,11 @@ impl TransparencyLogger {
         let r = recover(path, &self.config, g, self.now())?;
         // A finding this writer already holds is never forgotten (#2294).
         let known = inner.seg.hwm_missing_at;
+        // A tail below this writer's last record: the log it extends was
+        // replaced or restored, so positions in it no longer hold.
+        if r.counter < inner.counter {
+            self.subscribers.raise_generation();
+        }
         inner.file = r.file;
         inner.counter = r.counter;
         inner.last_entry_hash = r.last_entry_hash;
@@ -215,6 +284,7 @@ impl TransparencyLogger {
         inner.last_entry_hash.clone_from(&hash);
         inner.seg.has_records = true;
         self.mark_hwm(inner, path, sync);
+        self.subscribers.announce(&line, counter);
         Ok(hash)
     }
 
@@ -228,6 +298,7 @@ impl TransparencyLogger {
             .metadata()
             .map_err(segments::ctx("stat", &path))?
             .len();
+        self.subscribers.check_end(inner.seg.id, good);
         let written = self
             .injected_write(inner, bytes.as_bytes())
             .unwrap_or_else(|| inner.file.write_all(bytes.as_bytes()))
@@ -244,6 +315,10 @@ impl TransparencyLogger {
             && let Err(e) = cut_back(&inner.file, &path, good)
         {
             tracing::warn!(error = %e, "audit log: torn tail not cut back");
+        }
+        if written.is_ok() {
+            self.subscribers
+                .record_end(inner.seg.id, good + bytes.len() as u64);
         }
         written
     }
