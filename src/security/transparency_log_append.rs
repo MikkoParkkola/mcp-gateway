@@ -40,7 +40,10 @@ pub(crate) type Subscriber = std::sync::Arc<dyn Fn(&Map<String, Value>, &str, u6
 
 /// A reader of every written record: the record as persisted (chain fields,
 /// and `sig` and `key_id` when signed), its chain `counter`, and the logger's
-/// rewrite generation.
+/// rewrite generation. It runs under the log's lock like any reader below,
+/// and must not panic: release builds abort on panic, so nothing contains it.
+/// A reader subscribes before it reads the log's head, and takes generation
+/// 0 as the one it has seen.
 pub(crate) type AllReader = std::sync::Arc<dyn Fn(&Map<String, Value>, u64, u64) + Send + Sync>;
 
 /// Readers told of each record of their `kind` once it is written. They run
