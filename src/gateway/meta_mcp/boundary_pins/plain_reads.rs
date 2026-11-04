@@ -26,7 +26,7 @@ use super::scan::{Place, Sink, walk};
 const ROOTS: [&str; 3] = ["src/lib.rs", "src/main.rs", "src/bin/provenance-eval.rs"];
 
 /// What a plain read site opens.
-const CLASSES: [&str; 5] = [
+const CLASSES: [&str; 6] = [
     // The config guard's own open: the one place gateway.yaml is opened to
     // be read for anything that writes.
     "guard",
@@ -40,6 +40,8 @@ const CLASSES: [&str; 5] = [
     "not-config",
     // Opens a path without reading its bytes (a directory to sync, a probe).
     "no-content",
+    // Opens to create, write or append, never to read.
+    "write-only",
 ];
 
 /// Known gaps, each closed by deleting its slug once its last row flips.
