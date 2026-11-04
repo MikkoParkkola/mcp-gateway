@@ -163,9 +163,8 @@ fn token_exchange_keeps_bucket() {
     assert_eq!(before, after, "a new token split one subject's bucket");
 }
 
-/// A real leaf, parsed by `CertIdentity::from_der`, with the given CN and
-/// SAN URI (either may be absent).
-fn leaf(cn: Option<&str>, san_uri: Option<&str>) -> CertIdentity {
+/// A real leaf's DER, with the given CN and SAN URI (either may be absent).
+fn leaf_der(cn: Option<&str>, san_uri: Option<&str>) -> Vec<u8> {
     use rcgen::string::Ia5String;
     use rcgen::{CertificateParams, DistinguishedName, DnType, KeyPair, SanType};
     let mut params = CertificateParams::default();
@@ -179,10 +178,13 @@ fn leaf(cn: Option<&str>, san_uri: Option<&str>) -> CertIdentity {
         .into_iter()
         .collect();
     let key_pair = KeyPair::generate().expect("key generation failed");
-    let der = params.self_signed(&key_pair).expect("cert").der().to_vec();
-    // The unchecked parse: one row needs a certificate that names no one,
-    // which `from_der` refuses; the fields are the same either way.
-    CertIdentity::parse_for_test(&der).expect("parses")
+    params.self_signed(&key_pair).expect("cert").der().to_vec()
+}
+
+/// [`leaf_der`] parsed unchecked: one row needs the identity of a
+/// certificate that names no one, which `from_der` refuses.
+fn leaf(cn: Option<&str>, san_uri: Option<&str>) -> CertIdentity {
+    CertIdentity::parse_for_test(&leaf_der(cn, san_uri)).expect("parses")
 }
 
 /// MIK-8286 R1a: a certificate with neither a SAN URI nor a CN has no grant
@@ -191,6 +193,14 @@ fn leaf(cn: Option<&str>, san_uri: Option<&str>) -> CertIdentity {
 /// display-name fallback restored.
 #[test]
 fn a_certificate_naming_no_subject_has_no_grant_subject() {
+    // Reachable: the parser refuses such a certificate, so no caller is built.
+    assert!(
+        CertIdentity::from_der(&leaf_der(None, None))
+            .expect("parses")
+            .is_none(),
+        "from_der refuses a certificate that names no one"
+    );
+    // Defence in depth: were one built anyway, it would have no grant subject.
     assert_eq!(grant_subject_from_cert_identity(&leaf(None, None)), None);
     let by_cn = grant_subject_from_cert_identity(&leaf(Some("agent-a"), None)).unwrap();
     assert_eq!(
