@@ -141,11 +141,6 @@ thread_local! {
     /// returns: the caller still holds its admission (MIK-7903).
     static AFTER_SETTLE: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
         std::cell::RefCell::new(None);
-    /// Runs once on this thread inside a save, after the estimates are
-    /// captured and before the owned names are: a seed landing here would
-    /// save a name as owned without its figure.
-    static BETWEEN_SAVE_CAPTURES: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
-        std::cell::RefCell::new(None);
 }
 
 #[cfg(test)]

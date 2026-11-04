@@ -13,6 +13,15 @@ use super::{
     AlertAction, BudgetEnforcer, DailyAccumulator, EnforcerSnapshot, add_capped, rows, usd,
 };
 
+#[cfg(test)]
+thread_local! {
+    /// Runs once on this thread inside a save, after the estimates are
+    /// captured and before the owned names are: a seed landing here would
+    /// save a name as owned without its figure.
+    pub(super) static BETWEEN_SAVE_CAPTURES: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
+        std::cell::RefCell::new(None);
+}
+
 impl BudgetEnforcer {
     /// Re-apply today's spend from a persisted snapshot, so a restart keeps
     /// counting against the budgets instead of starting them at zero.
@@ -256,7 +265,7 @@ impl BudgetEnforcer {
             self.day_basis_at(taken_at),
         );
         #[cfg(test)]
-        super::fire(&super::BETWEEN_SAVE_CAPTURES);
+        super::fire(&BETWEEN_SAVE_CAPTURES);
         save.tool_owned = self.tool_attribution.owned_names();
         save.key_owned = self.key_attribution.owned_names();
         save.tool_born = in_usd(self.tool_attribution.born_on(today));

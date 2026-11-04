@@ -307,7 +307,7 @@ fn a_cost_below_one_micro_leaves_no_ledger_rows() {
     );
 }
 
-/// MIK-9166 D1: a save captures the owned names, the estimates and the
+/// A save captures the owned names, the estimates and the
 /// creation figures in one hold of the ledger lock, the lock a seed holds.
 ///
 /// The hook fires between the estimate capture and the owned-name capture.
@@ -326,7 +326,7 @@ fn a_save_never_records_an_owned_name_without_its_figure() {
     let enforcer = enforcer(Scope::Tool, 2);
     let slot: Slot = Arc::default();
     let (inner, hook_slot) = (Arc::clone(&enforcer), Arc::clone(&slot));
-    BETWEEN_SAVE_CAPTURES.with(|hook| {
+    super::snapshot::BETWEEN_SAVE_CAPTURES.with(|hook| {
         *hook.borrow_mut() = Some(Box::new(move || {
             let held = matches!(inner.ledger.try_lock(), Err(TryLockError::WouldBlock));
             let seed = std::thread::spawn(move || {
