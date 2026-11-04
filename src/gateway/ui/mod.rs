@@ -11,6 +11,9 @@
 
 mod access_report;
 mod access_table;
+/// Every admin route refuses a backend-scoped admin.
+#[cfg(test)]
+mod admin_scope_tests;
 #[cfg(test)]
 pub(in crate::gateway) use self::access_table::plain_rows;
 mod activity;
