@@ -104,10 +104,6 @@ impl View<'_> {
 
 /// A delivery reduced to what recording it needs, so a staged receipt holds
 /// at most [`RECORD_CAP`] of text rather than the whole result.
-#[expect(
-    clippy::struct_excessive_bools,
-    reason = "independent facts of one delivery, not a state machine"
-)]
 #[derive(Default)]
 pub(crate) struct DeliveryDigest {
     segments: Vec<Segment>,
