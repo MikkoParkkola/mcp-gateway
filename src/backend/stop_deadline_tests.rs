@@ -35,51 +35,21 @@ while True:
     time.sleep(0.05)
 "#;
 
-/// Kills [`PEER`]'s whole group when the row ends, so a red run (a stop that
-/// never killed it) leaks no backend: one that ignores EOF and SIGTERM would
-/// otherwise run on, holding whatever it inherited.
-struct KillGroupOnDrop(Pid);
+/// Ends the row's backend when the row ends, through its owner, so a red run
+/// (a stop that never killed it) leaks no backend built to ignore signals:
+/// its stop deadline moves to now (a tree already handed over is killed on
+/// the reaper's next step) and every live tree is retired (killed at once by
+/// the tree itself, serialized with its reap). No pid is signalled from test
+/// code: a reaped pid may name someone else's group by then.
+struct EndOnDrop(Arc<Backend>);
 
-impl KillGroupOnDrop {
-    /// Whether the guard may signal the group: only while its leader is still
-    /// this process's child, unreaped (a reaped pid may name someone else's
-    /// group by now).
-    fn may_signal(&self) -> bool {
-        kernel_view(self.0).is_some()
-    }
-}
-
-impl Drop for KillGroupOnDrop {
+impl Drop for EndOnDrop {
     fn drop(&mut self) {
-        if self.may_signal() {
-            let _ = rustix::process::kill_process_group(self.0, rustix::process::Signal::KILL);
+        if let Some(deadline) = self.0.stop_deadline.get() {
+            deadline.move_earlier(std::time::Instant::now());
         }
+        self.0.retire_now();
     }
-}
-
-/// The guard does not signal a group whose leader the reaper already reaped:
-/// its pid may have been reused.
-#[tokio::test]
-async fn the_guard_does_not_signal_a_reaped_group() {
-    let dir = tempfile::tempdir().expect("temp dir");
-    let backend = stays(dir.path(), "reaped");
-    backend.ensure_started().await.expect("the backend starts");
-    let pid = leader_pid(dir.path());
-    let guard = KillGroupOnDrop(pid);
-    assert!(guard.may_signal(), "a running leader may be signalled");
-    backend.stop().await.expect("stop");
-    let by = std::time::Instant::now() + Duration::from_secs(15);
-    while kernel_view(pid).is_some() {
-        assert!(
-            std::time::Instant::now() < by,
-            "the leader was never reaped"
-        );
-        tokio::time::sleep(Duration::from_millis(20)).await;
-    }
-    assert!(
-        !guard.may_signal(),
-        "a reaped leader's pid is not signalled"
-    );
 }
 
 /// `Some(false)` running, `Some(true)` exited unreaped, `None` reaped.
@@ -92,10 +62,15 @@ fn kernel_view(pid: Pid) -> Option<bool> {
     }
 }
 
-/// A stdio backend running [`PEER`] in `dir`.
-fn stays(dir: &std::path::Path, name: &str) -> Arc<Backend> {
+/// A stdio backend running [`PEER`] in `dir`, joined to `deadline` (a
+/// registry's, or its own for a row with none), which [`EndOnDrop`] ends it by.
+fn stays(
+    dir: &std::path::Path,
+    name: &str,
+    deadline: Arc<crate::transport::StopDeadline>,
+) -> Arc<Backend> {
     std::fs::write(dir.join("peer.py"), PEER).expect("write peer");
-    Arc::new(Backend::new(
+    let backend = Arc::new(Backend::new(
         name,
         BackendConfig {
             transport: TransportConfig::Stdio {
@@ -108,7 +83,9 @@ fn stays(dir: &std::path::Path, name: &str) -> Arc<Backend> {
         },
         &FailsafeConfig::default(),
         Duration::from_secs(60),
-    ))
+    ));
+    let _ = backend.stop_deadline.set(deadline);
+    backend
 }
 
 /// The pid [`PEER`] last recorded in `dir`.
@@ -125,13 +102,12 @@ fn leader_pid(dir: &std::path::Path) -> Pid {
 async fn a_gateway_stop_waits_for_an_idle_released_child_to_be_killed() {
     let dir = tempfile::tempdir().expect("temp dir");
     let registry = BackendRegistry::new();
-    let child = stays(dir.path(), "capability:stays");
     // As the capability executor builds it: joined to the registry's stop
     // deadline, never registered.
-    let _ = child.stop_deadline.set(registry.stop_deadline());
+    let child = stays(dir.path(), "capability:stays", registry.stop_deadline());
+    let _end = EndOnDrop(Arc::clone(&child));
     child.ensure_started().await.expect("the child starts");
     let pid = leader_pid(dir.path());
-    let _reap = KillGroupOnDrop(pid);
 
     // Let go while idle, with a long plan of its own.
     child.hand_over_now(Duration::from_secs(120));
@@ -153,10 +129,10 @@ async fn a_gateway_stop_waits_for_an_idle_released_child_to_be_killed() {
 #[tokio::test]
 async fn a_restart_of_a_backend_that_ignores_every_signal_completes_in_bound() {
     let dir = tempfile::tempdir().expect("temp dir");
-    let backend = stays(dir.path(), "stays");
+    let backend = stays(dir.path(), "stays", Arc::default());
+    let _end = EndOnDrop(Arc::clone(&backend));
     backend.ensure_started().await.expect("the backend starts");
     let old = leader_pid(dir.path());
-    let _reap = KillGroupOnDrop(old);
     // The close budget, plus room for the new child's start on a loaded host.
     let bound = backend.budgets.close_stage + Duration::from_secs(10);
     let restarted = tokio::time::timeout(bound, backend.force_restart())
@@ -178,11 +154,11 @@ async fn a_restart_of_a_backend_that_ignores_every_signal_completes_in_bound() {
 async fn a_stop_stuck_on_a_lifecycle_lock_ends_at_its_deadline() {
     let dir = tempfile::tempdir().expect("temp dir");
     let registry = BackendRegistry::new();
-    let backend = stays(dir.path(), "stuck");
+    let backend = stays(dir.path(), "stuck", registry.stop_deadline());
+    let _end = EndOnDrop(Arc::clone(&backend));
     assert!(registry.register(Arc::clone(&backend)), "registered");
     backend.ensure_started().await.expect("the backend starts");
     let pid = leader_pid(dir.path());
-    let _reap = KillGroupOnDrop(pid);
     // As a restart in flight holds it; `Backend::stop` waits up to its
     // lifecycle budget (15 s) for it.
     let _held = backend.lifecycle.write().await;
@@ -211,11 +187,10 @@ async fn a_stop_stuck_on_a_lifecycle_lock_ends_at_its_deadline() {
 async fn a_handover_after_the_gateway_stop_returns_is_killed_at_once() {
     let dir = tempfile::tempdir().expect("temp dir");
     let registry = BackendRegistry::new();
-    let child = stays(dir.path(), "capability:late");
-    let _ = child.stop_deadline.set(registry.stop_deadline());
+    let child = stays(dir.path(), "capability:late", registry.stop_deadline());
+    let _end = EndOnDrop(Arc::clone(&child));
     child.ensure_started().await.expect("the child starts");
     let pid = leader_pid(dir.path());
-    let _reap = KillGroupOnDrop(pid);
     // Nothing registered: the stop returns at once, its deadline far off.
     let far = tokio::time::Instant::now() + Duration::from_secs(60);
     registry.stop_all_by(far).await;

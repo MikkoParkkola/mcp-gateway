@@ -285,16 +285,30 @@ async fn a_tree_in_its_waits_is_killed_by_a_later_gateway_stop_deadline() {
     gone(child).await;
 }
 
-/// SIGKILLs a row's backend group when the row ends, while its leader is still
-/// this process's unreaped child, so a red run leaks no backend built to
-/// ignore signals.
-struct KillGroupOnDrop(Pid);
+/// Ends a row's tree when the row ends, through its owner, so a red run leaks
+/// no backend built to ignore signals: the row's stop deadline moves to now
+/// (a tree already handed over is killed on the reaper's next step) and a
+/// tree still in its slot is killed at once by the transport. No pid is
+/// signalled from test code: a reaped pid may name someone else's group.
+struct EndOnDrop(Arc<StdioTransport>, Arc<super::super::reaper::StopDeadline>);
 
-impl Drop for KillGroupOnDrop {
+impl EndOnDrop {
+    /// A guard over `t`, with a fresh stop deadline attached to it.
+    fn new(t: &Arc<StdioTransport>) -> Self {
+        let deadline = Arc::new(super::super::reaper::StopDeadline::default());
+        t.attach_stop_deadline(Arc::clone(&deadline));
+        Self(Arc::clone(t), deadline)
+    }
+
+    fn deadline(&self) -> &Arc<super::super::reaper::StopDeadline> {
+        &self.1
+    }
+}
+
+impl Drop for EndOnDrop {
     fn drop(&mut self) {
-        if kernel_view(self.0).is_some() {
-            let _ = rustix::process::kill_process_group(self.0, rustix::process::Signal::KILL);
-        }
+        self.1.move_earlier(std::time::Instant::now());
+        self.0.kill_tree_now();
     }
 }
 
@@ -302,20 +316,22 @@ impl Drop for KillGroupOnDrop {
 /// on: only the kill ends it.
 const MARKS_TERM: &str = "trap 'echo termed > term.mark' TERM\nwhile :; do sleep 0.05; done";
 
-/// Close `t` under a long plan of its own, then cut it with a gateway stop
-/// deadline `cut_in` (plus the reap reserve) from now; returns the leader.
-async fn cut_close(t: &Arc<StdioTransport>, cut_in: Duration) -> Pid {
-    let pid = leader(t).await;
-    let deadline = Arc::new(super::super::reaper::StopDeadline::default());
-    t.attach_stop_deadline(Arc::clone(&deadline));
-    let own_plan_end = tokio::time::Instant::now() + Duration::from_secs(120);
+/// Close `t` under a plan ending at `own_plan_end`, and wait for the handover.
+async fn close_under(t: &Arc<StdioTransport>, own_plan_end: tokio::time::Instant) {
     let closing = Arc::clone(t);
     tokio::spawn(async move {
         super::super::reaper::within_stop_deadline(own_plan_end, closing.close()).await
     });
     poll_until("the tree is handed over", || t.child.lock().tree.is_none()).await;
+}
+
+/// Close `t` under a long plan of its own, then cut it with the guard's stop
+/// deadline `cut_in` (plus the reap reserve) from now; returns the leader.
+async fn cut_close(t: &Arc<StdioTransport>, end: &EndOnDrop, cut_in: Duration) -> Pid {
+    let pid = leader(t).await;
+    close_under(t, tokio::time::Instant::now() + Duration::from_secs(120)).await;
     let cut = std::time::Instant::now() + super::super::reaper::KILL_RESERVE + cut_in;
-    deadline.move_earlier(cut);
+    end.deadline().move_earlier(cut);
     pid
 }
 
@@ -325,8 +341,8 @@ async fn cut_close(t: &Arc<StdioTransport>, cut_in: Duration) -> Pid {
 #[tokio::test]
 async fn a_cut_stop_still_sends_sigterm_before_the_kill() {
     let (w, t) = started(MARKS_TERM, None).await;
-    let pid = cut_close(&t, Duration::from_secs(3)).await;
-    let _reap = KillGroupOnDrop(pid);
+    let end = EndOnDrop::new(&t);
+    let pid = cut_close(&t, &end, Duration::from_secs(3)).await;
     assert_killed(pid).await;
     assert_eq!(
         std::fs::read_to_string(w.path().join("term.mark"))
@@ -342,12 +358,34 @@ async fn a_cut_stop_still_sends_sigterm_before_the_kill() {
 #[tokio::test]
 async fn a_cut_under_the_minimum_phase_skips_sigterm() {
     let (w, t) = started(MARKS_TERM, None).await;
-    let pid = cut_close(&t, Duration::from_millis(50)).await;
-    let _reap = KillGroupOnDrop(pid);
+    let end = EndOnDrop::new(&t);
+    let pid = cut_close(&t, &end, Duration::from_millis(50)).await;
     assert_killed(pid).await;
     assert!(
         !w.path().join("term.mark").exists(),
         "a SIGTERM was sent with no time left to act on it"
+    );
+}
+
+/// A cut that leaves under the minimum phase skips SIGTERM even when the
+/// uncut plan had its SIGTERM due before the cut: the plan (330 ms of waits:
+/// 220 ms after EOF, then 110 ms after SIGTERM) is cut on its first step to
+/// 295 ms, whose last third is under the minimum, so no SIGTERM goes out at
+/// 220 ms (the old `min` with the uncut time sent one there).
+#[tokio::test]
+async fn a_short_cut_drops_an_earlier_uncut_sigterm() {
+    let (w, t) = started(MARKS_TERM, None).await;
+    let end = EndOnDrop::new(&t);
+    let pid = leader(&t).await;
+    let reserve = super::super::reaper::KILL_RESERVE;
+    // The cut is set before the close, so the handover's first step applies it.
+    end.deadline()
+        .move_earlier(std::time::Instant::now() + reserve + Duration::from_millis(295));
+    close_under(&t, tokio::time::Instant::now() + reserve + Duration::from_millis(330)).await;
+    assert_killed(pid).await;
+    assert!(
+        !w.path().join("term.mark").exists(),
+        "the uncut plan's earlier SIGTERM survived a cut that left too little for one"
     );
 }
 
@@ -375,29 +413,27 @@ fn hand_over_gracefully(
 #[tokio::test]
 async fn a_graceful_handover_joins_its_stop_deadline_in_the_handover() {
     let (_w, t) = started(&resists_term(), None).await;
+    let end = EndOnDrop::new(&t);
     let pid = leader(&t).await;
-    let _reap = KillGroupOnDrop(pid);
-    let deadline = Arc::new(super::super::reaper::StopDeadline::default());
     assert_eq!(
-        hand_over_gracefully(&t, &deadline),
+        hand_over_gracefully(&t, end.deadline()),
         1,
         "the handover is tracked"
     );
-    deadline.move_earlier(std::time::Instant::now());
+    end.deadline().move_earlier(std::time::Instant::now());
     assert_killed(pid).await;
 }
 
-/// The same when the first step already ends the tree (its deadline has
-/// passed): it is tracked, so a stop's wait sees it, whichever step ends it.
+/// The same for a handover whose stop deadline has already passed: it is
+/// tracked too, so a stop's wait sees it, whichever reaper step ends it.
 #[tokio::test]
-async fn a_handover_ended_on_its_first_step_is_tracked_too() {
+async fn a_handover_whose_deadline_already_passed_is_tracked() {
     let (_w, t) = started(&resists_term(), None).await;
+    let end = EndOnDrop::new(&t);
     let pid = leader(&t).await;
-    let _reap = KillGroupOnDrop(pid);
-    let deadline = Arc::new(super::super::reaper::StopDeadline::default());
-    deadline.move_earlier(std::time::Instant::now());
+    end.deadline().move_earlier(std::time::Instant::now());
     assert_eq!(
-        hand_over_gracefully(&t, &deadline),
+        hand_over_gracefully(&t, end.deadline()),
         1,
         "the handover is tracked"
     );
