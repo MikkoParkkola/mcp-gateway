@@ -191,12 +191,15 @@ pub(crate) fn recover(config: &Path) -> Result<Recovered, String> {
     let target = resolved(config);
     let path = journal_path(&target);
     let original = original_path(&target);
+    // State-neutral: the journal may be unreadable (and so `all_renamed`),
+    // name another file, or sit beside a missing or wrong original, so the
+    // step never says to put the original back unconditionally.
     let manual = || {
         format!(
-            "copy the staged original {} over {}, then delete {}",
-            original.display(),
-            target.display(),
-            path.display()
+            "nothing was changed; inspect the journal {journal} before touching {target}: if its state is staged, restore the staged original {original} over {target} only if its SHA-256 matches the journal's original_revision, then delete the journal; if its state is all_renamed, only delete the journal",
+            journal = path.display(),
+            target = target.display(),
+            original = original.display(),
         )
     };
     let journal = match read(&path) {
