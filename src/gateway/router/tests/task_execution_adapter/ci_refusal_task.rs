@@ -196,10 +196,11 @@ async fn an_error_frame_refusal_settles_with_the_frames_own_code() {
     refused_with(&entries, &task, crate::error::rpc_codes::INTERNAL_ERROR);
 }
 
-/// The task path takes the live call's error answer: a response-firewall
-/// refusal of a task answer (its built-in credential block) fails the task
-/// with the firewall's error frame, `-32600`, never a withheld `isError`
-/// result, and that frame's code is what its settlement records.
+/// A response-firewall refusal of a task answer (its built-in credential
+/// block) is decided by the task's settlement inspection, which replaces the
+/// answer with the firewall's error frame, `-32600`, never a withheld
+/// `isError` result, and records that code. It never reaches the withheld
+/// code a gate's fold leaves (that path is for answers a gate withheld).
 #[tokio::test]
 async fn a_firewall_refused_task_answer_settles_as_an_error_frame() {
     use crate::security::firewall::{Firewall, FirewallConfig};
