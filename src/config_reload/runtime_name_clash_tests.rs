@@ -10,6 +10,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use super::*;
+use crate::backend::BackendRegistry;
 use crate::capability::{CapabilityBackend, CapabilityExecutor};
 use crate::gateway::test_helpers::write_owner_only;
 

@@ -10,6 +10,7 @@ use std::time::Duration;
 
 use super::*;
 use crate::backend::Backend;
+use crate::backend::BackendRegistry;
 use crate::gateway::test_helpers::write_owner_only;
 
 /// Long enough that no length gate applies.

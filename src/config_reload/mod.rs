@@ -52,7 +52,6 @@ use std::time::Duration;
 use parking_lot::RwLock;
 use serde::Serialize;
 
-use crate::backend::BackendRegistry;
 use crate::config::Config;
 
 // ============================================================================
