@@ -94,13 +94,13 @@ impl LogSource for Fake {
         self.tx.subscribe()
     }
 
-    fn head(&self, (): &()) -> impl Future<Output = LogCursor> + Send {
+    fn head(&self, (): &()) -> impl Future<Output = std::io::Result<LogCursor>> + Send {
         *self.heads.lock().unwrap() += 1;
         let n = self.rows.lock().unwrap().len() as u64;
-        std::future::ready(LogCursor {
+        std::future::ready(Ok(LogCursor {
             inv: (n > 0).then(|| part(n)),
             gov: None,
-        })
+        }))
     }
 
     fn rows_after(
@@ -110,8 +110,8 @@ impl LogSource for Fake {
         (): &(),
         limit: usize,
         (): &mut (),
-    ) -> impl Future<Output = Page> + Send {
-        std::future::ready(self.page(cursor, stop, limit))
+    ) -> impl Future<Output = std::io::Result<Page>> + Send {
+        std::future::ready(Ok(self.page(cursor, stop, limit)))
     }
 
     fn frame(&self, (): &(), a: &Appended) -> Option<Row> {

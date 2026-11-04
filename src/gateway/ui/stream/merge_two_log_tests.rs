@@ -118,13 +118,13 @@ impl LogSource for TwoLogs {
         self.tx.subscribe()
     }
 
-    fn head(&self, (): &()) -> impl Future<Output = LogCursor> + Send {
+    fn head(&self, (): &()) -> impl Future<Output = std::io::Result<LogCursor>> + Send {
         let logs = self.logs.lock().unwrap();
         let h = |l: &OneLog| (l.len > 0).then(|| part(l.len));
-        std::future::ready(LogCursor {
+        std::future::ready(Ok(LogCursor {
             inv: h(&logs[0]),
             gov: h(&logs[1]),
-        })
+        }))
     }
 
     fn rows_after(
@@ -134,10 +134,10 @@ impl LogSource for TwoLogs {
         (): &(),
         _limit: usize,
         (): &mut (),
-    ) -> impl Future<Output = Page> + Send {
+    ) -> impl Future<Output = std::io::Result<Page>> + Send {
         let inv = self.half(LogName::Invocation, cursor.inv.as_ref(), stop.inv.as_ref());
         let gov = self.half(LogName::Governance, cursor.gov.as_ref(), stop.gov.as_ref());
-        std::future::ready(Page {
+        std::future::ready(Ok(Page {
             rows: inv.rows.into_iter().chain(gov.rows).collect(),
             next: LogCursor {
                 inv: inv.next,
@@ -149,7 +149,7 @@ impl LogSource for TwoLogs {
                 gov: gov.reset,
             },
             searching: inv.searching || gov.searching,
-        })
+        }))
     }
 
     fn frame(&self, (): &(), _: &Appended) -> Option<Row> {
