@@ -378,6 +378,9 @@ pub struct Backend {
     /// Where this instance's nudges go, set when a registry with a change feed
     /// holds it.
     nudge_feed: std::sync::OnceLock<tools_nudge::NudgeFeed>,
+    /// The stop deadline of the registry that holds this instance, set when
+    /// it is registered; each stdio transport it builds joins it.
+    pub(crate) stop_deadline: std::sync::OnceLock<Arc<crate::transport::StopDeadline>>,
     /// Whether a per-user store nudge is queued and unread (`MIK-8148`).
     views_dirty: tools_nudge::ViewsDirty,
     /// A tool the next drain snapshot blocks between reading the descriptor

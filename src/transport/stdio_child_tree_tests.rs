@@ -255,6 +255,54 @@ async fn a_backend_that_ignores_eof_and_sigterm_dies_within_the_bound() {
     gone(child).await;
 }
 
+/// A tree already in its exit waits when the gateway stop begins (an
+/// orphaned fresh build, closed under a long budget of its own) is cut to the
+/// stop's deadline: its kill lands with the reap's reserve left, not when its
+/// own plan would have ended.
+#[tokio::test]
+async fn a_tree_in_its_waits_is_killed_by_a_later_gateway_stop_deadline() {
+    let (w, t) = started(&resists_term(), None).await;
+    let child = descendant(w.path()).await;
+    let pid = leader(&t).await;
+    let deadline = Arc::new(super::super::reaper::StopDeadline::default());
+    t.attach_stop_deadline(Arc::clone(&deadline));
+    let own_plan_end = tokio::time::Instant::now() + Duration::from_secs(120);
+    let closing = Arc::clone(&t);
+    let close = tokio::spawn(async move {
+        super::super::reaper::within_stop_deadline(own_plan_end, closing.close()).await
+    });
+    poll_until("the tree is handed over", || t.child.lock().tree.is_none()).await;
+    let started_at = std::time::Instant::now();
+    let cut = super::super::reaper::KILL_RESERVE + Duration::from_secs(1);
+    deadline.move_earlier(started_at + cut);
+    assert_killed(pid).await;
+    assert!(
+        started_at.elapsed() < Duration::from_secs(10),
+        "the kill waited for the tree's own plan: {:?}",
+        started_at.elapsed()
+    );
+    close.await.expect("close task").expect("close");
+    gone(child).await;
+}
+
+/// A second gateway stop with an earlier deadline moves it earlier; a later
+/// one leaves it, so a second stop can shorten the waits, never extend them.
+#[test]
+fn a_second_earlier_stop_deadline_takes_effect_and_a_later_one_does_not() {
+    let deadline = super::super::reaper::StopDeadline::default();
+    assert_eq!(deadline.get(), None, "unset until a stop");
+    let now = std::time::Instant::now();
+    deadline.move_earlier(now + Duration::from_secs(30));
+    deadline.move_earlier(now + Duration::from_secs(10));
+    let earlier = deadline.get().expect("set");
+    assert!(
+        earlier <= now + Duration::from_secs(10),
+        "the earlier stop took effect"
+    );
+    deadline.move_earlier(now + Duration::from_secs(60));
+    assert_eq!(deadline.get(), Some(earlier), "a later stop changes nothing");
+}
+
 /// T6: a second close sends nothing and keeps the first status.
 #[tokio::test]
 async fn a_second_close_sends_nothing() {

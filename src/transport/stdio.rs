@@ -88,6 +88,8 @@ pub struct StdioTransport {
     needles: std::sync::OnceLock<std::sync::Arc<crate::security::needles::NeedleSet>>,
     /// Longest frame the reader accepts; set before `start`.
     max_frame_bytes: AtomicUsize,
+    /// The owning gateway's stop deadline, handed to each tree it ends.
+    stop_deadline: std::sync::OnceLock<std::sync::Arc<reaper::StopDeadline>>,
     /// What a failed start said, kept only long enough to classify it (#1759).
     failure: start_failure::FailureRecord,
     /// The cache directory the gateway assigned this backend, or `None`.
@@ -495,7 +497,7 @@ impl Transport for StdioTransport {
 mod child_tree;
 #[path = "stdio_reaper.rs"]
 mod reaper;
-pub(crate) use reaper::{stop_deadline, within_stop_deadline};
+pub(crate) use reaper::{StopDeadline, stop_deadline, within_stop_deadline};
 #[path = "stdio_tree.rs"]
 mod tree;
 // Only the unix frame tests build a tree by hand (MIK-8360).

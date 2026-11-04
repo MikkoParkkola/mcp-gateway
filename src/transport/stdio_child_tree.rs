@@ -33,6 +33,9 @@ pub(super) struct ChildTree {
     ending: Ending,
     /// The exit wait before the kill, once a graceful ending has started.
     grace: Option<Grace>,
+    /// The gateway's stop deadline, when its backend belongs to one: cuts the
+    /// waits so the kill lands in time (see `StopDeadline`).
+    stop_deadline: Option<std::sync::Arc<super::reaper::StopDeadline>>,
     #[cfg(all(test, unix))]
     pub(super) term_signals_sent: usize,
     #[cfg(test)]
@@ -174,6 +177,7 @@ impl ChildTree {
             reaping: None,
             ending: Ending::Now,
             grace: None,
+            stop_deadline: None,
             #[cfg(all(test, unix))]
             term_signals_sent: 0,
             #[cfg(test)]
@@ -258,9 +262,15 @@ impl ChildTree {
         self.send_group_signal();
     }
 
-    /// Choose how the reaper ends this tree; set before the handover.
-    pub(super) fn set_ending(&mut self, ending: Ending) {
+    /// Choose how the reaper ends this tree, and the gateway stop deadline
+    /// that may cut it short; set before the handover.
+    pub(super) fn set_ending(
+        &mut self,
+        ending: Ending,
+        stop_deadline: Option<std::sync::Arc<super::reaper::StopDeadline>>,
+    ) {
         self.ending = ending;
+        self.stop_deadline = stop_deadline;
     }
 
     /// SIGTERM to the group, under the same ownership check as every other
@@ -298,6 +308,17 @@ impl ChildTree {
             (None, Ending::Now) => return false,
         };
         self.ending = Ending::Now;
+        // Read on every step: a gateway stop that began after this tree's
+        // handover still cuts its waits, so its kill lands before the stop's
+        // deadline with the reap's own reserve left.
+        let mut grace = grace;
+        if let Some(cut) = self.stop_deadline.as_ref().and_then(|d| d.get()) {
+            let cut = cut
+                .checked_sub(super::reaper::KILL_RESERVE)
+                .unwrap_or(now);
+            grace.kill_at = grace.kill_at.min(cut);
+            grace.term_at = grace.term_at.min(grace.kill_at);
+        }
         if self.exited() {
             return false;
         }
@@ -308,8 +329,6 @@ impl ChildTree {
             );
             return false;
         }
-        #[cfg_attr(not(unix), allow(unused_mut))]
-        let mut grace = grace;
         #[cfg(unix)]
         if now >= grace.term_at && !grace.term_sent {
             grace.term_sent = self.send_group_term();

@@ -231,6 +231,9 @@ pub struct BackendRegistry {
     needles: DashMap<String, Arc<crate::security::needles::NeedleSet>>,
     /// How long a value stays redacted after its last send.
     redaction_grace: std::time::Duration,
+    /// Shared with every backend registered here, and through them with each
+    /// stdio tree they hand over: set first by [`Self::stop_all_by`].
+    stop_deadline: Arc<crate::transport::StopDeadline>,
 }
 
 impl BackendRegistry {
@@ -250,6 +253,7 @@ impl BackendRegistry {
             secret_resolver: None,
             needles: DashMap::new(),
             redaction_grace: std::time::Duration::from_secs(24 * 60 * 60),
+            stop_deadline: Arc::default(),
         }
     }
 
@@ -372,6 +376,7 @@ impl BackendRegistry {
             backend.stamp_destination(destinations.for_backend(&backend.name));
         }
         backend.stamp_started(self.started.clone());
+        let _ = backend.stop_deadline.set(Arc::clone(&self.stop_deadline));
         let name = backend.name.clone();
         let breaker = Arc::clone(&backend.shared_entry().failsafe.circuit_breaker);
         if let Some(observer) = self.breaker_observer.get() {
@@ -632,6 +637,14 @@ impl BackendRegistry {
     #[cfg(test)]
     pub(crate) fn is_stopping(&self) -> bool {
         *self.stopping.read()
+    }
+
+    /// [`Self::stop_all`], planned to end by `deadline`: the deadline is set
+    /// first, so a stdio tree already in its exit waits is cut to it too, and
+    /// each close plans its own waits to fit.
+    pub(crate) async fn stop_all_by(&self, deadline: tokio::time::Instant) {
+        self.stop_deadline.move_earlier(deadline.into_std());
+        crate::transport::within_stop_deadline(deadline, self.stop_all()).await;
     }
 
     /// Stop all backends, concurrently.

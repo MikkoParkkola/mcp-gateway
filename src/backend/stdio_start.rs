@@ -38,6 +38,9 @@ impl Backend {
         if let Some(needles) = self.needles.get() {
             transport.attach_needles(std::sync::Arc::clone(needles));
         }
+        if let Some(deadline) = self.stop_deadline.get() {
+            transport.attach_stop_deadline(Arc::clone(deadline));
+        }
         // Registered before anything is spawned, under the lock `stop` and
         // `retire_now` latch under: a retire either sees this transport or this
         // start sees `stopping` and spawns nothing (MIK-7923, design M1).

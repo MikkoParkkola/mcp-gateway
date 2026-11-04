@@ -54,6 +54,44 @@ pub(crate) async fn within_stop_deadline<F: std::future::Future>(
     STOP_DEADLINE.scope(deadline, stop).await
 }
 
+/// A gateway's stop deadline, shared with every tree its backends hand over,
+/// so a tree already in its exit waits when the gateway stop begins is cut to
+/// end by then too. Unset until the stop; after that it only moves earlier.
+#[derive(Debug)]
+pub(crate) struct StopDeadline {
+    /// Nanoseconds after [`STOP_EPOCH`]; `u64::MAX` while unset.
+    at: std::sync::atomic::AtomicU64,
+}
+
+/// The fixed origin [`StopDeadline`] counts from.
+static STOP_EPOCH: std::sync::LazyLock<Instant> = std::sync::LazyLock::new(Instant::now);
+
+impl Default for StopDeadline {
+    fn default() -> Self {
+        Self {
+            at: std::sync::atomic::AtomicU64::new(u64::MAX),
+        }
+    }
+}
+
+impl StopDeadline {
+    /// Set the deadline, or move it earlier; a later one changes nothing, so
+    /// a second stop can shorten a first one's waits, never extend them.
+    pub(crate) fn move_earlier(&self, deadline: Instant) {
+        let nanos = deadline.saturating_duration_since(*STOP_EPOCH).as_nanos();
+        let nanos = u64::try_from(nanos).unwrap_or(u64::MAX - 1);
+        self.at.fetch_min(nanos, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// The deadline, once set.
+    pub(crate) fn get(&self) -> Option<Instant> {
+        match self.at.load(std::sync::atomic::Ordering::SeqCst) {
+            u64::MAX => None,
+            nanos => Some(*STOP_EPOCH + Duration::from_nanos(nanos)),
+        }
+    }
+}
+
 /// The caller's stop deadline, when this runs inside [`within_stop_deadline`].
 pub(crate) fn stop_deadline() -> Option<tokio::time::Instant> {
     STOP_DEADLINE.try_with(|deadline| *deadline).ok()
@@ -289,6 +327,12 @@ pub(super) async fn wait_reaped(
 }
 
 impl super::StdioTransport {
+    /// Join the gateway stop deadline of the backend that owns this
+    /// transport; set once, before its first start.
+    pub(crate) fn attach_stop_deadline(&self, deadline: std::sync::Arc<StopDeadline>) {
+        let _ = self.stop_deadline.set(deadline);
+    }
+
     /// The tree for a freshly spawned `child`, carrying this transport's
     /// test-only reap deadline (MIK-8360).
     #[cfg_attr(not(test), allow(clippy::unused_self))]
@@ -329,7 +373,7 @@ impl super::StdioTransport {
         let (mine, all) = {
             let mut slot = self.child.lock();
             if let Some(tree) = slot.tree.as_mut() {
-                tree.set_ending(ending);
+                tree.set_ending(ending, self.stop_deadline.get().cloned());
             }
             let mine = slot.take_for_reaper();
             (mine, slot.outstanding())

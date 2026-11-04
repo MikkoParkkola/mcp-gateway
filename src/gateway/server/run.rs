@@ -692,7 +692,7 @@ impl Gateway {
             clippy::disallowed_methods,
             reason = "Lifecycle: gateway startup, wiring or shutdown; no caller request"
         )]
-        crate::transport::within_stop_deadline(stop_deadline, self.backends.stop_all()).await;
+        self.backends.stop_all_by(stop_deadline).await;
 
         Ok(())
     }
