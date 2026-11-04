@@ -129,7 +129,7 @@ async fn an_owed_reload_runs_after_its_recovery_intent() {
     .expect("the write goes ahead");
 
     let seen = recorder.seen.lock().expect("lock");
-    let kinds: Vec<_> = seen.iter().map(|s| s.intent.kind).collect();
+    let kinds: Vec<_> = seen.iter().map(|s| s.intent.kind.clone()).collect();
     assert_eq!(kinds, [IntentKind::Recovery, IntentKind::Save]);
     assert!(seen[0].journal_pending, "recovery ran before its intent");
     assert_eq!(seen[0].file, NEXT, "recovery ran before its intent");
@@ -204,7 +204,7 @@ async fn a_reload_appends_its_recovery_intent_first() {
     ctx.reload_outcome().await.expect("the reload goes ahead");
 
     let seen = recorder.seen.lock().expect("lock");
-    let kinds: Vec<_> = seen.iter().map(|s| s.intent.kind).collect();
+    let kinds: Vec<_> = seen.iter().map(|s| s.intent.kind.clone()).collect();
     assert_eq!(kinds, [IntentKind::Recovery]);
     assert!(
         seen[0].journal_pending,

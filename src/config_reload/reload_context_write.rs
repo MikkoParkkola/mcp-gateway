@@ -12,7 +12,7 @@ use crate::config_reload::write::MutateError;
 use crate::config_reload::{ConfigMutation, ConfigWriteError, RELOAD_LOCK_WAIT, ReloadOutcome};
 
 use super::ReloadContext;
-use super::reload_context::replace::{AuditPosture, GatewayAuth};
+use super::replace::{AuditPosture, GatewayAuth};
 
 /// Why the older write paths refuse on an audited gateway.
 const AUDITED_ONLY: &str = "an audited gateway writes its config only through the audited writer";
