@@ -52,6 +52,10 @@ async fn an_out_of_range_search_limit_is_answered_not_refused() {
         let (status, body) = send(&fx, "/mcp", "k-std", "tools/call", params, None).await;
         assert_eq!(status, StatusCode::OK, "limit {limit}: {body}");
         assert!(body["error"].is_null(), "limit {limit}: {body}");
-        assert_ne!(body["result"]["isError"], json!(true), "limit {limit}: {body}");
+        assert_ne!(
+            body["result"]["isError"],
+            json!(true),
+            "limit {limit}: {body}"
+        );
     }
 }

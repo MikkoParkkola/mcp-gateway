@@ -29,7 +29,10 @@ fn both_search_tools_advertise_the_bound_the_handler_clamps_to() {
     let clamp_max = extract_search_limit(&json!({ "limit": u64::MAX }));
     for (name, schema) in [
         ("gateway_search_tools", limit_schema(search_tools)),
-        ("gateway_search", limit_schema(&build_code_mode_search_tool())),
+        (
+            "gateway_search",
+            limit_schema(&build_code_mode_search_tool()),
+        ),
     ] {
         assert_eq!(schema["minimum"], json!(1), "{name}: {schema}");
         assert_eq!(schema["maximum"], json!(clamp_max), "{name}: {schema}");
@@ -39,20 +42,33 @@ fn both_search_tools_advertise_the_bound_the_handler_clamps_to() {
 #[test]
 fn a_limit_below_one_is_raised_to_one() {
     for limit in [json!(0), json!(-5), json!(i64::MIN)] {
-        assert_eq!(extract_search_limit(&json!({ "limit": limit })), 1, "limit {limit}");
+        assert_eq!(
+            extract_search_limit(&json!({ "limit": limit })),
+            1,
+            "limit {limit}"
+        );
     }
 }
 
 #[test]
 fn a_limit_above_the_cap_is_lowered_to_it() {
     for limit in [json!(26), json!(1000), json!(u64::MAX)] {
-        assert_eq!(extract_search_limit(&json!({ "limit": limit })), 25, "limit {limit}");
+        assert_eq!(
+            extract_search_limit(&json!({ "limit": limit })),
+            25,
+            "limit {limit}"
+        );
     }
 }
 
 #[test]
 fn a_missing_or_non_integer_limit_keeps_the_default() {
-    for args in [json!({}), json!({ "limit": "9" }), json!({ "limit": 2.5 }), json!({ "limit": null })] {
+    for args in [
+        json!({}),
+        json!({ "limit": "9" }),
+        json!({ "limit": 2.5 }),
+        json!({ "limit": null }),
+    ] {
         assert_eq!(extract_search_limit(&args), 10, "args {args}");
     }
 }
@@ -88,8 +104,16 @@ async fn the_classic_route_holds_the_limit_to_the_bound() {
             .search_tools_anon(&json!({ "query": QUERY, "limit": limit }), None)
             .await
             .unwrap();
-        assert_eq!(tool_names(&response).len(), expected, "limit {limit}: {response}");
-        assert_eq!(response["total_available"], json!(MATCHING), "limit {limit}: {response}");
+        assert_eq!(
+            tool_names(&response).len(),
+            expected,
+            "limit {limit}: {response}"
+        );
+        assert_eq!(
+            response["total_available"],
+            json!(MATCHING),
+            "limit {limit}: {response}"
+        );
     }
 }
 
@@ -101,6 +125,10 @@ async fn the_code_mode_route_holds_the_limit_to_the_bound() {
             .code_mode_search_anon(&json!({ "query": QUERY, "limit": limit }), None)
             .await
             .unwrap();
-        assert_eq!(tool_names(&response).len(), expected, "limit {limit}: {response}");
+        assert_eq!(
+            tool_names(&response).len(),
+            expected,
+            "limit {limit}: {response}"
+        );
     }
 }
