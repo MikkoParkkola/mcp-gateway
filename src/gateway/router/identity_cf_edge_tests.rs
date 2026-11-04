@@ -65,8 +65,5 @@ fn a_blank_issuer_or_subject_yields_no_grant_subject() {
     assert!(grant_subject_from_verified_identity(&identity("", "sub")).is_none());
     assert!(grant_subject_from_verified_identity(&identity("https://iss", "")).is_none());
     let ok = grant_subject_from_verified_identity(&identity("https://iss", "sub")).unwrap();
-    assert_eq!(
-        (ok.authority.as_str(), ok.subject.as_str()),
-        ("https://iss", "sub")
-    );
+    assert_eq!((ok.authority(), ok.subject()), ("https://iss", "sub"));
 }

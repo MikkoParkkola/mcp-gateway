@@ -288,7 +288,7 @@ use crate::identity_grants::GrantSubject;
 #[test]
 fn c4a_the_subject_prefix_matches_the_widened_exchange_key() {
     let subject_key = "oidc:11:https://idp:5:alice";
-    let prefix = crate::identity_propagation::identity_binding_prefix(&GrantSubject::new(
+    let prefix = crate::identity_propagation::identity_binding_prefix(&GrantSubject::for_test(
         "https://idp".to_string(),
         "alice".to_string(),
         None,

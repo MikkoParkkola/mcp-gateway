@@ -17,7 +17,7 @@ use crate::identity_grants::{GrantAgent, GrantScope, GrantSubject, IdentityGrant
 fn changed_subjects_grant(grant_id: &str, subject: &str, capability: &str) -> IdentityGrant {
     IdentityGrant {
         grant_id: grant_id.to_string(),
-        subject: GrantSubject::new("https://idp".to_string(), subject.to_string(), None),
+        subject: GrantSubject::for_test("https://idp".to_string(), subject.to_string(), None),
         agent: GrantAgent::Any,
         capability: capability.to_string(),
         tool: None,
@@ -31,7 +31,7 @@ fn changed_subjects_grant(grant_id: &str, subject: &str, capability: &str) -> Id
 }
 
 fn subject_names(subjects: &[GrantSubject]) -> Vec<String> {
-    subjects.iter().map(|s| s.subject.clone()).collect()
+    subjects.iter().map(|s| s.subject().to_owned()).collect()
 }
 
 /// One transition of the grant store, and the subject set it owes the evictor.

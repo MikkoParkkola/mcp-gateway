@@ -405,7 +405,7 @@ async fn a_multi_user_grant_subject_alone_does_not_authorize_a_managed_account()
     backend.set_multi_user(true);
 
     let grant_subject_only = crate::capability::CapabilityExecutionContext::with_caller_identity(
-        crate::identity_grants::GrantSubject::new("cloudflare_access", "alice", None),
+        crate::identity_grants::GrantSubject::for_test("cloudflare_access", "alice", None),
     )
     .with_isolated_loopback_egress();
 

@@ -191,10 +191,10 @@ pub(super) fn caller_cache_principal(
     if let Some(subject) = grant_subject {
         return CachePrincipal::Caller(format!(
             "grant:{}:{}:{}:{}",
-            subject.authority.len(),
-            subject.authority,
-            subject.subject.len(),
-            subject.subject
+            subject.authority().len(),
+            subject.authority(),
+            subject.subject().len(),
+            subject.subject()
         ));
     }
     match (
@@ -324,7 +324,7 @@ fn proven_subject_owner<'a>(
     grant_subject: Option<&crate::identity_grants::GrantSubject>,
     caller_key: Option<&'a str>,
 ) -> Option<&'a str> {
-    let authority = grant_subject?.authority.as_str();
+    let authority = grant_subject?.authority();
     if !matches!(authority, "agent_oauth" | "mtls") {
         return None;
     }

@@ -15,7 +15,7 @@ use chrono::Utc;
 fn grant() -> IdentityGrant {
     IdentityGrant {
         grant_id: "g-1".to_string(),
-        subject: GrantSubject::new("oidc", "sub-123", Some("alice@corp".to_string())),
+        subject: GrantSubject::for_test("oidc", "sub-123", Some("alice@corp".to_string())),
         agent: GrantAgent::Any,
         capability: "gmail".to_string(),
         tool: Some("send".to_string()),
@@ -61,7 +61,7 @@ fn expired_grant_projects_as_revoked() {
 #[test]
 fn subject_id_falls_back_to_authority_subject_without_label() {
     let mut g = grant();
-    g.subject = GrantSubject::new("oidc", "sub-123", None);
+    g.subject = GrantSubject::for_test("oidc", "sub-123", None);
     assert_eq!(
         control_plane_grant_from_identity(g, Utc::now()).subject_id,
         "oidc:sub-123"
