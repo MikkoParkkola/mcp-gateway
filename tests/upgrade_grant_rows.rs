@@ -24,6 +24,7 @@ const BAD_PORT: &str = "server:\n  port: not-a-port\n";
 const NAMELESS: &str = "1 row(s) name no one: grant 'g-empty' (empty subject)";
 const CONFIG_ERROR: &str =
     "Error: the config does not load, so its identity grants were not checked";
+const DEFERRED: &str = "Identity grants are checked once the rewrite above is applied.";
 
 struct Setup {
     dir: tempfile::TempDir,
@@ -67,12 +68,12 @@ fn text(out: &Output) -> String {
     )
 }
 
-/// The one line of `printed` that starts with `prefix`.
-fn line<'a>(printed: &'a str, prefix: &str) -> &'a str {
+/// The first line of `printed` that contains `needle`.
+fn line<'a>(printed: &'a str, needle: &str) -> &'a str {
     printed
         .lines()
-        .find(|l| l.contains(prefix))
-        .unwrap_or_else(|| panic!("no line with {prefix:?} in: {printed}"))
+        .find(|l| l.contains(needle))
+        .unwrap_or_else(|| panic!("no line with {needle:?} in: {printed}"))
 }
 
 /// A run's exit status and the one printed line of interest.
