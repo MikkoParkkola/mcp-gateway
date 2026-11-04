@@ -192,13 +192,13 @@ async fn response_block(route: Route) {
     assert_eq!(got.rule, json!(shell.as_str()), "{route:?}: control");
     let shell = firewall_id(&fx, &blocks.security.firewall.rules[0]);
     let cases = [
-        (&blocks, None),
-        (&blocks, Some(&warns)),
-        (&warns, Some(&blocks)),
+        ("one generation", &blocks, None),
+        ("pinned blocks, published warns", &blocks, Some(&warns)),
+        ("pinned warns, published blocks", &warns, Some(&blocks)),
     ];
-    for (pinned, current) in cases {
+    for (name, pinned, current) in cases {
         let got = super::call_as(&fx, (route, injected()), pinned, current).await;
-        let case = (route, current.is_some());
+        let case = (route, name);
         // The invocation record holds the request's decision, which allowed
         // (the shell rule only warned); the response refusal is its own
         // delivery record, so a response verdict leaking into the decision
@@ -244,13 +244,21 @@ async fn a_task_refused_by_the_tool_policy_delivers_no_rule_id() {
     let expected = tool_policy_id(&fx, "deny", "alpha:read");
     let hex = expected.as_str().trim_start_matches("tool_policy:");
     assert!(!got.to_string().contains(hex), "{got}");
-    // The read is the last request, so its record is the last one: a record
-    // the worker's own refusal wrote cannot stand in for it.
+    // The read's record is the one that hashes the answer the read
+    // delivered, so a record another request wrote, before or after the
+    // read, cannot stand in for it.
+    let delivered = format!("sha256:{}", crate::hashing::canonical_json_sha256(&got));
     let recorded = super::invocations(&fx).await;
-    let read = recorded.last().expect("the read's record");
+    let reads: Vec<_> = recorded
+        .iter()
+        .filter(|row| row["response_hash"] == json!(delivered))
+        .collect();
+    let [read] = reads.as_slice() else {
+        panic!("wanted one record of the read's answer: {recorded:?}");
+    };
     assert_eq!(
         (&read["decision"]["kind"], &read["decision"]["rule_id"]),
         (&json!("tool_policy"), &json!(expected.as_str())),
-        "the read's record names the deny entry: {recorded:?}"
+        "the read's record names the deny entry: {read}"
     );
 }
