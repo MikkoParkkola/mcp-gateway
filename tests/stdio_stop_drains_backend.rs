@@ -17,8 +17,12 @@ use std::time::Duration;
 use mcp_gateway::config::{BackendConfig, Config, TransportConfig};
 use serde_json::{Value, json};
 
+use pids::{KillPid, alive};
+
 #[path = "common/gateway_bin.rs"]
 mod gateway_bin;
+#[path = "common/pids.rs"]
+mod pids;
 #[path = "common/yaml.rs"]
 mod yaml;
 
@@ -289,29 +293,6 @@ async fn a_stop_to_the_gateways_group_drains_the_backend_call() {
             logs(root)
         );
         tokio::time::sleep(Duration::from_millis(50)).await;
-    }
-}
-
-/// Whether `pid` is a live process (not gone, not a zombie).
-fn alive(pid: u32) -> bool {
-    let out = std::process::Command::new("ps")
-        .args(["-o", "stat=", "-p", &pid.to_string()])
-        .output()
-        .expect("ps");
-    let stat = String::from_utf8_lossy(&out.stdout);
-    let stat = stat.trim();
-    !stat.is_empty() && !stat.starts_with('Z')
-}
-
-/// SIGKILLs a pid when the row ends, so a red run leaks no descendant.
-struct KillPid(u32);
-
-impl Drop for KillPid {
-    fn drop(&mut self) {
-        let _ = std::process::Command::new("kill")
-            .args(["-KILL", &self.0.to_string()])
-            .stderr(Stdio::null())
-            .status();
     }
 }
 

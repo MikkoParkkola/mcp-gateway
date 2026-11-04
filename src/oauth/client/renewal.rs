@@ -31,6 +31,11 @@ impl OAuthClient {
     /// Try the headless renewal strategies (`refresh_token`, then
     /// `client_credentials`), stopping at a policy refusal.
     pub(super) async fn attempt_background_renewal(&self) -> Renewal {
+        // A sign-in confirmed under another issuer: this client's credential
+        // is not spent until the token step has re-discovered.
+        let Ok(allowed) = self.issuer_current() else {
+            return Renewal::Deferred;
+        };
         // A refresh sends the stored refresh token (MIK-8018); a cached one
         // only says this client has a grant to refresh.
         let has_refresh_token = self
@@ -40,7 +45,11 @@ impl OAuthClient {
             .is_some_and(|t| t.refresh_token.is_some());
 
         if has_refresh_token {
-            match self.refresh_token().await {
+            let refreshed = self.refresh_token().await;
+            // Every outcome: a refresh that failed may have retired the stored
+            // refresh token, which the status must show without a dispatch.
+            self.publish_sign_in();
+            match refreshed {
                 Ok(_) => return Renewal::Renewed,
                 Err(e) if is_ssrf_refusal(&e) => return self.refused(&e),
                 // A busy lock skips `client_credentials`, which takes the same
@@ -64,7 +73,9 @@ impl OAuthClient {
         }
 
         // Headless, for Beeper-style tokens.
-        match self.try_client_credentials().await {
+        #[cfg(all(test, feature = "webui"))]
+        self.renewal_pause.pause().await;
+        match self.try_client_credentials(allowed).await {
             Ok(_) => Renewal::Renewed,
             Err(e) if is_ssrf_refusal(&e) => self.refused(&e),
             // Its save met the busy lease: deferred, not exhausted, so no

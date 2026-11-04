@@ -60,13 +60,13 @@ src/config_reload/generation.rs	prepare	refuse_multi_user_flip	1	no-record	confi
 src/config_reload/grant_reload.rs	read_grant_file	report_grants_refusal	1	no-record	identity grants file reload
 src/config_reload/refusals.rs	classify	is_posture_refusal	1	not-delivered	predicate (a reload refusal's classification)
 src/config_reload/refusals.rs	startup_refusals	startup_refusal	1	no-record	config reload
-src/config_reload/reload_context.rs	refuse_before_apply	refuse_capability_name_clash	1	no-record	config reload
-src/config_reload/reload_context.rs	refuse_before_apply	reload_binding_refusal	1	feeds	a reload refusal gateway_reload_config answers; not a posture refusal, so recorded as no policy decision
-src/config_reload/reload_context.rs	refuse_before_apply	reload_posture_refusal	1	feeds	the posture refusal reload_config raises refused for
 src/config_reload/reload_context.rs	reload_transaction	refuse_before_apply	1	feeds	the reload refusals gateway_reload_config answers, as the rows inside it say
 src/config_reload/reload_context.rs	reload_transaction	reload_refusal	1	feeds	a reload refusal gateway_reload_config answers; reload_config raises only for the posture refusal
 src/config_reload/reload_context.rs	reload_transaction	restart_only_refusal	1	feeds	a reload refusal gateway_reload_config answers; reload_config raises only for the posture refusal
 src/config_reload/reload_context.rs	with_pending_restart	next_start_refusal	1	not-delivered	restart advice inside a reload answer
+src/config_reload/reload_context_refusals.rs	refuse_before_apply	refuse_capability_name_clash	1	no-record	config reload
+src/config_reload/reload_context_refusals.rs	refuse_before_apply	reload_binding_refusal	1	feeds	a reload refusal gateway_reload_config answers; not a posture refusal, so recorded as no policy decision
+src/config_reload/reload_context_refusals.rs	refuse_before_apply	reload_posture_refusal	1	feeds	the posture refusal reload_config raises refused for
 src/error_origin.rs	http_is_backend_refusal	is_deterministic_refusal	1	not-delivered	predicate
 src/error_origin.rs	origin	http_is_backend_refusal	1	not-delivered	predicate: names who refused, for the error-count metric
 src/error_origin.rs	to_rpc_code	http_is_backend_refusal	1	not-delivered	predicate: picks the JSON-RPC code for a backend's HTTP refusal
@@ -284,6 +284,10 @@ src/gateway/task_service/execution/worker_inspect.rs	inspect_and_record	Error::R
 src/gateway/ui/backend_ops.rs	add_backend	refuse_unresolved_secrets	1	no-record	admin UI
 src/gateway/ui/backend_ops.rs	update_backend	refuse_unresolved_secrets	1	no-record	admin UI
 src/gateway/ui/backends.rs	add_backend	add_refusal	1	no-record	accounts, SSE, start-up or admin UI: no call delivery
+src/gateway/ui/backends/signin.rs	confirm_sign_in	refuse_body	1	no-record	admin UI sign-in: refuses the request before any login starts, no call delivery
+src/gateway/ui/backends/signin.rs	confirm_sign_in	refuse_host	1	no-record	admin UI sign-in: refuses the request before any login starts, no call delivery
+src/gateway/ui/backends/signin.rs	start_sign_in	refuse_body	1	no-record	admin UI sign-in: refuses the request before any login starts, no call delivery
+src/gateway/ui/backends/signin.rs	start_sign_in	refuse_host	1	no-record	admin UI sign-in: refuses the request before any login starts, no call delivery
 src/gateway/ui/discovery.rs	adopt_eligible	name_refusal	1	no-record	admin UI decision set: whether a find opens an adopt item, no call delivery
 src/gateway/ui/discovery.rs	body	name_refusal	1	no-record	admin UI discovery listing: drops managed finds from the radar count, no call delivery
 src/gateway/ui/discovery.rs	listed	name_refusal	1	no-record	admin UI discovery listing: labels a find's adopt refusals, no call delivery

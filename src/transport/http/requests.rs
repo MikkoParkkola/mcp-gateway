@@ -266,11 +266,15 @@ impl HttpTransport {
             // client mutex a login holds for minutes, and never detaches
             // (MIK-7982 C2, MIK-8339).
             if !login_gate::interactive() {
-                let oauth = oauth_mutex
-                    .try_lock()
-                    .map_err(|_| Error::AuthorizationRequired {
-                        backend: sanitize_url_for_diagnostics(&self.base_url),
-                    })?;
+                let mut oauth =
+                    oauth_mutex
+                        .try_lock()
+                        .map_err(|_| Error::AuthorizationRequired {
+                            backend: sanitize_url_for_diagnostics(&self.base_url),
+                        })?;
+                // Holding the client: a confirmed sign-in under a changed
+                // issuer is re-discovered here before any token is used.
+                oauth.rediscover_if_moved().await?;
                 let token = oauth.get_token().await?;
                 Provenance::mark_dispatched();
                 return Ok(Some(token));
@@ -771,20 +775,16 @@ async fn detach_token_step(
     gate.note_detached();
     let carried = crate::oauth::login_gate::carry_scopes();
     let task = tokio::spawn(carried.run(async move {
-        let client = tokio::select! {
-            biased;
-            () = gate.revoked_since(since) => {
-                return Err(Error::AuthorizationCancelled { backend });
-            }
-            () = tokio::time::sleep_until(crate::oauth::login_gate::stage_end(
-                crate::oauth::OAUTH_AUTHORIZATION_WINDOW,
-                deadline,
-            )) => {
-                return Err(gate.classify(&cohort, &backend, Error::BackendTimeout(backend.clone())));
-            }
-            client = oauth.lock_owned() => client,
-        };
-        client.get_token_detached(true, since, &cohort, deadline).await
+        let mut client = gate
+            .bounded(since, &cohort, &backend, deadline, oauth.lock_owned())
+            .await?;
+        // Bounded as the wait for the client is: a re-discovery is a fetch.
+        let rediscover = client.rediscover_if_moved();
+        gate.bounded(since, &cohort, &backend, deadline, rediscover)
+            .await??;
+        client
+            .get_token_detached(true, since, &cohort, deadline)
+            .await
     }));
     task.await
         .map_err(|e| Error::OAuth(format!("the detached token step failed: {e}")))?

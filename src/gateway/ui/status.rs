@@ -14,6 +14,7 @@ use serde_json::{Value, json};
 use super::guard::Guard;
 use super::{AppState, access_report, auth_facts, call_windows, is_admin};
 use crate::gateway::authz::BackendGrant;
+use crate::oauth::client::sign_in::SignIn;
 
 /// `GET /ui/api/status` — JSON snapshot of gateway health.
 pub(super) async fn status(
@@ -109,6 +110,12 @@ pub(super) fn status_body(state: &AppState, view: StatusView, scope: BackendGran
                 .next_retry_at
                 .and_then(crate::config_reload::refusals::rfc3339),
             cleartext_credentials_accepted: backend.cleartext_override_in_effect(),
+            needs_sign_in: backend.needs_sign_in(),
+            sign_in: Some(backend.sign_in()).filter(|sign_in| *sign_in != SignIn::NotOAuth),
+            // A sign-in in flight: only its phase and end, never a secret.
+            sign_in_flow: backend.sign_in_flow_view().map(|(phase, until)| {
+                super::backends::with_time(json!({ "phase": phase.word() }), "until", until)
+            }),
             calls_24h: None,
             calls_prev_24h: None,
             name: bs.name,
@@ -153,6 +160,10 @@ pub(super) fn status_body(state: &AppState, view: StatusView, scope: BackendGran
     })
 }
 
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "each flag is one independent fact on the wire; no two encode a state"
+)]
 #[derive(Debug, Serialize)]
 struct ServerStatus {
     name: String,
@@ -182,6 +193,16 @@ struct ServerStatus {
     /// Loads only because `allow_cleartext_credentials` accepts sending its
     /// credentials in cleartext.
     cleartext_credentials_accepted: bool,
+    /// Whether a person must sign in: the one predicate
+    /// (`Backend::needs_sign_in`), shown beside `state` so display keys on it.
+    needs_sign_in: bool,
+    /// Its sign-in, for a backend that has an `oauth` block or waits on a
+    /// sign-in made elsewhere.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    sign_in: Option<SignIn>,
+    /// A sign-in in flight: only `phase` and `until`, never a secret.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    sign_in_flow: Option<Value>,
 }
 
 #[cfg(test)]

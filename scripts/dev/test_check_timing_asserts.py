@@ -268,6 +268,82 @@ class Timeouts(unittest.TestCase):
 HANG = {"HANG_BOUND": [("src/gateway/mod.rs", "Duration::from_secs(30)")]}
 
 
+class RequestTimeouts(unittest.TestCase):
+    """An HTTP client's `.timeout(D)` bounds the request on the real clock:
+    a slow answer under load fails the test, as `timeout(W, f)` does."""
+
+    scan, assertRefused, assertPasses = Timeouts.scan, Timeouts.assertRefused, Timeouts.assertPasses
+
+    BUILDER = 'let c = reqwest::Client::builder().timeout({w}).build().expect("client");'
+    REQUEST = 'let r = client.get(&url).timeout({w}).send().await.expect("answers");'
+
+    def test_a_short_request_timeout_is_judged(self):
+        for shape in (self.BUILDER, self.REQUEST, 'let r = gateway\n    .client\n    .post(&url)\n    .timeout({w})\n    .send();'):
+            with self.subTest(shape=shape):
+                self.assertRefused(shape.format(w="Duration::from_millis(500)"))
+                self.assertPasses(shape.format(w="Duration::from_secs(5)"))
+
+    def test_a_named_window_resolves_as_for_timeout(self):
+        prelude = "const PROBE: Duration = Duration::from_secs(2);"
+        (found,) = self.scan(self.BUILDER.format(w="PROBE"), prelude=prelude)
+        self.assertEqual((found.rule, found.window), ("under 5 s", 2.0))
+
+    def test_an_unresolved_request_window_fails_closed(self):
+        self.assertRefused(self.BUILDER.format(w="window()"), rule="unresolvable window")
+
+    def test_a_timeout_method_not_known_as_a_request_is_listed_at_any_window(self):
+        for w in ("Duration::from_millis(500)", "Duration::from_secs(60)"):
+            with self.subTest(w=w):
+                self.assertRefused(f"let s = events.timeout({w});", rule=guard.NOT_A_REQUEST)
+
+    def test_the_receiver_is_read_within_its_own_statement(self):
+        body = self.BUILDER.format(w="Duration::from_secs(30)") + "\nlet s = events.timeout(Duration::from_secs(30));"
+        self.assertRefused(body, rule=guard.NOT_A_REQUEST)
+
+    def test_spacing_or_a_comment_before_the_parenthesis_is_read(self):
+        for call in (".timeout (Duration::from_millis(500))", ".timeout /* why */ (Duration::from_millis(500))"):
+            with self.subTest(call=call):
+                (found,) = self.scan(f'let c = reqwest::Client::builder(){call}.build().expect("client");')
+                # One allowlist key whatever the spacing.
+                self.assertEqual(found.assertion, ".timeout(Duration::from_millis(500))")
+
+    def test_reqwest_inside_an_argument_does_not_make_a_request(self):
+        self.assertRefused(
+            "let s = tokio_stream::iter([reqwest::Client::new()]).timeout(Duration::from_secs(60));",
+            rule=guard.NOT_A_REQUEST,
+        )
+        self.assertRefused("let s = wrap(client.get(&url)).timeout(Duration::from_secs(60));", rule=guard.NOT_A_REQUEST)
+
+    def test_a_named_client_or_an_imported_builder_is_a_request(self):
+        for shape in (
+            'let r = http_client.get(&url).timeout({w}).send();',
+            'let c = Client::builder().timeout({w}).build().expect("client");',
+        ):
+            with self.subTest(shape=shape):
+                self.assertPasses(shape.format(w="Duration::from_secs(30)"))
+                self.assertRefused(shape.format(w="Duration::from_millis(500)"))
+
+    def test_a_timeout_getter_is_not_a_bound(self):
+        self.assertPasses("let d = config.timeout();")
+
+    def test_a_range_before_the_timeout_function_is_not_a_method(self):
+        self.assertPasses("let r = 0.. timeout(Duration::from_secs(5), f()).await.expect(\"x\");")
+
+    def test_a_request_timeout_in_product_code_is_not_judged(self):
+        # Beside a test item, so the file holds test code and is scanned.
+        text = "fn product() {\n" + self.BUILDER.format(w="Duration::from_millis(500)") + "\n}\n#[cfg(test)]\nfn helper() {}\n"
+        self.assertEqual(guard.scan_timeouts("src/x.rs", text, {}, {}), [])
+
+    def test_a_paused_clock_is_not_judged(self):
+        text = "#[tokio::test(start_paused = true)]\nasync fn paused() {\n" + self.BUILDER.format(w="Duration::from_millis(1)") + "\n}\n"
+        self.assertEqual(guard.scan_timeouts("src/x_tests.rs", text, {}, {}), [])
+
+    def test_a_new_request_timeout_meets_the_floor(self):
+        text = "#[tokio::test]\nasync fn case() {\n" + self.BUILDER.format(w="Duration::from_secs(5)") + "\n}\n"
+        found = guard.scan_new("src/x_tests.rs", text, HANG, {}, set(range(1, 6)))
+        self.assertEqual([f.rule for f in found], [guard.FLOOR], found)
+
+
 class NewCode(unittest.TestCase):
     """The 10 s floor and the PR-C rules judge only new or changed spans (MIK-8247, MIK-8288)."""
 
@@ -528,6 +604,61 @@ class BaseRef(unittest.TestCase):
         base = self.git("rev-parse", "HEAD")
         rs.write_text("fn a() {}\nfn b() {}\n")
         self.assertEqual(guard.added_lines(base), {"src/x_tests.rs": {2}})
+
+
+class MethodRowCutover(unittest.TestCase):
+    """A `.timeout(` row is not NEW only while the base's gate does
+    not judge `.timeout(` methods, read as data from the base's core, and a
+    base the check cannot read that way counts the row as NEW."""
+
+    CORE = "scripts/dev/check_timing_asserts_core.py"
+    ROW = guard.Row(PATH, "case", ".timeout(Duration::from_millis(120))", "the expiry is the behaviour under test")
+    FOUND = [guard.Finding(PATH, "case", ".timeout(Duration::from_millis(120))", 3, 0.12, "under 5 s")]
+
+    def setUp(self):
+        self.scratch = ScratchGit()
+        self.scratch.git("init", "-q")
+        self.refs = {}
+        for name, body in {
+            "pre": "THRESHOLD_S = 5.0\n",
+            "post": "THRESHOLD_S = 5.0\nJUDGES_TIMEOUT_METHOD = True\n",
+            "computed": "JUDGES_TIMEOUT_METHOD = bool(1)\n",
+            "broken": "JUDGES_TIMEOUT_METHOD = (\n",
+            "zero": "JUDGES_TIMEOUT_METHOD = 0\n",
+        }.items():
+            core = self.scratch.root / self.CORE
+            core.parent.mkdir(parents=True, exist_ok=True)
+            core.write_text(body)
+            self.scratch.git("add", ".")
+            self.scratch.git("commit", "-q", "-m", name)
+            self.refs[name] = self.scratch.git("rev-parse", "HEAD")
+
+    def tearDown(self):
+        self.scratch.close()
+
+    def test_the_marker_is_read_as_data_and_fails_closed(self):
+        expected = {"pre": False, "post": True, "computed": None, "broken": None, "zero": None}
+        for name, want in expected.items():
+            with self.subTest(base=name):
+                self.assertIs(guard.base_judges_timeout_method(self.refs[name]), want)
+        self.assertIsNone(guard.base_judges_timeout_method("no-such-ref"))
+
+    def test_a_method_row_is_new_unless_the_base_did_not_judge_methods(self):
+        for name, new in {"pre": False, "post": True, "computed": True, "broken": True}.items():
+            with self.subTest(base=name):
+                cutover = guard.cutover_rows([self.ROW], guard.base_judges_timeout_method(self.refs[name]))
+                errors = guard.judge(self.FOUND, [self.ROW], [], cutover=cutover)
+                self.assertEqual(any(e.startswith("NEW ROW") for e in errors), new, errors)
+
+    def test_the_cutover_never_admits_another_kind_of_row(self):
+        row = guard.Row(PATH, "case", "assert!( elapsed < Duration::from_millis(1) )", "r")
+        found = [guard.Finding(PATH, "case", row.assertion, 3, 0.001, "under 5 s")]
+        errors = guard.judge(found, [row], [], cutover=guard.cutover_rows([row], False))
+        self.assertTrue(any(e.startswith("NEW ROW") for e in errors), errors)
+
+    def test_this_gate_judges_timeout_methods(self):
+        # Once this lands on the base, every later `.timeout(` row is NEW.
+        self.assertIs(guard.JUDGES_TIMEOUT_METHOD, True)
 
 
 class Lexer(unittest.TestCase):
