@@ -548,6 +548,13 @@ impl StoredAnswer {
     pub(crate) fn into_response(self) -> JsonRpcResponse {
         self.response
     }
+
+    /// The refusal this answer records, as its record writes it. Red stub
+    /// (MIK-9191 PR 1): no answer carries one yet.
+    #[cfg(test)]
+    pub(crate) fn refused_by_json(&self) -> Option<serde_json::Value> {
+        None
+    }
 }
 
 /// Why a stored delivery does not go out.
