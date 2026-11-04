@@ -186,7 +186,7 @@ mod tests {
     async fn message(e: &ReplaceError) -> (StatusCode, String) {
         let response = refused_write(e);
         let status = response.status();
-        let body = axum::body::to_bytes(response.into_body(), 1 << 16)
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
             .await
             .expect("body");
         (status, String::from_utf8_lossy(&body).into_owned())
