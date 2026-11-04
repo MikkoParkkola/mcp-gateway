@@ -647,8 +647,9 @@ mod plan_tests {
     #[cfg(unix)]
     #[test]
     fn the_split_keeps_the_reserve_and_gives_a_third_to_sigterm() {
-        // 30 s less the 6 s + 1 s reserve leaves 23 s: a third after SIGTERM.
-        let waits = Duration::from_secs(23);
+        // 30 s less the reserve (the 5 s reap deadline and the close's 1 s
+        // margin) leaves 24 s: a third of it after SIGTERM.
+        let waits = Duration::from_secs(24);
         assert_eq!(
             graceful_ending(Duration::from_secs(30), true),
             Ending::Graceful {

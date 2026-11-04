@@ -17,6 +17,7 @@ disallowed-methods = [
     { path = "mcp_gateway::backend::registry::BackendRegistry::statuses", reason = "go through Registry or a leaf allow naming its class (MIK-8387)" },
     { path = "mcp_gateway::backend::registry::BackendRegistry::remove", reason = "go through Registry or a leaf allow naming its class (MIK-8387)" },
     { path = "mcp_gateway::backend::registry::BackendRegistry::stop_all", reason = "go through Registry or a leaf allow naming its class (MIK-8387)" },
+    { path = "mcp_gateway::backend::registry::BackendRegistry::stop_all_by", reason = "go through Registry or a leaf allow naming its class (MIK-8387)" },
     { path = "mcp_gateway::gateway::meta_mcp::MetaMcp::resolve_propagation_credential", reason = "grantless: thread the caller's view, or take a leaf allow (MIK-8387)" },
     { path = "mcp_gateway::gateway::meta_mcp::MetaMcp::resolve_propagation_headers", reason = "grantless: thread the caller's view, or take a leaf allow (MIK-8387)" },
 ]

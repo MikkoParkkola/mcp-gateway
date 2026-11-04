@@ -32,6 +32,8 @@ pub(crate) use self::lender::{Lender, LentCredential, Loan, Refusal, SendCheck};
 #[cfg(feature = "a2a")]
 pub(crate) use self::lender::count_refusal;
 #[cfg(test)]
+pub(crate) use self::stdio::KILL_RESERVE_FOR_TEST;
+#[cfg(test)]
 pub(crate) use self::stdio::assigned_package_cache_dir;
 pub(crate) use self::stdio::isolated_env_and_assigned_cache;
 pub use self::stdio::{
@@ -39,8 +41,6 @@ pub use self::stdio::{
     isolated_package_manager_env,
 };
 pub(crate) use self::stdio::{LiveTree, StopDeadline, stop_deadline, within_stop_deadline};
-#[cfg(test)]
-pub(crate) use self::stdio::KILL_RESERVE_FOR_TEST;
 pub use self::websocket::McpFrame;
 
 /// Reduce a URL to its origin before it reaches a log line or an error string.

@@ -661,6 +661,10 @@ impl BackendRegistry {
                 .map(|entry| Arc::clone(entry.value()))
                 .collect(),
         );
+        #[allow(
+            clippy::disallowed_methods,
+            reason = "Lifecycle: gateway startup, wiring or shutdown; no caller request"
+        )]
         crate::transport::within_stop_deadline(deadline, self.stop_all()).await;
         // Trees handed over gracefully before this stop (an idle close, a
         // restart) are cut to `deadline` by the reaper; wait for their kills.
