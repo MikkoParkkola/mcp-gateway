@@ -120,7 +120,7 @@ auth:
     meta.set_capabilities(cap_backend);
 
     let caller = allow_all_ctx();
-    assert!(caller.admin != crate::gateway::authz::AdminStanding::Gateway);
+    assert_ne!(caller.admin, crate::gateway::authz::AdminStanding::Gateway);
 
     let args = json!({
         "server": "caps",

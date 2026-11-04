@@ -227,6 +227,14 @@ pub enum AdminStanding {
     Gateway,
 }
 
+impl AdminStanding {
+    /// Whether this standing holds the gateway-wide admin powers.
+    #[must_use]
+    pub(crate) const fn is_gateway(self) -> bool {
+        matches!(self, Self::Gateway)
+    }
+}
+
 /// The one rule from an admin flag and a backend list to a standing, on the
 /// web UI's reading of the list ([`BackendGrant::for_ui_list`]), so an admin
 /// key with no backends stays a gateway-wide admin.

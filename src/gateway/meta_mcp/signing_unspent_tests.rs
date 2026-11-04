@@ -84,7 +84,7 @@ fn assert_unspent(meta: &MetaMcp, refused: (&str, &Value), caller: &MetaMcpCalle
 #[tokio::test]
 async fn an_admin_refusal_leaves_the_nonce_unspent() {
     let caller = ctx(&AllowAll);
-    assert!(caller.admin != crate::gateway::authz::AdminStanding::Gateway);
+    assert_ne!(caller.admin, crate::gateway::authz::AdminStanding::Gateway);
     assert_unspent(&meta(), ("gateway_get_stats", &json!({})), &caller);
 }
 

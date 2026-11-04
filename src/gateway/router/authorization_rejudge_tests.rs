@@ -6,6 +6,7 @@
 
 use super::{KeyGone, OwnedRouterAuthorizer};
 use crate::config::{ApiKeyConfig, AuthConfig, EnvOverlay, api_key_digest_spec};
+use crate::control_plane::role_mapping::ControlPlaneRoleMappingConfig;
 use crate::gateway::auth::ResolvedAuthConfig;
 
 const A: &str = "rejudge-secret-a";
@@ -44,21 +45,36 @@ fn queued_work_runs_only_under_the_exact_credential_it_was_admitted_with() {
     let now = crate::clock::utc_now().ok();
     assert!(
         matches!(
-            owned.rejudged(&admitted, None, &Default::default(), now),
+            owned.rejudged(
+                &admitted,
+                None,
+                &ControlPlaneRoleMappingConfig::default(),
+                now
+            ),
             Ok(Some(_))
         ),
         "control: the unchanged key runs its queued work"
     );
     assert_eq!(
         owned
-            .rejudged(&table(B, None), None, &Default::default(), now)
+            .rejudged(
+                &table(B, None),
+                None,
+                &ControlPlaneRoleMappingConfig::default(),
+                now
+            )
             .err(),
         Some(KeyGone),
         "a key re-issued under the same principal ran the old secret's work"
     );
     assert_eq!(
         owned
-            .rejudged(&table(B, Some(A)), None, &Default::default(), now)
+            .rejudged(
+                &table(B, Some(A)),
+                None,
+                &ControlPlaneRoleMappingConfig::default(),
+                now
+            )
             .err(),
         Some(KeyGone),
         "a rotated key ran work admitted under its previous secret"
@@ -96,14 +112,24 @@ fn queued_work_ends_when_its_key_steps_down_from_gateway_admin() {
     let now = crate::clock::utc_now().ok();
     assert!(
         matches!(
-            owned.rejudged(&admin_table(&[]), None, &Default::default(), now),
+            owned.rejudged(
+                &admin_table(&[]),
+                None,
+                &ControlPlaneRoleMappingConfig::default(),
+                now
+            ),
             Ok(Some(_))
         ),
         "control: an admin key with no backends keeps gateway-wide standing"
     );
     assert_eq!(
         owned
-            .rejudged(&admin_table(&["alpha"]), None, &Default::default(), now)
+            .rejudged(
+                &admin_table(&["alpha"]),
+                None,
+                &ControlPlaneRoleMappingConfig::default(),
+                now
+            )
             .err(),
         Some(KeyGone),
         "an admin key narrowed to [alpha] ran work admitted under gateway-wide admin"

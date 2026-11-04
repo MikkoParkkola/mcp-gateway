@@ -489,13 +489,7 @@ impl MetaMcp {
                     ControlFlow::Break(stored) => return stored,
                 }
             }
-            Some(MetaArm::GetStats) => {
-                self.get_stats(
-                    &arguments,
-                    caller.admin == crate::gateway::authz::AdminStanding::Gateway,
-                )
-                .await
-            }
+            Some(MetaArm::GetStats) => self.get_stats(&arguments, caller.admin.is_gateway()).await,
             Some(MetaArm::CostReport) => self.get_cost_report(&arguments, session_id, caller).await,
             Some(MetaArm::WebhookStatus) => self.webhook_status(),
             Some(MetaArm::RunPlaybook) => {
@@ -512,15 +506,10 @@ impl MetaMcp {
                 self.revalidate_caller_slots(Self::proof_of(caller)).await;
                 self.list_disabled_capabilities(caller.scope(), session_id)
             }
-            Some(MetaArm::SetProfile) => self.set_profile(
-                &arguments,
-                session_id,
-                caller.admin == crate::gateway::authz::AdminStanding::Gateway,
-            ),
-            Some(MetaArm::GetProfile) => self.get_profile(
-                session_id,
-                caller.admin == crate::gateway::authz::AdminStanding::Gateway,
-            ),
+            Some(MetaArm::SetProfile) => {
+                self.set_profile(&arguments, session_id, caller.admin.is_gateway())
+            }
+            Some(MetaArm::GetProfile) => self.get_profile(session_id, caller.admin.is_gateway()),
             Some(MetaArm::ListProfiles) => self.list_profiles(),
             Some(MetaArm::SetState) => self.set_state(&arguments, session_id, caller.scope()),
             Some(MetaArm::ReloadConfig) => self.reload_config().await,

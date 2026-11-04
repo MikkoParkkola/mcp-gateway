@@ -61,7 +61,7 @@ async fn non_admin_callback_registration_is_refused_as_forbidden() {
     let dir = tempfile::tempdir().unwrap();
     let meta = meta(&dir).await;
     let caller = anonymous_caller();
-    assert!(caller.admin != crate::gateway::authz::AdminStanding::Gateway);
+    assert_ne!(caller.admin, crate::gateway::authz::AdminStanding::Gateway);
 
     let err = meta
         .invoke_tool(&args(), None, &caller)
