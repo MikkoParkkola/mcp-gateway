@@ -107,12 +107,16 @@ async fn an_answer_that_is_already_a_stream_is_passed_through() {
 
 /// One frame at a time, so a test can act between them -- `body_text`
 /// buffers, which cannot tell "framed on arrival" from "framed at the end".
+///
+/// The wait is a hang guard on real I/O, not a window: a notification held
+/// behind the result never arrives at all until the test releases the call,
+/// so the bound only has to end that wait, and load must not end it early.
 async fn next_frame<S>(body: &mut S) -> String
 where
     S: futures::Stream<Item = std::result::Result<axum::body::Bytes, axum::Error>> + Unpin,
 {
     use futures::StreamExt;
-    let chunk = tokio::time::timeout(std::time::Duration::from_secs(5), body.next())
+    let chunk = tokio::time::timeout(crate::test_wait::HANG_BOUND, body.next())
         .await
         .expect("no frame arrived: a notification was held behind the result")
         .expect("the stream ended early")

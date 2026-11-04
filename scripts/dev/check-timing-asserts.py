@@ -63,7 +63,12 @@ quietly. And, for MIK-8360 (none is lexical; the fix pattern follows each):
 - `.connect_timeout(D)` and `.read_timeout(D)`: none in test code when
   `.timeout(D)` was first judged; a short one would bound a request the same way;
 - a sleep used as a window inside a helper whose caller holds the assert
-  (MIK-8354's `short_window`): the rule looks for the assert in the same fn.
+  (MIK-8354's `short_window`): the rule looks for the assert in the same fn;
+- an elapsed bound on tokio's paused clock in a fn that also awaits real I/O
+  (a child process, a pipe, a socket): while that I/O stalls the runtime
+  advances virtual time, so load can still move the measured span. Which
+  awaits are real I/O needs types, so the paused-clock exemption stands; bound
+  such a row on the event or deadline observed as fired, or on a hang guard.
 
 The allowlist is shrink-only: with `--base <ref>` a row absent from the list
 at `ref` fails. The comparison is skipped only when `ref` has no list.
