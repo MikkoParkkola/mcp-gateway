@@ -20,6 +20,8 @@ use crate::security::needles::{NeedleSet, scrub_text};
 
 const VALUE: &str = "poll-side-secret-91c4";
 const ROTATED: &str = "poll-side-rotated-91c4";
+/// The needle grace here: short, so a seeded value can be let retire.
+const GRACE: Duration = Duration::from_secs(60);
 
 /// A peer that answers `tasks/get` with a completed task echoing `VALUE`,
 /// first publishing `rotate` into the gateway's env when it holds one.
@@ -113,7 +115,9 @@ fn adapter(
         Duration::from_secs(5),
     ));
     backend.stamp_secret_resolver(Arc::new(SecretResolver::new().with_env(env)));
-    let needles = Arc::new(NeedleSet::default());
+    // Stamped before registration, so the registry keeps this set (and its
+    // short grace) and seeds the resolved value into it.
+    let needles = Arc::new(NeedleSet::with_grace(GRACE));
     backend.stamp_needles(Arc::clone(&needles));
     backend.set_transport_for_test(Arc::clone(&peer) as Arc<dyn crate::transport::Transport>);
     let registry = Arc::new(BackendRegistry::new());
@@ -141,13 +145,16 @@ fn redacted(needles: &NeedleSet) -> bool {
     !text.contains(VALUE)
 }
 
-/// The query production runs reaches the backend's renewal: with nothing
-/// inserted by a send, the value is in the set after one matched query.
-#[tokio::test]
+/// The query production runs reaches the backend's renewal. Registration
+/// seeds the resolved value, so the row lets that seed retire first (past
+/// its grace): only the query's renewal can put the value back.
+#[tokio::test(start_paused = true)]
 async fn a_matched_query_renews_the_dispatchs_value_before_its_poll() {
     let dir = tempfile::tempdir().expect("tempdir");
     let (adapter, needles, peer) = adapter(&dir, false);
-    assert!(!redacted(&needles), "premise: no send inserted the value");
+    assert!(redacted(&needles), "premise: registration seeded the value");
+    tokio::time::advance(GRACE + Duration::from_secs(1)).await;
+    assert!(!redacted(&needles), "premise: the seeded value retired");
     let answer = adapter.query(&handle(), Duration::from_secs(5)).await;
     assert!(
         matches!(answer, UpstreamAnswer::Completed(_)),
