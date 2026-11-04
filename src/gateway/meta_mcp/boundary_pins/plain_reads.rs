@@ -281,10 +281,10 @@ fn fixture_rows(source: &str) -> Vec<String> {
     found_in(dir.path(), &["src/lib.rs"])
 }
 
-/// Every other way to open or copy a file is seen too: an `OpenOptions`
-/// open (inline or held in a binding), `File::options`, `fs::copy`, a read
-/// imported by its bare name, one imported under another name, and one
-/// called through a renamed `fs` module or a renamed `File`.
+/// Every other way to open or copy a file is seen too: each `.open(` call
+/// (an `OpenOptions` value inline or held in a binding, `File::options`),
+/// `fs::copy`, a read imported by its bare name, one imported under another
+/// name, and one called through a renamed `fs` module or a renamed `File`.
 #[test]
 fn every_other_form_of_a_plain_read_is_seen() {
     let rows = fixture_rows(
@@ -308,24 +308,65 @@ fn every_other_form_of_a_plain_read_is_seen() {
         [
             "src/lib.rs\tbare\tfs::read_to_string\t1",
             "src/lib.rs\tcopied\tfs::copy\t1",
-            "src/lib.rs\theld\tFile::options\t1",
-            "src/lib.rs\theld\tOpenOptions::new\t1",
-            "src/lib.rs\tinline\tOpenOptions::new\t1",
+            "src/lib.rs\theld\t.open\t2",
+            "src/lib.rs\tinline\t.open\t1",
             "src/lib.rs\trenamed\tFile::open\t1",
             "src/lib.rs\trenamed\tfs::read\t2",
         ]
     );
 }
 
-/// An `fs` import the walk cannot resolve to a name (a glob) is a row of
-/// its own, so it fails the pin until someone classifies it.
+/// A second `.open(` on one `OpenOptions` value is a site of its own: the
+/// count moves, so the new open cannot inherit the first one's row.
 #[test]
-fn an_fs_import_the_walk_cannot_resolve_is_a_row() {
+fn each_open_on_one_options_value_is_counted() {
     let rows = fixture_rows(
-        "use std::fs::*;\npub fn hidden(p: &std::path::Path) {\n    let _ = read(p);\n}\n",
+        "pub fn twice(p: &std::path::Path) {\n    \
+         let mut options = std::fs::OpenOptions::new();\n    options.read(true);\n    \
+         let _ = options.open(p);\n    let _ = options.open(p);\n}\n",
     );
 
-    assert_eq!(rows, ["src/lib.rs\t<module>\tuse fs::*\t1"]);
+    assert_eq!(rows, ["src/lib.rs\ttwice\t.open\t2"]);
+}
+
+/// A read imported through a module a `use` bound first is resolved:
+/// `use std::fs; use fs::read_to_string as slurp;`.
+#[test]
+fn a_chained_fs_import_is_resolved() {
+    let rows = fixture_rows(
+        "use std::fs;\nuse fs::read_to_string as slurp;\n\
+         pub fn chained(p: &std::path::Path) {\n    let _ = slurp(p);\n}\n",
+    );
+
+    assert_eq!(rows, ["src/lib.rs\tchained\tfs::read_to_string\t1"]);
+}
+
+/// Whether walking a fixture crate holding `source` fails outright.
+fn the_walk_refuses(source: &str) -> bool {
+    let source = source.to_owned();
+    std::panic::catch_unwind(move || fixture_rows(&source)).is_err()
+}
+
+/// An `fs` glob import binds names the walk cannot see, so the pin fails
+/// outright: explicit imports are required, and no glob can be classified.
+#[test]
+fn an_fs_glob_import_fails_the_walk() {
+    assert!(the_walk_refuses(
+        "use std::fs::*;\npub fn hidden(p: &std::path::Path) {\n    let _ = read(p);\n}\n",
+    ));
+}
+
+/// One name bound to two different things in one file (here `File` and
+/// `OpenOptions` in two functions) would let the later binding hide reads
+/// through the earlier one, so the pin fails outright.
+#[test]
+fn an_alias_bound_twice_in_one_file_fails_the_walk() {
+    assert!(the_walk_refuses(
+        "pub fn a(p: &std::path::Path) {\n    use std::fs::File as H;\n    \
+         let _ = H::open(p);\n}\n\
+         pub fn b(p: &std::path::Path) {\n    use std::fs::OpenOptions as H;\n    \
+         let _ = H::new().read(true).open(p);\n}\n",
+    ));
 }
 
 /// The walk's roots are the crate's targets: the library, every `[[bin]]`
