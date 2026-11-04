@@ -38,11 +38,18 @@ fn changed_while_down(dir: &std::path::Path) -> String {
     path.display().to_string()
 }
 
+/// What an HTTP startup's capability step leaves running: the Meta-MCP it
+/// installed into, the shutdown sender that ends its tasks, and the file
+/// watcher, which stops watching when dropped.
+struct Started {
+    meta: Arc<MetaMcp>,
+    shutdown: tokio::sync::broadcast::Sender<()>,
+    _watcher: Option<crate::capability::CapabilityWatcher>,
+}
+
 /// An HTTP startup's capability step over `dirs`, as `run` performs it, on
-/// the gateway's own Meta-MCP. The shutdown sender ends its tasks on drop.
-async fn http_startup(
-    dirs: &[&std::path::Path],
-) -> (Arc<MetaMcp>, tokio::sync::broadcast::Sender<()>) {
+/// the gateway's own Meta-MCP.
+async fn http_startup(dirs: &[&std::path::Path]) -> Started {
     let mut config = Config::default();
     config.capabilities.enabled = true;
     config.capabilities.directories = dirs.iter().map(|d| d.display().to_string()).collect();
@@ -58,11 +65,14 @@ async fn http_startup(
         gateway.config.webhooks.clone(),
     )));
     let (shutdown, _) = tokio::sync::broadcast::channel(4);
-    let _watcher = gateway
-        .start_capability_watcher(&meta, &webhooks, &shutdown)
+    let watcher = Box::pin(gateway.start_capability_watcher(&meta, &webhooks, &shutdown))
         .await
         .expect("VOID: the capability step starts");
-    (meta, shutdown)
+    Started {
+        meta,
+        shutdown,
+        _watcher: watcher,
+    }
 }
 
 async fn eventually(what: &str, f: impl Fn() -> bool) {
@@ -121,20 +131,21 @@ async fn a_capability_changed_while_down_reaches_the_decisions_after_http_startu
 
     let dir = tempfile::tempdir().expect("VOID: a temp dir");
     let changed = changed_while_down(dir.path());
-    let (meta, shutdown) = http_startup(&[dir.path()]).await;
+    let started = Box::pin(http_startup(&[dir.path()])).await;
+    let (meta, shutdown) = (&started.meta, &started.shutdown);
     let backend = meta.capabilities.read().clone().expect("VOID: installed");
     eventually("the startup scan completes", || {
         backend.initial_scan_complete()
     })
     .await;
     assert_eq!(
-        recorded(&meta),
+        recorded(meta),
         vec![changed],
         "recorded by the time the scan reports complete"
     );
 
     let _set = crate::gateway::ui::decisions::start_with_source(
-        &meta,
+        meta,
         None,
         shutdown.subscribe(),
         Arc::new(NoClients),
@@ -147,8 +158,8 @@ async fn a_capability_changed_while_down_reaches_the_decisions_after_http_startu
             .into_iter()
             .find(|item| item["kind"] == json!("capability_changed"))
     };
-    eventually("a capability_changed item", || item(&meta).is_some()).await;
-    let item = item(&meta).expect("VOID: seen above");
+    eventually("a capability_changed item", || item(meta).is_some()).await;
+    let item = item(meta).expect("VOID: seen above");
     assert_eq!(
         item["trusted_name"],
         json!(false),
@@ -177,7 +188,8 @@ async fn a_scan_with_a_failed_directory_still_lets_a_later_edit_reload() {
         )
     };
     std::fs::write(good.path().join("a.yaml"), yaml("v1")).expect("VOID: write v1");
-    let (meta, _shutdown) = http_startup(&[failing.path(), good.path()]).await;
+    let started = Box::pin(http_startup(&[failing.path(), good.path()])).await;
+    let meta = &started.meta;
     let backend = meta.capabilities.read().clone().expect("VOID: installed");
     eventually("the startup scan completes", || {
         backend.initial_scan_complete()
@@ -218,16 +230,14 @@ async fn a_startup_scan_that_panics_is_completed_and_a_later_edit_reloads() {
         )
     };
     std::fs::write(first.path().join("a.yaml"), yaml("v1")).expect("VOID: write v1");
-    let (meta, _shutdown) = {
-        let (meta, shutdown) = http_startup(&[first.path(), second.path()]).await;
-        meta.capabilities
-            .read()
-            .clone()
-            .expect("VOID: installed")
-            .scan_panics_after_first_dir
-            .store(true, std::sync::atomic::Ordering::Release);
-        (meta, shutdown)
-    };
+    let started = Box::pin(http_startup(&[first.path(), second.path()])).await;
+    let meta = &started.meta;
+    meta.capabilities
+        .read()
+        .clone()
+        .expect("VOID: installed")
+        .scan_panics_after_first_dir
+        .store(true, std::sync::atomic::Ordering::Release);
     let backend = meta.capabilities.read().clone().expect("VOID: installed");
     eventually("the panicked scan is completed", || {
         backend.initial_scan_complete()
