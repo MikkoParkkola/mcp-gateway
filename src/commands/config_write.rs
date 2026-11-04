@@ -79,7 +79,7 @@ pub(crate) fn rewrite_url_aliases_in(path: &Path, mode: RewriteMode) -> Result<U
         refuse_unreadable(path, text)?;
         let rewrite = rewrite_of(text);
         // Saved exactly when some pass changed the text.
-        let saved = (rewrite.text != *text).then(|| rewrite.text.clone());
+        let saved = rewrite.saves.then(|| rewrite.text.clone());
         done = Some(rewrite);
         Ok(saved)
     })?;

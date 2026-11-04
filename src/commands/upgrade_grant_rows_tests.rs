@@ -138,3 +138,22 @@ fn a_dry_run_checks_grants_when_the_config_loads_as_it_stands() {
         ExitCode::FAILURE
     );
 }
+
+/// A dry run with valid grants on a config that loads passes; a config that
+/// does not load for a reason the rewrite does not touch fails the dry run
+/// too, since no applying run would make it load.
+#[test]
+fn a_dry_run_passes_valid_grants_and_fails_a_config_no_rewrite_fixes() {
+    let dir = tempfile::tempdir().unwrap();
+    let (config, data) = install_with(dir.path(), ROW_OK, "");
+    assert_eq!(
+        run_upgrade_with_config(true, true, Some(&data), Some(&config)),
+        ExitCode::SUCCESS
+    );
+    let broken = tempfile::tempdir().unwrap();
+    let (config, data) = install_with(broken.path(), ROW_OK, "server:\n  port: not-a-port\n");
+    assert_eq!(
+        run_upgrade_with_config(true, true, Some(&data), Some(&config)),
+        ExitCode::FAILURE
+    );
+}
