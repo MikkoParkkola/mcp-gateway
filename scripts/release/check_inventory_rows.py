@@ -38,6 +38,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import inventory_ledger as ledger  # noqa: E402
+import critical_function_coverage as coverage  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[2]
 ROOT_OF_SCRIPTS = Path(__file__).resolve().parents[1]
@@ -312,13 +313,13 @@ def stale_rows(base: str, head: str) -> list[tuple[str, str, int]]:
     added = set()
     for ledger_path in (INVENTORY, UNENFORCING):
         added |= rows(head, ledger_path) - rows(merge_base, ledger_path)
-    stale = []
-    for path, name, nth in sorted(added):
-        pattern = re.compile(r"\bfn\s+" + re.escape(name) + r"\b")
-        lines = (show(head, path) or "").splitlines()
-        if sum(1 for text in lines if pattern.search(text)) < nth:
-            stale.append((path, name, nth))
-    return stale
+    # The grader's own resolver: a row is stale exactly when the grade could
+    # not find the function it names.
+    return [
+        (path, name, nth)
+        for path, name, nth in sorted(added)
+        if coverage.fn_line((show(head, path) or "").splitlines(), name, nth) is None
+    ]
 
 
 def main(argv: list[str]) -> int:
