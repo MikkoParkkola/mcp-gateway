@@ -23,6 +23,7 @@ mod invoke_stages_dest;
 mod invoke_stages_r6;
 mod invoke_stages_rules;
 mod invoke_stages_tests;
+mod key_field_rows;
 mod keyed_request;
 mod live_config;
 mod live_generation;
