@@ -479,3 +479,27 @@ fn the_scan_finds_a_destructured_read_and_a_direct_admin_standing() {
         Some(&1)
     );
 }
+
+/// Every accessor that reads a standing is a reader too: each one picks
+/// Gateway or InScope, so each call is inventoried with the one it reads.
+#[test]
+fn the_scan_finds_every_standing_accessor() {
+    for (text, needle) in [
+        ("if c.is_gateway_admin() {}", "is_gateway_admin"),
+        ("let s = c.admin_standing();", "admin_standing"),
+        (
+            "client.map_or(None, AuthenticatedClient::admin_standing)",
+            "admin_standing",
+        ),
+        ("if caller.admin.is_gateway() {}", "is_gateway()"),
+        ("if is_admin(Some(c)) {}", "is_admin("),
+        ("let g = BackendGrant::for_ui(Some(c));", "for_ui("),
+    ] {
+        let files = vec![("src/new.rs".to_owned(), text.to_owned())];
+        assert_eq!(
+            found_in(&files).get(&(needle, "src/new.rs".to_owned())),
+            Some(&1),
+            "{text}"
+        );
+    }
+}
