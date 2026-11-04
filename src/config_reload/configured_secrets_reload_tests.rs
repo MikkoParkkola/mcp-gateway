@@ -187,8 +187,8 @@ fn a_backend_registers_only_at_startup_or_in_apply_patch() {
     assert_eq!(
         sites,
         [
-            "src/config_reload/mod.rs apply_patch",
-            "src/config_reload/mod.rs apply_patch",
+            "src/config_reload/apply.rs apply_patch",
+            "src/config_reload/apply.rs apply_patch",
             "src/gateway/server/construct.rs new_with_env",
         ],
         "a new production registration must set its load's record first"
