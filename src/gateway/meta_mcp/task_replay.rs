@@ -544,10 +544,8 @@ impl StoredAnswer {
         }
     }
 
-    /// The check that refused this answer, as its delivery record names it.
-    /// Read by the rows that judge each exit; PR 2's notification path is its
-    /// production reader.
-    #[cfg(test)]
+    /// The check that refused this answer, as its delivery record names it:
+    /// a notification frame carries it to its own record.
     pub(crate) fn refused_by(&self) -> Option<&crate::security::decision_record::RefusedBy> {
         self.refused_by.as_ref()
     }

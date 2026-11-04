@@ -48,6 +48,9 @@ pub(crate) struct PendingTaskFrame {
     pub restored_output: bool,
     withheld: bool,
     staged: super::invoke::relay::StagedReceipts,
+    /// The check that refused the stored output, when policy did: the
+    /// frame's delivery record names it.
+    refused_by: Option<crate::security::decision_record::RefusedBy>,
     /// The holds of the sealed questions the frame carries (MIK-8176 D4b):
     /// handed off by the stream just before the frame is yielded, dropped
     /// with it otherwise. The stored row keeps its own.
@@ -61,14 +64,15 @@ impl MetaMcp {
     /// `stored` is the reader's own owner-scoped read of the task, `None` when
     /// it cannot be read (the minimal notification is sent). `refused` is the
     /// reader's re-authorization of the stored output, run inside the
-    /// collectors this function opens. A refused reader, or one without the
-    /// stored task, gets `notification` as published: the task id and status,
-    /// never output.
+    /// collectors this function opens; its answer, when it refuses, is the
+    /// stored delivery's refusal. A refused reader, or one without the stored
+    /// task, gets `notification` as published: the task id and status, never
+    /// output.
     pub(crate) async fn task_notification_frame(
         &self,
         notification: &Value,
         stored: Option<super::sealed_hold::Held<CommittedTask>>,
-        refused: impl FnOnce(&CommittedTask) -> bool + Send,
+        refused: impl FnOnce(&CommittedTask) -> Option<super::task_replay::StoredAnswer> + Send,
         subscription: &SubscriptionId,
     ) -> Option<PendingTaskFrame> {
         // MIK-8176 D4b: the stored task is delivered onto this frame, so the
@@ -84,7 +88,14 @@ impl MetaMcp {
         let (decided, staged) = self
             .collecting_staged(async {
                 super::grant_audit::slot_result(self.transparency_logger.as_ref(), async {
-                    let withheld = stored.is_none_or(refused);
+                    // Withheld exactly as before: no stored task, or any
+                    // refusal. Its check rides along for the record only.
+                    let refusal = stored.and_then(refused);
+                    let withheld = stored.is_none() || refusal.is_some();
+                    let refused_by = refusal
+                        .as_ref()
+                        .and_then(super::task_replay::StoredAnswer::refused_by)
+                        .cloned();
                     let mut params = match stored {
                         Some(task) if !withheld => Some(task.delivered_wire()),
                         _ => None,
@@ -119,13 +130,18 @@ impl MetaMcp {
                         }),
                         None => notification.clone(),
                     };
-                    Ok((subscription.tag(frame), withheld, restored_output))
+                    Ok((
+                        subscription.tag(frame),
+                        withheld,
+                        restored_output,
+                        refused_by,
+                    ))
                 })
                 .await
                 .ok()
             })
             .await;
-        let (frame, withheld, restored_output) = decided?;
+        let (frame, withheld, restored_output, refused_by) = decided?;
         // Only the holds the frame as built still carries: a withheld or
         // refused frame carries none, and the row keeps the slot.
         let holds = super::sealed_hold::carried_from(&taken, &frame);
@@ -135,6 +151,7 @@ impl MetaMcp {
             withheld,
             staged,
             holds,
+            refused_by,
         })
     }
 
@@ -159,7 +176,12 @@ impl MetaMcp {
             key: crate::security::response_policy::KeyOf::NotKnown,
         };
         let delivered = self
-            .record_notification_delivery_attempt(sent, &correlation, reader.credential.clone())
+            .record_notification_delivery_attempt(
+                sent,
+                &correlation,
+                reader.credential.clone(),
+                pending.refused_by.as_ref(),
+            )
             .await;
         pending.staged.commit(delivered && !pending.withheld);
         delivered

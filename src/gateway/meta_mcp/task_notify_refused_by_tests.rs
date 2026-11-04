@@ -101,10 +101,7 @@ async fn notify(
                 stored,
                 super::sealed_hold::CarriedHolds::none(),
             )),
-            |stored| {
-                meta.refuse_stored_delivery(&request, stored, None, Some("s-1"), caller)
-                    .is_some()
-            },
+            |stored| meta.refuse_stored_delivery(&request, stored, None, Some("s-1"), caller),
             &subscription,
         )
         .await
