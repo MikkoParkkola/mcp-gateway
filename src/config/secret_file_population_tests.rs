@@ -195,6 +195,10 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
         "cfg(test) loader reading the boundary-pin tables and their fragment files beside them, and writing scratch copies of them for its own tests; no secret",
     ),
     (
+        "src/gateway/meta_mcp/boundary_pins/plain_reads.rs",
+        "cfg(test) plain-read inventory: walks the crate's own sources and writes one fixture crate in a temp dir; its fixture text names plain reads; no secret",
+    ),
+    (
         "src/gateway/meta_mcp/boundary_pins/shipped_reads.rs",
         "cfg(test) source scanner reading Cargo.toml and the crate's own sources for the MIK-8481 unshipped-read guard; no secret",
     ),

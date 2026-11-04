@@ -30,6 +30,7 @@ mod needle_attach_sites;
 mod packaged;
 mod pinned_generation;
 mod pinned_role_mapping;
+mod plain_reads;
 mod presend_exits;
 mod response_funnels;
 mod scan;
