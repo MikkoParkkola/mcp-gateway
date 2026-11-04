@@ -7,7 +7,8 @@ The Tests, Windows check and macOS check suites run as shards. Each shard is
 a plain `cargo test` over a subset of test targets. The shards of one OS are
 exact complements of the command that job ran before sharding:
 
-- the library is split by a libtest filter and the matching `--skip`;
+- the library is split by a libtest filter and the matching `--skip`, or run
+  whole in one shard (macOS);
 - the integration targets are split by `--test` glob classes `[a-l]*` and
   `[!a-l]*`, or taken whole (`*`) where the OS runs a single integration shard.
 
@@ -60,9 +61,12 @@ SHARDS: dict[str, dict[str, list[tuple[str, list[str], list[str], int]]]] = {
         "int-a": [("suite", ["--bins", "--test", GLOB_A], [], 763)],
         "int-b": [("suite", ["--test", GLOB_B], [], 1238)],
     },
+    # macOS runs the library as one shard: each shard compiles the `--lib`
+    # test binary from cold, and with about two macOS runners a third job
+    # queues behind the others. One build and both halves' tests (floors
+    # 5352 + 6942) beat two builds.
     "macos": {
-        "lib-a": [(*_LIB_A, 5352)],
-        "lib-b": [(*_LIB_B, 6942)],
+        "lib": [("suite", ["--lib"], [], 12294)],
         "int": [("suite", ["--bins", "--test", GLOB_ALL], [], 2205), ("doc", ["--doc"], [], 55)],
     },
 }
