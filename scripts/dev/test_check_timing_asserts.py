@@ -606,6 +606,17 @@ class BaseRef(unittest.TestCase):
         self.assertEqual(guard.added_lines(base), {"src/x_tests.rs": {2}})
 
 
+class TimeoutRowsAreShrinkOnly(unittest.TestCase):
+    """A `.timeout(` row added since the base is NEW like any other row."""
+
+    def test_a_new_timeout_row_is_refused(self):
+        row = guard.Row(PATH, "case", ".timeout(Duration::from_millis(120))", "the expiry is the behaviour under test")
+        found = [guard.Finding(PATH, "case", row.assertion, 3, 0.12, "under 5 s")]
+        errors = guard.judge(found, [row], [])
+        self.assertTrue(any(e.startswith("NEW ROW") for e in errors), errors)
+        self.assertEqual(guard.judge(found, [row], [row]), [])
+
+
 class MethodRowCutover(unittest.TestCase):
     """A `.timeout(` row is not NEW only while the base's gate does
     not judge `.timeout(` methods, read as data from the base's core, and a
