@@ -91,14 +91,15 @@ where
     };
     let written = super::super::write_audited(state, context, replace, kind).await;
     let answered = decided.lock().take();
+    // The writer could not read a file deleted since the check above.
+    let gone = matches!(written, Err(ReplaceError::Failed(_))) && absent(&path).await;
     match (written, answered) {
         (Err(ReplaceError::Refused(why)), Some(Err((code, message)))) if why == ROUTE_ANSWERED => {
             Err(Box::new(flat_error(code, message).into_response()))
         }
         (Ok(outcome), Some(Ok(value))) => Ok((value, outcome.reload)),
         (Ok(_), _) => Err(Box::new(unwritten("no_answer"))),
-        // The writer could not read a file deleted since the check above.
-        (Err(ReplaceError::Failed(_)), _) if absent(&path).await => {
+        (Err(ReplaceError::Failed(_)), _) if gone => {
             Err(Box::new(no_config_file().into_response()))
         }
         (Err(e), _) => Err(Box::new(refused_write(&e))),
