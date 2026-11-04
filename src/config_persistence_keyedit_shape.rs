@@ -236,6 +236,15 @@ impl Lines {
         }
     }
 
+    /// The 1-based line in the original that line `n` of the text comes
+    /// from; `None` for a line an edit inserted.
+    pub(super) fn original_line(&self, n: usize) -> Option<usize> {
+        match self.lines.get(n)?.1 {
+            Origin::Kept(i) | Origin::Replaced { line: i, .. } => Some(i + 1),
+            Origin::Inserted => None,
+        }
+    }
+
     /// The original lines still in the text, kept or with a value replaced.
     pub(super) fn surviving(&self) -> std::collections::BTreeSet<usize> {
         self.lines
@@ -352,7 +361,7 @@ pub(super) fn child_count(nodes: &[Node], parent: &Node) -> usize {
 }
 
 /// The direct children of `parent`, in document order.
-fn children<'n>(nodes: &'n [Node], parent: &Node) -> impl Iterator<Item = &'n Node> {
+pub(super) fn children<'n>(nodes: &'n [Node], parent: &Node) -> impl Iterator<Item = &'n Node> {
     let depth = parent.path.len();
     let prefix = parent.path.clone();
     nodes
@@ -519,14 +528,27 @@ pub(super) enum CommentRule {
     Drop,
 }
 
-/// Delete the entry at `path` and the lines under it. A missing entry is a
-/// no-op (`Ok(false)`). Under [`CommentRule::Refuse`] it gives up rather
-/// than delete operator text: a `#` anywhere in the deleted lines, or a
-/// comment line indented under the entry right after them.
+/// Which lines of an entry a removal deletes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Span {
+    /// The key's line and everything under it.
+    Entry,
+    /// Only the lines under the key; its line stays, so a key on its
+    /// element's dash line qualifies. A `#` after the key's colon still
+    /// refuses: the line's value is about to be rewritten.
+    Under,
+}
+
+/// Delete the entry at `path` (or, under [`Span::Under`], the lines under
+/// its key). A missing entry is a no-op (`Ok(false)`). Under
+/// [`CommentRule::Refuse`] it gives up rather than delete operator text: a
+/// `#` anywhere in the deleted lines, or a comment line indented under the
+/// entry right after them.
 pub(super) fn remove_entry(
     lines: &mut Lines,
     path: &[Segment],
     rule: CommentRule,
+    span: Span,
 ) -> Result<bool, ComputeRefusal> {
     let text = lines.text();
     let nodes = nodes(&text)?;
@@ -553,7 +575,7 @@ pub(super) fn remove_entry(
     };
     let first = lines.line_of(key.start);
     let key_col = column(&text, key.start);
-    if lines.content(first)[..key_col].trim_end().ends_with('-') {
+    if span == Span::Entry && lines.content(first)[..key_col].trim_end().ends_with('-') {
         return Err(give_up(
             GiveUp::DashLine,
             "the key sits on its element's dash line",
@@ -561,8 +583,8 @@ pub(super) fn remove_entry(
     }
     // The last line holding a non-space byte of the entry: a block scalar's
     // span ends in the next line's indentation, or past trailing blank lines.
-    let span = &text[node.start..node.end.min(text.len())];
-    let last_byte = node.start + span.trim_end().len().saturating_sub(1);
+    let entry = &text[node.start..node.end.min(text.len())];
+    let last_byte = node.start + entry.trim_end().len().saturating_sub(1);
     let mut last = lines.line_of(last_byte.max(key.start));
     // Blank lines wholly inside the span are the entry's (a block scalar's
     // trailing lines, which a `|+` scalar above would otherwise take).
@@ -589,10 +611,27 @@ pub(super) fn remove_entry(
         last = next;
         next += 1;
     }
-    if rule == CommentRule::Refuse && (first..=last).any(|n| lines.content(n).contains('#')) {
-        return Err(give_up(GiveUp::Comment, "a deleted line carries a comment"));
+    // Under `Span::Under` the key's line is judged after its colon only.
+    let after_key = column(&text, key.end);
+    let commented = |n: usize| match span {
+        Span::Under if n == first => lines.content(n)[after_key..].contains('#'),
+        _ => lines.content(n).contains('#'),
+    };
+    if rule == CommentRule::Refuse
+        && let Some(n) = (first..=last).find(|&n| commented(n))
+    {
+        // Named by its line in the original, never by its text.
+        let reason = match lines.original_line(n) {
+            Some(line) => format!("a deleted line carries a comment (line {line})"),
+            None => "a deleted line carries a comment".to_owned(),
+        };
+        return Err(give_up(GiveUp::Comment, &reason));
     }
-    lines.delete(first..last + 1);
+    let from = match span {
+        Span::Entry => first,
+        Span::Under => first + 1,
+    };
+    lines.delete(from..last + 1);
     Ok(true)
 }
 
@@ -625,7 +664,7 @@ pub(super) fn drop_emptied(
         let now = nodes(&lines.text())?;
         let emptied = find(&now, parent).is_some_and(|n| n.shape == Shape::Scalar { empty: true });
         if was_collection && emptied {
-            remove_entry(lines, parent, rule)?;
+            remove_entry(lines, parent, rule, Span::Entry)?;
         }
     }
     Ok(())

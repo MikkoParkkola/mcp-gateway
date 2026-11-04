@@ -702,7 +702,7 @@ async fn o4b_a_reloaded_notify_threshold_changes_the_limit_rows() {
 /// threshold of 80, and 87.5 % of a reloaded limit of $0.80, a row.
 #[cfg(feature = "cost-governance")]
 #[tokio::test]
-async fn o4c_a_reloaded_daily_limit_changes_the_limit_rows() {
+async fn o4d_a_reloaded_daily_limit_changes_the_limit_rows() {
     use crate::cost_accounting::config::CostGovernanceConfig;
     use crate::cost_accounting::enforcer::BudgetEnforcer;
     use crate::cost_accounting::registry::CostRegistry;

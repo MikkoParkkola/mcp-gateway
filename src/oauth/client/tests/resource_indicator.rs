@@ -170,7 +170,11 @@ fn token_exchange_params_include_resource() {
 fn refresh_params_include_resource_and_secret() {
     let client = secret_client("https://mcp.example.test/", "s3cr3t");
 
-    let params = client.refresh_params("refresh-abc", "cid");
+    let params = client.refresh_params(
+        client.issuer_current().unwrap().spend(&client).unwrap(),
+        "refresh-abc",
+        "cid",
+    );
 
     assert_eq!(param(&params, "grant_type"), Some("refresh_token"));
     assert_eq!(param(&params, "refresh_token"), Some("refresh-abc"));
@@ -189,7 +193,10 @@ fn client_credentials_params_include_resource() {
     let mut client = resource_test_client("https://mcp.example.test/");
     client.resource_metadata = Some(protected_resource("https://canonical.example.test/"));
 
-    let params = client.client_credentials_params("cid");
+    let params = client.client_credentials_params(
+        client.issuer_current().unwrap().spend(&client).unwrap(),
+        "cid",
+    );
 
     assert_eq!(param(&params, "grant_type"), Some("client_credentials"));
     assert_eq!(param(&params, "client_id"), Some("cid"));

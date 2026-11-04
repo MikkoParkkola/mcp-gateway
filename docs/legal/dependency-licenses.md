@@ -30,6 +30,8 @@ carrying each dependency's own notice.
 
 The browser tests under `ui-tests/` add five npm dev dependencies that are never shipped: Playwright (`@playwright/test`, `playwright`, `playwright-core`, Apache-2.0) and axe-core (`axe-core`, `@axe-core/playwright`, MPL-2.0). They run only in CI against fixtures; the MPL-2.0 file-level obligation would apply only to modified copies of those files, and none are modified or distributed.
 
+The repository's gate scripts use three Python packages that are never shipped: `tree-sitter` and `tree-sitter-rust` (MIT), installed only into the gates' own hash-locked environment `scripts/gate-env`, and PyYAML (MIT), which CI installs pinned for the workflow checks. They run in CI and on developer machines against this repository's own sources.
+
 `r-efi` appears with an LGPL option but is offered as `Apache-2.0 OR
 LGPL-2.1-or-later OR MIT`; the permissive option is selected, so no LGPL
 obligation attaches.

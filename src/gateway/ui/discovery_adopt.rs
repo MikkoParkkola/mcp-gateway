@@ -292,10 +292,20 @@ pub(super) fn found(
     }
 }
 
+/// The one refusal every unreadable body gets.
+fn invalid_body() -> Response {
+    structured_error(
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "invalid_body",
+        "the body must be {\"find_id\", \"revision\"} and nothing else",
+    )
+    .into_response()
+}
+
 /// `POST /ui/api/discovery/adopt`.
 pub(super) async fn adopt_discovery(
     State(state): State<Arc<AppState>>,
-    Extension(cache): Extension<Arc<DiscoveryCache>>,
+    injected: Option<Extension<Arc<DiscoveryCache>>>,
     guard: Guard,
     body: Result<Json<AdoptBody>, JsonRejection>,
 ) -> Response {
@@ -305,12 +315,10 @@ pub(super) async fn adopt_discovery(
     // Every rejection gets the same fixed text: axum's own would quote the
     // body back.
     let Ok(Json(body)) = body else {
-        return structured_error(
-            StatusCode::UNPROCESSABLE_ENTITY,
-            "invalid_body",
-            "the body must be {\"find_id\", \"revision\"} and nothing else",
-        )
-        .into_response();
+        return invalid_body();
+    };
+    let Some(cache) = super::cache_for(&state, injected) else {
+        return super::discovery_unavailable();
     };
     let Some(path) = state.config_path.clone() else {
         return config_path_unavailable().into_response();

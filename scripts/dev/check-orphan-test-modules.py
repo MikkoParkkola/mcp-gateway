@@ -46,9 +46,13 @@ Usage:
 
 from __future__ import annotations
 
+import collections
+import enum
+import functools
 import re
 import sys
 from pathlib import Path
+from typing import NamedTuple
 
 ROOT = Path(__file__).resolve().parents[2]
 SKIP_DIRS = {".git", "target", "node_modules"}
@@ -310,6 +314,312 @@ def attribute_end(code: str, start: int) -> int:
         depth += {"[": 1, "]": -1}.get(code[i], 0)
         i += 1
     return i
+
+
+# ---------------------------------------------------------------------------
+# cfg item extents, by a parser. Shared with the timing-asserts,
+# request-panics and inventory gates. tree-sitter comes from the gates' own
+# environment (scripts/gate-env) and is imported only here, so the orphan gate
+# itself still runs on the system Python.
+
+
+class SafeSide(enum.Enum):
+    """Where a caller wants an unsure extent to land."""
+
+    # Looking for test code (the timing gate): an unsure item runs long.
+    LEAN_LONG = "lean_long"
+    # Looking for product code (request-panics, inventory): an unsure item is
+    # left as product code.
+    LEAN_SHORT = "lean_short"
+
+
+class CfgItem(NamedTuple):
+    """One item under a target cfg: character offsets [start, end) of the
+    attribute through its construct, and its 1-based first and last lines."""
+
+    start: int
+    end: int
+    first_line: int
+    last_line: int
+
+
+class CfgItems(NamedTuple):
+    items: tuple[CfgItem, ...]
+    # The tree has errors; `known_gap` when they are exactly a listed gap.
+    parse_errors: bool
+    known_gap: bool
+    # Why each unsure case was resolved by the caller's side, for its report.
+    unsure: tuple[str, ...]
+
+
+# Today's grammar gaps of the pinned tree-sitter-rust: each file's errors as a
+# count of (kind, normalized text of the error node). A file whose errors
+# differ in any way (a new error, a repeat, a changed node) is unsure as a
+# whole, and a pin in test_cfg_items.py keeps each entry matching its file.
+KNOWN_GAPS: dict[str, collections.Counter] = {
+    "src/gateway/authz.rs": collections.Counter({("ERROR", "raw @"): 1}),
+    "src/gateway/meta_mcp/invoke/send.rs": collections.Counter(
+        {
+            ("ERROR", "#[cfg("): 1,
+            ("MISSING }", ""): 1,
+            ("ERROR", '"cost-governance")] cost_warnings, prompt_cache_key, outbound_retry,'): 1,
+            ("ERROR", ", }"): 1,
+        }
+    ),
+    "src/gateway/meta_mcp/invoke/post_dispatch.rs": collections.Counter(
+        {
+            ("ERROR", "#[cfg("): 1,
+            ("MISSING }", ""): 1,
+            ("ERROR", '"cost-governance")]'): 1,
+            ("ERROR", ","): 1,
+            ("ERROR", "}"): 1,
+        }
+    ),
+}
+
+# The attribute is its construct's first child.
+PARENT_OWNED = frozenset({"field_initializer", "shorthand_field_initializer", "match_arm"})
+# The attribute precedes its construct in a list.
+LIST_OWNED = frozenset(
+    {
+        "source_file",
+        "declaration_list",
+        "block",
+        "field_declaration_list",
+        "ordered_field_declaration_list",
+        "enum_variant_list",
+        "parameters",
+        "array_expression",
+    }
+)
+NOT_A_CONSTRUCT = frozenset({"attribute_item", "inner_attribute_item", "line_comment", "block_comment"})
+CFG_IN_TEXT = re.compile(r"#!?\[cfg\(")
+CFG_ATTR = re.compile(r"#\s*!?\s*\[\s*cfg\s*\(")
+
+
+@functools.lru_cache(maxsize=1)
+def _rust_parser():
+    try:
+        import tree_sitter_rust
+        from tree_sitter import Language, Parser
+    except ImportError as err:
+        raise SystemExit(
+            f"the cfg item finder needs the gates' environment ({err}); "
+            "run: UV_MALWARE_CHECK=1 uv sync --locked --project scripts/gate-env, "
+            "then run this gate with scripts/gate-env/.venv/bin/python"
+        ) from None
+    return Parser(Language(tree_sitter_rust.language()))
+
+
+def _owner(attr):
+    """The node an attribute marks, or None when the owner table does not
+    know its place (an unsure case, resolved by the caller's side)."""
+    parent = attr.parent
+    if parent is None:
+        return None
+    if attr.type == "inner_attribute_item":
+        if parent.type == "source_file":
+            return parent
+        holder = parent.parent
+        if parent.type == "declaration_list" and holder is not None and holder.type in ("mod_item", "impl_item", "trait_item"):
+            return holder
+        if parent.type == "block" and holder is not None and holder.type == "function_item":
+            return holder
+        return None
+    if parent.type in PARENT_OWNED:
+        return parent
+    if parent.type not in LIST_OWNED:
+        return None
+    node = attr.next_named_sibling
+    while node is not None and node.type in NOT_A_CONSTRUCT:
+        node = node.next_named_sibling
+    if node is not None and parent.type == "ordered_field_declaration_list" and node.type == "visibility_modifier":
+        node = node.next_named_sibling  # a `pub` tuple field spans through its type
+        while node is not None and node.type in NOT_A_CONSTRUCT:
+            node = node.next_named_sibling
+    return node
+
+
+def _cfg_predicates(attr_text: str) -> list[str]:
+    """The predicate of each `#[cfg(..)]` in `attr_text` (literals blanked)."""
+    code = blank(attr_text)[0]
+    return [cfg_expression(code, m.end()) for m in CFG_ATTR.finditer(code)]
+
+
+def _errors(root, src: bytes) -> list:
+    """Each ERROR and missing node, outermost only (an ERROR's insides are
+    not walked): (kind, normalized text, start byte, end byte)."""
+    found = []
+    stack = [root]
+    while stack:
+        node = stack.pop()
+        if node.type == "ERROR" or node.is_missing:
+            kind = f"MISSING {node.type}" if node.is_missing else "ERROR"
+            text = " ".join(src[node.start_byte : node.end_byte].decode("utf-8", "replace").split())[:80]
+            found.append((kind, text, node.start_byte, node.end_byte))
+            if node.type == "ERROR":
+                continue
+        stack.extend(reversed(node.children))
+    return found
+
+
+def _error_signature(errors: list) -> collections.Counter:
+    """The file's errors as a count of (kind, normalized node text): a repeat
+    of a listed error, or any new one, no longer matches its entry."""
+    return collections.Counter((kind, text) for kind, text, _, _ in errors)
+
+
+def _enclosing_function(node):
+    """The (start, end) bytes of the outermost function holding `node`, or
+    None: error recovery in any function reaches every function it holds."""
+    found = None
+    up = node.parent
+    while up is not None:
+        if up.type == "function_item":
+            found = (up.start_byte, up.end_byte)
+        up = up.parent
+    return found
+
+
+def _walk_cfg(root, src: bytes, is_target):
+    """(start byte, end byte or None, fallback end, reason, enclosing
+    function) for each outermost target cfg attribute and each macro body
+    holding one. `end` is None for an unsure case."""
+    found = []
+
+    def target(text: str) -> bool:
+        return any(is_target(p) for p in _cfg_predicates(text))
+
+    def attribute_targets(attr) -> bool:
+        """The attribute is itself `cfg(P)` with a target P: by its own name,
+        never by a `cfg` mentioned inside another attribute's arguments."""
+        inner = next((c for c in attr.named_children if c.type == "attribute"), None)
+        # A comment is a token like any other: `#[cfg /* why */ (test)]` is cfg(test).
+        named = inner.named_children if inner is not None else []
+        parts = [c for c in named if c.type not in ("line_comment", "block_comment")]
+        if len(parts) != 2 or parts[0].type != "identifier" or parts[1].type != "token_tree":
+            return False
+        if src[parts[0].start_byte : parts[0].end_byte] != b"cfg":
+            return False
+        args = blank(src[parts[1].start_byte : parts[1].end_byte].decode("utf-8", "replace"))[0].strip()
+        return args.startswith("(") and args.endswith(")") and is_target(args[1:-1])
+
+    # An explicit stack of (node, inside_end): the children of `node` that
+    # start before `inside_end` lie in an item already taken.
+    stack = [(root, -1)]
+    while stack:
+        node, inside_end = stack.pop()
+        pending = []
+        for child in node.children:
+            if child.start_byte < inside_end:
+                continue
+            if child.type in ("attribute_item", "inner_attribute_item"):
+                # An attribute is metadata, never a code body: a `cfg` named
+                # inside another attribute's arguments marks nothing.
+                if not attribute_targets(child):
+                    continue
+                owner = _owner(child)
+                scope = _enclosing_function(child)
+                if owner is None:
+                    found.append((child.start_byte, None, node.end_byte, "owner not known", scope))
+                else:
+                    start = min(child.start_byte, owner.start_byte)
+                    found.append((start, max(owner.end_byte, child.end_byte), None, "", scope))
+                    inside_end = max(inside_end, owner.end_byte)
+                continue
+            if child.type in ("macro_invocation", "macro_definition"):
+                body = "".join(blank(src[child.start_byte : child.end_byte].decode("utf-8", "replace"))[0].split())
+                if any(target(m.group(0) + body[m.end() :]) for m in CFG_IN_TEXT.finditer(body)):
+                    found.append((child.start_byte, None, child.end_byte, "cfg inside a macro body", _enclosing_function(child)))
+                    inside_end = max(inside_end, child.end_byte)
+                    continue
+            pending.append((child, inside_end))
+        stack.extend(reversed(pending))
+    # A level's attributes are found before its children's: restore source order.
+    return sorted(found, key=lambda f: f[0])
+
+
+def _char_offsets(text: str, src: bytes):
+    """A byte offset of `src` (the UTF-8 encoding of `text`) as a character
+    offset of `text`; the identity for an ASCII file."""
+    if len(src) == len(text):
+        return lambda b: b
+    starts = [0] * (len(src) + 1)
+    k = 0
+    for i, ch in enumerate(text):
+        for _ in range(len(ch.encode("utf-8"))):
+            starts[k] = i
+            k += 1
+    starts[len(src)] = len(text)
+    return lambda b: starts[b]
+
+
+def _item(text: str, start: int, end: int) -> CfgItem:
+    return CfgItem(start, end, text.count("\n", 0, start) + 1, text.count("\n", 0, max(start, end - 1)) + 1)
+
+
+def cfg_items(text: str, side: SafeSide, is_target=None, path: str = "", report: dict | None = None) -> CfgItems:
+    """Each outermost item in `text` under a cfg that `is_target` accepts
+    (default `cfg_is_test`), by its own extent, with every unsure case
+    resolved by `side`: a file whose parse errors are not exactly a listed
+    gap (the whole file), an attribute whose place the owner table does not
+    know, an item touching a listed error, and a macro body holding a target
+    cfg. LEAN_LONG makes an unsure case test code to its fallback end;
+    LEAN_SHORT leaves it product code."""
+    is_target = is_target or cfg_is_test
+    src = text.encode("utf-8")
+    tree = _rust_parser().parse(src)
+    root = tree.root_node
+    to_char = _char_offsets(text, src)
+    errors = root.has_error
+    error_nodes = _errors(root, src) if errors else []
+    known = errors and _error_signature(error_nodes) == KNOWN_GAPS.get(path)
+    if report is not None:
+        report[path] = (bool(errors), bool(known))
+    if errors and not known:
+        whole = (_item(text, 0, len(text)),) if side is SafeSide.LEAN_LONG else ()
+        return CfgItems(whole, True, False, ("parse errors outside the known-gap list",))
+    error_ranges = [(a, b) for _, _, a, b in error_nodes]
+    items: list[CfgItem] = []
+    unsure: list[str] = []
+    for start, end, fallback, reason, scope in _walk_cfg(root, src, is_target):
+        # Recovery can move extents anywhere inside a broken function, so an
+        # item touching a listed error, or in a function holding one, is unsure.
+        near = [(start, end)] + ([scope] if scope else [])
+        if end is not None and any(a < e and s < b for a, b in error_ranges for s, e in near):
+            end, fallback, reason = None, end, "item near a known parse error"
+        if end is None:
+            unsure.append(f"{reason} at line {text.count(chr(10), 0, to_char(start)) + 1}")
+            if side is SafeSide.LEAN_LONG:
+                items.append(_item(text, to_char(start), to_char(fallback)))
+            continue
+        items.append(_item(text, to_char(start), to_char(end)))
+    return CfgItems(tuple(items), bool(errors), bool(known), tuple(unsure))
+
+
+def parse_error_summary(report: dict) -> str:
+    """The line each gate prints: how many files it parsed with errors and
+    how many of those match the known-gap list, so a grammar regression or a
+    new gap shows as a changed count. `report` is what `cfg_items` filled."""
+    errors = sorted(path for path, (bad, _) in report.items() if bad)
+    known = [path for path in errors if report[path][1]]
+    line = f"cfg items: {len(report)} files parsed, {len(errors)} with parse errors ({len(known)} on the known-gap list)"
+    unlisted = [path for path in errors if not report[path][1]]
+    return line + (": unsure as a whole: " + ", ".join(unlisted) if unlisted else "")
+
+
+def item_extents_ignoring_errors(text: str, is_target=None) -> list[tuple[int, int]]:
+    """(first line, last line) of each target cfg item as the tree reads it,
+    errors or not: the locality check behind the known-gap list."""
+    src = text.encode("utf-8")
+    to_char = _char_offsets(text, src)
+    root = _rust_parser().parse(src).root_node
+    out = []
+    for start, end, _, _, _ in _walk_cfg(root, src, is_target or cfg_is_test):
+        if end is not None:
+            item = _item(text, to_char(start), to_char(end))
+            out.append((item.first_line, item.last_line))
+    return out
 
 
 def reachable() -> set[Path]:

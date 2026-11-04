@@ -232,6 +232,7 @@ pretty_assertions	1.4.1	Colin Kiegel <kiegel@gmx.de>|Florent Fayolle <florent.fa
 prettyplease	0.2.37	David Tolnay <dtolnay@gmail.com>	https://github.com/dtolnay/prettyplease	Apache-2.0 OR MIT		A minimal `syn` syntax tree pretty-printer
 proc-macro2	1.0.106	David Tolnay <dtolnay@gmail.com>|Alex Crichton <alex@alexcrichton.com>	https://github.com/dtolnay/proc-macro2	Apache-2.0 OR MIT		A substitute implementation of the compiler's `proc_macro` API to decouple token-based libraries from the procedural macro use case.
 proc-macro2-diagnostics	0.10.1	Sergio Benitez <sb@sergio.bz>	https://github.com/SergioBenitez/proc-macro2-diagnostics	Apache-2.0 OR MIT		Diagnostics for proc-macro2.
+PyYAML	6.0.2	Kirill Simonov	https://github.com/yaml/pyyaml	MIT		YAML parser and emitter for Python
 quanta	0.12.6	Toby Lawrence <toby@nuclearfurnace.com>	https://github.com/metrics-rs/quanta	MIT		high-speed timing library
 quick-xml	0.41.0		https://github.com/tafia/quick-xml	MIT		High performance xml reader and writer
 quinn	0.11.9		https://github.com/quinn-rs/quinn	Apache-2.0 OR MIT		Versatile QUIC transport protocol implementation
@@ -337,6 +338,8 @@ tracing-core	0.1.36	Tokio Contributors <team@tokio.rs>	https://github.com/tokio-
 tracing-log	0.2.0	Tokio Contributors <team@tokio.rs>	https://github.com/tokio-rs/tracing	MIT		Provides compatibility between `tracing` and the `log` crate.
 tracing-serde	0.2.0	Tokio Contributors <team@tokio.rs>	https://github.com/tokio-rs/tracing	MIT		A compatibility layer for serializing trace data with `serde`
 tracing-subscriber	0.3.23	Eliza Weisman <eliza@buoyant.io>|David Barsky <me@davidbarsky.com>|Tokio Contributors <team@tokio.rs>	https://github.com/tokio-rs/tracing	MIT		Utilities for implementing and composing `tracing` subscribers.
+tree-sitter	0.26.0	Max Brunsfeld	https://github.com/tree-sitter/py-tree-sitter	MIT		Python bindings to the Tree-sitter parsing library
+tree-sitter-rust	0.24.2	Max Brunsfeld	https://github.com/tree-sitter/tree-sitter-rust	MIT		Rust grammar for tree-sitter
 try-lock	0.2.5	Sean McArthur <sean@seanmonstar.com>	https://github.com/seanmonstar/try-lock	MIT		A lightweight atomic lock.
 tungstenite	0.29.0	Alexey Galakhov|Daniel Abramov	https://github.com/snapview/tungstenite-rs	Apache-2.0 OR MIT		Lightweight stream-based WebSocket implementation
 typenum	1.19.0	Paho Lurie-Gregg <paho@paholg.com>|Andre Bogus <bogusandre@gmail.com>	https://github.com/paholg/typenum	Apache-2.0 OR MIT		Typenum is a Rust library for type-level numbers evaluated at     compile time. It currently supports bits, unsigned integers, and signed     integers. It also provides a type-level array of type-level numbers, but its     implementation is incomplete.
