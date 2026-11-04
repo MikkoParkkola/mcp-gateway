@@ -187,6 +187,7 @@ async fn a_staged_original_that_is_not_utf8_names_encoding_and_the_manual_step()
     let staged = b"backends: {}\n# \xff\n";
     journal::stage_original(&path, staged).expect("stage");
     journal::begin(&path, crate::hashing::sha256_hex(staged)).expect("journal");
+    let journal_bytes = std::fs::read(journal::journal_path(&path)).expect("journal");
 
     let failure = replace_detached(
         ctx,
@@ -208,4 +209,15 @@ async fn a_staged_original_that_is_not_utf8_names_encoding_and_the_manual_step()
     );
     assert!(!text.contains(&*dir.path().to_string_lossy()), "{text}");
     assert_eq!(read(&path), START);
+    // The evidence the by-hand step needs is kept, byte for byte.
+    assert_eq!(
+        std::fs::read(journal::original_path(&path)).expect("staged original"),
+        staged,
+        "the staged original was changed"
+    );
+    assert_eq!(
+        std::fs::read(journal::journal_path(&path)).expect("journal"),
+        journal_bytes,
+        "the journal was changed"
+    );
 }
