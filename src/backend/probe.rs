@@ -257,7 +257,8 @@ impl Backend {
         // every probe path's future.
         let _ = crate::oauth::login_gate::short_contention(Box::pin(
             self.force_restart_for(super::restart::RestartCause::Unhealthy),
-        )).await;
+        ))
+        .await;
     }
 }
 

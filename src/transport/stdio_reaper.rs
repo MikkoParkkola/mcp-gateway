@@ -112,7 +112,13 @@ pub(super) fn graceful_ending(budget: Duration, stdin_closed: bool) -> Ending {
         (false, true) => (waits, Duration::ZERO),
         (false, false) => (Duration::ZERO, Duration::ZERO),
     };
-    let kept = |wait: Duration| if wait < MIN_PHASE { Duration::ZERO } else { wait };
+    let kept = |wait: Duration| {
+        if wait < MIN_PHASE {
+            Duration::ZERO
+        } else {
+            wait
+        }
+    };
     match (kept(eof), kept(term)) {
         (Duration::ZERO, Duration::ZERO) => Ending::Now,
         (eof, term) => Ending::Graceful { eof, term },
