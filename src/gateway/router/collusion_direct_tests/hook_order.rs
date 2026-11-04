@@ -56,21 +56,91 @@ fn body(source: &str, start: usize) -> &str {
     panic!("unbalanced body at byte {start}");
 }
 
-/// A code line that reads the live config or a generation, or calls a
-/// witness helper that reads one. Taking the request's recorded refusal
-/// (`audit::take_refusal`) reads the audit record, not a generation, so it
-/// is blanked first: every other `_refusal(` helper still counts.
+/// A code line that reads the live config or a generation itself.
+fn reads_directly(line: &str) -> bool {
+    ["generation", "live_config", "check_relay", "relay_block_message"]
+        .iter()
+        .any(|read| line.contains(read))
+}
+
+/// The names of production functions whose body reads a generation itself,
+/// so a call to one is a read wherever it is written. Keyed by name alone: a
+/// name any such function has counts for every function of that name.
+/// ponytail: one level deep; following calls further by name marks most of
+/// the crate (names collide), so a helper reaching the read through another
+/// helper, or through a method call, is not seen here.
+fn readers() -> &'static std::collections::HashSet<String> {
+    static READERS: std::sync::OnceLock<std::collections::HashSet<String>> =
+        std::sync::OnceLock::new();
+    READERS.get_or_init(|| {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let mut files = Vec::new();
+        rust_files(&root.join("src"), &mut files);
+        let mut names = std::collections::HashSet::new();
+        for path in files {
+            let shown = path.display().to_string();
+            if shown.contains("_tests") || shown.contains("/tests/") || shown.contains("test_support") {
+                continue;
+            }
+            let source = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{e}"));
+            let code = crate::test_source_text::sanitize(&source);
+            for (at, _) in code.match_indices("fn ") {
+                // `fn ` as a keyword, not the tail of an identifier.
+                if code[..at]
+                    .chars()
+                    .next_back()
+                    .is_some_and(|c| c.is_alphanumeric() || c == '_')
+                {
+                    continue;
+                }
+                let rest = &code[at + 3..];
+                let name: String = rest
+                    .chars()
+                    .take_while(|c| c.is_alphanumeric() || *c == '_')
+                    .collect();
+                // A declaration with no body (`;` before `{`) reads nothing.
+                let open = rest.find('{');
+                let has_body = open.is_some_and(|o| rest.find(';').is_none_or(|s| o < s));
+                if name.is_empty() || !has_body {
+                    continue;
+                }
+                if body(&code, at).lines().any(reads_directly) {
+                    names.insert(name);
+                }
+            }
+        }
+        names
+    })
+}
+
+/// The function names a line calls as free or path calls (`f(`, `a::f(`);
+/// method calls (`.f(`) are left out, their names collide too widely.
+fn called(line: &str) -> Vec<&str> {
+    let bytes = line.as_bytes();
+    let word = |b: u8| b.is_ascii_alphanumeric() || b == b'_';
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < bytes.len() {
+        if !word(bytes[i]) || (i > 0 && word(bytes[i - 1])) {
+            i += 1;
+            continue;
+        }
+        let start = i;
+        while i < bytes.len() && word(bytes[i]) {
+            i += 1;
+        }
+        let after = line[i..].trim_start();
+        let method = start > 0 && bytes[start - 1] == b'.';
+        if after.starts_with('(') && !method {
+            out.push(&line[start..i]);
+        }
+    }
+    out
+}
+
+/// A code line that reads a generation itself or calls a function that does.
 fn reads_generation(line: &str) -> bool {
-    let line = line.replace("take_refusal(", "");
-    [
-        "generation",
-        "live_config",
-        "_refusal(",
-        "check_relay",
-        "relay_block_message",
-    ]
-    .iter()
-    .any(|read| line.contains(read))
+    reads_directly(line) || called(line).iter().any(|f| readers().contains(*f))
 }
 
 /// Check every hook site in `source` (named `name` in messages): each runs
