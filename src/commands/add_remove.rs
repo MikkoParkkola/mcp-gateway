@@ -684,8 +684,8 @@ mod tests {
     /// A real CLI edit after a crashed byte write: `remove` meets a pending
     /// replace journal over an unparseable candidate and refuses, leaving the
     /// file, the journal and the staged original as they were. The CLI holds
-    /// no audit sink, so it does not recover; starting or reloading the
-    /// gateway does, with an audit record. The journal is planted by hand in
+    /// no audit sink, so it does not recover; a gateway reload does, and
+    /// records it when the gateway keeps an audit log. The journal is planted by hand in
     /// its on-disk form, so this also pins that format.
     #[test]
     fn remove_refuses_a_crashed_byte_write_and_leaves_it_pending() {

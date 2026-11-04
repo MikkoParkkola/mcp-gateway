@@ -154,7 +154,8 @@ fn cli_lock(path: &Path) -> Result<lock::Locked, String> {
     if locked.journal_pending {
         return Err(format!(
             "Not saved: {} has a write the gateway left pending ({}); start or reload the \
-             gateway, which recovers it with an audit record, then run this command again.",
+             gateway, which recovers it (a reload on a gateway with an audit log records the \
+             recovery there), then run this command again.",
             path.display(),
             journal::journal_path(&locked.target).display()
         ));
