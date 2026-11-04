@@ -488,3 +488,42 @@ async fn s1f_a_fresh_stream_starts_at_the_head_not_the_oldest_record() {
         "a call written before the stream opened is not replayed"
     );
 }
+
+#[tokio::test]
+async fn a1g_a_demotion_during_a_catch_up_sends_no_more_of_its_page() {
+    let (state, _dirs, inv) = logged(true).await;
+    let mut s = open(&state, request(STREAM, Who::Bearer(SCOPED_ADMIN), None)).await;
+    within(s.until("hello")).await;
+    call(&inv, "a", 0);
+    let id = within(s.until("activity")).await.id.expect("an id");
+    drop(s);
+    // Two catch-up pages of 200 rows, every one on a backend the key keeps.
+    for n in 1..=400 {
+        call(&inv, "a", n);
+    }
+    tokio::time::pause();
+    let mut again = open(
+        &state,
+        request(STREAM, Who::Bearer(SCOPED_ADMIN), Some(&id)),
+    )
+    .await;
+    within(again.until("hello")).await;
+    state.live_config.edit(|c| c.auth = auth(&["a"]));
+    let published = state.live_config.get();
+    let key = published
+        .auth
+        .api_keys
+        .iter()
+        .find(|k| k.name == SCOPED_ADMIN)
+        .expect("the reload publishes the scoped key");
+    assert_eq!(key.backends, vec!["a".to_string()], "the key is narrowed");
+    // The stream holds one unread frame; every later frame is checked first.
+    let mut after = 0;
+    while let Some(f) = within(again.next()).await {
+        after += usize::from(f.event == "activity");
+    }
+    assert!(
+        after <= 2,
+        "the narrowed access stops the page at its next frame: {after} rows sent after it"
+    );
+}
