@@ -44,7 +44,7 @@ pub(crate) enum DecisionKind {
     NotFound,
     /// A stored task result is not served under the bindings that produced
     /// it: no recorded targets, no recorded bindings, or a binding that has
-    /// changed since (MIK-9191).
+    /// changed since.
     Provenance,
 }
 
@@ -153,11 +153,11 @@ impl Refused {
 /// A refusing check and the configured rule that made it, when one did.
 pub(crate) type Refusal = (DecisionKind, Option<crate::security::rule_id::RuleId>);
 
-/// A check's outcome with the refusing check's pair (MIK-9191): its plain
+/// A check's outcome with the refusing check's pair: its plain
 /// form notes the pair; a stored read records it.
 pub(crate) type Explained = std::result::Result<(), (crate::Error, Refusal)>;
 
-/// The refusal a refused stored-task delivery's record names (MIK-9191):
+/// The refusal a refused stored-task delivery's record names:
 /// the check that refused it and, when a configured rule decided, that
 /// rule's id. Never delivered to the caller.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]

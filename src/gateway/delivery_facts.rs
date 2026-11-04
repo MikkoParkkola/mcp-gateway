@@ -111,7 +111,7 @@ pub(crate) struct DeliveryFacts {
     /// Whose failure the error about to be delivered is (`wrapped_step`).
     error_of: ErrorOf,
     /// The check that refused a stored task's answer, and its rule when a
-    /// configured rule decided (MIK-9191): the first one raised.
+    /// configured rule decided: the first one raised.
     refused_by: Option<crate::security::decision_record::RefusedBy>,
 }
 

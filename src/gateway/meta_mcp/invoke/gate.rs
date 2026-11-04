@@ -147,7 +147,7 @@ impl MetaMcp {
     }
 
     /// [`Self::check_visible_policy`], with the refusing check's pair and no
-    /// note (MIK-9191). The undefined twin's answer maps only the error: the
+    /// note. The undefined twin's answer maps only the error: the
     /// pair is the refusing check's.
     pub(crate) fn check_visible_policy_explained(
         &self,

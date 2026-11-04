@@ -349,7 +349,7 @@ impl MetaMcp {
     }
 }
 
-/// A refusal noted as its plain check notes it, and handed on (MIK-9191):
+/// A refusal noted as its plain check notes it, and handed on:
 /// the stored read keeps the notes the plain checks wrote, and takes the pair
 /// from the check's own return.
 fn noting(refused: (Error, Refusal)) -> (Error, Refusal) {

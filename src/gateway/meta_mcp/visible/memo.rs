@@ -578,14 +578,6 @@ pub(crate) fn refuse_withheld(server: &str, tool: &str) -> crate::Result<()> {
     absent_if_withheld(recorded_visibility(server, tool), tool)
 }
 
-/// [`refuse_withheld`], with the withholding's pair and no note (MIK-9191).
-pub(crate) fn refuse_withheld_explained(
-    server: &str,
-    tool: &str,
-) -> crate::security::decision_record::Explained {
-    absent_if_withheld_explained(recorded_visibility(server, tool), tool)
-}
-
 /// The absent answer for an already-judged [`Visibility`] (MIK-8392.STORED.3):
 /// the one withheld-name guard, over the memo or over a judgement made where
 /// no request memo is open. No second predicate.
@@ -594,21 +586,8 @@ pub(crate) fn refuse_withheld_explained(
 ///
 /// [`absent_name`] when `judged` is withheld.
 pub(crate) fn absent_if_withheld(judged: Option<Visibility>, tool: &str) -> crate::Result<()> {
-    absent_if_withheld_explained(judged, tool)
+    super::absent::absent_if_withheld_explained(judged, tool)
         .map_err(crate::gateway::meta_mcp::invoke::audit::noted)
-}
-
-/// [`absent_if_withheld`], with the withholding's pair and no note
-/// (MIK-9191): the record names the real reason; the caller sees an absent
-/// name.
-pub(crate) fn absent_if_withheld_explained(
-    judged: Option<Visibility>,
-    tool: &str,
-) -> crate::security::decision_record::Explained {
-    match judged {
-        Some(Visibility::Withheld(reason)) => Err((absent_name(tool), (reason.kind(), None))),
-        _ => Ok(()),
-    }
 }
 
 /// Record that this request's account check of `(server, account)` did not

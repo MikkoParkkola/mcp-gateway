@@ -28,7 +28,7 @@ impl MetaMcp {
     }
 
     /// [`Self::check_invocation_policy`], with the refusing check's pair and
-    /// no note (MIK-9191): a stored read records the pair of the check that
+    /// no note: a stored read records the pair of the check that
     /// refused it, never a note another check left.
     pub(crate) fn check_invocation_policy_explained(
         &self,
@@ -43,7 +43,10 @@ impl MetaMcp {
         let server = required("server")?;
         let tool = required("tool")?;
         self.authorize_target_explained(args, (server, tool), caller)?;
-        crate::gateway::meta_mcp::visible::memo::refuse_withheld_explained(server, tool)?;
+        crate::gateway::meta_mcp::visible::absent::absent_if_withheld_explained(
+            crate::gateway::meta_mcp::visible::memo::recorded_visibility(server, tool),
+            tool,
+        )?;
         if let Err(reason) = validate_tool_name(tool) {
             return Err((
                 Error::Protocol(format!("Invalid tool name '{tool}': {reason}")),
@@ -99,7 +102,7 @@ impl MetaMcp {
 
     /// The authorization chokepoint for `server`'s `tool`, read from `args`:
     /// the authorizer, the admin-capability rule and the identity grants,
-    /// with the refusing check's pair (MIK-9191).
+    /// with the refusing check's pair.
     pub(in crate::gateway::meta_mcp) fn authorize_target_explained(
         &self,
         args: &Value,

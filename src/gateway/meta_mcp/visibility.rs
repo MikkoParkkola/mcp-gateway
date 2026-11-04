@@ -470,7 +470,7 @@ impl MetaMcp {
     }
 
     /// [`Self::identity_grant_rule`], with the refusing check's pair and no
-    /// note (MIK-9191).
+    /// note.
     pub(super) fn identity_grant_rule_explained(
         &self,
         server: &str,

@@ -19,7 +19,7 @@ pub(crate) fn note_refused_by(
 }
 
 /// A check's explained refusal, noted as its plain form notes it: the error
-/// handed on, its pair noted (MIK-9191). Each plain check is its explained
+/// handed on, its pair noted. Each plain check is its explained
 /// form mapped through this, so the two cannot note different pairs.
 pub(crate) fn noted(
     (error, (kind, rule_id)): (crate::Error, crate::security::decision_record::Refusal),

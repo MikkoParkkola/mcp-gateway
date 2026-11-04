@@ -525,7 +525,7 @@ pub(crate) struct StoredAnswer {
 
 impl StoredAnswer {
     /// Policy refused it: the only way to build a refused answer, so every
-    /// refused one names its check (MIK-9191).
+    /// refused one names its check.
     fn refused(
         response: JsonRpcResponse,
         refusal: crate::security::decision_record::Refusal,
