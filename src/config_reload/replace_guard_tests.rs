@@ -136,6 +136,52 @@ async fn a_loose_recovery_file_is_never_restored(loose: fn(&Path) -> std::path::
     let text = format!("{failure:?}");
     let shown = dir.path().to_string_lossy().into_owned();
     assert!(!text.contains(&shown), "the refusal names a path: {text}");
+    assert_safe_recovery_advice(&text);
+}
+
+/// Advice a refused journal or staged original must never get: either may
+/// be another account's plant with a matching digest, so fixing its owner or
+/// mode, retrying while it is in place, or restoring, copying or comparing
+/// from it would install the plant as a trusted gateway.yaml.
+const FORBIDDEN_RECOVERY_ADVICE: &[&str] = &[
+    "chmod",
+    "chown",
+    "fix it as the gateway log says",
+    "fix its mode",
+    "fix its owner",
+    "and retry",
+    "restoring anything",
+    "restore it",
+    "copy the staged original",
+    "compare the staged original",
+    "then delete the journal",
+];
+
+/// The refusal for a journal or staged original the guard refused: no
+/// forbidden advice, phrase by phrase; both files called untrusted; both
+/// moved aside before any retry.
+fn assert_safe_recovery_advice(text: &str) {
+    let lower = text.to_lowercase();
+    for phrase in FORBIDDEN_RECOVERY_ADVICE {
+        assert!(
+            !lower.contains(phrase),
+            "the refusal advises {phrase:?}: {text}"
+        );
+    }
+    assert!(
+        lower.contains("untrusted"),
+        "both files are not called untrusted: {text}"
+    );
+    let aside = lower
+        .find("move both files aside")
+        .unwrap_or_else(|| panic!("the refusal does not say to move both files aside: {text}"));
+    let retry = lower
+        .rfind("retry")
+        .unwrap_or_else(|| panic!("the refusal gives no retry step: {text}"));
+    assert!(
+        aside < retry,
+        "the retry comes before moving both files aside: {text}"
+    );
 }
 
 #[cfg(unix)]
