@@ -615,7 +615,6 @@ fn scoped_client(
 #[test]
 fn authz_refusal_principal_names_the_authenticated_identity() {
     use crate::gateway::oauth::OAuthAgentIdentity;
-    use crate::mtls::CertIdentity;
 
     let api_key = scoped_client("keyed", vec!["*".into()], None);
     assert_eq!(

@@ -8,7 +8,6 @@ use serde_json::json;
 use super::mcp_cancel_key;
 use crate::gateway::auth::{AuthenticatedClient, anonymous_client, principal_of};
 use crate::identity_grants::GrantSubject;
-use crate::mtls::CertIdentity;
 
 fn credential(secret: &str) -> AuthenticatedClient {
     AuthenticatedClient {

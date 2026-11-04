@@ -484,8 +484,8 @@ async fn authz_3a_global_policy_does_not_refuse_a_permitted_tool() {
 /// identity actually arrived.
 #[tokio::test]
 async fn authz_10_certificate_policy_refuses_and_permits_a_playbook_step() {
+    use crate::mtls::MtlsPolicy;
     use crate::mtls::config::{CertMatchConfig, MtlsConfig, PolicyRuleConfig, ToolScopeConfig};
-    use crate::mtls::{CertIdentity, MtlsPolicy};
 
     let policy = Arc::new(MtlsPolicy::from_config(&MtlsConfig {
         enabled: true,
