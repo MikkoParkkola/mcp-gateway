@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! `GET /ui/api/stream`: the UI's live event feed (ADR-020).
 
+mod activity_source;
 mod conn;
 mod feed;
 mod guard;

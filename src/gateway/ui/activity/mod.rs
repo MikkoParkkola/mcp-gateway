@@ -171,20 +171,31 @@ async fn blocking(read: impl FnOnce() -> Response + Send + 'static) -> Response 
     })
 }
 
+/// What one live-stream read is given: the list's page byte budget, and the
+/// key the rows' HMACs are checked with, resolved as the list resolves it.
+pub(in crate::gateway::ui) struct StreamRead {
+    pub(in crate::gateway::ui) bytes: u64,
+    pub(in crate::gateway::ui) secret: Option<Vec<u8>>,
+}
+
 /// Run one live-stream read under the same gate as the list, the receipt and
-/// the export, with the list's page byte budget (passed to `read`). The
-/// permit moves into the blocking closure, so it is held until the read
-/// itself finishes, even when the caller stops waiting for it.
+/// the export. The permit moves into the blocking closure, so it is held
+/// until the read itself finishes, even when the caller stops waiting.
 pub(in crate::gateway::ui) async fn stream_read<T: Send + 'static>(
-    read: impl FnOnce(u64) -> std::io::Result<T> + Send + 'static,
+    state: &AppState,
+    read: impl FnOnce(StreamRead) -> std::io::Result<T> + Send + 'static,
 ) -> std::io::Result<T> {
+    let given = StreamRead {
+        bytes: PAGE_SCAN_BYTES,
+        secret: verification_secret(&state.live_config),
+    };
     let permit = READS
         .acquire()
         .await
         .map_err(|_| std::io::Error::other("the activity read gate is closed"))?;
     tokio::task::spawn_blocking(move || {
         let _held = permit;
-        read(PAGE_SCAN_BYTES)
+        read(given)
     })
     .await
     .map_err(|_| std::io::Error::other("the activity read did not finish"))?
