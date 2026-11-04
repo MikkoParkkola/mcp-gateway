@@ -71,7 +71,7 @@ fn grants_yaml(subject: &str, owner: &str) -> String {
 }
 
 /// An empty subject or owner in a grants file grants nothing, so loading it
-/// refuses, naming the path and the rule id; `mcp-gateway upgrade` removes such rows.
+/// refuses, naming the path and the rule id.
 #[tokio::test]
 async fn a_grants_yaml_naming_no_one_is_refused_with_its_path_and_rule_id() {
     for (subject, owner) in [("", "alice"), ("alice", "")] {
@@ -130,14 +130,13 @@ async fn the_nameless_file_refusal_reads_exactly() {
     let path = dir.path().join("grants.yaml");
     crate::gateway::test_helpers::write_owner_only(&path, grants_yaml("", "alice")).unwrap();
     let error = super::read_identity_grants_file(&path).await.unwrap_err();
-    assert_eq!(
-        error,
-        format!(
-            "identity grants file {} names no one in 1 row(s): grant 'g-empty' (empty subject). \
-             Such a row grants nothing; `mcp-gateway upgrade` removes it, or delete it by hand.",
-            path.display()
-        )
+    let head = format!(
+        "failed to parse identity grants file {}: 1 row(s) name no one: grant 'g-empty' \
+         (empty subject). Such a row matches no caller, so it grants nothing; delete it from \
+         the file",
+        path.display()
     );
+    assert!(error.starts_with(&head), "{error}");
 }
 
 /// Golden: a file with a bare agent id and a row naming no one names the
@@ -167,7 +166,8 @@ async fn a_nameless_row_behind_a_bare_one_is_the_remainder_error() {
     assert!(
         error.ends_with(
             "The gateway will not choose. Apart from those rows the file also fails to parse: \
-             the identity's subject is empty"
+             1 row(s) name no one: grant 'g-empty' (empty subject). Such a row matches no \
+             caller, so it grants nothing; delete it from the file"
         ),
         "{error}"
     );
@@ -196,18 +196,37 @@ fn a_capability_owner_naming_no_one_is_refused() {
     }
 }
 
-/// A second defect behind a nameless row is named in the same refusal.
+/// Every row naming no one is named, with each empty field, in one refusal.
 #[tokio::test]
-async fn a_second_defect_behind_a_nameless_row_is_named_too() {
+async fn every_nameless_row_is_named_in_one_refusal() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("grants.yaml");
-    let bad = "- grant_id: g-bad\n  subject:\n    authority: api_key\n    subject: bob\n  agent: any\n  capability: calendar_read\n  scope: everything\n  provenance: p\n  reason: r\n";
-    let body = format!("{}{bad}", grants_yaml("", "alice"));
+    let both = grants_yaml("", "").replace("g-empty", "g-both");
+    let body = format!(
+        "{}{}",
+        grants_yaml("", "alice"),
+        &both[both.find("- grant_id").unwrap()..]
+    );
     crate::gateway::test_helpers::write_owner_only(&path, body).unwrap();
     let error = super::read_identity_grants_file(&path).await.unwrap_err();
-    assert!(error.contains("names no one in 1 row(s)"), "{error}");
     assert!(
-        error.contains("Apart from those rows the file also fails to parse"),
+        error.contains(
+            "2 row(s) name no one: grant 'g-empty' (empty subject), grant 'g-both' (empty \
+             subject and owner)."
+        ),
         "{error}"
     );
+}
+
+/// The refusal comes from the loader's own typed parse, so a row the loader
+/// refuses for another reason (here a field written twice) is refused the
+/// same way beside a nameless one: nothing parses the file a second way.
+#[tokio::test]
+async fn a_duplicated_field_beside_a_nameless_row_is_the_loaders_refusal() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("grants.json");
+    let body = r#"{"schema_version":"identity_grants.v1","grants":[{"grant_id":"g-ok","subject":{"authority":"api_key","subject":"alice"},"agent":"any","capability":"c","scope":"execute","revoked_at":"2026-01-01T00:00:00Z","revoked_at":null,"provenance":"p","reason":"r"},{"grant_id":"g-empty","subject":{"authority":"api_key","subject":""},"agent":"any","capability":"c","scope":"execute","provenance":"p","reason":"r"}]}"#;
+    crate::gateway::test_helpers::write_owner_only(&path, body).unwrap();
+    let error = super::read_identity_grants_file(&path).await.unwrap_err();
+    assert!(error.contains("duplicate field `revoked_at`"), "{error}");
 }

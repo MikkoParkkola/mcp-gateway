@@ -246,7 +246,6 @@ READ_BACKS = {
     ("src/identity_grants/journal.rs", "parse_journal"): "rule: persisted grants",
     ("src/identity_grants_matching.rs", "parse_refusal"): "rule: grant-file error report",
     ("src/identity_grants_matching.rs", "remainder_error"): "rule: grant-file error report",
-    ("src/identity_grants_matching.rs", "strip_nameless"): "upgrade migration: reads the grants file's raw rows on purpose so rows naming no one can be removed; the checked path would refuse them",
 }
 
 

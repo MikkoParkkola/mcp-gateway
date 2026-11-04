@@ -83,26 +83,6 @@ pub(super) fn parse_refusal(
 ) -> String {
     let tree = Tree::parse(content);
     let bare = tree.as_ref().map(Tree::bare_rows).unwrap_or_default();
-    let nameless = tree.as_ref().map(Tree::nameless_rows).unwrap_or_default();
-    if bare.is_empty() && !nameless.is_empty() {
-        let rows: Vec<String> = nameless
-            .iter()
-            .map(|(grant_id, field)| format!("grant '{grant_id}' (empty {field})"))
-            .collect();
-        // A second defect behind those rows is named too, or `upgrade`
-        // would be advised for a file it cannot rewrite.
-        let remainder = strip_nameless(content)
-            .err()
-            .map(|e| format!(" Apart from those rows the file also fails to parse: {e}"))
-            .unwrap_or_default();
-        return format!(
-            "identity grants file {} names no one in {} row(s): {}. Such a row grants \
-             nothing; `mcp-gateway upgrade` removes it, or delete it by hand.{remainder}",
-            path.display(),
-            rows.len(),
-            rows.join(", "),
-        );
-    }
     if bare.is_empty() {
         let error = match tree {
             Some(Tree::Json(_)) => serde_json::from_str::<super::IdentityGrantFile>(content)
@@ -184,29 +164,6 @@ impl Tree {
         }
     }
 
-    /// `(grant_id, field)` of every row whose `subject` or `owner` has an
-    /// empty authority or subject: such a row names no one.
-    fn nameless_rows(&self) -> Vec<(String, String)> {
-        let named = |grant_id: Option<&str>, fields: Vec<&'static str>| {
-            let id = grant_id.unwrap_or("<no grant_id>").to_owned();
-            fields.into_iter().map(move |f| (id.clone(), f.to_owned()))
-        };
-        match self {
-            Self::Json(file) => json_rows(file)
-                .flat_map(|row| {
-                    let id = row.get("grant_id").and_then(serde_json::Value::as_str);
-                    named(id, json_nameless(row))
-                })
-                .collect(),
-            Self::Yaml(file) => yaml_rows(file)
-                .flat_map(|row| {
-                    let id = row.get("grant_id").and_then(crate::yaml::Value::as_str);
-                    named(id, yaml_nameless(row))
-                })
-                .collect(),
-        }
-    }
-
     /// Why the file still fails its typed parse with the bare rows removed,
     /// so a refusal naming them does not hide a second defect behind them.
     /// Parsed from a value, so it carries no line or column.
@@ -253,71 +210,6 @@ fn yaml_rows(file: &crate::yaml::Value) -> impl Iterator<Item = &crate::yaml::Va
         .and_then(crate::yaml::Value::as_sequence)
         .into_iter()
         .flatten()
-}
-
-/// The fields of a JSON row whose pair names no one.
-fn json_nameless(row: &serde_json::Value) -> Vec<&'static str> {
-    ["subject", "owner"]
-        .into_iter()
-        .filter(|field| {
-            row.get(field)
-                .and_then(|v| Some((v.get("authority")?.as_str()?, v.get("subject")?.as_str()?)))
-                .is_some_and(|(authority, subject)| !super::names_someone(authority, subject))
-        })
-        .collect()
-}
-
-/// The fields of a YAML row whose pair names no one.
-fn yaml_nameless(row: &crate::yaml::Value) -> Vec<&'static str> {
-    ["subject", "owner"]
-        .into_iter()
-        .filter(|field| {
-            row.get(field)
-                .and_then(|v| Some((v.get("authority")?.as_str()?, v.get("subject")?.as_str()?)))
-                .is_some_and(|(authority, subject)| !super::names_someone(authority, subject))
-        })
-        .collect()
-}
-
-/// A grants file with its rows naming no one removed, and those rows'
-/// `(grant_id, field)`.
-type Stripped = (super::IdentityGrantFile, Vec<(String, String)>);
-
-/// The grants file in `content` with every row naming no one removed, and
-/// those rows' `(grant_id, field)`; `None` when there is none to remove.
-///
-/// # Errors
-///
-/// The rest of the file still fails its typed parse.
-pub(super) fn strip_nameless(content: &str) -> Result<Option<Stripped>, String> {
-    let Some(tree) = Tree::parse(content) else {
-        return Ok(None);
-    };
-    let removed = tree.nameless_rows();
-    if removed.is_empty() {
-        return Ok(None);
-    }
-    let file = match tree {
-        Tree::Json(mut file) => {
-            if let Some(rows) = file
-                .get_mut("grants")
-                .and_then(serde_json::Value::as_array_mut)
-            {
-                rows.retain(|row| json_nameless(row).is_empty());
-            }
-            serde_json::from_value(file).map_err(|e| e.to_string())?
-        }
-        Tree::Yaml(mut file) => {
-            if let Some(rows) = file
-                .get_mut("grants")
-                .and_then(crate::yaml::Value::as_sequence_mut)
-            {
-                rows.retain(|row| yaml_nameless(row).is_empty());
-            }
-            crate::yaml::from_value(file).map_err(|e| e.to_string())?
-        }
-    };
-    Ok(Some((file, removed)))
 }
 
 /// The id of a bare YAML row: `!exact runner` or `{exact: runner}`.

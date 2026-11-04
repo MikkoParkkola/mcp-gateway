@@ -25,6 +25,7 @@ pub const DEFAULT_GRANT_LEASE_SECONDS: i64 = 60 * 60;
 /// Maximum recommendation lease duration for local grants.
 pub const MAX_GRANT_LEASE_SECONDS: i64 = 24 * 60 * 60;
 
+mod raw_file;
 mod subject;
 pub(crate) use subject::names_someone;
 pub use subject::{EmptyIdentity, GrantSubject};
@@ -83,8 +84,6 @@ pub mod journal;
 mod journal_tests;
 #[path = "identity_grants_matching.rs"]
 mod matching;
-/// `mcp-gateway upgrade`'s removal of grant rows that name no one.
-pub(crate) mod nameless_upgrade;
 pub use matching::GrantAgentKey;
 mod store;
 
@@ -120,13 +119,15 @@ pub struct IdentityGrant {
 }
 
 /// Local JSON/YAML grant file loaded by free/core deployments.
+///
+/// Read through [`raw_file`], which names every row whose subject or owner
+/// names no one in one refusal.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(try_from = "raw_file::RawGrantFile")]
 pub struct IdentityGrantFile {
     /// Grant-file schema version.
-    #[serde(default = "default_identity_grants_file_schema_version")]
     pub schema_version: String,
     /// Durable local grant rows.
-    #[serde(default)]
     pub grants: Vec<IdentityGrant>,
 }
 
@@ -277,7 +278,19 @@ pub async fn write_identity_grants_file(
         })?;
     }
 
-    let content = grants_text(path, grant_file)?;
+    // JSON or YAML by extension, matching what the reader accepts. The atomic
+    // replace below is byte-agnostic, so one writer covers both.
+    let content = if path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("json"))
+    {
+        serde_json::to_string_pretty(grant_file)
+            .map_err(|error| format!("failed to serialize identity grants JSON: {error}"))?
+    } else {
+        crate::yaml::to_string(grant_file)
+            .map_err(|error| format!("failed to serialize identity grants YAML: {error}"))?
+    };
 
     let target = path.to_path_buf();
     tokio::task::spawn_blocking(move || {
@@ -291,22 +304,6 @@ pub async fn write_identity_grants_file(
             path.display()
         )
     })
-}
-
-/// A grants file's text: JSON or YAML by extension, matching what the reader
-/// accepts. The atomic replace is byte-agnostic, so one writer covers both.
-fn grants_text(path: &Path, grant_file: &IdentityGrantFile) -> Result<String, String> {
-    if path
-        .extension()
-        .and_then(|extension| extension.to_str())
-        .is_some_and(|extension| extension.eq_ignore_ascii_case("json"))
-    {
-        serde_json::to_string_pretty(grant_file)
-            .map_err(|error| format!("failed to serialize identity grants JSON: {error}"))
-    } else {
-        crate::yaml::to_string(grant_file)
-            .map_err(|error| format!("failed to serialize identity grants YAML: {error}"))
-    }
 }
 
 /// Load local identity grants from a JSON or YAML file.

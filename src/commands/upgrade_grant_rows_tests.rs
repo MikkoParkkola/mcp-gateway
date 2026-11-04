@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! `mcp-gateway upgrade --config` removes the nameless grant rows from the
-//! grants file that config names, whatever the version stamp says, and
-//! `--dry-run` writes nothing.
+//! `mcp-gateway upgrade --config` names the grant rows that name no one in the
+//! grants file that config names, whatever the version stamp says, fails, and
+//! edits nothing; a dry run checks the same way.
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -30,60 +30,33 @@ fn install(dir: &Path, rows: &str) -> (PathBuf, PathBuf, PathBuf) {
     (grants, config, data)
 }
 
-#[tokio::test]
-async fn upgrade_cleans_the_grants_the_named_config_names_at_a_current_stamp() {
-    let dir = tempfile::tempdir().unwrap();
-    let (grants, config, data) = install(dir.path(), &format!("{ROW_OK}{ROW_EMPTY}"));
-    assert_eq!(
-        run_upgrade_with_config(false, true, Some(&data), Some(&config)),
-        ExitCode::SUCCESS
-    );
-    let read = mcp_gateway::identity_grants::read_identity_grants_file(&grants)
-        .await
-        .expect("loads after the upgrade");
-    let ids: Vec<_> = read.grants.iter().map(|g| g.grant_id.as_str()).collect();
-    assert_eq!(ids, ["g-ok"]);
-    assert!(dir.path().join("grants.yaml.bak.pre-4.0.0").exists());
-
-    let after = std::fs::read(&grants).unwrap();
-    assert_eq!(
-        run_upgrade_with_config(false, true, Some(&data), Some(&config)),
-        ExitCode::SUCCESS
-    );
-    assert_eq!(
-        std::fs::read(&grants).unwrap(),
-        after,
-        "a second run changes nothing"
-    );
+#[test]
+fn upgrade_fails_on_a_nameless_row_at_a_current_stamp_and_edits_nothing() {
+    for dry_run in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let (grants, config, data) = install(dir.path(), &format!("{ROW_OK}{ROW_EMPTY}"));
+        let before = std::fs::read(&grants).unwrap();
+        let files = std::fs::read_dir(dir.path()).unwrap().count();
+        assert_eq!(
+            run_upgrade_with_config(dry_run, true, Some(&data), Some(&config)),
+            ExitCode::FAILURE,
+            "dry_run={dry_run}"
+        );
+        assert_eq!(std::fs::read(&grants).unwrap(), before);
+        assert_eq!(
+            std::fs::read_dir(dir.path()).unwrap().count(),
+            files,
+            "no backup, no lock file"
+        );
+    }
 }
 
 #[test]
-fn a_dry_run_writes_nothing() {
+fn upgrade_passes_a_grants_file_that_loads() {
     let dir = tempfile::tempdir().unwrap();
-    let (grants, config, data) = install(dir.path(), &format!("{ROW_OK}{ROW_EMPTY}"));
-    let before = std::fs::read(&grants).unwrap();
-    let files = std::fs::read_dir(dir.path()).unwrap().count();
-    assert_eq!(
-        run_upgrade_with_config(true, true, Some(&data), Some(&config)),
-        ExitCode::SUCCESS
-    );
-    assert_eq!(std::fs::read(&grants).unwrap(), before);
-    assert_eq!(
-        std::fs::read_dir(dir.path()).unwrap().count(),
-        files,
-        "no backup and no lock file"
-    );
-}
-
-#[test]
-fn a_refused_cleanup_fails_the_upgrade_and_writes_nothing() {
-    let dir = tempfile::tempdir().unwrap();
-    let shadow = ROW_OK.replace("g-ok", "g-empty");
-    let (grants, config, data) = install(dir.path(), &format!("{shadow}{ROW_EMPTY}"));
-    let before = std::fs::read(&grants).unwrap();
+    let (_, config, data) = install(dir.path(), ROW_OK);
     assert_eq!(
         run_upgrade_with_config(false, true, Some(&data), Some(&config)),
-        ExitCode::FAILURE
+        ExitCode::SUCCESS
     );
-    assert_eq!(std::fs::read(&grants).unwrap(), before);
 }

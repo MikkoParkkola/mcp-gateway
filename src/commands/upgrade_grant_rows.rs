@@ -1,51 +1,51 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! `mcp-gateway upgrade` removes the identity-grant rows that name no one
-//! from the grants file the config names. Such a row grants nothing and is
-//! refused at load; this step runs on every `upgrade`, whatever the version
-//! stamp says, so the load refusal's advice always works. A second run finds
-//! nothing and says nothing.
+//! `mcp-gateway upgrade` checks the identity-grants file the gateway would
+//! load and names every rule in it that names no one. It edits nothing: a
+//! rewrite of a security file that could widen access needs proof a hand
+//! deletion does not. The report is the loader's own refusal, so `upgrade`
+//! and startup name the same rows.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
-use mcp_gateway::cli_support::{GrantCleanup, remove_nameless_grant_rows};
-
-/// The grants file `config` names, or the default one; `~` expanded.
-fn grants_path(config: Option<&Path>) -> PathBuf {
-    let named = config
-        .and_then(|path| std::fs::read_to_string(path).ok())
-        .and_then(|text| crate::yaml::from_str::<crate::yaml::Value>(&text).ok())
-        .and_then(|yaml| {
-            yaml.get("security")?
-                .get("identity_grants")?
-                .get("path")?
-                .as_str()
-                .map(str::to_owned)
-        });
-    let path = named.unwrap_or_else(|| mcp_gateway::config::IdentityGrantsConfig::default().path);
-    super::super::identity::expand_home_path(Path::new(&path))
+/// The grants file the gateway would load from `config` (found as startup
+/// finds it when `None`), with environment overrides applied and `~`
+/// expanded; `None` when grants are off or the config does not load (its own
+/// refusal is reported elsewhere).
+fn grants_path(config: Option<&Path>) -> Option<std::path::PathBuf> {
+    let loaded = mcp_gateway::config::Config::load(config).ok()?;
+    let grants = &loaded.security.identity_grants;
+    grants
+        .enabled
+        .then(|| super::super::identity::expand_home_path(Path::new(&grants.path)))
 }
 
-/// Run the cleanup and print one line per row, naming the rule id and the
-/// field only. `false` when it refused or failed, with the reason printed.
-pub(super) fn clean_grant_rows(config: Option<&Path>, mode: GrantCleanup) -> bool {
-    let path = grants_path(config);
-    match remove_nameless_grant_rows(&path, mode) {
-        Ok(rows) => {
-            let verb = match mode {
-                GrantCleanup::Apply => "removed",
-                GrantCleanup::DryRun => "upgrade would remove",
-            };
-            for (grant_id, field) in rows {
-                eprintln!(
-                    "{}: {verb} grant '{grant_id}': its {field} names no one, so it grants nothing",
-                    path.display()
-                );
-            }
-            true
-        }
-        Err(error) => {
-            eprintln!("Error: {error}");
+/// Read the grants file through the loader, on its own thread so this runs
+/// inside or outside an async runtime. `false`, with the loader's refusal
+/// printed, when the file would not load.
+pub(super) fn check_grant_rows(config: Option<&Path>) -> bool {
+    let Some(path) = grants_path(config) else {
+        return true;
+    };
+    if !path.exists() {
+        return true;
+    }
+    let read = std::thread::spawn(move || {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|e| e.to_string())?
+            .block_on(mcp_gateway::identity_grants::read_identity_grants_file(
+                &path,
+            ))
+            .map(drop)
+    })
+    .join()
+    .unwrap_or_else(|_| Err("the identity grants check panicked".to_string()));
+    match read {
+        Ok(()) => true,
+        Err(refusal) => {
+            eprintln!("Error: {refusal}");
             false
         }
     }

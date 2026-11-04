@@ -322,17 +322,5 @@ class SameNames(unittest.TestCase):
         self.assertEqual(len([v for v in cis.violations(root) if "deserializes" in v]), 1)
 
 
-class UpgradeReadBack(unittest.TestCase):
-    def test_only_the_upgrade_strip_is_a_listed_read_back_in_its_file(self):
-        body = (
-            "#[derive(Deserialize)]\nstruct File { who: GrantSubject }\n"
-            "fn strip_nameless(v: Value) -> File { serde_json::from_value(v).unwrap() }\n"
-            "fn other(v: Value) -> File { serde_json::from_value(v).unwrap() }\n"
-        )
-        root = tree({"src/identity_grants_matching.rs": body}, "mod identity_grants_matching;\n")
-        found = [v for v in cis.violations(root) if "deserializes" in v]
-        self.assertEqual(len(found), 1, found)
-        self.assertIn("fn `other`", found[0])
-
 if __name__ == "__main__":
     unittest.main()

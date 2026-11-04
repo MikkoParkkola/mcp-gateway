@@ -36,7 +36,7 @@ pub struct GrantSubject {
 
 /// A grant subject as written, before its check.
 #[derive(Deserialize)]
-struct RawGrantSubject {
+pub(super) struct RawGrantSubject {
     authority: String,
     subject: String,
     label: Option<String>,
