@@ -24,7 +24,9 @@ pub(crate) struct UrlRewrite {
     pub removed: Vec<super::retired_config_keys::Removal>,
     /// What the same rewrite did with each plaintext API key (MIK-8044).
     pub api_keys: Vec<super::api_key_rewrite::KeyRewrite>,
-    /// Whether the rewrite changes the file's text (what an apply saves).
+    /// Whether the rewrite changes the file's text (what an apply saves). Set
+    /// by `config_write::rewrite_of` once every pass has run; a single pass
+    /// such as [`rewrite_url_aliases`] leaves it `false`.
     pub saves: bool,
 }
 
