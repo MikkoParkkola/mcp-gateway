@@ -13,8 +13,7 @@ use crate::gateway::task_service::{TaskStatus, open_runtime_with_recovery};
 #[tokio::test]
 async fn t11_recovery_on_an_unreadable_store_clock_leaves_the_row_for_the_next_pass() {
     // GIVEN: an interrupted, never-dispatched row from a previous process
-    let root = Arc::new(tempfile::tempdir().unwrap());
-    let dir = root.path().join("tasks");
+    let (root, dir) = store_root();
     let row = vec![("x11", Seed::Undispatched, rows().remove(0).2)];
     let seeded = timeout(BUDGET, seed_store(&dir, row))
         .await

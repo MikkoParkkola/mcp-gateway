@@ -15,8 +15,7 @@ use super::*;
 /// its own row.
 #[tokio::test]
 async fn a_repaired_row_is_readable_without_a_restart() {
-    let root = Arc::new(tempfile::tempdir().unwrap());
-    let dir = root.path().join("tasks");
+    let (root, dir) = store_root();
     let (seeded, originals) = sealed_rows(&dir).await;
     let operation = operation();
     let representation = representation();
@@ -210,8 +209,7 @@ fn repair(originals: &[(std::path::PathBuf, Vec<u8>)]) {
 /// that. Mutant: the raw read restored.
 #[tokio::test]
 async fn t14b_a_repaired_live_row_is_settled_at_the_frozen_store_time() {
-    let root = Arc::new(tempfile::tempdir().unwrap());
-    let dir = root.path().join("tasks");
+    let (root, dir) = store_root();
     let (seeded, originals, restored, executor, heard) = sealed_runtime(&dir).await;
     restored.keep_test_dir(Arc::clone(&root));
     let frozen =
@@ -251,8 +249,7 @@ async fn t14b_a_repaired_live_row_is_settled_at_the_frozen_store_time() {
 /// a raw 1969-or-now read anyway.
 #[tokio::test]
 async fn t14b_a_repaired_live_row_stays_sealed_while_the_store_clock_is_unreadable() {
-    let root = Arc::new(tempfile::tempdir().unwrap());
-    let dir = root.path().join("tasks");
+    let (root, dir) = store_root();
     let (_, originals, restored, executor, _heard) = sealed_runtime(&dir).await;
     restored.keep_test_dir(Arc::clone(&root));
     restored

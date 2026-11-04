@@ -5,8 +5,7 @@ use std::ops::ControlFlow;
 
 #[tokio::test]
 async fn startup_settles_every_interrupted_row_by_what_its_record_can_prove() {
-    let root = Arc::new(tempfile::tempdir().unwrap());
-    let dir = root.path().join("tasks");
+    let (root, dir) = store_root();
     let seeded = timeout(BUDGET, seed_store(&dir, rows()))
         .await
         .expect("seeding completes");
@@ -91,8 +90,7 @@ async fn startup_settles_every_interrupted_row_by_what_its_record_can_prove() {
 
 #[tokio::test]
 async fn a_second_startup_rewrites_nothing_the_first_one_recovered() {
-    let root = Arc::new(tempfile::tempdir().unwrap());
-    let dir = root.path().join("tasks");
+    let (root, dir) = store_root();
     let seeded = timeout(
         BUDGET,
         seed_store(
@@ -180,8 +178,7 @@ async fn a_second_startup_rewrites_nothing_the_first_one_recovered() {
     reason = "one end-to-end recovery scenario read as a single sequence"
 )]
 async fn a_recovered_task_still_answers_the_owner_and_key_that_created_it() {
-    let root = Arc::new(tempfile::tempdir().unwrap());
-    let dir = root.path().join("tasks");
+    let (root, dir) = store_root();
     let seeded = timeout(
         BUDGET,
         seed_store(
@@ -302,8 +299,7 @@ async fn a_recovered_task_still_answers_the_owner_and_key_that_created_it() {
 #[tokio::test]
 async fn a_task_settled_during_recovery_is_published() {
     use crate::gateway::task_service::open_runtime_with_recovery;
-    let root = Arc::new(tempfile::tempdir().unwrap());
-    let dir = root.path().join("tasks");
+    let (root, dir) = store_root();
     let seeded = timeout(BUDGET, seed_store(&dir, rows()))
         .await
         .expect("seeding completes");
@@ -358,8 +354,7 @@ async fn a_task_settled_during_recovery_is_published() {
 /// sweep lifts the seal once the file is gone.
 #[tokio::test]
 async fn recovery_beside_a_sealed_row_settles_and_keeps_keys() {
-    let root = Arc::new(tempfile::tempdir().unwrap());
-    let dir = root.path().join("tasks");
+    let (root, dir) = store_root();
     let seeded = timeout(
         BUDGET,
         seed_store(
