@@ -67,6 +67,8 @@ src/config_reload/reload_context.rs	with_pending_restart	next_start_refusal	1	no
 src/config_reload/reload_context_refusals.rs	refuse_before_apply	refuse_capability_name_clash	1	no-record	config reload
 src/config_reload/reload_context_refusals.rs	refuse_before_apply	reload_binding_refusal	1	feeds	a reload refusal gateway_reload_config answers; not a posture refusal, so recorded as no policy decision
 src/config_reload/reload_context_refusals.rs	refuse_before_apply	reload_posture_refusal	1	feeds	the posture refusal reload_config raises refused for
+src/config_reload/reload_context_write.rs	mutate_locked	refuse_when_audited	1	no-record	config write: the older mutate path on an audited gateway, refused before any lock
+src/config_reload/reload_context_write.rs	write_and_reload_outcome_within	refuse_when_audited	1	no-record	config write: the older whole-file write on an audited gateway, refused before any lock
 src/config_reload/replace_validate.rs	refuse_candidate	refuse_before_apply	1	no-record	config write: the reload's own checks on the new bytes, before any secret entry; the reload runs them again
 src/config_reload/replace_validate.rs	refuse_candidate	reload_refusal	1	no-record	config write: the reload's own checks on the new bytes, before any secret entry; the reload runs them again
 src/config_reload/replace_validate.rs	refuse_candidate	restart_only_refusal	1	no-record	config write: the reload's own checks on the new bytes, before any secret entry; the reload runs them again
