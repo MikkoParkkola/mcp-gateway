@@ -406,9 +406,6 @@ REQUEST_RECEIVER = re.compile(
     r"reqwest::|\bClient::(?:builder|new)\s*\(|\b\w*client\s*\.\s*(?:get|post|put|patch|delete|head|request)\s*\("
 )
 NOT_A_REQUEST = "a .timeout( method not known as a request timeout"
-# Read as data from a base revision's copy of this file (never run): a
-# `.timeout(` allowlist row is new only when the base's gate judged them.
-JUDGES_TIMEOUT_METHOD = True
 
 
 @functools.lru_cache(maxsize=1)
