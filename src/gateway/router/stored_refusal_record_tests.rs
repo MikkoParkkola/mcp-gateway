@@ -183,3 +183,50 @@ async fn a_stored_read_of_a_tool_with_a_broken_schema_names_the_block() {
     .await;
     assert_eq!(kind_only(&fx, &got), json!({"kind": "descriptor_block"}));
 }
+
+/// A repeated task-augmented call (the same idempotency key) after a reload
+/// whose deny list names the tool is refused from the stored task, and that
+/// call's own delivery record names the deny entry (MIK-9191.RULEID.3).
+#[tokio::test(flavor = "current_thread")]
+async fn a_repeated_task_call_refused_by_a_deny_entry_names_it() {
+    let fx = fixture(super::Answer::Ok, None).await;
+    let id = super::submit_task(&fx, "stored-repeat", json!({})).await;
+    let first = super::settled_task(&fx, &id).await;
+    assert!(
+        first.pointer("/result/status").and_then(Value::as_str) == Some("completed"),
+        "premise: the task completed: {first}"
+    );
+    fx.state
+        .live_config
+        .set(configured(&fx, key_admits_policy_denies));
+    let got = super::submit_task_raw(&fx, "stored-repeat", json!({})).await;
+    let _ = super::invocations(&fx).await;
+    let expected = tool_policy_id(&fx, "deny", "alpha:read");
+    let hex = expected.as_str().trim_start_matches("tool_policy:");
+    assert!(
+        got.get("error").is_some() || got.pointer("/result/isError") == Some(&json!(true)),
+        "premise: the repeat is refused: {got}"
+    );
+    assert!(
+        !got.to_string().contains(hex),
+        "the answer names the rule: {got}"
+    );
+    let log = std::fs::read_to_string(fx.log.path()).unwrap_or_default();
+    let repeats: Vec<Value> = log
+        .lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .filter(|row| {
+            row["event"] == "response_delivery_attempt"
+                && row["tool"] == "gateway_invoke"
+                && row["response_effect"] == "refused"
+        })
+        .collect();
+    let [repeat] = repeats.as_slice() else {
+        panic!("wanted one refused repeat: {repeats:?}");
+    };
+    assert_eq!(
+        repeat["refused_by"],
+        json!({"kind": "tool_policy", "rule_id": expected.as_str()}),
+        "{repeat}"
+    );
+}
