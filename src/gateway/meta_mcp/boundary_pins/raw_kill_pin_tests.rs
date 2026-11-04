@@ -65,7 +65,9 @@ fn walk(dir: &Path, root: &Path, counts: &mut BTreeMap<String, usize>) {
             .expect("under the crate root")
             .to_string_lossy()
             .replace('\\', "/");
-        let rust = path.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("rs"));
+        let rust = path
+            .extension()
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("rs"));
         if !rust || !relative.contains("test") {
             continue;
         }
