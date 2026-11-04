@@ -418,3 +418,33 @@ fn every_in_gateway_reload_takes_the_lock_through_reload_outcome() {
         );
     }
 }
+
+/// A gateway.yaml other accounts can write is refused at the writer's read,
+/// before the operation's intent: nothing is recorded, written or reloaded,
+/// and the file is not rewritten owner-only.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_config_others_can_write_is_refused_before_its_intent() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let (_dir, path, ctx) = setup();
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o660)).expect("chmod");
+    let recorder = Recorder::new(&path, false);
+
+    let result = replace_audited(
+        Arc::clone(&ctx),
+        to(Expected::Any, NEXT, Replaced::Discard),
+        Audit::Required {
+            sink: Box::new(recorder.clone()),
+            kind: IntentKind::Save,
+        },
+        WAIT,
+    )
+    .await;
+
+    assert!(result.is_err(), "the refused file was written: {result:?}");
+    assert!(recorder.kinds().is_empty(), "an intent was recorded");
+    assert_eq!(read(&path), START, "the refused file was written");
+    let mode = std::fs::metadata(&path).expect("stat").permissions().mode();
+    assert_eq!(mode & 0o777, 0o660, "the refused file was rewritten");
+    assert!(!running_has_b(&ctx), "the refused file's edit was loaded");
+}
