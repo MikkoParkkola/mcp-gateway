@@ -131,3 +131,23 @@ fn capped_tool_text(data: &serde_json::Value) -> Option<(String, serde_json::Val
         )
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::protocol::RequestId;
+
+    /// A response-firewall refusal is answered as an error frame, never as a
+    /// withheld `isError` result. A task's settlement reads an error frame's
+    /// own code before any withheld code, so this refusal needs no fold of its
+    /// own; if it were ever answered as a withheld result, it would need one.
+    #[test]
+    fn a_firewall_refusal_is_answered_as_an_error_frame() {
+        let frame = super::error_response_preserving_status(
+            RequestId::Number(1),
+            &crate::Error::ResponseFirewallRefused,
+        );
+        let error = frame.error.as_ref().expect("an error frame");
+        assert_eq!(error.code, crate::error::rpc_codes::INVALID_REQUEST);
+        assert!(frame.result.is_none(), "no withheld result: {frame:?}");
+    }
+}
