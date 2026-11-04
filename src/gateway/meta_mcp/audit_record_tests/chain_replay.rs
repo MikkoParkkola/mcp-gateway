@@ -66,9 +66,13 @@ fn chained_meta(dir: &tempfile::TempDir) -> MetaMcp {
         )
         .with_continuations(meta.continuation()),
     )));
-    crate::security::firewall::collusion_live_rig::seed_meta(
-        &meta,
-        &meta.firewall_for_test().expect("set above"),
+    let firewall = meta.firewall_for_test().expect("set above");
+    crate::security::firewall::collusion_live_rig::seed_meta(&meta, &firewall);
+    let seeded = meta.current_generation().expect("seeded above");
+    assert_eq!(
+        serde_json::to_value(&seeded.config().security.firewall).expect("serialises"),
+        serde_json::to_value(firewall.config_for_test()).expect("serialises"),
+        "premise: the seeded live config carries the fixture firewall's config"
     );
     meta
 }
