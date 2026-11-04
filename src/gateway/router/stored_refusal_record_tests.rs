@@ -92,3 +92,52 @@ async fn a_stored_read_refused_by_the_default_action_names_it() {
         json!({"kind": "tool_policy", "rule_id": expected.as_str()})
     );
 }
+
+/// The key, after the reload, reaches only another backend: `alpha` is out
+/// of its scope.
+fn key_out_of_scope(c: &mut Config) {
+    c.auth = std_key(None);
+    if let Some(key) = c.auth.api_keys.first_mut() {
+        key.backends = vec!["beta".to_string()];
+    }
+}
+
+/// The key, after the reload, may call only another tool.
+fn key_allows_another_tool(c: &mut Config) {
+    c.auth = std_key(None);
+    if let Some(key) = c.auth.api_keys.first_mut() {
+        key.allowed_tools = Some(vec!["other".to_string()]);
+    }
+}
+
+/// The one refused read's `refused_by`, for a refusal no configured rule
+/// decided: it carries a kind and no `rule_id`.
+fn kind_only(fx: &Logged, got: &Value) -> Value {
+    assert!(
+        got.get("error").is_some(),
+        "premise: the read after the reload is refused: {got}"
+    );
+    let reads = refused_reads(fx);
+    let [read] = reads.as_slice() else {
+        panic!("wanted one refused read: {reads:?}");
+    };
+    assert!(
+        read["refused_by"].get("rule_id").is_none(),
+        "no rule decided: {read}"
+    );
+    read["refused_by"].clone()
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn a_stored_read_out_of_the_keys_scope_names_the_scope() {
+    let fx = fixture(super::Answer::Ok, None).await;
+    let got = read_after_reload(&fx, "stored-scope", key_out_of_scope).await;
+    assert_eq!(kind_only(&fx, &got), json!({"kind": "backend_scope"}));
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn a_stored_read_outside_the_keys_tools_names_the_tool_scope() {
+    let fx = fixture(super::Answer::Ok, None).await;
+    let got = read_after_reload(&fx, "stored-tools", key_allows_another_tool).await;
+    assert_eq!(kind_only(&fx, &got), json!({"kind": "client_tool_scope"}));
+}
