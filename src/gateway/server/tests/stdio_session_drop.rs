@@ -7,12 +7,13 @@
 //! Observed from outside: the backend answers after the drop, and the store,
 //! reopened, shows whether a worker was still there to commit that answer.
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
-use super::owner2_stdio_tasks::{BACKEND, held_backend, modern_call, reopen};
+use super::owner2_stdio_tasks::{BACKEND, held_backend, modern_call, reopen_stdio_store};
 use crate::config::{BackendConfig, Config, TransportConfig};
 use crate::gateway::Gateway;
 use crate::gateway::meta_mcp::LOCAL_OPERATOR_PRINCIPAL;
@@ -23,7 +24,7 @@ use crate::gateway::meta_mcp::LOCAL_OPERATOR_PRINCIPAL;
 #[tokio::test]
 async fn a_dropped_stdio_session_stops_its_task_workers() {
     let (url, mut arrived, release) = held_backend().await;
-    let store = tempfile::tempdir().expect("store root");
+    let store = Arc::new(tempfile::tempdir().expect("store root"));
     let mut config = Config::default();
     config.tasks.store_dir = store.path().display().to_string();
     config.backends.insert(
@@ -94,8 +95,11 @@ async fn a_dropped_stdio_session_stops_its_task_workers() {
     // keeps the store. Polled for up to 5 s, so a slow runner only waits.
     let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
     let (service, _executor) = loop {
-        match reopen(&config).await {
-            Ok(opened) => break opened,
+        match reopen_stdio_store(&config).await {
+            Ok(opened) => {
+                opened.0.keep_test_dir(Arc::clone(&store));
+                break opened;
+            }
             Err(_) if tokio::time::Instant::now() < deadline => {
                 tokio::time::sleep(Duration::from_millis(50)).await;
             }
@@ -121,10 +125,11 @@ async fn a_dropped_stdio_session_stops_its_task_workers() {
 /// observed directly.
 #[tokio::test]
 async fn dropping_the_tasks_guard_seals_the_executor() {
-    let store = tempfile::tempdir().expect("store root");
+    let store = Arc::new(tempfile::tempdir().expect("store root"));
     let mut config = Config::default();
     config.tasks.store_dir = store.path().display().to_string();
-    let (service, executor) = reopen(&config).await.expect("the store opens");
+    let (service, executor) = reopen_stdio_store(&config).await.expect("the store opens");
+    service.keep_test_dir(Arc::clone(&store));
     let guard = super::super::stdio_tasks::TasksDropGuard::new(&executor, &service);
     assert!(!executor.is_sealed(), "precondition: serving");
     drop(guard);

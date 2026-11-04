@@ -160,6 +160,8 @@ impl EventsHub {
         let Some(mut intake) = self.runtime.intake.lock().take() else {
             return;
         };
+        #[cfg(test)]
+        self.store.assert_test_dir_kept("the events hub");
         // Before anything reads the store: the worker drops outbox records it
         // cannot place, and every handle derives from the key (MIK-8697 §13.6).
         self.store.bind_key(services.record_key());

@@ -68,6 +68,13 @@ fn request<'a>(key: &'a str, operation: &'a Value, representation: &'a Value) ->
     }
 }
 
+/// A fresh store root and the task directory under it.
+fn store_root() -> (Arc<tempfile::TempDir>, std::path::PathBuf) {
+    let root = Arc::new(tempfile::tempdir().expect("a store root"));
+    let dir = root.path().join("tasks");
+    (root, dir)
+}
+
 fn fresh_admission() -> Arc<ExecutionAdmission> {
     ExecutionAdmission::new(Arc::new(|| 1_000))
 }

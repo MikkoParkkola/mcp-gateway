@@ -86,6 +86,19 @@ pub struct TaskService {
 }
 
 impl TaskService {
+    /// Test-only: the store holds a share of its temporary directory until
+    /// its last handle drops (see [`TaskStore::keep_test_dir`]).
+    #[cfg(test)]
+    pub(crate) fn keep_test_dir(&self, dir: Arc<tempfile::TempDir>) {
+        self.store.keep_test_dir(dir);
+    }
+
+    /// Test-only: the gateway opened this service's store, not a test.
+    #[cfg(test)]
+    pub(crate) fn opened_by_gateway(&self) {
+        self.store.opened_by_gateway();
+    }
+
     /// Open the durable store and hand its committed ownership bindings to
     /// admission BEFORE serving anything.
     ///

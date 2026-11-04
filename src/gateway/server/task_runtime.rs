@@ -51,6 +51,9 @@ pub(super) async fn open(
         // Task settlement is an event source from the first transition on,
         // the rows recovery settles included (MIK-7840).
         |service, executor| {
+            // Before recovery, which may start workers on this store.
+            #[cfg(test)]
+            service.opened_by_gateway();
             if config.events.sources.task_settled
                 && let Some(hub) = meta_mcp.events()
             {
