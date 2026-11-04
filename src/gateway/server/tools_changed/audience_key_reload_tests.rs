@@ -354,3 +354,26 @@ async fn file_reload_a_key_that_lost_a_backend_neither_lists_nor_calls_it() {
         "after a file reload k-std still calls alpha: {after}"
     );
 }
+
+/// `subscriptions/listen` relays only what the gateway advertises: tool-list
+/// changes (and named tasks), never a backend's ordinary notification. The
+/// gateway advertises `resources: { subscribe: false, listChanged: false }`
+/// (`build_server_capabilities`), and its only listen publishers send
+/// `tools/list_changed` (`announce_tools_changed`,
+/// `announce_backend_view_changed`) and task notifications. A resource-list
+/// change published for a backend is not delivered, and the stream stays open.
+#[tokio::test]
+async fn listen_relays_no_ordinary_backend_notification() {
+    let w = World::start().await;
+    let mut listen = w.listen("k-std").await;
+    w.state.subscriptions.publish_for_backend(
+        serde_json::json!({"jsonrpc": "2.0", "method": "notifications/resources/list_changed"}),
+        "alpha",
+    );
+    let heard = listen.frames(&w).await;
+    assert!(
+        heard.is_empty(),
+        "listen relayed an unadvertised notification: {heard:?}"
+    );
+    assert!(listen.is_open(&w).await, "the stream stays open");
+}
