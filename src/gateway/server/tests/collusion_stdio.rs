@@ -96,16 +96,21 @@ impl crate::transport::Transport for Alpha {
 
 /// One stdio `gateway_invoke` of `alpha:{tool}`; the answer.
 async fn invoke(meta: &Arc<MetaMcp>, tool: &str, arguments: &Value) -> Value {
-    let policy = Arc::new(crate::security::ToolPolicy::default());
     let mtls = Arc::new(crate::mtls::MtlsPolicy::from_config(
         &crate::mtls::MtlsConfig::default(),
     ));
     let params = json!({"name": "gateway_invoke",
                         "arguments": {"server": "alpha", "tool": tool, "arguments": arguments}});
     let request = json!({"jsonrpc": "2.0", "id": 7, "method": "tools/call", "params": params});
-    super::super::Gateway::dispatch_single(meta, &policy, &mtls, &request, "stdio-m8")
-        .await
-        .expect("a request is answered")
+    super::super::Gateway::dispatch_single(
+        meta,
+        &crate::gateway::authz::default_line(meta),
+        &mtls,
+        &request,
+        "stdio-m8",
+    )
+    .await
+    .expect("a request is answered")
 }
 
 #[tokio::test]
@@ -255,7 +260,6 @@ async fn staged_request(
     crate::gateway::meta_mcp::invoke::relay::StagedReceipts,
 ) {
     use crate::gateway::server::{Gateway, StdioClient};
-    let policy = Arc::new(crate::security::ToolPolicy::default());
     let mtls = Arc::new(crate::mtls::MtlsPolicy::from_config(
         &crate::mtls::MtlsConfig::default(),
     ));
@@ -272,7 +276,7 @@ async fn staged_request(
         reads.guard(),
         Box::pin(Gateway::dispatch_single_staged(
             meta,
-            &policy,
+            &crate::gateway::authz::default_line(meta),
             &mtls,
             request.clone(),
             client,
@@ -344,7 +348,6 @@ async fn batch_read_delivers(
 ) -> bool {
     use crate::gateway::server::Gateway;
     *cell.lock() = text.to_string();
-    let policy = Arc::new(crate::security::ToolPolicy::default());
     let mtls = Arc::new(crate::mtls::MtlsPolicy::from_config(
         &crate::mtls::MtlsConfig::default(),
     ));
@@ -356,7 +359,7 @@ async fn batch_read_delivers(
     let batch = json!([rpc(1, "read", json!({}))]);
     let frames = Gateway::dispatch_batch_read(
         meta,
-        &policy,
+        &crate::gateway::authz::default_line(meta),
         &mtls,
         batch,
         (
@@ -407,7 +410,6 @@ async fn a_batch_item_sees_the_receipt_of_an_earlier_item() {
         "read",
         &text_result(PROSE),
     );
-    let policy = Arc::new(crate::security::ToolPolicy::default());
     let mtls = Arc::new(crate::mtls::MtlsPolicy::from_config(
         &crate::mtls::MtlsConfig::default(),
     ));
@@ -422,7 +424,7 @@ async fn a_batch_item_sees_the_receipt_of_an_earlier_item() {
     ]);
     let frames = Gateway::dispatch_batch_read(
         &meta,
-        &policy,
+        &crate::gateway::authz::default_line(&meta),
         &mtls,
         batch,
         (
@@ -632,7 +634,6 @@ async fn stdio_gateway_built_refusal_is_sent_as_written() {
     use crate::gateway::server::{Gateway, StdioClient};
     let (meta, _firewall, _cell) = judged_stdio(None);
     let reads = meta.stdio_reads();
-    let policy = Arc::new(crate::security::ToolPolicy::default());
     let mtls = Arc::new(crate::mtls::MtlsPolicy::from_config(
         &crate::mtls::MtlsConfig::default(),
     ));
@@ -649,7 +650,7 @@ async fn stdio_gateway_built_refusal_is_sent_as_written() {
         reads.guard(),
         Box::pin(Gateway::dispatch_single_staged(
             &meta,
-            &policy,
+            &crate::gateway::authz::default_line(&meta),
             &mtls,
             json!({"jsonrpc": "2.0", "id": 7}),
             client,

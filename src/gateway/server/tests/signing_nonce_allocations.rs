@@ -116,7 +116,7 @@ fn client() -> super::super::StdioClient<'static> {
 async fn dispatch(fixture: &Fixture, request: Value) -> Value {
     super::super::Gateway::dispatch_single_for_client(
         &fixture.meta,
-        &fixture.tool_policy,
+        &crate::gateway::authz::published_line(&fixture.meta),
         &fixture.mtls_policy,
         request,
         client(),
@@ -126,16 +126,21 @@ async fn dispatch(fixture: &Fixture, request: Value) -> Value {
 }
 
 /// What the serve loop holds before a request's task starts
-/// (`stdio_loop.rs`): the read judge, built once per loop, and the params it
-/// keeps only when it judges. Prepared before any meter opens.
-fn served_inputs(fixture: &Fixture, request: &Value) -> (StdioReads, Option<Value>) {
+/// (`stdio_loop.rs`): the read judge, built once per loop, the line's
+/// generation, pinned as the line is read, and the params the judge keeps
+/// only when it judges. Prepared before any meter opens.
+fn served_inputs(fixture: &Fixture, request: &Value) -> (Served, Option<Value>) {
     let reads = fixture.meta.stdio_reads();
     let params = reads
         .judges()
         .then(|| request.get("params").cloned())
         .flatten();
-    (reads, params)
+    let line = crate::gateway::authz::published_line(&fixture.meta);
+    ((reads, line), params)
 }
+
+/// The read judge and the line's generation.
+type Served = (StdioReads, std::sync::Arc<crate::config_reload::Generation>);
 
 /// The dispatch inside the serve loop's own box of it (`stdio_loop.rs`):
 /// `dispatch_single_staged` boxed whole, then its answer judged, recorded,
@@ -146,12 +151,12 @@ fn served_inputs(fixture: &Fixture, request: &Value) -> (StdioReads, Option<Valu
 /// allocation of theirs is outside these readings.
 async fn dispatch_as_served(
     fixture: &Fixture,
-    (reads, params): (&StdioReads, Option<&Value>),
+    ((reads, line), params): (&Served, Option<&Value>),
     request: Value,
 ) -> Value {
     let (answer, staged) = Box::pin(super::super::Gateway::dispatch_single_staged(
         &fixture.meta,
-        &fixture.tool_policy,
+        line,
         &fixture.mtls_policy,
         request,
         client(),
