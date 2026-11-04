@@ -136,6 +136,7 @@ pub(crate) async fn current_caller(
         client,
         identity,
         agent: agent.clone(),
+        #[cfg(feature = "webui")]
         generation: std::sync::Arc::clone(&generation),
     };
     let auth_config = generation.auth();
@@ -184,6 +185,8 @@ pub(crate) struct CurrentCaller {
     pub(crate) agent: Option<crate::gateway::oauth::ValidatedToken>,
     /// The generation the caller was judged by: a later judgement of the
     /// same delivery (its role mapping) reads this one, never the live config.
+    /// Only the UI live stream reads it.
+    #[cfg(feature = "webui")]
     pub(crate) generation: std::sync::Arc<crate::config_reload::Generation>,
 }
 
