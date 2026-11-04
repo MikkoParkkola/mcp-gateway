@@ -160,3 +160,45 @@ async fn a_rebound_result_is_refused_for_provenance() {
     );
     assert_eq!(refused_by, Some(json!({"kind": "provenance"})));
 }
+
+/// Two recorded targets: the first, Alice's granted capability, is admitted;
+/// the second, a capability no grant covers, is refused. The answer names
+/// the second target's check, the one that refused.
+#[tokio::test]
+async fn the_refusing_target_of_two_is_the_one_named() {
+    const UNGRANTED: &str = "calendar_write_day";
+    let dir = tempfile::tempdir().unwrap();
+    let (endpoint, meta) = alice_gateway(&dir).await;
+    let base_url = crate::test_fixture_host::fixture_url(endpoint.port);
+    let second = crate::capability::parse_capability(&format!(
+        "name: {UNGRANTED}\n\
+         description: Write one calendar day\n\
+         metadata:\n\
+         \x20 exposure: personal\n\
+         \x20 identity_owner:\n\
+         \x20   authority: {}\n\
+         \x20   subject: {}\n\
+         providers:\n\
+         \x20 primary:\n\
+         \x20   service: rest\n\
+         \x20   config:\n\
+         \x20     base_url: {base_url}\n\
+         \x20     path: /write\n\
+         \x20     method: POST\n",
+        ALICE.0, ALICE.1
+    ))
+    .expect("the second capability parses");
+    meta.caller_capabilities()
+        .expect("the fixture's capabilities")
+        .register_capability(second)
+        .expect("the second capability registers");
+    let mut stored = finished_task();
+    stored.targets.push(Target {
+        server: CAPS.to_owned(),
+        tool: UNGRANTED.to_owned(),
+    });
+    assert_eq!(
+        read(&meta, &stored).await,
+        (true, Some(json!({"kind": "grant"})))
+    );
+}
