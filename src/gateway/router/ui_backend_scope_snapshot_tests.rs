@@ -250,13 +250,15 @@ fn expected(who: Who) -> [String; 2] {
         );
         [cell.clone(), cell]
     };
+    // Every caller is in one group: an identity's, or the default a key-only
+    // caller is given.
     match who {
         Who::AdminKey | Who::UiAdminKey => {
-            unscoped(2, ALL_EVENTS, r#"true/"CONTROL_RBAC_ADMIN""#, 0)
+            unscoped(2, ALL_EVENTS, r#"true/"CONTROL_RBAC_ADMIN""#, 1)
         }
         Who::Auditor => unscoped(2, ALL_EVENTS, r#"true/"CONTROL_RBAC_AUDITOR_READ""#, 1),
         Who::Developer => unscoped(1, "grant-dev", r#"false/"CONTROL_RBAC_ACTION_DENIED""#, 1),
-        Who::ScopedKey | Who::ScopedAdminKey => scoped(1, 0),
+        Who::ScopedKey | Who::ScopedAdminKey => scoped(1, 1),
         Who::ScopedAuditor | Who::ScopedDeveloper | Who::ScopedRoleAdmin => scoped(1, 1),
         Who::EmptyAuditor | Who::EmptyRoleAdmin => scoped(0, 1),
     }
