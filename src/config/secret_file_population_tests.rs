@@ -138,12 +138,6 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
         "grant audit state: journal ids and grant digests; no secret",
     ),
     (
-        "src/config_reload/replace.rs",
-        "re-reads gateway.yaml under the config lock to check the caller's revision and stage the \
-         original; the target is the canonical path this gateway loaded at start, and every write \
-         back is owner-only",
-    ),
-    (
         "src/config_reload/replace_audit.rs",
         "reads gateway.yaml under the config lock only to hash it for a recovery intent's base \
          revision; the bytes are hashed, never kept or logged",

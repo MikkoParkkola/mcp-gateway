@@ -432,7 +432,7 @@ pub(crate) enum CheckedFile {
     IdentityGrants,
     /// A control-plane `grants.json` or `policies.json`.
     ControlPlaneCollection,
-    /// `gateway.yaml`, reread by a read-only report.
+    /// `gateway.yaml`, reread by a read-only report or by the config writer.
     Config,
 }
 

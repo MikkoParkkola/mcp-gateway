@@ -441,7 +441,10 @@ async fn a_config_others_can_write_is_refused_before_its_intent() {
     )
     .await;
 
-    assert!(result.is_err(), "the refused file was written: {result:?}");
+    assert!(
+        matches!(result, Err(ReplaceError::ConfigRefused(_))),
+        "{result:?}"
+    );
     assert!(recorder.kinds().is_empty(), "an intent was recorded");
     assert_eq!(read(&path), START, "the refused file was written");
     let mode = std::fs::metadata(&path).expect("stat").permissions().mode();

@@ -348,6 +348,11 @@ fn entries_settle_by_the_final_result() {
             err(ReplaceError::Unsupported(String::new())),
             Settle::Discard,
         ),
+        (err(ReplaceError::NoConfigFile), Settle::Discard),
+        (
+            err(ReplaceError::ConfigRefused(String::new())),
+            Settle::Discard,
+        ),
         (err(ReplaceError::Failed(String::new())), Settle::Abandon),
         (
             err(ReplaceError::RollbackFailed {

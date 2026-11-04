@@ -89,6 +89,16 @@ fn writer_outcomes() -> Vec<(
             error: CANARY.to_owned(),
         }),
         failed(ReplaceError::Failed(CANARY.to_owned())),
+        (
+            Err(ReplaceError::NoConfigFile),
+            StatusCode::CONFLICT,
+            "no_config_file",
+        ),
+        (
+            Err(ReplaceError::ConfigRefused(CANARY.to_owned())),
+            StatusCode::SERVICE_UNAVAILABLE,
+            "gateway.yaml could not be loaded",
+        ),
     ]
 }
 

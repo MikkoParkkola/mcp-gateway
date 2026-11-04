@@ -191,6 +191,12 @@ pub(crate) enum ReplaceError {
     Failed(String),
     /// The secret store refused the [`SecretStep`]; nothing was written.
     Secrets(SaveError<std::convert::Infallible>),
+    /// gateway.yaml does not exist; nothing was written.
+    NoConfigFile,
+    /// The read check every loader applies refused gateway.yaml (its type,
+    /// mode, owner or encoding); nothing was written. The text names the
+    /// file and the fix, for the log only.
+    ConfigRefused(String),
 }
 
 /// Write `replace` in a task of its own: dropping the caller (a request
@@ -292,6 +298,8 @@ pub(crate) fn settle_for(result: &Result<ReplaceOutcome, ReplaceError>) -> Settl
         | ReplaceError::Refused(_)
         | ReplaceError::Stage(_)
         | ReplaceError::Secrets(_)
+        | ReplaceError::NoConfigFile
+        | ReplaceError::ConfigRefused(_)
         // The rollback came back: a failed one is `RollbackFailed`.
         | ReplaceError::Unsupported(_)
         | ReplaceError::Write(_)
@@ -460,9 +468,16 @@ impl ReloadContext {
                 self.trusted_config.display()
             )));
         }
-        let current = std::fs::read(&target).map_err(|e| {
-            ReplaceError::Failed(format!("reading {} failed: {e}", target.display()))
-        })?;
+        // The read every loader uses, mode and owner judged on the handle read:
+        // a file another account can change is refused before any intent,
+        // entry or write, so its edit is never rewritten owner-only.
+        let current = crate::config::read_checked_file(&target, crate::config::CheckedFile::Config)
+            .map(String::into_bytes)
+            .map_err(|e| match e.kind() {
+                std::io::ErrorKind::NotFound => ReplaceError::NoConfigFile,
+                std::io::ErrorKind::PermissionDenied => ReplaceError::ConfigRefused(e.to_string()),
+                _ => ReplaceError::Failed(e.to_string()),
+            })?;
         if let Expected::Revision(seen) = &replace.expected {
             let now = FileRevision::of(&current);
             if &now != seen {
