@@ -667,7 +667,12 @@ pub struct ControlPlaneReadOnlyView {
     pub audit_events: Vec<ControlPlaneAuditEvent>,
 }
 
+#[cfg(all(test, feature = "webui"))]
+#[path = "failing_store_test_support.rs"]
+mod failing_store;
 #[cfg(test)]
 mod grant_change_store_tests;
+#[cfg(all(test, feature = "webui"))]
+pub(crate) use failing_store::FailingStore;
 #[cfg(test)]
 mod tests;

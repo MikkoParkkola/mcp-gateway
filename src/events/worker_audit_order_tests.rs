@@ -76,13 +76,14 @@ fn stored(dir: &std::path::Path, event_id: &str) -> crate::events::outbox::Outbo
 #[tokio::test]
 async fn an_audit_outage_does_not_use_up_the_attempts() {
     use std::sync::atomic::Ordering;
-    let dir = tempfile::tempdir().expect("dir");
+    let dir = Arc::new(tempfile::tempdir().expect("dir"));
     let config = crate::config::EventsConfig {
         callback_allow_private: vec!["127.0.0.0/8".into()],
         retry_max_attempts: 2,
         ..crate::config::EventsConfig::default()
     };
     let hub = EventsHub::open(&config, dir.path()).expect("hub");
+    hub.keep_test_dir(Arc::clone(&dir));
     let services = logged_services(dir.path());
     let log = services.audit.clone().expect("log");
     let (port, accepted) = counting_callback().await;
@@ -125,12 +126,13 @@ async fn an_audit_outage_does_not_use_up_the_attempts() {
 /// written before the eviction's (worker settle).
 #[tokio::test]
 async fn a_self_evicting_burial_is_receipted_before_its_eviction() {
-    let dir = tempfile::tempdir().expect("dir");
+    let dir = Arc::new(tempfile::tempdir().expect("dir"));
     let config = crate::config::EventsConfig {
         dead_letter_max_bytes: 1,
         ..crate::config::EventsConfig::default()
     };
     let hub = EventsHub::open(&config, dir.path()).expect("hub");
+    hub.keep_test_dir(Arc::clone(&dir));
     let services = logged_services(dir.path());
     queued(&hub, 9, "evt_self");
     let record = pending(&hub, "evt_self");
@@ -144,12 +146,13 @@ async fn a_self_evicting_burial_is_receipted_before_its_eviction() {
 async fn a_self_evicting_refusal_is_receipted_before_its_eviction() {
     use crate::events::fanout::{MAX_BODY, SourceEvent};
     use crate::events::types::{SourceKind, Visibility};
-    let dir = tempfile::tempdir().expect("dir");
+    let dir = Arc::new(tempfile::tempdir().expect("dir"));
     let config = crate::config::EventsConfig {
         dead_letter_max_bytes: 1,
         ..crate::config::EventsConfig::default()
     };
     let hub = EventsHub::open(&config, dir.path()).expect("hub");
+    hub.keep_test_dir(Arc::clone(&dir));
     let services = logged_services(dir.path());
     offer(&hub, &["webhook.c.r.received"]);
     queued(&hub, 9, "evt_seed");
@@ -215,12 +218,13 @@ fn buried_setup(
 /// burial's receipt still comes before its eviction.
 #[tokio::test]
 async fn an_eviction_by_another_burial_follows_the_first_burials_receipt() {
-    let dir = tempfile::tempdir().expect("dir");
+    let dir = Arc::new(tempfile::tempdir().expect("dir"));
     let config = crate::config::EventsConfig {
         dead_letter_max_records: 1,
         ..crate::config::EventsConfig::default()
     };
     let (hub, services, x) = buried_setup(dir.path(), &config);
+    hub.keep_test_dir(Arc::clone(&dir));
     queued_event(&hub, "evt_y");
     let y = stored(dir.path(), "evt_y");
     let (a, b) = (Arc::clone(&hub), Arc::clone(&hub));
@@ -240,12 +244,13 @@ async fn an_eviction_by_another_burial_follows_the_first_burials_receipt() {
 async fn an_eviction_by_a_fan_out_refusal_follows_the_burials_receipt() {
     use crate::events::fanout::{MAX_BODY, SourceEvent};
     use crate::events::types::{SourceKind, Visibility};
-    let dir = tempfile::tempdir().expect("dir");
+    let dir = Arc::new(tempfile::tempdir().expect("dir"));
     let config = crate::config::EventsConfig {
         dead_letter_max_records: 1,
         ..crate::config::EventsConfig::default()
     };
     let (hub, services, x) = buried_setup(dir.path(), &config);
+    hub.keep_test_dir(Arc::clone(&dir));
     offer(&hub, &["webhook.c.r.received"]);
     let event = SourceEvent {
         kind: SourceKind::Webhook,
@@ -274,12 +279,13 @@ async fn an_eviction_by_a_fan_out_refusal_follows_the_burials_receipt() {
 /// that burial's receipt.
 #[tokio::test]
 async fn an_eviction_by_the_sweep_follows_the_burials_receipt() {
-    let dir = tempfile::tempdir().expect("dir");
+    let dir = Arc::new(tempfile::tempdir().expect("dir"));
     let config = crate::config::EventsConfig {
         dead_letter_retention: Duration::from_secs(1),
         ..crate::config::EventsConfig::default()
     };
     let (hub, services, x) = buried_setup(dir.path(), &config);
+    hub.keep_test_dir(Arc::clone(&dir));
     let (a, b) = (Arc::clone(&hub), Arc::clone(&hub));
     let (sa, sb) = (Arc::clone(&services), Arc::clone(&services));
     raced(
@@ -300,12 +306,13 @@ async fn an_eviction_by_the_sweep_follows_the_burials_receipt() {
 /// can read, the same sweep evicts.
 #[tokio::test]
 async fn a_pre_1970_clock_sweeps_nothing() {
-    let dir = tempfile::tempdir().expect("dir");
+    let dir = Arc::new(tempfile::tempdir().expect("dir"));
     let config = crate::config::EventsConfig {
         dead_letter_retention: Duration::from_secs(1),
         ..crate::config::EventsConfig::default()
     };
     let (hub, services, x) = buried_setup(dir.path(), &config);
+    hub.keep_test_dir(Arc::clone(&dir));
     hub.settle(&services, &x, gone()).await;
     assert_eq!(hub.store.dead_summaries().len(), 1, "premise: buried");
     // Past the retention.
@@ -330,12 +337,13 @@ async fn a_pre_1970_clock_sweeps_nothing() {
 /// unsent claims is retried, not buried `exhausted`.
 #[tokio::test]
 async fn a_failure_after_unsent_claims_is_judged_by_its_sends() {
-    let dir = tempfile::tempdir().expect("dir");
+    let dir = Arc::new(tempfile::tempdir().expect("dir"));
     let config = crate::config::EventsConfig {
         retry_max_attempts: 2,
         ..crate::config::EventsConfig::default()
     };
     let hub = EventsHub::open(&config, dir.path()).expect("hub");
+    hub.keep_test_dir(Arc::clone(&dir));
     queued(&hub, 9, "evt_judged");
     let mut record = pending(&hub, "evt_judged");
     record.attempt = 3;
@@ -352,12 +360,13 @@ async fn a_failure_after_unsent_claims_is_judged_by_its_sends() {
 /// before its eviction, in the worker's own pass.
 #[tokio::test]
 async fn a_self_evicting_expiry_burial_is_receipted_before_its_eviction() {
-    let dir = tempfile::tempdir().expect("dir");
+    let dir = Arc::new(tempfile::tempdir().expect("dir"));
     let config = crate::config::EventsConfig {
         dead_letter_max_bytes: 1,
         ..crate::config::EventsConfig::default()
     };
     let hub = EventsHub::open(&config, dir.path()).expect("hub");
+    hub.keep_test_dir(Arc::clone(&dir));
     let services = Arc::new(logged_services(dir.path()));
     queued_with(&hub, 9, "evt_exp", "webhook.c.r.received", |_, record| {
         record.attempt = 1;
@@ -388,8 +397,9 @@ async fn a_self_evicting_expiry_burial_is_receipted_before_its_eviction() {
 /// occurrence at fan-out, even when the subscription is gone by then.
 #[tokio::test]
 async fn a_dead_letter_record_names_the_host_stamped_on_the_occurrence() {
-    let dir = tempfile::tempdir().expect("dir");
+    let dir = Arc::new(tempfile::tempdir().expect("dir"));
     let hub = EventsHub::open(&crate::config::EventsConfig::default(), dir.path()).expect("hub");
+    hub.keep_test_dir(Arc::clone(&dir));
     let services = logged_services(dir.path());
     queued(&hub, 9, "evt_hosted");
     let later = Utc::now() + crate::duration_bound::delta!(minutes, 5);

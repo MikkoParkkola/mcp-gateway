@@ -142,11 +142,26 @@ pub fn recover_before_start(config: &Path) -> Result<(), String> {
 /// Take the config lock for a CLI write, waiting up to [`CLI_LOCK_WAIT`].
 /// The holder reads and writes the lock's target, never `path` again: a
 /// symlink at `path` re-pointed meanwhile would name another file.
+///
+/// A pending journal (a gateway write that failed and could not roll back)
+/// is refused, not recovered: the CLI holds no audit sink, so its recovery
+/// would go unrecorded. Starting or reloading the gateway recovers it.
 fn cli_lock(path: &Path) -> Result<lock::Locked, String> {
-    lock::lock_config_blocking(path, Instant::now() + CLI_LOCK_WAIT, |lock| {
-        say_waiting(path, lock);
-    })
-    .map_err(|e| not_locked(path, e))
+    let locked =
+        lock::lock_config_blocking_deferred(path, Instant::now() + CLI_LOCK_WAIT, |lock| {
+            say_waiting(path, lock);
+        })
+        .map_err(|e| not_locked(path, e))?;
+    if locked.journal_pending {
+        return Err(format!(
+            "Not saved: {} has a write the gateway left pending ({}); start or reload the \
+             gateway, which recovers it (a reload on a gateway with an audit log records the \
+             recovery there), then run this command again.",
+            path.display(),
+            journal::journal_path(&locked.target).display()
+        ));
+    }
+    Ok(locked)
 }
 
 /// How long a synchronous writer (the CLI) waits for another writer's
@@ -339,7 +354,8 @@ where
     // Advisory only: a file that does not load is refused before the lock
     // file is made, so the refusal leaves the directory as it was. The load
     // under the lock is the authoritative one. Skipped while a replace journal
-    // is pending: the lock recovers the file before that load.
+    // is pending: the file may be a refused candidate, and `cli_lock` refuses
+    // the write without loading it.
     if !journal::exists(path) {
         load_existing_or_default(path)
             .map_err(|e| format!("Failed to load {}: {e}", path.display()))?;
@@ -570,6 +586,9 @@ pub fn write_config_text(path: &Path, yaml: &str) -> Result<(), String> {
     write_yaml(path, yaml)
 }
 
+#[cfg(test)]
+#[path = "config_persistence_cli_recovery_tests.rs"]
+mod cli_recovery_tests;
 #[cfg(test)]
 #[path = "config_persistence_tests.rs"]
 mod tests;

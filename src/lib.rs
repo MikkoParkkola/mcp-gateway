@@ -168,6 +168,8 @@ pub mod stats;
 #[cfg(all(test, feature = "cost-governance"))]
 pub(crate) mod test_day;
 #[cfg(test)]
+mod test_dir_keep;
+#[cfg(test)]
 pub(crate) mod test_fixture_host;
 #[cfg(test)]
 pub(crate) mod test_late_write;

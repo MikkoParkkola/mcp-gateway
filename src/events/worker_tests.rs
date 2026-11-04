@@ -139,7 +139,7 @@ fn an_attempt_past_its_bounds_is_overdue_before_it_is_sent() {
 #[tokio::test]
 async fn an_attempt_the_audit_log_refuses_is_not_sent() {
     use std::sync::atomic::Ordering;
-    let dir = tempfile::tempdir().expect("dir");
+    let dir = Arc::new(tempfile::tempdir().expect("dir"));
     let log = Arc::new(
         crate::security::TransparencyLogger::open(Arc::new(
             crate::security::TransparencyLogConfig {
@@ -159,6 +159,7 @@ async fn an_attempt_the_audit_log_refuses_is_not_sent() {
         ..crate::config::EventsConfig::default()
     };
     let hub = EventsHub::open(&config, dir.path()).expect("hub");
+    hub.keep_test_dir(Arc::clone(&dir));
     let services = Services {
         live: Arc::new(crate::config_reload::LiveConfig::new(
             crate::config::Config::default(),
@@ -217,7 +218,7 @@ async fn a_backend_type_no_source_offers_is_not_sent() {
         ("webhook.c.r.received", true),
         ("backend.b.resource_updated", false),
     ] {
-        let dir = tempfile::tempdir().expect("dir");
+        let dir = Arc::new(tempfile::tempdir().expect("dir"));
         let log = Arc::new(
             crate::security::TransparencyLogger::open(Arc::new(
                 crate::security::TransparencyLogConfig {
@@ -237,6 +238,7 @@ async fn a_backend_type_no_source_offers_is_not_sent() {
             ..crate::config::EventsConfig::default()
         };
         let hub = EventsHub::open(&config, dir.path()).expect("hub");
+        hub.keep_test_dir(Arc::clone(&dir));
         let services = Services {
             live: Arc::new(crate::config_reload::LiveConfig::new(
                 crate::config::Config::default(),
@@ -267,7 +269,7 @@ async fn a_backend_type_no_source_offers_is_not_sent() {
 /// log recovers.
 #[tokio::test]
 async fn an_overdue_ending_the_audit_log_refuses_is_retried_not_buried() {
-    let dir = tempfile::tempdir().expect("dir");
+    let dir = Arc::new(tempfile::tempdir().expect("dir"));
     let log = Arc::new(
         crate::security::TransparencyLogger::open(Arc::new(
             crate::security::TransparencyLogConfig {
@@ -288,6 +290,7 @@ async fn an_overdue_ending_the_audit_log_refuses_is_retried_not_buried() {
         ..crate::config::EventsConfig::default()
     };
     let hub = EventsHub::open(&config, dir.path()).expect("hub");
+    hub.keep_test_dir(Arc::clone(&dir));
     let services = Services {
         live: Arc::new(crate::config_reload::LiveConfig::new(
             crate::config::Config::default(),
@@ -346,13 +349,14 @@ async fn an_overdue_ending_the_audit_log_refuses_is_retried_not_buried() {
 async fn eligibility_lost_after_the_sending_record_is_not_sent_or_charged() {
     use std::sync::atomic::Ordering;
     for (admits, sent) in [(usize::MAX, true), (1, false)] {
-        let dir = tempfile::tempdir().expect("dir");
+        let dir = Arc::new(tempfile::tempdir().expect("dir"));
         let config = crate::config::EventsConfig {
             callback_allow_private: vec!["127.0.0.0/8".into()],
             cost_per_delivery_usd: 0.01,
             ..crate::config::EventsConfig::default()
         };
         let hub = EventsHub::open(&config, dir.path()).expect("hub");
+        hub.keep_test_dir(Arc::clone(&dir));
         let source = Arc::new(Flipping {
             admits,
             asked: std::sync::atomic::AtomicUsize::new(0),
@@ -404,13 +408,14 @@ async fn a_type_no_source_offers_any_more_is_not_sent_or_charged() {
     use crate::events::types::SourceKind;
     use std::sync::atomic::Ordering;
     for (withdrawn, sent) in [(false, true), (true, false)] {
-        let dir = tempfile::tempdir().expect("dir");
+        let dir = Arc::new(tempfile::tempdir().expect("dir"));
         let config = crate::config::EventsConfig {
             callback_allow_private: vec!["127.0.0.0/8".into()],
             cost_per_delivery_usd: 0.01,
             ..crate::config::EventsConfig::default()
         };
         let hub = EventsHub::open(&config, dir.path()).expect("hub");
+        hub.keep_test_dir(Arc::clone(&dir));
         hub.register_source(Arc::new(Offering {
             kind: SourceKind::GatewayOperational,
             names: vec!["probe.gone"],
@@ -479,6 +484,8 @@ mod clock;
 
 #[path = "worker_fixtures_tests.rs"]
 mod fixtures;
+#[path = "worker_settle_dir_tests.rs"]
+mod settle_dir_tests;
 
 #[path = "worker_obs_tests.rs"]
 mod obs;
