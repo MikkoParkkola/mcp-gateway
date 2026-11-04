@@ -179,3 +179,25 @@ async fn a_rotation_during_the_poll_withholds_its_terminal_answer() {
         _ => panic!("the terminal answer after a rotation was not withheld"),
     }
 }
+
+/// A task whose secret no longer matches is withheld before its poll:
+/// nothing is sent to the peer, so its log never meets the old value, and
+/// the answer is the withheld one.
+#[tokio::test]
+async fn a_mismatched_task_is_withheld_without_a_poll() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let (adapter, _needles, peer) = adapter(&dir, false);
+    let mut rotated = handle();
+    rotated.fingerprint =
+        Some(Dispatched::of("peer", &[("api".to_owned(), ROTATED.to_owned())]).stored());
+    let answer = adapter.query(&rotated, Duration::from_secs(5)).await;
+    assert!(
+        !peer.seen.lock().iter().any(|m| m == "tasks/get"),
+        "a mismatched task was polled: {:?}",
+        peer.seen.lock()
+    );
+    match answer {
+        UpstreamAnswer::Substituted(error) => assert_eq!(error.message, super::secrets::WITHHELD),
+        _ => panic!("a mismatched task was not withheld"),
+    }
+}
