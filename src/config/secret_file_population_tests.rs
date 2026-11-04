@@ -96,6 +96,10 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
         "version stamp, 3.x pattern notice and config backup (fs::copy keeps the mode)",
     ),
     (
+        "src/commands/upgrade_grant_rows.rs",
+        "the config, only for its identity-grants path; nothing else is kept or printed",
+    ),
+    (
         "src/commands/upgrade_webhook_notice.rs",
         "empty marker file",
     ),
