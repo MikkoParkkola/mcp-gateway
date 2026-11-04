@@ -46,8 +46,9 @@ impl MetaMcp {
     /// The generation published now: the answer side's P beside the request's
     /// pinned one, and the only one for a check no request is behind (task
     /// settlement, a poll, a requestless notification). `None` only before
-    /// startup sets the live config. Every reader is a firewall check.
-    #[cfg(feature = "firewall")]
+    /// startup sets the live config. Every production reader is a firewall
+    /// check; tests also read it to pin a stdio line (`authz::test_line`).
+    #[cfg(any(test, feature = "firewall"))]
     pub(crate) fn current_generation(&self) -> Option<Arc<crate::config_reload::Generation>> {
         self.live_config().map(|live| live.generation())
     }
