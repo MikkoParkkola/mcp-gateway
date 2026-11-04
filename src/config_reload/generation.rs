@@ -194,7 +194,9 @@ impl Generation {
 /// Judged on the RUNNING settings (`enabled`, `single_user`, the bearer,
 /// OIDC) with the new keys: the file's restart-only settings apply only at
 /// a restart.
-fn refuse_multi_user_flip(
+/// Shared with the web UI's key create, which runs it on its candidate
+/// under the config lock so a flip is its own typed refusal; never copied.
+pub(crate) fn refuse_multi_user_flip(
     running: &Config,
     wanted: &crate::config::AuthConfig,
 ) -> Result<(), String> {
