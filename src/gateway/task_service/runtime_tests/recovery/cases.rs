@@ -357,10 +357,6 @@ async fn a_task_settled_during_recovery_is_published() {
 /// it; only a NEW key is refused while the seal holds, and the running expiry
 /// sweep lifts the seal once the file is gone.
 #[tokio::test]
-#[allow(
-    clippy::too_many_lines,
-    reason = "one scenario read top to bottom; the store keeps its folder in one more line"
-)]
 async fn recovery_beside_a_sealed_row_settles_and_keeps_keys() {
     let root = Arc::new(tempfile::tempdir().unwrap());
     let dir = root.path().join("tasks");
@@ -384,7 +380,6 @@ async fn recovery_beside_a_sealed_row_settles_and_keeps_keys() {
         text.replacen("\"dispatched\":", "\"dispatched\":@", 1),
     )
     .unwrap();
-
     let operation = operation();
     let representation = representation();
     let admission = fresh_admission();
