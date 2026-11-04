@@ -252,6 +252,8 @@ impl BudgetEnforcer {
             taken_at,
             self.day_basis_at(taken_at),
         );
+        #[cfg(test)]
+        super::fire(&super::BETWEEN_SAVE_CAPTURES);
         save.tool_owned = self.tool_attribution.owned_names();
         save.key_owned = self.key_attribution.owned_names();
         save.tool_born = in_usd(self.tool_attribution.born_on(today));
