@@ -157,3 +157,71 @@ fn role_mapping_reload_revokes_admin_without_restart() {
         "a removed admin rule must stop granting Admin after reload"
     );
 }
+
+/// A key whose `backends` names some backends, for the scope rows below.
+fn client_on(admin: bool, backends: &[&str]) -> AuthenticatedClient {
+    AuthenticatedClient {
+        backends: backends.iter().map(|b| (*b).to_string()).collect(),
+        ..client(admin)
+    }
+}
+
+/// The control-plane actor's role follows the backend scope: Admin needs an
+/// admin whose scope is every backend. A scoped admin, by its key or by its
+/// identity's mapping, is capped at Auditor (read breadth inside its scope).
+/// An unscoped identity on a non-admin key, the `[]` admin key and the
+/// auth-off caller keep their roles.
+#[test]
+fn a_backend_scoped_admin_is_no_control_plane_admin() {
+    let mapping = ControlPlaneRoleMappingConfig {
+        rules: vec![ControlPlaneRoleRule {
+            issuer: "https://idp".to_string(),
+            group: Some("ops".to_string()),
+            email: None,
+            domain: None,
+            role: ControlPlaneRole::Admin,
+        }],
+    };
+    let admin_identity = identity("https://idp", &["ops"]);
+    let role = |client: Option<&AuthenticatedClient>, id: Option<&VerifiedIdentity>| {
+        actor_from_client(client, id, &mapping).role
+    };
+    let cells = [
+        (
+            "admin key, *",
+            role(Some(&client_on(true, &["*"])), None),
+            ControlPlaneRole::Admin,
+        ),
+        (
+            "admin key, []",
+            role(Some(&client_on(true, &[])), None),
+            ControlPlaneRole::Admin,
+        ),
+        (
+            "admin identity, unscoped non-admin key",
+            role(Some(&client_on(false, &["*"])), Some(&admin_identity)),
+            ControlPlaneRole::Admin,
+        ),
+        (
+            "admin identity, no client",
+            role(None, Some(&admin_identity)),
+            ControlPlaneRole::Admin,
+        ),
+        (
+            "admin key, [alpha]",
+            role(Some(&client_on(true, &["alpha"])), None),
+            ControlPlaneRole::Auditor,
+        ),
+        (
+            "admin identity, key [alpha]",
+            role(Some(&client_on(false, &["alpha"])), Some(&admin_identity)),
+            ControlPlaneRole::Auditor,
+        ),
+    ];
+    let wrong: Vec<String> = cells
+        .iter()
+        .filter(|(_, got, want)| got != want)
+        .map(|(who, got, want)| format!("{who}: got {got:?}, want {want:?}"))
+        .collect();
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
