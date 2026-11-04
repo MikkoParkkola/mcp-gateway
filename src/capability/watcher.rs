@@ -195,6 +195,9 @@ struct LoggedOnce {
     stale_armed: bool,
     /// The walk-bounds skip warning.
     bounds_skip: bool,
+    /// The warning that a pending reload is waiting for the startup scan;
+    /// cleared when that reload starts, so each held reload warns once.
+    held_for_scan: bool,
 }
 
 /// Wait for a real shutdown on a broadcast channel that may also lag or lose
@@ -481,6 +484,26 @@ impl CapabilityWatcher {
             && state.in_flight.is_none()
             && state.last_event.is_some_and(|at| at.elapsed() >= debounce)
         {
+            // Never beside the startup scan: its pin-mismatch check would
+            // run against this reload and could unload bytes it restores.
+            // The reload stays pending and starts on the first tick after
+            // the scan completes; this is the only way into every
+            // `spawn_reload` below (the walk paths start only from here).
+            if !backend.initial_scan_complete() {
+                if !state.logged.held_for_scan
+                    && state
+                        .last_event
+                        .is_some_and(|at| at.elapsed() >= reload_slow)
+                {
+                    state.logged.held_for_scan = true;
+                    warn!(
+                        backend = %backend.name,
+                        "capability reload waits for the startup capability scan"
+                    );
+                }
+                return;
+            }
+            state.logged.held_for_scan = false;
             if !stale_enabled {
                 let (handle, active) = Self::spawn_reload(Arc::clone(backend), changes.cloned());
                 state.in_flight = Some((handle, active, None));
@@ -530,6 +553,10 @@ impl CapabilityWatcher {
             state.fingerprint_state.stalled_warned = false;
             if state.fingerprint_state.awaiting_before {
                 state.fingerprint_state.awaiting_before = false;
+                debug_assert!(
+                    backend.initial_scan_complete(),
+                    "a reload never starts beside the startup scan"
+                );
                 let (handle, active) = Self::spawn_reload(Arc::clone(backend), changes.cloned());
                 state.in_flight = Some((handle, active, found));
                 state.pending_reload = false;
@@ -546,6 +573,10 @@ impl CapabilityWatcher {
                     walk.abort();
                 }
                 state.fingerprint_state.stalled_warned = false;
+                debug_assert!(
+                    backend.initial_scan_complete(),
+                    "a reload never starts beside the startup scan"
+                );
                 let (handle, active) = Self::spawn_reload(Arc::clone(backend), changes.cloned());
                 state.in_flight = Some((handle, active, None));
                 state.pending_reload = false;

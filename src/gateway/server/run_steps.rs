@@ -83,6 +83,13 @@ impl Gateway {
             });
 
             let scan = async move {
+                // Completes the scan however it ends: a scan that panics or is
+                // dropped would otherwise leave readiness waiting and, with the
+                // watcher held until the scan completes, file edits unloaded.
+                let _ends = ScanEnds {
+                    backend: Arc::clone(&cap_backend_for_load),
+                    registry: Arc::clone(&registry_for_load),
+                };
                 if !accounts_configured {
                     // Let the HTTP listener bind before large capability scans start.
                     CapabilityBackend::settle_before_initial_scan().await;
@@ -108,7 +115,21 @@ impl Gateway {
                             debug!(directory = %dir, error = %e, "Failed to load capabilities");
                         }
                     }
+                    #[cfg(test)]
+                    assert!(
+                        !cap_backend_for_load
+                            .scan_panics_after_first_dir
+                            .load(std::sync::atomic::Ordering::Acquire),
+                        "test: the startup scan panics after its first directory"
+                    );
                 }
+
+                // A file whose pin stopped matching while the gateway was down
+                // was skipped by the load without a record: record it now, as
+                // the file watcher records one that changes while it runs.
+                // Before readiness and before webhook routes are registered, so
+                // nothing it unloads keeps a route.
+                cap_backend_for_load.detect_rug_pulls().await;
 
                 if webhooks_enabled {
                     for cap in cap_backend_for_load.list_capabilities() {
@@ -301,6 +322,22 @@ impl Gateway {
             .filter(|name| self.backends.get(name).is_some())
             .cloned()
             .collect()
+    }
+}
+
+/// Completes the startup capability scan when it ends without completing
+/// itself (a panic, or the scan dropped), marking it partial.
+struct ScanEnds {
+    backend: Arc<CapabilityBackend>,
+    registry: Arc<crate::backend::BackendRegistry>,
+}
+
+impl Drop for ScanEnds {
+    fn drop(&mut self) {
+        if !self.backend.initial_scan_complete() {
+            self.backend.mark_initial_scan_failed();
+            self.backend.finish_initial_scan(&self.registry);
+        }
     }
 }
 

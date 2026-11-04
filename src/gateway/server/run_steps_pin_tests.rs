@@ -11,7 +11,6 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-
 use super::super::Gateway;
 use crate::capability::{compute_capability_hash, rewrite_with_pin};
 use crate::config::Config;
@@ -191,6 +190,54 @@ async fn a_scan_with_a_failed_directory_still_lets_a_later_edit_reload() {
         "premise: a directory failed to load"
     );
     std::fs::write(good.path().join("a.yaml"), yaml("v2-much-longer")).expect("VOID: write v2");
+    let description = || {
+        backend
+            .list_capabilities()
+            .into_iter()
+            .find(|cap| cap.name == "a")
+            .map(|cap| cap.description)
+    };
+    eventually("the edit reloads", || {
+        description().as_deref() == Some("v2-much-longer")
+    })
+    .await;
+}
+
+/// A startup scan that panics part way is still completed, marked partial,
+/// by its exit guard, so a later edit reloads and readiness does not wait
+/// forever. The flag is set as `start_capability_watcher` returns, well
+/// inside the scan's 250 ms settle before it reads the first directory.
+/// Mutant: the exit guard removed: the scan never completes, no reload.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_startup_scan_that_panics_is_completed_and_a_later_edit_reloads() {
+    let first = tempfile::tempdir().expect("VOID: a temp dir");
+    let second = tempfile::tempdir().expect("VOID: a temp dir");
+    let yaml = |desc: &str| {
+        format!(
+            "name: a\ndescription: {desc}\nproviders:\n  primary:\n    service: rest\n    config:\n      base_url: https://api.invalid\n      path: /k\n"
+        )
+    };
+    std::fs::write(first.path().join("a.yaml"), yaml("v1")).expect("VOID: write v1");
+    let (meta, _shutdown) = {
+        let (meta, shutdown) = http_startup(&[first.path(), second.path()]).await;
+        meta.capabilities
+            .read()
+            .clone()
+            .expect("VOID: installed")
+            .scan_panics_after_first_dir
+            .store(true, std::sync::atomic::Ordering::Release);
+        (meta, shutdown)
+    };
+    let backend = meta.capabilities.read().clone().expect("VOID: installed");
+    eventually("the panicked scan is completed", || {
+        backend.initial_scan_complete()
+    })
+    .await;
+    assert!(
+        !backend.initial_scan_loaded_every_directory(),
+        "a scan that did not finish is marked partial"
+    );
+    std::fs::write(first.path().join("a.yaml"), yaml("v2-much-longer")).expect("VOID: write v2");
     let description = || {
         backend
             .list_capabilities()
