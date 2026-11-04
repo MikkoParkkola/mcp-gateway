@@ -350,7 +350,7 @@ mod tests {
                 code: -32010,
                 origin: Origin::Backend,
             });
-            delivery_facts::withheld_codeed(-32603);
+            delivery_facts::gateway_folded(-32603);
             delivery_facts::refused(());
         })
         .await;
