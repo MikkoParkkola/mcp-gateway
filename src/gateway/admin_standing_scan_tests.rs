@@ -328,3 +328,38 @@ fn the_scan_finds_a_new_raw_admin_read() {
         Some(&1)
     );
 }
+
+/// The two reads a field-access needle cannot see: a struct pattern that
+/// binds the flag (with or without a new name, or ignoring it) and a direct
+/// `CallerStanding::Admin`. Struct update syntax is a write and is not found.
+#[test]
+fn the_scan_finds_a_destructured_read_and_a_direct_admin_standing() {
+    let cells = [
+        ("let AuthenticatedClient { admin, .. } = client;", 1),
+        (
+            "let AuthenticatedClient { name, admin: flag, .. } = client;",
+            1,
+        ),
+        ("match c { Self { admin: _, .. } => {} }", 1),
+        ("AuthenticatedClient { admin: true, ..base }", 0),
+    ];
+    for (text, want) in cells {
+        let files = vec![("src/new.rs".to_owned(), text.to_owned())];
+        assert_eq!(
+            found_in(&files)
+                .get(&("{ admin, .. }", "src/new.rs".to_owned()))
+                .copied()
+                .unwrap_or(0),
+            want,
+            "{text}"
+        );
+    }
+    let files = vec![(
+        "src/new.rs".to_owned(),
+        "let s = CallerStanding::Admin;".to_owned(),
+    )];
+    assert_eq!(
+        found_in(&files).get(&("CallerStanding::Admin", "src/new.rs".to_owned())),
+        Some(&1)
+    );
+}
