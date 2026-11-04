@@ -457,22 +457,39 @@ impl MetaMcp {
         scope: InvokeScope<'_>,
         emit: Emit,
     ) -> Result<()> {
-        let verdict = self
-            .grant_evaluation(server, tool, scope)
+        // Noted only when audited: a silent evaluation is a listing's, and a
+        // listing inside a call must not name another target's check.
+        self.identity_grant_rule_explained(server, tool, scope, emit)
+            .map_err(|refusal| {
+                if emit == Emit::Audit {
+                    crate::gateway::meta_mcp::invoke::audit::noted(refusal)
+                } else {
+                    refusal.0
+                }
+            })
+    }
+
+    /// [`Self::identity_grant_rule`], with the refusing check's pair and no
+    /// note (MIK-9191).
+    pub(super) fn identity_grant_rule_explained(
+        &self,
+        server: &str,
+        tool: &str,
+        scope: InvokeScope<'_>,
+        emit: Emit,
+    ) -> crate::security::decision_record::Explained {
+        self.grant_evaluation(server, tool, scope)
             .and_then(|evaluation| {
                 evaluation.map_or(Ok(()), |verdict| {
                     self.settle_grant(server, tool, scope, &verdict, emit)
                 })
-            });
-        // Noted only when audited: a silent evaluation is a listing's, and a
-        // listing inside a call must not name another target's check.
-        if emit == Emit::Audit && verdict.is_err() {
-            crate::gateway::meta_mcp::invoke::audit::note_refused_by(
-                crate::security::decision_record::DecisionKind::Grant,
-                None,
-            );
-        }
-        verdict
+            })
+            .map_err(|e| {
+                (
+                    e,
+                    (crate::security::decision_record::DecisionKind::Grant, None),
+                )
+            })
     }
 
     /// One evaluation of the identity grants for `(server, tool)`: `None`

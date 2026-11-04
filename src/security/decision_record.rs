@@ -149,6 +149,10 @@ impl Refused {
 /// A refusing check and the configured rule that made it, when one did.
 pub(crate) type Refusal = (DecisionKind, Option<crate::security::rule_id::RuleId>);
 
+/// A check's outcome with the refusing check's pair (MIK-9191): its plain
+/// form notes the pair; a stored read records it.
+pub(crate) type Explained = std::result::Result<(), (crate::Error, Refusal)>;
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct Noted(Option<Box<NotedChecks>>);
 

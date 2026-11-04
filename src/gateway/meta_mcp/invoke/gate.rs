@@ -142,8 +142,26 @@ impl MetaMcp {
         session: Option<&str>,
         caller: &MetaMcpCallerContext<'_>,
     ) -> Result<()> {
-        self.check_invocation_policy(arguments, session, caller)
-            .map_err(|refusal| self.as_undefined_capability(arguments, caller, refusal))
+        self.check_visible_policy_explained(arguments, session, caller)
+            .map_err(super::audit::noted)
+    }
+
+    /// [`Self::check_visible_policy`], with the refusing check's pair and no
+    /// note (MIK-9191). The undefined twin's answer maps only the error: the
+    /// pair is the refusing check's.
+    pub(crate) fn check_visible_policy_explained(
+        &self,
+        arguments: &Value,
+        session: Option<&str>,
+        caller: &MetaMcpCallerContext<'_>,
+    ) -> crate::security::decision_record::Explained {
+        self.check_invocation_policy_explained(arguments, session, caller)
+            .map_err(|(refusal, pair)| {
+                (
+                    self.as_undefined_capability(arguments, caller, refusal),
+                    pair,
+                )
+            })
     }
 
     /// The policy's refusal of a capability the caller may not reach (admin

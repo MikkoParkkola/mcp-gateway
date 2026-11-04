@@ -18,6 +18,16 @@ pub(crate) fn note_refused_by(
     note_decision(|noted| noted.refused(kind, rule_id));
 }
 
+/// A check's explained refusal, noted as its plain form notes it: the error
+/// handed on, its pair noted (MIK-9191). Each plain check is its explained
+/// form mapped through this, so the two cannot note different pairs.
+pub(crate) fn noted(
+    (error, (kind, rule_id)): (crate::Error, crate::security::decision_record::Refusal),
+) -> crate::Error {
+    note_refused_by(kind, rule_id);
+    error
+}
+
 /// A managed account's answer to an upstream 401, noted when it turns the
 /// call into an account refusal (a reconnect): the caller's identity standing
 /// (MIK-8914.API2A.13), which no kind names yet. The upstream's own rejection,
