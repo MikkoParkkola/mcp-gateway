@@ -77,6 +77,24 @@ fn call(log: &TransparencyLogger, server: &str, n: usize) {
     .expect("the call is logged");
 }
 
+/// A real governance change, one `kind_of` delivers to a full admin: the
+/// config event every config row is checked against.
+fn config_change(state: &AppState) {
+    state
+        .governance_log
+        .as_ref()
+        .unwrap()
+        .append_event(
+            serde_json::json!({"kind": "control_plane_audit", "actor_id": "alice",
+                               "target_id": "backend:alpha", "action": "mutate_grant"})
+            .as_object()
+            .cloned()
+            .unwrap(),
+            &crate::security::audit::AuditEnvelope::gateway(),
+        )
+        .unwrap();
+}
+
 #[tokio::test]
 async fn s1a_an_admin_activity_stream_gets_a_call_made_after_it_opened() {
     let (state, _dirs, inv) = logged(true).await;
@@ -134,24 +152,18 @@ async fn s3_a_scoped_admin_gets_activity_and_never_config() {
         hello.json()["kinds"],
         serde_json::json!(["status", "reload", "activity"])
     );
-    state
-        .governance_log
-        .as_ref()
-        .unwrap()
-        .append_event(
-            serde_json::json!({"kind": "config", "change": 1})
-                .as_object()
-                .cloned()
-                .unwrap(),
-            &crate::security::audit::AuditEnvelope::gateway(),
-        )
-        .unwrap();
+    tokio::time::pause();
+    config_change(&state);
     call(&inv, "a", 1);
+    // Read on to the next keep-alive, past the call's activity row: a config
+    // row comes from its own log, so it could arrive after that row.
+    let mut activity = 0;
     within(async {
         loop {
             let f = s.next().await.expect("the stream is still open");
             assert_ne!(f.event, "config", "a scoped key never gets a config row");
-            if f.event == "activity" {
+            activity += usize::from(f.event == "activity");
+            if f.event == "comment" && activity > 0 {
                 break;
             }
         }
@@ -316,19 +328,7 @@ async fn f7_a_config_change_is_a_config_event_and_never_an_activity_one() {
     let (state, _dirs, inv) = logged(true).await;
     let mut s = open(&state, request(STREAM, Who::Bearer(BEARER), None)).await;
     within(s.until("hello")).await;
-    state
-        .governance_log
-        .as_ref()
-        .unwrap()
-        .append_event(
-            serde_json::json!({"kind": "control_plane_audit", "actor_id": "alice",
-                               "target_id": "backend:alpha", "action": "mutate_grant"})
-            .as_object()
-            .cloned()
-            .unwrap(),
-            &crate::security::audit::AuditEnvelope::gateway(),
-        )
-        .unwrap();
+    config_change(&state);
     call(&inv, "srv", 1);
     let (mut config, mut activity) = (Vec::new(), Vec::new());
     within(async {
@@ -399,5 +399,92 @@ async fn c1_a_catch_up_still_ends_at_its_lifetime_between_pages() {
     assert!(
         caught_up < 2 * 200,
         "the lifetime ends the stream at a page boundary, not after the whole catch-up: {caught_up} of {behind} rows sent"
+    );
+}
+
+/// The tool names of the next `n` activity rows.
+async fn tools(s: &mut Open, n: usize) -> Vec<String> {
+    let mut out = Vec::with_capacity(n);
+    while out.len() < n {
+        let f = within(s.until("activity")).await;
+        let tool = f.json()["tool"].as_str().map(str::to_string);
+        out.push(tool.unwrap_or_else(|| panic!("an activity row names its tool: {}", f.data)));
+    }
+    out
+}
+
+#[tokio::test]
+async fn s3b_a_scoped_admin_gets_only_its_backends_rows_live_and_on_resume() {
+    let (state, _dirs, inv) = logged(true).await;
+    let mut s = open(&state, request(STREAM, Who::Bearer(SCOPED_ADMIN), None)).await;
+    within(s.until("hello")).await;
+    call(&inv, "x", 1);
+    call(&inv, "a", 2);
+    let first = within(s.until("activity")).await;
+    assert!(
+        first.data.contains("tool_2") && !first.data.contains("tool_1"),
+        "live: the call on a backend outside the key is never sent: {}",
+        first.data
+    );
+    drop(s);
+    let id = first.id.expect("an id");
+    for (server, n) in [("x", 3), ("b", 4), ("x", 5), ("a", 6)] {
+        call(&inv, server, n);
+    }
+    let mut again = open(
+        &state,
+        request(STREAM, Who::Bearer(SCOPED_ADMIN), Some(&id)),
+    )
+    .await;
+    within(again.until("hello")).await;
+    call(&inv, "x", 7);
+    call(&inv, "a", 8);
+    assert_eq!(
+        tools(&mut again, 3).await,
+        ["tool_4", "tool_6", "tool_8"],
+        "catch-up and live: only the key's backends, in order"
+    );
+}
+
+fn gov_counter(f: &Frame) -> u64 {
+    f.part('g')
+        .and_then(|p| p.split('-').next()?.parse().ok())
+        .expect("the id carries the governance position")
+}
+
+#[tokio::test]
+async fn s1c_config_a_reconnect_resumes_its_config_rows_with_no_gap_and_no_repeat() {
+    let (state, _dirs, _inv) = logged(true).await;
+    let mut s = open(&state, request(STREAM, Who::Bearer(BEARER), None)).await;
+    within(s.until("hello")).await;
+    config_change(&state);
+    let seen = within(s.until("config")).await;
+    drop(s);
+    let before = gov_counter(&seen);
+    config_change(&state);
+    config_change(&state);
+    let id = seen.id.expect("a config frame carries an id");
+    let mut again = open(&state, request(STREAM, Who::Bearer(BEARER), Some(&id))).await;
+    within(again.until("hello")).await;
+    let next = gov_counter(&within(again.until("config")).await);
+    let last = gov_counter(&within(again.until("config")).await);
+    assert_eq!(
+        (next, last),
+        (before + 1, before + 2),
+        "the second and third changes, once each"
+    );
+}
+
+#[tokio::test]
+async fn s1f_a_fresh_stream_starts_at_the_head_not_the_oldest_record() {
+    let (state, _dirs, inv) = logged(true).await;
+    call(&inv, "srv", 1);
+    let mut s = open(&state, request(STREAM, Who::Bearer(BEARER), None)).await;
+    within(s.until("hello")).await;
+    call(&inv, "srv", 2);
+    assert_eq!(
+        tools(&mut s, 1).await,
+        ["tool_2"],
+        "a call written before the stream opened is not replayed"
     );
 }

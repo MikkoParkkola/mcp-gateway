@@ -77,10 +77,10 @@ src/gateway/server/build_meta.rs	build_meta_mcp	Error::Config (as value)	1	no-re
 src/gateway/server/build_meta.rs	build_meta_mcp	Error::Config(..)	1	no-record	start-up: the gateway refuses to start, no call exists
 src/gateway/server/build_meta.rs	build_meta_mcp	Error::Config(..)	2	no-record	start-up: the gateway refuses to start, no call exists
 src/gateway/server/construct.rs	new_evaluated_inner	Error::Config(..)	1	no-record	start-up: the gateway refuses to start, no call exists
-src/gateway/server/control_plane_store.rs	build_control_plane_store	Error::Config(..)	1	no-record	start-up: the gateway refuses to start, no call exists
-src/gateway/server/control_plane_store.rs	build_control_plane_store	Error::Config(..)	2	no-record	start-up: the gateway refuses to start, no call exists
-src/gateway/server/control_plane_store.rs	build_control_plane_store	Error::Config(..)	3	no-record	start-up: the gateway refuses to start, no call exists
-src/gateway/server/control_plane_store.rs	build_control_plane_store	Error::Config(..)	4	no-record	start-up: the gateway refuses to start, no call exists
+src/gateway/server/control_plane_store.rs	build_control_plane_store_with_log	Error::Config(..)	1	no-record	start-up: the gateway refuses to start, no call exists
+src/gateway/server/control_plane_store.rs	build_control_plane_store_with_log	Error::Config(..)	2	no-record	start-up: the gateway refuses to start, no call exists
+src/gateway/server/control_plane_store.rs	build_control_plane_store_with_log	Error::Config(..)	3	no-record	start-up: the gateway refuses to start, no call exists
+src/gateway/server/control_plane_store.rs	build_control_plane_store_with_log	Error::Config(..)	4	no-record	start-up: the gateway refuses to start, no call exists
 src/gateway/server/identity_grants.rs	load_configured_identity_grants	Error::Config(..)	1	no-record	start-up: the gateway refuses to start, no call exists
 src/gateway/server/identity_grants.rs	start_identity_grant_audit	Error::Config(..)	1	no-record	start-up: the gateway refuses to start, no call exists
 src/gateway/server/run.rs	run	Error::Config(..)	1	no-record	start-up: the gateway refuses to start, no call exists

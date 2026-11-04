@@ -77,6 +77,7 @@ async fn fixture_with(
 /// [`test_router_app_state_with_auth_and_key_server`] writing to these
 /// transparency loggers, with the live stream's readers attached to them as
 /// server start attaches them.
+#[cfg(feature = "webui")]
 pub(in crate::gateway::router) async fn test_router_app_state_with_logs(
     auth: &AuthConfig,
     transparency_log: Option<Arc<crate::security::TransparencyLogger>>,
