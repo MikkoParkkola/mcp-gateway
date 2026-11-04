@@ -133,6 +133,7 @@ impl Subscribers {
     /// Take the active file's current end as this writer's baseline when a
     /// reader subscribes. After a rotation or a rebuild the call's own write
     /// records the new segment's end, so no other baseline is needed.
+    #[cfg(feature = "webui")]
     fn rebaseline(&self, inner: &Inner) {
         if let Ok(meta) = inner.file.metadata() {
             self.record_end(inner.seg.id, meta.len());
