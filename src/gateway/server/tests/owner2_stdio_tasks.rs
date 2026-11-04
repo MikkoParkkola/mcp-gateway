@@ -299,7 +299,7 @@ pub(super) fn modern_call(id: u64, tool: &str, key: &str, task: bool) -> Value {
 pub(crate) async fn dispatch(fixture: &Fixture, request: Value) -> Value {
     Gateway::dispatch_single_for_client(
         &fixture.meta,
-        &fixture.policy,
+        &crate::gateway::authz::published_line(&fixture.meta),
         &fixture.mtls,
         request,
         super::super::StdioClient {

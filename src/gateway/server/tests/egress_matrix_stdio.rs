@@ -157,7 +157,6 @@ async fn cell(setup: Setup, method: &'static str, part: Part, text: String) -> S
 /// notification scope the stdio server opens: every frame the client was
 /// written, notifications first, as one text.
 async fn send(meta: &Arc<MetaMcp>, method: &'static str, part: Part) -> String {
-    let policy = Arc::new(crate::security::ToolPolicy::default());
     let mtls = Arc::new(crate::mtls::MtlsPolicy::from_config(
         &crate::mtls::MtlsConfig::default(),
     ));
@@ -172,7 +171,7 @@ async fn send(meta: &Arc<MetaMcp>, method: &'static str, part: Part) -> String {
     let (answer, _) = Box::pin(super::super::Gateway::dispatch_streaming_notifications(
         Box::pin(super::super::Gateway::dispatch_single(
             meta,
-            &policy,
+            &crate::gateway::authz::default_line(meta),
             &mtls,
             &request,
             "stdio-egress",

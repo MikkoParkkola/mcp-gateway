@@ -138,13 +138,18 @@ pub(super) fn keyed_request(id: i64, name: &str, arguments: &Value) -> Value {
 }
 
 pub(super) async fn dispatch(meta: &Arc<MetaMcp>, request: &Value) -> Value {
-    let policy = Arc::new(crate::security::ToolPolicy::default());
     let mtls = Arc::new(crate::mtls::MtlsPolicy::from_config(
         &crate::mtls::MtlsConfig::default(),
     ));
-    super::super::Gateway::dispatch_single(meta, &policy, &mtls, request, "stdio-replay")
-        .await
-        .expect("a request is answered")
+    super::super::Gateway::dispatch_single(
+        meta,
+        &crate::gateway::authz::default_line(meta),
+        &mtls,
+        request,
+        "stdio-replay",
+    )
+    .await
+    .expect("a request is answered")
 }
 
 /// The shared row: deliver, lapse (P1), repeat (P2: nothing dispatched), then

@@ -551,10 +551,9 @@ impl<A: ToolAuthorizer> ToolAuthorizer for CountingAuthorizer<A> {
 ///
 /// This replaces the inline check that ran for `gateway_invoke` alone, so a
 /// stdio playbook or code-mode step is now covered where it was not.
-/// What a stdio line is judged with: in production its generation, taken as
-/// the line is read (ADR-029, amended, item 5). A test may hand a bare tool
-/// policy instead, judged under no generation; that impl exists only in tests,
-/// so production cannot pass a startup policy.
+/// What a stdio line is judged with: its generation, taken as the line is
+/// read (ADR-029, amended, item 5). Tests pass a real generation too
+/// (`test_line`), so no line is judged under an invented config.
 pub(crate) trait StdioLine: Sync {
     /// The tool policy that decides the line's calls.
     fn tool_policy(&self) -> &crate::security::ToolPolicy;
@@ -575,21 +574,6 @@ impl StdioLine for std::sync::Arc<crate::config_reload::Generation> {
     }
     fn pinned(&self) -> std::sync::Arc<crate::config_reload::Generation> {
         std::sync::Arc::clone(self)
-    }
-}
-
-#[cfg(test)]
-impl StdioLine for std::sync::Arc<crate::security::ToolPolicy> {
-    fn tool_policy(&self) -> &crate::security::ToolPolicy {
-        self
-    }
-    fn generation(&self) -> Option<&crate::config_reload::Generation> {
-        None
-    }
-    /// A test's bare policy carries no config: its catalogue reads are
-    /// judged under the default one.
-    fn pinned(&self) -> std::sync::Arc<crate::config_reload::Generation> {
-        crate::config_reload::LiveConfig::new(crate::config::Config::default()).generation()
     }
 }
 

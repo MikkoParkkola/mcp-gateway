@@ -114,7 +114,6 @@ impl Stdio {
 
     /// One stdio request; returns the answer and the inspections it cost.
     async fn send(&self, method: &str, params: Value) -> (Value, usize) {
-        let policy = Arc::new(crate::security::ToolPolicy::default());
         let mtls = Arc::new(crate::mtls::MtlsPolicy::from_config(
             &crate::mtls::MtlsConfig::default(),
         ));
@@ -122,7 +121,7 @@ impl Stdio {
         let request = json!({ "jsonrpc": "2.0", "id": 7, "method": method, "params": params });
         let body = super::super::Gateway::dispatch_single(
             &self.meta,
-            &policy,
+            &crate::gateway::authz::default_line(&self.meta),
             &mtls,
             &request,
             "stdio-7407",

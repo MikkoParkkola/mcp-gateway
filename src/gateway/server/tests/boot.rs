@@ -182,7 +182,7 @@ async fn build_meta_mcp_applies_context_integrity_team_shared_preset() {
     let built = gateway.build_meta_mcp_published().await.unwrap();
     let response = Gateway::dispatch_single(
         &built.meta_mcp,
-        &built.tool_policy,
+        &crate::gateway::authz::published_line(&built.meta_mcp),
         &built.mtls_policy,
         &json!({
             "jsonrpc": "2.0",

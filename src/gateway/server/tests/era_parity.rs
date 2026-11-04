@@ -20,7 +20,7 @@ const REMOVED: [&str; 4] = [
 pub(super) async fn send(modern: bool, request: Value) -> Option<Value> {
     Gateway::dispatch_single_for_client(
         &test_meta_mcp(),
-        &test_tool_policy(),
+        &crate::gateway::authz::default_line(&test_meta_mcp()),
         &test_mtls_policy(),
         request,
         super::super::StdioClient {

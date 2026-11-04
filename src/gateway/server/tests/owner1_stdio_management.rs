@@ -18,7 +18,6 @@ use crate::gateway::Gateway;
 use crate::gateway::meta_mcp::MetaMcp;
 use crate::mtls::MtlsPolicy;
 use crate::routing_profile::RoutingProfileConfig;
-use crate::security::ToolPolicy;
 
 const SESSION: &str = super::super::STDIO_SESSION_ID;
 /// The one routing profile the management gateway configures.
@@ -27,11 +26,11 @@ const PROFILE: &str = "focus";
 /// The production stdio entry point.
 async fn dispatch(
     meta: &Arc<MetaMcp>,
-    policy: &Arc<ToolPolicy>,
+    line: &Arc<crate::config_reload::Generation>,
     mtls: &Arc<MtlsPolicy>,
     request: &Value,
 ) -> Value {
-    Gateway::dispatch_single(meta, policy, mtls, request, SESSION)
+    Gateway::dispatch_single(meta, line, mtls, request, SESSION)
         .await
         .expect("a request carrying an id must produce a response")
 }
@@ -93,7 +92,7 @@ async fn keyless_modern_write_executes() {
     for id in ["k1", "k2"] {
         let response = Gateway::dispatch_single(
             &fixture.meta,
-            &fixture.tool_policy,
+            &crate::gateway::authz::published_line(&fixture.meta),
             &fixture.mtls_policy,
             &invoke(id, None, json!({})),
             SESSION,
@@ -112,7 +111,7 @@ async fn legacy_unkeyed_repeat_executes_twice() {
     for id in ["l1", "l2"] {
         let response = Gateway::dispatch_single(
             &fixture.meta,
-            &fixture.tool_policy,
+            &crate::gateway::authz::published_line(&fixture.meta),
             &fixture.mtls_policy,
             &legacy(invoke(id, None, json!({"note": "same"}))),
             SESSION,
@@ -131,7 +130,6 @@ async fn legacy_unkeyed_repeat_executes_twice() {
 /// installs those; `build_meta_mcp` does not).
 struct Managed {
     meta: Arc<MetaMcp>,
-    policy: Arc<ToolPolicy>,
     mtls: Arc<MtlsPolicy>,
     _data_dir: tempfile::TempDir,
 }
@@ -165,7 +163,6 @@ async fn managed() -> Managed {
         .expect("the production builder accepts this configuration");
     Managed {
         meta: built.meta_mcp,
-        policy: built.tool_policy,
         mtls: built.mtls_policy,
         _data_dir: data_dir,
     }
@@ -173,7 +170,8 @@ async fn managed() -> Managed {
 
 impl Managed {
     async fn send(&self, request: &Value) -> Value {
-        dispatch(&self.meta, &self.policy, &self.mtls, request).await
+        let line = crate::gateway::authz::published_line(&self.meta);
+        dispatch(&self.meta, &line, &self.mtls, request).await
     }
 }
 
