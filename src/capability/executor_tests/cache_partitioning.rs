@@ -66,7 +66,7 @@ providers:
 }
 
 fn alice() -> CapabilityExecutionContext {
-    CapabilityExecutionContext::with_caller_identity(GrantSubject::new(
+    CapabilityExecutionContext::with_caller_identity(GrantSubject::for_test(
         "cloudflare_access",
         "alice",
         None,
@@ -74,7 +74,7 @@ fn alice() -> CapabilityExecutionContext {
 }
 
 fn bob() -> CapabilityExecutionContext {
-    CapabilityExecutionContext::with_caller_identity(GrantSubject::new(
+    CapabilityExecutionContext::with_caller_identity(GrantSubject::for_test(
         "cloudflare_access",
         "bob",
         None,

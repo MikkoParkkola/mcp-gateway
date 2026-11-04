@@ -19,7 +19,7 @@ fn still_authorized_grants() -> crate::identity_grants::LocalIdentityGrantStore 
     use crate::identity_grants::{
         GrantAgent, GrantScope, GrantSubject, IdentityGrant, LocalIdentityGrantStore,
     };
-    let subject = GrantSubject::new("test-authority", "user-still-allowed", None);
+    let subject = GrantSubject::for_test("test-authority", "user-still-allowed", None);
     LocalIdentityGrantStore::from_grants([IdentityGrant {
         grant_id: "grant-still-authorized".to_string(),
         subject,
@@ -333,7 +333,7 @@ async fn authz_cache_4_two_grant_subjects_do_not_share_an_outer_entry() {
         Duration::from_secs(300),
     );
     let subject = |name: &'static str| {
-        Some(crate::identity_grants::GrantSubject::new(
+        Some(crate::identity_grants::GrantSubject::for_test(
             "cloudflare_access",
             name,
             None,

@@ -10,6 +10,11 @@ pub(in crate::gateway::ui) mod access;
 mod csv;
 mod cursor;
 mod export;
+#[allow(
+    dead_code,
+    reason = "the stream's Activity source is wired to it in a later change"
+)]
+pub(in crate::gateway::ui) mod forward;
 mod reader;
 mod receipt;
 /// The decision set's startup read of one record kind.

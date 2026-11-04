@@ -17,7 +17,7 @@ fn fixture(name: &str) -> PathBuf {
 }
 
 fn alice() -> GrantSubject {
-    GrantSubject::new("api_key", "alice", None)
+    GrantSubject::for_test("api_key", "alice", None)
 }
 
 fn proven(id: &str, proof: ProofSource) -> OwnedProvenAgentId {

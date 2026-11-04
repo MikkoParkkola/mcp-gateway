@@ -95,7 +95,7 @@ fn grant(
     (authority, subject): (&str, &str),
     agent: GrantAgent,
 ) -> LocalIdentityGrantStore {
-    let owner = GrantSubject::new(authority.to_string(), subject, None);
+    let owner = GrantSubject::for_test(authority.to_string(), subject, None);
     LocalIdentityGrantStore::from_grants([IdentityGrant {
         grant_id: format!("g-{name}"),
         subject: owner.clone(),

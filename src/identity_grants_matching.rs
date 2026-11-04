@@ -4,7 +4,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::{GrantAgent, GrantScope, GrantSubject};
+use super::{GrantAgent, GrantScope};
 use crate::capability::CapabilityDefinition;
 use crate::security::{OwnedProvenAgentId, ProofSource};
 
@@ -164,9 +164,11 @@ impl Tree {
         }
     }
 
-    /// Why the file still fails its typed parse with the bare rows removed,
-    /// so a refusal naming them does not hide a second defect behind them.
-    /// Parsed from a value, so it carries no line or column.
+    /// Why the file still fails its typed parse once the bare bindings are set
+    /// aside, so a refusal naming them does not hide a second defect behind
+    /// them. The rows stay (their agent read as `any`), so a row naming no one
+    /// is still seen to share its id with a bare row. Parsed from a value, so
+    /// it carries no line or column.
     fn remainder_error(self) -> Option<String> {
         match self {
             Self::Json(mut file) => {
@@ -174,10 +176,12 @@ impl Tree {
                     .get_mut("grants")
                     .and_then(serde_json::Value::as_array_mut)
                 {
-                    rows.retain(|row| {
-                        !row.pointer("/agent/exact")
+                    for row in rows.iter_mut().filter(|row| {
+                        row.pointer("/agent/exact")
                             .is_some_and(serde_json::Value::is_string)
-                    });
+                    }) {
+                        row["agent"] = serde_json::Value::from("any");
+                    }
                 }
                 serde_json::from_value::<super::IdentityGrantFile>(file)
                     .err()
@@ -188,7 +192,11 @@ impl Tree {
                     .get_mut("grants")
                     .and_then(crate::yaml::Value::as_sequence_mut)
                 {
-                    rows.retain(|row| bare_yaml_id(row).is_none());
+                    for row in rows.iter_mut().filter(|row| bare_yaml_id(row).is_some()) {
+                        if let Some(agent) = row.get_mut("agent") {
+                            *agent = crate::yaml::Value::from("any");
+                        }
+                    }
                 }
                 crate::yaml::from_value::<super::IdentityGrantFile>(file)
                     .err()
@@ -218,27 +226,6 @@ fn bare_yaml_id(row: &crate::yaml::Value) -> Option<&str> {
         crate::yaml::Value::Tagged(tagged) if tagged.tag == "exact" => tagged.value.as_str(),
         agent @ crate::yaml::Value::Mapping(_) => agent.get("exact")?.as_str(),
         _ => None,
-    }
-}
-
-// Identity is `(authority, subject)`. The label is whatever each side had to
-// hand — an API key's name at runtime, a person's name in a grant file — so
-// comparing it made correctly written grants deny. Every owner and grant
-// comparison routes through this impl, which is why it lives on the type.
-impl PartialEq for GrantSubject {
-    fn eq(&self, other: &Self) -> bool {
-        self.authority == other.authority && self.subject == other.subject
-    }
-}
-
-impl Eq for GrantSubject {}
-
-// Must hash exactly what `eq` compares, or a set or map keyed by subject
-// would hold one identity twice.
-impl std::hash::Hash for GrantSubject {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.authority.hash(state);
-        self.subject.hash(state);
     }
 }
 

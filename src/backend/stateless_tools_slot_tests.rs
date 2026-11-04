@@ -210,7 +210,7 @@ fn minted(subject: &str) -> Vec<(String, String)> {
 
 /// The grant subject a revocation names, on a fixed test issuer.
 fn subject(name: &str) -> crate::identity_grants::GrantSubject {
-    crate::identity_grants::GrantSubject::new("https://issuer.example.invalid", name, None)
+    crate::identity_grants::GrantSubject::for_test("https://issuer.example.invalid", name, None)
 }
 
 /// The prefix `config_reload` hands `evict_identity_slots` for `name`: what
