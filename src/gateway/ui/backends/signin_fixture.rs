@@ -93,7 +93,7 @@ fn oauth_block() -> OAuthConfig {
 
 /// Whether the gateway has an audit log configured.
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum Audit {
+enum AuditLog {
     On,
     Off,
 }
@@ -114,7 +114,7 @@ impl Gw {
     /// As [`Gw::over`], with the callback server on `callback_host`.
     pub(super) async fn over_on(issuer: String, forms: Forms, callback_host: &str) -> Self {
         let store = tempfile::tempdir().expect("token store");
-        Self::build(issuer, forms, callback_host, store, Audit::On).await
+        Self::build(issuer, forms, callback_host, store, AuditLog::On).await
     }
 
     /// A gateway process started again over the same issuer and token store:
@@ -123,7 +123,7 @@ impl Gw {
     pub(super) async fn restarted(self) -> Self {
         let (issuer, forms) = (self.issuer.clone(), Arc::clone(&self.forms));
         let Self { store, .. } = self;
-        Self::build(issuer, forms, "127.0.0.1", store, Audit::On).await
+        Self::build(issuer, forms, "127.0.0.1", store, AuditLog::On).await
     }
 
     /// As [`Gw::new`], on a gateway with no audit log configured: the admin
@@ -131,7 +131,7 @@ impl Gw {
     pub(super) async fn new_without_audit_log() -> Self {
         let (issuer, forms) = token_endpoint(Some("access-a")).await;
         let store = tempfile::tempdir().expect("token store");
-        Self::build(issuer, forms, "127.0.0.1", store, Audit::Off).await
+        Self::build(issuer, forms, "127.0.0.1", store, AuditLog::Off).await
     }
 
     async fn build(
@@ -139,7 +139,7 @@ impl Gw {
         forms: Forms,
         callback_host: &str,
         store: tempfile::TempDir,
-        audit: Audit,
+        audit: AuditLog,
     ) -> Self {
         let auth = AuthConfig {
             enabled: true,
@@ -163,7 +163,7 @@ impl Gw {
             ))
             .expect("open log"),
         );
-        if audit == Audit::On {
+        if audit == AuditLog::On {
             Arc::get_mut(&mut state)
                 .expect("state is unique")
                 .transparency_log = Some(Arc::clone(&log));
