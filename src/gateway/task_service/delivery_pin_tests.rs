@@ -240,7 +240,7 @@ const OUTCOME_CALLS: &[(&str, &str, usize)] = &[
     (
         "src/gateway/task_service/store_input.rs",
         "input_requests",
-        1,
+        2,
     ),
     ("src/gateway/task_service/store_input.rs", "snapshot", 2),
     ("src/gateway/task_service/store_targets.rs", "result", 1),
