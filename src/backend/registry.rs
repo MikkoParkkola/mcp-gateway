@@ -675,6 +675,12 @@ impl BackendRegistry {
         // Trees handed over gracefully before this stop (an idle close, a
         // restart) are cut to `deadline` by the reaper; wait for their kills.
         self.stop_deadline.wait_handed(deadline).await;
+        // The stop is over: from now on a handover (an idle release racing
+        // this return) is killed on its first step, which runs on the
+        // handing-over thread, so nothing is left in its waits behind the
+        // parent. Then once more for any that slipped in before this moment.
+        self.stop_deadline.move_earlier(std::time::Instant::now());
+        self.stop_deadline.wait_handed(deadline).await;
     }
 
     /// Stop all backends, concurrently.

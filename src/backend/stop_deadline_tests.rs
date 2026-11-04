@@ -169,9 +169,8 @@ async fn a_handover_after_the_gateway_stop_returns_is_killed_at_once() {
     let pid = leader_pid(dir.path());
     let _reap = KillGroupOnDrop(pid);
     // Nothing registered: the stop returns at once, its deadline far off.
-    registry
-        .stop_all_by(tokio::time::Instant::now() + Duration::from_secs(60))
-        .await;
+    let far = tokio::time::Instant::now() + Duration::from_secs(60);
+    registry.stop_all_by(far).await;
     child.hand_over_now(Duration::from_secs(120));
     let by = std::time::Instant::now() + Duration::from_secs(5);
     while kernel_view(pid) == Some(false) {

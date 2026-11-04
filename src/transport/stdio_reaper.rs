@@ -37,7 +37,7 @@ pub(crate) const KILL_RESERVE: Duration = Duration::from_secs(REAP_DEADLINE.as_s
 const DEFAULT_STOP_BUDGET: Duration = Duration::from_secs(10);
 
 /// A wait shorter than this is skipped rather than sent for nothing.
-const MIN_PHASE: Duration = Duration::from_millis(100);
+pub(super) const MIN_PHASE: Duration = Duration::from_millis(100);
 
 tokio::task_local! {
     /// The deadline by which the caller's stop must be over, waits included.

@@ -301,7 +301,8 @@ async fn cut_close(t: &Arc<StdioTransport>, cut_in: Duration) -> Pid {
         super::super::reaper::within_stop_deadline(own_plan_end, closing.close()).await
     });
     poll_until("the tree is handed over", || t.child.lock().tree.is_none()).await;
-    deadline.move_earlier(std::time::Instant::now() + super::super::reaper::KILL_RESERVE + cut_in);
+    let cut = std::time::Instant::now() + super::super::reaper::KILL_RESERVE + cut_in;
+    deadline.move_earlier(cut);
     pid
 }
 

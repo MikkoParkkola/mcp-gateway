@@ -314,8 +314,19 @@ impl ChildTree {
         let mut grace = grace;
         if let Some(cut) = self.stop_deadline.as_ref().and_then(|d| d.get()) {
             let cut = cut.checked_sub(super::reaper::KILL_RESERVE).unwrap_or(now);
-            grace.kill_at = grace.kill_at.min(cut);
-            grace.term_at = grace.term_at.min(grace.kill_at);
+            if cut < grace.kill_at {
+                // What is left is split as the plan was: its last third after
+                // SIGTERM, so a cut stop still sends SIGTERM before the kill,
+                // unless that third is under the minimum phase.
+                grace.kill_at = cut;
+                let term = cut.saturating_duration_since(now) / 3;
+                let term_at = if term < super::reaper::MIN_PHASE {
+                    cut
+                } else {
+                    cut.checked_sub(term).unwrap_or(now)
+                };
+                grace.term_at = grace.term_at.min(term_at);
+            }
         }
         if self.exited() {
             return false;
