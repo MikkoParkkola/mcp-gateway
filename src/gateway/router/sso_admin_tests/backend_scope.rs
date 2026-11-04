@@ -329,7 +329,15 @@ async fn every_admin_meta_tool_refuses_a_backend_scoped_admin() {
                         "io.modelcontextprotocol/clientInfo": { "name": "scope", "version": "1.0.0" }
                     });
                 }
-                let (status, body) = send(&gw.state, rpc(&bearer, "tools/call", &params)).await;
+                let mut request = rpc(&bearer, "tools/call", &params);
+                if task {
+                    // The modern transport's headers, matching the body's.
+                    let headers = request.headers_mut();
+                    headers.insert("mcp-protocol-version", "2026-07-28".parse().unwrap());
+                    headers.insert("mcp-method", "tools/call".parse().unwrap());
+                    headers.insert("mcp-name", tool.parse().unwrap());
+                }
+                let (status, body) = send(&gw.state, request).await;
                 let refused = status == StatusCode::FORBIDDEN
                     && body["error"]["code"] == -32600
                     && body["error"]["message"]
