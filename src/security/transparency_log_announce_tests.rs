@@ -421,13 +421,14 @@ fn h2_a_cut_after_a_rebuild_whose_write_failed_raises_it() {
     std::fs::remove_file(&path).unwrap();
     log.arm_write_fault(Some(WriteFault::WriteError));
     assert!(log.log_invocation("s", "c", "srv", "t", "a", "b").is_err());
-    let raised = told.lock().unwrap().last().map_or(0, |t| t.2);
-    append(&log, 3);
+    // No write after the failed one: the cut comes before any write could
+    // record the rebuilt file's end, so only the rebuild's own baseline sees it.
     cut_in_half(&path);
-    append(&log, 4);
+    append(&log, 3);
     let told = told.lock().unwrap();
-    assert!(
-        told.last().unwrap().2 > raised,
-        "the cut of the rebuilt file raised the generation: {told:?}"
+    assert_eq!(
+        told.last().unwrap().2,
+        2,
+        "one rise for the replaced tail, one for the cut: {told:?}"
     );
 }
