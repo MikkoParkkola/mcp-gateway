@@ -208,7 +208,8 @@ async fn t4b_a_held_stdio_line_read_under_off_still_sends() {
 
 /// T4c: as T4a on the stdio catalogue: a `prompts/get` line carrying the read
 /// text, read under `block`, `off` published while it is held: still refused
-/// with -32002, and the backend is not asked for the prompt.
+/// with -32002, and the backend is not asked for the prompt. A catalogue line
+/// read after the reload follows the published `off`: dispatched once.
 #[tokio::test]
 async fn t4c_a_held_stdio_catalogue_line_read_under_block_still_refuses() {
     let dir = tempfile::tempdir().expect("a private folder");
@@ -216,7 +217,18 @@ async fn t4c_a_held_stdio_catalogue_line_read_under_block_still_refuses() {
     write_action(&path, "block");
     let (mut s, sends) = session(dir.path(), &path).await;
     let read = json!({"name": "alpha/summary", "arguments": {"text": PROSE}});
-    let answer = held_across(&mut s, &path, "off", ("prompts/get", read)).await;
+    let answer = held_across(&mut s, &path, "off", ("prompts/get", read.clone())).await;
     assert_relay_refused(&answer, "T4c");
     assert_eq!(sends.load(Ordering::SeqCst), 0, "the backend was asked");
+    let line = s.send("prompts/get", read).await;
+    let fresh = s.answer(line).await;
+    assert!(
+        fresh.get("error").is_none(),
+        "T4c: a fresh catalogue line under off refused: {fresh}"
+    );
+    assert_eq!(
+        sends.load(Ordering::SeqCst),
+        1,
+        "the fresh catalogue line was not dispatched exactly once"
+    );
 }
