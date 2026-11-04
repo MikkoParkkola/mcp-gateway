@@ -127,8 +127,7 @@ async fn stack_with(edit: impl FnOnce(&mut Value)) -> Stack {
     let inner_path = inner_config(inner.path(), &backend.url);
     let mut config = outer_config(&inner_path, inner.path());
     edit(&mut config);
-    let mut gateway = HttpGateway::start(config).await;
-    gateway.owning(inner);
+    let gateway = HttpGateway::start_owning(config, &[], vec![inner]).await;
     Stack { backend, gateway }
 }
 
@@ -574,8 +573,7 @@ async fn listed_private_backend_tool_call_is_served() {
         if listed {
             config["security"]["hardened"] = json!({"private_backends": [BACKEND]});
         }
-        let mut gateway = HttpGateway::start(config).await;
-        gateway.owning(home);
+        let gateway = HttpGateway::start_owning(config, &[], vec![home]).await;
         let stack = Stack { gateway, backend };
         let nonce = if listed {
             "listed-call"

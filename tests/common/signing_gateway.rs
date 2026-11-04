@@ -187,6 +187,17 @@ impl HttpGateway {
     /// Run the production CLI with explicit child-local fixture environment.
     /// Overrides follow `env_clear`; they never change the test runner's process.
     pub async fn start_with_env(config: Value, env: &[(&str, &std::ffi::OsStr)]) -> Self {
+        Self::start_owning(config, env, Vec::new()).await
+    }
+
+    /// [`Self::start_with_env`], handing `owned` (a stdio backend's home, say)
+    /// to the gateway before it is waited on, so a start that fails still
+    /// keeps every folder the gateway or its backends may write into.
+    pub async fn start_owning(
+        config: Value,
+        env: &[(&str, &std::ffi::OsStr)],
+        owned: Vec<TempDir>,
+    ) -> Self {
         // Every child gets its own task store (relative to its cwd): HOME cannot
         // isolate it on Windows, and the runner's shared store is single-owner.
         let mut config = config;
@@ -216,6 +227,9 @@ impl HttpGateway {
                 .expect("spawn real HTTP gateway"),
         );
         let directory = process.owning(directory).to_path_buf();
+        for folder in owned {
+            process.owning(folder);
+        }
         let mut gateway = Self {
             process,
             directory,
@@ -289,15 +303,14 @@ impl HttpGateway {
         std::fs::read_to_string(self.directory.join("gateway.log")).unwrap_or_default()
     }
 
-    /// Hands `folder` (a stdio backend's home, say) to the gateway, so it is
-    /// removed only after the gateway, and what it started, stopped.
-    pub fn owning(&mut self, folder: TempDir) -> std::path::PathBuf {
-        self.process.owning(folder).to_path_buf()
-    }
-
     /// Ends the gateway with a drain; its folders go only after it exited.
     pub async fn stop(self) {
-        self.process.stop().await;
+        let logs = self.logs();
+        let status = self.process.stop().await;
+        assert!(
+            status.success(),
+            "the gateway did not drain cleanly on its stop ({status}): {logs}"
+        );
     }
 
     pub async fn initialize(&self) -> String {
