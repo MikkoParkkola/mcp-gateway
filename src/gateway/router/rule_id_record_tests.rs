@@ -199,8 +199,15 @@ async fn response_block(route: Route) {
     for (pinned, current) in cases {
         let got = super::call_as(&fx, (route, injected()), pinned, current).await;
         let case = (route, current.is_some());
+        // The invocation record holds the request's decision, which allowed
+        // (the shell rule only warned); the response refusal is its own
+        // delivery record, so a response verdict leaking into the decision
+        // would change the kind as well as the rule.
         assert!(
-            got.refused && got.calls == 1 && got.kind == "firewall",
+            got.refused
+                && got.calls == 1
+                && got.kind == "default_allow"
+                && got.message == json!("Response blocked by security firewall"),
             "{case:?}: premise, the sent request's answer is blocked: {got:?}"
         );
         assert!(got.rule.is_null(), "{case:?}: {got:?}");
