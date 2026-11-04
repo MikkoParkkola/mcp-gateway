@@ -201,12 +201,6 @@ pub(in crate::gateway::ui) async fn stream_read<T: Send + 'static>(
     .map_err(|_| std::io::Error::other("the activity read did not finish"))?
 }
 
-/// Reads holding the gate now (test builds): the live stream's rows count it.
-#[cfg(test)]
-pub(in crate::gateway::ui) fn reads_in_flight() -> usize {
-    MAX_CONCURRENT_READS - READS.available_permits()
-}
-
 async fn list(
     State(state): State<Arc<AppState>>,
     Extension(generation): Extension<Arc<Generation>>,

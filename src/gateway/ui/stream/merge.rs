@@ -275,6 +275,7 @@ impl<S: LogSource> LogMerge<S> {
     }
 
     /// Whether the slow-consumer rule has closed this view.
+    #[cfg(test)]
     pub(super) fn is_too_slow(&self) -> bool {
         self.too_slow
     }
@@ -287,6 +288,7 @@ impl<S: LogSource> LogMerge<S> {
     }
 
     /// `Lagged` recoveries so far.
+    #[cfg(test)]
     pub(super) fn lag_recoveries(&self) -> usize {
         self.lag_recoveries
     }
@@ -325,7 +327,9 @@ impl<S: LogSource> LogMerge<S> {
     }
 
     /// The next non-empty batch, in order: catch-up pages first, then live
-    /// rows. Empty only when the view has ended (see [`Self::step`]).
+    /// rows. Empty only when the view has ended (see [`Self::step`]). The
+    /// connection drives [`Self::step`]; the merge loop's own rows use this.
+    #[cfg(test)]
     pub(super) async fn next(&mut self) -> Vec<Out> {
         loop {
             match self.step().await {

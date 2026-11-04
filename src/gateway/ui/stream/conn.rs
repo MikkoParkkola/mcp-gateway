@@ -248,7 +248,7 @@ async fn write(
         match out {
             Out::Row(row) => {
                 sent.log_event(conn, LOG_KINDS[i], cursor, &row.data)
-                    .await?
+                    .await?;
             }
             Out::Reset => {
                 let data = json!({ "kind": LOG_KINDS[i] });

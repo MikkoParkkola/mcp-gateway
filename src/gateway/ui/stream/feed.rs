@@ -49,11 +49,6 @@ impl LogFeed {
         self.generation.load(Ordering::Acquire)
     }
 
-    /// Whether a logger's reader is attached.
-    pub(super) fn is_attached(&self) -> bool {
-        self.attached.load(Ordering::Acquire)
-    }
-
     /// Attach `logger`'s all-records reader, once: a second call does nothing
     /// and returns `false`. The reader runs under the log's lock: it only
     /// stores the generation and hands the record to the broadcast, whose
