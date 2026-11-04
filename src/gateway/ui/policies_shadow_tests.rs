@@ -230,14 +230,16 @@ fn r9_where_a_scoped_rule_applies_differently() {
 
 /// Production constructions of `needle` per file under `src/`: comments,
 /// `use` lines, match arms and comparisons are not constructions, and test
-/// code (`*_tests.rs`, `tests/` directories, an inline `#[cfg(test)]` module
+/// code (`*_tests.rs`, `tests/` and `*_tests/` directories, an inline `#[cfg(test)]` module
 /// and everything after it) is skipped.
 fn constructions(needle: &str) -> std::collections::BTreeMap<String, usize> {
     fn walk(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
         for entry in std::fs::read_dir(dir).expect("read src") {
             let path = entry.expect("entry").path();
             if path.is_dir() {
-                if path.file_name().is_some_and(|n| n != "tests") {
+                // `tests/` and `*_tests/` directories hold test modules only.
+                let name = path.file_name().map(|n| n.to_string_lossy().into_owned());
+                if name.is_some_and(|n| n != "tests" && !n.ends_with("_tests")) {
                     walk(&path, out);
                 }
             } else if path.extension().is_some_and(|e| e == "rs")
