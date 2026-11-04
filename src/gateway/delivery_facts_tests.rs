@@ -119,7 +119,7 @@ async fn a_delivered_forbidden_is_refused_whatever_its_code() {
 /// must clear `vouched` (`unvouched()`, or `note_cached()` which calls it),
 /// with a row that fails without that call. Definitions and inline tests are
 /// listed too, so the counts are exact.
-const STORED_READS: &[(&str, &str, usize, &str)] = &[
+pub(super) const STORED_READS: &[(&str, &str, usize, &str)] = &[
     ("get_read(", "src/cache.rs", 4, "the response cache itself"),
     (
         "get_read(",
