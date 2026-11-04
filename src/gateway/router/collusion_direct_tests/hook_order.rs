@@ -56,7 +56,7 @@ fn body(source: &str, start: usize) -> &str {
     panic!("unbalanced body at byte {start}");
 }
 
-/// A code line that reads the live config or a generation itself.
+/// A code line that touches the live config or a generation itself.
 fn reads_directly(line: &str) -> bool {
     ["generation", "live_config", "check_relay", "relay_block_message"]
         .iter()
@@ -138,9 +138,16 @@ fn called(line: &str) -> Vec<&str> {
     out
 }
 
-/// A code line that reads a generation itself or calls a function that does.
+/// A handler line that reads a generation: it touches one itself, calls a
+/// function whose body does, or calls any `_refusal(` helper (broad on
+/// purpose: a guard can afford to over-report). Taking the request's recorded
+/// refusal (`audit::take_refusal`) reads the audit record, not a generation,
+/// so it is blanked first.
 fn reads_generation(line: &str) -> bool {
-    reads_directly(line) || called(line).iter().any(|f| readers().contains(*f))
+    let line = line.replace("take_refusal(", "");
+    reads_directly(&line)
+        || line.contains("_refusal(")
+        || called(&line).iter().any(|f| readers().contains(*f))
 }
 
 /// Check every hook site in `source` (named `name` in messages): each runs
