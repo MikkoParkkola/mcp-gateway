@@ -193,3 +193,74 @@ async fn a_backend_scoped_admin_reads_no_gateway_wide_admin_view() {
     }
     assert!(wrong.is_empty(), "{}", wrong.join("\n"));
 }
+
+/// Whether queued work captured for `token` (as rules `before` admit it)
+/// still dispatches after a reload publishes `after`: `true` runs, `false`
+/// ends the task as the dispatch would.
+async fn task_runs_after(gw: &Gateway, token: &str, before: &[&str], after: &[&str]) -> bool {
+    set_rules(&gw.state, before);
+    let mut headers = axum::http::HeaderMap::new();
+    headers.insert(
+        axum::http::header::AUTHORIZATION,
+        format!("Bearer {token}").parse().expect("header"),
+    );
+    let held = crate::gateway::auth::live::held_credential(&headers);
+    let auth = crate::gateway::router::build_auth_state(&gw.state);
+    let client = crate::gateway::auth::live::current_client(&auth, held.as_ref())
+        .await
+        .expect("the token authenticates");
+    let owned = crate::gateway::router::OwnedRouterAuthorizer::capture(Some(&client), None, None);
+    set_rules(&gw.state, after);
+    let host = crate::gateway::task_service::host::LiveHost::Http(Arc::clone(&gw.state));
+    host.rejudge(&owned, &gw.state.live_config.generation())
+        .is_ok()
+}
+
+/// A role-admin key-server task caller is re-judged under the current role
+/// mapping at each dispatch: a reload that removes its Admin rule ends the
+/// task, whether the token was gateway-wide or scoped to alpha.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_role_admin_task_ends_when_a_reload_removes_its_admin_rule() {
+    const B_ADMIN: &str = "{ issuer: \"https://idp-b.example\", group: ops-admins, role: admin }";
+    let gw = scoped_gateway(&[]).await;
+    let unscoped = gw.b.token("admin-b", &["ops-admins"], &json!({}));
+    let scoped = gw.a.token("admin-a", &["ops-admins"], &json!({}));
+    let cells = [
+        (
+            "role-admin token, *, rule kept",
+            &unscoped,
+            &[B_ADMIN][..],
+            &[B_ADMIN][..],
+            true,
+        ),
+        (
+            "role-admin token, *, rule removed",
+            &unscoped,
+            &[B_ADMIN][..],
+            &[][..],
+            false,
+        ),
+        (
+            "role-admin token, [alpha], rule kept",
+            &scoped,
+            &[ADMIN_GROUP_RULE][..],
+            &[ADMIN_GROUP_RULE][..],
+            true,
+        ),
+        (
+            "role-admin token, [alpha], rule removed",
+            &scoped,
+            &[ADMIN_GROUP_RULE][..],
+            &[][..],
+            false,
+        ),
+    ];
+    let mut wrong = Vec::new();
+    for (who, token, before, after, want) in cells {
+        let got = task_runs_after(&gw, token, before, after).await;
+        if got != want {
+            wrong.push(format!("{who}: runs {got}, want {want}"));
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
