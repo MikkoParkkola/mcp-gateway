@@ -228,39 +228,39 @@ const SANITIZE_ITEM: &str =
 fn expected(who: Who) -> [String; 2] {
     // servers/tools/trust_cards/trust_evaluations/requested_grants/policies/
     // users/groups/runtime_health/audit_events/shadow_assets/shadow_high.
-    let inventory =
-        |servers: usize, policies: usize, groups: usize, events: usize, shadow: &str| {
-            format!("{servers}/0/0/0/0/{policies}/1/{groups}/{servers}/{events}/{shadow}")
-        };
-    let unscoped = |grants: usize, audit: &str, all: &str, groups: usize| {
+    // The caller is the one user, in one group: an identity's, or the default
+    // a key-only caller is given.
+    let inventory = |servers: usize, policies: usize, events: usize, shadow: &str| {
+        format!("{servers}/0/0/0/0/{policies}/1/1/{servers}/{events}/{shadow}")
+    };
+    let unscoped = |grants: usize, audit: &str, all: &str| {
         let events = audit.split(';').filter(|t| !t.is_empty()).count();
         [("", 0), (audit, events)].map(|(audit, events)| {
             format!(
                 "200|grants:{grants}|policies:2|audit:{audit}|queue:{SANITIZE_ITEM}|radar:ran|counts:2/{events}/true|cov:{}/true/{}|all:{all}|inv:{}",
                 grants > 0,
                 events > 0,
-                inventory(2, 2, groups, events, "-/-"),
+                inventory(2, 2, events, "-/-"),
             )
         })
     };
-    let scoped = |servers: usize, groups: usize| {
+    let scoped = |servers: usize| {
         let cell = format!(
             "200|grants:0|policies:0|audit:|queue:|radar:out_of_scope:withheld=true|counts:0/0/true|cov:false/false/false|all:false/\"CONTROL_BACKEND_SCOPE\"|inv:{}",
-            inventory(servers, 0, groups, 0, "0/0"),
+            inventory(servers, 0, 0, "0/0"),
         );
         [cell.clone(), cell]
     };
-    // Every caller is in one group: an identity's, or the default a key-only
-    // caller is given.
     match who {
-        Who::AdminKey | Who::UiAdminKey => {
-            unscoped(2, ALL_EVENTS, r#"true/"CONTROL_RBAC_ADMIN""#, 1)
-        }
-        Who::Auditor => unscoped(2, ALL_EVENTS, r#"true/"CONTROL_RBAC_AUDITOR_READ""#, 1),
-        Who::Developer => unscoped(1, "grant-dev", r#"false/"CONTROL_RBAC_ACTION_DENIED""#, 1),
-        Who::ScopedKey | Who::ScopedAdminKey => scoped(1, 1),
-        Who::ScopedAuditor | Who::ScopedDeveloper | Who::ScopedRoleAdmin => scoped(1, 1),
-        Who::EmptyAuditor | Who::EmptyRoleAdmin => scoped(0, 1),
+        Who::AdminKey | Who::UiAdminKey => unscoped(2, ALL_EVENTS, r#"true/"CONTROL_RBAC_ADMIN""#),
+        Who::Auditor => unscoped(2, ALL_EVENTS, r#"true/"CONTROL_RBAC_AUDITOR_READ""#),
+        Who::Developer => unscoped(1, "grant-dev", r#"false/"CONTROL_RBAC_ACTION_DENIED""#),
+        Who::ScopedKey
+        | Who::ScopedAdminKey
+        | Who::ScopedAuditor
+        | Who::ScopedDeveloper
+        | Who::ScopedRoleAdmin => scoped(1),
+        Who::EmptyAuditor | Who::EmptyRoleAdmin => scoped(0),
     }
 }
 
