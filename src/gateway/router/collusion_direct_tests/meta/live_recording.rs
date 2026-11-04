@@ -13,6 +13,9 @@
 //! keeps only in-plan or seam receipts) and sets the Sync key the row
 //! computes; its step labels show the receipts are plan steps.
 
+use std::cell::Cell;
+use std::rc::Rc;
+
 use crate::security::firewall::StoredKey;
 use sha2::Digest as _;
 
@@ -164,18 +167,32 @@ async fn r43b_prime_a_block_published_before_delivery_stores_a_replay_entry() {
 }
 
 /// Publish `action` from the witness hook: inside the chain, after the
-/// request was admitted and before its delivery is recorded. Returns the
-/// hook's reach count before arming.
-fn reload_in_chain(fx: &Fixture, action: CollusionAction) -> u32 {
+/// request was admitted and before its delivery is recorded. Returns this
+/// fixture's publish count before arming, and the count the hook's reload
+/// left (unchanged until it runs).
+fn reload_in_chain(fx: &Fixture, action: CollusionAction) -> (u64, Rc<Cell<u64>>) {
     use crate::security::firewall::relay_witness_hook;
     let live = std::sync::Arc::clone(&fx.state.live_config);
-    let reached = relay_witness_hook::reached();
+    let start = live.seq();
+    let witnessed = Rc::new(Cell::new(start));
+    let w = Rc::clone(&witnessed);
     relay_witness_hook::arm(move || {
         let mut cfg = (*live.get()).clone();
         cfg.security.firewall.collusion.action = action;
         live.set(cfg);
+        w.set(live.seq());
     });
-    reached
+    (start, witnessed)
+}
+
+/// The premise of C and D: the hook's reload was this fixture's first
+/// publish after arming, so the chain ran across it.
+fn assert_reloaded_in_chain((start, witnessed): &(u64, Rc<Cell<u64>>)) {
+    assert_eq!(
+        witnessed.get(),
+        start + 1,
+        "premise: the witness hook's reload was not this chain's one publish"
+    );
 }
 
 /// Case B inside the chain: admitted under the startup `block`, `off`
@@ -184,12 +201,9 @@ fn reload_in_chain(fx: &Fixture, action: CollusionAction) -> u32 {
 #[tokio::test]
 async fn r43b_prime_c_off_published_after_admission_stores_no_replay_entry() {
     let fx = live_fixture(CollusionAction::Block).await;
-    let reached = reload_in_chain(&fx, CollusionAction::Off);
+    let reloaded = reload_in_chain(&fx, CollusionAction::Off);
     let key = keyed_chain(&fx, "r43bp-c").await;
-    assert!(
-        crate::security::firewall::relay_witness_hook::reached() > reached,
-        "premise: the chain never reached the witness hook"
-    );
+    assert_reloaded_in_chain(&reloaded);
     assert!(
         firewall(&fx).replay_digests(&key).is_none(),
         "R4.3b′ C: an entry was stored though `off` was current at delivery"
@@ -202,12 +216,9 @@ async fn r43b_prime_c_off_published_after_admission_stores_no_replay_entry() {
 #[tokio::test]
 async fn r43b_prime_d_block_published_after_admission_stores_a_replay_entry() {
     let fx = live_fixture(CollusionAction::Off).await;
-    let reached = reload_in_chain(&fx, CollusionAction::Block);
+    let reloaded = reload_in_chain(&fx, CollusionAction::Block);
     let key = keyed_chain(&fx, "r43bp-d").await;
-    assert!(
-        crate::security::firewall::relay_witness_hook::reached() > reached,
-        "premise: the chain never reached the witness hook"
-    );
+    assert_reloaded_in_chain(&reloaded);
     let (digests, _) = firewall(&fx)
         .replay_digests(&key)
         .expect("R4.3b′ D: no entry though `block` was current at delivery");
