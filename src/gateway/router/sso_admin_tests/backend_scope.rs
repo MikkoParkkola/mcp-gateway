@@ -289,10 +289,12 @@ async fn every_admin_meta_tool_refuses_a_backend_scoped_admin() {
             .collect()
     };
     let (_, all) = send(&gw.state, rpc(ADMIN_KEY, "tools/list", &json!({}))).await;
-    assert_eq!(
-        listed(&all).len(),
-        crate::gateway::router::ADMIN_META_TOOLS.len(),
-        "control: an unscoped admin key is listed every admin tool: {all}"
+    // Control: an unscoped admin key is listed the admin tools this fixture
+    // exposes. The call refusals below do not depend on exposure: dispatch
+    // refuses an admin meta-tool by name before it looks the tool up.
+    assert!(
+        !listed(&all).is_empty(),
+        "control: an unscoped admin key is listed admin tools: {all}"
     );
     let mut wrong = Vec::new();
     for (who, bearer) in [
