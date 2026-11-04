@@ -70,9 +70,11 @@ where
         });
         match spliced {
             Ok(spliced) => Ok(Template::plain(spliced.into_bytes())),
-            // Today's comment-loss answer: the lines a rewrite would drop.
+            // Today's comment-loss answer: the lines a rewrite would drop,
+            // under a fixed label, never the server's own path.
             Err(why) if why == NOT_IN_PLACE => {
-                *cell.lock() = Some(Err((StatusCode::CONFLICT, not_in_place(&path, text))));
+                let label = std::path::Path::new("gateway.yaml");
+                *cell.lock() = Some(Err((StatusCode::CONFLICT, not_in_place(label, text))));
                 Err(ROUTE_ANSWERED.to_owned())
             }
             Err(why) => Err(why.to_owned()),
