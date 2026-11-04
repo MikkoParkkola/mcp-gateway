@@ -325,6 +325,18 @@ class StaleRows(unittest.TestCase):
         self.repo.commit("add")
         self.assertEqual(self.repo.stale(), [("src/oauth/mod.rs", "gone", 1)])
 
+    def test_a_comment_naming_the_function_above_it_shifts_the_occurrence_for_both_checks(self) -> None:
+        # The grader counts every line naming `fn added`, the comment too, so
+        # the definition is occurrence 2 to the grader and to missing_rows; the
+        # stale check must agree, and the comment's own occurrence keeps no row.
+        self.repo.write("src/oauth/mod.rs", "pub fn existing() {}\n// fn added is new\npub fn added() {}\n")
+        self.repo.write(rows.UNENFORCING, UNENFORCING_HEADER + "src/oauth/mod.rs\tadded\t2\tr\n")
+        self.repo.commit("add")
+        self.assertEqual(self.repo.stale(), [])
+        self.repo.write(rows.UNENFORCING, UNENFORCING_HEADER + "src/oauth/mod.rs\tadded\t1\tr\n")
+        self.repo.commit("the comment's occurrence")
+        self.assertEqual(self.repo.stale(), [("src/oauth/mod.rs", "added", 1)])
+
     def test_an_added_row_naming_a_function_passes(self) -> None:
         self.repo.write(rows.UNENFORCING, UNENFORCING_HEADER + "src/oauth/mod.rs\texisting\t1\tr\n")
         self.repo.commit("add")

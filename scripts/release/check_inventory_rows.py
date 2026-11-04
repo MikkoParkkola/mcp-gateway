@@ -314,15 +314,23 @@ def stale_rows(base: str, head: str) -> list[tuple[str, str, int]]:
     added = set()
     for ledger_path in (INVENTORY, UNENFORCING):
         added |= rows(head, ledger_path) - rows(merge_base, ledger_path)
-    # The grader's own resolver, over each file's code with comments and
-    # literals blanked (read once per file): a `fn <name>` left in a comment
-    # or a string keeps no row alive.
-    code = {path: blanked((show(head, path) or "").splitlines()) for path in {row[0] for row in added}}
-    return [
-        (path, name, nth)
-        for path, name, nth in sorted(added)
-        if coverage.fn_line(code[path], name, nth) is None
-    ]
+    # The grader's own resolver over the raw file, so the occurrence means
+    # what it means to the grader and to `missing_rows`; then the line it
+    # resolves to must be code once comments and literals are blanked, so a
+    # `fn <name>` left in a comment or a string keeps no row alive. Each file
+    # is read and blanked once.
+    files = {}
+    for path in {row[0] for row in added}:
+        raw = (show(head, path) or "").splitlines()
+        files[path] = (raw, blanked(raw))
+    return [(path, name, nth) for path, name, nth in sorted(added) if not names_code(*files[path], name, nth)]
+
+
+def names_code(raw: list[str], code: list[str], name: str, nth: int) -> bool:
+    """The `nth` `fn <name>` in `raw`, counted as the grader counts, is a real
+    definition: its line still names the function in the blanked `code`."""
+    line = coverage.fn_line(raw, name, nth)
+    return line is not None and re.search(r"\bfn\s+" + re.escape(name) + r"\b", code[line - 1]) is not None
 
 
 def main(argv: list[str]) -> int:
