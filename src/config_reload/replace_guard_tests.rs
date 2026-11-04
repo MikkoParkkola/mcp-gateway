@@ -9,7 +9,7 @@ use std::sync::Arc;
 use super::super::reload_context::replace::{
     Expected, Replace, ReplaceError, Replaced, replace_detached,
 };
-use super::super::replace_test_support::{NEXT, START, WAIT, read, setup};
+use super::super::replace_test_support::{START, WAIT, read, setup};
 use super::{Counting, step, with_slot};
 use crate::secret_store::FilesStore;
 
@@ -113,7 +113,11 @@ async fn a_loose_recovery_file_is_never_restored(loose: fn(&Path) -> std::path::
 
     let result = replace_detached(
         ctx,
-        super::super::replace_test_support::to(Expected::Any, NEXT, Replaced::Discard),
+        super::super::replace_test_support::to(
+            Expected::Any,
+            super::super::replace_test_support::NEXT,
+            Replaced::Discard,
+        ),
         WAIT,
     )
     .await;
