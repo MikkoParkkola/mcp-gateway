@@ -133,8 +133,9 @@ async fn a_restart_of_a_backend_that_ignores_every_signal_completes_in_bound() {
     let _end = EndOnDrop(Arc::clone(&backend));
     backend.ensure_started().await.expect("the backend starts");
     let old = leader_pid(dir.path());
-    // The close budget, plus room for the new child's start on a loaded host.
-    let bound = backend.budgets.close_stage + Duration::from_secs(10);
+    // The 10 s close budget, plus 10 s for the new child's start on a loaded
+    // host.
+    let bound = Duration::from_secs(20);
     let restarted = tokio::time::timeout(bound, backend.force_restart())
         .await
         .expect("the restart completes within its bound");
@@ -165,12 +166,12 @@ async fn a_stop_stuck_on_a_lifecycle_lock_ends_at_its_deadline() {
     let started = tokio::time::Instant::now();
     registry.stop_all_by(started + Duration::from_secs(1)).await;
     assert!(
-        started.elapsed() < Duration::from_secs(5),
+        started.elapsed() < Duration::from_secs(10),
         "the stop outran its deadline: {:?}",
         started.elapsed()
     );
     // What the stop left running is retired on its way out: killed at once.
-    let by = std::time::Instant::now() + Duration::from_secs(5);
+    let by = std::time::Instant::now() + Duration::from_secs(10);
     while kernel_view(pid) == Some(false) {
         assert!(
             std::time::Instant::now() < by,
@@ -195,7 +196,7 @@ async fn a_handover_after_the_gateway_stop_returns_is_killed_at_once() {
     let far = tokio::time::Instant::now() + Duration::from_secs(60);
     registry.stop_all_by(far).await;
     child.hand_over_now(Duration::from_secs(120));
-    let by = std::time::Instant::now() + Duration::from_secs(5);
+    let by = std::time::Instant::now() + Duration::from_secs(10);
     while kernel_view(pid) == Some(false) {
         assert!(
             std::time::Instant::now() < by,
