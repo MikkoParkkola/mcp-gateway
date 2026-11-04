@@ -108,9 +108,10 @@ async fn an_answer_that_is_already_a_stream_is_passed_through() {
 /// One frame at a time, so a test can act between them -- `body_text`
 /// buffers, which cannot tell "framed on arrival" from "framed at the end".
 ///
-/// The wait is a hang guard on real I/O, not a window: a notification held
-/// behind the result never arrives at all until the test releases the call,
-/// so the bound only has to end that wait, and load must not end it early.
+/// Its caller runs on the paused clock: the stream is all in memory (a
+/// channel, a semaphore, a body), so a notification held behind the result
+/// leaves every task idle and tokio jumps straight to the bound. The bound
+/// only ends that wait; load cannot end it early or make a frame late.
 async fn next_frame<S>(body: &mut S) -> String
 where
     S: futures::Stream<Item = std::result::Result<axum::body::Bytes, axum::Error>> + Unpin,
@@ -131,7 +132,7 @@ where
 /// The HTTP acceptance rows read one notification and then release the
 /// call, so the loop's `rx.recv()` arm -- every notification after the
 /// first -- is unreachable from them. `MIK-7272.SUB.2b`.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_notification_raised_after_the_first_frame_is_framed_before_the_result() {
     // GIVEN a dispatch parked on a gate, one notification already published
     let (tx, rx) = tokio::sync::mpsc::channel(4);
