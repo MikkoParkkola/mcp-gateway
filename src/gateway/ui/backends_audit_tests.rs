@@ -408,3 +408,29 @@ async fn remove_and_update_on_a_missing_config_answer_not_found() {
     assert_eq!(status, StatusCode::NOT_FOUND, "update: {body}");
     assert!(!gateway.config().exists(), "a 404 created gateway.yaml");
 }
+
+/// Auth on and no audit log: a backend write is refused by the audit
+/// posture, for that reason, and nothing is written.
+#[tokio::test]
+async fn with_auth_on_and_no_audit_log_a_backend_add_is_refused() {
+    let mut gateway = Audited::new().await;
+    let mut running = Config::load(Some(&gateway.config())).expect("config loads");
+    running.auth.enabled = true;
+    {
+        let state = Arc::get_mut(&mut gateway.state).expect("state is unique");
+        state.transparency_log = None;
+        state.live_config = Arc::new(LiveConfig::new(running));
+    }
+
+    let (status, body) = gateway.add("b").await;
+
+    assert_eq!(
+        (status, &body["error"]),
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            &Value::from("audit_log_required")
+        ),
+        "{body}"
+    );
+    assert_eq!(gateway.text(), START, "the refused add wrote");
+}
