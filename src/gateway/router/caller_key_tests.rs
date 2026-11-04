@@ -180,9 +180,9 @@ fn leaf(cn: Option<&str>, san_uri: Option<&str>) -> CertIdentity {
         .collect();
     let key_pair = KeyPair::generate().expect("key generation failed");
     let der = params.self_signed(&key_pair).expect("cert").der().to_vec();
-    CertIdentity::from_der(&der)
-        .expect("parses")
-        .expect("names someone")
+    // The unchecked parse: one row needs a certificate that names no one,
+    // which `from_der` refuses; the fields are the same either way.
+    CertIdentity::parse_for_test(&der).expect("parses")
 }
 
 /// MIK-8286 R1a: a certificate with neither a SAN URI nor a CN has no grant
