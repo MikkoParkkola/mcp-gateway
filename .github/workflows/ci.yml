@@ -119,9 +119,18 @@ jobs:
         run: scripts/dev/check-commit-message-hygiene.sh "origin/${{ github.base_ref }}..HEAD"
       # A function added on the seven COV.3 paths needs its inventory row in the
       # same change; without one the coverage grade cannot see it (MIK-8169).
+      # The check finds test items with tree-sitter, from the gates' own
+      # hash-locked environment (scripts/gate-env).
+      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+        with:
+          version: "0.13.1"
+      - name: The gates' pinned environment
+        env:
+          UV_MALWARE_CHECK: "1"
+        run: uv sync --locked --project scripts/gate-env
       - name: Every added COV.3 function has an inventory row (MIK-8169)
         if: github.event_name == 'pull_request'
-        run: python3 scripts/release/check_inventory_rows.py "origin/${{ github.base_ref }}"
+        run: scripts/gate-env/.venv/bin/python scripts/release/check_inventory_rows.py "origin/${{ github.base_ref }}"
       # A caller identity is built only by its checked constructor, so one that
       # names no one can never be made (MIK-8286, identity-collapse).
       - name: Caller identities are built only through their checked constructors (MIK-8286)
@@ -129,7 +138,7 @@ jobs:
       # Every function on the COV.3 paths has a row, whenever it was added
       # (MIK-8195).
       - name: Every function on the COV.3 paths has an inventory row (MIK-8195)
-        run: python3 scripts/release/check_inventory_rows.py --all
+        run: scripts/gate-env/.venv/bin/python scripts/release/check_inventory_rows.py --all
       # A new stage on the tools/call path gets a per-call timing row or a
       # stated reason (MIK-8014); the gate's verdict rules have their own test.
       - name: Every tools/call path function has a per-call stage (MIK-8014)
@@ -197,6 +206,7 @@ jobs:
           python3 -c 'import yaml' 2>/dev/null || python3 -m pip install --user --quiet 'pyyaml==6.0.2'
           python3 scripts/ci/shard_tests.py --self-test
           python3 scripts/ci/check_needs.py --self-test
+          python3 scripts/ci/job_time_watch.py --self-test
           python3 scripts/ci/test_os_shards.py
       - name: Validate the gateway-spawn check against planted spawns
         run: python3 scripts/ci/check-gateway-spawns.py --self-test
@@ -747,12 +757,18 @@ jobs:
     name: macOS shard ${{ matrix.shard }}
     if: ${{ !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) && !(github.event_name == 'push' && github.ref == 'refs/heads/docs/ranking-1-release-line') && (github.event_name != 'pull_request' || (startsWith(github.head_ref, 'train/') && github.event.pull_request.head.repo.full_name == github.repository)) }}
     runs-on: macos-latest
-    timeout-minutes: 90
+    # The lib shard compiles the `--lib` test binary from cold (every macOS
+    # shard missed the cache on the last three trains, and a hit would save
+    # only the 2-4 min dependency build): 19 to 86 min, then about 32 min of
+    # tests. At 90 a slow runner cut off a train mid-test.
+    timeout-minutes: 150
     strategy:
       fail-fast: false
       matrix:
-        # Three jobs: the account has five macOS runners in all (MIK-8482).
-        shard: [lib-a, lib-b, int]
+        # Two jobs: about two macOS runners serve trains, so a third job
+        # queued behind the others, and lib-a and lib-b each compiled the
+        # same lib test binary. One lib shard builds it once.
+        shard: [lib, int]
     env:
       # Two build jobs on the 3-core, 7 GB runner: the default swapped. Kept
       # on measurement (MIK-8482): the slowest shard took 25.5 min (#3944
@@ -770,10 +786,34 @@ jobs:
       # Tests job's, for the same reason; every test that does not run on
       # macOS is listed in docs/release/macos-test-exclusions.tsv.
       - name: Every test kept off macOS is listed (MIK-8174)
-        if: matrix.shard == 'lib-a'
+        if: matrix.shard == 'lib'
         run: python3 scripts/release/check_macos_exclusions.py
+      # The same build takes 19 or 86 min on these runners. Swap and memory
+      # pressure every 30 s, printed below, say whether the slow ones swap.
+      # The sampler outlives this step; the runner ends it with the job.
+      - name: Sample swap and memory pressure during the build
+        run: |
+          (
+            while :; do
+              printf '%s swap %s | %s\n' "$(date -u +%H:%M:%S)" "$(sysctl -n vm.swapusage)" \
+                "$(memory_pressure -Q 2>/dev/null | tail -1)" >> "$RUNNER_TEMP/mac-sampler.log"
+              sleep 30
+            done
+          ) &
       - name: Shard suite
+        # Under the job's limit, so a slow build still leaves time for the
+        # report below.
+        timeout-minutes: 145
         run: python3 scripts/ci/shard_tests.py run macos ${{ matrix.shard }}
+      - name: Runner, swap and memory pressure during the build
+        if: always()
+        run: |
+          echo "image $ImageOS $ImageVersion, $(sysctl -n hw.ncpu) CPUs, $(( $(sysctl -n hw.memsize) / 1073741824 )) GB, $(sysctl -n machdep.cpu.brand_string)"
+          if [ -s "$RUNNER_TEMP/mac-sampler.log" ]; then
+            cat "$RUNNER_TEMP/mac-sampler.log"
+          else
+            echo "::warning::no swap or memory pressure samples were recorded"
+          fi
 
   # Gated like its shards: on a pull request that is not a train it is
   # skipped, never red, and no required check needs it. On a train it runs
@@ -783,10 +823,27 @@ jobs:
     needs: [macos-shards]
     if: ${{ always() && !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) && !(github.event_name == 'push' && github.ref == 'refs/heads/docs/ranking-1-release-line') && (github.event_name != 'pull_request' || (startsWith(github.head_ref, 'train/') && github.event.pull_request.head.repo.full_name == github.repository)) }}
     runs-on: ubuntu-latest
+    # Read this run's job timings for the limit watch below.
+    permissions:
+      contents: read
+      actions: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      # A shard creeping toward its time limit is cut off mid-test one day and
+      # takes the train with it: warn at 80%, never fail.
+      - name: Warn when a macOS shard used over 80% of its time limit
+        if: always()
+        # Advisory: a failed install or read must not turn this check red,
+        # nor hold it.
+        continue-on-error: true
+        timeout-minutes: 5
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 -c 'import yaml' 2>/dev/null || python3 -m pip install --user --quiet 'pyyaml==6.0.2' || true
+          python3 scripts/ci/job_time_watch.py macos-shards
       - name: Every macOS shard succeeded
         env:
           NEEDS: ${{ toJSON(needs) }}
@@ -1310,8 +1367,15 @@ jobs:
         run: python3 scripts/release/test_critical_function_coverage.py
       - name: Test the critical path coverage grader
         run: python3 scripts/release/test_critical_path_coverage.py
+      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+        with:
+          version: "0.13.1"
+      - name: The gates' pinned environment (the inventory check reads Rust with tree-sitter)
+        env:
+          UV_MALWARE_CHECK: "1"
+        run: uv sync --locked --project scripts/gate-env
       - name: Test the inventory-row check (MIK-8169)
-        run: python3 scripts/release/test_check_inventory_rows.py
+        run: scripts/gate-env/.venv/bin/python scripts/release/test_check_inventory_rows.py
       - name: Test the inventory ledger and its fragments (MIK-8279)
         run: python3 scripts/release/test_inventory_ledger.py
       - name: Test the coverage grade download pruning
@@ -1522,8 +1586,17 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+      # The gate reads Rust items with tree-sitter, from the gates' own
+      # hash-locked environment (scripts/gate-env), never the system Python.
+      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+        with:
+          version: "0.13.1"
+      - name: The gates' pinned environment
+        env:
+          UV_MALWARE_CHECK: "1"
+        run: uv sync --locked --project scripts/gate-env
       - name: Check the guard refuses what it claims to
-        run: python3 scripts/dev/test_check_timing_asserts.py
+        run: scripts/gate-env/.venv/bin/python scripts/dev/test_check_timing_asserts.py
       - name: Check the tree and the allowlist against the previous tip
         if: github.event_name != 'pull_request'
         # The frozen design's base outside a PR: the tip this push replaced,
@@ -1535,10 +1608,10 @@ jobs:
           if [ -z "$base" ] || [ "$base" = "0000000000000000000000000000000000000000" ]; then
             base="HEAD^"
           fi
-          python3 scripts/dev/check-timing-asserts.py --base "$base"
+          scripts/gate-env/.venv/bin/python scripts/dev/check-timing-asserts.py --base "$base"
       - name: Check the tree and the allowlist against the base
         if: github.event_name == 'pull_request'
-        run: python3 scripts/dev/check-timing-asserts.py --base "origin/${{ github.base_ref }}"
+        run: scripts/gate-env/.venv/bin/python scripts/dev/check-timing-asserts.py --base "origin/${{ github.base_ref }}"
 
   request-panics:
     name: No new request-path panic site without an invariant (MIK-8691)
@@ -1552,10 +1625,19 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+      # The scanner finds test items with tree-sitter, from the gates' own
+      # hash-locked environment (scripts/gate-env), never the system Python.
+      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+        with:
+          version: "0.13.1"
+      - name: The gates' pinned environment
+        env:
+          UV_MALWARE_CHECK: "1"
+        run: uv sync --locked --project scripts/gate-env
       - name: Check the guard refuses what it claims to
-        run: python3 scripts/ci/check-request-panics.py --self-test
+        run: scripts/gate-env/.venv/bin/python scripts/ci/check-request-panics.py --self-test
       - name: No new panic site without an invariant
-        run: python3 scripts/ci/check-request-panics.py
+        run: scripts/gate-env/.venv/bin/python scripts/ci/check-request-panics.py
       - name: The baseline only shrinks against the previous tip
         if: github.event_name != 'pull_request'
         env:
@@ -1565,10 +1647,10 @@ jobs:
           if [ -z "$base" ] || [ "$base" = "0000000000000000000000000000000000000000" ]; then
             base="HEAD^"
           fi
-          python3 scripts/ci/check-request-panics.py --base "$base"
+          scripts/gate-env/.venv/bin/python scripts/ci/check-request-panics.py --base "$base"
       - name: The baseline only shrinks against the base
         if: github.event_name == 'pull_request'
-        run: python3 scripts/ci/check-request-panics.py --base "origin/${{ github.base_ref }}"
+        run: scripts/gate-env/.venv/bin/python scripts/ci/check-request-panics.py --base "origin/${{ github.base_ref }}"
 
   orphan-test-modules:
     name: Orphan test modules (MIK-7538)
@@ -1595,6 +1677,19 @@ jobs:
       # These pin both, and a guard that cannot fail is the thing it guards.
       - name: Check the guard catches what it claims to
         run: python3 scripts/dev/test_check_orphan_test_modules.py
+      # The shared cfg item finder the Rust-reading gates use: tree-sitter,
+      # from the gates' own hash-locked environment.
+      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+        with:
+          version: "0.13.1"
+      - name: The gates' pinned environment
+        env:
+          UV_MALWARE_CHECK: "1"
+        run: uv sync --locked --project scripts/gate-env
+      - name: Check the cfg item finder marks what it claims to
+        run: scripts/gate-env/.venv/bin/python scripts/dev/test_cfg_items.py
+      - name: Check the gate environment check refuses without installing
+        run: python3 scripts/dev/test_gate_env_python.py
       - name: MCP events OAuth shim rows
         run: python3 scripts/dev/test_mcp_events_oauth_shim.py
       - name: MCP events fail-fast harness rows

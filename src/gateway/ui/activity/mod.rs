@@ -10,6 +10,11 @@ pub(in crate::gateway::ui) mod access;
 mod csv;
 mod cursor;
 mod export;
+#[allow(
+    dead_code,
+    reason = "the stream's Activity source is wired to it in a later change"
+)]
+pub(in crate::gateway::ui) mod forward;
 mod reader;
 mod receipt;
 /// The decision set's startup read of one record kind.
@@ -30,7 +35,7 @@ use serde_json::{Value, json};
 
 use self::access::{Access, Refused};
 use self::reader::{Limits, read_page};
-use self::rows::{FeedOutcome, Filter, kind_of, owned_by, row};
+use self::rows::{FeedOutcome, Filter, kind_of, row};
 use super::AppState;
 use super::errors::{auth_required, flat_error};
 use super::guard::Guard;
@@ -305,13 +310,8 @@ fn list_page(logs: &Logs, access: &Access, query: &ListQuery) -> Response {
         bytes: PAGE_SCAN_BYTES,
     };
     let keep = |line: &reader::Line| {
-        kind_of(line).is_some_and(|kind| {
-            parsed.filter.matches(line, kind)
-                && match access {
-                    Access::All => true,
-                    Access::Own { issuer, subject } => owned_by(line, kind, issuer, subject),
-                }
-        })
+        kind_of(line)
+            .is_some_and(|kind| parsed.filter.matches(line, kind) && access.admits(line, kind))
     };
     let page = match read_page(
         &logs.invocation,
@@ -480,6 +480,9 @@ fn export_response(
 #[cfg(test)]
 #[path = "list_tests.rs"]
 mod list_tests;
+#[cfg(test)]
+#[path = "scope_tests.rs"]
+mod scope_tests;
 #[cfg(test)]
 #[path = "security_tests.rs"]
 mod security_tests;

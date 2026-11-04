@@ -27,6 +27,7 @@ fn resolve_api_keys(
         .api_keys
         .iter()
         .map(|k| {
+            warn_if_scoped_admin(k);
             let digest = k.resolve_digest(overlay)?;
             // A previous digest without its expiry is refused at load; never
             // carried, so it can never match by omission.
@@ -54,6 +55,26 @@ fn resolve_api_keys(
             })
         })
         .collect::<Result<Vec<_>>>()
+}
+
+/// An admin key whose list names some backends sees only those in the web
+/// UI: say so at each load, so an operator who meant full admin learns it at
+/// startup rather than from a narrowed page. An empty list is a UI-wide
+/// admin that calls no backend, and is not warned here.
+fn warn_if_scoped_admin(key: &crate::config::ApiKeyConfig) {
+    if key.admin
+        && matches!(
+            crate::gateway::authz::BackendGrant::for_ui_list(key.admin, &key.backends),
+            crate::gateway::authz::BackendGrant::Scoped(_)
+        )
+    {
+        warn!(
+            target: AUTH_TARGET,
+            key = %key.name,
+            backends = ?key.backends,
+            "admin API key lists only some backends: the Activity and status in the web UI show it only those; set backends: [\"*\"] for full admin"
+        );
+    }
 }
 
 /// MIK-7973 and ADR-022: refuse a key whose principal or digest another key,
@@ -233,20 +254,29 @@ impl ResolvedAuthConfig {
             .map(|(client, _origin)| client)
     }
 
-    /// Whether the key whose quota identity is `minter` is in this table, an
-    /// admin key, and unexpired at `at`: what a dashboard link, handoff or
-    /// session minted with it needs at each use, so one minted by a key a
-    /// reload then removed, demoted, expired or re-issued (another digest)
-    /// ends there. A previous digest in its grace authenticates as its
-    /// current key, so the grace ending alone ends nothing.
+    /// Whether `minter`'s key is in this table under the same principal, an
+    /// admin key, unexpired at `at`, and still accepting the secret the
+    /// minting request matched (its current digest, or its previous one
+    /// before the grace ends): what a dashboard link, handoff or session
+    /// needs at each use. So one minted by a key a reload then removed,
+    /// demoted, expired or moved to another principal ends there; a routine
+    /// rotation keeps it until the old secret's grace ends, and a rotation
+    /// that drops that secret at once ends it. The key's UI scope must also
+    /// be whole (`BackendGrant::for_ui`): a session is, so a reload that
+    /// narrows the key to some backends ends what it minted.
     pub(crate) fn admin_key_live(
         &self,
-        minter: &QuotaPrincipal,
+        minter: &super::MintingKey,
         at: chrono::DateTime<chrono::Utc>,
     ) -> bool {
         self.api_keys().iter().any(|k| {
-            k.quota_principal == *minter
+            k.quota_principal.same_key_principal(&minter.quota)
+                && secret_still_valid(k, &minter.digest_tag, |end| {
+                    !crate::config::api_key_expired(Some(end), at)
+                })
                 && k.admin
+                && crate::gateway::authz::BackendGrant::for_ui_list(k.admin, &k.backends)
+                    == crate::gateway::authz::BackendGrant::Unscoped
                 && !crate::config::api_key_expired(k.expires_at, at)
         })
     }
@@ -405,6 +435,11 @@ impl ResolvedAuthConfig {
                 name: key.name.clone(),
                 personal: key.personal,
                 matched_previous_digest: via_previous,
+                digest_tag: super::digest_tag_of(if via_previous {
+                    &key.previous.as_ref()?.digest
+                } else {
+                    &key.digest
+                }),
             }),
         ))
     }
@@ -434,16 +469,22 @@ impl ResolvedAuthConfig {
     /// on its behalf without a request (an event watch's poll). `None` when no
     /// live key matches both, or the key expired: a key re-issued under the
     /// same name has another digest and does not match.
+    ///
+    /// `binding` is what the holder was bound to when it was opened (see
+    /// [`KeyBinding`]); there is no way to ask without one.
     pub(crate) fn client_for_key(
         &self,
         name: &str,
         principal: &str,
+        binding: KeyBinding<'_>,
     ) -> Option<AuthenticatedClient> {
         let keys = self.api_keys();
         let key = keys
             .iter()
             .find(|k| k.name == name && k.principal().storage_form() == principal)?;
-        (!crate::config::api_key_expired_now(key.expires_at)).then(|| Self::client_of(key))
+        (!crate::config::api_key_expired_now(key.expires_at)
+            && binding.holds(key, |end| !crate::config::api_key_expired_now(Some(end))))
+        .then(|| Self::client_of(key))
     }
 
     /// [`Self::client_for_key`] judged at `now`, the caller's reading of the
@@ -452,13 +493,16 @@ impl ResolvedAuthConfig {
         &self,
         name: &str,
         principal: &str,
+        binding: KeyBinding<'_>,
         now: chrono::DateTime<chrono::Utc>,
     ) -> Option<AuthenticatedClient> {
         let keys = self.api_keys();
         let key = keys
             .iter()
             .find(|k| k.name == name && k.principal().storage_form() == principal)?;
-        (!crate::config::api_key_expired(key.expires_at, now)).then(|| Self::client_of(key))
+        (!crate::config::api_key_expired(key.expires_at, now)
+            && binding.holds(key, |end| !crate::config::api_key_expired(Some(end), now)))
+        .then(|| Self::client_of(key))
     }
 
     /// Check rate limiting for a fully resolved authenticated client.
@@ -554,6 +598,52 @@ const DUMMY_PREVIOUS_DIGEST: [u8; 32] = [0xA5; 32];
 #[cfg(not(test))]
 fn dummy_previous_digest() -> [u8; 32] {
     DUMMY_PREVIOUS_DIGEST
+}
+
+/// What a holder found again by its key was bound to when it was opened. A
+/// lookup always names one, so no caller can skip the binding by omission.
+#[derive(Clone, Copy)]
+pub(crate) enum KeyBinding<'a> {
+    /// The fingerprint of the secret that opened it (a watch): that secret
+    /// must still be the key's current digest, or its previous one before the
+    /// grace ends.
+    Secret(&'a str),
+    /// The exact credential, digest and principal (a queued task): any
+    /// rotation ends it, since its old secret's work must not run.
+    Credential(&'a QuotaPrincipal),
+    /// Only whether the key is live: for tests that ask nothing more.
+    #[cfg(test)]
+    Unchecked,
+}
+
+impl KeyBinding<'_> {
+    fn holds(
+        self,
+        key: &ResolvedApiKey,
+        in_grace: impl Fn(chrono::DateTime<chrono::Utc>) -> bool,
+    ) -> bool {
+        match self {
+            Self::Secret(tag) => secret_still_valid(key, tag, in_grace),
+            Self::Credential(quota) => key.quota_principal == *quota,
+            #[cfg(test)]
+            Self::Unchecked => true,
+        }
+    }
+}
+
+/// Whether the secret fingerprinted `tag` still authenticates as `key`: its
+/// current digest, or its previous one while `in_grace` says the grace runs.
+fn secret_still_valid(
+    key: &ResolvedApiKey,
+    tag: &str,
+    in_grace: impl Fn(chrono::DateTime<chrono::Utc>) -> bool,
+) -> bool {
+    super::tag_still_valid(
+        tag,
+        Some(&key.digest),
+        key.previous.as_ref().map(|p| (&p.digest, p.expires_at)),
+        in_grace,
+    )
 }
 
 #[cfg(test)]

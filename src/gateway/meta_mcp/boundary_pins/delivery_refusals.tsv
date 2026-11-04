@@ -53,19 +53,20 @@ src/config/secret_rules.rs	check	refusal	1	no-record	config load
 src/config/strict_keys.rs	refuse_unrecognised_keys	refusal	1	no-record	config load
 src/config/strict_keys.rs	refuse_unrecognised_keys	removed_refusal	1	no-record	config load
 src/config_persistence_atomic_windows.rs	prepare_from	source_refusal	1	no-record	a config write
+src/config_persistence_keyedit.rs	edit_in_place	refusal	1	no-record	a config write: an API key revocation the in-place editor cannot prove, answered with hand instructions by the admin UI
 src/config_persistence_keyedit_shape.rs	place	attach_refusal	1	no-record	a config write
 src/config_reload/env_poll.rs	report_failure	is_posture_refusal	1	not-delivered	predicate (env-file reload)
 src/config_reload/generation.rs	prepare	refuse_multi_user_flip	1	no-record	config reload: a key edit that would flip the running multi-user status is refused before it applies
 src/config_reload/grant_reload.rs	read_grant_file	report_grants_refusal	1	no-record	identity grants file reload
 src/config_reload/refusals.rs	classify	is_posture_refusal	1	not-delivered	predicate (a reload refusal's classification)
 src/config_reload/refusals.rs	startup_refusals	startup_refusal	1	no-record	config reload
-src/config_reload/reload_context.rs	refuse_before_apply	refuse_capability_name_clash	1	no-record	config reload
-src/config_reload/reload_context.rs	refuse_before_apply	reload_binding_refusal	1	feeds	a reload refusal gateway_reload_config answers; not a posture refusal, so recorded as no policy decision
-src/config_reload/reload_context.rs	refuse_before_apply	reload_posture_refusal	1	feeds	the posture refusal reload_config raises refused for
 src/config_reload/reload_context.rs	reload_transaction	refuse_before_apply	1	feeds	the reload refusals gateway_reload_config answers, as the rows inside it say
 src/config_reload/reload_context.rs	reload_transaction	reload_refusal	1	feeds	a reload refusal gateway_reload_config answers; reload_config raises only for the posture refusal
 src/config_reload/reload_context.rs	reload_transaction	restart_only_refusal	1	feeds	a reload refusal gateway_reload_config answers; reload_config raises only for the posture refusal
 src/config_reload/reload_context.rs	with_pending_restart	next_start_refusal	1	not-delivered	restart advice inside a reload answer
+src/config_reload/reload_context_refusals.rs	refuse_before_apply	refuse_capability_name_clash	1	no-record	config reload
+src/config_reload/reload_context_refusals.rs	refuse_before_apply	reload_binding_refusal	1	feeds	a reload refusal gateway_reload_config answers; not a posture refusal, so recorded as no policy decision
+src/config_reload/reload_context_refusals.rs	refuse_before_apply	reload_posture_refusal	1	feeds	the posture refusal reload_config raises refused for
 src/config_reload/replace_validate.rs	refuse_candidate	refuse_before_apply	1	no-record	config write: the reload's own checks on the new bytes, before any secret entry; the reload runs them again
 src/config_reload/replace_validate.rs	refuse_candidate	reload_refusal	1	no-record	config write: the reload's own checks on the new bytes, before any secret entry; the reload runs them again
 src/config_reload/replace_validate.rs	refuse_candidate	restart_only_refusal	1	no-record	config write: the reload's own checks on the new bytes, before any secret entry; the reload runs them again
@@ -106,11 +107,14 @@ src/gateway/meta_mcp/grant_audit.rs	check_or_stamp	refuse_withheld	1	composite-o
 src/gateway/meta_mcp/grant_audit.rs	note_grant_decision	refuse_late	1	not-a-decision	an audit-integrity refusal: a grant decision after the answer's record
 src/gateway/meta_mcp/invoke/admin.rs	run_playbook	refuse_unattested_plan	1	recorded	sealed refusal, recorded at the outlet
 src/gateway/meta_mcp/invoke/audit_decision.rs	decided	Refused::of	1	not-delivered	audit row: the decision object of a call record
+src/gateway/meta_mcp/invoke/bridge_dispatch.rs	invoke	is_authorization_refusal	1	not-delivered	predicate: a refused round's error is parked so the call answers it as itself
 src/gateway/meta_mcp/invoke/bridge_dispatch.rs	invoke	note_send_refusal	1	not-delivered	a decision note for the record (kind unrecorded); the error it reads is answered unchanged
 src/gateway/meta_mcp/invoke/bridge_dispatch.rs	invoke	refuse_if_killed	2	recorded	the bridged kill switch, raised while vouched
 src/gateway/meta_mcp/invoke/bridge_dispatch.rs	invoke	refuse_relaying_round	1	recorded	bridged relay block, raised while vouched inside it
 src/gateway/meta_mcp/invoke/bridge_dispatch.rs	invoke	undeclared_key_refusal	1	recorded	bridged round undeclared key; raised while vouched where it ends the exchange
 src/gateway/meta_mcp/invoke/caller_verdict.rs	caller_verdict	audit_transient_refusal	1	not-delivered	audit row
+src/gateway/meta_mcp/invoke/caller_verdict.rs	dispatch_resolution	is_authorization_refusal	1	not-delivered	predicate: a carried fill refused at its send is answered as itself, not folded
+src/gateway/meta_mcp/invoke/caller_verdict.rs	dispatch_resolution	note_send_refusal	1	not-delivered	a decision note for the record (kind unrecorded); the error it reads is answered unchanged
 src/gateway/meta_mcp/invoke/chokepoint.rs	recheck_target	Error::Forbidden{}	1	recorded	raised while vouched at the send and bridged chokepoints
 src/gateway/meta_mcp/invoke/chokepoint.rs	recheck_target	audit_refusal	1	not-delivered	audit row
 src/gateway/meta_mcp/invoke/chokepoint.rs	rescan_outbound	Error::Forbidden{}	2	recorded	raised while vouched at the send and bridged chokepoints
@@ -124,6 +128,7 @@ src/gateway/meta_mcp/invoke/dispatch_guards.rs	admit_backend_wide	gateway_refuse
 src/gateway/meta_mcp/invoke/dispatch_guards.rs	admit_enabled_capability	gateway_refused	1	recorded	sealed refusal, recorded at the outlet
 src/gateway/meta_mcp/invoke/dispatch_guards.rs	firewall_refusal_body	Error::ResponseFirewallRefused	1	not-delivered	the stored body a replay serves
 src/gateway/meta_mcp/invoke/egress.rs	inspect_discovery_value	Error::ResponseFirewallRefused	1	recorded	the frame is marked delivery_refusal at the outlet
+src/gateway/meta_mcp/invoke/errors.rs	of_error	is_authorization_refusal	1	not-delivered	predicate: a refusal of the caller is not sampled against the error budget
 src/gateway/meta_mcp/invoke/gate.rs	absent_answer	seal_key_refusal	1	recorded	withheld answer; withheld raised in this fn for an out-of-scope name
 src/gateway/meta_mcp/invoke/gate.rs	as_undefined_capability	capability_rule_refusal	1	not-delivered	predicate comparing the rule's text
 src/gateway/meta_mcp/invoke/gate.rs	backstop	is_authorization_refusal	1	not-delivered	predicate: which dispatch-time refusal the playbook step records
@@ -135,6 +140,7 @@ src/gateway/meta_mcp/invoke/gate.rs	withheld_invoke_target	blocked_tool_refusal	
 src/gateway/meta_mcp/invoke/keys.rs	admit_keys	refuse_unproven	1	composite-or-replay	a stored replay's credential proof
 src/gateway/meta_mcp/invoke/legacy_bridge.rs	bridge_legacy_ask	Error::ResponseFirewallRefused	1	recorded	the frame is marked delivery_refusal at the outlet
 src/gateway/meta_mcp/invoke/legacy_bridge.rs	bridge_legacy_ask	bridge_refusal	1	recorded	bridged undeclared last round; raised while vouched
+src/gateway/meta_mcp/invoke/legacy_bridge.rs	bridge_legacy_ask	is_authorization_refusal	1	not-delivered	predicate: a parked round refusal answers as itself; the outlet records it
 src/gateway/meta_mcp/invoke/policy.rs	apply_response_gates_effect	Error::ResponseFirewallRefused	1	recorded	the frame is marked delivery_refusal at the outlet
 src/gateway/meta_mcp/invoke/policy.rs	authorize_invocation	Error::Forbidden{}	1	composite-or-replay	backstop for composite steps; a lone gateway_invoke's Forbidden is recorded by the outlet
 src/gateway/meta_mcp/invoke/policy.rs	authorize_invocation	audit_refusal	1	not-delivered	audit row
@@ -142,6 +148,7 @@ src/gateway/meta_mcp/invoke/policy.rs	check_attestation_scoped	gateway_refused	1
 src/gateway/meta_mcp/invoke/policy.rs	check_invocation_policy	blocked_tool_refusal	1	recorded	Protocol refusal; the route stage withholds it first (PR-2a raise)
 src/gateway/meta_mcp/invoke/policy.rs	check_invocation_policy	refuse_withheld	1	composite-or-replay	the invoke entry re-meeting a name the route stage withheld first (raised); reached by composite steps
 src/gateway/meta_mcp/invoke/policy.rs	refuse_unattested_plan	gateway_refused	1	recorded	sealed refusal, recorded at the outlet
+src/gateway/meta_mcp/invoke/post_dispatch.rs	settle_dispatch_error	is_authorization_refusal	1	not-delivered	predicate: a dispatch refused at its send answers as itself; the outlet records it
 src/gateway/meta_mcp/invoke/post_dispatch.rs	settle_dispatch_error	note_send_refusal	1	not-delivered	a decision note for the record (kind unrecorded); the error it reads is answered unchanged
 src/gateway/meta_mcp/invoke/post_dispatch.rs	settle_round	refuse_unbindable	2	not-a-decision	an internal failure: a continuation that cannot be bound
 src/gateway/meta_mcp/invoke/post_dispatch.rs	settle_round	refuse_undeclared	1	recorded	raised while vouched at this call
@@ -155,6 +162,9 @@ src/gateway/meta_mcp/invoke/propagation.rs	resolve_dispatch	refuse_shared_oauth_
 src/gateway/meta_mcp/invoke/propagation.rs	resolve_dispatch	refuse_unbound_account_backend	1	not-a-decision	a configuration error: an account backend with no strategy
 src/gateway/meta_mcp/invoke/propagation.rs	resolve_propagation_credential_attempted_for	refuse_unbound_account_backend	1	not-a-decision	a configuration error: an account backend with no strategy
 src/gateway/meta_mcp/invoke/propagation.rs	resolve_propagation_credential_attempted_for	unminted_refusal	1	composite-or-replay	the unminted proof a stored replay is refused with
+src/gateway/meta_mcp/invoke/r2_check.rs	answer_refused_fill	is_authorization_refusal	1	not-delivered	predicate: a cold fill refused at its send answers as itself, not folded
+src/gateway/meta_mcp/invoke/r2_check.rs	answer_refused_fill	note_send_refusal	1	not-delivered	a decision note for the record (kind unrecorded); the error it reads is answered unchanged
+src/gateway/meta_mcp/invoke/r2_check.rs	bridged_refused_fill	is_authorization_refusal	1	not-delivered	predicate: a bridged fill's refusal is parked so the call answers it as itself
 src/gateway/meta_mcp/invoke/r2_check.rs	undeclared_key_refusal_through	catalogue_refusal	1	feeds	builds the key refusal its callers seal
 src/gateway/meta_mcp/invoke/relay.rs	refuse_relay	relay_refusal	1	recorded	pre-send relay block on the meta route; raised while vouched
 src/gateway/meta_mcp/invoke/relay.rs	refuse_relaying_round	relay_refusal	1	recorded	pre-send relay block on a bridged round; raised while vouched
@@ -280,6 +290,11 @@ src/gateway/task_service/execution/worker_inspect.rs	inspect_and_record	Error::R
 src/gateway/ui/backend_ops.rs	add_backend	refuse_unresolved_secrets	1	no-record	admin UI
 src/gateway/ui/backend_ops.rs	update_backend	refuse_unresolved_secrets	1	no-record	admin UI
 src/gateway/ui/backends.rs	add_backend	add_refusal	1	no-record	accounts, SSE, start-up or admin UI: no call delivery
+src/gateway/ui/backends/signin.rs	confirm_sign_in	refuse_body	1	no-record	admin UI sign-in: refuses the request before any login starts, no call delivery
+src/gateway/ui/backends/signin.rs	confirm_sign_in	refuse_host	1	no-record	admin UI sign-in: refuses the request before any login starts, no call delivery
+src/gateway/ui/backends/signin.rs	start_sign_in	refuse_body	1	no-record	admin UI sign-in: refuses the request before any login starts, no call delivery
+src/gateway/ui/backends/signin.rs	start_sign_in	refuse_host	1	no-record	admin UI sign-in: refuses the request before any login starts, no call delivery
+src/gateway/ui/discovery.rs	adopt_eligible	name_refusal	1	no-record	admin UI decision set: whether a find opens an adopt item, no call delivery
 src/gateway/ui/discovery.rs	body	name_refusal	1	no-record	admin UI discovery listing: drops managed finds from the radar count, no call delivery
 src/gateway/ui/discovery.rs	listed	name_refusal	1	no-record	admin UI discovery listing: labels a find's adopt refusals, no call delivery
 src/gateway/ui/discovery_adopt.rs	adopt_discovery	name_refusal	1	no-record	admin UI discovery adopt: refuses adopting a find whose name is taken, no call delivery

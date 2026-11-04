@@ -1,0 +1,194 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+//! Which earlier spend a name budgeted by reload is charged with (ADR-023).
+//!
+//! Past the row cap, spend of unbudgeted names goes to one overflow total, so
+//! a name a publication starts budgeting may have spent there today. Its
+//! starting figure is an upper bound of that spend: the overflow total now
+//! when it has no row, or the overflow total when its row was created today.
+//! Once owned, a name's spend always lands in its own row, so it is never
+//! charged again.
+
+use dashmap::DashMap;
+
+use super::DailyAccumulator;
+
+/// One scope's (per tool or per key) attribution state.
+#[derive(Default)]
+pub(super) struct Attribution {
+    /// Every name budgeted since startup, by the startup config or a
+    /// published generation. Never removed: an owned name has a row of its
+    /// own under any generation, on any day, budgeted or not.
+    owned: DashMap<String, ()>,
+    /// The starting figure taken for a name today (zero included).
+    estimate: DashMap<String, DailyAccumulator>,
+    /// The overflow total when an unowned name's row was created today.
+    born: DashMap<String, DailyAccumulator>,
+}
+
+impl Attribution {
+    /// State owning `names`, the startup budgets.
+    pub(super) fn owning<'a>(names: impl IntoIterator<Item = &'a String>) -> Self {
+        let state = Self::default();
+        for name in names {
+            state.owned.insert(name.clone(), ());
+        }
+        state
+    }
+
+    pub(super) fn owns(&self, name: &str) -> bool {
+        self.owned.contains_key(name)
+    }
+
+    pub(super) fn own(&self, name: &str) {
+        self.owned.entry(name.to_owned()).or_insert(());
+    }
+
+    /// The starting figure taken for `name` on `today`, in micro-USD.
+    pub(super) fn estimate_on(&self, name: &str, today: Option<u64>) -> u64 {
+        self.estimate
+            .get(name)
+            .map_or(0, |acc| acc.current_on(today))
+    }
+
+    /// The figure a check judges `name` by: its row, its starting figure and
+    /// its pending reservations, saturating, since a restored figure may sit
+    /// at the top of the range.
+    pub(super) fn judged(&self, name: &str, row: u64, pending: u64, today: Option<u64>) -> u64 {
+        row.saturating_add(self.estimate_on(name, today))
+            .saturating_add(pending)
+    }
+
+    /// Every figure taken on `today`, zeros included, in micro-USD.
+    pub(super) fn estimates_on(&self, today: Option<u64>) -> Vec<(String, u64)> {
+        self.estimate
+            .iter()
+            .filter(|entry| entry.is_current_on(today))
+            .map(|entry| (entry.key().clone(), entry.current_on(today)))
+            .collect()
+    }
+
+    /// Record that an unowned name's row is created now, with `overflow` in
+    /// the overflow total. Nothing to record while the overflow is empty.
+    pub(super) fn born(&self, name: &str, overflow: u64, day: Option<u64>) {
+        if overflow > 0 && !self.owns(name) {
+            let acc = DailyAccumulator::on(day);
+            acc.add_on(day, overflow);
+            self.born.insert(name.to_owned(), acc);
+        }
+    }
+
+    /// Take an unowned budgeted name's starting figure, then own it.
+    /// Classify, read and own in this order, under the caller's ledger lock,
+    /// so no settle can own the name between them. An owned name takes
+    /// nothing: its spend since it was owned is all in its row, and a figure
+    /// it was given that day stays.
+    pub(super) fn seed(&self, name: &str, has_row: bool, overflow: u64, day: Option<u64>) {
+        if self.owns(name) {
+            return;
+        }
+        let figure = if has_row {
+            self.born.get(name).map_or(0, |acc| acc.current_on(day))
+        } else {
+            overflow
+        };
+        self.set(name, figure, day);
+        self.own(name);
+    }
+
+    /// Store `micro` as `name`'s figure on `day` (a restore, or a seed).
+    pub(super) fn set(&self, name: &str, micro: u64, day: Option<u64>) {
+        let acc = DailyAccumulator::on(day);
+        acc.add_on(day, micro);
+        self.estimate.insert(name.to_owned(), acc);
+    }
+
+    /// Drop the figures of days other than `today`. Ownership stays.
+    pub(super) fn sweep(&self, today: Option<u64>) {
+        self.estimate.retain(|_, acc| acc.is_current_on(today));
+        self.born.retain(|_, acc| acc.is_current_on(today));
+    }
+}
+
+impl super::BudgetEnforcer {
+    /// A settle's tool and key totals with each name's starting figure added,
+    /// so a crossing is judged on the figure `check` judges.
+    pub(super) fn judged_totals(
+        &self,
+        (tool_name, key_name): (&str, Option<&str>),
+        today: Option<u64>,
+        (tool, key): (u64, Option<u64>),
+    ) -> (u64, Option<u64>) {
+        let tool = tool.saturating_add(self.tool_attribution.estimate_on(tool_name, today));
+        let key = key.map(|key| {
+            key.saturating_add(key_name.map_or(0, |n| self.key_attribution.estimate_on(n, today)))
+        });
+        (tool, key)
+    }
+
+    /// A publication of `incoming` budgets: every name in them not yet owned
+    /// takes its starting figure and is owned from now on. A name budgeted at
+    /// startup or by an earlier publication is owned already and takes none.
+    /// One step under the ledger lock, the lock every check and settle takes
+    /// first, so no settle lands between a name's classification and its
+    /// owning.
+    pub(crate) fn seed_estimates(&self, incoming: &crate::cost_accounting::config::BudgetLimits) {
+        // The day is read under the lock, so a seed that waited across
+        // midnight takes the new day's overflow with the new day's stamp.
+        let _pending = super::locked(&self.ledger);
+        let today = self.today().ok();
+        let scopes = [
+            (
+                &self.tool_daily,
+                &self.tool_overflow,
+                &self.tool_attribution,
+                &incoming.per_tool,
+            ),
+            (
+                &self.key_daily,
+                &self.key_overflow,
+                &self.key_attribution,
+                &incoming.per_key,
+            ),
+        ];
+        for (rows, overflow, attribution, budgets) in scopes {
+            let overflow = overflow.current_on(today);
+            for name in budgets.keys() {
+                attribution.seed(name, rows.contains_key(name), overflow, today);
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+impl super::BudgetEnforcer {
+    /// The invariant the starting figures rest on: every name `budgets`
+    /// budgets is owned, and every stored figure belongs to an owned name.
+    /// The names breaking it, if any.
+    pub(crate) fn ownership_gap(
+        &self,
+        budgets: &crate::cost_accounting::config::BudgetLimits,
+    ) -> Vec<String> {
+        let mut gap = Vec::new();
+        for (scope, attribution, names) in [
+            ("tool", &self.tool_attribution, &budgets.per_tool),
+            ("key", &self.key_attribution, &budgets.per_key),
+        ] {
+            for name in names.keys().chain(
+                attribution
+                    .estimate
+                    .iter()
+                    .map(|e| e.key().clone())
+                    .collect::<Vec<_>>()
+                    .iter(),
+            ) {
+                if !attribution.owns(name) {
+                    gap.push(format!("{scope}:{name}"));
+                }
+            }
+        }
+        gap.sort();
+        gap.dedup();
+        gap
+    }
+}

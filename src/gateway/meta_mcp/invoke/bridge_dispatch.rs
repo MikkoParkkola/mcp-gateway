@@ -238,6 +238,7 @@ impl crate::gateway::input_bridge::BackendInvoker for BridgeDispatcher<'_> {
                 cost_key: self.caller.cost_key(),
                 trace_id: "",
                 caller_key: None,
+                generation: self.caller.generation,
             })
             .map_err(|e| {
                 // A spend refusal ends the exchange as the delivered refusal.
@@ -344,7 +345,7 @@ impl crate::gateway::input_bridge::BackendInvoker for BridgeDispatcher<'_> {
                 self.headers,
                 self.cache_binding,
                 self.account_credential.clone(),
-                self.caller.cost_key(),
+                (self.caller.cost_key(), self.caller.generation),
                 self.trace_id,
                 self.policy_epoch,
                 self.protocol_revision,
@@ -394,6 +395,10 @@ impl crate::gateway::input_bridge::BackendInvoker for BridgeDispatcher<'_> {
         {
             *self.account_refusal.lock() =
                 Some(super::audit::after_upstream_401(managed, error).await);
+        } else if super::gate::is_authorization_refusal(&error) {
+            // A refusal of the caller is parked too, so the call answers it as
+            // itself rather than as a failed exchange.
+            *self.account_refusal.lock() = Some(error);
         }
         Err(classified)
     }

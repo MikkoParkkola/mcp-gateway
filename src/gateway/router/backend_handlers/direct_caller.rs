@@ -657,6 +657,7 @@ pub(super) async fn forward_notification(
                 cost_key: None,
                 trace_id: &envelope.method,
                 caller_key: None,
+                generation: Some(&*caller.generation),
             };
             let screen = (
                 &call,

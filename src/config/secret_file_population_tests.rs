@@ -172,6 +172,10 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
         "src/discovery/config_scanner.rs",
         "other MCP clients' configs; not the gateway's files",
     ),
+    (
+        "src/discovery/config_scanner_client_scan.rs",
+        "other MCP clients' configs, opened to tell a permission refusal from a bad file before the parse; not the gateway's files",
+    ),
     ("src/fs_lock.rs", "lock files; empty"),
     ("src/fs_lock_windows.rs", "lock files; empty"),
     (

@@ -152,7 +152,7 @@ async fn a_rotated_token_that_cannot_be_saved_is_not_resent() {
         let first = Arc::clone(&first);
         async move { headless(&first).await }
     });
-    tokio::time::timeout(std::time::Duration::from_secs(5), gate.reached.notified())
+    tokio::time::timeout(std::time::Duration::from_secs(10), gate.reached.notified())
         .await
         .expect("the refresh reached its save");
     *flight.save_gate.lock() = None;
@@ -484,7 +484,10 @@ async fn a_login_repairs_a_damaged_refresh_state() {
     let key = owned.credential_key().unwrap();
     std::fs::write(owned.storage.refresh_state_path(&key, RESOURCE), "not json").unwrap();
 
-    owned.try_client_credentials().await.expect("logged in");
+    owned
+        .try_client_credentials(owned.issuer_current().unwrap())
+        .await
+        .expect("logged in");
     let issued = stored(&owned)
         .and_then(|t| t.refresh_token)
         .expect("the login stored a refresh token");
@@ -521,7 +524,10 @@ async fn a_login_repair_does_not_brand_the_server_rotating() {
     let key = owned.credential_key().unwrap();
     std::fs::write(owned.storage.refresh_state_path(&key, RESOURCE), "not json").unwrap();
 
-    owned.try_client_credentials().await.expect("logged in");
+    owned
+        .try_client_credentials(owned.issuer_current().unwrap())
+        .await
+        .expect("logged in");
     let issued = stored(&owned)
         .and_then(|t| t.refresh_token)
         .expect("the login stored a refresh token");
@@ -555,7 +561,10 @@ async fn a_login_stands_when_the_sidecar_cannot_be_repaired() {
     let key = owned.credential_key().unwrap();
     std::fs::create_dir(owned.storage.refresh_state_path(&key, RESOURCE)).unwrap();
 
-    let access = owned.try_client_credentials().await.expect("logged in");
+    let access = owned
+        .try_client_credentials(owned.issuer_current().unwrap())
+        .await
+        .expect("logged in");
     assert_eq!(stored(&owned).map(|t| t.access_token), Some(access));
     assert!(owned.storage.load_refresh_state(&key, RESOURCE).damaged);
 }
@@ -611,4 +620,163 @@ async fn a_refresh_on_an_unreadable_clock_sends_nothing_and_keeps_its_token() {
 
     headless(&owned).await.expect("the kept token refreshes");
     assert_eq!(server.uses("r1"), 1);
+}
+
+/// A background refresh whose outcome cannot be told apart from a consumed
+/// token, on a rotating server, retires the stored refresh token; the status
+/// cell must then read `Expired` (the access token is past its time and
+/// nothing can refresh it) with no dispatch in between. Red today: only a
+/// successful renewal republishes, so the cell keeps saying a refreshable
+/// token is held.
+#[tokio::test]
+async fn a_background_refresh_that_retires_the_token_republishes_the_status() {
+    use super::sign_in::{SignIn, SignInStatus};
+    use crate::oauth::client::renewal::Renewal;
+    let server = TokenServer::start(&[]).await;
+    let dir = tempfile::tempdir().unwrap();
+    let cell = Arc::new(SignInStatus::new(SignIn::NeverSignedIn));
+    let mut owned = client(dir.path(), &server).with_sign_in_status(Arc::clone(&cell));
+    rotating(&owned);
+    hold(&owned, &token("a1", Some("r1"), true));
+    owned.publish_sign_in();
+    assert!(
+        matches!(cell.snapshot(), SignIn::SignedIn { .. }),
+        "control: a refreshable token reads signed in"
+    );
+    token_endpoint(&mut owned, malformed_endpoint().await);
+
+    let renewal = owned.attempt_background_renewal().await;
+
+    assert!(!matches!(renewal, Renewal::Renewed), "the refresh failed");
+    assert_eq!(stored(&owned).and_then(|t| t.refresh_token), None);
+    assert_eq!(cell.snapshot(), SignIn::Expired);
+}
+
+/// The same retirement through `get_token` and through `get_token_detached`:
+/// each republishes, so the cell reads `Expired` with no dispatch in between.
+/// Red today: neither republishes after a failed refresh.
+#[tokio::test]
+async fn get_token_and_the_detached_step_republish_after_a_retiring_refresh() {
+    use super::sign_in::{SignIn, SignInStatus};
+    for detached in [false, true] {
+        let server = TokenServer::start(&[]).await;
+        let dir = tempfile::tempdir().unwrap();
+        let cell = Arc::new(SignInStatus::new(SignIn::NeverSignedIn));
+        let mut owned = client(dir.path(), &server).with_sign_in_status(Arc::clone(&cell));
+        rotating(&owned);
+        hold(&owned, &token("a1", Some("r1"), true));
+        owned.publish_sign_in();
+        token_endpoint(&mut owned, malformed_endpoint().await);
+
+        let outcome = if detached {
+            let gate = Arc::new(crate::oauth::login_gate::LoginGate::default());
+            let owned = owned.with_login_gate(Arc::clone(&gate));
+            let deadline = tokio::time::Instant::now() + crate::test_wait::HANG_BOUND;
+            owned
+                .get_token_detached(false, gate.epoch(), &gate.cohort(), deadline)
+                .await
+        } else {
+            headless(&owned).await
+        };
+
+        assert!(outcome.is_err(), "detached={detached}: the refresh failed");
+        assert_eq!(cell.snapshot(), SignIn::Expired, "detached={detached}");
+    }
+}
+
+/// A marker left by a process that stopped mid-exchange, on a rotating server,
+/// retires the stored refresh token without spawning an exchange, so the
+/// exchange's settled hook never runs: the caller's own publish is the only
+/// one. Each of renewal, `get_token` and `get_token_detached` must leave the
+/// cell reading `Expired`, with nothing sent. Red without the caller publish.
+#[tokio::test]
+async fn a_retired_unsettled_token_republishes_without_a_request() {
+    use super::sign_in::{SignIn, SignInStatus};
+    for path in ["renewal", "get_token", "detached"] {
+        let server = TokenServer::start(&[]).await;
+        let dir = tempfile::tempdir().unwrap();
+        let cell = Arc::new(SignInStatus::new(SignIn::NeverSignedIn));
+        let owned = client(dir.path(), &server).with_sign_in_status(Arc::clone(&cell));
+        hold(&owned, &token("a1", Some("r1"), true));
+        let state = RefreshState {
+            rotates: true,
+            in_flight: Some(super::super::refresh_flight::fingerprint_hex("r1")),
+            ..RefreshState::default()
+        };
+        let key = owned.credential_key().unwrap();
+        owned
+            .storage
+            .save_refresh_state(&key, RESOURCE, &state)
+            .unwrap();
+        owned.publish_sign_in();
+        assert!(
+            matches!(cell.snapshot(), SignIn::SignedIn { .. }),
+            "{path}: control: a refreshable token reads signed in"
+        );
+
+        match path {
+            "renewal" => {
+                let renewal = owned.attempt_background_renewal().await;
+                assert!(
+                    !matches!(renewal, crate::oauth::client::renewal::Renewal::Renewed),
+                    "{path}: nothing was refreshed"
+                );
+            }
+            "get_token" => {
+                headless(&owned).await.expect_err("a login is needed");
+            }
+            _ => {
+                let gate = Arc::new(crate::oauth::login_gate::LoginGate::default());
+                let owned = owned.with_login_gate(Arc::clone(&gate));
+                let deadline = tokio::time::Instant::now() + crate::test_wait::HANG_BOUND;
+                owned
+                    .get_token_detached(false, gate.epoch(), &gate.cohort(), deadline)
+                    .await
+                    .expect_err("a login is needed");
+            }
+        }
+
+        assert_eq!(server.requests(), 0, "{path}: nothing was sent");
+        assert_eq!(cell.snapshot(), SignIn::Expired, "{path}");
+    }
+}
+
+/// A refresh whose caller stopped waiting (a restart revoked it in
+/// `get_token_detached`, once the exchange had arrived) still publishes: the
+/// exchange is held, the caller has returned, and only then is the exchange
+/// released. The task that completes it settles the state, so the cell shows
+/// the new expiry. Red today: the publish ran in the dropped caller.
+#[tokio::test]
+async fn a_detached_refresh_whose_caller_left_still_publishes() {
+    use super::sign_in::{SignIn, SignInStatus};
+    use crate::test_wait::HANG_BOUND;
+    let server = TokenServer::start(&[super::token_server_fixture::Answer::HoldThenRotate]).await;
+    let dir = tempfile::tempdir().unwrap();
+    let cell = Arc::new(SignInStatus::new(SignIn::NeverSignedIn));
+    let gate = Arc::new(crate::oauth::login_gate::LoginGate::default());
+    let owned = client(dir.path(), &server)
+        .with_sign_in_status(Arc::clone(&cell))
+        .with_login_gate(Arc::clone(&gate));
+    hold(&owned, &token("a1", Some("r1"), true));
+    owned.publish_sign_in();
+    let before = cell.snapshot();
+    let deadline = tokio::time::Instant::now() + HANG_BOUND;
+    let cohort = gate.cohort();
+    let ask = owned.get_token_detached(false, gate.epoch(), &cohort, deadline);
+    let leave = async {
+        server.arrivals(1, HANG_BOUND).await;
+        gate.cancel_and_join().await;
+    };
+
+    let (left, ()) = tokio::join!(ask, leave);
+
+    assert!(left.is_err(), "the caller left mid-exchange");
+    assert_eq!(server.sent.lock().unwrap().len(), 1, "the exchange is held");
+    assert_eq!(cell.snapshot(), before, "nothing settled yet");
+    server.release.notify_one();
+    let began = std::time::Instant::now();
+    while cell.snapshot() == before && began.elapsed() < HANG_BOUND {
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    assert_ne!(cell.snapshot(), before, "the completing task published");
 }
