@@ -6,18 +6,9 @@
 //! the live config before it go unseen by every config-timing row.
 
 /// The hook call: a site is any code line calling it, however it is written
-/// or commented.
+/// or commented. Matched in source whose comments and literals are blanked
+/// (`test_source_text::sanitize`), so neither hides code nor fakes a call.
 const HOOK: &str = "relay_witness_hook::run(";
-
-/// `line` without its trailing `//` comment; empty for a comment line.
-fn code_of(line: &str) -> &str {
-    line.split("//").next().unwrap_or_default()
-}
-
-/// Whether `line` calls the hook.
-fn calls_hook(line: &str) -> bool {
-    code_of(line).contains(HOOK)
-}
 
 /// Every `.rs` file under `dir`, recursively.
 fn rust_files(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
@@ -79,6 +70,43 @@ fn reads_generation(line: &str) -> bool {
     .any(|read| line.contains(read))
 }
 
+/// Check every hook site in `source` (named `name` in messages): each runs
+/// in a handler that calls the hook once, before its first generation read.
+/// The number of sites found, or the first misplaced one.
+fn check_sites(name: &str, source: &str) -> Result<usize, String> {
+    let code = crate::test_source_text::sanitize(source);
+    let lines: Vec<&str> = code.lines().collect();
+    let mut sites = 0;
+    for hook in (0..lines.len()).filter(|&i| lines[i].contains(HOOK)) {
+        sites += 1;
+        let start = enclosing_fn(&lines, hook);
+        let signature = lines[code[..start].lines().count()].trim();
+        let where_ = format!("{name}: {signature}");
+        let body: Vec<&str> = body(&code, start)
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .collect();
+        let hooks: Vec<usize> = (0..body.len())
+            .filter(|&i| body[i].contains(HOOK))
+            .collect();
+        if hooks.len() != 1 {
+            return Err(format!("{where_}: the handler runs the witness hook once"));
+        }
+        let read = body
+            .iter()
+            .position(|line| reads_generation(line))
+            .ok_or_else(|| format!("{where_}: no generation read found"))?;
+        if read <= hooks[0] {
+            return Err(format!(
+                "{where_}: the witness hook must run before the first generation \
+                 read on the route, found after `{}`",
+                body[read].trim()
+            ));
+        }
+    }
+    Ok(sites)
+}
+
 #[test]
 fn the_witness_hook_runs_before_the_first_generation_read_on_every_route() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
@@ -86,40 +114,26 @@ fn the_witness_hook_runs_before_the_first_generation_read_on_every_route() {
     rust_files(&root.join("src"), &mut files);
     let mut sites = 0;
     for path in files {
-        // This scan names the hook in a string of its own.
-        if path.ends_with("collusion_direct_tests/hook_order.rs") {
-            continue;
-        }
         let source = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{e}"));
-        let lines: Vec<&str> = source.lines().collect();
-        for hook in (0..lines.len()).filter(|&i| calls_hook(lines[i])) {
-            sites += 1;
-            let start = enclosing_fn(&lines, hook);
-            let signature = lines[source[..start].lines().count()].trim();
-            let where_ = format!("{}: {signature}", path.display());
-            let code: Vec<&str> = body(&source, start)
-                .lines()
-                .map(code_of)
-                .filter(|line| !line.trim().is_empty())
-                .collect();
-            let hooks: Vec<usize> = (0..code.len()).filter(|&i| calls_hook(code[i])).collect();
-            assert_eq!(
-                hooks.len(),
-                1,
-                "{where_}: the handler runs the witness hook once"
-            );
-            let read = code
-                .iter()
-                .position(|line| reads_generation(line))
-                .unwrap_or_else(|| panic!("{where_}: no generation read found"));
-            assert!(
-                hooks[0] < read,
-                "{where_}: the witness hook must run before the first generation \
-                 read on the route, found after `{}`",
-                code[read].trim()
-            );
-        }
+        sites +=
+            check_sites(&path.display().to_string(), &source).unwrap_or_else(|e| panic!("{e}"));
     }
     // The routes the config-timing rows drive; fewer means the scan missed some.
     assert!(sites >= 5, "the scan found {sites} hook sites");
+}
+
+/// A generation read after a string literal holding `//`, before the hook,
+/// is still a read: the literal is blanked, not taken as a comment.
+#[test]
+fn a_read_after_a_slashed_literal_is_still_seen() {
+    // A later read follows the hook, so a scan that lost the first read
+    // would pass the handler.
+    let source = "fn route() {\n    let url = \"http://x\"; let generation = url;\n    \
+                  crate::security::firewall::relay_witness_hook::run();\n    \
+                  let _ = generation;\n}\n";
+    let found = check_sites("row", source);
+    assert!(
+        found.as_ref().is_err_and(|e| e.contains("must run before")),
+        "a read after a slashed literal went unseen: {found:?}"
+    );
 }
