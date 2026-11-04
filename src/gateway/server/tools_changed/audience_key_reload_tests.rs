@@ -64,22 +64,20 @@ fn reload_k_std(w: &World, edit: impl Fn(&mut crate::gateway::auth::ResolvedApiK
     assert_ne!(before, after, "the reload changed the key table");
 }
 
-/// STREAM.1: a key a reload removes has its held streams' next ordinary
-/// notification withheld. The GET fan-out queues no copy for a dead key, so
-/// the GET stream stays quiet; listen ends.
+/// STREAM.1 on the GET stream: a key a reload removes has its next ordinary
+/// notification withheld. The fan-out queues no copy for a dead key, so the
+/// stream stays quiet.
 #[tokio::test]
-async fn stream1_a_removed_key_ends_its_held_streams() {
+async fn stream1_a_removed_key_gets_nothing_on_its_get_stream() {
     let w = World::start().await;
     w.store_shared("alpha", vec![tool("read", "r")]);
     w.settle().await;
-    let (mut get, mut listen) = (w.sse("k-std").await, w.listen("k-std").await);
+    let mut get = w.sse("k-std").await;
     push(&w, "alpha").await;
     assert!(
         get.frames(&w).await.iter().any(|m| m == GET_NOTE),
         "premise: GET delivered"
     );
-    // `frames` reads up to its sentinel; a listen stream that ended panics.
-    let _ = listen.frames(&w).await;
 
     reload_k_std(&w, |_| false);
     assert_eq!(
@@ -92,6 +90,26 @@ async fn stream1_a_removed_key_ends_its_held_streams() {
         !get.frames(&w).await.iter().any(|m| m == GET_NOTE),
         "STREAM.1: the GET stream still serves a removed key"
     );
+}
+
+/// STREAM.1 on `subscriptions/listen`: a key a reload removes has its
+/// listener ended at its next delivery.
+#[tokio::test]
+async fn stream1_a_removed_key_ends_its_listen_stream() {
+    let w = World::start().await;
+    w.store_shared("alpha", vec![tool("read", "r")]);
+    w.settle().await;
+    let mut listen = w.listen("k-std").await;
+    // `frames` reads up to its sentinel; a listen stream that ended panics.
+    let _ = listen.frames(&w).await;
+
+    reload_k_std(&w, |_| false);
+    assert_eq!(
+        status_as(&w, "k-std").await,
+        axum::http::StatusCode::UNAUTHORIZED,
+        "premise: a request as the removed key is refused"
+    );
+    push(&w, "alpha").await;
     assert!(
         listen.closed(&w).await,
         "STREAM.1: listen still serves a removed key"
