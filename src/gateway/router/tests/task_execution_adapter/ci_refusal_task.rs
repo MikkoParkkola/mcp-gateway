@@ -195,3 +195,46 @@ async fn an_error_frame_refusal_settles_with_the_frames_own_code() {
     );
     refused_with(&entries, &task, crate::error::rpc_codes::INTERNAL_ERROR);
 }
+
+/// The task path takes the live call's error answer: a response-firewall
+/// refusal of a task answer (its built-in credential block) fails the task
+/// with the firewall's error frame, `-32600`, never a withheld `isError`
+/// result, and that frame's code is what its settlement records.
+#[tokio::test]
+async fn a_firewall_refused_task_answer_settles_as_an_error_frame() {
+    use crate::security::firewall::{Firewall, FirewallConfig};
+    let key = ["AKIA", "IOSFODNN7", "EXAMPLE"].concat();
+    let answer = Answer::Result(json!({
+        "content": [{"type": "text", "text": format!("AWS_ACCESS_KEY_ID={key}")}],
+        "isError": false
+    }));
+    let (task, settled, entries) = Box::pin(settled_with(answer, |mut meta| {
+        let config = FirewallConfig {
+            enabled: true,
+            scan_requests: true,
+            scan_responses: true,
+            credential_redaction: true,
+            ..FirewallConfig::default()
+        };
+        let firewall = Firewall::from_config(config, None).with_continuations(meta.continuation());
+        meta.set_firewall(Some(Arc::new(firewall)));
+        meta
+    }))
+    .await;
+    let text = settled.to_string();
+    assert!(!text.contains(&key), "premise: refused: {settled}");
+    assert!(
+        text.contains("Response blocked by security firewall"),
+        "premise: the firewall's own refusal: {settled}"
+    );
+    assert_eq!(
+        status_of(&settled),
+        "failed",
+        "an error frame fails the task: {settled}"
+    );
+    assert!(
+        !text.contains("\"isError\":true"),
+        "not a withheld result: {settled}"
+    );
+    refused_with(&entries, &task, crate::error::rpc_codes::INVALID_REQUEST);
+}
