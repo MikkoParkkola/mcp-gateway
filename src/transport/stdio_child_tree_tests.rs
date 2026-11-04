@@ -190,6 +190,27 @@ async fn close_after_the_exit_signals_each_phase_once_then_reaps() {
     gone(child).await;
 }
 
+/// A backend that writes on its way out after stdin closes (a gateway run as
+/// a stdio backend saves its telemetry, costs and audit then) gets to finish
+/// that write: closing the transport waits, bounded, for the leader to exit
+/// before the group is killed.
+#[tokio::test]
+async fn a_shutdown_write_after_stdin_closes_lands_before_close_returns() {
+    let (w, t) = started(
+        "cat >/dev/null\nsleep 0.3\necho landed > shutdown.mark",
+        None,
+    )
+    .await;
+    t.close().await.expect("close");
+    assert_eq!(
+        std::fs::read_to_string(w.path().join("shutdown.mark"))
+            .ok()
+            .as_deref(),
+        Some("landed\n"),
+        "the backend was killed before its shutdown write, 300 ms after stdin closed"
+    );
+}
+
 /// T6: a second close sends nothing and keeps the first status.
 #[tokio::test]
 async fn a_second_close_sends_nothing() {
