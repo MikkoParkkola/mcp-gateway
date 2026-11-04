@@ -417,22 +417,40 @@ async fn a_renewal_keeps_an_unchanged_value_redacted_past_its_grace() {
     assert!(echoed(), "premise: an unrenewed value retires on its grace");
 }
 
-/// A dispatch resolves its rules once: what it fingerprints for a deferred
-/// task and what it injects are the same values, so a rotation between two
-/// lookups cannot fingerprint one value and send another.
-#[test]
-fn a_send_resolves_its_rules_once() {
+/// A deferring dispatch resolves its rules once: what its slot fingerprints
+/// and what it injects are one resolution, so a rotation between two
+/// lookups cannot fingerprint one value and send another. The slot is armed
+/// as `with_upstream_submission` arms it, so the fingerprint is taken.
+#[tokio::test]
+async fn a_deferring_send_resolves_its_rules_once() {
+    use crate::security::dispatched::{Dispatched, Slot, scope};
     let backend = backend(
         http(),
         vec![rule(InjectTarget::Header, "X-Api-Key", SECRET)],
         true,
     );
+    let slot = Arc::new(Slot::armed_for("svc", "read"));
     let before = crate::secrets::lookup_probe::calls();
-    send(
-        &backend,
-        json!({"name": "read", "arguments": {}}),
-        Vec::new(),
-    )
-    .expect("sent");
+    let (_, headers) = scope(Arc::clone(&slot), async {
+        send(
+            &backend,
+            json!({"name": "read", "arguments": {}}),
+            Vec::new(),
+        )
+        .expect("sent")
+    })
+    .await;
     assert_eq!(crate::secrets::lookup_probe::calls() - before, 1);
+    assert!(
+        headers.iter().any(|(_, value)| value == SECRET),
+        "premise: it was sent"
+    );
+    assert_eq!(
+        slot.value(),
+        Some(Dispatched::of(
+            "svc",
+            &[("api".to_owned(), SECRET.to_owned())]
+        )),
+        "the slot fingerprints the value sent"
+    );
 }
