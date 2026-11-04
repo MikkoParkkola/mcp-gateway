@@ -31,7 +31,7 @@ pub(super) enum StopKind {
 
 /// What a graceful stop keeps back for the kill and the reap after its
 /// waits: the reap deadline, plus the margin the close waits beyond it.
-pub(super) const KILL_RESERVE: Duration = Duration::from_secs(REAP_DEADLINE.as_secs() + 1);
+pub(crate) const KILL_RESERVE: Duration = Duration::from_secs(REAP_DEADLINE.as_secs() + 1);
 
 /// A close with no stop deadline from its caller gets this budget.
 const DEFAULT_STOP_BUDGET: Duration = Duration::from_secs(10);

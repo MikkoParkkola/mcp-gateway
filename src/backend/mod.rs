@@ -697,6 +697,10 @@ mod a2a_lent_slot_tests;
 #[path = "frame_limit_start_tests.rs"]
 mod frame_limit_start_tests;
 
+#[cfg(all(test, unix))]
+#[path = "stop_deadline_tests.rs"]
+mod stop_deadline_tests;
+
 #[cfg(test)]
 #[path = "stateless_tools_slot_tests.rs"]
 mod stateless_tools_slot_tests;

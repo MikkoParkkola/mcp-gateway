@@ -285,38 +285,6 @@ async fn a_tree_in_its_waits_is_killed_by_a_later_gateway_stop_deadline() {
     gone(child).await;
 }
 
-/// A tree an idle close handed over earlier, still in its exit waits when the
-/// gateway stop begins, is killed before the stop returns: the stop waits for
-/// it, cut to the stop's deadline, rather than returning while it waits.
-#[tokio::test]
-async fn a_stop_waits_for_an_earlier_graceful_handover_to_be_killed() {
-    let (w, t) = started(&resists_term(), None).await;
-    let child = descendant(w.path()).await;
-    let pid = leader(&t).await;
-    let deadline = Arc::new(super::super::reaper::StopDeadline::default());
-    t.attach_stop_deadline(Arc::clone(&deadline));
-    let own_plan_end = tokio::time::Instant::now() + Duration::from_secs(120);
-    let closing = Arc::clone(&t);
-    let idle_close = tokio::spawn(async move {
-        super::super::reaper::within_stop_deadline(own_plan_end, closing.close()).await
-    });
-    poll_until("the tree is handed over", || t.child.lock().tree.is_none()).await;
-    // What `BackendRegistry::stop_all_by` does once its own stops are done.
-    let stop_by = tokio::time::Instant::now()
-        + super::super::reaper::KILL_RESERVE
-        + Duration::from_secs(2);
-    deadline.move_earlier(stop_by.into_std());
-    deadline.wait_handed(stop_by).await;
-    assert_ne!(
-        kernel_view(pid),
-        Some(false),
-        "the stop returned while the earlier handover's leader still ran"
-    );
-    assert_killed(pid).await;
-    idle_close.await.expect("close task").expect("close");
-    gone(child).await;
-}
-
 /// A second gateway stop with an earlier deadline moves it earlier; a later
 /// one leaves it, so a second stop can shorten the waits, never extend them.
 #[test]
