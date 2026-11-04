@@ -202,7 +202,9 @@ fn i11_many_insertions_in_one_run_stay_linear() {
     let r = redactor();
     let work = |n: usize| {
         let mut value = Value::String(format!("x:{}", vec![token.as_str(); n].join(":")));
-        let bytes = super::super::splice::work::counted(|| r.scan_and_redact(&mut value));
+        let bytes = super::super::splice::work::counted(|| {
+            r.scan_and_redact(&mut value);
+        });
         assert!(
             value.as_str().is_some_and(|v| !v.contains(token.as_str())),
             "premise: every credential was redacted"
