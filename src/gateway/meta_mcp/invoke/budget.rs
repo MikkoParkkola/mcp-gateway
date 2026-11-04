@@ -49,6 +49,21 @@ impl MetaMcp {
             );
             return;
         }
+        // A refusal of the caller says nothing about the backend either: one
+        // caller's refusals must not disable a backend for everyone.
+        if outcome == BudgetOutcome::IgnoredRefusal {
+            telemetry_metrics::counter!(
+                "mcp_error_budget_suppressed_total",
+                "server" => server.to_owned(),
+                "reason" => "refused"
+            )
+            .increment(1);
+            debug!(
+                server,
+                tool, "Refusal of the caller excluded from error budget accounting"
+            );
+            return;
+        }
         let cfg = self.error_budget_config.read();
         let cap_cfg = self.capability_budget_config.read();
         if outcome == BudgetOutcome::Success {
@@ -133,7 +148,7 @@ impl MetaMcp {
     pub(in crate::gateway) fn grant_subject_from_api_key(
         grant_key: Option<&str>,
     ) -> Option<GrantSubject> {
-        grant_key.and_then(|name| GrantSubject::checked("api_key", name, Some(name.to_string())))
+        grant_key.and_then(|name| GrantSubject::new("api_key", name, Some(name.to_string())).ok())
     }
 
     /// Whether the kernel enforces on `carrier`. Notes no data classes: the

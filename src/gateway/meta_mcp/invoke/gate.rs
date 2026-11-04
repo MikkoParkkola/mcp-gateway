@@ -762,11 +762,14 @@ mod call_level_tests;
 #[path = "gate_refusal_kind_tests.rs"]
 mod refusal_kind_tests;
 
-/// Whether a refusal the dispatch-time policy check gave is an authorization
-/// decision about the caller (`Forbidden`, which a playbook step answers
-/// neutrally); an audit failure, an undefined capability or an absent name is
-/// not.
-fn is_authorization_refusal(error: &Error) -> bool {
+/// Whether `error` is the gateway's own decision about the caller, wherever
+/// it was built (`Forbidden`, as `delivery_facts::outlet` reads it): a
+/// dispatch-time policy refusal, the per-user lender's refusal of a send, a
+/// refused shared slot. Such a refusal is answered as the refusal it is,
+/// never folded into a backend error result, and never sampled against the
+/// backend's error budget; a playbook step answers it neutrally. An audit
+/// failure, an undefined capability or an absent name is not one.
+pub(super) fn is_authorization_refusal(error: &Error) -> bool {
     matches!(error, Error::Forbidden { .. })
 }
 

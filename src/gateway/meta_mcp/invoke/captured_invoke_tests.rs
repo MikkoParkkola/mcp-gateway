@@ -224,7 +224,7 @@ async fn call_alpha(
         api_key_name: Some(actor.as_str()),
         agent_id: None,
         agent_declared: None,
-        grant_subject: Some(crate::identity_grants::GrantSubject::new(
+        grant_subject: Some(crate::identity_grants::GrantSubject::for_test(
             "https://idp.example.invalid",
             "alice",
             None,
@@ -240,6 +240,7 @@ async fn call_alpha(
         task: None,
         era: crate::protocol::meta::Era::Legacy,
         channel: &crate::gateway::input_bridge::NoClientChannel,
+        generation: None,
     };
 
     meta.invoke_tool(

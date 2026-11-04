@@ -60,7 +60,7 @@ async fn a_task_frame_record_names_the_listener_subject() {
         api_key_name: None,
         agent_id: None,
         agent_declared: None,
-        grant_subject: Some(GrantSubject::new(
+        grant_subject: Some(GrantSubject::for_test(
             "mtls",
             "spiffe://example.invalid/t7938",
             None,

@@ -129,6 +129,38 @@ async fn revalidated_client_follows_the_live_rule() {
     assert!(!client.admin, "the reload revoked it");
 }
 
+/// A held credential has no request behind it, so re-validation judges admin
+/// by the mapping current at each delivery, both ways round and for both
+/// credential forms: a fix that pinned it would keep a revoked role on an
+/// open stream.
+#[tokio::test]
+async fn revalidation_judges_admin_by_the_current_mapping_both_ways() {
+    let gw = gateway(&[]).await;
+    let token = gw.a.token("alice", &["ops-admins"], &json!({}));
+    let opaque = exchange(&gw.state, &token).await;
+    let authorizer = super::super::build_auth_state(&gw.state);
+    for bearer in [&token, &opaque] {
+        let mut headers = axum::http::HeaderMap::new();
+        headers.insert(
+            axum::http::header::AUTHORIZATION,
+            format!("Bearer {bearer}").parse().unwrap(),
+        );
+        let held = crate::gateway::auth::live::held_credential(&headers);
+        let admin = || async {
+            crate::gateway::auth::live::current_client(&authorizer, held.as_ref())
+                .await
+                .expect("the credential validates")
+                .admin
+        };
+        set_rules(&gw.state, &[]);
+        assert!(!admin().await, "no rule, no admin");
+        set_rules(&gw.state, &[ADMIN_GROUP_RULE]);
+        assert!(admin().await, "a reload adding the rule grants it");
+        set_rules(&gw.state, &[]);
+        assert!(!admin().await, "a reload removing the rule revokes it");
+    }
+}
+
 /// E1-T8: an email rule is not satisfied by an unverified email (A9 D1). The
 /// control shows the same token with a verified email is an admin.
 #[tokio::test]
@@ -177,10 +209,7 @@ async fn header_identity_is_never_admin() {
     .expect("the trusted proxy's header is honoured")
     .subject
     .expect("it names a subject");
-    assert_eq!(
-        (subject.authority.as_str(), subject.subject.as_str()),
-        (ISS_A, "alice")
-    );
+    assert_eq!((subject.authority(), subject.subject()), (ISS_A, "alice"));
 
     let via_proxy = |mut request: axum::http::Request<axum::body::Body>| {
         request

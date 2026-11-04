@@ -25,6 +25,8 @@ mod guard_tests;
 mod id_tests;
 #[cfg(test)]
 mod merge_tests;
+#[cfg(test)]
+mod merge_two_log_tests;
 
 use std::sync::Arc;
 

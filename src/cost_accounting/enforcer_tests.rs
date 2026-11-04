@@ -155,21 +155,21 @@ fn daily_accumulator_add_increases_current() {
 fn evaluate_alerts_selects_highest_matching_threshold() {
     // spend=0.09, limit=0.10 → 90% → highest rule that fires is Notify(80)
     let e = enforcer_with(true, Some(0.10), &[], &[], &[]);
-    let action = e.evaluate_alerts(0.09, 0.10);
+    let action = evaluate_alerts(&e.config.alerts, 0.09, 0.10);
     assert_eq!(action, Some(AlertAction::Notify));
 }
 
 #[test]
 fn evaluate_alerts_returns_block_at_100_percent() {
     let e = enforcer_with(true, Some(0.10), &[], &[], &[]);
-    let action = e.evaluate_alerts(0.10, 0.10);
+    let action = evaluate_alerts(&e.config.alerts, 0.10, 0.10);
     assert_eq!(action, Some(AlertAction::Block));
 }
 
 #[test]
 fn evaluate_alerts_returns_none_below_50_percent() {
     let e = enforcer_with(true, Some(1.0), &[], &[], &[]);
-    let action = e.evaluate_alerts(0.40, 1.0);
+    let action = evaluate_alerts(&e.config.alerts, 0.40, 1.0);
     assert_eq!(action, None);
 }
 
@@ -649,4 +649,40 @@ fn a_saturated_saved_total_restores_saturated() {
     );
     assert!(!snap.tool_daily.contains_key("past"), "{snap:?}");
     assert_eq!(snap.global_daily_usd.to_bits(), max, "{snap:?}");
+}
+
+/// A restored global total at the top of the range, plus a reservation in
+/// flight, saturates instead of wrapping or panicking: a daily budget that
+/// arrives by reload refuses the next call.
+#[test]
+fn a_saturated_global_total_with_a_reservation_refuses_instead_of_wrapping() {
+    use super::super::persistence::{PersistedCosts, ToolTotal};
+    let saved_at = 1_791_500_000;
+    let _clock = crate::clock::test_clock::at_secs(saved_at + 60);
+    let e = enforcer_with(true, None, &[], &[], &[("t", 1.0)]);
+    let mut saved = PersistedCosts {
+        saved_at,
+        day_basis: Some("local".to_owned()),
+        ..PersistedCosts::default()
+    };
+    #[allow(clippy::cast_precision_loss)]
+    let top = u64::MAX as f64 / 1_000_000.0;
+    saved.tool_totals.insert(
+        "big".to_owned(),
+        ToolTotal {
+            call_count: 1,
+            total_cost_usd: top,
+            avg_cost_usd: top,
+        },
+    );
+    e.restore(&saved);
+    // Admitted with no daily budget, so its reservation stays in flight.
+    let held = e.check("t", None);
+    assert!(held.allowed && held.hold.is_some(), "premise: a held call");
+    let mut daily = e.config.clone();
+    daily.budgets.daily = Some(5.0);
+    assert!(
+        !e.check_under(&daily, "t", None).allowed,
+        "a saturated total refuses"
+    );
 }

@@ -258,6 +258,7 @@ fn policy_context<'a>(
         task: None,
         era: crate::protocol::meta::Era::Modern,
         channel: &crate::gateway::input_bridge::NoClientChannel,
+        generation: Some(caller.generation),
     }
 }
 
@@ -571,10 +572,10 @@ pub(super) fn task_frames(
         // by a trusted proxy or an access gateway.
         status_only: caller.oauth_agent_identity.is_some()
             || caller.grant_subject.as_ref().is_some_and(|subject| {
-                !matches!(subject.authority.as_str(), "api_key" | "mtls")
+                !matches!(subject.authority(), "api_key" | "mtls")
                     && caller
                         .verified_identity
-                        .is_none_or(|verified| verified.issuer != subject.authority)
+                        .is_none_or(|verified| verified.issuer != subject.authority())
             }),
     })
 }

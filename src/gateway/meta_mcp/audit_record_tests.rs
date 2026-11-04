@@ -185,6 +185,7 @@ fn context<'a>(
         task: None,
         era: crate::protocol::meta::Era::Legacy,
         channel: &crate::gateway::input_bridge::NoClientChannel,
+        generation: None,
     }
 }
 
@@ -216,7 +217,7 @@ fn oidc_caller() -> Caller {
             .to_owned(),
         account: actor,
         authenticated: true,
-        grant: Some(GrantSubject::new(
+        grant: Some(GrantSubject::for_test(
             "https://a.example",
             "123",
             Some("x@corp.com".to_string()),

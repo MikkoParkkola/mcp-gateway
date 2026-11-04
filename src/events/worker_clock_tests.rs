@@ -472,6 +472,7 @@ async fn an_expiring_key_refused_by_an_unreadable_clock_keeps_its_subscription()
             principal: crate::gateway::auth::principal_of(SECRET)
                 .storage_form()
                 .to_owned(),
+            digest_tag: Some(crate::gateway::auth::secret_tag(SECRET)),
         });
     });
     let posts = || accepted.load(std::sync::atomic::Ordering::SeqCst);

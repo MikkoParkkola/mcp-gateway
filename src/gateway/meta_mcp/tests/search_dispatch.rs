@@ -130,7 +130,7 @@ async fn personal_capability_accepts_propagated_identity_before_schema_validatio
     };
     use tempfile::TempDir;
 
-    let subject = GrantSubject::new(
+    let subject = GrantSubject::for_test(
         "cloudflare_access",
         "user-123",
         Some("owner@example.com".to_string()),
@@ -236,6 +236,7 @@ providers:
                     confirmation: ConfirmationChannel::Unavailable,
                     era: crate::protocol::meta::Era::Legacy,
                     channel: &crate::gateway::input_bridge::NoClientChannel,
+                    generation: None,
                 }
             },
         )
