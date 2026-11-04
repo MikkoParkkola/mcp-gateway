@@ -203,7 +203,11 @@ async fn control_plane_snapshot(
                 .map_or(ControlPlaneBaseSource::Default, |base| base.source),
             store_read_degraded,
             export_configured: state.export_status.is_some(),
-            scoped,
+            reader: if scoped {
+                snapshot::Reader::Scoped
+            } else {
+                snapshot::Reader::Unscoped
+            },
         },
     );
     Json(response).into_response()

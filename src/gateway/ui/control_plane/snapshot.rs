@@ -400,9 +400,18 @@ pub(super) struct ControlPlaneResponseFlags {
     pub(super) mutation_disabled_reason: Option<&'static str>,
     /// See [`ControlPlaneApiResponse`].
     pub(super) base_source: ControlPlaneBaseSource,
-    /// The caller is scoped to some backends ([`is_scoped`]): it is shown no
-    /// gateway-wide row, so it reads no other principal's either.
-    pub(super) scoped: bool,
+    /// Whether the caller is scoped to some backends ([`is_scoped`]).
+    pub(super) reader: Reader,
+}
+
+/// Who a snapshot is read for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Reader {
+    /// A caller holding every backend, or a UI-wide admin.
+    Unscoped,
+    /// A caller scoped to some backends: shown no gateway-wide row, so it
+    /// reads no other principal's either.
+    Scoped,
 }
 
 impl ControlPlaneApiResponse {
@@ -420,7 +429,7 @@ impl ControlPlaneApiResponse {
             export_configured,
             mutation_disabled_reason,
             base_source,
-            scoped,
+            reader,
         } = flags;
         let coverage = snapshot.domain_coverage();
         let inventory_counts = ControlPlaneInventoryCounts::from_snapshot(snapshot, &shadow_radar);
@@ -453,7 +462,7 @@ impl ControlPlaneApiResponse {
                 mutating_actions_require_audit: true,
             },
             features: feature_entitlements(mutation_enabled, export_configured),
-            authorizations: ControlPlaneAuthorizationSet::for_actor(&actor, scoped),
+            authorizations: ControlPlaneAuthorizationSet::for_actor(&actor, reader),
             coverage,
             coverage_complete: coverage.is_complete(),
             inventory_counts,
@@ -608,13 +617,13 @@ pub(super) struct ControlPlaneAuthorizationSet {
 }
 
 impl ControlPlaneAuthorizationSet {
-    /// `scoped`: the caller's backend scope withholds every gateway-wide row,
-    /// so `read_all_principals` reads denied whatever its role allows.
-    pub(super) fn for_actor(actor: &ControlPlaneActor, scoped: bool) -> Self {
+    /// A [`Reader::Scoped`] caller is withheld every gateway-wide row, so its
+    /// `read_all_principals` reads denied whatever its role allows.
+    pub(super) fn for_actor(actor: &ControlPlaneActor, reader: Reader) -> Self {
         Self {
             read_inventory: ControlPlaneRbac::authorize(actor, ControlPlaneAction::ReadInventory),
             read_evidence: ControlPlaneRbac::authorize(actor, ControlPlaneAction::ReadEvidence),
-            read_all_principals: if scoped {
+            read_all_principals: if reader == Reader::Scoped {
                 ControlPlaneAuthorization {
                     allowed: false,
                     reason_code: "CONTROL_BACKEND_SCOPE".to_string(),
