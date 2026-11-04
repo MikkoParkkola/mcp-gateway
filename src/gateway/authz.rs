@@ -557,8 +557,9 @@ impl<A: ToolAuthorizer> ToolAuthorizer for CountingAuthorizer<A> {
 pub(crate) trait StdioLine: Sync {
     /// The tool policy that decides the line's calls.
     fn tool_policy(&self) -> &crate::security::ToolPolicy;
-    /// The generation the line is judged under.
-    fn generation(&self) -> Option<&crate::config_reload::Generation>;
+    /// The generation the line is judged under: always the one pinned as the
+    /// line was read, never a later read of the live config.
+    fn generation(&self) -> &crate::config_reload::Generation;
     /// The generation a reader that outlives the borrow judges the line
     /// under. Never absent: a catalogue read has no fallback to the config
     /// published later.
@@ -569,8 +570,8 @@ impl StdioLine for std::sync::Arc<crate::config_reload::Generation> {
     fn tool_policy(&self) -> &crate::security::ToolPolicy {
         crate::config_reload::Generation::tool_policy(self)
     }
-    fn generation(&self) -> Option<&crate::config_reload::Generation> {
-        Some(self)
+    fn generation(&self) -> &crate::config_reload::Generation {
+        self
     }
     fn pinned(&self) -> std::sync::Arc<crate::config_reload::Generation> {
         std::sync::Arc::clone(self)

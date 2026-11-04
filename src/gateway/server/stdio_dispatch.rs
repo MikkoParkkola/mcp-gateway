@@ -10,7 +10,6 @@ use tracing::debug;
 use super::Gateway;
 use super::StdioNonce;
 use super::stdio_route_stage::RouteStage;
-use super::stdio_single::message_generation;
 use super::{
     STDIO_CREDENTIAL_PRINCIPAL, StdioClient, stdio_catalogue, stdio_delivery,
     stdio_routing_keys_only, stdio_take_merged_client_meta, stdio_tasks,
@@ -40,7 +39,7 @@ impl Gateway {
         let session_id = client.session_id;
         let policy = ToolPolicyAuthorizer {
             tool_policy: generation.tool_policy(),
-            generation: generation.generation(),
+            generation: Some(generation.generation()),
         };
         let scope = InvokeScope::stdio(
             &policy,
@@ -155,8 +154,7 @@ impl Gateway {
                     }
                     m @ ("tasks/get" | "tasks/update" | "tasks/cancel") => {
                         let retry = crate::protocol::mrtr::RetryFields::from_params(params);
-                        let mut current = None;
-                        let live = message_generation(meta_mcp, generation, &mut current);
+                        let live = Some(generation.generation());
                         let caller = Self::build_stdio_caller_context(
                             true,
                             None,
@@ -225,7 +223,7 @@ impl Gateway {
                 signing: signing_context.as_ref(),
                 chain_source,
                 chain_nonce: chain_nonce.as_deref(),
-                generation: generation.generation(),
+                generation: Some(generation.generation()),
             },
         );
         // MIK-7887.RECEIPT.4: the receipt describes the delivered answer, with
@@ -557,7 +555,7 @@ impl Gateway {
             // step reached a backend with no policy check at all.
             let stdio_authorizer = crate::gateway::authz::ToolPolicyAuthorizer {
                 tool_policy: generation.tool_policy(),
-                generation: generation.generation(),
+                generation: Some(generation.generation()),
             };
 
             let retry = crate::protocol::mrtr::RetryFields::from_params(params);
@@ -622,8 +620,7 @@ impl Gateway {
             let granted;
             // The message's own generation, the policy's config: its budgets
             // judge the call from admission to settlement across a reload.
-            let mut current = None;
-            let live = message_generation(meta_mcp, generation, &mut current);
+            let live = Some(generation.generation());
             let mut caller = Self::build_stdio_caller_context(
                 is_modern,
                 protocol_revision_owned.as_deref(),
