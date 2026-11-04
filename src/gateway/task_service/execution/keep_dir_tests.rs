@@ -103,22 +103,28 @@ async fn a_worker_writing_after_the_test_body_keeps_the_folder() {
 async fn an_expiry_pass_holding_the_executor_keeps_the_folder() {
     let root = Arc::new(tempfile::tempdir().expect("store root"));
     let root_path = root.path().to_owned();
-    let (service, executor) = open_runtime(
-        &root_path.join("tasks"),
-        1,
-        StoreLimits::default(),
-        subscriptions(),
-    )
-    .await
-    .expect("the store opens");
-    service.keep_test_dir(Arc::clone(&root));
+    let tasks = root_path.join("tasks");
+    // Expiry deletes a row only when admission names it, and admission learns
+    // a stored row when the store opens: the row is written, then reopened.
     let task = expired_task();
-    service
-        .store
-        .create(PreparedTask::for_test(&task, OWNER, 1))
+    {
+        let (seeding, _executor) =
+            open_runtime(&tasks, 1, StoreLimits::default(), subscriptions())
+                .await
+                .expect("the store opens");
+        seeding.keep_test_dir(Arc::clone(&root));
+        seeding
+            .store
+            .create(PreparedTask::for_test(&task, OWNER, 1))
+            .await
+            .expect("an expired row to sweep");
+        seeding.shutdown().await.expect("the seeding store closes");
+    }
+    let (service, executor) = open_runtime(&tasks, 1, StoreLimits::default(), subscriptions())
         .await
-        .expect("an expired row to sweep");
-    let record = root_path.join("tasks").join(format!("{}.json", task.id()));
+        .expect("the store reopens");
+    service.keep_test_dir(Arc::clone(&root));
+    let record = tasks.join(format!("{}.json", task.id()));
     assert!(record.is_file(), "premise: the row is stored");
     // The sweep upgrades its weak executor for each pass; this handle is that
     // upgrade. The test body ends: its own share and its service go first.
