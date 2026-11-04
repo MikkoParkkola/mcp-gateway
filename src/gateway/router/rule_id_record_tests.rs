@@ -125,3 +125,66 @@ async fn a_withheld_tool_policy_refusal_keeps_its_rule_id_on_the_direct_route() 
 async fn a_withheld_tool_policy_refusal_keeps_its_rule_id_on_gateway_invoke() {
     withheld_tool_policy(Route::MetaInvoke).await;
 }
+
+/// A backend answer carrying a credential the response firewall finds, built
+/// from pieces so no literal token sits in the source.
+fn leaky_answer() -> serde_json::Value {
+    let token = ["gh", "p_", "abcdefghijklmnopqrstuvwxyz1234567890"].concat();
+    json!({"content": [{"type": "text", "text": format!("token {token}")}], "isError": false})
+}
+
+/// A response-firewall block names no rule: response attribution is not
+/// recorded, so a response verdict cannot borrow a request rule's id. Judged
+/// under one generation, and under a pinned generation that differs from the
+/// published one (the stronger of two answer policies decides).
+async fn response_block(route: Route) {
+    let fx = fixture(Answer::Built(leaky_answer), Some(FirewallAction::Block)).await;
+    let blocks = configured(&fx, super::rules_block);
+    let warns = configured(&fx, super::rules_warn);
+    for (pinned, current) in [(&blocks, &blocks), (&blocks, &warns), (&warns, &blocks)] {
+        let got = call(&fx, (route, json!({"cmd": "x"})), pinned, current).await;
+        assert!(
+            got.refused,
+            "{route:?}: premise, the answer is blocked: {got:?}"
+        );
+        assert!(got.rule.is_null(), "{route:?}: {got:?}");
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn a_response_firewall_block_records_no_rule_on_gateway_invoke() {
+    response_block(Route::MetaInvoke).await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn a_response_firewall_block_records_no_rule_on_the_direct_route() {
+    response_block(Route::Direct).await;
+}
+
+/// A queued task refused by the tool policy at dispatch delivers its refusal
+/// through `tasks/get`, the one path that answers with the refusal's own
+/// message: the answer carries no rule id, and the task's record names it.
+#[tokio::test(flavor = "current_thread")]
+async fn a_task_refused_by_the_tool_policy_delivers_no_rule_id() {
+    let fx = fixture(Answer::Ok, None).await;
+    let denies = configured(&fx, key_admits_policy_denies);
+    let (live, published) = (std::sync::Arc::clone(&fx.state.live_config), denies.clone());
+    super::seams::before_task_dispatch(move || live.set(published));
+    let got = super::task_with(&fx, "rule-id-task", json!({})).await;
+    assert_eq!(
+        got.pointer("/result/status")
+            .and_then(serde_json::Value::as_str),
+        Some("failed"),
+        "premise: the task is refused at dispatch: {got}"
+    );
+    let expected = tool_policy_id(&fx, "deny", "alpha:read");
+    let hex = expected.as_str().trim_start_matches("tool_policy:");
+    assert!(!got.to_string().contains(hex), "{got}");
+    let recorded = super::invocations(&fx).await;
+    assert!(
+        recorded
+            .iter()
+            .any(|row| row["decision"]["rule_id"] == json!(expected.as_str())),
+        "no record names the deny entry: {recorded:?}"
+    );
+}

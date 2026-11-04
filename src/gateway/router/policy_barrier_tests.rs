@@ -435,6 +435,11 @@ async fn dispatch_rescan_follows_the_pin() {
 /// Submit `gateway_invoke alpha read` with the injection as a task on `/mcp`,
 /// and return the last `tasks/get` body once it leaves `working`.
 async fn injected_task(fx: &Fx, key: &str) -> Value {
+    task_with(fx, key, injected()).await
+}
+
+/// [`injected_task`] with `arguments` instead of the injection.
+async fn task_with(fx: &Fx, key: &str, arguments: Value) -> Value {
     use super::direct_guards_fixture::send_with_headers;
     let modern = json!({
         "io.modelcontextprotocol/protocolVersion": "2026-07-28",
@@ -446,7 +451,7 @@ async fn injected_task(fx: &Fx, key: &str) -> Value {
     submit_meta[crate::protocol::mrtr::IDEMPOTENCY_KEY_META] = json!(key);
     let submit = json!({
         "name": "gateway_invoke",
-        "arguments": {"server": "alpha", "tool": "read", "arguments": injected()},
+        "arguments": {"server": "alpha", "tool": "read", "arguments": arguments},
         "task": {},
         "_meta": submit_meta,
     });

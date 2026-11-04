@@ -121,20 +121,26 @@ impl List {
     }
 }
 
-/// One configured entry: its list, its pattern as written, its id.
+/// One prefix entry: its list, the prefix with its star stripped, where it
+/// was configured, and its id.
 #[derive(Debug)]
-struct Entry {
+struct PrefixEntry {
     list: List,
-    pattern: String,
+    prefix: String,
+    at: usize,
     id: crate::security::rule_id::RuleId,
 }
 
 /// The ids of a keyed policy, kept beside the match sets: the sets decide,
-/// these only name what decided. In configured order, so a tie resolves to
-/// the entry configured first.
+/// these only name what decided. Exact patterns are looked up by name, as the
+/// match sets look them up, and only the prefixes are scanned, as the match
+/// sets scan them; `at` is the configured position, so a tie resolves to the
+/// entry configured first.
 #[derive(Debug)]
 struct PolicyIds {
-    entries: Vec<Entry>,
+    /// Exact patterns by name: each name's entries across the lists.
+    exact: std::collections::HashMap<String, Vec<(List, usize, crate::security::rule_id::RuleId)>>,
+    prefixes: Vec<PrefixEntry>,
     default_action: crate::security::rule_id::RuleId,
 }
 
@@ -147,20 +153,22 @@ impl PolicyIds {
         tool: &str,
         qualified: &str,
     ) -> Option<&crate::security::rule_id::RuleId> {
-        let mut best: Option<(&Entry, (bool, usize))> = None;
-        for entry in self.entries.iter().filter(|e| e.list == list) {
-            let rank = match entry.pattern.strip_suffix('*') {
-                Some(prefix) if tool.starts_with(prefix) || qualified.starts_with(prefix) => {
-                    (false, prefix.len())
-                }
-                None if entry.pattern == tool || entry.pattern == qualified => (true, 0),
-                _ => continue,
-            };
-            if best.is_none_or(|(_, held)| rank > held) {
-                best = Some((entry, rank));
-            }
+        let exact = [tool, qualified]
+            .into_iter()
+            .filter_map(|name| self.exact.get(name))
+            .flatten()
+            .filter(|(of, _, _)| *of == list)
+            .min_by_key(|(_, at, _)| *at);
+        if let Some((_, _, id)) = exact {
+            return Some(id);
         }
-        best.map(|(entry, _)| &entry.id)
+        self.prefixes
+            .iter()
+            .filter(|e| {
+                e.list == list && (tool.starts_with(&e.prefix) || qualified.starts_with(&e.prefix))
+            })
+            .min_by_key(|e| (std::cmp::Reverse(e.prefix.len()), e.at))
+            .map(|e| &e.id)
     }
 }
 
@@ -239,20 +247,32 @@ impl ToolPolicy {
             let bytes = serde_json::to_vec(&(list, pattern)).expect("a pair of strings serialises");
             crate::security::rule_id::RuleId::of("tool_policy", key, &bytes)
         };
-        let mut entries = Vec::new();
-        for (list, patterns) in [(List::Allow, &config.allow), (List::Deny, &config.deny)] {
-            entries.extend(patterns.iter().map(|pattern| Entry {
-                list,
-                pattern: pattern.clone(),
-                id: id(list.name(), pattern),
-            }));
-        }
-        if config.use_default_deny {
-            entries.extend(DEFAULT_DENIED_PATTERNS.iter().map(|pattern| Entry {
-                list: List::BuiltinDeny,
-                pattern: (*pattern).to_string(),
-                id: id(List::BuiltinDeny.name(), pattern),
-            }));
+        let mut exact: std::collections::HashMap<_, Vec<_>> = std::collections::HashMap::new();
+        let mut prefixes = Vec::new();
+        let builtin = DEFAULT_DENIED_PATTERNS.iter().map(|p| (*p).to_string());
+        let lists = config
+            .allow
+            .iter()
+            .cloned()
+            .map(|p| (List::Allow, p))
+            .chain(config.deny.iter().cloned().map(|p| (List::Deny, p)))
+            .chain(
+                builtin
+                    .filter(|_| config.use_default_deny)
+                    .map(|p| (List::BuiltinDeny, p)),
+            );
+        for (at, (list, pattern)) in lists.enumerate() {
+            // The pattern is hashed as written, before its star is stripped.
+            let rule = id(list.name(), &pattern);
+            match pattern.strip_suffix('*') {
+                Some(prefix) => prefixes.push(PrefixEntry {
+                    list,
+                    prefix: prefix.to_string(),
+                    at,
+                    id: rule,
+                }),
+                None => exact.entry(pattern).or_default().push((list, at, rule)),
+            }
         }
         let action = match config.default_action {
             PolicyAction::Allow => "allow",
@@ -260,7 +280,8 @@ impl ToolPolicy {
         };
         Self {
             ids: Some(Box::new(PolicyIds {
-                entries,
+                exact,
+                prefixes,
                 default_action: id("default_action", action),
             })),
             ..Self::from_config(config)
