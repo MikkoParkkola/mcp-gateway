@@ -350,6 +350,10 @@ pub(crate) fn encode_hwm(hw: &HighWater, secret: &[u8], key_id: &str) -> io::Res
 /// Write `hw` over `<path>.hwm` at offset 0 (one write, fixed length).
 pub(crate) fn write_hwm(path: &Path, bytes: &[u8], sync: bool) -> io::Result<()> {
     let hwm = sibling(path, "hwm");
+    #[cfg(test)]
+    diag_late_hwm(path);
+    #[cfg(test)]
+    diag_touch_who(path);
     OpenOptions::new()
         .create(true)
         .write(true)
@@ -492,5 +496,64 @@ mod hwm_mac_tests {
             parse_hwm(&image2, secret, "k1").is_none(),
             "a short mac is refused"
         );
+    }
+}
+
+#[cfg(test)]
+static DIAG_OPENERS: std::sync::Mutex<Option<std::collections::HashMap<std::path::PathBuf, String>>> =
+    std::sync::Mutex::new(None);
+
+/// DIAGNOSTIC (never ships): who opened each log path.
+#[cfg(test)]
+pub(crate) fn diag_note_open(path: &Path) {
+    let name = std::thread::current().name().unwrap_or("unnamed").to_owned();
+    DIAG_OPENERS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .get_or_insert_with(Default::default)
+        .insert(path.to_path_buf(), name);
+}
+
+/// DIAGNOSTIC (never ships): a `.hwm` rewrite after the log file is gone.
+#[cfg(test)]
+fn diag_late_hwm(path: &Path) {
+    if path.exists() {
+        return;
+    }
+    let opener = DIAG_OPENERS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .as_ref()
+        .and_then(|m| m.get(path).cloned())
+        .unwrap_or_else(|| "unknown".to_owned());
+    let writer = std::thread::current().name().unwrap_or("unnamed").to_owned();
+    eprintln!(
+        "LATE-HWM path={} opened-by={opener} writer={writer}\n{}",
+        path.display(),
+        std::backtrace::Backtrace::force_capture()
+    );
+}
+
+/// DIAGNOSTIC (never ships): every `.hwm` write also touches `who-<opener>`
+/// beside it, so a folder a late write leaves behind names its test in the CI
+/// guard's file list.
+#[cfg(test)]
+fn diag_touch_who(path: &Path) {
+    let opener = DIAG_OPENERS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .as_ref()
+        .and_then(|m| m.get(path).cloned())
+        .unwrap_or_else(|| "unrecorded".to_owned());
+    let safe: String = opener
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() || c == '_' { c } else { '.' })
+        .collect();
+    if let Some(dir) = path.parent() {
+        let _ = OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(false)
+            .open(dir.join(format!("who-{safe}")));
     }
 }
