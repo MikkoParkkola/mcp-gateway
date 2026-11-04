@@ -57,8 +57,11 @@ fn body(source: &str, start: usize) -> &str {
 }
 
 /// A code line that reads the live config or a generation, or calls a
-/// witness helper that reads one.
+/// witness helper that reads one. Taking the request's recorded refusal
+/// (`audit::take_refusal`) reads the audit record, not a generation, so it
+/// is blanked first: every other `_refusal(` helper still counts.
 fn reads_generation(line: &str) -> bool {
+    let line = line.replace("take_refusal(", "");
     [
         "generation",
         "live_config",
