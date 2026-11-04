@@ -213,9 +213,13 @@ fn scope_differs(rule: &FirewallRule) -> Value {
     let except = rule.except.as_deref().unwrap_or_default();
     let keyed = rule.keys.is_some() || except.iter().any(|e| e.key.is_some());
     let served = rule.servers.is_some() || except.iter().any(|e| e.server.is_some());
-    let list = |on: bool, labels: &[&str]| if on { labels.to_vec() } else { Vec::new() };
     json!({
-        "key_not_known": list(keyed, &KEY_NOT_KNOWN),
-        "backend_expanded": list(served, &BACKEND_EXPANDED),
+        "key_not_known": listed(keyed, &KEY_NOT_KNOWN),
+        "backend_expanded": listed(served, &BACKEND_EXPANDED),
     })
+}
+
+/// `labels` when `on`, else none.
+fn listed(on: bool, labels: &[&'static str]) -> Vec<&'static str> {
+    if on { labels.to_vec() } else { Vec::new() }
 }
