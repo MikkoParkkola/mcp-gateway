@@ -1,0 +1,1 @@
+src/gateway/authz.rs	tool_policy_refusal	1	critical	a	tool_policy_refusal	Decides whether the tool policy refuses a call on every transport, answering -32600 and naming the policy entry that refused for the decision record only

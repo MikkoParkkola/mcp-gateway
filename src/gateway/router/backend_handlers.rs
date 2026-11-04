@@ -160,7 +160,7 @@ async fn guard_tool_call(
             backend_name,
             tool_name,
             code,
-            crate::gateway::meta_mcp::invoke::audit::take_refusal_kind(),
+            crate::gateway::meta_mcp::invoke::audit::take_refusal(),
         );
         warn!(backend = %backend_name, tool = %tool_name, "Tool withheld by authorization; answered as absent");
     }
@@ -234,7 +234,7 @@ fn firewall_refusal(
         tool: tool_name,
         key: KeyOf::of_client(auth.client.and_then(AuthenticatedClient::api_key_identity)),
     };
-    let verdict = fw.check_request_keyed(
+    let (verdict, rule) = fw.check_request_attributed(
         auth.generation.firewall_policy(),
         &session_id,
         target,
@@ -254,7 +254,7 @@ fn firewall_refusal(
     if let Some((code, message)) = verdict.request_refusal() {
         crate::gateway::meta_mcp::invoke::audit::note_refused_by(
             crate::security::decision_record::DecisionKind::Firewall,
-            None,
+            rule,
         );
         crate::gateway::meta_mcp::invoke::audit::counting::note_request_firewall();
         // The shared wording's code, ASI10's -32002 included, with this

@@ -165,8 +165,17 @@ impl MetaMcp {
     /// S1 policy: session profile, kill switch, capability disable. Runs
     /// before idempotency, cache and nonce on both routes.
     pub(crate) fn admit_target(&self, call: &BackendCall<'_>) -> Result<()> {
-        self.admit_named_target(call)?;
-        self.admit_enabled_capability(call.server, call.tool)
+        self.admit_target_explained(call)
+            .map_err(super::audit::noted)
+    }
+
+    /// [`Self::admit_target`], with the refusing check's pair and no note.
+    pub(crate) fn admit_target_explained(
+        &self,
+        call: &BackendCall<'_>,
+    ) -> crate::security::decision_record::Explained {
+        self.admit_named_target_explained(call)?;
+        self.admit_enabled_capability_explained(call.server, call.tool)
     }
 
     /// [`Self::admit_target`] without the error-rate check: the session
@@ -177,15 +186,27 @@ impl MetaMcp {
         &self,
         call: &BackendCall<'_>,
     ) -> Result<()> {
+        self.admit_named_target_explained(call)
+            .map_err(super::audit::noted)
+    }
+
+    /// [`Self::admit_named_target`], with the refusing check's pair and no note.
+    pub(in crate::gateway::meta_mcp) fn admit_named_target_explained(
+        &self,
+        call: &BackendCall<'_>,
+    ) -> crate::security::decision_record::Explained {
         let (server, tool) = (call.server, call.tool);
         self.caller_profile_check(call.session_id, (server, tool))
-            .inspect_err(|_| {
-                super::audit::note_refused_by(
-                    crate::security::decision_record::DecisionKind::RoutingProfile,
-                    None,
-                );
+            .map_err(|e| {
+                (
+                    e,
+                    (
+                        crate::security::decision_record::DecisionKind::RoutingProfile,
+                        None,
+                    ),
+                )
             })?;
-        self.admit_backend_wide(server)
+        self.admit_backend_wide_explained(server)
     }
 
     /// MIK-8475: whether `server`'s `tool` is a target whose error-rate check
@@ -236,14 +257,25 @@ impl MetaMcp {
     /// about the server. The MIK-8361 gate answers it for a withheld and a
     /// missing name alike, before any fill.
     pub(crate) fn admit_backend_wide(&self, server: &str) -> Result<()> {
+        self.admit_backend_wide_explained(server)
+            .map_err(super::audit::noted)
+    }
+
+    /// [`Self::admit_backend_wide`], with the refusing check's pair and no note.
+    fn admit_backend_wide_explained(
+        &self,
+        server: &str,
+    ) -> crate::security::decision_record::Explained {
         if self.kill_switch.is_killed(server) {
-            super::audit::note_refused_by(
-                crate::security::decision_record::DecisionKind::KillSwitch,
-                None,
-            );
-            return Err(Error::gateway_refused(
-                -32000,
-                format!("Server '{server}' is currently disabled by operator kill switch"),
+            return Err((
+                Error::gateway_refused(
+                    -32000,
+                    format!("Server '{server}' is currently disabled by operator kill switch"),
+                ),
+                (
+                    crate::security::decision_record::DecisionKind::KillSwitch,
+                    None,
+                ),
             ));
         }
         Ok(())
@@ -258,21 +290,34 @@ impl MetaMcp {
         server: &str,
         tool: &str,
     ) -> Result<()> {
+        self.admit_enabled_capability_explained(server, tool)
+            .map_err(super::audit::noted)
+    }
+
+    /// [`Self::admit_enabled_capability`], with the refusing check's pair and no note.
+    fn admit_enabled_capability_explained(
+        &self,
+        server: &str,
+        tool: &str,
+    ) -> crate::security::decision_record::Explained {
         let cooldown = self.capability_budget_config.read().cooldown;
         if self
             .kill_switch
             .is_capability_disabled_with_cooldown(server, tool, cooldown)
         {
-            super::audit::note_refused_by(
-                crate::security::decision_record::DecisionKind::CapabilityDisabled,
-                None,
-            );
-            return Err(Error::gateway_refused(
-                -32000,
-                format!(
-                    "Capability '{tool}' on server '{server}' is temporarily disabled due to \
-                     a high error rate. It will auto-recover after the cooldown period. \
-                     Use gateway_list_disabled_capabilities to see all disabled capabilities."
+            return Err((
+                Error::gateway_refused(
+                    -32000,
+                    format!(
+                        "Capability '{tool}' on server '{server}' is temporarily disabled due \
+                         to a high error rate. It will auto-recover after the cooldown period. \
+                         Use gateway_list_disabled_capabilities to see all disabled \
+                         capabilities."
+                    ),
+                ),
+                (
+                    crate::security::decision_record::DecisionKind::CapabilityDisabled,
+                    None,
                 ),
             ));
         }

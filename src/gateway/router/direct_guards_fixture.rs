@@ -370,8 +370,6 @@ pub(crate) use answers::envelope_in;
 mod quota;
 #[path = "direct_guards_fixture_requests.rs"]
 mod requests;
-#[cfg(feature = "firewall")]
-pub(crate) use egress::fixture_hardened_signed_built_on;
 use egress::{CountingBackend, backend_transport};
 #[cfg(feature = "firewall")]
 pub(crate) use egress::{
@@ -379,6 +377,8 @@ pub(crate) use egress::{
     fixture_hardened_signed_firewalled, fixture_inspecting_on, fixture_inspection_off_on,
     fixture_observing_on, meta_firewall,
 };
+#[cfg(feature = "firewall")]
+pub(crate) use egress::{fixture_hardened_signed_built_on, fixture_logged};
 #[cfg(feature = "firewall")]
 pub(crate) use quota::Minting;
 #[cfg(feature = "cost-governance")]

@@ -110,7 +110,8 @@ src/gateway/meta_mcp/task_confirmation.rs	redeem	JsonRpcResponse::error	1
 src/gateway/meta_mcp/task_confirmation/helpers.rs	refuse	JsonRpcResponse::error	1
 src/gateway/meta_mcp/task_replay.rs	retry_later	error_response_preserving_status	1
 src/gateway/meta_mcp/task_replay/judging.rs	refuse_stored	JsonRpcResponse::error	1
-src/gateway/meta_mcp/task_replay/judging.rs	refuse_stored	error_response_preserving_status	5
+src/gateway/meta_mcp/task_replay/judging.rs	refuse_stored	error_response_preserving_status	3
+src/gateway/meta_mcp/task_replay/judging.rs	stored_withheld	error_response_preserving_status	1
 src/gateway/meta_mcp/visibility.rs	grant_evaluation	Error::json_rpc	1
 src/gateway/meta_mcp/visibility.rs	settle_grant	Error::json_rpc	1
 src/gateway/meta_mcp/visibility.rs	withheld_surfaced_in	Error::json_rpc	1
