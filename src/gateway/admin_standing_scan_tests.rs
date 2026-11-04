@@ -678,7 +678,7 @@ fn the_scan_finds_a_destructured_read_and_a_direct_admin_standing() {
 }
 
 /// Every accessor that reads a standing is a reader too: each one picks
-/// Gateway or InScope, so each call is inventoried with the one it reads.
+/// `Gateway` or `InScope`, so each call is inventoried with the one it reads.
 #[test]
 fn the_scan_finds_every_standing_accessor() {
     for (text, needle) in [
