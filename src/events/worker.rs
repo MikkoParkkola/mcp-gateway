@@ -29,7 +29,8 @@ impl EventsHub {
     async fn attempt(self: &Arc<Self>, services: &Services, event_id: &str) {
         // A test drives one delivery here directly, without the worker loop.
         #[cfg(test)]
-        self.store.assert_test_dir_kept("an events delivery attempt");
+        self.store
+            .assert_test_dir_kept("an events delivery attempt");
         let failed = std::cell::Cell::new(false);
         super::upstream_listener::FAILED_LOOKUP
             .scope(failed, self.attempt_once(services, event_id))

@@ -108,10 +108,9 @@ async fn an_expiry_pass_holding_the_executor_keeps_the_folder() {
     // a stored row when the store opens: the row is written, then reopened.
     let task = expired_task();
     {
-        let (seeding, _executor) =
-            open_runtime(&tasks, 1, StoreLimits::default(), subscriptions())
-                .await
-                .expect("the store opens");
+        let (seeding, _executor) = open_runtime(&tasks, 1, StoreLimits::default(), subscriptions())
+            .await
+            .expect("the store opens");
         seeding.keep_test_dir(Arc::clone(&root));
         seeding
             .store
