@@ -61,12 +61,12 @@ mod allowed_tools_task;
 mod live_key_tasks;
 mod support;
 
-/// A gateway refusal inside a task worker's dispatch is tied to its task.
-#[cfg(feature = "firewall")]
-mod dispatch_refusal_task;
 /// A context-integrity refusal of a task settles with the gate's own code.
 #[cfg(feature = "firewall")]
 mod ci_refusal_task;
+/// A gateway refusal inside a task worker's dispatch is tied to its task.
+#[cfg(feature = "firewall")]
+mod dispatch_refusal_task;
 
 #[cfg(feature = "firewall")]
 mod egress_task;
