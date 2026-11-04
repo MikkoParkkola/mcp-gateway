@@ -253,6 +253,12 @@ class StaleRows(unittest.TestCase):
         self.repo.commit("add")
         self.assertEqual(self.repo.stale(), [("src/oauth/mod.rs", "existing", 2)])
 
+    def test_an_added_row_naming_a_function_only_in_a_comment_fails(self) -> None:
+        self.repo.write("src/oauth/mod.rs", 'pub fn existing() {}\n// fn gone was removed\nconst S: &str = "fn gone";\n')
+        self.repo.write(rows.UNENFORCING, UNENFORCING_HEADER + "src/oauth/mod.rs\tgone\t1\tr\n")
+        self.repo.commit("add")
+        self.assertEqual(self.repo.stale(), [("src/oauth/mod.rs", "gone", 1)])
+
     def test_an_added_row_naming_a_function_passes(self) -> None:
         self.repo.write(rows.UNENFORCING, UNENFORCING_HEADER + "src/oauth/mod.rs\texisting\t1\tr\n")
         self.repo.commit("add")

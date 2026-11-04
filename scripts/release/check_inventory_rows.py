@@ -313,12 +313,14 @@ def stale_rows(base: str, head: str) -> list[tuple[str, str, int]]:
     added = set()
     for ledger_path in (INVENTORY, UNENFORCING):
         added |= rows(head, ledger_path) - rows(merge_base, ledger_path)
-    # The grader's own resolver: a row is stale exactly when the grade could
-    # not find the function it names.
+    # The grader's own resolver, over each file's code with comments and
+    # literals blanked (read once per file): a `fn <name>` left in a comment
+    # or a string keeps no row alive.
+    code = {path: blanked((show(head, path) or "").splitlines()) for path, _, _ in added}
     return [
         (path, name, nth)
         for path, name, nth in sorted(added)
-        if coverage.fn_line((show(head, path) or "").splitlines(), name, nth) is None
+        if coverage.fn_line(code[path], name, nth) is None
     ]
 
 
