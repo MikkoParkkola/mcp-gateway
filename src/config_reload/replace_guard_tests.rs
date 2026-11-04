@@ -284,3 +284,70 @@ async fn a_staged_original_that_is_not_utf8_names_encoding_and_the_manual_step()
         "the journal was changed"
     );
 }
+
+/// What recovery logs when the guard refuses the journal or staged original
+/// `loose` names (made group-writable, a plant with a matching digest).
+#[cfg(unix)]
+fn recovery_log_for(loose: fn(&Path) -> std::path::PathBuf) -> String {
+    use crate::config_persistence::journal;
+    use std::os::unix::fs::PermissionsExt as _;
+    const PLANTED: &str = "# planted by another account\nbackends: {}\n";
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("gateway.yaml");
+    crate::gateway::test_helpers::write_owner_only(&path, START).expect("config");
+    journal::stage_original(&path, PLANTED.as_bytes()).expect("stage");
+    journal::begin(&path, crate::hashing::sha256_hex(PLANTED.as_bytes())).expect("journal");
+    std::fs::set_permissions(loose(&path), std::fs::Permissions::from_mode(0o660)).expect("chmod");
+
+    let (result, logs) = crate::test_log_capture::capture_warnings(|| journal::recover(&path));
+
+    assert!(
+        matches!(result, Err(journal::NotRecovered::Refused(_))),
+        "{result:?}"
+    );
+    assert_eq!(read(&path), START, "the planted original was restored");
+    logs
+}
+
+/// The log line for a refused recovery file keeps the guard's facts (the
+/// mode it breaks) but never an owner or mode fix: following one would make
+/// the next recovery restore the plant. It gives the untrusted, move-aside
+/// guidance instead.
+#[cfg(unix)]
+fn assert_safe_recovery_log(logs: &str) {
+    let lower = logs.to_lowercase();
+    for advice in ["chmod", "chown", "icacls", "fix: "] {
+        assert!(
+            !lower.contains(advice),
+            "the log advises {advice:?}: {logs}"
+        );
+    }
+    assert!(
+        lower.contains("mode 0660"),
+        "the log lost the guard's facts: {logs}"
+    );
+    assert!(
+        lower.contains("untrusted"),
+        "the log does not call them untrusted: {logs}"
+    );
+    assert!(
+        lower.contains("move both files aside"),
+        "the log does not say to move both files aside: {logs}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_refused_staged_original_logs_no_owner_or_mode_fix() {
+    assert_safe_recovery_log(&recovery_log_for(|path| {
+        crate::config_persistence::journal::original_path(path)
+    }));
+}
+
+#[cfg(unix)]
+#[test]
+fn a_refused_journal_logs_no_owner_or_mode_fix() {
+    assert_safe_recovery_log(&recovery_log_for(|path| {
+        crate::config_persistence::journal::journal_path(path)
+    }));
+}
