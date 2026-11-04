@@ -314,6 +314,12 @@ impl Ear {
     /// Whether a listen stream has been closed by the server: after the
     /// sentinel is published, the stream ends before the sentinel arrives.
     pub(super) async fn closed(&mut self, world: &World) -> bool {
+        self.heard_until_closed(world).await.is_some()
+    }
+
+    /// As [`Self::closed`], keeping what was heard: the methods the listen
+    /// stream delivered before it ended, or `None` when it stayed open.
+    pub(super) async fn heard_until_closed(&mut self, world: &World) -> Option<Vec<String>> {
         let Self::Listen(events) = self else {
             panic!("closed() reads a listen stream");
         };
@@ -321,14 +327,18 @@ impl Ear {
         world.state.subscriptions.publish(json!({
             "jsonrpc": "2.0", "method": SENTINEL, "params": { "mark": u64::MAX }
         }));
+        let mut methods = Vec::new();
         loop {
             match events.next().await {
                 EventOutcome::Event(event) => {
                     if event["params"]["mark"] == json!(u64::MAX) {
-                        return false;
+                        return None;
+                    }
+                    if event["method"] != json!(SENTINEL) {
+                        methods.push(event["method"].as_str().unwrap_or_default().to_string());
                     }
                 }
-                EventOutcome::Eof => return true,
+                EventOutcome::Eof => return Some(methods),
                 EventOutcome::Timeout => {
                     panic!("VOID: no sentinel within ARRIVAL — closure unproven")
                 }

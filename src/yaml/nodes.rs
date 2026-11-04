@@ -5,12 +5,26 @@
 //! of everything under it. The key editor inserts and removes whole lines
 //! from these positions; it never decides where a node ends by hand.
 
+use std::borrow::Cow;
 use std::ops::Range;
 
 use granit_parser::{Event, Parser, ScalarStyle, StructureStyle};
 
 use super::Error;
 use super::spans::Bytes;
+
+/// Each scalar of `text`, key or value, with its 1-based start line, in
+/// document order, up to the first parse error: text that does not parse
+/// yields nothing more. A comment is no scalar. Callers read scalars here so
+/// the parser stays behind the adapter.
+pub(crate) fn scalars_with_lines(text: &str) -> impl Iterator<Item = (Cow<'_, str>, usize)> {
+    Parser::new_from_str(text)
+        .map_while(Result::ok)
+        .filter_map(|(event, span)| match event {
+            Event::Scalar(value, ..) => Some((value, span.start.line())),
+            _ => None,
+        })
+}
 
 /// One step from a node to a child.
 #[derive(Debug, Clone, PartialEq, Eq)]

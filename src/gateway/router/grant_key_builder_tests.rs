@@ -83,7 +83,7 @@ async fn personal_caps(
 /// the grant's owner equal to its subject.
 fn bearer_grant(tool: &str) -> IdentityGrant {
     let subject =
-        GrantSubject::checked("api_key", "bearer", None).expect("api_key:bearer names someone");
+        GrantSubject::new("api_key", "bearer", None).expect("api_key:bearer names someone");
     IdentityGrant {
         grant_id: format!("g-8518-{tool}"),
         subject: subject.clone(),

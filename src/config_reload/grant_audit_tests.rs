@@ -204,7 +204,7 @@ impl Fixture {
 pub(super) fn row(grant_id: &str, reason: &str) -> IdentityGrant {
     IdentityGrant {
         grant_id: grant_id.to_string(),
-        subject: GrantSubject::new("api_key".to_string(), "alice".to_string(), None),
+        subject: GrantSubject::for_test("api_key".to_string(), "alice".to_string(), None),
         agent: GrantAgent::Any,
         capability: "cap".to_string(),
         tool: None,

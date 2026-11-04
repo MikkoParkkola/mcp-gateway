@@ -129,6 +129,7 @@ async fn signing_1_real_http_startup_installs_the_configured_signer() {
         !oracle_accepts(&tampered, &id, "startup-nonce").await,
         "a tampered byte must fail the MAC: {tampered}"
     );
+    gateway.stop().await;
 }
 
 /// POST `request` and return the delivered body exactly as received.
@@ -188,6 +189,7 @@ async fn signing_4_oversized_numeric_id_is_refused_without_dispatch() {
         backend.calls().is_empty(),
         "invalid IDs reached the backend"
     );
+    gateway.stop().await;
 }
 
 #[tokio::test]
@@ -214,6 +216,7 @@ async fn signing_5_malformed_nonce_refuses_before_backend_dispatch() {
         backend.calls().is_empty(),
         "malformed nonces reached the backend"
     );
+    gateway.stop().await;
 }
 
 #[tokio::test]
@@ -251,6 +254,7 @@ async fn signing_6_disabled_dormant_secret_preserves_unsigned_calls() {
         !backend.calls().is_empty(),
         "disabled fixture never dispatched"
     );
+    gateway.stop().await;
 }
 
 const PLAYBOOK: &str = "name: sig6
@@ -320,4 +324,6 @@ async fn signing_6_required_nonce_leaves_other_surfaces_unsigned() {
             "{surface} must reach the backend once: {response}"
         );
     }
+    code_mode.stop().await;
+    named.stop().await;
 }

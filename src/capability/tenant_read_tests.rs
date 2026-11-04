@@ -99,7 +99,7 @@ providers:
 }
 
 fn cacheable_context() -> CapabilityExecutionContext {
-    let mut context = CapabilityExecutionContext::with_caller_identity(GrantSubject::new(
+    let mut context = CapabilityExecutionContext::with_caller_identity(GrantSubject::for_test(
         "cloudflare_access",
         "alice",
         None,

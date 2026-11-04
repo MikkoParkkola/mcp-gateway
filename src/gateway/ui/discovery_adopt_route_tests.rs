@@ -444,6 +444,95 @@ async fn without_a_config_file_nothing_is_adopted() {
     assert_eq!(body["error"], "no_config_file", "{body}");
 }
 
+/// W25: on a gateway with an audit log, an adopt appends its own paired
+/// intent (`config_adopt_intent`) before the writer changes anything.
+#[tokio::test]
+async fn an_adopt_writes_its_paired_intent_first() {
+    let mut route = Route::new(EMPTY, vec![stdio("tool", "npx tool", &[])]).await;
+    let log = Arc::new(
+        crate::security::TransparencyLogger::open(Arc::new(
+            crate::security::transparency_log::TransparencyLogConfig {
+                enabled: true,
+                path: route
+                    .dir
+                    .path()
+                    .join("audit.jsonl")
+                    .to_string_lossy()
+                    .into_owned(),
+                key_id: "adopt-intent".to_string(),
+                ..Default::default()
+            },
+        ))
+        .expect("open log"),
+    );
+    Arc::get_mut(&mut route.state)
+        .expect("state is unique")
+        .transparency_log = Some(Arc::clone(&log));
+    let (id, revision) = route.listed("tool").await;
+
+    let (status, body) = route.adopt(true, &id, &revision).await;
+
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    let events: Vec<Value> = std::fs::read_to_string(log.path())
+        .unwrap_or_default()
+        .lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .map(|entry| entry["event"].clone())
+        .collect();
+    assert!(
+        events.iter().any(|event| event == "config_adopt_intent"),
+        "W25: the adopt wrote no paired intent; the log holds {events:?}"
+    );
+}
+
+/// Auth on with no audit log: an adopt that carries a secret is refused, by
+/// the audit posture and for that reason, before the writer runs; neither
+/// gateway.yaml nor the store changes.
+#[tokio::test]
+async fn with_auth_on_and_no_audit_log_an_adopt_is_refused() {
+    let mut route = Route::new(
+        EMPTY,
+        vec![stdio("tool", "npx tool", &[("API_KEY", CANARY)])],
+    )
+    .await;
+    let mut running = Config::default();
+    running.auth.enabled = true;
+    Arc::get_mut(&mut route.state)
+        .expect("state is unique")
+        .live_config = Arc::new(LiveConfig::new(running));
+    assert!(
+        route.state.transparency_log.is_none(),
+        "premise: the gateway has no audit log"
+    );
+    let (id, revision) = route.listed("tool").await;
+    let before = route.bytes();
+
+    let (status, body) = route.adopt(true, &id, &revision).await;
+
+    assert_eq!(
+        (status, &body["error"]),
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            &Value::from("audit_log_required")
+        ),
+        "the adopt was not refused for the missing audit log: {body}"
+    );
+    assert_eq!(
+        body["message"], "auth is on but no audit log is configured; config writes are refused",
+        "{body}"
+    );
+    assert_eq!(
+        route.bytes(),
+        before,
+        "the refused adopt changed gateway.yaml"
+    );
+    assert_eq!(
+        route.entries(),
+        0,
+        "the refused adopt created a store entry"
+    );
+}
+
 /// Whether the decision set shows an open adopt item for `name`.
 fn adopt_item_open(state: &AppState, name: &str) -> bool {
     state

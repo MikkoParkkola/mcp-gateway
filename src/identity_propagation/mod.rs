@@ -385,15 +385,15 @@ pub(crate) fn observation_key(
 pub(crate) fn identity_binding_prefix(
     subject: &crate::identity_grants::GrantSubject,
 ) -> Option<String> {
-    if !url::Url::parse(&subject.authority).is_ok_and(|url| url.has_host()) {
+    if !url::Url::parse(subject.authority()).is_ok_and(|url| url.has_host()) {
         return None;
     }
     // Built through `stable_actor_id` rather than restated, so the two cannot
     // drift: the pool binding is derived from that same method.
     // Through `checked`: a subject that names no one has no slot to evict.
     let subject_key = VerifiedIdentity::checked(
-        subject.authority.clone(),
-        subject.subject.clone(),
+        subject.authority().to_owned(),
+        subject.subject().to_owned(),
         String::new(),
         None,
         Vec::new(),

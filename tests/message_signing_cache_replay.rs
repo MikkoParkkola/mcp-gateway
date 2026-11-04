@@ -134,6 +134,7 @@ async fn a_cache_hit_is_signed_for_its_own_nonce() {
     verify(&first, "cache-1", &cache_nonce_1).await;
     verify(&second, "cache-2", &cache_nonce_2).await;
     assert_ne!(signature_of(&first), signature_of(&second));
+    gateway.stop().await;
 }
 
 /// A synchronous idempotent replay: the same key served from the replay store
@@ -174,4 +175,5 @@ async fn an_idempotent_replay_is_signed_for_its_own_nonce() {
     verify(&first, "replay-1", &replay_nonce_1).await;
     verify(&second, "replay-2", &replay_nonce_2).await;
     assert_ne!(signature_of(&first), signature_of(&second));
+    gateway.stop().await;
 }

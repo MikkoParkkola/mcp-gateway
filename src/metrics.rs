@@ -65,3 +65,20 @@ pub fn render() -> String {
         .map(PrometheusHandle::render)
         .unwrap_or_default()
 }
+
+/// The value of the first series of `metric` in a [`render`] snapshot whose
+/// labels hold every one of `labels` (each `name="value"`); 0 when there is
+/// none yet. The recorder is process-wide, so a test reads a label no
+/// parallel test writes.
+#[cfg(all(test, feature = "metrics"))]
+pub(crate) fn series_value(text: &str, metric: &str, labels: &[&str]) -> f64 {
+    text.lines()
+        .find(|line| {
+            line.strip_prefix(metric)
+                .is_some_and(|rest| rest.starts_with('{'))
+                && labels.iter().all(|label| line.contains(label))
+        })
+        .and_then(|line| line.rsplit(' ').next())
+        .and_then(|n| n.parse::<f64>().ok())
+        .unwrap_or(0.0)
+}

@@ -122,7 +122,7 @@ pub(super) fn capability() -> CapabilityDefinition {
 
 pub(super) fn caller(subject: &str) -> CapabilityExecutionContext {
     CapabilityExecutionContext {
-        caller_identity: Some(GrantSubject::new("test", subject, None)),
+        caller_identity: Some(GrantSubject::for_test("test", subject, None)),
         ..CapabilityExecutionContext::default()
     }
 }

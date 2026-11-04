@@ -210,7 +210,7 @@ fn t4_quota_precedence_and_fallthrough() {
         groups: vec![],
         issuer: "https://idp.example".to_owned(),
     };
-    let subject = crate::identity_grants::GrantSubject::new("proxy", "bob", None);
+    let subject = crate::identity_grants::GrantSubject::for_test("proxy", "bob", None);
     let nonce = crate::gateway::StdioNonce::leaked_for_test();
     // Identity + subject + principal + name -> identity.
     let full = crate::gateway::meta_mcp::MetaMcpCallerContext {

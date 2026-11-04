@@ -10,7 +10,7 @@ use tokio::sync::broadcast::error::TryRecvError;
 
 fn idle_subject(n: usize) -> ViewSubject {
     ViewSubject {
-        grant_subject: Some(crate::identity_grants::GrantSubject::new(
+        grant_subject: Some(crate::identity_grants::GrantSubject::for_test(
             "proxy",
             format!("idle-{n}"),
             None,

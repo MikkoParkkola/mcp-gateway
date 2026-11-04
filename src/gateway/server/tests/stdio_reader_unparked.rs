@@ -22,8 +22,6 @@ use crate::gateway::Gateway;
 const FLOOD: usize = super::super::STDOUT_QUEUE_DEPTH + 200;
 /// Bound on each wait for a frame in the reading control.
 const ARRIVAL: Duration = Duration::from_secs(10);
-/// tokio's timer tick: a deadline fires at the first tick at or after it.
-const TIMER_RESOLUTION: Duration = Duration::from_millis(1);
 /// Real-time bound on a whole paused-clock row: only a true hang reaches it.
 const HANG_BOUND: Duration = Duration::from_secs(300);
 
@@ -102,30 +100,34 @@ fn batch(id: usize) -> String {
 }
 
 /// Close stdin with stdout still unread and require `run_stdio_on` to return
-/// `Ok` within its contract: the drain deadline plus the teardown deadline.
+/// `Ok` by its own deadline: the writer, blocked on the unread stdout, is
+/// abandoned when the drain deadline fires.
 ///
-/// The writer stays blocked on the unread stdout, so the drain must run to
-/// its deadline. From EOF the clock is paused (MIK-8360): once every task is
-/// idle, tokio advances it to the next deadline, so the row measures the
-/// product's own bound on a clock load cannot move. A parked reader never
-/// returns at all, which [`watched`] reports in real time.
+/// The row checks that the deadline fired (its warning, once), not how long
+/// the return took: the paused clock (MIK-8360) jumps to the next timer while
+/// a real thread or pipe is busy, so under load an elapsed bound read 48.6 s
+/// against a 40 s contract with nothing wrong. The clock stays
+/// paused so the deadlines pass at once. A parked reader never returns at
+/// all, which [`watched`] reports in real time.
 async fn eof_returns_while_stdout_is_unread(mut served: Served) {
+    let (_capture, seen) = crate::test_log_capture::live_counts_at(&[
+        (tracing::Level::INFO, "stdio: EOF reached, shutting down"),
+        (
+            tracing::Level::WARN,
+            "stdio: stdout is not being read; unwritten frames are dropped",
+        ),
+    ]);
     tokio::time::pause();
-    let eof = tokio::time::Instant::now();
     drop(served.stdin);
     (&mut served.task)
         .await
         .expect("the serve task does not panic")
         .expect("run_stdio_on returns Ok");
-    // Plus the timer's resolution: tokio rounds each deadline up to its next
-    // millisecond tick, so the two deadlines can each land 1 ms late.
-    let contract = super::super::STDIO_DRAIN_TIMEOUT
-        + super::super::stdio_shutdown::STDIO_TEARDOWN_TIMEOUT
-        + TIMER_RESOLUTION * 2;
-    let took = eof.elapsed();
-    assert!(
-        took <= contract,
-        "run_stdio_on returned {took:?} after EOF, past its {contract:?} contract"
+    assert_eq!(
+        *seen.borrow(),
+        vec![1, 1],
+        "the session ends at EOF, once, and the blocked writer is abandoned at the drain \
+         deadline, once ([EOF reached, writer abandoned] counts)"
     );
     // Held until here: dropping the reader would unblock the writer.
     drop(served.stdout);
