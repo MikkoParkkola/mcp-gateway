@@ -17,6 +17,7 @@ use super::id::{LogCursor, StreamId};
 use super::merge::{LogMerge, Out};
 use super::sent::Sent;
 use super::watcher;
+use crate::config_reload::Generation;
 use crate::gateway::auth::live::{HeldCredential, current_caller};
 use crate::gateway::auth::{AuthState, AuthenticatedClient};
 use crate::gateway::router::AppState;
@@ -151,23 +152,23 @@ impl Conn {
         let Some(caller) = current_caller(&self.auth, self.held.as_ref()).await else {
             return false;
         };
-        let access = activity_access(&self.state, &caller.client, caller.identity.as_ref());
+        let access = activity_access(&caller.client, caller.identity.as_ref(), &caller.generation);
         super::kinds_for(&caller.client, access.as_ref(), &self.state) == self.kinds
             && access == self.access
     }
 }
 
-/// The caller's Activity access under the live config's role mapping, as the
-/// list resolves it: `None` when Activity refuses the caller. A scoped key's
-/// backend list is sorted, so reordering it in the config is no change.
+/// The caller's Activity access under the role mapping of the generation it
+/// was judged by, as the list resolves it: `None` when Activity refuses the
+/// caller. A scoped key's backend list is sorted, so reordering it in the
+/// config is no change.
 pub(super) fn activity_access(
-    state: &AppState,
     client: &AuthenticatedClient,
     identity: Option<&VerifiedIdentity>,
+    generation: &Generation,
 ) -> Option<Access> {
-    let config = state.live_config.get();
-    let mut access =
-        access::resolve(Some(client), identity, &config.control_plane.role_mapping).ok()?;
+    let mapping = &generation.config().control_plane.role_mapping;
+    let mut access = access::resolve(Some(client), identity, mapping).ok()?;
     if let Access::Scoped { backends, .. } = &mut access {
         backends.sort();
         backends.dedup();

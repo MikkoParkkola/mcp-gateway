@@ -133,7 +133,7 @@ async fn stream(
         Err(refusal) => return too_many(refusal),
     };
     let (tx, rx) = mpsc::channel(1);
-    let access = conn::activity_access(&state, &client, caller.identity.as_ref());
+    let access = conn::activity_access(&client, caller.identity.as_ref(), &caller.generation);
     let conn = conn::Conn {
         facts: auth_facts(&state, Some(&client)),
         kinds: kinds_for(&client, access.as_ref(), &state),
