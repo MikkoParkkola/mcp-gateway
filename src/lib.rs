@@ -101,6 +101,8 @@ pub mod mtls;
 #[doc(hidden)]
 pub mod oauth;
 mod observer;
+// Only Unix readers use it: the guard opens through its own Windows path.
+#[cfg(unix)]
 mod open_nonblocking;
 pub(crate) mod personal_accounts;
 #[doc(hidden)]
