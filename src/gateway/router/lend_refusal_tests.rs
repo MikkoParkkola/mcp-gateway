@@ -501,29 +501,18 @@ async fn a_cold_fill_refused_by_the_lender_is_a_refusal_under_standard() {
     assert_cold_fill_refusal(crate::config::InputSchemaEnforcement::Standard).await;
 }
 
-/// The value of the first series of `metric` whose labels hold every one of
-/// `labels`, in rendered Prometheus text; 0 when there is none yet.
-#[cfg(feature = "metrics")]
-fn series_value(text: &str, metric: &str, labels: &[&str]) -> f64 {
-    text.lines()
-        .find(|line| {
-            line.strip_prefix(metric)
-                .is_some_and(|rest| rest.starts_with('{'))
-                && labels.iter().all(|label| line.contains(label))
-        })
-        .and_then(|line| line.rsplit(' ').next())
-        .and_then(|n| n.parse::<f64>().ok())
-        .unwrap_or(0.0)
-}
-
 /// LEND.6: a refusal left out of the error budget is still a recorded
 /// invocation: the invocation counter (status `error`) and the duration
-/// histogram each count it, once. The metrics are process-wide, so the row's
-/// backend has a name of its own: other rows refuse cold fills of [`BACKEND`]
-/// in parallel, which the same metrics count.
+/// histogram each count it, once. A lent-only call carrying no credential is
+/// refused at the route stage's catalogue fill, before any dispatch, so this
+/// row covers the refused-fill accounting; a send refused at the dispatch has
+/// its own row (`bridge_send_refusal_tests`). The metrics are process-wide, so
+/// the row's backend has a name of its own: other rows refuse fills of
+/// [`BACKEND`] in parallel, which the same metrics count.
 #[cfg(feature = "metrics")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_meta_lend_refusal_is_still_recorded_as_an_invocation() {
+    use crate::metrics::series_value;
     const ALONE: &str = "lent-metrics";
     crate::metrics::install();
     let (url, calls) = peer().await;
