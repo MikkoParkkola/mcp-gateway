@@ -218,12 +218,12 @@ async fn response_block(route: Route) {
 
 #[tokio::test(flavor = "current_thread")]
 async fn a_response_firewall_block_records_no_rule_on_gateway_invoke() {
-    response_block(Route::MetaInvoke).await;
+    Box::pin(response_block(Route::MetaInvoke)).await;
 }
 
 #[tokio::test(flavor = "current_thread")]
 async fn a_response_firewall_block_records_no_rule_on_the_direct_route() {
-    response_block(Route::Direct).await;
+    Box::pin(response_block(Route::Direct)).await;
 }
 
 /// A stored task read back after a reload whose tool policy denies its tool
