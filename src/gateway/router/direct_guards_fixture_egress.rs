@@ -330,6 +330,7 @@ pub(crate) async fn fixture_hardened_signed_firewalled(answer: Answer) -> Fx {
 /// [`super::fixture_built`] with `log` as the state's transparency log and no
 /// firewall: `build` arms the same log on the `MetaMcp`, so both routes record
 /// their deliveries in one file with no egress scan changing the answer.
+#[cfg(feature = "firewall")]
 pub(crate) async fn fixture_logged(
     answer: Answer,
     log: Arc<crate::security::TransparencyLogger>,
