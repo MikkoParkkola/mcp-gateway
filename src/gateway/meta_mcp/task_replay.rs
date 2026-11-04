@@ -505,7 +505,7 @@ type StoredVisibility = (
 
 /// A withheld target's refusal: a policy reason's withholding is the
 /// gateway's refusal and names its check; any other is no refusal.
-fn withheld_refusal(
+fn withholding_check(
     judged: visible::Visibility,
 ) -> Option<crate::security::decision_record::Refusal> {
     match judged {

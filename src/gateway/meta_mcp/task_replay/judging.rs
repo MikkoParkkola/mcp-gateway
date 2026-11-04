@@ -10,7 +10,7 @@ use serde_json::json;
 use super::super::visible::{self, memo::AccountOutcome};
 use super::super::{MetaMcp, MetaMcpCallerContext, error_response_preserving_status};
 use super::{
-    StoredAnswer, StoredRead, StoredVisibility, StoredWithheld, retry_later, withheld_refusal,
+    StoredAnswer, StoredRead, StoredVisibility, StoredWithheld, retry_later, withholding_check,
 };
 use crate::gateway::task_service::CommittedTask;
 use crate::protocol::{JsonRpcResponse, RequestId};
@@ -361,7 +361,7 @@ fn noting(refused: (Error, Refusal)) -> (Error, Refusal) {
 /// a policy reason; otherwise no refusal.
 fn stored_withheld(id: &RequestId, error: &Error, judged: visible::Visibility) -> StoredAnswer {
     let response = error_response_preserving_status(id.clone(), error);
-    match withheld_refusal(judged) {
+    match withholding_check(judged) {
         Some(refusal) => StoredAnswer::refused(response, refusal),
         None => StoredAnswer::unrecorded(response),
     }

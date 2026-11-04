@@ -43,10 +43,7 @@ impl MetaMcp {
         let server = required("server")?;
         let tool = required("tool")?;
         self.authorize_target_explained(args, (server, tool), caller)?;
-        crate::gateway::meta_mcp::visible::absent::absent_if_withheld_explained(
-            crate::gateway::meta_mcp::visible::memo::recorded_visibility(server, tool),
-            tool,
-        )?;
+        crate::gateway::meta_mcp::visible::absent::refuse_withheld_explained(server, tool)?;
         if let Err(reason) = validate_tool_name(tool) {
             return Err((
                 Error::Protocol(format!("Invalid tool name '{tool}': {reason}")),

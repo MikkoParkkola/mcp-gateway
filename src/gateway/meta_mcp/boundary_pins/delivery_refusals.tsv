@@ -125,8 +125,8 @@ src/gateway/meta_mcp/invoke/chokepoint.rs	route_request_scan	request_refusal	1	r
 src/gateway/meta_mcp/invoke/continuation.rs	redeem_retry	note_refusal	1	not-delivered	worker clock note
 src/gateway/meta_mcp/invoke/continuation.rs	seal_direct_interim	refusal	1	recorded	direct undeclared question, after dispatch; raised here
 src/gateway/meta_mcp/invoke/dispatch.rs	admit_spend	gateway_refused	1	recorded	sealed refusal, recorded at the outlet
-src/gateway/meta_mcp/invoke/dispatch_guards.rs	admit_backend_wide	gateway_refused	1	recorded	sealed refusal, recorded at the outlet
-src/gateway/meta_mcp/invoke/dispatch_guards.rs	admit_enabled_capability	gateway_refused	1	recorded	sealed refusal, recorded at the outlet
+src/gateway/meta_mcp/invoke/dispatch_guards.rs	admit_backend_wide_explained	gateway_refused	1	recorded	sealed refusal, recorded at the outlet
+src/gateway/meta_mcp/invoke/dispatch_guards.rs	admit_enabled_capability_explained	gateway_refused	1	recorded	sealed refusal, recorded at the outlet
 src/gateway/meta_mcp/invoke/dispatch_guards.rs	firewall_refusal_body	Error::ResponseFirewallRefused	1	not-delivered	the stored body a replay serves
 src/gateway/meta_mcp/invoke/egress.rs	inspect_discovery_value	Error::ResponseFirewallRefused	1	recorded	the frame is marked delivery_refusal at the outlet
 src/gateway/meta_mcp/invoke/errors.rs	of_error	is_authorization_refusal	1	not-delivered	predicate: a refusal of the caller is not sampled against the error budget
@@ -143,11 +143,11 @@ src/gateway/meta_mcp/invoke/legacy_bridge.rs	bridge_legacy_ask	Error::ResponseFi
 src/gateway/meta_mcp/invoke/legacy_bridge.rs	bridge_legacy_ask	bridge_refusal	1	recorded	bridged undeclared last round; raised while vouched
 src/gateway/meta_mcp/invoke/legacy_bridge.rs	bridge_legacy_ask	is_authorization_refusal	1	not-delivered	predicate: a parked round refusal answers as itself; the outlet records it
 src/gateway/meta_mcp/invoke/policy.rs	apply_response_gates_effect	Error::ResponseFirewallRefused	1	recorded	the frame is marked delivery_refusal at the outlet
-src/gateway/meta_mcp/invoke/policy.rs	authorize_invocation	Error::Forbidden{}	1	composite-or-replay	backstop for composite steps; a lone gateway_invoke's Forbidden is recorded by the outlet
-src/gateway/meta_mcp/invoke/policy.rs	authorize_invocation	audit_refusal	1	not-delivered	audit row
+src/gateway/meta_mcp/invoke/policy.rs	authorize_target_explained	Error::Forbidden{}	1	composite-or-replay	backstop for composite steps; a lone gateway_invoke's Forbidden is recorded by the outlet
+src/gateway/meta_mcp/invoke/policy.rs	authorize_target_explained	audit_refusal	1	not-delivered	audit row
 src/gateway/meta_mcp/invoke/policy.rs	check_attestation_scoped	gateway_refused	1	recorded	sealed refusal, recorded at the outlet
-src/gateway/meta_mcp/invoke/policy.rs	check_invocation_policy	blocked_tool_refusal	1	recorded	Protocol refusal; the route stage withholds it first (PR-2a raise)
-src/gateway/meta_mcp/invoke/policy.rs	check_invocation_policy	refuse_withheld	1	composite-or-replay	the invoke entry re-meeting a name the route stage withheld first (raised); reached by composite steps
+src/gateway/meta_mcp/invoke/policy.rs	check_invocation_policy_explained	blocked_tool_refusal	1	recorded	Protocol refusal; the route stage withholds it first (PR-2a raise)
+src/gateway/meta_mcp/invoke/policy.rs	check_invocation_policy_explained	refuse_withheld_explained	1	composite-or-replay	the invoke entry re-meeting a name the route stage withheld first (raised); reached by composite steps
 src/gateway/meta_mcp/invoke/policy.rs	refuse_unattested_plan	gateway_refused	1	recorded	sealed refusal, recorded at the outlet
 src/gateway/meta_mcp/invoke/post_dispatch.rs	settle_dispatch_error	is_authorization_refusal	1	not-delivered	predicate: a dispatch refused at its send answers as itself; the outlet records it
 src/gateway/meta_mcp/invoke/post_dispatch.rs	settle_dispatch_error	note_send_refusal	1	not-delivered	a decision note for the record (kind unrecorded); the error it reads is answered unchanged

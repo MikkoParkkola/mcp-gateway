@@ -23,3 +23,11 @@ pub(crate) fn absent_if_withheld_explained(
         _ => Ok(()),
     }
 }
+
+/// [`super::memo::refuse_withheld`], with the withholding's pair and no note.
+pub(crate) fn refuse_withheld_explained(
+    server: &str,
+    tool: &str,
+) -> crate::security::decision_record::Explained {
+    absent_if_withheld_explained(super::memo::recorded_visibility(server, tool), tool)
+}
