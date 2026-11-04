@@ -64,7 +64,7 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
     ),
     (
         "src/commands/regular_file.rs",
-        "gateway.yaml re-read by doctor (after Config::load's mode-checked read; prints key names, never values) and by upgrade (to rename backend url keys; prints line numbers and backend names, never values); opened as the loader opens it (O_NONBLOCK|O_NOCTTY, follows a symlink), regular files only, no size limit (as the guarded reader for config); the mode-checked read is lib-internal, widening it was declined",
+        "gateway.yaml re-read by doctor (after Config::load's mode-checked read; prints key names, never values); opened as the loader opens it (O_NONBLOCK|O_NOCTTY, follows a symlink), regular files only, no size limit (as the guarded reader for config); the mode-checked read is lib-internal, widening it was declined",
     ),
     (
         "src/commands/kubernetes.rs",

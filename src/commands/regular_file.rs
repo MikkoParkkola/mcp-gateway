@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Read a config file the way the gateway's own reader opens it, for the
-//! commands that read it a second time (`doctor`, `upgrade`).
+//! command that reads it a second time (`doctor`).
 
 use std::io::Read as _;
 use std::path::Path;

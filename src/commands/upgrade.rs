@@ -198,10 +198,21 @@ fn migrate_3_0_0_multi_user_notice(data_dir: &Path) -> std::io::Result<()> {
 /// read or it does not parse, so no notice is printed.
 fn multi_user_posture(data_dir: &Path) -> Option<MultiUserPosture> {
     let path = data_dir.join("gateway.yaml");
-    let Ok(text) = std::fs::read_to_string(&path) else {
-        // No config file at this location: nothing to detect, nothing to warn about.
+    // No config file at this location: nothing to detect, nothing to warn about.
+    if !path.exists() {
         return None;
-    };
+    }
+    // Read through the guard every loader uses, under the config lock, writing
+    // nothing: a file another account can change is never parsed here.
+    let mut read = None;
+    if let Err(why) = mcp_gateway::config_persistence::edit_config_text(&path, |current| {
+        read = current.map(str::to_owned);
+        Ok(None)
+    }) {
+        tracing::warn!(%why, "migration v3.0.0: gateway.yaml could not be read — skipping notice");
+        return None;
+    }
+    let text = read?;
     let Ok(yaml) = crate::yaml::from_str::<crate::yaml::Value>(&text) else {
         // Config::load() will surface the real parse error at startup; the
         // migration must not fail the upgrade over an informational notice.
