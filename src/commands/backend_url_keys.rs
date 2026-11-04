@@ -46,6 +46,7 @@ impl std::fmt::Debug for UrlRewrite {
             .field("kept", &self.kept)
             .field("removed", &self.removed)
             .field("api_keys", &self.api_keys)
+            .field("saves", &self.saves)
             .finish()
     }
 }
