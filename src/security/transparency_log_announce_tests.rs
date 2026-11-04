@@ -30,7 +30,10 @@ fn listen(log: &TransparencyLogger) -> Told {
 }
 
 fn event(fields: Value) -> Map<String, Value> {
-    fields.as_object().cloned().unwrap()
+    let Value::Object(map) = fields else {
+        panic!("an event is an object");
+    };
+    map
 }
 
 fn records(path: &Path) -> Vec<Map<String, Value>> {
