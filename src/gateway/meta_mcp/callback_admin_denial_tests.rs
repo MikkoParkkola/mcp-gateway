@@ -88,6 +88,27 @@ async fn non_admin_callback_registration_is_refused_as_forbidden() {
     );
 }
 
+/// Admin breadth inside the scope (MIK-9158 ruling b): an admin scoped to
+/// some backends keeps the admin-only capabilities on a backend it reaches.
+/// The backend check runs first, so the rule reads `InScope` as admin.
+#[tokio::test]
+async fn an_in_scope_admin_keeps_callback_registration() {
+    let dir = tempfile::tempdir().unwrap();
+    let meta = meta(&dir).await;
+    let scoped = MetaMcpCallerContext {
+        admin: crate::gateway::authz::AdminStanding::InScope,
+        ..anonymous_caller()
+    };
+    let outcome = meta.invoke_tool(&args(), None, &scoped).await;
+    assert!(
+        !matches!(
+            outcome,
+            Err(crate::Error::Forbidden { .. } | crate::Error::ToolNotFound(_))
+        ),
+        "an in-scope admin must not be refused: {outcome:?}"
+    );
+}
+
 #[derive(Clone, Default)]
 struct Buffer(Arc<Mutex<Vec<u8>>>);
 
