@@ -117,7 +117,7 @@ fn counter_of(bytes: &[u8]) -> Option<u64> {
 
 /// The log's segments, oldest first, the active file's included when it
 /// exists.
-fn segments(log: &Path) -> io::Result<Vec<u64>> {
+pub(super) fn segments(log: &Path) -> io::Result<Vec<u64>> {
     let files = listing(log)?;
     let mut segments: Vec<u64> = files.sealed.iter().map(|s| s.seq).collect();
     segments.extend(files.active);

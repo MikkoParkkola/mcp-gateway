@@ -208,7 +208,7 @@ impl ReloadContext {
             else {
                 // Skipped, never fallen through to a match: no `idp:` slot can
                 // exist for a grant whose authority is not an issuer.
-                skipped.push(subject.authority.clone());
+                skipped.push(subject.authority().to_owned());
                 continue;
             };
             let mut hit = 0usize;

@@ -159,7 +159,7 @@ async fn a_relabelled_subject_is_the_same_caller() {
     let alice = api_key("alice");
     for label in [Some("alice"), Some("Alice Renamed"), None] {
         let mut caller = context(&alice);
-        caller.grant_subject = Some(GrantSubject::new(
+        caller.grant_subject = Some(GrantSubject::for_test(
             "api_key",
             "alice",
             label.map(str::to_owned),
@@ -189,7 +189,7 @@ async fn each_caller_field_keeps_callers_apart() {
     let mut base = context(&alice);
     base.agent_id = Some(jwt);
     let subjects = [("api_key", "bob"), ("oidc", "alice")]
-        .map(|(a, s)| Some(GrantSubject::new(a, s, Some("alice".to_owned()))));
+        .map(|(a, s)| Some(GrantSubject::for_test(a, s, Some("alice".to_owned()))));
     let mut variants = vec![];
     for subject in subjects {
         let mut c = context(&alice);

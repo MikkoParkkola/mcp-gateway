@@ -103,8 +103,26 @@ async fn gateway_in(
         Arc<crate::backend::Backend>,
     ),
 ) {
+    gateway_named(BACKEND, url, mint, mode).await
+}
+
+/// [`gateway_in`] over a backend named `name`: a row reading process-wide
+/// metrics needs a server label no parallel row shares.
+async fn gateway_named(
+    name: &str,
+    url: String,
+    mint: FixedMint,
+    mode: crate::config::InputSchemaEnforcement,
+) -> (
+    axum::Router,
+    (tempfile::TempDir, super::tests::FixtureDir),
+    (
+        Arc<crate::gateway::meta_mcp::MetaMcp>,
+        Arc<crate::backend::Backend>,
+    ),
+) {
     let backend = Arc::new(crate::backend::Backend::new(
-        BACKEND,
+        name,
         BackendConfig {
             transport: TransportConfig::Http {
                 http_url: url,
@@ -481,6 +499,59 @@ async fn a_cold_fill_refused_by_the_lender_is_a_refusal_under_closed() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_cold_fill_refused_by_the_lender_is_a_refusal_under_standard() {
     assert_cold_fill_refusal(crate::config::InputSchemaEnforcement::Standard).await;
+}
+
+/// LEND.6: a refusal left out of the error budget is still a recorded
+/// invocation: the invocation counter (status `error`) and the duration
+/// histogram each count it, once. A lent-only call carrying no credential is
+/// refused at the route stage's catalogue fill, before any dispatch, so this
+/// row covers the refused-fill accounting; a send refused at the dispatch has
+/// its own row (`bridge_send_refusal_tests`). The metrics are process-wide, so
+/// the row's backend has a name of its own: other rows refuse fills of
+/// [`BACKEND`] in parallel, which the same metrics count.
+#[cfg(feature = "metrics")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_meta_lend_refusal_is_still_recorded_as_an_invocation() {
+    use crate::metrics::series_value;
+    const ALONE: &str = "lent-metrics";
+    crate::metrics::install();
+    let (url, calls) = peer().await;
+    let mint = FixedMint {
+        headers: vec![],
+        expires_at: i64::MAX,
+    };
+    let (router, _dirs, _) =
+        gateway_named(ALONE, url, mint, crate::config::InputSchemaEnforcement::Off).await;
+    let server = format!("server=\"{ALONE}\"");
+    let read = || {
+        let text = crate::metrics::render();
+        (
+            series_value(
+                &text,
+                "mcp_tool_invocations_total",
+                &[&server, "status=\"error\""],
+            ),
+            series_value(
+                &text,
+                "mcp_tool_invocation_duration_seconds_count",
+                &[&server],
+            ),
+        )
+    };
+    assert_eq!(read(), (0.0, 0.0), "premise: no series for the backend yet");
+    let arguments = json!({"server": ALONE, "tool": TOOL, "arguments": {"q": "x"}});
+    let (status, answer) = meta_call(&router, "gateway_invoke", arguments).await;
+    assert!(
+        answer.to_string().contains("this call carried none"),
+        "premise: the lender's refusal: {status} {answer}"
+    );
+    assert_eq!(answer["error"]["code"], -32001, "{answer}");
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+    assert_eq!(
+        read(),
+        (1.0, 1.0),
+        "one invocation with status error, and its duration"
+    );
 }
 
 /// LEND.6, end to end: refusals the real per-user lender makes, on either
