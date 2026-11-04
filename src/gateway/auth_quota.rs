@@ -115,6 +115,13 @@ impl QuotaPrincipal {
         Self { store, limit: None }
     }
 
+    /// Whether `other` is the same configured key across a rotation: the
+    /// limit key, its principal's hash, is the same. Only an API key's
+    /// quota identity has one; any other credential is never the same key.
+    pub(crate) fn same_key_principal(&self, other: &Self) -> bool {
+        self.limit.is_some() && self.limit == other.limit
+    }
+
     pub(crate) fn as_store_key(&self) -> &str {
         &self.store
     }

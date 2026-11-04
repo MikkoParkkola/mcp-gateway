@@ -30,6 +30,7 @@ fn presented(facts: Option<CredentialFacts>, session_sha256: Option<String>) -> 
         identity: None,
         session_sha256,
         bearer_sha256: None,
+        api_key_digest_tag: None,
     }
 }
 
@@ -113,4 +114,28 @@ async fn a_dashboard_subscription_binds_the_session_and_expires_one_idle_timeout
         .expect("a bounded idle timeout");
     assert_eq!(unbound.binding, None, "no session cookie, no binding");
     assert!(unbound.expires_at.is_some(), "the idle cap still applies");
+}
+
+/// An API-key subscription is bound to the secret that opened it: with the
+/// matched secret's tag it is stored with it; without one it is refused at
+/// creation, never stored tagless to fail at its first check.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_api_key_subscription_needs_its_matched_secret() {
+    let (state, _dir) = crate::gateway::router::tests::test_router_app_state().await;
+    let caller = client(CredentialKind::ApiKey);
+    let mut tagged = presented(None, None);
+    tagged.api_key_digest_tag = Some(crate::gateway::auth::secret_tag("secret"));
+    let credential = tagged
+        .credential(Some(&caller), &state)
+        .expect("a tagged key subscribes");
+    let api_key = credential.api_key.expect("the key is named");
+    assert_eq!(
+        api_key.digest_tag,
+        Some(crate::gateway::auth::secret_tag("secret"))
+    );
+    let refused = presented(None, None).credential(Some(&caller), &state);
+    assert!(
+        refused.is_err_and(|why| why.contains("matched secret")),
+        "no matched secret, no subscription"
+    );
 }

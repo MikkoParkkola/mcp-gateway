@@ -206,6 +206,13 @@ async fn fixture(kind: Gateway, store: bool) -> Fixture {
     };
     state.live_config.set(config);
     let (log_dir, other_receipt) = seed_log(&mut state);
+    // The gateway's discovery cache, as startup attaches it, over a scan
+    // that finds nothing: discovery answers what an admitted caller gets.
+    state
+        .meta_mcp
+        .set_discovery_cache(Arc::new(crate::discovery::listing::DiscoveryCache::new(
+            Arc::new(NoClientFiles),
+        )));
     if store {
         Arc::get_mut(&mut state)
             .expect("state is unique")
@@ -220,9 +227,32 @@ async fn fixture(kind: Gateway, store: bool) -> Fixture {
     }
 }
 
+/// A client-file scan that finds no file.
+struct NoClientFiles;
+
+impl crate::discovery::listing::ScanSource for NoClientFiles {
+    fn fingerprint(&self) -> crate::discovery::config_scanner::client_scan::Fingerprint {
+        crate::discovery::config_scanner::ConfigScanner::fingerprint(&[])
+    }
+    fn scan(
+        &self,
+    ) -> futures::future::BoxFuture<'_, crate::discovery::config_scanner::client_scan::ClientScan>
+    {
+        let scan = crate::discovery::config_scanner::client_scan::ClientScan {
+            finds: Vec::new(),
+            fingerprint: self.fingerprint(),
+            unreadable: Vec::new(),
+        };
+        Box::pin(async move { scan })
+    }
+    fn now(&self) -> std::time::Instant {
+        std::time::Instant::now()
+    }
+}
+
 /// An invocation log holding one call by [`DEV`], one by [`OTHER_DEV`] and one
 /// by a key, chained and hashed like the logger's, opened as the server would.
-fn seed_log(state: &mut Arc<AppState>) -> (tempfile::TempDir, String) {
+pub(super) fn seed_log(state: &mut Arc<AppState>) -> (tempfile::TempDir, String) {
     use crate::security::transparency_log::TransparencyLogConfig;
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("audit.jsonl");
@@ -283,6 +313,7 @@ fn paths() -> Vec<&'static str> {
         routes::UI_TOOLS_CALL,
         routes::UI_REFUSALS,
         routes::UI_DECISIONS,
+        routes::UI_DECISIONS_COUNT,
         routes::UI_GATEWAY,
         routes::UI_KEYS,
         routes::UI_CONFIG,
@@ -766,6 +797,10 @@ mod control_plane_scope;
 /// The status report against the guards, through the same fixture.
 #[path = "ui_access_report_tests.rs"]
 mod report;
+
+/// A backend-scoped credential's reads, against two backends.
+#[path = "ui_backend_scope_tests.rs"]
+mod backend_scope;
 
 /// Each UI role check against the mapping pinned on the request, through the
 /// same fixture.

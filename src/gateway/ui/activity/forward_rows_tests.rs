@@ -494,3 +494,32 @@ fn a_fresh_read_never_starts_past_an_unreadable_oldest_segment() {
     assert!(page.reset, "an unreadable segment is not skipped");
     assert!(page.rows.is_empty());
 }
+
+#[test]
+fn a_backend_scoped_caller_reads_only_its_backends_calls() {
+    let d = dir();
+    let path = d.path().join("inv.jsonl");
+    let w = write(&path, &[calls(3)]);
+    let l = log(&path, StreamKind::Activity);
+    let read = |backend: &str| {
+        let scoped = Access::Scoped {
+            owner: None,
+            backends: vec![backend.to_owned()],
+        };
+        drain(
+            &l,
+            None,
+            w.marks.last(),
+            &scoped,
+            WIDE,
+            &mut Search::default(),
+        )
+    };
+    assert_eq!(counters(&read("srv")), vec![1, 2, 3]);
+    let other = read("other");
+    assert!(counters(&other).is_empty(), "no call on another backend");
+    assert!(
+        !other.iter().any(|p| p.reset),
+        "nothing served is not a reset"
+    );
+}

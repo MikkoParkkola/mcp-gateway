@@ -49,6 +49,9 @@ fn file_text(keys: &[ApiKeyConfig]) -> String {
         if let Some(at) = k.expires_at {
             let _ = writeln!(text, "      expires_at: \"{}\"", at.to_rfc3339());
         }
+        if let Some(principal) = &k.principal {
+            let _ = writeln!(text, "      principal: \"{principal}\"");
+        }
     }
     text
 }
@@ -214,4 +217,48 @@ async fn no_request_through_the_router_reaches_the_no_pin_refusal() {
             }
         }
     }
+}
+
+/// A key rotated by hand in gateway.yaml because its secret leaked (a new
+/// digest, the same explicit principal, no previous digest) and then reloaded
+/// keeps its grants (ADR-022), but an event watch opened with the leaked
+/// secret must stop being admitted: the reload path ends it, with no route
+/// involved.
+#[tokio::test]
+async fn a_reload_rotating_a_leaked_key_ends_its_old_watch() {
+    const PRINCIPAL: &str = "0a1b2c3d4e5f";
+    const OLD: &str = "live-keys-leaked-old-secret";
+    const NEW: &str = "live-keys-leaked-new-secret";
+    let with = |secret: &str| {
+        let mut k = key(secret, None);
+        k.name = "ops".to_owned();
+        k.principal = Some(PRINCIPAL.to_owned());
+        k
+    };
+    let (state, _store) = test_router_app_state_with_auth(&auth(vec![with(OLD)])).await;
+    let dir = tempfile::tempdir().expect("tempdir");
+    let services = state.meta_mcp.events_services(
+        Arc::clone(&state.live_config),
+        crate::events::LiveCredentials::default(),
+    );
+    // The running config as loaded from the file, so the live table holds
+    // the key before the rotation.
+    reload_keys(&state, dir.path(), &[with(OLD)]).await;
+    // The watch as the old secret's caller recorded it: the key's name and
+    // its principal.
+    let watch = crate::events::ApiKeyRef {
+        name: "ops".to_owned(),
+        principal: PRINCIPAL.to_owned(),
+        // Opened with the old secret: bound to its digest.
+        digest_tag: Some(crate::gateway::auth::secret_tag(OLD)),
+    };
+    assert!(
+        services.admits(Some(&watch), "x"),
+        "control: before the rotation the watch is admitted"
+    );
+    reload_keys(&state, dir.path(), &[with(NEW)]).await;
+    assert!(
+        !services.admits(Some(&watch), "x"),
+        "a leaked rotation by reload left the old secret's watch admitted"
+    );
 }

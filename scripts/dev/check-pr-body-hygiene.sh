@@ -3,7 +3,8 @@
 # SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 # Guard what a pull request body says. The body is world-readable the moment
 # it is posted, so it is held to the same private-content patterns as the
-# tracked tree, may not cite a tracker id, and may not name the AI models that
+# tracked tree, may not cite a tracker id or an internal process reference (a
+# findings-register row, a ruling), and may not name the AI models that
 # reviewed the change (internal process; the attribution footer, which names
 # the authoring tool, is allowed). The title, given in PR_TITLE, is held to
 # the same rules.
@@ -51,7 +52,7 @@ report() {
 
 check_line() {
   local where="$1" line="$2"
-  for check in "${private_content_checks[@]}"; do
+  for check in "${private_content_checks[@]}" "${process_reference_checks[@]}"; do
     id="${check%%::*}"
     rest="${check#*::}"
     flags="${rest%%::*}"

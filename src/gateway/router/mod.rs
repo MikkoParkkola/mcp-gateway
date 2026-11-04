@@ -262,9 +262,21 @@ mod direct_effect_absent_tests;
 /// A late refusal keeps its own code, and its run keeps the key.
 #[cfg(all(test, feature = "firewall"))]
 mod late_refusal_lease_tests;
+/// A send refusal releases its call's key only when nothing was sent.
+#[cfg(test)]
+mod lend_key_tests;
 /// A lent-only call carrying no credential records `refused`.
 #[cfg(test)]
 mod lend_refusal_tests;
+/// A name budgeted by reload starts from the day's overflow total.
+#[cfg(all(test, feature = "cost-governance"))]
+mod live_budget_estimate_tests;
+#[cfg(all(test, feature = "cost-governance"))]
+mod live_budget_members_tests;
+#[cfg(all(test, feature = "cost-governance"))]
+mod live_budget_queued_tests;
+#[cfg(all(test, feature = "cost-governance"))]
+mod live_budget_tests;
 /// ADR-023: the security flags apply on reload.
 #[cfg(all(test, feature = "firewall"))]
 mod live_flags_tests;
@@ -305,6 +317,9 @@ mod playbook_busy_tests;
 mod playbook_envelope_tests;
 #[cfg(test)]
 mod playbook_key_tests;
+/// The key-by-policy barrier: one request, one generation.
+#[cfg(all(test, feature = "firewall"))]
+mod policy_barrier_tests;
 #[cfg(all(test, feature = "firewall"))]
 mod relay_key_settlement_tests; // MIK-8488 PR-A: site 18's key release
 /// MIK-8058: a failed reload's status says whose fault it is.
@@ -409,6 +424,9 @@ pub(crate) mod tests;
 mod trace_span;
 #[cfg(test)]
 mod trace_span_tests;
+/// T24 through the route: a capability reloaded as a write is not run.
+#[cfg(all(test, feature = "webui"))]
+mod ui_capability_reload_tests;
 #[cfg(all(test, feature = "webui"))]
 mod ui_tool_call_cell_tests;
 #[cfg(all(test, feature = "webui"))]
@@ -876,6 +894,8 @@ async fn pin_generation(
     next: middleware::Next,
 ) -> axum::response::Response {
     request.extensions_mut().insert(live.generation());
+    #[cfg(test)]
+    crate::gateway::meta_mcp::visible::seams::pinned();
     next.run(request).await
 }
 

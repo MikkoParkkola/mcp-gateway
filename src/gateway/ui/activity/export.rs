@@ -13,7 +13,7 @@ use sha2::{Digest, Sha256};
 use super::access::Access;
 use super::csv::{Cell, CsvWriter, Truncated};
 use super::reader::{Cursor, Limits, Line, Which, read_page};
-use super::rows::{Filter, Kind, kind_of, row, visible};
+use super::rows::{Filter, Kind, kind_of, row};
 use crate::security::transparency_log::recompute_entry_hash;
 use crate::security::transparency_log::signature::{SignatureState, signature_state};
 use crate::trust::provenance_public::{ACTIVITY_EXPORT_DOMAIN, ProvenancePublicSigner};
@@ -91,7 +91,7 @@ pub(super) fn collect(
     size: impl Fn(&Value) -> usize,
 ) -> std::io::Result<Collected> {
     let keep = |line: &Line| {
-        kind_of(line).is_some_and(|kind| filter.matches(line, kind) && visible(access, line, kind))
+        kind_of(line).is_some_and(|kind| filter.matches(line, kind) && access.admits(line, kind))
     };
     let mut c = Collected {
         rows: Vec::new(),

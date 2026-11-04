@@ -51,9 +51,15 @@ async fn a_hidden_capability_provider_lends_no_effect() {
         meta.declared_effect(("caps", "lookup"), None, None),
         Some((Effect::ReadOnly, EffectSource::CapabilityDefinition))
     );
-    let hidden = with_caller(Arc::new(HidesCaps), async {
-        meta.declared_effect(("caps", "lookup"), None, None)
+    assert!(meta.cache_admits(("caps", "lookup"), None, None));
+    let (hidden, admitted) = with_caller(Arc::new(HidesCaps), async {
+        (
+            meta.declared_effect(("caps", "lookup"), None, None),
+            meta.cache_admits(("caps", "lookup"), None, None),
+        )
     })
     .await;
     assert_eq!(hidden, None);
+    // Admission reads the same view, so it agrees with the effect.
+    assert!(!admitted);
 }

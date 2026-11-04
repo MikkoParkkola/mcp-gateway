@@ -25,7 +25,7 @@ use serde_json::Value;
 
 use super::access::Access;
 use super::reader::{Limits, Line, WINDOW, Which, read_page};
-use super::rows::{Kind, kind_of, row, visible};
+use super::rows::{Kind, kind_of, row};
 
 /// After this many restarts in one catch-up, the page ends in `reset`, so a
 /// log replaced on every call cannot hold a stream in catch-up.
@@ -365,7 +365,7 @@ pub(in crate::gateway::ui) fn frame(
 /// The row for `line` when this stream kind keeps it and `access` may see it.
 fn served(log: &Log<'_>, access: &Access, line: &Line) -> Option<Served> {
     let kind = kind_of(line).filter(|k| log.kind.keeps(*k))?;
-    if !visible(access, line, kind) {
+    if !access.admits(line, kind) {
         return None;
     }
     Some(Served {

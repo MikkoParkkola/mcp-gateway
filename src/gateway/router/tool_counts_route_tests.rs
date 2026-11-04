@@ -11,7 +11,10 @@ use axum::http::{Request, StatusCode};
 use serde_json::{Value, json};
 use tower::ServiceExt;
 
-use super::{http_backend_at, scoped_auth_config, test_router_app_state_with_auth_and_config};
+use super::{
+    full_admin_auth_config, http_backend_at, scoped_auth_config,
+    test_router_app_state_with_auth_and_config,
+};
 use crate::counters::{Call, CounterStore, Label, Tally};
 use crate::gateway::router::{AppState, create_router};
 
@@ -31,7 +34,11 @@ async fn state(
     crate::gateway::router::tests::FixtureDir,
 ) {
     let (state, dir) = test_router_app_state_with_auth_and_config(
-        &scoped_auth_config(admin),
+        &if admin {
+            full_admin_auth_config()
+        } else {
+            scoped_auth_config(false)
+        },
         crate::config::Config::default(),
     )
     .await;

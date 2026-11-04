@@ -9,6 +9,7 @@ use chrono::{DateTime, FixedOffset};
 use serde_json::{Map, Value};
 
 use super::reader::{Line, Which};
+use crate::gateway::authz::BackendGrant;
 use crate::security::transparency_log::signature::signature_state;
 
 /// Until findings are recorded with the call, a row says so; an empty list
@@ -239,13 +240,13 @@ pub(super) fn owned_by(line: &Line, kind: Kind, issuer: &str, subject: &str) -> 
         })
 }
 
-/// Whether `access` may see `line` of `kind`: the one rule the list, the
-/// export and the stream share.
-pub(super) fn visible(access: &super::access::Access, line: &Line, kind: Kind) -> bool {
-    match access {
-        super::access::Access::All => true,
-        super::access::Access::Own { issuer, subject } => owned_by(line, kind, issuer, subject),
-    }
+/// Whether a row lies inside the backend scope `backends`. Fail closed: only
+/// a call names its backend (`server`). Config rows are grant and policy
+/// changes and admin actions are gateway-wide, so neither is in any scope.
+pub(super) fn in_scope(line: &Line, kind: Kind, backends: &[String]) -> bool {
+    kind == Kind::Call
+        && str_field(&line.entry, "server")
+            .is_some_and(|server| BackendGrant::of_list(backends).admits(server))
 }
 
 #[cfg(test)]

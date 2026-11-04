@@ -41,12 +41,12 @@ impl BudgetEnforcer {
     /// unused without a key).
     pub(super) fn report_crossings(
         &self,
+        budgets: &crate::cost_accounting::config::BudgetLimits,
         tool: &str,
         key: Option<&str>,
         spent: u64,
         totals: [u64; 3],
     ) {
-        let budgets = &self.config.budgets;
         let [global, tool_total, key_total] = totals;
         let scopes = [
             (budgets.daily, global, None),
