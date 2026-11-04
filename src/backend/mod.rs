@@ -605,7 +605,7 @@ pub(crate) struct CleanupState {
     /// design M1): a replaced transport held by a busy caller or an orphaned
     /// entry is still here, so [`Backend::retire_now`] reaches it. An entry
     /// dies with its last strong reference; the next registration prunes it.
-    pub(crate) live: Vec<std::sync::Weak<dyn crate::transport::Transport>>,
+    pub(crate) live: Vec<std::sync::Weak<crate::transport::StdioTransport>>,
 }
 
 // The cells read counters from a local Prometheus render.

@@ -327,6 +327,40 @@ pub(super) async fn wait_reaped(
 }
 
 impl super::StdioTransport {
+    /// Close the child's stdin now, unless a write holds it: one stuck on a
+    /// peer that stopped reading. SIGTERM or the kill ends that one, and the
+    /// child never sees EOF. `true` when stdin was closed.
+    fn close_stdin_now(&self) -> bool {
+        match self.writer.try_lock() {
+            Ok(mut writer) => {
+                *writer = None;
+                true
+            }
+            Err(_) => false,
+        }
+    }
+
+    /// The handover of a graceful stop, synchronous and without a runtime:
+    /// retire the slot (a start finishing later installs nothing), close
+    /// stdin, and hand the tree to the reaper with the MCP stdio order
+    /// planned to fit `budget`. A later `close` waits for that reap.
+    pub(crate) fn hand_over_gracefully_now(&self, budget: Duration) {
+        self.connected
+            .store(false, std::sync::atomic::Ordering::SeqCst);
+        let ending = graceful_ending(budget, self.close_stdin_now());
+        {
+            let mut slot = self.child.lock();
+            slot.retired = true;
+            self.start.trip_eof();
+            if let Some(tree) = slot.tree.as_mut() {
+                tree.set_ending(ending, self.stop_deadline.get().cloned());
+            }
+            slot.take_for_reaper();
+        }
+        self.shutdown.lock().cancel();
+        self.pending.clear();
+    }
+
     /// Join the gateway stop deadline of the backend that owns this
     /// transport; set once, before its first start.
     pub(crate) fn attach_stop_deadline(&self, deadline: std::sync::Arc<StopDeadline>) {
@@ -433,15 +467,7 @@ impl super::StdioTransport {
         self.connected
             .store(false, std::sync::atomic::Ordering::Relaxed);
 
-        // A write stuck on a peer that stopped reading holds stdin; SIGTERM
-        // or the kill ends it, and the child never sees EOF.
-        let stdin_closed = match self.writer.try_lock() {
-            Ok(mut writer) => {
-                *writer = None;
-                true
-            }
-            Err(_) => false,
-        };
+        let stdin_closed = self.close_stdin_now();
         // The per-start stdin token first, then the tree to the reaper,
         // waited for (bounded) with any reap a retire started earlier. No
         // await comes before the handover, so a cancelled close cannot leave

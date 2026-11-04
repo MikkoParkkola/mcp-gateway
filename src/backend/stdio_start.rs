@@ -53,8 +53,7 @@ impl Backend {
                 )));
             }
             cleanups.live.retain(|weak| weak.strong_count() > 0);
-            let registered: Arc<dyn crate::transport::Transport> = transport.clone();
-            cleanups.live.push(Arc::downgrade(&registered));
+            cleanups.live.push(Arc::downgrade(&transport));
         }
         super::package_cache::start_with_repair(&transport).await?;
         Ok(transport)

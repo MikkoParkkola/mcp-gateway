@@ -21,18 +21,31 @@ impl Backend {
     /// taken from the pool: [`Self::stop`] still closes every transport under
     /// its own deadline, and each close waits for the reap this started.
     pub(crate) fn retire_now(&self) {
-        let live: Vec<Arc<dyn Transport>> = {
-            let mut cleanups = self.replaced_transport_cleanups.lock();
-            cleanups.stopping = true;
-            cleanups
-                .live
-                .iter()
-                .filter_map(std::sync::Weak::upgrade)
-                .collect()
-        };
-        for transport in live {
+        for transport in self.live_stdio() {
             transport.kill_tree_now();
         }
+    }
+
+    /// [`Self::retire_now`]'s graceful twin, for a healthy backend let go
+    /// (an idle capability child): latch `stopping` and hand every live tree
+    /// to the reaper now, synchronously and without a runtime, with the MCP
+    /// stdio order planned to fit `budget`. The async stop that follows only
+    /// waits for those reaps.
+    pub(crate) fn hand_over_now(&self, budget: Duration) {
+        for transport in self.live_stdio() {
+            transport.hand_over_gracefully_now(budget);
+        }
+    }
+
+    /// Latch `stopping` and take every live stdio transport, pooled or not.
+    fn live_stdio(&self) -> Vec<Arc<crate::transport::StdioTransport>> {
+        let mut cleanups = self.replaced_transport_cleanups.lock();
+        cleanups.stopping = true;
+        cleanups
+            .live
+            .iter()
+            .filter_map(std::sync::Weak::upgrade)
+            .collect()
     }
 
     /// Stop the backend, draining every pooled transport slot.
