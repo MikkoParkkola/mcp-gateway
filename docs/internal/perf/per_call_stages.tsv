@@ -74,6 +74,7 @@ src/gateway/meta_mcp/invoke/audit_decision.rs	refused_by_memo	-	on-path, untimed
 src/gateway/meta_mcp/invoke/audit_decision.rs	note_decision	http_invoke_tiny	on the HTTP gateway_invoke path: note_declared_effect calls it on every dispatch
 src/gateway/meta_mcp/invoke/audit_decision.rs	note_declared_effect	http_invoke_tiny	on the HTTP gateway_invoke path: every dispatch notes its declared effect
 src/gateway/meta_mcp/invoke/audit_decision.rs	note_refused_by	-	on-path, untimed: refusals only; the timed rows are allowed calls
+src/gateway/meta_mcp/invoke/audit_decision.rs	noted	-	on-path, untimed: refusals only (a refused check's note); the timed rows are allowed calls
 src/gateway/meta_mcp/invoke/audit_decision.rs	note_send_refusal	-	on-path, untimed: failed sends only; the timed rows are allowed calls
 src/gateway/meta_mcp/invoke/audit_decision.rs	take_route_noted	-	on-path, untimed: the router refusal record only; the timed rows are allowed calls
 src/gateway/meta_mcp/invoke/audit_decision.rs	with_route_scope	http_invoke_tiny	on the HTTP gateway_invoke path
@@ -200,6 +201,7 @@ src/gateway/meta_mcp/invoke/dispatch.rs	refuse_name_clash	http_invoke_tiny	on th
 src/gateway/meta_mcp/invoke/dispatch_guards.rs	account_dispatch	http_invoke_tiny	S3 accounting at every accounted dispatch
 src/gateway/meta_mcp/invoke/dispatch_guards.rs	admit_after_credential	http_invoke_tiny	S1 policy after the credential step, before every dispatch
 src/gateway/meta_mcp/invoke/dispatch_guards.rs	admit_backend_wide	http_invoke_tiny	S1 kill-switch check, before every dispatch
+src/gateway/meta_mcp/invoke/dispatch_guards.rs	admit_backend_wide_explained	http_invoke_tiny	the S1 kill-switch check with its refusing pair; admit_backend_wide is it plus the note
 src/gateway/meta_mcp/invoke/dispatch_guards.rs	admit_enabled_capability	http_invoke_tiny	S1 capability error-rate check, before every dispatch
 src/gateway/meta_mcp/invoke/dispatch_guards.rs	admit_enabled_capability_explained	http_invoke_tiny	the S1 capability error-rate check with its refusing pair; admit_enabled_capability is it plus the note
 src/gateway/meta_mcp/invoke/dispatch_guards.rs	admit_named_target	http_invoke_tiny	S1 profile and kill-switch check, before every dispatch

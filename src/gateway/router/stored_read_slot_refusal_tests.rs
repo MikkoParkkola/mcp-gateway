@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! A stored read judged against alpha's OWN catalogue on a per-user backend
-//! (MIK-9191): the caller-catalogue verdict is deferred until after policy
+//! (MIK-9191.RULEID.3): the caller-catalogue verdict is deferred until after policy
 //! and accounts, so its record names that verdict only when it is the answer
 //! delivered, and a lacked tool, which is no policy refusal, names nothing.
 
