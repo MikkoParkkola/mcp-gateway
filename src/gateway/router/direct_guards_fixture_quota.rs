@@ -183,7 +183,6 @@ pub(crate) async fn fixture_signed_with_secrets(
     fx
 }
 
-#[cfg(feature = "firewall")]
 impl Fx {
     /// The directory the fixture's gateway writes its stores under.
     pub(crate) fn store_path(&self) -> &std::path::Path {

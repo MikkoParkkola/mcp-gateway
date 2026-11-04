@@ -359,7 +359,7 @@ async fn admission_refusal_frees_nonce(
     const OWNER: &str = "unspent-owner";
     const KEY: &str = "unspent-key";
     let meta = meta();
-    let dir = tempfile::tempdir().expect("a task store root");
+    let dir = Arc::new(tempfile::tempdir().expect("a task store root"));
     let service = Arc::new(
         TaskService::open(
             &dir.path().join("tasks"),
@@ -369,6 +369,7 @@ async fn admission_refusal_frees_nonce(
         .await
         .expect("the task store opens"),
     );
+    service.keep_test_dir(Arc::clone(&dir));
     let refused = json!({"name": "absent-plan"});
     let intent = task.then(|| TaskIntent {
         executor: TaskExecutor::new(
