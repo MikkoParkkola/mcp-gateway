@@ -12,16 +12,16 @@ use crate::cost_accounting::config::CostGovernanceConfig;
 use crate::gateway::meta_mcp::invoke::dispatch_guards::{Admission, BackendCall, DirectOutcome};
 
 /// Unbudgeted rows one day map keeps (`rows::MAX_UNBUDGETED_ROWS`).
-const CAP: usize = 256;
+pub(super) const CAP: usize = 256;
 
 #[derive(Clone, Copy, Debug)]
-enum Scope {
+pub(super) enum Scope {
     Tool,
     Key,
 }
 
 impl Scope {
-    fn budget(self, cfg: &mut CostGovernanceConfig, name: &str) {
+    pub(super) fn budget(self, cfg: &mut CostGovernanceConfig, name: &str) {
         let limits = match self {
             Self::Tool => &mut cfg.budgets.per_tool,
             Self::Key => &mut cfg.budgets.per_key,
@@ -30,7 +30,7 @@ impl Scope {
     }
 
     /// The call that spends $1 on `name` in this scope.
-    fn call<'a>(self, name: &'a str, generation: &'a Generation) -> BackendCall<'a> {
+    pub(super) fn call<'a>(self, name: &'a str, generation: &'a Generation) -> BackendCall<'a> {
         match self {
             Self::Tool => BackendCall {
                 tool: name,
@@ -44,7 +44,7 @@ impl Scope {
     }
 
     /// This scope's day rows and its overflow total.
-    fn rows(self, fx: &Fx) -> (std::collections::HashMap<String, f64>, f64) {
+    pub(super) fn rows(self, fx: &Fx) -> (std::collections::HashMap<String, f64>, f64) {
         let enforcer = fx.state.meta_mcp.budget_enforcer.as_ref().expect("armed");
         let snapshot = enforcer.snapshot();
         match self {
@@ -54,7 +54,7 @@ impl Scope {
     }
 
     /// Spend on `n` distinct unbudgeted names, filling the cap.
-    fn fill(self, fx: &Fx, n: usize) {
+    pub(super) fn fill(self, fx: &Fx, n: usize) {
         let enforcer = fx.state.meta_mcp.budget_enforcer.as_ref().expect("armed");
         for i in 0..n {
             let name = format!("filler-{i}");
@@ -68,7 +68,7 @@ impl Scope {
 
 /// An armed gateway whose `scope` rows are full, and prices for the names the
 /// rows below spend on.
-async fn full_fixture(scope: Scope) -> Fx {
+pub(super) async fn full_fixture(scope: Scope) -> Fx {
     let fx = fixture(&governance(|c| {
         for name in ["target", "fresh"] {
             c.tool_costs.insert(name.to_owned(), 1.0);
@@ -80,7 +80,7 @@ async fn full_fixture(scope: Scope) -> Fx {
 }
 
 /// Settle one $1 call on `name` under the live generation.
-fn settle(fx: &Fx, scope: Scope, name: &str) {
+pub(super) fn settle(fx: &Fx, scope: Scope, name: &str) {
     let generation = fx.state.live_config.generation();
     let call = scope.call(name, &generation);
     let meta = &fx.state.meta_mcp;
@@ -131,26 +131,4 @@ async fn t18b_a_name_budgeted_by_reload_frees_a_place_in_the_cap() {
         })
         .await;
     }
-}
-
-/// A name budgeted by reload whose earlier spend went to the overflow starts
-/// from zero on reload, in a row of its own: the budget of 3.5 admits a $1
-/// call although $3 of its earlier spend sits in the overflow. A later change
-/// seeds it from the overflow total, and this row flips with it.
-#[tokio::test]
-async fn a_name_budgeted_by_reload_starts_from_zero() {
-    crate::test_day::same_utc_day_async(|| async move {
-        let fx = full_fixture(Scope::Tool).await;
-        let enforcer = fx.state.meta_mcp.budget_enforcer.as_ref().expect("armed");
-        enforcer.record_spend("target", None, 3.0);
-        reload(&fx, |c| {
-            c.budgets.per_tool.insert("target".to_owned(), 3.5);
-        });
-        let generation = fx.state.live_config.generation();
-        let call = Scope::Tool.call("target", &generation);
-        let admission = fx.state.meta_mcp.admit_spend_for(&call);
-        assert!(admission.is_ok(), "judged from zero, not from the overflow");
-        assert_eq!(Scope::Tool.rows(&fx).0.get("target").copied(), Some(0.0));
-    })
-    .await;
 }

@@ -96,21 +96,6 @@ def blanked(lines: list[str]) -> list[str]:
     return orphan_gate().blank("\n".join(lines))[0].split("\n")
 
 
-def test_only(text: str) -> bool:
-    """Whether an attribute line carries a `#[cfg(<expr>)]` that compiles
-    only under test, by the orphan gate's one cfg judgement (`cfg_is_test`).
-    Several attributes may share the line (`#[cfg(test)] #[cfg(unix)]`), so
-    each expression is read to its balancing `)`."""
-    text = text.strip()
-    if not text.startswith("#["):
-        return False
-    gate = orphan_gate()
-    return any(
-        gate.cfg_is_test(gate.cfg_expression(text, m.end()))
-        for m in re.finditer(r"#\s*\[\s*cfg\s*\(", text)
-    )
-
-
 def bodyless(lines: list[str], line: int) -> bool:
     """The signature at 1-based `line` ends in `;` before any `{`: a trait
     declaration, which has no lines of its own to cover. `lines` are
@@ -124,30 +109,29 @@ def bodyless(lines: list[str], line: int) -> bool:
     return False
 
 
-def test_lines(lines: list[str]) -> set[int]:
-    """1-based line numbers inside a `#[cfg(test)]` item (a module, fn or
-    impl). `lines` are [`blanked`]."""
-    inside: set[int] = set()
-    pending = False
-    depth = 0
-    start_depth: int | None = None
-    for n, raw in enumerate(lines, 1):
-        text = raw.strip()
-        if start_depth is not None:
-            inside.add(n)
-        elif test_only(text):
-            pending = True
-        elif pending and text and not text.startswith("#["):
-            inside.add(n)
-            if text.endswith(";"):
-                pending = False  # `#[cfg(test)] mod x;` or a use: one line
-            else:
-                start_depth = depth
-                pending = False
-        depth += text.count("{") - text.count("}")
-        if start_depth is not None and depth <= start_depth and "}" in text:
-            start_depth = None
-    return inside
+# Which files the finder parsed with errors, for the line the gate prints.
+PARSE_REPORT: dict[str, tuple[bool, bool]] = {}
+
+
+def test_lines(lines: list[str], path: str = "") -> set[int]:
+    """1-based line numbers inside an item under a test-only cfg, by its own
+    extent, as the orphan gate's shared parser finds it in the original
+    `lines`. This gate looks for product functions, so an unsure case stays
+    product code: LEAN_SHORT."""
+    gate = orphan_gate()
+    text = "\n".join(lines)
+    found = gate.cfg_items(text, gate.SafeSide.LEAN_SHORT, path=path, report=PARSE_REPORT)
+    # A line is test code only when its first character of code lies inside a
+    # test item: `fn product(#[cfg(test)] probe: ())` shares its line with a
+    # test-only parameter and is still product code.
+    tests: set[int] = set()
+    start = 0
+    for n, line in enumerate(lines, 1):
+        first = start + len(line) - len(line.lstrip())
+        if any(item.start <= first < item.end for item in found.items):
+            tests.add(n)
+        start += len(line) + 1
+    return tests
 
 
 @functools.lru_cache(maxsize=None)
@@ -296,7 +280,7 @@ def added_functions(base: str, head: str) -> list[tuple[str, str, int, int]]:
             if path:
                 lines = (show(head, path) or "").splitlines()
                 code = blanked(lines)
-                tests = test_lines(code)
+                tests = test_lines(lines, path)
         elif line.startswith("@@"):
             new_line = int(re.match(r"@@ -\S+ \+(\d+)", line).group(1))
         elif line.startswith("+") and path:
@@ -330,6 +314,7 @@ def main(argv: list[str]) -> int:
         broken = error.problems
         missing = []
         misnamed = []
+    print(orphan_gate().parse_error_summary(PARSE_REPORT))
     for problem in broken:
         print(f"inventory: {problem}")
     if broken:

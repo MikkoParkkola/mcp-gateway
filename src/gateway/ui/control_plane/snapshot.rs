@@ -236,19 +236,31 @@ pub(super) async fn local_shadow_radar(state: &AppState) -> ControlPlaneShadowRa
         .into_iter()
         .map(|backend| backend.name.clone())
         .collect();
+    // Client config files come from the shared discovery cache: one scan
+    // serves this radar, the discovery route and the decision set (R1). No
+    // cache attached means no scan here either.
+    let Some(cache) = state.meta_mcp.discovery_cache() else {
+        return ControlPlaneShadowRadar::scan_unavailable();
+    };
+    let Ok((listing, _stale)) = cache.listing().await else {
+        return ControlPlaneShadowRadar::scan_unavailable();
+    };
     let discovery = match &state.env {
         Some(env) => AutoDiscovery::new().with_env(Arc::clone(env)),
         None => AutoDiscovery::new(),
     };
-
-    let Ok(discovered) = discovery.discover_all().await else {
-        return ControlPlaneShadowRadar::scan_unavailable();
-    };
-
-    let report = ShadowScanReport::from_discovered(
-        &discovered,
+    let others = discovery.discover_non_client().await;
+    let client = listing
+        .finds
+        .iter()
+        .map(|find| find.radar.clone())
+        .collect();
+    let report = ShadowScanReport::from_cached_and_found(
+        client,
+        &others,
         &registered_names,
         state.config_path.as_deref(),
+        state.meta_mcp.record_key(),
     );
     ControlPlaneShadowRadar::from_report(&report)
 }

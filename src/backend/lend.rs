@@ -24,6 +24,14 @@ impl Backend {
             return Ok(None);
         }
         if credential.headers.is_empty() {
+            #[cfg(test)]
+            if let super::pool::PoolKey::PerUser { binding } = key {
+                *self
+                    .lend_refusals
+                    .lock()
+                    .entry(binding.clone())
+                    .or_default() += 1;
+            }
             return Err(Error::Forbidden {
                 code: -32001,
                 status: 403,
