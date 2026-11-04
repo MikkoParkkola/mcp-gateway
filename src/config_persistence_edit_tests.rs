@@ -248,3 +248,31 @@ fn no_public_config_writer_takes_a_bool() {
         .collect();
     assert!(flagged.is_empty(), "{flagged:?}");
 }
+
+/// The modes the config guard refuses on a file this process owns: group
+/// write, group read (refused because the test owns the file) and world write.
+#[cfg(unix)]
+const REFUSED_MODES: [u32; 3] = [0o620, 0o640, 0o602];
+
+/// The locked text editor (`init`, the `upgrade` rewrite) reads gateway.yaml
+/// through the guard every loader uses: a file another account can change or
+/// read is refused, never rewritten owner-only, and keeps its bytes and mode.
+#[cfg(unix)]
+#[test]
+fn the_text_editor_refuses_a_config_the_guard_refuses() {
+    use std::os::unix::fs::PermissionsExt as _;
+    for mode in REFUSED_MODES {
+        let text = "backends: {}\n";
+        let (_dir, path) = config_file(text);
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode)).expect("chmod");
+
+        let edited = edit_config_text(&path, |current| {
+            Ok(current.map(|text| format!("{text}# edited\n")))
+        });
+
+        assert!(edited.is_err(), "mode {mode:o}: {edited:?}");
+        assert_eq!(std::fs::read_to_string(&path).expect("read"), text);
+        let now = std::fs::metadata(&path).expect("stat").permissions().mode();
+        assert_eq!(now & 0o777, mode, "mode {mode:o}: the file was rewritten");
+    }
+}

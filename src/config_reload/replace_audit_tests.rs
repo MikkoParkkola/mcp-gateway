@@ -451,3 +451,40 @@ async fn a_config_others_can_write_is_refused_before_its_intent() {
     assert_eq!(mode & 0o777, 0o660, "the refused file was rewritten");
     assert!(!running_has_b(&ctx), "the refused file's edit was loaded");
 }
+
+/// A crashed write is pending on a gateway.yaml other accounts can write: the
+/// recovery's own read refuses it before the recovery intent, so nothing is
+/// recorded, recovered or written, and the journal stays for a later holder.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_pending_recovery_on_a_config_others_can_write_is_refused_before_its_intent() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let (_dir, path, ctx) = setup();
+    crashed_after_rename(&path, NEXT);
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o660)).expect("chmod");
+    let recorder = Recorder::new(&path, false);
+
+    let result = replace_audited(
+        Arc::clone(&ctx),
+        to(Expected::Any, NEXT, Replaced::Discard),
+        Audit::Required {
+            sink: Box::new(recorder.clone()),
+            kind: IntentKind::Save,
+        },
+        WAIT,
+    )
+    .await;
+
+    assert!(
+        matches!(result, Err(ReplaceError::ConfigRefused(_))),
+        "{result:?}"
+    );
+    assert!(recorder.kinds().is_empty(), "an intent was recorded");
+    assert_eq!(read(&path), NEXT, "the refused file was recovered");
+    let mode = std::fs::metadata(&path).expect("stat").permissions().mode();
+    assert_eq!(mode & 0o777, 0o660, "the refused file was rewritten");
+    assert!(
+        journal::journal_path(&path).exists(),
+        "the journal was settled"
+    );
+}

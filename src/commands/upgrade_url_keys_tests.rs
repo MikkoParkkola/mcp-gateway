@@ -307,3 +307,22 @@ fn upgrade_refusal_reports_the_guard_reason_for_an_unclosed_quote() {
     );
     assert_eq!(std::fs::read_to_string(&path).expect("read back"), text);
 }
+
+/// `upgrade` reads the config it rewrites through the guard every loader
+/// uses: a migratable key in a gateway.yaml another account can change is
+/// refused, and the file keeps its bytes and mode.
+#[cfg(unix)]
+#[test]
+fn an_upgrade_refuses_a_config_others_can_write() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = config_in(dir.path());
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o660)).expect("chmod");
+
+    let rewrite = rewrite_url_aliases_in(&path, RewriteMode::Apply);
+
+    assert!(rewrite.is_err(), "the refused file was rewritten");
+    assert_eq!(std::fs::read_to_string(&path).expect("read back"), CONFIG);
+    let mode = std::fs::metadata(&path).expect("stat").permissions().mode();
+    assert_eq!(mode & 0o777, 0o660, "the refused file was rewritten");
+}
