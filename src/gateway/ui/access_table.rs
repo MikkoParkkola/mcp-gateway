@@ -225,6 +225,13 @@ pub(super) static ROWS: &[Row] = &[
     ),
     row(routes::UI_DECISIONS, Get, Admin(AdminRequired), &[], false),
     row(
+        routes::UI_DECISIONS_COUNT,
+        Get,
+        Admin(AdminRequired),
+        &[],
+        false,
+    ),
+    row(
         routes::UI_REFUSALS,
         Get,
         Admin(Forbidden),
@@ -353,6 +360,20 @@ pub(super) static ROWS: &[Row] = &[
     ),
     row(
         routes::UI_BACKEND_REVIVE,
+        Post,
+        Admin(AdminRequired),
+        &[(Page::Servers, Tab::Actions)],
+        false,
+    ),
+    row(
+        routes::UI_BACKEND_SIGNIN,
+        Post,
+        Admin(AdminRequired),
+        &[(Page::Servers, Tab::Actions)],
+        false,
+    ),
+    row(
+        routes::UI_BACKEND_SIGNIN_CONFIRM,
         Post,
         Admin(AdminRequired),
         &[(Page::Servers, Tab::Actions)],

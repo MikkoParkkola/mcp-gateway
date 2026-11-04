@@ -23,6 +23,21 @@ private_content_checks=(
   "tailnet-ip::-::(^|[^0-9.])100\\.[0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3}([^0-9]|$)::is a private-network address"
 )
 
+# Internal process references a pull-request body may not carry: a row of the
+# release's register of unfixed findings, and a lead's or operator's ruling.
+# Same format as private_content_checks. Read by the pull-request-body check
+# only: the tracked tree still carries older ones, so the tree check would
+# need a debt list first. Plain prose passes: a register row is cited by a
+# three-digit number (the findings rows are), "of the register" must end the
+# phrase (not "of the register file"), and a ruling counts only when a date,
+# an id, "on", "of", "that" or punctuation follows (not "ruling out", not "the
+# lead ruling in Smith v Jones").
+# shellcheck disable=SC2034  # read by check-pr-body-hygiene.sh
+process_reference_checks=(
+  "register-row::i::(^|[^[:alpha:]])register[[:space:],:(]{1,4}(rows?|entry|entries)[[:space:]#:]*[0-9]{3}|(^|[^[:alpha:]])rows?[[:space:]#:]*[0-9]{3}[[:space:]]+(of|in)[[:space:]]+the[[:space:]]+([[:alpha:]-]+[[:space:]]+)?register[[:space:]]*([.,;:)]|$)::cites a row of the internal findings register"
+  "ruling::i::(^|[^[:alpha:]])(lead|operator)('s|’s)?[[:space:]]+rulings?([^[:alnum:][:space:]]|$|[[:space:]]+([0-9]|(on|of|that)([^[:alpha:]]|$)|[[:alpha:]]([^[:alpha:]]|$)))::cites an internal ruling"
+)
+
 # Fixed strings, matched case-insensitively, that every hit of a check above
 # contains. The tree check greps for these first and runs the regexes only on
 # the lines they find, so a new check needs its literal core added here.

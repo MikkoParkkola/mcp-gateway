@@ -105,6 +105,10 @@ pub(crate) struct Attempt {
     closed: CancellationToken,
     /// Where this login stands, as its joiners see it.
     finished: watch::Sender<Progress>,
+    /// When this login ends if nobody completes it: the authorization window
+    /// from its start, moved by a UI sign-in as its stage changes.
+    #[cfg(feature = "webui")]
+    ends_at: Mutex<tokio::time::Instant>,
 }
 
 /// A login's progress: running, or ended (`None` on a token, else its outcome).
@@ -167,6 +171,19 @@ impl Lead {
     /// closed (taken once).
     pub(crate) fn take_listeners_guard(&mut self) -> Option<DropGuard> {
         self.listeners.take()
+    }
+
+    /// This login's attempt, whose `finished()` publishes how it ended.
+    #[cfg(feature = "webui")]
+    pub(crate) fn attempt(&self) -> Arc<Attempt> {
+        Arc::clone(&self.attempt)
+    }
+
+    /// Move this login's end to `at`, for whoever asks how long it holds the
+    /// gate.
+    #[cfg(feature = "webui")]
+    pub(crate) fn set_end(&self, at: tokio::time::Instant) {
+        *self.attempt.ends_at.lock() = at;
     }
 
     /// Record how this login ended: `None` on a token.
@@ -242,6 +259,16 @@ impl LoginGate {
         Arc::clone(&self.state.lock().cohort)
     }
 
+    /// When the login in flight ends if nobody completes it, if one is.
+    #[cfg(feature = "webui")]
+    pub(crate) fn current_end(&self) -> Option<tokio::time::Instant> {
+        let state = self.state.lock();
+        state
+            .attempt
+            .as_ref()
+            .map(|attempt| *attempt.ends_at.lock())
+    }
+
     /// Whether any login is in flight.
     pub(crate) fn in_flight(&self) -> bool {
         self.state.lock().attempt.is_some()
@@ -286,6 +313,10 @@ impl LoginGate {
             cancel: CancellationToken::new(),
             closed: CancellationToken::new(),
             finished: watch::Sender::new(Progress::Running),
+            #[cfg(feature = "webui")]
+            ends_at: Mutex::new(
+                tokio::time::Instant::now() + crate::oauth::OAUTH_AUTHORIZATION_WINDOW,
+            ),
         });
         state.attempt = Some(Arc::clone(&attempt));
         Begin::Lead(Lead {
@@ -418,6 +449,30 @@ impl LoginGate {
             }
         } else {
             otherwise
+        }
+    }
+
+    /// `stage` of detached work that set out at `since`: ended by a
+    /// restart or stop, and at the authorization window or `deadline`,
+    /// whichever comes first, read through [`Self::classify`].
+    pub(crate) async fn bounded<T>(
+        &self,
+        since: u64,
+        cohort: &Arc<Cohort>,
+        backend: &str,
+        deadline: tokio::time::Instant,
+        stage: impl std::future::Future<Output = T>,
+    ) -> Result<T, Error> {
+        let window = stage_end(crate::oauth::OAUTH_AUTHORIZATION_WINDOW, deadline);
+        tokio::select! {
+            biased;
+            () = self.revoked_since(since) => Err(Error::AuthorizationCancelled {
+                backend: backend.to_owned(),
+            }),
+            () = tokio::time::sleep_until(window) => {
+                Err(self.classify(cohort, backend, Error::BackendTimeout(backend.to_owned())))
+            }
+            done = stage => Ok(done),
         }
     }
 }

@@ -60,6 +60,7 @@ src/gateway/server/warmstart.rs	warm_start_until_cached	statement	Background	get
 src/gateway/server/warmstart.rs	warm_start_until_cached	statement	Background	getx1
 src/gateway/streaming_session.rs	subscribe_backend	statement	Background	getx1
 src/gateway/ui/backends.rs	revive_backend	statement	Admin	getx1
+src/gateway/ui/backends/signin.rs	find_backend	statement	Admin	getx1
 src/gateway/ui/control_plane/snapshot.rs	local_runtime_snapshot	statement	Admin	allx1
 src/gateway/ui/control_plane/snapshot.rs	local_shadow_radar	statement	Admin	allx1
 src/gateway/ui/dashboard.rs	dashboard_handler	statement	Admin	allx1
