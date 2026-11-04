@@ -232,3 +232,54 @@ async fn an_idempotency_replay_of_a_rewritten_answer_records_no_rewrite() {
         }
     }
 }
+
+/// The inner idempotency cache's replay, reached with the outer admission
+/// entry expired: on `/mcp` a keyed repeat is answered by admission first, so
+/// this row drops only that entry and the second call is served by the
+/// idempotency cache. It records no effect either.
+#[tokio::test]
+async fn an_inner_idempotency_replay_of_a_rewritten_answer_records_no_effect() {
+    let (_dir, log) = temp_log(None);
+    let meta_log = Arc::clone(&log);
+    let fx = Box::pin(fixture::fixture_logged(
+        Answer::Text(INJECTED),
+        Arc::clone(&log),
+        move |mut meta| {
+            meta.enable_transparency_log(meta_log);
+            meta.set_context_integrity_kernel(ContextIntegrityKernel::new(rewriting(
+                ContextIntegrityDecisionKind::Strip,
+            )));
+            meta
+        },
+    ))
+    .await;
+    let first = Box::pin(keyed_read(&fx, HttpRoute::Mcp)).await;
+    let reclaimed = fx
+        .state
+        .meta_mcp
+        .execution_admission()
+        .reclaim_all_dated_for_test();
+    assert!(reclaimed > 0, "premise: the admission entry was dropped");
+    let replay = Box::pin(keyed_read(&fx, HttpRoute::Mcp)).await;
+    assert_eq!(
+        fx.calls.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "premise: with admission gone, the idempotency cache served the repeat"
+    );
+    let rows = delivery_rows(&log).await;
+    let [first_row, replay_row] = rows.as_slice() else {
+        panic!("two delivery records: {rows:?}");
+    };
+    assert_eq!(
+        first_row["response_effect"], "rewritten",
+        "premise: the first call recorded its rewrite: {first_row}"
+    );
+    assert_eq!(
+        replay.get("result"),
+        first.get("result"),
+        "the replay serves the stored answer"
+    );
+    for field in ["response_effect", "response_findings"] {
+        assert!(replay_row.get(field).is_none(), "{field}: {replay_row}");
+    }
+}
