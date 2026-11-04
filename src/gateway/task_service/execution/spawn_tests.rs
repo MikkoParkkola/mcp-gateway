@@ -13,7 +13,7 @@ use crate::gateway::task_service::{StoreLimits, open_runtime};
 
 #[tokio::test]
 async fn a_sealed_worker_takes_no_step_when_it_wakes() {
-    let dir = tempfile::tempdir().expect("store root");
+    let dir = Arc::new(tempfile::tempdir().expect("store root"));
     let subscriptions = Arc::new(SubscriptionRegistry::new(
         DEFAULT_MAX_LISTENERS,
         crate::gateway::test_helpers::auth_state(
@@ -29,6 +29,7 @@ async fn a_sealed_worker_takes_no_step_when_it_wakes() {
     )
     .await
     .expect("the store opens");
+    service.keep_test_dir(Arc::clone(&dir));
     let wake = Arc::new(tokio::sync::Notify::new());
     let stepped = Arc::new(AtomicBool::new(false));
     let (woken, step) = (Arc::clone(&wake), Arc::clone(&stepped));

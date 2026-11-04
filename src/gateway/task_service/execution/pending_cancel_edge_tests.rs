@@ -60,7 +60,7 @@ async fn a_pending_cancel_naming_no_backend_is_given_up_without_a_send() {
     f.state_becomes(Pending { attempts: 1 }).await;
     f.service.shutdown().await.expect("the first gateway stops");
     damage_pending(&f);
-    let service = open_service(f.dir.path()).await;
+    let service = open_service(&f.dir).await;
     let later = service.store.now().expect("a clock after 1970")
         + chrono::Duration::try_hours(1).expect("one hour");
     service.store.set_clock_for_test(Some(later));
@@ -91,7 +91,7 @@ async fn a_send_whose_outcome_cannot_be_written_is_sent_again_after_restart() {
     let _ = release.send(());
     sends_reach(&peer, 1).await;
     f.executor.cancel_send_idle(&f.id).await;
-    let service = open_service(f.dir.path()).await;
+    let service = open_service(&f.dir).await;
     assert_eq!(
         service.store.upstream_cancel_state(&f.owner_digest, &f.id),
         Some(Pending { attempts: 0 }),
