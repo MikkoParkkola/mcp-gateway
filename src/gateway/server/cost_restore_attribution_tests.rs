@@ -501,28 +501,87 @@ fn restore6_the_save_lists_every_owned_name() {
 }
 
 /// D6: a damaged owned list restores as a file saved before the list
-/// existed: the rest loads, nothing is seeded.
+/// existed: the rest loads, nothing is seeded. A list holding any entry that
+/// is not a name is damaged as a whole (a dropped name could be seeded).
 #[test]
 fn restore6_a_damaged_owned_list_seeds_nothing() {
-    let _clock = at_secs(T);
-    let dir = tempfile::tempdir().expect("tempdir");
-    let json = format!(
-        r#"{{"saved_at": {T}, "day_basis": "local", "tool_totals": {{}}, "key_totals": {{}},
-            "tool_overflow_usd": 3.0, "tool_owned": 7, "tool_born": {{}}}}"#
-    );
-    std::fs::write(dir.path().join("costs.json"), json).expect("write");
-    let (_, restarted) = boot_cost_governance(&governed(Scope::Tool, Some(3.5)), dir.path());
-    let restarted = restarted.expect("armed");
-    assert_eq!(
-        restarted.snapshot().tool_overflow_usd,
-        3.0,
-        "the rest loads"
-    );
-    assert_eq!(
-        restored_estimate(Scope::Tool, &restarted),
-        None,
-        "nothing seeded"
-    );
+    for scope in [Scope::Tool, Scope::Key] {
+        for damaged in ["7", "[7]", "[null]", r#"["other", 7]"#] {
+            let _clock = at_secs(T);
+            let dir = tempfile::tempdir().expect("tempdir");
+            let prefix = match scope {
+                Scope::Tool => "tool",
+                Scope::Key => "key",
+            };
+            let json = format!(
+                r#"{{"saved_at": {T}, "day_basis": "local", "tool_totals": {{}}, "key_totals": {{}},
+                    "{prefix}_overflow_usd": 3.0, "{prefix}_owned": {damaged}, "{prefix}_born": {{}}}}"#
+            );
+            std::fs::write(dir.path().join("costs.json"), json).expect("write");
+            let (_, restarted) = boot_cost_governance(&governed(scope, Some(3.5)), dir.path());
+            let restarted = restarted.expect("armed");
+            let snap = restarted.snapshot();
+            let overflow = match scope {
+                Scope::Tool => snap.tool_overflow_usd,
+                Scope::Key => snap.key_overflow_usd,
+            };
+            assert_eq!(overflow, 3.0, "{scope:?} {damaged}: the rest loads");
+            assert_eq!(
+                restored_estimate(scope, &restarted),
+                None,
+                "{scope:?} {damaged}"
+            );
+            assert!(
+                scope.admits(&restarted, "target"),
+                "{scope:?} {damaged}: 0 + 1 < 3.5"
+            );
+        }
+    }
+}
+
+/// RESTORE.7, fail closed: owned names saved but no usable creation figures
+/// (the map absent, as from a mixed file, or damaged): a name with a
+/// restored row is charged the saved overflow, as a legacy file's restore
+/// records it, never 0. At $4 a $1 call reads 3 + 0.5 + 1 and is refused.
+#[test]
+fn restore7_no_usable_creation_figures_charge_the_overflow() {
+    for scope in [Scope::Tool, Scope::Key] {
+        for damaged in [None, Some("7")] {
+            let _clock = at_secs(T);
+            let dir = tempfile::tempdir().expect("tempdir");
+            File {
+                overflow: 3.0,
+                owned: Some(vec![]),
+                born: None,
+                estimate: None,
+                rows: vec![("target", 0.5)],
+            }
+            .write(scope, dir.path());
+            if let Some(damaged) = damaged {
+                let path = dir.path().join("costs.json");
+                let mut json: serde_json::Value =
+                    serde_json::from_str(&std::fs::read_to_string(&path).expect("read"))
+                        .expect("json");
+                let field = match scope {
+                    Scope::Tool => "tool_born",
+                    Scope::Key => "key_born",
+                };
+                json[field] = serde_json::from_str(damaged).expect("a value");
+                std::fs::write(&path, json.to_string()).expect("write");
+            }
+            let (_, restarted) = boot_cost_governance(&governed(scope, Some(4.0)), dir.path());
+            let restarted = restarted.expect("armed");
+            assert_eq!(
+                restored_estimate(scope, &restarted),
+                Some(3.0),
+                "{scope:?} {damaged:?}"
+            );
+            assert!(
+                !scope.admits(&restarted, "target"),
+                "{scope:?} {damaged:?}: 4.5 > 4"
+            );
+        }
+    }
 }
 
 /// The format marker: an absent creation-figure map reads as `None` (a
@@ -692,9 +751,9 @@ fn restore7_rows_spilled_at_restore_do_not_inflate_the_seed() {
             Scope::Tool => snap.tool_overflow_usd,
             Scope::Key => snap.key_overflow_usd,
         };
-        assert!(
-            overflow > 3.0,
-            "{scope:?}: premise: rows spilled ({overflow})"
+        assert_eq!(
+            overflow, 8.0,
+            "{scope:?}: premise: five $1 rows spilled onto $3"
         );
         assert_eq!(restored_estimate(scope, &restarted), Some(3.0), "{scope:?}");
     }
