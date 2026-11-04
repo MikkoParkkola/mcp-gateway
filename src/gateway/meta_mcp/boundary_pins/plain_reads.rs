@@ -416,6 +416,21 @@ fn each_open_on_one_options_value_is_counted() {
     assert_eq!(rows, ["src/lib.rs\ttwice\t.open\t2"]);
 }
 
+/// An open written as a path call (`OpenOptions::open(&options, path)`) is
+/// the same site as `options.open(path)`, so it is counted with them.
+#[test]
+fn a_path_call_open_is_counted_with_the_method_opens() {
+    let rows = fixture_rows(
+        "use std::fs::OpenOptions;\n\
+         pub fn ufcs(p: &std::path::Path) {\n    \
+         let options = std::fs::OpenOptions::new();\n    \
+         let _ = std::fs::OpenOptions::open(&options, p);\n    \
+         let _ = OpenOptions::open(&options, p);\n}\n",
+    );
+
+    assert_eq!(rows, ["src/lib.rs\tufcs\t.open\t2"]);
+}
+
 /// A read imported through a module a `use` bound first is resolved:
 /// `use std::fs; use fs::read_to_string as slurp;`.
 #[test]
