@@ -136,8 +136,14 @@ impl AuditPosture {
         actor: crate::security::audit::AuditWho,
         subject: &str,
     ) -> Result<Audit, ReplaceError> {
-        let _ = (actor, subject);
-        self.audit(kind)
+        let mut audit = self.audit(kind)?;
+        if let Audit::Required { writer, .. } = &mut audit {
+            *writer = Some(KeyWriter {
+                actor,
+                subject: subject.to_owned(),
+            });
+        }
+        Ok(audit)
     }
 }
 
@@ -161,10 +167,19 @@ impl IntentSink for LogSink {
         if let Some(IntentId(id)) = &intent.recovery_intent_id {
             fields.insert("recovery_intent_id".into(), id.as_str().into());
         }
+        // A key write names who wrote which key; every other kind names the
+        // gateway, as it always has.
+        let envelope = match &intent.writer {
+            Some(writer) => {
+                fields.insert("subject".into(), writer.subject.as_str().into());
+                crate::security::audit::AuditEnvelope::ok(writer.actor.clone())
+            }
+            None => crate::security::audit::AuditEnvelope::gateway(),
+        };
         // ponytail: a synced append on the writer's task; spawn_blocking it
         // if a slow disk ever holds the config lock measurably longer.
         self.0
-            .append_event_synced(fields, &crate::security::audit::AuditEnvelope::gateway())
+            .append_event_synced(fields, &envelope)
             .map(IntentId)
             .map_err(|e| e.to_string())
     }
