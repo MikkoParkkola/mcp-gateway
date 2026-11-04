@@ -194,29 +194,27 @@ fn i10_the_marker_matches_no_rule() {
 }
 
 /// Thousands of credentials with no whitespace between them: the run is
-/// never reset, so a writer rescanning it would be quadratic.
+/// never reset, so a writer rescanning it would be quadratic. Counted in
+/// bytes the writer handles, not timed, so a busy runner cannot fail it.
 #[test]
 fn i11_many_insertions_in_one_run_stay_linear() {
     let token = format!("{}{}", "AKIA", "IOSFODNN7EXAMPLE");
     let r = redactor();
-    let time = |n: usize| {
-        let text = format!("x:{}", vec![token.as_str(); n].join(":"));
-        (0..5)
-            .map(|_| {
-                let mut value = Value::String(text.clone());
-                let started = std::time::Instant::now();
-                r.scan_and_redact(&mut value);
-                started.elapsed()
-            })
-            .min()
-            .expect("five runs")
+    let work = |n: usize| {
+        let mut value = Value::String(format!("x:{}", vec![token.as_str(); n].join(":")));
+        let bytes = super::super::splice::work::counted(|| r.scan_and_redact(&mut value));
+        assert!(
+            value.as_str().is_some_and(|v| !v.contains(token.as_str())),
+            "premise: every credential was redacted"
+        );
+        bytes
     };
-    let (small, large) = (time(500), time(8_000));
-    // Sixteen times the input: about 16x when linear, 256x when quadratic,
-    // so a busy runner has a wide margin either way.
+    let (small, large) = (work(500), work(8_000));
+    assert!(small > 0, "premise: the writer was used");
+    // Sixteen times the input: 16x when linear, 256x when quadratic.
     assert!(
-        large < small * 64,
-        "8000 took {large:?}, 500 took {small:?}"
+        large <= small * 20,
+        "8000 handled {large} bytes, 500 handled {small}"
     );
 }
 
