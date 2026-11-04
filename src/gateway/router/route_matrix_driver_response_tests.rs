@@ -298,6 +298,8 @@ pub(crate) struct ReadThenRelay {
     pub(crate) read: Value,
     /// `k-budget` sending the read's text to `alpha` under nonce `b1`.
     pub(crate) relayed: Value,
+    /// The log both routes record to.
+    pub(crate) log: Arc<crate::security::TransparencyLogger>,
     _dir: tempfile::TempDir,
 }
 
@@ -328,6 +330,7 @@ pub(crate) async fn read_then_relay(text: &'static str, record_fails: bool) -> R
     ReadThenRelay {
         read,
         relayed,
+        log,
         _dir: dir,
     }
 }
@@ -522,4 +525,27 @@ pub(crate) fn node_verifies(body: &Value, nonce: &str) -> Result<Value, String> 
             String::from_utf8_lossy(&output.stderr)
         ),
     }
+}
+
+/// A relay refusal on `/mcp` comes from the collusion detector, not a
+/// configured rule: its record names kind firewall and no rule.
+#[tokio::test]
+async fn a_relay_refusal_records_no_rule() {
+    let run = read_then_relay(DELIVERED_PROSE, false).await;
+    assert_eq!(
+        run.relayed["error"]["code"], -32002,
+        "premise: the relayed send is refused: {}",
+        run.relayed
+    );
+    while run.log.write_in_flight_for_test() {
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    let text = std::fs::read_to_string(run.log.path()).expect("the log");
+    let refused = text
+        .lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .rfind(|row| row.get("tool").is_some() && row["event"] != "response_delivery_attempt")
+        .expect("the relayed call's record");
+    assert_eq!(refused["decision"]["kind"], "firewall", "{refused}");
+    assert!(refused["decision"].get("rule_id").is_none(), "{refused}");
 }

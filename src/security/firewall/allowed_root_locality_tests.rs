@@ -45,13 +45,15 @@ fn call(fw: &Firewall, server: &str, path: &str, sender: Option<&Backend>) -> Se
         "id-1",
         sender,
     );
-    let rescanned = fw.rescan(
-        fw.startup_policy(),
-        on(server),
-        &args,
-        ScanSubject::Arguments,
-        sender,
-    );
+    let rescanned = fw
+        .rescan_attributed(
+            fw.startup_policy(),
+            on(server),
+            &args,
+            ScanSubject::Arguments,
+            sender,
+        )
+        .0;
     let (a, r) = (seen(&admitted), seen(&rescanned));
     assert_eq!(a, r, "admission and rescan disagree on {server}");
     a
