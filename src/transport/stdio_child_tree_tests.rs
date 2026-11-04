@@ -246,7 +246,11 @@ async fn a_backend_that_ignores_eof_and_sigterm_dies_within_the_bound() {
         .await
         .expect("close returns within the bound")
         .expect("close");
-    assert!(started_at.elapsed() < BOUND, "close took {:?}", started_at.elapsed());
+    assert!(
+        started_at.elapsed() < BOUND,
+        "close took {:?}",
+        started_at.elapsed()
+    );
     assert_killed(pid).await;
     gone(child).await;
 }
