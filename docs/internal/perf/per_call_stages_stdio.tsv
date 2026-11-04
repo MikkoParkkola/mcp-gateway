@@ -229,7 +229,6 @@ src/gateway/server/support.rs	dashboard_link	-	startup banner link, once per ser
 src/gateway/server/support.rs	dashboard_link_handoff	-	startup banner link, once per serve
 src/gateway/server/support.rs	layer	-	startup tower-layer construction, once per serve
 src/gateway/server/support.rs	log_startup_banner	-	startup banner, once per serve
-src/gateway/server/support.rs	names_nobody	-	on-path, untimed: the TLS listener's per-request certificate-identity service; the harness calls the router in-process with no socket layer
 src/gateway/server/support.rs	network_bind_refusal	-	startup pre-bind checks, before any listener opens
 src/gateway/server/support.rs	new	-	startup construction of the TLS acceptor and identity layer, once per serve
 src/gateway/server/support.rs	poll_ready	-	on-path, untimed: the TLS listener's per-request certificate-identity service; the harness calls the router in-process with no socket layer

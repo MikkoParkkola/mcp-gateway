@@ -346,10 +346,12 @@ async fn certificate_callers_each_get_their_own_budget() {
                 .unwrap();
             request
                 .extensions_mut()
-                .insert(crate::mtls::identity::CertIdentity {
-                    display_name: machine.to_string(),
-                    ..Default::default()
-                });
+                .insert(crate::mtls::identity::CertIdentity::for_test(
+                    crate::mtls::identity::CertFields {
+                        display_name: machine.to_string(),
+                        ..Default::default()
+                    },
+                ));
             let _ = router.clone().oneshot(request).await.unwrap();
         }
     }

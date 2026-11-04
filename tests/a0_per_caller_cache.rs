@@ -14,6 +14,8 @@
 #[path = "common/flags_off.rs"]
 mod flags_off;
 use flags_off::flags_off;
+#[path = "common/cert_identity.rs"]
+mod cert_identity;
 #[path = "common/record_key.rs"]
 mod record_key;
 
@@ -299,11 +301,7 @@ fn with_key(key: &'static str) -> Caller {
 
 fn mtls(san: &str) -> Caller {
     Caller {
-        cert: Some(CertIdentity {
-            san_uris: vec![san.to_string()],
-            display_name: "cosmetic".to_string(),
-            ..CertIdentity::default()
-        }),
+        cert: Some(cert_identity::cert_identity(None, Some(san))),
         ..Caller::default()
     }
 }

@@ -9,7 +9,6 @@ use super::super::*;
 use super::support::*;
 
 use crate::gateway::oauth::OAuthAgentIdentity;
-use crate::mtls::CertIdentity;
 
 enum Proof {
     Agent(&'static str),
@@ -52,12 +51,16 @@ async fn keyed_call(state: &Arc<AppState>, proof: &Proof, key: &str) -> Value {
             });
         }
         Proof::Cert { san, cn } => {
-            request.extensions_mut().insert(CertIdentity {
-                san_uris: san.map(str::to_string).into_iter().collect(),
-                common_name: cn.map(str::to_string),
-                display_name: "one display name for every certificate".to_string(),
-                ..Default::default()
-            });
+            request
+                .extensions_mut()
+                .insert(crate::mtls::identity::CertIdentity::for_test(
+                    crate::mtls::identity::CertFields {
+                        san_uris: san.map(str::to_string).into_iter().collect(),
+                        common_name: cn.map(str::to_string),
+                        display_name: "one display name for every certificate".to_string(),
+                        ..Default::default()
+                    },
+                ));
         }
     }
     let response = create_router(Arc::clone(state))

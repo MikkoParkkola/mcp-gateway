@@ -306,7 +306,7 @@ fn nameless_cert() -> crate::mtls::CertIdentity {
     params.distinguished_name = rcgen::DistinguishedName::new();
     let key_pair = rcgen::KeyPair::generate().expect("key generation failed");
     let der = params.self_signed(&key_pair).expect("cert").der().to_vec();
-    crate::mtls::CertIdentity::from_der(&der).expect("a nameless leaf still parses")
+    crate::mtls::CertIdentity::parse_for_test(&der).expect("a nameless leaf still parses")
 }
 
 /// `tools/call gateway_invoke` of `alpha`/`read` on `/mcp` as API key `key`,
@@ -540,7 +540,7 @@ async fn nameless_certificates_never_share_a_cached_personal_result() {
         axum::serve(listener, app).await.unwrap();
     });
     let dir = tempfile::TempDir::new().unwrap();
-    let placeholder = nameless_cert().display_name;
+    let placeholder = nameless_cert().display_name().to_owned();
     std::fs::write(
         dir.path().join("placeholder_probe.yaml"),
         personal_probe("placeholder_probe", &placeholder, port),
@@ -631,7 +631,9 @@ fn named_cert(cn: &str) -> crate::mtls::CertIdentity {
     params.distinguished_name = dn;
     let key_pair = rcgen::KeyPair::generate().expect("key generation failed");
     let der = params.self_signed(&key_pair).expect("cert").der().to_vec();
-    crate::mtls::CertIdentity::from_der(&der).expect("parses")
+    crate::mtls::CertIdentity::from_der(&der)
+        .expect("parses")
+        .expect("names someone")
 }
 
 /// POST `message` to `/mcp` with an optional `bearer` on an optional
