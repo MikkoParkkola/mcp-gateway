@@ -340,8 +340,9 @@ impl<S: LogSource> LogMerge<S> {
         }
     }
 
-    /// Count a `Lagged` recovery and ask for a catch-up from the delivered
-    /// position.
+    /// Count a `Lagged` recovery. The catch-up needs no request here: a lag
+    /// drops the oldest announcements, all newer than the last one seen, so
+    /// the next one received lies past a gap and `classify` asks for it.
     fn lagged(&mut self, missed: u64) {
         self.lag_recoveries += 1;
         self.too_slow = self.lag.record(Instant::now());
@@ -349,7 +350,6 @@ impl<S: LogSource> LogMerge<S> {
             missed,
             "ui stream: lagged, catching up from its own position"
         );
-        self.scan_wanted = true;
     }
 
     /// Start paging from the delivered position up to the head as of now.
