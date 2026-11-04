@@ -145,7 +145,7 @@ impl Audited {
             .expect("rename");
     }
 
-    fn guard(&self, route: &str, method: &axum::http::Method) -> Guard {
+    fn guard(route: &str, method: &axum::http::Method) -> Guard {
         Guard::for_route(route, method, Some(admin()))
     }
 
@@ -155,7 +155,7 @@ impl Audited {
             "url": "http://127.0.0.1:9/mcp",
         }))
         .expect("add body");
-        let guard = self.guard(routes::UI_BACKENDS, &axum::http::Method::POST);
+        let guard = Self::guard(routes::UI_BACKENDS, &axum::http::Method::POST);
         read(
             add_backend(State(Arc::clone(&self.state)), guard, Json(req))
                 .await
@@ -165,7 +165,7 @@ impl Audited {
     }
 
     async fn remove(&self, name: &str) -> (StatusCode, Value) {
-        let guard = self.guard(routes::UI_BACKEND, &axum::http::Method::DELETE);
+        let guard = Self::guard(routes::UI_BACKEND, &axum::http::Method::DELETE);
         read(
             remove_backend(
                 State(Arc::clone(&self.state)),
@@ -182,7 +182,7 @@ impl Audited {
         let req: UpdateBackendRequest =
             serde_json::from_value(serde_json::json!({ "description": description }))
                 .expect("update body");
-        let guard = self.guard(routes::UI_BACKEND, &axum::http::Method::PATCH);
+        let guard = Self::guard(routes::UI_BACKEND, &axum::http::Method::PATCH);
         read(
             update_backend(
                 State(Arc::clone(&self.state)),

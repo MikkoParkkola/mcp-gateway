@@ -27,34 +27,36 @@ const ROUTE_ANSWERED: &str = "the backend route answered the edit itself";
 /// Run one route's `edit` of backend `name` through the audited byte writer:
 /// gateway.yaml is spliced in place or the edit is refused, its intent comes
 /// first on an audited gateway, and a reload that refuses the new bytes puts
-/// the old ones back. `Err` is the answer to send.
+/// the old ones back. `Err` is the answer to send (boxed: a response is large).
 pub(super) async fn write_backend<T, F>(
     state: &AppState,
     operation: BackendOp,
     name: &str,
     edit: F,
-) -> Result<(T, ReloadOutcome), axum::response::Response>
+) -> Result<(T, ReloadOutcome), Box<axum::response::Response>>
 where
     T: Send + 'static,
     F: FnOnce(&mut Config) -> Result<T, (StatusCode, String)> + Send + 'static,
 {
     let Some(path) = state.config_path.clone() else {
-        return Err(config_path_unavailable().into_response());
+        return Err(Box::new(config_path_unavailable().into_response()));
     };
     // Fails closed: a write with no reload to check it would leave the file
     // ahead of the running gateway, unaudited.
     let Some(context) = state.meta_mcp.reload_context() else {
-        return Err(flat_error(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "Config reload is not enabled on this gateway",
-        )
-        .into_response());
+        return Err(Box::new(
+            flat_error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "Config reload is not enabled on this gateway",
+            )
+            .into_response(),
+        ));
     };
     // ponytail: checked before the lock; a file deleted after this check
     // reaches the writer, whose read fails and answers 500.
     if matches!(tokio::fs::metadata(&path).await, Err(e) if e.kind() == std::io::ErrorKind::NotFound)
     {
-        return Err(no_config_file().into_response());
+        return Err(Box::new(no_config_file().into_response()));
     }
     let decided: Decided<T> = Arc::default();
     let cell = Arc::clone(&decided);
@@ -90,11 +92,11 @@ where
     let answered = decided.lock().take();
     match (written, answered) {
         (Err(ReplaceError::Refused(why)), Some(Err((code, message)))) if why == ROUTE_ANSWERED => {
-            Err(flat_error(code, message).into_response())
+            Err(Box::new(flat_error(code, message).into_response()))
         }
         (Ok(outcome), Some(Ok(value))) => Ok((value, outcome.reload)),
-        (Ok(_), _) => Err(unwritten("no_answer")),
-        (Err(e), _) => Err(refused_write(&e)),
+        (Ok(_), _) => Err(Box::new(unwritten("no_answer"))),
+        (Err(e), _) => Err(Box::new(refused_write(&e))),
     }
 }
 

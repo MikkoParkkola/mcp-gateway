@@ -216,7 +216,7 @@ async fn add_backend(
             ticket.committed(&req.name);
             added
         }
-        Err(answer) => return answer,
+        Err(answer) => return *answer,
     };
 
     // The reload registered it; listeners hear of it once its tools are
@@ -284,7 +284,7 @@ async fn remove_backend(
             ticket.committed(&name);
             gone
         }
-        Err(answer) => return answer,
+        Err(answer) => return *answer,
     };
 
     // The reload removed it; listeners hear of it if it had tools they could
@@ -460,7 +460,7 @@ async fn update_backend(
             ticket.committed(&updated);
             updated_with
         }
-        Err(answer) => return answer,
+        Err(answer) => return *answer,
     };
 
     let mut response =
