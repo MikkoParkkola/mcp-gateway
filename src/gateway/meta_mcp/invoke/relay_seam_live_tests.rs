@@ -158,7 +158,30 @@ fn p8_10c_overflow_seams_follow_the_lists_in_force() {
     ];
     let steps: Vec<Step> = TOOLS.iter().map(|t| ("alpha", *t, false)).collect();
     let rig = Rig::new(config(Block, &[], vec![]));
-    deliver_plan(&rig, &rig.generation(), &steps);
+    let receipts = deliver_plan(&rig, &rig.generation(), &steps);
+    // Premise: seams 7 and 8 are the two contributor sets past the sixteen
+    // composites, in the order the seams are recorded.
+    let seams: Vec<Vec<String>> = receipts
+        .iter()
+        .filter(|r| r.kind == Kind::Seam)
+        .map(|r| {
+            r.digest
+                .contributor_facts_for_test()
+                .unwrap_or_default()
+                .into_iter()
+                .map(|(name, _)| name.to_string())
+                .collect()
+        })
+        .collect();
+    let at = |a: &str, b: &str| {
+        let names = [format!("alpha:{a}"), format!("alpha:{b}")];
+        seams.iter().position(|s| *s == names)
+    };
+    assert_eq!(
+        (seams.len(), at("t7", "t8"), at("t8", "t9")),
+        (18, Some(16), Some(17)),
+        "premise: seams 7 and 8 are the 17th and 18th, past the sixteen composites: {seams:?}"
+    );
     rig.reload(|c| c.security.firewall.collusion.sources = vec!["alpha:t7".to_string()]);
     assert!(
         refused(&rig, 7, ("gamma", "send")),
