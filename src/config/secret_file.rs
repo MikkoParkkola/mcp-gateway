@@ -767,3 +767,12 @@ mod recovery_text_tests {
         );
     }
 }
+
+// Unix-only (W-L8): FIFO and device-file fixtures (`mkfifo`, `/dev/null`).
+#[cfg(all(test, unix))]
+#[path = "secret_file_type_tests.rs"]
+mod type_tests;
+
+#[cfg(all(test, windows))]
+#[path = "secret_file_windows_tests.rs"]
+mod windows_tests;
