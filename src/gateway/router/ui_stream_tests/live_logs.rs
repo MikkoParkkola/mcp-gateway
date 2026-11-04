@@ -372,3 +372,32 @@ async fn s1d_a_burst_past_the_broadcast_capacity_arrives_exactly_once_in_order()
         "every call once, in counter order, across the lag"
     );
 }
+
+#[tokio::test]
+async fn c1_a_catch_up_still_ends_at_its_lifetime_between_pages() {
+    let (state, _dirs, inv) = logged(false).await;
+    let mut s = open(&state, request(STREAM, Who::Bearer(BEARER), None)).await;
+    within(s.until("hello")).await;
+    call(&inv, "srv", 0);
+    let id = within(s.until("activity")).await.id.expect("an id");
+    drop(s);
+    // Four catch-up pages of 200 rows behind the resumed id.
+    let behind = 800;
+    for n in 1..=behind {
+        call(&inv, "srv", n);
+    }
+    tokio::time::pause();
+    let mut again = open(&state, request(STREAM, Who::Bearer(BEARER), Some(&id))).await;
+    within(again.until("hello")).await;
+    // Past the stream's one-hour lifetime, while its catch-up runs: the
+    // stream holds one unread frame, so it is at most on its first page.
+    tokio::time::advance(Duration::from_secs(3_601)).await;
+    let mut caught_up = 0;
+    while let Some(f) = within(again.next()).await {
+        caught_up += usize::from(f.event == "activity");
+    }
+    assert!(
+        caught_up < 2 * 200,
+        "the lifetime ends the stream at a page boundary, not after the whole catch-up: {caught_up} of {behind} rows sent"
+    );
+}
