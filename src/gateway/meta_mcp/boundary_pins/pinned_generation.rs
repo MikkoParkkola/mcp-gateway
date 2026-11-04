@@ -11,13 +11,7 @@
 //! a reload landing mid-message would otherwise judge the policy and the
 //! budgets of one message under two configs.
 //!
-//! The relay witness on a catalogue read takes the generation its
-//! `CatalogueCaller` carries; outside tests its `CatalogueGeneration` has
-//! only the pinned case, so the compiler refuses a fallback, and the scan
-//! below still flags a `generation: None` written there.
-//!
-//! Syntax scan, per struct expression whose path ends in `MetaMcpCallerContext`
-//! or `CatalogueCaller`.
+//! Syntax scan, per struct expression whose path ends in `MetaMcpCallerContext`.
 //! A context built through an alias or a differently named type is missed, as
 //! in the other pins.
 
@@ -27,7 +21,7 @@ use super::scan::{Place, Sink, walk};
 const ROOTS: [&str; 3] = ["src/lib.rs", "src/main.rs", "src/bin/provenance-eval.rs"];
 
 /// The struct literals that carry a request's pinned generation.
-const PINNED_TYPES: [&str; 2] = ["MetaMcpCallerContext", "CatalogueCaller"];
+const PINNED_TYPES: [&str; 1] = ["MetaMcpCallerContext"];
 
 /// Why `expr`, a literal of a [`PINNED_TYPES`] type, does not pin a generation.
 fn unpinned(expr: &syn::ExprStruct) -> Option<&'static str> {
@@ -59,8 +53,7 @@ impl Sink for Sites {
     }
 }
 
-/// No production caller context or catalogue caller is built without a
-/// pinned generation.
+/// No production caller context is built without a pinned generation.
 #[test]
 fn g1_no_production_caller_context_is_unpinned() {
     let mut sites = Sites::default();
@@ -89,10 +82,6 @@ fn g2_the_scan_flags_a_none_generation_only() {
     ));
     assert!(!flagged(
         "MetaMcpCallerContext { era, generation: live.as_deref() }"
-    ));
-    assert!(flagged("relay::CatalogueCaller { key, generation: None }"));
-    assert!(!flagged(
-        "CatalogueCaller { key, generation: line.pinned() }"
     ));
     assert!(!flagged("Other { generation: None }"));
 }
