@@ -60,3 +60,15 @@ fn upgrade_passes_a_grants_file_that_loads() {
         ExitCode::SUCCESS
     );
 }
+
+/// Grants on with no grants file fails the upgrade, as it fails startup.
+#[test]
+fn upgrade_fails_when_the_grants_file_is_missing() {
+    let dir = tempfile::tempdir().unwrap();
+    let (grants, config, data) = install(dir.path(), ROW_OK);
+    std::fs::remove_file(&grants).unwrap();
+    assert_eq!(
+        run_upgrade_with_config(false, true, Some(&data), Some(&config)),
+        ExitCode::FAILURE
+    );
+}

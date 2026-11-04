@@ -10,26 +10,30 @@ use std::path::Path;
 
 /// The grants file the gateway would load from `config` (found as startup
 /// finds it when `None`), with environment overrides applied and `~`
-/// expanded; `None` when grants are off or the config does not load (its own
-/// refusal is reported elsewhere).
-fn grants_path(config: Option<&Path>) -> Option<std::path::PathBuf> {
-    let loaded = mcp_gateway::config::Config::load(config).ok()?;
+/// expanded; `Ok(None)` when grants are off.
+fn grants_path(config: Option<&Path>) -> Result<Option<std::path::PathBuf>, String> {
+    let loaded = mcp_gateway::config::Config::load(config).map_err(|e| {
+        format!("the config does not load, so its identity grants were not checked: {e}")
+    })?;
     let grants = &loaded.security.identity_grants;
-    grants
+    Ok(grants
         .enabled
-        .then(|| super::super::identity::expand_home_path(Path::new(&grants.path)))
+        .then(|| super::super::identity::expand_home_path(Path::new(&grants.path))))
 }
 
 /// Read the grants file through the loader, on its own thread so this runs
 /// inside or outside an async runtime. `false`, with the loader's refusal
 /// printed, when the file would not load.
 pub(super) fn check_grant_rows(config: Option<&Path>) -> bool {
-    let Some(path) = grants_path(config) else {
-        return true;
+    let path = match grants_path(config) {
+        Ok(Some(path)) => path,
+        Ok(None) => return true,
+        Err(refusal) => {
+            eprintln!("Error: {refusal}");
+            return false;
+        }
     };
-    if !path.exists() {
-        return true;
-    }
+    // A missing file is the loader's to judge, as at startup.
     let read = std::thread::spawn(move || {
         tokio::runtime::Builder::new_current_thread()
             .enable_all()

@@ -43,6 +43,13 @@ impl TryFrom<RawGrantFile> for IdentityGrantFile {
     fn try_from(raw: RawGrantFile) -> Result<Self, Self::Error> {
         let mut grants = Vec::with_capacity(raw.grants.len());
         let mut nameless = Vec::new();
+        // The gateway kept the last row per id, so a nameless row may have
+        // been shadowing another row with its id: deleting it would make that
+        // row active, and the refusal says so rather than advising blindly.
+        let mut uses = std::collections::HashMap::<String, usize>::new();
+        for row in &raw.grants {
+            *uses.entry(row.grant_id.clone()).or_default() += 1;
+        }
         for row in raw.grants {
             let subject = GrantSubject::try_from(row.subject);
             let owner = row.owner.map(GrantSubject::try_from).transpose();
@@ -66,8 +73,14 @@ impl TryFrom<RawGrantFile> for IdentityGrantFile {
                             .into_iter()
                             .filter_map(|(field, empty)| empty.then_some(field))
                             .collect();
+                    let shared = if uses[&row.grant_id] > 1 {
+                        "; another rule uses this id and takes effect once this one is deleted, \
+                         so decide which to keep"
+                    } else {
+                        ""
+                    };
                     nameless.push(format!(
-                        "grant '{}' (empty {})",
+                        "grant '{}' (empty {}{shared})",
                         row.grant_id,
                         fields.join(" and ")
                     ));

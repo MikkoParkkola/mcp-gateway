@@ -230,3 +230,23 @@ async fn a_duplicated_field_beside_a_nameless_row_is_the_loaders_refusal() {
     let error = super::read_identity_grants_file(&path).await.unwrap_err();
     assert!(error.contains("duplicate field `revoked_at`"), "{error}");
 }
+
+/// A nameless row sharing its id with another rule may have been shadowing
+/// it (the gateway kept the last row per id), so the refusal says deleting
+/// it makes the other one active.
+#[tokio::test]
+async fn a_nameless_row_sharing_its_id_is_flagged() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("grants.yaml");
+    let valid = grants_yaml("alice", "alice");
+    let body = format!(
+        "{valid}{}",
+        &grants_yaml("", "alice")[valid.find("- grant_id").unwrap()..]
+    );
+    crate::gateway::test_helpers::write_owner_only(&path, body).unwrap();
+    let error = super::read_identity_grants_file(&path).await.unwrap_err();
+    assert!(
+        error.contains("another rule uses this id and takes effect once this one is deleted"),
+        "{error}"
+    );
+}
