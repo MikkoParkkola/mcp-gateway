@@ -38,11 +38,11 @@ fn shared_key() -> AuthenticatedClient {
 }
 
 fn cert(san_uri: &str) -> CertIdentity {
-    CertIdentity {
+    crate::mtls::identity::CertIdentity::for_test(crate::mtls::identity::CertFields {
         san_uris: vec![san_uri.to_string()],
         display_name: "agent".to_string(),
         ..Default::default()
-    }
+    })
 }
 
 /// One identity carrier per caller: a grant subject, or a certificate with

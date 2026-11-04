@@ -615,7 +615,6 @@ fn scoped_client(
 #[test]
 fn authz_refusal_principal_names_the_authenticated_identity() {
     use crate::gateway::oauth::OAuthAgentIdentity;
-    use crate::mtls::CertIdentity;
 
     let api_key = scoped_client("keyed", vec!["*".into()], None);
     assert_eq!(
@@ -637,10 +636,10 @@ fn authz_refusal_principal_names_the_authenticated_identity() {
         "an agent caller must not be reported as unauthenticated"
     );
 
-    let cert = CertIdentity {
+    let cert = crate::mtls::identity::CertIdentity::for_test(crate::mtls::identity::CertFields {
         display_name: "machine-7".to_string(),
-        ..CertIdentity::default()
-    };
+        ..Default::default()
+    });
     assert_eq!(
         super::authorization::refusal_principal(None, None, Some(&cert)).as_deref(),
         Some("cert:machine-7"),

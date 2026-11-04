@@ -144,7 +144,7 @@ fn cert(san_uri: Option<&str>, cn: Option<&str>) -> CertIdentity {
 /// for one workload always are.
 fn issued(san_uri: Option<&str>, cn: Option<&str>, serial: u32) -> CertIdentity {
     let der = format!("der:{san_uri:?}:{cn:?}:{serial}");
-    CertIdentity {
+    crate::mtls::identity::CertIdentity::for_test(crate::mtls::identity::CertFields {
         san_uris: san_uri.map(str::to_string).into_iter().collect(),
         common_name: cn.map(str::to_string),
         display_name: san_uri.or(cn).unwrap_or("<unknown>").to_string(),
@@ -152,7 +152,7 @@ fn issued(san_uri: Option<&str>, cn: Option<&str>, serial: u32) -> CertIdentity 
             der.as_bytes(),
         )),
         ..Default::default()
-    }
+    })
 }
 
 /// Who a call is from. Each field is an independent proof the router reads.

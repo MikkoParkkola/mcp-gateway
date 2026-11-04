@@ -33,6 +33,7 @@ async fn chained_backend_gets_a_fresh_outbound_nonce() {
                 a, "same-client-nonce",
                 "{route:?}/{mode}: never the client's"
             );
+            d.stop().await;
         }
         let upstream = FakeUpstream::start(Mode::Honest).await;
         let d = HttpGateway::start(d_config(&upstream.url, "off", "on_request")).await;
@@ -42,6 +43,7 @@ async fn chained_backend_gets_a_fresh_outbound_nonce() {
             vec![None],
             "{route:?}: off writes nothing"
         );
+        d.stop().await;
     }
 }
 
@@ -60,6 +62,7 @@ async fn direct_challenge_keeps_other_meta_members() {
         meta[fake::NONCE_KEY].as_str().is_some_and(is_hex_32),
         "{meta}"
     );
+    d.stop().await;
 }
 
 /// cr1 HIGH: a non-object `_meta` cannot carry the challenge, so a chained
@@ -79,6 +82,7 @@ async fn direct_non_object_meta_is_refused_before_dispatch() {
             );
         }
         assert!(upstream.calls().is_empty(), "{mode}: nothing dispatched");
+        d.stop().await;
     }
 }
 
@@ -103,6 +107,7 @@ async fn invoke_nonce_fallback_on_a_chained_result() {
         client_verify(&response, "chain-nonce-f1b").is_ok(),
         "{response}"
     );
+    d.stop().await;
 }
 
 /// H8/H9: outside the claim. `emit: always` without a client nonce gives a
@@ -116,6 +121,7 @@ async fn nonce_scope_outside_the_claim() {
         let response = call(&d, route, None).await;
         assert_eq!(chain_len(&response), 2, "{route:?}: {response}");
         assert_eq!(client_verify(&response, "any"), Err("nonce"), "{route:?}");
+        d.stop().await;
     }
     let upstream = FakeUpstream::start(Mode::Honest).await;
     let mut config = d_config(&upstream.url, "verify", "on_request");
@@ -125,6 +131,7 @@ async fn nonce_scope_outside_the_claim() {
     let (path, mut body) = request(Route::Invoke, "h9", None);
     body["params"]["arguments"]["nonce"] = json!("invoke-only");
     assert_eq!(chain_len(&post(&d, &path, &body).await), 0);
+    d.stop().await;
 }
 
 /// P2b: the link count, a constant of 8 every hop agrees on (MIK-8783). An
@@ -142,6 +149,7 @@ async fn link_count_cap_on_append() {
         upstream.set_mode(Mode::Padded { links: 7, pad: 8 });
         let response = call(&d, route, Some("n-p2")).await;
         assert_eq!(chain_len(&response), 8, "{route:?}: {response}");
+        d.stop().await;
     }
 }
 
@@ -164,6 +172,7 @@ async fn interim_replies_from_chained_backends() {
             "{route:?}: no continuation: {response}"
         );
         let upstream = FakeUpstream::start(Mode::InputRequired).await;
+        d.stop().await;
         let d = HttpGateway::start(d_config(&upstream.url, "verify", "on_request")).await;
         let response = call(&d, route, Some("n-i1b")).await;
         assert_ne!(
@@ -174,6 +183,7 @@ async fn interim_replies_from_chained_backends() {
             !response.to_string().contains(oracle::CHAIN_KEY),
             "{route:?}: {response}"
         );
+        d.stop().await;
     }
 }
 
@@ -215,6 +225,7 @@ async fn require_refuses_an_unsolicited_task_handle() {
     assert_undeclared_task_refused(&call(&d, Route::Invoke, Some("n-k3")).await);
     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
     assert_eq!(upstream.calls().len(), 1, "nothing polled or retried");
+    d.stop().await;
 }
 
 /// K3 by the surfaced name (MIK-8159.CHAIN.2): the same raw-receipt refusal,
@@ -225,6 +236,7 @@ async fn require_refuses_an_unsolicited_task_handle_by_name() {
     let d = HttpGateway::start(d_config(&upstream.url, "require", "on_request")).await;
     assert_undeclared_task_refused(&call(&d, Route::Surfaced, Some("n-k3s")).await);
     assert_eq!(upstream.calls().len(), 1, "refused on the first answer");
+    d.stop().await;
 }
 
 /// Z1: a chained backend bypasses the response cache: both calls reach the
@@ -247,6 +259,7 @@ async fn chained_backend_bypasses_the_response_cache() {
             client_verify(&first, "n-z1a").is_ok() && client_verify(&second, "n-z1b").is_ok(),
             "{route:?}: {first} {second}"
         );
+        d.stop().await;
     }
 }
 
@@ -263,6 +276,7 @@ async fn non_tools_call_direct_method_is_not_chained() {
         !response.to_string().contains(oracle::CHAIN_KEY),
         "{response}"
     );
+    d.stop().await;
 }
 
 /// Z2: an idempotent replay of a chained result carries no chain, on both
@@ -307,6 +321,7 @@ async fn chained_replay_carries_no_chain() {
             responses[1]
         );
         assert_eq!(chain_len(&responses[1]), 0, "{route:?}: {}", responses[1]);
+        d.stop().await;
     }
 }
 
@@ -329,6 +344,8 @@ async fn two_real_gateways_chain_end_to_end() {
     let links =
         client_verify(&response, "n-real").unwrap_or_else(|rule| panic!("{rule}: {response}"));
     assert_eq!(links.len(), 2, "{response}");
+    d.stop().await;
+    u.stop().await;
 }
 
 /// MIN.1 gap 2 (review of #2529): a reply refused at raw receipt for its chain
@@ -359,5 +376,6 @@ async fn chain_refused_reply_is_recorded_uninspected() {
             "{route:?}: {}",
             records[0]
         );
+        d.stop().await;
     }
 }
