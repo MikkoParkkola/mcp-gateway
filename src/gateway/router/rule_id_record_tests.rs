@@ -32,7 +32,7 @@ fn firewall_id(fx: &Fx, rule: &FirewallRule) -> RuleId {
     )
 }
 
-fn tool_policy_id(fx: &Fx, list: &str, pattern: &str) -> RuleId {
+pub(super) fn tool_policy_id(fx: &Fx, list: &str, pattern: &str) -> RuleId {
     let key = fx
         .state
         .live_config

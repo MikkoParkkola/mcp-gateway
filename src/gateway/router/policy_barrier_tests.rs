@@ -459,15 +459,28 @@ async fn injected_task(fx: &Fx, key: &str) -> Value {
     task_with(fx, key, injected()).await
 }
 
-/// [`injected_task`] with `arguments` instead of the injection.
+/// [`injected_task`] with `arguments` instead of the injection: submitted,
+/// then read until it settles.
 async fn task_with(fx: &Fx, key: &str, arguments: Value) -> Value {
-    use super::direct_guards_fixture::send_with_headers;
-    let modern = json!({
+    let id = submit_task(fx, key, arguments).await;
+    settled_task(fx, &id).await
+}
+
+/// The task-augmented protocol metadata every task request carries.
+fn modern_task_meta() -> Value {
+    json!({
         "io.modelcontextprotocol/protocolVersion": "2026-07-28",
         "io.modelcontextprotocol/clientCapabilities": {
             "extensions": {"io.modelcontextprotocol/tasks": {}}
         },
-    });
+    })
+}
+
+/// Submit `arguments` to `alpha`'s `read` as a task under idempotency `key`;
+/// the task's id.
+async fn submit_task(fx: &Fx, key: &str, arguments: Value) -> String {
+    use super::direct_guards_fixture::send_with_headers;
+    let modern = modern_task_meta();
     let mut submit_meta = modern.clone();
     submit_meta[crate::protocol::mrtr::IDEMPOTENCY_KEY_META] = json!(key);
     let submit = json!({
@@ -483,21 +496,32 @@ async fn task_with(fx: &Fx, key: &str, arguments: Value) -> Value {
     ];
     let (_, created) =
         send_with_headers(fx, "/mcp", "k-std", "tools/call", submit, None, &headers).await;
-    let id = created
+    created
         .pointer("/result/taskId")
         .and_then(Value::as_str)
         .unwrap_or_else(|| panic!("the submit was refused: {created}"))
-        .to_owned();
-    let get_headers = [
+        .to_owned()
+}
+
+/// One `tasks/get` of task `id`, as `k-std`.
+async fn read_task(fx: &Fx, id: &str) -> Value {
+    use super::direct_guards_fixture::send_with_headers;
+    let headers = [
         ("mcp-protocol-version", "2026-07-28"),
         ("mcp-method", "tasks/get"),
-        ("mcp-name", id.as_str()),
+        ("mcp-name", id),
     ];
+    let get = json!({"taskId": id, "_meta": modern_task_meta()});
+    send_with_headers(fx, "/mcp", "k-std", "tasks/get", get, None, &headers)
+        .await
+        .1
+}
+
+/// Task `id` read until it is no longer working.
+async fn settled_task(fx: &Fx, id: &str) -> Value {
     tokio::time::timeout(std::time::Duration::from_secs(30), async {
         loop {
-            let get = json!({"taskId": id, "_meta": modern});
-            let (_, body) =
-                send_with_headers(fx, "/mcp", "k-std", "tasks/get", get, None, &get_headers).await;
+            let body = read_task(fx, id).await;
             if body.pointer("/result/status").and_then(Value::as_str) != Some("working") {
                 return body;
             }
@@ -559,3 +583,5 @@ async fn a_queued_task_is_not_judged_by_the_startup_rules() {
 /// The rule each recording site names (keyed rule ids).
 #[path = "rule_id_record_tests.rs"]
 mod rule_ids;
+#[path = "stored_refusal_record_tests.rs"]
+mod stored_refusals;
