@@ -144,6 +144,9 @@ class UnsupportedSyntax(Exception):
 
 KEYWORDS = {"if", "then", "else", "elif", "fi", "for", "do", "done", "while", "until", "case", "esac", "!"}
 PYTHONS = {"python", "python3"}
+# The gates' pinned environment (scripts/gate-env): its interpreter by path in
+# the workflows, and as pre-push binds it.
+GATE_PYTHONS = {"scripts/gate-env/.venv/bin/python", "$GATE_PY", "${GATE_PY}"}
 SCRIPT = re.compile(r"^(?:scripts|benchmarks)/[\w./*-]+\.py$")
 ASSIGN = re.compile(r"^([A-Za-z_]\w*)=(.*)$")
 FOR_GLOB = re.compile(r"^for\s+(\w+)\s+in\s+(\S+)\s*$")
@@ -425,7 +428,7 @@ def _stage_execution(stage, stages, bound, loops):
         return found
     if words[0] in UNSUPPORTED:
         raise UnsupportedSyntax(f"`{words[0]}` hides what it executes: {stage}")
-    if words[0] not in PYTHONS:
+    if words[0] not in PYTHONS and words[0] not in GATE_PYTHONS:
         return found
     # Interpreter flags (`-B`, `-I`) come before the script; the
     # script's own flags after it are arguments and are kept.

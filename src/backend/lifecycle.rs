@@ -72,6 +72,7 @@ impl Backend {
         cache_ttl: Duration,
         runtime_plan: Option<RuntimePlan>,
     ) -> Self {
+        let sign_in = super::sign_in_state::SignInState::for_config(&config);
         Self {
             name: name.to_string(),
             metric_label: Arc::<str>::from(name).into(),
@@ -105,6 +106,8 @@ impl Backend {
             skip_account_prepass: std::sync::atomic::AtomicBool::new(false),
             #[cfg(test)]
             unfilled_outcome_reads: std::sync::atomic::AtomicUsize::new(0),
+            #[cfg(test)]
+            lend_refusals: parking_lot::Mutex::default(),
             unserved_consecutive: AtomicU64::new(0),
             unserved_total: AtomicU64::new(0),
             probe_in_flight: std::sync::atomic::AtomicBool::new(false),
@@ -126,6 +129,7 @@ impl Backend {
             events_resolutions: std::sync::atomic::AtomicUsize::new(0),
             connected_unpinned: std::sync::atomic::AtomicBool::new(false),
             login_gate: Arc::default(),
+            sign_in,
             destination: std::sync::OnceLock::new(),
             secret_resolver: std::sync::OnceLock::new(),
             needles: std::sync::OnceLock::new(),
@@ -494,9 +498,9 @@ impl Backend {
             Ok(_) => {
                 entry.ever_started.store(true, Ordering::Relaxed);
                 entry.start_failed.store(false, Ordering::Relaxed);
-                entry.auth_wait.store(false, Ordering::Relaxed);
+                entry.auth_wait.clear();
             }
-            Err(e) if e.is_authorization_wait() => entry.auth_wait.store(true, Ordering::Relaxed),
+            Err(e) if e.is_authorization_wait() => entry.set_auth_wait(),
             Err(_) => entry.start_failed.store(true, Ordering::Relaxed),
         }
         started

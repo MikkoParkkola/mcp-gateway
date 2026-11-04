@@ -41,6 +41,10 @@ pub(super) fn render_shadow_report(report: &ShadowScanReport) -> String {
         out.push_str("Passive scan only; no discovered tools were invoked.\n");
         return out;
     }
+    if let Some(note) = &report.ids_note {
+        // The gateway's own sentence; no client value reaches it.
+        let _ = writeln!(out, "Note: {note}.\n");
+    }
 
     let _ = writeln!(
         out,

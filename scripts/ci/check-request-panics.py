@@ -33,7 +33,6 @@ OPERATOR_PREFIXES = (
     "src/honest_task_tokens",
 )
 
-_CFG_RE = re.compile(r"#\s*\[\s*cfg\s*\(")
 _RE_UNWRAP = re.compile(r"\.\s*unwrap\s*\(\s*\)")
 _RE_EXPECT = re.compile(r"\.\s*expect\s*\(")
 # Any path call, whatever precedes the last `::` (nested generics, a const
@@ -43,11 +42,7 @@ _RE_RAW_UNWRAP = re.compile(r"\.\s*r#unwrap\s*\(\s*\)")
 _RE_RAW_EXPECT = re.compile(r"\.\s*r#expect\s*\(")
 _RE_MACRO = re.compile(r"\b(?:panic|unreachable|unimplemented|todo)\s*!")
 
-_FN_ITEMS = {"fn", "struct", "enum", "union", "impl", "mod", "trait"}
-_LET_ITEMS = {"let", "const", "static", "type", "use"}
-_PREFIX_WORDS = {"async", "const", "unsafe"}
 
-_IDENT_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 
 
 def _load_orphan():
@@ -124,162 +119,32 @@ def write_baseline_counts(path: Path, current: dict) -> None:
     p.write_text(out, encoding="utf-8")
 
 
-def _skip_ws(code: str, i: int) -> int:
-    n = len(code)
-    while i < n and code[i].isspace():
-        i += 1
-    return i
+def _is_non_product(expr: str, orphan) -> bool:
+    """A cfg this gate leaves out: test-only, or a `kani` proof harness."""
+    return orphan.cfg_is_test(expr) or expr.strip() == "kani"
 
 
-def _read_ident(code: str, i: int):
-    m = _IDENT_RE.match(code, i)
-    if m:
-        return m.group(0), m.end()
-    return None, i
+# Which files the finder parsed with errors, for the line the gate prints.
+PARSE_REPORT: dict[str, tuple[bool, bool]] = {}
 
 
-def _skip_attributes(code: str, i: int, orphan) -> int:
-    n = len(code)
-    while True:
-        i = _skip_ws(code, i)
-        if i < n and code[i] == "#":
-            j = i + 1
-            while j < n and code[j].isspace():
-                j += 1
-            if j < n and code[j] == "!":
-                j += 1
-                while j < n and code[j].isspace():
-                    j += 1
-            if j < n and code[j] == "[":
-                i = orphan.attribute_end(code, j + 1)
-                continue
-        break
-    return i
-
-
-def _skip_pub(code: str, i: int) -> int:
-    i = _skip_ws(code, i)
-    word, wend = _read_ident(code, i)
-    if word != "pub":
-        return i
-    i = _skip_ws(code, wend)
-    if i < len(code) and code[i] == "(":
-        depth = 0
-        n = len(code)
-        while i < n:
-            if code[i] == "(":
-                depth += 1
-            elif code[i] == ")":
-                depth -= 1
-                if depth == 0:
-                    i += 1
-                    break
-            i += 1
-    return _skip_ws(code, i)
-
-
-def _classify_item(code: str, attr_end: int, orphan):
-    i = _skip_attributes(code, attr_end, orphan)
-    i = _skip_pub(code, i)
-    p1 = i
-    j = p1
-    while True:
-        j = _skip_ws(code, j)
-        word, wend = _read_ident(code, j)
-        if word in _PREFIX_WORDS:
-            j = wend
-            continue
-        if word == "extern":
-            j = wend
-            j = _skip_ws(code, j)
-            if j < len(code) and code[j] == '"':
-                k = j + 1
-                while k < len(code) and code[k] != '"':
-                    k += 1
-                if k < len(code):
-                    k += 1
-                j = k
-            continue
-        break
-    j = _skip_ws(code, j)
-    word, _ = _read_ident(code, j)
-    fn_like = word in _FN_ITEMS
-    word1, _ = _read_ident(code, p1)
-    let_like = (word1 in _LET_ITEMS) and not fn_like
-    return fn_like, let_like
-
-
-def _item_end(code: str, attr_end: int, fn_like: bool, let_like: bool) -> int:
-    depth = 0
-    k = attr_end
-    n = len(code)
-    while k < n:
-        c = code[k]
-        if c == "(" or c == "[" or c == "{":
-            depth += 1
-            k += 1
-        elif c == ")" or c == "]" or c == "}":
-            if depth == 0:
-                return k
-            if c == "}" and depth == 1:
-                if let_like:
-                    depth -= 1
-                    k += 1
-                    continue
-                return k + 1
-            depth -= 1
-            k += 1
-        elif c == ";" and depth == 0:
-            return k + 1
-        elif c == "," and depth == 0:
-            if not fn_like:
-                return k + 1
-            k += 1
-        else:
-            k += 1
-    return n
-
-
-def _blank_cfg_items(code: str, orphan) -> str:
-    matches = list(_CFG_RE.finditer(code))
-    if not matches:
-        return code
-    descs = []
-    for m in matches:
-        expr = orphan.cfg_expression(code, m.end())
-        if not (orphan.cfg_is_test(expr) or expr.strip() == "kani"):
-            continue
-        bracket = code.find("[", m.start(), m.end())
-        if bracket < 0:
-            continue
-        try:
-            attr_end = orphan.attribute_end(code, bracket + 1)
-        except Exception:
-            continue
-        descs.append((m.start(), attr_end))
-    descs.sort()
-    if not descs:
-        return code
-    out = list(code)
-    wiped: list[tuple[int, int]] = []
-
-    def _inside(s: int) -> bool:
-        for a, b in wiped:
-            if a <= s < b:
-                return True
-        return False
-
-    for start, attr_end in descs:
-        if _inside(start):
-            continue
-        fn_like, let_like = _classify_item(code, attr_end, orphan)
-        end = _item_end(code, attr_end, fn_like, let_like)
-        if end <= start:
-            continue
-        for k in range(start, min(end, len(out))):
+def _blank_cfg_items(blanked: str, text: str, path: str, orphan) -> str:
+    """`blanked` with every item under a non-product cfg blanked by its own
+    extent, as the shared parser finds it in `text` (`blank` keeps offsets,
+    so its spans index `blanked`). This gate looks for product code, so an
+    unsure case is left in place: LEAN_SHORT."""
+    found = orphan.cfg_items(
+        text,
+        orphan.SafeSide.LEAN_SHORT,
+        is_target=lambda expr: _is_non_product(expr, orphan),
+        path=path,
+        report=PARSE_REPORT,
+    )
+    out = list(blanked)
+    for item in found.items:
+        for k in range(item.start, min(item.end, len(out))):
             if out[k] != "\n":
                 out[k] = " "
-        wiped.append((start, end))
     return "".join(out)
 
 
@@ -420,7 +285,7 @@ def collect_current(root: Path, test_only: set[Path], orphan) -> tuple[dict, int
             raise SystemExit(f"request-panics: cannot read {rel}: {exc}")
         scanned += 1
         blanked, _ = orphan.blank(text)
-        final = _blank_cfg_items(blanked, orphan)
+        final = _blank_cfg_items(blanked, text, rel, orphan)
         starts = _find_site_starts(final)
         if not starts:
             continue
@@ -692,6 +557,27 @@ def run_self_test() -> int:
         }
     )
     check("flag live unwrap after cfg(kani) item", len(f) == 1 and "y.unwrap()" in f[0][2], repr(f))
+
+    # A file the parser cannot read cleanly is unsure as a whole; this gate
+    # looks for product code, so its test items stay product (LEAN_SHORT).
+    f, _, _, _ = _scan_temp(
+        {
+            "src/foo.rs": (
+                "fn p(s: S) {\n"
+                "    let S {\n"
+                '        #[cfg(feature = "x")]\n'
+                "        a,\n"
+                "        b,\n"
+                "    } = s;\n"
+                "}\n"
+                "#[cfg(test)]\n"
+                "fn t(y: Option<i32>) -> i32 {\n"
+                "    y.unwrap()\n"
+                "}\n"
+            )
+        }
+    )
+    check("flag a test item's unwrap in an unsure file", len(f) == 1 and "y.unwrap()" in f[0][2], repr(f))
 
     # ---- Not flagged ----
     f, _, _, _ = _scan_temp(
@@ -1133,6 +1019,7 @@ def main(argv: list[str] | None = None) -> int:
         return exc.code if isinstance(exc.code, int) else 1
     findings = find_new_sites(current, baseline)
     stale = find_stale_allowances(current, baseline)
+    print(_ORPHAN.parse_error_summary(PARSE_REPORT))
     if findings or stale:
         for rel, line, norm in findings:
             print(f"{rel}:{line}: new panic site without // invariant: {norm}")

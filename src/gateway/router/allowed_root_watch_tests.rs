@@ -137,7 +137,11 @@ async fn poll(w: &Watch, path: &str) -> Result<Value, String> {
         .live_config
         .generation()
         .auth()
-        .client_for_key(KEY, crate::gateway::auth::principal_of(KEY).storage_form())
+        .client_for_key(
+            KEY,
+            crate::gateway::auth::principal_of(KEY).storage_form(),
+            crate::gateway::auth::KeyBinding::Unchecked,
+        )
         .expect("the key is live");
     let target = Target {
         capability: "read_file".into(),

@@ -56,7 +56,9 @@ async fn is_gateway_running() -> bool {
     client
         .post(GATEWAY_URL)
         .json(&JsonRpcRequest::new("tools/list", json!({})))
-        .timeout(Duration::from_secs(2))
+        // A hang guard: a slow answer under load must not read as "not
+        // running" and skip the test; a closed port still fails at once.
+        .timeout(Duration::from_secs(10))
         .send()
         .await
         .is_ok()

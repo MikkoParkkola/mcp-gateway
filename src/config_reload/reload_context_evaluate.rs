@@ -1,8 +1,77 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! Which startup-only environment keys a reload leaves a restart to apply.
+//! Evaluating a candidate config for [`ReloadContext`]: the load against the
+//! recorded env files, and the startup-only env keys a restart would read
+//! differently (moved from `reload_context.rs`).
+//!
+//! [`ReloadContext`]: super::ReloadContext
 
-use super::{EvaluatedReload, IMPLICIT_STARTUP_ENV_KEYS, LiveEnv};
+use std::sync::Arc;
+
+use crate::config::{Config, EnvOverlay, LiveEnv};
+use crate::config_reload::{ConfigPatch, LiveConfig, POSTURE_REFUSED_PREFIX, compute_diff};
+
+/// A candidate config, evaluated against the recorded env files.
+pub(in crate::config_reload) struct EvaluatedReload {
+    pub(in crate::config_reload) config: Config,
+    /// May be empty: the env files can change while the config file does not.
+    pub(in crate::config_reload) patch: ConfigPatch,
+    pub(in crate::config_reload) overlay: Arc<EnvOverlay>,
+    /// Every `env:NAME` the config references, resolved or not.
+    pub(in crate::config_reload) secret_refs: std::collections::BTreeSet<String>,
+    /// What this evaluation read; digested when it is published.
+    pub(in crate::config_reload) inputs: crate::config_reload::revision::RawInputs,
+    /// Each backend's configured credentials, pinned before this load is
+    /// published.
+    pub(in crate::config_reload) configured: crate::config::configured_secrets::ConfiguredByBackend,
+}
+
+pub(in crate::config_reload) fn load_config_patch(
+    config_path: &std::path::Path,
+    live_config: &Arc<LiveConfig>,
+    env: &LiveEnv,
+) -> std::result::Result<EvaluatedReload, String> {
+    let old_config = live_config.get();
+    // The recorded paths, never `new_config.env_files`: `~` resolved once at
+    // startup, and resolving the spelling again could open a different file.
+    // A malformed line is an error here rather than a warning, so a reload
+    // against a half-read env file is refused instead of published.
+    let evaluated = Config::load_with_overlay(Some(config_path), env.env_paths())
+        .map_err(|e| format!("Failed to parse config: {e}"))?;
+    let patch = compute_diff(&old_config, &evaluated.config);
+
+    Ok(EvaluatedReload {
+        config: evaluated.config,
+        patch,
+        overlay: evaluated.overlay,
+        secret_refs: evaluated.secret_refs,
+        inputs: evaluated.inputs,
+        configured: evaluated.configured,
+    })
+}
+
+/// Startup-only environment keys no config field names.
+///
+/// The attestation signer is built once, during startup, straight off the
+/// overlay — these names appear in no config file, so a rotation is invisible
+/// both to the config diff and to the config's own `env:` references.
+pub(in crate::config_reload) const IMPLICIT_STARTUP_ENV_KEYS: &[&str] = &[
+    crate::attestation::wiring::ATTESTATION_MODE_ENV,
+    crate::attestation::wiring::ATTESTATION_SIGNING_KEY_ENV,
+    crate::attestation::wiring::ATTESTATION_KEY_ID_ENV,
+    crate::attestation::wiring::ATTESTATION_AUDIENCE_ENV,
+    crate::trust::provenance_public::PROVENANCE_SEED_ENV,
+    crate::trust::provenance_public::PROVENANCE_KEY_ID_ENV,
+];
+
+/// A refused preparation's answer: the reason, and that the reload changed
+/// nothing.
+pub(super) fn nothing_published(reason: &str) -> String {
+    format!(
+        "{POSTURE_REFUSED_PREFIX} {reason} No backend was started or stopped, and no \
+         configuration was published."
+    )
+}
 
 /// Startup-only environment keys a restart would read differently.
 ///

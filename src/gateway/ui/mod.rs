@@ -693,3 +693,6 @@ mod keys_tests;
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod discovery_wiring_tests;

@@ -30,6 +30,9 @@ fn every_server_state_serializes_to_the_word_the_shell_reads() {
         reason: String::new(),
         next_retry_at: None,
         cleartext_credentials_accepted: false,
+        needs_sign_in: false,
+        sign_in: None,
+        sign_in_flow: None,
     };
     for (state, word) in [
         (ServerState::Running, "running"),

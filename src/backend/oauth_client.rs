@@ -8,6 +8,8 @@ use std::sync::Arc;
 use tracing::info;
 
 use super::Backend;
+#[cfg(any(test, feature = "webui"))]
+use crate::oauth::client::sign_in::SignIn;
 use crate::oauth::{OAuthClient, OAuthClientConfig, TokenStorage};
 use crate::{Error, Result};
 
@@ -111,7 +113,8 @@ impl Backend {
                 token_refresh_buffer_secs: oauth_config.token_refresh_buffer_secs,
             },
         )
-        .with_login_gate(Arc::clone(&self.login_gate));
+        .with_login_gate(Arc::clone(&self.login_gate))
+        .with_sign_in_status(Arc::clone(&self.sign_in.status));
 
         #[cfg(test)]
         let oauth = match seam {
@@ -120,5 +123,107 @@ impl Backend {
         };
 
         Ok(Some(oauth))
+    }
+}
+
+impl Backend {
+    /// This backend's sign-in as an operator acts on it: one in-memory
+    /// snapshot, with no storage read, refresh or network call.
+    #[cfg(any(test, feature = "webui"))]
+    pub(crate) fn sign_in(&self) -> SignIn {
+        self.sign_in_given(self.shared_entry().auth_wait.get())
+    }
+
+    /// [`Backend::sign_in`] for a wait already read, so one caller never
+    /// sees two answers to one question. Order: no `oauth` block, then an
+    /// unchecked issuer, then a wait over a held token, then the token cases.
+    #[cfg(any(test, feature = "webui"))]
+    fn sign_in_given(&self, waiting: bool) -> SignIn {
+        if !self
+            .config
+            .oauth
+            .as_ref()
+            .is_some_and(|oauth| oauth.enabled)
+        {
+            return if waiting {
+                SignIn::WaitingElsewhere
+            } else {
+                SignIn::NotOAuth
+            };
+        }
+        match self.sign_in.status.snapshot() {
+            SignIn::SignedIn { .. } if waiting => SignIn::Expired,
+            held => held,
+        }
+    }
+
+    /// Whether this backend needs a person to sign in. The one place the
+    /// predicate is evaluated; the server row and the overview both call it.
+    #[cfg(any(test, feature = "webui"))]
+    pub(crate) fn needs_sign_in(&self) -> bool {
+        let waiting = self.shared_entry().auth_wait.get();
+        waiting || self.sign_in_given(waiting).needs_a_person()
+    }
+}
+
+#[cfg(feature = "webui")]
+impl Backend {
+    /// The client a person's sign-in runs on, its issuer resolved. A test's
+    /// installed client stands in for the one a start would build.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the backend has no `oauth` block or no HTTP
+    /// endpoint, or discovery fails.
+    pub(crate) async fn sign_in_client(&self) -> Result<Arc<OAuthClient>> {
+        #[cfg(test)]
+        self.sign_in.discovery_pause.pause().await;
+        #[cfg(test)]
+        if let Some(client) = self.sign_in.installed_client.lock().clone() {
+            return Ok(client);
+        }
+        let crate::config::TransportConfig::Http { http_url, .. } = &self.config.transport else {
+            return Err(Error::Config(format!(
+                "backend '{}' has no HTTP endpoint to sign in to",
+                self.name
+            )));
+        };
+        let Some(mut client) = self.create_oauth_client(http_url, self.destination())? else {
+            return Err(Error::Config(format!(
+                "backend '{}' has no oauth block",
+                self.name
+            )));
+        };
+        client.initialize().await?;
+        Ok(Arc::new(client))
+    }
+
+    /// Whether this backend is configured for OAuth sign-in.
+    pub(crate) fn has_oauth(&self) -> bool {
+        self.config
+            .oauth
+            .as_ref()
+            .is_some_and(|oauth| oauth.enabled)
+    }
+}
+
+#[cfg(all(test, feature = "webui"))]
+impl Backend {
+    /// Test-only: the OAuth client the sign-in flow uses, in place of the one
+    /// a start would build.
+    pub(crate) fn install_oauth_client_for_test(&self, client: OAuthClient) {
+        *self.sign_in.installed_client.lock() = Some(Arc::new(client));
+    }
+
+    /// Test-only: the installed client's in-memory token.
+    pub(crate) fn installed_client_token_for_test(&self) -> Option<crate::oauth::TokenInfo> {
+        let client = self.sign_in.installed_client.lock().clone()?;
+        client.cached_token_for_test()
+    }
+
+    /// Test-only: record that this backend's slot now waits on a sign-in,
+    /// bumping the wait's generation.
+    pub(crate) fn note_auth_wait(&self) {
+        self.shared_entry().set_auth_wait();
     }
 }
