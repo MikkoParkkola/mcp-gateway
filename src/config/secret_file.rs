@@ -695,36 +695,49 @@ mod recovery_text_tests {
         let found = r#"[ForeignSid("S-1-1-0"), NotProtected]"#;
         let acl = super::acl_refusal_text(what, head, found, || unreachable!("no repair"));
         assert!(acl.starts_with(head) && acl.contains(found), "{acl}");
-        let mut kinds = vec![
+        let kinds = [
             ("windows dacl", acl),
             ("not utf-8", super::not_utf8_message(what, path)),
             ("fifo", super::not_regular_message(what, path, "FIFO")),
-        ];
-        #[cfg(unix)]
-        {
-            use super::Refusal;
-            for (name, refusal) in [
-                ("world", Refusal::World),
-                ("group write", Refusal::GroupWrite),
-                ("group read", Refusal::GroupReadOwned),
-                ("foreign owner", Refusal::ForeignOwner),
-            ] {
-                kinds.push((
-                    name,
-                    super::refusal_message(what, path, refusal, (0o666, 0, 7), 0),
-                ));
-            }
-            let config =
-                super::refusal_message(SecretFile::Config, path, Refusal::World, (0o666, 0, 7), 0);
-            assert!(
-                config.contains("Fix: chmod 600"),
-                "the config fix changed: {config}"
-            );
-        }
-        for (kind, text) in &kinds {
+        ]
+        .into_iter()
+        .chain(mode_refusals(what, path));
+        for (kind, text) in kinds {
             assert!(text.contains(what.noun()), "{kind} lost the facts: {text}");
-            assert_recovery_guidance(kind, text);
+            assert_recovery_guidance(kind, &text);
         }
+    }
+
+    /// The Unix mode and owner refusals of `what`, after checking another
+    /// class keeps its usual fix; none elsewhere.
+    #[cfg(unix)]
+    fn mode_refusals(what: SecretFile, path: &std::path::Path) -> Vec<(&'static str, String)> {
+        use super::Refusal;
+        let config =
+            super::refusal_message(SecretFile::Config, path, Refusal::World, (0o666, 0, 7), 0);
+        assert!(
+            config.contains("Fix: chmod 600"),
+            "the config fix changed: {config}"
+        );
+        [
+            ("world", Refusal::World),
+            ("group write", Refusal::GroupWrite),
+            ("group read", Refusal::GroupReadOwned),
+            ("foreign owner", Refusal::ForeignOwner),
+        ]
+        .into_iter()
+        .map(|(name, refusal)| {
+            (
+                name,
+                super::refusal_message(what, path, refusal, (0o666, 0, 7), 0),
+            )
+        })
+        .collect()
+    }
+
+    #[cfg(not(unix))]
+    fn mode_refusals(_: SecretFile, _: &std::path::Path) -> Vec<(&'static str, String)> {
+        Vec::new()
     }
 
     /// Only crash recovery reads through the recovery class, and the config
