@@ -304,7 +304,7 @@ fn outcome_exposing_task_methods_are_called_only_where_listed() {
             let count = task_receiver_calls(&code, name);
             if count > 0 {
                 found.push((
-                    relative.to_string_lossy().into_owned(),
+                    relative.to_string_lossy().replace('\\', "/"),
                     (*name).to_owned(),
                     count,
                 ));
