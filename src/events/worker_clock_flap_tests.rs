@@ -7,6 +7,8 @@
 //! The last row (MIK-8202.AC.16 R8) runs the delivery worker's loop itself
 //! across a clock that fails and then reads again.
 
+use std::sync::Arc;
+
 use super::{
     NAME, assert_kept_unsent, counting_callback, logged_services, offer, private_callbacks, queued,
     queued_overdue, stored,

@@ -3,6 +3,8 @@
 //! An unreadable clock at fan-out: an occurrence whose source cannot judge
 //! on the clock. Split from `worker_clock_tests.rs`.
 
+use std::sync::Arc;
+
 use super::{ClockBlind, EventsHub, NAME, logged_services, now, private_callbacks, queued};
 
 /// Fan-out to a source that cannot judge on the clock: the row is kept and
