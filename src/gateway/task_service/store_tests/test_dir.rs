@@ -88,7 +88,7 @@ fn test_sources(dir: &std::path::Path, root: &std::path::Path, out: &mut Vec<(St
             .replace('\\', "/");
         let is_test =
             rel.contains("/tests/") || rel.contains("_tests") || rel.ends_with("tests.rs");
-        if is_test && rel.ends_with(".rs") {
+        if is_test && path.extension().is_some_and(|ext| ext == "rs") {
             out.push((rel, std::fs::read_to_string(&path).expect("read source")));
         }
     }

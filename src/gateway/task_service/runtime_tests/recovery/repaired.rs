@@ -18,7 +18,6 @@ async fn a_repaired_row_is_readable_without_a_restart() {
     let root = Arc::new(tempfile::tempdir().unwrap());
     let dir = root.path().join("tasks");
     let (seeded, originals) = sealed_rows(&dir).await;
-
     let operation = operation();
     let representation = representation();
     let admission = fresh_admission();

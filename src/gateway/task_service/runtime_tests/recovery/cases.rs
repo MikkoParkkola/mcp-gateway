@@ -380,7 +380,6 @@ async fn recovery_beside_a_sealed_row_settles_and_keeps_keys() {
         text.replacen("\"dispatched\":", "\"dispatched\":@", 1),
     )
     .unwrap();
-
     let operation = operation();
     let representation = representation();
     let admission = fresh_admission();

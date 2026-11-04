@@ -6,15 +6,15 @@
 
 use std::sync::Arc;
 
-use chrono::Utc;
-
 use super::*;
 
 #[test]
 fn a_late_write_after_the_test_ends_lands_and_leaves_no_folder() {
     let root = Arc::new(tempfile::tempdir().expect("a store root"));
     let root_path = root.path().to_owned();
-    let now = Utc::now();
+    let now = chrono::DateTime::parse_from_rfc3339("2026-09-07T00:00:00Z")
+        .expect("a fixed time")
+        .with_timezone(&chrono::Utc);
     let tail = TailPolicy {
         ttl: std::time::Duration::from_secs(3600),
         max: 3,
