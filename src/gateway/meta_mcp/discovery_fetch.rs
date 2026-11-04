@@ -15,6 +15,37 @@ use crate::protocol::Tool;
 use std::sync::Arc;
 use tracing::debug;
 
+/// Why a catalogue read omits a backend for a caller.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CatalogueOmit {
+    /// A multi-user gateway's isolation guard refuses this caller's binding.
+    Isolated,
+    /// The backend requires an end-user identity this caller does not carry.
+    NoIdentity,
+    /// The caller has a principal, but its credential did not resolve (or
+    /// resolved to nothing on a propagation-configured backend).
+    NotMinted,
+}
+
+impl CatalogueOmit {
+    /// Whether the omission is the gateway's decision about the caller, so a
+    /// read that names this backend alone is refused; a failed mint is not.
+    pub(crate) fn is_decision(self) -> bool {
+        match self {
+            Self::Isolated | Self::NoIdentity => true,
+            Self::NotMinted => false,
+        }
+    }
+}
+
+/// Whether the caller's credential for a backend resolved (or was not needed:
+/// a caller with no principal there mints nothing).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Mint {
+    Resolved,
+    Failed,
+}
+
 impl MetaMcp {
     /// The caller's per-user credential for `server`: headers and cache binding.
     ///
@@ -46,13 +77,37 @@ impl MetaMcp {
         backend: &Backend,
         caller: CallerProof<'_>,
     ) -> (crate::transport::LentCredential, Option<String>) {
+        self.caller_credential_minted(backend, caller).await.0
+    }
+
+    /// The caller's credential for `backend`, resolved once, and whether it
+    /// resolved: [`Mint::Failed`] when the caller has
+    /// a principal on `backend` and the resolution failed, or minted nothing
+    /// on a propagation-configured backend (an optional backend's static
+    /// fallback). An omission caused by that is not the gateway's decision
+    /// about the caller.
+    async fn caller_credential_minted(
+        &self,
+        backend: &Backend,
+        caller: CallerProof<'_>,
+    ) -> ((crate::transport::LentCredential, Option<String>), Mint) {
         if self.principal_for(backend, caller).is_none() {
-            return (crate::transport::LentCredential::default(), None);
+            return (Default::default(), Mint::Resolved);
         }
-        self.resolve_propagation_credential_held_for(&backend.name, Some(backend), caller)
+        match self
+            .resolve_propagation_credential_attempted_for(&backend.name, Some(backend), caller)
             .await
-            .map(|(headers, binding, _lease)| (headers, binding))
-            .unwrap_or_default()
+        {
+            Ok(((headers, binding, _lease), _attempted, unproven)) => {
+                let mint = if unproven.is_some() {
+                    Mint::Failed
+                } else {
+                    Mint::Resolved
+                };
+                ((headers, binding), mint)
+            }
+            Err(_) => (Default::default(), Mint::Failed),
+        }
     }
 
     /// [`Self::catalogue_credential_for`] for a request's caller context: the
@@ -62,12 +117,12 @@ impl MetaMcp {
     /// ONE resolution per request per backend, returning BOTH halves, because
     /// the isolation verdict and the slot selection must not disagree about who
     /// the caller is (design §4.3's residual) — and because resolving twice
-    /// would mint twice. `None` means omit.
+    /// would mint twice. `Err` means omit, and says why.
     pub(crate) async fn tool_credential_for(
         &self,
         backend: &Backend,
         caller: &super::MetaMcpCallerContext<'_>,
-    ) -> Option<(crate::transport::LentCredential, Option<String>)> {
+    ) -> Result<(crate::transport::LentCredential, Option<String>), CatalogueOmit> {
         self.catalogue_credential_for(backend, Self::proof_of(caller))
             .await
     }
@@ -248,17 +303,23 @@ impl MetaMcp {
     /// three handlers is how `resources/list` and `prompts/list` came to pass a
     /// constant `PoolKey::Shared` while `tools/list` passed a caller-derived key.
     ///
-    /// `None` means omit. `Some((headers, binding))` is safe to fetch with, and
-    /// `binding` is `None` for an identity-free caller, which selects the shared
-    /// slot exactly as before.
+    /// `Err` says why the backend is omitted. `Ok((headers, binding))` is safe
+    /// to fetch with, and `binding` is `None` for an identity-free caller,
+    /// which selects the shared slot exactly as before. After a failed mint
+    /// every omission is [`CatalogueOmit::NotMinted`], whichever guard fired:
+    /// the guard refused an absent binding because the mint failed.
     pub(super) async fn catalogue_credential_for(
         &self,
         backend: &Backend,
         caller: CallerProof<'_>,
-    ) -> Option<(crate::transport::LentCredential, Option<String>)> {
-        let (headers, binding) = self.caller_credential_for_identity(backend, caller).await;
+    ) -> Result<(crate::transport::LentCredential, Option<String>), CatalogueOmit> {
+        let ((headers, binding), mint) = self.caller_credential_minted(backend, caller).await;
+        let omit = |decided| match mint {
+            Mint::Resolved => decided,
+            Mint::Failed => CatalogueOmit::NotMinted,
+        };
         if self.meta_route_isolation_refused_for_caller(backend, binding.as_deref()) {
-            return None;
+            return Err(omit(CatalogueOmit::Isolated));
         }
         // A `required` backend has no identity-free view: on a single-user
         // gateway the guard above admits it, and the fill would then go out
@@ -268,9 +329,9 @@ impl MetaMcp {
             .identity_propagation_config()
             .is_some_and(|cfg| cfg.required);
         if required && !backend.fetch_carries_caller_identity(binding.as_deref()) {
-            return None;
+            return Err(omit(CatalogueOmit::NoIdentity));
         }
-        Some((headers, binding))
+        Ok((headers, binding))
     }
 
     /// The tools discovery should show for `backend`, from THIS CALLER's slot.

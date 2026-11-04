@@ -41,8 +41,9 @@ src/gateway/meta_mcp/invoke/propagation.rs	resolve_caller_credential_as	via refu
 src/gateway/meta_mcp/invoke/propagation.rs	resolve_caller_credential_as	via refuse (closure)	6	not-a-decision	configuration the operator has not finished, or a credential mint failure (the code's own note)
 src/gateway/meta_mcp/invoke/stored_proof.rs	unminted_refusal	Error::Config(..)	1	feeds	built by a refusal-named function the refusal scan classifies at each call
 src/gateway/meta_mcp/search.rs	list_tools_single_server	Error::BackendNotFound(..)	1	not-a-decision	a backend the caller may reach that the registry does not hold: a true absence
-src/gateway/meta_mcp/search.rs	list_tools_single_server	Error::BackendNotFound(..)	2	pending:inv2-credential-miss	the INV-2 credential miss answers absent with no raise
+src/gateway/meta_mcp/search.rs	list_tools_single_server	Error::BackendNotFound(..)	2	not-a-decision	the caller's credential did not resolve: a failed mint, not a decision about the caller
 src/gateway/meta_mcp/search.rs	list_tools_single_server	Error::BackendNotFound(..) wrapped	1	recorded	src/gateway/meta_mcp/search.rs::list_tools_single_server
+src/gateway/meta_mcp/search.rs	list_tools_single_server	Error::BackendNotFound(..) wrapped	2	recorded	src/gateway/meta_mcp/search.rs::list_tools_single_server
 src/gateway/meta_mcp/search.rs	parse_role_filter	Error::Protocol(..)	1	not-a-decision	client-protocol rejection: a malformed role filter argument
 src/gateway/meta_mcp/search.rs	parse_role_filter	Error::Protocol(..)	2	not-a-decision	client-protocol rejection: a malformed role filter argument
 src/gateway/meta_mcp/search/chain_exec.rs	resume_fingerprint	via record_absent_step	1	recorded	src/gateway/meta_mcp/search/chain_exec.rs::resume_fingerprint
