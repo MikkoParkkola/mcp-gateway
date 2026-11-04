@@ -116,6 +116,22 @@ async fn notify(
     (frame, record)
 }
 
+/// A withheld frame is the published notification only: its params carry
+/// the task id, the status and the subscription tag, and nothing stored.
+fn assert_withheld(frame: &Value) {
+    let keys: std::collections::BTreeSet<&str> = frame["params"]
+        .as_object()
+        .expect("params")
+        .keys()
+        .map(String::as_str)
+        .collect();
+    assert_eq!(
+        keys,
+        ["_meta", "status", "taskId"].into_iter().collect(),
+        "premise: withheld to the published status: {frame}"
+    );
+}
+
 async fn alice_gateway(dir: &tempfile::TempDir) -> (Endpoint, MetaMcp) {
     let endpoint = Endpoint::start(false).await;
     let meta = gateway(
@@ -144,10 +160,7 @@ async fn a_withheld_notification_names_the_deny_entry() {
         ..context(&alice)
     };
     let (frame, record) = notify(&meta, &dir, finished(vec![alice_target()]), &caller).await;
-    assert!(
-        !frame.to_string().contains("stored"),
-        "premise: the stored output is withheld: {frame}"
-    );
+    assert_withheld(&frame);
     let id = deny_entry_id();
     let hex = id.as_str().trim_start_matches("tool_policy:");
     assert!(!frame.to_string().contains(hex), "{frame}");
@@ -171,10 +184,7 @@ async fn a_notification_withheld_for_a_removed_backend_names_nothing() {
         tool: "read".to_owned(),
     };
     let (frame, record) = notify(&meta, &dir, finished(vec![gone]), &caller).await;
-    assert!(
-        !frame.to_string().contains("stored"),
-        "premise: the stored output is withheld: {frame}"
-    );
+    assert_withheld(&frame);
     assert!(record.get("refused_by").is_none(), "{record}");
 }
 
@@ -190,5 +200,58 @@ async fn a_served_notification_names_nothing() {
         frame.to_string().contains("stored"),
         "premise: served: {frame}"
     );
+    assert!(record.get("refused_by").is_none(), "{record}");
+}
+
+/// A stored result no longer served under its recorded bindings: withheld,
+/// and its record names the provenance check, with no rule id.
+#[tokio::test]
+async fn a_notification_withheld_for_provenance_names_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let (_endpoint, meta) = alice_gateway(&dir).await;
+    let alice = api_key("alice");
+    let caller = context(&alice);
+    let stored = CommittedTask {
+        bindings_recorded: false,
+        ..finished(vec![alice_target()])
+    };
+    let (frame, record) = notify(&meta, &dir, stored, &caller).await;
+    assert_withheld(&frame);
+    assert_eq!(
+        record["refused_by"],
+        json!({"kind": "provenance"}),
+        "{record}"
+    );
+}
+
+/// No stored task to read: the published status goes out, the stored-read
+/// judgement never runs, and the record names nothing.
+#[tokio::test]
+async fn a_notification_without_its_stored_task_names_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let (_endpoint, meta) = alice_gateway(&dir).await;
+    let published = json!({
+        "jsonrpc": "2.0",
+        "method": "notifications/tasks",
+        "params": { "taskId": "t-gone", "status": "completed" },
+    });
+    let subscription = SubscriptionId::of_request(RequestId::Number(6));
+    let pending = meta
+        .task_notification_frame(
+            &published,
+            None,
+            |_| panic!("no stored task, so no re-authorization"),
+            &subscription,
+        )
+        .await
+        .expect("a frame is built");
+    let frame = pending.frame.clone();
+    assert!(meta.finish_task_frame(pending, &frame, &reader()).await);
+    assert_withheld(&frame);
+    let record = entries(&dir)
+        .into_iter()
+        .rev()
+        .find(|row| row["response_stage"] == json!("notification_delivered"))
+        .expect("the frame's delivery record");
     assert!(record.get("refused_by").is_none(), "{record}");
 }

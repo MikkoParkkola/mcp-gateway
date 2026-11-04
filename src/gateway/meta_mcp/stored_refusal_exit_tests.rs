@@ -226,4 +226,24 @@ async fn a_refused_stored_repeat_carries_its_pair() {
         .and_then(super::task_replay::StoredAnswer::refused_by)
         .map(|r| serde_json::to_value(r).expect("RefusedBy serialises"));
     assert_eq!(pair, Some(json!({"kind": "provenance"})));
+    // Through delivery: the repeated call delivers the answer in its own
+    // cell, and that cell's record names the check.
+    let answer = answer.expect("a refused repeat");
+    let fields = crate::gateway::delivery_facts::scope(async move {
+        let _frame = answer.deliver();
+        let mut fields = serde_json::Map::new();
+        crate::gateway::delivery_facts::record_fields(
+            crate::gateway::delivery_facts::snapshot().as_ref(),
+            false,
+            &mut fields,
+        );
+        fields
+    })
+    .await;
+    assert_eq!(fields["response_effect"], json!("refused"), "{fields:?}");
+    assert_eq!(
+        fields["refused_by"],
+        json!({"kind": "provenance"}),
+        "{fields:?}"
+    );
 }

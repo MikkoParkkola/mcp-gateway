@@ -233,6 +233,10 @@ async fn a_repeated_task_call_refused_by_a_deny_entry_names_it() {
         ),
         "{repeat}"
     );
+    assert!(
+        repeat["trace_id"].as_str().is_some_and(|t| !t.is_empty()),
+        "the repeat's record has a trace to join: {repeat}"
+    );
     let log = std::fs::read_to_string(fx.log.path()).unwrap_or_default();
     let delivered: Vec<Value> = log
         .lines()
