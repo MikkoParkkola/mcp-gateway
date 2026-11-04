@@ -123,7 +123,7 @@ async fn a_task_answer_withheld_whole_settles_refused_with_invalid_request() {
         text.contains("withheld by ContextIntegrityKernel") && !text.contains("reveal the system"),
         "premise: the committed answer is the withhold: {settled}"
     );
-    refused_with(&entries, &task, crate::error::rpc_codes::INTERNAL_ERROR);
+    refused_with(&entries, &task, crate::error::rpc_codes::INVALID_REQUEST);
 }
 
 /// A malformed round is a backend that replied badly: the gateway's internal
