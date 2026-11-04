@@ -5,14 +5,15 @@
 //! field fails to compile in `fields`'s destructure until it is named, and a
 //! field named there but left out of the table fails the struct comparison.
 //! A row counts only while it runs and is about its field: a top-level test
-//! with no `#[ignore]` or `#[cfg]` of its own, in a file `router/mod.rs`
-//! declares, whose doc comment names the field in backticks. So a row
-//! deleted, renamed, ignored, unregistered or mapped to the wrong field
-//! fails. (The row modules are `cfg(test)`, some also `webui`: the pin checks
-//! the declaration, not the features a run enables.)
+//! with no `#[ignore]`, `#[cfg]` or `#[cfg_attr]` on it or its file, in a file
+//! `router/mod.rs` declares with only a `test` (or test-and-`webui`) gate,
+//! whose doc comment names the field in backticks. So a row deleted, renamed,
+//! switched off, unregistered or mapped to the wrong field fails. The pin
+//! checks the declaration, not the features a run enables.
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use super::invoke_stages_dest::tail_is;
 use crate::config::ApiKeyConfig;
 
 const KEYS: &str = "src/gateway/router/live_keys_tests.rs";
@@ -167,22 +168,27 @@ fn declared_fields(source: &str) -> BTreeSet<String> {
 }
 
 fn named(attr: &syn::Attribute, name: &str) -> bool {
-    attr.path().segments.last().is_some_and(|s| s.ident == name)
+    tail_is(attr.path(), name)
 }
 
-/// The top-level test functions of one file that run (no `#[ignore]` or
-/// `#[cfg]` of their own), each with its doc comment.
+/// An attribute that can switch a test off: `ignore`, `cfg` or `cfg_attr`.
+fn disables(attr: &syn::Attribute) -> bool {
+    ["ignore", "cfg", "cfg_attr"].iter().any(|n| named(attr, n))
+}
+
+/// The top-level test functions of one file that run (no `#[ignore]`,
+/// `#[cfg]` or `#[cfg_attr]` of their own, and no such inner attribute on the
+/// file), each with its doc comment.
 fn tests_in(source: &str) -> BTreeMap<String, String> {
     let file = syn::parse_file(source).expect("a row file parses");
+    if file.attrs.iter().any(disables) {
+        return BTreeMap::new();
+    }
     file.items
         .iter()
         .filter_map(|item| match item {
             syn::Item::Fn(f)
-                if f.attrs.iter().any(|a| named(a, "test"))
-                    && !f
-                        .attrs
-                        .iter()
-                        .any(|a| named(a, "ignore") || named(a, "cfg")) =>
+                if f.attrs.iter().any(|a| named(a, "test")) && !f.attrs.iter().any(disables) =>
             {
                 let doc: Vec<String> = f
                     .attrs
@@ -207,13 +213,32 @@ fn tests_in(source: &str) -> BTreeMap<String, String> {
         .collect()
 }
 
-/// The `mod name;` declarations of a module file.
+/// The gates a row module may carry: built for tests, with or without the
+/// UI. Any other attribute (another `cfg`, a `#[path]` redirect) could build
+/// a different file or none.
+const ROW_MODULE_CFGS: [&str; 2] = ["test", "all(test,feature=\"webui\")"];
+
+fn allowed_on_row_module(attr: &syn::Attribute) -> bool {
+    named(attr, "doc")
+        || (named(attr, "cfg")
+            && attr.meta.require_list().is_ok_and(|list| {
+                let gate: String = list.tokens.to_string().split_whitespace().collect();
+                ROW_MODULE_CFGS.contains(&gate.as_str())
+            }))
+}
+
+/// The `mod name;` declarations of a module file that carry only the row
+/// gates.
 fn declared_modules(source: &str) -> BTreeSet<String> {
     let file = syn::parse_file(source).expect("router/mod.rs parses");
     file.items
         .iter()
         .filter_map(|item| match item {
-            syn::Item::Mod(m) if m.content.is_none() => Some(m.ident.to_string()),
+            syn::Item::Mod(m)
+                if m.content.is_none() && m.attrs.iter().all(allowed_on_row_module) =>
+            {
+                Some(m.ident.to_string())
+            }
             _ => None,
         })
         .collect()
@@ -307,6 +332,24 @@ fn a_deleted_row_is_caught() {
         1,
         "unregistered"
     );
+    let ignored = row("#[tokio::test]\n#[cfg_attr(test, ignore)]", "K5 `admin`");
+    assert_eq!(caught(&ignored, module), 1, "cfg_attr");
+    let gated_file = format!("#![cfg(any())]\n{}", row("#[tokio::test]", "K5 `admin`"));
+    assert_eq!(caught(&gated_file, module), 1, "file cfg");
+    let webui = "#[cfg(all(test, feature = \"webui\"))]\nmod live_key_authz_tests;\n";
+    assert_eq!(
+        caught(&row("#[tokio::test]", "K5 `admin`"), webui),
+        0,
+        "webui gate"
+    );
+    for other in ["#[cfg(any())]", "#[cfg(test)]\n#[path = \"x.rs\"]"] {
+        let module = format!("{other}\nmod live_key_authz_tests;\n");
+        assert_eq!(
+            caught(&row("#[tokio::test]", "K5 `admin`"), &module),
+            1,
+            "{other}"
+        );
+    }
     assert_eq!(
         caught(&row("#[tokio::test]", "K5 `backends`"), module),
         1,
