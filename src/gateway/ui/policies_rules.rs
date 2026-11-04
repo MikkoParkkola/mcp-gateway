@@ -54,6 +54,7 @@ pub(super) fn offered() -> Vec<ScanType> {
 }
 
 /// The offered types' config spellings.
+#[cfg(test)]
 pub(super) fn offered_names() -> Vec<String> {
     offered().into_iter().map(name).collect()
 }
