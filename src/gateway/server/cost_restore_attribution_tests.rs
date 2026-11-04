@@ -391,3 +391,151 @@ fn restore7_a_restored_estimate_is_kept() {
         assert!(scope.admits(&restarted, "target"), "{scope:?}: 1.5 + 1 < 3");
     }
 }
+
+/// Governance with `target` and every name in `names` budgeted at $50.
+fn budgeting(
+    scope: Scope,
+    names: &[String],
+) -> crate::cost_accounting::config::CostGovernanceConfig {
+    let mut cfg = governed(scope, Some(50.0));
+    for name in names {
+        scope.limits(&mut cfg.budgets).insert(name.clone(), 50.0);
+    }
+    cfg
+}
+
+/// D5: the names the saving process owned are owned again before the rows
+/// go through the cap. More owned names than the cap, each with a row, plus
+/// a full cap of unbudgeted names and $3 in the overflow; restarted with
+/// none of them budgeted, every owned row survives, and `target`, budgeted
+/// by a reload after the restart, is not seeded (its spend is in its row):
+/// at $2 a $1 call reads 0.5 + 1 and is admitted.
+#[test]
+fn restore5_owned_names_are_carried_through_a_full_cap() {
+    for scope in [Scope::Tool, Scope::Key] {
+        let _clock = at_secs(T);
+        let dir = tempfile::tempdir().expect("tempdir");
+        let owned: Vec<String> = (0..CAP + 8).map(|i| format!("own-{i}")).collect();
+        let (_, first) = boot_cost_governance(&budgeting(scope, &owned), dir.path());
+        let first = first.expect("armed");
+        for name in &owned {
+            scope.spend(&first, name, 0.01);
+        }
+        scope.spend(&first, "target", 0.5);
+        for i in 0..CAP {
+            scope.spend(&first, &format!("filler-{i}"), 0.01);
+        }
+        scope.spend(&first, "other", 3.0);
+        let saved = build_persisted_costs(&first.snapshot_for_save().expect("a readable clock"));
+        cost_persistence::save(&dir.path().join("costs.json"), &saved).expect("save");
+
+        let (_, restarted) = boot_cost_governance(&governed(scope, None), dir.path());
+        let restarted = restarted.expect("armed");
+        let snap = restarted.snapshot();
+        let rows = match scope {
+            Scope::Tool => &snap.tool_daily,
+            Scope::Key => &snap.key_daily,
+        };
+        let kept = owned.iter().filter(|n| rows.contains_key(*n)).count();
+        assert_eq!(kept, CAP + 8, "{scope:?}: every owned row survives the cap");
+        assert_eq!(rows.get("target").copied(), Some(0.5), "{scope:?}");
+        restarted.seed_estimates(&governed(scope, Some(2.0)).budgets);
+        assert_eq!(
+            restored_estimate(scope, &restarted),
+            None,
+            "{scope:?}: owned, not seeded"
+        );
+        let published = governed(scope, Some(2.0));
+        let (tool, key) = match scope {
+            Scope::Tool => ("target", None),
+            Scope::Key => ("read", Some("target")),
+        };
+        assert!(
+            restarted.check_under(&published, tool, key).allowed,
+            "{scope:?}: 0.5 + 1 < 2"
+        );
+    }
+}
+
+/// RESTORE.6: the save lists every owned name, including one only a reload
+/// budgeted, and one a reload budgeted yesterday whose figure has expired.
+#[test]
+fn restore6_the_save_lists_every_owned_name() {
+    for scope in [Scope::Tool, Scope::Key] {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (_, enforcer) = boot_cost_governance(&governed(scope, None), dir.path());
+        let enforcer = enforcer.expect("armed");
+        {
+            let _yesterday = at_secs(T - 86_400);
+            let mut budgets = governed(scope, None).budgets;
+            scope
+                .limits(&mut budgets)
+                .insert("yesterday".to_owned(), 5.0);
+            enforcer.seed_estimates(&budgets);
+        }
+        let _clock = at_secs(T);
+        let mut budgets = governed(scope, None).budgets;
+        scope
+            .limits(&mut budgets)
+            .insert("reloaded".to_owned(), 5.0);
+        enforcer.seed_estimates(&budgets);
+        let saved = build_persisted_costs(&enforcer.snapshot_for_save().expect("a readable clock"));
+        let (owned, estimate) = match scope {
+            Scope::Tool => (saved.tool_owned.clone(), &saved.tool_estimate),
+            Scope::Key => (saved.key_owned.clone(), &saved.key_estimate),
+        };
+        let owned = owned.expect("a current save lists its owned names");
+        assert!(
+            owned.contains(&"reloaded".to_owned()),
+            "{scope:?}: {owned:?}"
+        );
+        assert!(
+            owned.contains(&"yesterday".to_owned()),
+            "{scope:?}: {owned:?}"
+        );
+        assert!(
+            !estimate.contains_key("yesterday"),
+            "{scope:?}: its figure expired"
+        );
+    }
+}
+
+/// D6: a damaged owned list restores as a file saved before the list
+/// existed: the rest loads, nothing is seeded.
+#[test]
+fn restore6_a_damaged_owned_list_seeds_nothing() {
+    let _clock = at_secs(T);
+    let dir = tempfile::tempdir().expect("tempdir");
+    let json = format!(
+        r#"{{"saved_at": {T}, "day_basis": "local", "tool_totals": {{}}, "key_totals": {{}},
+            "tool_overflow_usd": 3.0, "tool_owned": 7, "tool_born": {{}}}}"#
+    );
+    std::fs::write(dir.path().join("costs.json"), json).expect("write");
+    let (_, restarted) = boot_cost_governance(&governed(Scope::Tool, Some(3.5)), dir.path());
+    let restarted = restarted.expect("armed");
+    assert_eq!(
+        restarted.snapshot().tool_overflow_usd,
+        3.0,
+        "the rest loads"
+    );
+    assert_eq!(
+        restored_estimate(Scope::Tool, &restarted),
+        None,
+        "nothing seeded"
+    );
+}
+
+/// The format marker: an absent creation-figure map reads as `None` (a
+/// legacy file), a present empty one as `Some` (a current file).
+#[test]
+fn restore2_an_absent_born_map_differs_from_an_empty_one() {
+    let base = r#""saved_at": 1, "tool_totals": {}, "key_totals": {}"#;
+    let absent: PersistedCosts = serde_json::from_str(&format!("{{{base}}}")).expect("parses");
+    let empty: PersistedCosts = serde_json::from_str(&format!(
+        r#"{{{base}, "tool_born": {{}}, "key_born": {{}}}}"#
+    ))
+    .expect("parses");
+    assert!(absent.tool_born.is_none() && absent.key_born.is_none());
+    assert_eq!(empty.tool_born.map(|m| m.len()), Some(0));
+    assert_eq!(empty.key_born.map(|m| m.len()), Some(0));
+}
