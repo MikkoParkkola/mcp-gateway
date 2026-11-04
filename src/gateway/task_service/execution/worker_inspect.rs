@@ -55,10 +55,10 @@ pub(in crate::gateway::task_service::execution) fn dispatched_in_cell<T>(
 pub(in crate::gateway::task_service::execution) struct CellRefusal {
     /// A gateway refusal was raised in the cell.
     pub(in crate::gateway::task_service::execution) refused: bool,
-    /// The code of the gateway's own fold, when it answered the refusal as a
-    /// tool result: the code the refusing gate chose, which the settlement
-    /// records rather than one guessed from the result's shape.
-    pub(in crate::gateway::task_service::execution) gateway_fold: Option<i32>,
+    /// The code the latest refusal the gateway answered as a tool result was
+    /// built with: the refusing gate's own, which the settlement records
+    /// rather than one guessed from the result's shape.
+    pub(in crate::gateway::task_service::execution) withheld_code: Option<i32>,
 }
 
 /// Whether the dispatch cell holds a gateway refusal, and the gateway fold's
@@ -69,7 +69,7 @@ pub(in crate::gateway::task_service::execution) fn dispatch_refusal(
 ) -> Option<CellRefusal> {
     facts.map(|facts| CellRefusal {
         refused: facts.refused(),
-        gateway_fold: facts.gateway_fold_code(),
+        withheld_code: facts.withheld_code(),
     })
 }
 
@@ -165,7 +165,7 @@ fn dispatch_refusal_code(
         .and_then(|result| result.get("isError"));
     (withheld == Some(&serde_json::Value::Bool(true))).then(|| {
         dispatch
-            .gateway_fold
+            .withheld_code
             .unwrap_or_else(|| crate::Error::ResponseFirewallRefused.to_rpc_code())
     })
 }
@@ -292,11 +292,11 @@ mod tests {
     }
 
     /// A cell read: whether it holds a refusal, and the gateway fold's code.
-    fn cell(refused: bool, gateway_fold: Option<i32>) -> Option<CellRefusal> {
-        Some(CellRefusal {
+    fn cell(refused: bool, withheld_code: Option<i32>) -> CellRefusal {
+        CellRefusal {
             refused,
-            gateway_fold,
-        })
+            withheld_code,
+        }
     }
 
     /// A refusal is recorded with the code the task settles with, and one
@@ -305,11 +305,11 @@ mod tests {
     #[test]
     fn a_refusal_is_recorded_in_either_shape() {
         assert_eq!(
-            dispatch_refusal_code(cell(true, None), &refused_error()),
+            dispatch_refusal_code(Some(cell(true, None)), &refused_error()),
             Some(-32603)
         );
         assert_eq!(
-            dispatch_refusal_code(cell(true, None), &is_error_result()),
+            dispatch_refusal_code(Some(cell(true, None)), &is_error_result()),
             Some(crate::Error::ResponseFirewallRefused.to_rpc_code())
         );
     }
@@ -320,13 +320,13 @@ mod tests {
     fn a_withheld_result_carries_the_gates_own_code() {
         for code in [-32603, -32602, -32003, -32001] {
             assert_eq!(
-                dispatch_refusal_code(cell(true, Some(code)), &is_error_result()),
+                dispatch_refusal_code(Some(cell(true, Some(code))), &is_error_result()),
                 Some(code)
             );
         }
         // An error frame's own code still wins over any fold.
         assert_eq!(
-            dispatch_refusal_code(cell(true, Some(-32602)), &refused_error()),
+            dispatch_refusal_code(Some(cell(true, Some(-32602))), &refused_error()),
             Some(-32603)
         );
     }
@@ -344,17 +344,17 @@ mod tests {
             delivery_facts::refused(());
         })
         .await;
-        assert_eq!(backend, cell(true, None));
+        assert_eq!(backend, Some(cell(true, None)));
         let ((), gateway) = dispatched_in_cell(async {
             delivery_facts::folded(RpcError {
                 code: -32010,
                 origin: Origin::Backend,
             });
-            delivery_facts::gateway_folded(-32603);
+            delivery_facts::withheld_codeed(-32603);
             delivery_facts::refused(());
         })
         .await;
-        assert_eq!(gateway, cell(true, Some(-32603)));
+        assert_eq!(gateway, Some(cell(true, Some(-32603))));
     }
 
     /// Paired control: a refusal's code is not a refusal. With the cell clean,
@@ -363,7 +363,7 @@ mod tests {
     fn the_code_alone_records_nothing() {
         for settled in [refused_error(), is_error_result()] {
             assert_eq!(
-                dispatch_refusal_code(cell(false, Some(-32603)), &settled),
+                dispatch_refusal_code(Some(cell(false, Some(-32603))), &settled),
                 None
             );
             assert_eq!(dispatch_refusal_code(None, &settled), None);
@@ -380,10 +380,35 @@ mod tests {
         ] {
             let settled = JsonRpcResponse::success(RequestId::Number(0), result);
             assert_eq!(
-                dispatch_refusal_code(cell(true, Some(-32603)), &settled),
+                dispatch_refusal_code(Some(cell(true, Some(-32603))), &settled),
                 None
             );
         }
+    }
+
+    /// The latest gateway fold is the one recorded: an earlier gate's fold,
+    /// even a worse-ranked one, never lends its code to a later withhold, and a
+    /// backend failure folded afterwards does not displace it.
+    #[tokio::test]
+    async fn the_latest_gateway_fold_is_recorded() {
+        use crate::gateway::health_metrics::{Origin, RpcError};
+        let ((), later) = dispatched_in_cell(async {
+            delivery_facts::gateway_folded(-32603);
+            delivery_facts::gateway_folded(-32602);
+            delivery_facts::refused(());
+        })
+        .await;
+        assert_eq!(later, Some(cell(true, Some(-32602))));
+        let ((), backend_after) = dispatched_in_cell(async {
+            delivery_facts::gateway_folded(-32603);
+            delivery_facts::folded(RpcError {
+                code: -32010,
+                origin: Origin::Backend,
+            });
+            delivery_facts::refused(());
+        })
+        .await;
+        assert_eq!(backend_after, Some(cell(true, Some(-32603))));
     }
 
     /// With no cell to read, nothing is recorded.
@@ -400,14 +425,14 @@ mod tests {
             delivery_facts::refused(());
         })
         .await;
-        assert_eq!(refused, cell(true, None));
+        assert_eq!(refused, Some(cell(true, None)));
         let ((), clean) = dispatched_in_cell(async {}).await;
-        assert_eq!(clean, cell(false, None));
+        assert_eq!(clean, Some(cell(false, None)));
         let ((), inner) = delivery_facts::scope(async {
             delivery_facts::refused(());
             dispatched_in_cell(async {}).await
         })
         .await;
-        assert_eq!(inner, cell(false, None));
+        assert_eq!(inner, Some(cell(false, None)));
     }
 }

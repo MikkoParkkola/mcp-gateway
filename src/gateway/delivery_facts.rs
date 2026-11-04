@@ -105,6 +105,11 @@ pub(crate) struct DeliveryFacts {
     /// for the error count: the worst noted (the gateway's own over a
     /// backend failure over a backend's answer).
     folded: Option<RpcError>,
+    /// The code of the latest refusal the gateway answered as a tool result:
+    /// last writer wins, so a later withhold is never recorded with an
+    /// earlier gate's code. Kept apart from `folded`, whose worst-wins rule is
+    /// for the error count, not for which gate built the delivered answer.
+    withheld_code: Option<i32>,
     /// The latest composite step's fold, until the composite carries it
     /// (`step_carried`), ends on it (`composite_ended`) or moves past it.
     last_step_folded: Option<RpcError>,
@@ -174,6 +179,7 @@ impl Default for DeliveryFacts {
             last_step: LastStep::Settled,
             sends: Sends::default(),
             folded: None,
+            withheld_code: None,
             last_step_folded: None,
             error_of: ErrorOf::Own,
         }
@@ -214,13 +220,10 @@ impl DeliveryFacts {
         self.effect == ResponseEffect::Refused
     }
 
-    /// The code of the gateway's own fold: the code a refusal it answered as
-    /// a tool result was built with (`gateway_folded`). `None` when nothing
-    /// was folded or the worst fold is a backend's.
-    pub(crate) fn gateway_fold_code(&self) -> Option<i32> {
-        self.folded
-            .filter(|fold| fold.origin == Origin::Gateway)
-            .map(|fold| fold.code)
+    /// The code the latest refusal the gateway answered as a tool result was
+    /// built with. `None` when the gateway folded no refusal of its own.
+    pub(crate) fn withheld_code(&self) -> Option<i32> {
+        self.withheld_code
     }
 
     /// The strongest effect: this cell's own, raised to `Rewritten` when the
@@ -350,7 +353,12 @@ pub(crate) fn step_tool_failed() {
 /// wrote itself): the error count reads it when the answer has no error of
 /// its own. The worst noted wins.
 pub(crate) fn folded(marker: RpcError) {
-    with(|facts| facts.folded = worst(facts.folded, Some(marker)));
+    with(|facts| {
+        facts.folded = worst(facts.folded, Some(marker));
+        if marker.origin == Origin::Gateway {
+            facts.withheld_code = Some(marker.code);
+        }
+    });
 }
 
 /// [`folded`] for an `isError` result the gateway wrote itself (a refusal
