@@ -211,6 +211,46 @@ async fn a_shutdown_write_after_stdin_closes_lands_before_close_returns() {
     );
 }
 
+/// A backend that ignores EOF but saves on SIGTERM (the MCP stdio order:
+/// close stdin, wait, SIGTERM, wait, SIGKILL) gets its SIGTERM, and its save
+/// lands, before the group is killed.
+#[tokio::test]
+async fn a_backend_that_ignores_eof_gets_sigterm_before_sigkill() {
+    let (w, t) = started(
+        "trap 'echo termed > term.mark; exit 0' TERM\nwhile :; do sleep 0.05; done",
+        None,
+    )
+    .await;
+    t.close().await.expect("close");
+    assert_eq!(
+        std::fs::read_to_string(w.path().join("term.mark"))
+            .ok()
+            .as_deref(),
+        Some("termed\n"),
+        "the backend was SIGKILLed without a SIGTERM first"
+    );
+}
+
+/// A backend that ignores EOF and SIGTERM is still killed, and close still
+/// returns, within the bound: no backend can hold a stop open.
+#[tokio::test]
+async fn a_backend_that_ignores_eof_and_sigterm_dies_within_the_bound() {
+    // The fixed plan outside a shutdown (EOF wait, SIGTERM wait, the reap
+    // deadline) plus slack for a loaded host.
+    const BOUND: Duration = Duration::from_secs(15);
+    let (w, t) = started(&resists_term(), None).await;
+    let child = descendant(w.path()).await;
+    let pid = leader(&t).await;
+    let started_at = std::time::Instant::now();
+    tokio::time::timeout(BOUND, t.close())
+        .await
+        .expect("close returns within the bound")
+        .expect("close");
+    assert!(started_at.elapsed() < BOUND, "close took {:?}", started_at.elapsed());
+    assert_killed(pid).await;
+    gone(child).await;
+}
+
 /// T6: a second close sends nothing and keeps the first status.
 #[tokio::test]
 async fn a_second_close_sends_nothing() {
