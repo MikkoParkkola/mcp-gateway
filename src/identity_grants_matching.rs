@@ -164,9 +164,11 @@ impl Tree {
         }
     }
 
-    /// Why the file still fails its typed parse with the bare rows removed,
-    /// so a refusal naming them does not hide a second defect behind them.
-    /// Parsed from a value, so it carries no line or column.
+    /// Why the file still fails its typed parse once the bare bindings are set
+    /// aside, so a refusal naming them does not hide a second defect behind
+    /// them. The rows stay (their agent read as `any`), so a row naming no one
+    /// is still seen to share its id with a bare row. Parsed from a value, so
+    /// it carries no line or column.
     fn remainder_error(self) -> Option<String> {
         match self {
             Self::Json(mut file) => {
@@ -174,10 +176,12 @@ impl Tree {
                     .get_mut("grants")
                     .and_then(serde_json::Value::as_array_mut)
                 {
-                    rows.retain(|row| {
-                        !row.pointer("/agent/exact")
+                    for row in rows.iter_mut().filter(|row| {
+                        row.pointer("/agent/exact")
                             .is_some_and(serde_json::Value::is_string)
-                    });
+                    }) {
+                        row["agent"] = serde_json::Value::from("any");
+                    }
                 }
                 serde_json::from_value::<super::IdentityGrantFile>(file)
                     .err()
@@ -188,7 +192,11 @@ impl Tree {
                     .get_mut("grants")
                     .and_then(crate::yaml::Value::as_sequence_mut)
                 {
-                    rows.retain(|row| bare_yaml_id(row).is_none());
+                    for row in rows.iter_mut().filter(|row| bare_yaml_id(row).is_some()) {
+                        if let Some(agent) = row.get_mut("agent") {
+                            *agent = crate::yaml::Value::from("any");
+                        }
+                    }
                 }
                 crate::yaml::from_value::<super::IdentityGrantFile>(file)
                     .err()

@@ -12,10 +12,11 @@ use std::path::Path;
 /// finds it when `None`), with environment overrides applied and `~`
 /// expanded; `Ok(None)` when grants are off.
 fn grants_path(config: Option<&Path>) -> Result<Option<std::path::PathBuf>, String> {
-    let loaded = mcp_gateway::config::Config::load(config).map_err(|e| {
+    // Startup's strict load: a malformed env file refuses here too.
+    let loaded = mcp_gateway::config::Config::load_evaluated(config).map_err(|e| {
         format!("the config does not load, so its identity grants were not checked: {e}")
     })?;
-    let grants = &loaded.security.identity_grants;
+    let grants = &loaded.config.security.identity_grants;
     Ok(grants
         .enabled
         .then(|| super::super::identity::expand_home_path(Path::new(&grants.path))))

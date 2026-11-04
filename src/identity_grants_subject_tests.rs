@@ -250,3 +250,24 @@ async fn a_nameless_row_sharing_its_id_is_flagged() {
         "{error}"
     );
 }
+
+/// A nameless row sharing its id with a row the file also refuses for a bare
+/// agent binding is still flagged: setting the bare binding aside keeps the
+/// row, so deletion advice never hides the rule it would reactivate.
+#[tokio::test]
+async fn a_nameless_row_sharing_its_id_with_a_bare_row_is_flagged() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("grants.yaml");
+    let valid = grants_yaml("alice", "alice").replace("agent: any", "agent: !exact runner");
+    let body = format!(
+        "{valid}{}",
+        &grants_yaml("", "alice")[valid.find("- grant_id").unwrap()..]
+    );
+    crate::gateway::test_helpers::write_owner_only(&path, body).unwrap();
+    let error = super::read_identity_grants_file(&path).await.unwrap_err();
+    assert!(error.contains("by a bare id"), "{error}");
+    assert!(
+        error.contains("another rule uses this id and takes effect once this one is deleted"),
+        "{error}"
+    );
+}
