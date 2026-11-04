@@ -462,6 +462,11 @@ fn o5_3_the_last_reference_frees_the_interned_source() {
         pairs(&rig, &t0, "carol").is_empty(),
         "premise: carol's record lapsed"
     );
+    assert_eq!(
+        pairs(&rig, &t1, "dave"),
+        [("ov:z".to_string(), false)],
+        "O5.3: dave's pair went with carol's"
+    );
     assert!(
         detector(&rig).interns_for_test("ov:z"),
         "O5.3: freed while dave still holds it"
