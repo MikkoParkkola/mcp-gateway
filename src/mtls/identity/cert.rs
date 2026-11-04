@@ -78,10 +78,9 @@ impl CertIdentity {
     }
 
     /// The subject this certificate names, verbatim: its first SAN URI that is
-    /// not empty or only whitespace, else such a CN. `None` when it has
-    /// neither: such a
-    /// certificate names nobody, and its display name is a placeholder every
-    /// such certificate shares, so it is never an identity.
+    /// not empty or only whitespace, else its CN if that is not. `None` when it
+    /// has neither: such a certificate names nobody, and its display name is a
+    /// placeholder every such certificate shares, so it is never an identity.
     pub(crate) fn subject_id(&self) -> Option<&str> {
         self.san_uris
             .iter()
@@ -101,8 +100,10 @@ impl CertIdentity {
     /// is public and proves nothing on its own: calling this on unverified
     /// bytes would let the sender choose its own bucket.
     ///
-    /// `None` for a certificate that parses but names no one (no SAN URI, no
-    /// CN): it is no identity, and its caller refuses it as such.
+    /// `Ok(None)` for a certificate that parses but names no one: no SAN URI
+    /// and no CN, or only empty or whitespace-only ones (see
+    /// [`Self::subject_id`]). That is no identity, distinct from a parse
+    /// error, and its caller refuses it as such.
     ///
     /// # Errors
     ///

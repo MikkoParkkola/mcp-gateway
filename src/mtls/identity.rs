@@ -303,4 +303,20 @@ mod tests {
         assert!(id.san_uris().is_empty());
         assert!(id.san_dns_names().is_empty());
     }
+
+    #[test]
+    fn a_blank_first_san_uri_falls_through_to_the_next_name() {
+        // A real certificate: a blank first SAN URI is skipped for the next.
+        let der = make_cert_der("cn", None, &[uri_san(" "), uri_san("spiffe://x/a")]);
+        let id = CertIdentity::from_der(&der)
+            .unwrap()
+            .expect("names someone");
+        assert_eq!(id.subject_id(), Some("spiffe://x/a"));
+        // With no other SAN URI, the CN is the name.
+        let der = make_cert_der("agent-cn", None, &[uri_san(" ")]);
+        let id = CertIdentity::from_der(&der)
+            .unwrap()
+            .expect("names someone");
+        assert_eq!(id.subject_id(), Some("agent-cn"));
+    }
 }
