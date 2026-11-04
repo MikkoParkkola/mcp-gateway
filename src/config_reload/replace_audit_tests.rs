@@ -89,6 +89,7 @@ async fn a_pending_journal_with_a_failing_intent_changes_nothing() {
         Audit::Required {
             sink: Box::new(recorder.clone()),
             kind: IntentKind::Save,
+            writer: None,
         },
         WAIT,
     )
@@ -122,6 +123,7 @@ async fn an_owed_reload_runs_after_its_recovery_intent() {
         Audit::Required {
             sink: Box::new(recorder.clone()),
             kind: IntentKind::Save,
+            writer: None,
         },
         WAIT,
     )
@@ -155,6 +157,7 @@ async fn an_owed_reload_flag_alone_gets_a_recovery_intent() {
         Audit::Required {
             sink: Box::new(recorder.clone()),
             kind: IntentKind::Save,
+            writer: None,
         },
         WAIT,
     )
@@ -177,6 +180,7 @@ async fn an_intent_failure_writes_nothing() {
         Audit::Required {
             sink: Box::new(recorder.clone()),
             kind: IntentKind::Save,
+            writer: None,
         },
         WAIT,
     )
@@ -537,6 +541,7 @@ async fn a_save_the_loader_refuses_records_no_intent() {
         Audit::Required {
             sink: Box::new(recorder.clone()),
             kind: IntentKind::Save,
+            writer: None,
         },
         WAIT,
     )
@@ -567,6 +572,7 @@ async fn an_unchanged_save_records_no_intent() {
         Audit::Required {
             sink: Box::new(recorder.clone()),
             kind: IntentKind::Save,
+            writer: None,
         },
         WAIT,
     )

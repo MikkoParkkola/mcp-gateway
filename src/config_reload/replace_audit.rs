@@ -30,6 +30,18 @@ pub(crate) enum IntentKind {
     Adopt,
     /// A configuration-history restore.
     Restore,
+    /// A web UI API key create.
+    KeyCreate,
+}
+
+/// Who asked for a key write and which key: what a key write's intent names
+/// beside its kind, since `Replaced::Discard` keeps no original to diff.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct KeyWriter {
+    /// The authenticated request's identity.
+    pub(crate) actor: crate::security::audit::AuditWho,
+    /// The key's name, never a value.
+    pub(crate) subject: String,
 }
 
 /// The id an intent was appended under; its outcome record carries it.
@@ -47,6 +59,9 @@ pub(crate) struct Intent {
     pub(crate) outside_change: bool,
     /// The recovery intent appended first, when anything was pending.
     pub(crate) recovery_intent_id: Option<IntentId>,
+    /// For a key write, who wrote which key; `None` for every other kind,
+    /// whose records name the gateway as before.
+    pub(crate) writer: Option<KeyWriter>,
 }
 
 /// Where intents go: the audit log's synced append in production.
@@ -60,6 +75,7 @@ pub(crate) enum Audit {
     Required {
         sink: Box<dyn IntentSink>,
         kind: IntentKind,
+        writer: Option<KeyWriter>,
     },
     Off,
 }
@@ -104,10 +120,24 @@ impl AuditPosture {
             (Some(log), _) => Ok(Audit::Required {
                 sink: Box::new(LogSink(log)),
                 kind,
+                writer: None,
             }),
             (None, GatewayAuth::Off) => Ok(Audit::Off),
             (None, GatewayAuth::On) => Err(ReplaceError::Refused(NO_AUDIT_LOG.to_owned())),
         }
+    }
+
+    /// The audit for a key write of `kind`: as [`Self::audit`], with the
+    /// intent naming `actor` and the key `subject`.
+    #[allow(dead_code, reason = "the create route is its first caller")]
+    pub(crate) fn key_write(
+        self,
+        kind: IntentKind,
+        actor: crate::security::audit::AuditWho,
+        subject: &str,
+    ) -> Result<Audit, ReplaceError> {
+        let _ = (actor, subject);
+        self.audit(kind)
     }
 }
 
@@ -122,6 +152,7 @@ impl IntentSink for LogSink {
             IntentKind::Save => "config_save_intent",
             IntentKind::Adopt => "config_adopt_intent",
             IntentKind::Restore => "config_restore_intent",
+            IntentKind::KeyCreate => "config_key_create_intent",
         };
         let mut fields = serde_json::Map::new();
         fields.insert("event".into(), event.into());
@@ -207,6 +238,7 @@ impl ReloadContext {
             base: FileRevision::of(&on_disk),
             outside_change: true,
             recovery_intent_id: None,
+            writer: None,
         };
         sink.append(&intent).map(Some).map_err(|e| {
             ReplaceError::Refused(format!(

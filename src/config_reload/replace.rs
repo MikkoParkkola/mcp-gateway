@@ -473,7 +473,7 @@ impl ReloadContext {
         // entry or byte changes. Unchanged bytes write nothing, so they
         // record nothing.
         let unchanged = step.is_none() && template.bytes() == current.as_slice();
-        if let Audit::Required { sink, kind } = &mut audit
+        if let Audit::Required { sink, kind, writer } = &mut audit
             && !unchanged
         {
             let intent = Intent {
@@ -481,6 +481,7 @@ impl ReloadContext {
                 base: FileRevision::of(&current),
                 outside_change: false,
                 recovery_intent_id,
+                writer: writer.clone(),
             };
             sink.append(&intent).map_err(|e| {
                 ReplaceError::Refused(format!(
