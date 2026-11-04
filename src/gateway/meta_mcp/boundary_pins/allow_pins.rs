@@ -16,8 +16,8 @@ use super::scan::{Place, Sink, expr_attrs, item_attrs, walk};
 
 const ROOTS: [&str; 3] = ["src/lib.rs", "src/main.rs", "src/bin/provenance-eval.rs"];
 
-/// The banned names: the dedicated config's 18 methods and 2 APIs.
-const BANNED: [&str; 20] = [
+/// The banned names: the dedicated config's 19 methods and 2 APIs.
+const BANNED: [&str; 21] = [
     "subscribe_started",
     "reload_read_slot",
     "lock_reload",
@@ -36,6 +36,7 @@ const BANNED: [&str; 20] = [
     "statuses",
     "remove",
     "stop_all",
+    "stop_all_by",
     "resolve_propagation_credential",
     "resolve_propagation_headers",
 ];

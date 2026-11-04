@@ -664,7 +664,7 @@ mod plan_tests {
             graceful_ending(Duration::from_secs(10), false),
             Ending::Graceful {
                 eof: Duration::ZERO,
-                term: Duration::from_secs(3),
+                term: Duration::from_secs(4),
             }
         );
     }
