@@ -45,17 +45,15 @@ fn kernel_view(pid: Pid) -> Option<bool> {
     }
 }
 
-#[tokio::test]
-async fn a_gateway_stop_waits_for_an_idle_released_child_to_be_killed() {
-    let dir = tempfile::tempdir().expect("temp dir");
-    std::fs::write(dir.path().join("peer.py"), PEER).expect("write peer");
-    let registry = BackendRegistry::new();
-    let child = Arc::new(Backend::new(
-        "capability:stays",
+/// A stdio backend running [`PEER`] in `dir`.
+fn stays(dir: &std::path::Path, name: &str) -> Arc<Backend> {
+    std::fs::write(dir.join("peer.py"), PEER).expect("write peer");
+    Arc::new(Backend::new(
+        name,
         BackendConfig {
             transport: TransportConfig::Stdio {
                 command: "python3 peer.py".to_string(),
-                cwd: Some(dir.path().display().to_string()),
+                cwd: Some(dir.display().to_string()),
                 protocol_version: None,
             },
             timeout: Duration::from_secs(10),
@@ -63,17 +61,29 @@ async fn a_gateway_stop_waits_for_an_idle_released_child_to_be_killed() {
         },
         &FailsafeConfig::default(),
         Duration::from_secs(60),
-    ));
-    // As the capability executor builds it: joined to the registry's stop
-    // deadline, never registered.
-    let _ = child.stop_deadline.set(registry.stop_deadline());
-    child.ensure_started().await.expect("the child starts");
-    let raw: i32 = std::fs::read_to_string(dir.path().join("leader.pid"))
+    ))
+}
+
+/// The pid [`PEER`] last recorded in `dir`.
+fn leader_pid(dir: &std::path::Path) -> Pid {
+    let raw: i32 = std::fs::read_to_string(dir.join("leader.pid"))
         .expect("pid file")
         .trim()
         .parse()
         .expect("pid");
-    let pid = Pid::from_raw(raw).expect("non-zero pid");
+    Pid::from_raw(raw).expect("non-zero pid")
+}
+
+#[tokio::test]
+async fn a_gateway_stop_waits_for_an_idle_released_child_to_be_killed() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let registry = BackendRegistry::new();
+    let child = stays(dir.path(), "capability:stays");
+    // As the capability executor builds it: joined to the registry's stop
+    // deadline, never registered.
+    let _ = child.stop_deadline.set(registry.stop_deadline());
+    child.ensure_started().await.expect("the child starts");
+    let pid = leader_pid(dir.path());
 
     // Let go while idle, with a long plan of its own.
     child.hand_over_now(Duration::from_secs(120));
@@ -87,4 +97,27 @@ async fn a_gateway_stop_waits_for_an_idle_released_child_to_be_killed() {
         Some(false),
         "the gateway stop returned while the released child still ran"
     );
+}
+
+/// A requested restart whose old backend ignores EOF and SIGTERM (only the
+/// kill ends it) still completes within its close budget: the old close is
+/// hard-limited, and its plan (EOF wait, SIGTERM wait, kill) fits inside it.
+#[tokio::test]
+async fn a_restart_of_a_backend_that_ignores_every_signal_completes_in_bound() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let backend = stays(dir.path(), "stays");
+    backend.ensure_started().await.expect("the backend starts");
+    let old = leader_pid(dir.path());
+    // The close budget, plus room for the new child's start on a loaded host.
+    let bound = backend.budgets.close_stage + Duration::from_secs(10);
+    let restarted = tokio::time::timeout(bound, backend.force_restart())
+        .await
+        .expect("the restart completes within its bound");
+    assert!(restarted.is_ok(), "the restart failed: {restarted:?}");
+    assert_ne!(
+        kernel_view(old),
+        Some(false),
+        "the old backend still runs after the restart"
+    );
+    backend.stop().await.expect("stop");
 }
