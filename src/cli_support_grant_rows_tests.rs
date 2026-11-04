@@ -43,20 +43,20 @@ fn the_cleanup_waits_for_the_journal_lock() {
     assert_ne!(std::fs::read_to_string(&path).unwrap(), BODY);
 }
 
-/// A grants path that is a symlink stays one: the real file is rewritten.
+/// A grants path that is a symlink into another directory stays one: the
+/// real file is rewritten and backed up beside itself, not beside the link.
 #[cfg(unix)]
 #[test]
-fn a_symlinked_grants_path_stays_a_symlink() {
+fn a_symlinked_grants_path_is_backed_up_beside_the_real_file() {
     let dir = tempfile::tempdir().unwrap();
-    let real = grants_in(dir.path());
-    let link = dir.path().join("link.yaml");
+    let (real_dir, link_dir) = (dir.path().join("real"), dir.path().join("links"));
+    std::fs::create_dir_all(&real_dir).unwrap();
+    std::fs::create_dir_all(&link_dir).unwrap();
+    let real = grants_in(&real_dir);
+    let link = link_dir.join("link.yaml");
     std::os::unix::fs::symlink(&real, &link).unwrap();
-    assert_eq!(
-        remove_nameless_grant_rows(&link, GrantCleanup::Apply)
-            .unwrap()
-            .len(),
-        1
-    );
+    let removed = remove_nameless_grant_rows(&link, GrantCleanup::Apply).unwrap();
+    assert_eq!(removed.len(), 1);
     assert!(
         std::fs::symlink_metadata(&link)
             .unwrap()
@@ -64,4 +64,13 @@ fn a_symlinked_grants_path_stays_a_symlink() {
             .is_symlink()
     );
     assert_ne!(std::fs::read_to_string(&real).unwrap(), BODY);
+    assert_eq!(
+        std::fs::read_to_string(real_dir.join("grants.yaml.bak.pre-4.0.0")).unwrap(),
+        BODY,
+        "the backup sits beside the real file"
+    );
+    assert!(
+        !link_dir.join("link.yaml.bak.pre-4.0.0").exists(),
+        "nothing is written beside the link"
+    );
 }
