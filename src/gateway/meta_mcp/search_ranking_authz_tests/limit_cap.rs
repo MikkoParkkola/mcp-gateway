@@ -94,7 +94,7 @@ async fn meta_with_many_matches(code_mode: bool) -> (MetaMcp, Vec<TempDir>) {
 }
 
 /// Requested limit, then the match count both routes must return.
-const ROUTE_CASES: &[(i64, usize)] = &[(1000, 25), (0, 1)];
+const ROUTE_CASES: &[(i64, usize)] = &[(1000, 25), (0, 1), (7, 7)];
 
 #[tokio::test]
 async fn the_classic_route_holds_the_limit_to_the_bound() {

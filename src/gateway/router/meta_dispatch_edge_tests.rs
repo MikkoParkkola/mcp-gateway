@@ -40,11 +40,12 @@ async fn a_body_that_fails_to_read_is_a_parse_error() {
 
 /// The gateway does not check meta-tool arguments against the advertised
 /// schema, so a `limit` outside 1 to 25 reaches the handler, which clamps it,
-/// rather than being refused on the way in.
+/// rather than being refused on the way in. The fixture's catalogue has at
+/// least one "read" match, so 0 raised to 1 shows as exactly one.
 #[tokio::test]
 async fn an_out_of_range_search_limit_is_answered_not_refused() {
     let fx = fixture(Answer::Ok, |_| {}).await;
-    for limit in [0, 1000] {
+    for (limit, allowed) in [(0, 1..=1), (1000, 1..=25)] {
         let params = json!({
             "name": "gateway_search_tools",
             "arguments": {"query": "read", "limit": limit},
@@ -56,6 +57,14 @@ async fn an_out_of_range_search_limit_is_answered_not_refused() {
             body["result"]["isError"],
             json!(true),
             "limit {limit}: {body}"
+        );
+        let matches = body["result"]["structuredContent"]["matches"]
+            .as_array()
+            .unwrap_or_else(|| panic!("limit {limit}: no matches array: {body}"))
+            .len();
+        assert!(
+            allowed.contains(&matches),
+            "limit {limit}: {matches} matches: {body}"
         );
     }
 }
