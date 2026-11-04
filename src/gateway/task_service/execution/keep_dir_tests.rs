@@ -40,7 +40,7 @@ fn expired_task() -> Task {
     );
     task.transition(
         TaskTransition::Complete(serde_json::json!({})),
-        created + chrono::Duration::seconds(1),
+        created + crate::duration_bound::delta!(seconds, 1),
     )
     .expect("a working task completes");
     task
