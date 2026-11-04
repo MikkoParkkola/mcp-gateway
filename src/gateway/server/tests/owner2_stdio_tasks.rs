@@ -189,7 +189,7 @@ pub(super) fn intent(tasks: &StdioTasks, tool: &str, retry: &RetryFields) -> Tas
             protocol_revision: None,
             scope: crate::gateway::meta_mcp::InvokeScope {
                 authorizer: &crate::gateway::authz::AllowAll,
-                is_admin: false,
+                admin: crate::gateway::authz::AdminStanding::None,
                 api_key_name: None,
                 grant_key: None,
                 agent_id: None,

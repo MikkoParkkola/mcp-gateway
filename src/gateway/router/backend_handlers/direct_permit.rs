@@ -45,7 +45,10 @@ pub(super) fn mint_permit(
     };
     let invoke_scope = crate::gateway::meta_mcp::InvokeScope {
         authorizer: &authorizer,
-        is_admin: client.is_some_and(|c| c.admin),
+        admin: client.map_or(
+            crate::gateway::authz::AdminStanding::None,
+            crate::gateway::auth::AuthenticatedClient::admin_standing,
+        ),
         api_key_name: client.map(|c| c.name.as_str()),
         grant_key: client.and_then(crate::gateway::auth::AuthenticatedClient::api_key_identity),
         agent_id: caller

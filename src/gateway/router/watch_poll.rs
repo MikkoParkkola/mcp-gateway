@@ -235,7 +235,7 @@ impl WatchHost for GatewayWatchHost {
         let authorizer = owned.borrow(&state, &generation);
         let scope = InvokeScope {
             authorizer: &authorizer,
-            is_admin: client.admin,
+            admin: client.admin_standing(),
             api_key_name: Some(&client.name),
             grant_key: client.api_key_identity(),
             agent_id: None,

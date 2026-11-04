@@ -10,8 +10,10 @@ use super::AppState;
 use super::backend_choke::backend_for;
 use super::caller_hiding::{CallerParts, admits_some_tool};
 use crate::gateway::auth::AuthenticatedClient;
+use crate::gateway::authz::{
+    AdminStanding, BackendGrant, Decision, Emit, ToolAuthorizer, Transport,
+};
 pub(super) use crate::gateway::authz::{AuthorizationError, CallTarget, ToolTarget};
-use crate::gateway::authz::{BackendGrant, Decision, Emit, ToolAuthorizer, Transport};
 use crate::gateway::meta_mcp::MetaMcp;
 use crate::gateway::meta_mcp::invoke::TargetNaming;
 use crate::gateway::oauth::{
@@ -203,13 +205,14 @@ impl CallerStanding {
     /// Standing of an authenticated HTTP client (absent client ⇒ `Standard`).
     #[must_use]
     pub(crate) fn of_client(client: Option<&AuthenticatedClient>) -> Self {
-        Self::of_admin_flag(client.is_some_and(|client| client.admin))
+        Self::of(client.map_or(AdminStanding::None, AuthenticatedClient::admin_standing))
     }
 
-    /// Standing carried by a caller context's `is_admin` flag.
+    /// The single conversion from an admin standing: the admin meta-tools are
+    /// gateway-wide powers, so only `Gateway` holds them (MIK-9158).
     #[must_use]
-    pub(crate) fn of_admin_flag(is_admin: bool) -> Self {
-        if is_admin {
+    pub(crate) fn of(standing: AdminStanding) -> Self {
+        if standing == AdminStanding::Gateway {
             Self::Admin
         } else {
             Self::Standard

@@ -138,13 +138,17 @@ impl MetaMcp {
                 }
             })
             .and_then(|()| {
-                self.admin_capability_rule(server, tool, caller.is_admin)
-                    .inspect_err(|_| {
-                        super::audit::note_refused_by(
-                            crate::security::decision_record::DecisionKind::AdminCapability,
-                            None,
-                        );
-                    })
+                self.admin_capability_rule(
+                    server,
+                    tool,
+                    caller.admin != crate::gateway::authz::AdminStanding::None,
+                )
+                .inspect_err(|_| {
+                    super::audit::note_refused_by(
+                        crate::security::decision_record::DecisionKind::AdminCapability,
+                        None,
+                    );
+                })
             });
         if let Err(e) = refusal {
             let (transport, name) = (authorizer.transport(), authorizer.caller_name());

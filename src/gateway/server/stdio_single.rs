@@ -188,7 +188,7 @@ pub(super) fn stdio_caller_context<'a>(
         // dispatcher: it previously lived on the HTTP path
         // alone, so stdio was never checked and the default
         // non-admin context went unnoticed.
-        is_admin: true,
+        admin: crate::gateway::authz::AdminStanding::Gateway,
         surface_request: crate::gateway::recovery::SurfaceRequest::Configured,
         // stdio carries no per-request capability
         // declaration to read, and absent means absent.

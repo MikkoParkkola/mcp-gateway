@@ -37,8 +37,9 @@ type GrantVerdict = (IdentityGrantRequest, IdentityGrantEvaluation);
 pub struct InvokeScope<'a> {
     /// The per-transport invocation predicate.
     pub authorizer: &'a (dyn ToolAuthorizer + Sync),
-    /// Whether the caller holds admin.
-    pub is_admin: bool,
+    /// The caller's admin standing (MIK-9158): `Gateway` for gateway-wide
+    /// powers; `InScope` also reaches admin breadth inside its backends.
+    pub(crate) admin: crate::gateway::authz::AdminStanding,
     /// The caller's display name, for guards and audit; never a grant subject (MIK-8518).
     pub api_key_name: Option<&'a str>,
     /// The API key's name, only for an authenticated API-key credential: the identity-grant
@@ -135,13 +136,17 @@ impl MetaMcp {
                     kind,
                 )
             })?;
-        self.admin_capability_rule(server, tool, scope.is_admin)
-            .map_err(|error| {
-                (
-                    error,
-                    crate::security::decision_record::DecisionKind::AdminCapability,
-                )
-            })
+        self.admin_capability_rule(
+            server,
+            tool,
+            scope.admin != crate::gateway::authz::AdminStanding::None,
+        )
+        .map_err(|error| {
+            (
+                error,
+                crate::security::decision_record::DecisionKind::AdminCapability,
+            )
+        })
     }
 
     /// Whether a piece of `may_invoke` other than the authorizer refuses
@@ -155,7 +160,11 @@ impl MetaMcp {
     ) -> bool {
         self.active_profile(None).check(server, tool).is_err()
             || self
-                .admin_capability_rule(server, tool, scope.is_admin)
+                .admin_capability_rule(
+                    server,
+                    tool,
+                    scope.admin != crate::gateway::authz::AdminStanding::None,
+                )
                 .is_err()
             || self
                 .identity_grant_rule(server, tool, scope, Emit::Silent)
@@ -556,7 +565,7 @@ impl MetaMcp {
 impl From<InvokeScope<'_>> for crate::gateway::router::CallerStanding {
     /// The admin bit has one source: the scope the caller is judged by.
     fn from(scope: InvokeScope<'_>) -> Self {
-        Self::of_admin_flag(scope.is_admin)
+        Self::of(scope.admin)
     }
 }
 
@@ -596,7 +605,11 @@ impl InvokeScope<'static> {
     pub fn unscoped(standing: crate::gateway::router::CallerStanding) -> Self {
         Self {
             authorizer: &Operator,
-            is_admin: standing == crate::gateway::router::CallerStanding::Admin,
+            admin: if standing == crate::gateway::router::CallerStanding::Admin {
+                crate::gateway::authz::AdminStanding::Gateway
+            } else {
+                crate::gateway::authz::AdminStanding::None
+            },
             api_key_name: None,
             grant_key: None,
             agent_id: None,
@@ -637,7 +650,11 @@ impl InvokeScope<'static> {
     pub(crate) fn allow_all(standing: crate::gateway::router::CallerStanding) -> Self {
         Self {
             authorizer: &crate::gateway::authz::AllowAll,
-            is_admin: standing == crate::gateway::router::CallerStanding::Admin,
+            admin: if standing == crate::gateway::router::CallerStanding::Admin {
+                crate::gateway::authz::AdminStanding::Gateway
+            } else {
+                crate::gateway::authz::AdminStanding::None
+            },
             api_key_name: None,
             grant_key: None,
             agent_id: None,
@@ -658,7 +675,7 @@ impl<'a> InvokeScope<'a> {
     ) -> Self {
         Self {
             authorizer,
-            is_admin: true,
+            admin: crate::gateway::authz::AdminStanding::Gateway,
             api_key_name: None,
             grant_key: None,
             agent_id: None,

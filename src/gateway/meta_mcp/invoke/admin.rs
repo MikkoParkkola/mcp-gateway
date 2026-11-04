@@ -42,7 +42,9 @@ impl MetaMcp {
         // were read straight from the arguments. Refusing beats quietly
         // narrowing the report: a caller that asked for every session and got
         // one has no way to tell that it was scoped rather than empty.
-        if (include_all_sessions || include_all_keys) && !caller.is_admin {
+        if (include_all_sessions || include_all_keys)
+            && caller.admin != crate::gateway::authz::AdminStanding::Gateway
+        {
             return Err(crate::gateway::delivery_facts::refused(
                 crate::Error::Config(
                     "include_all_sessions and include_all_keys are admin views and require an \
@@ -57,7 +59,7 @@ impl MetaMcp {
         // client read any other client's spend by guessing or observing an id.
         let requested = extract_optional_str(args, "session_id");
         if let Some(requested) = requested
-            && !caller.is_admin
+            && caller.admin != crate::gateway::authz::AdminStanding::Gateway
             && Some(requested) != session_id
         {
             return Err(crate::gateway::delivery_facts::refused(
@@ -90,7 +92,7 @@ impl MetaMcp {
         // The gateway-wide total is every caller's spend combined, which is the
         // same cross-tenant view the explicit flags are gated on. Gating those
         // and leaving this open would have made the check cosmetic.
-        let aggregate = if caller.is_admin {
+        let aggregate = if caller.admin == crate::gateway::authz::AdminStanding::Gateway {
             serde_json::to_value(self.cost_tracker.aggregate()).unwrap_or(json!(null))
         } else {
             json!(null)

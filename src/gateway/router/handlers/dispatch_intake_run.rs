@@ -309,7 +309,10 @@ pub(in crate::gateway::router::handlers) async fn intake(
         };
         let scope = crate::gateway::meta_mcp::InvokeScope {
             authorizer: &authorizer,
-            is_admin: client.as_ref().is_some_and(|c| c.admin),
+            admin: client.as_ref().map_or(
+                crate::gateway::authz::AdminStanding::None,
+                crate::gateway::auth::AuthenticatedClient::admin_standing,
+            ),
             api_key_name: client.as_ref().map(|c| c.name.as_str()),
             grant_key: client
                 .as_ref()

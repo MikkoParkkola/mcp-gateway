@@ -66,7 +66,7 @@ async fn a_task_frame_record_names_the_listener_subject() {
             None,
         )),
         verified_identity: None,
-        is_admin: false,
+        admin: crate::gateway::authz::AdminStanding::None,
         input_capabilities: crate::protocol::meta::Declared::NONE,
         session_id: None,
     };
@@ -146,7 +146,7 @@ async fn a_task_frame_delivery_names_the_api_key_credential() {
         agent_declared: None,
         grant_subject: None,
         verified_identity: None,
-        is_admin: false,
+        admin: crate::gateway::authz::AdminStanding::None,
         input_capabilities: crate::protocol::meta::Declared::NONE,
         session_id: None,
     };

@@ -412,7 +412,10 @@ pub(super) async fn tools_call(
                 agent_id,
                 agent_declared,
                 grant_subject: grant_subject.clone(),
-                is_admin: client.as_ref().is_some_and(|c| c.admin),
+                admin: client.as_ref().map_or(
+                    crate::gateway::authz::AdminStanding::None,
+                    crate::gateway::auth::AuthenticatedClient::admin_standing,
+                ),
                 scope: invoke_scope,
                 input_capabilities: declared_capabilities,
                 session_id: Some(session_id.as_str()),

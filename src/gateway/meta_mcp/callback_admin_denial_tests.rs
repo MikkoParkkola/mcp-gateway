@@ -61,7 +61,7 @@ async fn non_admin_callback_registration_is_refused_as_forbidden() {
     let dir = tempfile::tempdir().unwrap();
     let meta = meta(&dir).await;
     let caller = anonymous_caller();
-    assert!(!caller.is_admin);
+    assert!(caller.admin != crate::gateway::authz::AdminStanding::Gateway);
 
     let err = meta
         .invoke_tool(&args(), None, &caller)
@@ -75,7 +75,7 @@ async fn non_admin_callback_registration_is_refused_as_forbidden() {
     // Control: the guard is what differs. An admin passes it and fails later,
     // at the network, with something that is not a refusal.
     let admin = MetaMcpCallerContext {
-        is_admin: true,
+        admin: crate::gateway::authz::AdminStanding::Gateway,
         ..anonymous_caller()
     };
     let outcome = meta.invoke_tool(&args(), None, &admin).await;
