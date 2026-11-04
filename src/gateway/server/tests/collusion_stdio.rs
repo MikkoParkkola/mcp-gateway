@@ -545,7 +545,11 @@ const THIRD: &str = "The lighthouse log for the outer skerry notes the oil used 
 #[tokio::test]
 async fn stdio_catalogue_is_inside_relay_detection() {
     let (meta, firewall, cell) = judged_stdio(None);
-    let policy = Arc::new(crate::security::ToolPolicy::default());
+    // The line as the read loop takes it: the generation published now, so a
+    // catalogue read is judged under the fixture's `block`.
+    let policy = meta
+        .current_generation()
+        .expect("the fixture publishes a live config");
     let mtls = Arc::new(crate::mtls::MtlsPolicy::from_config(
         &crate::mtls::MtlsConfig::default(),
     ));
