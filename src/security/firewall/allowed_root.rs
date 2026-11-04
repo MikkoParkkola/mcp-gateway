@@ -462,7 +462,7 @@ pub(crate) fn compile(i: usize, rule: &super::FirewallRule) -> Option<CompiledRo
 
 /// The finding types no rule's `scan` may list: only the folder check
 /// produces them.
-const OUTPUT_ONLY: [super::ScanType; 2] = [
+pub(crate) const OUTPUT_ONLY: [super::ScanType; 2] = [
     super::ScanType::PathOutsideRoot,
     super::ScanType::RootRefused,
 ];

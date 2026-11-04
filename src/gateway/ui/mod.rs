@@ -32,6 +32,7 @@ pub mod import;
 mod keys;
 mod overview;
 mod policies;
+mod policies_rules;
 #[cfg(test)]
 mod policies_shadow_tests;
 #[cfg(test)]
