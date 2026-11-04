@@ -52,10 +52,9 @@ where
             .into_response(),
         ));
     };
-    // ponytail: checked before the lock; a file deleted after this check
-    // reaches the writer, whose read fails and answers 500.
-    if matches!(tokio::fs::metadata(&path).await, Err(e) if e.kind() == std::io::ErrorKind::NotFound)
-    {
+    // Checked before any lock, so a missing file leaves nothing behind; a
+    // file deleted after this check is caught again from the writer's answer.
+    if absent(&path).await {
         return Err(Box::new(no_config_file().into_response()));
     }
     let decided: Decided<T> = Arc::default();
@@ -98,8 +97,17 @@ where
         }
         (Ok(outcome), Some(Ok(value))) => Ok((value, outcome.reload)),
         (Ok(_), _) => Err(Box::new(unwritten("no_answer"))),
+        // The writer could not read a file deleted since the check above.
+        (Err(ReplaceError::Failed(_)), _) if absent(&path).await => {
+            Err(Box::new(no_config_file().into_response()))
+        }
         (Err(e), _) => Err(Box::new(refused_write(&e))),
     }
+}
+
+/// gateway.yaml is not there: the one case answered `no_config_file`.
+async fn absent(path: &std::path::Path) -> bool {
+    matches!(tokio::fs::metadata(path).await, Err(e) if e.kind() == std::io::ErrorKind::NotFound)
 }
 
 /// A 500 with fixed text: an inner error can quote a configured value, so
