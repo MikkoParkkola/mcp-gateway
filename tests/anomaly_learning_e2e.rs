@@ -116,6 +116,7 @@ async fn real_direct_calls_train_the_router_firewall() {
         refused_as_anomaly(&body),
         "after {ROUNDS} a->b, a never-seen a->c must be refused as an anomaly: {body}"
     );
+    gateway.stop().await;
 }
 
 #[tokio::test]
@@ -140,4 +141,5 @@ async fn real_meta_calls_train_the_router_firewall() {
         refused_as_anomaly(&body),
         "after {ROUNDS} a->b, a never-seen a->c must be refused with -32002: {body}"
     );
+    gateway.stop().await;
 }
