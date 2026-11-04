@@ -15,7 +15,12 @@ mod allocator;
 #[path = "clock.rs"]
 #[allow(dead_code, reason = "the binary uses a subset")]
 mod clock;
+// The library's credential generator, compiled again for `gateway init`;
+// random_secret.rs states why this copy may hold no shared state.
 mod commands;
+#[path = "random_secret.rs"]
+#[allow(dead_code, reason = "init moves to it in the next commit")]
+mod random_secret;
 // Its one user in this crate is `dashboard-link`, compiled with `webui`.
 #[cfg(feature = "webui")]
 #[path = "debug_trust_roots.rs"]

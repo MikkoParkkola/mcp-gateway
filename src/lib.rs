@@ -57,6 +57,11 @@ pub mod control_plane;
 pub mod cost_accounting;
 mod counters;
 mod debug_trust_roots;
+#[allow(dead_code, reason = "its callers move to it in the next commit")]
+mod random_secret;
+#[cfg(test)]
+#[path = "random_secret_tests.rs"]
+mod random_secret_tests;
 // The decision set serves only the web UI's routes and stream.
 #[cfg(feature = "webui")]
 mod decisions;
