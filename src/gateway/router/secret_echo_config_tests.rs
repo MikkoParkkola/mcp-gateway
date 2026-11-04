@@ -45,32 +45,21 @@ for line in sys.stdin:
     print(json.dumps({"jsonrpc": "2.0", "id": req["id"], **body}), flush=True)
 "#;
 
-fn write_0600(path: &Path, body: &str) {
-    use std::io::Write as _;
-    #[cfg(unix)]
-    use std::os::unix::fs::OpenOptionsExt as _;
-    let mut options = std::fs::OpenOptions::new();
-    options.write(true).create(true).truncate(true);
-    #[cfg(unix)]
-    options.mode(0o600);
-    let mut file = options.open(path).expect("open");
-    file.write_all(body.as_bytes()).expect("write");
-}
-
 /// A gateway config whose one backend, `echoes`, is described by
 /// `backend` (YAML lines indented under it), and an env file holding
 /// `env_body`.
 fn config(dir: &Path, backend: &str, env_body: &str) -> PathBuf {
     let env = dir.join("gateway.env");
-    write_0600(&env, env_body);
+    crate::gateway::test_helpers::write_owner_only(&env, env_body).expect("write the env file");
     let path = dir.join("gateway.yaml");
-    write_0600(
+    crate::gateway::test_helpers::write_owner_only(
         &path,
-        &format!(
+        format!(
             "env_files:\n  - \"{}\"\nbackends:\n  echoes:\n    timeout: 10s\n{backend}",
             env.display()
         ),
-    );
+    )
+    .expect("write the config");
     path
 }
 
