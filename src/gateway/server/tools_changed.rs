@@ -396,6 +396,9 @@ mod audience_guard_8377_tests;
 #[cfg(test)]
 mod audience_identity_tests;
 #[cfg(test)]
+/// A removed key or grant ends what a held stream delivers.
+mod audience_key_reload_tests;
+#[cfg(test)]
 mod audience_l2_tests;
 #[cfg(test)]
 mod audience_liveness_tests;
