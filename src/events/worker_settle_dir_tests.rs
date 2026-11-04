@@ -14,7 +14,11 @@ async fn a_settle_still_writing_when_the_test_ends_keeps_the_folder() {
     let dir = Arc::new(tempfile::tempdir().expect("dir"));
     let root = dir.path().to_owned();
     let hub = delivery_hub(&dir);
-    let services = logged_services(&root);
+    // The audit log is the services' file, open until they drop, and Windows
+    // cannot remove a folder holding an open file: it lives in its own folder,
+    // so this one holds only what the delivery writes.
+    let audit = tempfile::tempdir().expect("audit dir");
+    let services = logged_services(audit.path());
     let (port, _accepted) = counting_callback().await;
     offer(&hub, &["webhook.c.r.received"]);
     queued(&hub, port, "evt_late");
