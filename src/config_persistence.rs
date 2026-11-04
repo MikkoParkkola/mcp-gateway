@@ -451,27 +451,15 @@ fn read_config(path: &Path, locked: &lock::Locked) -> Result<Option<(Config, Str
         .map_err(|e| format!("Failed to load {}: {e}", path.display()))
 }
 
-/// `path`'s text, or `None` when there is no file. A FIFO or a device would
-/// block the read or never end it, so the file is opened without blocking
-/// and the handle itself must be a regular file before it is read.
+/// `path`'s text, or `None` when there is no file, read through the guard
+/// every loader uses: a file another account can change or read, or one that
+/// is not a regular file, is refused before anything is written.
 fn read_text(path: &Path) -> Result<Option<String>, String> {
-    use std::io::Read as _;
-    let failed = |e: &dyn std::fmt::Display| format!("Failed to read {}: {e}", path.display());
-    let mut file = match crate::open_nonblocking::open_nonblocking(path) {
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        // Windows refuses to open a directory at all: name the cause the same.
-        Err(_) if std::fs::metadata(path).is_ok_and(|m| !m.is_file()) => {
-            return Err(failed(&"not a regular file"));
+    crate::config::read_config_text(path).map_err(|e| match e {
+        crate::config::UnreadConfig::Refused(why) | crate::config::UnreadConfig::Failed(why) => {
+            format!("Not saved: {why}")
         }
-        Err(e) => return Err(failed(&e)),
-        Ok(file) => file,
-    };
-    if !file.metadata().map_err(|e| failed(&e))?.is_file() {
-        return Err(failed(&"not a regular file"));
-    }
-    let mut text = String::new();
-    file.read_to_string(&mut text).map_err(|e| failed(&e))?;
-    Ok(Some(text))
+    })
 }
 
 /// How many backends one splice may change.
@@ -494,11 +482,12 @@ fn write_spliced(
 ) -> Result<(), Unwritten> {
     let current = Config::load_literal_with_text(path).ok();
     let (before, text) = current.as_ref().map(|(c, t)| (c, t.as_str())).unzip();
-    // A file that does not load is still read, so its comments are refused.
-    let unloaded = text
-        .is_none()
-        .then(|| std::fs::read_to_string(path).ok())
-        .flatten();
+    // A file that does not load is still read, so its comments are refused,
+    // through the same guard: one the guard refuses is never written over.
+    let unloaded = match text {
+        Some(_) => None,
+        None => read_text(path)?,
+    };
     let text = text.or(unloaded.as_deref());
     if let Some((yaml, _)) = render(path, before, text, config, mode, scope)? {
         // `path` is the lock holder's target ([`write_config_with`]).

@@ -111,7 +111,8 @@ const FAILED: &str = "the adopt did not complete";
 const STORE_UNAVAILABLE: &str = "secrets.store cannot take the discovered values";
 
 /// The writer's result as one answer. Only fixed text leaves: an inner
-/// error string is never returned, and only the variant name is logged.
+/// error string is never returned, and only the variant name is logged, but
+/// for the guard's refusal, whose text the operator needs to fix the file.
 pub(super) fn answer(name: &str, written: Result<ReplaceOutcome, ReplaceError>) -> Response {
     let failed = |variant: &'static str| {
         tracing::warn!(variant, "discovery adopt: the config write failed");
@@ -160,9 +161,12 @@ pub(super) fn answer(name: &str, written: Result<ReplaceOutcome, ReplaceError>) 
         Err(ReplaceError::Unconfirmed { .. }) => failed("unconfirmed"),
         Err(ReplaceError::Failed(_)) => failed("failed"),
         Err(ReplaceError::NoConfigFile) => no_config_file(),
-        Err(ReplaceError::ConfigRefused(_)) => {
+        // The guard's text names the file and the fix: the server log gets
+        // it, the answer never does.
+        Err(ReplaceError::ConfigRefused(why)) => {
             tracing::warn!(
                 variant = "config_refused",
+                detail = %why,
                 "discovery adopt: the config write refused gateway.yaml"
             );
             config_refusal()

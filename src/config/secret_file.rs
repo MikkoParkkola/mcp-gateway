@@ -432,7 +432,7 @@ pub(crate) enum CheckedFile {
     IdentityGrants,
     /// A control-plane `grants.json` or `policies.json`.
     ControlPlaneCollection,
-    /// `gateway.yaml`, reread by a read-only report or by the config writer.
+    /// `gateway.yaml`, reread by a read-only report.
     Config,
 }
 
@@ -484,6 +484,38 @@ pub(crate) fn read_checked_bytes(path: &Path, what: CheckedFile) -> std::io::Res
         ),
         refused @ GuardedRead::Refused(_) => refused.into(),
     })
+}
+
+/// Why [`read_config_text`] returned no text.
+#[derive(Debug)]
+pub(crate) enum UnreadConfig {
+    /// The guard refused the file: its type, mode, owner or encoding. The
+    /// text names the file and the fix, never the content.
+    Refused(String),
+    /// Opening or reading it failed; the text names the file and the error.
+    Failed(String),
+}
+
+/// gateway.yaml read the way every loader reads it, for a caller that writes
+/// it next: `None` when it does not exist, and the guard's refusal kept apart
+/// from an I/O failure, never told by an OS error code.
+///
+/// # Errors
+///
+/// [`UnreadConfig::Refused`] for a file the guard refuses,
+/// [`UnreadConfig::Failed`] when it cannot be opened or read.
+pub(crate) fn read_config_text(path: &Path) -> std::result::Result<Option<String>, UnreadConfig> {
+    let what = SecretFile::Config;
+    match read_guarded_file(path, what) {
+        Ok(text) => Ok(Some(text)),
+        Err(GuardedRead::Io(e)) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(GuardedRead::Io(e)) => Err(UnreadConfig::Failed(format!(
+            "Cannot read {} {}: {e}",
+            what.noun(),
+            path.display()
+        ))),
+        Err(GuardedRead::Refused(text)) => Err(UnreadConfig::Refused(text)),
+    }
 }
 
 /// [`read_guarded_file`] with both failures as today's `Error::Config` texts.

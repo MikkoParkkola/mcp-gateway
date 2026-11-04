@@ -21,6 +21,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use crate::config::UnreadConfig;
 use crate::config_persistence::journal;
 use crate::config_persistence::lock::{Locked, NotLocked, lock_config, lock_config_deferred};
 use crate::config_persistence::{FileMode, Symlink, write_atomic};
@@ -471,13 +472,12 @@ impl ReloadContext {
         // The read every loader uses, mode and owner judged on the handle read:
         // a file another account can change is refused before any intent,
         // entry or write, so its edit is never rewritten owner-only.
-        let current = crate::config::read_checked_file(&target, crate::config::CheckedFile::Config)
-            .map(String::into_bytes)
-            .map_err(|e| match e.kind() {
-                std::io::ErrorKind::NotFound => ReplaceError::NoConfigFile,
-                std::io::ErrorKind::PermissionDenied => ReplaceError::ConfigRefused(e.to_string()),
-                _ => ReplaceError::Failed(e.to_string()),
-            })?;
+        let current = match crate::config::read_config_text(&target) {
+            Ok(Some(text)) => text.into_bytes(),
+            Ok(None) => return Err(ReplaceError::NoConfigFile),
+            Err(UnreadConfig::Refused(why)) => return Err(ReplaceError::ConfigRefused(why)),
+            Err(UnreadConfig::Failed(why)) => return Err(ReplaceError::Failed(why)),
+        };
         if let Expected::Revision(seen) = &replace.expected {
             let now = FileRevision::of(&current);
             if &now != seen {

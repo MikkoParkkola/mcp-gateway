@@ -95,14 +95,16 @@ impl ReloadContext {
             return Ok(None);
         }
         // An absent file is the empty revision: the intent names what is on
-        // disk before recovery. Any other read failure recovers nothing.
-        let on_disk = match std::fs::read(&locked.target) {
-            Ok(bytes) => bytes,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Vec::new(),
-            Err(e) => {
+        // disk before recovery. The read every loader uses: a file the guard
+        // refuses is refused before any intent, and nothing is recovered.
+        let on_disk = match crate::config::read_config_text(&locked.target) {
+            Ok(text) => text.map(String::into_bytes).unwrap_or_default(),
+            Err(crate::config::UnreadConfig::Refused(why)) => {
+                return Err(ReplaceError::ConfigRefused(why));
+            }
+            Err(crate::config::UnreadConfig::Failed(why)) => {
                 return Err(ReplaceError::Failed(format!(
-                    "reading {} for the recovery's record failed: {e}",
-                    locked.target.display()
+                    "reading the config for the recovery's record failed: {why}"
                 )));
             }
         };
