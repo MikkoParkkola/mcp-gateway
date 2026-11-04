@@ -92,6 +92,8 @@ impl Ending {
 struct Grace {
     term_at: std::time::Instant,
     kill_at: std::time::Instant,
+    /// Whether SIGTERM went out; Windows has no SIGTERM step.
+    #[cfg(unix)]
     term_sent: bool,
 }
 
@@ -312,6 +314,7 @@ impl ChildTree {
             (None, Ending::Graceful { eof, term }) => Grace {
                 term_at: now + eof,
                 kill_at: now + eof + term,
+                #[cfg(unix)]
                 term_sent: false,
             },
             (None, Ending::Now) => return false,
