@@ -608,3 +608,34 @@ async fn the_mutate_path_on_an_audited_gateway_recovers_nothing() {
     );
     assert!(!running_has_b(&ctx), "the crashed bytes were loaded");
 }
+
+/// The older whole-file write on an audited gateway: its lock never
+/// recovers a pending journal unaudited. Refused before any lock, so the
+/// crashed bytes and the journal stay and nothing is loaded.
+#[tokio::test]
+async fn the_whole_file_write_on_an_audited_gateway_recovers_nothing() {
+    let (_dir, path, ctx) = setup();
+    crashed_after_rename(&path, NEXT);
+    let recorder = Recorder::new(&path, false);
+    ctx.set_recovery_audit(Box::new(recorder.clone()));
+    let config = crate::config::Config::load(Some(&path)).expect("config loads");
+
+    let result = ctx
+        .write_and_reload_outcome_within(&path, WAIT, &config)
+        .await;
+
+    assert!(
+        result.is_err(),
+        "the whole-file write wrote on an audited gateway"
+    );
+    assert_eq!(
+        read(&path),
+        NEXT,
+        "the whole-file write recovered unaudited"
+    );
+    assert!(
+        journal::journal_path(&path).exists(),
+        "the whole-file write settled the journal unaudited"
+    );
+    assert!(!running_has_b(&ctx), "the crashed bytes were loaded");
+}

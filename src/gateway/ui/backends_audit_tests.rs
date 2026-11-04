@@ -326,3 +326,35 @@ async fn a_backend_update_recovers_a_pending_journal_only_after_its_intent() {
         "the journal was settled unaudited"
     );
 }
+
+/// gateway.yaml is gone when a backend add arrives on an audited gateway:
+/// the add creates it, with its intent appended first; with the append
+/// refused no file is created.
+#[tokio::test]
+async fn an_audited_backend_add_creates_a_missing_config_after_its_intent() {
+    let gateway = Audited::new().await;
+    std::fs::remove_file(gateway.config()).expect("remove config");
+    let (status, body) = gateway.add("b").await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    let text = gateway.text();
+    assert!(
+        text.contains("b:"),
+        "the add did not create the file: {text}"
+    );
+    assert!(
+        gateway.events().iter().any(|e| e == INTENT),
+        "the create wrote no intent; the log holds {:?}",
+        gateway.events()
+    );
+
+    let refused = Audited::new().await;
+    std::fs::remove_file(refused.config()).expect("remove config");
+    refused.log.set_append_failure_for_test(true);
+    let (status, body) = refused.add("b").await;
+    refused.log.set_append_failure_for_test(false);
+    assert!(status.is_server_error(), "{status}: {body}");
+    assert!(
+        !refused.config().exists(),
+        "a refused intent let the add create gateway.yaml"
+    );
+}
