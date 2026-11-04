@@ -40,7 +40,7 @@ src/gateway/meta_mcp/invoke/gateway_writes.rs	insert_noted	via note	1
 src/gateway/meta_mcp/invoke/gateway_writes.rs	note	raise	1
 src/gateway/meta_mcp/invoke/gateway_writes.rs	note_task_envelope	via note	1
 src/gateway/meta_mcp/invoke/gateway_writes.rs	write_contract	via insert_noted	2
-src/gateway/meta_mcp/invoke/legacy_bridge.rs	bridge_legacy_ask	refused_while_vouched	1
+src/gateway/meta_mcp/invoke/legacy_bridge.rs	bridge_legacy_ask	refused_while_vouched	2
 src/gateway/meta_mcp/invoke/policy.rs	apply_response_contract_gate	via write_contract	2
 src/gateway/meta_mcp/invoke/policy.rs	apply_response_gates_effect	refused (as value)	2
 src/gateway/meta_mcp/invoke/policy.rs	apply_response_gates_effect	via insert_noted	1
@@ -48,6 +48,7 @@ src/gateway/meta_mcp/invoke/post_dispatch.rs	attach_tool_error_recovery	via inse
 src/gateway/meta_mcp/invoke/post_dispatch.rs	deliver	refused_while_vouched	1
 src/gateway/meta_mcp/invoke/post_dispatch.rs	deliver	via inject_cost_advice	1
 src/gateway/meta_mcp/invoke/post_dispatch.rs	inject_cost_advice	via insert_noted	2
+src/gateway/meta_mcp/invoke/post_dispatch.rs	settle_dispatch_error	refused_while_vouched	1
 src/gateway/meta_mcp/invoke/post_dispatch.rs	settle_dispatch_error	via settle_unsent	2
 src/gateway/meta_mcp/invoke/post_dispatch.rs	settle_round	refused_while_vouched	1
 src/gateway/meta_mcp/invoke/post_dispatch.rs	settle_round	via note	1
