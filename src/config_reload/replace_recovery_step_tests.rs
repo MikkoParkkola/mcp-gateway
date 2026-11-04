@@ -10,11 +10,57 @@ use super::*;
 /// What the case allows the manual step to advise.
 #[derive(Clone, Copy, Debug)]
 enum Restore {
-    /// The journal is unreadable: inspect it first; any restore is only of
-    /// an original matching the journal's digest.
+    /// The journal is unreadable: inspect it first; a restore is offered
+    /// only of this target's staged original matching the recorded digest.
     AfterInspection,
-    /// No restore advice of any kind.
+    /// No restore and no journal deletion before the file is checked.
     Never,
+}
+
+/// Advice that changes gateway.yaml or drops the journal: unsafe wherever
+/// the step cannot know the journal is this file's and readable.
+const UNSAFE: &[&str] = &[
+    "restore",
+    "copy",
+    "overwrite",
+    "replace",
+    "rename",
+    "move",
+    "delete the journal",
+    "remove the journal",
+];
+
+/// The step's clauses: each alternative (`;`) or sentence (`. `) it gives.
+/// Paths hold dots, never a dot and a space.
+fn clauses(message: &str) -> Vec<&str> {
+    message
+        .split(';')
+        .flat_map(|part| part.split(". "))
+        .map(str::trim)
+        .filter(|c| !c.is_empty())
+        .collect()
+}
+
+/// A clause that forbids rather than advises.
+fn forbids(clause: &str) -> bool {
+    let lower = clause.to_lowercase();
+    lower.contains("do not") || lower.contains("nothing")
+}
+
+/// The unsafe advice `clause` gives, if any. Paths are left out: the
+/// journal's own name holds "replace".
+fn unsafe_in(clause: &str) -> Vec<&'static str> {
+    let words = clause
+        .split_whitespace()
+        .filter(|w| !w.contains('/'))
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase();
+    UNSAFE
+        .iter()
+        .copied()
+        .filter(|advice| words.contains(advice))
+        .collect()
 }
 
 /// The lock's refusal, with gateway.yaml and the journal unchanged.
@@ -29,28 +75,56 @@ async fn refusal(path: &Path) -> String {
     message
 }
 
-/// The step names the journal, never says to copy the original over, and
-/// advises a restore only as `restore` allows.
+/// The step names the journal and gives unsafe advice only where `restore`
+/// allows it: a restore of this target's staged original matching the
+/// recorded digest, after inspection, and for `all_renamed` only a journal
+/// deletion that leaves gateway.yaml alone.
 fn assert_safe_step(message: &str, path: &Path, restore: Restore) {
     let journal = crate::config_persistence::journal::journal_path(path);
+    let target = crate::identity_grants::journal::resolved(path)
+        .display()
+        .to_string();
     assert!(
         message.contains(&journal.display().to_string()),
         "the step does not name the journal: {message}"
     );
-    assert!(!message.contains("copy"), "{message}");
-    let advice = message.find("restore the staged original");
     match restore {
-        Restore::Never => assert!(advice.is_none(), "restore advice: {message}"),
+        Restore::Never => {
+            for clause in clauses(message) {
+                let advice = unsafe_in(clause);
+                // A journal deletion is safe once the file was checked by hand.
+                let checked = clause.contains("by hand") && advice == ["delete the journal"];
+                assert!(
+                    advice.is_empty() || forbids(clause) || checked,
+                    "unsafe advice {advice:?} in {clause:?}: {message}"
+                );
+            }
+        }
         Restore::AfterInspection => {
             let inspect = message
                 .find("inspect")
                 .expect("the step says to inspect first");
-            if let Some(at) = advice {
-                assert!(inspect < at, "restore advised before inspection: {message}");
-                assert!(
-                    message[at..].contains("only if its SHA-256 matches"),
-                    "a restore not bound to the recorded digest: {message}"
-                );
+            for clause in clauses(message) {
+                let advice = unsafe_in(clause);
+                if advice.is_empty() || forbids(clause) {
+                    continue;
+                }
+                let at = message.find(clause).expect("a clause of the message");
+                assert!(inspect < at, "advice before inspection: {clause:?}");
+                if clause.contains("all_renamed") {
+                    assert_eq!(
+                        advice,
+                        ["delete the journal"],
+                        "all_renamed must leave gateway.yaml alone: {clause:?}"
+                    );
+                    continue;
+                }
+                for needed in [target.as_str(), "staged", "SHA-256", "original_revision"] {
+                    assert!(
+                        clause.contains(needed),
+                        "a restore not bound to {needed:?}: {clause:?}"
+                    );
+                }
             }
         }
     }

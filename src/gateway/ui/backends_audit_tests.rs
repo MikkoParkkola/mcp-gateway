@@ -222,6 +222,19 @@ fn admin() -> AuthenticatedClient {
 }
 
 const INTENT: &str = "config_backend_intent";
+
+impl Audited {
+    /// The `(operation, backend)` of the first backend intent in the log.
+    fn intent_subject(&self) -> (Value, Value) {
+        let intent = std::fs::read_to_string(self.log.path())
+            .unwrap_or_default()
+            .lines()
+            .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+            .find(|entry| entry["event"] == INTENT)
+            .expect("a backend intent was written");
+        (intent["operation"].clone(), intent["backend"].clone())
+    }
+}
 const RECOVERY: &str = "config_recovery_intent";
 
 /// A backend add on an audited gateway appends its intent; with the append
@@ -262,6 +275,10 @@ async fn an_audited_backend_remove_appends_its_intent_first() {
         "the remove wrote no intent; the log holds {:?}",
         gateway.events()
     );
+    assert_eq!(
+        gateway.intent_subject(),
+        (Value::from("remove"), Value::from("a"))
+    );
 
     let refused = Audited::new().await;
     refused.log.set_append_failure_for_test(true);
@@ -291,6 +308,10 @@ async fn an_audited_backend_update_appends_its_intent_first() {
         gateway.events().iter().any(|e| e == INTENT),
         "the update wrote no intent; the log holds {:?}",
         gateway.events()
+    );
+    assert_eq!(
+        gateway.intent_subject(),
+        (Value::from("update"), Value::from("a"))
     );
 
     let refused = Audited::new().await;
