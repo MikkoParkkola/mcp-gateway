@@ -390,6 +390,13 @@ probe = "none"
 reason = "needs a backend that echoes a value the gateway injected into its call; the caller leg cannot make a backend do that. Exercised by the echo rows over real transports (secret_echo_tests, the stdio and WebSocket scrub rows, the A2A needles rows) and their red proofs"
 
 [[control]]
+id = "configured-credential-echo-redaction"
+description = "a backend's configured headers: and env: credentials (references, header templates, and long enough whole-value env templates) join its redaction set, and every stored answer (a response-cache hit, an idempotent replay, a stored or repeated task result) is scrubbed against every set the registry retains when it is sent; a stored answer a set cannot scrub is withheld"
+source = "src/security/needles_configured.rs"
+probe = "none"
+reason = "needs a backend that echoes a credential from its own configuration, or a stored answer kept before a value counted as secret; the caller leg can do neither. Exercised by secret_echo_config_tests (one row per carrier), secret_marked_later_tests, cache_marked_later_tests, registry stored_scrub_tests and the configured needles rows, with their mutants"
+
+[[control]]
 id = "egress-scan-memo"
 description = "the response-inspection and context-integrity verdict memo returns only a text's own classification"
 source = "src/security/text_memo.rs"

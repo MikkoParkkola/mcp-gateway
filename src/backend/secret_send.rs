@@ -111,13 +111,36 @@ impl Backend {
         Ok(())
     }
 
+    /// Once this instance is registered: configured values its name's set
+    /// holds that this instance's record lacks start their grace now.
+    pub(crate) fn settle_superseded(&self) {
+        if let (Some(needles), Some(configured)) = (self.needles.get(), self.configured.get()) {
+            needles.pin_configured(&self.name, configured);
+        }
+    }
+
     /// Adds every value this backend's rules resolve to now, so a value is
     /// removed from what the backend sends before any call injects it (a
     /// tool description, an initialize answer). A rule that does not resolve
-    /// yet adds nothing; its value joins when a send resolves it.
-    pub(crate) fn seed_needles(&self) {
-        let (Some(resolver), Some(needles)) = (self.secret_resolver.get(), self.needles.get())
-        else {
+    /// yet adds nothing; its value joins when a send resolves it. The
+    /// backend's configured `headers:` and `env:` credentials, `configured`
+    /// (the registry's record for its name), are held first, with or without
+    /// a resolver: they reach the backend on every start.
+    pub(crate) fn seed_needles(
+        &self,
+        configured: &crate::config::configured_secrets::ConfiguredSecrets,
+    ) {
+        let Some(needles) = self.needles.get() else {
+            return;
+        };
+        // This instance owns these pins: its name's set settles on them, so
+        // a value the instance it replaces held and it lacks counts its grace
+        // from now.
+        let _ = self.configured.set(configured.clone());
+        // Added only: until this instance is registered, the one it replaces
+        // may go on serving, so nothing it holds is demoted yet.
+        needles.add_configured(&self.name, configured);
+        let Some(resolver) = self.secret_resolver.get() else {
             return;
         };
         for rule in &self.config.secrets {
@@ -125,6 +148,12 @@ impl Backend {
                 needles.insert(&self.name, &value);
             }
         }
+    }
+
+    /// The configured credentials this instance was seeded with; empty
+    /// before it registers.
+    pub(crate) fn configured_record(&self) -> crate::config::configured_secrets::ConfiguredSecrets {
+        self.configured.get().cloned().unwrap_or_default()
     }
 
     /// The rules of this backend that apply to `tool`.

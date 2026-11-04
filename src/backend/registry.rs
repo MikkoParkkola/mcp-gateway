@@ -12,6 +12,9 @@ use tracing::warn;
 use super::Backend;
 use crate::runtime::{RuntimeDenyReason, RuntimeLicenseTier, RuntimeProviderKind};
 
+#[path = "registry_secret_record.rs"]
+mod secret_record;
+
 /// Coarse lifecycle state of a backend, distinct from its health.
 ///
 /// A backend stopped ON PURPOSE is neither healthy nor failed. Without a third
@@ -231,6 +234,13 @@ pub struct BackendRegistry {
     needles: DashMap<String, Arc<crate::security::needles::NeedleSet>>,
     /// How long a value stays redacted after its last send.
     redaction_grace: std::time::Duration,
+    /// Each backend name's configured `headers:`/`env:` credentials, from the
+    /// load being applied (at startup, or by the reload in progress): what a
+    /// backend registering under that name is seeded with. The pins belong to
+    /// the instance: a later change to this map moves none of them.
+    configured: parking_lot::RwLock<Arc<crate::config::configured_secrets::ConfiguredByBackend>>,
+    /// Set with each load's record, taken by the patch that applies it.
+    record_armed: std::sync::atomic::AtomicBool,
 }
 
 impl BackendRegistry {
@@ -250,6 +260,8 @@ impl BackendRegistry {
             secret_resolver: None,
             needles: DashMap::new(),
             redaction_grace: std::time::Duration::from_secs(24 * 60 * 60),
+            configured: parking_lot::RwLock::default(),
+            record_armed: std::sync::atomic::AtomicBool::new(false),
         }
     }
 
@@ -344,7 +356,12 @@ impl BackendRegistry {
             }),
         );
         backend.stamp_needles(needles);
-        backend.seed_needles();
+        let configured = Arc::clone(&*self.configured.read());
+        backend.seed_needles(
+            configured
+                .get(&backend.name)
+                .unwrap_or(&crate::config::configured_secrets::ConfiguredSecrets::default()),
+        );
         // Only reads the flag, but `.write()`: the insert and bump must exclude `with_membership` readers.
         let stopping = self.stopping.write();
         if *stopping {
@@ -385,6 +402,9 @@ impl BackendRegistry {
         self.membership
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         drop(stopping);
+        // Registered now: the values the replaced instance held and this one
+        // lacks start their grace (outside the guard: it may warn).
+        inserted.settle_superseded();
         // Before the insert, so no transition escapes; again after it, so an
         // observer attached meanwhile reaches it here or in the walk.
         if let Some(observer) = self.breaker_observer.get() {
@@ -624,6 +644,19 @@ impl BackendRegistry {
         if let Some((_, gone)) = &removed {
             // The drain finds the name unregistered: the backend shows nothing.
             gone.nudge_tools(super::tools_nudge::NudgeKind::Changed);
+            // Its configured values count their grace from the removal: an
+            // echo still in flight from it is removed until then.
+            // The set is taken out first: no map guard is held while it logs.
+            let set = self
+                .needles
+                .get(name)
+                .map(|entry| Arc::clone(entry.value()));
+            if let Some(set) = set {
+                set.pin_configured(
+                    name,
+                    &crate::config::configured_secrets::ConfiguredSecrets::default(),
+                );
+            }
         }
         removed.is_some()
     }
@@ -692,6 +725,10 @@ impl Destinations {
         self.policy.for_backend(self.private.contains(name))
     }
 }
+
+#[cfg(test)]
+#[path = "registry_stored_scrub_tests.rs"]
+mod stored_scrub_tests;
 
 #[cfg(test)]
 mod tests {
