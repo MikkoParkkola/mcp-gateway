@@ -20,15 +20,15 @@ use axum::response::{IntoResponse, Response};
 use serde::Deserialize;
 use serde_json::json;
 
-use super::super::errors::{config_path_unavailable, flat_error, structured_error};
+use super::super::errors::{config_path_unavailable, flat_error, no_config_file, structured_error};
 use super::super::guard::Guard;
 use super::{Gateway, name_refusal, read_gateway};
 use crate::config::SecretStoreChoice;
 use crate::config_persistence::keyedit::{Segment, SlotId, Template};
 use crate::config_persistence::{NOT_IN_PLACE, edit_text};
 use crate::config_reload::{
-    AuditPosture, Expected, FileRevision, GatewayAuth, IntentKind, NO_AUDIT_LOG, RELOAD_LOCK_WAIT,
-    Replace, ReplaceError, ReplaceOutcome, Replaced, SecretStep, replace_audited,
+    Expected, FileRevision, IntentKind, NO_AUDIT_LOG, RELOAD_LOCK_WAIT, Replace, ReplaceError,
+    ReplaceOutcome, Replaced, SecretStep,
 };
 use crate::discovery::DiscoveredServer;
 use crate::discovery::adopt::{AdoptRefusal, Adoption, Literal, adoption, refusals};
@@ -340,11 +340,7 @@ pub(super) async fn adopt_discovery(
         );
     };
     let Gateway::File { revision, config } = &gateway else {
-        return (
-            StatusCode::CONFLICT,
-            Json(json!({"error": "no_config_file"})),
-        )
-            .into_response();
+        return no_config_file().into_response();
     };
     if revision.as_str() != body.revision {
         return stale(revision);
@@ -413,20 +409,10 @@ pub(super) async fn adopt_discovery(
         replaced: Replaced::Discard,
         secrets,
     };
-    answer(&name, write_audited(&state, context, replace).await)
-}
-
-/// Writes `replace` under this gateway's audit posture: its own intent first
-/// on an audited gateway (`config_adopt_intent`), refused outright with auth
-/// on and no audit log.
-async fn write_audited(
-    state: &AppState,
-    context: Arc<crate::config_reload::ReloadContext>,
-    replace: Replace,
-) -> Result<ReplaceOutcome, ReplaceError> {
-    let auth = GatewayAuth::of(state.live_config.running().auth.enabled);
-    let audit = AuditPosture::of(state.transparency_log.clone(), auth).audit(IntentKind::Adopt)?;
-    replace_audited(context, replace, audit, RELOAD_LOCK_WAIT).await
+    answer(
+        &name,
+        super::super::write_audited(&state, context, replace, IntentKind::Adopt).await,
+    )
 }
 
 #[cfg(test)]

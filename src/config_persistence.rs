@@ -65,6 +65,14 @@ pub(crate) mod keyedit;
 mod splice;
 #[cfg(feature = "webui")]
 pub(crate) use splice::{NOT_IN_PLACE, edit_text};
+
+/// Why [`edit_text`] could not edit `text` (at `path`) in place, as the
+/// web UI's backend routes answer it: the comment lines a rewrite would
+/// drop, by line number, never their text.
+#[cfg(feature = "webui")]
+pub(crate) fn not_in_place(path: &Path, text: &str) -> String {
+    splice::not_in_place(path, text)
+}
 #[path = "config_persistence_url.rs"]
 mod url_spelling;
 

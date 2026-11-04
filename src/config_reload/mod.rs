@@ -802,9 +802,6 @@ pub use write::{write_config_and_reload, write_config_and_reload_outcome};
 // The writer-lock tests call the refusing writer directly.
 #[cfg(test)]
 use write::mutate_config_and_reload_with;
-// Only the web UI writes in refusing mode.
-#[cfg(feature = "webui")]
-pub(crate) use write::{MutateError, mutate_config_and_reload_detached};
 
 mod env_poll;
 // Linux and macOS (MIK-8181), as the real-watcher rows (see `watch_chain_tests.rs`).

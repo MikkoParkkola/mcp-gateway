@@ -738,7 +738,9 @@ async fn a_reload_that_turns_auth_on_leaves_the_old_path_posture_as_started() {
     );
     write_owner_only(&path, &auth_on).expect("write");
 
-    ctx.reload_outcome().await.expect("the reload accepts auth on");
+    ctx.reload_outcome()
+        .await
+        .expect("the reload accepts auth on");
 
     assert!(
         ctx.live_config.get().auth.enabled,

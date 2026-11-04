@@ -32,13 +32,15 @@ use super::{
         remove_backend as remove_backend_config, resolve_backend,
         update_backend as update_backend_config,
     },
-    errors::{config_path_unavailable, flat_error},
+    errors::{config_path_unavailable, flat_error, no_config_file, structured_error},
 };
-use crate::config::TransportConfig;
-use crate::config_persistence::CommentLoss;
+use crate::config::{Config, TransportConfig};
+use crate::config_persistence::keyedit::Template;
+use crate::config_persistence::{NOT_IN_PLACE, edit_text, not_in_place};
 use crate::config_reload::refusals::RefusalKind;
 use crate::config_reload::{
-    ConfigMutation, ConfigWriteError, MutateError, mutate_config_and_reload_detached,
+    BackendOp, ConfigWriteError, Expected, IntentKind, NO_AUDIT_LOG, ReloadOutcome, Replace,
+    ReplaceError, Replaced,
 };
 use crate::gateway::router::AppState;
 use crate::registry::server_registry;
@@ -174,11 +176,6 @@ async fn add_backend(
         return flat_error(StatusCode::UNPROCESSABLE_ENTITY, refused.to_string()).into_response();
     }
 
-    // Require a config path to write to
-    let Some(ref config_path) = state.config_path else {
-        return config_path_unavailable().into_response();
-    };
-
     // Resolve the whole backend: transport, description, and for a registry
     // entry its login, env templates and default state.
     let resolved = match resolve_backend(
@@ -201,36 +198,28 @@ async fn add_backend(
     let selected = allowed_tools.clone();
     let ticket = WriteTicket::new(&state);
     let in_lock = ticket.clone();
-    let mutation = mutate_config_and_reload_detached(
-        config_path.clone(),
-        state.meta_mcp.reload_context(),
-        CommentLoss::Refuse,
-        move |config| {
-            add_backend_config(config, &name, resolved)
-                .inspect(|_| in_lock.note(RefusalKind::Add, &name, config))
-                .map(|notes| {
-                    if let Some(backend) = config.backends.get_mut(&name) {
-                        backend.allowed_tools = allowed_tools;
-                    }
-                    // Whether it went in enabled: notes alone do not say, an
-                    // OAuth login note comes with an enabled backend.
-                    let enabled = config.backends.get(&name).is_some_and(|b| b.enabled);
-                    (notes, enabled)
-                })
-                .map_err(|message| add_refusal(&name, message))
-        },
-    )
+    let mutation = write_backend(&state, BackendOp::Add, &req.name, move |config| {
+        add_backend_config(config, &name, resolved)
+            .inspect(|_| in_lock.note(RefusalKind::Add, &name, config))
+            .map(|notes| {
+                if let Some(backend) = config.backends.get_mut(&name) {
+                    backend.allowed_tools = allowed_tools;
+                }
+                // Whether it went in enabled: notes alone do not say, an
+                // OAuth login note comes with an enabled backend.
+                let enabled = config.backends.get(&name).is_some_and(|b| b.enabled);
+                (notes, enabled)
+            })
+            .map_err(|message| add_refusal(&name, message))
+    })
     .await;
 
     let ((notes, enabled), reload) = match mutation {
-        Ok(ConfigMutation::Applied(added, reload)) => {
+        Ok(added) => {
             ticket.committed(&req.name);
-            (added, reload)
+            added
         }
-        Ok(ConfigMutation::Rejected((code, message))) => {
-            return flat_error(code, message).into_response();
-        }
-        Err(e) => return unwritten(e),
+        Err(answer) => return answer,
     };
 
     // The reload registered it; listeners hear of it once its tools are
@@ -267,7 +256,7 @@ async fn remove_backend(
         return refused.into_response();
     }
 
-    let Some(ref config_path) = state.config_path else {
+    let Some(path) = state.config_path.clone() else {
         return config_path_unavailable().into_response();
     };
 
@@ -275,39 +264,30 @@ async fn remove_backend(
     // text this removal splices: never another writer's change. The write
     // runs detached (MIK-8120), so the note comes back as its value.
     let removed = name.clone();
-    let path = config_path.clone();
     let ticket = WriteTicket::new(&state);
     let in_lock = ticket.clone();
-    let mutation = mutate_config_and_reload_detached(
-        config_path.clone(),
-        state.meta_mcp.reload_context(),
-        CommentLoss::Refuse,
-        move |config| {
-            remove_backend_config(config, &removed).map_err(|_| {
-                (
-                    StatusCode::NOT_FOUND,
-                    format!("Backend '{removed}' not found"),
-                )
-            })?;
-            // Gone: once the write commits, its earlier add and edit
-            // refusals no longer apply.
-            in_lock.reserve();
-            Ok::<Vec<String>, (StatusCode, String)>(
-                crate::config_persistence::comments_a_write_drops(&path, config),
+    let mutation = write_backend(&state, BackendOp::Remove, &name, move |config| {
+        remove_backend_config(config, &removed).map_err(|_| {
+            (
+                StatusCode::NOT_FOUND,
+                format!("Backend '{removed}' not found"),
             )
-        },
-    )
+        })?;
+        // Gone: once the write commits, its earlier add and edit
+        // refusals no longer apply.
+        in_lock.reserve();
+        Ok::<Vec<String>, (StatusCode, String)>(crate::config_persistence::comments_a_write_drops(
+            &path, config,
+        ))
+    })
     .await;
 
     let gone = match mutation {
-        Ok(ConfigMutation::Applied(gone, _)) => {
+        Ok((gone, _)) => {
             ticket.committed(&name);
             gone
         }
-        Ok(ConfigMutation::Rejected((code, message))) => {
-            return flat_error(code, message).into_response();
-        }
-        Err(e) => return unwritten(e),
+        Err(answer) => return answer,
     };
 
     // The reload removed it; listeners hear of it if it had tools they could
@@ -393,10 +373,6 @@ async fn update_backend(
         return refused.into_response();
     }
 
-    let Some(ref config_path) = state.config_path else {
-        return config_path_unavailable().into_response();
-    };
-
     let UpdateBackendRequest {
         stop_when_idle_for_secs,
         command,
@@ -428,74 +404,66 @@ async fn update_backend(
     let updated = name.clone();
     let ticket = WriteTicket::new(&state);
     let in_lock = ticket.clone();
-    let mutation = mutate_config_and_reload_detached(
-        config_path.clone(),
-        state.meta_mcp.reload_context(),
-        CommentLoss::Refuse,
-        move |config| {
-            if !config.backends.contains_key(&name) {
-                return Err((StatusCode::NOT_FOUND, format!("Backend '{name}' not found")));
+    let mutation = write_backend(&state, BackendOp::Update, &updated, move |config| {
+        if !config.backends.contains_key(&name) {
+            return Err((StatusCode::NOT_FOUND, format!("Backend '{name}' not found")));
+        }
+
+        let transport = requested_transport(command, url);
+
+        let env = env.map(|env_patch| {
+            let mut merged = config
+                .backends
+                .get(&name)
+                .expect("checked above")
+                .env
+                .clone();
+            merged.extend(env_patch);
+            merged
+        });
+
+        let stop_when_idle_for = stop_when_idle_for_secs.map(|secs| {
+            if secs == 0 {
+                None // explicit clear: never stop
+            } else {
+                Some(std::time::Duration::from_secs(secs))
             }
+        });
 
-            let transport = requested_transport(command, url);
-
-            let env = env.map(|env_patch| {
-                let mut merged = config
-                    .backends
-                    .get(&name)
-                    .expect("checked above")
-                    .env
-                    .clone();
-                merged.extend(env_patch);
-                merged
-            });
-
-            let stop_when_idle_for = stop_when_idle_for_secs.map(|secs| {
-                if secs == 0 {
-                    None // explicit clear: never stop
-                } else {
-                    Some(std::time::Duration::from_secs(secs))
-                }
-            });
-
-            update_backend_config(
-                config,
-                &name,
-                BackendUpdate {
-                    description,
-                    env,
-                    enabled,
-                    transport,
-                    stop_when_idle_for,
-                },
-            )
-            .inspect(|()| in_lock.note(RefusalKind::Edit, &name, config))
-            .map(|()| {
-                let backend = config.backends.get_mut(&name)?;
-                let after = allowed_tools?;
-                let before = std::mem::replace(&mut backend.allowed_tools, after.clone());
-                (before != after).then_some((before, after))
-            })
-            .map_err(|message| {
-                // Surface the refusal verbatim. An operator setting "stop when idle" on a
-                // backend the gateway does not start needs to be told why, not silently
-                // ignored - being silently ignored is what this whole change corrects.
-                let code = in_lock.refused_edit(&name, &message, update_refusal_status(&message));
-                (code, message)
-            })
-        },
-    )
+        update_backend_config(
+            config,
+            &name,
+            BackendUpdate {
+                description,
+                env,
+                enabled,
+                transport,
+                stop_when_idle_for,
+            },
+        )
+        .inspect(|()| in_lock.note(RefusalKind::Edit, &name, config))
+        .map(|()| {
+            let backend = config.backends.get_mut(&name)?;
+            let after = allowed_tools?;
+            let before = std::mem::replace(&mut backend.allowed_tools, after.clone());
+            (before != after).then_some((before, after))
+        })
+        .map_err(|message| {
+            // Surface the refusal verbatim. An operator setting "stop when idle" on a
+            // backend the gateway does not start needs to be told why, not silently
+            // ignored - being silently ignored is what this whole change corrects.
+            let code = in_lock.refused_edit(&name, &message, update_refusal_status(&message));
+            (code, message)
+        })
+    })
     .await;
 
     let (selection, reload) = match mutation {
-        Ok(ConfigMutation::Applied(selection, reload)) => {
+        Ok(updated_with) => {
             ticket.committed(&updated);
-            (selection, reload)
+            updated_with
         }
-        Ok(ConfigMutation::Rejected((code, message))) => {
-            return flat_error(code, message).into_response();
-        }
-        Err(e) => return unwritten(e),
+        Err(answer) => return answer,
     };
 
     let mut response =
@@ -533,21 +501,140 @@ fn update_refusal_status(message: &str) -> StatusCode {
     }
 }
 
-/// The answer to a backend write that did not happen.
-fn unwritten(e: MutateError) -> axum::response::Response {
-    let code = match &e {
-        // Nothing was written: the edit cannot be made in place in the file.
-        MutateError::CommentLoss(_) => StatusCode::CONFLICT,
+/// A route edit's own answer, carried out of the writer's boxed compute.
+type Decided<T> = Arc<parking_lot::Mutex<Option<Result<T, (StatusCode, String)>>>>;
+
+/// The compute's refusal when the route's own answer is in its cell.
+const ROUTE_ANSWERED: &str = "the backend route answered the edit itself";
+
+/// Run one route's `edit` of backend `name` through the audited byte writer:
+/// gateway.yaml is spliced in place or the edit is refused, its intent comes
+/// first on an audited gateway, and a reload that refuses the new bytes puts
+/// the old ones back. `Err` is the answer to send.
+async fn write_backend<T, F>(
+    state: &AppState,
+    operation: BackendOp,
+    name: &str,
+    edit: F,
+) -> Result<(T, ReloadOutcome), axum::response::Response>
+where
+    T: Send + 'static,
+    F: FnOnce(&mut Config) -> Result<T, (StatusCode, String)> + Send + 'static,
+{
+    let Some(path) = state.config_path.clone() else {
+        return Err(config_path_unavailable().into_response());
+    };
+    // Fails closed: a write with no reload to check it would leave the file
+    // ahead of the running gateway, unaudited.
+    let Some(context) = state.meta_mcp.reload_context() else {
+        return Err(flat_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Config reload is not enabled on this gateway",
+        )
+        .into_response());
+    };
+    // ponytail: checked before the lock; a file deleted after this check
+    // reaches the writer, whose read fails and answers 500.
+    if matches!(tokio::fs::metadata(&path).await, Err(e) if e.kind() == std::io::ErrorKind::NotFound)
+    {
+        return Err(no_config_file().into_response());
+    }
+    let decided: Decided<T> = Arc::default();
+    let cell = Arc::clone(&decided);
+    let compute = move |bytes: &[u8]| -> Result<Template, String> {
+        let text = std::str::from_utf8(bytes).map_err(|_| "not utf-8".to_owned())?;
+        let spliced = edit_text(text, |config| {
+            let verdict = edit(config);
+            let refused = verdict.is_err();
+            *cell.lock() = Some(verdict);
+            if refused { Err(ROUTE_ANSWERED) } else { Ok(()) }
+        });
+        match spliced {
+            Ok(spliced) => Ok(Template::plain(spliced.into_bytes())),
+            // Today's comment-loss answer: the lines a rewrite would drop.
+            Err(why) if why == NOT_IN_PLACE => {
+                *cell.lock() = Some(Err((StatusCode::CONFLICT, not_in_place(&path, text))));
+                Err(ROUTE_ANSWERED.to_owned())
+            }
+            Err(why) => Err(why.to_owned()),
+        }
+    };
+    let replace = Replace {
+        expected: Expected::Any,
+        compute: Box::new(compute),
+        replaced: Replaced::Discard,
+        secrets: None,
+    };
+    let kind = IntentKind::Backend {
+        operation,
+        backend: name.to_owned(),
+    };
+    let written = super::write_audited(state, context, replace, kind).await;
+    let answered = decided.lock().take();
+    match (written, answered) {
+        (Err(ReplaceError::Refused(why)), Some(Err((code, message)))) if why == ROUTE_ANSWERED => {
+            Err(flat_error(code, message).into_response())
+        }
+        (Ok(outcome), Some(Ok(value))) => Ok((value, outcome.reload)),
+        (Ok(_), _) => Err(unwritten("no_answer")),
+        (Err(e), _) => Err(refused_write(&e)),
+    }
+}
+
+/// A 500 with fixed text: an inner error can quote a configured value, so
+/// only the variant name is logged.
+fn unwritten(variant: &'static str) -> axum::response::Response {
+    tracing::warn!(variant, "backend route: the config write failed");
+    flat_error(
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "the backend change was not written",
+    )
+    .into_response()
+}
+
+/// The answer to a backend write the writer refused.
+fn refused_write(e: &ReplaceError) -> axum::response::Response {
+    match e {
         // A busy gateway has written nothing, so this is a retry-me, not a
         // failure. 500 would tell the operator their edit broke something.
-        MutateError::Write(ConfigWriteError::Busy) => StatusCode::SERVICE_UNAVAILABLE,
-        MutateError::Write(ConfigWriteError::Failed(_)) => StatusCode::INTERNAL_SERVER_ERROR,
-    };
-    let message = match e {
-        MutateError::CommentLoss(message) => message,
-        MutateError::Write(e) => e.to_string(),
-    };
-    flat_error(code, message).into_response()
+        ReplaceError::Busy => flat_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            ConfigWriteError::Busy.to_string(),
+        )
+        .into_response(),
+        ReplaceError::Stale { .. } => structured_error(
+            StatusCode::CONFLICT,
+            "stale",
+            "gateway.yaml changed during the write; retry",
+        )
+        .into_response(),
+        // The gateway's own posture, fixed text: the operator can act on it.
+        ReplaceError::Refused(why) if why == NO_AUDIT_LOG => structured_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "audit_log_required",
+            NO_AUDIT_LOG,
+        )
+        .into_response(),
+        ReplaceError::Unconfirmed { .. } => {
+            tracing::warn!(
+                variant = "unconfirmed",
+                "backend route: the config write failed"
+            );
+            flat_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "the change could not be recorded; the next config write settles it",
+            )
+            .into_response()
+        }
+        ReplaceError::Refused(_) => unwritten("refused"),
+        ReplaceError::ReloadRefused(_) => unwritten("reload_refused"),
+        ReplaceError::Unsupported(_) => unwritten("unsupported"),
+        ReplaceError::Stage(_) => unwritten("stage"),
+        ReplaceError::Write(_) => unwritten("write"),
+        ReplaceError::RollbackFailed { .. } => unwritten("rollback_failed"),
+        ReplaceError::Failed(_) => unwritten("failed"),
+        ReplaceError::Secrets(_) => unwritten("secrets"),
+    }
 }
 
 /// `GET /ui/api/registry` — list all built-in registry entries as JSON.
