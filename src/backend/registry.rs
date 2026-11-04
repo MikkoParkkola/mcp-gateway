@@ -642,8 +642,19 @@ impl BackendRegistry {
     /// [`Self::stop_all`], planned to end by `deadline`: the deadline is set
     /// first, so a stdio tree already in its exit waits is cut to it too, and
     /// each close plans its own waits to fit.
+    ///
+    /// However the stop ends (finished, timed out by the caller, or dropped),
+    /// every backend's tree not yet handed to the reaper is then killed at
+    /// once, so none is left running behind the parent. A tree already
+    /// handed over is in the reaper's hands, cut to `deadline`.
     pub(crate) async fn stop_all_by(&self, deadline: tokio::time::Instant) {
         self.stop_deadline.move_earlier(deadline.into_std());
+        let _sweep = RetireOnDrop(
+            self.backends
+                .iter()
+                .map(|entry| Arc::clone(entry.value()))
+                .collect(),
+        );
         crate::transport::within_stop_deadline(deadline, self.stop_all()).await;
     }
 
@@ -685,6 +696,18 @@ impl BackendRegistry {
             }
         }))
         .await;
+    }
+}
+
+/// Retires each backend when dropped: the last word of a stop, whichever way
+/// it ended (see [`BackendRegistry::stop_all_by`]).
+struct RetireOnDrop(Vec<Arc<Backend>>);
+
+impl Drop for RetireOnDrop {
+    fn drop(&mut self) {
+        for backend in &self.0 {
+            backend.retire_now();
+        }
     }
 }
 
