@@ -8,8 +8,8 @@
 //!
 //! A read is a call to a path ending in `fs::read` or `fs::read_to_string`
 //! (std or tokio), `File::open`, or `open_nonblocking`. Not seen: a function
-//! imported by its bare name, `OpenOptions`, and a read through a helper of
-//! another name; those helpers are rows themselves where they read.
+//! imported by its bare name, `OpenOptions`, `fs::copy`, and a read through a
+//! helper of another name; those helpers are rows themselves where they read.
 //!
 //! Regenerating the table is a reviewed diff, never a silent refresh: run
 //! this test, copy the printed table, and classify every new row.

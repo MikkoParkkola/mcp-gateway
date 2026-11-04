@@ -28,9 +28,9 @@ src/config/mod.rs	prepare	File::open	1	no-content	opens the selected config only
 src/config/record_key.rs	sync_dir	File::open	1	no-content	opens a directory only to fsync it or list it; no file bytes are read
 src/config/secret_file.rs	open_for_guarded_read	open_nonblocking	1	guard	the config guard: type, mode and owner are judged on this handle before its bytes are read
 src/config_persistence_atomic.rs	apply_inherited_mode	open_nonblocking	1	no-content	opens the write target only to probe its ACL; no bytes are read
-src/config_persistence_atomic.rs	copy_keeping_access	File::open	1	pending:config-backup-copy	Windows: upgrade copies gateway.yaml to its .bak keeping the source access list; nothing parses or trusts the copy; whether it goes through the guard waits on a decision
-src/config_persistence_journal.rs	read	fs::read	1	not-config	the replace journal JSON beside gateway.yaml
-src/config_persistence_journal.rs	recover	fs::read	1	not-config	the staged original, owner-only and checked against the journal digest before it is restored
+src/config_persistence_atomic.rs	copy_keeping_access	File::open	1	pending:config-backup-copy	upgrade copies gateway.yaml to its .bak keeping the source access list (Windows here; Unix uses fs::copy, which this scan does not see); nothing parses or trusts the copy; whether it goes through the guard waits on a decision
+src/config_persistence_journal.rs	read	fs::read	1	not-config	the replace journal JSON beside gateway.yaml; no mode or owner check (an open question for the config-read-guard family)
+src/config_persistence_journal.rs	recover	fs::read	1	not-config	the staged original, checked only against the journal digest before it is restored as gateway.yaml; no mode or owner check (an open question for the config-read-guard family)
 src/config_persistence_journal.rs	sync_dir_of	File::open	1	no-content	opens a directory only to fsync it or list it; no file bytes are read
 src/config_reload/grant_audit_plan.rs	save	File::open	1	no-content	opens a directory only to fsync it or list it; no file bytes are read
 src/control_plane/export.rs	deliver	File::open	1	no-content	opens a directory only to fsync it or list it; no file bytes are read
@@ -73,7 +73,7 @@ src/security/transparency_log_hwm_scan.rs	record_at_mark	File::open	1	not-config
 src/security/transparency_log_pager.rs	open_segment	File::open	1	not-config	the audit log: its segments, anchor or high-water mark; no secret
 src/security/transparency_log_rotation.rs	finish_pending_expiry	File::open	1	not-config	the audit log: its segments, anchor or high-water mark; no secret
 src/security/transparency_log_rotation.rs	path_id	File::open	1	no-content	opens an audit log segment only for its file id
-src/security/transparency_log_segments.rs	listing	File::open	1	no-content	opens a directory only to fsync it or list it; no file bytes are read
+src/security/transparency_log_segments.rs	listing	File::open	1	not-config	reads the active audit log segment for its sequence; no secret
 src/security/transparency_log_segments.rs	read_first_line_raw	File::open	1	not-config	the audit log: its segments, anchor or high-water mark; no secret
 src/security/transparency_log_segments.rs	read_hwm	fs::read	1	not-config	the audit log: its segments, anchor or high-water mark; no secret
 src/security/transparency_log_segments.rs	sync_dir	File::open	1	no-content	opens a directory only to fsync it or list it; no file bytes are read
