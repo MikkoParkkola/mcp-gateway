@@ -134,6 +134,7 @@ async fn a_loose_recovery_file_is_never_restored(loose: fn(&Path) -> std::path::
         "the journal was settled"
     );
     let text = format!("{failure:?}");
+    assert_reviewed_recovery_refusal(&failure);
     let shown = dir.path().to_string_lossy().into_owned();
     assert!(!text.contains(&shown), "the refusal names a path: {text}");
     assert_safe_recovery_advice(&text);
@@ -156,6 +157,23 @@ const FORBIDDEN_RECOVERY_ADVICE: &[&str] = &[
     "compare the staged original",
     "then delete the journal",
 ];
+
+/// The reviewed refusal for a journal or staged original the guard refused,
+/// word for word: a phrase list can be beaten by a synonym, so any rewording
+/// fails here and goes back to review.
+const REVIEWED_RECOVERY_REFUSAL: &str = "a pending config recovery was not run: its replace \
+     journal and staged original are untrusted, because the config guard refuses one of them \
+     (another account could have planted or changed it, it is not a regular file, or it is not \
+     UTF-8 text), so nothing was restored. Leave their owner and mode alone: fixing them would \
+     make the next recovery restore them. Check gateway.yaml against a known-good copy, move \
+     both files aside, then retry";
+
+fn assert_reviewed_recovery_refusal(failure: &ReplaceError) {
+    let ReplaceError::ConfigRefused(text) = failure else {
+        panic!("not the guard's refusal: {failure:?}");
+    };
+    assert_eq!(text, REVIEWED_RECOVERY_REFUSAL);
+}
 
 /// The refusal for a journal or staged original the guard refused: no
 /// forbidden advice, phrase by phrase; both files called untrusted; both
@@ -249,6 +267,7 @@ async fn a_staged_original_that_is_not_utf8_names_encoding_and_the_manual_step()
         "{failure:?}"
     );
     let text = format!("{failure:?}");
+    assert_reviewed_recovery_refusal(&failure);
     assert!(text.contains("UTF-8"), "{text}");
     assert_safe_recovery_advice(&text);
     assert!(!text.contains(&*dir.path().to_string_lossy()), "{text}");
