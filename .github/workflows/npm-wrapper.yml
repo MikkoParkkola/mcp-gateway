@@ -1,0 +1,47 @@
+name: npm wrapper
+
+# Tests for the npm wrapper's release-binary check (npm/run.test.js): the
+# downloaded binary must match SHA256SUMS.txt before it is made executable.
+# Node built-ins only, so there is nothing to install. The tests make no
+# network calls: downloads are injected or served from 127.0.0.1.
+on:
+  pull_request:
+    paths:
+      - 'npm/**'
+      - '.github/workflows/npm-wrapper.yml'
+      - '.github/workflows/release.yml'
+  push:
+    branches: [main, docs/ranking-1-release-line]
+    paths:
+      - 'npm/**'
+      - '.github/workflows/npm-wrapper.yml'
+      - '.github/workflows/release.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: npm wrapper tests (Node ${{ matrix.node }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    strategy:
+      fail-fast: false
+      matrix:
+        # 18 is package.json's engines floor; 22 is the release job's Node.
+        node: ['18', '22']
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ matrix.node }}
+          package-manager-cache: false
+      # The file, not the directory: Node 22 reads a directory argument as a module.
+      - name: Run the wrapper tests
+        run: node --test npm/run.test.js

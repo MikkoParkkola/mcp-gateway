@@ -212,28 +212,24 @@ impl CompiledCriteria {
 
         // All specified criteria must match
         if let Some(ref pat) = self.cn
-            && !identity
-                .common_name
-                .as_deref()
-                .is_some_and(|cn| pat.matches(cn))
+            && !identity.common_name().is_some_and(|cn| pat.matches(cn))
         {
             return false;
         }
         if let Some(ref pat) = self.ou
             && !identity
-                .organizational_unit
-                .as_deref()
+                .organizational_unit()
                 .is_some_and(|ou| pat.matches(ou))
         {
             return false;
         }
         if let Some(ref pat) = self.san_uri
-            && !identity.san_uris.iter().any(|u| pat.matches(u))
+            && !identity.san_uris().iter().any(|u| pat.matches(u))
         {
             return false;
         }
         if let Some(ref pat) = self.san_dns
-            && !identity.san_dns_names.iter().any(|d| pat.matches(d))
+            && !identity.san_dns_names().iter().any(|d| pat.matches(d))
         {
             return false;
         }

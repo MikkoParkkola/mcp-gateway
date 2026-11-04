@@ -113,13 +113,13 @@ fn grant(
 
 /// A client certificate named `svc` with `ou` and these SAN URIs.
 fn cert(ou: Option<&str>, san_uris: &[&str]) -> CertIdentity {
-    CertIdentity {
+    crate::mtls::identity::CertIdentity::for_test(crate::mtls::identity::CertFields {
         common_name: Some("svc".to_string()),
         organizational_unit: ou.map(str::to_string),
         san_uris: san_uris.iter().map(|u| (*u).to_string()).collect(),
         display_name: "svc".to_string(),
-        ..CertIdentity::default()
-    }
+        ..Default::default()
+    })
 }
 
 /// G-CERT.1: one key and two certificates that share a CN and differ in OU;

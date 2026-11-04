@@ -57,7 +57,7 @@ fn fixture_offences(file: &str, source: &str) -> Vec<String> {
 #[test]
 fn fixture_new_comparison_in_an_allowlisted_file_is_flagged() {
     let source = "fn other(c: &Client) -> bool { c.credential_kind == CredentialKind::ApiKey }";
-    let found = fixture_offences("src/gateway/auth.rs", source);
+    let found = fixture_offences("src/gateway/auth_caller.rs", source);
     assert!(
         found.iter().any(|kind| kind == "ApiKey"),
         "a new comparison in `other` was not flagged"

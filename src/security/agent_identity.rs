@@ -340,18 +340,15 @@ pub(crate) fn extract_agent_identity(
 
 /// The mTLS principal a certificate resolves to, if any.
 ///
-/// Total and fixed: first SAN URI, else CN, else `None`. A certificate carrying
+/// Total and fixed: [`CertIdentity::subject_id`](crate::mtls::identity::CertIdentity::subject_id)
+/// (first SAN URI, else CN, neither blank), else `None`. A certificate carrying
 /// neither is not an mTLS identity, and such a request falls to the other rungs
 /// rather than acquiring a synthesised name. `display_name` is deliberately not
 /// consulted — it is a cosmetic audit label, and an unnameable certificate must
 /// not silently become an allowlist key.
 fn select_mtls_subject(cert: &crate::mtls::identity::CertIdentity) -> Option<String> {
-    cert.san_uris
-        .iter()
-        .map(String::as_str)
-        .chain(cert.common_name.as_deref())
-        .find(|s| !s.is_empty())
-        .map(String::from)
+    // The certificate's own rule, so the two cannot drift.
+    cert.subject_id().map(str::to_owned)
 }
 
 /// Outcome of a successful validation, for the caller's audit record.

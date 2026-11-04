@@ -66,6 +66,13 @@ fn writer_outcomes() -> Vec<(
             StatusCode::CONFLICT,
             "not_in_place",
         ),
+        (
+            Err(ReplaceError::Refused(
+                "auth is on but no audit log is configured; config writes are refused".to_owned(),
+            )),
+            StatusCode::SERVICE_UNAVAILABLE,
+            "audit_log_required",
+        ),
         failed(ReplaceError::Refused(REFERENCES.to_owned())),
         failed(ReplaceError::Refused(CANARY.to_owned())),
         (

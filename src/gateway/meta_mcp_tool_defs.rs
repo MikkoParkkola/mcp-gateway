@@ -100,7 +100,13 @@ fn build_search_tools_tool(tool_count: ToolTotal, server_count: usize) -> Tool {
             "type": "object",
             "properties": {
                 "query": { "type": "string", "description": "Search keyword" },
-                "limit": { "type": "integer", "description": "Maximum results (default 10)", "default": 10 },
+                "limit": {
+                    "type": "integer",
+                    "description": "Maximum results (default 10, 1 to 25)",
+                    "default": 10,
+                    "minimum": 1,
+                    "maximum": 25
+                },
                 "explain": {
                     "type": "boolean",
                     "description": "Include ranking diagnostics (reasons and signals). Default false.",
@@ -468,8 +474,10 @@ pub(crate) fn build_code_mode_search_tool() -> Tool {
                 },
                 "limit": {
                     "type": "integer",
-                    "description": "Maximum number of results to return (default 10, hard-capped at 25)",
-                    "default": 10
+                    "description": "Maximum number of results to return (default 10, 1 to 25)",
+                    "default": 10,
+                    "minimum": 1,
+                    "maximum": 25
                 },
                 "detail": {
                     "type": "string",

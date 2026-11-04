@@ -446,14 +446,16 @@ fn insert_identity(request: &mut axum::http::Request<axum::body::Body>, caller: 
     let extensions = request.extensions_mut();
     match caller {
         Caller::Cert => {
-            extensions.insert(crate::mtls::CertIdentity {
-                common_name: Some("cert-7938".to_string()),
-                organizational_unit: None,
-                san_uris: vec!["spiffe://example.invalid/cert-7938".to_string()],
-                san_dns_names: vec![],
-                display_name: "cert-7938".to_string(),
-                quota_principal: None,
-            });
+            extensions.insert(crate::mtls::identity::CertIdentity::for_test(
+                crate::mtls::identity::CertFields {
+                    common_name: Some("cert-7938".to_string()),
+                    organizational_unit: None,
+                    san_uris: vec!["spiffe://example.invalid/cert-7938".to_string()],
+                    san_dns_names: vec![],
+                    display_name: "cert-7938".to_string(),
+                    quota_principal: None,
+                },
+            ));
         }
         Caller::Agent => {
             extensions.insert(crate::gateway::oauth::OAuthAgentIdentity {

@@ -819,8 +819,8 @@ class Repository(unittest.TestCase):
             names,
             sorted([
                 "alert-rules.yml", "c6-obligations.yml", "changelog.yml", "ci.yml", "coverage-probe.yml",
-                "dependabot-auto-merge.yml", "docker.yml", "mrtr7b-full-burst.yml", "pr-body-hygiene.yml",
-                "registry-packages.yml", "rustdoc.yml", "ui-tests.yml",
+                "dependabot-auto-merge.yml", "docker.yml", "mrtr7b-full-burst.yml", "npm-wrapper.yml",
+                "pr-body-hygiene.yml", "registry-packages.yml", "rustdoc.yml", "ui-tests.yml",
             ]),
         )
         self.assertEqual(problems(REPO), [])
