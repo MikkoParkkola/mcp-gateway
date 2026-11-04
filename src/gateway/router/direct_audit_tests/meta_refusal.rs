@@ -302,16 +302,16 @@ async fn listed_without_identity() -> (Value, Value) {
 }
 
 /// On a multi-user gateway, a backend holding one person's OAuth login,
-/// named alone by a caller the isolation guard refuses; only isolation can
-/// hide it here (its identity is not required).
-async fn listed_behind_isolation() -> (Value, Value) {
+/// named alone by `caller`, whom the isolation guard refuses; only isolation
+/// can hide it here (it propagates no identity, so nothing is minted).
+async fn listed_behind_isolation(caller: &Caller) -> (Value, Value) {
     let fx = fixture(Setup {
         extras: &[Extra::AlphaOAuthIsolated],
         ..Setup::default()
     })
     .await;
     fx.state.meta_mcp.set_multi_user(true);
-    list_tools_of(&fx, Some("alpha"), &Caller::Anonymous).await
+    list_tools_of(&fx, Some("alpha"), caller).await
 }
 
 /// Fail-fast control, written first: a caller whose mint for a required
@@ -332,8 +332,9 @@ async fn meta_list_tools_after_a_failed_mint_records_no_refused() {
     }
 }
 
-/// A required backend named alone by a caller with no identity is withheld:
-/// the gateway's decision, recorded refused.
+/// A required backend named alone by a caller with no identity, on a
+/// single-user gateway (isolation admits it), is withheld: the gateway's
+/// decision, recorded refused.
 #[tokio::test]
 async fn meta_list_tools_of_an_identity_required_backend_records_refused() {
     let (answer, record) = listed_without_identity().await;
@@ -341,12 +342,30 @@ async fn meta_list_tools_of_an_identity_required_backend_records_refused() {
     assert_eq!(record["response_effect"], "refused", "{record}");
 }
 
-/// A backend only isolation hides, named alone: recorded refused.
+/// A backend only isolation hides, named alone, by a caller with or without
+/// an identity: recorded refused.
 #[tokio::test]
 async fn meta_list_tools_of_an_isolated_backend_records_refused() {
-    let (answer, record) = listed_behind_isolation().await;
-    assert!(answered_as_missing(&answer), "premise: {answer}");
-    assert_eq!(record["response_effect"], "refused", "{record}");
+    for (name, caller) in [("anonymous", Caller::Anonymous), ("oidc", Caller::Oidc)] {
+        let (answer, record) = listed_behind_isolation(&caller).await;
+        assert!(answered_as_missing(&answer), "{name} premise: {answer}");
+        assert_eq!(record["response_effect"], "refused", "{name}: {record}");
+    }
+}
+
+/// Control: an optional-propagation backend, for a caller whose mint fails,
+/// with no guard to hide it, falls back to the static credential and is
+/// listed as today: a failed mint alone omits nothing.
+#[tokio::test]
+async fn meta_list_tools_after_a_failed_optional_mint_still_lists() {
+    let (fx, mint) = failing_mint_fixture(&[Extra::AlphaIdentityOptional], false).await;
+    let (answer, record) = list_tools_of(&fx, Some("alpha"), &Caller::Oidc).await;
+    assert!(
+        mint.mints.load(Ordering::SeqCst) > 0,
+        "premise: a mint was attempted and failed"
+    );
+    assert!(!answered_as_missing(&answer), "listed: {answer}");
+    assert_ne!(record["response_effect"], "refused", "{record}");
 }
 
 /// Control: on a multi-user gateway, an optional-propagation backend that
@@ -404,7 +423,7 @@ async fn meta_list_tools_of_every_backend_records_no_refused() {
 async fn a_withheld_backend_answers_the_same_for_every_reason() {
     let (failed, _) = listed_after_a_failed_mint(true).await;
     let (no_identity, _) = listed_without_identity().await;
-    let (isolated, _) = listed_behind_isolation().await;
+    let (isolated, _) = listed_behind_isolation(&Caller::Anonymous).await;
     assert_eq!(no_identity, failed);
     assert_eq!(isolated, failed);
 }
