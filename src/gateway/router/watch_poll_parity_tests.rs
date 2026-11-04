@@ -107,6 +107,7 @@ async fn the_watch_host_poll_refuses_a_gone_key_and_a_blocked_pattern() {
             principal: crate::gateway::auth::principal_of(name)
                 .storage_form()
                 .to_owned(),
+            digest_tag: Some(crate::gateway::auth::secret_tag(name)),
         },
     };
     let fx = fixture_firewalled(Answer::Ok).await;
@@ -289,6 +290,7 @@ async fn a_poll_runs_only_what_the_executor_finds_read_only() {
             .client_for_key(
                 "k-budget",
                 crate::gateway::auth::principal_of("k-budget").storage_form(),
+                crate::gateway::auth::KeyBinding::Unchecked,
             )
             .expect("the fixture key is live");
         let polled = super::super::watch_poll::poll_capability(
@@ -324,6 +326,7 @@ async fn the_watch_host_admits_only_a_live_granted_key() {
         principal: "subscriber".into(),
         api_key: ApiKeyRef {
             name: name.into(),
+            digest_tag: Some(crate::gateway::auth::secret_tag(name)),
             principal,
         },
     };
@@ -349,6 +352,21 @@ async fn the_watch_host_admits_only_a_live_granted_key() {
     assert!(
         !host.may_invoke(&holder("k-std", "000000000000".into()), &target, now),
         "the key's name under another digest (re-issued)"
+    );
+    // A holder stored before holders were bound to their secret names none:
+    // refused even though its key is live and granted (fail closed).
+    let mut unbound = live("k-std");
+    unbound.api_key.digest_tag = None;
+    assert!(
+        !host.may_invoke(&unbound, &target, now),
+        "a holder naming no secret was polled"
+    );
+    // And one bound to a secret the key no longer accepts is refused too.
+    let mut old_secret = live("k-std");
+    old_secret.api_key.digest_tag = Some("000000000000".into());
+    assert!(
+        !host.may_invoke(&old_secret, &target, now),
+        "a holder bound to a secret its key no longer accepts was polled"
     );
     assert!(
         !host.may_invoke(&live("k-gone"), &target, now),

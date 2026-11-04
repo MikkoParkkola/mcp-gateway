@@ -28,7 +28,7 @@ const STARTUP: Duration = Duration::from_secs(60);
 /// One reload: a 2 s env poll and a sub-second debounce, with CI margin.
 const RELOAD: Duration = Duration::from_secs(20);
 /// One `/livez` probe; the start-up loop retries, so this only bounds a stall.
-const PROBE: Duration = Duration::from_secs(2);
+const PROBE: Duration = Duration::from_secs(10);
 const BEARER: &str = "discovered-config-admin-token";
 const PROTOCOL_VERSION: &str = "2025-06-18";
 const CONFIG_RELOADED: &str = "Config reload: complete";

@@ -537,6 +537,7 @@ impl crate::oauth::client::RefreshCaller for ProviderRefresh<'_> {
                 token.client_secret.clone_from(&client_secret);
                 token
             }),
+            settled: None,
         })
     }
 }

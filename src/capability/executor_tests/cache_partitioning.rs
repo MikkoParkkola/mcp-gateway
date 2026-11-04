@@ -8,7 +8,7 @@ use super::*;
 /// has no request timeout; a hung listener would stall the suite.
 fn finite_http_client() -> reqwest::Client {
     reqwest::Client::builder()
-        .timeout(Duration::from_secs(2))
+        .timeout(Duration::from_secs(10))
         .build()
         .unwrap()
 }

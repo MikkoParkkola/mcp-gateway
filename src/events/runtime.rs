@@ -211,6 +211,20 @@ impl EventsHub {
             .is_none_or(|services| services.admits(key, backend))
     }
 
+    /// [`Self::live_admits`] for the API key that authenticated the request
+    /// being answered now, which has no holder and so no secret binding.
+    pub(crate) fn live_admits_this_request(
+        &self,
+        name: &str,
+        principal: &str,
+        backend: &str,
+    ) -> bool {
+        self.runtime
+            .services
+            .get()
+            .is_none_or(|services| services.admits_this_request(name, principal, backend))
+    }
+
     /// The source of `kind`.
     pub(super) fn source(&self, kind: SourceKind) -> Option<Arc<dyn EventSource>> {
         self.sources
