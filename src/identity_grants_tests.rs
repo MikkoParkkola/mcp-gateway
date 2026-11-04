@@ -9,11 +9,11 @@ fn now() -> DateTime<Utc> {
 }
 
 fn alice() -> GrantSubject {
-    GrantSubject::new("local", "alice-sub", Some("alice".to_string()))
+    GrantSubject::for_test("local", "alice-sub", Some("alice".to_string()))
 }
 
 fn bob() -> GrantSubject {
-    GrantSubject::new("local", "bob-sub", Some("bob".to_string()))
+    GrantSubject::for_test("local", "bob-sub", Some("bob".to_string()))
 }
 
 fn agent_a() -> crate::security::OwnedProvenAgentId {
@@ -344,12 +344,17 @@ fn a_label_mismatch_alone_does_not_deny() {
     // name, an email claim); the grant file's label is what the operator
     // typed. They routinely differ, and identity is (authority, subject).
     let mut row = grant();
-    row.subject.label = Some("Alice Example".to_string());
+    row.subject = GrantSubject::new(
+        row.subject.authority(),
+        row.subject.subject(),
+        Some("Alice Example".to_string()),
+    )
+    .expect("names someone");
     row.owner = Some(row.subject.clone());
     let store = LocalIdentityGrantStore::from_grants(vec![row]);
 
-    let mut request = personal_request(Some(GrantSubject::new("local", "alice-sub", None)));
-    request.owner = Some(GrantSubject::new(
+    let mut request = personal_request(Some(GrantSubject::for_test("local", "alice-sub", None)));
+    request.owner = Some(GrantSubject::for_test(
         "local",
         "alice-sub",
         Some("owner label".to_string()),
@@ -359,7 +364,7 @@ fn a_label_mismatch_alone_does_not_deny() {
     assert_eq!(evaluation.reason, IdentityGrantDecisionReason::GrantMatched);
 
     // The converse: a shared label is not a shared identity.
-    let impostor = GrantSubject::new("local", "bob-sub", Some("Alice Example".to_string()));
+    let impostor = GrantSubject::for_test("local", "bob-sub", Some("Alice Example".to_string()));
     let mut request = personal_request(Some(impostor.clone()));
     request.owner = Some(impostor);
     assert!(!store.evaluate(&request).allowed);
@@ -409,8 +414,8 @@ fn subjects_differing_only_in_label_hash_equal() {
     use std::hash::BuildHasher;
 
     let hasher = std::collections::hash_map::RandomState::new();
-    let named = GrantSubject::new("api_key", "alice", Some("Alice".to_string()));
-    let bare = GrantSubject::new("api_key", "alice", None);
+    let named = GrantSubject::for_test("api_key", "alice", Some("Alice".to_string()));
+    let bare = GrantSubject::for_test("api_key", "alice", None);
     assert_eq!(named, bare);
     assert_eq!(hasher.hash_one(&named), hasher.hash_one(&bare));
 
@@ -541,14 +546,20 @@ fn a_stalled_read_through_the_public_reader_does_not_hold_the_runtime_drop() {
 fn caller_identity_constructors_refuse_an_identity_that_names_no_one() {
     use crate::key_server::oidc::VerifiedIdentity;
 
-    assert!(GrantSubject::checked("", "alice", None).is_none());
-    assert!(GrantSubject::checked("mtls", "", None).is_none());
-    let placeholder = GrantSubject::checked("mtls", "<unknown>", None);
+    assert!(GrantSubject::new("", "alice", None).ok().is_none());
+    assert!(GrantSubject::new("mtls", "", None).ok().is_none());
+    let placeholder = GrantSubject::new("mtls", "<unknown>", None).ok();
     assert!(placeholder.is_some(), "a literal name is still a name");
-    let named = GrantSubject::checked("https://idp.example", " alice ", Some("A".into())).unwrap();
-    assert_eq!(named.authority, "https://idp.example");
-    assert_eq!(named.subject, " alice ", "verified bytes are never trimmed");
-    assert_eq!(named.label.as_deref(), Some("A"));
+    let named = GrantSubject::new("https://idp.example", " alice ", Some("A".into()))
+        .ok()
+        .unwrap();
+    assert_eq!(named.authority(), "https://idp.example");
+    assert_eq!(
+        named.subject(),
+        " alice ",
+        "verified bytes are never trimmed"
+    );
+    assert_eq!(named.label(), Some("A"));
 
     let id = |issuer: &str, subject: &str| {
         VerifiedIdentity::checked(

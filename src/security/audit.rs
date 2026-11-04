@@ -261,8 +261,8 @@ impl AuditWho {
             credential_kind: Some(credential_kind),
             principal,
             account: account.unwrap_or("anonymous").to_string(),
-            authority: grant_subject.map(|g| g.authority.clone()),
-            subject: grant_subject.map(|g| g.subject.clone()),
+            authority: grant_subject.map(|g| g.authority().to_owned()),
+            subject: grant_subject.map(|g| g.subject().to_owned()),
         }
     }
 }

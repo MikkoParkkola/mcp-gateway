@@ -39,7 +39,9 @@ fn denial(
         timestamp: at(minute),
         allowed: false,
         reason,
-        subject: Some(GrantSubject::new("https://idp.example", "alice", None)),
+        subject: Some(
+            GrantSubject::new("https://idp.example", "alice", None).expect("names someone"),
+        ),
         agent_id: Some(AGENT.to_string()),
         capability: capability.to_string(),
         tool: None,
@@ -59,7 +61,7 @@ fn missing(capability: &str, minute: i64) -> IdentityGrantAuditEvent {
 fn grant(capability: &str, scope: GrantScope) -> IdentityGrant {
     IdentityGrant {
         grant_id: "g1".to_string(),
-        subject: GrantSubject::new("https://idp.example", "alice", None),
+        subject: GrantSubject::new("https://idp.example", "alice", None).expect("names someone"),
         agent: GrantAgent::Exact(GrantAgentKey {
             source: ProofSource::MutualTls,
             id: "runner".to_string(),
@@ -191,7 +193,7 @@ fn a_covering_grant_closes_and_its_expiry_reopens() {
 
 #[test]
 fn a_row_that_evaluate_would_not_match_leaves_the_item_open() {
-    let other = GrantSubject::new("https://idp.example", "bob", None);
+    let other = GrantSubject::new("https://idp.example", "bob", None).expect("names someone");
     let rows: Vec<(&str, IdentityGrant)> = vec![
         ("narrower scope", grant("stripe.charges", GrantScope::Read)),
         ("other capability", grant("stripe.refunds", GrantScope::Any)),
@@ -260,11 +262,10 @@ fn every_row_evaluate_would_match_closes_the_item() {
         (
             "same owner",
             IdentityGrant {
-                owner: Some(GrantSubject::new(
-                    "https://idp.example",
-                    "alice",
-                    Some("label".to_string()),
-                )),
+                owner: Some(
+                    GrantSubject::new("https://idp.example", "alice", Some("label".to_string()))
+                        .expect("names someone"),
+                ),
                 ..grant("stripe.charges", GrantScope::Execute)
             },
         ),
@@ -639,8 +640,20 @@ fn a_record_naming_no_one_reads_back_as_no_request() {
         };
         fields
     };
-    assert!(super::denial_from_record(&record("https://idp.example", "alice")).is_some());
-    for (authority, subject) in [("", ""), ("https://idp.example", ""), ("", "alice")] {
+    // Golden: the projected subject is the recorded pair, exactly.
+    let read = super::denial_from_record(&record("https://idp.example", " alice "))
+        .and_then(|event| event.subject)
+        .expect("names someone");
+    assert_eq!(
+        serde_json::to_string(&read).unwrap(),
+        r#"{"authority":"https://idp.example","subject":" alice "}"#
+    );
+    for (authority, subject) in [
+        ("", ""),
+        ("https://idp.example", ""),
+        ("", "alice"),
+        ("https://idp.example", "  "),
+    ] {
         assert!(
             super::denial_from_record(&record(authority, subject)).is_none(),
             "({authority:?}, {subject:?}) names no one"
@@ -663,13 +676,10 @@ fn an_empty_subject_is_never_covered_by_a_grant() {
         scope: Some(GrantScope::Execute),
         ..super::Requested::default()
     };
-    // A row for the same empty subject: `GrantSubject::new` would match it.
-    let row = IdentityGrant {
-        subject: GrantSubject::new("", "", None),
-        owner: None,
-        ..grant("stripe.charges", GrantScope::Any)
-    };
-    set.set_grants(vec![row], at(2));
+    // No row can name the empty subject: `GrantSubject::new` refuses it, so
+    // nothing a grants file holds can ever match this key.
+    assert!(GrantSubject::new("", "", None).is_err());
+    set.set_grants(vec![grant("stripe.charges", GrantScope::Any)], at(2));
     assert!(!set.covered(&nobody, "stripe.charges", &requested));
 }
 

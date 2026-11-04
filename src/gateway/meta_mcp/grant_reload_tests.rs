@@ -46,7 +46,7 @@ use crate::identity_grants::{
 fn grant(grant_id: &str, subject: &str, capability: &str) -> IdentityGrant {
     IdentityGrant {
         grant_id: grant_id.to_string(),
-        subject: GrantSubject::new("https://idp".to_string(), subject.to_string(), None),
+        subject: GrantSubject::for_test("https://idp".to_string(), subject.to_string(), None),
         agent: GrantAgent::Any,
         capability: capability.to_string(),
         tool: None,
@@ -229,7 +229,7 @@ async fn t8b_a_reordered_file_must_not_read_as_a_change() {
 // GREEN BEFORE AND AFTER by design.
 #[test]
 fn t11_guard_expiry_is_live_without_any_reload() {
-    let subject = GrantSubject::new("https://idp".to_string(), "alice".to_string(), None);
+    let subject = GrantSubject::for_test("https://idp".to_string(), "alice".to_string(), None);
     let mut expiring = grant("g1", "alice", "cal");
     expiring.expires_at = Some(Utc::now() + crate::duration_bound::delta!(seconds, 60));
     let store = LocalIdentityGrantStore::from_grants([expiring]);
@@ -355,7 +355,7 @@ fn revoked(mut row: IdentityGrant) -> IdentityGrant {
 
 /// The live authorization decision, read from `meta`'s store as `invoke` does.
 fn allows(meta: &MetaMcp, subject: &str, capability: &str) -> bool {
-    let subject = GrantSubject::new("https://idp".to_string(), subject.to_string(), None);
+    let subject = GrantSubject::for_test("https://idp".to_string(), subject.to_string(), None);
     meta.identity_grants
         .read()
         .evaluate(&IdentityGrantRequest {
