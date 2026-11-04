@@ -317,8 +317,7 @@ async fn a_secret_rotated_in_one_process_never_reaches_the_answer_or_the_store()
     let answer = settled(&gateway, &client, &task_id).await;
     let row = durable_record(root.path(), &task_id);
     gateway.terminate().await;
-    for text in [answer.to_string(), row.to_string()] {
-        assert!(!text.contains(OLD), "the old secret was delivered: {text}");
-        assert!(!text.contains(NEW), "the new secret was delivered: {text}");
-    }
+    // Withheld, not merely redacted: inside its grace the old value is still
+    // scrubbed from the answer, so only the settlement shows the check ran.
+    assert_withheld(&answer, &row);
 }
