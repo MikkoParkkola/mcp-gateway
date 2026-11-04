@@ -193,24 +193,78 @@ async fn a_running_key_removed_in_the_same_save_no_longer_collides() {
 
 /// Production lines matching `hit`, as `path:line`, comments skipped.
 fn lines_where(hit: impl Fn(&str) -> bool) -> Vec<String> {
+    lines_where_in(|_, _| true, hit)
+}
+
+/// As [`lines_where`], only in the files `keep` accepts, given each file's
+/// `src`-relative path and its text.
+fn lines_where_in(
+    keep: impl Fn(&str, &str) -> bool,
+    hit: impl Fn(&str) -> bool,
+) -> Vec<String> {
     let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
     let mut files = Vec::new();
     super::replace_audit_tests::production_sources(&src, &mut files);
     let mut found = Vec::new();
     for file in &files {
         let text = std::fs::read_to_string(file).expect("read source");
+        let name = file
+            .strip_prefix(&src)
+            .unwrap_or(file)
+            .to_string_lossy()
+            .replace('\\', "/");
+        if !keep(&name, &text) {
+            continue;
+        }
         for (n, line) in text.lines().enumerate() {
             if !line.trim_start().starts_with("//") && hit(line) {
-                let name = file.strip_prefix(&src).unwrap_or(file);
-                found.push(format!(
-                    "{}:{}",
-                    name.to_string_lossy().replace('\\', "/"),
-                    n + 1
-                ));
+                found.push(format!("{name}:{}", n + 1));
             }
         }
     }
     found
+}
+
+/// Whether the file at `rel`, holding `text`, can name the writer's `Audit`:
+/// a file of the writer's own module, or one with a statement that reaches it
+/// through `replace` (an import, wrapped or not, or a full path). A type that
+/// only shares the name, in a file that never imports the writer's, is not it.
+fn names_writer_audit(rel: &str, text: &str) -> bool {
+    if rel.starts_with("config_reload/replace") {
+        return true;
+    }
+    text.split(';').any(|statement| {
+        statement.contains("replace::")
+            && statement
+                .split(|c: char| !(c.is_alphanumeric() || c == '_'))
+                .any(|word| word == "Audit")
+    })
+}
+
+/// W27's scan tells the writer's `Audit` from a type that only shares its
+/// name: an `Audit::Off` in a file that never imports the writer's is not
+/// counted, and every way of reaching the writer's is.
+#[test]
+fn an_unrelated_enum_named_audit_is_not_the_writers() {
+    let unrelated = "enum Audit {\n    On,\n    Off,\n}\nfn f() -> Audit {\n    Audit::Off\n}\n";
+    assert!(
+        !names_writer_audit("gateway/ui/backends/fixture.rs", unrelated),
+        "a local enum named Audit was taken for the writer's"
+    );
+    for reaching in [
+        "use crate::config_reload::replace::{Audit, Intent};\nfn f() -> Audit { Audit::Off }\n",
+        "use super::reload_context::replace::{\n    Audit,\n    Expected,\n};\n",
+        "fn f() { let _ = crate::config_reload::replace::Audit::Off; }\n",
+    ] {
+        assert!(
+            names_writer_audit("gateway/ui/route.rs", reaching),
+            "a file reaching the writer's Audit was skipped: {reaching:?}"
+        );
+    }
+    assert!(
+        names_writer_audit("config_reload/replace_slots.rs", "Audit::Off"),
+        "a file of the writer's own module was skipped"
+    );
 }
 
 /// W27: no writer entry point runs without the posture's audit.
@@ -230,8 +284,9 @@ fn no_writer_entry_point_runs_without_the_posture_audit() {
         "W27: replace_detached is called outside replace_audited: {outside:?}"
     );
     // A construction, not a pattern: a pattern is followed by `=>` or sits
-    // in a `matches!` or a `let`.
-    let built = lines_where(|line| {
+    // in a `matches!` or a `let`. Only files that can name the writer's
+    // `Audit` count; another type that shares the name is not it.
+    let built = lines_where_in(names_writer_audit, |line| {
         (line.contains("Audit::Off") || line.contains("Audit::Required {"))
             && !line.contains("=>")
             && !line.contains("matches!")
