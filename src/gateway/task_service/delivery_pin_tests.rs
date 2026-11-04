@@ -27,11 +27,11 @@ fn rust_files(dir: &Path, out: &mut Vec<std::path::PathBuf>) {
     }
 }
 
-/// How often `code` names the item `name` through a path or a receiver: the
-/// whole identifier right after a `.` or a `::`, whitespace allowed between.
-/// A method call, a UFCS call and a function reference all count, whatever
-/// their spacing; a definition (`fn name`), a variable or a longer name
-/// that contains it does not.
+/// How often `code` calls or names the function `name`: the whole
+/// identifier after a `::` (a path call or a function reference), or after
+/// a `.` when a `(` follows (a method call), whitespace allowed between. A
+/// field of the same name (`self.wire.status`), a definition (`fn name`), a
+/// variable or a longer name that contains it does not count.
 fn path_uses(code: &str, name: &str) -> usize {
     let ident = |c: char| c.is_alphanumeric() || c == '_';
     code.match_indices(name)
@@ -40,7 +40,8 @@ fn path_uses(code: &str, name: &str) -> usize {
             let after = &code[at + name.len()..];
             let whole = !before.ends_with(ident) && !after.starts_with(ident);
             let reached = before.trim_end();
-            whole && (reached.ends_with('.') || reached.ends_with("::"))
+            let called = after.trim_start().starts_with('(');
+            whole && (reached.ends_with("::") || (reached.ends_with('.') && called))
         })
         .count()
 }
@@ -83,7 +84,8 @@ fn occurrences(name: &str) -> Vec<(String, usize)> {
 #[test]
 fn every_call_shape_of_the_projection_is_counted() {
     let code = "a.wire(); b . wire (); Task::wire(&t); map(Task::wire); x.delivered_wire(); \
-                fn wire(&self) {} let wire = 1; rewire(); a.wire_json(); s.task.wire()";
+                fn wire(&self) {} let wire = 1; rewire(); a.wire_json(); s.task.wire(); \
+                self.wire.status = 1; let s = self.wire.result.clone();";
     assert_eq!(path_uses(code, "wire"), 5);
     assert_eq!(path_uses(code, "delivered_wire"), 1);
 }
