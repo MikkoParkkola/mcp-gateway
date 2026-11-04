@@ -66,8 +66,8 @@ fn key_hash(key: &str) -> String {
 }
 
 struct Gateway {
-    _tmp: tempfile::TempDir,
-    child: tokio::process::Child,
+    /// The gateway and the folder it runs in, stopped before the folder goes.
+    process: gateway_bin::Reaped,
     log: PathBuf,
     url: String,
     http: reqwest::Client,
@@ -108,30 +108,36 @@ impl Gateway {
             &root,
             gateway_bin::Inherit::Environment,
         ));
-        let child = command
-            .current_dir(&root)
-            .env("MCP_GATEWAY_CONFIG_DIR", root.join("gateway-state"))
-            .args(["-c", "gateway.yaml", "-p", "0", "serve"])
-            .stdin(Stdio::null())
-            .stdout(Stdio::from(out))
-            .stderr(Stdio::from(err))
-            .kill_on_drop(true)
-            .spawn()
-            .expect("serve spawns");
+        let mut reaped = gateway_bin::Reaped::new(
+            command
+                .current_dir(&root)
+                .env("MCP_GATEWAY_CONFIG_DIR", root.join("gateway-state"))
+                .args(["-c", "gateway.yaml", "-p", "0", "serve"])
+                .stdin(Stdio::null())
+                .stdout(Stdio::from(out))
+                .stderr(Stdio::from(err))
+                .spawn()
+                .expect("serve spawns"),
+        );
         let http = reqwest::Client::builder()
             .timeout(Duration::from_secs(30))
             .no_proxy()
             .build()
             .expect("an HTTP client");
+        reaped.owning(tmp);
         let mut gateway = Self {
-            _tmp: tmp,
-            child,
+            process: reaped,
             log,
             url: String::new(),
             http,
         };
         gateway.wait_ready().await;
         gateway
+    }
+
+    /// Ends the gateway with a drain; its folder goes only after it exited.
+    async fn stop(self) {
+        self.process.stop().await;
     }
 
     fn logs(&self) -> String {
@@ -143,7 +149,7 @@ impl Gateway {
     async fn wait_ready(&mut self) {
         let deadline = tokio::time::Instant::now() + READY_BOUND;
         loop {
-            if let Some(status) = self.child.try_wait().expect("child status") {
+            if let Some(status) = self.process.child_mut().try_wait().expect("child status") {
                 panic!("serve exited before ready ({status})\n{}", self.logs());
             }
             if self.url.is_empty()
@@ -359,6 +365,7 @@ async fn an_api_key_caller_owns_its_task_and_no_one_else_sees_it() {
         anonymous.get("result").is_none(),
         "a refused create carries no result: {anonymous}"
     );
+    gateway.stop().await;
 }
 
 #[tokio::test]
@@ -438,6 +445,7 @@ async fn two_subjects_behind_one_key_own_separate_tasks() {
         "a subject with no credential must be refused: {headless}"
     );
     assert!(headless.get("result").is_none(), "{headless}");
+    gateway.stop().await;
 }
 
 /// One owner-scoped task call: `tasks/cancel`, or `tasks/update` with the
@@ -532,4 +540,5 @@ async fn another_key_cannot_cancel_or_update_a_running_task() {
         "key A must cancel its own task: {cancelled}"
     );
     assert_eq!(status(&read().await), Some(json!("cancelled")));
+    gateway.stop().await;
 }
