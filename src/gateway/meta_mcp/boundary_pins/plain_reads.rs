@@ -6,10 +6,13 @@
 //! says what it opens. The walk covers the lib, the binary and every other
 //! root, skipping test-only code by cfg.
 //!
-//! A read is a call to a path ending in `fs::read` or `fs::read_to_string`
-//! (std or tokio), `File::open`, or `open_nonblocking`. Not seen: a function
-//! imported by its bare name, `OpenOptions`, `fs::copy`, and a read through a
-//! helper of another name; those helpers are rows themselves where they read.
+//! A read is a call to a path ending in `fs::read`, `fs::read_to_string` or
+//! `fs::copy` (std, tokio or async-std), `File::open`, or `open_nonblocking`,
+//! and every `OpenOptions::new` or `File::options`, which is how a held or
+//! chained open starts. A name a `use` binds under `fs`, bare or renamed, is
+//! resolved first; an `fs` glob import binds names the walk cannot see, so it
+//! is a row of its own. Not seen: a read through a helper of another name;
+//! those helpers are rows themselves where they read.
 //!
 //! Regenerating the table is a reviewed diff, never a silent refresh: run
 //! this test, copy the printed table, and classify every new row.
@@ -44,7 +47,13 @@ const PENDING: [&str; 0] = [];
 
 #[derive(Default)]
 struct Found {
-    reads: BTreeMap<String, usize>,
+    /// Every call by path: (file, fn, path segments as written).
+    calls: Vec<(String, String, Vec<String>)>,
+    /// Per file, each name a `use` binds to something under `fs`: the local
+    /// name and the `fs` path it stands for (`fs`, `fs::read`, `fs::File`).
+    aliases: BTreeMap<String, BTreeMap<String, Vec<String>>>,
+    /// `fs` glob imports, which bind names the walk cannot see: (file, fn).
+    globs: Vec<(String, String)>,
 }
 
 /// The plain read `segments` names, if it is one.
@@ -52,15 +61,86 @@ fn read_callee(segments: &[String]) -> Option<String> {
     let last = segments.last()?.as_str();
     let owner = segments.len().checked_sub(2).map(|i| segments[i].as_str());
     match (owner, last) {
-        (Some("fs"), "read" | "read_to_string") | (Some("File"), "open") => {
-            Some(format!("{}::{last}", owner.unwrap_or_default()))
-        }
+        (Some("fs"), "read" | "read_to_string" | "copy")
+        | (Some("File"), "open" | "options")
+        | (Some("OpenOptions"), "new") => Some(format!("{}::{last}", owner.unwrap_or_default())),
         (_, "open_nonblocking") => Some("open_nonblocking".to_owned()),
         _ => None,
     }
 }
 
+/// Whether `path` is the `fs` module of std, tokio or async-std.
+fn is_fs(path: &[String]) -> bool {
+    matches!(path, [krate, fs] if fs == "fs" && matches!(krate.as_str(), "std" | "tokio" | "async_std"))
+}
+
+/// Each name `tree` binds: (the full path, the local name), or `None` for a
+/// glob over the path.
+fn bindings(
+    tree: &syn::UseTree,
+    prefix: &mut Vec<String>,
+    out: &mut Vec<(Vec<String>, Option<String>)>,
+) {
+    match tree {
+        syn::UseTree::Path(path) => {
+            prefix.push(path.ident.to_string());
+            bindings(&path.tree, prefix, out);
+            prefix.pop();
+        }
+        syn::UseTree::Name(name) if name.ident == "self" => {
+            out.push((prefix.clone(), prefix.last().cloned()));
+        }
+        syn::UseTree::Name(name) => {
+            let mut full = prefix.clone();
+            full.push(name.ident.to_string());
+            out.push((full, Some(name.ident.to_string())));
+        }
+        syn::UseTree::Rename(rename) => {
+            let mut full = prefix.clone();
+            if rename.ident != "self" {
+                full.push(rename.ident.to_string());
+            }
+            out.push((full, Some(rename.rename.to_string())));
+        }
+        syn::UseTree::Glob(_) => out.push((prefix.clone(), None)),
+        syn::UseTree::Group(group) => {
+            for tree in &group.items {
+                bindings(tree, prefix, out);
+            }
+        }
+    }
+}
+
+fn func_of(at: &Place) -> String {
+    at.func.clone().unwrap_or_else(|| "<module>".to_owned())
+}
+
 impl Sink for Found {
+    fn item(&mut self, at: &Place, item: &syn::Item) {
+        let syn::Item::Use(item) = item else {
+            return;
+        };
+        let mut found = Vec::new();
+        bindings(&item.tree, &mut Vec::new(), &mut found);
+        for (full, local) in found {
+            let under_fs = full.len() >= 2 && is_fs(&full[..2]);
+            match local {
+                None if under_fs && full.len() == 2 => {
+                    self.globs.push((at.file.clone(), func_of(at)));
+                }
+                Some(local) if under_fs => {
+                    let mut target = vec!["fs".to_owned()];
+                    target.extend(full[2..].iter().cloned());
+                    self.aliases
+                        .entry(at.file.clone())
+                        .or_default()
+                        .insert(local, target);
+                }
+                _ => {}
+            }
+        }
+    }
+
     fn expr(&mut self, at: &Place, expr: &syn::Expr) {
         let syn::Expr::Call(call) = expr else {
             return;
@@ -74,24 +154,36 @@ impl Sink for Found {
             .iter()
             .map(|s| s.ident.to_string())
             .collect();
-        if let Some(callee) = read_callee(&segments) {
-            let func = at.func.clone().unwrap_or_else(|| "<module>".to_owned());
-            *self
-                .reads
-                .entry(format!("{}\t{func}\t{callee}", at.file))
-                .or_default() += 1;
-        }
+        self.calls.push((at.file.clone(), func_of(at), segments));
     }
 }
 
 fn found_in(root: &Path, roots: &[&str]) -> Vec<String> {
     let mut found = Found::default();
     walk(root, roots, &mut found).expect("the crate walks");
-    found
-        .reads
-        .iter()
-        .map(|(key, n)| format!("{key}\t{n}"))
-        .collect()
+    let mut reads: BTreeMap<String, usize> = BTreeMap::new();
+    for (file, func, segments) in &found.calls {
+        // A name a `use` bound under `fs` stands for its `fs` path.
+        let resolved = match found
+            .aliases
+            .get(file)
+            .and_then(|names| names.get(segments.first()?))
+        {
+            Some(target) => target.iter().chain(&segments[1..]).cloned().collect(),
+            None => segments.clone(),
+        };
+        if let Some(callee) = read_callee(&resolved) {
+            *reads
+                .entry(format!("{file}\t{func}\t{callee}"))
+                .or_default() += 1;
+        }
+    }
+    for (file, func) in &found.globs {
+        *reads
+            .entry(format!("{file}\t{func}\tuse fs::*"))
+            .or_default() += 1;
+    }
+    reads.iter().map(|(key, n)| format!("{key}\t{n}")).collect()
 }
 
 fn pinned(text: &str) -> Vec<String> {
