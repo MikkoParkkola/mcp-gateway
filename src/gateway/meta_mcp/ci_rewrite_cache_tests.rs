@@ -64,6 +64,7 @@ async fn search(meta: &MetaMcp) -> (Value, Option<Value>) {
             crate::gateway::trace::generate(),
         ))
         .await
+        .outcome
         .expect("answered");
         let crate::gateway::meta_mcp::invoke::SourcedOutcome::Live((answer, _, _)) = sourced else {
             panic!("a live answer");
