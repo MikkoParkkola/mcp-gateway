@@ -36,18 +36,24 @@ fn upgrade_fails_on_a_nameless_row_at_a_current_stamp_and_edits_nothing() {
         let dir = tempfile::tempdir().unwrap();
         let (grants, config, data) = install(dir.path(), &format!("{ROW_OK}{ROW_EMPTY}"));
         let before = std::fs::read(&grants).unwrap();
-        let files = std::fs::read_dir(dir.path()).unwrap().count();
+        // Nothing beside the grants file: no backup, no grant lock. (The
+        // config's own lock, taken by the URL-key rewrite, is not this check's.)
+        let beside_grants = || {
+            let mut names: Vec<String> = std::fs::read_dir(dir.path())
+                .unwrap()
+                .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+                .filter(|name| name.contains("grants"))
+                .collect();
+            names.sort();
+            names
+        };
         assert_eq!(
             run_upgrade_with_config(dry_run, true, Some(&data), Some(&config)),
             ExitCode::FAILURE,
             "dry_run={dry_run}"
         );
         assert_eq!(std::fs::read(&grants).unwrap(), before);
-        assert_eq!(
-            std::fs::read_dir(dir.path()).unwrap().count(),
-            files,
-            "no backup, no lock file"
-        );
+        assert_eq!(beside_grants(), ["grants.yaml"], "no backup, no lock file");
     }
 }
 
