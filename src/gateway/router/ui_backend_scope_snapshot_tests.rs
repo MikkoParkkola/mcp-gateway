@@ -29,7 +29,7 @@ const EVENTS: [(&str, bool); 4] = [
 fn grant(grant_id: &str, subject: &str) -> IdentityGrant {
     IdentityGrant {
         grant_id: grant_id.to_string(),
-        subject: GrantSubject::new(ISSUER, subject, None),
+        subject: GrantSubject::for_test(ISSUER, subject, None),
         agent: GrantAgent::Any,
         capability: "matrix-capability".to_string(),
         tool: None,
