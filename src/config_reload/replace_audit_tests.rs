@@ -46,7 +46,7 @@ impl Recorder {
             .lock()
             .expect("lock")
             .iter()
-            .map(|s| s.intent.kind)
+            .map(|s| s.intent.kind.clone())
             .collect()
     }
 }
@@ -554,16 +554,39 @@ async fn a_save_the_loader_refuses_records_no_intent() {
     );
 }
 
-/// A save whose bytes are already the file's writes nothing, so it records
-/// no intent.
+/// A save whose bytes are already the file's still reloads, so an audited
+/// one appends its intent first, marked as an outside change (the running
+/// config may be behind the disk), and a refused append stops that reload.
 #[tokio::test]
-async fn an_unchanged_save_records_no_intent() {
+async fn an_unchanged_save_appends_its_intent_before_its_reload() {
     let (_dir, path, ctx) = setup();
-    let recorder = Recorder::new(&path, false);
+    write_owner_only(&path, NEXT).expect("a hand edit adds b");
+    let unchanged = || to(Expected::Any, NEXT, Replaced::Discard);
 
+    let refusing = Recorder::new(&path, true);
+    let refused = replace_audited(
+        Arc::clone(&ctx),
+        unchanged(),
+        Audit::Required {
+            sink: Box::new(refusing.clone()),
+            kind: IntentKind::Save,
+        },
+        WAIT,
+    )
+    .await;
+    assert!(
+        matches!(refused, Err(ReplaceError::Refused(_))),
+        "{refused:?}"
+    );
+    assert!(
+        !running_has_b(&ctx),
+        "a refused intent let the unchanged save reload the hand edit"
+    );
+
+    let recorder = Recorder::new(&path, false);
     let outcome = replace_audited(
         Arc::clone(&ctx),
-        to(Expected::Any, START, Replaced::Discard),
+        unchanged(),
         Audit::Required {
             sink: Box::new(recorder.clone()),
             kind: IntentKind::Save,
@@ -572,24 +595,60 @@ async fn an_unchanged_save_records_no_intent() {
     )
     .await
     .expect("an unchanged save goes ahead");
-
     assert_eq!(outcome.revision, None, "the unchanged save wrote");
+    let seen = recorder.seen.lock().expect("lock");
     assert_eq!(
-        recorder.kinds(),
-        [],
-        "an unchanged save left an operation intent"
+        seen.iter()
+            .map(|s| (s.intent.kind.clone(), s.intent.outside_change))
+            .collect::<Vec<_>>(),
+        [(IntentKind::Save, true)],
+        "an unchanged save's intent"
     );
+    assert!(running_has_b(&ctx), "the unchanged save did not reload");
 }
 
-/// The older mutate path on an audited gateway: its lock never recovers a
-/// pending journal unaudited. The write is refused before any lock, so the
-/// crashed bytes and the journal stay and nothing is loaded.
+/// An audit log at `dir/audit.jsonl`, carried by a context's reporting: the
+/// production posture of a gateway with a transparency log.
+fn audit_log_reporting(dir: &Path) -> super::refusals::ReloadReporting {
+    let log = Arc::new(
+        crate::security::TransparencyLogger::open(Arc::new(
+            crate::security::transparency_log::TransparencyLogConfig {
+                enabled: true,
+                path: dir.join("audit.jsonl").to_string_lossy().into_owned(),
+                key_id: "posture".to_string(),
+                ..Default::default()
+            },
+        ))
+        .expect("log opens"),
+    );
+    super::refusals::ReloadReporting::default().with_audit_log(Some(log))
+}
+
+/// A context over `path` whose running config has auth on, with no audit
+/// log: a posture that refuses every config write.
+fn auth_on_context(path: &Path) -> Arc<super::ReloadContext> {
+    let mut running = crate::config::Config::load(Some(path)).expect("config loads");
+    running.auth.enabled = true;
+    Arc::new(
+        super::ReloadContext::new(
+            path.to_path_buf(),
+            Arc::new(super::LiveConfig::new(running)),
+            Arc::new(crate::backend::BackendRegistry::new()),
+            crate::config::FailsafeConfig::default(),
+            std::time::Duration::from_secs(60),
+        )
+        .expect("the registry pairs with the config"),
+    )
+}
+
+/// The older mutate path with auth on and no audit log: a posture that
+/// requires an audit. The write is refused before any lock, so the crashed
+/// bytes and the journal stay and nothing is loaded.
 #[tokio::test]
-async fn the_mutate_path_on_an_audited_gateway_recovers_nothing() {
-    let (_dir, path, ctx) = setup();
+async fn the_mutate_path_with_auth_on_and_no_log_recovers_nothing() {
+    let (_dir, path, _) = setup();
+    let ctx = auth_on_context(&path);
     crashed_after_rename(&path, NEXT);
-    let recorder = Recorder::new(&path, false);
-    ctx.set_recovery_audit(Box::new(recorder.clone()));
 
     let result = ctx
         .mutate_and_reload_outcome_within(&path, WAIT, |_: &mut crate::config::Config| {
@@ -609,15 +668,14 @@ async fn the_mutate_path_on_an_audited_gateway_recovers_nothing() {
     assert!(!running_has_b(&ctx), "the crashed bytes were loaded");
 }
 
-/// The older whole-file write on an audited gateway: its lock never
-/// recovers a pending journal unaudited. Refused before any lock, so the
-/// crashed bytes and the journal stay and nothing is loaded.
+/// The older whole-file write on a gateway with an audit log: its lock
+/// never recovers a pending journal unaudited. Refused before any lock, so
+/// the crashed bytes and the journal stay and nothing is loaded.
 #[tokio::test]
 async fn the_whole_file_write_on_an_audited_gateway_recovers_nothing() {
-    let (_dir, path, ctx) = setup();
+    let (dir, path, _) = setup();
+    let ctx = Arc::new(unshared(&path).with_reporting(audit_log_reporting(dir.path())));
     crashed_after_rename(&path, NEXT);
-    let recorder = Recorder::new(&path, false);
-    ctx.set_recovery_audit(Box::new(recorder.clone()));
     let config = crate::config::Config::load(Some(&path)).expect("config loads");
 
     let result = ctx
@@ -640,29 +698,13 @@ async fn the_whole_file_write_on_an_audited_gateway_recovers_nothing() {
     assert!(!running_has_b(&ctx), "the crashed bytes were loaded");
 }
 
-/// M8: the old mutate path reads the gateway's audit posture live. A context
-/// whose reporting carries an audit log is audited even with no recovery
-/// sink installed, so the mutate is refused and recovers nothing.
+/// The old mutate path reads the gateway's audit posture from the context:
+/// a context whose reporting carries an audit log is audited even with no
+/// recovery sink installed, so the mutate is refused and recovers nothing.
 #[tokio::test]
 async fn the_mutate_path_reads_the_live_audit_posture() {
     let (dir, path, _) = setup();
-    let log = Arc::new(
-        crate::security::TransparencyLogger::open(Arc::new(
-            crate::security::transparency_log::TransparencyLogConfig {
-                enabled: true,
-                path: dir
-                    .path()
-                    .join("audit.jsonl")
-                    .to_string_lossy()
-                    .into_owned(),
-                key_id: "posture".to_string(),
-                ..Default::default()
-            },
-        ))
-        .expect("log opens"),
-    );
-    let reporting = super::refusals::ReloadReporting::default().with_audit_log(Some(log));
-    let ctx = Arc::new(unshared(&path).with_reporting(reporting));
+    let ctx = Arc::new(unshared(&path).with_reporting(audit_log_reporting(dir.path())));
     crashed_after_rename(&path, NEXT);
 
     let result = ctx
@@ -679,5 +721,41 @@ async fn the_mutate_path_reads_the_live_audit_posture() {
     assert!(
         journal::journal_path(&path).exists(),
         "the mutate path settled the journal unaudited"
+    );
+}
+
+/// The old path's posture is fixed for a context's lifetime: auth is
+/// restart-only, so a reload whose file turns auth on is accepted while the
+/// running auth stays off, and the old path's answer does not change. Fails
+/// if auth ever becomes reloadable, or the guard reads the reloaded config.
+#[tokio::test]
+async fn a_reload_that_turns_auth_on_leaves_the_old_path_posture_as_started() {
+    let (_dir, path, ctx) = setup();
+    assert!(!ctx.live_config.running().auth.enabled, "premise: auth off");
+    let key = crate::config::api_key_digest_spec(b"posture-pin-secret");
+    let auth_on = format!(
+        "{START}auth:\n  enabled: true\n  single_user: true\n  api_keys:\n    - name: pin\n      key_sha256: \"{key}\"\n      backends: [\"*\"]\n"
+    );
+    write_owner_only(&path, &auth_on).expect("write");
+
+    ctx.reload_outcome().await.expect("the reload accepts auth on");
+
+    assert!(
+        ctx.live_config.get().auth.enabled,
+        "premise: the reload published auth on"
+    );
+    assert!(
+        !ctx.live_config.running().auth.enabled,
+        "the running auth changed without a restart"
+    );
+    let result = ctx
+        .mutate_and_reload_outcome_within(&path, WAIT, |_: &mut crate::config::Config| {
+            Ok::<(), String>(())
+        })
+        .await;
+    assert!(
+        matches!(result, Ok(super::ConfigMutation::Applied(..))),
+        "a reload changed the old path's posture: {:?}",
+        result.as_ref().err()
     );
 }

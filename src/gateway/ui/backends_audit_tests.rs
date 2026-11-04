@@ -35,8 +35,19 @@ struct Audited {
     log: Arc<TransparencyLogger>,
 }
 
+/// Whether the fixture's gateway has a reload context.
+#[derive(Clone, Copy)]
+enum Reload {
+    Live,
+    Absent,
+}
+
 impl Audited {
     async fn new() -> Self {
+        Self::build(Reload::Live).await
+    }
+
+    async fn build(reload: Reload) -> Self {
         let dir = tempfile::tempdir().expect("dir");
         let path = dir.path().join("gateway.yaml");
         write_owner_only(&path, START).expect("write config");
@@ -77,7 +88,9 @@ impl Audited {
             )
             .expect("the registry pairs with the config"),
         );
-        state.meta_mcp.set_reload_context(Arc::clone(&ctx));
+        if let Reload::Live = reload {
+            state.meta_mcp.set_reload_context(Arc::clone(&ctx));
+        }
         Self {
             dir,
             _store: store,
@@ -327,38 +340,6 @@ async fn a_backend_update_recovers_a_pending_journal_only_after_its_intent() {
     );
 }
 
-/// gateway.yaml is gone when a backend add arrives on an audited gateway:
-/// the add creates it, with its intent appended first; with the append
-/// refused no file is created.
-#[tokio::test]
-async fn an_audited_backend_add_creates_a_missing_config_after_its_intent() {
-    let gateway = Audited::new().await;
-    std::fs::remove_file(gateway.config()).expect("remove config");
-    let (status, body) = gateway.add("b").await;
-    assert_eq!(status, StatusCode::CREATED, "{body}");
-    let text = gateway.text();
-    assert!(
-        text.contains("b:"),
-        "the add did not create the file: {text}"
-    );
-    assert!(
-        gateway.events().iter().any(|e| e == INTENT),
-        "the create wrote no intent; the log holds {:?}",
-        gateway.events()
-    );
-
-    let refused = Audited::new().await;
-    std::fs::remove_file(refused.config()).expect("remove config");
-    refused.log.set_append_failure_for_test(true);
-    let (status, body) = refused.add("b").await;
-    refused.log.set_append_failure_for_test(false);
-    assert!(status.is_server_error(), "{status}: {body}");
-    assert!(
-        !refused.config().exists(),
-        "a refused intent let the add create gateway.yaml"
-    );
-}
-
 /// The backend intent names its operation and backend, never a value.
 #[tokio::test]
 async fn a_backend_intent_names_its_operation_and_backend() {
@@ -396,17 +377,64 @@ async fn a_no_op_update_with_a_refused_intent_applies_no_outside_change() {
     );
 }
 
-/// Remove and update on a missing gateway.yaml answer 404: the empty root
-/// has no backends.
+/// What every backend route answers with no gateway.yaml to write into.
+const NO_CONFIG_FILE: &str = "no gateway.yaml exists yet; create one with `mcp-gateway init --profile local` (see QUICKSTART), then retry";
+
+/// Add, remove and update on a missing gateway.yaml: each is refused with
+/// 409 `no_config_file` and the way forward, appends no intent and leaves
+/// nothing behind: no file, no lock, no secret entry.
 #[tokio::test]
-async fn remove_and_update_on_a_missing_config_answer_not_found() {
+async fn the_backend_routes_refuse_a_missing_config_with_the_way_forward() {
     let gateway = Audited::new().await;
     std::fs::remove_file(gateway.config()).expect("remove config");
-    let (status, body) = gateway.remove("a").await;
-    assert_eq!(status, StatusCode::NOT_FOUND, "remove: {body}");
-    let (status, body) = gateway.update("a", "edited").await;
-    assert_eq!(status, StatusCode::NOT_FOUND, "update: {body}");
-    assert!(!gateway.config().exists(), "a 404 created gateway.yaml");
+    let answers = [
+        ("add", gateway.add("b").await),
+        ("remove", gateway.remove("a").await),
+        ("update", gateway.update("a", "edited").await),
+    ];
+    for (route, (status, body)) in answers {
+        assert_eq!(status, StatusCode::CONFLICT, "{route}: {body}");
+        assert_eq!(
+            (&body["error"], &body["message"]),
+            (&Value::from("no_config_file"), &Value::from(NO_CONFIG_FILE)),
+            "{route}: {body}"
+        );
+    }
+    assert!(
+        !gateway.events().iter().any(|e| e.ends_with("_intent")),
+        "a refused route appended an intent: {:?}",
+        gateway.events()
+    );
+    let mut left: Vec<_> = std::fs::read_dir(gateway.dir.path())
+        .expect("list")
+        .map(|e| e.expect("entry").file_name().to_string_lossy().into_owned())
+        .filter(|name| !name.contains("audit"))
+        .collect();
+    left.sort();
+    assert_eq!(left, Vec::<String>::new(), "a refused route left files");
+}
+
+/// A gateway with a config path but no reload context: every backend route
+/// fails closed with 503 and writes nothing.
+#[tokio::test]
+async fn without_a_reload_context_the_backend_routes_write_nothing() {
+    let gateway = Audited::build(Reload::Absent).await;
+    let answers = [
+        ("add", gateway.add("b").await),
+        ("remove", gateway.remove("a").await),
+        ("update", gateway.update("a", "edited").await),
+    ];
+    for (route, (status, body)) in answers {
+        assert_eq!(
+            (status, &body["error"]),
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                &Value::from("Config reload is not enabled on this gateway")
+            ),
+            "{route}: {body}"
+        );
+    }
+    assert_eq!(gateway.text(), START, "a route with no context wrote");
 }
 
 /// Auth on and no audit log: a backend write is refused by the audit

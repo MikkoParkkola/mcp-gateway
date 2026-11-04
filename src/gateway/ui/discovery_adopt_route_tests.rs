@@ -442,6 +442,11 @@ async fn without_a_config_file_nothing_is_adopted() {
     let (status, body) = route.adopt(true, &id, &revision).await;
     assert_eq!(status, StatusCode::CONFLICT, "{body}");
     assert_eq!(body["error"], "no_config_file", "{body}");
+    assert_eq!(
+        body["message"],
+        "no gateway.yaml exists yet; create one with `mcp-gateway init --profile local` (see QUICKSTART), then retry",
+        "{body}"
+    );
 }
 
 /// W25: on a gateway with an audit log, an adopt appends its own paired
