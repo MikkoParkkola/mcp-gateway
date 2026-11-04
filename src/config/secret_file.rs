@@ -660,21 +660,13 @@ mod tests;
 #[path = "secret_file_population_tests.rs"]
 mod population_tests;
 
-/// The Windows DACL refusal text for a recovery file, read on every platform.
+/// The refusal text for a recovery file, every kind, read on every platform.
 #[cfg(test)]
 mod recovery_text_tests {
-    /// No icacls repair and no owner change for a journal or staged original
-    /// another account may have planted; the untrusted, move-aside guidance
-    /// instead, after the guard's own facts.
-    #[test]
-    fn the_windows_recovery_file_refusal_gives_no_acl_repair() {
-        let head = r"Refusing to load replace journal or staged original C:\gw\.gateway.yaml.replace-journal";
-        let found = r#"[ForeignSid("S-1-1-0"), NotProtected]"#;
+    use super::SecretFile;
 
-        let text = super::acl_refusal_text(super::SecretFile::RecoveryFile, head, found, || {
-            unreachable!("a recovery file never gets the repair detail")
-        });
-
+    /// No owner, mode or ACL fix; the untrusted, move-aside guidance.
+    fn assert_recovery_guidance(kind: &str, text: &str) {
         let lower = text.to_lowercase();
         for advice in [
             "icacls",
@@ -686,23 +678,92 @@ mod recovery_text_tests {
             "chmod",
             "fix: ",
         ] {
+            assert!(!lower.contains(advice), "{kind} advises {advice:?}: {text}");
+        }
+        assert!(lower.contains("untrusted"), "{kind}: {text}");
+        assert!(lower.contains("move both files aside"), "{kind}: {text}");
+    }
+
+    /// Every refusal kind the guard gives a journal or staged original: the
+    /// Windows DACL, not UTF-8, not a regular file, and on Unix each mode rule
+    /// and a foreign owner. Another class keeps its usual fix.
+    #[test]
+    fn every_recovery_file_refusal_gives_the_guidance_and_no_fix() {
+        let path = std::path::Path::new("/gw/.gateway.yaml.replace-journal");
+        let what = SecretFile::RecoveryFile;
+        let head = r"Refusing to load replace journal or staged original C:\gw\x";
+        let found = r#"[ForeignSid("S-1-1-0"), NotProtected]"#;
+        let acl = super::acl_refusal_text(what, head, found, || unreachable!("no repair"));
+        assert!(acl.starts_with(head) && acl.contains(found), "{acl}");
+        let mut kinds = vec![
+            ("windows dacl", acl),
+            ("not utf-8", super::not_utf8_message(what, path)),
+            ("fifo", super::not_regular_message(what, path, "FIFO")),
+        ];
+        #[cfg(unix)]
+        {
+            use super::Refusal;
+            for (name, refusal) in [
+                ("world", Refusal::World),
+                ("group write", Refusal::GroupWrite),
+                ("group read", Refusal::GroupReadOwned),
+                ("foreign owner", Refusal::ForeignOwner),
+            ] {
+                kinds.push((
+                    name,
+                    super::refusal_message(what, path, refusal, (0o666, 0, 7), 0),
+                ));
+            }
+            let config =
+                super::refusal_message(SecretFile::Config, path, Refusal::World, (0o666, 0, 7), 0);
             assert!(
-                !lower.contains(advice),
-                "the refusal advises {advice:?}: {text}"
+                config.contains("Fix: chmod 600"),
+                "the config fix changed: {config}"
             );
         }
-        assert!(text.starts_with(head), "the guard's facts are gone: {text}");
-        assert!(text.contains(found), "the found refusals are gone: {text}");
-        assert!(lower.contains("untrusted"), "{text}");
-        assert!(lower.contains("move both files aside"), "{text}");
+        for (kind, text) in &kinds {
+            assert!(text.contains(what.noun()), "{kind} lost the facts: {text}");
+            assert_recovery_guidance(kind, text);
+        }
+    }
+
+    /// Only crash recovery reads through the recovery class, and the config
+    /// class's guarded read has a fixed set of callers, none of which is
+    /// handed a journal or staged-original path: a new caller of either is a
+    /// reviewed change.
+    #[test]
+    fn the_recovery_and_config_reads_have_their_known_callers() {
+        let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let callers = |needle: &str| -> Vec<String> {
+            let mut found = Vec::new();
+            let mut stack = vec![src.clone()];
+            while let Some(dir) = stack.pop() {
+                for entry in std::fs::read_dir(dir).expect("src").flatten() {
+                    let path = entry.path();
+                    let text = std::fs::read_to_string(&path).unwrap_or_default();
+                    if path.is_dir() {
+                        stack.push(path);
+                    } else if crate::test_source_text::production_text(&text).contains(needle) {
+                        let rel = path.strip_prefix(&src).expect("under src");
+                        found.push(rel.to_string_lossy().replace('\\', "/"));
+                    }
+                }
+            }
+            found.sort();
+            found
+        };
+        assert_eq!(
+            callers("read_recovery_text("),
+            ["config/secret_file.rs", "config_persistence_journal.rs"]
+        );
+        assert_eq!(
+            callers("read_config_text("),
+            [
+                "config/secret_file.rs",
+                "config_persistence.rs",
+                "config_reload/replace.rs",
+                "config_reload/replace_audit.rs",
+            ]
+        );
     }
 }
-
-// Unix-only (W-L8): FIFO and device-file fixtures (`mkfifo`, `/dev/null`).
-#[cfg(all(test, unix))]
-#[path = "secret_file_type_tests.rs"]
-mod type_tests;
-
-#[cfg(all(test, windows))]
-#[path = "secret_file_windows_tests.rs"]
-mod windows_tests;
