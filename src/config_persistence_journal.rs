@@ -250,7 +250,7 @@ pub(crate) fn recover(config: &Path) -> Result<Recovered, NotRecovered> {
             // The bytes restored as gateway.yaml: read through the config
             // guard, so a staged original another account could plant or
             // change, with a digest to match, is never restored.
-            let bytes = match crate::config::read_config_text(&original) {
+            let bytes = match crate::config::read_recovery_text(&original) {
                 Ok(Some(text)) => text.into_bytes(),
                 Ok(None) => {
                     return Err(NotRecovered::Failed(format!(
@@ -335,7 +335,7 @@ pub(crate) fn take_restored(config: &Path) -> bool {
 /// The journal at `path`, read through the config guard (it decides which
 /// bytes are restored as gateway.yaml); `None` when there is none.
 fn read(path: &Path) -> Result<Option<Journal>, UnreadConfig> {
-    let Some(text) = crate::config::read_config_text(path)? else {
+    let Some(text) = crate::config::read_recovery_text(path)? else {
         return Ok(None);
     };
     let journal: Journal =
