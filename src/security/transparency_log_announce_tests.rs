@@ -107,6 +107,10 @@ fn h1_a_failed_write_is_never_announced() {
         .collect();
     assert_eq!(counters.len(), 2, "two writes succeeded, one failed");
     assert!(
+        told.lock().unwrap().iter().all(|t| t.2 == 0),
+        "a failed write is not a rewrite"
+    );
+    assert!(
         counters.iter().all(|c| on_disk.contains(c)),
         "only persisted records are announced: {counters:?} vs {on_disk:?}"
     );
@@ -238,10 +242,11 @@ fn assert_announced_as_persisted(path: &Path, told: &Told) {
             "announced record {counter} is not on disk as announced"
         );
     }
-    let mut counters: Vec<u64> = told.iter().map(|t| t.1).collect();
-    let n = counters.len();
-    counters.dedup();
-    assert_eq!(counters.len(), n, "a counter announced twice");
+    let counters: Vec<u64> = told.iter().map(|t| t.1).collect();
+    assert!(
+        counters.windows(2).all(|w| w[0] < w[1]),
+        "announced out of order or twice: {counters:?}"
+    );
 }
 
 #[test]
@@ -271,6 +276,10 @@ fn h1_a_failed_sync_is_never_announced_and_the_next_write_is() {
         .filter_map(|t| t.0.get("change").and_then(Value::as_u64))
         .collect();
     assert_eq!(changes, vec![2], "only the write whose sync succeeded");
+    assert!(
+        told.lock().unwrap().iter().all(|t| t.2 == 0),
+        "a failed sync is not a rewrite"
+    );
     assert_announced_as_persisted(&path, &told);
 }
 
@@ -368,4 +377,57 @@ fn h2_a_file_cut_after_subscribing_and_before_any_append_raises_it() {
         .unwrap();
     append(&log, 3);
     assert!(told.lock().unwrap().last().unwrap().2 > 0);
+}
+
+fn cut_in_half(path: &Path) {
+    let len = std::fs::metadata(path).unwrap().len();
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(path)
+        .unwrap()
+        .set_len(len / 2)
+        .unwrap();
+}
+
+#[test]
+fn h2_a_second_reader_subscribing_after_a_cut_does_not_hide_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = log_path(&dir);
+    let log = TransparencyLogger::open(cfg(&path, 12, false)).unwrap();
+    let first = listen(&log);
+    for i in 0..3 {
+        append(&log, i);
+    }
+    cut_in_half(&path);
+    let _second = listen(&log);
+    append(&log, 3);
+    assert!(
+        first.lock().unwrap().last().unwrap().2 > 0,
+        "the cut before the second subscribe still raises the generation"
+    );
+}
+
+#[test]
+fn h2_a_cut_after_a_rebuild_whose_write_failed_raises_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = log_path(&dir);
+    let log = TransparencyLogger::open(cfg(&path, 12, false)).unwrap();
+    let told = listen(&log);
+    for i in 0..3 {
+        append(&log, i);
+    }
+    // The active file goes away: the next append rebuilds onto a new file,
+    // and its own record write fails, so no write records the new end.
+    std::fs::remove_file(&path).unwrap();
+    log.arm_write_fault(Some(WriteFault::WriteError));
+    assert!(log.log_invocation("s", "c", "srv", "t", "a", "b").is_err());
+    let raised = told.lock().unwrap().last().map_or(0, |t| t.2);
+    append(&log, 3);
+    cut_in_half(&path);
+    append(&log, 4);
+    let told = told.lock().unwrap();
+    assert!(
+        told.last().unwrap().2 > raised,
+        "the cut of the rebuilt file raised the generation: {told:?}"
+    );
 }
