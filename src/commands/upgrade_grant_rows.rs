@@ -22,17 +22,24 @@ fn grants_path(config: Option<&Path>) -> Result<Option<std::path::PathBuf>, Stri
         .then(|| super::super::identity::expand_home_path(Path::new(&grants.path))))
 }
 
+/// What the grants check found.
+pub(super) enum GrantsCheck {
+    /// Grants are off, or the grants file loads.
+    Passed,
+    /// The grants file would not load; the loader's refusal was printed.
+    Refused,
+    /// The config itself does not load, so no grants file could be named.
+    ConfigDoesNotLoad(String),
+}
+
 /// Read the grants file through the loader, on its own thread so this runs
-/// inside or outside an async runtime. `false`, with the loader's refusal
-/// printed, when the file would not load.
-pub(super) fn check_grant_rows(config: Option<&Path>) -> bool {
+/// inside or outside an async runtime. The loader's refusal is printed; a
+/// config that does not load is returned for the caller to judge.
+pub(super) fn check_grant_rows(config: Option<&Path>) -> GrantsCheck {
     let path = match grants_path(config) {
         Ok(Some(path)) => path,
-        Ok(None) => return true,
-        Err(refusal) => {
-            eprintln!("Error: {refusal}");
-            return false;
-        }
+        Ok(None) => return GrantsCheck::Passed,
+        Err(why) => return GrantsCheck::ConfigDoesNotLoad(why),
     };
     // A missing file is the loader's to judge, as at startup.
     let read = std::thread::spawn(move || {
@@ -48,10 +55,10 @@ pub(super) fn check_grant_rows(config: Option<&Path>) -> bool {
     .join()
     .unwrap_or_else(|_| Err("the identity grants check panicked".to_string()));
     match read {
-        Ok(()) => true,
+        Ok(()) => GrantsCheck::Passed,
         Err(refusal) => {
             eprintln!("Error: {refusal}");
-            false
+            GrantsCheck::Refused
         }
     }
 }

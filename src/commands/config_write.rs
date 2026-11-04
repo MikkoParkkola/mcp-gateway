@@ -137,6 +137,7 @@ fn rewrite_of(text: &str) -> UrlRewrite {
     if let Some(text) = hashed {
         rewrite.text = text;
     }
+    rewrite.saves = rewrite.text != text;
     rewrite
 }
 

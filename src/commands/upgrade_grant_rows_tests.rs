@@ -85,19 +85,24 @@ fn upgrade_fails_when_the_grants_file_is_missing() {
     );
 }
 
-/// A config the upgrade still rewrites (here a removed key) does not load as
-/// it stands, so a dry run defers the grants check instead of failing on the
-/// config, and the run that applies the rewrite checks them.
+/// `install` with `extra` appended to the config.
+fn install_with(dir: &Path, rows: &str, extra: &str) -> (PathBuf, PathBuf) {
+    let (_, config, data) = install(dir, rows);
+    let text = std::fs::read_to_string(&config).unwrap();
+    mcp_gateway::gateway::test_helpers::write_owner_only(&config, &format!("{text}{extra}"))
+        .unwrap();
+    (config, data)
+}
+
+/// A removed key the config refuses to load with (`marketplace`), which the
+/// rewrite removes: a dry run cannot load the config as it stands, so it
+/// defers the grants check, and the run that applies the rewrite checks
+/// them. With valid grants that run passes, so its failure is the grants'.
 #[test]
 fn a_pending_rewrite_defers_the_grants_check_to_the_applying_run() {
+    const REFUSING: &str = "marketplace:\n  plugin_dir: /tmp/p\n";
     let dir = tempfile::tempdir().unwrap();
-    let (_, config, data) = install(dir.path(), &format!("{ROW_OK}{ROW_EMPTY}"));
-    let text = std::fs::read_to_string(&config).unwrap();
-    mcp_gateway::gateway::test_helpers::write_owner_only(
-        &config,
-        &format!("{text}meta_mcp:\n  cache_tools: true\n"),
-    )
-    .unwrap();
+    let (config, data) = install_with(dir.path(), &format!("{ROW_OK}{ROW_EMPTY}"), REFUSING);
     assert_eq!(
         run_upgrade_with_config(true, true, Some(&data), Some(&config)),
         ExitCode::SUCCESS,
@@ -107,5 +112,29 @@ fn a_pending_rewrite_defers_the_grants_check_to_the_applying_run() {
         run_upgrade_with_config(false, true, Some(&data), Some(&config)),
         ExitCode::FAILURE,
         "the applying run loads the rewritten config and checks its grants"
+    );
+    let clean = tempfile::tempdir().unwrap();
+    let (config, data) = install_with(clean.path(), ROW_OK, REFUSING);
+    assert_eq!(
+        run_upgrade_with_config(false, true, Some(&data), Some(&config)),
+        ExitCode::SUCCESS,
+        "with valid grants the applying run passes"
+    );
+}
+
+/// A removed key that only warns (`meta_mcp.cache_tools`) leaves a config
+/// that loads as it stands, so a dry run checks its grants rather than
+/// deferring.
+#[test]
+fn a_dry_run_checks_grants_when_the_config_loads_as_it_stands() {
+    let dir = tempfile::tempdir().unwrap();
+    let (config, data) = install_with(
+        dir.path(),
+        &format!("{ROW_OK}{ROW_EMPTY}"),
+        "meta_mcp:\n  cache_tools: true\n",
+    );
+    assert_eq!(
+        run_upgrade_with_config(true, true, Some(&data), Some(&config)),
+        ExitCode::FAILURE
     );
 }

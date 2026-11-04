@@ -34,8 +34,7 @@ pub fn run_upgrade_with_config(
         return ExitCode::FAILURE;
     }
     let mut blocking = 0;
-    // A dry run that would still rewrite the config cannot load it as it
-    // will be, so its grants are checked by the run that applies it.
+    // A dry run leaves a rewrite pending when it would change the text.
     let mut pending = false;
     if let Some(path) = super::super::doctor::resolve_config_path(config).filter(|p| p.exists()) {
         let mode = if dry_run {
@@ -51,10 +50,7 @@ pub fn run_upgrade_with_config(
                     }
                 }
                 blocking = rewrite.blocking();
-                pending = dry_run
-                    && !(rewrite.changed.is_empty()
-                        && rewrite.removed.is_empty()
-                        && rewrite.api_keys.is_empty());
+                pending = dry_run && rewrite.saves;
             }
             Err(e) => {
                 eprintln!("Error: {e}");
@@ -67,18 +63,25 @@ pub fn run_upgrade_with_config(
     // not load (MIK-8044).
     let code = super::run_upgrade_command(dry_run, quiet, data_dir);
     if blocking == 0 {
-        // Read-only, so a dry run checks too, once the config is in its final
-        // form; it is found as startup finds it, after the rewrite above.
-        if pending {
-            if !quiet {
-                println!("Identity grants are checked once the rewrite above is applied.");
+        // Read-only, so a dry run checks too; the config is found as startup
+        // finds it, after the rewrite above. A dry run whose config does not
+        // load as it stands, with a rewrite pending, leaves the grants to the
+        // run that applies the rewrite.
+        use super::grant_rows::{GrantsCheck, check_grant_rows};
+        return match check_grant_rows(config) {
+            GrantsCheck::Passed => code,
+            GrantsCheck::Refused => ExitCode::FAILURE,
+            GrantsCheck::ConfigDoesNotLoad(_) if pending => {
+                if !quiet {
+                    println!("Identity grants are checked once the rewrite above is applied.");
+                }
+                code
             }
-            return code;
-        }
-        if !super::grant_rows::check_grant_rows(config) {
-            return ExitCode::FAILURE;
-        }
-        return code;
+            GrantsCheck::ConfigDoesNotLoad(why) => {
+                eprintln!("Error: {why}");
+                ExitCode::FAILURE
+            }
+        };
     }
     if quiet {
         eprintln!(

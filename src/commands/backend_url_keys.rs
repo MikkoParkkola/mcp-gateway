@@ -24,6 +24,8 @@ pub(crate) struct UrlRewrite {
     pub removed: Vec<super::retired_config_keys::Removal>,
     /// What the same rewrite did with each plaintext API key (MIK-8044).
     pub api_keys: Vec<super::api_key_rewrite::KeyRewrite>,
+    /// Whether the rewrite changes the file's text (what an apply saves).
+    pub saves: bool,
 }
 
 /// `text` is the whole config file, which can hold a plaintext API key (one
@@ -129,6 +131,7 @@ pub(crate) fn rewrite_url_aliases(text: &str, only: Option<&BTreeSet<String>>) -
             kept,
             removed: Vec::new(),
             api_keys: Vec::new(),
+            saves: false,
         };
     }
     UrlRewrite {
@@ -138,6 +141,7 @@ pub(crate) fn rewrite_url_aliases(text: &str, only: Option<&BTreeSet<String>>) -
         kept,
         removed: Vec::new(),
         api_keys: Vec::new(),
+        saves: false,
     }
 }
 
