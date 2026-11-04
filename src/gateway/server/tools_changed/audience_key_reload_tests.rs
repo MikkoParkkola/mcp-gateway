@@ -83,7 +83,7 @@ async fn stream1_a_removed_key_ends_its_held_streams() {
     reload_k_std(&w, |_| false);
     push(&w, "alpha").await;
     assert!(
-        get.closed(&w).await,
+        !get.is_open(&w).await,
         "STREAM.1: the GET stream still serves a removed key"
     );
     assert!(
