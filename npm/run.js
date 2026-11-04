@@ -47,9 +47,16 @@ function getPlatform() {
 function download(url, get = https.get, redirects = 0) {
   return new Promise((resolve, reject) => {
     const req = get(url, (res) => {
+      // First, so a redirect or refused response that errors still rejects.
+      res.on("error", reject);
       if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
         res.resume();
-        const next = new URL(res.headers.location, url);
+        let next;
+        try {
+          next = new URL(res.headers.location, url);
+        } catch {
+          return reject(new Error(`malformed redirect from ${url}`));
+        }
         if (next.protocol !== "https:")
           return reject(new Error(`refusing a redirect off HTTPS for ${url}`));
         if (redirects >= MAX_REDIRECTS)
@@ -62,7 +69,6 @@ function download(url, get = https.get, redirects = 0) {
       }
       const chunks = [];
       res.on("data", (chunk) => chunks.push(chunk));
-      res.on("error", reject);
       res.on("aborted", () => reject(new Error(`download interrupted: ${url}`)));
       res.on("end", () => {
         if (!res.complete) return reject(new Error(`download interrupted: ${url}`));

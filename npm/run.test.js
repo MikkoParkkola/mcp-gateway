@@ -86,6 +86,11 @@ test("a sibling listed before the artifact does not shadow it", () => {
   assert.equal(expectedDigest(reordered, ARTIFACT), "b".repeat(64));
 });
 
+test("CRLF line endings, an uppercase digest and the binary-mode marker parse", () => {
+  const crlf = `${"C".repeat(64)} *${ARTIFACT}\r\n${"d".repeat(64)}  other\r\n`;
+  assert.equal(expectedDigest(crlf, ARTIFACT), "c".repeat(64));
+});
+
 test("an artifact the sums file does not list is refused", () => {
   const without = RELEASE_SUMS.split("\n")
     .filter((line) => !line.endsWith(`  ${ARTIFACT}`))
@@ -174,6 +179,18 @@ test("a redirect off HTTPS is refused", async () => {
   });
   try {
     await assert.rejects(download(`${url}/bin`, http.get), /redirect off HTTPS/);
+  } finally {
+    server.close();
+  }
+});
+
+test("a malformed redirect is an error, not a crash", async () => {
+  const { server, url } = await serve((req, res) => {
+    res.writeHead(302, { location: "https://[::1" });
+    res.end();
+  });
+  try {
+    await assert.rejects(download(`${url}/bin`, http.get), /malformed redirect/);
   } finally {
     server.close();
   }
