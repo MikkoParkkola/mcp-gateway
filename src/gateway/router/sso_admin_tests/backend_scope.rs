@@ -354,7 +354,14 @@ async fn the_cost_reports_admin_views_refuse_a_backend_scoped_admin() {
         for arguments in &views {
             let call = json!({"name": "gateway_cost_report", "arguments": arguments});
             let (status, body) = send(&gw.state, rpc(&bearer, "tools/call", &call)).await;
-            if answered(status, &body) != want {
+            // A refusal must be the admin-view refusal, not any failure.
+            let refused = body.to_string().contains("admin credential");
+            let ok = if want {
+                answered(status, &body)
+            } else {
+                !answered(status, &body) && refused
+            };
+            if !ok {
                 wrong.push(format!("{who} {arguments}: {status} {body}"));
             }
         }
