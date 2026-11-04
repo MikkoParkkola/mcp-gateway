@@ -180,34 +180,5 @@ fn refused_write(e: &ReplaceError) -> axum::response::Response {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    async fn message(e: &ReplaceError) -> (StatusCode, String) {
-        let response = refused_write(e);
-        let status = response.status();
-        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .expect("body");
-        (status, String::from_utf8_lossy(&body).into_owned())
-    }
-
-    /// A failed rollback, and a write that failed anywhere, may have left
-    /// gateway.yaml changed: the answer never says nothing was written.
-    #[tokio::test]
-    async fn a_failed_rollback_or_write_answers_state_neutral_text() {
-        let failures = [
-            ReplaceError::RollbackFailed {
-                journal: std::path::PathBuf::from("j"),
-                error: "e".to_owned(),
-            },
-            ReplaceError::Failed("e".to_owned()),
-        ];
-        for e in &failures {
-            let (status, text) = message(e).await;
-            assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{e:?}: {text}");
-            assert!(!text.contains("not written"), "{e:?}: {text}");
-            assert!(text.contains("may have changed"), "{e:?}: {text}");
-        }
-    }
-}
+#[path = "write_tests.rs"]
+mod tests;
