@@ -31,6 +31,9 @@ mod history;
 pub mod import;
 mod keys;
 mod overview;
+mod policies;
+#[cfg(test)]
+mod policies_tests;
 mod preview;
 mod preview_identity;
 mod refusals;
@@ -98,6 +101,7 @@ pub fn api_router() -> Router<Arc<AppState>> {
         .merge(import::import_router())
         .merge(discovery::discovery_router())
         .merge(decisions::decisions_router())
+        .merge(policies::policies_router())
         .merge(history::history_router())
         .merge(stream::stream_router());
 
