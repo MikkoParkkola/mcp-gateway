@@ -319,7 +319,8 @@ async fn a_missing_config_is_recorded_as_the_empty_revision() {
 }
 
 /// A crashed write whose config cannot be read (here a directory stands
-/// in its place): no intent is appended and nothing is recovered.
+/// in its place, which the config guard refuses): no intent is appended and
+/// nothing is recovered.
 #[tokio::test]
 async fn an_unreadable_config_appends_no_intent_and_recovers_nothing() {
     let (_dir, path, ctx) = setup();
@@ -334,7 +335,7 @@ async fn an_unreadable_config_appends_no_intent_and_recovers_nothing() {
         .await
         .expect_err("the reload is skipped");
 
-    assert!(skipped.contains("for the recovery's record"), "{skipped}");
+    assert!(skipped.contains("not a regular file"), "{skipped}");
     assert!(
         recorder.kinds().is_empty(),
         "an intent named a revision never read"
