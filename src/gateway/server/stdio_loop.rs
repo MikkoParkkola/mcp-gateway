@@ -163,7 +163,8 @@ impl Gateway {
             .record_at_start(&self.backends, meta_mcp.transparency_log())
             .await?;
         let reporting =
-            crate::config_reload::refusals::ReloadReporting::with_override_audit(override_auditor);
+            crate::config_reload::refusals::ReloadReporting::with_override_audit(override_auditor)
+                .with_audit_log(meta_mcp.transparency_log().cloned());
         self.install_stdio_startup_catalogue(
             &meta_mcp,
             &live_config,

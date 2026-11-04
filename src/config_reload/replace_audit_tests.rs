@@ -346,7 +346,7 @@ async fn an_unreadable_config_appends_no_intent_and_recovers_nothing() {
 }
 
 /// Every `.rs` file under `dir`, test files excluded.
-fn production_sources(dir: &Path, out: &mut Vec<std::path::PathBuf>) {
+pub(super) fn production_sources(dir: &Path, out: &mut Vec<std::path::PathBuf>) {
     for entry in std::fs::read_dir(dir).expect("list src") {
         let path = entry.expect("entry").path();
         let name = path
@@ -417,4 +417,166 @@ fn every_in_gateway_reload_takes_the_lock_through_reload_outcome() {
             "{entry} no longer reloads through ReloadContext::reload_outcome"
         );
     }
+}
+
+/// The source text of `file` under `src/`, from the first `from` to the
+/// following `to`.
+fn source_span(file: &str, from: &str, to: &str) -> String {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("src").join(file);
+    let text = std::fs::read_to_string(path).expect("read source");
+    let at = text
+        .find(from)
+        .unwrap_or_else(|| panic!("{file} has no `{from}`"));
+    let len = text[at..]
+        .find(to)
+        .unwrap_or_else(|| panic!("{file}: `{from}` has no following `{to}`"));
+    text[at..at + len].to_string()
+}
+
+/// The HTTP gateway's reload reporting carries the audit log, so its reload
+/// context audits its recoveries.
+#[test]
+fn the_http_gateway_reporting_carries_the_audit_log() {
+    let statement = source_span(
+        "gateway/server/run.rs",
+        "ReloadReporting::with_override_audit(",
+        ";",
+    );
+    assert!(
+        statement.contains(".with_audit_log("),
+        "run.rs's reload reporting does not carry the audit log, so the HTTP gateway's recoveries go unaudited"
+    );
+}
+
+/// Stdio's reload reporting carries the audit log, so its reload context
+/// audits its recoveries.
+#[test]
+fn the_stdio_reporting_carries_the_audit_log() {
+    let statement = source_span(
+        "gateway/server/stdio_loop.rs",
+        "ReloadReporting::with_override_audit(",
+        ";",
+    );
+    assert!(
+        statement.contains(".with_audit_log("),
+        "stdio_loop.rs's reload reporting does not carry the audit log, so stdio's recoveries go unaudited"
+    );
+}
+
+/// The file watcher's reload context is built on the HTTP gateway's audited
+/// reporting: run.rs hands `reload_reporting` to the watcher, which passes
+/// it on and builds its context on that parameter, not on fresh reporting.
+#[test]
+fn the_watcher_context_is_built_on_the_audited_reporting() {
+    let spawn = source_span("gateway/server/run.rs", "self.start_config_watcher(", ";");
+    let hand_on = source_span(
+        "gateway/server/run_steps.rs",
+        "ConfigWatcher::start_with_hook(",
+        ") {",
+    );
+    let context = source_span(
+        "config_reload/watcher.rs",
+        "let ctx = match ReloadContext::new(",
+        "match on_registered",
+    );
+    assert!(
+        spawn.contains("reload_reporting,")
+            && hand_on.contains("reporting,")
+            && context.contains(".with_reporting(reporting)"),
+        "the watcher's reload context is not built on the HTTP gateway's audited reporting, so the watcher's recoveries go unaudited"
+    );
+}
+
+/// A context built the production way, on reporting that carries an audit
+/// log, records a recovery intent there before it recovers a crashed write.
+#[tokio::test]
+async fn a_context_reporting_into_the_audit_log_records_its_recovery() {
+    use crate::security::{TransparencyLogConfig, TransparencyLogger};
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("gateway.yaml");
+    write_owner_only(&path, START).expect("write config");
+    let log_path = dir.path().join("audit.ndjson");
+    let log = Arc::new(
+        TransparencyLogger::open(Arc::new(TransparencyLogConfig {
+            enabled: true,
+            path: log_path.to_string_lossy().to_string(),
+            key_id: "test".to_string(),
+            ..TransparencyLogConfig::default()
+        }))
+        .expect("log opens"),
+    );
+    let reporting = super::refusals::ReloadReporting::default().with_audit_log(Some(log));
+    let ctx = Arc::new(unshared(&path).with_reporting(reporting));
+    crashed_after_rename(&path, NEXT);
+
+    ctx.reload_outcome().await.expect("the reload goes ahead");
+
+    let audit = std::fs::read_to_string(&log_path).unwrap_or_default();
+    assert!(
+        audit.contains("config_recovery_intent"),
+        "the recovery left no intent in the audit log: {audit}"
+    );
+}
+
+/// A public URL over open tools: the loader's posture check refuses it.
+const EXPOSED: &str = concat!(
+    "server:\n  public_url: \"https://gw.public.test\"\n",
+    "# operator's note\nbackends:\n  a:\n    http_url: \"http://127.0.0.1:9/mcp\" # first\n",
+);
+
+/// The operation's own intent follows the checks on the new bytes: an
+/// audited save the loader refuses is refused and records no intent.
+#[tokio::test]
+async fn a_save_the_loader_refuses_records_no_intent() {
+    let (_dir, path, ctx) = setup();
+    let recorder = Recorder::new(&path, false);
+
+    let result = replace_audited(
+        Arc::clone(&ctx),
+        to(Expected::Any, EXPOSED, Replaced::Discard),
+        Audit::Required {
+            sink: Box::new(recorder.clone()),
+            kind: IntentKind::Save,
+        },
+        WAIT,
+    )
+    .await;
+
+    assert!(
+        matches!(result, Err(ReplaceError::ReloadRefused(_))),
+        "{result:?}"
+    );
+    assert_eq!(read(&path), START);
+    assert_eq!(
+        recorder.kinds(),
+        [],
+        "a save refused by its checks left an operation intent"
+    );
+}
+
+/// A save whose bytes are already the file's writes nothing, so it records
+/// no intent.
+#[tokio::test]
+async fn an_unchanged_save_records_no_intent() {
+    let (_dir, path, ctx) = setup();
+    let recorder = Recorder::new(&path, false);
+
+    let outcome = replace_audited(
+        Arc::clone(&ctx),
+        to(Expected::Any, START, Replaced::Discard),
+        Audit::Required {
+            sink: Box::new(recorder.clone()),
+            kind: IntentKind::Save,
+        },
+        WAIT,
+    )
+    .await
+    .expect("an unchanged save goes ahead");
+
+    assert_eq!(outcome.revision, None, "the unchanged save wrote");
+    assert_eq!(
+        recorder.kinds(),
+        [],
+        "an unchanged save left an operation intent"
+    );
 }

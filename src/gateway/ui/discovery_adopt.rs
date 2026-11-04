@@ -27,8 +27,8 @@ use crate::config::SecretStoreChoice;
 use crate::config_persistence::keyedit::{Segment, SlotId, Template};
 use crate::config_persistence::{NOT_IN_PLACE, edit_text};
 use crate::config_reload::{
-    Expected, FileRevision, RELOAD_LOCK_WAIT, Replace, ReplaceError, ReplaceOutcome, Replaced,
-    SecretStep, replace_detached,
+    AuditPosture, Expected, FileRevision, GatewayAuth, IntentKind, NO_AUDIT_LOG, RELOAD_LOCK_WAIT,
+    Replace, ReplaceError, ReplaceOutcome, Replaced, SecretStep, replace_audited,
 };
 use crate::discovery::DiscoveredServer;
 use crate::discovery::adopt::{AdoptRefusal, Adoption, Literal, adoption, refusals};
@@ -127,6 +127,12 @@ pub(super) fn answer(name: &str, written: Result<ReplaceOutcome, ReplaceError>) 
         Err(ReplaceError::Refused(why)) if why == NOT_IN_PLACE => (
             StatusCode::CONFLICT,
             Json(json!({"error": "not_in_place", "message": NOT_IN_PLACE})),
+        )
+            .into_response(),
+        // The gateway's own posture, fixed text: the operator can act on it.
+        Err(ReplaceError::Refused(why)) if why == NO_AUDIT_LOG => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({"error": "audit_log_required", "message": NO_AUDIT_LOG})),
         )
             .into_response(),
         Err(ReplaceError::Refused(_)) => failed("refused"),
@@ -407,10 +413,20 @@ pub(super) async fn adopt_discovery(
         replaced: Replaced::Discard,
         secrets,
     };
-    answer(
-        &name,
-        replace_detached(context, replace, RELOAD_LOCK_WAIT).await,
-    )
+    answer(&name, write_audited(&state, context, replace).await)
+}
+
+/// Writes `replace` under this gateway's audit posture: its own intent first
+/// on an audited gateway (`config_adopt_intent`), refused outright with auth
+/// on and no audit log.
+async fn write_audited(
+    state: &AppState,
+    context: Arc<crate::config_reload::ReloadContext>,
+    replace: Replace,
+) -> Result<ReplaceOutcome, ReplaceError> {
+    let auth = GatewayAuth::of(state.live_config.running().auth.enabled);
+    let audit = AuditPosture::of(state.transparency_log.clone(), auth).audit(IntentKind::Adopt)?;
+    replace_audited(context, replace, audit, RELOAD_LOCK_WAIT).await
 }
 
 #[cfg(test)]
