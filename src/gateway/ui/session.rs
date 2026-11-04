@@ -315,6 +315,7 @@ mod mik_8659_dashboard_tests {
             )),
             export_status: None,
             transparency_log: None,
+            governance_log: None,
             dashboard_bootstrap: Arc::new(crate::gateway::auth::DashboardBootstrap::new()),
             tasks: task_service,
             task_executor,

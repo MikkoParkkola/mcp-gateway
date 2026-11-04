@@ -123,6 +123,7 @@ async fn fixture_with(
         live_config: Arc::clone(&live_config),
         export_status: None,
         transparency_log: None,
+        governance_log: None,
         dashboard_bootstrap: std::sync::Arc::new(crate::gateway::auth::DashboardBootstrap::new()),
         tasks: task_service,
         task_executor,

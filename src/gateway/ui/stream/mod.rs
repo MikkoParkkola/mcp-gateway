@@ -3,6 +3,7 @@
 //! `GET /ui/api/stream`: the UI's live event feed (ADR-020).
 
 mod conn;
+mod feed;
 mod guard;
 #[allow(
     dead_code,

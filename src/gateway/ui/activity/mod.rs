@@ -171,6 +171,31 @@ async fn blocking(read: impl FnOnce() -> Response + Send + 'static) -> Response 
     })
 }
 
+/// Run one live-stream read under the same gate as the list, the receipt and
+/// the export, with the list's page byte budget (passed to `read`). The
+/// permit moves into the blocking closure, so it is held until the read
+/// itself finishes, even when the caller stops waiting for it.
+pub(in crate::gateway::ui) async fn stream_read<T: Send + 'static>(
+    read: impl FnOnce(u64) -> std::io::Result<T> + Send + 'static,
+) -> std::io::Result<T> {
+    let permit = READS
+        .acquire()
+        .await
+        .map_err(|_| std::io::Error::other("the activity read gate is closed"))?;
+    tokio::task::spawn_blocking(move || {
+        let _held = permit;
+        read(PAGE_SCAN_BYTES)
+    })
+    .await
+    .map_err(|_| std::io::Error::other("the activity read did not finish"))?
+}
+
+/// Reads holding the gate now (test builds): the live stream's rows count it.
+#[cfg(test)]
+pub(in crate::gateway::ui) fn reads_in_flight() -> usize {
+    MAX_CONCURRENT_READS - READS.available_permits()
+}
+
 async fn list(
     State(state): State<Arc<AppState>>,
     Extension(generation): Extension<Arc<Generation>>,
