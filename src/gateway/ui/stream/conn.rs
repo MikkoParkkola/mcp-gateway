@@ -309,36 +309,36 @@ async fn drive(
     let mut keep = interval_at(Instant::now() + KEEP_ALIVE, KEEP_ALIVE);
     keep.set_missed_tick_behavior(MissedTickBehavior::Delay);
     loop {
-        // With a scan pending, every pass reads one page, after the race has
-        // served whatever is already due (the client gone, the lifetime, a
-        // check, a keep-alive, a snapshot): biased, so a catch-up delays it
-        // by one page at most. The page is read after the race, never
-        // cancelled; the live receives wait until the scan ends.
+        // Biased: whatever is already due (the client gone, the lifetime, a
+        // check, a keep-alive, a snapshot) is served first, one per pass, and
+        // with a scan pending a page is read only on a pass where nothing was
+        // due, so a catch-up delays upkeep by one page at most. The page is
+        // read after the race, never cancelled; the live receives wait until
+        // the scan ends.
         let scan = (0..2).find(|&i| logs[i].as_ref().is_some_and(LogMerge::scanning));
         let [activity, config] = &mut logs;
-        let stepped = tokio::select! {
+        let pass = tokio::select! {
             biased;
             () = conn.tx.closed() => return Ok(End::ClientGone),
             () = tokio::time::sleep_until(deadline) => return Ok(End::Lifetime),
             _ = recheck.tick() => {
                 if let Err(end) = conn.upkeep().await { return Ok(end); }
-                None
+                Pass::Upkept
             }
             _ = keep.tick() => {
                 conn.send(Bytes::from_static(b": keep-alive\n\n")).await?;
-                None
+                Pass::Upkept
             }
             changed = rx.changed() => {
                 changed.map_err(|_| End::ClientGone)?;
                 let snap = rx.borrow_and_update().clone();
                 sent.deliver(conn, &snap).await?;
-                None
+                Pass::Upkept
             }
-            () = std::future::ready(()), if scan.is_some() => None,
-            out = live(activity), if scan.is_none() => Some((0, out)),
-            out = live(config), if scan.is_none() => Some((1, out)),
+            () = std::future::ready(()), if scan.is_some() => Pass::Page,
+            (i, out) = live_either(activity, config), if scan.is_none() => Pass::Live(i, out),
         };
-        if let Some(i) = scan {
+        if let (Pass::Page, Some(i)) = (&pass, scan) {
             conn.require_entitled().await?;
             let step = match logs[i].as_mut() {
                 Some(m) => m.step().await,
@@ -350,11 +350,35 @@ async fn drive(
             write(conn, &mut sent, &mut logs, i, outs).await?;
             continue;
         }
-        match stepped {
-            Some((_, None)) => return Ok(End::LogEnded),
-            Some((i, Some(outs))) => write(conn, &mut sent, &mut logs, i, outs).await?,
-            None => {}
+        match pass {
+            Pass::Live(_, None) => return Ok(End::LogEnded),
+            Pass::Live(i, Some(outs)) => write(conn, &mut sent, &mut logs, i, outs).await?,
+            // Served what was due; the next pass serves the next due one, or
+            // the page.
+            Pass::Upkept | Pass::Page => {}
         }
+    }
+}
+
+/// What one pass of the connection's race did.
+enum Pass {
+    /// Served one due upkeep: a check, a keep-alive or a snapshot.
+    Upkept,
+    /// Nothing was due and a scan is pending: read its next page.
+    Page,
+    /// A live announcement from this log, or `None` when it closed.
+    Live(usize, Option<Vec<Out>>),
+}
+
+/// The next live announcement from either log, the two raced fairly: a run
+/// on one log never holds back the other.
+async fn live_either(
+    activity: &mut Option<Merge>,
+    config: &mut Option<Merge>,
+) -> (usize, Option<Vec<Out>>) {
+    tokio::select! {
+        out = live(activity) => (0, out),
+        out = live(config) => (1, out),
     }
 }
 
