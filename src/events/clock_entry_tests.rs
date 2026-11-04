@@ -51,6 +51,7 @@ const DECISION_POINTS: &[(&str, &str, usize)] = &[
     ("schedule_source.rs", "on_first_subscriber", 1),
     ("services.rs", "admission", 1),
     ("services.rs", "admits", 1),
+    ("services.rs", "admits_this_request", 1),
     ("services.rs", "audit_evictions", 1),
     ("services.rs", "audit_outcome", 1),
     ("store.rs", "admit_granted", 1),

@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! On the direct route, a backend's own -32001 refusal,
 //! carried on a non-retry status, is the backend's error, not a denial the
-//! gateway made.
+//! gateway made; on the meta route too, where it is folded into the
+//! delivered tool result.
 
 use super::*;
 
@@ -38,6 +39,29 @@ async fn a_backends_minus_32001_refusal_is_audited_as_an_error() {
         "premise: the peer's code: {body}"
     );
     let entry = only_invocation(&fx);
+    assert_eq!(entry["outcome"], "error", "{entry}");
+    assert_eq!(entry["error_code"], -32001, "{entry}");
+}
+
+/// A2b: on the meta route the same refusal is folded into the delivered
+/// tool result, and its invocation record still says `error`, not `denied`.
+#[tokio::test]
+async fn a_backends_minus_32001_refusal_folded_on_the_meta_route_is_audited_as_an_error() {
+    let fx = fixture(Setup {
+        backend_fail: Some(peer_400),
+        ..Setup::default()
+    })
+    .await;
+    let arguments = json!({"server": "alpha", "tool": "t", "arguments": {}});
+    let body = json!({"jsonrpc": "2.0", "id": 5, "method": "tools/call",
+                      "params": {"name": "gateway_invoke", "arguments": arguments}});
+    let (_, answer) = post_to(&fx, "/mcp", &body.to_string(), &Caller::Anonymous).await;
+    assert_eq!(
+        answer["result"]["isError"], true,
+        "premise: folded into the delivered tool result: {answer}"
+    );
+    let entry = only_invocation(&fx);
+    assert_eq!(entry["route"], "meta", "{entry}");
     assert_eq!(entry["outcome"], "error", "{entry}");
     assert_eq!(entry["error_code"], -32001, "{entry}");
 }

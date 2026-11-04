@@ -119,3 +119,27 @@ fn each_answer_gets_the_first_kind_that_matches() {
         assert_eq!(error_kind(status, marker), kind, "{case}");
     }
 }
+
+/// The serialised answer shape: an answer with no `error` member counts the
+/// failure folded into it, and one with no fold counts nothing; its own
+/// `error` wins over a fold, read with the answer's origin.
+#[test]
+fn a_serialised_answer_counts_its_fold_unless_it_carries_its_own_error() {
+    let folded = RpcError {
+        code: -32001,
+        origin: Origin::Backend,
+    };
+    let tool_error = serde_json::json!({"jsonrpc": "2.0", "id": 1,
+        "result": {"isError": true, "content": []}});
+    assert_eq!(
+        RpcError::of_value(&tool_error, Origin::Gateway, Some(folded)),
+        Some(folded)
+    );
+    assert_eq!(RpcError::of_value(&tool_error, Origin::Gateway, None), None);
+    let own = serde_json::json!({"jsonrpc": "2.0", "id": 1,
+        "error": {"code": -32603, "message": "x"}});
+    assert_eq!(
+        RpcError::of_value(&own, Origin::Gateway, Some(folded)),
+        Some(gateway(-32603))
+    );
+}

@@ -484,13 +484,15 @@ const ROWS: &[Row] = &[
         Payload::None,
         [401, 403, 403, 404],
     ),
-    // src/gateway/ui/discovery.rs (list_discovery)
+    // src/gateway/ui/discovery.rs (list_discovery; this fixture attaches no
+    // discovery cache, which the gateway's decision set owns, so the admin's
+    // answer is 503 rather than a scan of its own)
     row(
         "/ui/api/discovery",
         Method::GET,
         "/ui/api/discovery",
         Payload::None,
-        [401, 403, 403, 200],
+        [401, 403, 403, 503],
     ),
     // src/gateway/ui/discovery_adopt.rs (adopt_discovery; `{}` is not a find,
     // so the admin's answer is the fixed invalid_body refusal)

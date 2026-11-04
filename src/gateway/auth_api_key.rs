@@ -123,3 +123,33 @@ pub(crate) fn refuse_shared_digests<'a>(
     }
     Ok(())
 }
+
+/// The fingerprint a holder is bound to: the full SHA-256, hex, of the
+/// digest the request matched. Full length, so two digests that share a
+/// principal's 12-hex prefix never share a tag and a rotation away from one
+/// always ends what it opened; hashed, so the key's digest itself is never
+/// stored with a holder.
+pub(crate) fn digest_tag_of(digest: &[u8; 32]) -> String {
+    crate::hashing::sha256_hex(digest)
+}
+
+/// The tag of the digest of `secret`, as a request presenting it records.
+#[cfg(test)]
+pub(crate) fn secret_tag(secret: &str) -> String {
+    digest_tag_of(&<sha2::Sha256 as sha2::Digest>::digest(secret.as_bytes()).into())
+}
+
+/// Whether the secret fingerprinted `tag` still authenticates: it is the
+/// `current` digest's, or the `previous` digest's while `in_grace` holds for
+/// the grace's end (ADR-022). The one rule every holder kind is judged by
+/// (event subscriptions, watch polls, dashboard sessions); a digest that
+/// could not be read is `None` and matches nothing (fail closed).
+pub(crate) fn tag_still_valid(
+    tag: &str,
+    current: Option<&[u8; 32]>,
+    previous: Option<(&[u8; 32], chrono::DateTime<chrono::Utc>)>,
+    in_grace: impl FnOnce(chrono::DateTime<chrono::Utc>) -> bool,
+) -> bool {
+    current.is_some_and(|digest| digest_tag_of(digest) == tag)
+        || previous.is_some_and(|(digest, end)| digest_tag_of(digest) == tag && in_grace(end))
+}

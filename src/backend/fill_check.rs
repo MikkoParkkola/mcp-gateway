@@ -11,7 +11,6 @@
 
 use crate::error::rpc_codes::INTERNAL_ERROR;
 use std::sync::Arc;
-use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use super::LIST_MAX_PAGES;
@@ -310,7 +309,7 @@ fn record_fill(
     // MIK-8619).
     if error.is_authorization_wait() || is_credential_lock_busy(error) {
         if error.is_authorization_wait() {
-            entry.auth_wait.store(true, Ordering::Relaxed);
+            entry.set_auth_wait();
         }
         return;
     }
@@ -359,8 +358,8 @@ fn success_under(entry: &PooledEntry, request_failed: &mut bool, latency: Durati
     entry.failsafe.record_success(latency);
     // A served answer means nobody is waiting to sign in. Load first: the
     // per-call path pays a store only on the rare clear.
-    if entry.auth_wait.load(Ordering::Relaxed) {
-        entry.auth_wait.store(false, Ordering::Relaxed);
+    if entry.auth_wait.get() {
+        entry.auth_wait.clear();
     }
     if entry.failsafe.circuit_breaker.stats().state == CircuitState::Closed {
         *request_failed = false;

@@ -6,6 +6,10 @@
 
 - **Rust 1.95+** (edition 2024): `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`
 - **Node.js** (only for testing stdio backends that use `npx`)
+- **uv 0.13** (for the pre-push hook): the gates that read Rust items run on their own
+  hash-locked Python environment. Build it once, and again when `scripts/gate-env/uv.lock`
+  changes; the hook installs nothing and names this command when it is needed:
+  `UV_MALWARE_CHECK=1 uv sync --locked --project scripts/gate-env`
 
 ### Build and Test
 

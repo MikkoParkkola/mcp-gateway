@@ -42,9 +42,6 @@ use std::io::{self, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use hmac::{KeyInit, Mac};
-use sha2::{Digest, Sha256};
-
 use crate::hashing::HmacSha256;
 
 // ── Read bounds (MIK-6710 memory-DoS mitigation) ───────────────────────────────
@@ -111,8 +108,15 @@ mod anchor;
 // MIK-7116.MIN.1: invocation records carrying tenant attribution.
 #[path = "transparency_log_attributed.rs"]
 mod attributed;
+#[path = "transparency_log_entry_hash.rs"]
+mod entry_hash;
+#[path = "transparency_log_config.rs"]
+mod log_config;
 pub use anchor::verify_audit_log;
 pub(crate) use attributed::TaskSettlementRoute;
+use entry_hash::{chain_line, sha256_raw, sig_message};
+pub use entry_hash::{recompute_entry_hash, verify_entry_sig};
+pub use log_config::TransparencyLogConfig;
 pub(crate) use verify::is_signed_entry;
 #[cfg(test)]
 pub(crate) use verify::verify_segments;
@@ -126,62 +130,9 @@ pub use crate::security::audit_rotation_config::{OnDiskFull, RotationConfig};
 
 // ── Configuration ─────────────────────────────────────────────────────────────
 
-/// Runtime configuration for the transparency log.
-///
-/// Serialisation lives in `src/config/features/security.rs` alongside the
-/// other security configs; this struct is the "resolved" in-memory copy.
-#[derive(Clone)]
-pub struct TransparencyLogConfig {
-    /// Enable the transparency log.  Default: `false` (opt-in).
-    pub enabled: bool,
-    /// Path to the NDJSON log file.  `~` is expanded at open time.
-    pub path: String,
-    /// Key identifier written into `key_id` when signing is active.
-    pub key_id: String,
-    /// HMAC shared secret.  When empty, the `sig` / `key_id` fields are
-    /// omitted from each entry (hash chain still provides tamper evidence).
-    pub shared_secret: String,
-    /// Segment size, retention and disk-full behaviour (D6).
-    pub rotation: RotationConfig,
-}
-
 /// How long open waits for the writer lease: long enough for a supervisor
 /// restart to let the old process exit. Not configurable in 4.0.
 pub(crate) const DEFAULT_LEASE_WAIT_SECS: u64 = 10;
-
-// Manual `Debug` that redacts the HMAC shared secret (CWE-532, mirrors PR
-// #323). A derived `Debug` would print the resolved signing secret verbatim
-// into any trace or error context; only its presence is surfaced.
-impl std::fmt::Debug for TransparencyLogConfig {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("TransparencyLogConfig")
-            .field("enabled", &self.enabled)
-            .field("path", &self.path)
-            .field("key_id", &self.key_id)
-            .field("rotation", &self.rotation)
-            .field(
-                "shared_secret",
-                &if self.shared_secret.is_empty() {
-                    "<empty>"
-                } else {
-                    "<redacted>"
-                },
-            )
-            .finish()
-    }
-}
-
-impl Default for TransparencyLogConfig {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            path: "~/.mcp-gateway/transparency/transparency.jsonl".to_string(),
-            key_id: "default".to_string(),
-            shared_secret: String::new(),
-            rotation: RotationConfig::default(),
-        }
-    }
-}
 
 // ── Internal mutable state ────────────────────────────────────────────────────
 
@@ -671,131 +622,6 @@ fn read_last_nonempty_line_raw(path: &Path) -> io::Result<Option<String>> {
         .map(str::to_string))
 }
 
-/// Recompute the `entry_hash` for an existing entry read from the log file.
-///
-/// Strips `entry_hash`, `sig`, and `key_id`, serialises what remains (`BTreeMap`
-/// so alphabetically sorted), and returns `"sha256:<hex>"`. Public so incremental
-/// consumers (e.g. the SIEM exporter, MIK-6689) can tamper-verify one entry at a
-/// time instead of re-reading the whole file.
-///
-/// # Errors
-///
-/// Returns `io::Error` if `entry` is not a JSON object or cannot be serialised.
-pub fn recompute_entry_hash(entry: &serde_json::Value) -> io::Result<String> {
-    let obj = entry
-        .as_object()
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "entry is not a JSON object"))?;
-
-    // Build a clean copy without the hash-and-sig fields.
-    let core: serde_json::Map<String, serde_json::Value> = obj
-        .iter()
-        .filter(|(k, _)| {
-            k.as_str() != "entry_hash" && k.as_str() != "sig" && k.as_str() != "key_id"
-        })
-        .map(|(k, v)| (k.clone(), v.clone()))
-        .collect();
-
-    let core_json = serde_json::to_string(&core).map_err(io::Error::other)?;
-
-    Ok(crate::hashing::sha256_tagged(core_json.as_bytes()))
-}
-
-/// Verify one entry's HMAC `sig` against `secret`, given the entry's
-/// already-hash-verified `entry_hash` string (`"sha256:<hex>"`).
-///
-/// The signature is `HMAC-SHA256(secret, sig_message(entry_hash_bytes, key_id))`
-/// where `key_id` is bound INTO the signed message (matching `append_core`), so a
-/// stripped/altered `key_id` also fails verification, not only a
-/// stripped/altered `sig` (MIK-6700). Comparison is constant-time via
-/// `Mac::verify_slice`. Under a configured secret every entry must carry both a
-/// `sig` and a `key_id`; a missing/malformed field is an error, so neither can
-/// be dropped to bypass.
-///
-/// # Errors
-///
-/// Returns a human-readable reason string when the signature is absent,
-/// malformed, unsigned, or fails to authenticate.
-pub fn verify_entry_sig(
-    entry: &serde_json::Value,
-    entry_hash: &str,
-    secret: &[u8],
-) -> Result<(), String> {
-    let sig = entry
-        .get("sig")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| "missing 'sig' while a shared secret is configured".to_string())?;
-    let key_id = entry
-        .get("key_id")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| "missing 'key_id' while a shared secret is configured".to_string())?;
-    let sig_hex = sig
-        .strip_prefix("hmac-sha256:")
-        .ok_or_else(|| format!("malformed sig (expected 'hmac-sha256:' prefix): {sig}"))?;
-    let sig_bytes = hex::decode(sig_hex).map_err(|e| format!("sig is not valid hex: {e}"))?;
-    let hash_hex = entry_hash
-        .strip_prefix("sha256:")
-        .ok_or_else(|| format!("malformed entry_hash (expected 'sha256:' prefix): {entry_hash}"))?;
-    let hash_bytes =
-        hex::decode(hash_hex).map_err(|e| format!("entry_hash is not valid hex: {e}"))?;
-    let hash_arr: [u8; 32] = hash_bytes
-        .as_slice()
-        .try_into()
-        .map_err(|_| format!("entry_hash is not 32 bytes: {entry_hash}"))?;
-
-    let msg = sig_message(&hash_arr, key_id);
-    let mut mac = HmacSha256::new_from_slice(secret).expect("HMAC accepts any key length");
-    mac.update(&msg);
-    mac.verify_slice(&sig_bytes)
-        .map_err(|_| "HMAC sig mismatch (possible re-chain forgery or altered key_id)".to_string())
-}
-
-/// Complete one record from its domain `fields`: add `counter` and
-/// `prev_entry_hash`, hash the canonical JSON (sorted keys), sign it when a
-/// secret is set, and return `(line, entry_hash)`. The one place a record is
-/// chained, for caller appends and the logger's own housekeeping records.
-fn chain_line(
-    config: &TransparencyLogConfig,
-    mut fields: serde_json::Map<String, serde_json::Value>,
-    counter: u64,
-    prev_entry_hash: &str,
-) -> io::Result<(String, String)> {
-    fields.insert("counter".into(), counter.into());
-    fields.insert("prev_entry_hash".into(), prev_entry_hash.into());
-    let core_json = serde_json::to_string(&serde_json::Value::Object(fields.clone()))
-        .map_err(io::Error::other)?;
-    let entry_hash_bytes: [u8; 32] = sha256_raw(core_json.as_bytes());
-    let entry_hash = format!("sha256:{}", hex::encode(entry_hash_bytes));
-    // key_id is bound INTO the signed message (MIK-6700 review).
-    if !config.shared_secret.is_empty() {
-        let msg = sig_message(&entry_hash_bytes, &config.key_id);
-        let sig_hex = crate::hashing::hmac_sha256_hex(config.shared_secret.as_bytes(), &msg);
-        fields.insert("sig".into(), format!("hmac-sha256:{sig_hex}").into());
-        fields.insert("key_id".into(), config.key_id.clone().into());
-    }
-    fields.insert("entry_hash".into(), entry_hash.clone().into());
-    let line =
-        serde_json::to_string(&serde_json::Value::Object(fields)).map_err(io::Error::other)?;
-    Ok((line, entry_hash))
-}
-
-/// Build the HMAC message for an entry's `sig`: the 32 raw `entry_hash` bytes
-/// followed by the `key_id` bytes. Binding `key_id` into the signed material
-/// (rather than leaving it as unauthenticated metadata) means it cannot be
-/// stripped or altered without invalidating the signature (MIK-6700).
-fn sig_message(entry_hash_bytes: &[u8; 32], key_id: &str) -> Vec<u8> {
-    let mut msg = Vec::with_capacity(32 + key_id.len());
-    msg.extend_from_slice(entry_hash_bytes);
-    msg.extend_from_slice(key_id.as_bytes());
-    msg
-}
-
-/// Raw (non-hex) SHA-256 digest.
-fn sha256_raw(data: &[u8]) -> [u8; 32] {
-    let mut h = Sha256::new();
-    h.update(data);
-    h.finalize().into()
-}
-
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -840,29 +666,6 @@ mod tests;
 #[cfg(test)]
 #[path = "transparency_log_writer_tests.rs"]
 mod writer_tests;
-
-#[cfg(test)]
-mod cwe532_debug_redaction {
-    use super::*;
-
-    const SENTINEL: &str = "SENTINEL_SECRET_a1b2c3";
-
-    // The resolved in-memory TransparencyLogConfig::Debug must never surface
-    // the HMAC shared secret.
-    #[test]
-    fn transparency_log_config_debug_redacts_shared_secret() {
-        let cfg = TransparencyLogConfig {
-            shared_secret: SENTINEL.to_string(),
-            ..TransparencyLogConfig::default()
-        };
-        let dbg = format!("{cfg:?}");
-        assert!(!dbg.contains(SENTINEL), "leaked shared_secret: {dbg}");
-        assert!(
-            dbg.contains("<redacted>"),
-            "missing redaction marker: {dbg}"
-        );
-    }
-}
 
 #[cfg(test)]
 #[path = "transparency_log_bounded_clock_compile_red_tests.rs"]

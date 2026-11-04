@@ -135,6 +135,7 @@ fn l4_debug_output_names_no_principal_or_derived_key() {
     let api_key = crate::events::ApiKeyRef {
         name: "c".to_owned(),
         principal: P.to_owned(),
+        digest_tag: Some(P.to_owned()),
     };
     let credential = crate::events::Credential {
         kind: crate::security::audit::CredentialKind::StaticBearer,
