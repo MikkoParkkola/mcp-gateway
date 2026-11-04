@@ -98,7 +98,7 @@ where
             Err(Box::new(flat_error(code, message).into_response()))
         }
         (Ok(outcome), Some(Ok(value))) => Ok((value, outcome.reload)),
-        (Ok(_), _) => Err(Box::new(unwritten("no_answer"))),
+        (Ok(_), _) => Err(Box::new(incomplete("no_answer"))),
         (Err(ReplaceError::Failed(_)), _) if gone => {
             Err(Box::new(no_config_file().into_response()))
         }
