@@ -479,7 +479,7 @@ impl DeliveryDigest {
 
     /// This digest, keeping `earlier`'s inferred fact: a rebuild from a
     /// redacted copy must not lose the classification the original carried.
-    pub(crate) fn keeping_sensitivity_of(mut self, earlier: &Self) -> Self {
+    pub(crate) fn keeping_inferred_of(mut self, earlier: &Self) -> Self {
         self.inferred |= earlier.inferred;
         self
     }

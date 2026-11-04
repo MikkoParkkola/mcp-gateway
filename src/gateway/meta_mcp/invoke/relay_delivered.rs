@@ -151,7 +151,7 @@ impl MetaMcp {
             {
                 // A redaction can drop the classification marker with the
                 // text; what the call was judged sensitive for stays so.
-                let digest = digest.keeping_sensitivity_of(&one.digest);
+                let digest = digest.keeping_inferred_of(&one.digest);
                 receipts.push(super::Receipt {
                     key: one.key.clone(),
                     keyed: one.keyed,
@@ -236,7 +236,7 @@ impl MetaMcp {
                     return;
                 };
                 if let Some(digest) = fw.delivery_digest(&one.server, &one.tool, &copy) {
-                    one.digest = digest.keeping_sensitivity_of(&one.digest);
+                    one.digest = digest.keeping_inferred_of(&one.digest);
                 }
             });
         }
