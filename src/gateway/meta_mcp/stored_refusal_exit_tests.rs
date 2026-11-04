@@ -202,3 +202,28 @@ async fn the_refusing_target_of_two_is_the_one_named() {
         (true, Some(json!({"kind": "grant"})))
     );
 }
+
+/// A repeated task-augmented call judged against a stored task it may not
+/// be served (no recorded bindings): its stored-repeat judgement refuses with
+/// the provenance pair, which `deliver` hands to the call's delivery record.
+#[tokio::test]
+async fn a_refused_stored_repeat_carries_its_pair() {
+    let dir = tempfile::tempdir().unwrap();
+    let (_endpoint, meta) = alice_gateway(&dir).await;
+    let stored = CommittedTask {
+        bindings_recorded: false,
+        ..finished_task()
+    };
+    let alice = api_key("alice");
+    let caller = context(&alice);
+    let (answer, written, _) = with_grant_slot(meta.transparency_logger.as_ref(), async {
+        meta.refuse_stored_repeat(&RequestId::Number(1), &stored, None, Some("s"), &caller)
+    })
+    .await;
+    written.expect("the slot's records are written");
+    let pair = answer
+        .as_ref()
+        .and_then(super::task_replay::StoredAnswer::refused_by)
+        .map(|r| serde_json::to_value(r).expect("RefusedBy serialises"));
+    assert_eq!(pair, Some(json!({"kind": "provenance"})));
+}
