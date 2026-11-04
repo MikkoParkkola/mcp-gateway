@@ -37,8 +37,8 @@ const CLASSES: [&str; 7] = [
     // Reads gateway.yaml for a command that writes nothing from it (a
     // report, a notice, a dry run); the reason says what the bytes feed.
     "read-only",
-    // Copies gateway.yaml to a backup with the source's own access; nothing
-    // in the gateway reads the backup back.
+    // Copies gateway.yaml (or a client config) to a backup with the source's
+    // own access; nothing in the gateway reads a gateway.yaml backup back.
     "backup-copy",
     // Reads a file that is not gateway.yaml; the reason names it.
     "not-config",
