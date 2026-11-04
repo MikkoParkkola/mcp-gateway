@@ -320,12 +320,13 @@ impl ChildTree {
                 // unless that third is under the minimum phase.
                 grace.kill_at = cut;
                 let term = cut.saturating_duration_since(now) / 3;
-                let term_at = if term < super::reaper::MIN_PHASE {
+                grace.term_at = if term < super::reaper::MIN_PHASE {
+                    // Too little left to use a SIGTERM wait: none is sent,
+                    // even if the uncut plan had one due sooner.
                     cut
                 } else {
-                    cut.checked_sub(term).unwrap_or(now)
+                    grace.term_at.min(cut.checked_sub(term).unwrap_or(now))
                 };
-                grace.term_at = grace.term_at.min(term_at);
             }
         }
         if self.exited() {

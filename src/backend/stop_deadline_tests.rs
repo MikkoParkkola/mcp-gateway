@@ -144,6 +144,9 @@ async fn a_stop_stuck_on_a_lifecycle_lock_ends_at_its_deadline() {
     let registry = BackendRegistry::new();
     let backend = stays(dir.path(), "stuck");
     assert!(registry.register(Arc::clone(&backend)), "registered");
+    backend.ensure_started().await.expect("the backend starts");
+    let pid = leader_pid(dir.path());
+    let _reap = KillGroupOnDrop(pid);
     // As a restart in flight holds it; `Backend::stop` waits up to its
     // lifecycle budget (15 s) for it.
     let _held = backend.lifecycle.write().await;
@@ -154,6 +157,15 @@ async fn a_stop_stuck_on_a_lifecycle_lock_ends_at_its_deadline() {
         "the stop outran its deadline: {:?}",
         started.elapsed()
     );
+    // What the stop left running is retired on its way out: killed at once.
+    let by = std::time::Instant::now() + Duration::from_secs(5);
+    while kernel_view(pid) == Some(false) {
+        assert!(
+            std::time::Instant::now() < by,
+            "the stop returned with the stuck backend still running"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
 }
 
 /// A graceful handover that comes after the gateway stop returned (an idle
