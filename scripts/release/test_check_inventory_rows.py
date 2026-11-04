@@ -74,6 +74,18 @@ class Repo:
         check = getattr(rows, "stale_rows", lambda _base, _head: None)
         return check("base", "HEAD")
 
+    def main(self) -> tuple[int, str]:
+        """`main` run in this process on the change, and what it printed."""
+        import contextlib
+        import io
+
+        rows.ROOT = self.root
+        rows.mount_status.cache_clear()
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            code = rows.main(["check_inventory_rows.py", "base", "HEAD"])
+        return code, out.getvalue()
+
 
 class CheckInventoryRows(unittest.TestCase):
     def setUp(self) -> None:
@@ -233,6 +245,44 @@ class CheckInventoryRows(unittest.TestCase):
         self.repo.write("src/oauth/mod.rs", "pub fn existing() {}\nfn helper() {}\n")
         self.repo.commit("add")
         self.assertEqual(self.repo.missing(), ["helper"])
+
+
+class MainReportsEveryDiagnostic(unittest.TestCase):
+    """`main` with a file the parser reports on and a bad row: the parser
+    summary and the row's diagnostic are both printed, and the run fails, on
+    the normal path and on the ledger-error path."""
+
+    BROKEN = "pub fn existing() {}\nconst X: u8 = ;\n"
+
+    def setUp(self) -> None:
+        self.repo = Repo()
+        self.addCleanup(self.repo.dir.cleanup)
+
+    def test_the_normal_path_prints_the_parse_summary_and_the_stale_row(self) -> None:
+        self.repo.write("src/oauth/mod.rs", self.BROKEN)
+        self.repo.write(rows.UNENFORCING, UNENFORCING_HEADER + "src/oauth/mod.rs\tgone\t1\tr\n")
+        self.repo.commit("add")
+        code, out = self.repo.main()
+        self.assertNotEqual(code, 0, out)
+        self.assertIn("1 with parse errors", out)
+        self.assertIn("unsure as a whole: src/oauth/mod.rs", out)
+        self.assertIn("stale inventory row: src/oauth/mod.rs fn gone (occurrence 1)", out)
+
+    def test_the_ledger_error_path_prints_the_parse_summary_and_the_problem(self) -> None:
+        # A malformed row at the merge-base only: the head reads, the files
+        # are parsed, then reading the base's rows for the stale check fails.
+        self.repo.git("checkout", "-q", "base")
+        self.repo.write(rows.UNENFORCING, UNENFORCING_HEADER + "src/oauth/mod.rs\texisting\t1\t\n")
+        self.repo.commit("base with a malformed row")
+        self.repo.git("checkout", "-q", "-B", "change")
+        self.repo.write(rows.UNENFORCING, UNENFORCING_HEADER + "src/oauth/mod.rs\texisting\t1\tr\n")
+        self.repo.write("src/oauth/mod.rs", self.BROKEN)
+        self.repo.commit("change")
+        code, out = self.repo.main()
+        self.assertNotEqual(code, 0, out)
+        self.assertIn("1 with parse errors", out)
+        self.assertIn("unsure as a whole: src/oauth/mod.rs", out)
+        self.assertIn(f"inventory: {rows.UNENFORCING}:2: the reason must not be empty", out)
 
 
 class StaleRows(unittest.TestCase):
