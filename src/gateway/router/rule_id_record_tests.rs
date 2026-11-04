@@ -161,10 +161,9 @@ async fn a_response_firewall_block_records_no_rule_on_the_direct_route() {
     response_block(Route::Direct).await;
 }
 
-/// A stored task whose tool the policy denies once it is published is
-/// refused, either at its dispatch (the task fails) or at the `tasks/get`
-/// that reads it back; both answer with the refusal's own message, so the
-/// answer carries no rule id while a record names it.
+/// A stored task read back after a reload whose tool policy denies its tool
+/// is refused at the `tasks/get` (register row 425's designed path): the
+/// refusal's message carries no rule id, and a record names the deny entry.
 #[tokio::test(flavor = "current_thread")]
 async fn a_task_refused_by_the_tool_policy_delivers_no_rule_id() {
     let fx = fixture(Answer::Ok, None).await;
@@ -172,13 +171,9 @@ async fn a_task_refused_by_the_tool_policy_delivers_no_rule_id() {
     let (live, published) = (std::sync::Arc::clone(&fx.state.live_config), denies.clone());
     super::seams::before_task_dispatch(move || live.set(published));
     let got = super::task_with(&fx, "rule-id-task", json!({})).await;
-    let failed = got
-        .pointer("/result/status")
-        .and_then(serde_json::Value::as_str)
-        == Some("failed");
     assert!(
-        failed || got.get("error").is_some(),
-        "premise: the task or its read is refused: {got}"
+        got.get("error").is_some() && got.get("result").is_none(),
+        "premise: the tasks/get read is refused: {got}"
     );
     let expected = tool_policy_id(&fx, "deny", "alpha:read");
     let hex = expected.as_str().trim_start_matches("tool_policy:");
