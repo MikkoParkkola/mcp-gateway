@@ -267,6 +267,198 @@ const ADMIN_READERS: &[(&str, &str, usize, &str)] = &[
         1,
         "stdio: the spawning client is the operator",
     ),
+    (
+        "is_gateway_admin",
+        "src/gateway/auth_caller.rs",
+        1,
+        "its definition: admin_standing() is Gateway",
+    ),
+    (
+        "is_gateway_admin",
+        "src/gateway/router/backend_handlers/costs.rs",
+        1,
+        "Gateway: /api/costs",
+    ),
+    (
+        "is_gateway_admin",
+        "src/gateway/router/handlers/health.rs",
+        1,
+        "Gateway: /health backend detail",
+    ),
+    (
+        "is_gateway_admin",
+        "src/gateway/ui/guard.rs",
+        2,
+        "Gateway: AdminSplit and the dashboard link mint",
+    ),
+    (
+        "is_gateway_admin",
+        "src/gateway/ui/mod.rs",
+        1,
+        "Gateway: ui::is_admin",
+    ),
+    (
+        "admin_standing",
+        "src/events/operational_source.rs",
+        1,
+        "Gateway: operator event standing from the key config",
+    ),
+    (
+        "admin_standing",
+        "src/gateway/auth_caller.rs",
+        4,
+        "the accessor and is_gateway_admin",
+    ),
+    (
+        "admin_standing",
+        "src/gateway/auth_resolved.rs",
+        2,
+        "InScope: the load warning; Gateway: session liveness",
+    ),
+    (
+        "admin_standing",
+        "src/gateway/authz.rs",
+        1,
+        "the rule itself",
+    ),
+    (
+        "admin_standing",
+        "src/gateway/mod.rs",
+        1,
+        "this scan's module name",
+    ),
+    (
+        "admin_standing",
+        "src/gateway/router/authorization.rs",
+        1,
+        "CallerStanding::of_client",
+    ),
+    (
+        "admin_standing",
+        "src/gateway/router/authorization_owned.rs",
+        4,
+        "task re-judgement: any step down refuses",
+    ),
+    (
+        "admin_standing",
+        "src/gateway/router/backend_handlers/direct_permit.rs",
+        1,
+        "context construction: the standing as is",
+    ),
+    (
+        "admin_standing",
+        "src/gateway/router/handlers/dispatch_intake_run.rs",
+        1,
+        "context construction: the standing as is",
+    ),
+    (
+        "admin_standing",
+        "src/gateway/router/handlers/dispatch_tools_call/route_stage.rs",
+        1,
+        "context construction: the standing as is",
+    ),
+    (
+        "admin_standing",
+        "src/gateway/router/handlers/dispatch_tools_call.rs",
+        1,
+        "context construction: the standing as is",
+    ),
+    (
+        "admin_standing",
+        "src/gateway/router/handlers/tasks.rs",
+        1,
+        "context construction: the standing as is",
+    ),
+    (
+        "admin_standing",
+        "src/gateway/router/handlers.rs",
+        3,
+        "context construction: the standing as is",
+    ),
+    (
+        "admin_standing",
+        "src/gateway/router/view_judge.rs",
+        1,
+        "context construction: the standing as is",
+    ),
+    (
+        "admin_standing",
+        "src/gateway/router/watch_poll.rs",
+        2,
+        "context construction: the standing as is",
+    ),
+    (
+        "admin_standing",
+        "src/gateway/ui/activity/access.rs",
+        1,
+        "InScope: Activity breadth, bounded by within",
+    ),
+    (
+        "admin_standing",
+        "src/gateway/ui/control_plane/mutations.rs",
+        1,
+        "Gateway: Admin; InScope: Auditor",
+    ),
+    (
+        "is_gateway()",
+        "src/gateway/meta_mcp/call_dispatch.rs",
+        3,
+        "Gateway: stats and the profile tools",
+    ),
+    (
+        "is_admin(",
+        "src/gateway/ui/guard.rs",
+        1,
+        "Gateway: the Admin rows",
+    ),
+    (
+        "is_admin(",
+        "src/gateway/ui/mod.rs",
+        2,
+        "its definition and the auth facts",
+    ),
+    (
+        "is_admin(",
+        "src/gateway/ui/status.rs",
+        1,
+        "Gateway: the full status view",
+    ),
+    (
+        "is_admin(",
+        "src/gateway/ui/stream/mod.rs",
+        2,
+        "Gateway: the stream's reload kind and full view",
+    ),
+    (
+        "is_admin(",
+        "src/security/data_flow.rs",
+        2,
+        "unrelated: data-flow classifier test names",
+    ),
+    (
+        "::for_ui(",
+        "src/gateway/ui/activity/access.rs",
+        1,
+        "the scope that bounds Activity breadth",
+    ),
+    (
+        "::for_ui(",
+        "src/gateway/ui/control_plane/mutations.rs",
+        1,
+        "the actor cap: a scoped Admin identity is Auditor",
+    ),
+    (
+        "::for_ui(",
+        "src/gateway/ui/control_plane/snapshot.rs",
+        1,
+        "the snapshot scope",
+    ),
+    (
+        "::for_ui(",
+        "src/gateway/ui/status.rs",
+        1,
+        "the status scope beside the Gateway check",
+    ),
 ];
 
 const NEEDLES: &[&str] = &[
@@ -277,6 +469,11 @@ const NEEDLES: &[&str] = &[
     "CallerStanding::of_client(",
     "CallerStanding::Admin",
     DESTRUCTURED,
+    "is_gateway_admin",
+    "admin_standing",
+    "is_gateway()",
+    "is_admin(",
+    "::for_ui(",
 ];
 
 /// Not a literal needle: a struct pattern binding an `admin` field.
@@ -493,7 +690,7 @@ fn the_scan_finds_every_standing_accessor() {
         ),
         ("if caller.admin.is_gateway() {}", "is_gateway()"),
         ("if is_admin(Some(c)) {}", "is_admin("),
-        ("let g = BackendGrant::for_ui(Some(c));", "for_ui("),
+        ("let g = BackendGrant::for_ui(Some(c));", "::for_ui("),
     ] {
         let files = vec![("src/new.rs".to_owned(), text.to_owned())];
         assert_eq!(

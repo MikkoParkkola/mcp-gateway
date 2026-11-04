@@ -329,3 +329,35 @@ async fn every_admin_meta_tool_refuses_a_backend_scoped_admin() {
     }
     assert!(wrong.is_empty(), "{}", wrong.join("\n"));
 }
+
+/// The cost report's three admin views, all sessions, all keys and another
+/// session's spend, answer an unscoped admin key and refuse both
+/// backend-scoped admins.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_cost_reports_admin_views_refuse_a_backend_scoped_admin() {
+    let gw = scoped_gateway(&[ADMIN_GROUP_RULE]).await;
+    let scoped_token = gw.a.token("admin-a", &["ops-admins"], &json!({}));
+    let views = [
+        json!({"include_all_sessions": true}),
+        json!({"include_all_keys": true}),
+        json!({"session_id": "another-callers-session"}),
+    ];
+    let answered = |status: StatusCode, body: &Value| {
+        status == StatusCode::OK && body.get("error").is_none() && body["result"]["isError"] != true
+    };
+    let mut wrong = Vec::new();
+    for (who, bearer, want) in [
+        ("admin key, *", ADMIN_KEY.to_string(), true),
+        ("admin key, [alpha]", SCOPED_ADMIN_KEY.to_string(), false),
+        ("role-admin token, [alpha]", scoped_token, false),
+    ] {
+        for arguments in &views {
+            let call = json!({"name": "gateway_cost_report", "arguments": arguments});
+            let (status, body) = send(&gw.state, rpc(&bearer, "tools/call", &call)).await;
+            if answered(status, &body) != want {
+                wrong.push(format!("{who} {arguments}: {status} {body}"));
+            }
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}

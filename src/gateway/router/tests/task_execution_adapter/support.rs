@@ -57,7 +57,8 @@ pub(super) fn admission_principal() -> String {
     .stable_actor_id()
 }
 
-/// A second registered backend that no key in [`two_principal_auth`] may reach.
+/// A second registered backend that neither non-admin key in
+/// [`two_principal_auth`] may reach (the admin key holds every backend).
 /// Used by the rows that need a refusal which is real rather than arranged.
 pub(super) const FORBIDDEN_BACKEND: &str = "vault";
 
