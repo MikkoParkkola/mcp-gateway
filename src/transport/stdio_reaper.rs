@@ -593,11 +593,13 @@ mod plan_tests {
     #[cfg(unix)]
     #[test]
     fn the_split_keeps_the_reserve_and_gives_a_third_to_sigterm() {
+        // 30 s less the 6 s + 1 s reserve leaves 23 s: a third after SIGTERM.
+        let waits = Duration::from_secs(23);
         assert_eq!(
             graceful_ending(Duration::from_secs(30), true),
             Ending::Graceful {
-                eof: Duration::from_secs(16),
-                term: Duration::from_secs(7),
+                eof: waits - waits / 3,
+                term: waits / 3,
             }
         );
         // Stdin a writer still holds: no EOF wait, SIGTERM at once.
