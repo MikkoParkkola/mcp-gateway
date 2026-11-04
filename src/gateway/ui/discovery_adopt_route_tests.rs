@@ -446,6 +446,7 @@ async fn without_a_config_file_nothing_is_adopted() {
 
 /// The text every answer may not hold: the config's directory, as spelled and
 /// as resolved.
+#[cfg(unix)] // only the mode row reads it
 fn paths_of(route: &Route) -> Vec<String> {
     let dir = route.dir.path();
     let mut paths = vec![dir.to_string_lossy().into_owned()];
