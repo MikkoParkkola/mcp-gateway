@@ -250,7 +250,7 @@ pub use crate::security::audit::CredentialKind;
 #[path = "auth_caller.rs"]
 mod caller;
 pub use caller::AuthenticatedClient;
-pub(in crate::gateway) use caller::{Principal, api_key_name, authenticated_principal};
+pub(in crate::gateway) use caller::{api_key_name, authenticated_principal};
 #[path = "auth_cookies.rs"]
 mod cookies;
 pub use cookies::SESSION_COOKIE;
