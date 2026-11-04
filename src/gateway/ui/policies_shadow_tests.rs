@@ -227,3 +227,90 @@ fn r9_where_a_scoped_rule_applies_differently() {
         json!(KEY_NOT_KNOWN)
     );
 }
+
+/// Production constructions of `needle` per file under `src/`: comments,
+/// `use` lines, match arms and comparisons are not constructions, and test
+/// code (`*_tests.rs`, `tests/` directories, an inline `#[cfg(test)]` module
+/// and everything after it) is skipped.
+fn constructions(needle: &str) -> std::collections::BTreeMap<String, usize> {
+    fn walk(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+        for entry in std::fs::read_dir(dir).expect("read src") {
+            let path = entry.expect("entry").path();
+            if path.is_dir() {
+                if path.file_name().is_some_and(|n| n != "tests") {
+                    walk(&path, out);
+                }
+            } else if path.extension().is_some_and(|e| e == "rs")
+                && !path.to_string_lossy().ends_with("_tests.rs")
+            {
+                out.push(path);
+            }
+        }
+    }
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let mut files = Vec::new();
+    walk(&root.join("src"), &mut files);
+    let mut found = std::collections::BTreeMap::new();
+    for file in files {
+        let text = std::fs::read_to_string(&file).expect("read");
+        let production = text.split("#[cfg(test)]\nmod ").next().unwrap_or_default();
+        let count = production
+            .lines()
+            .map(str::trim_start)
+            .filter(|l| !l.starts_with("//") && !l.starts_with("use "))
+            .filter(|l| l.contains(needle) && !l.contains("=>") && !l.contains("=="))
+            .count();
+        if count > 0 {
+            let rel = file
+                .strip_prefix(root)
+                .expect("under the crate")
+                .to_string_lossy()
+                .into_owned();
+            found.insert(rel, count);
+        }
+    }
+    found
+}
+
+/// R9c: the surface lists are in step with the code: every production site
+/// that resolves a key as not known, or expands a backend over the registry,
+/// is one this table classifies (a surface the read model names, or excluded
+/// with its reason), and no classified site is gone.
+#[test]
+fn r9c_the_surface_lists_match_the_code() {
+    let key_sites = [
+        // check_request, check_response: no production caller.
+        ("src/security/firewall/mod.rs", 2),
+        // log_request, log_response: audit records, no rule decision.
+        ("src/security/firewall/audit.rs", 2),
+        ("src/events/services.rs", 1), // event_delivery
+        // audited_call_judged: the delivery record.
+        ("src/gateway/router/backend_handlers/direct_audit.rs", 1),
+        // the delivery-attempt record; the scan is scan_stored_task.
+        ("src/gateway/meta_mcp/task_notify.rs", 1),
+        ("src/gateway/meta_mcp/response_security.rs", 1), // task_settlement
+        // rescan_outbound: the verdict (outbound_rescan) and its audit labels.
+        ("src/gateway/meta_mcp/invoke/chokepoint.rs", 2),
+        // backend_error, notification, stored_task, discovery, and
+        // content_refuses_value (content checks only, excluded).
+        ("src/gateway/meta_mcp/invoke/egress.rs", 5),
+    ];
+    let backend_sites = [
+        // notification, stored_task, discovery.
+        ("src/gateway/meta_mcp/invoke/egress.rs", 3),
+        ("src/gateway/meta_mcp/response_security.rs", 1), // aggregate_answer
+    ];
+    let as_map = |sites: &[(&str, usize)]| -> std::collections::BTreeMap<String, usize> {
+        sites.iter().map(|(f, n)| ((*f).to_owned(), *n)).collect()
+    };
+    assert_eq!(
+        constructions("KeyOf::NotKnown"),
+        as_map(&key_sites),
+        "key-not-known sites moved"
+    );
+    assert_eq!(
+        constructions("TargetOrigin::NoBackend"),
+        as_map(&backend_sites),
+        "expanded-backend sites moved"
+    );
+}
