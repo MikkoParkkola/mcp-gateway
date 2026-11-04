@@ -137,3 +137,26 @@ fn a_read_after_a_slashed_literal_is_still_seen() {
         "a read after a slashed literal went unseen: {found:?}"
     );
 }
+
+/// Taking the request's recorded refusal reads the audit record, not a
+/// generation, so it may come before the hook.
+#[test]
+fn taking_the_recorded_refusal_before_the_hook_is_not_a_read() {
+    let source = "fn route() {\n    let _ = crate::gateway::meta_mcp::invoke::audit::take_refusal();\n    \
+                  crate::security::firewall::relay_witness_hook::run();\n    \
+                  let _ = firewall_refusal(generation);\n}\n";
+    assert_eq!(check_sites("row", source), Ok(1));
+}
+
+/// A refusal helper that reads the generation still counts before the hook.
+#[test]
+fn a_generation_reading_refusal_before_the_hook_is_still_a_read() {
+    let source = "fn route() {\n    let _ = firewall_refusal(policy);\n    \
+                  crate::security::firewall::relay_witness_hook::run();\n    \
+                  let _ = relay_refusal(policy);\n}\n";
+    let found = check_sites("row", source);
+    assert!(
+        found.as_ref().is_err_and(|e| e.contains("found after `let _ = firewall_refusal(policy);`")),
+        "a refusal helper before the hook went unseen: {found:?}"
+    );
+}
