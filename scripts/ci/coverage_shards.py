@@ -33,7 +33,7 @@ import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from shard_tests import SDK, cargo, selected  # noqa: E402
+from shard_tests import HEADER, RESULT, SDK, cargo  # noqa: E402
 
 LIB_SPLIT = "gateway::"
 GLOB_A, GLOB_B, GLOB_ALL = "[a-l]*", "[!a-l]*", "*"
@@ -43,6 +43,11 @@ _LIB_B = (["--lib"], ["--skip", LIB_SPLIT])
 
 # shard -> (cargo args after BASE, libtest args before `--skip SDK`)
 PLANS: dict[int, dict[str, tuple[list[str], list[str]]]] = {
+    # Today's single job, run the same way (listing and reconciling) so the
+    # equivalence comparison reads the same files from both pipelines.
+    1: {
+        "all": (["--tests"], []),
+    },
     3: {
         "lib-a": _LIB_A,
         "lib-b": _LIB_B,
@@ -62,7 +67,9 @@ def owners(plan: dict[str, tuple[list[str], list[str]]], kind: str, name: str) -
     filter and its complement, so its two shards together are one owner."""
     found = []
     for shard, (args, _test) in plan.items():
-        if kind == "lib" and "--lib" in args:
+        if "--tests" in args:
+            found.append(shard)
+        elif kind == "lib" and "--lib" in args:
             found.append(shard)
         elif kind == "bin" and "--bins" in args:
             found.append(shard)
@@ -96,8 +103,9 @@ def check(n: int, metadata: dict) -> list[str]:
                 continue
             found = owners(plan, kind, target["name"])
             if kind == "lib":
+                # Whole in one shard, or split by the filter and its `--skip`.
                 filters = sorted(" ".join(plan[s][1]) for s in found)
-                if filters != sorted([LIB_SPLIT, f"--skip {LIB_SPLIT}"]):
+                if filters not in ([""], sorted([LIB_SPLIT, f"--skip {LIB_SPLIT}"])):
                     problems.append(f"lib {target['name']}: split as {filters}")
             elif len(found) != 1:
                 problems.append(f"{kind} {target['name']}: in {found or 'no shard'}")
@@ -106,9 +114,80 @@ def check(n: int, metadata: dict) -> list[str]:
 
 def run(n: int, shard: str, program: tuple[str, ...] = ("cargo",)) -> int:
     args, test_args = PLANS[n][shard]
-    rc, lines = cargo([*BASE, *args, "--", *test_args, "--skip", SDK], program)
-    print(f"::notice::coverage {n}/{shard}: selected {selected(lines)}, rc {rc}")
-    return rc
+    select = [*BASE, *args, "--", *test_args, "--skip", SDK]
+    # The tests come from libtest's own listing, before anything runs, so no
+    # output can interleave with a name; the run's per-binary result lines then
+    # have to account for every listed test.
+    rc, every = cargo([*select, "--list"], program)
+    rc2, ignored = cargo([*select, "--list", "--ignored"], program)
+    if rc or rc2:
+        print(f"::error::coverage {n}/{shard}: listing the tests failed ({rc}, {rc2})")
+        return rc or rc2
+    rc, lines = cargo(select, program)
+    listed, skipped = listing(every), listing(ignored)
+    problems = reconcile(listed, skipped, results(lines))
+    for p in problems:
+        print(f"::error::coverage {n}/{shard}: {p}")
+    with open("tests.tsv", "w", encoding="utf-8") as f:
+        for binary in sorted(listed):
+            for name in listed[binary]:
+                outcome = "ignored" if name in skipped.get(binary, ()) else "ok"
+                f.write(f"{binary}\t{name}\t{outcome}\n")
+    print(f"::notice::coverage {n}/{shard}: {sum(map(len, listed.values()))} tests "
+          f"in {len(listed)} binaries, rc {rc}")
+    return rc or (1 if problems else 0)
+
+
+def binary_of(header: str) -> str:
+    """The binary a `Running`/`Doc-tests` header names, without its build hash:
+    `unittests src/lib.rs` or `tests/x.rs`, the same in every run of one commit."""
+    text = HEADER.sub("", header).strip()
+    return text.split(" (", 1)[0]
+
+
+def listing(lines: list[str]) -> dict[str, list[str]]:
+    """`--list` output: each binary's test names (libtest prints `<name>: test`)."""
+    found: dict[str, list[str]] = {}
+    current = None
+    for line in lines:
+        if HEADER.match(line):
+            current = binary_of(line)
+            found.setdefault(current, [])
+        elif current is not None and line.endswith(": test"):
+            found[current].append(line[: -len(": test")])
+    return found
+
+
+def results(lines: list[str]) -> dict[str, tuple[int, int, int]]:
+    """Each binary's (passed, failed, ignored) from its LAST result line: a test
+    that re-runs its own binary as a child prints the child's line inside it."""
+    found: dict[str, tuple[int, int, int]] = {}
+    current = None
+    for line in lines:
+        if HEADER.match(line):
+            current = binary_of(line)
+        elif current is not None and (m := RESULT.search(line)):
+            found[current] = tuple(map(int, m.groups()))  # type: ignore[assignment]
+    return found
+
+
+def reconcile(listed: dict[str, list[str]], ignored: dict[str, list[str]],
+              ran: dict[str, tuple[int, int, int]]) -> list[str]:
+    """The run accounts for every listed test: per binary, nothing failed, the
+    ignored count is the ignored listing's, and the rest passed."""
+    problems = []
+    for binary, names in sorted(listed.items()):
+        if binary not in ran:
+            problems.append(f"{binary}: listed {len(names)} tests, no result line")
+            continue
+        passed, failed, skipped = ran[binary]
+        want = len(ignored.get(binary, []))
+        if failed or skipped != want or passed != len(names) - want:
+            problems.append(f"{binary}: ran {passed} passed, {failed} failed, {skipped} ignored; "
+                            f"listed {len(names)}, {want} of them ignored")
+    for binary in sorted(set(ran) - set(listed)):
+        problems.append(f"{binary}: a result line for a binary the listing did not name")
+    return problems
 
 
 # The sections a profile is mapped through: two builds of one binary whose bytes differ
@@ -225,11 +304,13 @@ def self_test() -> int:
     assert check(4, old) == [], check(4, old)
     for n in PLANS:
         assert check(n, good) == [], (n, check(n, good))
-    # A target kind no shard runs (a testable example) is reported, not dropped.
+    # A target kind no shard runs (a testable example) is reported, not dropped;
+    # the single job's `--tests` does run it, as cargo would.
     extra = json.loads(json.dumps(good))
     extra["packages"][0]["targets"].append(target("example", "demo"))
     for n in PLANS:
-        assert check(n, extra) == ["example demo: in no shard"], check(n, extra)
+        want = [] if n == 1 else ["example demo: in no shard"]
+        assert check(n, extra) == want, (n, check(n, extra))
     # A glob class that stops being a complement shows up as an unowned target.
     broken = {k: (list(a), list(t)) for k, (a, t) in PLANS[4].items()}
     broken["int-b"] = (["--test", "[m-z]*"], [])
@@ -260,6 +341,32 @@ def self_test() -> int:
     assert canary(good.replace("FNDA:0,_RNvCs1", "FNDA:2,_RNvCs1").replace("DA:6,0", "DA:6,2")) == \
         ["canary called 2 times", "canary line 6 covered"]
     assert canary(other + sf + "DA:5,0\nend_of_record\n") == [f"{CANARY_FN} has no FN record"]
+    # The test accounting: names from the listing, outcomes reconciled per binary.
+    lib = "     Running unittests src/lib.rs (target/llvm-cov-target/debug/deps/mcp_gateway-ab12)"
+    lease = "     Running tests/lease.rs (target/llvm-cov-target/debug/deps/lease-cd34)"
+    every = listing([lib, "a::b: test", "a::c: test", "", "2 tests, 0 benchmarks",
+                     lease, "child_reruns: test", "", "1 test, 0 benchmarks"])
+    assert every == {"unittests src/lib.rs": ["a::b", "a::c"], "tests/lease.rs": ["child_reruns"]}, every
+    skipped = listing([lib, "a::c: test", lease])
+    # The lease binary re-runs itself as a child: the child's result line comes
+    # first, the binary's own last.
+    ran = results([lib, "running 2 tests", "test result: ok. 1 passed; 0 failed; 1 ignored; 0 measured",
+                   lease, "running 1 test", "running 1 test",
+                   "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured",
+                   "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured"])
+    assert reconcile(every, skipped, ran) == [], reconcile(every, skipped, ran)
+    ran_child_only = results([lib, "test result: ok. 1 passed; 0 failed; 1 ignored",
+                              lease, "test result: ok. 0 passed; 0 failed; 1 ignored",
+                              "test result: ok. 1 passed; 0 failed; 0 ignored"])
+    assert reconcile(every, skipped, ran_child_only) == [], "the last line is the binary's"
+    assert reconcile(every, skipped, {"unittests src/lib.rs": (1, 0, 1)}) == \
+        ["tests/lease.rs: listed 1 tests, no result line"]
+    assert reconcile(every, {}, ran) == \
+        ["unittests src/lib.rs: ran 1 passed, 0 failed, 1 ignored; listed 2, 0 of them ignored"]
+    assert reconcile(every, skipped, {**ran, "tests/other.rs": (1, 0, 0)}) == \
+        ["tests/other.rs: a result line for a binary the listing did not name"]
+    assert reconcile(every, skipped, {**ran, "unittests src/lib.rs": (0, 1, 1)})[0].startswith(
+        "unittests src/lib.rs: ran 0 passed, 1 failed")
     print("coverage_shards self-test: ok")
     return 0
 
