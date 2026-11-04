@@ -52,6 +52,14 @@ async fn logged(governance: bool) -> (Arc<AppState>, impl Sized, Arc<Transparenc
     (state, (fixture_dir, dir), inv)
 }
 
+/// A wait that fails the row instead of hanging it: a stream that never
+/// sends the frame (a mutant, a regression) is a red row within this bound.
+async fn within<T>(wait: impl std::future::Future<Output = T>) -> T {
+    tokio::time::timeout(Duration::from_secs(20), wait)
+        .await
+        .expect("the frame arrives in time")
+}
+
 fn call(log: &TransparencyLogger, server: &str, n: usize) {
     log.log_invocation(
         "s",
@@ -68,13 +76,13 @@ fn call(log: &TransparencyLogger, server: &str, n: usize) {
 async fn s1a_an_admin_activity_stream_gets_a_call_made_after_it_opened() {
     let (state, _dirs, inv) = logged(true).await;
     let mut s = open(&state, request(STREAM, Who::Bearer(BEARER), None)).await;
-    let hello = s.until("hello").await;
+    let hello = within(s.until("hello")).await;
     assert_eq!(
         hello.json()["kinds"],
         serde_json::json!(["status", "reload", "activity", "config"])
     );
     call(&inv, "srv", 1);
-    let event = s.until("activity").await;
+    let event = within(s.until("activity")).await;
     assert!(event.json().is_object(), "the row: {}", event.data);
     assert!(event.part('i').is_some(), "the id carries the log position");
 }
@@ -83,17 +91,17 @@ async fn s1a_an_admin_activity_stream_gets_a_call_made_after_it_opened() {
 async fn s1c_a_reconnect_with_its_id_resumes_with_no_gap_and_no_repeat() {
     let (state, _dirs, inv) = logged(true).await;
     let mut s = open(&state, request(STREAM, Who::Bearer(BEARER), None)).await;
-    s.until("hello").await;
+    within(s.until("hello")).await;
     for n in 1..=3 {
         call(&inv, "srv", n);
     }
-    s.until("activity").await;
-    let second = s.until("activity").await;
+    within(s.until("activity")).await;
+    let second = within(s.until("activity")).await;
     drop(s);
     let id = second.id.expect("an activity frame carries an id");
     call(&inv, "srv", 4);
     let mut again = open(&state, request(STREAM, Who::Bearer(BEARER), Some(&id))).await;
-    again.until("hello").await;
+    within(again.until("hello")).await;
     let counter = |f: &Frame| {
         f.part('i')
             .and_then(|p| p.split('-').next()?.parse::<u64>().ok())
@@ -103,8 +111,8 @@ async fn s1c_a_reconnect_with_its_id_resumes_with_no_gap_and_no_repeat() {
         ..parse("")
     })
     .unwrap();
-    let next = counter(&again.until("activity").await).unwrap();
-    let last = counter(&again.until("activity").await).unwrap();
+    let next = counter(&within(again.until("activity")).await).unwrap();
+    let last = counter(&within(again.until("activity")).await).unwrap();
     assert_eq!(
         (next, last),
         (before + 1, before + 2),
@@ -116,7 +124,7 @@ async fn s1c_a_reconnect_with_its_id_resumes_with_no_gap_and_no_repeat() {
 async fn s3_a_scoped_admin_gets_activity_and_never_config() {
     let (state, _dirs, inv) = logged(true).await;
     let mut s = open(&state, request(STREAM, Who::Bearer(SCOPED_ADMIN), None)).await;
-    let hello = s.until("hello").await;
+    let hello = within(s.until("hello")).await;
     assert_eq!(
         hello.json()["kinds"],
         serde_json::json!(["status", "reload", "activity"])
@@ -134,13 +142,16 @@ async fn s3_a_scoped_admin_gets_activity_and_never_config() {
         )
         .unwrap();
     call(&inv, "a", 1);
-    loop {
-        let f = s.next().await.expect("the stream is still open");
-        assert_ne!(f.event, "config", "a scoped key never gets a config row");
-        if f.event == "activity" {
-            break;
+    within(async {
+        loop {
+            let f = s.next().await.expect("the stream is still open");
+            assert_ne!(f.event, "config", "a scoped key never gets a config row");
+            if f.event == "activity" {
+                break;
+            }
         }
-    }
+    })
+    .await;
 }
 
 #[tokio::test]
@@ -148,7 +159,7 @@ async fn a1d_a_narrowed_backend_list_ends_the_stream_with_its_kinds_unchanged() 
     let (state, _dirs, _inv) = logged(true).await;
     tokio::time::pause();
     let mut s = open(&state, request(STREAM, Who::Bearer(SCOPED_ADMIN), None)).await;
-    s.until("hello").await;
+    within(s.until("hello")).await;
     state.live_config.edit(|c| {
         for key in &mut c.auth.api_keys {
             if key.name == SCOPED_ADMIN {
@@ -168,11 +179,11 @@ async fn a1f_a_status_only_caller_keeps_its_stream_across_rechecks() {
     tokio::time::pause();
     let mut s = open(&state, request(STREAM, Who::Bearer(KEY), None)).await;
     assert_eq!(
-        s.until("hello").await.json()["kinds"],
+        within(s.until("hello")).await.json()["kinds"],
         serde_json::json!(["status"])
     );
     // Past several one-second rechecks, to the first keep-alive.
-    let comment = s.until("comment").await;
+    let comment = within(s.until("comment")).await;
     assert_eq!(comment.event, "comment", "the stream is still open");
 }
 
@@ -180,9 +191,9 @@ async fn a1f_a_status_only_caller_keeps_its_stream_across_rechecks() {
 async fn f13_no_frame_or_id_carries_a_search_segment_or_offset() {
     let (state, _dirs, inv) = logged(true).await;
     let mut s = open(&state, request(STREAM, Who::Bearer(BEARER), None)).await;
-    let hello = s.until("hello").await;
+    let hello = within(s.until("hello")).await;
     call(&inv, "srv", 1);
-    let event = s.until("activity").await;
+    let event = within(s.until("activity")).await;
     for text in [
         hello.data.as_str(),
         event.data.as_str(),
@@ -213,9 +224,9 @@ async fn a_gateway_with_no_governance_log_serves_activity_without_config() {
     let (state, _dirs, inv) = logged(false).await;
     let mut s = open(&state, request(STREAM, Who::Bearer(BEARER), None)).await;
     assert_eq!(
-        s.until("hello").await.json()["kinds"],
+        within(s.until("hello")).await.json()["kinds"],
         serde_json::json!(["status", "reload", "activity"])
     );
     call(&inv, "srv", 1);
-    assert!(s.until("activity").await.json().is_object());
+    assert!(within(s.until("activity")).await.json().is_object());
 }
