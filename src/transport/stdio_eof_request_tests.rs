@@ -517,6 +517,10 @@ while IFS= read -r l; do :; done"#
                     matches!(first, Err(Error::BackendTimeout(_))),
                     "premise: the first call timed out: {first:?}"
                 );
+                // Only the first call's window is under test. The second
+                // answer needs the child to fork sed twice, which a loaded
+                // runner can take longer than 300 ms to do.
+                t.set_request_timeout(REQUEST_TIMEOUT);
                 t.request("tools/list", None)
                     .await
                     .expect("the second call is answered after the late one");
