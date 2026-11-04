@@ -188,6 +188,9 @@ mod judged_answer;
 /// Slice B T10: only an API-key match records a key's last use.
 #[cfg(all(test, feature = "webui"))]
 mod keys_last_used_callers_tests;
+/// K5 authorization fields on the next call; its fixture is the UI's.
+#[cfg(all(test, feature = "webui"))]
+mod live_key_authz_tests;
 #[cfg(all(test, feature = "webui"))]
 mod live_keys_dashboard_tests;
 #[cfg(test)]
