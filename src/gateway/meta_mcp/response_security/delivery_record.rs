@@ -5,7 +5,7 @@
 use super::{DeliveryCredential, ResponseCorrelation};
 
 /// Whether a delivery record states what the gateway did to the answer.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub(super) enum Facts {
     /// An answer: its cell's facts, and whether the delivered frame is the
     /// gateway's own refusal.
