@@ -231,6 +231,14 @@ async fn list_tools_of(fx: &Fixture, server: Option<&str>, caller: &Caller) -> (
     (answer, super::composite_refusals::last_delivery(fx))
 }
 
+/// The listing a `gateway_list_tools` answer carries, parsed.
+fn listing(answer: &Value) -> Value {
+    let text = answer["result"]["content"][0]["text"]
+        .as_str()
+        .unwrap_or_else(|| panic!("a listing: {answer}"));
+    serde_json::from_str(text).expect("the listing is JSON")
+}
+
 /// Whether `answer` is the missing-backend answer for `alpha`.
 fn answered_as_missing(answer: &Value) -> bool {
     answer.to_string().contains("alpha")
@@ -358,14 +366,26 @@ async fn meta_list_tools_of_an_isolated_backend_records_refused() {
 /// listed as today: a failed mint alone omits nothing.
 #[tokio::test]
 async fn meta_list_tools_after_a_failed_optional_mint_still_lists() {
-    let (fx, mint) = failing_mint_fixture(&[Extra::AlphaIdentityOptional], false).await;
-    let (answer, record) = list_tools_of(&fx, Some("alpha"), &Caller::Oidc).await;
-    assert!(
-        mint.mints.load(Ordering::SeqCst) > 0,
-        "premise: a mint was attempted and failed"
-    );
-    assert!(!answered_as_missing(&answer), "listed: {answer}");
-    assert_ne!(record["response_effect"], "refused", "{record}");
+    for multi_user in [false, true] {
+        let (fx, mint) = failing_mint_fixture(&[Extra::AlphaIdentityOptional], multi_user).await;
+        let (answer, record) = list_tools_of(&fx, Some("alpha"), &Caller::Oidc).await;
+        assert!(
+            mint.mints.load(Ordering::SeqCst) > 0,
+            "multi_user={multi_user} premise: a mint was attempted and failed"
+        );
+        let listed = listing(&answer);
+        assert!(
+            listed["server"] == "alpha"
+                && listed["tools"]
+                    .as_array()
+                    .is_some_and(|tools| tools.iter().any(|tool| tool["name"] == "t")),
+            "multi_user={multi_user}: alpha's tool t is listed: {answer}"
+        );
+        assert_ne!(
+            record["response_effect"], "refused",
+            "multi_user={multi_user}: {record}"
+        );
+    }
 }
 
 /// Control: on a multi-user gateway, an optional-propagation backend that
@@ -403,14 +423,17 @@ async fn meta_list_tools_of_every_backend_records_no_refused() {
     })
     .await;
     isolated.state.meta_mcp.set_multi_user(true);
+    let lists_alpha = |answer: &Value| listing(answer).to_string().contains(r#""server":"alpha""#);
+    let plain = fixture(Setup::default()).await;
+    let (answer, _) = list_tools_of(&plain, None, &Caller::Anonymous).await;
+    assert!(
+        lists_alpha(&answer),
+        "premise: the check sees a listed alpha: {answer}"
+    );
     for (name, fx) in [("required", &required), ("isolated", &isolated)] {
         let (answer, record) = list_tools_of(fx, None, &Caller::Anonymous).await;
         assert!(
-            answer.get("result").is_some(),
-            "{name} premise: listed: {answer}"
-        );
-        assert!(
-            !answer.to_string().contains("\"alpha\""),
+            !lists_alpha(&answer),
             "{name} premise: alpha left out: {answer}"
         );
         assert_ne!(record["response_effect"], "refused", "{name}: {record}");
