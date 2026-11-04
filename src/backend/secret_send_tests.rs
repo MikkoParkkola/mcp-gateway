@@ -401,7 +401,12 @@ async fn a_renewal_keeps_an_unchanged_value_redacted_past_its_grace() {
     assert!(!echoed(), "premise: a sent value is redacted");
 
     tokio::time::advance(STEP).await;
-    assert!(backend.renew_needles("read", &arguments));
+    let stored = crate::security::dispatched::Dispatched::of(
+        "svc",
+        &[("api".to_owned(), SECRET.to_owned())],
+    )
+    .stored();
+    assert!(backend.vouch_and_renew("read", &arguments, Some(&stored)));
     tokio::time::advance(STEP).await;
     assert!(
         !echoed(),

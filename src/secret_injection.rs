@@ -294,32 +294,59 @@ impl SecretInjector {
     }
 }
 
-/// Each of `rules` that applies to `tool`, with the value it resolves to now
-/// through `resolver`, before any templating: what a dispatch's fingerprint
-/// is taken over, at the dispatch and again at each check, so both sides
-/// hash the same inputs. An empty value is left out, as injection skips it.
+/// What each of `rules` resolves to now for `tool`, aligned with `rules`:
+/// `None` for a rule that does not apply. One such resolution is what a
+/// dispatch both fingerprints and injects, and what a deferred task's check
+/// both compares and renews, so neither pair can see two different values.
 ///
 /// # Errors
 ///
-/// A rule that does not resolve.
-pub(crate) fn resolved_rules(
+/// A rule that applies and does not resolve, named with its backend.
+pub(crate) fn resolve_rules(
     rules: &[CredentialRule],
     resolver: &SecretResolver,
+    backend: &str,
     tool: &str,
-) -> crate::Result<Vec<(String, String)>> {
-    let mut pairs = Vec::new();
-    for rule in rules
+) -> crate::Result<Vec<Option<String>>> {
+    rules
         .iter()
-        .filter(|rule| tool_matches_rule(tool, &rule.tools))
-    {
-        let value = resolver.resolve(&rule.value).map_err(|e| {
-            crate::Error::Config(format!("Failed to resolve credential '{}': {e}", rule.name))
-        })?;
-        if !value.is_empty() {
-            pairs.push((rule.name.clone(), value));
-        }
-    }
-    Ok(pairs)
+        .map(|rule| {
+            if !tool_matches_rule(tool, &rule.tools) {
+                return Ok(None);
+            }
+            resolver.resolve(&rule.value).map(Some).map_err(|e| {
+                warn!(
+                    backend = backend,
+                    credential = %rule.name,
+                    error = %e,
+                    "Failed to resolve credential"
+                );
+                crate::Error::Config(format!(
+                    "Failed to resolve credential '{}' for backend '{}': {e}",
+                    rule.name, backend
+                ))
+            })
+        })
+        .collect()
+}
+
+/// The (rule name, value) pairs a dispatch's fingerprint is taken over:
+/// each applying rule's resolved value from [`resolve_rules`], before any
+/// injection, leaving out an empty one as injection skips it.
+pub(crate) fn resolved_pairs(
+    rules: &[CredentialRule],
+    values: &[Option<String>],
+) -> Vec<(String, String)> {
+    rules
+        .iter()
+        .zip(values)
+        .filter_map(|(rule, value)| {
+            value
+                .as_ref()
+                .filter(|value| !value.is_empty())
+                .map(|value| (rule.name.clone(), value.clone()))
+        })
+        .collect()
 }
 
 /// [`SecretInjector::inject`] over one backend's `rules`, resolved by
@@ -335,6 +362,24 @@ pub(crate) fn inject_rules(
     tool: &str,
     arguments: serde_json::Value,
 ) -> crate::Result<InjectionResult> {
+    let values = resolve_rules(rules, resolver, backend, tool)?;
+    inject_resolved(rules, &values, backend, tool, arguments)
+}
+
+/// [`inject_rules`] over `values`, which [`resolve_rules`] resolved for the
+/// same `rules` and `tool`: nothing is resolved again.
+///
+/// # Errors
+///
+/// As [`SecretInjector::inject`], less resolution.
+pub(crate) fn inject_resolved(
+    rules: &[CredentialRule],
+    values: &[Option<String>],
+    backend: &str,
+    tool: &str,
+    arguments: serde_json::Value,
+) -> crate::Result<InjectionResult> {
+    debug_assert_eq!(rules.len(), values.len(), "values come from resolve_rules");
     let mut args = arguments;
     let mut headers: HashMap<String, String> = HashMap::new();
     let mut injected_names: Vec<String> = Vec::new();
@@ -348,24 +393,11 @@ pub(crate) fn inject_rules(
     // earlier rule on the same key injected.
     drop_owned(rules, tool, &mut args);
 
-    for rule in rules {
-        if !tool_matches_rule(tool, &rule.tools) {
+    for (rule, value) in rules.iter().zip(values) {
+        // `None`: the rule does not apply to this tool.
+        let Some(resolved_value) = value.clone() else {
             continue;
-        }
-
-        // Resolve the credential value
-        let resolved_value = resolver.resolve(&rule.value).map_err(|e| {
-            warn!(
-                backend = backend,
-                credential = %rule.name,
-                error = %e,
-                "Failed to resolve credential"
-            );
-            crate::Error::Config(format!(
-                "Failed to resolve credential '{}' for backend '{}': {e}",
-                rule.name, backend
-            ))
-        })?;
+        };
 
         // Skip injection if the rule value itself is empty; an unset or empty
         // {env.X} already failed above (C4).

@@ -21,10 +21,11 @@ pub(crate) const WITHHELD: &str =
 /// an unchanged secret is still removed. Otherwise the withheld answer: the
 /// gateway's own words, settled as the task's end, never retried.
 pub(super) fn withheld(backend: &Backend, handle: &UpstreamHandle) -> Option<UpstreamAnswer> {
-    let vouched = backend.current_secrets(&handle.tool).is_some_and(|now| {
-        crate::security::dispatched::delivers(handle.fingerprint.as_deref(), &now)
-    });
-    if vouched && backend.renew_needles(&handle.tool, &handle.arguments) {
+    if backend.vouch_and_renew(
+        &handle.tool,
+        &handle.arguments,
+        handle.fingerprint.as_deref(),
+    ) {
         return None;
     }
     tracing::warn!(
