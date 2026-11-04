@@ -40,11 +40,27 @@ async fn a_body_that_fails_to_read_is_a_parse_error() {
 
 /// The gateway does not check meta-tool arguments against the advertised
 /// schema, so a `limit` outside 1 to 25 reaches the handler, which clamps it,
-/// rather than being refused on the way in. The fixture's catalogue has at
-/// least one "read" match, so 0 raised to 1 shows as exactly one.
+/// rather than being refused on the way in. One capability matches "read",
+/// so a 0 raised to 1 shows as exactly one match, where 0 gave none.
 #[tokio::test]
 async fn an_out_of_range_search_limit_is_answered_not_refused() {
     let fx = fixture(Answer::Ok, |_| {}).await;
+    let caps = tempfile::tempdir().unwrap();
+    std::fs::write(
+        caps.path().join("read_limit_probe.yaml"),
+        "name: read_limit_probe\ndescription: read a limit probe\nproviders:\n  primary:\n    service: rest\n    config:\n      base_url: https://example.invalid\n      path: /probe\n",
+    )
+    .unwrap();
+    let backend = std::sync::Arc::new(crate::capability::CapabilityBackend::new(
+        "limit_probe",
+        std::sync::Arc::new(crate::capability::CapabilityExecutor::new()),
+    ));
+    let loaded = backend
+        .load_from_directory(caps.path().to_str().unwrap())
+        .await
+        .unwrap();
+    assert_eq!(loaded, 1, "the probe capability must load");
+    fx.state.meta_mcp.set_capabilities(backend);
     for (limit, allowed) in [(0, 1..=1), (1000, 1..=25)] {
         let params = json!({
             "name": "gateway_search_tools",
