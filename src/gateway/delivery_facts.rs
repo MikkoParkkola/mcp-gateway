@@ -734,6 +734,10 @@ fn insert_refused_by(facts: &DeliveryFacts, fields: &mut Map<String, Value>) {
 mod tests;
 
 #[cfg(test)]
+#[path = "delivery_facts_refused_by_tests.rs"]
+mod refused_by_tests;
+
+#[cfg(test)]
 #[path = "delivery_facts_withheld_tests.rs"]
 mod withheld_tests;
 
