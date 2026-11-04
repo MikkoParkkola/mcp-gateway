@@ -321,7 +321,9 @@ fn an_upgrade_refuses_a_config_others_can_write() {
 
     let rewrite = rewrite_url_aliases_in(&path, RewriteMode::Apply);
 
-    assert!(rewrite.is_err(), "the refused file was rewritten");
+    // The guard's own refusal, not some other failure.
+    let error = rewrite.err().expect("the refused file was rewritten");
+    assert!(error.contains("Refusing to load config file"), "{error}");
     assert_eq!(std::fs::read_to_string(&path).expect("read back"), CONFIG);
     let mode = std::fs::metadata(&path).expect("stat").permissions().mode();
     assert_eq!(mode & 0o777, 0o660, "the refused file was rewritten");

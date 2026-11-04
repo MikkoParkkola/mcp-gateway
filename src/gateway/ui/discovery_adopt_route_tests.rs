@@ -610,6 +610,62 @@ async fn a_config_removed_before_the_writers_read_is_no_config_file() {
     assert_eq!(route.entries(), 0, "a refused write left a store entry");
 }
 
+/// A crashed write's journal and staged original wait beside gateway.yaml,
+/// with a matching digest, and `loose` names the one another account could
+/// change. The writer's lock runs recovery first, which refuses it: the
+/// adopt answers the route's fixed 503, nothing is written or saved, and the
+/// answer names no path.
+#[cfg(unix)]
+async fn a_loose_recovery_file_answers_the_fixed_refusal(
+    loose: fn(&std::path::Path) -> std::path::PathBuf,
+) {
+    use crate::config_persistence::journal;
+    use std::os::unix::fs::PermissionsExt as _;
+    let route = Route::new(
+        EMPTY,
+        vec![stdio("tool", "npx tool", &[("API_KEY", CANARY)])],
+    )
+    .await;
+    let (id, revision) = route.listed("tool").await;
+    let path = route.config();
+    let planted = "# planted\nsecrets:\n  store: files\nbackends: {}\n";
+    journal::stage_original(&path, planted.as_bytes()).expect("stage");
+    journal::begin(&path, crate::hashing::sha256_hex(planted.as_bytes())).expect("journal");
+    std::fs::set_permissions(loose(&path), std::fs::Permissions::from_mode(0o660)).expect("loosen");
+
+    let (status, body) = route.adopt(true, &id, &revision).await;
+
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{body}");
+    assert_eq!(body["error"], "gateway.yaml could not be loaded", "{body}");
+    for path in paths_of(&route) {
+        assert!(!body.to_string().contains(&path), "the answer names {path}");
+    }
+    assert_eq!(
+        route.bytes(),
+        EMPTY.as_bytes(),
+        "the planted original was restored"
+    );
+    assert_eq!(route.entries(), 0, "a refused write left a store entry");
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_staged_original_others_can_write_answers_the_fixed_refusal() {
+    a_loose_recovery_file_answers_the_fixed_refusal(|path| {
+        crate::config_persistence::journal::original_path(path)
+    })
+    .await;
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_journal_others_can_write_answers_the_fixed_refusal() {
+    a_loose_recovery_file_answers_the_fixed_refusal(|path| {
+        crate::config_persistence::journal::journal_path(path)
+    })
+    .await;
+}
+
 /// Whether the decision set shows an open adopt item for `name`.
 fn adopt_item_open(state: &AppState, name: &str) -> bool {
     state

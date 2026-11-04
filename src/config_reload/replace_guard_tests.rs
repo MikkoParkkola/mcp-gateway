@@ -150,3 +150,57 @@ async fn a_journal_others_can_write_is_never_acted_on() {
     })
     .await;
 }
+
+/// An owner-only gateway.yaml that is not UTF-8 is refused by the writer's
+/// read like any file the guard refuses: no store entry, bytes unchanged.
+#[tokio::test]
+async fn a_config_that_is_not_utf8_creates_no_entry() {
+    let (dir, path, ctx) = setup();
+    let bytes = b"backends: {}\n# \xff\xfe\n";
+    crate::gateway::test_helpers::write_owner_only(&path, bytes).expect("write");
+    let (save, creates) = counted_save(dir.path());
+
+    let failure = replace_detached(ctx, save, WAIT)
+        .await
+        .expect_err("refused");
+
+    assert!(
+        matches!(failure, ReplaceError::ConfigRefused(_)),
+        "{failure:?}"
+    );
+    assert_eq!(creates.load(std::sync::atomic::Ordering::SeqCst), 0);
+    assert_eq!(std::fs::read(&path).expect("read"), bytes);
+}
+
+/// A staged original that is not UTF-8 (staged before the writer read
+/// through the guard) is refused, and the refusal says so and gives the
+/// by-hand step: compare it with gateway.yaml, then delete the journal.
+#[tokio::test]
+async fn a_staged_original_that_is_not_utf8_names_encoding_and_the_manual_step() {
+    use crate::config_persistence::journal;
+    let (dir, path, ctx) = setup();
+    let staged = b"backends: {}\n# \xff\n";
+    journal::stage_original(&path, staged).expect("stage");
+    journal::begin(&path, crate::hashing::sha256_hex(staged)).expect("journal");
+
+    let failure = replace_detached(
+        ctx,
+        super::super::replace_test_support::to(Expected::Any, START, Replaced::Discard),
+        WAIT,
+    )
+    .await
+    .expect_err("refused");
+
+    assert!(
+        matches!(failure, ReplaceError::ConfigRefused(_)),
+        "{failure:?}"
+    );
+    let text = format!("{failure:?}");
+    assert!(text.contains("UTF-8"), "{text}");
+    assert!(
+        text.contains("compare") && text.contains("then delete the journal"),
+        "{text}"
+    );
+    assert!(!text.contains(&*dir.path().to_string_lossy()), "{text}");
+    assert_eq!(read(&path), START);
+}

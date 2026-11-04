@@ -266,11 +266,20 @@ fn the_text_editor_refuses_a_config_the_guard_refuses() {
         let (_dir, path) = config_file(text);
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode)).expect("chmod");
 
+        let mut ran = false;
         let edited = edit_config_text(&path, |current| {
+            ran = true;
             Ok(current.map(|text| format!("{text}# edited\n")))
         });
 
-        assert!(edited.is_err(), "mode {mode:o}: {edited:?}");
+        // The guard's own refusal, not some other failure, and the edit never
+        // saw the refused text.
+        let error = edited.expect_err("refused");
+        assert!(
+            error.contains("Refusing to load config file"),
+            "mode {mode:o}: {error}"
+        );
+        assert!(!ran, "mode {mode:o}: the edit ran on refused text");
         assert_eq!(std::fs::read_to_string(&path).expect("read"), text);
         let now = std::fs::metadata(&path).expect("stat").permissions().mode();
         assert_eq!(now & 0o777, mode, "mode {mode:o}: the file was rewritten");

@@ -177,3 +177,101 @@ fn a_new_plain_read_of_the_config_is_seen() {
         ]
     );
 }
+
+/// `src/lib.rs` of a fixture crate holding `source`, walked.
+fn fixture_rows(source: &str) -> Vec<String> {
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::create_dir(dir.path().join("src")).expect("src");
+    crate::gateway::test_helpers::write_owner_only(dir.path().join("src/lib.rs"), source)
+        .expect("fixture");
+    found_in(dir.path(), &["src/lib.rs"])
+}
+
+/// Every other way to open or copy a file is seen too: an `OpenOptions`
+/// open (inline or held in a binding), `File::options`, `fs::copy`, a read
+/// imported by its bare name, one imported under another name, and one
+/// called through a renamed `fs` module or a renamed `File`.
+#[test]
+fn every_other_form_of_a_plain_read_is_seen() {
+    let rows = fixture_rows(
+        "use std::fs::read_to_string;\n\
+         use std::fs::read as slurp;\n\
+         use std::fs as disk;\n\
+         use std::fs::{File as Handle, OpenOptions};\n\
+         pub fn inline(p: &std::path::Path) {\n    \
+         let _ = std::fs::OpenOptions::new().read(true).open(p);\n}\n\
+         pub fn held(p: &std::path::Path) {\n    \
+         let mut options = OpenOptions::new();\n    options.read(true);\n    \
+         let _ = options.open(p);\n    let _ = std::fs::File::options().read(true).open(p);\n}\n\
+         pub fn copied(p: &std::path::Path) {\n    let _ = std::fs::copy(p, p);\n}\n\
+         pub fn bare(p: &std::path::Path) {\n    let _ = read_to_string(p);\n}\n\
+         pub fn renamed(p: &std::path::Path) {\n    let _ = slurp(p);\n    \
+         let _ = disk::read(p);\n    let _ = Handle::open(p);\n}\n",
+    );
+
+    assert_eq!(
+        rows,
+        [
+            "src/lib.rs\tbare\tfs::read_to_string\t1",
+            "src/lib.rs\tcopied\tfs::copy\t1",
+            "src/lib.rs\theld\tFile::options\t1",
+            "src/lib.rs\theld\tOpenOptions::new\t1",
+            "src/lib.rs\tinline\tOpenOptions::new\t1",
+            "src/lib.rs\trenamed\tFile::open\t1",
+            "src/lib.rs\trenamed\tfs::read\t2",
+        ]
+    );
+}
+
+/// An `fs` import the walk cannot resolve to a name (a glob) is a row of
+/// its own, so it fails the pin until someone classifies it.
+#[test]
+fn an_fs_import_the_walk_cannot_resolve_is_a_row() {
+    let rows = fixture_rows(
+        "use std::fs::*;\npub fn hidden(p: &std::path::Path) {\n    let _ = read(p);\n}\n",
+    );
+
+    assert_eq!(rows, ["src/lib.rs\t<module>\tuse fs::*\t1"]);
+}
+
+/// The walk's roots are the crate's targets: the library, every `[[bin]]`
+/// path and every file Cargo finds under `src/bin/`, so a new binary cannot
+/// escape the inventory.
+#[test]
+fn the_walk_roots_are_the_cargo_targets() {
+    let root = crate_root();
+    let manifest = std::fs::read_to_string(root.join("Cargo.toml")).expect("Cargo.toml");
+    let mut targets = vec!["src/lib.rs".to_owned()];
+    let mut in_bin = false;
+    for line in manifest.lines().map(str::trim) {
+        if line.starts_with('[') {
+            in_bin = line == "[[bin]]";
+        } else if in_bin
+            && let Some(path) = line
+                .strip_prefix("path")
+                .map(str::trim_start)
+                .and_then(|rest| rest.strip_prefix('='))
+        {
+            targets.push(path.trim().trim_matches('"').to_owned());
+        }
+    }
+    let autobins = !manifest
+        .lines()
+        .any(|l| l.trim().replace(' ', "") == "autobins=false");
+    if autobins && let Ok(entries) = std::fs::read_dir(root.join("src/bin")) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if path.extension().is_some_and(|e| e == "rs") {
+                targets.push(format!("src/bin/{name}"));
+            } else if path.join("main.rs").is_file() {
+                targets.push(format!("src/bin/{name}/main.rs"));
+            }
+        }
+    }
+    targets.sort();
+    targets.dedup();
+    let mut roots: Vec<String> = ROOTS.iter().map(|r| (*r).to_owned()).collect();
+    roots.sort();
+    assert_eq!(roots, targets, "ROOTS must list every Cargo target");
+}

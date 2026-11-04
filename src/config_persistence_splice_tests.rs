@@ -389,7 +389,12 @@ fn a_write_over_a_config_the_guard_refuses_is_refused() {
 
         let result = write_config_with(&path, &next, CommentLoss::Rewrite, &held);
 
-        assert!(result.is_err(), "mode {mode:o}: {result:?}");
+        // The guard's own refusal, not some other failure.
+        assert!(
+            matches!(&result, Err(crate::config_persistence::Unwritten::Failed(why))
+                if why.contains("Refusing to load config file")),
+            "mode {mode:o}: {result:?}"
+        );
         assert_eq!(std::fs::read_to_string(&path).expect("read"), current);
         let now = std::fs::metadata(&path).expect("stat").permissions().mode();
         assert_eq!(now & 0o777, mode, "mode {mode:o}: the file was rewritten");
