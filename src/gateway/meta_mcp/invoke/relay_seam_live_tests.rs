@@ -183,9 +183,18 @@ fn p8_10d_a_seam_keeps_its_contributors_exact_facts() {
     ];
     let rig = Rig::new(config(Block, &[], vec![]));
     let receipts = deliver_plan(&rig, &rig.generation(), &steps);
-    let facts: Vec<_> = receipts
+    let seams: Vec<_> = receipts.iter().filter(|r| r.kind == Kind::Seam).collect();
+    // Every seam carries its contributors' facts: one without would drop out
+    // of the comparison below instead of failing it.
+    assert!(
+        seams.iter().all(|r| r
+            .digest
+            .contributor_facts_for_test()
+            .is_some_and(|facts| !facts.is_empty())),
+        "P8.10d: a seam receipt carries no contributor facts"
+    );
+    let facts: Vec<_> = seams
         .iter()
-        .filter(|r| r.kind == Kind::Seam)
         .filter_map(|r| r.digest.contributor_facts_for_test())
         .map(|list| {
             list.into_iter()
