@@ -14,7 +14,14 @@ pub(in crate::gateway::router) async fn test_router_app_state_with_meta(
     configure: impl FnOnce(MetaMcp) -> MetaMcp,
 ) -> Fixture {
     let agent_auth = AgentAuthState::new(false, Arc::new(AgentRegistry::new()));
-    fixture_with(auth, key_server, agent_auth, configure).await
+    fixture_with(
+        auth,
+        key_server,
+        agent_auth,
+        configure,
+        RunningAuth::Resolved,
+    )
+    .await
 }
 
 /// [`test_router_app_state_with_meta`], with `agent_auth` in place from the
@@ -24,8 +31,9 @@ pub(in crate::gateway::router) async fn test_router_app_state_with_meta_and_agen
     key_server: Option<Arc<crate::key_server::KeyServer>>,
     agent_auth: AgentAuthState,
     configure: impl FnOnce(MetaMcp) -> MetaMcp,
+    running: RunningAuth,
 ) -> Fixture {
-    fixture_with(auth, key_server, agent_auth, configure).await
+    fixture_with(auth, key_server, agent_auth, configure, running).await
 }
 
 /// [`test_router_app_state_with_meta`], with `firewall` as the router's own
@@ -62,7 +70,19 @@ pub(in crate::gateway::router) async fn test_router_app_state_with_agent_auth(
     auth: &AuthConfig,
     agent_auth: AgentAuthState,
 ) -> Fixture {
-    fixture_with(auth, None, agent_auth, |meta| meta).await
+    fixture_with(auth, None, agent_auth, |meta| meta, RunningAuth::Resolved).await
+}
+
+/// Whether the fixture's running config carries the auth it resolved.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum RunningAuth {
+    /// The keys live in the resolved table only; `config.auth` is the
+    /// default (the long-standing fixture shape, which pinned rows rely on).
+    Resolved,
+    /// `config.auth` is the auth the table was resolved from, as a started
+    /// gateway's is, so a reload of an edited key list is judged as in
+    /// production.
+    Carried,
 }
 
 async fn fixture_with(
@@ -70,6 +90,7 @@ async fn fixture_with(
     key_server: Option<Arc<crate::key_server::KeyServer>>,
     agent_auth: AgentAuthState,
     configure: impl FnOnce(MetaMcp) -> MetaMcp,
+    running: RunningAuth,
 ) -> Fixture {
     // As the gateway builds it: one resolver for every backend's secrets.
     let backends = Arc::new(BackendRegistry::with_secret_resolver(Arc::new(
@@ -88,11 +109,13 @@ async fn fixture_with(
     ));
     let gateway_key_pair = Arc::new(GatewayKeyPair::generate().expect("gateway key generation"));
 
-    // The running config carries the auth it was resolved from, as a started
-    // gateway's does, so a reload of an edited key list is judged against it.
+    let config_auth = match running {
+        RunningAuth::Resolved => AuthConfig::default(),
+        RunningAuth::Carried => auth.clone(),
+    };
     let live_config = Arc::new(crate::config_reload::LiveConfig::with_auth(
         crate::config_reload::flags_off(crate::config::Config {
-            auth: auth.clone(),
+            auth: config_auth,
             ..crate::config::Config::default()
         }),
         Arc::clone(&auth_config),

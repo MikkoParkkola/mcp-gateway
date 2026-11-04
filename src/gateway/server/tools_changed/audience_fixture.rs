@@ -429,7 +429,7 @@ impl World {
         let wire_caps = Arc::clone(&caps);
         let probe = Arc::<Probe>::default();
         let wire_probe = Arc::clone(&probe);
-        let (mut state, store) = crate::gateway::router::tests::audience_state(
+        let (mut state, store) = crate::gateway::router::tests::audience_state_with(
             &auth,
             (Some(Arc::clone(&key_server)), agents),
             move |meta| {
@@ -439,6 +439,9 @@ impl World {
                 meta.set_capabilities(wire_caps);
                 configure(meta)
             },
+            // As a started gateway runs: a reload of an edited key list is
+            // judged against the running auth.
+            crate::gateway::router::tests::RunningAuth::Carried,
         )
         .await;
         let (feed, nudges) = tokio::sync::mpsc::unbounded_channel();
