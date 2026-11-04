@@ -117,7 +117,6 @@ impl DeliveryDigest {
         let kept = Self {
             segments,
             retained: Vec::new(),
-            sensitive: self.sensitive,
             inferred: self.inferred,
             source: self.source.clone(),
             deferred: false,
@@ -181,7 +180,6 @@ impl DeliveryDigest {
         Self {
             segments: Vec::new(),
             retained: Vec::new(),
-            sensitive: self.sensitive,
             inferred: self.inferred,
             source: self.source.clone(),
             deferred: false,
@@ -262,7 +260,6 @@ impl DeliveryDigest {
         Self {
             segments: Vec::new(),
             retained: Vec::new(),
-            sensitive: self.sensitive,
             inferred: self.inferred,
             source: self.source.clone(),
             deferred: false,

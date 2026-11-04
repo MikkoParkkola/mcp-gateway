@@ -78,9 +78,8 @@ pub(crate) struct ReplayReceipt {
     pub(in super::super) segments: Vec<ReplaySegment>,
     /// Fingerprints retained from leaves a change removed.
     pub(in super::super) retained: Vec<u64>,
-    pub(in super::super) sensitive: bool,
     /// The inferred fact alone: a replay re-records from it and the lists in
-    /// force, never from the stored `sensitive`.
+    /// force.
     pub(in super::super) inferred: bool,
     /// Staged whole, its cap still to apply where it is recorded.
     pub(in super::super) deferred: bool,
@@ -209,7 +208,6 @@ impl DeliveryDigest {
                 })
                 .collect(),
             retained: self.retained.clone(),
-            sensitive: self.sensitive,
             inferred: self.inferred,
             deferred: self.deferred,
             seam_sources: self.seam_sources.clone(),
@@ -240,7 +238,6 @@ impl DeliveryDigest {
                 })
                 .collect(),
             retained: receipt.retained.clone(),
-            sensitive: receipt.sensitive,
             inferred: receipt.inferred,
             source: None,
             deferred: receipt.deferred,

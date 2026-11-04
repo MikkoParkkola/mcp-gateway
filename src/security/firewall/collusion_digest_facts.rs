@@ -28,7 +28,6 @@ impl DeliveryDigest {
     #[must_use]
     pub(crate) fn with_contributor_facts(mut self, inferred: Box<[bool]>) -> Self {
         self.inferred = inferred.iter().any(|f| *f);
-        self.sensitive |= self.inferred;
         self.seam_inferred = Some(inferred);
         self
     }

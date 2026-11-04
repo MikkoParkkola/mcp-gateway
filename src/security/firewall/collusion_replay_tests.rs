@@ -136,7 +136,7 @@ fn g31_a_replayed_receipt_records_what_the_original_held() {
         original_fps,
         "the replay holds exactly the original's fingerprints"
     );
-    assert_eq!(replayed.is_sensitive(), digest.is_sensitive());
+    assert_eq!(replayed.is_inferred(), digest.is_inferred());
     fw.record_digest(
         RelayCaller::Keyed("alice"),
         "alpha",

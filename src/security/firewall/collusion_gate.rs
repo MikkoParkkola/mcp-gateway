@@ -203,15 +203,12 @@ impl<'a> RelayCaller<'a> {
 }
 
 /// Per-firewall relay state: the detector (shared across firewalls through
-/// [`Firewall::with_collusion`]) and the compiled globs.
+/// [`Firewall::with_collusion`]); the lists are read from each generation.
 pub(super) struct RelayGate {
     detector: Option<Arc<CollusionDetector>>,
     /// The replay receipt store (`MIK-8408` E1): one beside the detector,
     /// shared wherever the detector is shared.
     replay: Arc<ReplayReceipts>,
-    /// The collusion lists compiled at startup: what recording and the
-    /// witness judge by until each reads its own generation's.
-    view: super::CollusionView,
     /// Delivered results whose text was cut to the recording cap.
     text_cut: AtomicU64,
     /// Plans whose answer was over the bound their receipts are kept against.
@@ -236,7 +233,6 @@ impl RelayGate {
         Self {
             detector: Some(detector_for(config)),
             replay: Arc::new(ReplayReceipts::new()),
-            view: super::CollusionView::compile(config),
             text_cut: AtomicU64::new(0),
             plan_drop: AtomicU64::new(0),
             #[cfg(test)]

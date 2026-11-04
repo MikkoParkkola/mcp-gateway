@@ -172,10 +172,8 @@ impl Firewall {
         self.relay_detector()?;
         let source = format!("{server}:{tool}");
         let inferred = context_integrity_sensitive(result);
-        let sensitive = self.relay.view.sources.iter().any(|p| p.matches(&source)) || inferred;
         let (leaves, values) = delivery_parts(result);
-        let (mut digest, cut) = of_parts(&leaves, values, sensitive);
-        digest.inferred = inferred;
+        let (mut digest, cut) = of_parts(&leaves, values, inferred);
         digest.set_source(&source);
         self.count_cut(cut);
         Some((digest, cut))

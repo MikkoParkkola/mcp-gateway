@@ -113,9 +113,6 @@ pub(crate) struct DeliveryDigest {
     segments: Vec<Segment>,
     /// Fingerprints kept from leaves a change removed (plans only).
     retained: Vec<u64>,
-    /// Sensitive by the source lists the digest was taken under, or by the
-    /// result's own classification: what retention reads.
-    pub(super) sensitive: bool,
     /// The result's own classification marker, taken before any redaction:
     /// the inferred fact a record holds, never a list match.
     pub(super) inferred: bool,
@@ -272,20 +269,19 @@ fn cap<'a>(n: usize, at: &dyn Fn(usize) -> View<'a>) -> (Vec<Segment>, bool) {
 impl DeliveryDigest {
     /// [`Self::of_parts`] with every leaf a value (tests only).
     #[cfg(test)]
-    pub(super) fn of_leaves(leaves: &[&str], sensitive: bool) -> (Self, bool) {
-        Self::of_parts(leaves, leaves.len(), sensitive)
+    pub(super) fn of_leaves(leaves: &[&str], inferred: bool) -> (Self, bool) {
+        Self::of_parts(leaves, leaves.len(), inferred)
     }
 
     /// `leaves` in walk order, the first `values` of them values and the rest
     /// object keys, as [`delivery_parts`] returns them; capped by leaf (see
     /// [`cap`]). Also whether anything was cut.
-    pub(super) fn of_parts(leaves: &[&str], values: usize, sensitive: bool) -> (Self, bool) {
+    pub(super) fn of_parts(leaves: &[&str], values: usize, inferred: bool) -> (Self, bool) {
         let (segments, cut) = cap(leaves.len(), &|i| part_view(leaves, values, i));
         let digest = Self {
             segments,
             retained: Vec::new(),
-            sensitive,
-            inferred: sensitive,
+            inferred,
             source: None,
             deferred: false,
             seam_sources: None,
@@ -336,8 +332,8 @@ impl DeliveryDigest {
 
     /// [`Self::of_plan_step_parts`] with every leaf a value (tests only).
     #[cfg(test)]
-    pub(super) fn of_plan_step_leaves(leaves: &[&str], sensitive: bool) -> (Self, bool) {
-        Self::of_plan_step_parts(leaves, leaves.len(), sensitive)
+    pub(super) fn of_plan_step_leaves(leaves: &[&str], inferred: bool) -> (Self, bool) {
+        Self::of_plan_step_parts(leaves, leaves.len(), inferred)
     }
 
     /// The parts of a plan step (as [`Self::of_parts`] takes them), staged
@@ -349,20 +345,19 @@ impl DeliveryDigest {
     pub(super) fn of_plan_step_parts(
         leaves: &[&str],
         values: usize,
-        sensitive: bool,
+        inferred: bool,
     ) -> (Self, bool) {
         let per_leaf = std::mem::size_of::<Segment>();
         let total: usize = leaves.iter().map(|l| l.len() + per_leaf).sum();
         if total > DELIVERED_SET_CAP {
-            return Self::of_parts(leaves, values, sensitive);
+            return Self::of_parts(leaves, values, inferred);
         }
         let digest = Self {
             segments: (0..leaves.len())
                 .map(|i| part_view(leaves, values, i).owned())
                 .collect(),
             retained: Vec::new(),
-            sensitive,
-            inferred: sensitive,
+            inferred,
             source: None,
             deferred: true,
             seam_sources: None,
@@ -401,7 +396,6 @@ impl DeliveryDigest {
         let digest = Self {
             segments,
             retained: self.retained[..kept].to_vec(),
-            sensitive: self.sensitive,
             inferred: self.inferred,
             source: self.source.clone(),
             deferred: false,
@@ -462,7 +456,7 @@ impl DeliveryDigest {
     /// contributing source's own receipt identity.
     pub(crate) fn of_seam(
         mut fps: Vec<u64>,
-        sensitive: bool,
+        inferred: bool,
         sources: Option<Box<[String]>>,
     ) -> Self {
         fps.sort_unstable();
@@ -470,8 +464,7 @@ impl DeliveryDigest {
         fps.truncate(RECORD_CAP);
         Self {
             retained: fps,
-            sensitive,
-            inferred: sensitive,
+            inferred,
             source: None,
             seam_sources: sources,
             seam_inferred: None,
@@ -488,16 +481,9 @@ impl DeliveryDigest {
             .map(|s| s.text.as_str())
     }
 
-    /// Whether this digest is sensitive (tests only).
-    #[cfg(test)]
-    pub(crate) const fn is_sensitive(&self) -> bool {
-        self.sensitive
-    }
-
-    /// This digest, as sensitive as `earlier` was: a rebuild from a redacted
-    /// copy must not lose the verdict the original delivery carried.
+    /// This digest, keeping `earlier`'s inferred fact: a rebuild from a
+    /// redacted copy must not lose the classification the original carried.
     pub(crate) fn keeping_sensitivity_of(mut self, earlier: &Self) -> Self {
-        self.sensitive |= earlier.sensitive;
         self.inferred |= earlier.inferred;
         self
     }
@@ -649,7 +635,6 @@ impl DeliveryDigest {
         let kept = Self {
             segments,
             retained: Vec::new(),
-            sensitive: self.sensitive,
             inferred: self.inferred,
             source: self.source.clone(),
             deferred: true,
