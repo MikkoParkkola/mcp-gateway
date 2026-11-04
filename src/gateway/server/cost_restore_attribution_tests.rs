@@ -542,10 +542,10 @@ fn restore2_an_absent_born_map_differs_from_an_empty_one() {
 
 /// RESTORE.2: a saved creation figure is validated like every persisted
 /// figure. A NaN (saved as `null`), a negative one, and one above what a
-/// file may hold are each dropped, the rest of the file loads, and `target`
-/// (with its restored row) is seeded with 0: at $2 a $1 call reads
-/// 0 + 0.5 + 1 and is admitted, where born 2 (3.5) or the overflow (4.5)
-/// would refuse.
+/// file may hold each fail, the rest of the file loads, and `target` (with
+/// its restored row) is charged the saved overflow, the upper bound, never
+/// less: at $4 a $1 call reads 3 + 0.5 + 1 and is refused, where a dropped
+/// figure (1.5) or the corrupt one read as born 2 (3.5) would admit it.
 #[test]
 fn restore2_a_corrupt_creation_figure_is_dropped() {
     for scope in [Scope::Tool, Scope::Key] {
@@ -563,16 +563,16 @@ fn restore2_a_corrupt_creation_figure_is_dropped() {
             json[field]["target"] = bad.clone();
             std::fs::write(&path, json.to_string()).expect("write");
 
-            let (_, restarted) = boot_cost_governance(&governed(scope, Some(2.0)), dir.path());
+            let (_, restarted) = boot_cost_governance(&governed(scope, Some(4.0)), dir.path());
             let restarted = restarted.expect("armed");
             assert_eq!(
                 restored_estimate(scope, &restarted),
-                Some(0.0),
+                Some(3.0),
                 "{scope:?} {bad}"
             );
             assert!(
-                scope.admits(&restarted, "target"),
-                "{scope:?} {bad}: 0 + 0.5 + 1 < 2"
+                !scope.admits(&restarted, "target"),
+                "{scope:?} {bad}: 3 + 0.5 + 1 > 4"
             );
         }
     }

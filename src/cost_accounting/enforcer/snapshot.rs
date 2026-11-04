@@ -132,159 +132,36 @@ impl BudgetEnforcer {
             ),
         ];
         for (attribution, rows, born, owned, budgets, overflow, kind) in scopes {
-            // A file saved before the field existed keeps the figures the
-            // restore recorded (the restored overflow, an upper bound).
-            let saved_born: Option<Vec<(String, u64)>> = born.as_ref().map(|map| {
+            // Each saved creation figure, validated; one that fails takes the
+            // saved overflow, the upper bound, so corruption never charges
+            // less. An absent map (a file saved before it existed) keeps the
+            // figures the restore recorded, and charges the overflow below.
+            let saved_born: Option<HashMap<String, u64>> = born.as_ref().map(|map| {
                 map.iter()
-                    .filter_map(|(name, &usd)| {
-                        saved_figure(kind, name, usd).map(|m| (name.clone(), m))
+                    .map(|(name, &usd)| {
+                        let micro = saved_figure(kind, name, usd).unwrap_or(overflow);
+                        (name.clone(), micro)
                     })
                     .collect()
             });
             if let Some(saved_born) = &saved_born {
-                attribution.restore_born(saved_born, day);
+                let figures: Vec<(String, u64)> =
+                    saved_born.iter().map(|(n, &m)| (n.clone(), m)).collect();
+                attribution.restore_born(&figures, day);
             }
             // A file saved before the owned names existed seeds nothing.
             let Some(owned) = owned else { continue };
+            let owned: std::collections::HashSet<&str> = owned.iter().map(String::as_str).collect();
             for name in budgets.keys() {
-                if owned.contains(name) || attribution.has_estimate(name) {
+                if owned.contains(name.as_str()) || attribution.has_estimate(name) {
                     continue;
                 }
-                let figure = if rows.contains_key(name) {
-                    saved_born
-                        .iter()
-                        .flatten()
-                        .find(|(n, _)| n == name)
-                        .map_or(0, |(_, micro)| *micro)
-                } else {
-                    overflow
+                let figure = match (&saved_born, rows.contains_key(name)) {
+                    (Some(saved), true) => saved.get(name).copied().unwrap_or(0),
+                    (None, true) | (_, false) => overflow,
                 };
                 attribution.set(name, figure, day);
             }
-        }
-    }
-
-    /// The day key to file `persisted` under, or `None` when it is from an
-    /// earlier day. A clock it cannot read keeps the saved spend counting
-    /// instead: discarding it would restart the budgets at zero.
-    fn restore_day(&self, persisted: &super::super::persistence::PersistedCosts) -> Option<u64> {
-        let now = crate::clock::unix_secs();
-        let saved = persisted.saved_at;
-        let same_day = match persisted.day_basis.as_deref() {
-            Some("local") => now.map(|now| self.day_key(now) == self.day_key(saved)),
-            // A basis this build does not recognise counts as a pre-upgrade
-            // UTC day: discarding it would restart the budgets at zero.
-            basis => {
-                if let Some(other) = basis {
-                    tracing::warn!(
-                        target: "mcp_gateway::cost_accounting::enforcer",
-                        day_basis = other,
-                        "Persisted cost data names a day basis this gateway does not recognise; restoring it as a UTC day"
-                    );
-                }
-                let same = now.map(|now| now / 86_400 == saved / 86_400);
-                if same != Ok(false) {
-                    self.legacy_utc_day
-                        .store(saved / 86_400 + 1, std::sync::atomic::Ordering::Relaxed);
-                }
-                same
-            }
-        };
-        if same_day == Ok(false) {
-            tracing::info!(
-                // The pre-split module path, kept as the log target.
-                target: "mcp_gateway::cost_accounting::enforcer",
-                saved_at = saved,
-                "Persisted cost data is from an earlier day; budgets start at zero"
-            );
-            return None;
-        }
-        Some(self.day_key(saved))
-    }
-
-    /// The per-tool day rows.
-    pub(super) fn tool_maps(&self) -> rows::Rows<'_> {
-        (
-            &self.tool_daily,
-            &self.tool_overflow,
-            &self.tool_overflow_swept,
-            &self.tool_attribution,
-        )
-    }
-
-    /// The per-key day rows.
-    pub(super) fn key_maps(&self) -> rows::Rows<'_> {
-        (
-            &self.key_daily,
-            &self.key_overflow,
-            &self.key_overflow_swept,
-            &self.key_attribution,
-        )
-    }
-
-    /// Snapshot current accumulator state for the UI endpoint.
-    #[must_use]
-    pub fn snapshot(&self) -> EnforcerSnapshot {
-        self.snapshot_under(&self.config)
-    }
-
-    /// [`Self::snapshot`] reporting the limits of `governance`, the config one
-    /// response is built from.
-    #[must_use]
-    pub(crate) fn snapshot_under(&self, governance: &CostGovernanceConfig) -> EnforcerSnapshot {
-        self.snapshot_at(crate::clock::unix_secs().ok(), governance)
-    }
-
-    /// A snapshot to persist, stamped from the wall clock. On a clock before
-    /// 1970 there is none (MIK-8202): a snapshot stamped 0 would read as an
-    /// earlier day on the next boot, which would throw the day's spend away.
-    pub(crate) fn snapshot_for_save(
-        &self,
-    ) -> Result<EnforcerSaveSnapshot, crate::clock::ClockBeforeEpoch> {
-        let taken_at = crate::clock::unix_secs()?;
-        // One hold of the ledger lock across every capture, the lock a seed
-        // holds while it classifies, reads and owns: a save never records a
-        // name as owned without the figure that seed gave it (ADR-023).
-        let _ledger = super::locked(&self.ledger);
-        let today = Some(self.day_key(taken_at));
-        let mut save = EnforcerSaveSnapshot::from_snapshot(
-            self.snapshot_at(Some(taken_at), &self.config),
-            taken_at,
-            self.day_basis_at(taken_at),
-        );
-        #[cfg(test)]
-        super::fire(&super::BETWEEN_SAVE_CAPTURES);
-        save.tool_owned = self.tool_attribution.owned_names();
-        save.key_owned = self.key_attribution.owned_names();
-        save.tool_born = in_usd(self.tool_attribution.born_on(today));
-        save.key_born = in_usd(self.key_attribution.born_on(today));
-        Ok(save)
-    }
-
-    fn snapshot_at(
-        &self,
-        taken_at: Option<u64>,
-        governance: &CostGovernanceConfig,
-    ) -> EnforcerSnapshot {
-        let today = taken_at.map(|secs| self.day_key(secs));
-        let global_daily_usd = usd(self.global_daily.current_on(today));
-
-        let tool_daily = daily_usd(&self.tool_daily, today);
-
-        let key_daily = daily_usd(&self.key_daily, today);
-
-        EnforcerSnapshot {
-            global_daily_usd,
-            global_daily_limit: governance.budgets.daily,
-            tool_daily,
-            tool_limits: governance.budgets.per_tool.clone(),
-            taken_at,
-            key_daily,
-            key_limits: governance.budgets.per_key.clone(),
-            tool_overflow_usd: usd(self.tool_overflow.current_on(today)),
-            key_overflow_usd: usd(self.key_overflow.current_on(today)),
-            tool_estimate: in_usd(self.tool_attribution.estimates_on(today)),
-            key_estimate: in_usd(self.key_attribution.estimates_on(today)),
         }
     }
 }

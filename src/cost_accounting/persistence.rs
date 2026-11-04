@@ -130,22 +130,44 @@ where
         );
         return Ok(None);
     };
-    Ok(Some(
-        raw.into_iter()
-            .filter_map(|v| v.as_str().map(str::to_owned))
-            .collect(),
-    ))
+    // One entry that is not a name damages the whole list: a name dropped
+    // from it could be seeded as never budgeted, so none is trusted.
+    let names: Option<Vec<String>> = raw
+        .into_iter()
+        .map(|v| v.as_str().map(str::to_owned))
+        .collect();
+    if names.is_none() {
+        tracing::warn!(
+            target: "mcp_gateway::cost_accounting::enforcer",
+            file = "costs.json",
+            "Saved budgeted names hold an entry that is not a name; restoring none"
+        );
+    }
+    Ok(names)
 }
 
-/// A present creation-figure map read entry by entry, as `lenient_figures`
-/// reads it; presence is kept, since an absent map and an empty one restore
-/// differently.
+/// A present creation-figure map; presence is kept, since an absent map and
+/// an empty one restore differently. A damaged map reads as absent, and an
+/// entry that is not a number is kept as NaN: the restore then charges that
+/// name the saved overflow, the upper bound, never less.
 #[cfg(feature = "cost-governance")]
 fn lenient_born<'de, D>(deserializer: D) -> Result<Option<HashMap<String, f64>>, D::Error>
 where
     D: serde::Deserializer<'de>,
 {
-    lenient_figures(deserializer).map(Some)
+    let serde_json::Value::Object(raw) = serde_json::Value::deserialize(deserializer)? else {
+        tracing::warn!(
+            target: "mcp_gateway::cost_accounting::enforcer",
+            file = "costs.json",
+            "Saved creation figures are not a map; charging the saved overflow"
+        );
+        return Ok(None);
+    };
+    Ok(Some(
+        raw.into_iter()
+            .map(|(name, value)| (name, value.as_f64().unwrap_or(f64::NAN)))
+            .collect(),
+    ))
 }
 
 /// Spend for a single tool on the day of `saved_at`.
