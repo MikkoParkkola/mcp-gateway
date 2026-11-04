@@ -50,12 +50,43 @@ pub(crate) enum SecretFile {
     RecoveryFile,
 }
 
-/// The Windows DACL refusal of a replace journal or staged original: the
-/// guard's `head` and the refusals it `found`, then the guidance, never an
-/// icacls repair. Platform-neutral, so every platform's tests read it.
+/// The Windows DACL refusal: the guard's `head`, then `detail` (the found
+/// refusals and the repair) for every class but a recovery file, which gets
+/// the `found` refusals and its guidance, never an icacls repair.
+/// Platform-neutral, so every platform's tests read it.
 #[cfg(any(windows, test))]
-fn recovery_acl_refusal(head: &str, found: &str) -> String {
-    format!("{head} ({found}). {RECOVERY_FILE_FIX}")
+fn acl_refusal_text(
+    what: SecretFile,
+    head: &str,
+    found: &str,
+    detail: impl FnOnce() -> String,
+) -> String {
+    match what.recovery_guidance() {
+        Some(guidance) => format!("{head} ({found}). {guidance}"),
+        None => format!("{head}{}", detail()),
+    }
+}
+
+/// The not-UTF-8 refusal, with the class's fix when it has one.
+fn not_utf8_message(what: SecretFile, path: &Path) -> String {
+    let fix = what.fix_text(String::new);
+    let gap = if fix.is_empty() { "" } else { " " };
+    format!(
+        "Cannot read {} {}: it is not UTF-8.{gap}{fix}",
+        what.noun(),
+        path.display()
+    )
+}
+
+/// The refusal of something that is not a regular file (`kind`).
+#[cfg(any(unix, test))]
+fn not_regular_message(what: SecretFile, path: &Path, kind: &str) -> String {
+    format!(
+        "Refusing to load {} {}: it is a {kind}, not a regular file. {}",
+        what.noun(),
+        path.display(),
+        what.fix_text(|| "Write the content to a regular file.".to_owned())
+    )
 }
 
 /// What a refused replace journal or staged original gets instead of an
@@ -99,6 +130,23 @@ impl SecretFile {
             Self::ControlPlaneCollection => "control-plane file",
             Self::RecoveryFile => "replace journal or staged original",
         }
+    }
+
+    /// The one place a class's refusal guidance is decided: a recovery file
+    /// gets [`RECOVERY_FILE_FIX`] in place of any owner, mode or ACL fix,
+    /// whatever the refusal.
+    const fn recovery_guidance(self) -> Option<&'static str> {
+        match self {
+            Self::RecoveryFile => Some(RECOVERY_FILE_FIX),
+            _ => None,
+        }
+    }
+
+    /// The fix a refusal of this class prints: `usual` for every class but a
+    /// recovery file ([`Self::recovery_guidance`]). Every refusal branch
+    /// takes its fix from here.
+    fn fix_text(self, usual: impl FnOnce() -> String) -> String {
+        self.recovery_guidance().map_or_else(usual, str::to_owned)
     }
 
     pub(crate) const fn protects(self) -> Protects {
@@ -216,18 +264,7 @@ pub(crate) fn read_guarded_file(
     what: SecretFile,
 ) -> std::result::Result<String, GuardedRead> {
     let bytes = read_guarded_bytes(path, what)?;
-    String::from_utf8(bytes).map_err(|_| {
-        let guidance = if what == SecretFile::RecoveryFile {
-            format!(" {RECOVERY_FILE_FIX}")
-        } else {
-            String::new()
-        };
-        GuardedRead::Refused(format!(
-            "Cannot read {} {}: it is not UTF-8.{guidance}",
-            what.noun(),
-            path.display()
-        ))
-    })
+    String::from_utf8(bytes).map_err(|_| GuardedRead::Refused(not_utf8_message(what, path)))
 }
 
 /// [`read_guarded_file`] without the UTF-8 check, for a file whose lines are
@@ -307,11 +344,9 @@ fn check_acl(
     let head = format!("Refusing to load {} {shown}", what.noun());
     // A recovery file gets the guard's facts and no repair line: an icacls
     // repair would make the next recovery restore a plant.
-    let text = if what == SecretFile::RecoveryFile {
-        recovery_acl_refusal(&head, &format!("{found:?}"))
-    } else {
-        format!("{head}{}", refusal_detail(&shown, &found, what.protects()))
-    };
+    let text = acl_refusal_text(what, &head, &format!("{found:?}"), || {
+        refusal_detail(&shown, &found, what.protects())
+    });
     Err(GuardedRead::Refused(text))
 }
 
@@ -346,16 +381,10 @@ fn check_mode(
     let meta = file.metadata().map_err(GuardedRead::Io)?;
     // Type before mode, on the same handle: nothing but a regular file is read.
     if !meta.file_type().is_file() {
-        let fix = if what == SecretFile::RecoveryFile {
-            RECOVERY_FILE_FIX
-        } else {
-            "Write the content to a regular file."
-        };
-        return Err(GuardedRead::Refused(format!(
-            "Refusing to load {} {}: it is a {}, not a regular file. {fix}",
-            what.noun(),
-            path.display(),
-            file_kind(meta.file_type())
+        return Err(GuardedRead::Refused(not_regular_message(
+            what,
+            path,
+            file_kind(meta.file_type()),
         )));
     }
     let euid = rustix::process::geteuid().as_raw();
@@ -435,24 +464,19 @@ fn foreign_owner_message(
     (file_uid, euid): (u32, u32),
     why: &str,
 ) -> String {
-    if what == SecretFile::RecoveryFile {
-        return format!(
-            "Refusing to load {noun} {path}: it is owned by uid {file_uid}, which is neither \
-             this process (uid {euid}) nor root, so that account can change it at will. \
-             {RECOVERY_FILE_FIX}",
-            noun = what.noun(),
-            path = path.display(),
-        );
-    }
     let shown = shell_arg(path);
     let chmod = match what.protects() {
         Protects::Secrecy => "chmod 600",
         Protects::Integrity => "chmod go-w",
     };
+    let fix = what.fix_text(|| {
+        format!(
+            "Fix: chown {euid} -- {shown} && {chmod} -- {shown} (see UPGRADING-4.0 \u{a7}{OWNER_UPGRADE_ITEM})."
+        )
+    });
     format!(
         "Refusing to load {noun} {path}: it is owned by uid {file_uid}, which is neither this \
-         process (uid {euid}) nor root, so that account can change it at will, and {why}. \
-         Fix: chown {euid} -- {shown} && {chmod} -- {shown} (see UPGRADING-4.0 \u{a7}{OWNER_UPGRADE_ITEM}).",
+         process (uid {euid}) nor root, so that account can change it at will, and {why}. {fix}",
         noun = what.noun(),
         path = path.display(),
     )
@@ -600,9 +624,14 @@ pub(crate) fn read_secret_file(path: &Path, what: SecretFile) -> Result<String> 
 /// Helm chart takes. An integrity file keeps its read bits (`chmod go-w`).
 #[cfg(unix)]
 fn refusal_fix(path: &Path, owned: bool, what: SecretFile) -> String {
+    what.fix_text(|| usual_refusal_fix(path, owned, what))
+}
+
+/// [`refusal_fix`] for every class but a recovery file.
+#[cfg(unix)]
+fn usual_refusal_fix(path: &Path, owned: bool, what: SecretFile) -> String {
     let see = format!("(see UPGRADING-4.0 \u{a7}{UPGRADE_ITEM})");
     match (what.protects(), owned, what) {
-        (_, _, SecretFile::RecoveryFile) => RECOVERY_FILE_FIX.to_owned(),
         (Protects::Integrity, true, _) => format!("Fix: chmod go-w -- {} {see}.", shell_arg(path)),
         (Protects::Integrity, false, _) => {
             format!("Fix: clear the group- and world-write bits {see}.")
@@ -642,7 +671,9 @@ mod recovery_text_tests {
         let head = r"Refusing to load replace journal or staged original C:\gw\.gateway.yaml.replace-journal";
         let found = r#"[ForeignSid("S-1-1-0"), NotProtected]"#;
 
-        let text = super::recovery_acl_refusal(head, found);
+        let text = super::acl_refusal_text(super::SecretFile::RecoveryFile, head, found, || {
+            unreachable!("a recovery file never gets the repair detail")
+        });
 
         let lower = text.to_lowercase();
         for advice in [
