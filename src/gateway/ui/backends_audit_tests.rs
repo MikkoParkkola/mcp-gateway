@@ -358,3 +358,53 @@ async fn an_audited_backend_add_creates_a_missing_config_after_its_intent() {
         "a refused intent let the add create gateway.yaml"
     );
 }
+
+/// The backend intent names its operation and backend, never a value.
+#[tokio::test]
+async fn a_backend_intent_names_its_operation_and_backend() {
+    let gateway = Audited::new().await;
+    let (status, body) = gateway.add("b").await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    let intent = std::fs::read_to_string(gateway.log.path())
+        .unwrap_or_default()
+        .lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .find(|entry| entry["event"] == INTENT)
+        .expect("the add wrote its intent");
+    assert_eq!(
+        (&intent["operation"], &intent["backend"]),
+        (&Value::from("add"), &Value::from("b")),
+        "{intent}"
+    );
+}
+
+/// An update that changes no byte still reloads; on an audited gateway a
+/// refused intent stops that reload, so a hand edit made since the last
+/// reload is not applied unaudited.
+#[tokio::test]
+async fn a_no_op_update_with_a_refused_intent_applies_no_outside_change() {
+    let gateway = Audited::new().await;
+    write_owner_only(gateway.config(), CRASHED).expect("hand edit adds b");
+    gateway.log.set_append_failure_for_test(true);
+    let (status, body) = gateway.update("a", "").await;
+    gateway.log.set_append_failure_for_test(false);
+    assert!(!status.is_success(), "{status}: {body}");
+    assert_eq!(
+        gateway.running(),
+        ["a"],
+        "the no-op reload applied the outside change unaudited"
+    );
+}
+
+/// Remove and update on a missing gateway.yaml answer 404: the empty root
+/// has no backends.
+#[tokio::test]
+async fn remove_and_update_on_a_missing_config_answer_not_found() {
+    let gateway = Audited::new().await;
+    std::fs::remove_file(gateway.config()).expect("remove config");
+    let (status, body) = gateway.remove("a").await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "remove: {body}");
+    let (status, body) = gateway.update("a", "edited").await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "update: {body}");
+    assert!(!gateway.config().exists(), "a 404 created gateway.yaml");
+}
