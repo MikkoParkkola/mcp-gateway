@@ -111,6 +111,17 @@ fn unwritten(variant: &'static str) -> axum::response::Response {
     .into_response()
 }
 
+/// A 500 for a write whose outcome on disk is unknown: a failed rollback,
+/// or a failure anywhere in the writer. Fixed text, as [`unwritten`].
+fn incomplete(variant: &'static str) -> axum::response::Response {
+    tracing::warn!(variant, "backend route: the config write failed");
+    flat_error(
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "the backend change could not be completed; gateway.yaml may have changed, so inspect it before retrying",
+    )
+    .into_response()
+}
+
 /// The answer to a backend write the writer refused.
 fn refused_write(e: &ReplaceError) -> axum::response::Response {
     match e {
@@ -150,8 +161,9 @@ fn refused_write(e: &ReplaceError) -> axum::response::Response {
         ReplaceError::Unsupported(_) => unwritten("unsupported"),
         ReplaceError::Stage(_) => unwritten("stage"),
         ReplaceError::Write(_) => unwritten("write"),
-        ReplaceError::RollbackFailed { .. } => unwritten("rollback_failed"),
-        ReplaceError::Failed(_) => unwritten("failed"),
+        // The bytes on disk are not known: say so, never "not written".
+        ReplaceError::RollbackFailed { .. } => incomplete("rollback_failed"),
+        ReplaceError::Failed(_) => incomplete("failed"),
         ReplaceError::Secrets(_) => unwritten("secrets"),
     }
 }
