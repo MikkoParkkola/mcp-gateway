@@ -262,7 +262,7 @@ pub(crate) struct Store {
     /// the store's last handle drops, so a write still in flight when its
     /// test ends lands in a directory that is then removed with it.
     #[cfg(test)]
-    test_dir: std::sync::OnceLock<std::sync::Arc<tempfile::TempDir>>,
+    test_dir: crate::test_dir_keep::TestDirKeep,
     /// Test-only: one settle pauses before it rewrites the subscription's
     /// delivery status line, the last write a delivery makes.
     #[cfg(test)]
@@ -276,13 +276,7 @@ impl Store {
     /// unowned.
     #[cfg(test)]
     pub(crate) fn keep_test_dir(&self, dir: std::sync::Arc<tempfile::TempDir>) {
-        if let Err(other) = self.test_dir.set(dir) {
-            let kept = self.test_dir.get().expect("set");
-            assert!(
-                std::sync::Arc::ptr_eq(kept, &other),
-                "a store keeps one test directory"
-            );
-        }
+        self.test_dir.keep(dir, &self.subs_dir);
     }
 
     /// The next row generation. Checked: running out is an error, never a
@@ -351,7 +345,7 @@ impl Store {
             #[cfg(test)]
             fail_next_dead_sync: std::sync::atomic::AtomicBool::new(false),
             #[cfg(test)]
-            test_dir: std::sync::OnceLock::new(),
+            test_dir: crate::test_dir_keep::TestDirKeep::default(),
             #[cfg(test)]
             before_touch: crate::test_pause::Slot::default(),
         };

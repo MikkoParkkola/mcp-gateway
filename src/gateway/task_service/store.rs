@@ -175,7 +175,7 @@ struct Shared {
     /// removed; a worker's late write landing mid-removal left the folder behind.
     /// Declared last, so the lease above is closed first.
     #[cfg(test)]
-    test_dir: std::sync::OnceLock<Arc<tempfile::TempDir>>,
+    test_dir: crate::test_dir_keep::TestDirKeep,
 }
 
 #[derive(Clone)]
@@ -188,13 +188,7 @@ impl TaskStore {
     /// would leave this one unowned.
     #[cfg(test)]
     pub(crate) fn keep_test_dir(&self, dir: Arc<tempfile::TempDir>) {
-        if let Err(other) = self.0.test_dir.set(dir) {
-            let kept = self.0.test_dir.get().expect("set");
-            assert!(
-                Arc::ptr_eq(kept, &other),
-                "a store keeps one test directory"
-            );
-        }
+        self.0.test_dir.keep(dir, &self.0.dir);
     }
 
     pub(super) async fn open(path: &Path, limits: StoreLimits) -> Result<Self, StoreError> {
@@ -229,7 +223,7 @@ impl TaskStore {
             seams: input::TestSeams::default(),
             temp: AtomicU64::new(0),
             #[cfg(test)]
-            test_dir: std::sync::OnceLock::new(),
+            test_dir: crate::test_dir_keep::TestDirKeep::default(),
         })))
     }
 

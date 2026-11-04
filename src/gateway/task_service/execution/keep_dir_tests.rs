@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use crate::gateway::subscription_registry::{DEFAULT_MAX_LISTENERS, SubscriptionRegistry};
 use crate::gateway::task_service::record::PreparedTask;
-use crate::gateway::task_service::{StoreLimits, Task, TaskOptions, open_runtime};
+use crate::gateway::task_service::{StoreLimits, Task, TaskOptions, TaskTransition, open_runtime};
 
 const OWNER: &str = "keep-dir-owner";
 
@@ -24,18 +24,26 @@ fn subscriptions() -> Arc<SubscriptionRegistry> {
     ))
 }
 
-/// A task created in 2026-09 with a one-day retention: long expired by now.
+/// A task completed in 2026-09 with a one-day retention: finished, and long
+/// expired by now, so an expiry pass deletes it.
 fn expired_task() -> Task {
-    Task::create_at(
+    let created = chrono::DateTime::parse_from_rfc3339("2026-09-07T00:00:00Z")
+        .expect("a fixed time")
+        .with_timezone(&chrono::Utc);
+    let mut task = Task::create_at(
         "private-tool",
-        chrono::DateTime::parse_from_rfc3339("2026-09-07T00:00:00Z")
-            .expect("a fixed time")
-            .with_timezone(&chrono::Utc),
+        created,
         TaskOptions {
             ttl_ms: Some(86_400_000),
             poll_interval_ms: Some(1_000),
         },
+    );
+    task.transition(
+        TaskTransition::Complete(serde_json::json!({})),
+        created + chrono::Duration::seconds(1),
     )
+    .expect("a working task completes");
+    task
 }
 
 #[tokio::test]
@@ -80,14 +88,15 @@ async fn a_worker_writing_after_the_test_body_keeps_the_folder() {
     assert!(record.is_file(), "the worker's record is in place");
 
     drop(executor);
-    let gone_by = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
-    while root_path.exists() && tokio::time::Instant::now() < gone_by {
-        tokio::task::yield_now().await;
-    }
-    assert!(
-        !root_path.exists(),
-        "the folder outlived the worker's last handle"
-    );
+    crate::test_wait::wait_until(crate::test_wait::HANG_BOUND, || async {
+        if root_path.exists() {
+            std::ops::ControlFlow::Continue("the folder is still there".to_owned())
+        } else {
+            std::ops::ControlFlow::Break(())
+        }
+    })
+    .await
+    .expect("the folder goes with the worker's last handle");
 }
 
 #[tokio::test]

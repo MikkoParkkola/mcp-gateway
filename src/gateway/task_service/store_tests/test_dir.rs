@@ -70,6 +70,10 @@ const NO_STORE: &[(&str, &str)] = &[
 ];
 
 /// Whether `text` starts a worker-bearing store and never keeps its folder.
+/// File-level, as a backstop: a file with one keep passes even if another of
+/// its openers does not keep. What holds each store to its own directory is
+/// the runtime check in `TestDirKeep::keep` (the store must live inside the
+/// directory it keeps).
 fn unkept(text: &str) -> bool {
     WORKER_OPENERS.iter().any(|opener| text.contains(opener)) && !text.contains("keep_test_dir")
 }
