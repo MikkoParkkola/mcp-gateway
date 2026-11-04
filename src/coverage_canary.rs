@@ -9,7 +9,11 @@
 //! zero; the merge job fails when it is missing or reached.
 
 /// Never called. Its zero count in the merged report is the check.
-#[allow(dead_code)]
 pub(crate) fn coverage_canary() -> u8 {
     1
 }
+
+/// Keeps the canary in every binary whatever the linker or codegen settings drop:
+/// referenced here, never called, so its count stays zero.
+#[used]
+static COVERAGE_CANARY: fn() -> u8 = coverage_canary;
