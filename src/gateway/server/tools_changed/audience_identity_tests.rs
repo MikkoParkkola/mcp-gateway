@@ -17,11 +17,11 @@ fn alpha_with(read: &str) -> Vec<crate::protocol::Tool> {
 }
 
 fn client_cert() -> crate::mtls::CertIdentity {
-    crate::mtls::CertIdentity {
+    crate::mtls::identity::CertIdentity::for_test(crate::mtls::identity::CertFields {
         common_name: Some("svc".to_string()),
         display_name: "svc".to_string(),
         ..Default::default()
-    }
+    })
 }
 
 /// R8: a listen stream opened with a certificate is told a visible change; the

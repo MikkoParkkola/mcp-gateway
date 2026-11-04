@@ -33,13 +33,13 @@ pub(super) fn header(name: &str, value: &str) -> HeaderMap {
 }
 
 fn cert(san: &[&str], cn: Option<&str>) -> crate::mtls::identity::CertIdentity {
-    crate::mtls::identity::CertIdentity {
+    crate::mtls::identity::CertIdentity::for_test(crate::mtls::identity::CertFields {
         common_name: cn.map(String::from),
         san_uris: san.iter().map(|s| (*s).to_string()).collect(),
         // Deliberately set: the selection rule must never reach it.
         display_name: "cosmetic-display-name".to_string(),
         ..Default::default()
-    }
+    })
 }
 
 pub(super) fn proven(id: &str, proof: ProofSource) -> AgentIdentity {
@@ -187,6 +187,24 @@ fn an_unnameable_certificate_is_not_a_principal() {
         identity.proven.is_none(),
         "a certificate with no SAN URI and no CN produced a principal, which \
          means the display_name fallback is reachable"
+    );
+}
+
+/// A SAN URI or CN of only whitespace names no one, so it never becomes an
+/// mTLS principal: a blank SAN URI does not shadow a real CN, and a blank CN
+/// alone is no principal.
+#[test]
+fn a_blank_san_uri_or_common_name_is_not_a_principal() {
+    for (san, cn) in [(&["  "][..], None), (&[][..], Some(" \t "))] {
+        let identity = extract_agent_identity(&HeaderMap::new(), None, Some(&cert(san, cn)), None);
+        assert!(identity.proven.is_none(), "{san:?} {cn:?}: {identity:?}");
+    }
+    let c = cert(&[" "], Some("agent-cn"));
+    let identity = extract_agent_identity(&HeaderMap::new(), None, Some(&c), None);
+    assert_eq!(
+        identity.proven_id(),
+        Some("agent-cn"),
+        "a blank SAN URI is skipped"
     );
 }
 
