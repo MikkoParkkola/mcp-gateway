@@ -5,8 +5,19 @@
 //! that route's handler. A hook placed after a read would let a re-read of
 //! the live config before it go unseen by every config-timing row.
 
-/// The hook call as a statement; the site list is every line ending in it.
-const HOOK: &str = "relay_witness_hook::run();";
+/// The hook call: a site is any code line calling it, however it is written
+/// or commented.
+const HOOK: &str = "relay_witness_hook::run(";
+
+/// `line` without its trailing `//` comment; empty for a comment line.
+fn code_of(line: &str) -> &str {
+    line.split("//").next().unwrap_or_default()
+}
+
+/// Whether `line` calls the hook.
+fn calls_hook(line: &str) -> bool {
+    code_of(line).contains(HOOK)
+}
 
 /// Every `.rs` file under `dir`, recursively.
 fn rust_files(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
@@ -75,20 +86,23 @@ fn the_witness_hook_runs_before_the_first_generation_read_on_every_route() {
     rust_files(&root.join("src"), &mut files);
     let mut sites = 0;
     for path in files {
+        // This scan names the hook in a string of its own.
+        if path.ends_with("collusion_direct_tests/hook_order.rs") {
+            continue;
+        }
         let source = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{e}"));
         let lines: Vec<&str> = source.lines().collect();
-        for hook in (0..lines.len()).filter(|&i| lines[i].trim_end().ends_with(HOOK)) {
+        for hook in (0..lines.len()).filter(|&i| calls_hook(lines[i])) {
             sites += 1;
             let start = enclosing_fn(&lines, hook);
             let signature = lines[source[..start].lines().count()].trim();
             let where_ = format!("{}: {signature}", path.display());
             let code: Vec<&str> = body(&source, start)
                 .lines()
-                .filter(|line| !line.trim_start().starts_with("//"))
+                .map(code_of)
+                .filter(|line| !line.trim().is_empty())
                 .collect();
-            let hooks: Vec<usize> = (0..code.len())
-                .filter(|&i| code[i].trim_end().ends_with(HOOK))
-                .collect();
+            let hooks: Vec<usize> = (0..code.len()).filter(|&i| calls_hook(code[i])).collect();
             assert_eq!(
                 hooks.len(),
                 1,
