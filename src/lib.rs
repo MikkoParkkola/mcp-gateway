@@ -43,8 +43,6 @@ pub mod cli_support;
 mod clock;
 #[doc(hidden)]
 pub mod config;
-#[cfg(coverage)]
-mod coverage_canary;
 #[doc(hidden)]
 pub mod config_persistence;
 #[doc(hidden)]
@@ -58,6 +56,8 @@ pub mod control_plane;
 #[doc(hidden)]
 pub mod cost_accounting;
 mod counters;
+#[cfg(coverage)]
+mod coverage_canary;
 mod debug_trust_roots;
 // The decision set serves only the web UI's routes and stream.
 #[cfg(feature = "webui")]
