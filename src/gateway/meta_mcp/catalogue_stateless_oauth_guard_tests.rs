@@ -164,8 +164,8 @@ async fn a_required_stateless_backend_is_admitted_and_fetched_on_the_callers_slo
 
     // PREMISE, checked rather than assumed. The mint MUST succeed, or the guard
     // refuses for a reason that has nothing to do with the pool slot.
-    let (headers, binding) = meta
-        .caller_credential_for_identity(
+    let ((headers, binding), _) = meta
+        .caller_credential_minted(
             &meta
                 .backends
                 .for_test()

@@ -41,7 +41,7 @@ impl CatalogueOmit {
 /// Whether the caller's credential for a backend resolved (or was not needed:
 /// a caller with no principal there mints nothing).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Mint {
+pub(super) enum Mint {
     Resolved,
     Failed,
 }
@@ -65,28 +65,20 @@ impl MetaMcp {
     /// except the sole operator on a managed-account backend, whom the vault's
     /// own predicate serves, exactly as `gateway_invoke` and the direct route do.
     ///
-    /// A resolution failure is empty too, never an error: a caller who cannot
-    /// mint for this backend simply gets no per-user view of it and falls back
-    /// to the identity-free one. That fallback is NOT omission for most
-    /// backends — the identity-free guard omits only a `required` backend, so a
-    /// failed mint against a non-`required` one degrades to the shared
+    /// A failed resolution yields an empty credential, never an error: a
+    /// caller who cannot mint for this backend gets no per-user view of it and
+    /// falls back to the identity-free one. That fallback is NOT omission for
+    /// most backends — the identity-free guard omits only a `required` backend,
+    /// so a failed mint against a non-`required` one degrades to the shared
     /// catalogue rather than hiding it. Discovery must not fail wholesale
     /// because one backend out of many refused.
-    pub(crate) async fn caller_credential_for_identity(
-        &self,
-        backend: &Backend,
-        caller: CallerProof<'_>,
-    ) -> (crate::transport::LentCredential, Option<String>) {
-        self.caller_credential_minted(backend, caller).await.0
-    }
-
-    /// The caller's credential for `backend`, resolved once, and whether it
-    /// resolved: [`Mint::Failed`] when the caller has
-    /// a principal on `backend` and the resolution failed, or minted nothing
-    /// on a propagation-configured backend (an optional backend's static
-    /// fallback). An omission caused by that is not the gateway's decision
-    /// about the caller.
-    async fn caller_credential_minted(
+    ///
+    /// The [`Mint`] says whether the credential resolved: [`Mint::Failed`]
+    /// when the caller has a principal on `backend` and the resolution failed,
+    /// or minted nothing on a propagation-configured backend (an optional
+    /// backend's static fallback). An omission that follows is not the
+    /// gateway's decision about the caller.
+    pub(super) async fn caller_credential_minted(
         &self,
         backend: &Backend,
         caller: CallerProof<'_>,
