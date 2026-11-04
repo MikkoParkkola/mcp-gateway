@@ -3,14 +3,17 @@
 //! An unreadable clock at fan-out: an occurrence whose source cannot judge
 //! on the clock. Split from `worker_clock_tests.rs`.
 
+use std::sync::Arc;
+
 use super::{ClockBlind, EventsHub, NAME, logged_services, now, private_callbacks, queued};
 
 /// Fan-out to a source that cannot judge on the clock: the row is kept and
 /// the occurrence dropped and counted as a clock drop.
 #[tokio::test]
 async fn fan_out_to_a_source_that_cannot_judge_on_the_clock_counts_a_drop() {
-    let dir = tempfile::tempdir().expect("dir");
+    let dir = Arc::new(tempfile::tempdir().expect("dir"));
     let hub = EventsHub::open(&private_callbacks(), dir.path()).expect("hub");
+    hub.keep_test_dir(Arc::clone(&dir));
     let services = logged_services(dir.path());
     hub.register_source(ClockBlind::after(0));
     queued(&hub, 9, "evt_fo");
