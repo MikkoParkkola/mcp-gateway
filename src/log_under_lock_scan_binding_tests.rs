@@ -192,95 +192,98 @@ fn scan1_a_dashmap_reached_through_a_binding_is_still_a_map() {
     rows(SCAN1);
 }
 
+/// Forms whose `backends` is not a map, though a map field shares the name.
+const SCAN2: &[(&str, &str, usize)] = &[
+    (
+        "T1 a resolved parameter's plain field",
+        "fn f(c: &C) { for e in &c.backends { warn!(\"x\"); } }",
+        0,
+    ),
+    (
+        "T1 a local bound to a plain field",
+        "fn f(c: &C) { let b = &c.backends; for e in b { warn!(\"x\"); } }",
+        0,
+    ),
+    (
+        "T1 self in impl C",
+        "impl C { fn f(&self) { for e in &self.backends { warn!(\"x\"); } } }",
+        0,
+    ),
+    (
+        "T1 an annotated let receiver",
+        "fn f(src: S) { let c: &C = src; for e in &c.backends { warn!(\"x\"); } }",
+        0,
+    ),
+    (
+        "T1 through Arc",
+        "fn f(c: Arc<C>) { for e in &c.backends { warn!(\"x\"); } }",
+        0,
+    ),
+    (
+        "an annotation outranks the initializer",
+        "fn f(x: &X) { let c: &C = &x.backends; for e in &c.backends { warn!(\"x\"); } }",
+        0,
+    ),
+    (
+        "an owned map moved, then consumed",
+        "fn f(m: DashMap<K, V>) { let b = m; for e in b { warn!(\"x\"); } }",
+        0,
+    ),
+    (
+        "self-referencing shadow, C",
+        "fn f(c: &C) { let c = &c.backends; for e in c { warn!(\"x\"); } }",
+        0,
+    ),
+    (
+        "a shadowed map local",
+        "impl R { fn f(&self) { let b = &self.backends; let b = &[1]; for e in b.iter() { warn!(\"x\"); } } }",
+        0,
+    ),
+    (
+        "block exit restores",
+        "fn f(c: &C, r: &R) { { let c = r; } for e in &c.backends { warn!(\"x\"); } }",
+        0,
+    ),
+    (
+        "an owned map consumed",
+        "fn f(m: DashMap<K, V>) { for e in m { warn!(\"x\"); } }",
+        0,
+    ),
+    (
+        "a struct named with a leading underscore",
+        "struct _C { backends: HashMap<K, V> } fn f(c: &_C) { for _ in &c.backends { warn!(\"x\"); } }",
+        0,
+    ),
+    (
+        "a receiver typed Self in impl C",
+        "impl C { fn f(c: &Self) { for e in &c.backends { warn!(\"x\"); } } }",
+        0,
+    ),
+    (
+        "a Vec of maps is not a map",
+        "fn f(w: &W2) { for e in &w.backends { warn!(\"x\"); } }",
+        0,
+    ),
+    (
+        "an Option of a map is not a map",
+        "fn f(m: Option<DashMap<K, V>>) { for e in m.iter() { warn!(\"x\"); } }",
+        0,
+    ),
+    (
+        "a dropped block guard",
+        "impl R { fn f(&self, k: K) { let g = { let b = &self.backends; b.get(&k) }; drop(g); warn!(\"x\"); } }",
+        0,
+    ),
+    (
+        "T2 an unresolved receiver fails closed",
+        "fn f(x: &X) { for e in &x.backends { warn!(\"x\"); } }",
+        1,
+    ),
+];
+
 #[test]
 fn scan2_a_plain_map_of_a_dashmaps_name_is_not_a_map() {
-    rows(&[
-        (
-            "T1 a resolved parameter's plain field",
-            "fn f(c: &C) { for e in &c.backends { warn!(\"x\"); } }",
-            0,
-        ),
-        (
-            "T1 a local bound to a plain field",
-            "fn f(c: &C) { let b = &c.backends; for e in b { warn!(\"x\"); } }",
-            0,
-        ),
-        (
-            "T1 self in impl C",
-            "impl C { fn f(&self) { for e in &self.backends { warn!(\"x\"); } } }",
-            0,
-        ),
-        (
-            "T1 an annotated let receiver",
-            "fn f(src: S) { let c: &C = src; for e in &c.backends { warn!(\"x\"); } }",
-            0,
-        ),
-        (
-            "T1 through Arc",
-            "fn f(c: Arc<C>) { for e in &c.backends { warn!(\"x\"); } }",
-            0,
-        ),
-        (
-            "an annotation outranks the initializer",
-            "fn f(x: &X) { let c: &C = &x.backends; for e in &c.backends { warn!(\"x\"); } }",
-            0,
-        ),
-        (
-            "an owned map moved, then consumed",
-            "fn f(m: DashMap<K, V>) { let b = m; for e in b { warn!(\"x\"); } }",
-            0,
-        ),
-        (
-            "self-referencing shadow, C",
-            "fn f(c: &C) { let c = &c.backends; for e in c { warn!(\"x\"); } }",
-            0,
-        ),
-        (
-            "a shadowed map local",
-            "impl R { fn f(&self) { let b = &self.backends; let b = &[1]; for e in b.iter() { warn!(\"x\"); } } }",
-            0,
-        ),
-        (
-            "block exit restores",
-            "fn f(c: &C, r: &R) { { let c = r; } for e in &c.backends { warn!(\"x\"); } }",
-            0,
-        ),
-        (
-            "an owned map consumed",
-            "fn f(m: DashMap<K, V>) { for e in m { warn!(\"x\"); } }",
-            0,
-        ),
-        (
-            "a struct named with a leading underscore",
-            "struct _C { backends: HashMap<K, V> } fn f(c: &_C) { for _ in &c.backends { warn!(\"x\"); } }",
-            0,
-        ),
-        (
-            "a receiver typed Self in impl C",
-            "impl C { fn f(c: &Self) { for e in &c.backends { warn!(\"x\"); } } }",
-            0,
-        ),
-        (
-            "a Vec of maps is not a map",
-            "fn f(w: &W2) { for e in &w.backends { warn!(\"x\"); } }",
-            0,
-        ),
-        (
-            "an Option of a map is not a map",
-            "fn f(m: Option<DashMap<K, V>>) { for e in m.iter() { warn!(\"x\"); } }",
-            0,
-        ),
-        (
-            "a dropped block guard",
-            "impl R { fn f(&self, k: K) { let g = { let b = &self.backends; b.get(&k) }; drop(g); warn!(\"x\"); } }",
-            0,
-        ),
-        (
-            "T2 an unresolved receiver fails closed",
-            "fn f(x: &X) { for e in &x.backends { warn!(\"x\"); } }",
-            1,
-        ),
-    ]);
+    rows(SCAN2);
     // Two structs named C, one declaring a map: the scan fails closed.
     assert_eq!(
         with_maps_and(
