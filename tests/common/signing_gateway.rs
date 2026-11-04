@@ -304,13 +304,18 @@ impl HttpGateway {
     }
 
     /// Ends the gateway with a drain; its folders go only after it exited.
+    /// Windows has no drain signal: the stop there is a kill, whose exit
+    /// status (1) says nothing about the gateway, so only Unix checks it.
     pub async fn stop(self) {
         let logs = self.logs();
         let status = self.process.stop().await;
+        #[cfg(unix)]
         assert!(
             status.success(),
             "the gateway did not drain cleanly on its stop ({status}): {logs}"
         );
+        #[cfg(not(unix))]
+        let _ = (status, logs);
     }
 
     pub async fn initialize(&self) -> String {
