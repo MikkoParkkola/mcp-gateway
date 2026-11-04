@@ -588,17 +588,23 @@ fn cert_subject_id_skips_an_empty_first_san_like_agent_identity() {
         Some("spiffe://cluster/b")
     );
 
-    // Non-empty, not non-blank: a whitespace SAN is itself the subject.
+    // A whitespace-only SAN names no one, like an empty one: the next is the
+    // subject.
     let blank = crate::mtls::identity::CertIdentity::for_test(crate::mtls::identity::CertFields {
         san_uris: vec![" ".to_string(), "spiffe://cluster/b".to_string()],
-        ..cert.clone()
+        common_name: Some("c".to_string()),
+        ..Default::default()
     });
-    assert_eq!(cert_subject_id(&blank).as_deref(), Some(" "));
+    assert_eq!(
+        cert_subject_id(&blank).as_deref(),
+        Some("spiffe://cluster/b")
+    );
 
     let empty_sans =
         crate::mtls::identity::CertIdentity::for_test(crate::mtls::identity::CertFields {
             san_uris: vec![String::new(), String::new()],
-            ..cert.clone()
+            common_name: Some("c".to_string()),
+            ..Default::default()
         });
     assert_eq!(cert_subject_id(&empty_sans).as_deref(), Some("c"));
 
@@ -606,7 +612,7 @@ fn cert_subject_id_skips_an_empty_first_san_like_agent_identity() {
         crate::mtls::identity::CertIdentity::for_test(crate::mtls::identity::CertFields {
             san_uris: vec![String::new()],
             common_name: Some(String::new()),
-            ..cert
+            ..Default::default()
         });
     assert_eq!(cert_subject_id(&nothing), None);
 }
