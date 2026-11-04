@@ -35,7 +35,7 @@ async fn held_then_applied(tuning: ReloadTuning) {
     let (backend, event_tx) = held_over(dir.path(), tuning).await;
     std::fs::write(dir.path().join("a.yaml"), cap_yaml("a", "v2-much-longer")).expect("write v2");
     event_tx.send(()).await.expect("the event lands");
-    // timing: absence, well past the debounce and several 100 ms ticks
+    // timing: absence
     tokio::time::sleep(Duration::from_millis(600)).await;
     assert_eq!(
         description_of(&backend, "a").as_deref(),
@@ -91,7 +91,7 @@ async fn a_reload_held_past_the_slow_bound_is_warned_once() {
     )
     .await;
     event_tx.send(()).await.expect("the event lands");
-    // timing: absence, several slow bounds
+    // timing: absence
     tokio::time::sleep(Duration::from_millis(1_000)).await;
     assert_eq!(counts.borrow()[0], 1, "one warning for one held reload");
 }
