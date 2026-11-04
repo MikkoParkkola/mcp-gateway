@@ -104,3 +104,21 @@ async fn an_observed_recovered_answer_records_no_rewrite() {
         std::assert_ne!(record["response_effect"], "rewritten", "{path:?}: {record}");
     }
 }
+
+/// A recovered answer that is a bare string carrying an instruction: even in
+/// observe mode the verdict must ride with it, and a scalar has no member to
+/// carry it, so the gateway wraps the answer. That changes the bytes the task
+/// delivers, so its settlement records `rewritten`.
+#[tokio::test]
+async fn a_recovered_scalar_the_verdict_wraps_records_rewritten() {
+    for path in BOTH {
+        let kernel = ContextIntegrityKernel::new(ContextIntegrityPolicy::monitor_only());
+        let (_fx, _id, fetched, record) = Box::pin(recovered(json!(INJECTED), kernel, path)).await;
+        std::assert!(
+            fetched.to_string().contains("_context_integrity")
+                && fetched.to_string().contains("structuredContent"),
+            "{path:?}: premise: the scalar was wrapped with its verdict: {fetched}"
+        );
+        std::assert_eq!(record["response_effect"], "rewritten", "{path:?}: {record}");
+    }
+}
