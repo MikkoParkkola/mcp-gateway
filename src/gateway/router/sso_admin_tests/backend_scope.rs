@@ -289,12 +289,19 @@ async fn every_admin_meta_tool_refuses_a_backend_scoped_admin() {
             .collect()
     };
     let (_, all) = send(&gw.state, rpc(ADMIN_KEY, "tools/list", &json!({}))).await;
-    // Control: an unscoped admin key is listed the admin tools this fixture
-    // exposes. The call refusals below do not depend on exposure: dispatch
-    // refuses an admin meta-tool by name before it looks the tool up.
-    assert!(
-        !listed(&all).is_empty(),
-        "control: an unscoped admin key is listed admin tools: {all}"
+    // Control: an unscoped admin key is listed exactly the three admin tools
+    // this fixture exposes. The call refusals below cover all six whatever is
+    // exposed: dispatch refuses an admin meta-tool by name.
+    let mut shown = listed(&all);
+    shown.sort_unstable();
+    assert_eq!(
+        shown,
+        [
+            "gateway_kill_server",
+            "gateway_reload_capabilities",
+            "gateway_revive_server",
+        ],
+        "control: the admin tools an unscoped admin key is listed: {all}"
     );
     let mut wrong = Vec::new();
     for (who, bearer) in [
