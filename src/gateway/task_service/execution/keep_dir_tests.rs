@@ -1,10 +1,10 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! The two writers that outlive a test body keep the store's folder through
-//! their own handle: a task worker still running, and an expiry pass that has
-//! upgraded the executor (as the stdio expiry sweep does). Each row drops the
-//! test's own share first, lets the writer write, and expects the folder to
-//! go only with the writer's last handle.
+//! A task worker still running when its test body ends keeps the store's
+//! folder through its own handle: the row drops the test's own share first,
+//! lets the worker write, and expects the folder to go only with the worker's
+//! last handle. The expiry pass's row lives with the expiry tests, whose seed
+//! commits a row the pass may delete (`runtime_tests/expiry/keep_dir.rs`).
 
 use std::sync::Arc;
 
@@ -97,48 +97,4 @@ async fn a_worker_writing_after_the_test_body_keeps_the_folder() {
     })
     .await
     .expect("the folder goes with the worker's last handle");
-}
-
-#[tokio::test]
-async fn an_expiry_pass_holding_the_executor_keeps_the_folder() {
-    let root = Arc::new(tempfile::tempdir().expect("store root"));
-    let root_path = root.path().to_owned();
-    let tasks = root_path.join("tasks");
-    // Expiry deletes a row only when admission names it, and admission learns
-    // a stored row when the store opens: the row is written, then reopened.
-    let task = expired_task();
-    {
-        let (seeding, _executor) = open_runtime(&tasks, 1, StoreLimits::default(), subscriptions())
-            .await
-            .expect("the store opens");
-        seeding.keep_test_dir(Arc::clone(&root));
-        seeding
-            .store
-            .create(PreparedTask::for_test(&task, OWNER, 1))
-            .await
-            .expect("an expired row to sweep");
-        seeding.shutdown().await.expect("the seeding store closes");
-    }
-    let (service, executor) = open_runtime(&tasks, 1, StoreLimits::default(), subscriptions())
-        .await
-        .expect("the store reopens");
-    service.keep_test_dir(Arc::clone(&root));
-    let record = tasks.join(format!("{}.json", task.id()));
-    assert!(record.is_file(), "premise: the row is stored");
-    // The sweep upgrades its weak executor for each pass; this handle is that
-    // upgrade. The test body ends: its own share and its service go first.
-    let pass = Arc::clone(&executor);
-    drop(root);
-    drop(service);
-    drop(executor);
-    pass.expiry_pass_for_test()
-        .await
-        .expect("the pass deletes the expired row in the still-owned folder");
-    assert!(!record.exists(), "the pass deleted the expired row");
-
-    drop(pass);
-    assert!(
-        !root_path.exists(),
-        "the folder outlived the pass's last handle"
-    );
 }
