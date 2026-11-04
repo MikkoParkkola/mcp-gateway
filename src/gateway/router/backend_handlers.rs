@@ -165,6 +165,10 @@ async fn guard_tool_call(
         warn!(backend = %backend_name, tool = %tool_name, "Tool withheld by authorization; answered as absent");
     }
 
+    // Test builds: the witness hook runs before the first generation read on this route
+    // (`firewall_refusal` and the relay check under it read it).
+    #[cfg(all(test, feature = "firewall"))]
+    crate::security::firewall::relay_witness_hook::run();
     #[cfg(feature = "firewall")]
     if let Some(rejection) = firewall_refusal(
         state,

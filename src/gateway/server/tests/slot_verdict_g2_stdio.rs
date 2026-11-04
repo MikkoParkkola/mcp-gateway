@@ -116,7 +116,7 @@ impl Stdio {
             "params": {"name": TOOL, "arguments": {"folder": "inbox"}}});
         let answer = Gateway::dispatch_single_for_client(
             &self.meta,
-            &Arc::new(crate::security::ToolPolicy::default()),
+            &crate::gateway::authz::default_line(&self.meta),
             &Arc::new(crate::mtls::MtlsPolicy::from_config(
                 &crate::mtls::MtlsConfig::default(),
             )),
@@ -193,7 +193,7 @@ impl Stdio {
         let request = json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params});
         Gateway::dispatch_single_for_client(
             &self.meta,
-            &Arc::new(crate::security::ToolPolicy::default()),
+            &crate::gateway::authz::default_line(&self.meta),
             &Arc::new(crate::mtls::MtlsPolicy::from_config(
                 &crate::mtls::MtlsConfig::default(),
             )),
@@ -615,7 +615,7 @@ async fn x1_stdio_per_user_surfaced_name_is_sanitized() {
         "params": {"name": TOOL, "arguments": {"folder": "a\u{0}b"}}});
     let answer = Gateway::dispatch_single_for_client(
         &meta,
-        &Arc::new(crate::security::ToolPolicy::default()),
+        &crate::gateway::authz::default_line(&meta),
         &Arc::new(crate::mtls::MtlsPolicy::from_config(
             &crate::mtls::MtlsConfig::default(),
         )),

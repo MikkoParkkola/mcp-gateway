@@ -245,6 +245,7 @@ src/gateway/server/task_runtime.rs	settle_store	-	shutdown task-store settle, of
 src/gateway/server/task_runtime.rs	shutdown	-	shutdown task-store settle, off the request path
 src/gateway/server/task_runtime.rs	within	-	shutdown deadline helper, off the request path
 src/gateway/server/test_seams.rs	bound_port_for_test	-	test seam setter, used only by tests
+src/gateway/server/test_seams.rs	build_meta_mcp_published	-	test-only seam (cfg(test))
 src/gateway/server/test_seams.rs	data_dir	-	startup data-directory resolution, once per serve
 src/gateway/server/test_seams.rs	inflight_for_test	-	test-only seam (cfg(test))
 src/gateway/server/test_seams.rs	new	-	startup seam construction, once per gateway; in tests it also records the starting test's name

@@ -20,9 +20,13 @@ use super::scan::{Place, Sink, walk};
 
 const ROOTS: [&str; 3] = ["src/lib.rs", "src/main.rs", "src/bin/provenance-eval.rs"];
 
-/// Why `expr`, a `MetaMcpCallerContext` literal, does not pin a generation.
+/// The struct literals that carry a request's pinned generation.
+const PINNED_TYPES: [&str; 1] = ["MetaMcpCallerContext"];
+
+/// Why `expr`, a literal of a [`PINNED_TYPES`] type, does not pin a generation.
 fn unpinned(expr: &syn::ExprStruct) -> Option<&'static str> {
-    if expr.path.segments.last()?.ident != "MetaMcpCallerContext" || expr.rest.is_some() {
+    let ident = &expr.path.segments.last()?.ident;
+    if !PINNED_TYPES.iter().any(|t| ident == t) || expr.rest.is_some() {
         return None;
     }
     let field = expr

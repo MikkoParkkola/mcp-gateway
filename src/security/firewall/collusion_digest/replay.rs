@@ -74,11 +74,15 @@ pub(crate) struct ReplayReceipt {
     pub(in super::super) segments: Vec<ReplaySegment>,
     /// Fingerprints retained from leaves a change removed.
     pub(in super::super) retained: Vec<u64>,
-    pub(in super::super) sensitive: bool,
+    /// The inferred fact alone: a replay re-records from it and the lists in
+    /// force.
+    pub(in super::super) inferred: bool,
     /// Staged whole, its cap still to apply where it is recorded.
     pub(in super::super) deferred: bool,
     /// A seam of two or more sources: the contributing `server:tool`s.
     pub(in super::super) seam_sources: Option<Box<[String]>>,
+    /// Each contributor's own inferred fact, in `seam_sources`' order.
+    pub(in super::super) seam_inferred: Option<Box<[bool]>>,
     /// What the holder received when this receipt was cut: excuse only.
     pub(in super::super) cut_fps: Option<Arc<[u64]>>,
     pub(in super::super) joins: ReplayJoins,
@@ -90,6 +94,16 @@ pub(crate) struct ReplayReceipt {
 }
 
 impl ReplayReceipt {
+    /// Each contributing source with its inferred fact (tests only).
+    #[cfg(test)]
+    pub(crate) fn contributor_facts_for_test(&self) -> Option<Vec<(std::sync::Arc<str>, bool)>> {
+        Some(super::facts::contributor_facts(
+            self.seam_sources.as_deref()?,
+            self.seam_inferred.as_deref(),
+            self.inferred,
+        ))
+    }
+
     /// Its real byte size in the store's accounting: fingerprint bytes plus
     /// text bytes plus [`REPLAY_ITEM_OVERHEAD`] per item held.
     pub(in super::super) fn bytes(&self) -> usize {
@@ -190,9 +204,10 @@ impl DeliveryDigest {
                 })
                 .collect(),
             retained: self.retained.clone(),
-            sensitive: self.sensitive,
+            inferred: self.inferred,
             deferred: self.deferred,
             seam_sources: self.seam_sources.clone(),
+            seam_inferred: self.seam_inferred.clone(),
             cut_fps: self.cut_fps.clone(),
             joins,
             seam_excuses: self.seam_excuses.clone(),
@@ -219,9 +234,11 @@ impl DeliveryDigest {
                 })
                 .collect(),
             retained: receipt.retained.clone(),
-            sensitive: receipt.sensitive,
+            inferred: receipt.inferred,
+            source: None,
             deferred: receipt.deferred,
             seam_sources: receipt.seam_sources.clone(),
+            seam_inferred: receipt.seam_inferred.clone(),
             cut_fps: receipt.cut_fps.clone(),
             joins: match &receipt.joins {
                 ReplayJoins::None => Joins::None,
@@ -322,9 +339,10 @@ impl DeliveryDigest {
             return (self, dropped);
         }
         let dropped = self.cut_fps.is_some() || self.seam_excuses.is_some();
-        let seam_sources = self.seam_sources.clone();
+        let (seam_sources, seam_inferred) = (self.seam_sources.clone(), self.seam_inferred.clone());
         let mut kept = self.retaining_for(detector, delivered, step);
         kept.seam_sources = seam_sources;
+        kept.seam_inferred = seam_inferred;
         // F4: on a changed answer the excuse-only sets are dropped,
         // explicitly here: retention's early exits (an unread answer,
         // a verbatim receipt with no joins) return the digest with

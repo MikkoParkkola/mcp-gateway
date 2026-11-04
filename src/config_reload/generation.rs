@@ -156,13 +156,6 @@ impl Generation {
 
     /// The collusion fields in effect under this generation.
     #[cfg(feature = "firewall")]
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "read by the relay gate once it judges under the witness's generation"
-        )
-    )]
     #[must_use]
     pub(crate) fn collusion_view(&self) -> &crate::security::firewall::CollusionView {
         &self.collusion

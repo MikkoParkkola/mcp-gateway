@@ -46,8 +46,9 @@ impl MetaMcp {
     /// The generation published now: the answer side's P beside the request's
     /// pinned one, and the only one for a check no request is behind (task
     /// settlement, a poll, a requestless notification). `None` only before
-    /// startup sets the live config. Every reader is a firewall check.
-    #[cfg(feature = "firewall")]
+    /// startup sets the live config. Every production reader is a firewall
+    /// check; tests also read it to pin a stdio line (`authz::test_line`).
+    #[cfg(any(test, feature = "firewall"))]
     pub(crate) fn current_generation(&self) -> Option<Arc<crate::config_reload::Generation>> {
         self.live_config().map(|live| live.generation())
     }
@@ -73,6 +74,25 @@ impl MetaMcp {
     /// Public accessor for the reload context — used by UI management endpoints.
     pub fn reload_context(&self) -> Option<Arc<ReloadContext>> {
         self.reload_context.read().clone()
+    }
+
+    /// The generation a gateway would publish for the configuration this
+    /// Meta-MCP's firewall was built from.
+    #[cfg(all(test, feature = "firewall"))]
+    pub(crate) fn paired_generation_for_test(
+        &self,
+    ) -> std::sync::Arc<crate::config_reload::Generation> {
+        if let Some(fw) = self.firewall.as_ref() {
+            return fw.paired_generation_for_test();
+        }
+        crate::config_reload::LiveConfig::new(crate::config::Config::default()).generation()
+    }
+
+    /// The firewall the Meta-MCP records relay evidence into, for a fixture
+    /// that pairs its live config with it.
+    #[cfg(all(test, feature = "firewall"))]
+    pub(crate) fn firewall_for_test(&self) -> Option<Arc<crate::security::firewall::Firewall>> {
+        self.firewall.clone()
     }
 
     pub(in crate::gateway) fn get_transition_tracker(&self) -> Option<Arc<TransitionTracker>> {

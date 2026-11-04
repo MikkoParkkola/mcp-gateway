@@ -178,7 +178,8 @@ impl Gateway {
                         meta_mcp.handle_tools_list_with_params(id, params, Some(session_id), scope)
                     }
                     m if stdio_catalogue::METHODS.contains(&m) => {
-                        stdio_catalogue::dispatch(meta_mcp, m, id, params).await
+                        stdio_catalogue::dispatch(meta_mcp, m, id, params, generation.pinned())
+                            .await
                     }
                     "logging/setLevel" => meta_mcp.handle_logging_set_level(id, params).await,
                     "ping" => JsonRpcResponse::success(id, serde_json::json!({})),

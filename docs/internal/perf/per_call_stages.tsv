@@ -452,6 +452,7 @@ src/gateway/meta_mcp/invoke/relay_staging.rs	collecting	-	direct-route and task-
 src/gateway/meta_mcp/invoke/relay_staging.rs	collecting_http	http_invoke_tiny	wraps every HTTP delivery (collects only with relay detection on); with relay detection OFF it opens the gateway-writes scope (MIK-8408 D5), +3 allocations and about 735 B per tiny gateway_invoke (371 to 374, measured); removal ticketed as MIK-8545 (v4.1.0)
 src/gateway/meta_mcp/invoke/relay_staging.rs	collecting_staged	-	on-path, untimed: only with relay detection active; the harness routes configure none
 src/gateway/meta_mcp/invoke/relay_staging.rs	commit	stdio_invoke_tiny	commits or drops the staged receipts of every judged stdio answer
+src/gateway/meta_mcp/invoke/relay_staging.rs	commit_staged	stdio_invoke_tiny	reads the generation published now for every stdio answer, then commits or drops its staged receipts under it
 src/gateway/meta_mcp/invoke/relay_staging.rs	commit_with	-	direct-route and task-executor receipt commits only
 src/gateway/meta_mcp/invoke/relay_staging.rs	discard_staged	-	task executions and task replays only, not a live tools/call
 src/gateway/meta_mcp/invoke/relay_staging.rs	drop_replay_capture	stdio_invoke_tiny	every stdio delivery admission did not retain (every unkeyed call): clears one Option field; no allocation
@@ -461,6 +462,8 @@ src/gateway/meta_mcp/invoke/relay_staging.rs	none	stdio_invoke_tiny	the no-recei
 src/gateway/meta_mcp/invoke/relay_staging.rs	plan_step	-	gateway_execute and playbook steps only, not a single gateway_invoke
 src/gateway/meta_mcp/invoke/relay_staging.rs	stage_with	-	direct /mcp/{backend} route only, not the meta tools/call path
 src/gateway/meta_mcp/invoke/relay_staging.rs	take_staged_for_test	-	test-only helper (cfg(test))
+src/gateway/meta_mcp/invoke/relay_staging.rs	unpublished	-	unreachable through binary startup, which publishes a generation before serving; a library embedding that serves before publishing reaches it (logs only)
+src/gateway/meta_mcp/invoke/relay_staging.rs	unpublished_refusal	-	unreachable through binary startup, which publishes a generation before serving; a library embedding that serves before publishing reaches it (the fail-closed refusal)
 src/gateway/meta_mcp/invoke/relay_catalogue.rs	as_caller	-	prompts/get and resources/read only, not the tools/call path
 src/gateway/meta_mcp/invoke/relay_catalogue.rs	catalogue_refusal	-	prompts/get and resources/read only, not the tools/call path
 src/gateway/meta_mcp/invoke/relay_catalogue.rs	forward_catalogue	-	prompts/get and resources/read only, not the tools/call path

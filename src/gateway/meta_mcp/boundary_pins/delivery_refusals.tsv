@@ -169,7 +169,9 @@ src/gateway/meta_mcp/invoke/r2_check.rs	undeclared_key_refusal_through	catalogue
 src/gateway/meta_mcp/invoke/relay.rs	refuse_relay	relay_refusal	1	recorded	pre-send relay block on the meta route; raised while vouched
 src/gateway/meta_mcp/invoke/relay.rs	refuse_relaying_round	relay_refusal	1	recorded	pre-send relay block on a bridged round; raised while vouched
 src/gateway/meta_mcp/invoke/relay.rs	relay_refusal	Error::Forbidden{}	1	feeds	the relay block, raised by refuse_relay and refuse_relaying_round
+src/gateway/meta_mcp/invoke/relay.rs	relay_refusal	unpublished_refusal	1	feeds	the no-live-config message, wrapped in the same Forbidden as the relay block
 src/gateway/meta_mcp/invoke/relay_catalogue.rs	catalogue_refusal	Error::Forbidden{}	1	feeds	the catalogue relay refusal forward_catalogue raises
+src/gateway/meta_mcp/invoke/relay_catalogue.rs	catalogue_refusal	unpublished_refusal	1	feeds	the no-live-config message, wrapped in the same Forbidden as the catalogue relay refusal
 src/gateway/meta_mcp/invoke/relay_catalogue.rs	forward_catalogue	catalogue_refusal	1	recorded	raised here (design section 2 row)
 src/gateway/meta_mcp/invoke/resolve.rs	resolve	refuse_name_clash	1	not-a-decision	a name that is both a registry backend and the capability backend: a configuration clash (-32001, the BackendNotFound class), not a decision about the caller
 src/gateway/meta_mcp/invoke/send.rs	admit_send	refuse_relay	1	recorded	pre-send relay block, raised while vouched inside it
