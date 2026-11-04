@@ -74,7 +74,7 @@ impl TryFrom<RawGrantFile> for IdentityGrantFile {
                             .filter_map(|(field, empty)| empty.then_some(field))
                             .collect();
                     let shared = if uses[&row.grant_id] > 1 {
-                        "; another rule uses this id and takes effect once this one is deleted, \
+                        "; another rule uses this id and may take effect once this one is deleted, \
                          so decide which to keep"
                     } else {
                         ""

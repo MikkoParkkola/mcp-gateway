@@ -246,7 +246,7 @@ async fn a_nameless_row_sharing_its_id_is_flagged() {
     crate::gateway::test_helpers::write_owner_only(&path, body).unwrap();
     let error = super::read_identity_grants_file(&path).await.unwrap_err();
     assert!(
-        error.contains("another rule uses this id and takes effect once this one is deleted"),
+        error.contains("another rule uses this id and may take effect once this one is deleted"),
         "{error}"
     );
 }
@@ -267,7 +267,7 @@ async fn a_nameless_row_sharing_its_id_with_a_bare_row_is_flagged() {
     let error = super::read_identity_grants_file(&path).await.unwrap_err();
     assert!(error.contains("by a bare id"), "{error}");
     assert!(
-        error.contains("another rule uses this id and takes effect once this one is deleted"),
+        error.contains("another rule uses this id and may take effect once this one is deleted"),
         "{error}"
     );
 }
