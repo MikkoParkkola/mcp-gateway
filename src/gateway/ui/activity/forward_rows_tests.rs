@@ -518,6 +518,7 @@ fn a_backend_scoped_caller_reads_only_its_backends_calls() {
     assert_eq!(counters(&read("srv")), vec![1, 2, 3]);
     let other = read("other");
     assert!(counters(&other).is_empty(), "no call on another backend");
+    assert!(!other.is_empty(), "the scoped read answered");
     assert!(
         !other.iter().any(|p| p.reset),
         "nothing served is not a reset"
