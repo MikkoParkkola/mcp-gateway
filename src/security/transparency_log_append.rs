@@ -38,6 +38,11 @@ fn cut_back(file: &std::fs::File, path: &Path, good: u64) -> io::Result<()> {
 /// chain `counter`, which orders records across segments.
 pub(crate) type Subscriber = std::sync::Arc<dyn Fn(&Map<String, Value>, &str, u64) + Send + Sync>;
 
+/// A reader of every written record: the record as persisted (chain fields,
+/// and `sig` and `key_id` when signed), its chain `counter`, and the logger's
+/// rewrite generation.
+pub(crate) type AllReader = std::sync::Arc<dyn Fn(&Map<String, Value>, u64, u64) + Send + Sync>;
+
 /// Readers told of each record of their `kind` once it is written. They run
 /// under the log's lock, which every audit write takes, so they see records
 /// in append order and never one whose write failed. A reader must only hand
@@ -78,6 +83,14 @@ impl TransparencyLogger {
             readers.push((kind.to_string(), reader));
         }
     }
+
+    /// Tell `reader` of every record written from now on, whatever its kind.
+    #[cfg(feature = "webui")]
+    #[allow(
+        dead_code,
+        reason = "the live stream's activity and config sources read it when they land"
+    )]
+    pub(crate) fn subscribe_all(&self, _reader: AllReader) {}
 }
 
 impl TransparencyLogger {
@@ -506,6 +519,9 @@ impl TransparencyLogger {
     }
 }
 
+#[cfg(all(test, feature = "webui"))]
+#[path = "transparency_log_announce_tests.rs"]
+mod announce_tests;
 #[cfg(all(test, feature = "webui"))]
 #[path = "transparency_log_subscribe_tests.rs"]
 mod subscribe_tests;
