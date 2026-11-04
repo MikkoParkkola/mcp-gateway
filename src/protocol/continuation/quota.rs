@@ -70,10 +70,10 @@ impl QuotaKey {
             QuotaSource::Identity(identity) => format!("agent:{}", identity.stable_actor_id()),
             QuotaSource::Subject(subject) => format!(
                 "subject:{}:{}:{}:{}",
-                subject.authority.len(),
-                subject.authority,
-                subject.subject.len(),
-                subject.subject
+                subject.authority().len(),
+                subject.authority(),
+                subject.subject().len(),
+                subject.subject()
             ),
             QuotaSource::Credential(principal) => {
                 format!(

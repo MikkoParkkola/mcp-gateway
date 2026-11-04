@@ -739,3 +739,6 @@ mod backend_name;
 
 #[path = "search_ranking_authz_tests/cold_backend.rs"]
 mod cold_backend;
+
+#[path = "search_ranking_authz_tests/limit_cap.rs"]
+mod limit_cap;

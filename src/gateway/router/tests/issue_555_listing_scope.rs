@@ -155,7 +155,7 @@ async fn capability_backend() -> (Arc<CapabilityBackend>, tempfile::TempDir) {
 fn grant_to_u1() -> IdentityGrant {
     IdentityGrant {
         grant_id: "g-u1".to_string(),
-        subject: GrantSubject::new("api_key", "u1", Some("u1".to_string())),
+        subject: GrantSubject::for_test("api_key", "u1", Some("u1".to_string())),
         agent: GrantAgent::Any,
         capability: "cap_granted".to_string(),
         tool: None,

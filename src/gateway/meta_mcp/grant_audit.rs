@@ -149,7 +149,7 @@ impl GrantNote {
         if let Some(subject) = &event.subject {
             fields.insert(
                 "subject".into(),
-                serde_json::json!({ "authority": subject.authority, "subject": subject.subject }),
+                serde_json::json!({ "authority": subject.authority(), "subject": subject.subject() }),
             );
         }
         Self {
@@ -158,7 +158,7 @@ impl GrantNote {
             trace_id: crate::gateway::trace::current(),
             allowed: event.allowed,
             fields,
-            subject: event.subject.as_ref().map(|s| s.subject.clone()),
+            subject: event.subject.as_ref().map(|s| s.subject().to_owned()),
             repeat: None,
         }
     }

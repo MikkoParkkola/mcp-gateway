@@ -147,8 +147,21 @@ class RealTree(unittest.TestCase):
             found = {v.split(": ", 1)[0].rsplit(":", 1)[0] + " " + v.split("`")[3]
                      for v in cis.violations(HERE.parents[1])}
             self.assertEqual(found, {
-                "src/identity_grants.rs new", "src/identity_grants.rs checked",
-                "src/key_server/oidc_identity.rs checked", "src/mtls/identity.rs from_der",
+                "src/identity_grants/subject.rs new",
+                "src/key_server/oidc_identity.rs checked", "src/mtls/identity/cert.rs parse",
+                # GrantSubject::new is checked; each call site is listed
+                # until the rule is retired.
+                "src/identity_grants/subject.rs try_from",
+                "src/decisions/mod.rs access_key", "src/decisions/mod.rs covered",
+                "src/decisions/mod.rs denial_from_record",
+                "src/gateway/meta_mcp/invoke/budget.rs grant_subject_from_api_key",
+                "src/gateway/router/identity.rs grant_subject_from_cert_identity",
+                "src/gateway/router/identity.rs grant_subject_from_oauth_agent",
+                "src/gateway/router/identity.rs grant_subject_from_verified_identity",
+                "src/gateway/router/identity.rs trusted_proxy_identity",
+                "src/gateway/ui/admin_audit.rs record_admin_action_as",
+                "src/gateway/ui/admin_audit.rs recorded",
+                "src/gateway/ui/events.rs admitted", "src/gateway/ui/tool_call.rs via_label",
             })
         finally:
             cis.ALLOWED.update(saved)
@@ -307,6 +320,7 @@ class SameNames(unittest.TestCase):
         root = tree({"src/a.rs": self.A, "src/b.rs": b + self.READ, "src/c.rs": c},
                     self.MODS + '#[path = "c.rs"]\nmod c2;\n')
         self.assertEqual(len([v for v in cis.violations(root) if "deserializes" in v]), 1)
+
 
 if __name__ == "__main__":
     unittest.main()

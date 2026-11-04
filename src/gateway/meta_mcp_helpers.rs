@@ -135,11 +135,6 @@ pub(crate) fn extract_bool_or(args: &Value, key: &str, default: bool) -> bool {
     args.get(key).and_then(Value::as_bool).unwrap_or(default)
 }
 
-/// Extract an optional unsigned integer parameter, defaulting when missing or wrong type.
-pub(crate) fn extract_u64_or(args: &Value, key: &str, default: u64) -> u64 {
-    args.get(key).and_then(Value::as_u64).unwrap_or(default)
-}
-
 /// Extensions advertised by `initialize`, to a peer that declared `era`.
 ///
 /// **This conditional is a design event** (`development-process.md` §P3): the
@@ -610,11 +605,20 @@ pub(crate) fn build_search_response(
 const DEFAULT_SEARCH_LIMIT: usize = 10;
 const MAX_SEARCH_LIMIT: usize = 25;
 
-/// Extract the search limit from arguments, defaulting to 10 and clamping to a
-/// hard maximum so discovery output stays bounded regardless of backend count.
-#[allow(clippy::cast_possible_truncation)]
+/// Extract the search limit from arguments: 10 when absent or not an integer,
+/// otherwise clamped to 1..=25 so discovery output stays bounded regardless of
+/// backend count. Both search tools advertise this range in their schemas.
 pub(crate) fn extract_search_limit(args: &Value) -> usize {
-    (extract_u64_or(args, "limit", DEFAULT_SEARCH_LIMIT as u64) as usize).min(MAX_SEARCH_LIMIT)
+    let Some(limit) = args.get("limit") else {
+        return DEFAULT_SEARCH_LIMIT;
+    };
+    if limit.as_i64().is_some_and(|n| n < 1) {
+        return 1;
+    }
+    // Any other integer reads as u64; one that does not fit usize is above the cap.
+    limit.as_u64().map_or(DEFAULT_SEARCH_LIMIT, |n| {
+        usize::try_from(n).map_or(MAX_SEARCH_LIMIT, |n| n.clamp(1, MAX_SEARCH_LIMIT))
+    })
 }
 
 /// Extract a required string parameter from JSON arguments.

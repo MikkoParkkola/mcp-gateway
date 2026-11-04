@@ -18,7 +18,7 @@ async fn resolve_admission(
 }
 
 fn pair(subject: Option<GrantSubject>) -> Option<(String, String)> {
-    subject.map(|s| (s.authority, s.subject))
+    subject.map(|s| (s.authority().to_owned(), s.subject().to_owned()))
 }
 
 fn verified() -> VerifiedIdentity {

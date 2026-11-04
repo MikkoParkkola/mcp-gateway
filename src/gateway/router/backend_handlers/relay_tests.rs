@@ -38,11 +38,11 @@ fn shared_key() -> AuthenticatedClient {
 }
 
 fn cert(san_uri: &str) -> CertIdentity {
-    CertIdentity {
+    crate::mtls::identity::CertIdentity::for_test(crate::mtls::identity::CertFields {
         san_uris: vec![san_uri.to_string()],
         display_name: "agent".to_string(),
         ..Default::default()
-    }
+    })
 }
 
 /// One identity carrier per caller: a grant subject, or a certificate with
@@ -157,14 +157,14 @@ async fn parity(a: &Who, a_other_key: &Who, b: &Who) {
 
 #[tokio::test]
 async fn grant_subject_keys_relay_and_recording() {
-    let subject = |id: &str| Who::Subject(GrantSubject::new("oidc:https://idp", id, None));
+    let subject = |id: &str| Who::Subject(GrantSubject::for_test("oidc:https://idp", id, None));
     parity(&subject("alice"), &subject("alice"), &subject("bob")).await;
 }
 
 #[tokio::test]
 async fn certificate_keys_relay_and_recording() {
     let cert = |uri: &str| {
-        let subject = GrantSubject::new("mtls", uri, Some("agent".to_string()));
+        let subject = GrantSubject::for_test("mtls", uri, Some("agent".to_string()));
         Who::Cert(cert(uri), subject)
     };
     parity(
@@ -193,7 +193,7 @@ async fn a_signing_refusal_records_nothing() {
     meta.enable_message_signing(signer, std::time::Duration::from_secs(300), false);
     Arc::get_mut(&mut state).expect("state is unique").meta_mcp = Arc::new(meta);
     let key = shared_key();
-    let subject = |id: &str| Who::Subject(GrantSubject::new("oidc:https://idp", id, None));
+    let subject = |id: &str| Who::Subject(GrantSubject::for_test("oidc:https://idp", id, None));
     let (a, b) = (subject("alice"), subject("bob"));
     let delivered = json!({"content": [{"type": "text", "text": PROSE}]});
     let mut response = JsonRpcResponse::success(RequestId::Number(1), delivered);
@@ -221,7 +221,7 @@ async fn a_signing_refusal_records_nothing() {
 /// the call's dispatch scope, which is how the skip is observed.
 async fn classes_noted_by_staging(state: &AppState) -> String {
     let key = shared_key();
-    let who = Who::Subject(GrantSubject::new("oidc:https://idp", "alice", None));
+    let who = Who::Subject(GrantSubject::for_test("oidc:https://idp", "alice", None));
     let text = format!("{PROSE} Contact: keeper@orchardcoop.fi");
     let result = json!({"contents": [{"uri": "res://orchard", "text": text}]});
     let ((), notes) = crate::gateway::meta_mcp::invoke::audit::with_dispatch_scope(async {
@@ -293,7 +293,7 @@ async fn blocking_state_for(
 }
 
 fn subject(id: &str) -> Who {
-    Who::Subject(GrantSubject::new("oidc:https://idp", id, None))
+    Who::Subject(GrantSubject::for_test("oidc:https://idp", id, None))
 }
 
 /// A result whose only copy of `PROSE` is the gateway's `serverInfo` stamp.

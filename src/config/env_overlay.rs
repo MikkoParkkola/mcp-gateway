@@ -434,6 +434,16 @@ impl EnvOverlay {
         &self.owned
     }
 
+    /// This overlay with `pending` names resolving to their values above the
+    /// env files: the config writer's validation of a template, whose secret
+    /// slots name these before any store entry exists. Not owned keys, so no
+    /// restart notice and no reserved-name refusal sees them.
+    #[must_use]
+    pub(crate) fn with_pending(mut self, pending: BTreeMap<String, String>) -> Self {
+        self.vars.extend(pending);
+        self
+    }
+
     /// Whether `path` on disk now differs from what this overlay loaded from
     /// it (#1286).
     ///
@@ -560,6 +570,21 @@ impl EnvOverlay {
                 (path.to_string_lossy().into_owned(), parsed)
             })
             .collect()
+    }
+
+    /// Where `key` is first assigned, in application order: the env file and
+    /// the 1-based line, read from the bytes the overlay was parsed from.
+    pub(crate) fn assignment_of(&self, key: &str) -> Option<(PathBuf, usize)> {
+        self.sources.iter().find_map(|(path, text)| {
+            // ponytail: one assignment per line; a quoted value spanning lines
+            // that itself starts `KEY=` would be named instead of its owner.
+            text.lines().enumerate().find_map(|(n, line)| {
+                let line = line.trim_start();
+                let line = line.strip_prefix("export ").map_or(line, str::trim_start);
+                let (name, _) = line.split_once('=')?;
+                (name.trim() == key).then(|| (path.clone(), n + 1))
+            })
+        })
     }
 
     /// The first env file whose own bytes substitute a key these same files

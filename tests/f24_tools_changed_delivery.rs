@@ -315,6 +315,7 @@ async fn every_tool_set_change_reaches_both_eras_once() {
     );
     // The rebuilt backend lists the same tool: nothing changed for discovery.
     expect("the admin UI revives a backend", 0).await;
+    gateway.stop().await;
 }
 
 /// A client that presents the admin bearer on every request.

@@ -17,11 +17,11 @@ fn alpha_with(read: &str) -> Vec<crate::protocol::Tool> {
 }
 
 fn client_cert() -> crate::mtls::CertIdentity {
-    crate::mtls::CertIdentity {
+    crate::mtls::identity::CertIdentity::for_test(crate::mtls::identity::CertFields {
         common_name: Some("svc".to_string()),
         display_name: "svc".to_string(),
         ..Default::default()
-    }
+    })
 }
 
 /// R8: a listen stream opened with a certificate is told a visible change; the
@@ -101,7 +101,7 @@ fn agent_a_grant() -> crate::identity_grants::LocalIdentityGrantStore {
         GrantAgent, GrantAgentKey, GrantScope, GrantSubject, IdentityGrant,
     };
     use crate::security::ProofSource;
-    let alice = GrantSubject::new(adapter_authority(), "alice", None);
+    let alice = GrantSubject::for_test(adapter_authority(), "alice", None);
     crate::identity_grants::LocalIdentityGrantStore::from_grants([IdentityGrant {
         grant_id: "g-agent-a".to_string(),
         subject: alice.clone(),

@@ -29,19 +29,17 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
 
-use async_trait::async_trait;
 use serde_json::Value;
-use tokio::sync::mpsc::{Receiver, Sender, channel};
+use tokio::sync::mpsc::{Sender, channel};
 use tokio::sync::{Mutex, oneshot};
 use tokio::task::JoinHandle;
 use tokio_tungstenite::tungstenite::Message;
-use tracing::{debug, error, warn};
+use tracing::{debug, warn};
 use uuid::Uuid;
 
 use super::notification_sink::DeliveryHandle;
 use super::write_claim::WriteClaim;
-use super::{PendingRequestGuard, Transport, sanitize_url_for_diagnostics};
-use crate::gateway::health_metrics::clock::{backend_request, backend_wait};
+use super::{Transport, sanitize_url_for_diagnostics};
 use crate::protocol::{
     JsonRpcNotification, JsonRpcRequest, JsonRpcResponse, PROTOCOL_VERSION, RequestId, Selectable,
     checked_selection, initialize_params, is_version_mismatch_error, negotiate_best_version,
@@ -551,212 +549,7 @@ impl WebSocketTransport {
 
 // ── I/O loop (runs inside the spawned task) ───────────────────────────────────
 
-/// Frame counters, taken outside the `select!` below: inside a macro body the
-/// log-under-lock scan sees only tokens, and a lock there reads as held over
-/// the arm's log lines. The guard is a temporary released at once either way.
-async fn count_received(inner: &Inner) {
-    inner.session.lock().await.messages_received += 1;
-}
-
-async fn count_sent(inner: &Inner) {
-    inner.session.lock().await.messages_sent += 1;
-}
-
-/// Drive reads from the WebSocket stream and writes from the outbound channel
-/// using `tokio::select!`.  Exits when the connection closes or the outbound
-/// channel is dropped.
-async fn run_io_loop(
-    inner: Arc<Inner>,
-    ws_stream: tokio_tungstenite::WebSocketStream<
-        tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
-    >,
-    mut outbound_rx: Receiver<Outbound>,
-) {
-    use futures::{SinkExt, StreamExt};
-
-    let (mut ws_sink, mut ws_source) = ws_stream.split();
-
-    loop {
-        tokio::select! {
-            // Inbound frame from the server.
-            maybe_msg = ws_source.next() => {
-                match maybe_msg {
-                    Some(Ok(Message::Text(text))) => {
-                        count_received(&inner).await;
-                        let text_str: &str = &text;
-                        if let Err(e) = WebSocketTransport::dispatch_inbound(&inner, text_str) {
-                            // `from_text` errors quote no frame text.
-                            error!(
-                                error = %e,
-                                len = text_str.len(),
-                                "Failed to dispatch inbound WebSocket frame"
-                            );
-                        }
-                    }
-                    Some(Ok(Message::Ping(data))) => {
-                        debug!("Received transport-level WebSocket ping, replying with pong");
-                        let _ = ws_sink.send(Message::Pong(data)).await;
-                    }
-                    Some(Ok(Message::Pong(_))) => {
-                        debug!("Received transport-level WebSocket pong");
-                    }
-                    Some(Ok(Message::Close(frame))) => {
-                        log_close(frame.as_ref());
-                        inner.connected.store(false, Ordering::Relaxed);
-                        break;
-                    }
-                    Some(Ok(_)) => {
-                        // Binary / continuation frames — not used by MCP.
-                    }
-                    Some(Err(e)) => {
-                        error!(error = %e, "WebSocket read error");
-                        inner.connected.store(false, Ordering::Relaxed);
-                        break;
-                    }
-                    None => {
-                        debug!("WebSocket stream ended");
-                        inner.connected.store(false, Ordering::Relaxed);
-                        break;
-                    }
-                }
-            }
-
-            // Outbound frame from the application.
-            maybe_out = outbound_rx.recv() => {
-                if let Some((msg, claim)) = maybe_out {
-                    // A request whose caller gave up while it was queued is
-                    // never written (`MIK-7642.PR.B`).
-                    if claim.is_some_and(|claim| !claim.claim_write()) {
-                        continue;
-                    }
-                    if let Err(e) = ws_sink.send(msg).await {
-                        error!(error = %e, "WebSocket write error");
-                        inner.connected.store(false, Ordering::Relaxed);
-                        break;
-                    }
-                    count_sent(&inner).await;
-                } else {
-                    // Channel dropped — application is closing the transport.
-                    debug!("WebSocket outbound channel closed; sending close frame");
-                    let _ = ws_sink.send(Message::Close(None)).await;
-                    inner.connected.store(false, Ordering::Relaxed);
-                    break;
-                }
-            }
-        }
-    }
-    // Fail in-flight calls now: their senders drop, so each caller sees
-    // "connection closed before the response arrived" instead of waiting out
-    // its timeout.
-    inner.pending.clear();
-    inner.taps.clear();
-}
-
 // ── Transport impl ────────────────────────────────────────────────────────────
-
-#[async_trait]
-impl Transport for WebSocketTransport {
-    fn redacts_injected_values(&self) -> bool {
-        self.inner.needles.get().is_some()
-    }
-
-    async fn request(&self, method: &str, params: Option<Value>) -> Result<JsonRpcResponse> {
-        backend_request(async move {
-            let id = self.next_id();
-            let request = JsonRpcRequest {
-                jsonrpc: "2.0".to_string(),
-                id: id.clone(),
-                method: method.to_string(),
-                params,
-            };
-
-            // Register before the send: the I/O task can route progress back
-            // before `send_message` returns, and an unregistered token is dropped.
-            let _progress_cleanup = ProgressRegistration::register(
-                &self.inner.progress_destinations,
-                request.params.as_ref(),
-            );
-
-            let (tx, rx) = oneshot::channel();
-            self.inner.pending.insert(id.to_string(), tx);
-            // See StdioTransport::request: removing the entry is the guard's job
-            // so a request future dropped by an OUTER timeout or task abort does
-            // not strand its `pending` entry.
-            let _cleanup = PendingRequestGuard::new(&self.inner.pending, &id.to_string());
-            // Declared after `_cleanup`, so it drops first and still finds the
-            // entry of a request nobody answered.
-            let claim = WriteClaim::new();
-            let mut cancel = cancel::CancelUnanswered::arm(&self.inner, &request, &claim);
-
-            let msg = McpFrame::Request(request).to_ws_message()?;
-            // The timeout covers the enqueue too: a full queue behind a stalled
-            // writer must not outlast the configured backend timeout.
-            let exchange = async {
-                self.enqueue((msg, Some(claim))).await?;
-                Ok::<_, Error>(rx.await)
-            };
-            let outcome = tokio::time::timeout(self.timeout, exchange).await;
-            // Finished, answered or failed: the transport's own timeout is not a
-            // cancel (design Q1).
-            cancel.disarm();
-            let answer = match outcome {
-                Ok(Ok(Ok(response))) => Ok(response),
-                Ok(Err(e)) => Err(e),
-                Ok(Ok(Err(_))) => Err(Error::Transport(
-                    "WebSocket connection closed before the response arrived".to_string(),
-                )),
-                Err(_) => Err(Error::BackendTimeout(
-                    "WebSocket request timed out".to_string(),
-                )),
-            };
-            // Scrubbed on the call's own task (the reader routes the answer as
-            // sent), as the body's last step: a redacted answer stays the
-            // backend's, and a refusal is an error `Error::origin` counts as
-            // the gateway's.
-            match self.inner.needles.get() {
-                Some(needles) => crate::security::needles::scrub_answer(needles, answer),
-                None => answer,
-            }
-        })
-        .await
-    }
-
-    async fn notify(&self, method: &str, params: Option<Value>) -> Result<()> {
-        backend_wait(async move {
-            let msg = McpFrame::Notification {
-                method: method.to_string(),
-                params,
-            }
-            .to_ws_message()?;
-            self.send_message(msg).await
-        })
-        .await
-    }
-
-    fn is_connected(&self) -> bool {
-        self.inner.connected.load(Ordering::Relaxed)
-    }
-
-    async fn close(&self) -> Result<()> {
-        self.inner.connected.store(false, Ordering::Relaxed);
-
-        // Dropping the sender closes the outbound channel, which causes the I/O
-        // task to send a WebSocket close frame and exit cleanly.
-        self.inner.outbound_tx.lock().await.take();
-
-        // Abort the task (safe to call even after it has already exited).
-        if let Some(h) = self.inner.task.lock().take() {
-            h.abort();
-        }
-
-        // The aborted task skips its own cleanup: fail in-flight calls here so
-        // they do not wait out their timeouts.
-        self.inner.pending.clear();
-        self.inner.taps.clear();
-
-        Ok(())
-    }
-}
 
 /// A transport dropped without `close()` (a lifecycle that discards it, a
 /// start that was cancelled) must not orphan its I/O task: the task holds the
@@ -781,14 +574,19 @@ fn connect_error(error: &tokio_tungstenite::tungstenite::Error) -> String {
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
+#[path = "websocket_calls.rs"]
+mod calls;
 #[path = "websocket_cancel.rs"]
 mod cancel;
+#[path = "websocket_io.rs"]
+mod io;
 #[path = "websocket_listen.rs"]
 mod listen;
 #[path = "websocket_progress.rs"]
 mod progress;
 #[path = "websocket_scrub.rs"]
 mod scrub;
+use io::run_io_loop;
 use progress::{ProgressRegistration, progress_key, route_progress};
 use scrub::{log_close, scrub_frame};
 

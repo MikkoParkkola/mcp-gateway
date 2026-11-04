@@ -19,11 +19,11 @@ fn agent(client_id: &str) -> OAuthAgentIdentity {
 }
 
 fn cert(der: &[u8]) -> CertIdentity {
-    CertIdentity {
+    crate::mtls::identity::CertIdentity::for_test(crate::mtls::identity::CertFields {
         display_name: "same display name".to_string(),
         quota_principal: Some(QuotaPrincipal::client_certificate(der)),
-        ..CertIdentity::default()
-    }
+        ..Default::default()
+    })
 }
 
 #[test]
