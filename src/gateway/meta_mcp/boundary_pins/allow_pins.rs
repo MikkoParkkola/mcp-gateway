@@ -16,30 +16,29 @@ use super::scan::{Place, Sink, expr_attrs, item_attrs, walk};
 
 const ROOTS: [&str; 3] = ["src/lib.rs", "src/main.rs", "src/bin/provenance-eval.rs"];
 
-/// The banned names: the dedicated config's 19 methods and 2 APIs.
-const BANNED: [&str; 21] = [
-    "subscribe_started",
-    "reload_read_slot",
-    "lock_reload",
-    "register",
-    "observe_breakers",
-    "enforce_destinations",
-    "set_change_feed",
-    "catalogue_hook",
-    "nudge_catalogue",
-    "nudge_catalogue_scanned",
-    "nudge_surfaced",
-    "resolve_unwarmed",
-    "with_membership",
-    "get",
-    "all",
-    "statuses",
-    "remove",
-    "stop_all",
-    "stop_all_by",
-    "resolve_propagation_credential",
-    "resolve_propagation_headers",
-];
+/// The banned names: the method of each `path` in the dedicated config's
+/// span, read from it, so a newly banned method is named in one place (the
+/// span itself is pinned to the config byte for byte, T1f).
+fn banned() -> &'static [String] {
+    static NAMES: std::sync::LazyLock<Vec<String>> = std::sync::LazyLock::new(|| {
+        include_str!("registry_ban_span.toml")
+            .lines()
+            .filter_map(|line| line.split_once("path = \"")?.1.split_once('"'))
+            .filter_map(|(path, _)| path.rsplit("::").next().map(str::to_string))
+            .collect()
+    });
+    &NAMES
+}
+
+/// The names `banned` must read, a row against a misparse of the span.
+#[test]
+fn the_banned_names_are_read_from_the_config_span() {
+    let names = banned();
+    assert!(names.len() >= 20, "too few names read: {names:?}");
+    for name in ["get", "stop_all", "stop_all_by", "resolve_propagation_headers"] {
+        assert!(names.iter().any(|n| n == name), "{name} not read: {names:?}");
+    }
+}
 
 fn crate_root() -> &'static Path {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -97,7 +96,7 @@ impl<'ast> Visit<'ast> for Names {
     fn visit_expr_method_call(&mut self, call: &'ast syn::ExprMethodCall) {
         let name = call.method.to_string();
         // `get` with no argument is a `OnceLock` read; the registry's takes a name.
-        if BANNED.contains(&name.as_str()) && !(name == "get" && call.args.is_empty()) {
+        if banned().contains(&name) && !(name == "get" && call.args.is_empty()) {
             *self.0.entry(name).or_default() += 1;
         }
         syn::visit::visit_expr_method_call(self, call);
@@ -113,7 +112,7 @@ impl<'ast> Visit<'ast> for Names {
             .map(|s| s.ident.to_string())
             .collect();
         if let [.., owner, name] = segs.as_slice()
-            && BANNED.contains(&name.as_str())
+            && banned().contains(name)
             && ["BackendRegistry", "MetaMcp", "Self"].contains(&owner.as_str())
         {
             *self.0.entry(name.clone()).or_default() += 1;
