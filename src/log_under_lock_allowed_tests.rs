@@ -2,6 +2,15 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! The log-under-lock scan's allowlist, apart from the scan for the file-size
 //! ceiling.
+//!
+//! What the scan does not follow when it judges a `DashMap` by type (a site
+//! written in one of these forms is not seen, so review it by hand): a map
+//! returned by a function or method; a closure's argument; a field of a local
+//! whose type is not written down (judged by the field's name alone);
+//! destructuring; generic parameters and trait objects; type aliases; maps
+//! built inside macro bodies; a map local given its value by a later
+//! assignment; a map reached through a tuple-struct field; and a guard taken
+//! inside a `match` arm's guard expression.
 
 /// Sites that log under a guard on purpose, each with why it cannot block,
 /// and sites the scan reads as holding a guard when none is held, each with
@@ -123,12 +132,6 @@ pub(super) const ALLOWED: &[(&str, &str, &str, &str)] = &[
         "store",
         "info!: fields backend slot reason outcome evidence trigger",
         "the record is written with the install, under the caller's guard; the lossy writer never waits",
-    ),
-    (
-        "src/security/firewall/allowed_root.rs",
-        "warn_at_load",
-        "warn!: secret {:?} of backends.{name} owns {owned:?}, a declared argument in {path}.path_args: covered calls are refused",
-        "not a guard: config.backends is the plain HashMap at config/mod.rs:142, not the registry DashMap the scan matches by field name",
     ),
     (
         "src/transport/http/startup.rs",
