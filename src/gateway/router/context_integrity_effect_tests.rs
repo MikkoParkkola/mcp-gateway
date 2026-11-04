@@ -286,11 +286,25 @@ async fn an_inner_idempotency_replay_of_a_rewritten_answer_records_no_effect() {
         "the replay serves the stripped answer: {replay}"
     );
     assert_eq!(
-        served,
-        delivered_text(&first),
+        without_traces(&served),
+        without_traces(&delivered_text(&first)),
         "the replay serves the answer the first call stored"
     );
     for field in ["response_effect", "response_findings"] {
         assert!(replay_row.get(field).is_none(), "{field}: {replay_row}");
     }
+}
+
+/// `text` without the gateway's per-call trace ids (`_trace_id`, `gw-` and a
+/// UUID), which every answer carries with its own value.
+fn without_traces(text: &str) -> String {
+    const TRACE_LEN: usize = "gw-".len() + 36;
+    let mut out = String::new();
+    let mut rest = text;
+    while let Some(at) = rest.find("gw-") {
+        out.push_str(&rest[..at]);
+        rest = rest.get(at + TRACE_LEN..).unwrap_or_default();
+    }
+    out.push_str(rest);
+    out
 }
