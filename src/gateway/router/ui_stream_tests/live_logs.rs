@@ -289,11 +289,15 @@ async fn r1_a_gone_cursor_resets_then_replays_the_log_from_its_oldest_record() {
     drop(s);
     // The same counter with a hash no record has: the cursor's row is gone.
     let counter = inv_counter(&first);
-    let stale = id.replace(
+    let wrong_id = id.replace(
         &first.part('i').unwrap(),
         &format!("{counter}-ffffffffffffffff"),
     );
-    let mut again = open(&state, request(STREAM, Who::Bearer(BEARER), Some(&stale))).await;
+    let mut again = open(
+        &state,
+        request(STREAM, Who::Bearer(BEARER), Some(&wrong_id)),
+    )
+    .await;
     within(again.until("hello")).await;
     let reset = within(again.until("reset")).await;
     assert_eq!(reset.json()["kind"], "activity");
@@ -308,25 +312,43 @@ async fn r1_a_gone_cursor_resets_then_replays_the_log_from_its_oldest_record() {
 }
 
 #[tokio::test]
-async fn f7_the_activity_stream_never_carries_a_config_record_from_its_log() {
+async fn f7_a_config_change_is_a_config_event_and_never_an_activity_one() {
     let (state, _dirs, inv) = logged(true).await;
     let mut s = open(&state, request(STREAM, Who::Bearer(BEARER), None)).await;
     within(s.until("hello")).await;
-    // A well-formed config record in the invocation log, then a call.
-    inv.append_event(
-        serde_json::json!({"kind": "config", "change": 1})
+    state
+        .governance_log
+        .as_ref()
+        .unwrap()
+        .append_event(
+            serde_json::json!({"kind": "control_plane_audit", "actor_id": "alice",
+                               "target_id": "backend:alpha", "action": "mutate_grant"})
             .as_object()
             .cloned()
             .unwrap(),
-        &crate::security::audit::AuditEnvelope::gateway(),
-    )
-    .unwrap();
+            &crate::security::audit::AuditEnvelope::gateway(),
+        )
+        .unwrap();
     call(&inv, "srv", 1);
-    let event = within(s.until("activity")).await;
+    let (mut config, mut activity) = (Vec::new(), Vec::new());
+    within(async {
+        while config.is_empty() || activity.is_empty() {
+            let f = s.next().await.expect("the stream is still open");
+            match f.event.as_str() {
+                "config" => config.push(f.data),
+                "activity" => activity.push(f.data),
+                _ => {}
+            }
+        }
+    })
+    .await;
     assert!(
-        event.data.contains("tool_1"),
-        "the first activity frame is the call, not the config record: {}",
-        event.data
+        config[0].contains("mutate_grant"),
+        "the change is a config event: {config:?}"
+    );
+    assert!(
+        activity.iter().all(|d| !d.contains("mutate_grant")) && activity[0].contains("tool_1"),
+        "the call is the activity event, the change never is: {activity:?}"
     );
 }
 
