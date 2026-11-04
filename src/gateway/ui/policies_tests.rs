@@ -300,8 +300,11 @@ fn r1e_coverage_agrees_with_the_real_matcher() {
             let full = row["overridden_by"].as_array().expect("full").len() == 1;
             let part = row["partly_overridden_by"].as_array().expect("part").len() == 1;
             let (mut both, mut deny_only) = (false, false);
-            for s in SERVERS {
-                for t in TOOLS {
+            // Every name in both roles: a server named like a tool prefix
+            // (server `b`, tool `run`: `b:run` starts with `b`) is a pair too.
+            let names: Vec<&str> = SERVERS.iter().chain(TOOLS.iter()).copied().collect();
+            for &s in &names {
+                for &t in &names {
                     if matches(deny, s, t) {
                         if matches(allow, s, t) {
                             both = true;
