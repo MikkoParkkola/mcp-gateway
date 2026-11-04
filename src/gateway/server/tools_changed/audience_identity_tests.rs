@@ -101,7 +101,7 @@ fn agent_a_grant() -> crate::identity_grants::LocalIdentityGrantStore {
         GrantAgent, GrantAgentKey, GrantScope, GrantSubject, IdentityGrant,
     };
     use crate::security::ProofSource;
-    let alice = GrantSubject::new(adapter_authority(), "alice", None);
+    let alice = GrantSubject::for_test(adapter_authority(), "alice", None);
     crate::identity_grants::LocalIdentityGrantStore::from_grants([IdentityGrant {
         grant_id: "g-agent-a".to_string(),
         subject: alice.clone(),

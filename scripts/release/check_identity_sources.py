@@ -31,12 +31,29 @@ import re
 import sys
 from pathlib import Path
 
+# `GrantSubject::new` is the fallible constructor (names_someone), so each
+# production call is checked; each site stays listed until this rule is
+# retired.
+NEW_IS_CHECKED = "new is the checked constructor (names_someone)"
+
 # (file, enclosing fn, construct) -> why it may build an identity directly.
 ALLOWED = {
     ("src/key_server/oidc_identity.rs", "checked", "VerifiedIdentity {"): "the checked constructor",
-    ("src/identity_grants.rs", "new", "GrantSubject {"): "the one literal; `checked` wraps it",
-    ("src/identity_grants.rs", "checked", "GrantSubject::new("): "the checked constructor",
+    ("src/identity_grants/subject.rs", "new", "GrantSubject {"): "the one literal, in the checked constructor",
     ("src/mtls/identity/cert.rs", "parse", "CertIdentity {"): "the production parser; `from_der` refuses what it builds when it names no one",
+    ("src/decisions/mod.rs", "access_key", "GrantSubject::new("): NEW_IS_CHECKED,
+    ("src/decisions/mod.rs", "covered", "GrantSubject::new("): NEW_IS_CHECKED,
+    ("src/decisions/mod.rs", "denial_from_record", "GrantSubject::new("): NEW_IS_CHECKED,
+    ("src/gateway/meta_mcp/invoke/budget.rs", "grant_subject_from_api_key", "GrantSubject::new("): NEW_IS_CHECKED,
+    ("src/gateway/router/identity.rs", "grant_subject_from_cert_identity", "GrantSubject::new("): NEW_IS_CHECKED,
+    ("src/gateway/router/identity.rs", "grant_subject_from_oauth_agent", "GrantSubject::new("): NEW_IS_CHECKED,
+    ("src/gateway/router/identity.rs", "grant_subject_from_verified_identity", "GrantSubject::new("): NEW_IS_CHECKED,
+    ("src/gateway/router/identity.rs", "trusted_proxy_identity", "GrantSubject::new("): NEW_IS_CHECKED,
+    ("src/gateway/ui/admin_audit.rs", "record_admin_action_as", "GrantSubject::new("): NEW_IS_CHECKED,
+    ("src/gateway/ui/admin_audit.rs", "recorded", "GrantSubject::new("): NEW_IS_CHECKED,
+    ("src/gateway/ui/events.rs", "admitted", "GrantSubject::new("): NEW_IS_CHECKED,
+    ("src/gateway/ui/tool_call.rs", "via_label", "GrantSubject::new("): NEW_IS_CHECKED,
+    ("src/identity_grants/subject.rs", "try_from", "GrantSubject::new("): NEW_IS_CHECKED,
 }
 # Grant-file RULE targets (operator input, not a caller identity): the CLI is
 # the binary crate and cannot see the crate-internal `checked`.

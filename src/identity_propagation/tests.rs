@@ -331,7 +331,7 @@ fn c7_the_prefix_matches_by_starts_with_and_never_by_containment() {
 #[test]
 fn c8_a_non_issuer_authority_yields_no_prefix_at_all() {
     for authority in ["mtls", "agent_oauth", "trusted_header"] {
-        let subject = GrantSubject::new(authority.to_string(), "alice".to_string(), None);
+        let subject = GrantSubject::for_test(authority.to_string(), "alice".to_string(), None);
         assert!(
             identity_binding_prefix(&subject).is_none(),
             "C8: authority {authority:?} must SKIP, never fall through to a match"

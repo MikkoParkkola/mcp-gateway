@@ -563,7 +563,7 @@ async fn nameless_certificates_never_share_a_cached_personal_result() {
     // Each owner holds an execute grant for its own probe, as an operator
     // would write them.
     let grant = |id: &str, subject: &str, capability: &str| {
-        let subject = crate::identity_grants::GrantSubject::new("mtls", subject, None);
+        let subject = crate::identity_grants::GrantSubject::for_test("mtls", subject, None);
         crate::identity_grants::IdentityGrant {
             grant_id: id.to_owned(),
             subject: subject.clone(),

@@ -37,7 +37,7 @@ use crate::identity_grants::{GrantAgent, GrantScope, GrantSubject, IdentityGrant
 fn grant_row(grant_id: &str, subject: &str, scope: GrantScope) -> IdentityGrant {
     IdentityGrant {
         grant_id: grant_id.to_string(),
-        subject: GrantSubject::new(ISSUER.to_string(), subject.to_string(), None),
+        subject: GrantSubject::for_test(ISSUER.to_string(), subject.to_string(), None),
         agent: GrantAgent::Any,
         capability: "cal".to_string(),
         tool: None,

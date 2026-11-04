@@ -25,59 +25,10 @@ pub const DEFAULT_GRANT_LEASE_SECONDS: i64 = 60 * 60;
 /// Maximum recommendation lease duration for local grants.
 pub const MAX_GRANT_LEASE_SECONDS: i64 = 24 * 60 * 60;
 
-/// Stable subject identity used by grant evaluation.
-///
-/// Equality is `(authority, subject)` only; see `identity_grants_matching.rs`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct GrantSubject {
-    /// Identity authority, such as an issuer URL or local authority name.
-    pub authority: String,
-    /// Stable subject identifier inside the authority namespace.
-    pub subject: String,
-    /// Optional operator-facing label. Display only: never part of identity.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub label: Option<String>,
-}
-
-impl GrantSubject {
-    /// Create a new grant subject.
-    #[must_use]
-    pub fn new(
-        authority: impl Into<String>,
-        subject: impl Into<String>,
-        label: Option<String>,
-    ) -> Self {
-        Self {
-            authority: authority.into(),
-            subject: subject.into(),
-            label,
-        }
-    }
-
-    /// The only way production code builds a CALLER's grant subject
-    /// (MIK-8286): `None` when the authority or the subject is empty, since
-    /// such a subject names nobody and every key built from it would merge
-    /// all such callers. Grant-file rule targets are not caller identities
-    /// and keep [`GrantSubject::new`]; `scripts/release/check_identity_sources.py`
-    /// counts every production `new` call outside this one.
-    pub(crate) fn checked(
-        authority: impl Into<String>,
-        subject: impl Into<String>,
-        label: Option<String>,
-    ) -> Option<Self> {
-        let (authority, subject) = (authority.into(), subject.into());
-        names_someone(&authority, &subject).then(|| Self::new(authority, subject, label))
-    }
-}
-
-/// Whether an (authority, subject) pair names someone: both non-empty,
-/// compared raw (verified bytes are never trimmed). The one predicate every
-/// caller-identity source applies (MIK-8286). It does not judge names: a
-/// subject literally spelled like a placeholder still names someone, so the
-/// certificate refusal is its own check (`CertIdentity::subject_id`).
-pub(crate) fn names_someone(authority: &str, subject: &str) -> bool {
-    !authority.is_empty() && !subject.is_empty()
-}
+mod raw_file;
+mod subject;
+pub(crate) use subject::names_someone;
+pub use subject::{EmptyIdentity, GrantSubject};
 
 /// Grant authorities the gateway mints itself, so no external identity
 /// source may claim them (MIK-8518): read by the trusted-proxy guard and by
@@ -168,13 +119,15 @@ pub struct IdentityGrant {
 }
 
 /// Local JSON/YAML grant file loaded by free/core deployments.
+///
+/// Read through [`raw_file`], which names every row whose subject or owner
+/// names no one in one refusal.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(try_from = "raw_file::RawGrantFile")]
 pub struct IdentityGrantFile {
     /// Grant-file schema version.
-    #[serde(default = "default_identity_grants_file_schema_version")]
     pub schema_version: String,
     /// Durable local grant rows.
-    #[serde(default)]
     pub grants: Vec<IdentityGrant>,
 }
 
@@ -687,6 +640,9 @@ pub struct LocalIdentityGrantStore {
     grants: BTreeMap<String, IdentityGrant>,
 }
 
+#[cfg(test)]
+#[path = "identity_grants_subject_tests.rs"]
+mod subject_tests;
 #[cfg(test)]
 #[path = "identity_grants_tests.rs"]
 mod tests;

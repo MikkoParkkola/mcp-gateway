@@ -39,7 +39,7 @@ async fn resolve(
 }
 
 fn subject_pair(subject: Option<GrantSubject>) -> Option<(String, String)> {
-    subject.map(|s| (s.authority, s.subject))
+    subject.map(|s| (s.authority().to_owned(), s.subject().to_owned()))
 }
 
 fn verified_oidc() -> VerifiedIdentity {
@@ -295,7 +295,10 @@ async fn cf_mode_ignores_user_id_header_for_subject() {
         (HEADER_CF_ACCESS_USER_ID, "u2"),
     ]);
     let subject = resolve(&h, Some(peer(OUTSIDER)), &access_mode(), Some(&verifier)).await;
-    assert_eq!(subject.unwrap().map(|s| s.subject).as_deref(), Some("u1"));
+    assert_eq!(
+        subject.unwrap().map(|s| s.subject().to_owned()).as_deref(),
+        Some("u1")
+    );
 }
 
 /// A8-T14: an assertion issued two hours ago and still unexpired is
@@ -307,7 +310,10 @@ async fn aged_unexpired_access_assertion_is_accepted() {
     let jwt = idp.sign(&access_claims("u1", AUD, 7200, 3600));
     let h = headers(&[(HEADER_CF_ACCESS_JWT, jwt.as_str())]);
     let subject = resolve(&h, Some(peer(OUTSIDER)), &access_mode(), Some(&verifier)).await;
-    assert_eq!(subject.unwrap().map(|s| s.subject).as_deref(), Some("u1"));
+    assert_eq!(
+        subject.unwrap().map(|s| s.subject().to_owned()).as_deref(),
+        Some("u1")
+    );
 }
 
 /// Access-shaped claims with Cloudflare's usual extra fields; `custom`
@@ -343,7 +349,7 @@ async fn realistic_size_access_assertion_is_accepted() {
     let h = headers(&[(HEADER_CF_ACCESS_JWT, jwt.as_str())]);
     let subject = resolve(&h, Some(peer(OUTSIDER)), &access_mode(), Some(&verifier)).await;
     assert_eq!(
-        subject.unwrap().map(|s| s.subject).as_deref(),
+        subject.unwrap().map(|s| s.subject().to_owned()).as_deref(),
         Some("7335d417-61da-459d-899c-0a01c76a2f94")
     );
 }
@@ -504,7 +510,10 @@ async fn documented_caller_identity_examples_load_and_resolve() {
     let subject = resolve(&h, Some(peer(&peer_ip)), proxy, None)
         .await
         .unwrap();
-    assert_eq!(subject, Some(GrantSubject::new("corp-sso", "alice", None)));
+    assert_eq!(
+        subject,
+        Some(GrantSubject::for_test("corp-sso", "alice", None))
+    );
 }
 
 /// Strip the indent a list-nested fenced block carries.
@@ -563,8 +572,8 @@ fn oauth_agent_grant_subject_keeps_padding() {
         raw_scopes: Vec::new(),
     };
     let subject = grant_subject_from_oauth_agent(&identity).expect("non-empty sub");
-    assert_eq!(subject.subject, " admin ");
-    assert_eq!(subject.label.as_deref(), Some("Admin"));
+    assert_eq!(subject.subject(), " admin ");
+    assert_eq!(subject.label(), Some("Admin"));
     assert_eq!(
         grant_subject_from_oauth_agent(&OAuthAgentIdentity {
             client_id: String::new(),

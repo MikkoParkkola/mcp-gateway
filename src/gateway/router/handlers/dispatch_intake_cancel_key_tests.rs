@@ -29,7 +29,7 @@ fn certificates_naming_no_subject_never_share_a_cancel_owner() {
         display_name: "<unknown>".to_owned(),
         ..Default::default()
     });
-    let shown = GrantSubject::new("mtls", "<unknown>", None);
+    let shown = GrantSubject::for_test("mtls", "<unknown>", None);
     let (one, two) = (credential("k1"), credential("k2"));
     let key = |client| mcp_cancel_key((Some(&shown), Some(&cert), client), "", &json!(7));
     assert_ne!(

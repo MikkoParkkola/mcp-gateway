@@ -544,10 +544,8 @@ async fn a4_a_shared_key_still_separates_callers_the_guard_separates() {
         Some("2026-07-28"),
     )
     .declared_capabilities();
-    let subject = |name: &str| crate::identity_grants::GrantSubject {
-        authority: "mtls".to_string(),
-        subject: name.to_string(),
-        label: None,
+    let subject = |name: &str| {
+        crate::identity_grants::GrantSubject::for_test("mtls".to_string(), name.to_string(), None)
     };
     let (alice, bob) = (Some(subject("alice")), Some(subject("bob")));
     let caller = |grant: &Option<crate::identity_grants::GrantSubject>,
