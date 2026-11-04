@@ -205,3 +205,151 @@ fn h2_rotation_and_a_rebuild_that_finds_the_counter_in_place_do_not_raise_it() {
     assert!(!told.is_empty());
     assert!(told.iter().all(|t| t.2 == 0), "no raise: {told:?}");
 }
+
+/// Every announced record is on disk exactly as announced, once, and no
+/// counter is announced twice.
+fn assert_announced_as_persisted(path: &Path, told: &Told) {
+    let on_disk: Vec<Map<String, Value>> = super::super::segments::list_segments(path)
+        .unwrap()
+        .iter()
+        .flat_map(|s| records(&s.path))
+        .chain(records(path))
+        .collect();
+    let told = told.lock().unwrap();
+    for (record, counter, _) in told.iter() {
+        assert!(
+            on_disk.contains(record),
+            "announced record {counter} is not on disk as announced"
+        );
+    }
+    let mut counters: Vec<u64> = told.iter().map(|t| t.1).collect();
+    let n = counters.len();
+    counters.dedup();
+    assert_eq!(counters.len(), n, "a counter announced twice");
+}
+
+#[test]
+fn h1_a_failed_sync_is_never_announced_and_the_next_write_is() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = log_path(&dir);
+    let log = TransparencyLogger::open(cfg(&path, 12, false)).unwrap();
+    let told = listen(&log);
+    log.arm_write_fault(Some(WriteFault::SyncError));
+    assert!(
+        log.append_event_synced(
+            event(json!({"kind": "config", "change": 1})),
+            &AuditEnvelope::gateway()
+        )
+        .is_err(),
+        "the sync fault fires"
+    );
+    log.append_event_synced(
+        event(json!({"kind": "config", "change": 2})),
+        &AuditEnvelope::gateway(),
+    )
+    .unwrap();
+    let changes: Vec<u64> = told
+        .lock()
+        .unwrap()
+        .iter()
+        .filter_map(|t| t.0.get("change").and_then(Value::as_u64))
+        .collect();
+    assert_eq!(changes, vec![2], "only the write whose sync succeeded");
+    assert_announced_as_persisted(&path, &told);
+}
+
+#[test]
+fn h1_a_disk_full_retry_is_announced_once_behind_its_expiry_record() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = log_path(&dir);
+    let log = TransparencyLogger::open(cfg(&path, 12, false)).unwrap();
+    rotate_n(&log, &path, 1);
+    let told = listen(&log);
+    log.arm_write_fault(Some(WriteFault::FullUntilReserveFreed));
+    append(&log, 1);
+    log.arm_write_fault(None);
+    let told_now = told.lock().unwrap().clone();
+    let events: Vec<Option<String>> = told_now
+        .iter()
+        .map(|t| t.0.get("event").and_then(Value::as_str).map(str::to_owned))
+        .collect();
+    let expiry = events
+        .iter()
+        .position(|e| e.as_deref() == Some(EV_EXPIRED))
+        .expect("the expiry record is announced");
+    assert_eq!(
+        told_now.len(),
+        expiry + 2,
+        "the retried call follows it, once"
+    );
+    assert_announced_as_persisted(&path, &told);
+}
+
+#[test]
+fn h2_a_same_counter_fork_raises_the_generation() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = log_path(&dir);
+    let log = TransparencyLogger::open(cfg(&path, 12, false)).unwrap();
+    let told = listen(&log);
+    for i in 0..3 {
+        append(&log, i);
+    }
+    // Another log of the same length and a different history.
+    let other_dir = tempfile::tempdir().unwrap();
+    let other_path = log_path(&other_dir);
+    let other = TransparencyLogger::open(cfg(&other_path, 12, false)).unwrap();
+    for i in 10..13 {
+        append(&other, i);
+    }
+    drop(other);
+    std::fs::remove_file(&path).unwrap();
+    std::fs::copy(&other_path, &path).unwrap();
+    append(&log, 3);
+    let told = told.lock().unwrap();
+    assert!(
+        told.last().unwrap().2 > 0,
+        "the fork raised the generation: {told:?}"
+    );
+}
+
+#[test]
+fn h2_a_new_segment_cut_after_a_rotation_raises_the_generation() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = log_path(&dir);
+    let log = TransparencyLogger::open(cfg(&path, 12, false)).unwrap();
+    let told = listen(&log);
+    rotate_n(&log, &path, 1);
+    append(&log, 100);
+    let len = std::fs::metadata(&path).unwrap().len();
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(&path)
+        .unwrap()
+        .set_len(len / 2)
+        .unwrap();
+    append(&log, 101);
+    assert!(told.lock().unwrap().last().unwrap().2 > 0);
+}
+
+#[test]
+fn h2_a_file_cut_after_subscribing_and_before_any_append_raises_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = log_path(&dir);
+    {
+        let first = TransparencyLogger::open(cfg(&path, 12, false)).unwrap();
+        for i in 0..3 {
+            append(&first, i);
+        }
+    }
+    let log = TransparencyLogger::open(cfg(&path, 12, false)).unwrap();
+    let told = listen(&log);
+    let len = std::fs::metadata(&path).unwrap().len();
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(&path)
+        .unwrap()
+        .set_len(len / 2)
+        .unwrap();
+    append(&log, 3);
+    assert!(told.lock().unwrap().last().unwrap().2 > 0);
+}
