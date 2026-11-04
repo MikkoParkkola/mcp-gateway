@@ -509,6 +509,9 @@ async fn a1g_a_demotion_during_a_catch_up_sends_no_more_of_its_page() {
     )
     .await;
     within(again.until("hello")).await;
+    // The first catch-up row: the stream is now inside its first page, past
+    // the check before it, with the rest of that page still to send.
+    within(again.until("activity")).await;
     state.live_config.edit(|c| c.auth = auth(&["a"]));
     let published = state.live_config.get();
     let key = published
@@ -518,7 +521,8 @@ async fn a1g_a_demotion_during_a_catch_up_sends_no_more_of_its_page() {
         .find(|k| k.name == SCOPED_ADMIN)
         .expect("the reload publishes the scoped key");
     assert_eq!(key.backends, vec!["a".to_string()], "the key is narrowed");
-    // The stream holds one unread frame; every later frame is checked first.
+    // The stream holds at most one more frame of the page; every later frame
+    // is checked before it is sent.
     let mut after = 0;
     while let Some(f) = within(again.next()).await {
         after += usize::from(f.event == "activity");

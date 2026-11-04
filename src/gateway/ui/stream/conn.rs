@@ -190,13 +190,16 @@ async fn merges(conn: &Conn, resume: Option<&LogCursor>) -> [Option<Merge>; 2] {
     let Some(access) = conn.access.clone() else {
         return out;
     };
-    let paths = [
-        conn.state.transparency_log.as_ref().map(|l| l.path()),
-        conn.state.governance_log.as_ref().map(|l| l.path()),
-    ];
+    let paths = advertised(
+        &conn.kinds,
+        [
+            conn.state.transparency_log.as_ref().map(|l| l.path()),
+            conn.state.governance_log.as_ref().map(|l| l.path()),
+        ],
+    );
     let kinds = [StreamKind::Activity, StreamKind::Config];
     for (i, path) in paths.into_iter().enumerate() {
-        let Some(path) = path.filter(|_| conn.kinds.contains(&LOG_KINDS[i])) else {
+        let Some(path) = path else {
             continue;
         };
         let source = Arc::new(ActivitySource::new(Arc::clone(&conn.state), kinds[i], path));
@@ -213,6 +216,17 @@ async fn merges(conn: &Conn, resume: Option<&LogCursor>) -> [Option<Merge>; 2] {
         out[i] = Some(LogMerge::connect(source, access.clone(), half).await);
     }
     out
+}
+
+/// Each log, kept only where the connection advertised its kind: a log the
+/// caller was not offered gets no merge, whatever its access would admit.
+/// The first guard of a scoped admin's config: its access admits no config
+/// row either, so no stream row can see this one alone.
+fn advertised<T>(kinds: &[&str], [inv, gov]: [Option<T>; 2]) -> [Option<T>; 2] {
+    [
+        inv.filter(|_| kinds.contains(&LOG_KINDS[0])),
+        gov.filter(|_| kinds.contains(&LOG_KINDS[1])),
+    ]
 }
 
 /// What the connection has delivered across both logs.
@@ -364,3 +378,7 @@ async fn first_snapshot(
         }
     }
 }
+
+#[cfg(test)]
+#[path = "conn_tests.rs"]
+mod tests;
