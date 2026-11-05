@@ -7,6 +7,7 @@
 use super::*;
 
 const ALL: &str = "u3-admin-every-backend";
+const EMPTY: &str = "u3-admin-no-backends";
 const SCOPED: &str = "u3-admin-docs-only";
 
 fn admin_key(key: &str, backends: &[&str]) -> ApiKeyConfig {
@@ -21,7 +22,8 @@ fn admin_key(key: &str, backends: &[&str]) -> ApiKeyConfig {
 }
 
 /// The first `hello` and `status` frames `key` is sent: whether `reload` is
-/// offered, and whether the status is the full view with every server's row.
+/// offered, and whether the status is the full view, a `servers` list naming
+/// `docs`. Either view carries the counts.
 async fn admin_parts(state: &Arc<AppState>, key: &str) -> (bool, bool) {
     let mut s = open(state, request(STREAM, Who::Bearer(key), None)).await;
     assert_eq!(s.status, StatusCode::OK, "{key} opens the stream");
@@ -31,7 +33,27 @@ async fn admin_parts(state: &Arc<AppState>, key: &str) -> (bool, bool) {
         .expect("hello names its kinds")
         .iter()
         .any(|k| k == "reload");
-    let full = s.until("status").await.json().get("servers").is_some();
+    let status = s.until("status").await.json();
+    assert!(
+        status["server_count"].is_u64(),
+        "{key}: the status carries its counts: {status}"
+    );
+    let full = match status.get("servers") {
+        None => false,
+        Some(servers) => {
+            let names: Vec<&str> = servers
+                .as_array()
+                .expect("a servers list")
+                .iter()
+                .filter_map(|s| s["name"].as_str())
+                .collect();
+            assert!(
+                names.contains(&"docs"),
+                "{key}: the full view names docs: {status}"
+            );
+            true
+        }
+    };
     (reload, full)
 }
 
@@ -39,7 +61,12 @@ async fn admin_parts(state: &Arc<AppState>, key: &str) -> (bool, bool) {
 async fn the_stream_gives_a_backend_scoped_admin_no_admin_view() {
     let auth = AuthConfig {
         enabled: true,
-        api_keys: vec![admin_key(ALL, &["*"]), admin_key(SCOPED, &["docs"])],
+        api_keys: vec![
+            admin_key(ALL, &["*"]),
+            admin_key(EMPTY, &[]),
+            admin_key(SCOPED, &["docs"]),
+            standard_key(),
+        ],
         ..AuthConfig::default()
     };
     let (state, _dir) = test_router_app_state_with_auth_and_key_server(&auth, None).await;
@@ -53,8 +80,18 @@ async fn the_stream_gives_a_backend_scoped_admin_no_admin_view() {
         "control: an admin key holding every backend gets reload and the full view"
     );
     assert_eq!(
+        admin_parts(&state, EMPTY).await,
+        (true, true),
+        "an admin key with no backends is a gateway-wide admin"
+    );
+    assert_eq!(
         admin_parts(&state, SCOPED).await,
         (false, false),
         "an admin key scoped to docs gets neither reload nor the full view"
+    );
+    assert_eq!(
+        admin_parts(&state, KEY).await,
+        (false, false),
+        "a standard key gets neither"
     );
 }
