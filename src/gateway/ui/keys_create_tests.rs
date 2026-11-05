@@ -4,9 +4,12 @@
 //! secret handed out once, the intent and admin records, and the source
 //! pins that keep the secret out of the writer.
 
+use std::sync::Arc;
+
 use axum::http::StatusCode;
 use serde_json::{Value, json};
 
+use super::keys_create::BeforeLock;
 use super::keys_create_fixture_tests::{
     Call, Fixture, KNOWN, Setup, admin_client, item, root_item, spec, yaml_of,
 };
@@ -62,7 +65,6 @@ fn p1_a_full_body_writes_the_entry_and_answers_the_secret_once() {
         (entry["name"].clone(), entry["live"].clone()),
         (json!("alpha"), json!(true))
     );
-    fx.assert_leak_free(&sent, KNOWN);
 }
 
 /// P0: the real generator, no seam: two creates, two distinct 49-character
@@ -89,7 +91,6 @@ fn p0_the_real_generator_hands_out_distinct_working_secrets() {
                 .validate_token(&secret)
                 .is_some()
         );
-        fx.assert_leak_free(&sent, &secret);
         secrets.push(secret);
     }
     assert_ne!(secrets[0], secrets[1]);
@@ -187,7 +188,6 @@ fn p12_the_admin_action_record_names_the_key_and_the_action() {
         (&ours[0]["key"], &ours[0]["action"]),
         (&json!("noted"), &json!("create"))
     );
-    fx.assert_leak_free(&sent, KNOWN);
 }
 
 /// Two keys already: the new one lands after both and the others stay.
@@ -258,4 +258,23 @@ fn the_test_seams_are_compiled_out_of_production() {
     for seam in ["KnownSecret", "BeforeLock"] {
         assert!(raw.contains(seam) && !code.contains(seam), "{seam}");
     }
+}
+
+/// L1: a log line written inside `spawn_blocking` during a POST is captured,
+/// so a secret logged by the blocking loader cannot escape the leak check.
+#[test]
+fn l1_the_capture_sees_a_blocking_thread() {
+    let fx = Fixture::new(Setup::default());
+    let mut call = Call::new(&fx.body("watched"));
+    call.before_lock = Some(BeforeLock(Arc::new(|| {
+        let (done, waited) = std::sync::mpsc::channel();
+        tokio::task::spawn_blocking(move || {
+            tracing::warn!("zq-blocking-marker");
+            done.send(()).expect("the waiter lives");
+        });
+        waited.recv().expect("the blocking task ran");
+    })));
+    let sent = fx.post(call);
+    assert_eq!(sent.status, StatusCode::CREATED, "{}", sent.body);
+    assert!(sent.logs.contains("zq-blocking-marker"), "{}", sent.logs);
 }

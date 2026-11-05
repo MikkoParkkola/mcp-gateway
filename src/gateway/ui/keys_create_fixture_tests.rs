@@ -5,7 +5,7 @@
 //! that captures the answer, the log lines and (for the leak grep) every
 //! place a secret could land.
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use axum::body::{Body, to_bytes};
@@ -90,6 +90,8 @@ pub(super) struct Sent {
     pub(super) status: StatusCode,
     pub(super) cache_control: Option<String>,
     pub(super) body: String,
+    /// Every response header, name and value.
+    pub(super) headers: Vec<(String, String)>,
     pub(super) logs: String,
 }
 
@@ -131,8 +133,50 @@ pub(super) fn admin_client() -> AuthenticatedClient {
     }
 }
 
+/// The bytes of every JSON log record the fixture's threads wrote.
+#[derive(Clone, Default)]
+struct Capture(Arc<Mutex<Vec<u8>>>);
+
+impl std::io::Write for Capture {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+thread_local! {
+    /// The capture subscriber a runtime thread installed when it started.
+    static THREAD_CAPTURE: std::cell::RefCell<Option<tracing::dispatcher::DefaultGuard>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// A runtime whose every thread (the blocking loader's and the writer's
+/// task included) logs into `dispatch`.
+fn capturing_runtime(dispatch: &tracing::Dispatch) -> tokio::runtime::Runtime {
+    let dispatch = dispatch.clone();
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .on_thread_start(move || {
+            let guard = tracing::dispatcher::set_default(&dispatch);
+            THREAD_CAPTURE.with(|slot| *slot.borrow_mut() = Some(guard));
+        })
+        .build()
+        .expect("runtime")
+}
+
 pub(super) struct Fixture {
     pub(super) rt: tokio::runtime::Runtime,
+    capture: Capture,
+    dispatch: tracing::Dispatch,
+    /// Whether gateway.yaml exists: its absence is the expected state when not.
+    has_file: bool,
     pub(super) dir: tempfile::TempDir,
     _store: crate::gateway::router::tests::FixtureDir,
     pub(super) state: Arc<AppState>,
@@ -141,10 +185,19 @@ pub(super) struct Fixture {
 
 impl Fixture {
     pub(super) fn new(setup: Setup) -> Self {
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .expect("runtime");
+        crate::test_log_capture::keep_interest_open();
+        let capture = Capture::default();
+        let writer = capture.clone();
+        let dispatch = tracing::Dispatch::new(
+            tracing_subscriber::fmt()
+                .json()
+                .without_time()
+                .with_ansi(false)
+                .with_max_level(tracing::Level::TRACE)
+                .with_writer(move || writer.clone())
+                .finish(),
+        );
+        let rt = capturing_runtime(&dispatch);
         let dir = tempfile::tempdir().expect("dir");
         let path = dir.path().join("gateway.yaml");
         if setup.file {
@@ -187,6 +240,9 @@ impl Fixture {
         }
         Self {
             rt,
+            capture,
+            dispatch,
+            has_file: setup.file,
             dir,
             _store: store,
             state,
@@ -269,23 +325,35 @@ impl Fixture {
             .get("cache-control")
             .and_then(|v| v.to_str().ok())
             .map(str::to_owned);
+        let headers = response
+            .headers()
+            .iter()
+            .map(|(k, v)| (k.to_string(), String::from_utf8_lossy(v.as_bytes()).into()))
+            .collect();
         let bytes = to_bytes(response.into_body(), 1 << 16).await.expect("body");
         Sent {
             status,
             cache_control,
+            headers,
             body: String::from_utf8_lossy(&bytes).into_owned(),
             logs: String::new(),
         }
     }
 
-    /// `send`, capturing the log records written on this thread.
+    /// `send`, capturing the log records of every thread the request
+    /// touches, then the shared leak check (L1): no row can skip it.
     pub(super) fn post(&self, call: Call) -> Sent {
-        let mut sent = None;
-        let logs = crate::test_log_capture::records(|| {
-            sent = Some(self.rt.block_on(self.send(call)));
-        });
-        let mut sent = sent.expect("the call ran");
-        sent.logs = serde_json::to_string(&logs).expect("logs");
+        let known = call.known.clone();
+        let asked = serde_json::from_str::<Value>(&call.body).unwrap_or(Value::Null);
+        self.capture.0.lock().expect("capture").clear();
+        let mut sent =
+            tracing::dispatcher::with_default(&self.dispatch, || self.rt.block_on(self.send(call)));
+        let bytes = self.capture.0.lock().expect("capture").clone();
+        sent.logs = String::from_utf8(bytes).expect("utf-8 log output");
+        let secret = known.or_else(|| sent.json()["secret"].as_str().map(str::to_owned));
+        if let Some(secret) = secret {
+            self.assert_leak_free(&sent, &secret, asked["name"].as_str());
+        }
         sent
     }
 
@@ -358,14 +426,26 @@ impl Fixture {
     /// nowhere but `key_sha256` of a written entry (a definite refusal holds
     /// no digest at all, the file included). Looks in the file, the answer,
     /// the captured log and the audit log.
-    pub(super) fn assert_leak_free(&self, sent: &Sent, secret: &str) {
+    fn assert_leak_free(&self, sent: &Sent, secret: &str, _name: Option<&str>) {
         let created = sent.status == StatusCode::CREATED;
+        let uncertain = sent.status == StatusCode::INTERNAL_SERVER_ERROR
+            && sent.json()["error"] == "state_uncertain";
         let digest = crate::config::parse_api_key_digest(&spec(secret)).expect("digest");
         let mut digests = spellings(&digest);
         digests.push(spec(secret));
         let file = self.text();
         let audit = self.audit_text();
-        for (place, text) in [("logs", &sent.logs), ("audit", &audit)] {
+        let headers = sent
+            .headers
+            .iter()
+            .map(|(k, v)| format!("{k}: {v}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        for (place, text) in [
+            ("logs", &sent.logs),
+            ("audit", &audit),
+            ("headers", &headers),
+        ] {
             assert!(!text.contains(secret), "the secret is in the {place}");
             for d in &digests {
                 assert!(
@@ -376,12 +456,12 @@ impl Fixture {
         }
         assert!(!file.contains(secret), "the secret is in the file");
         let spec_text = spec(secret);
-        let allowed = usize::from(created);
-        assert_eq!(
-            file.matches(spec_text.as_str()).count(),
-            allowed,
-            "digest spec in the file"
-        );
+        let in_file = file.matches(spec_text.as_str()).count();
+        if uncertain {
+            assert!(in_file <= 1, "digest spec in the file");
+        } else {
+            assert_eq!(in_file, usize::from(created), "digest spec in the file");
+        }
         let rest = file.replace(spec_text.as_str(), "");
         for d in &digests {
             assert!(

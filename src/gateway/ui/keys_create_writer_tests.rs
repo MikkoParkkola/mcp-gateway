@@ -20,7 +20,6 @@ fn injected(fx: &Fixture, answer: fn() -> Result<ReplaceOutcome, ReplaceError>) 
     let before = fx.bytes();
     let sent = fx.post(call);
     assert_eq!(fx.bytes(), before, "the file changed");
-    fx.assert_leak_free(&sent, KNOWN);
     sent
 }
 

@@ -24,7 +24,6 @@ fn refused(fx: &Fixture, body: &Value, status: StatusCode, code: &str) -> Value 
     assert_eq!(sent.status, status, "{}", sent.body);
     assert_eq!(sent.json()["error"], code, "{}", sent.body);
     assert_eq!(fx.bytes(), before, "the file changed");
-    fx.assert_leak_free(&sent, KNOWN);
     sent.json()
 }
 
@@ -53,7 +52,6 @@ fn p2_a_malformed_body_gets_fixed_text_that_does_not_echo() {
             sent.body
         );
         assert!(!sent.body.contains(CANARY), "{}", sent.body);
-        fx.assert_leak_free(&sent, KNOWN);
         texts.push(sent.body);
     }
     assert!(texts.windows(2).all(|w| w[0] == w[1]), "not one fixed text");
