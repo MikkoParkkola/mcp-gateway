@@ -168,13 +168,16 @@ pub(super) fn both(fx: &Fx, tool: &str, args: &Value) -> Seen {
         "id-1",
         sender.as_deref(),
     );
-    let rescanned = fx.fw.rescan(
-        fx.fw.startup_policy(),
-        target(tool),
-        args,
-        ScanSubject::Arguments,
-        sender.as_deref(),
-    );
+    let rescanned = fx
+        .fw
+        .rescan_attributed(
+            fx.fw.startup_policy(),
+            target(tool),
+            args,
+            ScanSubject::Arguments,
+            sender.as_deref(),
+        )
+        .0;
     let (a, r) = (seen(&admitted), seen(&rescanned));
     assert_eq!(a, r, "admission and rescan disagree on {args}");
     a

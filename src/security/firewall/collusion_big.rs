@@ -393,17 +393,11 @@ impl CollusionDetector {
     pub(crate) fn record_sampled_at(
         &self,
         (source, principal): (&str, &str),
-        (sensitive, flows): (bool, u64),
+        held: super::Held<'_>,
         (fps, cut, sample): super::Recorded<'_>,
         now: Instant,
     ) {
-        self.record_held_at(
-            source,
-            principal,
-            (sensitive, super::Flows::Any(flows)),
-            (fps, cut, sample),
-            now,
-        );
+        self.record_held_at(source, principal, held, (fps, cut, sample), now);
     }
 }
 

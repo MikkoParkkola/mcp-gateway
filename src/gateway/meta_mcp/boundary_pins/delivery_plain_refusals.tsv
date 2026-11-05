@@ -16,15 +16,15 @@ src/gateway/meta_mcp/invoke/dispatch.rs	refuse_name_clash	via ambiguous_backend	
 src/gateway/meta_mcp/invoke/dispatch_guards.rs	admit_after_credential	via withheld_as_undefined	1	recorded	src/gateway/meta_mcp/invoke/gate.rs::withheld_as_undefined
 src/gateway/meta_mcp/invoke/gate.rs	as_undefined_capability	Error::ToolNotFound(..)	1	feeds	the undefined twin of a rule refusal, returned to check_visible_policy's callers
 src/gateway/meta_mcp/invoke/gate.rs	check_call_level_policy	Error::Protocol(..)	1	not-a-decision	client-protocol rejection: an invalid tool name with an empty server or tool
-src/gateway/meta_mcp/invoke/gate.rs	check_visible_policy	via as_undefined_capability	1	recorded	src/gateway/meta_mcp/invoke/gate.rs::withheld_for
+src/gateway/meta_mcp/invoke/gate.rs	check_visible_policy_explained	via as_undefined_capability	1	recorded	src/gateway/meta_mcp/invoke/gate.rs::withheld_for
 src/gateway/meta_mcp/invoke/gate.rs	named_gate_answer	Error::ToolNotFound(..)	1	recorded	src/gateway/meta_mcp/invoke/gate.rs::withheld_for
 src/gateway/meta_mcp/invoke/gate.rs	profile_refusal_as_undefined	via profile_withheld_capability	1	feeds	returned to withheld_as_undefined, which raises withheld for it
 src/gateway/meta_mcp/invoke/gate.rs	profile_withheld_capability	Error::ToolNotFound(..)	1	feeds	returned up the chain to withheld_as_undefined, which raises withheld for it
 src/gateway/meta_mcp/invoke/gate.rs	withheld_as_undefined	Error::ToolNotFound (in macro)	1	not-delivered	predicate: a matches! pattern reads an error, builds none
 src/gateway/meta_mcp/invoke/gate.rs	withheld_as_undefined	via profile_refusal_as_undefined	1	recorded	src/gateway/meta_mcp/invoke/gate.rs::withheld_as_undefined
-src/gateway/meta_mcp/invoke/policy.rs	check_invocation_policy	Error::Protocol(..)	1	not-a-decision	client-protocol rejection: a malformed tool name
-src/gateway/meta_mcp/invoke/policy.rs	check_invocation_policy	Error::Protocol(..)	2	recorded	src/gateway/meta_mcp/invoke/gate.rs::withheld_for
-src/gateway/meta_mcp/invoke/policy.rs	check_invocation_policy	via withheld_as_undefined	1	recorded	src/gateway/meta_mcp/invoke/gate.rs::withheld_as_undefined
+src/gateway/meta_mcp/invoke/policy.rs	check_invocation_policy_explained	Error::Protocol(..)	1	not-a-decision	client-protocol rejection: a malformed tool name
+src/gateway/meta_mcp/invoke/policy.rs	check_invocation_policy_explained	Error::Protocol(..)	2	recorded	src/gateway/meta_mcp/invoke/gate.rs::withheld_for
+src/gateway/meta_mcp/invoke/policy.rs	check_invocation_policy_explained	via withheld_as_undefined	1	recorded	src/gateway/meta_mcp/invoke/gate.rs::withheld_as_undefined
 src/gateway/meta_mcp/invoke/policy.rs	record_absent_step	Error::BackendNotFound(..)	1	feeds	returned to resume_fingerprint, which raises withheld for an absent step
 src/gateway/meta_mcp/invoke/policy.rs	record_absent_step	Error::BackendNotFound(..)	2	feeds	returned to resume_fingerprint, which raises withheld for an absent step
 src/gateway/meta_mcp/invoke/post_dispatch.rs	settle_dispatch_error	Error::BackendNotFound,Error::ToolNotFound (in macro)	1	not-delivered	predicate: a matches! pattern reads an error, builds none
@@ -41,8 +41,9 @@ src/gateway/meta_mcp/invoke/propagation.rs	resolve_caller_credential_as	via refu
 src/gateway/meta_mcp/invoke/propagation.rs	resolve_caller_credential_as	via refuse (closure)	6	not-a-decision	configuration the operator has not finished, or a credential mint failure (the code's own note)
 src/gateway/meta_mcp/invoke/stored_proof.rs	unminted_refusal	Error::Config(..)	1	feeds	built by a refusal-named function the refusal scan classifies at each call
 src/gateway/meta_mcp/search.rs	list_tools_single_server	Error::BackendNotFound(..)	1	not-a-decision	a backend the caller may reach that the registry does not hold: a true absence
-src/gateway/meta_mcp/search.rs	list_tools_single_server	Error::BackendNotFound(..)	2	pending:inv2-credential-miss	the INV-2 credential miss answers absent with no raise
+src/gateway/meta_mcp/search.rs	list_tools_single_server	Error::BackendNotFound(..)	2	not-a-decision	the caller's credential did not resolve: a failed mint, not a decision about the caller
 src/gateway/meta_mcp/search.rs	list_tools_single_server	Error::BackendNotFound(..) wrapped	1	recorded	src/gateway/meta_mcp/search.rs::list_tools_single_server
+src/gateway/meta_mcp/search.rs	list_tools_single_server	Error::BackendNotFound(..) wrapped	2	recorded	src/gateway/meta_mcp/search.rs::list_tools_single_server
 src/gateway/meta_mcp/search.rs	parse_role_filter	Error::Protocol(..)	1	not-a-decision	client-protocol rejection: a malformed role filter argument
 src/gateway/meta_mcp/search.rs	parse_role_filter	Error::Protocol(..)	2	not-a-decision	client-protocol rejection: a malformed role filter argument
 src/gateway/meta_mcp/search/chain_exec.rs	resume_fingerprint	via record_absent_step	1	recorded	src/gateway/meta_mcp/search/chain_exec.rs::resume_fingerprint

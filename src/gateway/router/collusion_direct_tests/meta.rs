@@ -32,6 +32,8 @@ async fn meta_fixture_with(
         meta.share_keyring_with_for_test(firewall);
     }
     meta.set_firewall(st.firewall.clone());
+    // The Meta-MCP reads the router's live config, as startup wires it.
+    meta.set_live_config(Arc::clone(&st.live_config));
     meta.enable_idempotency(Arc::new(IdempotencyCache::new()), Duration::from_secs(300));
     st.meta_mcp = Arc::new(configure(meta));
     fx
@@ -547,6 +549,8 @@ async fn meta_grant_decision_failure_leaves_no_receipt() {
 mod chain_key;
 #[path = "meta/hidden_provider.rs"]
 mod hidden_provider;
+#[path = "meta/live_recording.rs"]
+mod live_recording;
 #[path = "meta/withheld.rs"]
 mod withheld;
 #[path = "meta/writes.rs"]

@@ -105,7 +105,7 @@ async fn t4_an_empty_commit_removes_the_entry_with_relay_detection_off() {
     );
     collecting(async {
         note_task_capture(stored.task.id().to_owned(), stored.revision, None);
-        commit_with(&off, true);
+        commit_with(&off, true, &off.paired_generation_for_test());
     })
     .await;
     assert!(

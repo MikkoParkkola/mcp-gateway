@@ -45,7 +45,8 @@ async fn a_hidden_malformed_name_is_refused_and_audited_as_the_authorizer_refuse
 
     // The twin: what the policy this call skipped answers for the same name.
     let by_policy = meta
-        .authorize_invocation(&arguments, &caller)
+        .authorize_target_explained(&arguments, ("alpha", "bad/tool"), &caller)
+        .map_err(|(error, _)| error)
         .expect_err("the authorizer refuses a malformed name");
 
     let buffer = Buffer::default();

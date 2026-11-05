@@ -13,9 +13,19 @@ use crate::gateway::meta_mcp::MetaMcp;
 /// request route stage's.
 pub(crate) fn note_refused_by(
     kind: crate::security::decision_record::DecisionKind,
-    rule_id: Option<String>,
+    rule_id: Option<crate::security::rule_id::RuleId>,
 ) {
     note_decision(|noted| noted.refused(kind, rule_id));
+}
+
+/// A check's explained refusal, noted as its plain form notes it: the error
+/// handed on, its pair noted. Each plain check is its explained
+/// form mapped through this, so the two cannot note different pairs.
+pub(crate) fn noted(
+    (error, (kind, rule_id)): (crate::Error, crate::security::decision_record::Refusal),
+) -> crate::Error {
+    note_refused_by(kind, rule_id);
+    error
 }
 
 /// A managed account's answer to an upstream 401, noted when it turns the
@@ -73,18 +83,24 @@ tokio::task_local! {
     static ROUTE: RefCell<crate::security::decision_record::Noted>;
 }
 
-/// The check noted as refusing so far: the dispatch's, read (it is this
-/// call's), else the route stage's, taken, so the next target of the same
-/// request starts from nothing and never inherits this one's check.
-pub(crate) fn take_refusal_kind() -> Option<crate::security::decision_record::DecisionKind> {
+/// The check noted as refusing so far, and its rule: the dispatch's, read
+/// (it is this call's), else the route stage's, taken, so the next target of
+/// the same request starts from nothing and never inherits this one's check.
+pub(crate) fn take_refusal() -> Option<crate::security::decision_record::Refusal> {
     // Taken first, always: a dispatch that noted its own check must not
     // leave the route's note for the next target.
-    let route = take_route_noted().refusal_kind();
+    let route = take_route_noted().refusal_pair();
     super::NOTES
-        .try_with(|notes| notes.borrow().decision.refusal_kind())
+        .try_with(|notes| notes.borrow().decision.refusal_pair())
         .ok()
         .flatten()
         .or(route)
+}
+
+/// [`take_refusal`]'s check alone, for rows that pin only the kind.
+#[cfg(test)]
+pub(crate) fn take_refusal_kind() -> Option<crate::security::decision_record::DecisionKind> {
+    take_refusal().map(|(kind, _)| kind)
 }
 
 /// Run a request's route stage with a decision scope of its own.
@@ -113,8 +129,8 @@ pub(crate) fn take_route_noted() -> crate::security::decision_record::Noted {
 impl DispatchNotes {
     /// The check the request's memo kept for a withheld target: it names
     /// the refusal the record's outcome code came from.
-    pub(crate) fn refused_by_memo(&mut self, kind: crate::security::decision_record::DecisionKind) {
-        self.decision.refused_by_memo(kind);
+    pub(crate) fn refused_by_memo(&mut self, refusal: crate::security::decision_record::Refusal) {
+        self.decision.refused_by_memo(refusal);
     }
 
     /// The decision object for this call's record: a cache hit or a replay

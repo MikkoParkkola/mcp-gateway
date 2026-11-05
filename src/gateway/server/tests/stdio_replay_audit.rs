@@ -21,7 +21,7 @@ fn keyed_request(id: &str, key: &str) -> Value {
 async fn dispatch(fixture: &Fixture, request: Value) -> Value {
     super::super::Gateway::dispatch_single_for_client(
         &fixture.meta,
-        &fixture.tool_policy,
+        &crate::gateway::authz::published_line(&fixture.meta),
         &fixture.mtls_policy,
         request,
         super::super::StdioClient {
