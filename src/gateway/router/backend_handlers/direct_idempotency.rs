@@ -233,15 +233,21 @@ pub(super) fn deliver_replay(
                     StatusCode::OK,
                 ));
             }
+            #[cfg(test)]
+            seams::note_served(seams::Served::Execution);
             Some(response)
         }
         None => None,
     };
     let replay = match guarded {
         Some(GuardOutcome::CachedResult(cached)) => {
+            #[cfg(test)]
+            seams::note_served(seams::Served::Cache);
             Some(JsonRpcResponse::success(id.clone(), cached))
         }
         Some(GuardOutcome::CachedError(error)) => {
+            #[cfg(test)]
+            seams::note_served(seams::Served::Cache);
             crate::gateway::meta_mcp::invoke::audit::note_cached_failure(&error);
             crate::gateway::meta_mcp::invoke::audit::counting::note_replay();
             let mut response = super::cached_error_response(Some(id.clone()), &error);
@@ -353,6 +359,28 @@ pub(crate) mod seams {
 
     pub(in crate::gateway::router::backend_handlers) fn note_replay(held_7a: bool) {
         REPLAY_HELD.with(|cell| cell.set(Some(held_7a)));
+    }
+
+    /// Which store answered a stored delivery on this thread.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub(crate) enum Served {
+        /// Stage 7a: the idempotency cache (a cached success or failure).
+        Cache,
+        /// Stage 7b: the execution store's completed replay.
+        Execution,
+    }
+
+    thread_local! {
+        static SERVED: std::cell::Cell<Option<Served>> = const { std::cell::Cell::new(None) };
+    }
+
+    /// The store that served the last stored delivery on this thread; taken once.
+    pub(crate) fn served() -> Option<Served> {
+        SERVED.with(std::cell::Cell::take)
+    }
+
+    pub(in crate::gateway::router::backend_handlers) fn note_served(served: Served) {
+        SERVED.with(|cell| cell.set(Some(served)));
     }
 
     pub(in crate::gateway::router::backend_handlers) async fn before_mark() {
