@@ -739,7 +739,16 @@ pub(crate) fn record_fields(
 
 /// `refused_by`, beside `response_effect` in every branch that writes it.
 fn insert_refused_by(facts: &DeliveryFacts, fields: &mut Map<String, Value>) {
-    if let Some(refused_by) = &facts.refused_by {
+    insert_notification_refused_by(facts.refused_by.as_ref(), fields);
+}
+
+/// `refused_by` on a delivery record, when a check refused the stored
+/// output: an answer's (from its cell) or a notification frame's.
+pub(crate) fn insert_notification_refused_by(
+    refused_by: Option<&crate::security::decision_record::RefusedBy>,
+    fields: &mut Map<String, Value>,
+) {
+    if let Some(refused_by) = refused_by {
         // invariant: a kind and an optional string always serialise.
         let value = serde_json::to_value(refused_by).expect("RefusedBy serialises");
         fields.insert("refused_by".into(), value);
