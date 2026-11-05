@@ -34,7 +34,7 @@ if [[ -f Cargo.toml ]]; then
     echo "FAIL: no merge-base with origin/docs/ranking-1-release-line; run: git fetch origin docs/ranking-1-release-line"
     exit 1
   }
-  # PREPUSH_KEEP_GOING=1 (MIK-9315): run every cheap step below and name each one that fails,
+  # PREPUSH_KEEP_GOING=1: run every cheap step below and name each one that fails,
   # instead of stopping at the first; the default is unchanged (stop at the first failure).
   # merge-base above and gate environment stay stop-first: every later step needs them.
   cheap_failed=()

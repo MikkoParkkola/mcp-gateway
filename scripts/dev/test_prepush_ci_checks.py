@@ -59,7 +59,7 @@ CI_ONLY: dict[tuple[str, tuple[str, ...]], str] = {
         "120 s budget on every push; CI runs it on every PR"
     ),
     ("scripts/release/test_workflow_wiring_mutations.py", ()): "budget: 329 s alone, over the 120 s budget",
-    # Shell-script steps (MIK-9315): CI-only ones, each with the reason it cannot run before a push.
+    # Shell-script steps: CI-only ones, each with the reason it cannot run before a push.
     ("scripts/ci/check-license-headers.sh", ()): (
         "budget: 36 s alone would push the CI-checks stage past its 120 s budget; the pre-push kit's "
         "cheap stage runs it on Spark, and CI on every PR"

@@ -148,7 +148,7 @@ PYTHONS = {"python", "python3"}
 # the workflows, and as pre-push binds it.
 GATE_PYTHONS = {"scripts/gate-env/.venv/bin/python", "$GATE_PY", "${GATE_PY}"}
 SCRIPT = re.compile(r"^(?:scripts|benchmarks)/[\w./*-]+\.py$")
-# A shell-script step (MIK-9315): `bash|sh <script>` or the script run directly. Only repo scripts under
+# A shell-script step: `bash|sh <script>` or the script run directly. Only repo scripts under
 # scripts/ or tests/ count; a leading ./ is not part of the form.
 SHELLS = {"bash", "sh"}
 SH_SCRIPT = re.compile(r"^(?:\./)?((?:scripts|tests)/[\w./*-]+\.sh)$")
