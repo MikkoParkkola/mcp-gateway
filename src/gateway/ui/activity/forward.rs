@@ -27,11 +27,12 @@
 //! the start each walk the listing, and each crossing opens one. `S` is the
 //! most segments any of the call's listings shows, and `X <= S`, so one call
 //! opens the active file at most `9 + 6S` times. `S` is the kept sealed
-//! segments plus the active file: `retain_segments + 1` once retention has
-//! run, which gives 87 opens at the invocation log's default of 12 and 39
-//! for the governance log's fixed 4. Retention runs on the next append, so
-//! after `retain_segments` is lowered `S` is, until then, the largest value
-//! the log has run under, plus 1.
+//! segments plus the active file, and a rotation seals the old active file
+//! before its retention pass unlinks the oldest segment, so `S` is at most
+//! `retain_segments + 2`: 93 opens at the invocation log's default of 12 and
+//! 45 for the governance log's fixed 4. Retention runs on the next append, so
+//! after `retain_segments` is lowered `S` is, until then, at most the largest
+//! value the log has run under, plus 2.
 
 use std::fs::File;
 use std::io;
