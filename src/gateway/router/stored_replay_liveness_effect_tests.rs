@@ -120,6 +120,7 @@ async fn a_lift_whose_stored_slot_was_evicted_records_none() {
         "premise: dispatched: {first}"
     );
     let backend = fx.gateway.backends().get(BACKEND).expect("the backend");
+    backend.retire_per_user_slot_for_test(&DirectAccountGateway::operator_binding());
     backend.forget_caller_slots_for_test();
     fx.gateway.rearm_operator_slot_for_test();
     backend.declare_slot_effects_for_test(None, vec![declared(Some(true))]);
