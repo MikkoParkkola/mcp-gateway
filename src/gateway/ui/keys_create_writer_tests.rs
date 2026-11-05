@@ -261,22 +261,26 @@ fn a4_the_intent_is_durable_before_the_writer_commits() {
 
 /// P9r: a reload that refuses after the rename, and a journal that then
 /// cannot be removed, leave the file unproven (the real writer, two real
-/// faults): 500 `state_uncertain`. The secret is in neither the config nor
-/// the journal, the digest at most in `key_sha256`, and GET shows the entry
-/// under the new revision. The refusal is armed from the writer's own
-/// "commit" step: after the pre-write check, before the rename and reload,
-/// on the thread that reloads.
+/// faults): 500 `state_uncertain`, the logged variant `rollback_failed`.
+/// The recovery restored the original bytes (`recover` writes them back
+/// before it tries to remove the journal), so gateway.yaml and GET show the
+/// original and no new entry, while a `staged` journal and the staged
+/// original stay. The leak check (secret, digest) runs inside `post`. The
+/// refusal is armed from the writer's own "commit" step: after the
+/// pre-write check, before the rename and reload, on the thread that
+/// reloads.
 #[test]
-fn p9r_a_failed_rollback_is_state_uncertain_and_leaks_nothing() {
+fn p9r_a_failed_rollback_is_state_uncertain_and_keeps_the_original() {
     use std::sync::Mutex;
 
     use crate::config_persistence::journal::{self, fault};
     use crate::config_reload::{refuse_hook, write_order};
     let fx = Fixture::new(Setup::default());
     let target = crate::identity_grants::journal::resolved(&fx.path());
+    let (original, revision) = (fx.bytes(), fx.revision());
     let armed = fault::set(&target, fault::Fault::FailJournalRemove);
-    let fired = Arc::new(Mutex::new(None));
-    let cell = Arc::clone(&fired);
+    let reached = Arc::new(Mutex::new(None));
+    let cell = Arc::clone(&reached);
     write_order::on(
         &target,
         "commit",
@@ -285,10 +289,10 @@ fn p9r_a_failed_rollback_is_state_uncertain_and_leaks_nothing() {
         }),
     );
     let sent = fx.post(Call::new(&fx.body("stuck")));
-    let hook = fired.lock().expect("cell").take();
-    let journal_text = std::fs::read(journal::journal_path(&target))
-        .map(|b| String::from_utf8_lossy(&b).into_owned())
-        .unwrap_or_default();
+    let hook = reached.lock().expect("cell").take();
+    let removals = fault::fired(&target);
+    let journal_bytes = std::fs::read(journal::journal_path(&target)).expect("journal is readable");
+    let staged = std::fs::read(journal::original_path(&target)).expect("staged original");
     drop(armed);
     write_order::take(&target);
     let hook = hook.expect("the writer never reached its commit step");
@@ -296,6 +300,7 @@ fn p9r_a_failed_rollback_is_state_uncertain_and_leaks_nothing() {
         hook.load(std::sync::atomic::Ordering::SeqCst),
         "the reload never took the refusal: no rollback was exercised"
     );
+    assert!(removals >= 1, "the journal-remove fault never fired");
     assert_eq!(
         sent.status,
         StatusCode::INTERNAL_SERVER_ERROR,
@@ -303,23 +308,23 @@ fn p9r_a_failed_rollback_is_state_uncertain_and_leaks_nothing() {
         sent.body
     );
     assert_eq!(error_of(&sent), "state_uncertain");
-    let digest = super::keys_create_fixture_tests::spec(KNOWN);
-    let config = fx.text();
-    for (place, text) in [
-        ("answer", &sent.body),
-        ("config", &config),
-        ("journal", &journal_text),
-    ] {
-        assert!(!text.contains(KNOWN), "the secret is in the {place}");
-    }
-    assert!(journal_text.matches(digest.as_str()).count() <= 1);
-    assert!(config.matches(digest.as_str()).count() <= 1);
-    assert!(!sent.body.contains(&digest), "{}", sent.body);
-    assert!(!sent.logs.contains(KNOWN) && !sent.logs.contains(&digest));
+    let logged = r#""variant":"rollback_failed""#;
+    assert!(
+        sent.logs.contains(logged),
+        "no rollback_failed: {}",
+        sent.logs
+    );
+    let journal: Value = serde_json::from_slice(&journal_bytes).expect("journal is JSON");
+    assert_eq!(journal["state"], "staged", "{journal}");
+    assert_eq!(staged, original, "the staged original is the old file");
+    assert_eq!(fx.bytes(), original, "the rollback restored the original");
     let listed = fx.get();
-    assert_eq!(listed["revision"], fx.revision());
-    let entry = listed["keys"]
+    assert_eq!(listed["revision"], revision);
+    let names: Vec<_> = listed["keys"]
         .as_array()
-        .and_then(|k| k.iter().find(|e| e["name"] == "stuck"));
-    assert!(entry.is_none_or(|e| e["live"].is_boolean()), "{listed}");
+        .expect("keys")
+        .iter()
+        .map(|e| e["name"].clone())
+        .collect();
+    assert_eq!(names, ["root"], "{listed}");
 }
