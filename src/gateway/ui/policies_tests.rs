@@ -477,8 +477,10 @@ fn e1_a_build_without_the_firewall_has_no_finding_rules_section() {
     );
 }
 
-/// R8: exactly the four tool limits, in the order they run on HTTP, each
-/// with its setting and where it is edited (ADR-029, "Tool limits").
+/// R8: exactly the four tool limits, in ADR-029's display order ("Tool
+/// limits"), each with its setting and where it is edited. Display order, not
+/// enforcement order: on HTTP the key's backend scope runs before the global
+/// policy and its tool scope after.
 #[test]
 fn r8_the_four_tool_limits() {
     let model = read_model(&Config::default());
@@ -504,7 +506,7 @@ fn r8_the_four_tool_limits() {
 fn e2_a_build_without_the_firewall_has_no_part_two_firewall_sections() {
     let model = read_model(&Config::default());
     for section in ["scan_types", "guards", "credentials", "relay"] {
-        assert_eq!(model[section], Value::Null, "{section}");
+        assert_eq!(model.get(section), Some(&Value::Null), "{section}");
     }
     assert!(model["tool_limits"].is_array(), "{model}");
 }

@@ -10,7 +10,7 @@
 use serde_json::{Value, json};
 
 use super::policies::Sources;
-use super::policies_rules::{decides, name, offered};
+use super::policies_rules::{as_compiled, decides, name, offered, shadowed};
 use crate::security::firewall::memory_scanner::MemoryScanner;
 use crate::security::firewall::tenant_guard::CrossTenantReads;
 use crate::security::firewall::{
@@ -234,11 +234,17 @@ fn is_pinned(rule: &FirewallRule) -> bool {
         && path_args.is_none()
 }
 
-/// An `except` entry that excludes every call: no key, no server (a server
-/// glob never covers a call with no backend), and no tool or exactly `*`.
+/// An `except` entry that excludes every call `rule` covers: no key, no
+/// server (a server glob never covers a call with no backend), and a tool
+/// glob of `*` or exactly the rule's own `match`. Read on the compiled rule:
+/// an entry setting no field makes a refused shape, which blocks every call.
 fn excludes_every_call(rule: &FirewallRule) -> bool {
     rule.except.iter().flatten().any(|e| {
-        e.key.is_none() && e.server.is_none() && e.tool.as_deref().is_none_or(|t| t == "*")
+        e.key.is_none()
+            && e.server.is_none()
+            && e.tool
+                .as_deref()
+                .is_some_and(|t| t == "*" || t == rule.tool_match)
     })
 }
 
@@ -252,22 +258,24 @@ fn credentials(file: &FirewallConfig, run: &FirewallConfig) -> Value {
             "shadowed_by": null, "partly_shadowed_by": null,
         }),
         Some(at) => {
-            let (mut full, mut partly) = (Vec::new(), Vec::new());
-            for (j, earlier) in rules[..at].iter().enumerate() {
-                if !decides(earlier).contains(&ScanType::Credentials)
-                    || excludes_every_call(earlier)
-                {
-                    continue;
-                }
-                let path = format!("{FW}.rules[{j}]");
-                let unscoped =
-                    earlier.servers.is_none() && earlier.keys.is_none() && earlier.except.is_none();
-                if earlier.tool_match == "*" && unscoped {
-                    full.push(path);
-                } else {
-                    partly.push(path);
-                }
-            }
+            // Read as a check reads them, and fully shadowed exactly as the
+            // finding rules report it.
+            let compiled: Vec<FirewallRule> = rules.iter().map(as_compiled).collect();
+            let full: Vec<String> = shadowed(&compiled, at)
+                .into_iter()
+                .find(|s| s["scan_type"] == "credentials")
+                .and_then(|s| serde_json::from_value(s["by"].clone()).ok())
+                .unwrap_or_default();
+            let partly: Vec<String> = compiled[..at]
+                .iter()
+                .enumerate()
+                .filter(|(_, earlier)| {
+                    decides(earlier).contains(&ScanType::Credentials)
+                        && !excludes_every_call(earlier)
+                })
+                .map(|(j, _)| format!("{FW}.rules[{j}]"))
+                .filter(|path| !full.contains(path))
+                .collect();
             json!({
                 "present": true, "position": at, "path": format!("{FW}.rules[{at}]"),
                 "shadowed_by": full, "partly_shadowed_by": partly,

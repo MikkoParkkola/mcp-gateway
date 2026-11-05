@@ -87,8 +87,9 @@ fn firewall_sections(_sources: &Sources<'_>) -> [(&'static str, Value); 4] {
     ]
 }
 
-/// The four configured tool limits, in the order they run on HTTP
-/// (ADR-029, "Tool limits"), each with where it is edited. A list, not a
+/// The four configured tool limits, in ADR-029's display order ("Tool
+/// limits"; on HTTP the key's backend scope runs before the global policy and
+/// its tool scope after), each with where it is edited. A list, not a
 /// judgement: finding rules are not among them.
 fn tool_limits() -> Value {
     json!([

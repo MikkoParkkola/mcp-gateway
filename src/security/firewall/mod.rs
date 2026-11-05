@@ -41,6 +41,9 @@ pub(crate) use allowed_root::warn_at_load as warn_folder_rules_at_load;
 /// The relay gate's inferred sensitive classes, for the Policies screen.
 #[cfg(feature = "webui")]
 pub(crate) use collusion_gate::SENSITIVE_CLASSES;
+/// The rule shapes the load refuses, which compile fail-closed.
+#[cfg(feature = "webui")]
+pub(crate) use verdict::refused_shape;
 pub mod anomaly;
 pub(crate) mod anomaly_config;
 mod anomaly_gate;

@@ -360,6 +360,15 @@ fn r5b_switched_on_guards_run() {
         json!(["blind_no_identity"])
     );
 
+    // Under the hardened posture a full learned-pair map refuses too.
+    let mut config = guards_on();
+    config.security.posture = crate::security::posture::SecurityPosture::Hardened;
+    let model = read_model(&config);
+    assert_eq!(
+        guard(&model, "anomaly")["rule_proof"],
+        json!(["blind_no_identity", "blind_map_full", "forced_block"])
+    );
+
     let mut config = guards_on();
     config.security.firewall.scan_requests = false;
     config.security.firewall.scan_responses = false;
@@ -386,12 +395,19 @@ fn r5d_a_reloaded_guard_waits_for_a_restart() {
     let startup = Config::default();
     let next = guards_on();
     let model = reloaded(&startup, &[&next]);
-    let budget = guard(&model, "budget");
-    assert_eq!(budget["running"], json!(false));
-    assert_eq!(
-        budget["settings"][0],
-        setting(&format!("{FW}.budget.enabled"), json!(true), json!(false))
-    );
+    for (name, path) in [
+        ("anomaly", "anomaly_detection"),
+        ("tenant", "tenant_guard.enabled"),
+        ("budget", "budget.enabled"),
+    ] {
+        let g = guard(&model, name);
+        assert_eq!(g["running"], json!(false), "{name}");
+        assert_eq!(
+            g["settings"][0],
+            setting(&format!("{FW}.{path}"), json!(true), json!(false)),
+            "{name}"
+        );
+    }
 }
 
 /// R5e: the cross-tenant read verdict runs whenever `arg_keys` attributes
@@ -416,6 +432,14 @@ fn r5e_the_read_verdict_runs_on_its_own_keys() {
     let reads = guard(&model, "tenant_reads");
     assert_eq!(reads["running"], json!(false));
     assert_eq!(reads["effect"], json!("checks_nothing"));
+
+    config.security.firewall.tenant_guard.cross_tenant_reads =
+        crate::security::firewall::tenant_guard::CrossTenantReads::Block;
+    let model = read_model(&config);
+    assert_eq!(
+        guard(&model, "tenant_reads")["effect"],
+        json!("withholds_frame")
+    );
 }
 
 /// The pinned credentials rule, exactly.
@@ -480,6 +504,8 @@ fn r6c_only_the_exact_shape_is_the_pinned_rule() {
         ("scan", json!(["credentials", "shell_injection"])),
         ("action", json!("block")),
         ("match", json!("srv:*")),
+        ("allowed_roots", json!(["/srv"])),
+        ("path_args", json!(["p"])),
     ] {
         let mut rule = pinned();
         rule[field] = value;
@@ -553,6 +579,19 @@ fn r6d_what_shadows_the_pinned_rule() {
             json!({ "match": "*", "action": "block", "scan": ["credentials"], "except": [{ "key": "k" }] }),
             &none,
             &first,
+        ),
+        // R6i: a shape the load refuses (published with the firewall off)
+        // compiles to an unscoped `*` block, a full shadower.
+        (
+            json!({ "match": "foo", "action": "warn", "scan": ["credentials"], "except": [{}] }),
+            &first,
+            &none,
+        ),
+        // R6j: an exception naming the rule's own match leaves it no call.
+        (
+            json!({ "match": "foo", "action": "block", "scan": ["credentials"], "except": [{ "tool": "foo" }] }),
+            &none,
+            &none,
         ),
     ] {
         let (shadowed, partly) = shadows_of_pinned(&earlier);

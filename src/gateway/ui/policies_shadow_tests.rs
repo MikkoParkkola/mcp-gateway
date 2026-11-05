@@ -478,6 +478,7 @@ fn r2h_only_the_six_offered_types_are_editable() {
         } else {
             json!(["unoffered_type"])
         };
+        assert_eq!(rule(&model, 0)["editable"], reasons == json!([]), "{ty}");
         assert_eq!(rule(&model, 0)["read_only_reasons"], reasons, "{ty}");
     }
 }
@@ -518,6 +519,21 @@ fn r3k_a_mixed_list_decides_its_decided_types() {
         rule(&model, 0)["read_only_reasons"],
         json!(["unoffered_type"])
     );
+}
+
+/// R3l: shadowing reads a rule as a check reads it: a shape the load
+/// refuses (here an empty `keys` list, published with the firewall off)
+/// compiles to an unscoped `*` rule that blocks its types on every call, so
+/// it shadows a later rule with another match.
+#[test]
+fn r3l_a_refused_shape_shadows_as_compiled() {
+    let mut config = rules(json!([
+        { "match": "foo", "action": "warn", "scan": ["shell_injection"], "keys": [] },
+        { "match": "bar", "action": "block", "scan": ["shell_injection"] }
+    ]));
+    config.security.firewall.enabled = false;
+    let model = read_model(&config);
+    assert_eq!(shadowed(&model, 1), vec![sh("shell_injection", &[0])]);
 }
 
 /// R2e: a present-but-empty collection counts as present.

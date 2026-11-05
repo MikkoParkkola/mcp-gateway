@@ -223,7 +223,57 @@ fn r7g_uncompilable_entries_are_not_pending() {
         relay["allowed_flows"]["enforced"].as_array().map(Vec::len),
         Some(64)
     );
+    // The first 64, in order: entry 64 (`s64`) is the one dropped.
+    assert_eq!(
+        relay["allowed_flows"]["enforced"][0],
+        json!({ "source": "s0", "egress": "e0" })
+    );
+    assert_eq!(
+        relay["allowed_flows"]["enforced"][63],
+        json!({ "source": "s63", "egress": "e63" })
+    );
     for field in relay_fields(&model) {
         assert_eq!(field["pending_restart"], json!(false), "{field}");
+    }
+}
+
+/// R7h: each detector setting, changed alone by a reload, waits for a
+/// restart, and keeps the relay's live fields from applying.
+#[test]
+fn r7h_each_detector_setting_waits_for_a_restart() {
+    for (i, field) in ["window_secs", "min_matches", "common_principals"]
+        .into_iter()
+        .enumerate()
+    {
+        let startup = Config::default();
+        let mut next = startup.clone();
+        let c = &mut next.security.firewall.collusion;
+        let (file, enforced) = match field {
+            "window_secs" => {
+                c.window_secs = 900;
+                (json!(900), json!(600))
+            }
+            "min_matches" => {
+                c.min_matches = 3;
+                (json!(3), json!(2))
+            }
+            _ => {
+                c.common_principals = 4;
+                (json!(4), json!(5))
+            }
+        };
+        c.sources = vec!["late:*".to_owned()];
+        let model = reloaded(&startup, &[&next]);
+        assert_eq!(
+            model["relay"]["detector"][i],
+            setting(&format!("{RELAY}.{field}"), file, enforced),
+            "{field}"
+        );
+        assert_eq!(model["relay"]["sources"]["enforced"], json!([]), "{field}");
+        assert_eq!(
+            model["relay"]["sources"]["pending_restart"],
+            json!(true),
+            "{field}"
+        );
     }
 }

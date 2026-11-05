@@ -6,7 +6,9 @@
 
 use serde_json::{Value, json};
 
-use crate::security::firewall::{FirewallAction, FirewallRule, OUTPUT_ONLY, ScanType};
+use crate::security::firewall::{
+    FirewallAction, FirewallRule, OUTPUT_ONLY, ScanType, refused_shape,
+};
 
 /// Every scan type, in `ScanType` order. The match below fails to compile
 /// when a type is added, so this list cannot fall behind.
@@ -148,6 +150,7 @@ fn is_root(rule: &FirewallRule) -> bool {
 /// Every finding rule, in order.
 pub(super) fn finding_rules(rules: &[FirewallRule]) -> Value {
     let offered = offered();
+    let compiled: Vec<FirewallRule> = rules.iter().map(as_compiled).collect();
     let out: Vec<Value> = rules
         .iter()
         .enumerate()
@@ -170,7 +173,7 @@ pub(super) fn finding_rules(rules: &[FirewallRule]) -> Value {
                 "root": is_root(rule),
                 "editable": reasons.is_empty(),
                 "read_only_reasons": reasons,
-                "shadowed": shadowed(rules, i),
+                "shadowed": shadowed(&compiled, i),
                 "scope_differs": scope_differs(rule),
             })
         })
@@ -224,7 +227,29 @@ fn read_only_reasons(rule: &FirewallRule, offered: &[ScanType]) -> Vec<&'static 
 /// The earlier rules that shadow rule `i`, per type: an earlier rule with
 /// `match: "*"` or the identical match, deciding the type, with no
 /// `servers`, `keys` or `except` (present but empty counts as present).
-fn shadowed(rules: &[FirewallRule], i: usize) -> Vec<Value> {
+/// `rule` as a check reads it: a shape the load refuses compiles to an
+/// unscoped `*` rule that blocks its scan types on every call
+/// (`verdict.rs` `compile_rule`); any other rule as written.
+pub(super) fn as_compiled(rule: &FirewallRule) -> FirewallRule {
+    if !refused_shape(rule) {
+        return rule.clone();
+    }
+    FirewallRule {
+        tool_match: "*".to_owned(),
+        action: FirewallAction::Block,
+        reason: rule.reason.clone(),
+        scan: rule.scan.clone(),
+        servers: None,
+        keys: None,
+        except: None,
+        allowed_roots: None,
+        path_args: None,
+    }
+}
+
+/// The earlier rules that shadow rule `i` of `rules` (read as compiled), per
+/// scan type.
+pub(super) fn shadowed(rules: &[FirewallRule], i: usize) -> Vec<Value> {
     let later = &rules[i];
     decides(later)
         .into_iter()
