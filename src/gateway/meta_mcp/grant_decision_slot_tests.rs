@@ -10,7 +10,8 @@ use serde_json::{Value, json};
 
 use super::grant_audit::{GrantNote, allow_unslotted_check_for_test, select_records};
 use super::grant_audit_fixture::{
-    CAPS, Endpoint, PERSONAL, capability_backend, decisions, grant, grants, logger, stall_log,
+    CAPS, Endpoint, PERSONAL, capability_backend, decisions, grant, grants, kept_logger, logger,
+    stall_log,
 };
 use super::grant_decision_audit_tests::{api_key, context, gateway};
 use crate::backend::BackendRegistry;
@@ -255,9 +256,9 @@ fn stalled_log_bounds_the_decision_write() {
             .build()
             .expect("the scenario runtime builds");
         let outcome = runtime.block_on(async {
-            let dir = tempfile::tempdir().unwrap();
+            let dir = Arc::new(tempfile::tempdir().unwrap());
             let endpoint = Arc::new(Endpoint::start(true).await);
-            let log = logger(&dir, AuditFailurePolicy::FailClosed);
+            let log = kept_logger(&dir, AuditFailurePolicy::FailClosed);
             let mut meta = MetaMcp::new(Arc::new(BackendRegistry::new()))
                 .with_identity_grants(grants(vec![grant("g1", ALICE, ALICE)]))
                 .with_code_mode(true);

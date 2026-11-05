@@ -192,6 +192,17 @@ pub(crate) fn logger(
     )
 }
 
+/// [`logger`], keeping `dir` until the log's last handle drops, so a late
+/// append from a worker the test left running lands before `dir` goes.
+pub(crate) fn kept_logger(
+    dir: &Arc<tempfile::TempDir>,
+    policy: AuditFailurePolicy,
+) -> Arc<TransparencyLogger> {
+    let log = logger(dir, policy);
+    log.keep_test_dir(Arc::clone(dir));
+    log
+}
+
 pub(crate) fn log_path(dir: &tempfile::TempDir) -> std::path::PathBuf {
     dir.path().join("audit.jsonl")
 }
