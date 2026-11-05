@@ -143,6 +143,7 @@ async fn test_stdio_initialize_produces_valid_response() {
         )),
         export_status: None,
         transparency_log: None,
+        governance_log: None,
         dashboard_bootstrap: Arc::new(mcp_gateway::gateway::auth::DashboardBootstrap::new()),
         tasks,
         task_executor,

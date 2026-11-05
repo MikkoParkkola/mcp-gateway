@@ -9,7 +9,7 @@ use tokio::net::TcpListener;
 use tracing::{debug, info, warn};
 
 use super::Gateway;
-use super::control_plane_store::{build_control_plane_store, control_plane_base};
+use super::control_plane_store::{build_control_plane_store_with_log, control_plane_base};
 #[cfg(not(test))]
 use super::support;
 use super::support::log_startup_banner;
@@ -193,7 +193,9 @@ impl Gateway {
         // reloads), built after the store it records into. Audited before the
         // live config exists, so the served grants are in the startup inputs:
         // the running revision names the grants this process serves.
-        let control_plane_store = build_control_plane_store(&self.config, &control_plane_base)?;
+        let opened_store = build_control_plane_store_with_log(&self.config, &control_plane_base)?;
+        let governance_log = opened_store.as_ref().map(|o| Arc::clone(&o.governance_log));
+        let control_plane_store = opened_store.map(|o| o.store);
         let (identity_grant_sink, grants_read) = identity_grants::start_identity_grant_audit(
             &self.config,
             &meta_mcp,
@@ -480,9 +482,16 @@ impl Gateway {
             live_config: Arc::clone(&live_config),
             export_status,
             transparency_log,
+            governance_log,
             dashboard_bootstrap,
             process: Arc::new(ProcessFacts::new(started, counters.upgrade.clone())),
         });
+        // The live stream's two feeds, attached once per process.
+        #[cfg(feature = "webui")]
+        state.dashboard_bootstrap.stream_hub().attach_logs(
+            state.transparency_log.as_deref(),
+            state.governance_log.as_deref(),
+        );
 
         // REST capability watch polls through the router's controls, so it
         // joins the running events hub once the router state exists.
