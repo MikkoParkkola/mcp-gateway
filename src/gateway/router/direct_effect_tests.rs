@@ -476,3 +476,32 @@ async fn a_direct_cache_hit_on_a_cold_slot_records_none() {
     assert_eq!(decision["decided"], "replayed", "{decision}");
     assert!(decision.get("declared_effect").is_none(), "{decision}");
 }
+
+/// GUARD: the stored-result stores are per caller. alice runs a keyed direct
+/// call; bob, another verified identity on the same key and backend, sends
+/// the same idempotency key and is never served alice's stored answer: his
+/// call runs fresh under his own owner. Both stores: the execution store
+/// alone (cache off), and the idempotency cache in front of it (cache on).
+#[tokio::test]
+async fn another_caller_on_the_same_key_is_never_served_a_stored_answer() {
+    for cache in [Cache::Off, Cache::On] {
+        let dir = tempfile::tempdir().expect("a log directory");
+        let fx = bound_with(&dir, cache).await;
+        let (_, alice) = keyed(&fx, "alice", "k-shared").await;
+        assert!(alice.get("result").is_some(), "premise: alice ran: {alice}");
+        let ran = super::direct_continuation_tests::dispatched(&fx);
+        let _ = super::backend_handlers::direct_lease_seams::served();
+        let (_, bob) = keyed(&fx, "bob", "k-shared").await;
+        assert!(bob.get("result").is_some(), "bob is answered: {bob}");
+        assert_eq!(
+            super::backend_handlers::direct_lease_seams::served(),
+            None,
+            "bob was served a stored answer: {bob}"
+        );
+        assert_eq!(
+            super::direct_continuation_tests::dispatched(&fx),
+            ran + 1,
+            "bob's call did not run fresh: {bob}"
+        );
+    }
+}
