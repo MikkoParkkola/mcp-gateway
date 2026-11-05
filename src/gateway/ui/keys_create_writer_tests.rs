@@ -234,3 +234,44 @@ fn a4_the_intent_is_durable_before_the_writer_commits() {
         ["intent", "commit"]
     );
 }
+
+/// P9r: a write whose journal then cannot be removed ends unproven (the
+/// real writer, a real fault): 500 `state_uncertain`. The secret is in
+/// neither the config nor the journal, the digest at most in `key_sha256`,
+/// and GET shows the entry under the new revision.
+#[test]
+fn p9r_a_journal_that_cannot_be_removed_is_state_uncertain() {
+    use crate::config_persistence::journal::{self, fault};
+    let fx = Fixture::new(Setup::default());
+    let target = crate::identity_grants::journal::resolved(&fx.path());
+    let armed = fault::set(&target, fault::Fault::FailJournalRemove);
+    let sent = fx.post(Call::new(&fx.body("stuck")));
+    let journal_text = std::fs::read(journal::journal_path(&target))
+        .map(|b| String::from_utf8_lossy(&b).into_owned())
+        .unwrap_or_default();
+    drop(armed);
+    assert_eq!(
+        sent.status,
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "{}",
+        sent.body
+    );
+    assert_eq!(error_of(&sent), "state_uncertain");
+    let digest = super::keys_create_fixture_tests::spec(KNOWN);
+    for (place, text) in [
+        ("answer", &sent.body),
+        ("config", &fx.text()),
+        ("journal", &journal_text),
+    ] {
+        assert!(!text.contains(KNOWN), "the secret is in the {place}");
+    }
+    assert!(journal_text.matches(digest.as_str()).count() <= 1);
+    assert!(fx.text().matches(digest.as_str()).count() <= 1);
+    assert!(!sent.body.contains(&digest), "{}", sent.body);
+    let listed = fx.get();
+    assert_eq!(listed["revision"], fx.revision());
+    let entry = listed["keys"]
+        .as_array()
+        .and_then(|k| k.iter().find(|e| e["name"] == "stuck"));
+    assert!(entry.is_some_and(|e| e["live"].is_boolean()), "{listed}");
+}
