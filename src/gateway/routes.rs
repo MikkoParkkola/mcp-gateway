@@ -89,6 +89,9 @@ owned_routes! {
     UI_DECISIONS = "/ui/api/decisions",
     /// How many decisions an admin has open, and their revision.
     UI_DECISIONS_COUNT = "/ui/api/decisions/count",
+    /// The Policies screen's read model: the tool policy and the finding
+    /// rules, with coverage, shadowing and editability.
+    UI_POLICIES = "/ui/api/policies",
     /// The web UI's windowed call counters.
     UI_METRICS_SERIES = "/ui/api/metrics/series",
     /// Restarts, upgrades, reloads, pauses and switch-offs.

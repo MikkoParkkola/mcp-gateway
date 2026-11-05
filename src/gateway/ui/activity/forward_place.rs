@@ -7,7 +7,6 @@ use std::fs::File;
 use std::io;
 use std::path::Path;
 
-use super::super::seek::segments;
 use super::scan::{Anchor, Mode};
 use super::{Log, Mark};
 use crate::security::transparency_log::pager::open_segment;
@@ -65,10 +64,19 @@ pub(super) enum Next {
     Missing,
 }
 
+/// The log's segments. Every listing opens the active file to read the
+/// segment number on its first line, once, or up to three times when a
+/// rotation races it; the forward read's module doc counts these opens.
+fn listed(path: &Path) -> io::Result<Vec<u64>> {
+    #[cfg(test)]
+    super::tests::listed();
+    super::super::seek::segments(path)
+}
+
 /// The segment after `seq`. Segments are numbered without gaps, so a later
 /// one that is not `seq + 1` means one vanished.
 pub(super) fn next_segment(path: &Path, seq: u64) -> io::Result<Next> {
-    let Some(next) = segments(path)?.into_iter().find(|s| *s > seq) else {
+    let Some(next) = listed(path)?.into_iter().find(|s| *s > seq) else {
         return Ok(Next::End);
     };
     if next != seq + 1 {
@@ -87,7 +95,7 @@ pub(super) fn open(path: &Path, seq: u64) -> io::Result<Segment> {
         return Ok(Segment::Gone);
     };
     #[cfg(test)]
-    if super::tests::identity_fails() {
+    if super::tests::identity_fails(seq) {
         return Ok(Segment::Unreadable);
     }
     Ok(match file_id(&file) {
@@ -110,7 +118,7 @@ pub(super) enum Segment {
 /// costs no more per call than reading rows does. `None` for a log with no
 /// segment that opens.
 pub(super) fn start(log: &Log<'_>, cursor: Option<&Mark>) -> io::Result<Option<(File, Place)>> {
-    for seq in segments(log.path)? {
+    for seq in listed(log.path)? {
         let (file, id) = match open(log.path, seq)? {
             Segment::Opened(file, id) => (file, id),
             // Removed since it was listed: the next one is now the oldest.
@@ -146,7 +154,7 @@ pub(super) fn resume(
         return Ok(None);
     }
     let mut found = None;
-    for seq in segments(log.path)? {
+    for seq in listed(log.path)? {
         if let Segment::Opened(file, id) = open(log.path, seq)?
             && id == place.file
         {
