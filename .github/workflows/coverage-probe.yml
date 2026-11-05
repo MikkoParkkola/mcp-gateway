@@ -40,6 +40,7 @@ on:
       - "scripts/release/critical_path_coverage.py"
       - "scripts/ci/coverage_shards.py"
       - "scripts/ci/coverage_shard_*.sh"
+      - "scripts/ci/testdata/llvm_cov_report_v.txt"
       - "src/coverage_canary.rs"
       - ".github/workflows/coverage-probe.yml"
   workflow_dispatch:
@@ -158,6 +159,13 @@ jobs:
         env:
           PART: ${{ matrix.part }}
         run: bash scripts/ci/coverage_shard_bundle.sh "$PART"
+      # A failed part never reaches the merge: keep its log on its own.
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: failure()
+        with:
+          name: cov-failed-${{ matrix.part }}
+          retention-days: 7
+          path: run.log
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: cov-shard-${{ matrix.part }}

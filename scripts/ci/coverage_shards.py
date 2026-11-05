@@ -38,13 +38,11 @@ import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from shard_tests import HEADER, RESULT, SDK, cargo  # noqa: E402
+from shard_tests import GLOB_A, GLOB_ALL, GLOB_B, HEADER, LIB_SPLIT, RESULT, SDK, cargo  # noqa: E402
 
-LIB_SPLIT = "gateway::"
 # Every plan also runs the SDK journey's binary as its own part, as the single
 # job runs it alone before the rest.
 SDK_PART, SDK_TARGET = "sdk", "task_upstream_recovery_sdk"
-GLOB_A, GLOB_B, GLOB_ALL = "[a-l]*", "[!a-l]*", "*"
 BASE = ["llvm-cov", "--no-report", "--all-features"]
 _LIB_A = (["--lib"], [LIB_SPLIT])
 _LIB_B = (["--lib"], ["--skip", LIB_SPLIT])
@@ -218,7 +216,7 @@ CANARY_FN = "coverage_canary"
 def canary(lcov: str) -> list[str]:
     """The problems with the canary in an lcov report: empty when the canary's file is
     there with its function recorded (FN) at a count of 0 (FNDA) and every line at 0."""
-    inside, found, named, problems = False, False, False, []
+    inside, found, named, counted, lines, problems = False, False, False, False, 0, []
     for line in lcov.splitlines():
         if line.startswith("SF:"):
             path = line[3:].strip().replace("\\", "/")
@@ -230,14 +228,23 @@ def canary(lcov: str) -> list[str]:
             named = True
         elif line.startswith("FNDA:"):
             count, name = line[5:].split(",", 1)
-            if CANARY_FN in name and int(count) != 0:
-                problems.append(f"canary called {count} times")
-        elif line.startswith("DA:") and int(line[3:].split(",")[1]) != 0:
-            problems.append(f"canary line {line[3:].split(',')[0]} covered")
+            if CANARY_FN in name:
+                counted = True
+                if int(count) != 0:
+                    problems.append(f"canary called {count} times")
+        elif line.startswith("DA:"):
+            lines += 1
+            if int(line[3:].split(",")[1]) != 0:
+                problems.append(f"canary line {line[3:].split(',')[0]} covered")
     if not found:
         return [f"{CANARY_FILE} is not in the report"]
     if not named:
         problems.append(f"{CANARY_FN} has no FN record")
+    # A zero needs a record to be zero in: a count, and at least one line.
+    if not counted:
+        problems.append(f"{CANARY_FN} has no FNDA count")
+    if not lines:
+        problems.append(f"{CANARY_FILE} has no DA line")
     return problems
 
 
@@ -414,7 +421,12 @@ def self_test() -> int:
     assert canary(other) == [f"{CANARY_FILE} is not in the report"]
     assert canary(good.replace("FNDA:0,_RNvCs1", "FNDA:2,_RNvCs1").replace("DA:6,0", "DA:6,2")) == \
         ["canary called 2 times", "canary line 6 covered"]
-    assert canary(other + sf + "DA:5,0\nend_of_record\n") == [f"{CANARY_FN} has no FN record"]
+    assert canary(other + sf + "DA:5,0\nend_of_record\n") == \
+        [f"{CANARY_FN} has no FN record", f"{CANARY_FN} has no FNDA count"]
+    # A file and a function record with no count or line is no evidence of zero.
+    bare = other + sf + f"FN:5,_RNvCs1_11mcp_gateway15{CANARY_FN}\nend_of_record\n"
+    assert canary(bare) == [f"{CANARY_FN} has no FNDA count", f"{CANARY_FILE} has no DA line"], \
+        canary(bare)
     # The test accounting: names from the listing, outcomes reconciled per binary.
     lib = "     Running unittests src/lib.rs (target/llvm-cov-target/debug/deps/mcp_gateway-ab12)"
     lease = "     Running tests/lease.rs (target/llvm-cov-target/debug/deps/lease-cd34)"

@@ -32,6 +32,12 @@ import os
 import sys
 import tempfile
 
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "release"))
+from critical_path_coverage import relative  # noqa: E402  (the grader's own path rule)
+
+
+SINGLES = 3
+
 
 def tests(paths: list[str]) -> collections.Counter:
     """Each (binary, test, outcome) row of the tests.tsv files, counted."""
@@ -52,8 +58,7 @@ def lines(path: str) -> dict[tuple[str, int], int]:
     with open(path, encoding="utf-8", errors="replace") as f:
         for line in f:
             if line.startswith("SF:"):
-                name = line[3:].strip()
-                current = "src/" + name.split("/src/", 1)[1] if "/src/" in name else name
+                current = relative(line[3:].strip())
             elif line.startswith("DA:") and current is not None:
                 number, count = line[3:].split(",")[:2]
                 key = (current, int(number))
@@ -156,6 +161,13 @@ def main(argv: list[str]) -> int:
     p.add_argument("--lcov", required=True)
     p.add_argument("--lcov-single", nargs="+", required=True)
     a = p.parse_args(argv[1:])
+    # The band is defined by three single runs of the same commit; fewer would
+    # widen nothing and pass as the full comparison.
+    counts = (len(a.table_single), len(a.tests_single), len(a.lcov_single))
+    if counts != (SINGLES, SINGLES, SINGLES):
+        print(f"compare_coverage: need {SINGLES} single runs each of --table-single, "
+              f"--tests-single and --lcov-single, got {counts}")
+        return 2
     problems = compare(a.table, a.table_single, a.tests, a.tests_single, a.lcov, a.lcov_single)
     for problem in problems:
         print(f"DIFF {problem}")
