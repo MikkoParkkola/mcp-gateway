@@ -402,6 +402,10 @@ pub(super) fn build_persisted_costs(
         day_basis: snap.day_basis.clone(),
         tool_estimate: snap.tool_estimate.clone(),
         key_estimate: snap.key_estimate.clone(),
+        tool_owned: Some(snap.tool_owned.clone()),
+        key_owned: Some(snap.key_owned.clone()),
+        tool_born: Some(snap.tool_born.clone()),
+        key_born: Some(snap.key_born.clone()),
     }
 }
 

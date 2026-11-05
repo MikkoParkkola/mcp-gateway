@@ -68,6 +68,22 @@ impl Attribution {
             .collect()
     }
 
+    /// Every owned name, sorted, for the save.
+    pub(super) fn owned_names(&self) -> Vec<String> {
+        let mut names: Vec<String> = self.owned.iter().map(|e| e.key().clone()).collect();
+        names.sort();
+        names
+    }
+
+    /// Every creation figure recorded on `today`, in micro-USD.
+    pub(super) fn born_on(&self, today: Option<u64>) -> Vec<(String, u64)> {
+        self.born
+            .iter()
+            .filter(|entry| entry.is_current_on(today))
+            .map(|entry| (entry.key().clone(), entry.current_on(today)))
+            .collect()
+    }
+
     /// Record that an unowned name's row is created now, with `overflow` in
     /// the overflow total. Nothing to record while the overflow is empty.
     pub(super) fn born(&self, name: &str, overflow: u64, day: Option<u64>) {
@@ -101,6 +117,26 @@ impl Attribution {
         let acc = DailyAccumulator::on(day);
         acc.add_on(day, micro);
         self.estimate.insert(name.to_owned(), acc);
+    }
+
+    /// Replace the creation figures a restore recorded with the saved ones:
+    /// `saved` holds the figure for each row created after the overflow
+    /// began, so an unowned name missing from it was created with nothing in
+    /// the overflow. Owned names record none (`born`).
+    pub(super) fn restore_born(&self, saved: &[(String, u64)], day: Option<u64>) {
+        self.born.clear();
+        for (name, micro) in saved {
+            if micro > &0 && !self.owns(name) {
+                let acc = DailyAccumulator::on(day);
+                acc.add_on(day, *micro);
+                self.born.insert(name.clone(), acc);
+            }
+        }
+    }
+
+    /// Whether a starting figure is stored for `name` (any day).
+    pub(super) fn has_estimate(&self, name: &str) -> bool {
+        self.estimate.contains_key(name)
     }
 
     /// Drop the figures of days other than `today`. Ownership stays.
