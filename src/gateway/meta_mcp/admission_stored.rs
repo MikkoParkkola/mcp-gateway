@@ -48,6 +48,40 @@ pub(super) struct StoredDelivery {
     /// process.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(super) bindings: Vec<StepBinding>,
+    /// The one slot a single-slot execution dispatched under, which a
+    /// replay's declared effect is read from. Absent when none was noted, the
+    /// steps ran under two slots, or the record is older: the replay then
+    /// records no effect.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) effect_slot: Option<crate::backend::pool::PoolKey>,
+}
+
+/// The slot an execution's dispatches ran under, gathered on its lease: none
+/// noted yet, one slot, or two distinct slots, which stays conflicted.
+#[derive(Debug, Clone, Default)]
+pub(crate) enum SlotNote {
+    #[default]
+    Unnoted,
+    One(crate::backend::pool::PoolKey),
+    Conflicted,
+}
+
+impl SlotNote {
+    /// Note a dispatch's slot. Red stub (MIK-9216 red gate): first noted wins,
+    /// no conflict.
+    pub(crate) fn note(&mut self, slot: crate::backend::pool::PoolKey) {
+        if matches!(self, Self::Unnoted) {
+            *self = Self::One(slot);
+        }
+    }
+
+    /// The slot a settled answer stores: only from one slot.
+    pub(crate) fn settled(&self) -> Option<crate::backend::pool::PoolKey> {
+        match self {
+            Self::One(slot) => Some(slot.clone()),
+            Self::Unnoted | Self::Conflicted => None,
+        }
+    }
 }
 
 /// One dispatched step and the binding it ran under: `(server, tool,

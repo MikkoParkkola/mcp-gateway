@@ -44,6 +44,9 @@ pub(crate) struct SyncLease {
     steps: Mutex<Vec<(String, String)>>,
     /// The binding each step ran under (MIK-8407), kept for a replay.
     bindings: Mutex<Vec<stored::StepBinding>>,
+    /// The slot this execution's dispatches ran under, for a replay's
+    /// declared effect.
+    effect_slot: Mutex<stored::SlotNote>,
     /// MIK-8747: the era its stored delivery is shaped for (meta path only).
     era: Option<crate::protocol::meta::Era>,
 }
@@ -73,6 +76,11 @@ impl SyncLease {
     /// one, so its replay refuses (MIK-8407).
     pub(crate) fn note_binding(&self, (server, tool): (&str, &str), binding: Option<&str>) {
         stored::note_distinct(&mut self.bindings.lock(), (server, tool), binding);
+    }
+
+    /// Note the slot a dispatch of this execution ran under.
+    pub(crate) fn note_effect_slot(&self, slot: crate::backend::pool::PoolKey) {
+        self.effect_slot.lock().note(slot);
     }
 
     /// The steps noted so far, for the invoke stage rows (MIK-8488).
@@ -136,6 +144,7 @@ impl SyncLease {
         let audit = self.audit.into_inner();
         let steps = self.steps.into_inner();
         let bindings = self.bindings.into_inner();
+        let effect_slot = self.effect_slot.into_inner().settled();
         if dispatches == 0
             || response.result.as_ref().is_some_and(|result| {
                 crate::protocol::mrtr::InputRequired::claims_input_required(result)
@@ -174,6 +183,7 @@ impl SyncLease {
             dispatched: Some(steps),
             era,
             bindings,
+            effect_slot,
         };
         let retained = lease.complete_secured(&serde_json::to_value(stored).unwrap_or(Value::Null))
             == Settlement::Retained;
@@ -401,6 +411,7 @@ impl MetaMcp {
                     audit: Mutex::new(None),
                     steps: Mutex::new(Vec::new()),
                     bindings: Mutex::new(Vec::new()),
+                    effect_slot: Mutex::new(stored::SlotNote::default()),
                     era: None,
                 }))
             }
@@ -753,6 +764,10 @@ impl MetaMcp {
 #[cfg(test)]
 #[path = "admission_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "admission_slot_tests.rs"]
+mod slot_tests;
 
 #[cfg(test)]
 #[path = "admission_round_tests.rs"]

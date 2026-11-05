@@ -28,7 +28,8 @@ mod eviction;
 /// caller identity is present, the backend additionally owns one
 /// [`PoolKey::PerUser`] slot per stable identity binding, so two distinct users
 /// never share a backend transport or its upstream MCP session (IDP.7).
-#[derive(Clone, PartialEq, Eq, Hash)]
+#[derive(Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "slot", rename_all = "snake_case")]
 pub(crate) enum PoolKey {
     /// The canonical single-tenant slot. Every backend without identity
     /// propagation, and every propagating request that lacks a resolved
