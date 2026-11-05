@@ -543,9 +543,11 @@ async fn a_config_deleted_under_the_writer_answers_no_config_file() {
 
 /// The guard's refusal of gateway.yaml or its recovery files, as every
 /// backend route answers it: fixed text, no path.
+#[cfg(unix)]
 const CONFIG_REFUSED: &str = "gateway.yaml could not be loaded";
 
 /// A value a refused write must never put anywhere.
+#[cfg(unix)]
 const SECRET: &str = "s3cr3t-9230";
 
 impl Audited {
@@ -559,6 +561,7 @@ impl Audited {
     }
 
     /// An update carrying a secret-looking env value.
+    #[cfg(unix)]
     async fn update_with_secret(&self) -> (StatusCode, Value) {
         self.update_with("a", serde_json::json!({ "env": { "TOKEN": SECRET } }))
             .await
@@ -566,6 +569,7 @@ impl Audited {
 
     /// The refusal answer, with the secret nowhere and no store beside the
     /// config.
+    #[cfg(unix)]
     fn assert_refused(&self, route: &str, (status, body): &(StatusCode, Value)) {
         assert_eq!(
             (*status, &body["error"]),
