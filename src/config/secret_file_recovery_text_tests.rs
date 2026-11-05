@@ -71,11 +71,6 @@ fn the_recovery_guidance_is_the_reviewed_text() {
 #[cfg(unix)]
 fn mode_refusals(what: SecretFile, path: &std::path::Path) -> Vec<(&'static str, String)> {
     use super::Refusal;
-    let config = super::refusal_message(SecretFile::Config, path, Refusal::World, (0o666, 0, 7), 0);
-    assert!(
-        config.contains("Fix: chmod 600"),
-        "the config fix changed: {config}"
-    );
     /// Every Unix refusal kind with its name: the one list the row reads.
     const KINDS: [(&str, Refusal); 4] = [
         ("world", Refusal::World),
@@ -83,6 +78,11 @@ fn mode_refusals(what: SecretFile, path: &std::path::Path) -> Vec<(&'static str,
         ("group read", Refusal::GroupReadOwned),
         ("foreign owner", Refusal::ForeignOwner),
     ];
+    let config = super::refusal_message(SecretFile::Config, path, Refusal::World, (0o666, 0, 7), 0);
+    assert!(
+        config.contains("Fix: chmod 600"),
+        "the config fix changed: {config}"
+    );
     // No wildcard: a new kind fails to compile here, and the slot it is
     // given must then hold it in KINDS, or this check fails.
     let slot = |refusal: Refusal| match refusal {
