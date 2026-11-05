@@ -22,26 +22,9 @@ fn watch_row(observed: bool) -> Subscription {
         "watch_class": serde_json::to_value(WatchClass::Free).expect("class"),
     });
     if observed {
-        let config: crate::config::Config = crate::yaml::from_str(
-            "backends:\n  signed:\n    http_url: https://h/mcp\n    identity_propagation:\n      \
-             strategy: signed_assertion\n      audience: https://mail\n      session_mode: per_user\n",
-        )
-        .expect("config");
-        let witness = crate::key_server::oidc::VerifiedIdentity::checked(
-            "https://idp".into(),
-            "witness".into(),
-            "w@h".into(),
-            None,
-            Vec::new(),
-        )
-        .expect("names someone");
-        let basis =
-            crate::events::observation::observe_subscriber(&config, "signed", Some(&witness))
-                .expect("observes")
-                .expect("per-user");
-        row["obs_basis"] = serde_json::to_value(basis).expect("basis");
+        row["obs_basis"] = crate::events::stored_identity_fixture::basis();
         row["observed_identity"] =
-            json!({"subject": "", "email": "q@h", "groups": [], "issuer": "https://idp"});
+            crate::events::stored_identity_fixture::identity("https://idp", "");
     }
     serde_json::from_value(row).expect("a watch row")
 }

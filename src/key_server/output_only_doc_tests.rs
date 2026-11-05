@@ -29,16 +29,18 @@ fn doc_test(source: &str, name: &str, fence: &str) -> Vec<String> {
 
 #[test]
 fn each_output_only_type_fails_to_read_and_writes_out() {
-    for (source, name, path) in [
+    for (source, name, path, arg) in [
         (
             include_str!("oidc.rs"),
             "VerifiedIdentity",
             "mcp_gateway::key_server::oidc::VerifiedIdentity",
+            "identity",
         ),
         (
             include_str!("store.rs"),
             "TemporaryToken",
             "mcp_gateway::key_server::TemporaryToken",
+            "token",
         ),
     ] {
         let failing = doc_test(source, name, FAILING);
@@ -59,10 +61,7 @@ fn each_output_only_type_fails_to_read_and_writes_out() {
         assert_eq!(
             passing,
             [
-                format!(
-                    "fn write({}: &{path}) -> String {{",
-                    passing_arg(&passing[0])
-                ),
+                format!("fn write({arg}: &{path}) -> String {{"),
                 passing[1].clone(),
                 "}".to_owned(),
             ],
@@ -70,14 +69,4 @@ fn each_output_only_type_fails_to_read_and_writes_out() {
         );
         assert!(passing[1].starts_with("serde_json::to_string("), "{name}");
     }
-}
-
-/// The argument name of the twin's `fn write(<arg>: ...)`.
-fn passing_arg(signature: &str) -> String {
-    signature
-        .trim_start_matches("fn write(")
-        .split(':')
-        .next()
-        .unwrap_or_default()
-        .to_owned()
 }

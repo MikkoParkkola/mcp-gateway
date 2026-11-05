@@ -6,9 +6,12 @@
 
 use super::*;
 
-const CONFIG: &str = "backends:\n  \
-     signed:\n    http_url: https://h/mcp\n    identity_propagation:\n      \
-     strategy: signed_assertion\n      audience: https://mail\n      session_mode: per_user\n";
+use crate::events::stored_identity_fixture::{SIGNED as CONFIG, per_user_row as row};
+
+/// A stored identity naming `subject` at the fixture's issuer.
+fn identity(subject: &str) -> serde_json::Value {
+    crate::events::stored_identity_fixture::identity("https://idp", subject)
+}
 
 fn services() -> Services {
     let config: crate::config::Config = crate::yaml::from_str(CONFIG).expect("config");
@@ -24,39 +27,6 @@ fn services() -> Services {
         credentials: LiveCredentials::default(),
         record_key: Some(crate::gateway::record_principal::test_key_arc()),
     }
-}
-
-/// A row on `name` as the store reads it from disk, with `identity` stored
-/// and the basis a subscribe on `signed` records.
-fn row(name: &str, identity: &serde_json::Value) -> records::Subscription {
-    let config: crate::config::Config = crate::yaml::from_str(CONFIG).expect("config");
-    let witness = crate::key_server::oidc::VerifiedIdentity::checked(
-        "https://idp".into(),
-        "witness".into(),
-        "w@h".into(),
-        None,
-        Vec::new(),
-    )
-    .expect("names someone");
-    let basis = observation::observe_subscriber(&config, "signed", Some(&witness))
-        .expect("observes")
-        .expect("per-user");
-    serde_json::from_value(serde_json::json!({
-        "v": 1, "id": "i", "principal": "p", "api_key": null, "url": "https://cb",
-        "name": name, "arguments": {}, "secret": "s",
-        "previous_secret": null, "previous_until": null,
-        "granted_at": "2026-10-25T00:00:00Z", "expires_at": null, "active": true,
-        "failed_since": null, "last_delivery_at": null, "last_error": null,
-        "observed_identity": identity,
-        "obs_basis": serde_json::to_value(basis).expect("basis serializes"),
-    }))
-    .expect("a stored row loads")
-}
-
-fn identity(subject: &str) -> serde_json::Value {
-    serde_json::json!({
-        "subject": subject, "email": "q@h", "groups": [], "issuer": "https://idp",
-    })
 }
 
 #[test]

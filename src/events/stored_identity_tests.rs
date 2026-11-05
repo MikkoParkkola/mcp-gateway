@@ -8,52 +8,15 @@
 //! the code's own writer, so a renamed field fails here rather than
 //! round-tripping through itself.
 
-use super::{ObsRefusal, binding, observe_row, observe_subscriber};
-use crate::config::Config;
+use super::{ObsRefusal, binding, observe_row};
 use crate::events::records::Subscription;
+use crate::events::stored_identity_fixture::{config, identity, per_user_row};
 use serde_json::{Value, json};
-
-fn config() -> Config {
-    crate::yaml::from_str(
-        "backends:\n  \
-         signed:\n    http_url: https://h/mcp\n    identity_propagation:\n      \
-         strategy: signed_assertion\n      audience: https://mail\n      session_mode: per_user\n",
-    )
-    .expect("config parses")
-}
 
 /// A per-user row on `signed` whose stored identity is `identity`, as the
 /// events store reads it back from disk.
 fn stored_row(identity: &Value) -> Subscription {
-    let config = config();
-    let witness = crate::key_server::oidc::VerifiedIdentity::checked(
-        "https://idp".into(),
-        "witness".into(),
-        "witness@example.com".into(),
-        None,
-        Vec::new(),
-    )
-    .expect("names someone");
-    let basis = observe_subscriber(&config, "signed", Some(&witness))
-        .expect("observes")
-        .expect("per-user");
-    serde_json::from_value(json!({
-        "v": 1, "id": "i", "principal": "p", "api_key": null, "url": "https://cb",
-        "name": "backend.signed.tools_changed", "arguments": {}, "secret": "s",
-        "previous_secret": null, "previous_until": null,
-        "granted_at": "2026-10-25T00:00:00Z", "expires_at": null, "active": true,
-        "failed_since": null, "last_delivery_at": null, "last_error": null,
-        "observed_identity": identity,
-        "obs_basis": serde_json::to_value(basis).expect("basis serializes"),
-    }))
-    .expect("a stored row loads")
-}
-
-fn identity(issuer: &str, subject: &str) -> Value {
-    json!({
-        "subject": subject, "email": "someone@example.com",
-        "groups": [], "issuer": issuer,
-    })
+    per_user_row("backend.signed.tools_changed", identity)
 }
 
 /// A stored identity naming nobody (empty or blank issuer or subject) is
@@ -89,7 +52,7 @@ fn a_stored_identity_that_checks_observes_as_its_subject() {
     let expected = crate::key_server::oidc::VerifiedIdentity::checked(
         "https://idp".into(),
         "p".into(),
-        "someone@example.com".into(),
+        "q@h".into(),
         None,
         Vec::new(),
     )

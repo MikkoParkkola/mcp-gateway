@@ -50,7 +50,12 @@ fn no_conversion_turns_a_stored_identity_into_a_verified_one() {
             if path.is_dir() {
                 pending.push(path);
             } else if path.extension().is_some_and(|e| e == "rs") {
-                let text = std::fs::read_to_string(&path).expect("source");
+                // Whitespace removed, so `From< &StoredIdentity >` or a
+                // generic wrapped over lines is caught as well.
+                let text: String = std::fs::read_to_string(&path)
+                    .expect("source")
+                    .split_whitespace()
+                    .collect();
                 for spelling in ["From<StoredIdentity>", "From<&StoredIdentity>"] {
                     if text.contains(spelling) {
                         offenders.push(format!("{}: {spelling}", path.display()));
