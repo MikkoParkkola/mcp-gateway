@@ -444,11 +444,12 @@ async fn a_direct_cache_hit_reads_the_callers_slot_now() {
     assert_eq!(decision["declared_effect"], "read_only", "{decision}");
 }
 
-/// A3, alice's slot cold at the hit (evicted and re-armed unlisted), the
-/// shared slot declaring read-only: the hit records no effect, never the
-/// shared slot's.
+/// A3, alice's slot evicted after the call and re-armed unlisted, the shared
+/// slot declaring read-only. The repeat lists alice's slot again before the
+/// cache answers (the fixture's listing gives `read` no hint), so the hit
+/// records her slot as refilled: undeclared, never the shared read-only.
 #[tokio::test]
-async fn a_direct_cache_hit_on_a_cold_slot_records_none() {
+async fn a_direct_cache_hit_on_an_evicted_slot_reads_it_as_refilled() {
     let dir = tempfile::tempdir().expect("a log directory");
     let fx = bound_with(&dir, Cache::On).await;
     let alpha = fx.state.backends.get("alpha").expect("alpha");
@@ -457,7 +458,7 @@ async fn a_direct_cache_hit_on_a_cold_slot_records_none() {
     let shared = alpha
         .pooled_transport_for_test(&crate::backend::PoolKey::Shared)
         .expect("the fixture's scripted transport");
-    let decision = cache_hit(&fx, &dir, "k-7a-cold", || {
+    let decision = cache_hit(&fx, &dir, "k-7a-evicted", || {
         alpha.retire_per_user_slot_for_test(ALICE_ALPHA);
         alpha.forget_caller_slots_for_test();
         alpha.set_pooled_transport_for_test(
@@ -466,15 +467,20 @@ async fn a_direct_cache_hit_on_a_cold_slot_records_none() {
             },
             shared,
         );
+        assert_eq!(
+            alpha.declared_effect_for(Some(ALICE_ALPHA), "read"),
+            None,
+            "premise: alice's slot is evicted and unlisted"
+        );
     })
     .await;
     assert_eq!(
         alpha.declared_effect_for(Some(ALICE_ALPHA), "read"),
-        None,
-        "premise: alice's slot stayed cold through the hit"
+        Some(crate::security::decision_record::Effect::Undeclared),
+        "premise: the repeat refilled alice's slot from the fixture's listing"
     );
     assert_eq!(decision["decided"], "replayed", "{decision}");
-    assert!(decision.get("declared_effect").is_none(), "{decision}");
+    assert_eq!(decision["declared_effect"], "undeclared", "{decision}");
 }
 
 /// GUARD: the stored-result stores are per caller. alice runs a keyed direct
