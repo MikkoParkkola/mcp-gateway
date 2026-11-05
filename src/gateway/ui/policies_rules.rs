@@ -85,7 +85,7 @@ fn decided() -> Vec<ScanType> {
 }
 
 /// A scan type's config spelling.
-fn name(t: ScanType) -> String {
+pub(super) fn name(t: ScanType) -> String {
     serde_json::to_value(t)
         .ok()
         .and_then(|v| v.as_str().map(str::to_owned))
@@ -116,7 +116,7 @@ pub(super) const BACKEND_EXPANDED: [&str; 4] = [
 /// The types `rule` decides: those of its `scan` a rule decides, or every
 /// such type when `scan` is empty; none for a root rule.
 /// A root rule decides only its own findings, never a content finding.
-fn decides(rule: &FirewallRule) -> Vec<ScanType> {
+pub(super) fn decides(rule: &FirewallRule) -> Vec<ScanType> {
     if is_root(rule) {
         return Vec::new();
     }

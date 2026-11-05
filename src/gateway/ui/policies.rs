@@ -52,15 +52,48 @@ impl<'a> Sources<'a> {
 /// The read model for `sources`.
 pub(super) fn read_model(sources: &Sources<'_>) -> Value {
     let config = sources.generation.config();
-    json!({
+    let mut model = json!({
         "tool_policy": tool_policy(&config.security.tool_policy),
         "finding_rules": finding_rules(config),
-        "scan_types": Value::Null,
-        "guards": Value::Null,
-        "credentials": Value::Null,
-        "relay": Value::Null,
-        "tool_limits": Value::Null,
-    })
+        "tool_limits": tool_limits(),
+    });
+    for (section, value) in firewall_sections(sources) {
+        model[section] = value;
+    }
+    model
+}
+
+/// The scan types, guards, credentials and relay sections: `null` in a
+/// build without the firewall, as `finding_rules`.
+#[cfg(feature = "firewall")]
+fn firewall_sections(sources: &Sources<'_>) -> [(&'static str, Value); 4] {
+    super::policies_part2::sections(sources)
+}
+
+#[cfg(not(feature = "firewall"))]
+fn firewall_sections(_sources: &Sources<'_>) -> [(&'static str, Value); 4] {
+    [
+        ("scan_types", Value::Null),
+        ("guards", Value::Null),
+        ("credentials", Value::Null),
+        ("relay", Value::Null),
+    ]
+}
+
+/// The four configured tool limits, in the order they run on HTTP
+/// (ADR-029, "Tool limits"), each with where it is edited. A list, not a
+/// judgement: finding rules are not among them.
+fn tool_limits() -> Value {
+    json!([
+        { "limit": "global", "setting": "security.tool_policy", "edited_on": "policies_screen" },
+        {
+            "limit": "key",
+            "setting": "auth.api_keys[].allowed_tools, auth.api_keys[].denied_tools and the key's backend scope",
+            "edited_on": "keys_screen"
+        },
+        { "limit": "certificate", "setting": "mtls policy", "edited_on": "gateway_yaml" },
+        { "limit": "agent", "setting": "OAuth agent scopes", "edited_on": "gateway_yaml" },
+    ])
 }
 
 /// The firewall's finding rules. A build without the firewall answers
