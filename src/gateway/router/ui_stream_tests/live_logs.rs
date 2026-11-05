@@ -802,9 +802,12 @@ async fn l2_snapshots_changing_faster_than_a_send_do_not_starve_a_live_stream() 
             }
         })
     };
-    // The premise: the churn reaches the stream as status frames.
-    within(s.until("status")).await;
-    within(s.until("status")).await;
+    // The premise: the churn reaches the stream as status frames, two of
+    // them through the loop (the first comes with hello), so a snapshot can
+    // follow a snapshot.
+    for _ in 0..3 {
+        within(s.until("status")).await;
+    }
     call(&inv, "srv", 1);
     let frame = within(s.until("activity")).await;
     churn.abort();
