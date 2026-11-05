@@ -79,7 +79,7 @@ impl SyncLease {
     }
 
     /// Note the slot a dispatch of this execution ran under.
-    pub(crate) fn note_effect_slot(&self, slot: crate::backend::pool::PoolKey) {
+    pub(crate) fn note_effect_slot(&self, slot: crate::backend::PoolKey) {
         self.effect_slot.lock().note(slot);
     }
 

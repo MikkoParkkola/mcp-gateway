@@ -7,7 +7,7 @@
 use serde_json::json;
 
 use super::stored::{SlotNote, StoredDelivery};
-use crate::backend::pool::PoolKey;
+use crate::backend::PoolKey;
 
 fn per_user(binding: &str) -> PoolKey {
     PoolKey::PerUser {
