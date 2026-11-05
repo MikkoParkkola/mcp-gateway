@@ -12,7 +12,7 @@ use crate::gateway::meta_mcp::MetaMcp;
 
 /// Stdio startup's catalogue step for `config`, on the gateway and Meta-MCP
 /// the stdio loop builds: its outcome, and the Meta-MCP it installed into.
-async fn startup(config: Config) -> (crate::Result<()>, Arc<MetaMcp>) {
+pub(super) async fn startup(config: Config) -> (crate::Result<()>, Arc<MetaMcp>) {
     let gateway = Gateway::new(config)
         .await
         .expect("VOID: the gateway builds");

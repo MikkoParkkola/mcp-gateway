@@ -37,6 +37,14 @@ pub(crate) enum ReplayOrigin {
     ContinuationOrigin,
 }
 
+/// What a stored execution recorded beside its answer: the steps it
+/// dispatched, the bindings they ran under and the one slot it ran on.
+pub(crate) type StoredSteps = (
+    Option<Vec<(String, String)>>,
+    Vec<super::super::admission::StepBinding>,
+    Option<crate::backend::PoolKey>,
+);
+
 /// What a served replay carries to `audit_replay`: the stored facts, and the
 /// server a `Named` target was admitted for (MIK-8520, MIK-7645 AC3). The
 /// record and receipt name that server, never the live surfaced map read
@@ -45,6 +53,12 @@ pub(crate) enum ReplayOrigin {
 pub(crate) struct ReplayFacts {
     pub(crate) audit: Option<ReplayAudit>,
     pub(crate) server: Option<String>,
+    /// The backend tool a `Named` target called, which a replay's declared
+    /// effect is looked up for; none for a continuation origin.
+    pub(crate) tool: Option<String>,
+    /// The one slot the first execution ran under, as stored with its
+    /// settled answer; none when it stored none.
+    pub(crate) slot: Option<crate::backend::PoolKey>,
 }
 
 impl ReplayTarget {
@@ -218,18 +232,21 @@ impl MetaMcp {
         arguments: &Value,
         caller: &super::super::MetaMcpCallerContext<'_>,
         target: Option<ReplayTarget>,
-        (dispatched, bindings): (
-            Option<Vec<(String, String)>>,
-            Vec<super::super::admission::StepBinding>,
-        ),
+        (dispatched, bindings, effect_slot): StoredSteps,
         (response, audit): (JsonRpcResponse, Option<ReplayAudit>),
     ) -> Option<(JsonRpcResponse, ReplayFacts)> {
         // Derived once: every answer below, refusals included, and the
         // deferred entry are records of the call admitted for this server.
         let server = ReplayTarget::audit_server(target.as_ref());
+        let audit_tool = target
+            .as_ref()
+            .filter(|target| target.origin == ReplayOrigin::Named)
+            .map(|target| target.tool.clone());
         let facts = |audit| ReplayFacts {
             audit,
             server: server.clone(),
+            tool: audit_tool.clone(),
+            slot: effect_slot.clone(),
         };
         let view = self.scoped(caller.scope().authorizer.backend_grant());
         if let Err(error) = self.judge_bindings(&view, &bindings) {
@@ -294,6 +311,8 @@ impl MetaMcp {
                 response,
                 audit,
                 audit_server: server.clone(),
+                audit_tool: audit_tool.clone(),
+                effect_slot: effect_slot.clone(),
                 tool_name: tool_name.to_owned(),
                 arguments: arguments.clone(),
                 bindings,

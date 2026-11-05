@@ -2,7 +2,9 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Operator controls: cost report, stats, kill/revive, reload, playbooks.
 
-use crate::error::rpc_codes::{INTERNAL_ERROR, INVALID_PARAMS, INVALID_REQUEST};
+use crate::error::rpc_codes::{
+    INTERNAL_ERROR, INVALID_PARAMS, INVALID_REQUEST, SERVER_ERROR_START,
+};
 use serde_json::{Value, json};
 use tracing::debug;
 
@@ -336,6 +338,14 @@ impl MetaMcp {
             )
         })?;
 
+        // Never beside the startup scan: its pin-mismatch check could unload
+        // bytes this reload restores. Retryable: the scan ends on its own.
+        if !backend.initial_scan_complete() {
+            return Err(Error::json_rpc(
+                SERVER_ERROR_START,
+                "the startup capability scan is still running; retry when /readyz is ready",
+            ));
+        }
         match backend.reload().await {
             Ok(total) => {
                 // Listeners hear of it only if what they see changed (`MIK-8127`).
