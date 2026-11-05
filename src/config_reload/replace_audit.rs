@@ -55,7 +55,9 @@ impl BackendOp {
     }
 }
 
-/// The id an intent was appended under; its outcome record carries it.
+/// The id an intent was appended under. Only the intent is recorded: no
+/// outcome record follows it, so the request's own record (the web UI's
+/// admin action) is where an outcome is read.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct IntentId(pub(crate) String);
 
