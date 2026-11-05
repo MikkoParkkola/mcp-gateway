@@ -7,8 +7,11 @@
 use std::path::Path;
 
 /// Each production call of the flip check, by file: the reload's
-/// `Generation::prepare`. The web UI key create joins when it lands.
-const CALLERS: &[(&str, usize)] = &[("src/config_reload/generation.rs", 1)];
+/// `Generation::prepare`, and the web UI key create's compute.
+const CALLERS: &[(&str, usize)] = &[
+    ("src/config_reload/generation.rs", 1),
+    ("src/gateway/ui/keys_create.rs", 1),
+];
 
 fn production_sources() -> Vec<(String, String)> {
     fn walk(dir: &Path, out: &mut Vec<std::path::PathBuf>) {

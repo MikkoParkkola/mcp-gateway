@@ -253,6 +253,7 @@ pub(super) static ROWS: &[Row] = &[
         &[(Page::Access, Tab::Status)],
         true,
     ),
+    row(routes::UI_KEYS, Post, Admin(Forbidden), &[], false),
     row(
         routes::UI_DEAD_LETTERS,
         Get,

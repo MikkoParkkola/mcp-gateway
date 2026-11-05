@@ -101,12 +101,12 @@ fn production_sources() -> Vec<(String, String)> {
 
 /// The production callers of `random_secret`, both crates:
 /// `gateway init`'s admin token (binary), the auto bearer, the key server's
-/// bearer, the dashboard's session values, the OAuth client's PKCE verifier. The create route joins at S5 and
-/// rotate in C2; any other caller fails here until it is reviewed and named.
+/// bearer, the dashboard's session values, the OAuth client's PKCE verifier. The create route is listed; rotate joins in C2; any other caller fails here until it is reviewed and named.
 const CALLERS: &[(&str, usize)] = &[
     ("src/commands/mod.rs", 1),
     ("src/config/features/auth.rs", 1),
     ("src/gateway/auth_dashboard.rs", 1),
+    ("src/gateway/ui/keys_create.rs", 1),
     ("src/key_server/store.rs", 1),
     ("src/oauth/client/mod.rs", 1),
 ];

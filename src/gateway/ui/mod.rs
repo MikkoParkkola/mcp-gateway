@@ -31,6 +31,7 @@ mod guard;
 mod history;
 pub mod import;
 mod keys;
+mod keys_create;
 mod overview;
 mod preview;
 mod preview_identity;
@@ -85,7 +86,10 @@ pub fn api_router() -> Router<Arc<AppState>> {
         .route(routes::UI_TOOLS_CALL, post(tool_call::call))
         .route(routes::UI_REFUSALS, get(refusals::refusals))
         .route(routes::UI_GATEWAY, get(gateway_status::gateway_status))
-        .route(routes::UI_KEYS, get(keys::keys))
+        .route(
+            routes::UI_KEYS,
+            get(keys::keys).post(keys_create::create_key),
+        )
         .route(routes::UI_CONFIG, get(config))
         .route(routes::UI_RELOAD, post(reload))
         .route(routes::UI_DASHBOARD_LINK, post(session::dashboard_link))
@@ -701,3 +705,15 @@ mod tests;
 
 #[cfg(test)]
 mod discovery_wiring_tests;
+
+#[cfg(test)]
+#[path = "keys_create_fixture_tests.rs"]
+mod keys_create_fixture_tests;
+
+#[cfg(test)]
+#[path = "keys_create_tests.rs"]
+mod keys_create_tests;
+
+#[cfg(test)]
+#[path = "keys_create_refusal_tests.rs"]
+mod keys_create_refusal_tests;
