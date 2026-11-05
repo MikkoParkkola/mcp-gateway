@@ -249,10 +249,10 @@ fn uses_of<'a>(code: &'a str, name: &str) -> Vec<&'a str> {
 /// 201 body (`created` takes it as `once`). An alias, a clone or a log line
 /// adds a line here and fails the pin.
 const SECRET_USES: [&str; 4] = [
+    "Json(json!({\"name\": name, \"secret\": once, \"revision\": revision.as_str()})),",
     "let secret = crate::random_secret::random_secret(\"mcpgw_\");",
     "let digest = crate::config::api_key_digest_spec(secret.as_bytes());",
     "}) if landed(&state, &name, &digest) => created(&name, &secret, &revision),",
-    "Json(json!({\"name\": name, \"secret\": once, \"revision\": revision.as_str()})),",
 ];
 
 /// `created` holds the secret as `once`: its signature and the body only.
@@ -307,7 +307,10 @@ fn raw_source(file: &str) -> String {
 #[test]
 fn l1_every_post_row_runs_the_leak_check() {
     let fixture = raw_source("keys_create_fixture_tests.rs");
-    let post = fixture.split("fn post(").nth(1).expect("post");
+    let post = fixture
+        .split("fn post_driven<")
+        .nth(1)
+        .expect("post_driven");
     let post = post.split("\n    }\n").next().unwrap_or("");
     assert!(post.contains("self.assert_leak_free("), "{post}");
     let door = ["fx.se", "nd("].concat();
