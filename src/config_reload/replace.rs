@@ -173,6 +173,9 @@ pub(crate) enum ReplaceError {
     /// The compute refused, or produced bytes that are not UTF-8 text. Bytes
     /// the loader rejects are `ReloadRefused`, after the rollback.
     Refused(String),
+    /// The audit log refused to record the operation's (or its recovery's)
+    /// intent; nothing was written. Raised only where an intent is appended.
+    AuditRefused(String),
     /// gateway.yaml no longer resolves to the file this gateway started on.
     Unsupported(String),
     /// Staging the original or the journal failed; nothing was replaced.
@@ -278,6 +281,7 @@ pub(crate) fn settle_for(result: &Result<ReplaceOutcome, ReplaceError>) -> Settl
         ReplaceError::Busy
         | ReplaceError::Stale { .. }
         | ReplaceError::Refused(_)
+        | ReplaceError::AuditRefused(_)
         | ReplaceError::Stage(_)
         | ReplaceError::Secrets(_)
         // The rollback came back: a failed one is `RollbackFailed`.

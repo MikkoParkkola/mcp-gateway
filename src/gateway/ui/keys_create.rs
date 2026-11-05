@@ -434,7 +434,9 @@ fn refused_write(
         (None, Err(ReplaceError::ReloadRefused(_))) => {
             coded(StatusCode::CONFLICT, "reload_refused")
         }
-        (None, Err(ReplaceError::Refused(_))) => audit_unavailable(),
+        (None, Err(ReplaceError::Refused(_) | ReplaceError::AuditRefused(_))) => {
+            audit_unavailable()
+        }
         (
             None,
             Err(ReplaceError::Unsupported(_) | ReplaceError::Stage(_) | ReplaceError::Write(_)),

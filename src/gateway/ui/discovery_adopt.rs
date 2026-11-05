@@ -136,6 +136,7 @@ pub(super) fn answer(name: &str, written: Result<ReplaceOutcome, ReplaceError>) 
         )
             .into_response(),
         Err(ReplaceError::Refused(_)) => failed("refused"),
+        Err(ReplaceError::AuditRefused(_)) => failed("audit_refused"),
         Err(ReplaceError::Secrets(SaveError::Refused(StoreError::Unavailable(_)))) => {
             fixed(StatusCode::UNPROCESSABLE_ENTITY, STORE_UNAVAILABLE)
         }
