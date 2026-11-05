@@ -151,12 +151,12 @@ fn a_warn_stamp_from_the_future_is_due() {
 /// is `MonotonicClock`.
 #[test]
 fn the_default_clock_is_std_instant() {
-    let l: RateLimiter = RateLimiter::new(&RateLimitConfig::default());
-    let _: RateLimiter<MonotonicClock> = l;
     fn send_sync<T: Send + Sync>() {}
     fn any_clock<C: Clock + Clone + Send + Sync>() {
         send_sync::<RateLimiter<C>>();
     }
+    let l: RateLimiter = RateLimiter::new(&RateLimitConfig::default());
+    let _: RateLimiter<MonotonicClock> = l;
     any_clock::<MonotonicClock>();
     any_clock::<StepClock>();
 }
@@ -191,7 +191,7 @@ fn racing_callers_after_a_step_share_one_rebuilt_bucket() {
 fn small_steps_back_admit_within_one_interval() {
     let (l, clock) = limiter(secs(1000));
     drain(&l);
-    clock.set(secs(1000) - T / 2);
+    clock.set(Duration::from_micros(999_995_000));
     assert!(admitted(l.acquire()), "a wait of 1.5 intervals is a step");
 
     let (l, clock) = limiter(secs(1000));
