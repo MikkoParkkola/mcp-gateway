@@ -497,3 +497,8 @@ pub(crate) fn sync_dir(dir: &Path) -> std::io::Result<()> {
         std::fs::File::open(dir)?.sync_all()
     }
 }
+
+/// A stored identity is verified only through the checked constructor.
+#[cfg(test)]
+#[path = "stored_identity_pin_tests.rs"]
+mod stored_identity_pin_tests;
