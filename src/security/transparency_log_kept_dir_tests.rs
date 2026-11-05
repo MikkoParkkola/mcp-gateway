@@ -5,13 +5,15 @@
 //! filesystem call until its last handle drops. A log in an unregistered temp
 //! dir is named instead (MIK-8986 part 2, PR 1).
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::{Arc, Weak};
 use std::time::Duration;
 
 use super::keep_dir_tests::note;
 use super::{TransparencyLogConfig, TransparencyLogger};
-use crate::test_dir_keep::{expect_unkept, kept_tempdir, kept_tempdir_in, outside_temp};
+use crate::test_dir_keep::{
+    AUDIT_LOG, Unkept, expect_unkept, kept_tempdir, kept_tempdir_in, outside_temp,
+};
 
 fn config(path: &str) -> Arc<TransparencyLogConfig> {
     Arc::new(TransparencyLogConfig {
@@ -98,7 +100,7 @@ fn an_unkept_temp_dir_log_is_recorded_once_with_its_test() {
     let path = dir.path().join("audit.jsonl");
     let unkept = expect_unkept();
     let log = open(&path);
-    assert_eq!(unkept.recorded(), vec![(path, this_test())]);
+    assert_eq!(unkept.recorded(), vec![(AUDIT_LOG, path, this_test())]);
     drop(log);
 }
 
@@ -183,7 +185,7 @@ fn a_kept_log_records_nothing() {
     let dir = kept_tempdir();
     let unkept = expect_unkept();
     let log = open(&dir.path().join("audit.jsonl"));
-    assert_eq!(unkept.recorded(), Vec::<(PathBuf, String)>::new());
+    assert_eq!(unkept.recorded(), Vec::<Unkept>::new());
     drop(log);
 }
 
@@ -241,7 +243,7 @@ fn a_real_log_outside_the_temp_dir_records_nothing() {
     let dir = outside_temp();
     let unkept = expect_unkept();
     let log = open(&dir.path().join("audit.jsonl"));
-    assert_eq!(unkept.recorded(), Vec::<(PathBuf, String)>::new());
+    assert_eq!(unkept.recorded(), Vec::<Unkept>::new());
     drop(log);
 }
 
@@ -268,5 +270,5 @@ fn a_worker_open_is_attributed_to_its_spawning_test() {
         .expect("a worker")
         .join()
         .expect("the worker does not panic");
-    assert_eq!(recorded, vec![(path, parent)]);
+    assert_eq!(recorded, vec![(AUDIT_LOG, path, parent)]);
 }

@@ -170,9 +170,16 @@ fn is_external(path: &Path) -> bool {
     is_external_in(external, path)
 }
 
+/// One unkept open: its kind (`AUDIT_LOG`), its path, and the test it is
+/// attributed to.
+pub(crate) type Unkept = (&'static str, std::path::PathBuf, String);
+
+/// The kind a transparency log reports as.
+pub(crate) const AUDIT_LOG: &str = "audit log";
+
 std::thread_local! {
     /// The open `expect_unkept` scope on this thread, if any.
-    static EXPECTED: std::cell::RefCell<Option<Vec<(std::path::PathBuf, String)>>> =
+    static EXPECTED: std::cell::RefCell<Option<Vec<Unkept>>> =
         const { std::cell::RefCell::new(None) };
     /// A row's checkpoint inside the next open (`before_first_fs_call`).
     static CHECKPOINT: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
@@ -183,19 +190,19 @@ std::thread_local! {
 /// raw stderr naming the test, for the CI shard check, unless the path is
 /// outside the temp dir or a parent process keeps its dir. Inside an
 /// `expect_unkept` scope it is recorded there instead.
-pub(crate) fn report_unkept(path: &Path) {
+pub(crate) fn report_unkept(kind: &'static str, path: &Path) {
     if !under_temp_root(path) || is_external(path) {
         return;
     }
     let creator = crate::test_late_write::Creator::default();
     let recorded = EXPECTED.with(|expected| {
         expected.borrow_mut().as_mut().map(|seen| {
-            seen.push((path.to_path_buf(), creator.name().to_owned()));
+            seen.push((kind, path.to_path_buf(), creator.name().to_owned()));
         })
     });
     if recorded.is_none() {
         crate::test_late_write::report(&format!(
-            "audit log at {} is in a temp dir no test kept; created by {}\n",
+            "{kind} at {} is in a temp dir no test kept; created by {}\n",
             path.display(),
             creator.name()
         ));
@@ -204,7 +211,7 @@ pub(crate) fn report_unkept(path: &Path) {
 
 /// While held, an unkept open on this thread is recorded here instead of
 /// reported, for a row that opens one on purpose.
-pub(crate) struct ExpectUnkept(Option<Vec<(std::path::PathBuf, String)>>);
+pub(crate) struct ExpectUnkept(Option<Vec<Unkept>>);
 
 /// Start recording this thread's unkept opens until the guard drops.
 pub(crate) fn expect_unkept() -> ExpectUnkept {
@@ -214,7 +221,11 @@ pub(crate) fn expect_unkept() -> ExpectUnkept {
 impl ExpectUnkept {
     /// The unkept opens recorded so far, in order: each path and the test
     /// it is attributed to.
-    pub(crate) fn recorded(&self) -> Vec<(std::path::PathBuf, String)> {
+    #[allow(
+        clippy::unused_self,
+        reason = "the record lives in a thread-local; the guard scopes it"
+    )]
+    pub(crate) fn recorded(&self) -> Vec<Unkept> {
         EXPECTED.with(|expected| expected.borrow().clone().unwrap_or_default())
     }
 }

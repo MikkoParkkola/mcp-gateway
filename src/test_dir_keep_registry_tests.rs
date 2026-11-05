@@ -7,6 +7,7 @@
 
 use std::path::{Path, PathBuf};
 
+use super::AUDIT_LOG;
 use super::{
     contains, expect_unkept, is_external_in, kept_tempdir, norm, outside_temp, parse_external,
     registered_paths, report_unkept,
@@ -32,10 +33,10 @@ fn the_reporter_names_only_paths_under_the_temp_dir() {
     let through_alias = alias.join("audit.jsonl");
     let outside = PathBuf::from("/nonexistent-root/a/b/audit.jsonl");
     let unkept = expect_unkept();
-    report_unkept(&inside);
-    report_unkept(&through_alias);
-    report_unkept(&outside);
-    let named: Vec<PathBuf> = unkept.recorded().into_iter().map(|(p, _)| p).collect();
+    report_unkept(AUDIT_LOG, &inside);
+    report_unkept(AUDIT_LOG, &through_alias);
+    report_unkept(AUDIT_LOG, &outside);
+    let named: Vec<PathBuf> = unkept.recorded().into_iter().map(|(_, p, _)| p).collect();
     assert_eq!(
         named,
         vec![inside, through_alias],

@@ -199,7 +199,7 @@ pub struct TransparencyLogger {
     /// open before any file is touched (`crate::test_dir_keep`). Declared
     /// last, so the log's files and lease close before these shares drop.
     #[cfg(test)]
-    kept_dirs: Vec<Arc<tempfile::TempDir>>,
+    _kept_dirs: Vec<Arc<tempfile::TempDir>>,
 }
 
 /// Which rung of the correlation chain supplied an invocation entry's
@@ -284,7 +284,7 @@ impl TransparencyLogger {
         let kept_dirs = crate::test_dir_keep::kept_dirs_for(&path);
         #[cfg(test)]
         if kept_dirs.is_empty() {
-            crate::test_dir_keep::report_unkept(&path);
+            crate::test_dir_keep::report_unkept(crate::test_dir_keep::AUDIT_LOG, &path);
         }
         #[cfg(test)]
         crate::test_dir_keep::run_before_first_fs_call();
@@ -346,7 +346,7 @@ impl TransparencyLogger {
             #[cfg(test)]
             test_dir: crate::test_dir_keep::TestDirKeep::default(),
             #[cfg(test)]
-            kept_dirs,
+            _kept_dirs: kept_dirs,
         })
     }
 
