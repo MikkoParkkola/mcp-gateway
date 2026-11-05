@@ -588,6 +588,8 @@ mod replica_restart_tests;
 #[cfg(test)]
 mod restart_required_tests;
 
+#[cfg(all(test, feature = "firewall"))]
+mod live_collusion_tests;
 #[cfg(test)]
 mod live_keys_reload_tests;
 #[cfg(test)]
@@ -785,8 +787,8 @@ pub use reload_context::ReloadContext;
 pub(crate) use reload_context::SurfacedHook;
 #[cfg(feature = "webui")]
 pub(crate) use reload_context::replace::{
-    Expected, FileRevision, Replace, ReplaceError, ReplaceOutcome, Replaced, SecretStep,
-    replace_detached,
+    AuditPosture, Expected, FileRevision, GatewayAuth, IntentKind, NO_AUDIT_LOG, Replace,
+    ReplaceError, ReplaceOutcome, Replaced, SecretStep, replace_audited,
 };
 #[cfg(test)]
 use reload_context::{
@@ -848,6 +850,8 @@ mod replace_secret_tests;
 mod replace_test_support;
 #[cfg(test)]
 mod replace_tests;
+#[cfg(test)]
+mod replace_validate_tests;
 
 #[cfg(test)]
 mod reader_lock_tests;

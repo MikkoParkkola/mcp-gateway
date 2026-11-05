@@ -16,6 +16,7 @@ use std::time::Duration;
 use super::{FileRevision, Replace, ReplaceError, ReplaceOutcome};
 use crate::config_persistence::lock::Locked;
 use crate::config_reload::ReloadContext;
+use crate::security::TransparencyLogger;
 
 /// What an intent is for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -63,7 +64,97 @@ pub(crate) enum Audit {
     Off,
 }
 
-/// The only way to run the byte writer.
+/// Whether the gateway authenticates its callers.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum GatewayAuth {
+    On,
+    Off,
+}
+
+impl GatewayAuth {
+    /// From the running config's `auth.enabled`.
+    pub(crate) fn of(enabled: bool) -> Self {
+        if enabled { Self::On } else { Self::Off }
+    }
+}
+
+/// The refusal of a write on a gateway with auth on and no audit log.
+pub(crate) const NO_AUDIT_LOG: &str =
+    "auth is on but no audit log is configured; config writes are refused";
+
+/// Where this gateway's writes are audited: its audit log, when it has one.
+/// The one place an [`Audit`] is built, so no caller chooses whether its
+/// write is audited.
+pub(crate) struct AuditPosture {
+    log: Option<Arc<TransparencyLogger>>,
+    auth: GatewayAuth,
+}
+
+impl AuditPosture {
+    /// The posture of a gateway whose audit log is `log`, with `auth`.
+    pub(crate) fn of(log: Option<Arc<TransparencyLogger>>, auth: GatewayAuth) -> Self {
+        Self { log, auth }
+    }
+
+    /// The audit for one operation of `kind`. Auth on with no audit log is
+    /// refused here as well as at startup: an authenticated gateway never
+    /// writes its config unaudited.
+    pub(crate) fn audit(self, kind: IntentKind) -> Result<Audit, ReplaceError> {
+        match (self.log, self.auth) {
+            (Some(log), _) => Ok(Audit::Required {
+                sink: Box::new(LogSink(log)),
+                kind,
+            }),
+            (None, GatewayAuth::Off) => Ok(Audit::Off),
+            (None, GatewayAuth::On) => Err(ReplaceError::Refused(NO_AUDIT_LOG.to_owned())),
+        }
+    }
+}
+
+/// Intents into the audit log, through its synced append: fsynced whatever
+/// the log's failure policy, and on the tail other processes appended.
+struct LogSink(Arc<TransparencyLogger>);
+
+impl IntentSink for LogSink {
+    fn append(&mut self, intent: &Intent) -> Result<IntentId, String> {
+        let event = match intent.kind {
+            IntentKind::Recovery => "config_recovery_intent",
+            IntentKind::Save => "config_save_intent",
+            IntentKind::Adopt => "config_adopt_intent",
+            IntentKind::Restore => "config_restore_intent",
+        };
+        let mut fields = serde_json::Map::new();
+        fields.insert("event".into(), event.into());
+        fields.insert("base_revision".into(), intent.base.as_str().into());
+        fields.insert("outside_change".into(), intent.outside_change.into());
+        if let Some(IntentId(id)) = &intent.recovery_intent_id {
+            fields.insert("recovery_intent_id".into(), id.as_str().into());
+        }
+        // ponytail: a synced append on the writer's task; spawn_blocking it
+        // if a slow disk ever holds the config lock measurably longer.
+        self.0
+            .append_event_synced(fields, &crate::security::audit::AuditEnvelope::gateway())
+            .map(IntentId)
+            .map_err(|e| e.to_string())
+    }
+}
+
+/// Tests' writer with no audit: production reaches the writer only through
+/// [`replace_audited`] with its posture's audit.
+#[cfg(test)]
+pub(crate) async fn replace_detached(
+    ctx: Arc<ReloadContext>,
+    replace: Replace,
+    wait: Duration,
+) -> Result<ReplaceOutcome, ReplaceError> {
+    replace_audited(ctx, replace, Audit::Off, wait).await
+}
+
+/// The only way to run the byte writer. Invariant (ADR-024): a save's
+/// compute closure produces its bytes through a refusing in-place editor
+/// (the key editor or `edit_text`), never through a `CommentLoss::Rewrite`
+/// render, so a refusal surfaces as [`ReplaceError::Refused`] and nothing
+/// is written.
 pub(crate) async fn replace_audited(
     ctx: Arc<ReloadContext>,
     replace: Replace,
@@ -78,6 +169,11 @@ impl ReloadContext {
     /// start.
     pub(crate) fn set_recovery_audit(&self, sink: Box<dyn IntentSink>) {
         *self.recovery_audit.lock() = Some(sink);
+    }
+
+    /// Audit this gateway's recoveries into its audit log.
+    pub(in crate::config_reload) fn audit_recoveries_into(&self, log: Arc<TransparencyLogger>) {
+        self.set_recovery_audit(Box::new(LogSink(log)));
     }
 
     /// With anything pending (a crashed write's journal, or a reload owed
@@ -95,14 +191,19 @@ impl ReloadContext {
             return Ok(None);
         }
         // An absent file is the empty revision: the intent names what is on
-        // disk before recovery. Any other read failure recovers nothing.
-        let on_disk = match std::fs::read(&locked.target) {
-            Ok(bytes) => bytes,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Vec::new(),
-            Err(e) => {
+        // disk before recovery. The read every loader uses: a file the guard
+        // refuses is refused before any intent, and nothing is recovered.
+        let on_disk = match crate::config::read_config_text(&locked.target) {
+            Ok(text) => text.map(String::into_bytes).unwrap_or_default(),
+            Err(crate::config::UnreadConfig::Refused(why)) => {
+                return Err(ReplaceError::ConfigRefused(why));
+            }
+            Err(
+                crate::config::UnreadConfig::Failed(why)
+                | crate::config::UnreadConfig::NotTheConfig(why),
+            ) => {
                 return Err(ReplaceError::Failed(format!(
-                    "reading {} for the recovery's record failed: {e}",
-                    locked.target.display()
+                    "reading the config for the recovery's record failed: {why}"
                 )));
             }
         };
@@ -196,6 +297,13 @@ impl ReloadContext {
         })
         .await
         .map_err(|e| ReplaceError::Failed(format!("the recovery task failed: {e}")))?
-        .map_err(ReplaceError::Failed)
+        .map_err(|e| match e {
+            crate::config_persistence::journal::NotRecovered::Refused(why) => {
+                ReplaceError::ConfigRefused(why)
+            }
+            crate::config_persistence::journal::NotRecovered::Failed(why) => {
+                ReplaceError::Failed(why)
+            }
+        })
     }
 }

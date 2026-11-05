@@ -31,6 +31,8 @@
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
+#[path = "upgrade_grant_rows.rs"]
+mod grant_rows;
 #[path = "upgrade_url_keys.rs"]
 mod url_keys;
 #[path = "upgrade_webhook_notice.rs"]

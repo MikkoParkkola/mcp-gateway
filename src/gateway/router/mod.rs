@@ -188,6 +188,12 @@ mod judged_answer;
 /// Slice B T10: only an API-key match records a key's last use.
 #[cfg(all(test, feature = "webui"))]
 mod keys_last_used_callers_tests;
+/// K5 authorization fields on the next call; its fixture is the UI's.
+#[cfg(all(test, feature = "webui"))]
+mod live_key_authz_tests;
+/// K5 identity fields seen in the audit record; its fixture is the UI's.
+#[cfg(all(test, feature = "webui"))]
+mod live_key_identity_record_tests;
 #[cfg(all(test, feature = "webui"))]
 mod live_keys_dashboard_tests;
 #[cfg(test)]
@@ -250,6 +256,9 @@ mod canary_tests;
 /// The capability editor's audit record: the change, never the content.
 #[cfg(all(test, feature = "webui"))]
 mod capability_edit_audit_tests;
+/// A context-integrity rewrite is recorded as the gateway's rewrite.
+#[cfg(all(test, feature = "firewall"))]
+mod context_integrity_effect_tests;
 /// A delivery record says what the gateway did to the answer.
 #[cfg(all(test, feature = "firewall"))]
 mod delivery_effect_tests;
@@ -527,6 +536,10 @@ pub struct AppState {
     /// (`idp_mint` / `idp_refuse`) into the same hash chain (MIK-6740). `None`
     /// when the transparency log is disabled — audit writes are then a no-op.
     pub transparency_log: Option<Arc<crate::security::TransparencyLogger>>,
+    /// The governance audit log's writer, when the control-plane store is
+    /// open: the web UI's live stream reads its config rows through it.
+    /// `None` without a store; the stream then has no config source.
+    pub governance_log: Option<Arc<crate::security::TransparencyLogger>>,
     /// Lifecycle registry for TTL-reaped per-identity state
     /// (`MIK-7215.CONTROL.4`). `None` when the gateway was constructed
     /// without lifecycle wiring — tests and any embedder that does not run

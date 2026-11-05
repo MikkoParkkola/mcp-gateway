@@ -358,12 +358,12 @@ pub(super) async fn record(
         .map_or_else(|| direct_outcome(*status, body), AuditOutcome::Denied);
     // A withheld call's record carries the memo's code, so its check.
     let mut notes = notes;
-    if let Some(kind) = call
+    if let Some(refusal) = call
         .tool
         .as_deref()
-        .and_then(|tool| crate::gateway::meta_mcp::visible::memo::denial_kind(server, tool))
+        .and_then(|tool| crate::gateway::meta_mcp::visible::memo::denial(server, tool))
     {
-        notes.refused_by_memo(kind);
+        notes.refused_by_memo(refusal);
     }
     // D4: counted before the log check, so auth off still counts.
     let firewall = body

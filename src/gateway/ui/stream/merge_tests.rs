@@ -9,13 +9,15 @@ use serde_json::json;
 use tokio::sync::broadcast;
 use tokio::time::Instant;
 
-use super::id::{LogCursor, LogName, LogPart};
-use super::merge::{Appended, LAG_WINDOW, LagWindow, LogMerge, LogSource, Out, PAGE, Page, Row};
+use super::id::{LogCursor, LogName, Mark};
+use super::merge::{
+    Appended, LAG_WINDOW, LagWindow, LogMerge, LogSource, Out, PAGE, Page, Reset, Row,
+};
 
 const HASH: &str = "0123456789abcdef";
 
-fn part(n: u64) -> LogPart {
-    LogPart {
+fn part(n: u64) -> Mark {
+    Mark {
         counter: n,
         hash16: HASH.to_owned(),
     }
@@ -58,7 +60,7 @@ impl Fake {
     fn replace(&self, count: u64, hash: &str) {
         let swapped = (1..=count)
             .map(|n| Row {
-                part: LogPart {
+                part: Mark {
                     counter: n,
                     hash16: hash.to_owned(),
                 },
@@ -86,27 +88,30 @@ impl Fake {
 
 impl LogSource for Fake {
     type Access = ();
+    type Search = ();
 
     fn subscribe(&self) -> broadcast::Receiver<Appended> {
         self.tx.subscribe()
     }
 
-    fn head(&self, (): &()) -> impl Future<Output = LogCursor> + Send {
+    fn head(&self, (): &()) -> impl Future<Output = std::io::Result<LogCursor>> + Send {
         *self.heads.lock().unwrap() += 1;
         let n = self.rows.lock().unwrap().len() as u64;
-        std::future::ready(LogCursor {
+        std::future::ready(Ok(LogCursor {
             inv: (n > 0).then(|| part(n)),
             gov: None,
-        })
+        }))
     }
 
     fn rows_after(
         &self,
         cursor: &LogCursor,
+        stop: &LogCursor,
         (): &(),
         limit: usize,
-    ) -> impl Future<Output = Page> + Send {
-        std::future::ready(self.page(cursor, limit))
+        (): &mut (),
+    ) -> impl Future<Output = std::io::Result<Page>> + Send {
+        std::future::ready(Ok(self.page(cursor, stop, limit)))
     }
 
     fn frame(&self, (): &(), a: &Appended) -> Option<Row> {
@@ -116,17 +121,18 @@ impl LogSource for Fake {
 }
 
 impl Fake {
-    fn page(&self, cursor: &LogCursor, limit: usize) -> Page {
+    fn page(&self, cursor: &LogCursor, stop: &LogCursor, limit: usize) -> Page {
         *self.reads.lock().unwrap() += 1;
         let grow = *self.append_on_read.lock().unwrap();
-        let page = self.read_page(cursor, limit);
+        let page = self.read_page(cursor, stop, limit);
         if grow {
             self.append(false);
         }
         page
     }
 
-    fn read_page(&self, cursor: &LogCursor, limit: usize) -> Page {
+    /// Rows after `cursor` up to and including `stop`, as a source must.
+    fn read_page(&self, cursor: &LogCursor, stop: &LogCursor, limit: usize) -> Page {
         let rows = self.rows.lock().unwrap();
         let mut b = self.biggest_page.lock().unwrap();
         *b = (*b).max(limit);
@@ -142,7 +148,12 @@ impl Fake {
         } else {
             usize::try_from(known.unwrap_or(0)).unwrap()
         };
-        let end = (start + limit).min(rows.len());
+        let head = stop
+            .inv
+            .as_ref()
+            .map_or(0, |h| usize::try_from(h.counter).unwrap())
+            .min(rows.len());
+        let end = (start + limit).min(head).max(start);
         let slice = &rows[start..end];
         Page {
             rows: slice
@@ -154,8 +165,12 @@ impl Fake {
                 inv: slice.last().map(|r| r.part.clone()).or(cursor.inv.clone()),
                 gov: None,
             },
-            more: end < rows.len(),
-            reset,
+            more: end < head,
+            reset: Reset {
+                inv: reset,
+                gov: false,
+            },
+            searching: false,
         }
     }
 }
@@ -217,7 +232,7 @@ async fn a_fresh_connect_starts_at_the_head() {
 async fn a_cursor_whose_row_is_gone_resets_then_replays_from_the_oldest() {
     let fake = Fake::new(3, 64);
     let stale = LogCursor {
-        inv: Some(LogPart {
+        inv: Some(Mark {
             counter: 2,
             hash16: "ffffffffffffffff".to_owned(),
         }),

@@ -13,7 +13,7 @@
 use super::*;
 
 pub(super) fn test_grant_file() -> IdentityGrantFile {
-    let subject = GrantSubject::new("api_key", "alice", Some("Alice".to_string()));
+    let subject = GrantSubject::for_test("api_key", "alice", Some("Alice".to_string()));
     IdentityGrantFile::new(vec![IdentityGrant {
         grant_id: "grant-startup-1".to_string(),
         subject: subject.clone(),
@@ -179,10 +179,10 @@ async fn build_meta_mcp_applies_context_integrity_team_shared_preset() {
         }),
     }));
 
-    let built = gateway.build_meta_mcp().await.unwrap();
+    let built = gateway.build_meta_mcp_published().await.unwrap();
     let response = Gateway::dispatch_single(
         &built.meta_mcp,
-        &built.tool_policy,
+        &crate::gateway::authz::published_line(&built.meta_mcp),
         &built.mtls_policy,
         &json!({
             "jsonrpc": "2.0",

@@ -217,7 +217,7 @@ fn oidc_caller() -> Caller {
             .to_owned(),
         account: actor,
         authenticated: true,
-        grant: Some(GrantSubject::new(
+        grant: Some(GrantSubject::for_test(
             "https://a.example",
             "123",
             Some("x@corp.com".to_string()),
@@ -470,6 +470,10 @@ mod surfaced_replay;
 mod decision_kinds;
 // A dispatched call records the effect its tool declared.
 mod effect_records;
+// A tool-policy refusal names its rule.
+mod rule_ids;
+// A call to a backend that does not exist records not_found.
+mod not_found;
 
 /// MIK-7735. A backend's own `-32001` / `-32004` answer is the peer's
 /// refusal, not the gateway's policy: the record says `error`, with the

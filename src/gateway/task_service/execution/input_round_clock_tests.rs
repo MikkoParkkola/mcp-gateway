@@ -3,17 +3,20 @@
 //! `readable_now`'s two stops on a clock before 1970 (MIK-8202): the task's
 //! row is gone, and the cancel sender is dropped. Paused time; no wall clock.
 
+use std::sync::Arc;
+
 use super::{ClockWait, readable_now};
 use crate::gateway::task_service::StoreLimits;
 use crate::gateway::task_service::TaskStore;
 use tokio::sync::watch;
 
 /// A store whose clock reads before 1970, holding no task.
-async fn store_before_epoch() -> (TaskStore, tempfile::TempDir) {
-    let dir = tempfile::tempdir().expect("tempdir");
+async fn store_before_epoch() -> (TaskStore, Arc<tempfile::TempDir>) {
+    let dir = Arc::new(tempfile::tempdir().expect("tempdir"));
     let store = TaskStore::open(&dir.path().join("tasks"), StoreLimits::default())
         .await
         .expect("an empty store opens");
+    store.keep_test_dir(Arc::clone(&dir));
     store.set_clock_for_test(chrono::DateTime::from_timestamp(-1, 0));
     (store, dir)
 }
@@ -66,13 +69,14 @@ async fn r2b_p2_an_expired_input_round_wait_fails_the_task_at_last_updated_at() 
 
     const OWNER: &str = "verified-owner";
     let created = chrono::DateTime::from_timestamp(1_700_000_000, 0).expect("a valid instant");
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = Arc::new(tempfile::tempdir().expect("tempdir"));
     let admission = ExecutionAdmission::new(Arc::new(|| 1_000));
     let service = Arc::new(
         TaskService::open(&dir.path().join("tasks"), StoreLimits::default(), admission)
             .await
             .expect("the store opens"),
     );
+    service.keep_test_dir(Arc::clone(&dir));
     let registry = SubscriptionRegistry::new(
         DEFAULT_MAX_LISTENERS,
         crate::gateway::test_helpers::auth_state(

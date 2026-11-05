@@ -907,8 +907,10 @@ function renderControlPlane(d) {
   document.getElementById('cp-decisions').textContent = decisions.length;
   document.getElementById('cp-coverage-count').textContent =
     coverageEntries.length ? `${covered}/${coverageEntries.length}` : '-';
-  document.getElementById('cp-shadow-count').textContent =
-    shadowSummary.unmanaged_total ?? d.inventory_counts?.shadow_assets ?? '-';
+  // A key scoped to some backends is not shown the local scan: a dash, not 0.
+  document.getElementById('cp-shadow-count').textContent = shadow.scan_status === 'out_of_scope'
+    ? '-'
+    : shadowSummary.unmanaged_total ?? d.inventory_counts?.shadow_assets ?? '-';
   document.getElementById('cp-trustcards-count').textContent =
     d.inventory_counts?.trust_cards ?? trustCards.length;
   document.getElementById('cp-mode').innerHTML = route.read_only
@@ -967,6 +969,10 @@ function renderControlPlaneTrustCards(cards) {
 function renderControlPlaneShadow(shadow) {
   const tbody = document.getElementById('cp-shadow-tbody');
   const assets = shadow.control_plane_assets || [];
+  if (shadow.scan_status === 'out_of_scope') {
+    tbody.innerHTML = '<tr><td colspan="5" class="muted">Outside your backend scope</td></tr>';
+    return;
+  }
   if (!assets.length) {
     tbody.innerHTML = '<tr><td colspan="5" class="muted">No shadow MCPs</td></tr>';
     return;

@@ -341,8 +341,10 @@ impl MetaMcp {
         {
             self.refused_without_catalogue(&backend, (server, tool), scope, session_id)
         } else {
-            if let Err((_, kind)) = self.may_invoke_explained(server, tool, scope, session_id) {
-                super::invoke::audit::note_refused_by(kind, None);
+            if let Err((_, (kind, rule))) =
+                self.may_invoke_explained(server, tool, scope, session_id)
+            {
+                super::invoke::audit::note_refused_by(kind, rule);
                 return true;
             }
             let call = super::invoke::dispatch_guards::BackendCall {
@@ -410,8 +412,8 @@ impl MetaMcp {
             super::invoke::audit::note_refused_by(backend.blocked_tool_kind(tool), None);
             return true;
         }
-        if let Err((_, kind)) = self.may_invoke_explained(server, tool, scope, session_id) {
-            super::invoke::audit::note_refused_by(kind, None);
+        if let Err((_, (kind, rule))) = self.may_invoke_explained(server, tool, scope, session_id) {
+            super::invoke::audit::note_refused_by(kind, rule);
             return true;
         }
         let call = super::invoke::dispatch_guards::BackendCall {
@@ -498,45 +500,61 @@ enum StoredRead {
 /// per-user catalogue (answered after the account judgement).
 type StoredVisibility = (
     Option<Option<std::time::Duration>>,
-    Option<(Error, StoredEffect)>,
+    Option<(visible::Visibility, String)>,
 );
 
-/// Whether a stored delivery's answer is the gateway's policy refusal.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum StoredEffect {
-    /// Policy refused it: the delivery records `refused`.
-    Refused,
-    /// A miss, a retry or an unavailable account: no effect is recorded.
-    Unrecorded,
-}
-
-impl StoredEffect {
-    /// A withheld target's effect: a refusal only for a policy reason.
-    fn of(judged: visible::Visibility) -> Self {
-        match judged {
-            visible::Visibility::Withheld(reason) if reason.is_policy() => Self::Refused,
-            _ => Self::Unrecorded,
-        }
+/// A withheld target's refusal: a policy reason's withholding is the
+/// gateway's refusal and names its check; any other is no refusal.
+fn withholding_check(
+    judged: visible::Visibility,
+) -> Option<crate::security::decision_record::Refusal> {
+    match judged {
+        visible::Visibility::Withheld(reason) if reason.is_policy() => Some((reason.kind(), None)),
+        _ => None,
     }
 }
 
 /// The answer a stored delivery gets instead of its output.
 pub(crate) struct StoredAnswer {
     response: JsonRpcResponse,
-    effect: StoredEffect,
+    /// The check that refused it, when policy did: the delivery records
+    /// `refused` and names it. `None` is a miss, a retry or an unavailable
+    /// account, which records no effect.
+    refused_by: Option<crate::security::decision_record::RefusedBy>,
 }
 
 impl StoredAnswer {
-    fn new(effect: StoredEffect, response: JsonRpcResponse) -> Self {
-        Self { response, effect }
+    /// Policy refused it: the only way to build a refused answer, so every
+    /// refused one names its check.
+    fn refused(
+        response: JsonRpcResponse,
+        refusal: crate::security::decision_record::Refusal,
+    ) -> Self {
+        Self {
+            response,
+            refused_by: Some(refusal.into()),
+        }
     }
 
-    /// The answer to send, raising `refused` first when policy refused it.
+    /// No refusal: a miss, a retry or an unavailable account.
+    fn unrecorded(response: JsonRpcResponse) -> Self {
+        Self {
+            response,
+            refused_by: None,
+        }
+    }
+
+    /// The check that refused this answer, as its delivery record names it:
+    /// a notification frame carries it to its own record.
+    pub(crate) fn refused_by(&self) -> Option<&crate::security::decision_record::RefusedBy> {
+        self.refused_by.as_ref()
+    }
+
+    /// The answer to send, raising `refused` with its check first when
+    /// policy refused it.
     pub(crate) fn deliver(self) -> JsonRpcResponse {
-        if self.effect == StoredEffect::Refused {
-            crate::gateway::delivery_facts::raise(
-                crate::gateway::delivery_facts::ResponseEffect::Refused,
-            );
+        if let Some(refused_by) = self.refused_by {
+            crate::gateway::delivery_facts::refused_by(refused_by);
         }
         self.response
     }
@@ -571,3 +589,7 @@ fn retry_later(id: &RequestId, after: Option<std::time::Duration>) -> JsonRpcRes
 #[cfg(test)]
 #[path = "stored_read_prepass_tests.rs"]
 mod prepass_tests;
+
+#[cfg(test)]
+#[path = "task_replay_rule_id_tests.rs"]
+mod rule_id_tests;

@@ -14,11 +14,11 @@ const UNREGISTERED: &str = "gamma";
 /// so a certificate subject never makes the two callers one principal.
 fn cert_of(who: &str) -> crate::mtls::CertIdentity {
     let name = format!("agent-{who}");
-    crate::mtls::CertIdentity {
+    crate::mtls::identity::CertIdentity::for_test(crate::mtls::identity::CertFields {
         common_name: Some(name.clone()),
         display_name: name,
         ..Default::default()
-    }
+    })
 }
 
 /// An env key no fixture sets: the keyed capability's credential.
@@ -64,7 +64,7 @@ fn admit_both() -> crate::mtls::MtlsPolicy {
     use crate::mtls::config::{CertMatchConfig, MtlsConfig, PolicyRuleConfig, ToolScopeConfig};
     let admit_all = |who: &str| PolicyRuleConfig {
         match_criteria: CertMatchConfig {
-            cn: cert_of(who).common_name,
+            cn: cert_of(who).common_name().map(str::to_owned),
             ..Default::default()
         },
         allow: ToolScopeConfig {
@@ -144,9 +144,16 @@ async fn hidden_provider_fixture() -> Fixture {
     meta.set_firewall(Some(Arc::clone(&firewall)));
     meta.enable_idempotency(Arc::new(IdempotencyCache::new()), Duration::from_secs(300));
     meta.set_capabilities(keyless_caps());
-    state_mut.firewall = Some(firewall);
+    state_mut.firewall = Some(Arc::clone(&firewall));
     state_mut.meta_mcp = Arc::new(meta);
     state_mut.mtls_policy = Arc::new(admit_both());
+    // The witness judges under the request's live config: publish the
+    // firewall's `block`, as startup builds both from one config.
+    crate::security::firewall::collusion_live_rig::pair_state(
+        &mut state,
+        &firewall,
+        crate::security::firewall::collusion_live_rig::Layer::CollusionOnly,
+    );
     Fixture {
         state,
         read,

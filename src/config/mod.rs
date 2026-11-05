@@ -63,6 +63,7 @@ use crate::security::{posture, verify_remote_server_provenance};
 use crate::{Error, Result};
 pub(crate) use backend_transport::transport_key_for;
 use config_file::ConfigFile;
+pub(crate) use config_file::{PENDING_SLOT_PREFIX, reserved_slot_reference};
 #[cfg(feature = "webui")]
 pub(crate) use pattern_grammar::check_backend_allowed_tools;
 pub(crate) use pattern_grammar::tool_pattern_matches;
@@ -77,7 +78,10 @@ pub(crate) use secret_ref::{is_keychain_name, is_reference, is_template_syntax};
 // New items (F18): the one mode-checked read for files outside `config`.
 #[cfg(windows)]
 pub(crate) use secret_file::Protects;
-pub(crate) use secret_file::{CheckedFile, read_checked_bytes, read_checked_file};
+pub(crate) use secret_file::{
+    CheckedFile, UnreadConfig, read_checked_bytes, read_checked_file, read_config_text,
+    read_recovery_text,
+};
 
 // Re-export all feature config types so external code needs only `crate::config::Foo`.
 pub use features::{
@@ -477,6 +481,20 @@ impl Config {
             )));
         }
 
+        // The config writer's pending slot names resolve only inside its own
+        // validation; an env file assigning one could stand in for a secret.
+        if let Some(key) =
+            (overlay.owned_keys().iter()).find(|k| k.starts_with(PENDING_SLOT_PREFIX))
+        {
+            let at = match overlay.assignment_of(key) {
+                Some((file, line)) => format!("env file {} line {line}", file.display()),
+                None => "an env file".to_owned(),
+            };
+            return Err(Error::Config(format!(
+                "Refusing to load config: {at} assigns {key}; names starting \
+                 {PENDING_SLOT_PREFIX} are reserved for the gateway's config writer, so rename it"
+            )));
+        }
         let figment = match expansion {
             Expansion::Resolve => Self::figment(path, &overlay),
             // A rewrite path round-trips the FILE. Merging `MCP_GATEWAY_*`

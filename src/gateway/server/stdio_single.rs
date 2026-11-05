@@ -311,11 +311,11 @@ impl Gateway {
             // No frame is judged here: recorded and settled as built, and the
             // receipts follow the frame as `judge_and_commit` has them follow it.
             let Some(answer) = answer else {
-                staged.commit(false);
+                meta_mcp.commit_staged(staged, false);
                 return None;
             };
             let frame = answer.delivered_unjudged(meta_mcp, session_id).await;
-            staged.commit(frame.delivers_result());
+            meta_mcp.commit_staged(staged, frame.delivers_result());
             frame.stdio_value().map(std::borrow::Cow::into_owned)
         })
         .await
@@ -369,19 +369,4 @@ impl Gateway {
     ) -> Vec<serde_json::Value> {
         Self::dispatch_batch_for_client(meta_mcp, generation, mtls_policy, batch, session_id).await
     }
-}
-
-/// The generation a stdio message is judged with: the one its line was
-/// pinned to when it was read, or, for a line that carries none, the live
-/// config's current one, read once into `current`.
-pub(super) fn message_generation<'a>(
-    meta_mcp: &MetaMcp,
-    line: &'a dyn crate::gateway::authz::StdioLine,
-    current: &'a mut Option<Arc<crate::config_reload::Generation>>,
-) -> Option<&'a crate::config_reload::Generation> {
-    if let Some(pinned) = line.generation() {
-        return Some(pinned);
-    }
-    *current = meta_mcp.live_config().map(|live| live.generation());
-    current.as_deref()
 }

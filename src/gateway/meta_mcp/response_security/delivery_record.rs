@@ -5,13 +5,14 @@
 use super::{DeliveryCredential, ResponseCorrelation};
 
 /// Whether a delivery record states what the gateway did to the answer.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub(super) enum Facts {
     /// An answer: its cell's facts, and whether the delivered frame is the
     /// gateway's own refusal.
     Answer { frame_refused: bool },
-    /// A notification: never an answer's facts.
-    Omit,
+    /// A notification: never an answer's facts; only the check that refused
+    /// its stored output, when policy did.
+    Notification(Option<crate::security::decision_record::RefusedBy>),
 }
 
 impl super::super::MetaMcp {
@@ -107,10 +108,14 @@ impl super::super::MetaMcp {
         frame: &serde_json::Value,
         correlation: &ResponseCorrelation<'_>,
         credential: DeliveryCredential,
+        refused_by: Option<&crate::security::decision_record::RefusedBy>,
     ) -> bool {
         self.record_delivery_attempt(
             || Ok(frame.clone()),
-            (crate::security::audit::AuditOutcome::Ok, Facts::Omit),
+            (
+                crate::security::audit::AuditOutcome::Ok,
+                Facts::Notification(refused_by.cloned()),
+            ),
             "notification_delivered",
             correlation,
             credential,
@@ -226,9 +231,21 @@ async fn append_delivery_attempt(
         }
     }
     // What the gateway did to the answer, from the delivery's cell.
-    if let Facts::Answer { frame_refused } = facts {
-        let facts = crate::gateway::delivery_facts::snapshot();
-        crate::gateway::delivery_facts::record_fields(facts.as_ref(), frame_refused, &mut fields);
+    match facts {
+        Facts::Answer { frame_refused } => {
+            let facts = crate::gateway::delivery_facts::snapshot();
+            crate::gateway::delivery_facts::record_fields(
+                facts.as_ref(),
+                frame_refused,
+                &mut fields,
+            );
+        }
+        Facts::Notification(refused_by) => {
+            crate::gateway::delivery_facts::insert_notification_refused_by(
+                refused_by.as_ref(),
+                &mut fields,
+            );
+        }
     }
     // Named as the invocation record names the same call (MIK-7938): a
     // certificate or agent caller is the client `anonymous` or `public`, so
@@ -237,8 +254,8 @@ async fn append_delivery_attempt(
     who.credential_kind = Some(credential.kind);
     who.principal = credential.principal;
     if let Some(grant) = correlation.subject {
-        who.authority = Some(grant.authority.clone());
-        who.subject = Some(grant.subject.clone());
+        who.authority = Some(grant.authority().to_owned());
+        who.subject = Some(grant.subject().to_owned());
     }
     // The invocation's own trace when one answered; absent, the
     // envelope's fallback traces the record as before.

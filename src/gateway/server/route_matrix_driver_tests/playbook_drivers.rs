@@ -85,14 +85,7 @@ pub(crate) async fn stdio_params_over(
     .await;
     let mut answers = Vec::new();
     for params in params {
-        answers.push(
-            stdio_send_under(
-                &gateway_meta,
-                params,
-                crate::security::ToolPolicy::from_config(&policy),
-            )
-            .await,
-        );
+        answers.push(stdio_send_under(&gateway_meta, params, &policy).await);
     }
     (answers, calls.load(Ordering::SeqCst))
 }

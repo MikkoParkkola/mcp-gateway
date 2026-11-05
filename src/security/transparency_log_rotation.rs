@@ -106,25 +106,25 @@ pub(super) fn now_secs(offset: i64) -> Option<u64> {
 
 /// A file's identity: (volume, file id). Unix: (`st_dev`, `st_ino`). Windows:
 /// (volume serial, 128-bit id), the only pair `ReFS` keeps unique.
-pub(super) type FileId = (u64, u128);
+pub(crate) type FileId = (u64, u128);
 
 /// The identity of an open file, read from its handle.
 #[cfg(unix)]
-pub(super) fn file_id(file: &File) -> io::Result<FileId> {
+pub(crate) fn file_id(file: &File) -> io::Result<FileId> {
     use std::os::unix::fs::MetadataExt;
     let meta = file.metadata()?;
     Ok((meta.dev(), u128::from(meta.ino())))
 }
 
 #[cfg(windows)]
-pub(super) fn file_id(file: &File) -> io::Result<FileId> {
+pub(crate) fn file_id(file: &File) -> io::Result<FileId> {
     crate::win_acl::file_identity(file)
 }
 
 /// The identity of whatever `path` names now. Windows has no id without a
 /// handle, so the file is opened for attributes only, sharing everything so
 /// a writer's rotate or delete is not blocked.
-pub(super) fn path_id(path: &Path) -> io::Result<FileId> {
+pub(crate) fn path_id(path: &Path) -> io::Result<FileId> {
     #[cfg(windows)]
     let file = {
         use std::os::windows::fs::OpenOptionsExt;

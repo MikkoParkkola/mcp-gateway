@@ -217,7 +217,7 @@ async fn receipt_after_rebuild(
             meta.rebuild_receipt_from_final(Some(delivered), stamps, AnswerShape::Literal);
         })
         .await;
-    receipts.commit(true);
+    receipts.commit(true, &meta.paired_generation_for_test());
 }
 
 /// MIK-7887.RECEIPT.4: a modern answer's `serverInfo` is the gateway's own.
@@ -298,7 +298,7 @@ async fn an_interim_invoke_answer_keeps_its_input_requests_in_the_receipt() {
             );
         })
         .await;
-    receipts.commit(true);
+    receipts.commit(true, &meta.paired_generation_for_test());
     assert!(
         relayed_by_bob(&firewall, PROSE),
         "a delivered input request lost its receipt"
@@ -347,7 +347,7 @@ async fn a_native_pretty_printed_json_text_keeps_its_numbers() {
             meta.restage_if_changed(snapshot, Some(&delivered), AnswerShape::Literal);
         })
         .await;
-    staged.commit(true);
+    staged.commit(true, &firewall.paired_generation_for_test());
     assert!(
         relayed_by_bob(&firewall, &text),
         "the numbers lost their receipt"
@@ -415,7 +415,7 @@ async fn receipt_after_rebuild_as(
             meta.rebuild_receipt_from_final(Some(delivered), GatewayStamps::Legacy, shape);
         })
         .await;
-    receipts.commit(true);
+    receipts.commit(true, &meta.paired_generation_for_test());
 }
 
 /// [`PROSE`] as lines shorter than a fingerprint: every window crosses a
@@ -486,7 +486,7 @@ async fn receipt_after_invoke(
             value
         })
         .await;
-    receipts.commit(true);
+    receipts.commit(true, &meta.paired_generation_for_test());
     delivered
 }
 

@@ -87,7 +87,7 @@ pub(crate) struct Fixture {
     pub(super) rounds: Arc<AtomicUsize>,
     /// `security.sanitize_input` as `run_stdio_on` reads it from the config.
     sanitize: crate::gateway::server::stdio_single::InputSanitizing,
-    pub(super) store: tempfile::TempDir,
+    pub(super) store: Arc<tempfile::TempDir>,
     pub(super) expiry: Option<crate::gateway::task_service::execution::ExpirySweep>,
     _data: tempfile::TempDir,
 }
@@ -111,7 +111,7 @@ pub(crate) async fn fixture_on_with(
     policy: Option<ToolPolicyConfig>,
     configure: impl FnOnce(&mut Config),
 ) -> Fixture {
-    let store = tempfile::tempdir().expect("store root");
+    let store = Arc::new(tempfile::tempdir().expect("store root"));
     let mut config = Config::default();
     config.tasks.store_dir = store.path().display().to_string();
     config.backends.insert(
@@ -135,7 +135,7 @@ pub(crate) async fn fixture_on_with(
         .await
         .expect("the production constructor accepts this configuration")
         .with_data_dir(data.path().to_path_buf())
-        .build_meta_mcp()
+        .build_meta_mcp_published()
         .await
         .expect("the production builder accepts this configuration");
     let tool_policy = built.tool_policy;
@@ -152,6 +152,7 @@ pub(crate) async fn fixture_on_with(
     )
     .await
     .expect("the stdio store opens");
+    tasks.service.keep_test_dir(Arc::clone(&store));
     Fixture {
         tasks,
         meta: built.meta_mcp,
@@ -299,7 +300,7 @@ pub(super) fn modern_call(id: u64, tool: &str, key: &str, task: bool) -> Value {
 pub(crate) async fn dispatch(fixture: &Fixture, request: Value) -> Value {
     Gateway::dispatch_single_for_client(
         &fixture.meta,
-        &fixture.policy,
+        &crate::gateway::authz::published_line(&fixture.meta),
         &fixture.mtls,
         request,
         super::super::StdioClient {
@@ -442,7 +443,7 @@ async fn a_stdio_task_runs_under_the_current_tool_policy() {
 async fn stdio_eof_releases_the_store_lease_before_returning() {
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
     let (url, _rounds) = backend().await;
-    let store = tempfile::tempdir().expect("store root");
+    let store = Arc::new(tempfile::tempdir().expect("store root"));
     let mut config = Config::default();
     config.tasks.store_dir = store.path().display().to_string();
     config.backends.insert(
@@ -494,7 +495,10 @@ async fn stdio_eof_releases_the_store_lease_before_returning() {
         .expect("EOF returns within the bound")
         .expect("no panic")
         .expect("run_stdio_on returns Ok");
-    let reopened = reopen(&config).await;
+    let reopened = reopen_stdio_store(&config).await;
+    if let Ok((service, _)) = &reopened {
+        service.keep_test_dir(Arc::clone(&store));
+    }
     assert!(
         reopened.is_ok(),
         "the lease is free once run_stdio_on returned"
@@ -568,7 +572,7 @@ async fn a_legacy_task_member_is_answered_synchronously() {
 }
 
 /// Open the stdio store `config` names, as the next process would.
-pub(super) async fn reopen(
+pub(super) async fn reopen_stdio_store(
     config: &Config,
 ) -> Result<
     (
@@ -662,7 +666,7 @@ pub(super) async fn held_backend() -> (
 async fn eof_drains_a_running_task_before_returning() {
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
     let (url, mut arrived, release) = held_backend().await;
-    let store = tempfile::tempdir().expect("store root");
+    let store = Arc::new(tempfile::tempdir().expect("store root"));
     let mut config = Config::default();
     config.tasks.store_dir = store.path().display().to_string();
     config.server.shutdown_timeout = Duration::from_secs(20);
@@ -733,9 +737,10 @@ async fn eof_drains_a_running_task_before_returning() {
         .expect("EOF returns once the task settled")
         .expect("no panic")
         .expect("run_stdio_on returns Ok");
-    let (service, _executor) = reopen(&config)
+    let (service, _executor) = reopen_stdio_store(&config)
         .await
         .expect("the lease is free once run_stdio_on returned");
+    service.keep_test_dir(Arc::clone(&store));
     let task = service
         .get(LOCAL_OPERATOR_PRINCIPAL, &id)
         .expect("the local operator's task is in its store");

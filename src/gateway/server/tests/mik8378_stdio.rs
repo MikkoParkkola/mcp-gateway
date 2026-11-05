@@ -14,13 +14,12 @@ use crate::gateway::server::stdio_single::InputSanitizing;
 
 async fn dispatch(request: Value) -> Option<Value> {
     let meta = Arc::new(MetaMcp::new(Arc::new(BackendRegistry::new())));
-    let tool_policy = Arc::new(crate::security::ToolPolicy::default());
     let mtls_policy = Arc::new(crate::mtls::MtlsPolicy::from_config(
         &crate::mtls::MtlsConfig::default(),
     ));
     super::super::Gateway::dispatch_single_for_client(
         &meta,
-        &tool_policy,
+        &crate::gateway::authz::default_line(&meta),
         &mtls_policy,
         request,
         super::super::StdioClient {

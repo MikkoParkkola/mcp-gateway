@@ -186,7 +186,7 @@ impl StdioTransport {
                 self.settle_child_exit().await;
                 Some(stderr)
             };
-            self.shut().await;
+            self.shut(super::reaper::StopKind::Dead).await;
             if let Some(reader) = late_reader {
                 // The child `close` just killed: record that ending, so the
                 // failure is not reported as a child still running.

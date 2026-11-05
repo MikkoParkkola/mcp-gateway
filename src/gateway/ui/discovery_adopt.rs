@@ -27,8 +27,8 @@ use crate::config::SecretStoreChoice;
 use crate::config_persistence::keyedit::{Segment, SlotId, Template};
 use crate::config_persistence::{NOT_IN_PLACE, edit_text};
 use crate::config_reload::{
-    Expected, FileRevision, RELOAD_LOCK_WAIT, Replace, ReplaceError, ReplaceOutcome, Replaced,
-    SecretStep, replace_detached,
+    AuditPosture, Expected, FileRevision, GatewayAuth, IntentKind, NO_AUDIT_LOG, RELOAD_LOCK_WAIT,
+    Replace, ReplaceError, ReplaceOutcome, Replaced, SecretStep, replace_audited,
 };
 use crate::discovery::DiscoveredServer;
 use crate::discovery::adopt::{AdoptRefusal, Adoption, Literal, adoption, refusals};
@@ -89,11 +89,30 @@ fn fixed(status: StatusCode, message: &'static str) -> Response {
     flat_error(status, message).into_response()
 }
 
+/// gateway.yaml could not be read or was refused: by the route's own read or
+/// by the writer's. Fixed text: the reason names the file, so it never leaves.
+fn config_refusal() -> Response {
+    fixed(
+        StatusCode::SERVICE_UNAVAILABLE,
+        "gateway.yaml could not be loaded",
+    )
+}
+
+/// There is no gateway.yaml to adopt into.
+fn no_config_file() -> Response {
+    (
+        StatusCode::CONFLICT,
+        Json(json!({"error": "no_config_file"})),
+    )
+        .into_response()
+}
+
 const FAILED: &str = "the adopt did not complete";
 const STORE_UNAVAILABLE: &str = "secrets.store cannot take the discovered values";
 
 /// The writer's result as one answer. Only fixed text leaves: an inner
-/// error string is never returned, and only the variant name is logged.
+/// error string is never returned, and only the variant name is logged, but
+/// for the guard's refusal, whose text the operator needs to fix the file.
 pub(super) fn answer(name: &str, written: Result<ReplaceOutcome, ReplaceError>) -> Response {
     let failed = |variant: &'static str| {
         tracing::warn!(variant, "discovery adopt: the config write failed");
@@ -129,6 +148,12 @@ pub(super) fn answer(name: &str, written: Result<ReplaceOutcome, ReplaceError>) 
             Json(json!({"error": "not_in_place", "message": NOT_IN_PLACE})),
         )
             .into_response(),
+        // The gateway's own posture, fixed text: the operator can act on it.
+        Err(ReplaceError::Refused(why)) if why == NO_AUDIT_LOG => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({"error": "audit_log_required", "message": NO_AUDIT_LOG})),
+        )
+            .into_response(),
         Err(ReplaceError::Refused(_)) => failed("refused"),
         Err(ReplaceError::Secrets(SaveError::Refused(StoreError::Unavailable(_)))) => {
             fixed(StatusCode::UNPROCESSABLE_ENTITY, STORE_UNAVAILABLE)
@@ -141,6 +166,17 @@ pub(super) fn answer(name: &str, written: Result<ReplaceOutcome, ReplaceError>) 
         Err(ReplaceError::RollbackFailed { .. }) => failed("rollback_failed"),
         Err(ReplaceError::Unconfirmed { .. }) => failed("unconfirmed"),
         Err(ReplaceError::Failed(_)) => failed("failed"),
+        Err(ReplaceError::NoConfigFile) => no_config_file(),
+        // The guard's text names the file and the fix: the server log gets
+        // it, the answer never does.
+        Err(ReplaceError::ConfigRefused(why)) => {
+            tracing::warn!(
+                variant = "config_refused",
+                detail = %why,
+                "discovery adopt: the config write refused gateway.yaml"
+            );
+            config_refusal()
+        }
     }
 }
 
@@ -328,17 +364,10 @@ pub(super) async fn adopt_discovery(
         tokio::task::spawn_blocking(move || read_gateway(Some(&path))).await
     };
     let Ok(Ok(gateway)) = read else {
-        return fixed(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "gateway.yaml could not be loaded",
-        );
+        return config_refusal();
     };
     let Gateway::File { revision, config } = &gateway else {
-        return (
-            StatusCode::CONFLICT,
-            Json(json!({"error": "no_config_file"})),
-        )
-            .into_response();
+        return no_config_file();
     };
     if revision.as_str() != body.revision {
         return stale(revision);
@@ -407,10 +436,20 @@ pub(super) async fn adopt_discovery(
         replaced: Replaced::Discard,
         secrets,
     };
-    answer(
-        &name,
-        replace_detached(context, replace, RELOAD_LOCK_WAIT).await,
-    )
+    answer(&name, write_audited(&state, context, replace).await)
+}
+
+/// Writes `replace` under this gateway's audit posture: its own intent first
+/// on an audited gateway (`config_adopt_intent`), refused outright with auth
+/// on and no audit log.
+async fn write_audited(
+    state: &AppState,
+    context: Arc<crate::config_reload::ReloadContext>,
+    replace: Replace,
+) -> Result<ReplaceOutcome, ReplaceError> {
+    let auth = GatewayAuth::of(state.live_config.running().auth.enabled);
+    let audit = AuditPosture::of(state.transparency_log.clone(), auth).audit(IntentKind::Adopt)?;
+    replace_audited(context, replace, audit, RELOAD_LOCK_WAIT).await
 }
 
 #[cfg(test)]

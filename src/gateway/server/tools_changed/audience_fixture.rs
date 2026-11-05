@@ -271,7 +271,7 @@ pub(super) fn adapter_assertion(sub: &str) -> String {
 /// The fixture's credentials under `access`: `k-std`, `k-deny` (denied
 /// `read`, `fetch` and the capability), `k-narrow` (`beta` alone), `k-exp`
 /// (expiring at [`K_EXP_UNTIL`]) and the agents' keys.
-fn fixture_auth(access: &super::audience_access::McpAccess) -> AuthConfig {
+pub(super) fn fixture_auth(access: &super::audience_access::McpAccess) -> AuthConfig {
     let mut auth = AuthConfig {
         // An `AgentOnly` caller presents its agent token and no API key.
         enabled: !matches!(access, super::audience_access::McpAccess::AgentOnly(_)),

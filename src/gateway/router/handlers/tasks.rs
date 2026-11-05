@@ -572,10 +572,10 @@ pub(super) fn task_frames(
         // by a trusted proxy or an access gateway.
         status_only: caller.oauth_agent_identity.is_some()
             || caller.grant_subject.as_ref().is_some_and(|subject| {
-                !matches!(subject.authority.as_str(), "api_key" | "mtls")
+                !matches!(subject.authority(), "api_key" | "mtls")
                     && caller
                         .verified_identity
-                        .is_none_or(|verified| verified.issuer != subject.authority)
+                        .is_none_or(|verified| verified.issuer != subject.authority())
             }),
     })
 }
@@ -623,10 +623,13 @@ impl crate::gateway::streaming::TaskFrames for TaskFrameSource {
         let request = RequestId::Number(0);
         let refused = |stored: &crate::gateway::task_service::CommittedTask| {
             with_policy_caller(&self.state, &live, |policy| {
-                self.state
-                    .meta_mcp
-                    .refuse_stored_delivery(&request, stored, None, live.session_id, policy)
-                    .is_some()
+                self.state.meta_mcp.refuse_stored_delivery(
+                    &request,
+                    stored,
+                    None,
+                    live.session_id,
+                    policy,
+                )
             })
         };
         // MIK-8392: the pre-pass fills this frame's account outcomes in its own

@@ -11,7 +11,9 @@ use std::time::Duration;
 use serde_json::Value;
 
 use super::super::task_runtime::{self, ShutdownBudget};
-use super::owner2_stdio_tasks::{dispatch, fixture_on, held_backend, modern_call, reopen};
+use super::owner2_stdio_tasks::{
+    dispatch, fixture_on, held_backend, modern_call, reopen_stdio_store,
+};
 use crate::config::Config;
 use crate::gateway::task_service::execution::CancelOutcome;
 
@@ -110,8 +112,12 @@ async fn an_incomplete_cancel_keeps_the_store_open_and_a_complete_one_closes_it(
         )
         .await;
 
+        let reopened = reopen_stdio_store(&store_config(fixture.store.path())).await;
+        if let Ok((service, _)) = &reopened {
+            service.keep_test_dir(Arc::clone(&fixture.store));
+        }
         assert_eq!(
-            reopen(&store_config(fixture.store.path())).await.is_ok(),
+            reopened.is_ok(),
             closed,
             "a cancel that stopped = {stopped}: the store's lease is free only when it closed"
         );

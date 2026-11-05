@@ -5,7 +5,7 @@
 //! disk whenever that reload refuses.
 //!
 //! Web UI settings saves (a spliced file) and configuration-history restores
-//! (stored bytes) both write through [`replace_detached`]. It refuses a write
+//! (stored bytes) both write through [`replace_audited`]. It refuses a write
 //! made from a stale view of the file, keeps the original in a private copy
 //! with a journal ([`crate::config_persistence::journal`]) until a reload has
 //! accepted the new bytes, and puts the original back on a refused reload or
@@ -21,6 +21,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use crate::config::UnreadConfig;
 use crate::config_persistence::journal;
 use crate::config_persistence::lock::{Locked, NotLocked, lock_config, lock_config_deferred};
 use crate::config_persistence::{FileMode, Symlink, write_atomic};
@@ -179,7 +180,8 @@ pub(crate) enum ReplaceError {
     Stage(String),
     /// Writing the new bytes failed; the original is back.
     Write(String),
-    /// The reload refused the new bytes; the original is back.
+    /// The reload refused the new bytes, or the check of them before any
+    /// entry or write did; the original stands.
     ReloadRefused(String),
     /// Putting the original back failed; the journal stays `staged`.
     RollbackFailed { journal: PathBuf, error: String },
@@ -191,32 +193,18 @@ pub(crate) enum ReplaceError {
     Failed(String),
     /// The secret store refused the [`SecretStep`]; nothing was written.
     Secrets(SaveError<std::convert::Infallible>),
+    /// gateway.yaml does not exist; nothing was written.
+    NoConfigFile,
+    /// The read check every loader applies refused gateway.yaml (its type,
+    /// mode, owner or encoding); nothing was written. The text names the
+    /// file and the fix, for the log only.
+    ConfigRefused(String),
 }
 
-/// Write `replace` in a task of its own: dropping the caller (a request
+/// The writer's task, in a task of its own: dropping the caller (a request
 /// handler whose client went away) drops only the wait, never a write
-/// between its rename and its reload.
-///
-/// Invariant (ADR-024): a save's compute closure produces its bytes through
-/// a refusing in-place editor (the key editor or `edit_text`), never through
-/// a `CommentLoss::Rewrite` render, so a refusal surfaces as
-/// [`ReplaceError::Refused`] and nothing is written.
-#[cfg_attr(
-    not(any(test, feature = "webui")),
-    expect(
-        dead_code,
-        reason = "first callers: the web UI settings save and the configuration-history restore"
-    )
-)]
-pub(crate) async fn replace_detached(
-    ctx: Arc<ReloadContext>,
-    replace: Replace,
-    wait: Duration,
-) -> Result<ReplaceOutcome, ReplaceError> {
-    audit::replace_audited(ctx, replace, Audit::Off, wait).await
-}
-
-/// The writer's task: [`replace_detached`] and [`replace_audited`](audit::replace_audited) share it.
+/// between its rename and its reload. Reached only through
+/// [`replace_audited`](audit::replace_audited).
 #[cfg_attr(
     not(any(test, feature = "webui")),
     expect(
@@ -242,11 +230,18 @@ async fn spawn_locked(
 #[path = "replace_audit.rs"]
 mod audit;
 pub(crate) use audit::{Audit, Intent, IntentSink};
+#[cfg(feature = "webui")]
+pub(crate) use audit::{AuditPosture, GatewayAuth, NO_AUDIT_LOG};
 #[cfg(test)]
-pub(crate) use audit::{IntentId, IntentKind, replace_audited};
+pub(crate) use audit::{IntentId, replace_detached};
+#[cfg(any(test, feature = "webui"))]
+pub(crate) use audit::{IntentKind, replace_audited};
 
 #[path = "replace_slots.rs"]
 mod slots;
+
+#[path = "replace_validate.rs"]
+mod validate;
 use slots::{fill_secrets, fits_when_filled, same_fields};
 
 /// What happens to a replacement's new store entries.
@@ -292,6 +287,8 @@ pub(crate) fn settle_for(result: &Result<ReplaceOutcome, ReplaceError>) -> Settl
         | ReplaceError::Refused(_)
         | ReplaceError::Stage(_)
         | ReplaceError::Secrets(_)
+        | ReplaceError::NoConfigFile
+        | ReplaceError::ConfigRefused(_)
         // The rollback came back: a failed one is `RollbackFailed`.
         | ReplaceError::Unsupported(_)
         | ReplaceError::Write(_)
@@ -447,6 +444,7 @@ impl ReloadContext {
             match e {
                 NotLocked::Busy => ReplaceError::Busy,
                 NotLocked::Failed(message) => ReplaceError::Failed(message),
+                NotLocked::Refused(message) => ReplaceError::ConfigRefused(message),
             }
         })?;
         let target = locked.target.clone();
@@ -460,17 +458,42 @@ impl ReloadContext {
                 self.trusted_config.display()
             )));
         }
-        let current = std::fs::read(&target).map_err(|e| {
-            ReplaceError::Failed(format!("reading {} failed: {e}", target.display()))
-        })?;
+        // The read every loader uses, mode and owner judged on the handle read:
+        // a file another account can change is refused before any intent,
+        // entry or write, so its edit is never rewritten owner-only.
+        let current = match crate::config::read_config_text(&target) {
+            Ok(Some(text)) => text.into_bytes(),
+            Ok(None) => return Err(ReplaceError::NoConfigFile),
+            Err(UnreadConfig::Refused(why)) => return Err(ReplaceError::ConfigRefused(why)),
+            Err(UnreadConfig::Failed(why) | UnreadConfig::NotTheConfig(why)) => {
+                return Err(ReplaceError::Failed(why));
+            }
+        };
         if let Expected::Revision(seen) = &replace.expected {
             let now = FileRevision::of(&current);
             if &now != seen {
                 return Err(ReplaceError::Stale { current: now });
             }
         }
-        // The operation's own intent, before any entry or byte changes.
-        if let Audit::Required { sink, kind } = &mut audit {
+        let mut entries = Entries {
+            pending: None,
+            renamed: false,
+        };
+        // The new bytes are computed, and their slots checked against the
+        // secrets, before any entry exists: a refusal creates nothing.
+        let template = (replace.compute)(&current).map_err(ReplaceError::Refused)?;
+        let step = replace.secrets.filter(|step| !step.values.is_empty());
+        same_fields(&template, step.as_ref())?;
+        fits_when_filled(&template)?;
+        self.validate_template(&target, &template, step.as_ref())
+            .await?;
+        // The operation's own intent, once its checks pass and before any
+        // entry or byte changes. Unchanged bytes write nothing, so they
+        // record nothing.
+        let unchanged = step.is_none() && template.bytes() == current.as_slice();
+        if let Audit::Required { sink, kind } = &mut audit
+            && !unchanged
+        {
             let intent = Intent {
                 kind: *kind,
                 base: FileRevision::of(&current),
@@ -483,16 +506,6 @@ impl ReloadContext {
                 ))
             })?;
         }
-        let mut entries = Entries {
-            pending: None,
-            renamed: false,
-        };
-        // The new bytes are computed, and their slots checked against the
-        // secrets, before any entry exists: a refusal creates nothing.
-        let template = (replace.compute)(&current).map_err(ReplaceError::Refused)?;
-        let step = replace.secrets.filter(|step| !step.values.is_empty());
-        same_fields(&template, step.as_ref())?;
-        fits_when_filled(&template)?;
         let result = match step {
             None => Ok(template.bytes().to_vec()),
             Some(step) => fill_secrets(template, step, deadline, &mut entries).await,
@@ -668,7 +681,7 @@ impl ReloadContext {
             Ok(_) => error,
             Err(rollback) => ReplaceError::RollbackFailed {
                 journal: journal::journal_path(target),
-                error: rollback,
+                error: rollback.into_message(),
             },
         }
     }
