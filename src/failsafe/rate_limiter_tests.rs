@@ -31,6 +31,7 @@ impl Clock for StepClock {
 }
 
 const T: Duration = Duration::from_millis(10);
+const BURST: u32 = 50;
 
 fn limiter(at: Duration) -> (RateLimiter<StepClock>, StepClock) {
     let clock = StepClock::default();
@@ -38,7 +39,7 @@ fn limiter(at: Duration) -> (RateLimiter<StepClock>, StepClock) {
     let config = RateLimitConfig {
         enabled: true,
         requests_per_second: 100,
-        burst_size: 50,
+        burst_size: BURST,
     };
     (RateLimiter::with_clock(&config, clock.clone()), clock)
 }
@@ -54,9 +55,9 @@ fn admitted(outcome: Acquire) -> bool {
 /// Takes every token left at the clock's current time: how many, and the
 /// refusal that stopped it.
 fn drain_to(l: &RateLimiter<StepClock>) -> (usize, Acquire) {
-    // No bucket here holds more than its burst of 50: more admissions mean
+    // No bucket here holds more than one burst: more admissions mean
     // a bucket that never empties, which fails here instead of hanging.
-    for n in 0..=50 {
+    for n in 0..=usize::try_from(BURST).unwrap() {
         let outcome = l.acquire();
         if !admitted(outcome) {
             return (n, outcome);
@@ -222,8 +223,8 @@ fn small_steps_back_admit_within_one_interval() {
     assert!(admitted(l.acquire()));
 }
 
-/// The public `try_acquire` keeps its answers, and a disabled limiter admits
-/// without a bucket.
+/// The public `try_acquire` keeps its answers, and a limiter disabled after
+/// use admits every call.
 #[test]
 fn try_acquire_and_a_disabled_limiter_keep_their_answers() {
     let (l, clock) = limiter(secs(3610));

@@ -35,8 +35,8 @@ pub(crate) enum Acquire {
     /// interval, which only a clock that went back produces. The bucket was
     /// rebuilt and this call took a token from it.
     AdmittedAfterClockStep {
-        /// The wait the old state would have imposed: at least the step
-        /// back, plus up to one burst's worth of intervals.
+        /// The wait the old state would have imposed. Not the size of the
+        /// step: unused burst capacity can make it shorter or longer.
         stale_wait: Duration,
     },
     /// No token. `wait` is the time until the next one; `warn` is true for at
