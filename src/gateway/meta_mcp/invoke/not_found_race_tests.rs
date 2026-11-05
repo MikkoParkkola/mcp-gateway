@@ -147,3 +147,27 @@ async fn a_mark_never_reaches_a_later_call_on_the_same_name() {
         assert_ne!(record["decision"]["kind"], "not_found", "{record}");
     }
 }
+
+/// A miss, then a reload registers the backend, then a call on the same name
+/// in the same request: the second call dispatches and records its own
+/// outcome, never the first call's `not_found`.
+#[tokio::test]
+async fn a_miss_does_not_label_a_later_successful_call() {
+    let dir = tempfile::tempdir().unwrap();
+    let (meta, _) = logged(&dir);
+    let registry = Arc::clone(meta.backends.for_test());
+    let args = json!({"server": "beta", "tool": "read", "arguments": {}});
+    with_visibility_memo(async {
+        let _ = meta.invoke_tool(&args, None, &ctx(&AllowAll)).await;
+        let _ = register_answering(&registry, "beta", serde_json::from_str(OK).expect("ok"));
+        let _ = meta.invoke_tool(&args, None, &ctx(&AllowAll)).await;
+    })
+    .await;
+    let all = records(&dir);
+    let [missed, served] = all.as_slice() else {
+        panic!("one record per call: {all:?}");
+    };
+    assert_eq!(missed["decision"]["kind"], "not_found", "premise: {missed}");
+    assert_ne!(served["decision"]["kind"], "not_found", "{served}");
+    assert_eq!(served["outcome"], json!("ok"), "{served}");
+}
