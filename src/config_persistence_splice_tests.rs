@@ -360,3 +360,43 @@ fn a_sibling_sequence_item_ends_the_span() {
         "the item stops at `- name: y`"
     );
 }
+
+/// The locked config writer (the web UI and reload-API writes) never falls
+/// back to a plain read when the guarded load refuses the file: a file
+/// another account can change or read is refused, keeping its bytes and mode.
+#[cfg(unix)]
+#[test]
+fn a_write_over_a_config_the_guard_refuses_is_refused() {
+    use crate::config::Config;
+    use crate::config_persistence::{CommentLoss, write_config_with};
+    use std::os::unix::fs::PermissionsExt as _;
+    for mode in [0o620, 0o640, 0o602] {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("gateway.yaml");
+        let current = "backends:\n  a: {command: a}\n";
+        crate::gateway::test_helpers::write_owner_only(&path, current).expect("write");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode)).expect("chmod");
+        let next: Config =
+            crate::yaml::from_str("backends:\n  a: {command: a}\n  b: {command: b}\n")
+                .expect("config");
+        let held = crate::config_persistence::lock::lock_config_blocking(
+            &path,
+            std::time::Instant::now(),
+            |_| {},
+        )
+        .expect("config lock")
+        .held;
+
+        let result = write_config_with(&path, &next, CommentLoss::Rewrite, &held);
+
+        // The guard's own refusal, not some other failure.
+        assert!(
+            matches!(&result, Err(crate::config_persistence::Unwritten::Failed(why))
+                if why.contains("Refusing to load config file")),
+            "mode {mode:o}: {result:?}"
+        );
+        assert_eq!(std::fs::read_to_string(&path).expect("read"), current);
+        let now = std::fs::metadata(&path).expect("stat").permissions().mode();
+        assert_eq!(now & 0o777, mode, "mode {mode:o}: the file was rewritten");
+    }
+}

@@ -29,7 +29,9 @@ fn take_lock(lock_path: &Path, deadline: Instant) -> Result<ExclusiveFileLock, S
         NotLocked::Busy => StoreError::Failed(
             "another save held the vault lock until the deadline; nothing was written".to_owned(),
         ),
-        NotLocked::Failed(why) => StoreError::Failed(format!("cannot take the vault lock: {why}")),
+        NotLocked::Failed(why) | NotLocked::Refused(why) => {
+            StoreError::Failed(format!("cannot take the vault lock: {why}"))
+        }
     })
 }
 
