@@ -658,10 +658,15 @@ async fn a_backend_write_with_a_refused_journal_is_refused() {
     gateway.crashed_after_rename();
     let journal = journal::journal_path(&gateway.config());
     Audited::chmod(&journal, 0o620);
+    let before = std::fs::read(&journal).expect("read journal");
     let answer = gateway.update_with_secret().await;
     gateway.assert_refused("update", &answer);
     assert_eq!(gateway.text(), CRASHED, "the crashed bytes were touched");
-    assert!(journal.exists(), "the refused journal was settled");
+    assert_eq!(
+        std::fs::read(&journal).ok(),
+        Some(before),
+        "the refused journal was settled or rewritten"
+    );
     assert!(
         gateway.events().iter().any(|e| e == RECOVERY),
         "no recovery intent: {:?}",
@@ -678,11 +683,19 @@ async fn a_backend_write_with_a_refused_staged_original_is_refused() {
     gateway.crashed_after_rename();
     let original = journal::original_path(&gateway.config());
     Audited::chmod(&original, 0o620);
+    let journal = journal::journal_path(&gateway.config());
+    let before = (
+        std::fs::read(&original).expect("read original"),
+        std::fs::read(&journal).expect("read journal"),
+    );
     let answer = gateway.update_with_secret().await;
     gateway.assert_refused("update", &answer);
     assert_eq!(gateway.text(), CRASHED, "the refused original was restored");
-    assert!(original.exists(), "the refused original was removed");
-    assert!(journal::journal_path(&gateway.config()).exists());
+    assert_eq!(
+        (std::fs::read(&original).ok(), std::fs::read(&journal).ok()),
+        (Some(before.0), Some(before.1)),
+        "the refused original or the journal was removed or rewritten"
+    );
     assert!(
         gateway.events().iter().any(|e| e == RECOVERY),
         "no recovery intent: {:?}",
