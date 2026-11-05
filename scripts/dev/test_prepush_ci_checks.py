@@ -790,7 +790,8 @@ class Rows(unittest.TestCase):
             "bash scripts/ci/x.sh > >(scripts/ci/y.sh)",
             "bash <<EOF\nscripts/ci/x.sh\nEOF", "bash <<'EOF'\nscripts/ci/x.sh --check\nEOF",
             "cat <<EOF\n$(bash scripts/ci/x.sh)\nEOF", 'bash scripts/ci/x.s"h"', "bash scripts/ci/x.s\\h",
-            "scripts/ci/x.s'h' --check", 'a; scripts/ci/x.s"h"',
+            "scripts/ci/x.s'h' --check", 'a; scripts/ci/x.s"h"', "scripts/ci/x.$'sh'", 'bash scripts/ci/x.$"sh"',
+            "scripts/ci/x.s\"h' --check",
         ):
             with self.subTest(line), self.assertRaises(workflow_shell.UnsupportedSyntax):
                 workflow_shell.executions(line)

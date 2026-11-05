@@ -182,13 +182,15 @@ SH_MENTION = re.compile(r"\.sh(?![\w.-])")
 
 
 def _names_sh(text):
-    """Whether `text` names a .sh, as written or once the shell drops quotes and escapes (x.s"h")."""
+    """Whether `text` names a .sh, as written or once the shell drops quotes and escapes (x.s"h",
+    x.$'sh'). Text shlex cannot split counts if `.sh` survives any quotes or escapes between."""
     if SH_MENTION.search(text):
         return True
+    text = text.replace("$'", "'").replace('$"', '"')  # bash's ANSI-C and locale quoting
     try:
         return bool(SH_MENTION.search(" ".join(shlex.split(text))))
     except ValueError:
-        return False
+        return bool(re.search(r"\.[\\'\"]*s[\\'\"]*h(?![\w.-])", text))
 SH_SYNTAX_LOOP = re.compile(r'^for\s+(\w+)\s+in\s+((?:\S+\.sh\s+)*\S+\.sh)\s*;\s*do\s+bash\s+-n\s+"\$\1"\s*;\s*done$')
 
 
@@ -430,6 +432,7 @@ def executions(run_block: str, shell_lines: ShellLines = ShellLines.STRICT,
     when the block names Python the walker cannot account for, or (STRICT) a
     .sh in anything but a canonical line. A line in `ci_only_lines` (compared with
     its whitespace collapsed) is CI-only by its table entry and yields nothing."""
+    ci_only_lines = frozenset(" ".join(line.split()) for line in ci_only_lines)
     found = _walk(run_block, shell_lines, ci_only_lines)
     _check_complete(run_block, [e for e in found if not e.script.endswith(".sh")])
     return found
