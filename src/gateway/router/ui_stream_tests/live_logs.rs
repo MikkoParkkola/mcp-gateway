@@ -635,3 +635,24 @@ async fn a1g_a_demotion_during_a_catch_up_sends_no_more_of_its_page() {
         "the narrowed access stops the page at its next frame: {after} rows sent after it"
     );
 }
+
+#[tokio::test]
+async fn l1_a_recheck_slower_than_its_period_does_not_starve_a_live_stream() {
+    let (state, _dirs, inv) = logged(false).await;
+    let mut s = open(&state, request(STREAM, Who::Bearer(BEARER), None)).await;
+    within(s.until("hello")).await;
+    tokio::time::pause();
+    // Every check takes a second and a half: past the one-second recheck
+    // period, inside the two-second deadline, as a slow key server would.
+    state
+        .dashboard_bootstrap
+        .stream_hub()
+        .slow_validation_for_test(1_500);
+    call(&inv, "srv", 1);
+    let frame = within(s.until("activity")).await;
+    assert!(
+        frame.data.contains("tool_1"),
+        "the call arrives though every check is slow: {}",
+        frame.data
+    );
+}

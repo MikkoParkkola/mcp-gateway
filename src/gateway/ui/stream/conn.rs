@@ -149,6 +149,17 @@ impl Conn {
         {
             std::future::pending::<()>().await;
         }
+        #[cfg(test)]
+        {
+            let delay = self
+                .state
+                .dashboard_bootstrap
+                .stream_hub()
+                .validation_delay();
+            if !delay.is_zero() {
+                tokio::time::sleep(delay).await;
+            }
+        }
         let Some(caller) = current_caller(&self.auth, self.held.as_ref()).await else {
             return false;
         };

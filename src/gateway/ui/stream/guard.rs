@@ -89,6 +89,9 @@ struct Shared {
     /// Test seam: credential validation never answers while set.
     #[cfg(test)]
     hang_validation: std::sync::atomic::AtomicBool,
+    /// Test seam: credential validation takes this many milliseconds.
+    #[cfg(test)]
+    slow_validation_ms: std::sync::atomic::AtomicU64,
     /// Test seam: the watcher handover probe.
     #[cfg(test)]
     probe: super::probe::PublishProbe,
@@ -154,6 +157,8 @@ impl StreamHub {
                 #[cfg(test)]
                 hang_validation: std::sync::atomic::AtomicBool::new(false),
                 #[cfg(test)]
+                slow_validation_ms: std::sync::atomic::AtomicU64::new(0),
+                #[cfg(test)]
                 probe: super::probe::PublishProbe::default(),
                 #[cfg(test)]
                 awaiting_room: std::sync::atomic::AtomicUsize::new(0),
@@ -214,6 +219,23 @@ impl StreamHub {
     pub(crate) fn hang_validation_for_test(&self, on: bool) {
         use std::sync::atomic::Ordering::SeqCst;
         self.shared.hang_validation.store(on, SeqCst);
+    }
+
+    /// Make every credential validation take `ms` milliseconds before it
+    /// answers, as a slow key server would; 0 is no delay.
+    #[cfg(test)]
+    pub(crate) fn slow_validation_for_test(&self, ms: u64) {
+        use std::sync::atomic::Ordering::SeqCst;
+        self.shared.slow_validation_ms.store(ms, SeqCst);
+    }
+
+    #[cfg(test)]
+    pub(super) fn validation_delay(&self) -> std::time::Duration {
+        std::time::Duration::from_millis(
+            self.shared
+                .slow_validation_ms
+                .load(std::sync::atomic::Ordering::SeqCst),
+        )
     }
 
     /// Sends waiting for room in their channel right now.
