@@ -13,7 +13,7 @@ use axum::http::{Request, StatusCode};
 use serde_json::Value;
 use tower::ServiceExt;
 
-use super::keys_create::{BeforeWrite, KnownSecret};
+use super::keys_create::{BeforeLock, KnownSecret};
 use crate::config::{ApiKeyConfig, AuthConfig, Config, FailsafeConfig};
 use crate::config_reload::{FileRevision, LiveConfig, ReloadContext};
 use crate::gateway::auth::AuthenticatedClient;
@@ -100,7 +100,7 @@ pub(super) struct Call {
     pub(super) body: String,
     pub(super) client: AuthenticatedClient,
     pub(super) known: Option<String>,
-    pub(super) before_write: Option<BeforeWrite>,
+    pub(super) before_lock: Option<BeforeLock>,
 }
 
 impl Call {
@@ -109,7 +109,7 @@ impl Call {
             body: body.to_string(),
             client: admin_client(),
             known: Some(KNOWN.to_owned()),
-            before_write: None,
+            before_lock: None,
         }
     }
 
@@ -244,7 +244,7 @@ impl Fixture {
         if let Some(known) = call.known {
             request = request.extension(KnownSecret(known));
         }
-        if let Some(hook) = call.before_write {
+        if let Some(hook) = call.before_lock {
             request = request.extension(hook);
         }
         let response = super::admin_audit::audited_api_router(&self.state)

@@ -20,11 +20,18 @@ pub(super) struct KnownSecret(pub(super) String);
 /// and before it asks the writer for the config lock.
 #[cfg(test)]
 #[derive(Clone)]
-pub(super) struct BeforeWrite(pub(super) Arc<dyn Fn() + Send + Sync>);
+pub(super) struct BeforeLock(pub(super) Arc<dyn Fn() + Send + Sync>);
 
-pub(super) async fn create_key(guard: Guard) -> Response {
+pub(super) async fn create_key(
+    guard: Guard,
+    #[cfg(test)] before_lock: Option<axum::Extension<BeforeLock>>,
+) -> Response {
     if let Err(refused) = guard.admit() {
         return refused.into_response();
+    }
+    #[cfg(test)]
+    if let Some(axum::Extension(hook)) = &before_lock {
+        (hook.0)();
     }
     StatusCode::NOT_IMPLEMENTED.into_response()
 }

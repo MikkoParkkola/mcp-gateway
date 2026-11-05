@@ -234,7 +234,7 @@ fn the_test_seams_are_compiled_out_of_production() {
     ))
     .expect("source");
     let code = production("keys_create.rs");
-    for seam in ["KnownSecret", "BeforeWrite"] {
+    for seam in ["KnownSecret", "BeforeLock"] {
         assert!(raw.contains(seam) && !code.contains(seam), "{seam}");
     }
 }

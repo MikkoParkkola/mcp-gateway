@@ -11,7 +11,7 @@ use serde_json::{Value, json};
 
 use std::sync::Arc;
 
-use super::keys_create::BeforeWrite;
+use super::keys_create::BeforeLock;
 use super::keys_create_fixture_tests::{
     Call, Fixture, KNOWN, ROOT, Setup, item, root_item, spec, yaml_of,
 };
@@ -302,18 +302,26 @@ fn p6_an_expiry_not_after_now_is_refused() {
 }
 
 /// P6 under the lock: an expiry still ahead when the route checks, but past
-/// when the writer holds the lock, is refused.
+/// when the writer holds the lock, is refused. The test holds the config lock
+/// until the route says it is about to ask for it, then moves the clock and
+/// lets go, so only a clock read made under the lock sees the later time.
 #[test]
 fn p6_the_clock_is_read_again_under_the_lock() {
+    use std::sync::atomic::{AtomicBool, Ordering};
     let _clock = crate::clock::test_clock::at_secs(NOW);
     let fx = Fixture::new(Setup::default());
     let mut body = fx.body("late");
     body["expires_at"] = json!(at(NOW + 60));
     let reached = Arc::new(tokio::sync::Notify::new());
-    let ping = Arc::clone(&reached);
+    let fired = Arc::new(AtomicBool::new(false));
+    let (ping, flag) = (Arc::clone(&reached), Arc::clone(&fired));
     let mut call = Call::new(&body);
-    call.before_write = Some(BeforeWrite(Arc::new(move || ping.notify_one())));
+    call.before_lock = Some(BeforeLock(Arc::new(move || {
+        flag.store(true, Ordering::SeqCst);
+        ping.notify_one();
+    })));
     let before = fx.bytes();
+    let later = std::cell::RefCell::new(None);
     let sent = fx.rt.block_on(async {
         let held = crate::config_persistence::lock::lock_config(
             &fx.path(),
@@ -322,14 +330,16 @@ fn p6_the_clock_is_read_again_under_the_lock() {
         .await
         .expect("the test holds the lock");
         let advance = async {
-            // A route that never gets this far must fail the row, not hang it.
-            let _ =
-                tokio::time::timeout(std::time::Duration::from_secs(5), reached.notified()).await;
-            std::mem::forget(crate::clock::test_clock::at_secs(NOW + 120));
+            // A hang guard only: it never decides pass or fail in a normal run.
+            tokio::time::timeout(std::time::Duration::from_secs(60), reached.notified())
+                .await
+                .expect("the route never reached the lock; a hung row is not a red");
+            *later.borrow_mut() = Some(crate::clock::test_clock::at_secs(NOW + 120));
             drop(held);
         };
         tokio::join!(fx.send(call), advance).0
     });
+    assert!(fired.load(Ordering::SeqCst), "the route never signalled");
     assert_eq!(
         sent.status,
         StatusCode::UNPROCESSABLE_ENTITY,
