@@ -102,14 +102,36 @@ fn production_sources() -> Vec<(String, String)> {
 /// The production callers of `random_secret`, both crates:
 /// `gateway init`'s admin token (binary), the auto bearer, the key server's
 /// bearer, the dashboard's session values, the OAuth client's PKCE verifier. The create route is listed; rotate joins in C2; any other caller fails here until it is reviewed and named.
+/// Every production file that names `random_secret` as a whole word, with
+/// how often: the shared generator's callers (2 each, since
+/// `crate::random_secret::random_secret(` names it twice), the two crates'
+/// `mod random_secret;`, and the personal-account journey's own
+/// `random_secret()` (its definition, its import and its three calls), which
+/// is not the shared generator. Any other naming, by path, `use`, alias,
+/// grouped or glob import, adds a word and fails until reviewed.
 const CALLERS: &[(&str, usize)] = &[
-    ("src/commands/mod.rs", 1),
-    ("src/config/features/auth.rs", 1),
-    ("src/gateway/auth_dashboard.rs", 1),
-    ("src/gateway/ui/keys_create.rs", 1),
-    ("src/key_server/store.rs", 1),
-    ("src/oauth/client/mod.rs", 1),
+    ("src/commands/mod.rs", 2),
+    ("src/config/features/auth.rs", 2),
+    ("src/gateway/auth_dashboard.rs", 2),
+    ("src/gateway/ui/keys_create.rs", 2),
+    ("src/key_server/store.rs", 2),
+    ("src/lib.rs", 1),
+    ("src/main.rs", 1),
+    ("src/oauth/client/mod.rs", 2),
+    ("src/personal_accounts/journey/mod.rs", 1),
+    ("src/personal_accounts/journey/ops.rs", 4),
 ];
+
+/// `random_secret` as a whole word: `random_secret_tests` and
+/// `is_random_secret` are other identifiers.
+fn whole_words(code: &str) -> usize {
+    let ident = |c: char| c.is_alphanumeric() || c == '_';
+    code.match_indices("random_secret")
+        .filter(|(at, word)| {
+            !code[..*at].ends_with(ident) && !code[at + word.len()..].starts_with(ident)
+        })
+        .count()
+}
 
 #[test]
 fn random_secret_is_called_only_where_listed() {
@@ -117,12 +139,8 @@ fn random_secret_is_called_only_where_listed() {
         .into_iter()
         .filter(|(file, _)| file != "src/random_secret.rs")
         .filter_map(|(file, code)| {
-            // Any path into the module counts: a call, a `use` of the fn or
-            // the module, an alias or a glob import all name
-            // `random_secret::`, so none of them reaches the generator
-            // unlisted. Another module's own `random_secret()` has no such
-            // path. String literals are blanked in `code`.
-            let count = code.matches("random_secret::").count();
+            // Comments and string literals are blanked in `code`.
+            let count = whole_words(&code);
             (count > 0).then_some((file, count))
         })
         .collect();
@@ -180,7 +198,7 @@ const RANDOM_BASE64URL_REVIEWED: &[(&str, &str)] = &[
     ),
     (
         "src/protocol/continuation/keyring.rs",
-        "signing-key material; base64url names its key ids",
+        "signing-key material; base64url encodes the encrypted continuation envelope",
     ),
 ];
 
