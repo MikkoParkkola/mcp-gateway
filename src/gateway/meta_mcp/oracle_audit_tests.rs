@@ -196,7 +196,10 @@ async fn chain(meta: &MetaMcp) -> Value {
 async fn a3a_a_withheld_steps_failed_record_is_isolated() {
     use super::grant_audit::seams;
     let endpoint = Endpoint::start(false).await;
-    let (absent_dir, dir) = (Arc::new(tempfile::tempdir().unwrap()), Arc::new(tempfile::tempdir().unwrap()));
+    let (absent_dir, dir) = (
+        Arc::new(tempfile::tempdir().unwrap()),
+        Arc::new(tempfile::tempdir().unwrap()),
+    );
     let absent = chain(&mixed(&endpoint, &absent_dir, false).0).await;
     let (withheld, _log) = mixed(&endpoint, &dir, true);
     // The withheld step's note is written at once, before the request-end
