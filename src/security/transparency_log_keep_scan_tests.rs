@@ -1,7 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Every test that opens a transparency log in a temporary directory hands
-//! the log that directory (`keep_test_dir`), so a late append from a worker
+//! the log that directory (`keep_test_dir`; the shared fixture
+//! `grant_audit_fixture::logger` does so itself), so a late append from a worker
 //! the test left running lands before the directory goes. A source scan, as
 //! the task store's: file-level, a backstop for review.
 
@@ -34,20 +35,15 @@ const PENDING: &[&str] = &[
     "src/gateway/meta_mcp/catalogue_per_caller_tests.rs",
     "src/gateway/meta_mcp/catalogue_stateless_oauth_guard_tests.rs",
     "src/gateway/meta_mcp/chain_resume_binding_tests.rs",
-    "src/gateway/meta_mcp/grant_decision_audit_tests.rs",
-    "src/gateway/meta_mcp/grant_decision_slot_tests.rs",
     "src/gateway/meta_mcp/grant_slot_wrap_tests.rs",
-    "src/gateway/meta_mcp/grant_withheld_parity_tests.rs",
     "src/gateway/meta_mcp/invoke/audit_settlement_tests.rs",
     "src/gateway/meta_mcp/invoke/identity_propagation_enforcement_tests.rs",
     "src/gateway/meta_mcp/invoke/identity_propagation_enforcement_tests/resolution.rs",
     "src/gateway/meta_mcp/invoke/stored_proof_tests.rs",
-    "src/gateway/meta_mcp/oracle_audit_tests.rs",
     "src/gateway/meta_mcp/response_delivery_tests.rs",
     "src/gateway/meta_mcp/response_security/delivery_record_tests.rs",
     "src/gateway/meta_mcp/signing_delivery_tests.rs",
     "src/gateway/meta_mcp/slot_verdict_fixture.rs",
-    "src/gateway/meta_mcp/task_notify_tests.rs",
     "src/gateway/meta_mcp/trace_correlation_tests.rs",
     "src/gateway/meta_mcp/upstream_401_direct_tests.rs",
     "src/gateway/outbound/caller_key_record_tests.rs",
@@ -60,7 +56,6 @@ const PENDING: &[&str] = &[
     "src/gateway/router/backend_handlers/tests.rs",
     "src/gateway/router/capability_edit_audit_tests.rs",
     "src/gateway/router/collusion_direct_tests/meta.rs",
-    "src/gateway/router/collusion_direct_tests/meta/withheld.rs",
     "src/gateway/router/collusion_direct_tests/verdict.rs",
     "src/gateway/router/direct_anonymous_continuation_tests.rs",
     "src/gateway/router/direct_audit_tests/extras.rs",
@@ -96,11 +91,8 @@ const PENDING: &[&str] = &[
     "src/gateway/router/tests/openwebui_adapter/revoke_route.rs",
     "src/gateway/router/tests/openwebui_adapter/start_route.rs",
     "src/gateway/router/tests/refusal_wire_pins.rs",
-    "src/gateway/router/tests/task_execution_adapter/confirmation/slot_release.rs",
-    "src/gateway/router/tests/task_execution_adapter/grant_audit_order.rs",
     "src/gateway/router/tests/task_execution_adapter/query_serialization/dark_clock_settle.rs",
     "src/gateway/router/tests/task_execution_adapter/settlement_record.rs",
-    "src/gateway/router/tests/task_execution_adapter/slot_release_tasks.rs",
     "src/gateway/router/ui_access_matrix_tests.rs",
     "src/gateway/router/ui_audit_cancel_tests.rs",
     "src/gateway/router/ui_backend_scope_tests.rs",
@@ -110,9 +102,7 @@ const PENDING: &[&str] = &[
     "src/gateway/server/control_plane_store/tests/key_change_tests.rs",
     "src/gateway/server/control_plane_store/tests/lease_tests.rs",
     "src/gateway/server/tests/collusion_stdio.rs",
-    "src/gateway/server/tests/grant_decision_stdio.rs",
     "src/gateway/server/tests/startup_strategy.rs",
-    "src/gateway/server/tests/stdio_replay_audit.rs",
     "src/gateway/server/tools_changed/audience_fixture.rs",
     "src/gateway/streaming_tests.rs",
     "src/gateway/ui/activity/export_tests.rs",
@@ -146,24 +136,9 @@ fn is_test(rel: &str) -> bool {
             .is_some_and(|ext| ext.eq_ignore_ascii_case("rs"))
 }
 
-/// Whether `text` calls the shared fixture `logger(` (which does not keep),
-/// as opposed to `kept_logger(`, another `*_logger(` or its definition.
-fn calls_shared_unkept_logger(text: &str) -> bool {
-    text.contains("grant_audit_fixture")
-        && text.match_indices("logger(").any(|(at, _)| {
-            let before = &text[..at];
-            let named = before
-                .chars()
-                .next_back()
-                .is_some_and(|c| c.is_alphanumeric() || c == '_');
-            !named && !before.ends_with("fn ")
-        })
-}
-
 /// Whether `text` opens a log and never keeps a directory for one.
 fn unkept(text: &str) -> bool {
-    (text.contains("TransparencyLogger::open") || calls_shared_unkept_logger(text))
-        && !text.contains("keep_test_dir")
+    text.contains("TransparencyLogger::open") && !text.contains("keep_test_dir")
 }
 
 fn test_sources(dir: &std::path::Path, root: &std::path::Path, out: &mut Vec<(String, String)>) {
@@ -219,14 +194,5 @@ fn the_scan_tells_a_kept_log_from_an_unkept_one() {
     assert!(unkept("let log = TransparencyLogger::open(cfg).unwrap();"));
     assert!(!unkept(
         "let log = TransparencyLogger::open(cfg).unwrap();\nlog.keep_test_dir(dir);"
-    ));
-    assert!(unkept(
-        "use grant_audit_fixture::logger;\nlet l = logger(&dir, p);"
-    ));
-    assert!(!unkept(
-        "use grant_audit_fixture::kept_logger;\nlet l = kept_logger(&dir, p);"
-    ));
-    assert!(!unkept(
-        "use grant_audit_fixture::x;\nlet l = open_logger();"
     ));
 }
