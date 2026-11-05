@@ -12,11 +12,13 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use super::super::Gateway;
+#[cfg(feature = "webui")]
 use crate::capability::{compute_capability_hash, rewrite_with_pin};
 use crate::config::Config;
 use crate::gateway::meta_mcp::MetaMcp;
 use crate::gateway::webhooks::WebhookRegistry;
 
+#[cfg(feature = "webui")]
 const CHANGED: &str = "
 name: changed_tool
 description: Trusted when it was pinned
@@ -30,6 +32,7 @@ providers:
 
 /// `CHANGED` pinned to its own hash, then edited so the pin no longer
 /// matches: what a change made while the gateway was down leaves on disk.
+#[cfg(feature = "webui")]
 fn changed_while_down(dir: &std::path::Path) -> String {
     let text = rewrite_with_pin(CHANGED, &compute_capability_hash(CHANGED))
         .replace("Trusted when it was pinned", "Changed while down");
@@ -43,6 +46,9 @@ fn changed_while_down(dir: &std::path::Path) -> String {
 /// watcher, which stops watching when dropped.
 struct Started {
     meta: Arc<MetaMcp>,
+    // Held in every build: the open sender keeps the step's tasks running.
+    // Only the `webui` row sends on it.
+    #[cfg_attr(not(feature = "webui"), allow(dead_code))]
     shutdown: tokio::sync::broadcast::Sender<()>,
     _watcher: Option<crate::capability::CapabilityWatcher>,
 }
@@ -84,6 +90,7 @@ async fn eventually(what: &str, f: impl Fn() -> bool) {
     }
 }
 
+#[cfg(feature = "webui")]
 fn recorded(meta: &MetaMcp) -> Vec<String> {
     meta.capabilities
         .read()
