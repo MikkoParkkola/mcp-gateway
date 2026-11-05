@@ -106,11 +106,15 @@ async fn a_lift_after_a_rotation_records_the_first_executions_slot() {
     assert_eq!(last["declared_effect_source"], "tool_annotation", "{all:?}");
 }
 
-/// The first execution's per-user slot is evicted after settle and comes
-/// back cold for the lift, while the shared slot declares `read` read-only:
-/// the lifted replay records no effect, never the shared slot's.
+/// The first execution's per-user slot declares `read` read-only, then is
+/// evicted; the shared slot declares it may-write. The repeat's own route
+/// stage lists the caller's slot again before the lift (resolve.rs: the
+/// resolution and its checks precede `lift_deferred`), re-filling the same
+/// key from the fixture's listing, whose `read` carries no hint. The lifted
+/// replay records that slot as it is now (undeclared): never the declaration
+/// the evicted entry held, nor the shared slot's.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_lift_whose_stored_slot_was_evicted_records_none() {
+async fn a_lift_whose_stored_slot_was_evicted_reads_it_as_refilled() {
     let fx = fixture_with(false, true).await;
     answer_marker(&fx);
     let params = || invoke_params(Some("e1-evicted"), false);
@@ -121,15 +125,17 @@ async fn a_lift_whose_stored_slot_was_evicted_records_none() {
     );
     let backend = fx.gateway.backends().get(BACKEND).expect("the backend");
     let operator = DirectAccountGateway::operator_binding();
-    assert!(
-        backend.declared_effect_for(Some(&operator), TOOL).is_some(),
-        "premise: the stored slot held a declaration before the eviction"
+    backend.declare_slot_effects_for_test(Some(&operator), vec![declared(Some(true))]);
+    assert_eq!(
+        backend.declared_effect_for(Some(&operator), TOOL),
+        Some(crate::security::decision_record::Effect::ReadOnly),
+        "premise: the stored slot declared read-only before the eviction"
     );
     // Removes the pooled slot itself (it panics if the slot is not pooled).
     backend.retire_per_user_slot_for_test(&operator);
     backend.forget_caller_slots_for_test();
     fx.gateway.rearm_operator_slot_for_test();
-    backend.declare_slot_effects_for_test(None, vec![declared(Some(true))]);
+    backend.declare_slot_effects_for_test(None, vec![declared(Some(false))]);
     assert_eq!(
         backend.declared_effect_for(Some(&operator), TOOL),
         None,
@@ -142,8 +148,14 @@ async fn a_lift_whose_stored_slot_was_evicted_records_none() {
         "premise: served: {again}"
     );
     assert_eq!(fx.gateway.tool_calls().len(), sent, "premise: not re-sent");
+    assert_eq!(
+        backend.declared_effect_for(Some(&operator), TOOL),
+        Some(crate::security::decision_record::Effect::Undeclared),
+        "premise: the repeat re-filled the stored slot from the fixture's listing"
+    );
     let all = decisions(&fx);
     let last = all.last().expect("the replay's record");
     assert_eq!(last["decided"], "replayed", "{all:?}");
-    assert!(last.get("declared_effect").is_none(), "{all:?}");
+    assert_eq!(last["declared_effect"], "undeclared", "{all:?}");
+    assert_eq!(last["declared_effect_source"], "tool_annotation", "{all:?}");
 }

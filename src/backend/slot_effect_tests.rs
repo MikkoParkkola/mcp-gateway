@@ -78,6 +78,13 @@ fn the_exact_lookup_reads_only_the_slot_named() {
         Some(Effect::ReadOnly)
     );
     assert_eq!(per_user.declared_effect_at(&absent, "read"), None);
+    // A slot the backend holds but whose list never landed (evicted and
+    // re-armed, say) reads none, though the shared slot is warm.
+    let cold = PoolKey::PerUser {
+        binding: "b-3".to_owned(),
+    };
+    per_user.pooled_entry(&cold).expect("admitted");
+    assert_eq!(per_user.declared_effect_at(&cold, "read"), None);
     assert!(
         per_user.pooled_transport_for_test(&absent).is_none()
             && !per_user.pool.contains_key(&absent),
