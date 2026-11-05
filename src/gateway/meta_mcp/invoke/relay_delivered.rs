@@ -29,10 +29,20 @@ impl MetaMcp {
             let digest = fw.delivery_digest(server, tool, value)?;
             let (key, keyed) = (who.key.to_owned(), who.keyed);
             let (server, tool) = (server.to_owned(), tool.to_owned());
+            // Checked here, not in the closure: a channel may run the commit
+            // under its own lock (`streaming.rs`), and nothing logs there.
+            let Some(live) = self.live_config() else {
+                super::staging::unpublished("bridge");
+                return None;
+            };
             Some(crate::gateway::input_bridge::DeliveryCommit::new(
                 move || {
                     let caller = crate::security::firewall::RelayCaller::new(&key, keyed);
-                    fw.record_digest(caller, &server, &tool, &digest);
+                    // Read when delivery is confirmed, not when built.
+                    let generation = live.generation();
+                    #[cfg(all(test, feature = "firewall"))]
+                    super::commit_capture_hook::run();
+                    fw.record_digest(caller, &server, &tool, &digest, &generation);
                 },
             ))
         }
@@ -141,7 +151,7 @@ impl MetaMcp {
             {
                 // A redaction can drop the classification marker with the
                 // text; what the call was judged sensitive for stays so.
-                let digest = digest.keeping_sensitivity_of(&one.digest);
+                let digest = digest.keeping_inferred_of(&one.digest);
                 receipts.push(super::Receipt {
                     key: one.key.clone(),
                     keyed: one.keyed,
@@ -226,7 +236,7 @@ impl MetaMcp {
                     return;
                 };
                 if let Some(digest) = fw.delivery_digest(&one.server, &one.tool, &copy) {
-                    one.digest = digest.keeping_sensitivity_of(&one.digest);
+                    one.digest = digest.keeping_inferred_of(&one.digest);
                 }
             });
         }
@@ -747,6 +757,10 @@ mod tests {
 #[cfg(all(test, feature = "firewall"))]
 #[path = "relay_delivered_p3_tests.rs"]
 mod p3_tests;
+
+#[cfg(all(test, feature = "firewall"))]
+#[path = "relay_seam_live_tests.rs"]
+mod seam_live_tests;
 
 #[cfg(all(test, feature = "firewall", feature = "metrics"))]
 #[path = "relay_delivered_replay_count_tests.rs"]

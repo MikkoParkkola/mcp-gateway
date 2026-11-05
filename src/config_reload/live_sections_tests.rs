@@ -49,9 +49,9 @@ fn r1_a_security_flag_only_edit_is_not_restart_pending() {
     );
 }
 
-// R2: every other security field stays restart-pending, including the
-// collusion lists, which stay restart-only until their evidence is judged
-// against the current rules.
+// R2: every other security field stays restart-pending. The four live
+// collusion fields (action and the three lists) are not among them: they
+// apply on reload (`live_collusion_tests.rs`).
 #[test]
 fn r2_any_other_security_field_stays_restart_pending() {
     let running = Config::default();
@@ -68,14 +68,8 @@ fn r2_any_other_security_field_stays_restart_pending() {
         ),
         #[cfg(feature = "firewall")]
         (
-            "collusion.sources",
-            Box::new(|c| {
-                c.security
-                    .firewall
-                    .collusion
-                    .sources
-                    .push("mail".to_string());
-            }),
+            "collusion.window_secs",
+            Box::new(|c| c.security.firewall.collusion.window_secs += 1),
         ),
     ];
     for (name, edit) in edits {
@@ -639,18 +633,6 @@ fn a_held_collusion_edit_keeps_the_previous_view_not_the_startup_one() {
         CollusionAction::Block,
         "a held edit keeps the previous view"
     );
-}
-
-/// Until the relay gate judges with the generation's view (ADR-029's PR2), a
-/// collusion edit reports a restart: the line never claims a live change the
-/// gate does not apply.
-#[cfg(feature = "firewall")]
-#[test]
-fn a_collusion_edit_reports_a_restart_until_the_relay_gate_reads_it_live() {
-    let running = Config::default();
-    let mut wanted = running.clone();
-    wanted.security.firewall.collusion.action = crate::security::firewall::CollusionAction::Block;
-    assert!(pending(&running, wanted).contains(&"security"));
 }
 
 /// The tool policy applies on reload in every build, the firewall's too.

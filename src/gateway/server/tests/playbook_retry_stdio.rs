@@ -24,17 +24,21 @@ async fn a_stdio_playbook_run_carrying_retry_fields_is_refused() {
         engine.register(definition);
         meta.set_playbook_engine(engine);
         let meta = Arc::new(meta);
-        let policy = Arc::new(crate::security::ToolPolicy::default());
         let mtls = Arc::new(crate::mtls::MtlsPolicy::from_config(
             &crate::mtls::MtlsConfig::default(),
         ));
         let mut params = json!({"name": "gateway_run_playbook", "arguments": {"name": "one"}});
         params[field] = value;
         let request = json!({"jsonrpc": "2.0", "id": 9, "method": "tools/call", "params": params});
-        let body =
-            super::super::Gateway::dispatch_single(&meta, &policy, &mtls, &request, "stdio-8341")
-                .await
-                .expect("a request is answered");
+        let body = super::super::Gateway::dispatch_single(
+            &meta,
+            &crate::gateway::authz::default_line(&meta),
+            &mtls,
+            &request,
+            "stdio-8341",
+        )
+        .await
+        .expect("a request is answered");
         assert_eq!(body["error"]["code"], -32602, "{field}: {body}");
         assert!(
             body["error"]["message"]

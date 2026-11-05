@@ -98,7 +98,7 @@ fn records_for_session(session_id: &str, requests: &[serde_json::Value]) -> Vec<
                 captured.lock().expect("collector lock").clear();
                 Gateway::dispatch_single(
                     &meta,
-                    &test_tool_policy(),
+                    &crate::gateway::authz::default_line(&meta),
                     &test_mtls_policy(),
                     request,
                     session_id,

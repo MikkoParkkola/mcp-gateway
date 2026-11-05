@@ -22,6 +22,8 @@ pub(crate) use delivered::{Delivered, Mode};
 #[path = "collusion_key_path.rs"]
 mod key_path;
 pub(super) use key_path::{key_path_joins, key_path_run_indices, key_path_runs};
+#[path = "collusion_digest_facts.rs"]
+mod facts;
 #[path = "collusion_digest_judged.rs"]
 mod judged;
 #[path = "collusion_view.rs"]
@@ -107,13 +109,21 @@ pub(crate) struct DeliveryDigest {
     segments: Vec<Segment>,
     /// Fingerprints kept from leaves a change removed (plans only).
     retained: Vec<u64>,
-    pub(super) sensitive: bool,
+    /// The result's own classification marker, taken before any redaction:
+    /// the inferred fact a record holds, never a list match.
+    pub(super) inferred: bool,
+    /// The `server:tool` the result came from, set where the digest is
+    /// taken: the identity a record holds.
+    source: Option<std::sync::Arc<str>>,
     /// Staged whole, its cap still to apply (a plan step, MIK-7992).
     deferred: bool,
     /// A seam between plan steps of two or more sources (`MIK-8113`): the
     /// contributing `server:tool` sources, ascending. Its copy may leave only
     /// by a flow every one of them allows.
     pub(super) seam_sources: Option<Box<[String]>>,
+    /// Each contributing source's own inferred fact, in `seam_sources`'
+    /// order: a composite keeps them apart, never one combined bit.
+    pub(super) seam_inferred: Option<Box<[bool]>>,
     /// What the holder received when this receipt was cut: excuse only
     /// (`MIK-8066.EXCUSE.1`).
     pub(super) cut_fps: Option<std::sync::Arc<[u64]>>,
@@ -255,21 +265,23 @@ fn cap<'a>(n: usize, at: &dyn Fn(usize) -> View<'a>) -> (Vec<Segment>, bool) {
 impl DeliveryDigest {
     /// [`Self::of_parts`] with every leaf a value (tests only).
     #[cfg(test)]
-    pub(super) fn of_leaves(leaves: &[&str], sensitive: bool) -> (Self, bool) {
-        Self::of_parts(leaves, leaves.len(), sensitive)
+    pub(super) fn of_leaves(leaves: &[&str], inferred: bool) -> (Self, bool) {
+        Self::of_parts(leaves, leaves.len(), inferred)
     }
 
     /// `leaves` in walk order, the first `values` of them values and the rest
     /// object keys, as [`delivery_parts`] returns them; capped by leaf (see
     /// [`cap`]). Also whether anything was cut.
-    pub(super) fn of_parts(leaves: &[&str], values: usize, sensitive: bool) -> (Self, bool) {
+    pub(super) fn of_parts(leaves: &[&str], values: usize, inferred: bool) -> (Self, bool) {
         let (segments, cut) = cap(leaves.len(), &|i| part_view(leaves, values, i));
         let digest = Self {
             segments,
             retained: Vec::new(),
-            sensitive,
+            inferred,
+            source: None,
             deferred: false,
             seam_sources: None,
+            seam_inferred: None,
             cut_fps: None,
             seam_excuses: None,
             joins: Joins::None,
@@ -316,8 +328,8 @@ impl DeliveryDigest {
 
     /// [`Self::of_plan_step_parts`] with every leaf a value (tests only).
     #[cfg(test)]
-    pub(super) fn of_plan_step_leaves(leaves: &[&str], sensitive: bool) -> (Self, bool) {
-        Self::of_plan_step_parts(leaves, leaves.len(), sensitive)
+    pub(super) fn of_plan_step_leaves(leaves: &[&str], inferred: bool) -> (Self, bool) {
+        Self::of_plan_step_parts(leaves, leaves.len(), inferred)
     }
 
     /// The parts of a plan step (as [`Self::of_parts`] takes them), staged
@@ -329,21 +341,23 @@ impl DeliveryDigest {
     pub(super) fn of_plan_step_parts(
         leaves: &[&str],
         values: usize,
-        sensitive: bool,
+        inferred: bool,
     ) -> (Self, bool) {
         let per_leaf = std::mem::size_of::<Segment>();
         let total: usize = leaves.iter().map(|l| l.len() + per_leaf).sum();
         if total > DELIVERED_SET_CAP {
-            return Self::of_parts(leaves, values, sensitive);
+            return Self::of_parts(leaves, values, inferred);
         }
         let digest = Self {
             segments: (0..leaves.len())
                 .map(|i| part_view(leaves, values, i).owned())
                 .collect(),
             retained: Vec::new(),
-            sensitive,
+            inferred,
+            source: None,
             deferred: true,
             seam_sources: None,
+            seam_inferred: None,
             cut_fps: None,
             seam_excuses: None,
             joins: Joins::None,
@@ -378,9 +392,11 @@ impl DeliveryDigest {
         let digest = Self {
             segments,
             retained: self.retained[..kept].to_vec(),
-            sensitive: self.sensitive,
+            inferred: self.inferred,
+            source: self.source.clone(),
             deferred: false,
             seam_sources: None,
+            seam_inferred: None,
             cut_fps: None,
             seam_excuses: None,
             joins,
@@ -436,7 +452,7 @@ impl DeliveryDigest {
     /// contributing source's own receipt identity.
     pub(crate) fn of_seam(
         mut fps: Vec<u64>,
-        sensitive: bool,
+        inferred: bool,
         sources: Option<Box<[String]>>,
     ) -> Self {
         fps.sort_unstable();
@@ -444,8 +460,10 @@ impl DeliveryDigest {
         fps.truncate(RECORD_CAP);
         Self {
             retained: fps,
-            sensitive,
+            inferred,
+            source: None,
             seam_sources: sources,
+            seam_inferred: None,
             ..Self::default()
         }
     }
@@ -459,15 +477,10 @@ impl DeliveryDigest {
             .map(|s| s.text.as_str())
     }
 
-    /// Whether this digest is sensitive.
-    pub(crate) const fn is_sensitive(&self) -> bool {
-        self.sensitive
-    }
-
-    /// This digest, as sensitive as `earlier` was: a rebuild from a redacted
-    /// copy must not lose the verdict the original delivery carried.
-    pub(crate) fn keeping_sensitivity_of(mut self, earlier: &Self) -> Self {
-        self.sensitive |= earlier.sensitive;
+    /// This digest, keeping `earlier`'s inferred fact: a rebuild from a
+    /// redacted copy must not lose the classification the original carried.
+    pub(crate) fn keeping_inferred_of(mut self, earlier: &Self) -> Self {
+        self.inferred |= earlier.inferred;
         self
     }
 
@@ -618,9 +631,11 @@ impl DeliveryDigest {
         let kept = Self {
             segments,
             retained: Vec::new(),
-            sensitive: self.sensitive,
+            inferred: self.inferred,
+            source: self.source.clone(),
             deferred: true,
             seam_sources: None,
+            seam_inferred: None,
             cut_fps: None,
             seam_excuses: None,
             joins: Joins::None,

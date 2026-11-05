@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 
 use std::collections::HashSet;
 
-use super::{CollusionDetector, MAX_SOURCE_FINGERPRINTS, RelayAction, RelayParams, SAMPLE, sample};
+use super::{CollusionDetector, MAX_SOURCE_FINGERPRINTS, RelayParams, SAMPLE, sample};
 
 const A: &str = "principal-a";
 const B: &str = "principal-b";
@@ -19,7 +19,6 @@ const U: &str = "backend:post_message";
 
 fn observe() -> RelayParams {
     RelayParams {
-        action: RelayAction::Observe,
         ..RelayParams::default()
     }
 }
@@ -251,11 +250,15 @@ fn allowed_flow_not_flagged() {
     let d = detector();
     let now = Instant::now();
     let s = secret();
-    d.record_delivery_flows_at(T, A, (true, 0b01), &s, now);
-    assert!(d.check_egress_flows_at(B, (U, 0b01), &s, now).is_none());
-    assert!(d.check_egress_flows_at(B, (U, 0b11), &s, now).is_none());
-    assert!(d.check_egress_flows_at(B, (U, 0b10), &s, now).is_some());
-    assert!(d.check_egress_flows_at(B, (U, 0), &s, now).is_some());
+    d.record_delivery_at(T, A, true, &s, now);
+    let egress = |mask| {
+        let view = super::live_stubs::masked(&[(T, 0b01)], (U, mask));
+        d.check_egress_under(&view, B, U, &s, now)
+    };
+    assert!(egress(0b01).is_none());
+    assert!(egress(0b11).is_none());
+    assert!(egress(0b10).is_some());
+    assert!(egress(0).is_some());
 }
 
 // Row 9 ────────────────────────────────────────────────────────────────────
@@ -399,20 +402,27 @@ fn finding_has_no_content() {
     }
 }
 
+/// The detector keeps no action of its own: an `off` view at delivery
+/// records nothing, the same delivery under `block` does.
 #[test]
 fn off_records_nothing() {
-    let now = Instant::now();
+    use crate::security::firewall::CollusionAction;
+    use crate::security::firewall::collusion_live_rig::{Rig, config, plain};
     let s = secret();
+    let rig = Rig::new(config(CollusionAction::Block, &[], vec![]));
+    let on = rig.generation();
+    rig.reload(|c| c.security.firewall.collusion.action = CollusionAction::Off);
+    let off = rig.generation();
+    let detector = rig
+        .firewall
+        .collusion_detector()
+        .expect("built whatever the action");
 
-    let on = detector();
-    on.record_delivery_at(T, A, true, &s, now);
-    assert!(on.tracked_fingerprints() > 0);
-    assert!(on.check_egress_at(B, U, &s, now).is_some());
+    rig.deliver("alice", ("alpha", "read"), &plain(&s), &off);
+    assert_eq!(detector.tracked_fingerprints(), 0);
 
-    let off = CollusionDetector::new(RelayParams::default());
-    off.record_delivery_at(T, A, true, &s, now);
-    assert_eq!(off.tracked_fingerprints(), 0);
-    assert!(off.check_egress_at(B, U, &s, now).is_none());
+    rig.deliver("alice", ("alpha", "read"), &plain(&s), &on);
+    assert!(detector.tracked_fingerprints() > 0);
 }
 
 // Row 17 ───────────────────────────────────────────────────────────────────
