@@ -285,8 +285,10 @@ async fn t7_a_modern_stdio_client_is_told_false_and_sent_nothing() {
     let mut serve = serve(false).await;
     serve
         .send(
+            // Declared in full: the version alone classes it malformed, so legacy.
             &json!({"jsonrpc": "2.0", "id": 1, "method": "server/discover", "params": {
-            "_meta": {"io.modelcontextprotocol/protocolVersion": "2026-07-28"}}}),
+            "_meta": {"io.modelcontextprotocol/protocolVersion": "2026-07-28",
+                "io.modelcontextprotocol/clientCapabilities": {}}}}),
         )
         .await;
     let discover = serve.reply(1, &mut Vec::new()).await;
