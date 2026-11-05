@@ -50,6 +50,7 @@ mod run_wiring;
 #[path = "tests/mod.rs"]
 pub(crate) mod signing_allocation_tests;
 mod start_checks;
+mod first_list_wait;
 mod stdio_catalogue;
 mod stdio_channel;
 mod stdio_delivery;

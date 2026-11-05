@@ -35,15 +35,17 @@ impl Cancelled {
     /// Called from inside the dispatch's own task, which is what names it. The
     /// inline path answers on the serve loop's own task, which is never joined
     /// here: it leaves one stale `answered` entry, the same id every time.
+    /// Returns whether the frame was queued.
     pub(super) fn send_unless_cancelled(
         &self,
         id: Option<&RequestId>,
         permit: Permit<'_, crate::gateway::outbound::OutboundFrame>,
         frame: crate::gateway::outbound::OutboundFrame,
-    ) {
+    ) -> bool {
         let mut marks = self.0.lock();
         let task = tokio::task::try_id();
-        if !task.is_some_and(|task| marks.cancelled.contains(&task)) {
+        let sent = !task.is_some_and(|task| marks.cancelled.contains(&task));
+        if sent {
             // MIK-8176: every single answer enters the writer queue here, so
             // its holds are attached here, however it was built. The writer
             // hands them off as it takes the frame; a cancelled answer is
@@ -53,6 +55,7 @@ impl Cancelled {
         if let (Some(_), Some(task)) = (id, task) {
             marks.answered.insert(task);
         }
+        sent
     }
 }
 

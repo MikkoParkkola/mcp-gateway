@@ -9,6 +9,7 @@ use tracing::debug;
 
 use super::Gateway;
 use super::StdioNonce;
+use super::first_list_wait;
 use super::stdio_route_stage::RouteStage;
 use super::{
     STDIO_CREDENTIAL_PRINCIPAL, StdioClient, stdio_catalogue, stdio_delivery,
@@ -169,10 +170,9 @@ impl Gateway {
                             .await
                     }
                     "tools/list" => {
-                        // MIK-8356: the same grant recheck HTTP runs before tools/list.
-                        meta_mcp.revalidate_caller_slots(scope.caller).await;
-                        // The same own-view warm HTTP runs.
-                        meta_mcp.warm_listing_views(scope, Some(session_id)).await;
+                        // The grant recheck and own-view warm HTTP runs, then a first wait.
+                        let era = request_shape.era();
+                        first_list_wait::prepare(meta_mcp, scope, session_id, era).await;
                         meta_mcp.handle_tools_list_with_params(id, params, Some(session_id), scope)
                     }
                     m if stdio_catalogue::METHODS.contains(&m) => {
