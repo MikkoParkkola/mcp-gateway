@@ -348,6 +348,10 @@ impl Fixture {
 
     /// [`Fixture::post`] for a row that must drive the request's future
     /// alongside its own (a held lock, a clock to advance).
+    #[expect(
+        clippy::needless_lifetimes,
+        reason = "'a ties the boxed send future to self; elided in the Fn bound it would be higher-ranked"
+    )]
     pub(super) fn post_driven<'a, Fut: std::future::Future<Output = Sent>>(
         &'a self,
         call: Call,
@@ -468,7 +472,9 @@ fn decoded(raw: &str) -> Vec<String> {
         },
         |whole| vec![whole],
     );
-    values.iter().for_each(|v| collect_strings(v, &mut out));
+    for value in &values {
+        collect_strings(value, &mut out);
+    }
     out
 }
 

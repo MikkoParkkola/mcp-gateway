@@ -180,7 +180,7 @@ fn a5_the_intent_names_the_caller_and_the_key() {
 #[test]
 fn p12_the_admin_action_record_names_the_key_and_the_action() {
     let fx = Fixture::new(Setup::default());
-    let sent = created(&fx, &fx.body("noted"));
+    created(&fx, &fx.body("noted"));
     let actions = fx.records("admin_action");
     let ours: Vec<_> = actions.iter().filter(|r| r["method"] == "POST").collect();
     assert_eq!(ours.len(), 1, "{}", fx.audit_text());
