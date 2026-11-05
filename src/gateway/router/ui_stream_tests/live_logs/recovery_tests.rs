@@ -213,8 +213,35 @@ async fn r2_a_gapped_log_reached_by_a_replay_goes_live_across_reconnects() {
     }
 }
 
-#[tokio::test]
-async fn l2_snapshots_changing_faster_than_a_send_do_not_starve_a_live_stream() {
+/// L2 under a wall-clock bound: the row runs on its own thread and
+/// runtime, and the test thread waits at most 120 s. A connection loop that
+/// spins without yielding (a snapshot debt never paid) starves the paused
+/// clock and with it every bound inside the row, so it would hang, not fail;
+/// this turns that hang into a red row. The spinning thread is left behind.
+#[test]
+fn l2_snapshots_changing_faster_than_a_send_do_not_starve_a_live_stream() {
+    let (done_tx, done_rx) = std::sync::mpsc::channel();
+    let row = std::thread::spawn(move || {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("the row's runtime builds")
+            .block_on(l2_row());
+        let _ = done_tx.send(());
+    });
+    match done_rx.recv_timeout(Duration::from_secs(120)) {
+        Ok(()) => row.join().expect("the row's thread ends"),
+        // The row panicked: its own failure, not the bound's.
+        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+            std::panic::resume_unwind(row.join().expect_err("the row panicked"))
+        }
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+            panic!("L2 did not end within 120 s of wall time: the stream starved its runtime")
+        }
+    }
+}
+
+async fn l2_row() {
     let (state, _dirs, inv) = logged(false).await;
     let mut s = open(&state, request(STREAM, Who::Bearer(BEARER), None)).await;
     within(s.until("hello")).await;
