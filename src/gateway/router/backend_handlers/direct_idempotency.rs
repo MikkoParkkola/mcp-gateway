@@ -145,11 +145,11 @@ pub(super) fn execution_lease(
         // The second element is the replayed execution's record facts, which
         // `/mcp` writes into its invocation record. The direct route records a
         // replay as it records a cache hit (`note_cached`), so it sets them aside.
-        Ok(SyncAdmission::Replay(response, _, _, _, bindings, _)) => {
+        Ok(SyncAdmission::Replay(response, _, _, _, bindings, slot)) => {
             if let Some(GuardOutcome::Proceed(mut reservation)) = guarded.take() {
                 reservation.release();
             }
-            Ok((None, Some((response, bindings))))
+            Ok((None, Some((response, bindings, slot))))
         }
         // The caller's `?` drops the undispatched 7a reservation, which
         // releases it (`IdempotencyReservation`'s drop, OnDrop::Release).
@@ -157,10 +157,12 @@ pub(super) fn execution_lease(
     }
 }
 
-/// A 7b replay: the stored answer and the binding each step ran under.
+/// A 7b replay: the stored answer, the binding each step ran under, and the
+/// one slot the execution ran on (none when it stored none).
 pub(super) type StoredReplay = (
     JsonRpcResponse,
     Vec<crate::gateway::meta_mcp::admission::StepBinding>,
+    Option<crate::backend::PoolKey>,
 );
 
 /// Whether this route binds its stored results (MIK-8440): only a
@@ -218,7 +220,7 @@ pub(super) fn deliver_replay(
     // MIK-8440: a replay is served only under the forwarded credential that
     // produced it; another credential's retry is refused, never re-run.
     let replay = match replay {
-        Some((response, bindings)) => {
+        Some((response, bindings, slot)) => {
             let current = propagation
                 .identity_key
                 .as_deref()
@@ -235,11 +237,19 @@ pub(super) fn deliver_replay(
             }
             #[cfg(test)]
             seams::note_served(seams::Served::Execution);
-            // Red stub: a completed replay notes may-write.
-            crate::gateway::meta_mcp::invoke::audit::note_declared_effect(
-                crate::security::decision_record::Effect::MayWrite,
-                crate::security::decision_record::EffectSource::ToolAnnotation,
-            );
+            // The slot the first execution ran on, read now and looked up
+            // as stored (never resolved again, never the replaying caller's).
+            if let Some(effect) = slot.as_ref().and_then(|slot| {
+                scope
+                    .route
+                    .backend
+                    .declared_effect_at(slot, admitted.call.tool)
+            }) {
+                crate::gateway::meta_mcp::invoke::audit::note_declared_effect(
+                    effect,
+                    crate::security::decision_record::EffectSource::ToolAnnotation,
+                );
+            }
             Some(response)
         }
         None => None,
