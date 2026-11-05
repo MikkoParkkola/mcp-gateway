@@ -17,8 +17,10 @@ src/capability/watcher.rs	start_walk	spawn-blocking	1	no-refusal-inside	fingerpr
 src/commands/cap.rs	cap_pin	spawn-blocking	1	outside-calls	CLI cap pin command: pins a capability file under its directory lock
 src/config_reload/override_audit.rs	start	spawn	1	no-refusal-inside	override-audit worker that drains a queue into the audit log
 src/config_reload/replace.rs	create_entries	spawn-blocking	1	outside-calls	creates vault secret entries for a web UI settings save; errors return to the UI handler, not a tool call
-src/config_reload/replace.rs	replace_detached	spawn	1	outside-calls	web UI settings save or history restore of gateway.yaml plus reload; refusals return to the UI handler at join, not a tool call
 src/config_reload/replace.rs	settle	spawn-blocking	1	no-refusal-inside	discards or keeps a refused save's pending secret entries
+src/config_reload/replace.rs	spawn_locked	spawn	1	outside-calls	web UI settings save or history restore of gateway.yaml plus reload; refusals return to the UI handler at join, not a tool call
+src/config_reload/replace_audit.rs	recover_held	spawn-blocking	1	outside-calls	recovers a config write's journal for the web UI settings save; no tool call's answer waits on it
+src/config_reload/replace_validate.rs	validate_template	spawn-blocking	1	outside-calls	loads a config template for the web UI settings save; the refusal returns to the UI handler at join, not a tool call
 src/config_reload/watch_chain.rs	spawn_rewatch_task	spawn	1	outside-calls	config include-chain rewatch loop on file events and a retry timer
 src/config_reload/watcher.rs	spawn_reload_task	spawn	1	outside-calls	config file watcher loop that debounces and triggers reloads
 src/config_reload/write.rs	mutate_config_and_reload_detached	spawn	1	outside-calls	web UI backend add/edit/remove config mutation plus reload; errors return to the UI handler, not a tool call
@@ -75,19 +77,28 @@ src/gateway/task_service/store_targets.rs	claim_upstream_cancel	spawn-blocking	1
 src/gateway/task_service/store_targets.rs	claim_upstream_cancel_undated	spawn-blocking	1	no-refusal-inside	task store claim of an upstream cancel without a date; claim returned to the awaiting caller
 src/gateway/task_service/store_targets.rs	settle_bounded_by	spawn-blocking	1	no-refusal-inside	task store write settling a task within its bound; error returned to the awaiting caller
 src/gateway/ui/activity/mod.rs	blocking	spawn-blocking	1	no-refusal-inside	web UI activity read from disk
+src/gateway/ui/activity/mod.rs	stream_read	spawn-blocking	1	outside-calls	reads the web UI activity stream from the audit log
 src/gateway/ui/admin_audit.rs	recorded	spawn	1	no-refusal-inside	runs an admin UI handler and writes its admin audit record; no tool call's delivery runs inside
+src/gateway/ui/backends/signin_flow.rs	start	spawn	1	outside-calls	runs a web UI backend sign-in; it serves the sign-in page, not a tool call
+src/gateway/ui/decisions.rs	replay_until_ready	spawn-blocking	1	outside-calls	replays the decision log into the web UI's decision source at start-up
+src/gateway/ui/decisions.rs	start_discovery	spawn	1	outside-calls	keeps the web UI's client-file discovery cache current in the background
+src/gateway/ui/decisions.rs	start_with	spawn	3	outside-calls	the web UI decision source's background readers and hand-off queue
+src/gateway/ui/decisions.rs	start_with	spawn-blocking	1	outside-calls	the web UI decision source's blocking log reader
 src/gateway/ui/discovery.rs	list_discovery	spawn-blocking	1	no-refusal-inside	reads gateway.yaml off the async workers for the discovery list; a read failure returns as a 503
 src/gateway/ui/discovery_adopt.rs	adopt_discovery	spawn-blocking	1	no-refusal-inside	reads gateway.yaml off the async workers before an adopt; a read failure returns as a 503
 src/gateway/ui/discovery_adopt.rs	open_store	spawn-blocking	1	no-refusal-inside	opens the secret store choice and the vault off the async workers; a keychain that does not answer in time is a 503
 src/gateway/ui/mod.rs	config	spawn-blocking	1	no-refusal-inside	web UI config page reads the literal config file for secret references
 src/gateway/ui/preview.rs	preview_backend	spawn	1	outside-calls	web UI backend preview: starts and describes a backend in its own task; not a tool call
+src/gateway/ui/stream/mod.rs	stream	spawn	1	outside-calls	feeds the web UI's server-sent event stream
+src/gateway/ui/stream/watcher.rs	spawn	spawn	1	outside-calls	watches for changes to publish on the web UI stream
+src/gateway/ui/tool_call.rs	spawn_call	spawn	1	own-cell	runs a web UI tool call detached through the /mcp handler, which opens the call's own delivery cell and records its refusal
 src/idempotency/guard.rs	spawn_cleanup_task	spawn	1	outside-calls	idempotency cache cleanup timer
 src/identity_grants.rs	write_identity_grants_file	spawn-blocking	1	no-refusal-inside	atomic write of the identity grants file
 src/identity_grants/journal.rs	acquire_lock	spawn-blocking	1	outside-calls	takes the grant journal lock for a CLI identity grant change
 src/identity_grants/journal.rs	apply_change_with	spawn-blocking	2	outside-calls	directory sync and journal append for a CLI identity grant change
 src/identity_grants/journal.rs	read_locked	spawn-blocking	2	outside-calls	locked grant-file and journal reads at start-up and config reload
 src/key_server/store.rs	spawn_reaper	spawn	1	outside-calls	expired temporary token reaper loop
-src/oauth/callback.rs	start_callback_server	spawn	2	outside-calls	OAuth callback HTTP listeners (IPv4 and IPv6) for a login
+src/oauth/callback.rs	start_callback_server_with	spawn	2	outside-calls	OAuth callback HTTP listeners (IPv4 and IPv6) for a login
 src/oauth/client/refresh_flight.rs	spawn	spawn	1	raised-at-join	refresh_stored awaits the exchange in the caller's task, so a destination refusal returns there
 src/oauth/client/renewal.rs	spawn_refresh_task	spawn	1	outside-calls	background OAuth token renewal loop
 src/personal_accounts/mod.rs	start_custody_with_http	spawn-blocking	1	outside-calls	opens personal-account custody at start-up
@@ -99,10 +110,10 @@ src/security/transparency_log_bounded.rs	append_bounded_within	spawn-blocking	1	
 src/skills/watcher.rs	spawn_regen_task	spawn	1	outside-calls	skills directory watcher that regenerates skill output on changes
 src/transport/http/listen.rs	open_listen_as	spawn	1	no-refusal-inside	reads a backend's listen response into a channel of unsolicited notifications
 src/transport/http/listen.rs	open_session_stream_as	spawn	1	no-refusal-inside	reads a backend's session SSE stream into a channel of admitted notifications
-src/transport/http/requests.rs	detach_token_step	spawn	1	raised-at-join	detached OAuth token step; the caller records an SSRF destination refusal after task.await
+src/transport/http/requests_detach_token.rs	detach_token_step	spawn	1	raised-at-join	detached OAuth token step; the caller records an SSRF destination refusal after task.await
 src/transport/http/sse_channel.rs	open	spawn	1	no-refusal-inside	reads a backend SSE response and routes frames or errors to waiting requests over channels
-src/transport/http/startup.rs	connect	spawn	1	raised-at-join	connect awaits the OAuth handshake task in the caller's task, so a destination refusal returns there
-src/transport/stdio.rs	start	spawn	1	no-refusal-inside	backend stdout reader routing response frames to pending requests
+src/transport/http/startup.rs	connect_as	spawn	1	raised-at-join	connect awaits the OAuth handshake task in the caller's task, so a destination refusal returns there
 src/transport/stdio_early_exit.rs	spawn_stderr_tail	spawn	1	no-refusal-inside	drains the backend's stderr into the log and a tail buffer
+src/transport/stdio_start.rs	start	spawn	1	no-refusal-inside	backend stdout reader routing response frames to pending requests
 src/transport/stdio_tree.rs	finish_whole	spawn	1	no-refusal-inside	finishes a stdin write to the backend process; transport error returned through the join
 src/transport/websocket.rs	do_connect	spawn	1	no-refusal-inside	WebSocket backend io loop routing frames between socket and pending requests
