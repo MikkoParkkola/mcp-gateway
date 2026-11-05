@@ -589,3 +589,27 @@ async fn a1g_a_demotion_during_a_catch_up_sends_no_more_of_its_page() {
         "the narrowed access stops the page at its next frame: {after} rows sent after it"
     );
 }
+
+#[tokio::test]
+async fn s2_activity_and_config_arrive_within_a_second_of_the_change() {
+    let (state, _dirs, inv) = logged(true).await;
+    let mut s = open(&state, request(STREAM, Who::Bearer(BEARER), None)).await;
+    within(s.until("hello")).await;
+    // On the paused clock, time moves only when every task waits on a timer:
+    // a frame pushed by the broadcast arrives with the clock where the change
+    // left it, and one that waited on a poll or a tick would move it a second
+    // or more.
+    tokio::time::pause();
+    let changed = tokio::time::Instant::now();
+    call(&inv, "srv", 1);
+    within(s.until("activity")).await;
+    let activity = changed.elapsed();
+    let changed = tokio::time::Instant::now();
+    config_change(&state);
+    within(s.until("config")).await;
+    let config = changed.elapsed();
+    assert!(
+        activity < Duration::from_secs(1) && config < Duration::from_secs(1),
+        "each event within a second of its change: activity {activity:?}, config {config:?}"
+    );
+}

@@ -16,6 +16,12 @@
 //! anchor's re-read, plus the shared segment opener's identity check of the
 //! active file, which reads that file's first line (at most one capped line)
 //! each time the active file is opened. Opening a sealed segment reads nothing.
+//!
+//! One call opens the active file at most twice, so that check adds at most
+//! two capped lines: a fresh start opens it once, either as the oldest
+//! segment or by crossing into it; a resume opens it once while finding its
+//! segment; and a resume that fails then starts over, which opens it once
+//! more. A call never crosses into the active file twice.
 
 use std::fs::File;
 use std::io;
