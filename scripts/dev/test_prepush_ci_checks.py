@@ -185,7 +185,9 @@ CI_ONLY_LINES: dict[tuple[str, str], str] = {
 
 def _scan(root, ci_only_lines=None):
     """(form -> [workflows], form -> automatic CI_ONLY reason, problems)."""
-    lines_table = CI_ONLY_LINES if ci_only_lines is None else ci_only_lines
+    # Keys compared with whitespace collapsed, as the walker compares the workflow's lines.
+    lines_table = {(wf, " ".join(line.split())): reason
+                   for (wf, line), reason in (CI_ONLY_LINES if ci_only_lines is None else ci_only_lines).items()}
     forms, auto, found = {}, {}, []
     seen, listed_seen = set(), set()
     for workflow in pr_workflows(root):
@@ -760,6 +762,9 @@ class Rows(unittest.TestCase):
         for run, script in (("x.sh", "x.sh"), ("deploy/k8s/scripts/smoke.sh", "deploy/k8s/scripts/smoke.sh")):
             with self.subTest(run):
                 self.assertEqual([e.script for e in workflow_shell.executions(run)], [script])
+        # A quoted ">" is an argument, not a redirection.
+        (ex,) = workflow_shell.executions('bash scripts/ci/x.sh ">" --strict')
+        self.assertEqual(ex.args, (">", "--strict"))
         (ex,) = workflow_shell.executions('base="$BASE_SHA"\nscripts/ci/x.sh "$base..HEAD"')
         self.assertEqual(ex.args, ("<BASE_TIP>..HEAD",))
 
@@ -781,7 +786,11 @@ class Rows(unittest.TestCase):
             "bash scripts/ci/check-[ab].sh", "bash ../x.sh", 'echo "see scripts/ci/x.sh"',
             'for f in scripts/ci/x.sh; do bash "$f"; done', "for f in scripts/ci/x.sh scripts/ci/y.sh; do",
             'for f in scripts/*.sh; do bash -n "$f"; done', "bash -n +n scripts/ci/x.sh",
-            'echo "scripts/ci/x.sh --strict" | bash',
+            'echo "scripts/ci/x.sh --strict" | bash', "scripts/ci/x.sh < <(scripts/ci/y.sh)",
+            "bash scripts/ci/x.sh > >(scripts/ci/y.sh)",
+            "bash <<EOF\nscripts/ci/x.sh\nEOF", "bash <<'EOF'\nscripts/ci/x.sh --check\nEOF",
+            "cat <<EOF\n$(bash scripts/ci/x.sh)\nEOF", 'bash scripts/ci/x.s"h"', "bash scripts/ci/x.s\\h",
+            "scripts/ci/x.s'h' --check", 'a; scripts/ci/x.s"h"',
         ):
             with self.subTest(line), self.assertRaises(workflow_shell.UnsupportedSyntax):
                 workflow_shell.executions(line)

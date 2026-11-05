@@ -42,6 +42,22 @@ def heredocs_dropped(lines):
     return kept
 
 
+def heredoc_bodies(lines):
+    """The body lines `heredocs_dropped` removes (terminators excluded)."""
+    bodies, delimiter = [], None
+    for line in lines:
+        if delimiter is not None:
+            if line.strip() == delimiter:
+                delimiter = None
+            else:
+                bodies.append(line)
+            continue
+        opener = HEREDOC.search(line)
+        if opener:
+            delimiter = opener.group(2)
+    return bodies
+
+
 def joined(lines):
     """`lines` with `\\` continuations joined into one command each.
 
@@ -163,6 +179,16 @@ UNSUPPORTED = ("eval", "source", ".")
 SH_SCRIPT = re.compile(r"^(?:\./)?(?!\.\./)((?:[\w.-]+/)*[\w.-]+\.sh)$")
 # Any word ending in .sh triggers the rule, however it is spelled ($DIR/x.sh, x-*.sh, "x.sh").
 SH_MENTION = re.compile(r"\.sh(?![\w.-])")
+
+
+def _names_sh(text):
+    """Whether `text` names a .sh, as written or once the shell drops quotes and escapes (x.s"h")."""
+    if SH_MENTION.search(text):
+        return True
+    try:
+        return bool(SH_MENTION.search(" ".join(shlex.split(text))))
+    except ValueError:
+        return False
 SH_SYNTAX_LOOP = re.compile(r'^for\s+(\w+)\s+in\s+((?:\S+\.sh\s+)*\S+\.sh)\s*;\s*do\s+bash\s+-n\s+"\$\1"\s*;\s*done$')
 
 
@@ -413,12 +439,19 @@ def _walk(run_block: str, shell_lines: ShellLines = ShellLines.STRICT, ci_only_l
     """The walker proper: every script execution it can read, in order."""
     # One word per `${{ … }}` expression, so whitespace splitting keeps it whole.
     run_block = re.sub(r"\$\{\{\s*(.*?)\s*\}\}", lambda m: "${{" + m.group(1).replace(" ", "") + "}}", run_block)
-    lines = heredocs_dropped(run_block.replace("\\\n", " ").splitlines())
+    raw_lines = run_block.replace("\\\n", " ").splitlines()
+    # A heredoc body is data to the Python reading, but it may be a script fed to a shell
+    # (`bash <<EOF`): a .sh named in one fails closed unless that exact line is listed.
+    for body in heredoc_bodies(raw_lines):
+        if (_names_sh(body) and " ".join(body.split()) not in ci_only_lines
+                and shell_lines is ShellLines.STRICT):
+            raise UnsupportedSyntax(f"a .sh inside a heredoc body: {body.strip()}")
+    lines = heredocs_dropped(raw_lines)
     found, bound, loops = [], {}, {}
     for raw in lines:
         if raw.strip().startswith("#"):
             continue
-        if SH_MENTION.search(raw):
+        if _names_sh(raw):
             if " ".join(raw.split()) in ci_only_lines:
                 continue
             try:
@@ -478,13 +511,13 @@ def _stage_execution(stage, stages, bound, loops):
         return found
     if "*" in target and not any(target == p for p in loops.values()):
         raise UnsupportedSyntax(f"a glob operand runs only its first match: {stage}")
-    return found + _forms(words[0], target, rest[1:], stages, bound)
+    return found + _forms(words[0], target, _without_redirections(rest[1:]), stages, bound)
 
 
 def _forms(argv0, target, args, stages, bound):
-    """One Execution per combination of the bound values its arguments use."""
+    """One Execution per combination of the bound values its arguments use (redirections already removed)."""
     found = []
-    words_after = _without_redirections(args)
+    words_after = list(args)
     used = [v for v in bound if any(("$" + v) in w for w in words_after)]
     for combo in itertools.product(*(bound[v] for v in used)):
         values = {v: value for v, (value, _) in zip(used, combo)}
@@ -508,10 +541,15 @@ def _shell_line(line, bound):
     top, spans = _lex(line)
     chained = [i for i, (flag, char) in enumerate(zip(top, line)) if flag and char in ";&|"
                and not (char == "&" and ">" in line[max(i - 1, 0):i + 2])]  # 2>&1, &>f are redirections
-    if spans or chained:
+    # `<( )` and `>( )` run their own commands, like `$( )`.
+    process = [i for i, (flag, char) in enumerate(zip(top, line)) if flag and char in "<>" and line[i + 1:i + 2] == "("]
+    if spans or chained or process:
         raise UnsupportedSyntax(f"a .sh in a chained or substituted command; write it as its own line: {line}")
+    # Redirections are found in the words as written (a quoted ">" is an argument), then quotes
+    # are dropped; the script word itself must be written plainly (no quotes or escapes).
     try:
-        words = _without_redirections(shlex.split(line))
+        written = _without_redirections(shlex.split(line, posix=False))
+        words = [" ".join(shlex.split(w)) for w in written]
     except ValueError as err:
         raise UnsupportedSyntax(f"{err}: {line}") from None
     argv0 = words[0] if words else ""
@@ -521,7 +559,8 @@ def _shell_line(line, bound):
             if len(words) == 2 and SH_SCRIPT.match(words[1]):
                 return []
             raise UnsupportedSyntax(f"`bash -n` checks one script per line (or the loop form): {line}")
-    script = SH_SCRIPT.match(words[0]) if words else None
+    plain = written[len(written) - len(words):] if words else []
+    script = SH_SCRIPT.match(words[0]) if words and plain[0] == words[0] else None
     if not script:
         raise UnsupportedSyntax(f"not `bash <path>.sh [args]`, `<path>.sh [args]` or `bash -n <path>.sh`: {line}")
     return _forms(argv0 if argv0 == "bash" else script.group(1), script.group(1), words[1:], (), bound)
