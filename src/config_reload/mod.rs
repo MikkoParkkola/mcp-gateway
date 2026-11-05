@@ -732,6 +732,8 @@ pub async fn apply_patch(
 mod diff;
 mod generation;
 pub use generation::Generation;
+#[cfg(all(test, feature = "webui"))]
+pub(crate) use generation::refuse_hook;
 #[cfg(feature = "webui")]
 pub(crate) use generation::refuse_multi_user_flip;
 
