@@ -59,10 +59,13 @@ const fn class(t: ScanType) -> (bool, bool) {
         // Their ordinary findings pass through the rules (ADR-029 F1b).
         ScanType::SequenceAnomaly | ScanType::CrossTenantReach => (false, true),
         // No scanner produces `pii`; both budget outcomes force a block past
-        // the rules; the relay gate alone decides a relay.
-        ScanType::Pii | ScanType::BudgetExceeded | ScanType::CollusionRelay => (false, false),
-        // Output-only: the folder check produces them and no rule lists them.
-        ScanType::PathOutsideRoot | ScanType::RootRefused => (false, false),
+        // the rules; the relay gate alone decides a relay; the folder check
+        // alone produces the two output-only types, which no rule lists.
+        ScanType::Pii
+        | ScanType::BudgetExceeded
+        | ScanType::CollusionRelay
+        | ScanType::PathOutsideRoot
+        | ScanType::RootRefused => (false, false),
     }
 }
 

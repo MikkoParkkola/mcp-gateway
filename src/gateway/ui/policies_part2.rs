@@ -29,7 +29,12 @@ fn setting(path: &str, file: Value, enforced: Value) -> Value {
 }
 
 fn setting_pending(path: &str, file: Value, enforced: Value, pending: bool) -> Value {
-    json!({ "path": path, "file": file, "enforced": enforced, "pending_restart": pending })
+    let mut s = serde_json::Map::new();
+    s.insert("path".to_owned(), Value::from(path));
+    s.insert("file".to_owned(), file);
+    s.insert("enforced".to_owned(), enforced);
+    s.insert("pending_restart".to_owned(), Value::Bool(pending));
+    Value::Object(s)
 }
 
 /// A switch, `on` when its enforced value is.
@@ -134,7 +139,7 @@ fn tool_list(
         .any(|e| scanner.is_memory_write_tool(e));
     let mut s = setting(
         &fw_path("memory_poisoning.scan_tools"),
-        json!(file),
+        Value::from(file),
         json!(run.scan_tools),
     );
     s["on"] = json!(on);

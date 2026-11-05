@@ -187,7 +187,7 @@ fn tool_list(tools: &[&str]) -> Value {
 }
 
 /// R4d, R4g: the tool list is reported as configured; an empty list scans
-/// no tool, so memory_poisoning is not produced.
+/// no tool, so `memory_poisoning` is not produced.
 #[test]
 fn r4d_the_memory_scanners_tool_list() {
     let list = tool_list(&["a", "b"]);
@@ -492,8 +492,8 @@ fn r6c_only_the_exact_shape_is_the_pinned_rule() {
     }
 }
 
-/// The pinned rule's (shadowed_by, partly_shadowed_by) behind `earlier`.
-fn shadows_of_pinned(earlier: Value) -> (Value, Value) {
+/// The pinned rule's (`shadowed_by`, `partly_shadowed_by`) behind `earlier`.
+fn shadows_of_pinned(earlier: &Value) -> (Value, Value) {
     let model = read_model(&with_rules(json!([earlier, pinned()])));
     let p = &model["credentials"]["pinned_rule"];
     assert_eq!(p["position"], json!(1), "{model}");
@@ -555,7 +555,7 @@ fn r6d_what_shadows_the_pinned_rule() {
             &first,
         ),
     ] {
-        let (shadowed, partly) = shadows_of_pinned(earlier.clone());
+        let (shadowed, partly) = shadows_of_pinned(&earlier);
         assert_eq!(&shadowed, full, "{earlier}");
         assert_eq!(&partly, part, "{earlier}");
     }

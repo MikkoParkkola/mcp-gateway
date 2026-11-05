@@ -37,6 +37,13 @@ pub(super) async fn read_policies(State(state): State<Arc<AppState>>, guard: Gua
 /// so a reload between two reads cannot mix them.
 pub(super) struct Sources<'a> {
     pub(super) generation: Arc<crate::config_reload::Generation>,
+    #[cfg_attr(
+        not(feature = "firewall"),
+        expect(
+            dead_code,
+            reason = "only the firewall sections read restart-only fields"
+        )
+    )]
     pub(super) running: &'a Config,
 }
 
