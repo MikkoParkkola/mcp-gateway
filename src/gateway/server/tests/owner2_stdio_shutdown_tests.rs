@@ -210,7 +210,7 @@ async fn an_unresolvable_auth_config_leaves_the_stdio_store_open() {
     );
     if let Some((tasks, expiry)) = opened {
         let window = std::time::Duration::from_secs(5);
-        let budget = super::super::task_runtime::ShutdownBudget::within(window, window);
+        let budget = crate::gateway::server::task_runtime::ShutdownBudget::within(window, window);
         stdio_tasks::shutdown(&tasks, expiry, budget).await;
     }
 }
