@@ -469,13 +469,21 @@ fn refused_write(
             coded(StatusCode::CONFLICT, "reload_refused")
         }
         (None, Err(ReplaceError::AuditRefused(_))) => audit_unavailable(),
+        // The writer's own read check: nothing was written, so these are the
+        // preconditions' answers, never the guard's text.
+        (None, Err(ReplaceError::NoConfigFile)) => coded(StatusCode::CONFLICT, "no_config_file"),
+        (None, Err(ReplaceError::ConfigRefused(_))) => fixed(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "reload is off or gateway.yaml could not be loaded",
+        ),
         (
             None,
             Err(
                 ReplaceError::Refused(_)
                 | ReplaceError::Unsupported(_)
                 | ReplaceError::Stage(_)
-                | ReplaceError::Write(_),
+                | ReplaceError::Write(_)
+                | ReplaceError::Secrets(_),
             ),
         ) => fixed(StatusCode::INTERNAL_SERVER_ERROR, "the key was not created"),
         (None, _) => coded(StatusCode::INTERNAL_SERVER_ERROR, "state_uncertain"),
