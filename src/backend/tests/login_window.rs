@@ -236,6 +236,37 @@ pub(crate) async fn approve_if_listening(url: &str) -> bool {
         .is_ok()
 }
 
+/// A port another login's listener took after this one closed answers this
+/// login's callback with its own refusal (a state mismatch, 400). That is not
+/// this login still listening: only this login's listener accepts its state.
+#[tokio::test]
+async fn a_foreign_listener_on_the_port_is_not_this_login_listening() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let foreign = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = foreign.local_addr().unwrap().port();
+    let refusing = tokio::spawn(async move {
+        let (mut stream, _) = foreign.accept().await.unwrap();
+        let mut request = [0_u8; 1024];
+        let _ = stream.read(&mut request).await;
+        let _ = stream
+            .write_all(
+                b"HTTP/1.1 400 Bad Request\r\ncontent-length: 0\r\nconnection: close\r\n\r\n",
+            )
+            .await;
+    });
+    let callback = format!("http://127.0.0.1:{port}/oauth/callback");
+    let url = url::Url::parse_with_params(
+        "http://issuer.invalid/authorize",
+        &[("redirect_uri", callback.as_str()), ("state", "this-login")],
+    )
+    .unwrap();
+    assert!(
+        !approve_if_listening(url.as_str()).await,
+        "a foreign listener's refusal was read as this login still listening"
+    );
+    refusing.await.expect("the foreign listener answered");
+}
+
 pub(super) fn variant(error: &Error) -> String {
     format!("{error:?}")
 }
