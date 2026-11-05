@@ -44,7 +44,7 @@ src/gateway/meta_mcp/grant_audit.rs	slot_http	JsonRpcResponse::error	1
 src/gateway/meta_mcp/grant_audit.rs	slot_http	error_response_preserving_status	1
 src/gateway/meta_mcp/grant_audit.rs	slot_rpc	error_response_preserving_status	1
 src/gateway/meta_mcp/invoke/admin.rs	get_stats	Error::json_rpc	1
-src/gateway/meta_mcp/invoke/admin.rs	reload_capabilities	Error::json_rpc	2
+src/gateway/meta_mcp/invoke/admin.rs	reload_capabilities	Error::json_rpc	3
 src/gateway/meta_mcp/invoke/admin.rs	reload_config	Error::json_rpc	2
 src/gateway/meta_mcp/invoke/admin.rs	run_playbook	Error::json_rpc	2
 src/gateway/meta_mcp/invoke/admin.rs	webhook_status	Error::json_rpc	1
