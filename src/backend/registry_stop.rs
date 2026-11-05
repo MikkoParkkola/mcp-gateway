@@ -33,10 +33,6 @@ impl BackendRegistry {
         let _sweep = RetireOnDrop(backends.clone());
         #[cfg(test)]
         seam::after_sweep();
-        #[allow(
-            clippy::disallowed_methods,
-            reason = "Lifecycle: gateway startup, wiring or shutdown; no caller request"
-        )]
         let stop = crate::transport::within_stop_deadline(deadline, Self::stop_each(backends));
         // Bounded by the deadline as a whole: a backend waiting on a restart's
         // lifecycle lock cannot outrun the stage. What it leaves running is
