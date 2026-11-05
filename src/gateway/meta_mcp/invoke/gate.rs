@@ -535,8 +535,10 @@ impl MetaMcp {
             crate::gateway::delivery_facts::withheld();
             crate::gateway::delivery_facts::gateway_folded(-32003);
         } else {
-            // Not out of scope: the name matches nothing.
+            // Not out of scope: the name matches nothing, the gateway's own
+            // refusal, recorded as an unscoped caller's missing backend is.
             super::audit::note_refused_by(DecisionKind::NotFound, None);
+            super::audit::note_not_found();
             crate::gateway::delivery_facts::gateway_folded(-32001);
         }
         self.record_withheld(server, tool, Withholding::Absent, caller, session_id)

@@ -414,6 +414,9 @@ impl MetaMcp {
                 crate::security::decision_record::DecisionKind::NotFound,
                 None,
             ));
+            // A denial with the miss's code; out of scope, the memo's -32003
+            // was kept first and wins.
+            notes.mark_not_found();
             self.audit_invocation(&args, session_id, caller, &recorded_trace, missing, notes)
                 .await
         });
