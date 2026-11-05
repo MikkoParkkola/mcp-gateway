@@ -243,21 +243,13 @@ pub(super) fn deliver_replay(
         Some(GuardOutcome::CachedResult(cached)) => {
             #[cfg(test)]
             seams::note_served(seams::Served::Cache);
-            // Red stub: a cache hit notes may-write.
-            crate::gateway::meta_mcp::invoke::audit::note_declared_effect(
-                crate::security::decision_record::Effect::MayWrite,
-                crate::security::decision_record::EffectSource::ToolAnnotation,
-            );
+            note_caller_slot_effect(scope, propagation, admitted.call.tool);
             Some(JsonRpcResponse::success(id.clone(), cached))
         }
         Some(GuardOutcome::CachedError(error)) => {
             #[cfg(test)]
             seams::note_served(seams::Served::Cache);
-            // Red stub: a cache hit notes may-write.
-            crate::gateway::meta_mcp::invoke::audit::note_declared_effect(
-                crate::security::decision_record::Effect::MayWrite,
-                crate::security::decision_record::EffectSource::ToolAnnotation,
-            );
+            note_caller_slot_effect(scope, propagation, admitted.call.tool);
             crate::gateway::meta_mcp::invoke::audit::note_cached_failure(&error);
             crate::gateway::meta_mcp::invoke::audit::counting::note_replay();
             let mut response = super::cached_error_response(Some(id.clone()), &error);
@@ -297,6 +289,22 @@ pub(super) fn deliver_replay(
         return Err(build_http_response(&Egressed::of(response), StatusCode::OK));
     }
     Ok(())
+}
+
+/// A 7a cache hit is keyed by the caller's binding, so its record says what
+/// the caller's own slot declares for `tool` now, as the live call would
+/// read it; nothing when that slot cannot say.
+fn note_caller_slot_effect(scope: Scope<'_>, propagation: &Propagation, tool: &str) {
+    if let Some(effect) = scope
+        .route
+        .backend
+        .declared_effect_for(propagation.identity_key.as_deref(), tool)
+    {
+        crate::gateway::meta_mcp::invoke::audit::note_declared_effect(
+            effect,
+            crate::security::decision_record::EffectSource::ToolAnnotation,
+        );
+    }
 }
 
 /// Just before the backend can be reached: from here a drop is uncertain.
