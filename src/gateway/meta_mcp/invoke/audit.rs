@@ -516,7 +516,7 @@ impl MetaMcp {
         mut notes: DispatchNotes,
     ) -> Result<Value> {
         // D4: counted before the log check, so auth off still counts.
-        let withheld = super::gate::count_meta_denial(args, &result);
+        let withheld = super::denial::count_meta_denial(args, &result);
         self.count_invocation(args, caller, &result, &notes, withheld);
         let Some(log) = self.transparency_logger.as_ref() else {
             return result;

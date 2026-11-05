@@ -46,6 +46,10 @@ struct VisibilityMemo {
     /// carried to that target's dispatch so it answers without resolving
     /// (and auditing) a second time in one request.
     resolution_error: Keyed<TargetKey, crate::Error>,
+    /// Targets whose gate found the backend unregistered for an unscoped
+    /// caller, provisionally: the dispatch takes the mark, and only a miss
+    /// there too records `not_found` (MIK-9266).
+    gate_absent: Keyed<TargetKey, ()>,
     /// The surfaced state this request reads, taken at its first
     /// surfaced read, so a reload mid-request cannot split it across two maps.
     surfaced: parking_lot::Mutex<Option<std::sync::Arc<super::SurfacedState>>>,
@@ -780,6 +784,9 @@ pub(super) enum Scoped<T> {
 pub(super) fn recorded_in_scope(server: &str, tool: &str) -> Scoped<Option<Visibility>> {
     in_memo(|memo| memo.recorded(server, tool)).map_or(Scoped::NoMemo, Scoped::InMemo)
 }
+
+mod gate_absent;
+pub(crate) use gate_absent::{clear_gate_absent, mark_gate_absent, take_gate_absent};
 
 #[cfg(test)]
 mod account_tests;
