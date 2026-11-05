@@ -214,19 +214,26 @@ pub(super) fn stored_bindings(bytes: &[u8]) -> Vec<StepBinding> {
         .unwrap_or_default()
 }
 
-/// The replay of a stored execution: its answer and record facts, with the
-/// steps it dispatched, the bindings it ran under and the one slot it ran on,
-/// all read from the stored bytes.
-pub(super) fn stored_replay(
-    response: crate::protocol::JsonRpcResponse,
-    audit: Option<ReplayAudit>,
-    target: Option<super::ReplayTarget>,
-    bytes: &[u8],
-) -> super::SyncAdmission {
-    super::SyncAdmission::Replay(
-        response,
-        audit,
-        target,
+impl super::SyncLease {
+    /// The lease of a fresh execution: nothing noted yet.
+    pub(super) fn fresh(lease: crate::idempotency::admission::Lease) -> Self {
+        Self {
+            state: parking_lot::Mutex::new((lease, 0)),
+            playbook: None,
+            audit: parking_lot::Mutex::new(None),
+            steps: parking_lot::Mutex::new(Vec::new()),
+            bindings: parking_lot::Mutex::new(Vec::new()),
+            effect_slot: parking_lot::Mutex::new(SlotNote::default()),
+            era: None,
+        }
+    }
+}
+
+/// What a stored execution recorded beside its answer, read from its bytes:
+/// the steps it dispatched, the bindings they ran under and the one slot it
+/// ran on.
+pub(super) fn stored_steps(bytes: &[u8]) -> super::StoredSteps {
+    (
         dispatched_steps(bytes),
         stored_bindings(bytes),
         stored_effect_slot(bytes),

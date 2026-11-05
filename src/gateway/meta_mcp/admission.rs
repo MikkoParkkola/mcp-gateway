@@ -18,7 +18,7 @@ use super::warn_limit::{WarnedAt, first_warn};
 mod plan;
 #[path = "admission_replay.rs"]
 mod replay;
-pub(crate) use replay::{ReplayFacts, ReplayOrigin, ReplayTarget};
+pub(crate) use replay::{ReplayFacts, ReplayOrigin, ReplayTarget, StoredSteps};
 #[path = "admission_era.rs"]
 mod era;
 #[path = "admission_operation.rs"]
@@ -407,15 +407,7 @@ impl MetaMcp {
         match admission {
             Ok(Admission::Owned(lease)) => {
                 super::invoke::relay::note_sync_capture_key(replay_key.as_ref(), &round);
-                Ok(SyncAdmission::Owned(SyncLease {
-                    state: Mutex::new((lease, 0)),
-                    playbook: None,
-                    audit: Mutex::new(None),
-                    steps: Mutex::new(Vec::new()),
-                    bindings: Mutex::new(Vec::new()),
-                    effect_slot: Mutex::new(stored::SlotNote::default()),
-                    era: None,
-                }))
+                Ok(SyncAdmission::Owned(SyncLease::fresh(lease)))
             }
             Ok(Admission::Replay(bytes)) => {
                 super::invoke::relay::note_sync_lookup_key(replay_key.as_ref(), &round);
@@ -428,11 +420,14 @@ impl MetaMcp {
                     Error::json_rpc(409, "Secured execution result is unavailable")
                 })?;
                 response.id = Some(request_id.clone());
-                Ok(stored::stored_replay(
+                let (ran, bound, slot) = stored::stored_steps(&bytes);
+                Ok(SyncAdmission::Replay(
                     response,
                     audit,
                     single_target,
-                    &bytes,
+                    ran,
+                    bound,
+                    slot,
                 ))
             }
             Ok(Admission::InFlight) => {
