@@ -55,7 +55,7 @@ src/gateway/server/warmstart.rs	spawn	spawn	1	outside-calls	warm-start task that
 src/gateway/server/window_saver.rs	start_window_saver	spawn	1	outside-calls	protocol-revision window checkpoint timer
 src/gateway/streaming.rs	spawn_reaper_on	spawn	1	outside-calls	SSE session reaper loop
 src/gateway/task_service/execution/expiry.rs	start_expiry	spawn	1	outside-calls	task expiry sweep loop
-src/gateway/task_service/execution/operations.rs	spawn_now	spawn	1	review	where a task worker's refusal is recorded is undecided: it runs detached, with no delivery record of its own
+src/gateway/task_service/execution/operations.rs	spawn_now	spawn	1	own-cell	runs a task worker detached; each settlement it decides opens its own delivery_facts::scope, and a refusal or rewrite there is written to the task's own record (task_settlement for gateway-run tasks, task_recovery for upstream-run) before the commit
 src/gateway/task_service/execution/pending_cancel.rs	claim_and_send	spawn	1	no-refusal-inside	sends a claimed upstream cancel and re-checks the row; the claim is answered in the caller
 src/gateway/task_service/execution/pending_cancel.rs	flush	spawn	1	outside-calls	spawns cancel senders for pending upstream cancels that are due
 src/gateway/task_service/execution/pending_cancel.rs	listen_for_starts	spawn	1	outside-calls	listens for backend starts to resend pending cancels
