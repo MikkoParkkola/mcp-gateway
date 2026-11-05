@@ -306,10 +306,13 @@ pub(super) fn deliver_replay(
     Ok(())
 }
 
-/// A 7a cache hit is keyed by the caller's binding, so its record says what
-/// the caller's own slot declares for `tool` now, as the live call would
-/// read it; nothing when that slot cannot say.
-fn note_caller_slot_effect(scope: Scope<'_>, propagation: &Propagation, tool: &str) {
+/// Note what the caller's own slot declares for `tool` now: the slot the
+/// call's binding selects, resolved as the dispatch resolves it; nothing when
+/// that slot cannot say. A live direct call reads it so, and a 7a cache hit
+/// too, since the cache is keyed by the caller's binding. A direct call names
+/// a registry backend, never a capability provider (answered absent), so the
+/// source is the tool's own annotation.
+pub(super) fn note_caller_slot_effect(scope: Scope<'_>, propagation: &Propagation, tool: &str) {
     if let Some(effect) = scope
         .route
         .backend

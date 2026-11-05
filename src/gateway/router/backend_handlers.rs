@@ -603,20 +603,8 @@ async fn backend_handler_inner(
         Ok(admitted) => admitted,
         Err(response) => return response,
     };
-    // What the called tool declared it could change, from the slot this
-    // dispatch runs under (the caller's binding, resolved as the dispatch
-    // resolves it). A direct call names a registry backend, never a
-    // capability provider (answered absent), so the source is the tool's own
-    // annotation.
-    if let Some(effect) = route
-        .backend
-        .declared_effect_for(propagation.identity_key.as_deref(), admitted.call.tool)
-    {
-        crate::gateway::meta_mcp::invoke::audit::note_declared_effect(
-            effect,
-            crate::security::decision_record::EffectSource::ToolAnnotation,
-        );
-    }
+    // What the called tool declared, from the slot this dispatch runs under.
+    direct_idempotency::note_caller_slot_effect(scope, &propagation, admitted.call.tool);
     direct_dispatch::dispatch(scope, &envelope, (&preflight, &propagation), admitted).await
 }
 
