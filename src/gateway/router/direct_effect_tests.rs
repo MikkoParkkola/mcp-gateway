@@ -184,3 +184,165 @@ async fn probe_direct_reaches_the_capability_backend() {
         "the direct answer recorded an effect: {records}"
     );
 }
+
+/// `read` declaring `readOnlyHint: hint`, or no hint, with the fixture
+/// backend's input schema.
+fn read_tool(hint: Option<bool>) -> crate::protocol::Tool {
+    let mut tool = json!({"name": "read", "inputSchema": {
+        "type": "object", "properties": {"cmd": {"type": "string"}}}});
+    if let Some(hint) = hint {
+        tool["annotations"] = json!({"readOnlyHint": hint});
+    }
+    serde_json::from_value(tool).expect("a tool")
+}
+
+/// The decision of every invocation record in `dir`'s log, in order.
+fn decisions(dir: &tempfile::TempDir) -> Vec<Value> {
+    entries(dir)
+        .into_iter()
+        .filter(|entry| {
+            entry.get("tool").is_some() && entry["event"] != "response_delivery_attempt"
+        })
+        .filter_map(|entry| entry.get("decision").cloned())
+        .collect()
+}
+
+/// The one decision a direct call of `read` on `backend` as `subject` (none
+/// for the key alone) records.
+async fn direct_decision(
+    fx: &Fx,
+    dir: &tempfile::TempDir,
+    backend: &str,
+    subject: Option<&str>,
+) -> Value {
+    let before = decisions(dir).len();
+    let (status, body) =
+        super::direct_continuation_tests::call(fx, backend, subject, json!({})).await;
+    assert!(
+        status.is_success() && body.get("result").is_some(),
+        "premise: delivered: {status} {body}"
+    );
+    let mut after = decisions(dir).split_off(before);
+    assert_eq!(after.len(), 1, "premise: one invocation record: {after:?}");
+    after.remove(0)
+}
+
+/// A1: a direct call records what its slot declares for the tool, from the
+/// tool's own annotation: read-only, may-write, or listed with no hint.
+#[cfg(feature = "firewall")]
+#[tokio::test]
+async fn a_direct_call_records_its_declared_effect() {
+    for (hint, effect) in [
+        (Some(true), "read_only"),
+        (Some(false), "may_write"),
+        (None, "undeclared"),
+    ] {
+        let dir = tempfile::tempdir().expect("a log directory");
+        let log = logger(&dir, AuditFailurePolicy::FailClosed);
+        let fx = fixture_logged(Answer::Ok, Arc::clone(&log), |mut meta| {
+            meta.enable_transparency_log(log);
+            meta
+        })
+        .await;
+        let alpha = fx.state.backends.get("alpha").expect("alpha");
+        alpha.declare_slot_effects_for_test(None, vec![read_tool(hint)]);
+        let decision = direct_decision(&fx, &dir, "alpha", None).await;
+        assert_eq!(decision["decided"], "fresh", "{decision}");
+        assert_eq!(decision["declared_effect"], effect, "{hint:?}: {decision}");
+        assert_eq!(
+            decision["declared_effect_source"], "tool_annotation",
+            "{hint:?}: {decision}"
+        );
+    }
+}
+
+/// A propagation strategy minting `<subject>@<audience>` for every caller.
+struct Binds;
+
+#[async_trait::async_trait]
+impl crate::identity_propagation::IdentityPropagation for Binds {
+    async fn propagate(
+        &self,
+        identity: &crate::key_server::oidc::VerifiedIdentity,
+        backend: &crate::identity_propagation::BackendDescriptor,
+    ) -> Result<
+        crate::identity_propagation::PropagatedCredential,
+        crate::identity_propagation::PropagationError,
+    > {
+        Ok(crate::identity_propagation::PropagatedCredential {
+            expiry_synthetic: false,
+            headers: vec![("Authorization".to_string(), "Bearer minted".to_string())],
+            expires_at: i64::MAX,
+            cache_binding: format!("{}@{}", identity.subject, backend.audience),
+            subject_key: identity.subject.clone(),
+            audience: backend.audience.clone(),
+            scopes: Vec::new(),
+        })
+    }
+}
+
+/// alice's binding on `alpha`.
+const ALICE_ALPHA: &str = "alice@aud-alpha";
+
+/// The propagating fixture with its route log in `dir`, alice's per-user slot
+/// on `alpha` reachable through the fixture's scripted transport.
+async fn bound(dir: &tempfile::TempDir) -> Fx {
+    let log = logger(dir, AuditFailurePolicy::FailClosed);
+    let fx = super::direct_guards_fixture::fixture_propagating_logged(Answer::Ok, log, |meta| {
+        meta.set_identity_propagation(Arc::new(Binds));
+    })
+    .await;
+    let alpha = fx.state.backends.get("alpha").expect("alpha");
+    let shared = alpha
+        .pooled_transport_for_test(&crate::backend::PoolKey::Shared)
+        .expect("the fixture's scripted transport");
+    alpha.set_pooled_transport_for_test(
+        &crate::backend::PoolKey::PerUser {
+            binding: ALICE_ALPHA.to_owned(),
+        },
+        shared,
+    );
+    fx
+}
+
+/// A2: a propagated caller's direct call records its own bound slot's
+/// declaration, never the shared slot's: the shared slot declares `read`
+/// may-write, alice's slot read-only.
+#[tokio::test]
+async fn direct_effect_follows_the_caller_bound_slot() {
+    let dir = tempfile::tempdir().expect("a log directory");
+    let fx = bound(&dir).await;
+    let alpha = fx.state.backends.get("alpha").expect("alpha");
+    alpha.declare_slot_effects_for_test(None, vec![read_tool(Some(false))]);
+    alpha.declare_slot_effects_for_test(Some(ALICE_ALPHA), vec![read_tool(Some(true))]);
+    let decision = direct_decision(&fx, &dir, "alpha", Some("alice")).await;
+    assert_eq!(decision["declared_effect"], "read_only", "{decision}");
+    assert_eq!(
+        decision["declared_effect_source"], "tool_annotation",
+        "{decision}"
+    );
+}
+
+/// A2, the slot not yet listed: alice's slot holds no list, and the shared
+/// slot declares `read` read-only. The call lists alice's own slot (the
+/// fixture's listing gives `read` no hint), so the record says undeclared:
+/// alice's slot as listed for this call, never the shared slot's read-only.
+#[tokio::test]
+async fn direct_effect_of_an_unlisted_bound_slot_is_its_own() {
+    let dir = tempfile::tempdir().expect("a log directory");
+    let fx = bound(&dir).await;
+    let alpha = fx.state.backends.get("alpha").expect("alpha");
+    alpha.declare_slot_effects_for_test(None, vec![read_tool(Some(true))]);
+    assert_eq!(
+        alpha.declared_effect_for(Some(ALICE_ALPHA), "read"),
+        None,
+        "premise: alice's slot is not listed yet"
+    );
+    let decision = direct_decision(&fx, &dir, "alpha", Some("alice")).await;
+    assert_eq!(
+        alpha.declared_effect_for(Some(ALICE_ALPHA), "read"),
+        Some(crate::security::decision_record::Effect::Undeclared),
+        "premise: the call listed alice's slot from the fixture's listing"
+    );
+    assert_eq!(decision["declared_effect"], "undeclared", "{decision}");
+}
