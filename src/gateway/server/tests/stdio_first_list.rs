@@ -107,9 +107,13 @@ pub(super) async fn asked(held: &Held, n: usize) {
     }
 }
 
+/// A request declaring the 2026 era in full: the version alone reads as
+/// malformed, and a malformed request is classed legacy.
 pub(super) fn modern(id: u64, method: &str) -> Value {
-    json!({"jsonrpc": "2.0", "id": id, "method": method, "params": {
-        "_meta": {"io.modelcontextprotocol/protocolVersion": "2026-07-28"}}})
+    json!({"jsonrpc": "2.0", "id": id, "method": method, "params": {"_meta": {
+        "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+        "io.modelcontextprotocol/clientCapabilities": {},
+    }}})
 }
 
 pub(super) fn names(reply: &Value) -> Vec<String> {

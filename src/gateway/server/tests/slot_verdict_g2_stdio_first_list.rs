@@ -116,7 +116,10 @@ async fn r11_the_first_lists_two_waits_share_one_deadline_stdio() {
         .scope(stdio.rpc(
             1,
             "tools/list",
-            json!({"_meta": {"io.modelcontextprotocol/protocolVersion": "2026-07-28"}}),
+            json!({"_meta": {
+                "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+                "io.modelcontextprotocol/clientCapabilities": {},
+            }}),
         ))
         .await;
     let took = started.elapsed();
