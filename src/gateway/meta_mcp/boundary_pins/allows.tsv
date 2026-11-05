@@ -43,12 +43,10 @@ src/gateway/server/construct.rs	new_with_env	statement	Lifecycle	enforce_destina
 src/gateway/server/construct.rs	new_with_env	statement	Lifecycle	registerx1
 src/gateway/server/events_wiring.rs	install	statement	Lifecycle	allx1
 src/gateway/server/run.rs	run	statement	Lifecycle	set_change_feedx1
-src/gateway/server/run.rs	run	statement	Lifecycle	stop_allx1
 src/gateway/server/run_steps.rs	managed_recovery_adapters	statement	Lifecycle	getx1
 src/gateway/server/run_steps.rs	start_capability_watcher	statement	Lifecycle	catalogue_hookx1
 src/gateway/server/stdio_loop.rs	run_stdio_on	statement	Lifecycle	catalogue_hookx1
 src/gateway/server/stdio_loop.rs	run_stdio_on	statement	Lifecycle	set_change_feedx1
-src/gateway/server/stdio_shutdown.rs	stdio_teardown	statement	Lifecycle	stop_allx1
 src/gateway/server/support.rs	log_startup_banner	statement	Lifecycle	allx1
 src/gateway/server/support.rs	log_startup_banner	statement	Lifecycle	allx1
 src/gateway/server/tools_changed.rs	decide_on	statement	Background	getx1

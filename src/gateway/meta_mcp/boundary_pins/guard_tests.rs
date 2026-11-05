@@ -298,6 +298,11 @@ fn t1e_the_backend_registry_surface_is_pinned() {
         "scrub_stored_text",
         "mark_for_test (test)",
         "overflow_for_test (test)",
+        // `stop_all` planned to a deadline: banned like it.
+        "stop_all_by",
+        // Hands out the stop deadline cell, for backends built outside the
+        // registry; it reads no backend.
+        "stop_deadline",
     ]
     .into_iter()
     .map(str::to_string)

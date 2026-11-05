@@ -43,7 +43,58 @@ pub(crate) enum SecretFile {
     IdentityGrants,
     /// A control-plane `grants.json` or `policies.json`.
     ControlPlaneCollection,
+    /// A replace journal or the staged original a crash recovery restores as
+    /// gateway.yaml. A refusal never suggests fixing its owner or mode:
+    /// either file may be another account's plant, and fixing it would make
+    /// the next recovery restore it ([`RECOVERY_FILE_FIX`]).
+    RecoveryFile,
 }
+
+/// The Windows DACL refusal: the guard's `head`, then `detail` (the found
+/// refusals and the repair) for every class but a recovery file, which gets
+/// the `found` refusals and its guidance, never an icacls repair.
+/// Platform-neutral, so every platform's tests read it.
+#[cfg(any(windows, test))]
+fn acl_refusal_text(
+    what: SecretFile,
+    head: &str,
+    found: &str,
+    detail: impl FnOnce() -> String,
+) -> String {
+    match what.recovery_guidance() {
+        Some(guidance) => format!("{head} ({found}). {guidance}"),
+        None => format!("{head}{}", detail()),
+    }
+}
+
+/// The not-UTF-8 refusal, with the class's fix when it has one.
+fn not_utf8_message(what: SecretFile, path: &Path) -> String {
+    let fix = what.fix_text(String::new);
+    let gap = if fix.is_empty() { "" } else { " " };
+    format!(
+        "Cannot read {} {}: it is not UTF-8.{gap}{fix}",
+        what.noun(),
+        path.display()
+    )
+}
+
+/// The refusal of something that is not a regular file (`kind`).
+#[cfg(any(unix, test))]
+fn not_regular_message(what: SecretFile, path: &Path, kind: &str) -> String {
+    format!(
+        "Refusing to load {} {}: it is a {kind}, not a regular file. {}",
+        what.noun(),
+        path.display(),
+        what.fix_text(|| "Write the content to a regular file.".to_owned())
+    )
+}
+
+/// What a refused replace journal or staged original gets instead of an
+/// owner or mode fix: the one place this guidance is written.
+const RECOVERY_FILE_FIX: &str = "Both the replace journal and its staged original are \
+     untrusted: another account could have planted them with a matching digest. Leave their \
+     owner and mode alone, because fixing them would make the next recovery restore them. Check \
+     gateway.yaml against a known-good copy, move both files aside, then retry.";
 
 /// What a file's mode must protect.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -77,7 +128,25 @@ impl SecretFile {
             Self::TlsCrl => "certificate revocation list",
             Self::IdentityGrants => "identity grants file",
             Self::ControlPlaneCollection => "control-plane file",
+            Self::RecoveryFile => "replace journal or staged original",
         }
+    }
+
+    /// The one place a class's refusal guidance is decided: a recovery file
+    /// gets [`RECOVERY_FILE_FIX`] in place of any owner, mode or ACL fix,
+    /// whatever the refusal.
+    const fn recovery_guidance(self) -> Option<&'static str> {
+        match self {
+            Self::RecoveryFile => Some(RECOVERY_FILE_FIX),
+            _ => None,
+        }
+    }
+
+    /// The fix a refusal of this class prints: `usual` for every class but a
+    /// recovery file ([`Self::recovery_guidance`]). Every refusal branch
+    /// takes its fix from here.
+    fn fix_text(self, usual: impl FnOnce() -> String) -> String {
+        self.recovery_guidance().map_or_else(usual, str::to_owned)
     }
 
     pub(crate) const fn protects(self) -> Protects {
@@ -195,13 +264,7 @@ pub(crate) fn read_guarded_file(
     what: SecretFile,
 ) -> std::result::Result<String, GuardedRead> {
     let bytes = read_guarded_bytes(path, what)?;
-    String::from_utf8(bytes).map_err(|_| {
-        GuardedRead::Refused(format!(
-            "Cannot read {} {}: it is not UTF-8.",
-            what.noun(),
-            path.display()
-        ))
-    })
+    String::from_utf8(bytes).map_err(|_| GuardedRead::Refused(not_utf8_message(what, path)))
 }
 
 /// [`read_guarded_file`] without the UTF-8 check, for a file whose lines are
@@ -279,7 +342,11 @@ fn check_acl(
     }
     let shown = path.display().to_string();
     let head = format!("Refusing to load {} {shown}", what.noun());
-    let text = format!("{head}{}", refusal_detail(&shown, &found, what.protects()));
+    // A recovery file gets the guard's facts and no repair line: an icacls
+    // repair would make the next recovery restore a plant.
+    let text = acl_refusal_text(what, &head, &format!("{found:?}"), || {
+        refusal_detail(&shown, &found, what.protects())
+    });
     Err(GuardedRead::Refused(text))
 }
 
@@ -314,11 +381,10 @@ fn check_mode(
     let meta = file.metadata().map_err(GuardedRead::Io)?;
     // Type before mode, on the same handle: nothing but a regular file is read.
     if !meta.file_type().is_file() {
-        return Err(GuardedRead::Refused(format!(
-            "Refusing to load {} {}: it is a {}, not a regular file. Write the content to a regular file.",
-            what.noun(),
-            path.display(),
-            file_kind(meta.file_type())
+        return Err(GuardedRead::Refused(not_regular_message(
+            what,
+            path,
+            file_kind(meta.file_type()),
         )));
     }
     let euid = rustix::process::geteuid().as_raw();
@@ -403,10 +469,14 @@ fn foreign_owner_message(
         Protects::Secrecy => "chmod 600",
         Protects::Integrity => "chmod go-w",
     };
+    let fix = what.fix_text(|| {
+        format!(
+            "Fix: chown {euid} -- {shown} && {chmod} -- {shown} (see UPGRADING-4.0 \u{a7}{OWNER_UPGRADE_ITEM})."
+        )
+    });
     format!(
         "Refusing to load {noun} {path}: it is owned by uid {file_uid}, which is neither this \
-         process (uid {euid}) nor root, so that account can change it at will, and {why}. \
-         Fix: chown {euid} -- {shown} && {chmod} -- {shown} (see UPGRADING-4.0 \u{a7}{OWNER_UPGRADE_ITEM}).",
+         process (uid {euid}) nor root, so that account can change it at will, and {why}. {fix}",
         noun = what.noun(),
         path = path.display(),
     )
@@ -486,6 +556,138 @@ pub(crate) fn read_checked_bytes(path: &Path, what: CheckedFile) -> std::io::Res
     })
 }
 
+/// Why [`read_config_text`] returned no text.
+#[derive(Debug)]
+pub(crate) enum UnreadConfig {
+    /// The guard refused the file: its type, mode, owner or encoding. The
+    /// text names the file and the fix, never the content.
+    Refused(String),
+    /// Opening or reading it failed; the text names the file and the error.
+    Failed(String),
+    /// The config read was handed a replace journal or staged original:
+    /// a caller bug, refused so it fails loudly.
+    NotTheConfig(String),
+}
+
+/// gateway.yaml read the way every loader reads it, for a caller that writes
+/// it next: `None` when it does not exist, and the guard's refusal kept apart
+/// from an I/O failure, never told by an OS error code.
+///
+/// # Errors
+///
+/// [`UnreadConfig::Refused`] for a file the guard refuses,
+/// [`UnreadConfig::Failed`] when it cannot be opened or read,
+/// [`UnreadConfig::NotTheConfig`] for a replace journal or staged original,
+/// by name or by file identity.
+pub(crate) fn read_config_text(path: &Path) -> std::result::Result<Option<String>, UnreadConfig> {
+    // Refused, not read as a recovery file: switching class here would hide
+    // the wrong caller, and a caller that hands the config read a journal or
+    // staged original must fail loudly.
+    // A relative path resolves against the working directory, as the read
+    // below does; without one, the path is compared as given.
+    if is_recovery_file(&std::env::current_dir().unwrap_or_default(), path) {
+        return Err(UnreadConfig::NotTheConfig(format!(
+            "{} is a replace journal or staged original, not a config; only crash recovery reads it",
+            path.display()
+        )));
+    }
+    if is_linked_to_its_recovery_files(path) {
+        return Err(UnreadConfig::NotTheConfig(format!(
+            "{} is the same file as its replace journal or staged original; only crash recovery reads it",
+            path.display()
+        )));
+    }
+    read_text_of(path, SecretFile::Config)
+}
+
+/// `path`, canonical; for a missing file, its canonical parent plus its name;
+/// `path` itself when even the parent cannot be resolved.
+fn canonical_or_parent(path: &Path) -> std::path::PathBuf {
+    std::fs::canonicalize(path)
+        .ok()
+        .or_else(|| {
+            let parent = path.parent().filter(|p| !p.as_os_str().is_empty());
+            let parent = std::fs::canonicalize(parent.unwrap_or_else(|| Path::new("."))).ok()?;
+            Some(parent.join(path.file_name()?))
+        })
+        .unwrap_or_else(|| path.to_path_buf())
+}
+
+/// Whether `path`, resolved against `base` when relative, is the replace
+/// journal or staged original of some config:
+/// the config its name would belong to is derived, recovery's own helpers
+/// are applied to that config, and the results are compared canonical, so a
+/// symlink to one, or a spelling through another directory, is still that
+/// file. Nothing here is listed or opened, so nothing can fail open.
+fn is_recovery_file(base: &Path, path: &Path) -> bool {
+    use crate::config_persistence::journal::{config_beside, journal_path, original_path};
+    let target = canonical_or_parent(&base.join(path));
+    config_beside(&target).is_some_and(|config| {
+        [journal_path(&config), original_path(&config)]
+            .iter()
+            .any(|file| canonical_or_parent(file) == target)
+    })
+}
+
+/// Whether `path` is the same file as its own replace journal or staged
+/// original under another name (a hard link), which no path comparison sees.
+/// Compared only for files that exist; a hard link between two different
+/// configs is out of scope.
+fn is_linked_to_its_recovery_files(path: &Path) -> bool {
+    use crate::config_persistence::journal::{journal_path, original_path};
+    // A config that cannot be stat'ed has nothing to compare; the read that
+    // follows reports it.
+    file_identity(path).is_ok_and(|config| {
+        [journal_path(path), original_path(path)]
+            .iter()
+            .any(|file| file_identity(file).is_ok_and(|id| id == config))
+    })
+}
+
+/// (device, inode) of what `path` names, read without opening it, so a FIFO
+/// cannot block the read.
+#[cfg(unix)]
+fn file_identity(path: &Path) -> std::io::Result<(u64, u128)> {
+    use std::os::unix::fs::MetadataExt;
+    let meta = std::fs::metadata(path)?;
+    Ok((meta.dev(), u128::from(meta.ino())))
+}
+
+/// (volume serial, file id) of what `path` names, from a handle opened for
+/// attributes only. Unix keeps its own stat above: the shared helper opens
+/// the file there, which would block on a FIFO.
+#[cfg(windows)]
+fn file_identity(path: &Path) -> std::io::Result<(u64, u128)> {
+    crate::security::transparency_log::rotation::path_id(path)
+}
+
+/// [`read_config_text`] for a replace journal or its staged original: the
+/// same rule, with a refusal that never suggests fixing the file's owner or
+/// mode ([`SecretFile::RecoveryFile`]).
+///
+/// # Errors
+///
+/// As [`read_config_text`].
+pub(crate) fn read_recovery_text(path: &Path) -> std::result::Result<Option<String>, UnreadConfig> {
+    read_text_of(path, SecretFile::RecoveryFile)
+}
+
+fn read_text_of(
+    path: &Path,
+    what: SecretFile,
+) -> std::result::Result<Option<String>, UnreadConfig> {
+    match read_guarded_file(path, what) {
+        Ok(text) => Ok(Some(text)),
+        Err(GuardedRead::Io(e)) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(GuardedRead::Io(e)) => Err(UnreadConfig::Failed(format!(
+            "Cannot read {} {}: {e}",
+            what.noun(),
+            path.display()
+        ))),
+        Err(GuardedRead::Refused(text)) => Err(UnreadConfig::Refused(text)),
+    }
+}
+
 /// [`read_guarded_file`] with both failures as today's `Error::Config` texts.
 pub(crate) fn read_secret_file(path: &Path, what: SecretFile) -> Result<String> {
     read_guarded_file(path, what).map_err(|e| match e {
@@ -505,6 +707,12 @@ pub(crate) fn read_secret_file(path: &Path, what: SecretFile) -> Result<String> 
 /// Helm chart takes. An integrity file keeps its read bits (`chmod go-w`).
 #[cfg(unix)]
 fn refusal_fix(path: &Path, owned: bool, what: SecretFile) -> String {
+    what.fix_text(|| usual_refusal_fix(path, owned, what))
+}
+
+/// [`refusal_fix`] for every class but a recovery file.
+#[cfg(unix)]
+fn usual_refusal_fix(path: &Path, owned: bool, what: SecretFile) -> String {
     let see = format!("(see UPGRADING-4.0 \u{a7}{UPGRADE_ITEM})");
     match (what.protects(), owned, what) {
         (Protects::Integrity, true, _) => format!("Fix: chmod go-w -- {} {see}.", shell_arg(path)),
@@ -534,6 +742,11 @@ mod tests;
 #[cfg(test)]
 #[path = "secret_file_population_tests.rs"]
 mod population_tests;
+
+/// The refusal text for a recovery file, every kind, read on every platform.
+#[cfg(test)]
+#[path = "secret_file_recovery_text_tests.rs"]
+mod recovery_text_tests;
 
 // Unix-only (W-L8): FIFO and device-file fixtures (`mkfifo`, `/dev/null`).
 #[cfg(all(test, unix))]

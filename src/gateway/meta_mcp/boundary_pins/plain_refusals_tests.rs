@@ -16,7 +16,7 @@ pub(super) const ROOTS: [&str; 3] = ["src/lib.rs", "src/main.rs", "src/bin/prove
 
 /// Plain-error refusal gaps, each closed by its follow-up, which deletes the
 /// slug here when it flips the last `pending:<slug>` row.
-const PENDING: [&str; 1] = ["unbindable-confirmation"];
+const PENDING: [&str; 0] = [];
 
 /// Every `crate::Error` variant that is not one of the twelve: covered by
 /// the refusal scan in `delivery_framing.rs` (`Forbidden`, `GatewayRefused`,
@@ -511,10 +511,11 @@ fn unbindable_ordinal(source: &str) -> usize {
         .expect("the unbindable_caller refusal is in confirm_destructive_task_with")
 }
 
-/// Site-pinned like the credential miss (code review): moving the pending
-/// class onto a neighbouring refuse call fails.
+/// Site-pinned like the credential miss (code review): moving the recorded
+/// class onto a neighbouring refuse call fails. The unbindable answer raises
+/// `refused` in `confirm_destructive_task_with`.
 #[test]
-fn the_unbindable_confirmation_is_pending() {
+fn the_unbindable_confirmation_is_recorded() {
     let source =
         std::fs::read_to_string(crate_root().join("src/gateway/meta_mcp/task_confirmation.rs"))
             .expect("task_confirmation.rs reads");
@@ -526,7 +527,7 @@ fn the_unbindable_confirmation_is_pending() {
         .into_iter()
         .find(|l| l.starts_with(&key))
         .unwrap_or_else(|| panic!("no row for the unbindable refusal: {key}"));
-    assert_eq!(row(line).class, "pending:unbindable-confirmation", "{line}");
+    assert_eq!(row(line).class, "recorded", "{line}");
 }
 
 /// Every raise helper has at least one caller row (code review, muse): a

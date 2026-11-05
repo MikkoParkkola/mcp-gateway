@@ -136,6 +136,14 @@ impl CapabilityExecutor {
         self
     }
 
+    /// Share the gateway's stop deadline with every MCP child backend this
+    /// executor builds, so a gateway stop also cuts their trees' exit waits.
+    #[must_use]
+    pub(crate) fn with_stop_deadline(self, deadline: Arc<crate::transport::StopDeadline>) -> Self {
+        let _ = self.mcp_children.stop_deadline.set(deadline);
+        self
+    }
+
     /// The MCP revocation generation of one capability.
     pub(crate) fn mcp_generation(&self, capability: &str) -> u64 {
         self.mcp_children.generation(capability)

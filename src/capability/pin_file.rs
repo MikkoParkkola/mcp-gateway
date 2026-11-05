@@ -40,7 +40,7 @@ fn pin_file_until(file: &Path, deadline: Instant) -> Result<String, String> {
             "{} is held by another write; retry",
             crate::config_persistence::lock::lock_path(&dir.join("capabilities")).display()
         ),
-        NotLocked::Failed(error) => error,
+        NotLocked::Failed(error) | NotLocked::Refused(error) => error,
     })?;
     let content = std::fs::read_to_string(&real)
         .map_err(|e| format!("cannot read {}: {e}", real.display()))?;

@@ -241,6 +241,9 @@ pub struct BackendRegistry {
     configured: parking_lot::RwLock<Arc<crate::config::configured_secrets::ConfiguredByBackend>>,
     /// Set with each load's record, taken by the patch that applies it.
     record_armed: std::sync::atomic::AtomicBool,
+    /// Shared with every backend registered here, and through them with each
+    /// stdio tree they hand over: set first by [`Self::stop_all_by`].
+    stop_deadline: Arc<crate::transport::StopDeadline>,
 }
 
 impl BackendRegistry {
@@ -262,6 +265,7 @@ impl BackendRegistry {
             redaction_grace: std::time::Duration::from_secs(24 * 60 * 60),
             configured: parking_lot::RwLock::default(),
             record_armed: std::sync::atomic::AtomicBool::new(false),
+            stop_deadline: Arc::default(),
         }
     }
 
@@ -389,6 +393,7 @@ impl BackendRegistry {
             backend.stamp_destination(destinations.for_backend(&backend.name));
         }
         backend.stamp_started(self.started.clone());
+        let _ = backend.stop_deadline.set(Arc::clone(&self.stop_deadline));
         let name = backend.name.clone();
         let breaker = Arc::clone(&backend.shared_entry().failsafe.circuit_breaker);
         if let Some(observer) = self.breaker_observer.get() {
@@ -725,6 +730,9 @@ impl Destinations {
         self.policy.for_backend(self.private.contains(name))
     }
 }
+
+#[path = "registry_stop.rs"]
+mod stop;
 
 #[cfg(test)]
 #[path = "registry_stored_scrub_tests.rs"]

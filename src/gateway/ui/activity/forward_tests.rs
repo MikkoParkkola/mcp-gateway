@@ -64,8 +64,6 @@ enum Rec {
     Junk(usize),
     /// This many junk lines of this length each.
     Junks(usize, usize),
-    /// Bytes with no newline, ending the file.
-    Torn(usize),
 }
 
 /// What a fixture wrote: each record's place and offsets, in counter order.
@@ -134,7 +132,6 @@ fn write_from(path: &Path, segments: &[Vec<Rec>], first_seq: u64, first_counter:
                     bytes.extend(std::iter::repeat_n(b'x', *n));
                     bytes.push(b'\n');
                 }
-                Rec::Torn(n) => bytes.extend(std::iter::repeat_n(b'x', *n)),
                 rec => {
                     let mut e = body(rec, counter).unwrap();
                     e["counter"] = counter.into();
