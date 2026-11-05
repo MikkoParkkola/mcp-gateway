@@ -503,6 +503,15 @@ const ROWS: &[Row] = &[
         Payload::Json("{}"),
         [401, 403, 403, 422],
     ),
+    // src/gateway/ui/policies.rs (read_policies; read-only, from the
+    // published config, so the admin is served)
+    row(
+        "/ui/api/policies",
+        Method::GET,
+        "/ui/api/policies",
+        Payload::None,
+        [401, 403, 403, 200],
+    ),
     // src/gateway/ui/preview.rs (preview_backend): describe step
     row(
         "/ui/api/previews",
