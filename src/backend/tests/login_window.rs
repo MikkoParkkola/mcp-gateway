@@ -248,13 +248,20 @@ async fn a_foreign_listener_on_the_port_is_not_this_login_listening() {
     let port = foreign.local_addr().unwrap().port();
     let refusing = tokio::spawn(async move {
         let (mut stream, _) = foreign.accept().await.unwrap();
-        let mut request = [0_u8; 1024];
-        let _ = stream.read(&mut request).await;
-        let _ = stream
+        // The whole request head first, so the probe meets the 400, never a reset.
+        let mut request = Vec::new();
+        let mut chunk = [0_u8; 1024];
+        while !request.windows(4).any(|w| w == b"\r\n\r\n") {
+            let read = stream.read(&mut chunk).await.expect("the probe's request");
+            assert!(read > 0, "the probe closed before its request was complete");
+            request.extend_from_slice(&chunk[..read]);
+        }
+        stream
             .write_all(
                 b"HTTP/1.1 400 Bad Request\r\ncontent-length: 0\r\nconnection: close\r\n\r\n",
             )
-            .await;
+            .await
+            .expect("the foreign listener answers");
     });
     let callback = format!("http://127.0.0.1:{port}/oauth/callback");
     let url = url::Url::parse_with_params(
@@ -263,10 +270,12 @@ async fn a_foreign_listener_on_the_port_is_not_this_login_listening() {
     )
     .unwrap();
     assert!(
-        !approve_if_listening(url.as_str()).await,
+        !within("the probe", approve_if_listening(url.as_str())).await,
         "a foreign listener's refusal was read as this login still listening"
     );
-    refusing.await.expect("the foreign listener answered");
+    within("the foreign listener", refusing)
+        .await
+        .expect("the foreign listener answered with its 400");
 }
 
 pub(super) fn variant(error: &Error) -> String {
