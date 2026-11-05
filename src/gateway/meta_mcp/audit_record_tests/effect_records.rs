@@ -55,7 +55,7 @@ impl crate::transport::Transport for Listing {
 }
 
 /// `meta` whose backend `alpha` lists `read` with `hint`, from a cold slot.
-fn listing(hint: Option<bool>, dir: &tempfile::TempDir) -> (MetaMcp, Arc<AtomicUsize>) {
+pub(super) fn listing(hint: Option<bool>, dir: &tempfile::TempDir) -> (MetaMcp, Arc<AtomicUsize>) {
     let meta = meta(Ok(ok_result()), dir);
     let calls = Arc::new(AtomicUsize::new(0));
     let alpha = meta.backends.for_test().get("alpha").expect("alpha");

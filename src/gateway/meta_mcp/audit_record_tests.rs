@@ -470,6 +470,8 @@ mod surfaced_replay;
 mod decision_kinds;
 // A dispatched call records the effect its tool declared.
 mod effect_records;
+// A completed-execution replay records the stored slot's effect now.
+mod replay_effects;
 // A tool-policy refusal names its rule.
 mod rule_ids;
 
