@@ -63,14 +63,20 @@ pub(crate) enum Recovered {
     KeptNew,
 }
 
+/// Name suffixes of the journal and the staged original: the one pair both
+/// [`journal_path`]/[`original_path`] and their inverse [`config_beside`]
+/// read, so a rename cannot leave the inverse matching nothing.
+const JOURNAL_SUFFIX: &str = ".replace-journal";
+const ORIGINAL_SUFFIX: &str = ".replace-original";
+
 /// `.<name>.replace-journal` beside the resolved config.
 pub(crate) fn journal_path(config: &Path) -> PathBuf {
-    beside(&resolved(config), ".replace-journal")
+    beside(&resolved(config), JOURNAL_SUFFIX)
 }
 
 /// `.<name>.replace-original` beside the resolved config.
 pub(crate) fn original_path(config: &Path) -> PathBuf {
-    beside(&resolved(config), ".replace-original")
+    beside(&resolved(config), ORIGINAL_SUFFIX)
 }
 
 fn beside(target: &Path, suffix: &str) -> PathBuf {
@@ -85,7 +91,7 @@ fn beside(target: &Path, suffix: &str) -> PathBuf {
 /// for a name neither builds (a name that is not UTF-8 among them).
 pub(crate) fn config_beside(file: &Path) -> Option<PathBuf> {
     let name = file.file_name()?.to_str()?.strip_prefix('.')?;
-    let config = [".replace-journal", ".replace-original"]
+    let config = [JOURNAL_SUFFIX, ORIGINAL_SUFFIX]
         .iter()
         .find_map(|suffix| name.strip_suffix(suffix))
         .filter(|config| !config.is_empty())?;

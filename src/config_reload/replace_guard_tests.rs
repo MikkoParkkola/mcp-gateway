@@ -427,14 +427,17 @@ fn the_config_read_refuses_a_recovery_file_through_a_linked_directory() {
     }
 }
 
-/// A gateway.yaml that is a hard link to its own journal is the journal
-/// under another name, which no path comparison sees: refused by identity.
+/// A gateway.yaml that is a hard link to its own journal or staged original
+/// is that file under another name, which no path comparison sees: refused
+/// by identity.
 #[test]
 fn the_config_read_refuses_a_config_hard_linked_to_its_journal() {
     use crate::config_persistence::journal;
-    let dir = tempfile::tempdir().expect("tempdir");
-    let path = config_with_recovery_files(dir.path());
-    std::fs::remove_file(&path).expect("remove the config");
-    std::fs::hard_link(journal::journal_path(&path), &path).expect("hard link");
-    assert_not_the_config(&path);
+    for recovery_file in [journal::journal_path, journal::original_path] {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = config_with_recovery_files(dir.path());
+        std::fs::remove_file(&path).expect("remove the config");
+        std::fs::hard_link(recovery_file(&path), &path).expect("hard link");
+        assert_not_the_config(&path);
+    }
 }
