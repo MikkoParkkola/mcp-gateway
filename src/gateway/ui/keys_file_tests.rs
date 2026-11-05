@@ -299,3 +299,47 @@ async fn r6_the_join_is_by_name_not_by_position() {
     assert_ne!(entry(&answer, "beta")["last_used"], Value::Null);
     assert_eq!(entry(&answer, "alpha")["last_used"], Value::Null);
 }
+
+/// Every entry's `last_used`, by name.
+fn last_useds(answer: &Value) -> Vec<(String, Value)> {
+    answer["keys"]
+        .as_array()
+        .expect("keys")
+        .iter()
+        .map(|k| {
+            (
+                k["name"].as_str().expect("name").to_owned(),
+                k["last_used"].clone(),
+            )
+        })
+        .collect()
+}
+
+/// R5: a last use recorded before a restart is gone after it, and then one
+/// matched call sets `keys[i].last_used` of that key only.
+#[tokio::test]
+async fn r5_last_used_is_null_after_a_restart_until_a_call_matches() {
+    let (_dir, path) = write_config(&yaml());
+    let both = || vec![key("alpha", ALPHA, None), key("beta", BETA, None)];
+    let before = table(both());
+    assert!(before.validate_token(ALPHA).is_some(), "premise");
+    assert!(before.validate_token(BETA).is_some(), "premise");
+    let seeded = last_useds(&get(Some(&path), before, None).await);
+    assert!(
+        seeded.len() == 2 && seeded.iter().all(|(_, at)| !at.is_null()),
+        "premise: both readings are seeded: {seeded:?}"
+    );
+
+    let restarted = table(both());
+    let answer = get(Some(&path), Arc::clone(&restarted), None).await;
+    assert_eq!(last_useds(&answer).len(), 2);
+    assert!(
+        last_useds(&answer).iter().all(|(_, at)| at.is_null()),
+        "{answer}"
+    );
+
+    assert!(restarted.validate_token(BETA).is_some(), "one matched call");
+    let answer = get(Some(&path), restarted, None).await;
+    assert_ne!(entry(&answer, "beta")["last_used"], Value::Null);
+    assert_eq!(entry(&answer, "alpha")["last_used"], Value::Null);
+}
