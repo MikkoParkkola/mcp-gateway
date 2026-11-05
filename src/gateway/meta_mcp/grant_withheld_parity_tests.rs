@@ -31,7 +31,7 @@ fn surfaced(meta: MetaMcp) -> MetaMcp {
 /// An ungranted gateway logging to `dir` under `FailClosed`, with its log.
 fn denied_gateway(
     endpoint: &Endpoint,
-    dir: &tempfile::TempDir,
+    dir: &Arc<tempfile::TempDir>,
 ) -> (MetaMcp, Arc<crate::security::TransparencyLogger>) {
     let log = logger(dir, AuditFailurePolicy::FailClosed);
     let mut meta = MetaMcp::new(Arc::new(crate::backend::BackendRegistry::new()))
@@ -75,7 +75,7 @@ fn row7_failed_grant_record_on_a_withheld_name_answers_as_absent() {
             allowed.get("error").is_none() && endpoint.arrivals() == 1,
             "premise: the granted control did not succeed: {allowed}"
         );
-        let probe_dir = tempfile::tempdir().unwrap();
+        let probe_dir = Arc::new(tempfile::tempdir().unwrap());
         let probe = surfaced(gateway(
             &endpoint,
             vec![],
@@ -89,8 +89,8 @@ fn row7_failed_grant_record_on_a_withheld_name_answers_as_absent() {
             "premise: withheld reached the endpoint: {refused}"
         );
     });
-    let dir = tempfile::tempdir().unwrap();
-    let absent_dir = tempfile::tempdir().unwrap();
+    let dir = Arc::new(tempfile::tempdir().unwrap());
+    let absent_dir = Arc::new(tempfile::tempdir().unwrap());
     let endpoint = runtime.block_on(Endpoint::start(false));
     let (withheld, log) = denied_gateway(&endpoint, &dir);
     let withheld = surfaced(withheld);
@@ -130,7 +130,7 @@ fn row7_failed_grant_record_on_a_withheld_name_answers_as_absent() {
 #[tokio::test]
 async fn row7b_another_decision_in_the_request_still_fails_closed() {
     let endpoint = Endpoint::start(false).await;
-    let dir = tempfile::tempdir().unwrap();
+    let dir = Arc::new(tempfile::tempdir().unwrap());
     let (meta, log) = denied_gateway(&endpoint, &dir);
     let meta = surfaced(meta);
     let who = api_key("bob");
@@ -182,7 +182,7 @@ fn row7c_a_cancelled_withheld_call_still_logs_its_failed_record() {
     let (_guard, mut seen) = crate::test_log_capture::live_count(WARNING);
     runtime.block_on(async {
         let endpoint = Endpoint::start(false).await;
-        let dir = tempfile::tempdir().unwrap();
+        let dir = Arc::new(tempfile::tempdir().unwrap());
         let meta = Arc::new(surfaced(denied_gateway(&endpoint, &dir).0));
         let hold = seams::hold_next_write_for_test();
         seams::fail_append_at_for_test(1);

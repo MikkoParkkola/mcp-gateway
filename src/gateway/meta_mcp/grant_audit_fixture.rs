@@ -174,9 +174,11 @@ pub(crate) fn grants(rows: Vec<IdentityGrant>) -> LocalIdentityGrantStore {
     LocalIdentityGrantStore::from_grants(rows)
 }
 
-/// A log at `<dir>/audit.jsonl` under `policy`.
+/// A log at `<dir>/audit.jsonl` under `policy`, keeping `dir` until the
+/// log's last handle drops, so a late append from a worker the test left
+/// running lands before `dir` goes.
 pub(crate) fn logger(
-    dir: &tempfile::TempDir,
+    dir: &Arc<tempfile::TempDir>,
     policy: AuditFailurePolicy,
 ) -> Arc<TransparencyLogger> {
     let config = TransparencyLogConfig {
@@ -185,11 +187,13 @@ pub(crate) fn logger(
         key_id: "d3a".to_string(),
         ..TransparencyLogConfig::default()
     };
-    Arc::new(
+    let log = Arc::new(
         TransparencyLogger::open(Arc::new(config))
             .expect("the fixture log opens")
             .with_failure_policy(policy),
-    )
+    );
+    log.keep_test_dir(Arc::clone(dir));
+    log
 }
 
 pub(crate) fn log_path(dir: &tempfile::TempDir) -> std::path::PathBuf {
@@ -238,8 +242,11 @@ pub(crate) fn trace_of(record: &Value) -> Option<&str> {
 }
 
 /// Put `log` in the stalled state: arm a stuck write and let one bounded
-/// append time out on it. Returns the release for the end of the cell.
-pub(crate) async fn stall_log(log: &Arc<TransparencyLogger>) -> Box<dyn FnOnce() + Send> {
+/// append time out on it. Returns the stall, for
+/// [`TransparencyLogger::release_and_drain`] at the end of the cell.
+pub(crate) async fn stall_log(
+    log: &Arc<TransparencyLogger>,
+) -> crate::security::transparency_log::rotation::StallRelease {
     let gate = log.stall_next_write_for_test(std::time::Duration::from_millis(100));
     let fields: serde_json::Map<String, Value> =
         [("kind".to_string(), Value::from("d3a_stall_probe"))]
@@ -253,5 +260,5 @@ pub(crate) async fn stall_log(log: &Arc<TransparencyLogger>) -> Box<dyn FnOnce()
         timed_out.is_err() && log.is_stalled(),
         "the probe append must stall the log"
     );
-    Box::new(move || gate.release())
+    gate
 }

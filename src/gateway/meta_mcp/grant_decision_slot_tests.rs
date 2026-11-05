@@ -71,7 +71,7 @@ fn selection_rule_table() {
 }
 
 /// Wait, bounded, for the log to hold `count` decision records.
-async fn wait_for_decisions(dir: &tempfile::TempDir, count: usize) -> Vec<Value> {
+async fn wait_for_decisions(dir: &Arc<tempfile::TempDir>, count: usize) -> Vec<Value> {
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {
         let found = decisions(dir);
@@ -86,7 +86,7 @@ async fn wait_for_decisions(dir: &tempfile::TempDir, count: usize) -> Vec<Value>
 /// the decision's record, written on a spawned task.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn unslotted_check_refuses_and_still_records() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = Arc::new(tempfile::tempdir().unwrap());
     let endpoint = Endpoint::start(false).await;
     let rows = vec![grant("g1", ALICE, ALICE)];
     let meta = gateway(&endpoint, rows, Some(&dir), AuditFailurePolicy::BestEffort);
@@ -107,7 +107,7 @@ async fn unslotted_check_refuses_and_still_records() {
 /// is still written, and the close has nothing left to fail.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_check_after_the_seal_refuses_and_still_records() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = Arc::new(tempfile::tempdir().unwrap());
     let endpoint = Endpoint::start(false).await;
     let rows = vec![grant("g1", ALICE, ALICE)];
     let meta = gateway(&endpoint, rows, Some(&dir), AuditFailurePolicy::BestEffort);
@@ -132,7 +132,7 @@ async fn a_check_after_the_seal_refuses_and_still_records() {
 /// the stall rather than pinning a thread.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn unslotted_check_on_stalled_log_is_bounded() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = Arc::new(tempfile::tempdir().unwrap());
     let endpoint = Endpoint::start(false).await;
     let rows = vec![grant("g1", ALICE, ALICE)];
     let meta = gateway(&endpoint, rows, Some(&dir), AuditFailurePolicy::BestEffort);
@@ -152,7 +152,7 @@ async fn unslotted_check_on_stalled_log_is_bounded() {
     while log.refused_under_stall_for_test() == 0 && Instant::now() < deadline {
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
-    release();
+    log.release_and_drain(release).await;
     assert!(
         log.refused_under_stall_for_test() >= 1,
         "the spawned record write went through the bounded path"
@@ -164,7 +164,7 @@ async fn unslotted_check_on_stalled_log_is_bounded() {
 #[tokio::test]
 #[should_panic(expected = "slot")]
 async fn unslotted_check_panics_under_test() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = Arc::new(tempfile::tempdir().unwrap());
     let mut meta = MetaMcp::new(Arc::new(BackendRegistry::new()))
         .with_identity_grants(grants(vec![grant("g1", ALICE, ALICE)]));
     meta.enable_transparency_log(logger(&dir, AuditFailurePolicy::BestEffort));
@@ -195,7 +195,7 @@ impl std::io::Write for Captured {
 /// does not panic, and logs the lost record at `error!`.
 #[tokio::test]
 async fn off_runtime_unslotted_check_refuses_without_panic() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = Arc::new(tempfile::tempdir().unwrap());
     let endpoint = Endpoint::start(false).await;
     let rows = vec![grant("g1", ALICE, ALICE)];
     let meta = Arc::new(gateway(
@@ -255,7 +255,7 @@ fn stalled_log_bounds_the_decision_write() {
             .build()
             .expect("the scenario runtime builds");
         let outcome = runtime.block_on(async {
-            let dir = tempfile::tempdir().unwrap();
+            let dir = Arc::new(tempfile::tempdir().unwrap());
             let endpoint = Arc::new(Endpoint::start(true).await);
             let log = logger(&dir, AuditFailurePolicy::FailClosed);
             let mut meta = MetaMcp::new(Arc::new(BackendRegistry::new()))
@@ -290,7 +290,9 @@ fn stalled_log_bounds_the_decision_write() {
             // that waited on the stall never answers: the hang guard below
             // fails it, and `refused` names the bounded path (MIK-8222).
             let answer = call.await.expect("the call task completes");
-            gate.release();
+            // Drained before the scenario's folder drops: the released write
+            // would otherwise rewrite `.hwm` while the folder is removed.
+            log.release_and_drain(gate).await;
             (answer, log.refused_under_stall_for_test())
         });
         let _ = sent.send(outcome);
@@ -320,7 +322,10 @@ async fn http_refusal_carries_the_recorded_id_without_reading_the_answer() {
         (Some(RequestId::Number(7)), PAST_ANY_READ, json!(7)),
         (None, 16, Value::Null),
     ] {
-        let (endpoint, dir) = (Endpoint::start(false).await, tempfile::tempdir().unwrap());
+        let (endpoint, dir) = (
+            Endpoint::start(false).await,
+            Arc::new(tempfile::tempdir().unwrap()),
+        );
         let log = logger(&dir, AuditFailurePolicy::FailClosed);
         let mut meta = MetaMcp::new(Arc::new(BackendRegistry::new()))
             .with_identity_grants(grants(vec![grant("g1", ALICE, ALICE)]));
