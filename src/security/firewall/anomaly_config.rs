@@ -19,12 +19,27 @@ impl FirewallConfig {
     /// Rule `match` globs are checked only when the firewall is on.
     /// Anomaly thresholds are checked only when `anomaly_detection` is on,
     /// relay settings only when `collusion.action` is not `off`, so a config
-    /// that enables neither loads exactly as before.
+    /// that enables neither loads exactly as before. An empty
+    /// `memory_poisoning.scan_tools` entry is refused whatever is enabled.
     ///
     /// # Errors
     ///
     /// A message naming the first out-of-range field.
     pub fn validate(&self) -> Result<(), String> {
+        // `scan_tools` is a substring match, so an empty entry is in every tool
+        // name. Refused whatever `enabled` says: an empty entry is never meant.
+        if let Some(i) = self
+            .memory_poisoning
+            .scan_tools
+            .iter()
+            .position(String::is_empty)
+        {
+            return Err(format!(
+                "security.firewall.memory_poisoning.scan_tools[{i}] is empty, which matches \
+                 every tool, so every call would be scanned as a memory write. Remove it, or \
+                 list the memory tools' names"
+            ));
+        }
         // A `match` glob that does not parse would fail open at runtime, so it
         // is refused while the rules can run. The message names the rule's
         // path, not its text.

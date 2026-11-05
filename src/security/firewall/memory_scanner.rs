@@ -151,7 +151,12 @@ impl MemoryScanner {
     ///
     /// Panics on startup if any pattern is invalid regex — this is a
     /// programming error caught during development, not a runtime condition.
-    pub fn new(config: MemoryPoisoningConfig) -> Self {
+    pub fn new(mut config: MemoryPoisoningConfig) -> Self {
+        // The match is case-insensitive on both sides: `is_memory_write_tool`
+        // lowercases the tool name, so the entries are lowercased once here.
+        for entry in &mut config.scan_tools {
+            *entry = entry.to_lowercase();
+        }
         Self {
             instruction_injection: RegexSet::new(INSTRUCTION_INJECTION_PATTERNS)
                 .expect("instruction injection patterns must compile"),
