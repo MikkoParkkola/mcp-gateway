@@ -147,11 +147,10 @@ async fn w1_a_worker_step_record_keeps_the_scope_refusal() {
     let cells = worker_cells().await;
     assert_tasks_made("W1", &cells);
     let answer_of = |cell: &str| {
-        cells
-            .iter()
-            .find(|(name, _)| *name == cell)
-            .map(|(_, (outcome, _, _))| outcome.clone())
-            .unwrap_or_else(|| panic!("W1: no {cell} cell"))
+        cells.iter().find(|(name, _)| *name == cell).map_or_else(
+            || panic!("W1: no {cell} cell"),
+            |(_, (outcome, _, _))| outcome.clone(),
+        )
     };
     assert_eq!(
         answer_of(GHOST),
