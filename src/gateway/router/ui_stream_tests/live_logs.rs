@@ -324,6 +324,52 @@ async fn r1_a_gone_cursor_resets_then_replays_the_log_from_its_oldest_record() {
 }
 
 #[tokio::test]
+async fn r1b_a_reconnect_with_the_reset_frames_id_still_gets_the_replay() {
+    let (state, _dirs, inv) = logged(true).await;
+    let mut s = open(&state, request(STREAM, Who::Bearer(BEARER), None)).await;
+    within(s.until("hello")).await;
+    for n in 1..=3 {
+        call(&inv, "srv", n);
+    }
+    let first = within(s.until("activity")).await;
+    let id = first.id.clone().unwrap();
+    drop(s);
+    let counter = inv_counter(&first);
+    let wrong_id = id.replace(
+        &first.part('i').unwrap(),
+        &format!("{counter}-ffffffffffffffff"),
+    );
+    let mut reset_by = open(
+        &state,
+        request(STREAM, Who::Bearer(BEARER), Some(&wrong_id)),
+    )
+    .await;
+    within(reset_by.until("hello")).await;
+    // The client drops right after the reset frame, before any replayed row,
+    // and reconnects with the id that frame carried.
+    let reset = within(reset_by.until("reset")).await;
+    drop(reset_by);
+    let reset_id = reset.id.expect("a reset frame carries an id");
+    let mut again = open(
+        &state,
+        request(STREAM, Who::Bearer(BEARER), Some(&reset_id)),
+    )
+    .await;
+    within(again.until("hello")).await;
+    call(&inv, "srv", 4);
+    // Read up to the call made after the reconnect.
+    let mut seen = Vec::new();
+    while seen.last() != Some(&4) {
+        seen.push(inv_counter(&within(again.until("activity")).await));
+    }
+    assert_eq!(
+        seen,
+        [1, 2, 3, 4],
+        "the replay the reset announced still comes, from the oldest record"
+    );
+}
+
+#[tokio::test]
 async fn f7_a_config_change_is_a_config_event_and_never_an_activity_one() {
     let (state, _dirs, inv) = logged(true).await;
     let mut s = open(&state, request(STREAM, Who::Bearer(BEARER), None)).await;
