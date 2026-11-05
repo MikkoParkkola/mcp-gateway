@@ -115,6 +115,21 @@ async fn a_private_destination_records_refused_for_each_protocol() {
     assert!(fails.is_empty(), "{fails:#?}");
 }
 
+/// A host naming loopback, refused by its own check before any lookup.
+#[tokio::test]
+async fn a_loopback_name_records_refused_for_each_protocol() {
+    let mut fails = Vec::new();
+    for (service, target) in [
+        ("rest", "http://localhost"),
+        ("graphql", "http://localhost/rpc"),
+        ("jsonrpc", "http://localhost/rpc"),
+    ] {
+        let (error, effect) = Box::pin(call(service, target, false)).await;
+        check(&mut fails, service, &error, "SSRF blocked", effect.as_ref());
+    }
+    assert!(fails.is_empty(), "{fails:#?}");
+}
+
 /// A credential bound for cleartext off this machine, refused before the
 /// secret is read.
 #[tokio::test]
