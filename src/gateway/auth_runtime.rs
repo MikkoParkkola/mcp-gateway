@@ -40,8 +40,8 @@ pub(crate) struct AuthRuntime {
     /// The buckets' time origin. Without tokio's `test-util` feature (a
     /// dev-dependency only), `tokio::time::Instant::now()` is
     /// `std::time::Instant::now()` on every thread, so a deployment counts in
-    /// real time; in tests it is the paused clock only inside a `start_paused`
-    /// runtime. Per store rather than per process, so one test's paused
+    /// real time; in tests it is the paused clock only inside a runtime whose
+    /// clock is paused. Per store rather than per process, so one test's paused
     /// timeline never anchors another's.
     anchor: Instant,
 }
