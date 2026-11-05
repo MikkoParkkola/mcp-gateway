@@ -40,6 +40,7 @@ src/gateway/server/construct.rs	with_watched_config	-	Gateway construction, once
 src/gateway/server/control_plane_store.rs	auth_on_with_store_dir	-	test-only (inline cfg(test) module)
 src/gateway/server/control_plane_store.rs	base	-	test-only (inline cfg(test) module)
 src/gateway/server/control_plane_store.rs	build_control_plane_store	-	startup control-plane store opening, once per serve
+src/gateway/server/control_plane_store.rs	build_control_plane_store_with_log	-	startup control-plane store opening, once per serve
 src/gateway/server/control_plane_store.rs	control_plane_base	-	startup control-plane store opening, once per serve
 src/gateway/server/control_plane_store.rs	default_store_path_unchanged	-	test-only (inline cfg(test) module)
 src/gateway/server/control_plane_store.rs	default_unwritable_store_degrades_without_refusing	-	test-only (inline cfg(test) module)

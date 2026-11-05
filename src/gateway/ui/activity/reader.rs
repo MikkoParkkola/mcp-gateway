@@ -76,9 +76,9 @@ pub(super) struct Page {
 
 /// What bounds one page.
 #[derive(Debug, Clone, Copy)]
-pub(super) struct Limits {
-    pub(super) matches: usize,
-    pub(super) bytes: u64,
+pub(in crate::gateway::ui) struct Limits {
+    pub(in crate::gateway::ui) matches: usize,
+    pub(in crate::gateway::ui) bytes: u64,
 }
 
 enum Item {
