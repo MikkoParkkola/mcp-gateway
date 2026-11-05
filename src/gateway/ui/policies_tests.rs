@@ -12,7 +12,8 @@ use axum::http::{Method, StatusCode};
 use serde_json::{Value, json};
 
 use super::guard::Guard;
-use super::policies::{read_model, read_policies};
+use super::policies::read_policies;
+use super::policies_test_support::read_model;
 use crate::config::Config;
 use crate::gateway::auth::AuthenticatedClient;
 use crate::gateway::router::AppState;

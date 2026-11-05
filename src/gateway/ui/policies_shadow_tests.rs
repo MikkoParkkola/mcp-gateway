@@ -7,7 +7,7 @@ use serde_json::json;
 
 use serde_json::Value;
 
-use super::policies::read_model;
+use super::policies_test_support::read_model;
 use crate::config::Config;
 
 fn sh(ty: &str, by: &[usize]) -> (String, Vec<String>) {

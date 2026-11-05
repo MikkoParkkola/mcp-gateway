@@ -37,6 +37,8 @@ mod policies_rules;
 #[cfg(all(test, feature = "firewall"))]
 mod policies_shadow_tests;
 #[cfg(test)]
+mod policies_test_support;
+#[cfg(test)]
 mod policies_tests;
 mod preview;
 mod preview_identity;

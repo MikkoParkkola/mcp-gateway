@@ -28,17 +28,38 @@ pub(super) async fn read_policies(State(state): State<Arc<AppState>>, guard: Gua
     if let Err(refused) = guard.admit() {
         return refused.into_response();
     }
-    // One generation for every section: a reload between two reads cannot
-    // mix them.
-    let generation = state.live_config.generation();
-    Json(read_model(generation.config())).into_response()
+    Json(read_model(&Sources::of(&state.live_config))).into_response()
 }
 
-/// The read model for `config`.
-pub(super) fn read_model(config: &Config) -> Value {
+/// What the read model reads: one published generation (the file's values,
+/// and the live fields the gateway applies through it) and the config the
+/// process runs (the restart-only fields it enforces). Each is taken once,
+/// so a reload between two reads cannot mix them.
+pub(super) struct Sources<'a> {
+    pub(super) generation: Arc<crate::config_reload::Generation>,
+    pub(super) running: &'a Config,
+}
+
+impl<'a> Sources<'a> {
+    pub(super) fn of(live: &'a crate::config_reload::LiveConfig) -> Self {
+        Self {
+            generation: live.generation(),
+            running: live.running(),
+        }
+    }
+}
+
+/// The read model for `sources`.
+pub(super) fn read_model(sources: &Sources<'_>) -> Value {
+    let config = sources.generation.config();
     json!({
         "tool_policy": tool_policy(&config.security.tool_policy),
         "finding_rules": finding_rules(config),
+        "scan_types": Value::Null,
+        "guards": Value::Null,
+        "credentials": Value::Null,
+        "relay": Value::Null,
+        "tool_limits": Value::Null,
     })
 }
 
