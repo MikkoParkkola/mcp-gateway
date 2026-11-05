@@ -357,14 +357,23 @@ impl Fixture {
             }
         }
         assert!(!file.contains(secret), "the secret is in the file");
+        let spec_text = spec(secret);
+        let allowed = usize::from(created);
+        assert_eq!(
+            file.matches(spec_text.as_str()).count(),
+            allowed,
+            "digest spec in the file"
+        );
+        let rest = file.replace(spec_text.as_str(), "");
         for d in &digests {
-            let (in_file, in_answer) = (
-                file.matches(d.as_str()).count(),
-                sent.body.contains(d.as_str()),
+            assert!(
+                !rest.contains(d.as_str()),
+                "a digest ({d}) is outside key_sha256"
             );
-            assert!(!in_answer, "a digest ({d}) is in the answer: {}", sent.body);
-            let allowed = usize::from(created && d.as_str() == spec(secret));
-            assert_eq!(in_file, allowed, "digest {d} in the file {in_file} times");
+            assert!(
+                !sent.body.contains(d.as_str()),
+                "a digest ({d}) is in the answer"
+            );
         }
         let answered = sent.body.matches(secret).count();
         assert_eq!(answered, usize::from(created), "{}", sent.body);

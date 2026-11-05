@@ -304,7 +304,10 @@ struct Judge {
 
 impl Judge {
     fn refuse(&self, why: Refusal) -> String {
-        *self.outcome.lock().unwrap_or_else(|e| e.into_inner()) = Some(why);
+        *self
+            .outcome
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(why);
         format!("{why:?}")
     }
 
@@ -403,7 +406,7 @@ fn not_written(state: &AppState) -> Response {
             "error": "not_written",
             "message": format!(
                 "{path} cannot be edited in place; nothing was written. Run \
-                 `mcp-gateway hash-key` on a new secret, add an entry to auth.api_keys \
+                 `mcp-gateway hash-key` on the new key, add an entry to auth.api_keys \
                  with the key_sha256 it prints, then reload."
             ),
         })),
@@ -487,7 +490,9 @@ pub(super) async fn create_key(
         (hook.0)();
     }
     let written = write_audited(&state, &guard, (&name, checked.context), replace).await;
-    let refusal = *outcome.lock().unwrap_or_else(|e| e.into_inner());
+    let refusal = *outcome
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     match written {
         Ok(ReplaceOutcome {
             revision: Some(revision),

@@ -127,13 +127,14 @@ fn p8_a_file_with_no_key_list_gets_one() {
     assert_eq!(keys[0].denied_tools.as_deref(), Some(&["y".to_owned()][..]));
 }
 
-/// P11: the reload reports `auth` restart-required, and the key is live on
-/// the next call all the same.
+/// P11: the key is live on the next call, and the reload does not report
+/// `auth` as awaiting a restart (the restart-only comparison leaves the key
+/// list out, `config_reload/diff.rs`).
 #[test]
 fn p11_the_key_is_live_though_the_reload_reports_auth_pending() {
     let fx = Fixture::new(Setup::default());
     created(&fx, &fx.body("late"));
-    assert!(fx.live.pending_restart_fields().contains(&"auth"));
+    assert!(!fx.live.pending_restart_fields().contains(&"auth"));
     assert!(fx.live.generation().auth().validate_token(KNOWN).is_some());
 }
 

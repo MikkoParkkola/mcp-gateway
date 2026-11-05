@@ -268,7 +268,8 @@ fn p5_a_duplicate_principal_is_a_reload_refusal_with_fixed_text() {
         ..Setup::default()
     });
     refused(&fx, &fx.body("new"), StatusCode::CONFLICT, "reload_refused");
-    assert_eq!(fx.records("config_key_create_intent").len(), 1);
+    // The candidate check runs before the intent is appended.
+    assert!(fx.records("config_key_create_intent").is_empty());
 }
 
 const NOW: u64 = 1_793_880_000;
