@@ -17,11 +17,18 @@
 //! active file, which reads that file's first line (at most one capped line)
 //! each time the active file is opened. Opening a sealed segment reads nothing.
 //!
-//! One call opens the active file at most twice, so that check adds at most
-//! two capped lines: a fresh start opens it once, either as the oldest
-//! segment or by crossing into it; a resume opens it once while finding its
-//! segment; and a resume that fails then starts over, which opens it once
-//! more. A call never crosses into the active file twice.
+//! Opens of the active file, each reading at most its first line (one capped
+//! line, `RECORD_CAP`): every listing of the segments opens it once, three
+//! times when a rotation races it three times, and a call lists at most
+//! `3 + X` times (a resume, a fresh start, the end of the log, and one per
+//! segment crossed, `X`); the call also opens it itself at most twice (the
+//! resume, then the start or the crossing into it). So one call opens it at
+//! most `3 * (3 + X) + 2` times. `X` is at most the kept sealed segments,
+//! `retain_segments`: with the invocation log's default of 12, that is 47
+//! opens, and with the governance log's fixed 4, 23. A raised `retain_segments` is
+//! still bounded by the byte budget, since a crossing reads the whole
+//! segment before it: the stream's page budget (`PAGE_SCAN_BYTES`, 8 MiB)
+//! over the shortest sealed segment, one segment-opened record.
 
 use std::fs::File;
 use std::io;

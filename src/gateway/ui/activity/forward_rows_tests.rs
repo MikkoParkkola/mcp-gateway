@@ -554,96 +554,110 @@ fn a_backend_scoped_caller_reads_only_its_backends_calls() {
     );
 }
 
-/// How many times `call` opened the active file of the log at `path`.
-fn active_opens(path: &Path, call: impl FnOnce()) -> usize {
+/// How many times `call` opened the active file of the log at `path`: each
+/// listing of the segments opens it once (no rotation races here), plus each
+/// open of the active file itself.
+fn active_opens(path: &Path, call: impl FnOnce()) -> u32 {
     OPENED.with(|o| o.borrow_mut().clear());
+    LISTED.with(|l| l.set(0));
     call();
     let active = *super::super::super::seek::segments(path)
         .unwrap()
         .last()
         .expect("the log has an active file");
-    OPENED.with(|o| o.borrow().iter().filter(|s| **s == active).count())
+    let opened = OPENED.with(|o| o.borrow().iter().filter(|s| **s == active).count());
+    LISTED.with(Cell::get) + u32::try_from(opened).unwrap()
+}
+
+/// The module doc's bound on one call's opens of the active file, for a call
+/// that crosses `crossed` segments: three opens per listing (rotation
+/// retries), at most three listings plus one per crossing, two direct opens.
+fn bound(crossed: u32) -> u32 {
+    3 * (3 + crossed) + 2
+}
+
+/// Rewrite the active file with the same bytes and a new identity. Not
+/// delete-then-write: the file system can hand the freed inode straight to
+/// the new file, which then has the old identity, so the resume holds and the
+/// row fails at random. Renamed over the active one, the copy exists beside
+/// the old file, so it cannot reuse that inode.
+fn new_identity(path: &Path) {
+    let copy = path.with_extension("rewrite");
+    std::fs::copy(path, &copy).unwrap();
+    std::fs::rename(&copy, path).unwrap();
 }
 
 #[test]
-fn one_call_opens_the_active_file_at_most_twice() {
+fn one_call_opens_the_active_file_within_its_stated_bound() {
     let d = dir();
     let path = d.path().join("inv.jsonl");
-    let one = Limits { matches: 1, ..WIDE };
-    // A fresh read of a log that is only its active file, and of one that
-    // crosses into it: once each.
-    let w = write(&path, &[calls(2)]);
     let l = log(&path, StreamKind::Activity);
+    let one = Limits { matches: 1, ..WIDE };
+    let five = Limits { matches: 5, ..WIDE };
+    let read = |cursor: Option<&Mark>, stop: Option<&Mark>, budget, search: &mut Search| {
+        rows_after(&l, cursor, stop, &Access::All, budget, search).unwrap()
+    };
+    // A fresh read of a log that is only its active file: one listing, one
+    // open. Crossing two sealed segments into it: three listings, one open.
+    let w = write(&path, &[calls(2)]);
     let fresh = active_opens(&path, || {
-        rows_after(
-            &l,
-            None,
-            w.marks.last(),
-            &Access::All,
-            WIDE,
-            &mut Search::default(),
-        )
-        .unwrap();
+        read(None, w.marks.last(), WIDE, &mut Search::default());
     });
     let w = write(&path, &[calls(2), calls(2), calls(2)]);
     let crossing = active_opens(&path, || {
-        rows_after(
-            &l,
-            None,
-            w.marks.last(),
-            &Access::All,
-            WIDE,
-            &mut Search::default(),
-        )
-        .unwrap();
+        read(None, w.marks.last(), WIDE, &mut Search::default());
     });
-    // A resume in the active file: once.
+    // A resume in the active file: one listing, one open.
     let mut search = Search::default();
-    let five = Limits { matches: 5, ..WIDE };
-    rows_after(&l, None, w.marks.last(), &Access::All, five, &mut search).unwrap();
+    read(None, w.marks.last(), five, &mut search);
     let resumed = active_opens(&path, || {
-        rows_after(
-            &l,
-            Some(&w.marks[4]),
-            w.marks.last(),
-            &Access::All,
-            one,
-            &mut search,
-        )
-        .unwrap();
+        read(Some(&w.marks[4]), w.marks.last(), one, &mut search);
     });
-    // A resume that fails on a rewritten active file, then starts over and
-    // crosses into it again: twice, the most one call opens it.
+    // A resume that fails on a new identity, then starts over and crosses two
+    // segments into the active file again: four listings, two opens.
     let mut search = Search::default();
-    rows_after(&l, None, w.marks.last(), &Access::All, five, &mut search).unwrap();
-    // A new file with the same bytes, renamed over the active one. Not
-    // delete-then-write: the file system can hand the freed inode straight
-    // to the new file, which then has the old identity, so the resume holds
-    // and the row fails at random. Here both files exist at once, so the new
-    // one cannot reuse the old one's inode.
-    let copy = path.with_extension("rewrite");
-    std::fs::copy(&path, &copy).unwrap();
-    std::fs::rename(&copy, &path).unwrap();
+    read(None, w.marks.last(), five, &mut search);
+    new_identity(&path);
     let restarted = active_opens(&path, || {
-        let page = rows_after(
-            &l,
-            Some(&w.marks[4]),
-            w.marks.last(),
-            &Access::All,
-            one,
-            &mut search,
-        )
-        .unwrap();
+        let page = read(Some(&w.marks[4]), w.marks.last(), one, &mut search);
         assert!(
             page.diag.restarted,
-            "premise: the rewritten file fails the resume"
+            "premise: the new identity fails the resume"
         );
     });
     assert_eq!(
         (fresh, crossing, resumed, restarted),
-        (1, 1, 1, 2),
-        "opens of the active file per call: fresh, crossing, resumed, restarted"
+        (2, 4, 2, 6),
+        "active-file opens per call: fresh, crossing, resumed, restarted"
     );
+    for (opens, crossed) in [(fresh, 0), (crossing, 2), (resumed, 0), (restarted, 2)] {
+        assert!(
+            opens <= bound(crossed),
+            "{opens} opens past the bound for {crossed} crossings"
+        );
+    }
+    // At the cap: every kept segment crossed after a failed resume, the most
+    // listings a call without rotation races makes.
+    let kept = 4;
+    let w = write(&path, &vec![calls(2); kept + 1]);
+    let mut search = Search::default();
+    read(
+        None,
+        w.marks.last(),
+        Limits { matches: 9, ..WIDE },
+        &mut search,
+    );
+    new_identity(&path);
+    let at_cap = active_opens(&path, || {
+        read(Some(&w.marks[8]), w.marks.last(), one, &mut search);
+    });
+    let kept = u32::try_from(kept).unwrap();
+    assert_eq!(
+        at_cap,
+        kept + 4,
+        "two listings, one per crossing, two opens"
+    );
+    assert!(at_cap <= bound(kept));
 }
 
 #[test]

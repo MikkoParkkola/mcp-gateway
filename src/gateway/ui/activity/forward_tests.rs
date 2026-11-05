@@ -30,6 +30,13 @@ thread_local! {
     static IDENTITY_SKIP: Cell<u32> = const { Cell::new(0) };
     /// Every segment whose identity was read, by sequence, in order.
     static OPENED: RefCell<Vec<u64>> = const { RefCell::new(Vec::new()) };
+    /// How many times the forward read listed the log's segments.
+    static LISTED: Cell<u32> = const { Cell::new(0) };
+}
+
+/// Count one listing of the log's segments; each opens the active file.
+pub(super) fn listed() {
+    LISTED.with(|l| l.set(l.get() + 1));
 }
 
 /// The resume's seam between deciding the identity and the first read.
