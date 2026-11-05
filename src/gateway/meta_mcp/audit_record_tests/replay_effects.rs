@@ -491,3 +491,39 @@ async fn a_replay_after_propagation_is_turned_off_records_none() {
     assert_eq!(all.len(), 1, "{all:?}");
     assert_no_effect(&all[0]["decision"]);
 }
+
+/// The first execution ran while the slot declared `read` read-only; the
+/// slot then declares it may-write. The replay records the slot's effect when
+/// it is served (may-write), never the first run's: a stale read-only would
+/// understate what the replayed call could have changed.
+#[tokio::test]
+async fn a_replay_after_read_only_turns_may_write_records_may_write() {
+    let dir = tempfile::tempdir().unwrap();
+    let (meta, _) = listing(Some(true), &dir);
+    let (stored, decision) = replayed(
+        &meta,
+        &dir,
+        ("e1-widen", &args()),
+        (Route::Http, First::Dispatched),
+        || relist(&meta, Some(false)),
+    )
+    .await;
+    assert_eq!(
+        stored,
+        Some(PoolKey::Shared),
+        "premise: the dispatch noted its slot"
+    );
+    let all = records(&dir);
+    assert_eq!(
+        all.first()
+            .map(|r| r["decision"]["declared_effect"].clone()),
+        Some(json!("read_only")),
+        "premise: the first run recorded read-only: {all:?}"
+    );
+    assert_eq!(decision["decided"], "replayed", "{decision}");
+    assert_eq!(decision["declared_effect"], "may_write", "{decision}");
+    assert_eq!(
+        decision["declared_effect_source"], "tool_annotation",
+        "{decision}"
+    );
+}
