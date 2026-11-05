@@ -12,6 +12,8 @@ use crate::config::{BackendConfig, TransportConfig};
 use crate::secret_store::StoreError;
 
 const CANARY: &str = "zq-adopt-canary";
+/// The guard's refusal text: it goes to the server log, never the answer.
+const GUARD_DETAIL: &str = "Refusing to load config file /zq/guard/gateway.yaml: mode 0660";
 
 async fn body_of(response: Response) -> (StatusCode, Value) {
     let status = response.status();
@@ -96,6 +98,16 @@ fn writer_outcomes() -> Vec<(
             error: CANARY.to_owned(),
         }),
         failed(ReplaceError::Failed(CANARY.to_owned())),
+        (
+            Err(ReplaceError::NoConfigFile),
+            StatusCode::CONFLICT,
+            "no_config_file",
+        ),
+        (
+            Err(ReplaceError::ConfigRefused(GUARD_DETAIL.to_owned())),
+            StatusCode::SERVICE_UNAVAILABLE,
+            "gateway.yaml could not be loaded",
+        ),
     ]
 }
 
@@ -117,6 +129,30 @@ fn every_writer_outcome_has_one_answer_and_quotes_nothing() {
         assert!(!text.contains(CANARY), "{what} answered {text}");
         assert!(!logs.contains(CANARY), "{what} logged {logs}");
     }
+}
+
+/// The guard's refusal is logged with its text, which names the file and the
+/// fix, and answered with fixed text naming no path.
+#[test]
+fn a_guard_refusal_is_logged_in_full_and_answered_without_a_path() {
+    let ((status, json), logs) = {
+        let (response, logs) = crate::test_log_capture::capture_warnings(|| {
+            answer(
+                "tool",
+                Err(ReplaceError::ConfigRefused(GUARD_DETAIL.to_owned())),
+            )
+        });
+        (futures::executor::block_on(body_of(response)), logs)
+    };
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+    assert!(
+        logs.contains(GUARD_DETAIL),
+        "the detail was not logged: {logs}"
+    );
+    assert!(
+        !json.to_string().contains("/zq/"),
+        "the answer names a path: {json}"
+    );
 }
 
 fn stdio_backend() -> BackendConfig {

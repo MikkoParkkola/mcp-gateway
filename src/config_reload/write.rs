@@ -44,7 +44,8 @@ impl From<crate::config_persistence::lock::NotLocked> for ConfigWriteError {
     fn from(e: crate::config_persistence::lock::NotLocked) -> Self {
         match e {
             crate::config_persistence::lock::NotLocked::Busy => Self::Busy,
-            crate::config_persistence::lock::NotLocked::Failed(message) => Self::Failed(message),
+            crate::config_persistence::lock::NotLocked::Failed(message)
+            | crate::config_persistence::lock::NotLocked::Refused(message) => Self::Failed(message),
         }
     }
 }
