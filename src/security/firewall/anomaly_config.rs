@@ -24,20 +24,23 @@ impl FirewallConfig {
     ///
     /// # Errors
     ///
-    /// A message naming the first out-of-range field.
+    /// A message naming the first out-of-range field, or the first blank
+    /// `memory_poisoning.scan_tools` entry.
     pub fn validate(&self) -> Result<(), String> {
-        // `scan_tools` is a substring match, so an empty entry is in every tool
-        // name. Refused whatever `enabled` says: an empty entry is never meant.
-        if let Some(i) = self
-            .memory_poisoning
-            .scan_tools
-            .iter()
-            .position(String::is_empty)
-        {
+        // `scan_tools` is a substring match: an empty entry is in every tool
+        // name, and a whitespace-only one in none a tool has. Refused whatever
+        // `enabled` says: neither is ever meant.
+        let scan_tools = &self.memory_poisoning.scan_tools;
+        if let Some(i) = scan_tools.iter().position(|t| t.trim().is_empty()) {
+            let why = if scan_tools[i].is_empty() {
+                "is empty, which matches every tool, so every call would be scanned as a \
+                 memory write"
+            } else {
+                "is only whitespace, which matches no tool, so it scans nothing"
+            };
             return Err(format!(
-                "security.firewall.memory_poisoning.scan_tools[{i}] is empty, which matches \
-                 every tool, so every call would be scanned as a memory write. Remove it, or \
-                 list the memory tools' names"
+                "security.firewall.memory_poisoning.scan_tools[{i}] {why}. Remove it, or list \
+                 the memory tools' names"
             ));
         }
         // A `match` glob that does not parse would fail open at runtime, so it
@@ -181,6 +184,27 @@ mod tests {
                 );
                 assert!(err.contains("every tool"), "error does not say why: {err}");
             }
+        }
+    }
+
+    /// The boundaries of the refusal: an empty list loads (it scans nothing,
+    /// as configured); an empty entry first is refused at index 0; a
+    /// whitespace-only entry is refused as matching nothing.
+    #[test]
+    fn scan_tools_refusal_boundaries() {
+        load("    memory_poisoning:\n      scan_tools: []\n").expect("an empty list loads");
+        for (list, at, why) in [
+            ("[\"\", \"store\"]", "scan_tools[0]", "every tool"),
+            ("[\"store\", \"  \"]", "scan_tools[1]", "matches no tool"),
+            ("[\"\\t\"]", "scan_tools[0]", "matches no tool"),
+        ] {
+            let err = load(&format!(
+                "    memory_poisoning:\n      scan_tools: {list}\n"
+            ))
+            .expect_err("a blank entry loaded")
+            .to_string();
+            assert!(err.contains(at), "{list}: {err}");
+            assert!(err.contains(why), "{list}: {err}");
         }
     }
 
