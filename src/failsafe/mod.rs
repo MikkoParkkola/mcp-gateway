@@ -14,6 +14,7 @@ pub use circuit_breaker::{
 #[cfg(feature = "webui")]
 pub(crate) use health::Slow;
 pub use health::{HealthMetrics, HealthTracker};
+use rate_limiter::Acquire;
 pub use rate_limiter::RateLimiter;
 pub(crate) use retry::with_retry_unless;
 pub use retry::{RetryPolicy, with_retry};
@@ -93,18 +94,7 @@ impl Failsafe {
     ///
     /// `RateLimited` when the limiter has no token.
     pub(crate) fn take_token(&self, backend: &str) -> crate::Result<()> {
-        if !self.rate_limiter.try_acquire() {
-            // The operator's view of limiter refusals: they are excluded from
-            // the error budgets and from the circuit gauge, so this counter is
-            // the only place they show (F23b, MIK-7579).
-            telemetry_metrics::counter!(
-                "mcp_backend_rate_limited_total",
-                "backend" => backend.to_string()
-            )
-            .increment(1);
-            return Err(crate::Error::RateLimited(backend.to_string()));
-        }
-        Ok(())
+        settle(backend, self.rate_limiter.acquire())
     }
 
     /// Record a success with latency
@@ -156,6 +146,40 @@ impl Failsafe {
     #[must_use]
     pub fn health_metrics(&self) -> HealthMetrics {
         self.health_tracker.metrics()
+    }
+}
+
+/// Turns a limiter decision into the call's answer, logging its WARNs and
+/// counting its refusals under `backend`.
+fn settle(backend: &str, outcome: Acquire) -> crate::Result<()> {
+    match outcome {
+        Acquire::Admitted => Ok(()),
+        Acquire::AdmittedAfterClockStep { ahead_by } => {
+            tracing::warn!(
+                backend,
+                ahead_by_ms = u64::try_from(ahead_by.as_millis()).unwrap_or(u64::MAX),
+                "backend rate limiter clock stepped back; bucket reset"
+            );
+            Ok(())
+        }
+        Acquire::Refused { wait, warn } => {
+            if warn {
+                tracing::warn!(
+                    backend,
+                    next_allowed_in_ms = u64::try_from(wait.as_millis()).unwrap_or(u64::MAX),
+                    "backend rate limiter refused"
+                );
+            }
+            // The operator's view of limiter refusals: they are excluded from
+            // the error budgets and from the circuit gauge, so this counter is
+            // the only place they show (F23b, MIK-7579).
+            telemetry_metrics::counter!(
+                "mcp_backend_rate_limited_total",
+                "backend" => backend.to_string()
+            )
+            .increment(1);
+            Err(crate::Error::RateLimited(backend.to_string()))
+        }
     }
 }
 
@@ -241,6 +265,58 @@ mod tests {
             "an empty bucket is a rate-limit refusal, not an open circuit"
         );
         assert_eq!(failsafe.circuit_breaker.state(), CircuitState::Closed);
+    }
+
+    /// A clock-step reset admits the call and logs a WARN naming the backend
+    /// and how far ahead of the clock the old bucket was.
+    #[test]
+    fn a_clock_step_reset_admits_and_warns_with_the_backend() {
+        let (answer, log) = crate::test_log_capture::capture_warnings(|| {
+            settle(
+                "alpha",
+                Acquire::AdmittedAfterClockStep {
+                    ahead_by: Duration::from_secs(3600),
+                },
+            )
+        });
+        assert!(answer.is_ok());
+        let line = log
+            .lines()
+            .find(|l| l.contains("backend rate limiter clock stepped back; bucket reset"))
+            .unwrap_or_else(|| panic!("no reset WARN in {log}"));
+        assert!(line.contains("backend=\"alpha\""), "{line}");
+        assert!(line.contains("ahead_by_ms=3600000"), "{line}");
+    }
+
+    /// A refusing limiter logs one WARN per backend naming the backend and
+    /// the wait, then stays quiet for the rest of the minute.
+    #[test]
+    fn a_refusing_limiter_warns_once_per_backend() {
+        let mut config = FailsafeConfig::default();
+        config.rate_limit.enabled = true;
+        config.rate_limit.requests_per_second = 1;
+        config.rate_limit.burst_size = 1;
+        let a = Failsafe::new("a", &config);
+        let b = Failsafe::new("b", &config);
+
+        let ((), log) = crate::test_log_capture::capture_warnings(|| {
+            for (failsafe, name) in [(&a, "alpha"), (&b, "beta")] {
+                assert!(failsafe.take_token(name).is_ok());
+                for _ in 0..2 {
+                    assert!(failsafe.take_token(name).is_err());
+                }
+            }
+        });
+
+        let warns: Vec<&str> = log
+            .lines()
+            .filter(|l| l.contains("backend rate limiter refused"))
+            .collect();
+        assert_eq!(warns.len(), 2, "{log}");
+        for (line, name) in warns.iter().zip(["alpha", "beta"]) {
+            assert!(line.contains(&format!("backend=\"{name}\"")), "{line}");
+            assert!(line.contains("next_allowed_in_ms="), "{line}");
+        }
     }
 
     /// F13 T-admit-order, GUARD row (green on base): the breaker is asked
