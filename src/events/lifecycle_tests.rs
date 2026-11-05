@@ -188,28 +188,35 @@ async fn unsubscribe(hub: &Arc<EventsHub>, principal: &str) {
         .expect("unsubscribe");
 }
 
-/// Committed outbox records. A rewrite stages a hidden `.{name}.tmp` file
-/// beside its record until the rename (`records::write_record`), so a raw
-/// count reads one too many while the worker settles an attempt (MIK-8184).
+/// Committed outbox records ([`crate::events::records::committed_records`]).
 fn outbox_files(dir: &std::path::Path) -> usize {
-    std::fs::read_dir(dir.join("outbox")).map_or(0, |entries| {
-        entries
-            .filter_map(Result::ok)
-            .filter(|entry| !entry.file_name().to_string_lossy().starts_with('.'))
-            .count()
-    })
+    crate::events::records::committed_records(&dir.join("outbox")).len()
 }
 
-/// MIK-8184: a rewrite staged beside its record is not a second record.
+/// A rewrite staged beside its record is not a second record, whatever its
+/// name, so a listing taken mid-rewrite counts each
+/// record once.
 #[test]
 fn a_staged_rewrite_is_not_an_outbox_record() {
     let dir = tempfile::tempdir().expect("dir");
     let outbox = dir.path().join("outbox");
     std::fs::create_dir(&outbox).expect("outbox");
-    for name in ["a.json", "b.json", ".a.json.7.tmp"] {
+    // The staged names `write_record` uses, and a stray non-record file.
+    for name in [
+        "a.json",
+        "b.json",
+        ".a.json.7.tmp",
+        ".b.json.12.tmp",
+        "notes.txt",
+    ] {
         std::fs::write(outbox.join(name), b"{}").expect("write");
     }
     assert_eq!(outbox_files(dir.path()), 2);
+    assert_eq!(
+        crate::events::records::committed_records(&outbox),
+        [outbox.join("a.json"), outbox.join("b.json")],
+        "each committed record, once, in order"
+    );
 }
 
 #[tokio::test]

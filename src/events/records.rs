@@ -441,6 +441,27 @@ pub(crate) fn remove_record(dir: &Path, name: &str) -> std::io::Result<()> {
     }
 }
 
+/// The committed record files in `dir`, test builds only, sorted. A rewrite
+/// stages a hidden `.{name}.{n}.tmp` file beside its record until the rename
+/// ([`write_record`]), so a raw listing reads a record twice while the worker
+/// settles an attempt. The filter is the loader's own:
+/// only `*.json` is a record.
+#[cfg(test)]
+pub(crate) fn committed_records(dir: &Path) -> Vec<PathBuf> {
+    let mut paths: Vec<PathBuf> = std::fs::read_dir(dir).map_or_else(
+        |_| Vec::new(),
+        |entries| {
+            entries
+                .flatten()
+                .map(|e| e.path())
+                .filter(|p| p.extension().and_then(|e| e.to_str()) == Some("json"))
+                .collect()
+        },
+    );
+    paths.sort();
+    paths
+}
+
 /// Every `*.json` record in `dir` this build can load. A record of an
 /// unreadable version or shape is skipped and logged, never deleted.
 pub(crate) fn load_records<T: for<'de> Deserialize<'de>>(dir: &Path) -> Vec<(PathBuf, T)> {
