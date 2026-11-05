@@ -705,6 +705,11 @@ mod recovery_text_tests {
         for (kind, text) in kinds {
             assert!(text.contains(what.noun()), "{kind} lost the facts: {text}");
             assert_recovery_guidance(kind, &text);
+            // The guidance itself, word for word, ends every kind's text.
+            assert!(
+                text.ends_with(super::RECOVERY_FILE_FIX),
+                "{kind} does not end with the recovery guidance: {text}"
+            );
         }
     }
 
@@ -719,16 +724,24 @@ mod recovery_text_tests {
             config.contains("Fix: chmod 600"),
             "the config fix changed: {config}"
         );
+        // No wildcard: a new refusal kind fails to compile here until it is
+        // named, and so until this row covers it.
+        let name = |refusal: Refusal| match refusal {
+            Refusal::ForeignOwner => "foreign owner",
+            Refusal::World => "world",
+            Refusal::GroupWrite => "group write",
+            Refusal::GroupReadOwned => "group read",
+        };
         [
-            ("world", Refusal::World),
-            ("group write", Refusal::GroupWrite),
-            ("group read", Refusal::GroupReadOwned),
-            ("foreign owner", Refusal::ForeignOwner),
+            Refusal::World,
+            Refusal::GroupWrite,
+            Refusal::GroupReadOwned,
+            Refusal::ForeignOwner,
         ]
         .into_iter()
-        .map(|(name, refusal)| {
+        .map(|refusal| {
             (
-                name,
+                name(refusal),
                 super::refusal_message(what, path, refusal, (0o666, 0, 7), 0),
             )
         })
@@ -740,10 +753,11 @@ mod recovery_text_tests {
         Vec::new()
     }
 
-    /// Only crash recovery reads through the recovery class, and the config
-    /// class's guarded read has a fixed set of callers, none of which is
-    /// handed a journal or staged-original path: a new caller of either is a
-    /// reviewed change.
+    /// The files that call the recovery-class and config-class guarded reads,
+    /// pinned: only crash recovery's file calls the recovery read, and the
+    /// config read has a fixed set of calling files, so a new calling file of
+    /// either fails here and is a reviewed change. It pins files, not the
+    /// paths each call is handed.
     #[test]
     fn the_recovery_and_config_reads_have_their_known_callers() {
         let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
