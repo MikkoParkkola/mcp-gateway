@@ -414,8 +414,12 @@ impl CapabilityExecutor {
         // The refresh token and client secret go only where the capability's
         // own request may go (#2113): the same destination check, before any
         // byte is sent.
-        super::super::require_tls_for_credentials(token_endpoint)
-            .inspect_err(|_| crate::gateway::delivery_facts::refused_while_vouched())?;
+        super::super::require_tls_for_credentials(token_endpoint).inspect_err(|_| {
+            // A malformed endpoint is a configuration error, not a refusal.
+            if crate::capability::execution_context::names_a_host(token_endpoint) {
+                crate::gateway::delivery_facts::refused_while_vouched();
+            }
+        })?;
         super::super::validate_capability_url_for_context(token_endpoint, context).inspect_err(
             |e| {
                 // A malformed URL is a configuration error, not a refusal.
