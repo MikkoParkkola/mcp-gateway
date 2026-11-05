@@ -24,6 +24,10 @@ env:
   CARGO_TERM_COLOR: always
   # Instrumented frames overflow the 2 MiB default test-thread stack.
   RUST_MIN_STACK: "8388608"
+  # One compiler and one cargo-llvm-cov for every part and the merge: the merge refuses a
+  # part whose manifest records another rustc release or commit.
+  COVERAGE_RUST: "1.99.1"
+  COVERAGE_LLVM_COV: "0.9.1"
 
 jobs:
   plan:
@@ -36,6 +40,8 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        with:
+          toolchain: ${{ env.COVERAGE_RUST }}
       - id: plan
         run: |
           set -euo pipefail
@@ -54,12 +60,13 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
         with:
+          toolchain: ${{ env.COVERAGE_RUST }}
           components: llvm-tools-preview
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           save-if: false
       - name: Install cargo-llvm-cov
-        run: cargo install cargo-llvm-cov --locked
+        run: cargo install cargo-llvm-cov --locked --version "$COVERAGE_LLVM_COV"
       - name: Pinned task SDK and Redis
         run: |
           sudo apt-get update && sudo apt-get install -y --no-install-recommends python3-venv
@@ -99,12 +106,13 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
         with:
+          toolchain: ${{ env.COVERAGE_RUST }}
           components: llvm-tools-preview
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           save-if: false
       - name: Install cargo-llvm-cov
-        run: cargo install cargo-llvm-cov --locked
+        run: cargo install cargo-llvm-cov --locked --version "$COVERAGE_LLVM_COV"
       - name: Run the shard
         run: |
           set -o pipefail
@@ -128,9 +136,10 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
         with:
+          toolchain: ${{ env.COVERAGE_RUST }}
           components: llvm-tools-preview
       - name: Install cargo-llvm-cov
-        run: cargo install cargo-llvm-cov --locked
+        run: cargo install cargo-llvm-cov --locked --version "$COVERAGE_LLVM_COV"
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: cov-shard-*
@@ -146,6 +155,10 @@ jobs:
           # -v prints each llvm-cov command line, with every -object it reads.
           cargo llvm-cov report -v --summary-only --json --output-path cov.json 2>&1 | tee report-json.log
           cargo llvm-cov report -v --lcov --output-path linux.lcov 2>&1 | tee report-lcov.log
+          # Each report read every executable a part built with coverage sections.
+          for log in report-json.log report-lcov.log; do
+            python3 scripts/ci/coverage_shards.py objects "$log" shards/cov-shard-*/manifest.txt
+          done
           python3 scripts/ci/coverage_shards.py canary linux.lcov
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()

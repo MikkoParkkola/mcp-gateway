@@ -37,7 +37,9 @@ cp tests.tsv bundle/tests.tsv
   echo "profiles $n"
   echo "executables $(tr -cd '\0' < bundle/executables.list | wc -c)"
   echo "tar_bytes $(wc -c < bundle/files.tar | tr -d ' ')"
+  # The compiler that built these executables: the merge refuses a part built by another.
+  rustc -Vv | sed -n 's/^release: /rustc_release /p; s/^commit-hash: /rustc_commit /p'
   (cd "$t" && xargs -0 python3 "$here/coverage_shards.py" digest < "$OLDPWD/bundle/executables.list")
 } > bundle/manifest.txt
 rm bundle/executables.list
-head -4 bundle/manifest.txt | sed "s/^/::notice::/"
+head -6 bundle/manifest.txt | sed "s/^/::notice::/"

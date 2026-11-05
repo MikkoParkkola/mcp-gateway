@@ -23,6 +23,11 @@ TMPDIR guard, as in the single job.
   coverage_shards.py plan <n>              print the plan's shards as JSON
   coverage_shards.py check <n> <metadata>  check the partition (file or -)
   coverage_shards.py run <n> <shard>       run one shard, or `sdk` (exit 1 on failure)
+  coverage_shards.py objects <report-log> <manifest>...
+                                           every manifest executable with coverage
+                                           sections is read by each llvm-cov command
+  coverage_shards.py on-disk <root> <manifest>...
+                                           every manifest executable is unpacked intact
   coverage_shards.py --self-test
 """
 from __future__ import annotations
@@ -284,6 +289,68 @@ def elf(sections: list[tuple[str, bytes]]) -> bytes:
     return head + body + table
 
 
+REPORT_ROOT = "target/llvm-cov-target"
+FIXTURE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "testdata", "llvm_cov_report_v.log")
+
+
+def manifest_paths(text: str) -> dict[str, str]:
+    """Each executable's digest in a bundle manifest, by its path under REPORT_ROOT."""
+    found = {}
+    for line in text.splitlines():
+        if line.startswith(("cov:", "file:")) and "  " in line:
+            sha, path = line.split("  ", 1)
+            found[os.path.normpath(path)] = sha
+    return found
+
+
+def report_objects(log: str) -> list[set[str]]:
+    """The `-object` paths of each llvm-cov command in `cargo llvm-cov report -v`
+    output, one set per command, relative to REPORT_ROOT."""
+    import shlex
+
+    commands = []
+    for line in log.splitlines():
+        line = line.strip()
+        if not line.startswith("Running `"):
+            continue
+        cmd = shlex.split(line[len("Running `"):].rstrip("`"))
+        if cmd and os.path.basename(cmd[0]) == "llvm-cov":
+            commands.append({os.path.relpath(cmd[i + 1], REPORT_ROOT)
+                             for i, arg in enumerate(cmd[:-1]) if arg == "-object"})
+    return commands
+
+
+def objects(log: str, manifests: list[str]) -> list[str]:
+    """Every executable a manifest records with coverage sections must be among the
+    `-object` arguments of each llvm-cov command the report ran: a report that read
+    fewer would drop their functions from the grade. Checked per command, never as a
+    union. Executables without coverage sections (dependency proc-macro libraries)
+    are not read by report and not required."""
+    commands = report_objects(log)
+    if not commands:
+        return ["no llvm-cov command in the report output (run report with -v)"]
+    want = {path for text in manifests for path, sha in manifest_paths(text).items()
+            if sha.startswith("cov:")}
+    return [f"llvm-cov command {i}: {path} is not among its -object arguments"
+            for i, got in enumerate(commands, 1) for path in sorted(want - got)]
+
+
+def on_disk(root: str, manifests: list[str]) -> list[str]:
+    """Every executable in every manifest is under `root` after unpacking, with the
+    manifest's digest."""
+    problems = []
+    for text in manifests:
+        for path, sha in manifest_paths(text).items():
+            full = os.path.join(root, path)
+            if not os.path.isfile(full):
+                problems.append(f"{path}: missing after unpacking")
+                continue
+            with open(full, "rb") as f:
+                if digest(f.read()) != sha:
+                    problems.append(f"{path}: digest differs from its manifest")
+    return problems
+
+
 def self_test() -> int:
     def target(kind: str, name: str, test: bool = True) -> dict:
         return {"kind": [kind], "name": name, "test": test}
@@ -374,6 +441,41 @@ def self_test() -> int:
         ["tests/other.rs: a result line for a binary the listing did not name"]
     assert reconcile(every, skipped, {**ran, "unittests src/lib.rs": (0, 1, 1)})[0].startswith(
         "unittests src/lib.rs: ran 0 passed, 1 failed")
+
+    # The report reads every executable with coverage sections, in each command.
+    with open(FIXTURE, encoding="utf-8") as f:
+        real = f.read()
+    (got,) = report_objects(real)
+    assert len(got) == 261, len(got)
+    sample = sorted(got)[0]
+    manifest = "".join(f"cov:{i:064x}  ./{p}\n" for i, p in enumerate(sorted(got)))
+    manifest += f"file:{0:064x}  ./debug/deps/libsome_derive-0.so\n"
+    assert objects(real, [manifest]) == [], objects(real, [manifest])
+    dropped = real.replace(f" -object {REPORT_ROOT}/{sample}", "", 1)
+    assert dropped != real, "the fixture names the sample"
+    assert objects(dropped, [manifest]) == \
+        [f"llvm-cov command 1: {sample} is not among its -object arguments"]
+    # Per command, never a union: the lcov command omitting it fails though the
+    # JSON command read it.
+    assert objects(real + "\n" + dropped, [manifest]) == \
+        [f"llvm-cov command 2: {sample} is not among its -object arguments"]
+    assert objects("     Running `llvm-profdata merge -o x`\n", [manifest]) == \
+        ["no llvm-cov command in the report output (run report with -v)"]
+    # On disk: present with the manifest's digest.
+    import tempfile
+    with tempfile.TemporaryDirectory() as d:
+        os.makedirs(os.path.join(d, "debug", "deps"))
+        files = {"debug/deps/a-1": elf(cov), "debug/deps/b-2": elf([("__llvm_covfun", b"B")])}
+        for name, data in files.items():
+            with open(os.path.join(d, name), "wb") as f:
+                f.write(data)
+        listed = "".join(f"{digest(data)}  ./{name}\n" for name, data in files.items())
+        assert on_disk(d, [listed]) == [], on_disk(d, [listed])
+        os.remove(os.path.join(d, "debug/deps/b-2"))
+        assert on_disk(d, [listed]) == ["debug/deps/b-2: missing after unpacking"]
+        with open(os.path.join(d, "debug/deps/a-1"), "wb") as f:
+            f.write(elf([("__llvm_covfun", b"other"), *cov[1:]]))
+        assert on_disk(d, [listed])[0] == "debug/deps/a-1: digest differs from its manifest"
     print("coverage_shards self-test: ok")
     return 0
 
@@ -385,6 +487,15 @@ def main(argv: list[str]) -> int:
         problems = canary(open(argv[2], encoding="utf-8", errors="replace").read())
         for p in problems:
             print(f"::error::coverage canary: {p}")
+        return 1 if problems else 0
+    if len(argv) >= 4 and argv[1] in ("objects", "on-disk"):
+        manifests = [open(m, encoding="utf-8").read() for m in argv[3:]]
+        if argv[1] == "objects":
+            problems = objects(open(argv[2], encoding="utf-8").read(), manifests)
+        else:
+            problems = on_disk(argv[2], manifests)
+        for problem in problems:
+            print(f"::error::coverage {argv[1]}: {problem}")
         return 1 if problems else 0
     if len(argv) >= 2 and argv[1] == "digest":
         # `digest <file>...`, in sha256sum's layout: "<digest>  <path>".
