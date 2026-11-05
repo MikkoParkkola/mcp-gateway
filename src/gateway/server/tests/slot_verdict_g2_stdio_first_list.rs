@@ -12,7 +12,45 @@ use std::time::Duration;
 use crate::backend::Backend;
 use crate::config::TransportConfig;
 use crate::gateway::server::first_list_wait::FirstList;
-use crate::gateway::server::signing_allocation_tests::stdio_first_list::held_backend;
+use crate::protocol::{JsonRpcResponse, RequestId};
+
+/// An in-process transport whose `tools/list` never answers: on a paused
+/// clock, idle then means waiting on this, never on a socket the runtime
+/// cannot see (a pending real connect lets virtual time run past it).
+struct HeldList {
+    lists: Arc<std::sync::atomic::AtomicUsize>,
+    never: tokio::sync::Notify,
+}
+
+#[async_trait::async_trait]
+impl crate::transport::Transport for HeldList {
+    async fn request(
+        &self,
+        method: &str,
+        _params: Option<Value>,
+    ) -> crate::Result<JsonRpcResponse> {
+        if method == "tools/list" {
+            self.lists.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            self.never.notified().await;
+        }
+        Ok(JsonRpcResponse::success_serialized(
+            RequestId::Number(1),
+            json!({}),
+        ))
+    }
+
+    async fn notify(&self, _method: &str, _params: Option<Value>) -> crate::Result<()> {
+        Ok(())
+    }
+
+    fn is_connected(&self) -> bool {
+        true
+    }
+
+    async fn close(&self) -> crate::Result<()> {
+        Ok(())
+    }
+}
 
 const SHARED: &str = "held_shared";
 const SHARED_TOOL: &str = "held_shared_tool";
@@ -30,12 +68,13 @@ async fn r11_the_first_lists_two_waits_share_one_deadline_stdio() {
     );
     let bound = per_user.tools_fill_bound();
     // A shared backend that never answers its tools/list, with the same bound.
-    let held = held_backend(&[SHARED_TOOL]).await;
+    let lists = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let shared = Arc::new(Backend::new(
         SHARED,
         crate::config::BackendConfig {
             transport: TransportConfig::Http {
-                http_url: held.url.clone(),
+                // Never dialled: the slot's transport is the in-process one below.
+                http_url: "http://127.0.0.1:9/".to_string(),
                 streamable_http: Some(true),
                 protocol_version: None,
             },
@@ -47,6 +86,10 @@ async fn r11_the_first_lists_two_waits_share_one_deadline_stdio() {
         &crate::config::FailsafeConfig::default(),
         Duration::from_secs(60),
     ));
+    shared.set_transport_for_test(Arc::new(HeldList {
+        lists: Arc::clone(&lists),
+        never: tokio::sync::Notify::new(),
+    }));
     assert!(
         gateway.backends().register(shared),
         "premise: the shared backend registers"
@@ -84,7 +127,7 @@ async fn r11_the_first_lists_two_waits_share_one_deadline_stdio() {
         "premise: the own-view warm reached its pre-pass"
     );
     assert!(
-        held.lists.load(std::sync::atomic::Ordering::SeqCst) >= 1,
+        lists.load(std::sync::atomic::Ordering::SeqCst) >= 1,
         "premise: the first list's fill asked the shared backend"
     );
     assert!(answer.get("error").is_none(), "{answer}");
