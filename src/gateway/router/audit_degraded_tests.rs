@@ -63,12 +63,15 @@ struct Fixture {
     router: axum::Router,
     log: Arc<TransparencyLogger>,
     calls: Arc<AtomicUsize>,
-    _dirs: (tempfile::TempDir, crate::gateway::router::tests::FixtureDir),
+    _dirs: (
+        Arc<tempfile::TempDir>,
+        crate::gateway::router::tests::FixtureDir,
+    ),
 }
 
 /// One logger, shared by the meta route and `AppState`, as the server wires it.
 async fn fixture(policy: AuditFailurePolicy) -> Fixture {
-    let audit = tempfile::tempdir().unwrap();
+    let audit = Arc::new(tempfile::tempdir().unwrap());
     let log = Arc::new(
         TransparencyLogger::open(Arc::new(TransparencyLogConfig {
             enabled: true,
@@ -83,6 +86,7 @@ async fn fixture(policy: AuditFailurePolicy) -> Fixture {
         .expect("open log")
         .with_failure_policy(policy),
     );
+    log.keep_test_dir(Arc::clone(&audit));
     let calls = Arc::new(AtomicUsize::new(0));
     let backend = Arc::new(Backend::new(
         "alpha",

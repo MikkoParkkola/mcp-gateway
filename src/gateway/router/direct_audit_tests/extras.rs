@@ -193,11 +193,11 @@ pub(super) enum Log {
 pub(super) fn audit_log(
     fail_closed: bool,
 ) -> (
-    tempfile::TempDir,
+    Arc<tempfile::TempDir>,
     std::path::PathBuf,
     Arc<TransparencyLogger>,
 ) {
-    let audit = tempfile::tempdir().unwrap();
+    let audit = Arc::new(tempfile::tempdir().unwrap());
     let path = audit.path().join("audit.jsonl");
     let policy = if fail_closed {
         AuditFailurePolicy::FailClosed
@@ -214,5 +214,6 @@ pub(super) fn audit_log(
         .expect("open log")
         .with_failure_policy(policy),
     );
+    log.keep_test_dir(Arc::clone(&audit));
     (audit, path, log)
 }
