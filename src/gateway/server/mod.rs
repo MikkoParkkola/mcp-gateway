@@ -22,6 +22,8 @@ mod cost_estimate_restart_tests;
 #[cfg(all(test, feature = "cost-governance"))]
 mod cost_restart_tests;
 #[cfg(all(test, feature = "cost-governance"))]
+mod cost_restore_attribution_tests;
+#[cfg(all(test, feature = "cost-governance"))]
 mod cost_save_stamp_tests;
 mod counter_wiring;
 mod events_wiring;
