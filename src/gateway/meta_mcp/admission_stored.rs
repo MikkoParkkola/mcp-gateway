@@ -67,12 +67,15 @@ pub(crate) enum SlotNote {
 }
 
 impl SlotNote {
-    /// Note a dispatch's slot. Red stub (MIK-9216 red gate): first noted wins,
-    /// no conflict.
+    /// Note a dispatch's slot: the first sets it, the same slot again keeps
+    /// it, and a distinct one conflicts it for good, so an A, B, A
+    /// execution stores none.
     pub(crate) fn note(&mut self, slot: crate::backend::PoolKey) {
-        if matches!(self, Self::Unnoted) {
-            *self = Self::One(slot);
-        }
+        *self = match std::mem::take(self) {
+            Self::Unnoted => Self::One(slot),
+            Self::One(held) if held == slot => Self::One(held),
+            Self::One(_) | Self::Conflicted => Self::Conflicted,
+        };
     }
 
     /// The slot a settled answer stores: only from one slot.
