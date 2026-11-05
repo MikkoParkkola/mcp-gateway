@@ -32,6 +32,8 @@ impl BackendRegistry {
                 .map(|entry| Arc::clone(entry.value()))
                 .collect(),
         );
+        #[cfg(test)]
+        seam::after_sweep();
         #[allow(
             clippy::disallowed_methods,
             reason = "Lifecycle: gateway startup, wiring or shutdown; no caller request"
@@ -63,6 +65,31 @@ impl Drop for RetireOnDrop {
     fn drop(&mut self) {
         for backend in &self.0 {
             backend.retire_now();
+        }
+    }
+}
+
+/// Test-only hook right after the stop takes the backends it will retire,
+/// for the row that registers a backend in that window. Thread-local: its
+/// rows run on the default current-thread runtime.
+#[cfg(test)]
+pub(in crate::backend) mod seam {
+    use std::cell::RefCell;
+
+    thread_local! {
+        static AFTER_SWEEP: RefCell<Option<Box<dyn FnOnce()>>> = RefCell::new(None);
+    }
+
+    /// Run `hook` once, the next time a stop on this thread has taken them.
+    /// Unix-only, like the only row that arms it.
+    #[cfg(unix)]
+    pub(in crate::backend) fn after_sweep_runs(hook: impl FnOnce() + 'static) {
+        AFTER_SWEEP.with(|slot| *slot.borrow_mut() = Some(Box::new(hook)));
+    }
+
+    pub(super) fn after_sweep() {
+        if let Some(hook) = AFTER_SWEEP.with(|slot| slot.borrow_mut().take()) {
+            hook();
         }
     }
 }

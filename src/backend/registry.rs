@@ -700,6 +700,8 @@ impl Destinations {
 
 #[path = "registry_stop.rs"]
 mod stop;
+#[cfg(all(test, unix))]
+pub(in crate::backend) use stop::seam as stop_seam;
 
 #[cfg(test)]
 mod tests {

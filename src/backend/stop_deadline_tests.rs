@@ -205,3 +205,45 @@ async fn a_handover_after_the_gateway_stop_returns_is_killed_at_once() {
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
 }
+
+/// A backend a reload registers while the gateway stop is starting, after
+/// the stop took the backends it will retire, is either refused (the stop's
+/// latch is already set) or retired with the rest. Here its stop is stuck on
+/// a restart's lifecycle lock until the deadline, so only the retirement can
+/// end its tree. The registration is made at the stop's seam, so the window
+/// is hit every run, not by timing.
+#[tokio::test]
+async fn a_backend_registered_as_the_stop_starts_is_refused_or_retired() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let registry = Arc::new(BackendRegistry::new());
+    let backend = stays(dir.path(), "late", registry.stop_deadline());
+    let _end = EndOnDrop(Arc::clone(&backend));
+    backend.ensure_started().await.expect("the backend starts");
+    let pid = leader_pid(dir.path());
+    let _held = backend.lifecycle.write().await;
+    let registered = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let (late, seen, by_registry) = (
+        Arc::clone(&backend),
+        Arc::clone(&registered),
+        Arc::clone(&registry),
+    );
+    super::registry::stop_seam::after_sweep_runs(move || {
+        seen.store(
+            by_registry.register(late),
+            std::sync::atomic::Ordering::SeqCst,
+        );
+    });
+    registry
+        .stop_all_by(tokio::time::Instant::now() + Duration::from_secs(1))
+        .await;
+    if registered.load(std::sync::atomic::Ordering::SeqCst) {
+        let by = std::time::Instant::now() + Duration::from_secs(10);
+        while kernel_view(pid) == Some(false) {
+            assert!(
+                std::time::Instant::now() < by,
+                "registered as the stop started, and left running behind it"
+            );
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    }
+}
