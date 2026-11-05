@@ -255,6 +255,20 @@ impl<S: LogSource> LogMerge<S> {
         if self.unacked == 0
             && let Some(hint) = self.hint.take()
         {
+            // Everything up to the hint is delivered or not this viewer's,
+            // so a replay still marked owed is done that far: the id moves
+            // on even when the replay showed this viewer no row. Only to a
+            // real position: a reset page's hint has no half for its log.
+            for (delivered, reached) in [
+                (&mut self.delivered.inv, &hint.inv),
+                (&mut self.delivered.gov, &hint.gov),
+            ] {
+                if delivered.as_ref().is_some_and(super::id::is_replay_pending)
+                    && let Some(reached) = reached
+                {
+                    *delivered = Some(reached.clone());
+                }
+            }
             self.recovery = Some(hint);
         }
     }
@@ -385,9 +399,24 @@ impl<S: LogSource> LogMerge<S> {
         if page.reset.any() {
             self.replays += 1;
             if self.replays > 1 {
-                tracing::debug!("ui stream: the replay reset again, ending the view");
-                self.failed = true;
-                return None;
+                // The replay from the oldest record met a gap that stays. The
+                // client already holds the reset frame and reloads: the reset
+                // log goes live from the head captured when this catch-up
+                // began. Ending the view instead would leave the client's id
+                // on the replay-pending marker, so every reconnect would
+                // replay, reset twice and end, and the stream never go live.
+                tracing::debug!("ui stream: the replay reset again, going live from the head");
+                if page.reset.inv {
+                    self.delivered.inv = self.stop.inv.clone();
+                }
+                if page.reset.gov {
+                    self.delivered.gov = self.stop.gov.clone();
+                }
+                self.recovery = None;
+                self.hint = None;
+                self.scan = None;
+                self.search = S::Search::default();
+                return Some(Vec::new());
             }
             tracing::debug!("ui stream: the position's row is gone, resetting");
             out.push(Out::Reset);
