@@ -92,8 +92,9 @@ impl std::error::Error for RedirectRefused {}
 /// Records a cleartext downgrade refused at a redirect hop (`RedirectRefused`)
 /// on the call's delivery; the caller still receives it as a transport
 /// error. A hop the destination policy refuses (a rejected address, a name
-/// for loopback) is recorded by `refuse_hop` at the hop itself, and the send
-/// only translates it (`ssrf_refusal`), so it is never noted twice.
+/// for loopback) is recorded by `refuse_hop` at the hop itself, and again by
+/// the send's `ssrf_refusal` arm, which also covers a refusal by the address
+/// pin: the effect only rises, so the second raise changes nothing.
 fn note_redirect_refusal(error: &reqwest::Error) {
     if error.is_redirect() && crate::security::ssrf::source_of::<RedirectRefused>(error).is_some() {
         // Raised only while the cell vouches for the delivery: a composite's

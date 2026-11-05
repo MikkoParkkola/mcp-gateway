@@ -115,6 +115,29 @@ async fn a_private_destination_records_refused_for_each_protocol() {
     assert!(fails.is_empty(), "{fails:#?}");
 }
 
+/// A URL with no host is a configuration error, not a refusal: it is
+/// answered as before and records nothing refused.
+#[tokio::test]
+async fn a_hostless_url_records_no_refusal() {
+    let mut fails = Vec::new();
+    for (service, target) in [
+        ("rest", "file:///tmp/rest"),
+        ("graphql", "file:///tmp/rpc"),
+        ("jsonrpc", "file:///tmp/rpc"),
+    ] {
+        let (error, effect) = Box::pin(call(service, target, false)).await;
+        if !error.contains("has no host") {
+            fails.push(format!(
+                "{service}: error does not say \"has no host\": {error}"
+            ));
+        }
+        if effect == Some(Value::from("refused")) {
+            fails.push(format!("{service}: a configuration error recorded refused"));
+        }
+    }
+    assert!(fails.is_empty(), "{fails:#?}");
+}
+
 /// A host naming loopback, refused by its own check before any lookup.
 #[tokio::test]
 async fn a_loopback_name_records_refused_for_each_protocol() {

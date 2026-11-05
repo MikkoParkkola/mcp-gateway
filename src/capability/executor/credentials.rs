@@ -416,8 +416,14 @@ impl CapabilityExecutor {
         // byte is sent.
         super::super::require_tls_for_credentials(token_endpoint)
             .inspect_err(|_| crate::gateway::delivery_facts::refused_while_vouched())?;
-        super::super::validate_capability_url_for_context(token_endpoint, context)
-            .inspect_err(|_| crate::gateway::delivery_facts::refused_while_vouched())?;
+        super::super::validate_capability_url_for_context(token_endpoint, context).inspect_err(
+            |e| {
+                // A malformed URL is a configuration error, not a refusal.
+                if crate::security::ssrf::is_ssrf_refusal(e) {
+                    crate::gateway::delivery_facts::refused_while_vouched();
+                }
+            },
+        )?;
         // Read before the flight: the keychain lookup may block, and the
         // secret does not depend on the token.
         let keychain_key = format!("{provider}-client-secret");
