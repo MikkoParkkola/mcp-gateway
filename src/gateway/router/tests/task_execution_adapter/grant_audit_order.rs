@@ -288,7 +288,7 @@ async fn logged_round(
     policy: AuditFailurePolicy,
 ) -> (
     Arc<AppState>,
-    tempfile::TempDir,
+    Arc<tempfile::TempDir>,
     crate::gateway::router::tests::FixtureDir,
     String,
 ) {

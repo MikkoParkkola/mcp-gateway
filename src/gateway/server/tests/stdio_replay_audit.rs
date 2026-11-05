@@ -3,6 +3,8 @@
 //! #2480: a stdio call answered from a completed execution (an idempotent
 //! replay) writes one invocation record, as the HTTP meta route does (#2477).
 
+use std::sync::Arc;
+
 use serde_json::{Value, json};
 
 use super::signing_nonce_allocations_support::{Fixture, SESSION, invoke};

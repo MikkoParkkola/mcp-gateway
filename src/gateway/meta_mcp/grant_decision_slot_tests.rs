@@ -10,8 +10,7 @@ use serde_json::{Value, json};
 
 use super::grant_audit::{GrantNote, allow_unslotted_check_for_test, select_records};
 use super::grant_audit_fixture::{
-    CAPS, Endpoint, PERSONAL, capability_backend, decisions, grant, grants, logger, logger,
-    stall_log,
+    CAPS, Endpoint, PERSONAL, capability_backend, decisions, grant, grants, logger, stall_log,
 };
 use super::grant_decision_audit_tests::{api_key, context, gateway};
 use crate::backend::BackendRegistry;
@@ -323,7 +322,10 @@ async fn http_refusal_carries_the_recorded_id_without_reading_the_answer() {
         (Some(RequestId::Number(7)), PAST_ANY_READ, json!(7)),
         (None, 16, Value::Null),
     ] {
-        let (endpoint, dir) = (Endpoint::start(false).await, Arc::new(tempfile::tempdir().unwrap()));
+        let (endpoint, dir) = (
+            Endpoint::start(false).await,
+            Arc::new(tempfile::tempdir().unwrap()),
+        );
         let log = logger(&dir, AuditFailurePolicy::FailClosed);
         let mut meta = MetaMcp::new(Arc::new(BackendRegistry::new()))
             .with_identity_grants(grants(vec![grant("g1", ALICE, ALICE)]));
