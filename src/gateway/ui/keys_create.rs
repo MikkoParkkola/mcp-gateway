@@ -45,6 +45,14 @@ pub(super) struct KnownSecret(pub(super) String);
 #[derive(Clone)]
 pub(super) struct BeforeLock(pub(super) Arc<dyn Fn() + Send + Sync>);
 
+/// Under test, a request may carry the writer's answer, standing in for the
+/// writer so a row reaches every `ReplaceError` variant.
+#[cfg(test)]
+#[derive(Clone)]
+pub(super) struct InjectWriter(
+    pub(super) Arc<dyn Fn() -> Result<ReplaceOutcome, ReplaceError> + Send + Sync>,
+);
+
 /// The create body: strict, so a key outside the list is refused.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -451,6 +459,7 @@ pub(super) async fn create_key(
     guard: Guard,
     #[cfg(test)] known: Option<axum::Extension<KnownSecret>>,
     #[cfg(test)] before_lock: Option<axum::Extension<BeforeLock>>,
+    #[cfg(test)] _inject: Option<axum::Extension<InjectWriter>>,
     body: Result<Json<CreateBody>, JsonRejection>,
 ) -> Response {
     if let Err(refused) = guard.admit() {

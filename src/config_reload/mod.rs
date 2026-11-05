@@ -785,6 +785,8 @@ use diff::tracked_sections;
 pub use diff::{ConfigPatch, compute_diff};
 pub use reload_context::ReloadContext;
 pub(crate) use reload_context::SurfacedHook;
+#[cfg(test)]
+pub(crate) use reload_context::replace::order as write_order;
 #[cfg(feature = "webui")]
 pub(crate) use reload_context::replace::{
     AuditPosture, Expected, FileRevision, GatewayAuth, IntentKind, NO_AUDIT_LOG, Replace,

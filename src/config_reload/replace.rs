@@ -223,6 +223,37 @@ async fn spawn_locked(
         })
 }
 
+/// Test-only record of the writer's steps, keyed by the resolved target, so a
+/// row can prove the order of two of them. Written from the writer's own task
+/// and blocking threads, hence a global.
+#[cfg(test)]
+pub(crate) mod order {
+    use std::path::{Path, PathBuf};
+    use std::sync::Mutex;
+
+    static EVENTS: Mutex<Vec<(PathBuf, &'static str)>> = Mutex::new(Vec::new());
+
+    #[allow(dead_code, reason = "recorded at the intent append and the commit")]
+    pub(super) fn record(target: &Path, event: &'static str) {
+        EVENTS
+            .lock()
+            .expect("order")
+            .push((target.to_path_buf(), event));
+    }
+
+    /// The events recorded for `target`, in order, cleared.
+    pub(crate) fn take(target: &Path) -> Vec<&'static str> {
+        let mut all = EVENTS.lock().expect("order");
+        let mine = all
+            .iter()
+            .filter(|(p, _)| p == target)
+            .map(|(_, e)| *e)
+            .collect();
+        all.retain(|(p, _)| p != target);
+        mine
+    }
+}
+
 #[path = "replace_audit.rs"]
 mod audit;
 pub(crate) use audit::{Audit, Intent, IntentSink};
