@@ -74,6 +74,25 @@ pub(super) async fn key_only_fixture(
     .await
 }
 
+/// [`fixture`] with authentication off and `log` as the transparency log of the
+/// surfaced-tool `MetaMcp`: a call carrying no credential and no identity is
+/// one the gate cannot name, so a destructive task call answers
+/// `unbindable_caller`. Its one user, the `unbindable` rows, builds with
+/// `firewall`.
+#[cfg(feature = "firewall")]
+pub(super) async fn anonymous_fixture(
+    mock: &Arc<MockBackend>,
+    log: Arc<crate::security::TransparencyLogger>,
+) -> (Arc<AppState>, crate::gateway::router::tests::FixtureDir) {
+    Box::pin(fixture_under(
+        mock,
+        &crate::config::AuthConfig::default(),
+        crate::config::Config::default(),
+        |meta| meta.enable_transparency_log(log),
+    ))
+    .await
+}
+
 async fn fixture_under(
     mock: &Arc<MockBackend>,
     auth: &crate::config::AuthConfig,

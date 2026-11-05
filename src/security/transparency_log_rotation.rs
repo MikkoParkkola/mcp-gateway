@@ -124,7 +124,7 @@ pub(crate) fn file_id(file: &File) -> io::Result<FileId> {
 /// The identity of whatever `path` names now. Windows has no id without a
 /// handle, so the file is opened for attributes only, sharing everything so
 /// a writer's rotate or delete is not blocked.
-pub(super) fn path_id(path: &Path) -> io::Result<FileId> {
+pub(crate) fn path_id(path: &Path) -> io::Result<FileId> {
     #[cfg(windows)]
     let file = {
         use std::os::windows::fs::OpenOptionsExt;
