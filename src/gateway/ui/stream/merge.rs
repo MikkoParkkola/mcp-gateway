@@ -170,7 +170,8 @@ pub(super) struct LogMerge<S: LogSource> {
     /// The source failed a read: the view ends, its delivered cursor kept.
     failed: bool,
     /// Resets met in the current catch-up: the first replays from the
-    /// oldest record, a second ends the view instead of replaying forever.
+    /// oldest record, a second goes live from the captured head instead of
+    /// replaying forever.
     replays: u8,
 }
 
@@ -380,7 +381,7 @@ impl<S: LogSource> LogMerge<S> {
     }
 
     /// One catch-up page from `from`, after yielding to the runtime. `None`
-    /// when the read failed or a replay reset again.
+    /// when the read failed.
     async fn page(&mut self, from: &LogCursor) -> Option<Vec<Out>> {
         tokio::task::yield_now().await;
         let page = match self

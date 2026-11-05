@@ -65,8 +65,7 @@ pub(super) enum End {
     CredentialChanged,
     ValidationTimeout,
     Lifetime,
-    /// A log source closed or failed, or a reset's replay reset again: the
-    /// client reconnects with its id.
+    /// A log source closed or failed: the client reconnects with its id.
     LogEnded,
 }
 
