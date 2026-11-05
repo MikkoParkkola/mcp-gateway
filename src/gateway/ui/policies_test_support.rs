@@ -13,15 +13,15 @@ use crate::config_reload::LiveConfig;
 
 /// The read model of a gateway started on `config`, with nothing reloaded.
 pub(super) fn read_model(config: &Config) -> Value {
-    reloaded(config, None)
+    reloaded(config, &[])
 }
 
-/// The read model of a gateway started on `startup` and then, when
-/// `reload` is given, reloaded to it.
-pub(super) fn reloaded(startup: &Config, reload: Option<&Config>) -> Value {
+/// The read model of a gateway started on `startup` and then reloaded to
+/// each of `reloads` in turn.
+pub(super) fn reloaded(startup: &Config, reloads: &[&Config]) -> Value {
     let live = LiveConfig::new(startup.clone());
-    if let Some(next) = reload {
-        live.set(next.clone());
+    for next in reloads {
+        live.set((*next).clone());
     }
     model_of(&Sources::of(&live))
 }

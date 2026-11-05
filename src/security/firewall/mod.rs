@@ -30,9 +30,13 @@ use crate::transition::TransitionTracker;
 
 mod allowed_root;
 /// The finding types no rule's `scan` may list (the folder check alone
-/// produces them): the Policies screen offers every other type.
+/// produces them); the Policies screen reads every other type as
+/// rule-listable.
 #[cfg(feature = "webui")]
 pub(crate) use allowed_root::OUTPUT_ONLY;
+/// The relay gate's inferred sensitive classes, for the Policies screen.
+#[cfg(feature = "webui")]
+pub(crate) use collusion_gate::SENSITIVE_CLASSES;
 pub(crate) use allowed_root::ScanSubject;
 #[cfg(test)]
 pub(crate) use allowed_root::plain_rule;
