@@ -20,6 +20,7 @@ use super::watcher;
 use crate::config_reload::Generation;
 use crate::gateway::auth::live::{HeldCredential, current_caller};
 use crate::gateway::auth::{AuthState, AuthenticatedClient};
+use crate::gateway::authz::BackendGrant;
 use crate::gateway::router::AppState;
 use crate::gateway::ui::activity::access::{self, Access};
 use crate::gateway::ui::activity::forward::StreamKind;
@@ -51,6 +52,10 @@ pub(super) struct Conn {
     /// it differs.
     pub(super) access: Option<Access>,
     pub(super) admin: bool,
+    /// The backends the caller's UI grant reaches, sorted and deduplicated;
+    /// `None` when the grant is unscoped. Every entitlement check derives it
+    /// again and ends the stream when it differs.
+    pub(super) scope: Option<Vec<String>>,
     /// The caller's `auth` member of the status payload, fixed at connect.
     pub(super) facts: Value,
     pub(super) tx: Tx,
@@ -155,6 +160,24 @@ impl Conn {
         let access = activity_access(&caller.client, caller.identity.as_ref(), &caller.generation);
         super::kinds_for(&caller.client, access.as_ref(), &self.state) == self.kinds
             && access == self.access
+            && ui_scope(&caller.client) == self.scope
+    }
+}
+
+/// The caller's UI scope, the grant the status route counts by: `None` when
+/// it is unscoped (an admin with an empty list is a UI-wide admin), else the
+/// backends it reaches, sorted and deduplicated so a reordered or repeated
+/// list in the config is no change. An empty list reaches nothing.
+pub(super) fn ui_scope(client: &AuthenticatedClient) -> Option<Vec<String>> {
+    match BackendGrant::for_ui(Some(client)) {
+        BackendGrant::Unscoped => None,
+        BackendGrant::Empty => Some(Vec::new()),
+        BackendGrant::Scoped(backends) => {
+            let mut backends = backends.to_vec();
+            backends.sort();
+            backends.dedup();
+            Some(backends)
+        }
     }
 }
 
@@ -303,7 +326,7 @@ async fn drive(
     let mut recheck = interval_at(start + RECHECK, RECHECK);
     recheck.set_missed_tick_behavior(MissedTickBehavior::Delay);
     let first = first_snapshot(conn, rx, &mut recheck, deadline).await?;
-    let hello = json!({"kinds": conn.kinds, "head": sent.head(&first, conn.admin)});
+    let hello = json!({"kinds": conn.kinds, "head": sent.head(&first, &conn)});
     conn.send(hello_frame(&hello)).await?;
     sent.deliver(conn, &first).await?;
     let mut keep = interval_at(Instant::now() + KEEP_ALIVE, KEEP_ALIVE);

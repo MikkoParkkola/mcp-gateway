@@ -32,6 +32,23 @@ fn register(state: &AppState, name: &str) {
         .register(http_backend_at(name, "http://127.0.0.1:9/mcp"));
 }
 
+/// The bearer and the four keys, the plain and scoped-admin keys over the
+/// lists given.
+fn auth(plain: &[&str], admin: &[&str]) -> AuthConfig {
+    AuthConfig {
+        enabled: true,
+        bearer_token: Some(BEARER.to_owned()),
+        api_keys: vec![
+            key(PLAIN, plain, false),
+            key(SADMIN, admin, true),
+            key(EMPTY_PLAIN, &[], false),
+            key(EMPTY_ADMIN, &[], true),
+        ],
+        public_paths: vec!["/health".to_owned()],
+        ..AuthConfig::default()
+    }
+}
+
 const ISSUER: &str = "https://issuer.test";
 /// One group per control-plane role an identity can hold.
 const ROLE_RULES: &str = "rules: [\
@@ -76,18 +93,7 @@ async fn gateway() -> (Arc<AppState>, Vec<(&'static str, String)>, impl Sized) {
         bearers.push((group, t.token.clone()));
         key_server.store.insert(t).await;
     }
-    let auth = AuthConfig {
-        enabled: true,
-        bearer_token: Some(BEARER.to_owned()),
-        api_keys: vec![
-            key(PLAIN, &SCOPE, false),
-            key(SADMIN, &SCOPE, true),
-            key(EMPTY_PLAIN, &[], false),
-            key(EMPTY_ADMIN, &[], true),
-        ],
-        public_paths: vec!["/health".to_owned()],
-        ..AuthConfig::default()
-    };
+    let auth = auth(&SCOPE, &SCOPE);
     let (state, dir) =
         test_router_app_state_with_auth_and_key_server(&auth, Some(key_server)).await;
     let mut config = (*state.live_config.get()).clone();
@@ -207,17 +213,25 @@ async fn empty_lists_and_unscoped_admins_keep_their_views() {
     }
 }
 
-/// Set the backends of the key named `name`, as a reload would.
+/// Give the key `name` the list `backends`, as a reload of the file would: a
+/// whole new auth section, so the generation builds a new key table. The
+/// premise is checked, so a setup that changes nothing fails here.
 fn set_backends(state: &AppState, name: &str, backends: &[&str]) {
-    state.live_config.edit(|c| {
-        let k = c
-            .auth
-            .api_keys
-            .iter_mut()
-            .find(|k| k.name == name)
-            .expect("the key is configured");
-        k.backends = backends.iter().map(|b| (*b).to_string()).collect();
-    });
+    let (plain, admin) = if name == PLAIN {
+        (backends, &SCOPE[..])
+    } else {
+        (&SCOPE[..], backends)
+    };
+    state.live_config.edit(|c| c.auth = auth(plain, admin));
+    let published = state.live_config.get();
+    let key = published
+        .auth
+        .api_keys
+        .iter()
+        .find(|k| k.name == name)
+        .expect("the reload publishes the key");
+    let want: Vec<String> = backends.iter().map(|b| (*b).to_string()).collect();
+    assert_eq!(key.backends, want, "the reload set {name}'s list");
 }
 
 async fn narrowing_ends_the_stream_and_a_reorder_does_not(who: &str) {
