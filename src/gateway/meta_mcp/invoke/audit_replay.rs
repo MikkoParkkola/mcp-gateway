@@ -122,12 +122,12 @@ impl MetaMcp {
         }
     }
 
-    /// What a replay's backend tool declares now, on the slot its first
+    /// What a replay's backend tool declares now, in the slot its first
     /// execution ran under: a capability by its live definition under this
-    /// caller's view, otherwise the stored slot's declaration. With no stored
-    /// slot no backend slot is read, so a result that stored none, or a
-    /// continuation origin (no tool), records none: never the shared slot's
-    /// or the replaying caller's.
+    /// caller's view, otherwise that exact slot's declaration, looked up and
+    /// never resolved again. With no stored slot, or a slot the backend no
+    /// longer holds, it reads none: never the shared slot's or the replaying
+    /// caller's. A continuation origin (no tool) reads none.
     fn replay_effect(
         &self,
         facts: &crate::gateway::meta_mcp::admission::ReplayFacts,
@@ -137,14 +137,18 @@ impl MetaMcp {
         crate::security::decision_record::EffectSource,
     )> {
         let (server, tool) = (facts.server.as_deref()?, facts.tool.as_deref()?);
-        let backend = facts.slot.as_ref().and_then(|_| {
-            self.scoped(caller.scope().authorizer.backend_grant())
-                .scoped_get(server)
-        });
-        let binding = match &facts.slot {
-            Some(crate::backend::PoolKey::PerUser { binding }) => Some(binding.as_str()),
-            Some(crate::backend::PoolKey::Shared) | None => None,
-        };
-        self.declared_effect((server, tool), backend.as_deref(), binding)
+        if let Some(capability) = self.declared_effect((server, tool), None, None) {
+            return Some(capability);
+        }
+        let slot = facts.slot.as_ref()?;
+        self.scoped(caller.scope().authorizer.backend_grant())
+            .scoped_get(server)?
+            .declared_effect_at(slot, tool)
+            .map(|effect| {
+                (
+                    effect,
+                    crate::security::decision_record::EffectSource::ToolAnnotation,
+                )
+            })
     }
 }

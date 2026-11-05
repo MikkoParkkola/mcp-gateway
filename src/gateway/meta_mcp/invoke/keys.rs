@@ -260,7 +260,9 @@ impl MetaMcp {
         // The slot this dispatch runs under, kept with a settled answer so its
         // replay reads that slot's declaration, never the replaying caller's.
         if let Some(execution) = caller.execution {
-            execution.note_effect_slot(crate::gateway::meta_mcp::admission::dispatch_slot(bind));
+            if let Some(backend) = be {
+                execution.note_effect_slot(backend.slot_key_for(bind));
+            }
         }
         // U12: a web UI call runs only as the call the route checked, and a
         // tool this slot did not declare read-only only when confirmed. Here

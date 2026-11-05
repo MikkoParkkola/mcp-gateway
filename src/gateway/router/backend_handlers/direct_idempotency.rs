@@ -133,9 +133,12 @@ pub(super) fn execution_lease(
                 lease.note_binding((scope.name, tool), propagation.identity_key.as_deref());
             }
             // The slot it runs under, for a completed replay's declared effect.
-            lease.note_effect_slot(crate::gateway::meta_mcp::admission::dispatch_slot(
-                propagation.identity_key.as_deref(),
-            ));
+            lease.note_effect_slot(
+                scope
+                    .route
+                    .backend
+                    .slot_key_for(propagation.identity_key.as_deref()),
+            );
             Ok((Some(lease), None))
         }
         // Released before the replay's delivery begins, not when it ends.

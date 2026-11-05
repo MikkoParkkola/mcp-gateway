@@ -56,19 +56,6 @@ pub(super) struct StoredDelivery {
     pub(super) effect_slot: Option<crate::backend::PoolKey>,
 }
 
-/// The slot a dispatch under `binding` runs on, as the stored slot names it:
-/// a caller binding's per-user slot, otherwise the shared slot. On a
-/// backend that propagates no identity both read the shared slot back, and
-/// a step with a binding beside one without conflicts the note, which stores
-/// none: the safe direction.
-pub(crate) fn dispatch_slot(binding: Option<&str>) -> crate::backend::PoolKey {
-    binding.map_or(crate::backend::PoolKey::Shared, |binding| {
-        crate::backend::PoolKey::PerUser {
-            binding: binding.to_owned(),
-        }
-    })
-}
-
 /// The slot an execution's dispatches ran under, gathered on its lease: none
 /// noted yet, one slot, or two distinct slots, which stays conflicted.
 #[derive(Debug, Clone, Default)]
