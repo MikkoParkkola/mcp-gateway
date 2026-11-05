@@ -367,7 +367,7 @@ async fn write_audited(
     let log = state
         .transparency_log
         .clone()
-        .ok_or_else(|| ReplaceError::Refused(NO_AUDIT_LOG.to_owned()))?;
+        .ok_or_else(|| ReplaceError::AuditRefused(NO_AUDIT_LOG.to_owned()))?;
     let auth = GatewayAuth::of(state.live_config.running().auth.enabled);
     let who = super::admin_audit::caller_who(state, guard.client.as_ref(), guard.identity.as_ref());
     let audit = AuditPosture::of(Some(log), auth).key_write(IntentKind::KeyCreate, who, name)?;
@@ -422,6 +422,24 @@ fn not_written(state: &AppState) -> Response {
         .into_response()
 }
 
+/// The variant's name, for the log: never its payload.
+fn variant_of(error: &ReplaceError) -> &'static str {
+    match error {
+        ReplaceError::Busy => "busy",
+        ReplaceError::Stale { .. } => "stale",
+        ReplaceError::Refused(_) => "refused",
+        ReplaceError::AuditRefused(_) => "audit_refused",
+        ReplaceError::Unsupported(_) => "unsupported",
+        ReplaceError::Stage(_) => "stage",
+        ReplaceError::Write(_) => "write",
+        ReplaceError::ReloadRefused(_) => "reload_refused",
+        ReplaceError::RollbackFailed { .. } => "rollback_failed",
+        ReplaceError::Unconfirmed { .. } => "unconfirmed",
+        ReplaceError::Failed(_) => "failed",
+        ReplaceError::Secrets(_) => "secrets",
+    }
+}
+
 /// Every write that did not end in a live key, as fixed text. The compute's
 /// own refusal wins; a writer refusal with none is the audit log's (the
 /// compute and the loader check are the others).
@@ -430,6 +448,12 @@ fn refused_write(
     refusal: Option<Refusal>,
     written: Result<ReplaceOutcome, ReplaceError>,
 ) -> Response {
+    if let Err(error) = &written {
+        tracing::warn!(
+            variant = variant_of(error),
+            "key create: the config write failed"
+        );
+    }
     match (refusal, written) {
         (Some(Refusal::Expired), _) => invalid_field("expires_at"),
         (Some(Refusal::Flip), _) => coded(StatusCode::CONFLICT, "restart_required"),
@@ -442,12 +466,15 @@ fn refused_write(
         (None, Err(ReplaceError::ReloadRefused(_))) => {
             coded(StatusCode::CONFLICT, "reload_refused")
         }
-        (None, Err(ReplaceError::Refused(_) | ReplaceError::AuditRefused(_))) => {
-            audit_unavailable()
-        }
+        (None, Err(ReplaceError::AuditRefused(_))) => audit_unavailable(),
         (
             None,
-            Err(ReplaceError::Unsupported(_) | ReplaceError::Stage(_) | ReplaceError::Write(_)),
+            Err(
+                ReplaceError::Refused(_)
+                | ReplaceError::Unsupported(_)
+                | ReplaceError::Stage(_)
+                | ReplaceError::Write(_),
+            ),
         ) => fixed(StatusCode::INTERNAL_SERVER_ERROR, "the key was not created"),
         (None, _) => coded(StatusCode::INTERNAL_SERVER_ERROR, "state_uncertain"),
     }
