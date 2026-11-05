@@ -66,6 +66,7 @@ src/gateway/meta_mcp/invoke/admin.rs	run_playbook	-	gateway_run_playbook meta-to
 src/gateway/meta_mcp/invoke/admin.rs	set_playbook_engine	-	startup wiring, set once when the gateway is built
 src/gateway/meta_mcp/invoke/admin.rs	webhook_status	-	gateway_webhook_status meta-tool only, not the tools/call path
 src/gateway/meta_mcp/invoke/audit_replay.rs	audit_replay	-	on-path, untimed: replayed executions only; the timed rows execute fresh
+src/gateway/meta_mcp/invoke/audit_replay.rs	replay_effect	-	on-path, untimed: replayed executions only (audit_replay calls it); the timed rows execute fresh
 src/gateway/meta_mcp/invoke/audit_decision.rs	after_upstream_401	-	on-path, untimed: an upstream 401 on a managed account only; the timed rows are allowed calls
 src/gateway/meta_mcp/invoke/audit_decision.rs	take_refusal	-	on-path, untimed: withheld targets only; the timed rows are allowed calls
 src/gateway/meta_mcp/invoke/audit_decision.rs	take_refusal_kind	-	off-path: test-only, take_refusal's kind alone for rows that pin only the kind
