@@ -298,9 +298,14 @@ enum Cache {
 /// cache as `cache` says, and alice's and bob's per-user slots on `alpha`
 /// reachable through the fixture's scripted transport.
 async fn bound_with(dir: &tempfile::TempDir, cache: Cache) -> Fx {
+    bound_answering(dir, cache, Answer::Ok).await
+}
+
+/// [`bound_with`] with the fixture backend answering `answer`.
+async fn bound_answering(dir: &tempfile::TempDir, cache: Cache, answer: Answer) -> Fx {
     let log = logger(dir, AuditFailurePolicy::FailClosed);
     let meta_log = Arc::clone(&log);
-    let fx = super::direct_guards_fixture::fixture_propagating_logged(Answer::Ok, log, |meta| {
+    let fx = super::direct_guards_fixture::fixture_propagating_logged(answer, log, |meta| {
         // Both routes record into one log: the meta layer's too.
         meta.enable_transparency_log(meta_log);
         meta.set_identity_propagation(Arc::new(Binds));
