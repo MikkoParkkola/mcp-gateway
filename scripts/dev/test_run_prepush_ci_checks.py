@@ -835,9 +835,11 @@ class Step(unittest.TestCase):
     # P2b (impl r1 F20)
     def test_p2b_the_rust_step_line_stops_the_hook_and_follows_the_lib_tests(self):
         pre_push = (HERE / "pre-push.sh").read_text()
-        steps = [l.strip() for l in pre_push.splitlines() if l.strip().startswith('step "')]
-        self.assertLess(steps.index('step "cargo test --lib"'), steps.index('step "doc/CLI Rust tests (--all-features)"'))
-        self.assertLess(steps.index('step "CI script checks"'), steps.index('step "cargo fmt --check"'))
+        # Steps are declared `step "<name>"` or, for the keep-going cheap steps, `cheap "<name>" <fn>`.
+        steps = [l.strip().split('"')[1] for l in pre_push.splitlines()
+                 if l.strip().startswith(('step "', 'cheap "')) and '"$' not in l]
+        self.assertLess(steps.index("cargo test --lib"), steps.index("doc/CLI Rust tests (--all-features)"))
+        self.assertLess(steps.index("CI script checks"), steps.index("cargo fmt --check"))
         rust = [l.strip() for l in pre_push.splitlines() if "run_prepush_ci_checks.py --rust" in l and not l.lstrip().startswith("#")]
         self.assertEqual(len(rust), 1, rust)
         with tempfile.TemporaryDirectory() as tmp:
@@ -853,12 +855,10 @@ class Step(unittest.TestCase):
     # prints the PyYAML hint and stops when PyYAML is missing; no traceback.
     def test_p4_the_self_test_step_without_yaml_prints_the_hint(self):
         pre_push = (HERE / "pre-push.sh").read_text().splitlines()
-        start = pre_push.index('  step "CI-check gate self-tests"')
-        body = []
-        for text in pre_push[start + 1:]:
-            if not text.strip() or text.strip().startswith("step "):
-                break
-            body.append(text)
+        self.assertIn('  cheap "CI-check gate self-tests" ci_selftest_step', pre_push)
+        start = pre_push.index("  ci_selftest_step() {")
+        body = pre_push[start:pre_push.index("  }", start) + 1]
+        body.append("  ci_selftest_step")  # define it, then call it as `cheap` would
         self.assertTrue(any("test_prepush_ci_checks.py" in t for t in body), body)
         with tempfile.TemporaryDirectory() as tmp:
             d = pathlib.Path(tmp)
