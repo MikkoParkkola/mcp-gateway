@@ -53,6 +53,87 @@ impl TestDirKeep {
     }
 }
 
+// The registry of kept temp dirs (MIK-8986 part 2). A transparency log opened
+// inside a dir from `kept_tempdir()` keeps that dir, and every registered dir
+// containing it, until its last handle drops; a log opened in an unregistered
+// temp dir is reported. The registry holds only `Weak`s, so it never keeps a
+// dir alive by itself.
+// STUB (red commit): every function below is a placeholder the rows fail on.
+
+/// A temp dir that any transparency log opened inside it keeps.
+pub(crate) fn kept_tempdir() -> Arc<tempfile::TempDir> {
+    Arc::new(tempfile::tempdir().expect("a temp dir"))
+}
+
+/// [`kept_tempdir`], created inside `parent`.
+pub(crate) fn kept_tempdir_in(parent: &Path) -> Arc<tempfile::TempDir> {
+    Arc::new(tempfile::tempdir_in(parent).expect("a temp dir"))
+}
+
+/// Every live registered dir that contains `path`.
+pub(crate) fn kept_dirs_for(_path: &Path) -> Vec<Arc<tempfile::TempDir>> {
+    Vec::new()
+}
+
+/// `path` with its deepest existing ancestor canonicalised.
+pub(crate) fn norm(path: &Path) -> std::path::PathBuf {
+    path.to_path_buf()
+}
+
+/// Whether `dir` contains `path`, compared per path component.
+pub(crate) fn contains(_dir: &Path, _path: &Path) -> bool {
+    false
+}
+
+/// Whether `path` lies under the process temp dir.
+pub(crate) fn under_temp_root(_path: &Path) -> bool {
+    false
+}
+
+/// The dirs a parent test process keeps, from `MCP_GATEWAY_TEST_KEPT_DIRS`'s format.
+pub(crate) fn parse_external(_list: &std::ffi::OsStr) -> Vec<std::path::PathBuf> {
+    Vec::new()
+}
+
+/// Whether one of `external` contains `path`.
+pub(crate) fn is_external_in(_external: &[std::path::PathBuf], _path: &Path) -> bool {
+    false
+}
+
+/// Report a log opened at `path` that keeps no registered dir.
+pub(crate) fn report_unkept(_path: &Path) {}
+
+/// While held, an unkept open on this thread is recorded here instead of
+/// reported, for a row that opens one on purpose.
+pub(crate) struct ExpectUnkept(());
+
+pub(crate) fn expect_unkept() -> ExpectUnkept {
+    ExpectUnkept(())
+}
+
+impl ExpectUnkept {
+    /// The unkept opens recorded so far, in order: each path and the test
+    /// it is attributed to.
+    pub(crate) fn recorded(&self) -> Vec<(std::path::PathBuf, String)> {
+        Vec::new()
+    }
+}
+
+/// The normalised paths of the registry's entries, live or not yet pruned.
+pub(crate) fn registered_paths() -> Vec<std::path::PathBuf> {
+    Vec::new()
+}
+
+/// A row's checkpoint: `f` runs once, on this thread, inside the next log
+/// open after its kept-dir lookup and before any filesystem call.
+pub(crate) fn before_first_fs_call(_f: impl FnOnce() + 'static) {}
+
+/// Run and clear this thread's checkpoint, if one is set.
+pub(crate) fn run_before_first_fs_call() {}
+
+#[path = "test_dir_keep_registry_tests.rs"]
+mod registry_tests;
+
 #[cfg(test)]
 mod tests {
     use super::*;

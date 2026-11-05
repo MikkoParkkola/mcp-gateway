@@ -198,4 +198,8 @@ fn the_scan_tells_a_kept_log_from_an_unkept_one() {
     assert!(!unkept(
         "let log = TransparencyLogger::open(cfg).unwrap();\nlog.keep_test_dir(dir);"
     ));
+    // R14 (MIK-8986 part 2): a dir from `kept_tempdir()` is kept by the open.
+    assert!(!unkept(
+        "let dir = kept_tempdir();\nlet log = TransparencyLogger::open(cfg).unwrap();"
+    ));
 }
