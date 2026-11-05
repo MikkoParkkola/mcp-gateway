@@ -266,16 +266,19 @@ async fn a_capability_replay_records_its_live_definitions_effect() {
     assert_eq!(decision["declared_effect_source"], "capability_definition", "{decision}");
 }
 
-/// A capability whose definition was removed before the replay: no effect.
+/// A capability whose definition was removed records no effect. The route
+/// stage admits no replay of a removed definition (its repeat is not
+/// admitted as one), so this calls `audit_replay` with the facts a stored
+/// capability replay carries, after the unload.
 #[tokio::test]
 async fn a_capability_replay_of_a_removed_definition_records_none() {
     let dir = tempfile::tempdir().unwrap();
     let (meta, caps) = with_caps(&dir, true);
-    let (_, decision) = replayed(&meta, &dir, ("c-gone", &caps_args()), (Route::Http, First::Unnoted), || {
-        assert!(caps.unload_capability("lookup"), "premise: unloaded");
-    })
-    .await;
-    assert_no_effect(&decision);
+    assert!(caps.unload_capability("lookup"), "premise: unloaded");
+    replay_caps(&meta).await;
+    let all = records(&dir);
+    assert_eq!(all.len(), 1, "{all:?}");
+    assert_no_effect(&all[0]["decision"]);
 }
 
 /// Hides the provider `caps` from the caller.
