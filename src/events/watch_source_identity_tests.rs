@@ -11,6 +11,7 @@ use serde_json::json;
 use super::*;
 
 /// What a test watch row carries besides its recorded class.
+#[derive(Clone, Copy)]
 enum Carries<'a> {
     /// Nothing more: a plain watch row.
     Plain,
