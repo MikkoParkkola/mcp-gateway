@@ -96,7 +96,7 @@ async fn a_pending_journal_with_a_failing_intent_changes_nothing() {
     .await;
 
     assert!(
-        matches!(result, Err(ReplaceError::Refused(_))),
+        matches!(result, Err(ReplaceError::AuditRefused(_))),
         "{result:?}"
     );
     assert_eq!(read(&path), NEXT, "the crashed bytes were recovered");
@@ -187,7 +187,7 @@ async fn an_intent_failure_writes_nothing() {
     .await;
 
     assert!(
-        matches!(result, Err(ReplaceError::Refused(_))),
+        matches!(result, Err(ReplaceError::AuditRefused(_))),
         "{result:?}"
     );
     assert_eq!(read(&path), START);

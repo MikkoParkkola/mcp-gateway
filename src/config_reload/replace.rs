@@ -241,6 +241,7 @@ pub(crate) mod order {
     }
 
     /// The events recorded for `target`, in order, cleared.
+    #[cfg(feature = "webui")]
     pub(crate) fn take(target: &Path) -> Vec<&'static str> {
         let mut all = EVENTS.lock().expect("order");
         let mine = all
