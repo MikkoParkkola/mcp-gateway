@@ -385,7 +385,7 @@ pub(crate) struct CapabilityAccount {
     log: Arc<crate::security::TransparencyLogger>,
     kind: AccountKind,
     personal: bool,
-    log_dir: tempfile::TempDir,
+    log_dir: std::sync::Arc<tempfile::TempDir>,
     /// Test-only (MIK-8428 Case A): see [`ReleaseBudget`].
     release_budget: Arc<Mutex<Option<usize>>>,
     /// MIK-8407: `PERSONAL` is installed too, for a capability re-bind.
@@ -441,7 +441,7 @@ impl CapabilityAccount {
             account_key("alice", WORK),
             grant(ALICE_WORK_TOKEN, expires_at),
         )]);
-        let dir = tempfile::tempdir().expect("a log directory");
+        let dir = std::sync::Arc::new(tempfile::tempdir().expect("a log directory"));
         let log = crate::gateway::meta_mcp::grant_audit_fixture::logger(
             &dir,
             crate::security::audit::AuditFailurePolicy::BestEffort,

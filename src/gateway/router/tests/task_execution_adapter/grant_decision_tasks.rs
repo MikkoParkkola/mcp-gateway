@@ -118,23 +118,11 @@ async fn cancelled_worker_on_stalled_log_writes_through_the_bound() {
     while row.log.refused_under_stall_for_test() == 0 && tokio::time::Instant::now() < deadline {
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
-    release();
+    row.log.release_and_drain(release).await;
     row.endpoint.release();
     assert!(
         row.log.refused_under_stall_for_test() >= 1,
         "the cancelled slot's pending note went through the bounded path"
-    );
-    // The released write still runs on the blocking pool: wait for it, so it
-    // never lands while the row's log folder is being removed (a late `.hwm`
-    // and record would keep the folder).
-    let late = Arc::clone(&row.log);
-    assert!(
-        tokio::task::spawn_blocking(move || {
-            late.wait_write_cleared_for_test(crate::test_wait::HANG_BOUND)
-        })
-        .await
-        .expect("the wait does not panic"),
-        "the released audit write finishes"
     );
 }
 
