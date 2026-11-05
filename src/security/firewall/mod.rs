@@ -34,13 +34,13 @@ mod allowed_root;
 /// rule-listable.
 #[cfg(feature = "webui")]
 pub(crate) use allowed_root::OUTPUT_ONLY;
-/// The relay gate's inferred sensitive classes, for the Policies screen.
-#[cfg(feature = "webui")]
-pub(crate) use collusion_gate::SENSITIVE_CLASSES;
 pub(crate) use allowed_root::ScanSubject;
 #[cfg(test)]
 pub(crate) use allowed_root::plain_rule;
 pub(crate) use allowed_root::warn_at_load as warn_folder_rules_at_load;
+/// The relay gate's inferred sensitive classes, for the Policies screen.
+#[cfg(feature = "webui")]
+pub(crate) use collusion_gate::SENSITIVE_CLASSES;
 pub mod anomaly;
 pub(crate) mod anomaly_config;
 mod anomaly_gate;

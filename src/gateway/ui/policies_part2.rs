@@ -14,8 +14,8 @@ use super::policies_rules::{decides, name, offered};
 use crate::security::firewall::memory_scanner::MemoryScanner;
 use crate::security::firewall::tenant_guard::CrossTenantReads;
 use crate::security::firewall::{
-    CollusionAction, CollusionView, FirewallAction, FirewallConfig, FirewallRule, SENSITIVE_CLASSES,
-    ScanType,
+    CollusionAction, CollusionView, FirewallAction, FirewallConfig, FirewallRule,
+    SENSITIVE_CLASSES, ScanType,
 };
 use crate::security::posture::SecurityPosture;
 
@@ -52,7 +52,10 @@ pub(super) fn sections(sources: &Sources<'_>) -> [(&'static str, Value); 4] {
         ("scan_types", scan_types(file, run)),
         ("guards", guards(file, run, posture)),
         ("credentials", credentials(file, run)),
-        ("relay", relay(file, run, sources.generation.collusion_view())),
+        (
+            "relay",
+            relay(file, run, sources.generation.collusion_view()),
+        ),
     ]
 }
 
@@ -66,11 +69,25 @@ fn scan_types(file: &FirewallConfig, run: &FirewallConfig) -> Value {
             let (side, mut pre) = match t {
                 ScanType::Credentials | ScanType::PromptInjection => (
                     "answer",
-                    vec![firewall, switch(&fw_path("scan_responses"), file.scan_responses, run.scan_responses)],
+                    vec![
+                        firewall,
+                        switch(
+                            &fw_path("scan_responses"),
+                            file.scan_responses,
+                            run.scan_responses,
+                        ),
+                    ],
                 ),
                 _ => (
                     "call",
-                    vec![firewall, switch(&fw_path("scan_requests"), file.scan_requests, run.scan_requests)],
+                    vec![
+                        firewall,
+                        switch(
+                            &fw_path("scan_requests"),
+                            file.scan_requests,
+                            run.scan_requests,
+                        ),
+                    ],
                 ),
             };
             match t {
@@ -87,7 +104,11 @@ fn scan_types(file: &FirewallConfig, run: &FirewallConfig) -> Value {
                 )),
                 ScanType::MemoryPoisoning => {
                     let (f, r) = (&file.memory_poisoning, &run.memory_poisoning);
-                    pre.push(switch(&fw_path("memory_poisoning.enabled"), f.enabled, r.enabled));
+                    pre.push(switch(
+                        &fw_path("memory_poisoning.enabled"),
+                        f.enabled,
+                        r.enabled,
+                    ));
                     pre.push(tool_list(f.scan_tools.clone(), r));
                 }
                 _ => {}
@@ -102,10 +123,20 @@ fn scan_types(file: &FirewallConfig, run: &FirewallConfig) -> Value {
 /// The memory scanner's tool list. It is on when some entry can match a
 /// tool, as the scanner itself judges it: a tool named like the entry is
 /// matched only when the entry can match at all.
-fn tool_list(file: Vec<String>, run: &crate::security::firewall::memory_scanner::MemoryPoisoningConfig) -> Value {
+fn tool_list(
+    file: Vec<String>,
+    run: &crate::security::firewall::memory_scanner::MemoryPoisoningConfig,
+) -> Value {
     let scanner = MemoryScanner::new(run.clone());
-    let on = run.scan_tools.iter().any(|e| scanner.is_memory_write_tool(e));
-    let mut s = setting(&fw_path("memory_poisoning.scan_tools"), json!(file), json!(run.scan_tools));
+    let on = run
+        .scan_tools
+        .iter()
+        .any(|e| scanner.is_memory_write_tool(e));
+    let mut s = setting(
+        &fw_path("memory_poisoning.scan_tools"),
+        json!(file),
+        json!(run.scan_tools),
+    );
     s["on"] = json!(on);
     s
 }
@@ -218,11 +249,14 @@ fn credentials(file: &FirewallConfig, run: &FirewallConfig) -> Value {
         Some(at) => {
             let (mut full, mut partly) = (Vec::new(), Vec::new());
             for (j, earlier) in rules[..at].iter().enumerate() {
-                if !decides(earlier).contains(&ScanType::Credentials) || excludes_every_call(earlier) {
+                if !decides(earlier).contains(&ScanType::Credentials)
+                    || excludes_every_call(earlier)
+                {
                     continue;
                 }
                 let path = format!("{FW}.rules[{j}]");
-                let unscoped = earlier.servers.is_none() && earlier.keys.is_none() && earlier.except.is_none();
+                let unscoped =
+                    earlier.servers.is_none() && earlier.keys.is_none() && earlier.except.is_none();
                 if earlier.tool_match == "*" && unscoped {
                     full.push(path);
                 } else {
@@ -260,14 +294,20 @@ fn relay(file: &FirewallConfig, run: &FirewallConfig, view: &CollusionView) -> V
     let (want_sources, want_non_egress, want_flows) = wanted.lists();
     let (sources, non_egress, flows) = view.lists();
     let flow_json = |f: &[(String, String)]| -> Value {
-        json!(f.iter().map(|(s, e)| json!({ "source": s, "egress": e })).collect::<Vec<_>>())
+        json!(
+            f.iter()
+                .map(|(s, e)| json!({ "source": s, "egress": e }))
+                .collect::<Vec<_>>()
+        )
     };
     let effect = match view.action() {
         CollusionAction::Off => "checks_nothing",
         CollusionAction::Observe => "records_and_allows",
         CollusionAction::Block => "refuses_relays_and_unkeyed_egress",
     };
-    let (rc, s) = (&run.collusion, |f: &str, a: Value, b: Value| setting(&path(f), a, b));
+    let (rc, s) = (&run.collusion, |f: &str, a: Value, b: Value| {
+        setting(&path(f), a, b)
+    });
     json!({
         "action": setting_pending(&path("action"), json!(c.action), json!(view.action()), wanted.action() != view.action()),
         "effect": effect,

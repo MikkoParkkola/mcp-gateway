@@ -81,7 +81,10 @@ pub(super) fn offered() -> Vec<ScanType> {
 
 /// The scan types a rule decides, in `ScanType` order.
 fn decided() -> Vec<ScanType> {
-    rule_listable().into_iter().filter(|t| class(*t).1).collect()
+    rule_listable()
+        .into_iter()
+        .filter(|t| class(*t).1)
+        .collect()
 }
 
 /// A scan type's config spelling.
@@ -124,7 +127,11 @@ pub(super) fn decides(rule: &FirewallRule) -> Vec<ScanType> {
     let mut types: Vec<ScanType> = if rule.scan.is_empty() {
         decided
     } else {
-        rule.scan.iter().copied().filter(|t| decided.contains(t)).collect()
+        rule.scan
+            .iter()
+            .copied()
+            .filter(|t| decided.contains(t))
+            .collect()
     };
     types.sort_by_key(|t| ALL.iter().position(|a| a == t));
     types.dedup();

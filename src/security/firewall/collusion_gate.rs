@@ -294,7 +294,8 @@ fn detector_for(config: &CollusionConfig) -> Arc<CollusionDetector> {
 pub(super) const RECORD_CAP: usize = 6 * 1024;
 
 /// A context-integrity data class that makes a delivery sensitive.
-pub(crate) const SENSITIVE_CLASSES: [&str; 3] = ["personal_data", "financial_data", "guarded_material"];
+pub(crate) const SENSITIVE_CLASSES: [&str; 3] =
+    ["personal_data", "financial_data", "guarded_material"];
 
 impl Firewall {
     /// Record into and check against `other`'s relay detector, when there is

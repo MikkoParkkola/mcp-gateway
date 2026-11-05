@@ -7,26 +7,9 @@
 
 use serde_json::{Value, json};
 
-use super::policies_test_support::{read_model, reloaded};
+use super::policies_test_support::{FW, read_model, reloaded, setting, switch};
 use crate::config::Config;
 use crate::security::firewall::memory_scanner::MemoryScanner;
-
-/// A setting as the read model reports it.
-fn setting(path: &str, file: Value, enforced: Value) -> Value {
-    json!({
-        "path": path,
-        "file": file,
-        "enforced": enforced,
-        "pending_restart": file != enforced,
-    })
-}
-
-/// A boolean precondition, `on` when its enforced value is.
-fn switch(path: &str, file: bool, enforced: bool) -> Value {
-    let mut s = setting(path, json!(file), json!(enforced));
-    s["on"] = json!(enforced);
-    s
-}
 
 /// The scan type entry `ty`.
 fn scan_type<'a>(model: &'a Value, ty: &str) -> &'a Value {
@@ -50,7 +33,6 @@ fn produced(model: &Value, ty: &str) -> bool {
         .unwrap_or_else(|| panic!("{ty}.produced: {model}"))
 }
 
-const FW: &str = "security.firewall";
 const CALL_SIDE: [&str; 4] = [
     "shell_injection",
     "path_traversal",
@@ -85,7 +67,11 @@ fn r4a_the_offered_types_with_sides_and_preconditions() {
     let on = |name: &str| switch(&format!("{FW}.{name}"), true, true);
     let expected = |ty: &str| -> Vec<Value> {
         match ty {
-            "credentials" => vec![on("enabled"), on("scan_responses"), on("credential_redaction")],
+            "credentials" => vec![
+                on("enabled"),
+                on("scan_responses"),
+                on("credential_redaction"),
+            ],
             "prompt_injection" => vec![
                 on("enabled"),
                 on("scan_responses"),
@@ -93,7 +79,11 @@ fn r4a_the_offered_types_with_sides_and_preconditions() {
             ],
             "memory_poisoning" => {
                 let tools = json!(["remember", "batch_remember", "store", "kv_set", "kv_search"]);
-                let mut list = setting(&format!("{FW}.memory_poisoning.scan_tools"), tools.clone(), tools);
+                let mut list = setting(
+                    &format!("{FW}.memory_poisoning.scan_tools"),
+                    tools.clone(),
+                    tools,
+                );
                 list["on"] = json!(true);
                 vec![
                     on("enabled"),
@@ -107,7 +97,11 @@ fn r4a_the_offered_types_with_sides_and_preconditions() {
     };
     for ty in &types {
         let entry = scan_type(&model, ty);
-        let side = if ANSWER_SIDE.contains(ty) { "answer" } else { "call" };
+        let side = if ANSWER_SIDE.contains(ty) {
+            "answer"
+        } else {
+            "call"
+        };
         assert_eq!(entry["sides"], json!([side]), "{ty}");
         assert_eq!(entry["preconditions"], json!(expected(ty)), "{ty}");
         assert!(produced(&model, ty), "{ty}");
@@ -131,7 +125,10 @@ fn r4b_a_types_own_switch_stops_that_type_alone() {
         }
         let model = read_model(&config);
         let path = format!("{FW}.{field}");
-        assert_eq!(precondition(&model, stopped, &path), &switch(&path, false, false));
+        assert_eq!(
+            precondition(&model, stopped, &path),
+            &switch(&path, false, false)
+        );
         for ty in ANSWER_SIDE.iter().chain(&CALL_SIDE) {
             assert_eq!(produced(&model, ty), *ty != stopped, "{field}: {ty}");
         }
@@ -168,7 +165,10 @@ fn r4c_a_sides_switch_and_the_firewall_switch() {
     for ty in ANSWER_SIDE.iter().chain(&CALL_SIDE) {
         assert!(!produced(&model, ty), "{ty}");
         let path = format!("{FW}.enabled");
-        assert_eq!(precondition(&model, ty, &path), &switch(&path, false, false));
+        assert_eq!(
+            precondition(&model, ty, &path),
+            &switch(&path, false, false)
+        );
     }
 }
 
@@ -178,7 +178,12 @@ fn tool_list(tools: &[&str]) -> Value {
     config.security.firewall.memory_poisoning.scan_tools =
         tools.iter().map(|t| (*t).to_owned()).collect();
     let model = read_model(&config);
-    precondition(&model, "memory_poisoning", &format!("{FW}.memory_poisoning.scan_tools")).clone()
+    precondition(
+        &model,
+        "memory_poisoning",
+        &format!("{FW}.memory_poisoning.scan_tools"),
+    )
+    .clone()
 }
 
 /// R4d, R4g: the tool list is reported as configured; an empty list scans
@@ -194,7 +199,10 @@ fn r4d_the_memory_scanners_tool_list() {
     config.security.firewall.memory_poisoning.scan_tools = Vec::new();
     let model = read_model(&config);
     let path = format!("{FW}.memory_poisoning.scan_tools");
-    assert_eq!(precondition(&model, "memory_poisoning", &path)["on"], json!(false));
+    assert_eq!(
+        precondition(&model, "memory_poisoning", &path)["on"],
+        json!(false)
+    );
     assert!(!produced(&model, "memory_poisoning"));
 }
 
@@ -210,7 +218,10 @@ fn r4j_the_tool_list_follows_the_scanners_matcher() {
         .is_memory_write_tool("store");
     let model = read_model(&config);
     let path = format!("{FW}.memory_poisoning.scan_tools");
-    assert_eq!(precondition(&model, "memory_poisoning", &path)["on"], json!(scans));
+    assert_eq!(
+        precondition(&model, "memory_poisoning", &path)["on"],
+        json!(scans)
+    );
     assert_eq!(produced(&model, "memory_poisoning"), scans);
 }
 
@@ -239,7 +250,10 @@ fn r4e_a_reload_applies_live_fields_and_holds_restart_only_ones() {
         &switch(&responses, false, true)
     );
     assert!(!produced(&model, "credentials"), "redaction is off now");
-    assert!(produced(&model, "prompt_injection"), "scan_responses still runs");
+    assert!(
+        produced(&model, "prompt_injection"),
+        "scan_responses still runs"
+    );
 }
 
 fn guard<'a>(model: &'a Value, name: &str) -> &'a Value {
@@ -293,11 +307,18 @@ fn r5a_the_guards_and_their_settings() {
             same("budget.window_secs", json!(60)),
         ])
     );
-    assert_eq!(budget["rule_proof"], json!(["budget_limit", "budget_unattributable"]));
+    assert_eq!(
+        budget["rule_proof"],
+        json!(["budget_limit", "budget_unattributable"])
+    );
     assert_eq!(budget["rule_decidable"], json!([]));
 
     let reads = guard(&model, "tenant_reads");
-    assert_eq!(reads["running"], json!(false), "no arg_keys: nothing attributes");
+    assert_eq!(
+        reads["running"],
+        json!(false),
+        "no arg_keys: nothing attributes"
+    );
     assert_eq!(
         reads["mode"],
         same("tenant_guard.cross_tenant_reads", json!("observe"))
@@ -334,7 +355,10 @@ fn r5b_switched_on_guards_run() {
     let mut config = guards_on();
     config.security.firewall.anomaly_block_threshold = None;
     let model = read_model(&config);
-    assert_eq!(guard(&model, "anomaly")["rule_proof"], json!(["blind_no_identity"]));
+    assert_eq!(
+        guard(&model, "anomaly")["rule_proof"],
+        json!(["blind_no_identity"])
+    );
 
     let mut config = guards_on();
     config.security.firewall.scan_requests = false;
@@ -486,18 +510,50 @@ fn r6d_what_shadows_the_pinned_rule() {
         // R6d: an unscoped `*` rule deciding every type.
         (json!({ "match": "*", "action": "block" }), &first, &none),
         // R6e: scoped by key, a narrower match, and a scoped empty-scan rule.
-        (json!({ "match": "*", "action": "block", "scan": ["credentials"], "keys": ["k"] }), &none, &first),
-        (json!({ "match": "srv:*", "action": "block", "scan": ["credentials"] }), &none, &first),
-        (json!({ "match": "*", "action": "block", "keys": ["k"] }), &none, &first),
+        (
+            json!({ "match": "*", "action": "block", "scan": ["credentials"], "keys": ["k"] }),
+            &none,
+            &first,
+        ),
+        (
+            json!({ "match": "srv:*", "action": "block", "scan": ["credentials"] }),
+            &none,
+            &first,
+        ),
+        (
+            json!({ "match": "*", "action": "block", "keys": ["k"] }),
+            &none,
+            &first,
+        ),
         // R6f: a root rule, and a rule for a type no rule decides.
-        (json!({ "match": "*", "action": "block", "allowed_roots": ["/srv"], "path_args": ["p"] }), &none, &none),
-        (json!({ "match": "*", "action": "block", "scan": ["pii"] }), &none, &none),
+        (
+            json!({ "match": "*", "action": "block", "allowed_roots": ["/srv"], "path_args": ["p"] }),
+            &none,
+            &none,
+        ),
+        (
+            json!({ "match": "*", "action": "block", "scan": ["pii"] }),
+            &none,
+            &none,
+        ),
         // R6g: a universal exception applies to no call; `server: "*"` is
         // not universal (a call with no backend is still covered), nor is a
         // key.
-        (json!({ "match": "*", "action": "block", "scan": ["credentials"], "except": [{ "tool": "*" }] }), &none, &none),
-        (json!({ "match": "*", "action": "block", "scan": ["credentials"], "except": [{ "server": "*" }] }), &none, &first),
-        (json!({ "match": "*", "action": "block", "scan": ["credentials"], "except": [{ "key": "k" }] }), &none, &first),
+        (
+            json!({ "match": "*", "action": "block", "scan": ["credentials"], "except": [{ "tool": "*" }] }),
+            &none,
+            &none,
+        ),
+        (
+            json!({ "match": "*", "action": "block", "scan": ["credentials"], "except": [{ "server": "*" }] }),
+            &none,
+            &first,
+        ),
+        (
+            json!({ "match": "*", "action": "block", "scan": ["credentials"], "except": [{ "key": "k" }] }),
+            &none,
+            &first,
+        ),
     ] {
         let (shadowed, partly) = shadows_of_pinned(earlier.clone());
         assert_eq!(&shadowed, full, "{earlier}");
@@ -509,10 +565,17 @@ fn r6d_what_shadows_the_pinned_rule() {
 /// applies at once, `scan_responses` waits for a restart.
 #[test]
 fn r6h_the_credentials_switches() {
-    let sw = |name: &str, file: bool, enforced: bool| switch(&format!("{FW}.{name}"), file, enforced);
+    let sw =
+        |name: &str, file: bool, enforced: bool| switch(&format!("{FW}.{name}"), file, enforced);
     let model = read_model(&Config::default());
-    assert_eq!(model["credentials"]["redaction"], sw("credential_redaction", true, true));
-    assert_eq!(model["credentials"]["scan_responses"], sw("scan_responses", true, true));
+    assert_eq!(
+        model["credentials"]["redaction"],
+        sw("credential_redaction", true, true)
+    );
+    assert_eq!(
+        model["credentials"]["scan_responses"],
+        sw("scan_responses", true, true)
+    );
     assert_eq!(model["credentials"]["firewall"], sw("enabled", true, true));
     for field in ["credential_redaction", "scan_responses", "enabled"] {
         let mut config = Config::default();
@@ -528,192 +591,23 @@ fn r6h_the_credentials_switches() {
             "enabled" => "firewall",
             other => other,
         };
-        assert_eq!(model["credentials"][key], sw(field, false, false), "{field}");
+        assert_eq!(
+            model["credentials"][key],
+            sw(field, false, false),
+            "{field}"
+        );
     }
     let startup = Config::default();
     let mut next = startup.clone();
     next.security.firewall.credential_redaction = false;
     next.security.firewall.scan_responses = false;
     let model = reloaded(&startup, &[&next]);
-    assert_eq!(model["credentials"]["redaction"], sw("credential_redaction", false, false));
-    assert_eq!(model["credentials"]["scan_responses"], sw("scan_responses", false, true));
-}
-
-const RELAY: &str = "security.firewall.collusion";
-
-fn relay_config(f: impl FnOnce(&mut crate::security::firewall::CollusionConfig)) -> Config {
-    let mut config = Config::default();
-    f(&mut config.security.firewall.collusion);
-    config
-}
-
-fn flows(pairs: &[(&str, &str)]) -> Vec<crate::security::firewall::AllowedFlow> {
-    pairs
-        .iter()
-        .map(|(s, e)| crate::security::firewall::AllowedFlow {
-            source: (*s).to_owned(),
-            egress: (*e).to_owned(),
-        })
-        .collect()
-}
-
-/// R7a: each action with what it does.
-#[test]
-fn r7a_each_relay_action_with_its_effect() {
-    use crate::security::firewall::CollusionAction;
-    for (action, name, effect) in [
-        (CollusionAction::Off, "off", "checks_nothing"),
-        (CollusionAction::Observe, "observe", "records_and_allows"),
-        (CollusionAction::Block, "block", "refuses_relays_and_unkeyed_egress"),
-    ] {
-        let model = read_model(&relay_config(|c| c.action = action));
-        let relay = &model["relay"];
-        assert_eq!(relay["action"], setting(&format!("{RELAY}.action"), json!(name), json!(name)));
-        assert_eq!(relay["effect"], json!(effect), "{name}");
-    }
-}
-
-/// R7b, R7e: the lists with their paths, the gate's own inferred classes,
-/// read-only; the firewall precondition and the detector settings.
-#[test]
-fn r7b_the_relay_lists_classes_and_precondition() {
-    let model = read_model(&relay_config(|c| {
-        c.sources = vec!["crm:*".to_owned()];
-        c.non_egress = vec!["notes:read_*".to_owned()];
-        c.allowed_flows = flows(&[("docs:read", "mail:send_*")]);
-    }));
-    let relay = &model["relay"];
-    let same = |name: &str, v: Value| setting(&format!("{RELAY}.{name}"), v.clone(), v);
-    assert_eq!(relay["sources"], same("sources", json!(["crm:*"])));
-    assert_eq!(relay["non_egress"], same("non_egress", json!(["notes:read_*"])));
     assert_eq!(
-        relay["allowed_flows"],
-        same("allowed_flows", json!([{ "source": "docs:read", "egress": "mail:send_*" }]))
+        model["credentials"]["redaction"],
+        sw("credential_redaction", false, false)
     );
     assert_eq!(
-        relay["inferred_classes"],
-        json!(crate::security::firewall::SENSITIVE_CLASSES)
+        model["credentials"]["scan_responses"],
+        sw("scan_responses", false, true)
     );
-    assert_eq!(relay["read_only"], json!(true));
-    assert_eq!(relay["firewall"], switch(&format!("{FW}.enabled"), true, true));
-    assert_eq!(
-        relay["detector"],
-        json!([
-            same("window_secs", json!(600)),
-            same("min_matches", json!(2)),
-            same("common_principals", json!(5)),
-        ])
-    );
-
-    let mut config = Config::default();
-    config.security.firewall.enabled = false;
-    let model = read_model(&config);
-    assert_eq!(model["relay"]["firewall"], switch(&format!("{FW}.enabled"), false, false));
-}
-
-/// The relay's four live fields, each as `setting` with file and enforced.
-fn relay_fields(model: &Value) -> [&Value; 4] {
-    let r = &model["relay"];
-    [&r["action"], &r["sources"], &r["non_egress"], &r["allowed_flows"]]
-}
-
-/// A reload that sets every live relay field.
-fn relay_edit(base: &Config, action: crate::security::firewall::CollusionAction, tag: &str) -> Config {
-    let mut next = base.clone();
-    let c = &mut next.security.firewall.collusion;
-    c.action = action;
-    c.sources = vec![format!("{tag}:src")];
-    c.non_egress = vec![format!("{tag}:ne")];
-    c.allowed_flows = flows(&[(&format!("{tag}:a"), &format!("{tag}:b"))]);
-    next
-}
-
-/// The four live fields as a config with them would report, file = enforced.
-fn applied_fields(action: &str, tag: &str) -> [Value; 4] {
-    let same = |name: &str, v: Value| setting(&format!("{RELAY}.{name}"), v.clone(), v);
-    [
-        same("action", json!(action)),
-        same("sources", json!([format!("{tag}:src")])),
-        same("non_egress", json!([format!("{tag}:ne")])),
-        same(
-            "allowed_flows",
-            json!([{ "source": format!("{tag}:a"), "egress": format!("{tag}:b") }]),
-        ),
-    ]
-}
-
-/// R7c: a reload of the four live fields alone applies at once.
-#[test]
-fn r7c_a_live_relay_edit_applies() {
-    use crate::security::firewall::CollusionAction;
-    let startup = Config::default();
-    let next = relay_edit(&startup, CollusionAction::Observe, "one");
-    let model = reloaded(&startup, &[&next]);
-    let expected = applied_fields("observe", "one");
-    assert_eq!(relay_fields(&model), expected.each_ref());
-    assert_eq!(model["relay"]["effect"], json!("records_and_allows"));
-}
-
-/// R7d, R7d2: a reload that also changes a detector setting waits for a
-/// restart, and the gate keeps the view applied last, which after a first
-/// live edit is that edit's, not the startup config's.
-#[test]
-fn r7d_a_detector_change_keeps_the_applied_view() {
-    use crate::security::firewall::CollusionAction;
-    let startup = Config::default();
-    let first = relay_edit(&startup, CollusionAction::Observe, "one");
-    let mut second = relay_edit(&first, CollusionAction::Block, "two");
-    second.security.firewall.collusion.window_secs = 900;
-    let model = reloaded(&startup, &[&first, &second]);
-    let file = applied_fields("block", "two");
-    let enforced = applied_fields("observe", "one");
-    for ((got, f), e) in relay_fields(&model).iter().zip(&file).zip(&enforced) {
-        assert_eq!(got["file"], f["file"], "{got}");
-        assert_eq!(got["enforced"], e["enforced"], "{got}");
-        assert_eq!(got["pending_restart"], json!(true), "{got}");
-    }
-    assert_eq!(model["relay"]["effect"], json!("records_and_allows"), "the enforced action");
-    assert_eq!(
-        model["relay"]["detector"][0],
-        setting(&format!("{RELAY}.window_secs"), json!(900), json!(600))
-    );
-}
-
-/// R7f: with the firewall off at startup no live relay edit applies.
-#[test]
-fn r7f_no_live_relay_edit_without_a_running_firewall() {
-    let mut startup = Config::default();
-    startup.security.firewall.enabled = false;
-    let mut next = startup.clone();
-    next.security.firewall.collusion.sources = vec!["late:*".to_owned()];
-    let model = reloaded(&startup, &[&next]);
-    assert_eq!(
-        model["relay"]["sources"],
-        setting(&format!("{RELAY}.sources"), json!(["late:*"]), json!([]))
-    );
-}
-
-/// R7g: `off` loads lists the gate cannot compile (an invalid glob, more
-/// than 64 flows); once applied they are not reported as waiting for a
-/// restart, since the enforced view is what compiling them gives.
-#[test]
-fn r7g_uncompilable_entries_are_not_pending() {
-    let startup = Config::default();
-    let mut next = startup.clone();
-    let c = &mut next.security.firewall.collusion;
-    c.sources = vec!["[".to_owned(), "ok:*".to_owned()];
-    c.non_egress = vec!["[".to_owned()];
-    let many: Vec<(String, String)> = (0..65).map(|i| (format!("s{i}"), format!("e{i}"))).collect();
-    let pairs: Vec<(&str, &str)> = many.iter().map(|(s, e)| (s.as_str(), e.as_str())).collect();
-    c.allowed_flows = flows(&pairs);
-    let model = reloaded(&startup, &[&next]);
-    let relay = &model["relay"];
-    assert_eq!(relay["sources"]["file"], json!(["[", "ok:*"]));
-    assert_eq!(relay["sources"]["enforced"], json!(["ok:*"]));
-    assert_eq!(relay["non_egress"]["enforced"], json!([]));
-    assert_eq!(relay["allowed_flows"]["file"].as_array().map(Vec::len), Some(65));
-    assert_eq!(relay["allowed_flows"]["enforced"].as_array().map(Vec::len), Some(64));
-    for field in relay_fields(&model) {
-        assert_eq!(field["pending_restart"], json!(false), "{field}");
-    }
 }

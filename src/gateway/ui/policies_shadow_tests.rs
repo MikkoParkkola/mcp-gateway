@@ -116,7 +116,11 @@ fn r3f_shadow_eligibility_is_not_editability() {
             earlier.clone(),
             { "match": "send_*", "action": "warn", "scan": ["shell_injection"], "servers": ["mail"] }
         ])));
-        assert_eq!(shadowed(&model, 1), vec![sh("shell_injection", &[0])], "{earlier}");
+        assert_eq!(
+            shadowed(&model, 1),
+            vec![sh("shell_injection", &[0])],
+            "{earlier}"
+        );
     }
 }
 
@@ -215,8 +219,9 @@ fn r9_where_a_scoped_rule_applies_differently() {
         );
     }
     // R9e: present-but-empty scoping annotates as present (firewall off).
-    let mut config =
-        rules(json!([{ "match": "*", "action": "block", "scan": ["shell_injection"], "keys": [] }]));
+    let mut config = rules(
+        json!([{ "match": "*", "action": "block", "scan": ["shell_injection"], "keys": [] }]),
+    );
     config.security.firewall.enabled = false;
     assert_eq!(
         rule(&read_model(&config), 0)["scope_differs"]["key_not_known"],
@@ -465,7 +470,9 @@ fn r2h_only_the_six_offered_types_are_editable() {
         "collusion_relay",
     ];
     for ty in OFFERED.iter().chain(&unoffered) {
-        let model = read_model(&rules(json!([{ "match": "*", "action": "warn", "scan": [ty] }])));
+        let model = read_model(&rules(
+            json!([{ "match": "*", "action": "warn", "scan": [ty] }]),
+        ));
         let reasons = if OFFERED.contains(ty) {
             json!([])
         } else {

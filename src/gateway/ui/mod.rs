@@ -33,13 +33,15 @@ mod keys;
 mod overview;
 mod policies;
 #[cfg(feature = "firewall")]
-mod policies_rules;
-#[cfg(all(test, feature = "firewall"))]
-mod policies_shadow_tests;
-#[cfg(feature = "firewall")]
 mod policies_part2;
 #[cfg(all(test, feature = "firewall"))]
 mod policies_part2_tests;
+#[cfg(all(test, feature = "firewall"))]
+mod policies_relay_tests;
+#[cfg(feature = "firewall")]
+mod policies_rules;
+#[cfg(all(test, feature = "firewall"))]
+mod policies_shadow_tests;
 #[cfg(test)]
 mod policies_test_support;
 #[cfg(test)]
