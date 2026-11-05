@@ -32,10 +32,13 @@ src/capability/executor/client.rs	configured	refuse_hop	2	recorded	refuse_hop ra
 src/capability/executor/client.rs	configured	refuse_loopback_name	1	feeds	a redirect hop naming loopback: refuse_hop delivers it and raises refused while vouched
 src/capability/executor/client.rs	send_with_retry	note_redirect_refusal	2	recorded	a cleartext downgrade the redirect policy refused (RedirectRefused): the send raises refused while vouched, on both send paths; the caller still receives the transport error
 src/capability/executor/client.rs	send_with_retry	ssrf_refusal	2	recorded	a capability HTTP call the SSRF guard refuses: both send paths raise refused while vouched
-src/capability/executor/credentials.rs	refresh_provider_token	is_ssrf_refusal	1	not-delivered	predicate: a refresh-flight destination refusal is recorded before the config wrap hides it
+src/capability/executor/credentials.rs	refresh_provider_token	is_ssrf_refusal	2	not-delivered	predicate: a destination refusal of the token endpoint, or of the refresh flight before the config wrap hides it, is recorded; a malformed URL is not
+src/capability/executor/graphql.rs	execute	is_ssrf_refusal	1	not-delivered	predicate: only a destination refusal of the endpoint records refused; a malformed URL is a configuration error
 src/capability/executor/graphql.rs	execute	refuse_loopback_name	1	recorded	a GraphQL endpoint naming loopback: the call site raises refused while vouched
+src/capability/executor/jsonrpc.rs	execute	is_ssrf_refusal	1	not-delivered	predicate: only a destination refusal of the endpoint records refused; a malformed URL is a configuration error
 src/capability/executor/jsonrpc.rs	execute	refuse_loopback_name	1	recorded	a JSON-RPC endpoint naming loopback: the call site raises refused while vouched
 src/capability/executor/mcp.rs	execute_mcp	refuse_egress	1	recorded	an MCP capability naming a network destination: the call site raises refused while vouched
+src/capability/executor/mod.rs	execute_provider_with_context	is_ssrf_refusal	1	not-delivered	predicate: only a destination refusal of the REST URL records refused; a malformed URL is a configuration error
 src/capability/loader.rs	load_capability_file	refuse_unloadable	1	no-record	capability load
 src/capability/openapi/convert.rs	fetch_error_message	ssrf_refusal	1	no-record	OpenAPI import (admin UI), not a call
 src/commands/config_write.rs	rewrite_url_aliases_in	refuse_unreadable	2	no-record	a CLI config rewrite

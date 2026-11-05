@@ -115,24 +115,29 @@ async fn a_private_destination_records_refused_for_each_protocol() {
     assert!(fails.is_empty(), "{fails:#?}");
 }
 
-/// A URL with no host is a configuration error, not a refusal: it is
-/// answered as before and records nothing refused.
+/// A malformed URL (no host, not absolute, unparsable) is a configuration
+/// error, not a refusal: it is answered as before and records nothing
+/// refused.
 #[tokio::test]
 async fn a_hostless_url_records_no_refusal() {
     let mut fails = Vec::new();
-    for (service, target) in [
-        ("rest", "file:///tmp/rest"),
-        ("graphql", "file:///tmp/rpc"),
-        ("jsonrpc", "file:///tmp/rpc"),
+    for (target, says) in [
+        ("file:///tmp/rpc", "has no host"),
+        ("rpc-path-only", "not absolute"),
+        ("http://[::1/rpc", "Invalid URL"),
     ] {
-        let (error, effect) = Box::pin(call(service, target, false)).await;
-        if !error.contains("has no host") {
-            fails.push(format!(
-                "{service}: error does not say \"has no host\": {error}"
-            ));
-        }
-        if effect == Some(Value::from("refused")) {
-            fails.push(format!("{service}: a configuration error recorded refused"));
+        for service in ["rest", "graphql", "jsonrpc"] {
+            let (error, effect) = Box::pin(call(service, target, false)).await;
+            if !error.contains(says) {
+                fails.push(format!(
+                    "{service} {target}: error does not say {says:?}: {error}"
+                ));
+            }
+            if effect == Some(Value::from("refused")) {
+                fails.push(format!(
+                    "{service} {target}: a configuration error recorded refused"
+                ));
+            }
         }
     }
     assert!(fails.is_empty(), "{fails:#?}");
