@@ -151,11 +151,16 @@ SCRIPT = re.compile(r"^(?:scripts|benchmarks)/[\w./*-]+\.py$")
 # A shell-script step: `bash|sh <script>` or the script run directly. Any repo-relative path
 # counts (not absolute, not $VAR, not ../); a leading ./ is not part of the form.
 SHELLS = {"bash", "sh"}
-SH_SCRIPT = re.compile(r"^(?:\./)?(?!\.\./)((?:[\w.-]+/)+[\w.*-]+\.sh)$")
+SH_SCRIPT = re.compile(r"^(?:\./)?(?!\.\./)((?:[\w.*-]+/)*[\w.*-]+\.sh)$")
 SH_PATH = re.compile(r"(?<![\w./$-])(?:\./)?(?:[\w-][\w.-]*/)+[\w*-][\w.*-]*\.sh(?![\w.])")
 ASSIGN = re.compile(r"^([A-Za-z_]\w*)=(.*)$")
 FOR_GLOB = re.compile(r"^for\s+(\w+)\s+in\s+(\S+)\s*$")
 UNSUPPORTED = ("eval", "source", ".")
+
+
+def _syntax_check_flag(flag):
+    """True for a short-flag bundle holding `n` (`-n`, `-ne`), not for an `-o` value (`-onounset`)."""
+    return flag.startswith("-") and not flag.startswith("--") and "n" in flag[1:].split("o")[0]
 
 
 def _token(word, bound):
@@ -395,8 +400,10 @@ def _syntax_checked_loop_items(lines):
     text = " ; ".join(lines)
     items = set()
     for m in re.finditer(r"\bfor\s+(\w+)\s+in\s+([^;]+);", text):
-        var = re.escape(m.group(1))
-        if re.search(r"\b(?:ba)?sh\s+-[A-Za-z]*n[A-Za-z]*\s+\"?\$\{?" + var + r"\b", text):
+        use = r"\$\{?" + re.escape(m.group(1)) + r"\b"
+        uses = len(re.findall(use, text))
+        checks = len(re.findall(r"\b(?:ba)?sh\s+-[A-Za-z]*n[A-Za-z]*\s+\"?" + use, text))
+        if uses and uses == checks:  # a loop that also runs `$f` accounts for nothing
             items.update(w.strip("'\"").removeprefix("./") for w in m.group(2).split())
     return items
 
@@ -407,8 +414,7 @@ def _syntax_checks_stripped(line):
     for piece in _chains(line):
         for stage in _pipe_stages(piece):
             words = stage.split()
-            flags = [w for w in words[1:] if w.startswith("-") and not w.startswith("--")]
-            if words and words[0] in SHELLS and any("n" in f[1:] for f in flags):
+            if words and words[0] in SHELLS and any(_syntax_check_flag(w) for w in words[1:]):
                 continue
             kept.append(stage)
     return " ; ".join(kept)
@@ -466,6 +472,8 @@ def _stage_execution(stage, stages, bound, loops):
     if words[0] in UNSUPPORTED:
         raise UnsupportedSyntax(f"`{words[0]}` hides what it executes: {stage}")
     direct = SH_SCRIPT.match(words[0].strip("'\""))
+    if not direct and words[0].strip("'\"").endswith(".sh"):
+        raise UnsupportedSyntax(f"a shell script the walker cannot resolve: {stage}")
     if direct:
         target, rest = direct.group(1), list(words)
         if "*" in target:
@@ -480,7 +488,7 @@ def _stage_execution(stage, stages, bound, loops):
             if re.fullmatch(r"-[A-Za-z]*o", flags[-1]) and rest:  # `-o pipefail`, `-eo pipefail`
                 rest.pop(0)
         # `bash -n` only parses its files (a syntax check) and executes nothing.
-        if words[0] in SHELLS and any(f.startswith("-") and not f.startswith("--") and "n" in f[1:] for f in flags):
+        if words[0] in SHELLS and any(_syntax_check_flag(f) for f in flags):
             return found
         if not rest:
             return found
@@ -495,7 +503,9 @@ def _stage_execution(stage, stages, bound, loops):
         if words[0] in SHELLS:
             sh = SH_SCRIPT.match(target)
             if not sh:
-                return found  # `bash -c ...` and non-repo scripts are not script executions
+                if target.endswith(".sh"):
+                    raise UnsupportedSyntax(f"a shell script the walker cannot resolve: {stage}")
+                return found  # `bash -c ...` is not a script execution (the path guard reads its text)
             target = sh.group(1)
         elif not SCRIPT.match(target):
             return found

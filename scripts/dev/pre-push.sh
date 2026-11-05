@@ -44,6 +44,7 @@ if [[ -f Cargo.toml ]]; then
     if [[ "${PREPUSH_KEEP_GOING:-0}" == "1" ]]; then
       # Not `"$@" || ...`: bash ignores set -e inside a function called from a `||` list, so a
       # failing command mid-step would be lost. A subshell outside any condition keeps set -e.
+      # So in this mode a step cannot set variables for later steps; keep them stateless.
       local rc=0
       set +e
       ( set -e; "$@" )

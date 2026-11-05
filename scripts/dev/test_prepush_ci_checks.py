@@ -771,6 +771,23 @@ class Rows(unittest.TestCase):
         found = workflow_shell.executions('for f in scripts/ci/check-*.sh; do bash "$f"; done')
         self.assertEqual([e.script for e in found], ["scripts/ci/check-*.sh"])
 
+    # D39-D41 (review round 2): loop exemptions, unread operands, attached -o values.
+    def test_d39_a_loop_that_also_runs_its_scripts_is_not_a_syntax_check(self):
+        block = 'for f in scripts/ci/x.sh scripts/ci/y.sh; do bash -n "$f"; bash "$f"; done'
+        with self.assertRaises(workflow_shell.UnsupportedSyntax):
+            workflow_shell.executions(block)
+
+    def test_d40_a_shell_operand_the_walker_cannot_read_fails_closed(self):
+        self.assertEqual([e.script for e in workflow_shell.executions("bash x.sh")], ["x.sh"])
+        for block in ("bash $GITHUB_WORKSPACE/scripts/ci/x.sh", "bash scripts/*/x.sh",
+                      '"$GITHUB_WORKSPACE/scripts/ci/x.sh" --check'):
+            with self.subTest(block), self.assertRaises(workflow_shell.UnsupportedSyntax):
+                workflow_shell.executions(block)
+
+    def test_d41_an_attached_o_value_is_not_a_syntax_check_flag(self):
+        found = workflow_shell.executions("bash -onounset scripts/ci/x.sh")
+        self.assertEqual([e.script for e in found], ["scripts/ci/x.sh"])
+
     # D29 (lead ruling 2026-10-23): the guard's exceptions are closed lists.
     def test_d29_the_guards_exception_lists_are_closed(self):
         self.assertEqual(workflow_shell.LOOKUPS, ("command -v", "which", "type", "hash"))
