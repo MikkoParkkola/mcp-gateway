@@ -153,7 +153,7 @@ SCRIPT = re.compile(r"^(?:scripts|benchmarks)/[\w./*-]+\.py$")
 # counts (not absolute, not $VAR, not ../); a leading ./ is not part of the form.
 SHELLS = {"bash", "sh"}
 SH_SCRIPT = re.compile(r"^(?:\./)?(?!\.\./)((?:[\w.*-]+/)*[\w.*-]+\.sh)$")
-SH_PATH = re.compile(r"(?<![\w./$-])(?:\./)?(?:[\w*-][\w.*-]*/)+[\w*-][\w.*-]*\.sh(?![\w.])")
+SH_PATH = re.compile(r"(?<![\w./$-])(?:\./)?(?:[\w*-][\w.*-]*/)*[\w*-][\w.*-]*\.sh(?![\w.])")
 ASSIGN = re.compile(r"^([A-Za-z_]\w*)=(.*)$")
 FOR_GLOB = re.compile(r"^for\s+(\w+)\s+in\s+(\S+)\s*$")
 UNSUPPORTED = ("eval", "source", ".")
@@ -384,7 +384,7 @@ def _data_stripped(line):
     return " ; ".join(kept)
 
 
-def _check_complete(run_block, found):
+def _check_complete(run_block, found, stage_runs=None):
     """Raise UnsupportedSyntax when the block names more Python than `found` runs."""
     lines = _guard_lines(run_block)
     loose = []
@@ -410,21 +410,29 @@ def _check_complete(run_block, found):
     checked = _syntax_checked_loop_items(lines)
     named = collections.Counter(m.group(0).removeprefix("./") for line in lines
                                 for m in SH_PATH.finditer(_syntax_checks_stripped(_data_stripped(line))))
-    ran = collections.Counter(e.script for e in found if e.script.endswith(".sh"))
-    sh_unread = [path for path, n in named.items() if path not in checked and n > ran[path]]
+    # One run per walker stage, not per bound variant: two bindings of one call are not two calls.
+    ran = stage_runs if stage_runs is not None else collections.Counter(e.script for e in found if e.script.endswith(".sh"))
+    sh_unread = [path for path, n in named.items() if n > ran[path] + checked[path]]
     if sh_unread:
         raise UnsupportedSyntax(f".sh path(s) named but not read as an execution: {', '.join(sh_unread)}")
 
 
 def _syntax_checked_loop_items(lines):
-    """Paths a `for VAR in a.sh b.sh; do bash -n "$VAR"` loop hands to a syntax check."""
+    """Occurrences of the paths a `for VAR in a.sh b.sh; do bash -n "$VAR"` loop hands to a syntax
+    check: only when every stage using $VAR is a syntax check (`_is_syntax_check`, the walker's own
+    flag parser), so `bash -onounset "$f"` or a second `bash "$f"` accounts for nothing."""
     text = " ; ".join(lines)
-    items = set()
+    stages = [stage for piece in _chains(text) for stage in _pipe_stages(piece)]
+    items = collections.Counter()
     for m in re.finditer(r"\bfor\s+(\w+)\s+in\s+([^;]+);", text):
-        use = r"\$\{?" + re.escape(m.group(1)) + r"\b"
-        uses = len(re.findall(use, text))
-        checks = len(re.findall(r"\b(?:ba)?sh\s+-[A-Za-z]*n[A-Za-z]*\s+\"?" + use, text))
-        if uses and uses == checks:  # a loop that also runs `$f` accounts for nothing
+        use = re.compile(r"\$\{?" + re.escape(m.group(1)) + r"\b")
+        users = [stage for stage in stages if use.search(stage)]
+        def checks(stage):
+            try:
+                return _is_syntax_check(_command_words(stage))
+            except UnsupportedSyntax:
+                return False
+        if users and all(checks(stage) for stage in users):
             items.update(w.strip("'\"").removeprefix("./") for w in m.group(2).split())
     return items
 
@@ -447,12 +455,13 @@ def _syntax_checks_stripped(line):
 def executions(run_block: str) -> list[Execution]:
     """Every script execution in one `run:` block, in order; UnsupportedSyntax
     when the block names Python the walker cannot account for."""
-    found = _walk(run_block)
-    _check_complete(run_block, found)
+    stage_runs = collections.Counter()
+    found = _walk(run_block, stage_runs)
+    _check_complete(run_block, found, stage_runs)
     return found
 
 
-def _walk(run_block: str) -> list[Execution]:
+def _walk(run_block: str, stage_runs=None) -> list[Execution]:
     """The walker proper: every script execution it can read, in order."""
     # One word per `${{ … }}` expression, so whitespace splitting keeps it whole.
     run_block = re.sub(r"\$\{\{\s*(.*?)\s*\}\}", lambda m: "${{" + m.group(1).replace(" ", "") + "}}", run_block)
@@ -465,7 +474,7 @@ def _walk(run_block: str) -> list[Execution]:
             # A substitution runs its own commands (nested ones recursively);
             # single-quoted text is data and holds none.
             for _, _, body in _lex(pipeline)[1]:
-                found += _walk(body)
+                found += _walk(body, stage_runs)
             stages = _pipe_stages(pipeline)
             if not stages:
                 continue
@@ -483,7 +492,10 @@ def _walk(run_block: str) -> list[Execution]:
                 continue
             # Every stage is a command: `cat f | python3 scripts/x.py` runs x.py.
             for stage in stages:
-                found += _stage_execution(stage, stages, bound, loops)
+                ran = _stage_execution(stage, stages, bound, loops)
+                if stage_runs is not None:
+                    stage_runs.update({e.script for e in ran if e.script.endswith(".sh")})
+                found += ran
     return found
 
 

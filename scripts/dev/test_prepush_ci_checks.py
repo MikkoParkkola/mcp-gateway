@@ -812,6 +812,27 @@ class Rows(unittest.TestCase):
             with self.subTest(block), self.assertRaises(workflow_shell.UnsupportedSyntax):
                 workflow_shell.executions(block)
 
+    # D46-D49 (review round 3): fail-open accounting the guard still allowed.
+    def test_d46_a_syntax_checked_loop_item_does_not_cover_a_later_run(self):
+        block = 'for f in scripts/ci/x.sh; do bash -n "$f"; done\ntime -p bash scripts/ci/x.sh'
+        with self.assertRaises(workflow_shell.UnsupportedSyntax):
+            workflow_shell.executions(block)
+
+    def test_d47_a_loop_running_with_an_attached_o_value_is_not_a_syntax_check(self):
+        block = 'for f in scripts/ci/x.sh scripts/ci/y.sh; do bash -onounset "$f"; done'
+        with self.assertRaises(workflow_shell.UnsupportedSyntax):
+            workflow_shell.executions(block)
+
+    def test_d48_an_unread_root_script_fails_closed(self):
+        with self.assertRaises(workflow_shell.UnsupportedSyntax):
+            workflow_shell.executions("time -p bash x.sh")
+
+    def test_d49_bound_variants_of_one_run_do_not_cover_a_second_run(self):
+        block = ('base="$BASE_SHA"\nbase="$(git merge-base HEAD origin/x)"\n'
+                 'bash scripts/ci/x.sh "$base"\ntime -p bash scripts/ci/x.sh "$base"')
+        with self.assertRaises(workflow_shell.UnsupportedSyntax):
+            workflow_shell.executions(block)
+
     # D29 (lead ruling 2026-10-23): the guard's exceptions are closed lists.
     def test_d29_the_guards_exception_lists_are_closed(self):
         self.assertEqual(workflow_shell.LOOKUPS, ("command -v", "which", "type", "hash"))
