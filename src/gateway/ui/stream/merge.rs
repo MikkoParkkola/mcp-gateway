@@ -312,8 +312,9 @@ impl<S: LogSource> LogMerge<S> {
 
     /// One step: a catch-up page (its rows, possibly none, when the caller
     /// may see none of them) or one live announcement's rows. `None` when the
-    /// source closed or failed, the view is too slow, or a reset's replay
-    /// reset again. The caller must `ack` every row it wrote before asking
+    /// source closed or failed or the view is too slow; a reset's replay that
+    /// resets again goes live from the captured head instead, with no second
+    /// reset frame. The caller must `ack` every row it wrote before asking
     /// again. The live half awaits only the broadcast receive and is safe to
     /// cancel; a catch-up page must be awaited to its end.
     pub(super) async fn step(&mut self) -> Option<Vec<Out>> {
