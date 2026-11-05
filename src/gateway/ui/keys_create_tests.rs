@@ -278,3 +278,30 @@ fn l1_the_capture_sees_a_blocking_thread() {
     assert_eq!(sent.status, StatusCode::CREATED, "{}", sent.body);
     assert!(sent.logs.contains("zq-blocking-marker"), "{}", sent.logs);
 }
+
+fn raw_source(file: &str) -> String {
+    std::fs::read_to_string(format!(
+        "{}/src/gateway/ui/{file}",
+        env!("CARGO_MANIFEST_DIR")
+    ))
+    .expect("source")
+}
+
+/// L1: the leak check runs inside `post`, and no row reaches the route by
+/// another door (`send` skips the capture and the check).
+#[test]
+fn l1_every_post_row_runs_the_leak_check() {
+    let fixture = raw_source("keys_create_fixture_tests.rs");
+    let post = fixture.split("fn post(").nth(1).expect("post");
+    let post = post.split("\n    }\n").next().unwrap_or("");
+    assert!(post.contains("self.assert_leak_free("), "{post}");
+    let door = ["fx.se", "nd("].concat();
+    for file in [
+        "keys_create_tests.rs",
+        "keys_create_refusal_tests.rs",
+        "keys_create_writer_tests.rs",
+        "keys_file_tests.rs",
+    ] {
+        assert!(!raw_source(file).contains(&door), "{file} bypasses post");
+    }
+}

@@ -346,7 +346,7 @@ fn p6_the_clock_is_read_again_under_the_lock() {
     })));
     let before = fx.bytes();
     let later = std::cell::RefCell::new(None);
-    let sent = fx.rt.block_on(async {
+    let sent = fx.post_driven(call, |send| async {
         let held = crate::config_persistence::lock::lock_config(
             &fx.path(),
             std::time::Instant::now() + std::time::Duration::from_secs(30),
@@ -361,7 +361,7 @@ fn p6_the_clock_is_read_again_under_the_lock() {
             *later.borrow_mut() = Some(crate::clock::test_clock::at_secs(NOW + 120));
             drop(held);
         };
-        tokio::join!(fx.send(call), advance).0
+        tokio::join!(send, advance).0
     });
     assert!(fired.load(Ordering::SeqCst), "the route never signalled");
     assert_eq!(

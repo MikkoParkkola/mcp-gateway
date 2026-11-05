@@ -343,11 +343,22 @@ impl Fixture {
     /// `send`, capturing the log records of every thread the request
     /// touches, then the shared leak check (L1): no row can skip it.
     pub(super) fn post(&self, call: Call) -> Sent {
+        self.post_driven(call, |send| send)
+    }
+
+    /// [`Fixture::post`] for a row that must drive the request's future
+    /// alongside its own (a held lock, a clock to advance).
+    pub(super) fn post_driven<'a, Fut: std::future::Future<Output = Sent>>(
+        &'a self,
+        call: Call,
+        drive: impl FnOnce(std::pin::Pin<Box<dyn std::future::Future<Output = Sent> + 'a>>) -> Fut,
+    ) -> Sent {
         let known = call.known.clone();
         let asked = serde_json::from_str::<Value>(&call.body).unwrap_or(Value::Null);
         self.capture.0.lock().expect("capture").clear();
-        let mut sent =
-            tracing::dispatcher::with_default(&self.dispatch, || self.rt.block_on(self.send(call)));
+        let mut sent = tracing::dispatcher::with_default(&self.dispatch, || {
+            self.rt.block_on(drive(Box::pin(self.send(call))))
+        });
         let bytes = self.capture.0.lock().expect("capture").clone();
         sent.logs = String::from_utf8(bytes).expect("utf-8 log output");
         let secret = known.or_else(|| sent.json()["secret"].as_str().map(str::to_owned));
@@ -394,8 +405,8 @@ fn open_log(dir: &tempfile::TempDir) -> crate::security::TransparencyLogger {
 }
 
 /// Every spelling of `bytes` the leak checks refuse: hex in both cases,
-/// unpadded standard and URL-safe base64, a JSON byte array and the spaced
-/// Debug list.
+/// standard and URL-safe base64 padded and not, a JSON byte array and the
+/// spaced Debug list.
 fn spellings(bytes: &[u8]) -> Vec<String> {
     use base64::Engine as _;
     let list: Vec<String> = bytes.iter().map(u8::to_string).collect();
@@ -404,6 +415,8 @@ fn spellings(bytes: &[u8]) -> Vec<String> {
         hex::encode_upper(bytes),
         base64::engine::general_purpose::STANDARD_NO_PAD.encode(bytes),
         base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes),
+        base64::engine::general_purpose::STANDARD.encode(bytes),
+        base64::engine::general_purpose::URL_SAFE.encode(bytes),
         format!("[{}]", list.join(",")),
         format!("[{}]", list.join(", ")),
     ]
@@ -421,61 +434,119 @@ fn secret_shaped(text: &str) -> Vec<String> {
         .collect()
 }
 
+/// `path`'s text. A missing file is `None`; any other failure fails the test,
+/// so an unreadable place is never taken for an empty one.
+fn read_present(path: &std::path::Path) -> Option<String> {
+    match std::fs::read(path) {
+        Ok(bytes) => Some(String::from_utf8(bytes).expect("utf-8 text")),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+        Err(e) => panic!("{} cannot be read: {e}", path.display()),
+    }
+}
+
+fn collect_strings(value: &Value, out: &mut Vec<String>) {
+    match value {
+        Value::String(s) => out.push(s.clone()),
+        Value::Array(items) => items.iter().for_each(|v| collect_strings(v, out)),
+        Value::Object(map) => map.iter().for_each(|(k, v)| {
+            out.push(k.clone());
+            collect_strings(v, out);
+        }),
+        _ => {}
+    }
+}
+
+/// `raw` and, when it is JSON (a document or one record per line), every
+/// string in it decoded, so a `\u`-escaped spelling is seen too.
+fn decoded(raw: &str) -> Vec<String> {
+    let mut out = vec![raw.to_owned()];
+    let values: Vec<Value> = serde_json::from_str(raw).map_or_else(
+        |_| {
+            raw.lines()
+                .filter_map(|l| serde_json::from_str(l).ok())
+                .collect()
+        },
+        |whole| vec![whole],
+    );
+    values.iter().for_each(|v| collect_strings(v, &mut out));
+    out
+}
+
+/// Fails when any of `needles` is in `raw` or in a string decoded from it.
+fn assert_clean(place: &str, raw: &str, needles: &[String]) {
+    for text in decoded(raw) {
+        for needle in needles {
+            assert!(
+                !text.contains(needle.as_str()),
+                "{place} holds a forbidden value ({needle})"
+            );
+        }
+    }
+}
+
+/// How many `key_sha256` values of the created entry an outcome may hold.
+fn digest_allowance(sent: &Sent) -> std::ops::RangeInclusive<usize> {
+    match sent.status {
+        StatusCode::CREATED => 1..=1,
+        StatusCode::INTERNAL_SERVER_ERROR if sent.json()["error"] == "state_uncertain" => 0..=1,
+        _ => 0..=0,
+    }
+}
+
+/// The 201 body with its one permitted secret removed; any other body whole.
+fn body_without_secret(sent: &Sent, secret: &str) -> String {
+    if sent.status != StatusCode::CREATED {
+        return sent.body.clone();
+    }
+    let mut answer = sent.json();
+    assert_eq!(answer["secret"], secret, "{}", sent.body);
+    answer["secret"] = Value::String(String::new());
+    answer.to_string()
+}
+
 impl Fixture {
     /// L1: the secret nowhere but a 201's `secret` field, and its digest
-    /// nowhere but `key_sha256` of a written entry (a definite refusal holds
-    /// no digest at all, the file included). Looks in the file, the answer,
-    /// the captured log and the audit log.
-    fn assert_leak_free(&self, sent: &Sent, secret: &str, _name: Option<&str>) {
-        let created = sent.status == StatusCode::CREATED;
-        let uncertain = sent.status == StatusCode::INTERNAL_SERVER_ERROR
-            && sent.json()["error"] == "state_uncertain";
-        let digest = crate::config::parse_api_key_digest(&spec(secret)).expect("digest");
-        let mut digests = spellings(&digest);
-        digests.push(spec(secret));
-        let file = self.text();
-        let audit = self.audit_text();
-        let headers = sent
+    /// nowhere but `key_sha256` of the created entry (a definite refusal
+    /// holds none; an uncertain ending at most one). Looks in gateway.yaml,
+    /// the answer and its headers, the captured logs, the audit log (which
+    /// also records every write intent) and the replace journal with its
+    /// staged original. Only a missing file is empty, and only where its
+    /// absence is the expected state; any other read failure fails.
+    fn assert_leak_free(&self, sent: &Sent, secret: &str, name: Option<&str>) {
+        let spec_text = spec(secret);
+        let digest = crate::config::parse_api_key_digest(&spec_text).expect("digest");
+        let mut bare = spellings(&digest);
+        bare.push(secret.to_owned());
+        let mut forbidden = bare.clone();
+        forbidden.push(spec_text.clone());
+        let headers: Vec<String> = sent
             .headers
             .iter()
             .map(|(k, v)| format!("{k}: {v}"))
-            .collect::<Vec<_>>()
-            .join("\n");
-        for (place, text) in [
-            ("logs", &sent.logs),
-            ("audit", &audit),
-            ("headers", &headers),
-        ] {
-            assert!(!text.contains(secret), "the secret is in the {place}");
-            for d in &digests {
-                assert!(
-                    !text.contains(d.as_str()),
-                    "a digest ({d}) is in the {place}"
-                );
-            }
+            .collect();
+        assert_clean("headers", &headers.join("\n"), &forbidden);
+        assert_clean("answer", &body_without_secret(sent, secret), &forbidden);
+        assert_clean("logs", &sent.logs, &forbidden);
+        let target = crate::identity_grants::journal::resolved(&self.path());
+        let side = [
+            ("audit", self.dir.path().join("audit.jsonl")),
+            (
+                "journal",
+                crate::config_persistence::journal::journal_path(&target),
+            ),
+            (
+                "staged original",
+                crate::config_persistence::journal::original_path(&target),
+            ),
+        ];
+        let mut texts = vec![sent.body.clone(), sent.logs.clone()];
+        for (place, path) in side {
+            let text = read_present(&path).unwrap_or_default();
+            assert_clean(place, &text, &forbidden);
+            texts.push(text);
         }
-        assert!(!file.contains(secret), "the secret is in the file");
-        let spec_text = spec(secret);
-        let in_file = file.matches(spec_text.as_str()).count();
-        if uncertain {
-            assert!(in_file <= 1, "digest spec in the file");
-        } else {
-            assert_eq!(in_file, usize::from(created), "digest spec in the file");
-        }
-        let rest = file.replace(spec_text.as_str(), "");
-        for d in &digests {
-            assert!(
-                !rest.contains(d.as_str()),
-                "a digest ({d}) is outside key_sha256"
-            );
-            assert!(
-                !sent.body.contains(d.as_str()),
-                "a digest ({d}) is in the answer"
-            );
-        }
-        let answered = sent.body.matches(secret).count();
-        assert_eq!(answered, usize::from(created), "{}", sent.body);
-        let others: Vec<String> = [&file, &sent.body, &sent.logs, &audit]
+        texts.push(self.assert_file(secret, name, digest_allowance(sent), &bare));
+        let others: Vec<String> = texts
             .iter()
             .flat_map(|t| secret_shaped(t))
             .filter(|s| s != secret)
@@ -484,5 +555,44 @@ impl Fixture {
             others.is_empty(),
             "another secret-shaped string: {others:?}"
         );
+    }
+
+    /// gateway.yaml: the secret absent, the digest spec exactly where the
+    /// parsed entry says (raw count equal to parsed count, so a comment or
+    /// a second entry fails), every other spelling absent. Returns the text.
+    fn assert_file(
+        &self,
+        secret: &str,
+        name: Option<&str>,
+        allowed: std::ops::RangeInclusive<usize>,
+        bare: &[String],
+    ) -> String {
+        let Some(file) = read_present(&self.path()) else {
+            assert!(!self.has_file, "gateway.yaml is gone");
+            return String::new();
+        };
+        assert!(!file.contains(secret), "the secret is in the file");
+        let spec_text = spec(secret);
+        let keys = Config::load_literal(Some(&self.path()))
+            .map_or_else(|_| Vec::new(), |c| c.auth.api_keys);
+        let holding = keys
+            .iter()
+            .filter(|k| k.key_sha256.as_deref() == Some(spec_text.as_str()));
+        let own = holding
+            .clone()
+            .filter(|k| Some(k.name.as_str()) == name)
+            .count();
+        assert_eq!(holding.count(), own, "another entry holds the digest");
+        assert_eq!(
+            file.matches(spec_text.as_str()).count(),
+            own,
+            "digest spec outside key_sha256"
+        );
+        assert!(
+            allowed.contains(&own),
+            "{own} entries hold the digest, allowed {allowed:?}"
+        );
+        assert_clean("file", &file.replace(spec_text.as_str(), ""), bare);
+        file
     }
 }
