@@ -302,6 +302,31 @@ fn p6_an_expiry_not_after_now_is_refused() {
     assert_eq!(fx.post(Call::new(&body)).status, StatusCode::CREATED);
 }
 
+/// P6b: the expiry checked is the expiry written. gateway.yaml holds whole
+/// seconds, so half a second after now is refused rather than stored
+/// truncated to now (a key that would never authenticate), and a fractional
+/// expiry further ahead is stored as the whole second it was checked at.
+#[test]
+fn p6b_the_expiry_checked_is_the_expiry_written() {
+    let _clock = crate::clock::test_clock::at_secs(NOW);
+    let fx = Fixture::new(Setup::default());
+    let half_past = |secs: u64| at(secs).replace('Z', ".500Z");
+    let mut body = fx.body("half");
+    body["expires_at"] = json!(half_past(NOW));
+    let answer = refused(
+        &fx,
+        &body,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "invalid_field",
+    );
+    assert_eq!(answer["field"], "expires_at");
+    let mut body = fx.body("later");
+    body["expires_at"] = json!(half_past(NOW + 1));
+    assert_eq!(fx.post(Call::new(&body)).status, StatusCode::CREATED);
+    let file = String::from_utf8(fx.bytes()).expect("gateway.yaml is UTF-8");
+    assert!(file.contains(&at(NOW + 1)), "{file}");
+}
+
 /// P6 under the lock: an expiry still ahead when the route checks, but past
 /// when the writer holds the lock, is refused. The test holds the config lock
 /// until the route says it is about to ask for it, then moves the clock and
