@@ -62,7 +62,7 @@ async fn r11_the_first_lists_two_waits_share_one_deadline_stdio() {
         },
     ]));
     // Armed and never released: the own-view warm waits out its deadline.
-    let (_reached, _held_prepass) = per_user.before_listing_prepass.arm();
+    let (reached, _held_prepass) = per_user.before_listing_prepass.arm();
     let stdio = Stdio {
         gateway,
         meta,
@@ -77,6 +77,16 @@ async fn r11_the_first_lists_two_waits_share_one_deadline_stdio() {
         ))
         .await;
     let took = started.elapsed();
+    // Both waits ran: the own-view warm stopped at its pre-pass, and the
+    // first list's fill asked the shared backend for its tools.
+    assert!(
+        futures::FutureExt::now_or_never(reached.notified()).is_some(),
+        "premise: the own-view warm reached its pre-pass"
+    );
+    assert!(
+        held.lists.load(std::sync::atomic::Ordering::SeqCst) >= 1,
+        "premise: the first list's fill asked the shared backend"
+    );
     assert!(answer.get("error").is_none(), "{answer}");
     assert!(
         took >= bound
