@@ -140,12 +140,13 @@ async fn r2_a_gapped_log_reached_by_a_replay_goes_live_across_reconnects() {
         ..TransparencyLogConfig::default()
     };
     let inv = Arc::new(TransparencyLogger::open(Arc::new(config)).expect("the logger opens"));
-    let (state, _fixture) = super::super::tests::meta_fixture::test_router_app_state_with_logs(
-        &auth(&["a", "b"]),
-        Some(Arc::clone(&inv)),
-        None,
-    )
-    .await;
+    let (state, _fixture) =
+        crate::gateway::router::tests::meta_fixture::test_router_app_state_with_logs(
+            &auth(&["a", "b"]),
+            Some(Arc::clone(&inv)),
+            None,
+        )
+        .await;
     for n in 1..=60 {
         call(&inv, "srv", n);
     }
