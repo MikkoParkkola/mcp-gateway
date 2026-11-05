@@ -169,6 +169,12 @@ tasks:\n  store_dir: {}\n",
         caps.display(),
         serde_json::to_string(&tasks.display().to_string()).expect("a JSON string")
     ) + &extra(dir.path());
+    boot(dir, yaml, stdout_bytes).await
+}
+
+/// A stdio gateway booted from `yaml`, written as `gateway.yaml` in `dir`, as
+/// production starts it, served over in-memory pipes.
+pub(super) async fn boot(dir: tempfile::TempDir, yaml: String, stdout_bytes: usize) -> Serve {
     let path = dir.path().join("gateway.yaml");
     crate::gateway::test_helpers::write_owner_only(&path, yaml).expect("write config");
     let serve_dir = dir;
