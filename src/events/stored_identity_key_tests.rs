@@ -320,3 +320,37 @@ fn a_revoked_nobody_rows_queued_record_is_cancelled() {
         "control: the row naming someone keeps its record"
     );
 }
+
+/// A row that carries a per-user observation but whose name does not parse
+/// gets no key, never the shared one (D8); a shared row with such a name
+/// keeps the shared key it always had.
+#[test]
+fn a_per_user_row_with_an_unparseable_name_gets_no_listener_key() {
+    let dir = tempfile::tempdir().expect("dir");
+    let hub = EventsHub::open(&crate::config::EventsConfig::default(), dir.path()).expect("hub");
+    let none: backend_source::Ineligible = Arc::new(std::collections::BTreeSet::new);
+    hub.install_backend_source_with_upstream(
+        Arc::new(|| vec!["signed".to_owned()]),
+        Arc::new(crate::backend::BackendRegistry::new()),
+        none,
+    );
+    assert!(hub.runtime.services.set(Arc::new(services())).is_ok());
+    let source = hub
+        .source(types::SourceKind::BackendNotification)
+        .expect("source");
+    let now = chrono::Utc::now();
+    let name = "backend..tools_changed";
+    let mut shared_row = row(name, &identity("q"));
+    shared_row.obs_basis = None;
+    shared_row.observed_identity = None;
+    assert_eq!(
+        source.key_of_row(&shared_row, now),
+        backend_source::backend_key(None, name, &serde_json::json!({})),
+        "control: a shared row keeps its shared key"
+    );
+    assert_eq!(
+        source.key_of_row(&row(name, &identity("q")), now),
+        None,
+        "a per-user row is never keyed as shared"
+    );
+}
