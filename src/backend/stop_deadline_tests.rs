@@ -221,22 +221,25 @@ async fn a_backend_registered_as_the_stop_starts_is_refused_or_retired() {
     backend.ensure_started().await.expect("the backend starts");
     let pid = leader_pid(dir.path());
     let _held = backend.lifecycle.write().await;
-    let registered = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    // `None` until the seam fires: a hook that never ran must fail the row,
+    // not read as a refused registration.
+    let registered: Arc<std::sync::Mutex<Option<bool>>> = Arc::new(std::sync::Mutex::new(None));
     let (late, seen, by_registry) = (
         Arc::clone(&backend),
         Arc::clone(&registered),
         Arc::clone(&registry),
     );
     super::registry::stop_seam::after_sweep_runs(move || {
-        seen.store(
-            by_registry.register(late),
-            std::sync::atomic::Ordering::SeqCst,
-        );
+        *seen.lock().expect("lock") = Some(by_registry.register(late));
     });
     registry
         .stop_all_by(tokio::time::Instant::now() + Duration::from_secs(1))
         .await;
-    if registered.load(std::sync::atomic::Ordering::SeqCst) {
+    let registered = registered
+        .lock()
+        .expect("lock")
+        .expect("premise: the stop's seam fired and the late backend tried to register");
+    if registered {
         let by = std::time::Instant::now() + Duration::from_secs(10);
         while kernel_view(pid) == Some(false) {
             assert!(

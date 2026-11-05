@@ -653,6 +653,9 @@ impl BackendRegistry {
     /// Does NOT bump the `membership` epoch: it takes the `stopping` write
     /// guard but changes no membership (shutdown sets the latch and snapshots
     /// the map), so readers of `with_membership` need not treat it as a change.
+    ///
+    /// No deadline and no retirement sweep: the gateway's shutdown goes
+    /// through `stop_all_by`, which retires whatever this leaves running.
     pub async fn stop_all(&self) {
         Self::stop_each(self.latch_and_snapshot()).await;
     }
