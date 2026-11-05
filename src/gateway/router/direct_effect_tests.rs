@@ -588,12 +588,19 @@ async fn a_direct_cached_failure_records_the_callers_slot_effect() {
     let alpha = fx.state.backends.get("alpha").expect("alpha");
     alpha.declare_slot_effects_for_test(None, vec![read_tool(Some(false))]);
     alpha.declare_slot_effects_for_test(Some(ALICE_ALPHA), vec![read_tool(Some(true))]);
+    let before_first = super::direct_continuation_tests::dispatched(&fx);
     let (_, first) = keyed(&fx, "alice", "k-7a-failure").await;
-    assert!(
-        first.get("error").is_some(),
-        "premise: the first call failed: {first}"
+    assert_eq!(
+        first.pointer("/error/code").and_then(Value::as_i64),
+        Some(-32010),
+        "premise: the backend's scripted failure: {first}"
     );
     let ran = super::direct_continuation_tests::dispatched(&fx);
+    assert_eq!(
+        ran,
+        before_first + 1,
+        "premise: the first call dispatched once"
+    );
     let _ = super::backend_handlers::direct_lease_seams::served();
     let before = decisions(&dir).len();
     let (_, hit) = keyed(&fx, "alice", "k-7a-failure").await;

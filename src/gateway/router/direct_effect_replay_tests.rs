@@ -51,10 +51,11 @@ async fn generational(dir: &Arc<tempfile::TempDir>) -> (Fx, Arc<Generations>) {
     let log = logger(dir, AuditFailurePolicy::FailClosed);
     let generations = Arc::new(Generations(AtomicUsize::new(1)));
     let strategy = Arc::clone(&generations);
-    let fx = super::direct_guards_fixture::fixture_propagating_logged(Answer::Ok, log, |meta| {
-        meta.set_identity_propagation(strategy);
-    })
-    .await;
+    let fx =
+        super::super::direct_guards_fixture::fixture_propagating_logged(Answer::Ok, log, |meta| {
+            meta.set_identity_propagation(strategy);
+        })
+        .await;
     let alpha = fx.state.backends.get("alpha").expect("alpha");
     let shared = alpha
         .pooled_transport_for_test(&crate::backend::PoolKey::Shared)
@@ -84,10 +85,10 @@ async fn replayed_7b(
         status.is_success() && first.get("result").is_some(),
         "premise: the first call ran: {first}"
     );
-    let ran = super::direct_continuation_tests::dispatched(fx);
+    let ran = super::super::direct_continuation_tests::dispatched(fx);
     generations.0.store(2, Ordering::SeqCst);
     between();
-    let _ = super::backend_handlers::direct_lease_seams::served();
+    let _ = super::super::backend_handlers::direct_lease_seams::served();
     let before = decisions(dir).len();
     let (_, replay) = keyed(fx, "alice", key).await;
     assert!(
@@ -95,12 +96,12 @@ async fn replayed_7b(
         "premise: the replay delivered: {replay}"
     );
     assert_eq!(
-        super::backend_handlers::direct_lease_seams::served(),
-        Some(super::backend_handlers::direct_lease_seams::Served::Execution),
+        super::super::backend_handlers::direct_lease_seams::served(),
+        Some(super::super::backend_handlers::direct_lease_seams::Served::Execution),
         "premise: stage 7b answered, not 7a"
     );
     assert_eq!(
-        super::direct_continuation_tests::dispatched(fx),
+        super::super::direct_continuation_tests::dispatched(fx),
         ran,
         "premise: nothing was sent again"
     );
