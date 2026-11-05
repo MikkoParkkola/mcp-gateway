@@ -49,7 +49,7 @@ ALLOWED = {
     ("src/gateway/router/identity.rs", "grant_subject_from_oauth_agent", "GrantSubject::new("): NEW_IS_CHECKED,
     ("src/gateway/router/identity.rs", "grant_subject_from_verified_identity", "GrantSubject::new("): NEW_IS_CHECKED,
     ("src/gateway/router/identity.rs", "trusted_proxy_identity", "GrantSubject::new("): NEW_IS_CHECKED,
-    ("src/gateway/ui/admin_audit.rs", "record_admin_action_as", "GrantSubject::new("): NEW_IS_CHECKED,
+    ("src/gateway/ui/admin_audit.rs", "caller_who", "GrantSubject::new("): NEW_IS_CHECKED,
     ("src/gateway/ui/admin_audit.rs", "recorded", "GrantSubject::new("): NEW_IS_CHECKED,
     ("src/gateway/ui/events.rs", "admitted", "GrantSubject::new("): NEW_IS_CHECKED,
     ("src/gateway/ui/tool_call.rs", "via_label", "GrantSubject::new("): NEW_IS_CHECKED,
