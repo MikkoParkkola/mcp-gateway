@@ -286,6 +286,9 @@ mod pinned_admin;
 #[cfg(feature = "webui")]
 #[path = "sso_admin_tests/admin_action.rs"]
 mod admin_action;
+/// A backend-scoped admin has no gateway-wide admin standing.
+#[path = "sso_admin_tests/backend_scope.rs"]
+mod backend_scope;
 /// E5-T7: an SSO admin cannot mint a dashboard link it could not redeem.
 #[cfg(feature = "webui")]
 #[path = "sso_admin_tests/dashboard_link.rs"]

@@ -36,10 +36,10 @@ fn request<'a>(
         agent_id: None,
         agent_declared: None,
         grant_subject: None,
-        is_admin: false,
+        admin: crate::gateway::authz::AdminStanding::None,
         scope: crate::gateway::meta_mcp::InvokeScope {
             authorizer: &crate::gateway::authz::AllowAll,
-            is_admin: false,
+            admin: crate::gateway::authz::AdminStanding::None,
             api_key_name: None,
             grant_key: None,
             agent_id: None,

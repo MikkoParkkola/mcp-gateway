@@ -96,7 +96,7 @@ async fn ungranted_refusal(idem: &str) {
         .expect("the owner names someone");
     let scope = crate::gateway::meta_mcp::InvokeScope {
         authorizer: &crate::gateway::authz::AllowAll,
-        is_admin: false,
+        admin: crate::gateway::authz::AdminStanding::None,
         api_key_name: None,
         grant_key: None,
         agent_id: None,
@@ -116,7 +116,7 @@ async fn non_admin_refusal(idem: &str) {
     row.state.meta_mcp.set_capabilities(webhook_backend());
     let admin = crate::gateway::meta_mcp::InvokeScope {
         authorizer: &crate::gateway::authz::AllowAll,
-        is_admin: true,
+        admin: crate::gateway::authz::AdminStanding::Gateway,
         api_key_name: None,
         grant_key: None,
         agent_id: None,
