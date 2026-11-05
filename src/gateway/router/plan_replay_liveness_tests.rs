@@ -430,3 +430,47 @@ async fn n1_a_step_naming_a_meta_plan_runs_no_inner_plan() {
         "N1: only the two outer plans entered the executor"
     );
 }
+
+/// MIK-9216.EFFECT.1, composite results: a settled plan stores the one slot
+/// its steps ran under, and none when they ran under two (its replay names no
+/// target, so the settled delivery is what these rows read).
+mod effect_slot {
+    use super::*;
+    use crate::backend::PoolKey;
+
+    /// Two chain steps on the operator's one per-user slot: the settled
+    /// delivery stores that slot.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn a_plan_on_one_slot_stores_that_slot() {
+        let fx = fixture().await;
+        run_once(&fx, &Plan::Chain, "e1-one-slot").await;
+        assert_eq!(fx.gateway.tool_calls_to(BACKEND), 2, "premise: two steps ran");
+        assert_eq!(
+            fx.meta.stored_effect_slots_for_test(),
+            vec![Some(PoolKey::PerUser {
+                binding: DirectAccountGateway::operator_binding()
+            })],
+        );
+    }
+
+    /// A playbook whose two steps ran under two accounts' slots stores none.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn a_plan_on_two_slots_stores_none() {
+        let fx = fixture_with(Some(Second::PersonalAccount)).await;
+        for _ in 0..2 {
+            fx.gateway.answer_next(
+                json!({"content": [{"type": "text", "text": MARKER}], "isError": false}),
+            );
+        }
+        let first = send(
+            &fx,
+            "gateway_run_playbook",
+            playbook_params("conditional", "e1-two-slots", &json!({"deep": "true"})),
+        )
+        .await;
+        assert!(first.to_string().contains(MARKER), "premise: the plan ran: {first}");
+        assert_eq!(fx.gateway.tool_calls_to(BACKEND), 1, "premise: {first}");
+        assert_eq!(fx.gateway.tool_calls_to(PERSONAL_BACKEND), 1, "premise: {first}");
+        assert_eq!(fx.meta.stored_effect_slots_for_test(), vec![None]);
+    }
+}

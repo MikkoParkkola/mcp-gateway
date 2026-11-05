@@ -741,6 +741,17 @@ pub(crate) struct UnkeyedPolicy {
 }
 
 impl MetaMcp {
+    /// The slot every settled delivery stored, `None` where it stored none:
+    /// the composite rows read what a settled playbook kept.
+    #[cfg(test)]
+    pub(crate) fn stored_effect_slots_for_test(&self) -> Vec<Option<crate::backend::PoolKey>> {
+        self.execution_admission
+            .completed_bytes_for_test()
+            .iter()
+            .map(|bytes| stored::stored_effect_slot(bytes))
+            .collect()
+    }
+
     pub(crate) fn set_idempotency_key_mode(&self, mode: crate::config::IdempotencyKeyMode) {
         *self.unkeyed.mode.write() = mode;
     }
