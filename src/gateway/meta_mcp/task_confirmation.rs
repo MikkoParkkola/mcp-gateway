@@ -212,15 +212,20 @@ impl MetaMcp {
         // both computed by the caller from one context, the quota key the one
         // `MetaMcpCallerContext::quota_key` gives this caller on every other
         // route, so a confirmation shares the caller's one cap.
+        //
+        // A caller this gateway cannot name is refused, and that is a decision
+        // about the caller, so its delivery record says refused. Only HTTP
+        // reaches it; a stdio caller always has its session nonce, so both
+        // halves are set.
         let (Some(fingerprint), Some(quota)) = (request.principal.clone(), request.quota.clone())
         else {
             return (
-                refuse(
+                crate::gateway::delivery_facts::refused(refuse(
                     request,
                     "unbindable_caller",
                     -32003,
                     "this destructive call cannot be confirmed for a caller this gateway cannot name",
-                ),
+                )),
                 witness,
             );
         };
