@@ -53,7 +53,7 @@ async fn a_delivered_task_frame_is_tagged_and_logged_as_sent() {
     let subscription = SubscriptionId::of_request(RequestId::Number(5));
 
     let pending = meta
-        .task_notification_frame(&published(), None, |_| false, &subscription)
+        .task_notification_frame(&published(), None, |_| None, &subscription)
         .await
         .expect("a frame is built");
     let frame = pending.frame.clone();
@@ -87,7 +87,7 @@ async fn a_task_frame_that_cannot_be_logged_is_withheld_when_fail_closed() {
     log.fail_next_append_for_test();
 
     let pending = meta
-        .task_notification_frame(&published(), None, |_| false, &subscription)
+        .task_notification_frame(&published(), None, |_| None, &subscription)
         .await
         .expect("a frame is built");
     let frame = pending.frame.clone();
@@ -136,7 +136,7 @@ async fn a_frame_carries_the_task_as_it_is_at_delivery() {
                 stored,
                 super::sealed_hold::CarriedHolds::none(),
             )),
-            |_| false,
+            |_| None,
             &subscription,
         )
         .await

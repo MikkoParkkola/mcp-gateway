@@ -479,6 +479,17 @@ fn modern_task_meta() -> Value {
 /// Submit `arguments` to `alpha`'s `read` as a task under idempotency `key`;
 /// the task's id.
 async fn submit_task(fx: &Fx, key: &str, arguments: Value) -> String {
+    let created = submit_task_raw(fx, key, arguments).await;
+    created
+        .pointer("/result/taskId")
+        .and_then(Value::as_str)
+        .unwrap_or_else(|| panic!("the submit was refused: {created}"))
+        .to_owned()
+}
+
+/// [`submit_task`]'s answer as it came back: a repeat under the same `key`
+/// is answered from the stored task, or refused.
+async fn submit_task_raw(fx: &Fx, key: &str, arguments: Value) -> Value {
     use super::direct_guards_fixture::send_with_headers;
     let modern = modern_task_meta();
     let mut submit_meta = modern.clone();
@@ -494,13 +505,9 @@ async fn submit_task(fx: &Fx, key: &str, arguments: Value) -> String {
         ("mcp-method", "tools/call"),
         ("mcp-name", "gateway_invoke"),
     ];
-    let (_, created) =
-        send_with_headers(fx, "/mcp", "k-std", "tools/call", submit, None, &headers).await;
-    created
-        .pointer("/result/taskId")
-        .and_then(Value::as_str)
-        .unwrap_or_else(|| panic!("the submit was refused: {created}"))
-        .to_owned()
+    send_with_headers(fx, "/mcp", "k-std", "tools/call", submit, None, &headers)
+        .await
+        .1
 }
 
 /// One `tasks/get` of task `id`, as `k-std`.
