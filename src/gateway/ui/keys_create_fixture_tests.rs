@@ -230,7 +230,8 @@ impl Fixture {
 
     /// Who the route should record for `client`.
     pub(super) fn who(&self, client: &AuthenticatedClient) -> Value {
-        let key = self.live.generation().auth().record_key().clone();
+        let generation = self.live.generation();
+        let key = generation.auth().record_key().clone();
         serde_json::to_value(AuditWho::from_request(Some(client), None, &key)).expect("who")
     }
 

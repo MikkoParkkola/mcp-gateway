@@ -141,7 +141,11 @@ fn p11_the_key_is_live_though_the_reload_reports_auth_pending() {
 /// admin key and for a dashboard session.
 #[test]
 fn a5_the_intent_names_the_caller_and_the_key() {
-    let session = crate::gateway::auth_clients::dashboard_client();
+    let session = crate::gateway::auth::AuthenticatedClient {
+        name: "dashboard".into(),
+        credential_kind: crate::security::audit::CredentialKind::DashboardSession,
+        ..admin_client()
+    };
     for client in [admin_client(), session] {
         let fx = Fixture::new(Setup::default());
         let mut call = Call::new(&fx.body("watched"));
