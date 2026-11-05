@@ -346,11 +346,16 @@ async fn drive(
             () = tokio::time::sleep_until(deadline) => return Ok(End::Lifetime),
             _ = recheck.tick(), if may.recheck => {
                 if let Err(end) = conn.upkeep().await { return Ok(end); }
+                // The next check is a period after this one ends, not after
+                // it began: a check slower than the period would otherwise be
+                // due again at once and win every pass of the biased race.
+                recheck.reset();
                 served.recheck = true;
                 Pass::Upkept
             }
             _ = keep.tick(), if may.keep => {
                 conn.send(Bytes::from_static(b": keep-alive\n\n")).await?;
+                keep.reset();
                 served.keep = true;
                 Pass::Upkept
             }

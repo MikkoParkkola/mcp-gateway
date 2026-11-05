@@ -235,11 +235,13 @@ impl<S: LogSource> LogMerge<S> {
                     inv: true,
                     gov: true,
                 });
+                // Not `None`, which an id reads as "not carried, start at the
+                // head": the replay is owed until its first row is acked.
                 if gone.inv {
-                    self.delivered.inv = None;
+                    self.delivered.inv = Some(super::id::replay_pending());
                 }
                 if gone.gov {
-                    self.delivered.gov = None;
+                    self.delivered.gov = Some(super::id::replay_pending());
                 }
                 self.recovery = None;
             }
