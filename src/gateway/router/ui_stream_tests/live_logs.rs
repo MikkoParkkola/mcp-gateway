@@ -777,3 +777,40 @@ async fn r2_a_gapped_log_reached_by_a_replay_goes_live_across_reconnects() {
         assert!(live.data.contains(&want), "round {round}");
     }
 }
+
+#[tokio::test]
+async fn l2_snapshots_changing_faster_than_a_send_do_not_starve_a_live_stream() {
+    let (state, _dirs, inv) = logged(false).await;
+    let mut s = open(&state, request(STREAM, Who::Bearer(BEARER), None)).await;
+    within(s.until("hello")).await;
+    tokio::time::pause();
+    // Every check takes 1.5 s, so a snapshot send (two checks) takes about
+    // 3 s, and a status change lands every second: a snapshot is always due.
+    state
+        .dashboard_bootstrap
+        .stream_hub()
+        .slow_validation_for_test(1_500);
+    let churn = {
+        let state = Arc::clone(&state);
+        tokio::spawn(async move {
+            for i in 0.. {
+                let _ = state.backends.register(http_backend_at(
+                    &format!("churn-{i}"),
+                    "http://127.0.0.1:9/mcp",
+                ));
+                tokio::time::sleep(Duration::from_secs(1)).await;
+            }
+        })
+    };
+    // The premise: the churn reaches the stream as status frames.
+    within(s.until("status")).await;
+    within(s.until("status")).await;
+    call(&inv, "srv", 1);
+    let frame = within(s.until("activity")).await;
+    churn.abort();
+    assert!(
+        frame.data.contains("tool_1"),
+        "the call arrives though a snapshot is always due: {}",
+        frame.data
+    );
+}
