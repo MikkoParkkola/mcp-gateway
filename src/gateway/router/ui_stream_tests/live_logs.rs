@@ -357,14 +357,15 @@ async fn r1b_a_reconnect_with_the_reset_frames_id_still_gets_the_replay() {
     .await;
     within(again.until("hello")).await;
     call(&inv, "srv", 4);
-    // Read up to the call made after the reconnect.
-    let mut seen = Vec::new();
-    while seen.last() != Some(&4) {
-        seen.push(inv_counter(&within(again.until("activity")).await));
+    // Read up to the call made after the reconnect. Tool names, not
+    // counters: the log's counters also count its segment-opened record.
+    let mut seen: Vec<String> = Vec::new();
+    while seen.last().map(String::as_str) != Some("tool_4") {
+        seen.extend(tools(&mut again, 1).await);
     }
     assert_eq!(
         seen,
-        [1, 2, 3, 4],
+        ["tool_1", "tool_2", "tool_3", "tool_4"],
         "the replay the reset announced still comes, from the oldest record"
     );
 }
