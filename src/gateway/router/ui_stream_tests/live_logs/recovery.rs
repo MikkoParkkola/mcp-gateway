@@ -210,7 +210,7 @@ async fn l2_snapshots_changing_faster_than_a_send_do_not_starve_a_live_stream() 
     let churn = {
         let state = Arc::clone(&state);
         tokio::spawn(async move {
-            for i in 0.. {
+            for i in 0..10_000 {
                 let _ = state.backends.register(http_backend_at(
                     &format!("churn-{i}"),
                     "http://127.0.0.1:9/mcp",
@@ -249,7 +249,7 @@ async fn l3_a_key_removed_under_load_gets_no_row_made_after_the_removal() {
     let churn = {
         let state = Arc::clone(&state);
         tokio::spawn(async move {
-            for i in 0.. {
+            for i in 0..10_000 {
                 let _ = state.backends.register(http_backend_at(
                     &format!("churn-{i}"),
                     "http://127.0.0.1:9/mcp",
@@ -271,7 +271,7 @@ async fn l3_a_key_removed_under_load_gets_no_row_made_after_the_removal() {
     let writer = {
         let inv = Arc::clone(&inv);
         tokio::spawn(async move {
-            for n in 2.. {
+            for n in 2..10_000 {
                 call(&inv, "a", n);
                 tokio::time::sleep(Duration::from_millis(500)).await;
             }

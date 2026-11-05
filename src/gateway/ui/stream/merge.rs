@@ -409,10 +409,10 @@ impl<S: LogSource> LogMerge<S> {
                 // replay, reset twice and end, and the stream never go live.
                 tracing::debug!("ui stream: the replay reset again, going live from the head");
                 if page.reset.inv {
-                    self.delivered.inv = self.stop.inv.clone();
+                    self.delivered.inv.clone_from(&self.stop.inv);
                 }
                 if page.reset.gov {
-                    self.delivered.gov = self.stop.gov.clone();
+                    self.delivered.gov.clone_from(&self.stop.gov);
                 }
                 self.recovery = None;
                 self.hint = None;
