@@ -290,7 +290,7 @@ def elf(sections: list[tuple[str, bytes]]) -> bytes:
 
 
 REPORT_ROOT = "target/llvm-cov-target"
-FIXTURE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "testdata", "llvm_cov_report_v.log")
+FIXTURE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "testdata", "llvm_cov_report_v.txt")
 
 
 def manifest_paths(text: str) -> dict[str, str]:
