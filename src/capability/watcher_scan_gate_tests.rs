@@ -88,22 +88,24 @@ async fn a_reload_held_past_the_slow_bound_is_warned_once() {
         dir.path(),
         ReloadTuning {
             debounce: Duration::from_millis(50),
-            reload_slow: Duration::from_millis(200),
+            reload_slow: Duration::from_millis(400),
             ..ReloadTuning::default()
         },
     )
     .await;
-    // Events keep arriving, each past the debounce but inside the slow
-    // bound: the wait is timed from the first held reload, so it still warns.
+    // Events keep arriving 150 ms apart: past the debounce, so each gap has a
+    // 100 ms loop tick that finds the reload due and holds it, yet well inside
+    // the slow bound. Timed from the first held reload, the warning fires
+    // while they still arrive; timed from the last event, it never would.
     for _ in 0..8 {
         event_tx.send(()).await.expect("the event lands");
         // timing: absence
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        tokio::time::sleep(Duration::from_millis(150)).await;
     }
     // Asserted before the quiet period: a timer reset by each event would
     // still be silent here, and would only fire once the events stop.
     assert_eq!(counts.borrow()[0], 1, "warned while events kept arriving");
     // timing: absence
-    tokio::time::sleep(Duration::from_millis(400)).await;
+    tokio::time::sleep(Duration::from_millis(600)).await;
     assert_eq!(counts.borrow()[0], 1, "one warning for one held reload");
 }
