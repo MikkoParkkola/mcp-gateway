@@ -135,10 +135,14 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 180
     strategy:
-      fail-fast: false
+      fail-fast: true
       matrix:
         part: ${{ fromJSON(needs.linux-plan.outputs.parts) }}
     steps:
+      - name: Planted failure (red proof, never merged)
+        env:
+          PART: ${{ matrix.part }}
+        run: '[ "$PART" != lib-a ] || { echo "planted: part lib-a fails"; exit 1; }'
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
         with:
@@ -236,7 +240,7 @@ jobs:
     runs-on: windows-2025
     # Pull requests grade Linux only (runner budget); every release-line push grades
     # Windows too, so a Windows-only shortfall is caught at most one merge later.
-    if: github.event_name != 'pull_request'
+    if: false # red proof: Windows not needed
     timeout-minutes: 300
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
