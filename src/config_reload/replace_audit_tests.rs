@@ -605,6 +605,7 @@ async fn a_config_others_can_write_is_refused_before_its_intent() {
         Audit::Required {
             sink: Box::new(recorder.clone()),
             kind: IntentKind::Save,
+            writer: None,
         },
         WAIT,
     )
@@ -639,6 +640,7 @@ async fn a_pending_recovery_on_a_config_others_can_write_is_refused_before_its_i
         Audit::Required {
             sink: Box::new(recorder.clone()),
             kind: IntentKind::Save,
+            writer: None,
         },
         WAIT,
     )
