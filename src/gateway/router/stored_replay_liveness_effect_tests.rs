@@ -115,7 +115,10 @@ async fn a_lift_whose_stored_slot_was_evicted_records_none() {
     answer_marker(&fx);
     let params = || invoke_params(Some("e1-evicted"), false);
     let first = send(&fx, "tools/call", "gateway_invoke", params()).await;
-    assert!(first.to_string().contains(MARKER), "premise: dispatched: {first}");
+    assert!(
+        first.to_string().contains(MARKER),
+        "premise: dispatched: {first}"
+    );
     let backend = fx.gateway.backends().get(BACKEND).expect("the backend");
     backend.forget_caller_slots_for_test();
     fx.gateway.rearm_operator_slot_for_test();
@@ -127,7 +130,10 @@ async fn a_lift_whose_stored_slot_was_evicted_records_none() {
     );
     let sent = fx.gateway.tool_calls().len();
     let again = send(&fx, "tools/call", "gateway_invoke", params()).await;
-    assert!(again.to_string().contains(MARKER), "premise: served: {again}");
+    assert!(
+        again.to_string().contains(MARKER),
+        "premise: served: {again}"
+    );
     assert_eq!(fx.gateway.tool_calls().len(), sent, "premise: not re-sent");
     let all = decisions(&fx);
     let last = all.last().expect("the replay's record");

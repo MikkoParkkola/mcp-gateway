@@ -450,3 +450,44 @@ async fn a_stdio_replay_with_no_stored_slot_records_none() {
     assert_eq!(stored, None, "premise: nothing noted, nothing stored");
     assert_no_effect(&decision);
 }
+
+/// A result stored under a per-user slot, replayed after the backend stopped
+/// propagating identity (so `alpha` has no per-user slots now, and resolving
+/// that binding again would collapse it to the shared slot). The shared slot
+/// declares `read` read-only. The replay looks up the stored slot itself,
+/// which does not exist, and records no effect, never the shared slot's.
+#[tokio::test]
+async fn a_replay_after_propagation_is_turned_off_records_none() {
+    let dir = tempfile::tempdir().unwrap();
+    let (meta, _) = listing(Some(true), &dir);
+    relist(&meta, Some(true));
+    let alpha = meta.backends.for_test().get("alpha").expect("alpha");
+    assert_eq!(
+        alpha.declared_effect_for(Some("b-1"), "read"),
+        Some(crate::security::decision_record::Effect::ReadOnly),
+        "premise: re-resolving the binding reads the shared slot"
+    );
+    let who = api_key_caller();
+    let facts = crate::gateway::meta_mcp::admission::ReplayFacts {
+        server: Some("alpha".to_owned()),
+        tool: Some("read".to_owned()),
+        slot: Some(PoolKey::PerUser {
+            binding: "b-1".to_owned(),
+        }),
+        ..Default::default()
+    };
+    let response = JsonRpcResponse::success(RequestId::Number(7), ok_result());
+    let _ = meta
+        .audit_replay(
+            INVOKE,
+            &args(),
+            None,
+            &context(&AllowAll, &who),
+            response,
+            facts,
+        )
+        .await;
+    let all = records(&dir);
+    assert_eq!(all.len(), 1, "{all:?}");
+    assert_no_effect(&all[0]["decision"]);
+}
