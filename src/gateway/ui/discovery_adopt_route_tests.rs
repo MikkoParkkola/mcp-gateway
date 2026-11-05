@@ -608,3 +608,39 @@ async fn a_backend_written_by_hand_closes_its_decision() {
     })
     .await;
 }
+
+/// An audit log that refuses the adopt's intent refuses the write: 503
+/// `audit_log_required`, nothing written. Only an append the log itself
+/// refused answers this way; any other refusal is a 500.
+#[tokio::test]
+async fn a_failed_intent_append_is_an_audit_refusal_and_writes_nothing() {
+    use crate::security::transparency_log::rotation_fault::WriteFault;
+    let mut route = Route::new(EMPTY, vec![stdio("tool", "npx tool", &[])]).await;
+    let log = Arc::new(
+        crate::security::TransparencyLogger::open(Arc::new(
+            crate::security::transparency_log::TransparencyLogConfig {
+                enabled: true,
+                path: route
+                    .dir
+                    .path()
+                    .join("audit.jsonl")
+                    .to_string_lossy()
+                    .into_owned(),
+                key_id: "adopt-append".to_string(),
+                ..Default::default()
+            },
+        ))
+        .expect("open log"),
+    );
+    Arc::get_mut(&mut route.state)
+        .expect("state is unique")
+        .transparency_log = Some(Arc::clone(&log));
+    let (id, revision) = route.listed("tool").await;
+    log.arm_write_fault(Some(WriteFault::WriteError));
+
+    let (status, body) = route.adopt(true, &id, &revision).await;
+
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{body}");
+    assert_eq!(body["error"], "audit_log_required", "{body}");
+    assert_eq!(route.bytes(), EMPTY.as_bytes());
+}
