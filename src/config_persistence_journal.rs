@@ -87,15 +87,39 @@ fn beside(target: &Path, suffix: &str) -> PathBuf {
 }
 
 /// The config a journal or staged original named `file` would belong to: the
-/// inverse of [`journal_path`] and [`original_path`], by name alone. `None`
-/// for a name neither builds (a name that is not UTF-8 among them).
+/// inverse of [`journal_path`] and [`original_path`], by name alone, on the
+/// name's own bytes, so a name that is not UTF-8 is still recognised.
 pub(crate) fn config_beside(file: &Path) -> Option<PathBuf> {
-    let name = file.file_name()?.to_str()?.strip_prefix('.')?;
+    let name = file.file_name()?;
     let config = [JOURNAL_SUFFIX, ORIGINAL_SUFFIX]
         .iter()
-        .find_map(|suffix| name.strip_suffix(suffix))
-        .filter(|config| !config.is_empty())?;
+        .find_map(|suffix| name_before(name, suffix))?;
     Some(file.with_file_name(config))
+}
+
+/// `name` without its leading `.` and `suffix`; `None` when it lacks either
+/// or nothing is left.
+#[cfg(unix)]
+fn name_before(name: &std::ffi::OsStr, suffix: &str) -> Option<std::ffi::OsString> {
+    use std::os::unix::ffi::OsStrExt;
+    let config = name
+        .as_bytes()
+        .strip_prefix(b".")?
+        .strip_suffix(suffix.as_bytes())?;
+    (!config.is_empty()).then(|| std::ffi::OsStr::from_bytes(config).to_os_string())
+}
+
+/// [`name_before`] on Windows, on the name's UTF-16 units, unpaired
+/// surrogates included.
+#[cfg(windows)]
+fn name_before(name: &std::ffi::OsStr, suffix: &str) -> Option<std::ffi::OsString> {
+    use std::os::windows::ffi::{OsStrExt, OsStringExt};
+    let units: Vec<u16> = name.encode_wide().collect();
+    let suffix: Vec<u16> = suffix.encode_utf16().collect();
+    let config = units
+        .strip_prefix(&[u16::from(b'.')])?
+        .strip_suffix(suffix.as_slice())?;
+    (!config.is_empty()).then(|| std::ffi::OsString::from_wide(config))
 }
 
 /// Whether a journal sits beside `config`. Cheap enough for a preflight: a
