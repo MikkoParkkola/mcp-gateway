@@ -217,7 +217,12 @@ fn w1_the_secret_never_enters_the_writers_input() {
         let word = line
             .split(|c: char| !(c.is_alphanumeric() || c == '_'))
             .any(|w| w == "secret");
-        let ok = ["api_key_digest_spec(", "random_secret(", "\"secret\""];
+        let ok = [
+            "api_key_digest_spec(",
+            "random_secret(",
+            "\"secret\"",
+            "created(",
+        ];
         assert!(
             !word || ok.iter().any(|o| line.contains(o)),
             "secret used in: {line}"

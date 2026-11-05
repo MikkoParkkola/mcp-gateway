@@ -26,8 +26,10 @@ use crate::config::{ApiKeyConfig, AuthConfig, Config, EnvOverlay};
 use crate::config_persistence::keyedit::{
     Change, FieldPath, Scalar, Segment, Template, edit_in_place,
 };
-use crate::config_reload::FileRevision;
-use crate::config_reload::{LiveConfig, refuse_multi_user_flip};
+use crate::config_reload::{
+    AuditPosture, Expected, FileRevision, GatewayAuth, IntentKind, LiveConfig, RELOAD_LOCK_WAIT,
+    Replace, ReplaceError, ReplaceOutcome, Replaced, refuse_multi_user_flip, replace_audited,
+};
 use crate::gateway::router::AppState;
 
 /// Under test, a request may carry the secret the route hands out, so a row
@@ -170,6 +172,7 @@ fn expired_by(expires_at: Option<DateTime<Utc>>) -> Result<(), Box<Response>> {
 struct Checked {
     revision: FileRevision,
     auth: AuthConfig,
+    context: Arc<crate::config_reload::ReloadContext>,
 }
 
 /// The preconditions, in order: a config file, reload and a loadable file, a
@@ -180,7 +183,7 @@ async fn preconditions(state: &AppState, body: &CreateBody) -> Result<Checked, B
     if matches!(read, Ok(Ok(Gateway::None))) {
         return Err(Box::new(coded(StatusCode::CONFLICT, "no_config_file")));
     }
-    let (Ok(Ok(Gateway::File { revision, config })), Some(_)) =
+    let (Ok(Ok(Gateway::File { revision, config })), Some(context)) =
         (read, state.meta_mcp.reload_context())
     else {
         return Err(Box::new(fixed(
@@ -197,6 +200,7 @@ async fn preconditions(state: &AppState, body: &CreateBody) -> Result<Checked, B
     Ok(Checked {
         revision,
         auth: config.auth,
+        context,
     })
 }
 
@@ -336,10 +340,103 @@ fn compute(
     }
 }
 
+fn audit_unavailable() -> Response {
+    coded(StatusCode::SERVICE_UNAVAILABLE, "audit_unavailable")
+}
+
+/// The key write's audit: its intent names the caller and the key. No log is
+/// no write, whatever the auth posture.
+fn audit_for(state: &AppState, guard: &Guard, name: &str) -> Option<crate::config_reload::Audit> {
+    let log = state.transparency_log.clone()?;
+    let auth = GatewayAuth::of(state.live_config.running().auth.enabled);
+    let who = super::admin_audit::caller_who(state, guard.client.as_ref(), guard.identity.as_ref());
+    AuditPosture::of(Some(log), auth)
+        .key_write(IntentKind::KeyCreate, who, name)
+        .ok()
+}
+
+/// Whether the live generation holds `name` under `digest` (a spec): the
+/// reload's own restart flag says nothing about a key list.
+fn landed(state: &AppState, name: &str, digest: &str) -> bool {
+    let Some(wanted) = crate::config::parse_api_key_digest(digest) else {
+        return false;
+    };
+    let generation = state.live_config.generation();
+    let keys = generation.auth().api_keys();
+    keys.iter().any(|k| k.name == name && k.digest == wanted)
+}
+
+/// The 201: the name, the key once, the new revision; never cached.
+fn created(name: &str, once: &str, revision: &FileRevision) -> Response {
+    let mut response = (
+        StatusCode::CREATED,
+        [(axum::http::header::CACHE_CONTROL, "no-store")],
+        Json(json!({"name": name, "secret": once, "revision": revision.as_str()})),
+    )
+        .into_response();
+    let detail = serde_json::json!({"key": name, "action": "create"});
+    if let Some(fields) = detail.as_object() {
+        let fields = super::admin_audit::AuditDetail(fields.clone());
+        response.extensions_mut().insert(fields);
+    }
+    response
+}
+
+/// The hand steps when keyedit cannot edit in place.
+fn not_written(state: &AppState) -> Response {
+    let path = state
+        .config_path
+        .as_ref()
+        .map(|p| p.display().to_string())
+        .unwrap_or_default();
+    (
+        StatusCode::CONFLICT,
+        Json(json!({
+            "error": "not_written",
+            "message": format!(
+                "{path} cannot be edited in place; nothing was written. Run \
+                 `mcp-gateway hash-key` on a new secret, add an entry to auth.api_keys \
+                 with the key_sha256 it prints, then reload."
+            ),
+        })),
+    )
+        .into_response()
+}
+
+/// Every write that did not end in a live key, as fixed text. The compute's
+/// own refusal wins; a writer refusal with none is the audit log's (the
+/// compute and the loader check are the others).
+fn refused_write(
+    state: &AppState,
+    refusal: Option<Refusal>,
+    written: Result<ReplaceOutcome, ReplaceError>,
+) -> Response {
+    match (refusal, written) {
+        (Some(Refusal::Expired), _) => invalid_field("expires_at"),
+        (Some(Refusal::Flip), _) => coded(StatusCode::CONFLICT, "restart_required"),
+        (Some(Refusal::NotWritten), _) => not_written(state),
+        (None, Err(ReplaceError::Stale { current })) => stale(&current),
+        (None, Err(ReplaceError::Busy)) => fixed(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "the config is being written; retry",
+        ),
+        (None, Err(ReplaceError::ReloadRefused(_))) => {
+            coded(StatusCode::CONFLICT, "reload_refused")
+        }
+        (None, Err(ReplaceError::Refused(_))) => audit_unavailable(),
+        (
+            None,
+            Err(ReplaceError::Unsupported(_) | ReplaceError::Stage(_) | ReplaceError::Write(_)),
+        ) => fixed(StatusCode::INTERNAL_SERVER_ERROR, "the key was not created"),
+        (None, _) => coded(StatusCode::INTERNAL_SERVER_ERROR, "state_uncertain"),
+    }
+}
+
 /// `POST /ui/api/keys`.
 pub(super) async fn create_key(
     State(state): State<std::sync::Arc<AppState>>,
     guard: Guard,
+    #[cfg(test)] known: Option<axum::Extension<KnownSecret>>,
     #[cfg(test)] before_lock: Option<axum::Extension<BeforeLock>>,
     body: Result<Json<CreateBody>, JsonRejection>,
 ) -> Response {
@@ -359,15 +456,38 @@ pub(super) async fn create_key(
     if let Err(refused) = expired_by(body.expires_at) {
         return *refused;
     }
+    let secret = crate::random_secret::random_secret("mcpgw_");
+    #[cfg(test)]
+    let secret = known.map_or(secret, |axum::Extension(k)| k.0);
+    let digest = crate::config::api_key_digest_spec(secret.as_bytes());
+    let name = body.name.clone();
+    let entry = NewKeyEntry::of(body, digest.clone());
+    let Some(audit) = audit_for(&state, &guard, &name) else {
+        return audit_unavailable();
+    };
+    let outcome = Outcome::default();
+    let judge = Judge {
+        live: Arc::clone(&state.live_config),
+        file_auth: checked.auth,
+        outcome: Arc::clone(&outcome),
+    };
+    let replace = Replace {
+        expected: Expected::Revision(checked.revision),
+        compute: Box::new(compute(entry, judge)),
+        replaced: Replaced::Discard,
+        secrets: None,
+    };
     #[cfg(test)]
     if let Some(axum::Extension(hook)) = &before_lock {
         (hook.0)();
     }
-    let _ = (
-        &checked.revision,
-        &checked.auth,
-        body.admin,
-        body.rate_limit,
-    );
-    StatusCode::NOT_IMPLEMENTED.into_response()
+    let written = replace_audited(checked.context, replace, audit, RELOAD_LOCK_WAIT).await;
+    let refusal = *outcome.lock().unwrap_or_else(|e| e.into_inner());
+    match written {
+        Ok(ReplaceOutcome {
+            revision: Some(revision),
+            ..
+        }) if landed(&state, &name, &digest) => created(&name, &secret, &revision),
+        other => refused_write(&state, refusal, other),
+    }
 }
