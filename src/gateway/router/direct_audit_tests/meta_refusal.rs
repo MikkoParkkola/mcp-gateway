@@ -220,3 +220,259 @@ async fn meta_list_tools_of_a_nonexistent_backend_records_no_refused() {
     let record = super::composite_refusals::last_delivery(&fx);
     assert_ne!(record["response_effect"], "refused", "{record}");
 }
+
+/// `gateway_list_tools` for `server`, as `caller`: the answer and the last
+/// delivery record.
+async fn list_tools_of(fx: &Fixture, server: Option<&str>, caller: &Caller) -> (Value, Value) {
+    let arguments = server.map_or_else(|| json!({}), |server| json!({"server": server}));
+    let list = json!({"jsonrpc": "2.0", "id": 5, "method": "tools/call",
+        "params": {"name": "gateway_list_tools", "arguments": arguments}});
+    let (_, answer) = post_to(fx, "/mcp", &list.to_string(), caller).await;
+    (answer, super::composite_refusals::last_delivery(fx))
+}
+
+/// The listing a `gateway_list_tools` answer carries, parsed.
+fn listing(answer: &Value) -> Value {
+    let text = answer["result"]["content"][0]["text"]
+        .as_str()
+        .unwrap_or_else(|| panic!("a listing: {answer}"));
+    serde_json::from_str(text).expect("the listing is JSON")
+}
+
+/// Fill `alpha`'s and `beta`'s shared catalogues now: a listing of every
+/// backend fills a cold one behind its read, never by it, so without this it
+/// could list nothing and "alpha left out" would prove nothing.
+async fn warm_shared_catalogues(fx: &Fixture) {
+    for name in ["alpha", "beta"] {
+        fx.state
+            .backends
+            .get(name)
+            .unwrap_or_else(|| panic!("{name} is registered"))
+            .get_tools_for_binding_lent(None, crate::transport::LentCredential::default())
+            .await
+            .unwrap_or_else(|e| panic!("{name}'s catalogue fills: {e}"));
+    }
+}
+
+/// Whether `answer` is the missing-backend answer for `alpha`.
+fn answered_as_missing(answer: &Value) -> bool {
+    answer.to_string().contains("alpha")
+        && answer.get("result").is_none_or(|r| r["isError"] == true)
+}
+
+/// A propagation strategy whose every mint fails, counting the attempts.
+#[derive(Default)]
+struct FailingMint {
+    mints: AtomicUsize,
+}
+
+#[async_trait::async_trait]
+impl crate::identity_propagation::IdentityPropagation for FailingMint {
+    async fn propagate(
+        &self,
+        _identity: &crate::key_server::oidc::VerifiedIdentity,
+        _backend: &crate::identity_propagation::BackendDescriptor,
+    ) -> Result<
+        crate::identity_propagation::PropagatedCredential,
+        crate::identity_propagation::PropagationError,
+    > {
+        self.mints.fetch_add(1, Ordering::SeqCst);
+        Err(crate::identity_propagation::PropagationError::Refuse(
+            "the issuer is down".to_owned(),
+        ))
+    }
+}
+
+/// A fixture with `extras` whose propagation mint always fails.
+async fn failing_mint_fixture(
+    extras: &'static [Extra],
+    multi_user: bool,
+) -> (Fixture, Arc<FailingMint>) {
+    let fx = fixture(Setup {
+        extras,
+        ..Setup::default()
+    })
+    .await;
+    let mint = Arc::new(FailingMint::default());
+    fx.state
+        .meta_mcp
+        .set_identity_propagation(Arc::clone(&mint) as _);
+    fx.state.meta_mcp.set_multi_user(multi_user);
+    (fx, mint)
+}
+
+/// A required backend named alone by a caller with an identity whose mint
+/// fails, as `multi_user` says: the answer and the delivery record.
+async fn listed_after_a_failed_mint(multi_user: bool) -> (Value, Value) {
+    let (fx, mint) = failing_mint_fixture(&[Extra::AlphaRequiresIdentity], multi_user).await;
+    let listed = list_tools_of(&fx, Some("alpha"), &Caller::Oidc).await;
+    assert!(
+        mint.mints.load(Ordering::SeqCst) > 0,
+        "multi_user={multi_user} premise: a mint was attempted and failed"
+    );
+    listed
+}
+
+/// A backend that requires the caller's identity, named alone by a caller
+/// that carries none: the answer and the delivery record.
+async fn listed_without_identity() -> (Value, Value) {
+    let fx = fixture(Setup {
+        extras: &[Extra::AlphaRequiresIdentity],
+        ..Setup::default()
+    })
+    .await;
+    list_tools_of(&fx, Some("alpha"), &Caller::Anonymous).await
+}
+
+/// On a multi-user gateway, a backend holding one person's OAuth login,
+/// named alone by `caller`, whom the isolation guard refuses; only isolation
+/// can hide it here (it propagates no identity, so nothing is minted).
+async fn listed_behind_isolation(caller: &Caller) -> (Value, Value) {
+    let fx = fixture(Setup {
+        extras: &[Extra::AlphaOAuthIsolated],
+        ..Setup::default()
+    })
+    .await;
+    fx.state.meta_mcp.set_multi_user(true);
+    list_tools_of(&fx, Some("alpha"), caller).await
+}
+
+/// Fail-fast control, written first: a caller whose mint for a required
+/// backend fails is not refused by a decision, on a single-user and a
+/// multi-user gateway alike; the omission records no refusal.
+#[tokio::test]
+async fn meta_list_tools_after_a_failed_mint_records_no_refused() {
+    for multi_user in [false, true] {
+        let (answer, record) = listed_after_a_failed_mint(multi_user).await;
+        assert!(
+            answered_as_missing(&answer),
+            "multi_user={multi_user} premise: the backend was omitted: {answer}"
+        );
+        assert_ne!(
+            record["response_effect"], "refused",
+            "multi_user={multi_user}: {record}"
+        );
+    }
+}
+
+/// A required backend named alone by a caller with no identity, on a
+/// single-user gateway (isolation admits it), is withheld: the gateway's
+/// decision, recorded refused.
+#[tokio::test]
+async fn meta_list_tools_of_an_identity_required_backend_records_refused() {
+    let (answer, record) = listed_without_identity().await;
+    assert!(answered_as_missing(&answer), "premise: {answer}");
+    assert_eq!(record["response_effect"], "refused", "{record}");
+}
+
+/// A backend only isolation hides, named alone, by a caller with or without
+/// an identity: recorded refused.
+#[tokio::test]
+async fn meta_list_tools_of_an_isolated_backend_records_refused() {
+    for (name, caller) in [("anonymous", Caller::Anonymous), ("oidc", Caller::Oidc)] {
+        let (answer, record) = listed_behind_isolation(&caller).await;
+        assert!(answered_as_missing(&answer), "{name} premise: {answer}");
+        assert_eq!(record["response_effect"], "refused", "{name}: {record}");
+    }
+}
+
+/// Control: an optional-propagation backend, for a caller whose mint fails,
+/// with no guard to hide it, falls back to the static credential and is
+/// listed as today: a failed mint alone omits nothing.
+#[tokio::test]
+async fn meta_list_tools_after_a_failed_optional_mint_still_lists() {
+    for multi_user in [false, true] {
+        let (fx, mint) = failing_mint_fixture(&[Extra::AlphaIdentityOptional], multi_user).await;
+        let (answer, record) = list_tools_of(&fx, Some("alpha"), &Caller::Oidc).await;
+        assert!(
+            mint.mints.load(Ordering::SeqCst) > 0,
+            "multi_user={multi_user} premise: a mint was attempted and failed"
+        );
+        let listed = listing(&answer);
+        assert!(
+            listed["server"] == "alpha"
+                && listed["tools"]
+                    .as_array()
+                    .is_some_and(|tools| tools.iter().any(|tool| tool["name"] == "t")),
+            "multi_user={multi_user}: alpha's tool t is listed: {answer}"
+        );
+        assert_ne!(
+            record["response_effect"], "refused",
+            "multi_user={multi_user}: {record}"
+        );
+    }
+}
+
+/// Control: on a multi-user gateway, an optional-propagation backend that
+/// holds a per-user OAuth login, for a caller whose mint fails: the resolver
+/// falls back to nothing minted (unproven), and the isolation guard then
+/// hides the backend. That omission follows a failed mint, so no refusal.
+#[tokio::test]
+async fn meta_list_tools_after_an_unproven_mint_records_no_refused() {
+    let (fx, mint) = failing_mint_fixture(
+        &[Extra::AlphaIdentityOptional, Extra::AlphaOAuthIsolated],
+        true,
+    )
+    .await;
+    let (answer, record) = list_tools_of(&fx, Some("alpha"), &Caller::Oidc).await;
+    assert!(answered_as_missing(&answer), "premise: omitted: {answer}");
+    assert!(
+        mint.mints.load(Ordering::SeqCst) > 0,
+        "premise: a mint was attempted and failed"
+    );
+    assert_ne!(record["response_effect"], "refused", "{record}");
+}
+
+/// Control: the all-backends listing leaves a withheld backend out silently,
+/// whichever decision withheld it; that is not a refusal of the call.
+#[tokio::test]
+async fn meta_list_tools_of_every_backend_records_no_refused() {
+    let required = fixture(Setup {
+        extras: &[Extra::AlphaRequiresIdentity],
+        ..Setup::default()
+    })
+    .await;
+    let isolated = fixture(Setup {
+        extras: &[Extra::AlphaOAuthIsolated],
+        ..Setup::default()
+    })
+    .await;
+    isolated.state.meta_mcp.set_multi_user(true);
+    let lists = |answer: &Value, server: &str| {
+        listing(answer)
+            .to_string()
+            .contains(&format!(r#""server":"{server}""#))
+    };
+    let lists_alpha = |answer: &Value| lists(answer, "alpha");
+    let plain = fixture(Setup::default()).await;
+    warm_shared_catalogues(&plain).await;
+    let (answer, _) = list_tools_of(&plain, None, &Caller::Anonymous).await;
+    assert!(
+        lists_alpha(&answer),
+        "premise: the check sees a listed alpha: {answer}"
+    );
+    for (name, fx) in [("required", &required), ("isolated", &isolated)] {
+        warm_shared_catalogues(fx).await;
+        let (answer, record) = list_tools_of(fx, None, &Caller::Anonymous).await;
+        assert!(
+            lists(&answer, "beta"),
+            "{name} premise: beta listed: {answer}"
+        );
+        assert!(
+            !lists_alpha(&answer),
+            "{name} premise: alpha left out: {answer}"
+        );
+        assert_ne!(record["response_effect"], "refused", "{name}: {record}");
+    }
+}
+
+/// The caller sees one answer whatever withheld the backend: a refusal
+/// changes the record, never the bytes.
+#[tokio::test]
+async fn a_withheld_backend_answers_the_same_for_every_reason() {
+    let (failed, _) = listed_after_a_failed_mint(true).await;
+    let (no_identity, _) = listed_without_identity().await;
+    let (isolated, _) = listed_behind_isolation(&Caller::Anonymous).await;
+    assert_eq!(no_identity, failed);
+    assert_eq!(isolated, failed);
+}

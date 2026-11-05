@@ -311,7 +311,7 @@ impl MetaMcp {
             if authorize_backend(client, &backend.name).is_err() {
                 continue;
             }
-            if let Some(credential) = self.catalogue_credential_for(&backend, caller).await {
+            if let Ok(credential) = self.catalogue_credential_for(&backend, caller).await {
                 credentialed.push((backend, credential));
             }
         }
@@ -417,7 +417,7 @@ impl MetaMcp {
             if authorize_backend(client, &backend.name).is_err() {
                 continue;
             }
-            let Some((headers, binding)) = self.catalogue_credential_for(&backend, caller).await
+            let Ok((headers, binding)) = self.catalogue_credential_for(&backend, caller).await
             else {
                 continue;
             };
@@ -469,7 +469,7 @@ impl MetaMcp {
             if authorize_backend(client, &backend.name).is_err() {
                 continue;
             }
-            let Some((headers, binding)) = self.catalogue_credential_for(&backend, caller).await
+            let Ok((headers, binding)) = self.catalogue_credential_for(&backend, caller).await
             else {
                 continue;
             };
