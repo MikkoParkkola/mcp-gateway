@@ -352,34 +352,48 @@ fn a_refused_journal_logs_no_owner_or_mode_fix() {
     }));
 }
 
+/// A gateway.yaml with a staged original and a journal beside it.
+fn config_with_recovery_files(dir: &Path) -> std::path::PathBuf {
+    use crate::config_persistence::journal;
+    let path = dir.join("gateway.yaml");
+    crate::gateway::test_helpers::write_owner_only(&path, START).expect("config");
+    journal::stage_original(&path, START.as_bytes()).expect("stage");
+    journal::begin(&path, crate::hashing::sha256_hex(START.as_bytes())).expect("journal");
+    path
+}
+
+/// `file` is refused as not the config, by the typed refusal.
+fn assert_not_the_config(file: &Path) {
+    let read = crate::config::read_config_text(file);
+    assert!(
+        matches!(read, Err(crate::config::UnreadConfig::NotTheConfig(_))),
+        "{} was read as a config: {read:?}",
+        file.display()
+    );
+}
+
+/// `path` reads as the config it is.
+fn assert_reads_as_config(path: &Path) {
+    let read = crate::config::read_config_text(path);
+    assert!(
+        matches!(&read, Ok(Some(text)) if text == START),
+        "{} no longer reads: {read:?}",
+        path.display()
+    );
+}
+
 /// The config class's guarded read refuses the replace journal and the
 /// staged original, and a symlink to either from another directory, with
 /// its own typed refusal; gateway.yaml itself reads as before.
 #[test]
 fn the_config_read_refuses_a_journal_or_staged_original() {
-    use crate::config::{UnreadConfig, read_config_text};
     use crate::config_persistence::journal;
     let dir = tempfile::tempdir().expect("tempdir");
-    let path = dir.path().join("gateway.yaml");
-    crate::gateway::test_helpers::write_owner_only(&path, START).expect("config");
-    journal::stage_original(&path, START.as_bytes()).expect("stage");
-    journal::begin(&path, crate::hashing::sha256_hex(START.as_bytes())).expect("journal");
-
-    assert!(
-        matches!(read_config_text(&path), Ok(Some(text)) if text == START),
-        "gateway.yaml no longer reads"
-    );
-    let refused = |file: &Path| {
-        assert!(
-            matches!(read_config_text(file), Err(UnreadConfig::NotTheConfig(_))),
-            "{} was read as a config: {:?}",
-            file.display(),
-            read_config_text(file)
-        );
-    };
+    let path = config_with_recovery_files(dir.path());
+    assert_reads_as_config(&path);
     let recovery_files = [journal::journal_path(&path), journal::original_path(&path)];
     for file in &recovery_files {
-        refused(file);
+        assert_not_the_config(file);
     }
     // Links live in another directory, so the refusal cannot lean on the
     // link sitting next to gateway.yaml.
@@ -389,7 +403,73 @@ fn the_config_read_refuses_a_journal_or_staged_original() {
         for (index, file) in recovery_files.iter().enumerate() {
             let link = elsewhere.path().join(format!("link-{index}.yaml"));
             std::os::unix::fs::symlink(file, &link).expect("symlink");
-            refused(&link);
+            assert_not_the_config(&link);
         }
     }
+}
+
+/// Held while a row runs from another working directory: the directory is
+/// process-wide.
+static CWD: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// A bare relative name, resolved against the working directory, is refused
+/// the same way.
+#[test]
+fn the_config_read_refuses_a_recovery_file_by_a_bare_relative_name() {
+    let _cwd = CWD
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let dir = tempfile::tempdir().expect("tempdir");
+    config_with_recovery_files(dir.path());
+    let back = std::env::current_dir().expect("working directory");
+    std::env::set_current_dir(dir.path()).expect("enter");
+    let reads = [
+        ".gateway.yaml.replace-journal",
+        ".gateway.yaml.replace-original",
+        "gateway.yaml",
+    ]
+    .map(|name| crate::config::read_config_text(Path::new(name)));
+    std::env::set_current_dir(back).expect("leave");
+    let [journal, original, config] = reads;
+    for read in [journal, original] {
+        assert!(
+            matches!(read, Err(crate::config::UnreadConfig::NotTheConfig(_))),
+            "a bare relative recovery file was read as a config: {read:?}"
+        );
+    }
+    assert!(
+        matches!(&config, Ok(Some(text)) if text == START),
+        "{config:?}"
+    );
+}
+
+/// Through a symlinked config directory, the recovery files are still
+/// refused and gateway.yaml still reads.
+#[cfg(unix)]
+#[test]
+fn the_config_read_refuses_a_recovery_file_through_a_linked_directory() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    config_with_recovery_files(dir.path());
+    let elsewhere = tempfile::tempdir().expect("another directory");
+    let linked = elsewhere.path().join("config-dir");
+    std::os::unix::fs::symlink(dir.path(), &linked).expect("symlink");
+    assert_reads_as_config(&linked.join("gateway.yaml"));
+    for name in [
+        ".gateway.yaml.replace-journal",
+        ".gateway.yaml.replace-original",
+    ] {
+        assert_not_the_config(&linked.join(name));
+    }
+}
+
+/// A gateway.yaml that is a hard link to its own journal is the journal
+/// under another name, which no path comparison sees: refused by identity.
+#[test]
+fn the_config_read_refuses_a_config_hard_linked_to_its_journal() {
+    use crate::config_persistence::journal;
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = config_with_recovery_files(dir.path());
+    std::fs::remove_file(&path).expect("remove the config");
+    std::fs::hard_link(journal::journal_path(&path), &path).expect("hard link");
+    assert_not_the_config(&path);
 }

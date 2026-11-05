@@ -576,7 +576,9 @@ pub(crate) enum UnreadConfig {
 /// # Errors
 ///
 /// [`UnreadConfig::Refused`] for a file the guard refuses,
-/// [`UnreadConfig::Failed`] when it cannot be opened or read.
+/// [`UnreadConfig::Failed`] when it cannot be opened or read,
+/// [`UnreadConfig::NotTheConfig`] for a replace journal or staged original,
+/// by name or by file identity.
 pub(crate) fn read_config_text(path: &Path) -> std::result::Result<Option<String>, UnreadConfig> {
     // Refused, not read as a recovery file: switching class here would hide
     // the wrong caller, and a caller that hands the config read a journal or
@@ -587,36 +589,79 @@ pub(crate) fn read_config_text(path: &Path) -> std::result::Result<Option<String
             path.display()
         )));
     }
+    if is_linked_to_its_recovery_files(path) {
+        return Err(UnreadConfig::NotTheConfig(format!(
+            "{} is the same file as its replace journal or staged original; only crash recovery reads it",
+            path.display()
+        )));
+    }
     read_text_of(path, SecretFile::Config)
 }
 
-/// `path`, canonical; for a missing file, its canonical parent plus its name.
-fn canonical_or_parent(path: &Path) -> Option<std::path::PathBuf> {
-    std::fs::canonicalize(path).ok().or_else(|| {
-        let parent = path.parent().filter(|p| !p.as_os_str().is_empty());
-        let parent = std::fs::canonicalize(parent.unwrap_or_else(|| Path::new("."))).ok()?;
-        Some(parent.join(path.file_name()?))
+/// `path`, canonical; for a missing file, its canonical parent plus its name;
+/// `path` itself when even the parent cannot be resolved.
+fn canonical_or_parent(path: &Path) -> std::path::PathBuf {
+    std::fs::canonicalize(path)
+        .ok()
+        .or_else(|| {
+            let parent = path.parent().filter(|p| !p.as_os_str().is_empty());
+            let parent = std::fs::canonicalize(parent.unwrap_or_else(|| Path::new("."))).ok()?;
+            Some(parent.join(path.file_name()?))
+        })
+        .unwrap_or_else(|| path.to_path_buf())
+}
+
+/// Whether `path` is the replace journal or staged original of some config:
+/// the config its name would belong to is derived, recovery's own helpers
+/// are applied to that config, and the results are compared canonical, so a
+/// symlink to one, or a spelling through another directory, is still that
+/// file. Nothing here is listed or opened, so nothing can fail open.
+fn is_recovery_file(path: &Path) -> bool {
+    use crate::config_persistence::journal::{config_beside, journal_path, original_path};
+    let target = canonical_or_parent(path);
+    config_beside(&target).is_some_and(|config| {
+        [journal_path(&config), original_path(&config)]
+            .iter()
+            .any(|file| canonical_or_parent(file) == target)
     })
 }
 
-/// Whether `path` is the replace journal or staged original of a config in
-/// its directory, by the same helpers recovery builds them with, compared
-/// canonical: a symlink to one, or a spelling through another directory, is
-/// still that file.
-fn is_recovery_file(path: &Path) -> bool {
+/// Whether `path` is the same file as its own replace journal or staged
+/// original under another name (a hard link), which no path comparison sees.
+/// Compared only for files that exist; a hard link between two different
+/// configs is out of scope.
+fn is_linked_to_its_recovery_files(path: &Path) -> bool {
     use crate::config_persistence::journal::{journal_path, original_path};
-    let Some(target) = canonical_or_parent(path) else {
-        return false;
-    };
-    let Some(Ok(entries)) = target.parent().map(std::fs::read_dir) else {
-        return false;
-    };
-    entries.flatten().any(|entry| {
-        let config = entry.path();
-        [journal_path(&config), original_path(&config)]
+    // A config that cannot be stat'ed has nothing to compare; the read that
+    // follows reports it.
+    file_identity(path).is_ok_and(|config| {
+        [journal_path(path), original_path(path)]
             .iter()
-            .any(|file| canonical_or_parent(file).as_ref() == Some(&target))
+            .any(|file| file_identity(file).is_ok_and(|id| id == config))
     })
+}
+
+/// (device, inode) of what `path` names, read without opening it, so a FIFO
+/// cannot block the read.
+#[cfg(unix)]
+fn file_identity(path: &Path) -> std::io::Result<(u64, u128)> {
+    use std::os::unix::fs::MetadataExt;
+    let meta = std::fs::metadata(path)?;
+    Ok((meta.dev(), u128::from(meta.ino())))
+}
+
+/// (volume serial, file id) of what `path` names, from a handle opened for
+/// attributes only, sharing everything so no writer is blocked.
+#[cfg(windows)]
+fn file_identity(path: &Path) -> std::io::Result<(u64, u128)> {
+    use std::os::windows::fs::OpenOptionsExt;
+    const FILE_READ_ATTRIBUTES: u32 = 0x80;
+    const SHARE_ALL: u32 = 0x7; // FILE_SHARE_READ | WRITE | DELETE
+    let file = std::fs::OpenOptions::new()
+        .access_mode(FILE_READ_ATTRIBUTES)
+        .share_mode(SHARE_ALL)
+        .open(path)?;
+    crate::win_acl::file_identity(&file)
 }
 
 /// [`read_config_text`] for a replace journal or its staged original: the

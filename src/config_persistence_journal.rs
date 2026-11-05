@@ -80,6 +80,18 @@ fn beside(target: &Path, suffix: &str) -> PathBuf {
     target.with_file_name(name)
 }
 
+/// The config a journal or staged original named `file` would belong to: the
+/// inverse of [`journal_path`] and [`original_path`], by name alone. `None`
+/// for a name neither builds (a name that is not UTF-8 among them).
+pub(crate) fn config_beside(file: &Path) -> Option<PathBuf> {
+    let name = file.file_name()?.to_str()?.strip_prefix('.')?;
+    let config = [".replace-journal", ".replace-original"]
+        .iter()
+        .find_map(|suffix| name.strip_suffix(suffix))
+        .filter(|config| !config.is_empty())?;
+    Some(file.with_file_name(config))
+}
+
 /// Whether a journal sits beside `config`. Cheap enough for a preflight: a
 /// writer that parses the file before locking checks this first, so a
 /// stranded half-replaced file never blocks the recovery that fixes it.

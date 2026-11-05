@@ -91,6 +91,21 @@ fn mode_refusals(what: SecretFile, path: &std::path::Path) -> Vec<(&'static str,
         Refusal::GroupReadOwned => 2,
         Refusal::ForeignOwner => 3,
     };
+    // The variant count, kept beside the match: a new kind takes the next
+    // slot and raises it, and KINDS must then name it.
+    let variants = 4;
+    assert_eq!(
+        KINDS.len(),
+        variants,
+        "KINDS does not name every refusal kind"
+    );
+    let mut slots: Vec<usize> = KINDS.iter().map(|(_, refusal)| slot(*refusal)).collect();
+    slots.sort_unstable();
+    assert_eq!(
+        slots,
+        (0..variants).collect::<Vec<_>>(),
+        "the slots are not the full range"
+    );
     for (index, (_, refusal)) in KINDS.iter().enumerate() {
         assert_eq!(slot(*refusal), index, "{refusal:?} is not in its slot");
     }
@@ -116,6 +131,41 @@ fn mode_refusals(_: SecretFile, _: &std::path::Path) -> Vec<(&'static str, Strin
 /// config read has a fixed set of calling files, so a new calling file of
 /// either fails here and is a reviewed change. It pins files, not the
 /// paths each call is handed.
+/// A test file by its name or a `tests` directory, never by a "test"
+/// substring, which would exempt a production `latest.rs`.
+fn is_test_file(rel: &std::path::Path) -> bool {
+    let name = rel.file_name().and_then(|n| n.to_str()).unwrap_or_default();
+    name.ends_with("_tests.rs")
+        || name.ends_with("_test.rs")
+        || rel
+            .parent()
+            .is_some_and(|dir| dir.iter().any(|segment| segment == "tests"))
+}
+
+#[test]
+fn the_test_file_rule_skips_only_test_files() {
+    use std::path::Path;
+    for test in [
+        "a/b_tests.rs",
+        "b_test.rs",
+        "config/tests/env_files.rs",
+        "tests/x.rs",
+    ] {
+        assert!(is_test_file(Path::new(test)), "{test} is a test file");
+    }
+    for production in [
+        "latest.rs",
+        "contest/mod.rs",
+        "config/testing.rs",
+        "tests.rs",
+    ] {
+        assert!(
+            !is_test_file(Path::new(production)),
+            "{production} is not a test file"
+        );
+    }
+}
+
 #[test]
 fn the_recovery_and_config_reads_have_their_known_callers() {
     let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
@@ -128,9 +178,7 @@ fn the_recovery_and_config_reads_have_their_known_callers() {
                 let text = std::fs::read_to_string(&path).unwrap_or_default();
                 if path.is_dir() {
                     stack.push(path);
-                } else if !path
-                    .strip_prefix(&src)
-                    .is_ok_and(|rel| rel.to_string_lossy().contains("test"))
+                } else if !is_test_file(path.strip_prefix(&src).expect("under src"))
                     && crate::test_source_text::production_text(&text).contains(needle)
                 {
                     let rel = path.strip_prefix(&src).expect("under src");
