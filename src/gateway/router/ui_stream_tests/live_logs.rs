@@ -657,3 +657,53 @@ async fn l1_a_recheck_slower_than_its_period_does_not_starve_a_live_stream() {
         frame.data
     );
 }
+
+#[tokio::test]
+async fn r1c_a_replay_that_shows_nothing_leaves_later_ids_without_the_marker() {
+    // Every call is on a backend the scoped key does not have, so the
+    // replay after the reset shows this viewer no row.
+    let (state, _dirs, inv) = logged(false).await;
+    for n in 1..=3 {
+        call(&inv, "x", n);
+    }
+    let mut s = open(&state, request(STREAM, Who::Bearer(SCOPED_ADMIN), None)).await;
+    within(s.until("hello")).await;
+    let id = within(s.until("status"))
+        .await
+        .id
+        .expect("a status frame carries an id");
+    drop(s);
+    let head = Frame {
+        id: Some(id.clone()),
+        ..parse("")
+    }
+    .part('i')
+    .expect("the id carries the invocation position");
+    let counter = head.split('-').next().unwrap();
+    let wrong_id = id.replace(&head, &format!("{counter}-ffffffffffffffff"));
+    let mut again = open(
+        &state,
+        request(STREAM, Who::Bearer(SCOPED_ADMIN), Some(&wrong_id)),
+    )
+    .await;
+    within(again.until("hello")).await;
+    within(again.until("reset")).await;
+    // Two status changes: during a catch-up a snapshot is served at most
+    // once before the next page, so the second follows the replay's page.
+    for name in ["docs-1", "docs-2"] {
+        let _ = state
+            .backends
+            .register(http_backend_at(name, "http://127.0.0.1:9/mcp"));
+        within(again.until("status")).await;
+    }
+    let _ = state
+        .backends
+        .register(http_backend_at("docs-3", "http://127.0.0.1:9/mcp"));
+    let after = within(again.until("status")).await;
+    assert_ne!(
+        after.part('i').as_deref(),
+        Some("0-0000000000000000"),
+        "a finished replay is not owed again: {:?}",
+        after.id
+    );
+}
