@@ -31,7 +31,7 @@ pub(crate) use self::lender::{Lender, LentCredential, Loan, Refusal, SendCheck};
 // Only the A2A deferred cancel counts its refusal from outside the lender.
 #[cfg(feature = "a2a")]
 pub(crate) use self::lender::count_refusal;
-#[cfg(test)]
+#[cfg(all(test, unix))]
 pub(crate) use self::stdio::KILL_RESERVE_FOR_TEST;
 #[cfg(test)]
 pub(crate) use self::stdio::assigned_package_cache_dir;

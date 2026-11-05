@@ -96,7 +96,7 @@ impl StopDeadline {
     }
 
     /// How many handovers are tracked, finished or not.
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     pub(crate) fn handed_len(&self) -> usize {
         self.handed.lock().len()
     }
