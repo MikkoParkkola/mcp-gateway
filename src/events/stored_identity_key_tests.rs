@@ -91,3 +91,46 @@ fn a_per_user_row_naming_nobody_gets_no_listener_key() {
         );
     }
 }
+
+/// What the runtime start runs before it replays any key: a row whose stored
+/// identity names nobody is revoked and gone, and a sibling naming someone
+/// is kept.
+#[tokio::test]
+async fn a_row_naming_nobody_is_revoked_before_anything_starts() {
+    let dir = tempfile::tempdir().expect("dir");
+    let events = crate::config::EventsConfig::default();
+    let hub = EventsHub::open(&events, dir.path()).expect("hub");
+    assert!(hub.runtime.services.set(Arc::new(services())).is_ok());
+    let name = "backend.signed.tools_changed";
+    for (id, subject) in [("sub_nobody", ""), ("sub_someone", "q")] {
+        let mut stored = row(name, &identity(subject));
+        stored.id = id.into();
+        stored.principal = id.into();
+        hub.store
+            .admit(
+                stored,
+                true,
+                store::Caps {
+                    per_principal: 10,
+                    global: 10,
+                },
+                chrono::Duration::zero(),
+                chrono::Utc::now(),
+                tail_policy(&events),
+            )
+            .expect("io")
+            .expect("admitted");
+    }
+    hub.revoke_unobservable(None).await;
+    let left: Vec<String> = hub
+        .store
+        .subscriptions()
+        .into_iter()
+        .map(|s| s.id)
+        .collect();
+    assert_eq!(
+        left,
+        vec!["sub_someone".to_owned()],
+        "the nobody row is revoked; the row naming someone stays"
+    );
+}
