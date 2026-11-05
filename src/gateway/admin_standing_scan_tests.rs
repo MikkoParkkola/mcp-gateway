@@ -648,13 +648,10 @@ fn the_scan_finds_a_new_raw_admin_read() {
 #[test]
 fn the_scan_finds_a_destructured_read_and_a_direct_admin_standing() {
     let cells = [
-        ("let AuthenticatedClient { admin, .. } = client;", 1),
-        (
-            "let AuthenticatedClient { name, admin: flag, .. } = client;",
-            1,
-        ),
+        ("let Caller { admin, .. } = client;", 1),
+        ("let Caller { name, admin: flag, .. } = client;", 1),
         ("match c { Self { admin: _, .. } => {} }", 1),
-        ("AuthenticatedClient { admin: true, ..base }", 0),
+        ("Caller { admin: true, ..base }", 0),
     ];
     for (text, want) in cells {
         let files = vec![("src/new.rs".to_owned(), text.to_owned())];
