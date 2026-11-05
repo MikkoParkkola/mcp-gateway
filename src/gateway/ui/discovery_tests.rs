@@ -230,3 +230,19 @@ async fn the_adopt_rule_is_the_routes_own() {
         "without a config file nothing is a decision"
     );
 }
+
+/// The line discovery logs when gateway.yaml does not load, word for word:
+/// the reader is shared, and discovery's own text must not change with it.
+#[test]
+fn a_config_that_does_not_load_logs_discoverys_own_line() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let broken = gateway_file(dir.path(), "backends: [\n");
+    let (captured, _guard) = crate::gateway::session_id::log_capture::capture_debug();
+    assert!(read_gateway(Some(&broken)).is_err());
+    let text = captured.text();
+    assert!(
+        text.lines().any(|line| line.contains("WARN")
+            && line.contains("discovery: gateway.yaml could not be loaded")),
+        "{text}"
+    );
+}
