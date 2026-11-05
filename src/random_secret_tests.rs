@@ -117,10 +117,12 @@ fn random_secret_is_called_only_where_listed() {
         .into_iter()
         .filter(|(file, _)| file != "src/random_secret.rs")
         .filter_map(|(file, code)| {
-            // Every caller names the shared fn by its path, so the count
-            // never takes in another module's own `random_secret()`. String
-            // literals are blanked in `code`, so the prefix cannot be matched.
-            let count = code.matches("random_secret::random_secret(").count();
+            // Any path into the module counts: a call, a `use` of the fn or
+            // the module, an alias or a glob import all name
+            // `random_secret::`, so none of them reaches the generator
+            // unlisted. Another module's own `random_secret()` has no such
+            // path. String literals are blanked in `code`.
+            let count = code.matches("random_secret::").count();
             (count > 0).then_some((file, count))
         })
         .collect();
@@ -135,20 +137,73 @@ fn random_secret_is_called_only_where_listed() {
     );
 }
 
-/// No other production code draws 32 random bytes and base64url-encodes
-/// them: a second credential generator would escape the caller list.
+/// The randomness entry points a generator can draw from, in any spelling
+/// this codebase uses.
+const RNG_ENTRY_POINTS: &[&str] = &[
+    "rand::rng()",
+    "rand::random",
+    "thread_rng",
+    "OsRng",
+    "SystemRandom",
+    "getrandom",
+    "fill_bytes",
+    "rand::fill",
+];
+
+/// Production files that both draw random bytes and use base64url, each
+/// reviewed as not being a second credential generator. A new such file
+/// fails until it calls `random_secret` or is reviewed and listed here.
+const RANDOM_BASE64URL_REVIEWED: &[(&str, &str)] = &[
+    (
+        "src/a2a/delegation.rs",
+        "a 128-bit cancel token whose RNG failure is recoverable",
+    ),
+    (
+        "src/events/client.rs",
+        "a verification challenge the subscriber echoes, never a credential",
+    ),
+    (
+        "src/gateway/ui/activity/cursor.rs",
+        "an HMAC key; base64url encodes the signed body, not random bytes",
+    ),
+    (
+        "src/gateway/ui/backends/signin_flow.rs",
+        "a 16-byte sign-in attempt id",
+    ),
+    (
+        "src/oauth/client/mod.rs",
+        "16-byte state and client ids; its PKCE verifier calls random_secret",
+    ),
+    (
+        "src/personal_accounts/journey/mod.rs",
+        "its own generator with a recoverable RNG error (a register row)",
+    ),
+    (
+        "src/protocol/continuation/keyring.rs",
+        "signing-key material; base64url names its key ids",
+    ),
+];
+
+/// No other production code draws random bytes and base64url-encodes them
+/// unreviewed: a second credential generator would escape the caller list,
+/// whatever RNG or spelling it used.
 #[test]
 fn no_other_credential_generator_exists() {
-    let generators: Vec<String> = production_sources()
+    let mut found: Vec<String> = production_sources()
         .into_iter()
         .filter(|(file, _)| file != "src/random_secret.rs")
         .filter(|(_, code)| {
-            code.contains("[u8; 32] = rand::rng().random()") && code.contains("URL_SAFE_NO_PAD")
+            code.contains("URL_SAFE") && RNG_ENTRY_POINTS.iter().any(|rng| code.contains(rng))
         })
         .map(|(file, _)| file)
         .collect();
-    assert!(
-        generators.is_empty(),
-        "credential generators outside random_secret.rs: {generators:?}"
+    found.sort();
+    let want: Vec<String> = RANDOM_BASE64URL_REVIEWED
+        .iter()
+        .map(|(file, _)| (*file).to_owned())
+        .collect();
+    assert_eq!(
+        found, want,
+        "random bytes and base64url outside random_secret.rs: call it, or review the file and list it"
     );
 }
