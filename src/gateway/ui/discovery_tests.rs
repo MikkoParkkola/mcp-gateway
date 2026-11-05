@@ -11,6 +11,7 @@ use futures::future::BoxFuture;
 
 use super::*;
 use crate::config::TransportConfig;
+use crate::config_reload::FileRevision;
 use crate::discovery::config_scanner::ConfigScanner;
 use crate::discovery::config_scanner::client_scan::{ClientScan, Fingerprint};
 use crate::discovery::listing::ScanSource;

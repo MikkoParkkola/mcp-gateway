@@ -21,7 +21,7 @@ use axum::routing::{get, post};
 use serde_json::json;
 
 use super::backends::validate_backend_name;
-use super::config_file::{Gateway, read_gateway};
+use super::config_file::{Gateway, load_gateway, read_gateway};
 use super::errors::flat_error;
 use super::guard::Guard;
 use crate::discovery::listing::{DiscoveryCache, ListedFind, Listing, Refusal};
