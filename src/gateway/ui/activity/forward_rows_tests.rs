@@ -611,9 +611,11 @@ fn one_call_opens_the_active_file_at_most_twice() {
     // crosses into it again: twice, the most one call opens it.
     let mut search = Search::default();
     rows_after(&l, None, w.marks.last(), &Access::All, five, &mut search).unwrap();
-    let bytes = std::fs::read(&path).unwrap();
-    std::fs::remove_file(&path).unwrap();
-    std::fs::write(&path, bytes).unwrap();
+    // A new file with the same bytes, renamed over the active one: both
+    // exist at once, so the new file cannot reuse the old one's inode.
+    let copy = path.with_extension("rewrite");
+    std::fs::copy(&path, &copy).unwrap();
+    std::fs::rename(&copy, &path).unwrap();
     let restarted = active_opens(&path, || {
         let page = rows_after(
             &l,
