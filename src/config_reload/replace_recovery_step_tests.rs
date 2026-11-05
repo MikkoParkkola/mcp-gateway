@@ -1,67 +1,11 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! A journal recovery that cannot act names a safe manual step, and leaves
-//! gateway.yaml and the journal as the crash left them. The asserts are
-//! properties of the step, not its sentence: which file it names, and
-//! whether it advises a restore only where one can be safe.
+//! A journal recovery that cannot act gives the reviewed manual step for its
+//! case, word for word, and leaves gateway.yaml and the journal as the crash
+//! left them. Exact texts: a phrase list can be beaten by a synonym, so any
+//! rewording fails here and goes back to review.
 
 use super::*;
-
-/// What the case allows the manual step to advise.
-#[derive(Clone, Copy, Debug)]
-enum Restore {
-    /// The journal is unreadable: inspect it first; a restore is offered
-    /// only of this target's staged original matching the recorded digest.
-    AfterInspection,
-    /// No restore and no journal deletion before the file is checked.
-    Never,
-}
-
-/// Advice that changes gateway.yaml or drops the journal: unsafe wherever
-/// the step cannot know the journal is this file's and readable.
-const UNSAFE: &[&str] = &[
-    "restore",
-    "copy",
-    "overwrite",
-    "replace",
-    "rename",
-    "move",
-    "delete the journal",
-    "remove the journal",
-];
-
-/// The step's clauses: each alternative (`;`) or sentence (`. `) it gives.
-/// Paths hold dots, never a dot and a space.
-fn clauses(message: &str) -> Vec<&str> {
-    message
-        .split(';')
-        .flat_map(|part| part.split(". "))
-        .map(str::trim)
-        .filter(|c| !c.is_empty())
-        .collect()
-}
-
-/// A clause that forbids rather than advises.
-fn forbids(clause: &str) -> bool {
-    let lower = clause.to_lowercase();
-    lower.contains("do not") || lower.contains("nothing")
-}
-
-/// The unsafe advice `clause` gives, if any. Paths and identifiers are left
-/// out: the journal's own name holds "replace", and `all_renamed` "rename".
-fn unsafe_in(clause: &str) -> Vec<&'static str> {
-    let words = clause
-        .split_whitespace()
-        .filter(|w| !w.contains('/') && !w.contains('_'))
-        .collect::<Vec<_>>()
-        .join(" ")
-        .to_lowercase();
-    UNSAFE
-        .iter()
-        .copied()
-        .filter(|advice| words.contains(advice))
-        .collect()
-}
 
 /// The lock's refusal, with gateway.yaml and the journal unchanged.
 async fn refusal(path: &Path) -> String {
@@ -75,110 +19,72 @@ async fn refusal(path: &Path) -> String {
     message
 }
 
-/// The step names the journal and gives unsafe advice only where `restore`
-/// allows it: a restore of this target's staged original matching the
-/// recorded digest, after inspection, and for `all_renamed` only a journal
-/// deletion that leaves gateway.yaml alone.
-fn assert_safe_step(message: &str, path: &Path, restore: Restore) {
-    let journal = crate::config_persistence::journal::journal_path(path);
-    let target = crate::identity_grants::journal::resolved(path)
-        .display()
-        .to_string();
-    assert!(
-        message.contains(&journal.display().to_string()),
-        "the step does not name the journal: {message}"
-    );
-    match restore {
-        Restore::Never => {
-            for clause in clauses(message) {
-                let advice = unsafe_in(clause);
-                // A journal deletion is safe once the file was checked by hand.
-                let checked = clause.contains("by hand") && advice == ["delete the journal"];
-                assert!(
-                    advice.is_empty() || forbids(clause) || checked,
-                    "unsafe advice {advice:?} in {clause:?}: {message}"
-                );
-            }
-        }
-        Restore::AfterInspection => {
-            let inspect = message
-                .find("inspect")
-                .expect("the step says to inspect first");
-            for clause in clauses(message) {
-                let advice = unsafe_in(clause);
-                if advice.is_empty() || forbids(clause) {
-                    continue;
-                }
-                let at = message.find(clause).expect("a clause of the message");
-                assert!(inspect < at, "advice before inspection: {clause:?}");
-                if clause.contains("all_renamed") {
-                    assert_eq!(
-                        advice,
-                        ["delete the journal"],
-                        "all_renamed must leave gateway.yaml alone: {clause:?}"
-                    );
-                    continue;
-                }
-                for needed in [target.as_str(), "staged", "SHA-256", "original_revision"] {
-                    assert!(
-                        clause.contains(needed),
-                        "a restore not bound to {needed:?}: {clause:?}"
-                    );
-                }
-            }
-        }
-    }
+/// The journal, the staged original and the resolved target, as the step
+/// names them.
+fn names(path: &Path) -> (String, String, String) {
+    use crate::config_persistence::journal;
+    (
+        journal::journal_path(path).display().to_string(),
+        journal::original_path(path).display().to_string(),
+        crate::identity_grants::journal::resolved(path)
+            .display()
+            .to_string(),
+    )
 }
 
-/// T9: a `staged` journal whose original is gone cannot be acted on: the
-/// lock is refused, and the step advises no restore.
+/// T9: a `staged` journal whose original is gone: restore nothing, check the
+/// file by hand, then drop the journal.
 #[tokio::test]
 async fn a_journal_without_its_original_refuses_the_lock() {
     let (_dir, path, _ctx) = setup();
     crashed_after_rename(&path, NEXT);
     std::fs::remove_file(crate::config_persistence::journal::original_path(&path)).expect("rm");
+    let (journal, original, target) = names(&path);
 
-    let message = refusal(&path).await;
-    assert_safe_step(&message, &path, Restore::Never);
+    assert_eq!(
+        refusal(&path).await,
+        format!(
+            "{original} cannot be read (it is gone); nothing was changed. Do not restore it: check {target} by hand against the change that was being made, then delete the journal {journal}"
+        )
+    );
 }
 
-/// A journal that cannot be read may be `all_renamed`: the step says to
-/// inspect it before touching gateway.yaml.
+/// A journal that cannot be read may be `all_renamed`: inspect it before
+/// touching the file; a restore only of this file's digest-matching original.
 #[tokio::test]
 async fn an_unreadable_journal_refuses_the_lock_with_a_neutral_step() {
     let (_dir, path, _ctx) = setup();
     crashed_after_rename(&path, NEXT);
-    write_owner_only(
-        crate::config_persistence::journal::journal_path(&path),
-        "{not a journal",
-    )
-    .expect("corrupt the journal");
+    let (journal, original, target) = names(&path);
+    write_owner_only(&journal, "{not a journal").expect("corrupt the journal");
+    let e = serde_json::from_str::<serde_json::Value>("{not a journal").expect_err("not JSON");
 
-    let message = refusal(&path).await;
-    assert_safe_step(&message, &path, Restore::AfterInspection);
+    assert_eq!(
+        refusal(&path).await,
+        format!(
+            "{journal} cannot be read ({e}); nothing was changed. Its state is unknown, so leave {target} as it is until you have inspected the journal. If it names {target} and its state is staged, restore the staged original {original} over {target} only if its SHA-256 matches the journal's original_revision, then delete the journal; if its state is all_renamed, only delete the journal; if it names another file, restore nothing over {target}"
+        )
+    );
 }
 
-/// A journal naming another file says nothing about this one: the step
-/// names that file, advises no restore over this one, and keeps the journal.
+/// A journal naming another file says nothing about this one: restore
+/// nothing over it, and keep the journal.
 #[tokio::test]
 async fn a_journal_naming_another_file_refuses_the_lock_with_a_neutral_step() {
     let (dir, path, _ctx) = setup();
     crashed_after_rename(&path, NEXT);
-    let journal = crate::config_persistence::journal::journal_path(&path);
+    let (journal, _, target) = names(&path);
     let mut record: serde_json::Value =
-        serde_json::from_str(&read(&journal)).expect("the journal is JSON");
+        serde_json::from_str(&read(Path::new(&journal))).expect("the journal is JSON");
     let other = dir.path().join("other.yaml");
     record["target"] = serde_json::Value::from(other.to_string_lossy().into_owned());
     write_owner_only(&journal, record.to_string()).expect("re-point the journal");
+    let other = other.display();
 
-    let message = refusal(&path).await;
-    assert_safe_step(&message, &path, Restore::Never);
-    assert!(
-        message.contains(&other.display().to_string()),
-        "the step does not name the other file: {message}"
-    );
-    assert!(
-        !message.contains("then delete") && !message.contains("only delete"),
-        "the step advises deleting another file's journal: {message}"
+    assert_eq!(
+        refusal(&path).await,
+        format!(
+            "{journal} names {other}, not {target}; nothing was changed. Resolve that journal for {other} first: restore nothing over {target}, and do not delete the journal"
+        )
     );
 }

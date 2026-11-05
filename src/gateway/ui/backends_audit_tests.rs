@@ -179,9 +179,12 @@ impl Audited {
     }
 
     async fn update(&self, name: &str, description: &str) -> (StatusCode, Value) {
-        let req: UpdateBackendRequest =
-            serde_json::from_value(serde_json::json!({ "description": description }))
-                .expect("update body");
+        self.update_with(name, serde_json::json!({ "description": description }))
+            .await
+    }
+
+    async fn update_with(&self, name: &str, body: Value) -> (StatusCode, Value) {
+        let req: UpdateBackendRequest = serde_json::from_value(body).expect("update body");
         let guard = Self::guard(routes::UI_BACKEND, &axum::http::Method::PATCH);
         read(
             update_backend(
@@ -535,5 +538,150 @@ async fn a_config_deleted_under_the_writer_answers_no_config_file() {
             &Value::from(NO_CONFIG_FILE)
         ),
         "{body}"
+    );
+}
+
+/// The guard's refusal of gateway.yaml or its recovery files, as every
+/// backend route answers it: fixed text, no path.
+const CONFIG_REFUSED: &str = "gateway.yaml could not be loaded";
+
+/// A value a refused write must never put anywhere.
+const SECRET: &str = "s3cr3t-9230";
+
+impl Audited {
+    /// `path`'s mode set to `mode`, read back.
+    #[cfg(unix)]
+    fn chmod(path: &std::path::Path, mode: u32) {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).expect("chmod");
+        let now = std::fs::metadata(path).expect("stat").permissions().mode();
+        assert_eq!(now & 0o777, mode, "premise: the mode took");
+    }
+
+    /// An update carrying a secret-looking env value.
+    async fn update_with_secret(&self) -> (StatusCode, Value) {
+        self.update_with("a", serde_json::json!({ "env": { "TOKEN": SECRET } }))
+            .await
+    }
+
+    /// The refusal answer, with the secret nowhere and no store beside the
+    /// config.
+    fn assert_refused(&self, route: &str, (status, body): &(StatusCode, Value)) {
+        assert_eq!(
+            (*status, &body["error"]),
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                &Value::from(CONFIG_REFUSED)
+            ),
+            "{route}: {body}"
+        );
+        let dir = self.dir.path().display().to_string();
+        assert!(
+            !body.to_string().contains(&dir),
+            "{route}: a path leaked: {body}"
+        );
+        assert!(!body.to_string().contains(SECRET), "{route}: {body}");
+        let log = std::fs::read_to_string(self.log.path()).unwrap_or_default();
+        assert!(
+            !log.contains(SECRET),
+            "{route}: the value reached the audit log"
+        );
+        assert!(
+            !std::fs::read_to_string(self.config())
+                .unwrap_or_default()
+                .contains(SECRET),
+            "{route}: the value was written"
+        );
+        let stores: Vec<_> = std::fs::read_dir(self.dir.path())
+            .expect("list")
+            .map(|e| e.expect("entry").file_name().to_string_lossy().into_owned())
+            .filter(|n| n.contains("secret") || n.contains("vault"))
+            .collect();
+        assert!(stores.is_empty(), "{route}: a store appeared: {stores:?}");
+        assert!(
+            !self.events().iter().any(|e| e == INTENT),
+            "{route}: an operation intent was appended: {:?}",
+            self.events()
+        );
+        assert_eq!(self.running(), ["a"], "{route}: something was loaded");
+    }
+}
+
+/// A group-writable gateway.yaml is refused by add, update and remove alike,
+/// with the guard's fixed answer; its bytes and mode stay.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_backend_write_on_a_group_writable_config_is_refused() {
+    let gateway = Audited::new().await;
+    Audited::chmod(&gateway.config(), 0o620);
+    let answers = [
+        ("add", gateway.add("b").await),
+        ("update", gateway.update_with_secret().await),
+        ("remove", gateway.remove("a").await),
+    ];
+    for (route, answer) in &answers {
+        gateway.assert_refused(route, answer);
+    }
+    assert_eq!(gateway.text(), START, "the refused file was written");
+    use std::os::unix::fs::PermissionsExt as _;
+    let mode = std::fs::metadata(gateway.config())
+        .expect("stat")
+        .permissions()
+        .mode();
+    assert_eq!(mode & 0o777, 0o620, "the refused file was rewritten");
+}
+
+/// A world-writable gateway.yaml: another arm of the guard, the same answer.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_backend_write_on_a_world_writable_config_is_refused() {
+    let gateway = Audited::new().await;
+    Audited::chmod(&gateway.config(), 0o602);
+    let answer = gateway.update_with_secret().await;
+    gateway.assert_refused("update", &answer);
+    assert_eq!(gateway.text(), START, "the refused file was written");
+}
+
+/// A crashed write's journal the guard refuses: the update is refused with
+/// the same answer; the crashed bytes and the journal stay. The audited
+/// writer takes the deferred lock and appends the recovery's intent before
+/// recovery reads the journal, so that intent is there; no operation
+/// intent follows.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_backend_write_with_a_refused_journal_is_refused() {
+    let gateway = Audited::new().await;
+    gateway.crashed_after_rename();
+    let journal = journal::journal_path(&gateway.config());
+    Audited::chmod(&journal, 0o620);
+    let answer = gateway.update_with_secret().await;
+    gateway.assert_refused("update", &answer);
+    assert_eq!(gateway.text(), CRASHED, "the crashed bytes were touched");
+    assert!(journal.exists(), "the refused journal was settled");
+    assert!(
+        gateway.events().iter().any(|e| e == RECOVERY),
+        "no recovery intent: {:?}",
+        gateway.events()
+    );
+}
+
+/// A staged original the guard refuses: the same answer, nothing restored;
+/// the recovery's intent is there and no operation intent follows.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_backend_write_with_a_refused_staged_original_is_refused() {
+    let gateway = Audited::new().await;
+    gateway.crashed_after_rename();
+    let original = journal::original_path(&gateway.config());
+    Audited::chmod(&original, 0o620);
+    let answer = gateway.update_with_secret().await;
+    gateway.assert_refused("update", &answer);
+    assert_eq!(gateway.text(), CRASHED, "the refused original was restored");
+    assert!(original.exists(), "the refused original was removed");
+    assert!(journal::journal_path(&gateway.config()).exists());
+    assert!(
+        gateway.events().iter().any(|e| e == RECOVERY),
+        "no recovery intent: {:?}",
+        gateway.events()
     );
 }

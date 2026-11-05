@@ -154,6 +154,7 @@ impl Route {
         let response = adopt_discovery(
             axum::extract::State(Arc::clone(&self.state)),
             Some(Extension(Arc::clone(&self.cache))),
+            None,
             Guard::for_route(
                 crate::gateway::routes::UI_DISCOVERY_ADOPT,
                 &axum::http::Method::POST,
@@ -835,3 +836,6 @@ async fn a_backend_written_by_hand_closes_its_decision() {
     })
     .await;
 }
+
+#[path = "discovery_adopt_deleted_tests.rs"]
+mod deleted;

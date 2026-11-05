@@ -32,3 +32,25 @@ async fn a_failed_rollback_or_write_answers_state_neutral_text() {
         assert!(text.contains("may have changed"), "{e:?}: {text}");
     }
 }
+
+/// The writer's typed outcomes answer fixed text: a missing file the shared
+/// 409 with its way forward, the guard's refusal a 503 that never carries
+/// the guard's own text (it names the file).
+#[tokio::test]
+async fn the_writer_refusals_answer_fixed_text() {
+    let (status, text) = message(&ReplaceError::NoConfigFile).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{text}");
+    assert!(
+        text.contains("no_config_file") && text.contains("mcp-gateway init --profile local"),
+        "{text}"
+    );
+
+    let detail = "/secret/path/gateway.yaml is writable by its group";
+    let (status, text) = message(&ReplaceError::ConfigRefused(detail.to_owned())).await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{text}");
+    assert!(text.contains("gateway.yaml could not be loaded"), "{text}");
+    assert!(
+        !text.contains("/secret/path"),
+        "the guard's text leaked: {text}"
+    );
+}

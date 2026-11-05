@@ -41,6 +41,13 @@ use crate::secret_store::{
 /// A secret store the writer can save into.
 type Store = Arc<dyn SecretStore + Send + Sync>;
 
+/// Test-only: the store an adopt saves into instead of the configured one,
+/// as a request extension (the pattern of the injected `DiscoveryCache`).
+/// Absent from every non-test build.
+#[cfg(test)]
+#[derive(Clone)]
+pub(super) struct AdoptStoreForTest(pub(super) Store);
+
 /// The compute's refusal when the name is already a backend in the bytes
 /// it was handed.
 const MANAGED: &str = "managed";
@@ -333,6 +340,7 @@ fn invalid_body() -> Response {
 pub(super) async fn adopt_discovery(
     State(state): State<Arc<AppState>>,
     injected: Option<Extension<Arc<DiscoveryCache>>>,
+    #[cfg(test)] store_for_test: Option<Extension<AdoptStoreForTest>>,
     guard: Guard,
     body: Result<Json<AdoptBody>, JsonRejection>,
 ) -> Response {
@@ -400,6 +408,11 @@ pub(super) async fn adopt_discovery(
             Ok(opened) => Some(opened),
             Err(refused) => return *refused,
         }
+    };
+    #[cfg(test)]
+    let opened = match (opened, store_for_test) {
+        (Some((_, vault)), Some(Extension(AdoptStoreForTest(store)))) => Some((store, vault)),
+        (opened, _) => opened,
     };
     if let Some((store, _)) = &opened {
         let over = over_limit(&adoption, store);
