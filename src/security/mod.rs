@@ -45,6 +45,7 @@ pub mod response_contract;
 pub mod response_inspect;
 pub(crate) mod response_policy;
 pub mod response_scanner;
+pub(crate) mod rule_id;
 pub mod sanitize;
 pub mod scope_collision;
 pub(crate) mod security_metrics;

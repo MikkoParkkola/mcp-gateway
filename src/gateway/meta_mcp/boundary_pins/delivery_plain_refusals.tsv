@@ -16,15 +16,15 @@ src/gateway/meta_mcp/invoke/dispatch.rs	refuse_name_clash	via ambiguous_backend	
 src/gateway/meta_mcp/invoke/dispatch_guards.rs	admit_after_credential	via withheld_as_undefined	1	recorded	src/gateway/meta_mcp/invoke/gate.rs::withheld_as_undefined
 src/gateway/meta_mcp/invoke/gate.rs	as_undefined_capability	Error::ToolNotFound(..)	1	feeds	the undefined twin of a rule refusal, returned to check_visible_policy's callers
 src/gateway/meta_mcp/invoke/gate.rs	check_call_level_policy	Error::Protocol(..)	1	not-a-decision	client-protocol rejection: an invalid tool name with an empty server or tool
-src/gateway/meta_mcp/invoke/gate.rs	check_visible_policy	via as_undefined_capability	1	recorded	src/gateway/meta_mcp/invoke/gate.rs::withheld_for
+src/gateway/meta_mcp/invoke/gate.rs	check_visible_policy_explained	via as_undefined_capability	1	recorded	src/gateway/meta_mcp/invoke/gate.rs::withheld_for
 src/gateway/meta_mcp/invoke/gate.rs	named_gate_answer	Error::ToolNotFound(..)	1	recorded	src/gateway/meta_mcp/invoke/gate.rs::withheld_for
 src/gateway/meta_mcp/invoke/gate.rs	profile_refusal_as_undefined	via profile_withheld_capability	1	feeds	returned to withheld_as_undefined, which raises withheld for it
 src/gateway/meta_mcp/invoke/gate.rs	profile_withheld_capability	Error::ToolNotFound(..)	1	feeds	returned up the chain to withheld_as_undefined, which raises withheld for it
 src/gateway/meta_mcp/invoke/gate.rs	withheld_as_undefined	Error::ToolNotFound (in macro)	1	not-delivered	predicate: a matches! pattern reads an error, builds none
 src/gateway/meta_mcp/invoke/gate.rs	withheld_as_undefined	via profile_refusal_as_undefined	1	recorded	src/gateway/meta_mcp/invoke/gate.rs::withheld_as_undefined
-src/gateway/meta_mcp/invoke/policy.rs	check_invocation_policy	Error::Protocol(..)	1	not-a-decision	client-protocol rejection: a malformed tool name
-src/gateway/meta_mcp/invoke/policy.rs	check_invocation_policy	Error::Protocol(..)	2	recorded	src/gateway/meta_mcp/invoke/gate.rs::withheld_for
-src/gateway/meta_mcp/invoke/policy.rs	check_invocation_policy	via withheld_as_undefined	1	recorded	src/gateway/meta_mcp/invoke/gate.rs::withheld_as_undefined
+src/gateway/meta_mcp/invoke/policy.rs	check_invocation_policy_explained	Error::Protocol(..)	1	not-a-decision	client-protocol rejection: a malformed tool name
+src/gateway/meta_mcp/invoke/policy.rs	check_invocation_policy_explained	Error::Protocol(..)	2	recorded	src/gateway/meta_mcp/invoke/gate.rs::withheld_for
+src/gateway/meta_mcp/invoke/policy.rs	check_invocation_policy_explained	via withheld_as_undefined	1	recorded	src/gateway/meta_mcp/invoke/gate.rs::withheld_as_undefined
 src/gateway/meta_mcp/invoke/policy.rs	record_absent_step	Error::BackendNotFound(..)	1	feeds	returned to resume_fingerprint, which raises withheld for an absent step
 src/gateway/meta_mcp/invoke/policy.rs	record_absent_step	Error::BackendNotFound(..)	2	feeds	returned to resume_fingerprint, which raises withheld for an absent step
 src/gateway/meta_mcp/invoke/post_dispatch.rs	settle_dispatch_error	Error::BackendNotFound,Error::ToolNotFound (in macro)	1	not-delivered	predicate: a matches! pattern reads an error, builds none

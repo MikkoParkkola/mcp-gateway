@@ -461,6 +461,8 @@ const TARGET_STATE: &str = "triage";
 
 #[path = "bridge_fallthrough_tests.rs"]
 mod bridge_fallthrough;
+#[path = "ci_rewrite_cache_tests.rs"]
+mod ci_rewrite_cache;
 #[cfg(feature = "firewall")]
 #[path = "collusion_bridge_tests.rs"]
 mod collusion_bridge;

@@ -263,6 +263,7 @@ pub(super) async fn require_admin_tool_access(
         status: axum::http::StatusCode::SERVICE_UNAVAILABLE,
         message: error.to_string(),
         kind: DecisionKind::AdminCapability,
+        rule_id: None,
     };
     log.admit().await.map_err(unavailable)?;
     let outcome = match &verdict {
@@ -364,12 +365,7 @@ pub(super) fn decide_tool_target<'a>(
     let early = validate_tool_name(target.tool)
         .map_err(|e| refused(DecisionKind::Syntax, e.clone()))
         .and_then(|()| crate::gateway::authz::authorize_backend(client, target.server))
-        .and_then(|()| {
-            generation
-                .tool_policy()
-                .check(target.server, target.tool)
-                .map_err(|e| refused(DecisionKind::ToolPolicy, e.to_string()))
-        })
+        .and_then(|()| crate::gateway::authz::tool_policy_refusal(generation.tool_policy(), target))
         .and_then(|()| {
             client.map_or(Ok(()), |client| {
                 client

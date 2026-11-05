@@ -759,7 +759,7 @@ use held::{cancel_held_upstream, follow_upstream_job};
 
 #[path = "worker_inspect.rs"]
 mod inspect;
-pub(super) use inspect::{dispatched_in_cell, inspect_and_record};
+pub(super) use inspect::{CellRefusal, dispatched_in_cell, inspect_and_record};
 
 #[cfg(test)]
 #[path = "worker_rescue_seam.rs"]

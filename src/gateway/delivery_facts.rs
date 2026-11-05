@@ -105,11 +105,19 @@ pub(crate) struct DeliveryFacts {
     /// for the error count: the worst noted (the gateway's own over a
     /// backend failure over a backend's answer).
     folded: Option<RpcError>,
+    /// The code of the latest refusal the gateway answered as a tool result:
+    /// last writer wins, so a later withhold is never recorded with an
+    /// earlier gate's code. Kept apart from `folded`, whose worst-wins rule is
+    /// for the error count, not for which gate built the delivered answer.
+    withheld_code: Option<i32>,
     /// The latest composite step's fold, until the composite carries it
     /// (`step_carried`), ends on it (`composite_ended`) or moves past it.
     last_step_folded: Option<RpcError>,
     /// Whose failure the error about to be delivered is (`wrapped_step`).
     error_of: ErrorOf,
+    /// The check that refused a stored task's answer, and its rule when a
+    /// configured rule decided: the first one raised.
+    refused_by: Option<crate::security::decision_record::RefusedBy>,
 }
 
 /// What the injected-value scrub did during a delivery.
@@ -174,8 +182,10 @@ impl Default for DeliveryFacts {
             last_step: LastStep::Settled,
             sends: Sends::default(),
             folded: None,
+            withheld_code: None,
             last_step_folded: None,
             error_of: ErrorOf::Own,
+            refused_by: None,
         }
     }
 }
@@ -212,6 +222,12 @@ impl DeliveryFacts {
     /// Whether a gateway refusal was raised in this cell.
     pub(crate) fn refused(&self) -> bool {
         self.effect == ResponseEffect::Refused
+    }
+
+    /// The code the latest refusal the gateway answered as a tool result was
+    /// built with. `None` when the gateway folded no refusal of its own.
+    pub(crate) fn withheld_code(&self) -> Option<i32> {
+        self.withheld_code
     }
 
     /// The strongest effect: this cell's own, raised to `Rewritten` when the
@@ -341,7 +357,12 @@ pub(crate) fn step_tool_failed() {
 /// wrote itself): the error count reads it when the answer has no error of
 /// its own. The worst noted wins.
 pub(crate) fn folded(marker: RpcError) {
-    with(|facts| facts.folded = worst(facts.folded, Some(marker)));
+    with(|facts| {
+        facts.folded = worst(facts.folded, Some(marker));
+        if marker.origin == Origin::Gateway {
+            facts.withheld_code = Some(marker.code);
+        }
+    });
 }
 
 /// [`folded`] for an `isError` result the gateway wrote itself (a refusal
@@ -468,6 +489,15 @@ fn with(update: impl FnOnce(&mut DeliveryFacts)) {
 /// The gateway did `effect` to this delivery's answer; the strongest one wins.
 pub(crate) fn raise(effect: ResponseEffect) {
     with(|facts| facts.effect = facts.effect.max(effect));
+}
+
+/// A stored task's answer refused by `refused_by`'s check: raise `Refused`
+/// and keep the check for the delivery record; the first one stands.
+pub(crate) fn refused_by(refused_by: crate::security::decision_record::RefusedBy) {
+    with(|facts| {
+        facts.effect = facts.effect.max(ResponseEffect::Refused);
+        facts.refused_by.get_or_insert(refused_by);
+    });
 }
 
 /// A gateway refusal decided at a delivering site: raise `Refused` and hand
@@ -676,10 +706,12 @@ pub(crate) fn record_fields(
             .load(std::sync::atomic::Ordering::SeqCst);
         if effect == ResponseEffect::Refused || echoed {
             fields.insert("response_effect".into(), effect.as_str().into());
+            insert_refused_by(facts, fields);
         }
         return;
     }
     fields.insert("response_effect".into(), effect.as_str().into());
+    insert_refused_by(facts, fields);
     if !facts.scanned {
         fields.insert("response_findings".into(), Value::Null);
         return;
@@ -705,9 +737,22 @@ pub(crate) fn record_fields(
     }
 }
 
+/// `refused_by`, beside `response_effect` in every branch that writes it.
+fn insert_refused_by(facts: &DeliveryFacts, fields: &mut Map<String, Value>) {
+    if let Some(refused_by) = &facts.refused_by {
+        // invariant: a kind and an optional string always serialise.
+        let value = serde_json::to_value(refused_by).expect("RefusedBy serialises");
+        fields.insert("refused_by".into(), value);
+    }
+}
+
 #[cfg(test)]
 #[path = "delivery_facts_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "delivery_facts_refused_by_tests.rs"]
+mod refused_by_tests;
 
 #[cfg(test)]
 #[path = "delivery_facts_withheld_tests.rs"]

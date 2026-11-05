@@ -18,7 +18,7 @@ use super::observe::{Acceptance, Handoff};
 use super::settlement::{
     DispatchSettlement, abandoned_input_round, classify_dispatch, interrupted_before_dispatch,
 };
-use super::worker::{dispatched_in_cell, inspect_and_record, settle_surfaced_refused};
+use super::worker::{CellRefusal, dispatched_in_cell, inspect_and_record, settle_surfaced_refused};
 use super::{CommitStage, OwnedCallerContext, TaskCall, TaskExecutor};
 use crate::gateway::task_service::host::LiveHost;
 use crate::gateway::task_service::record::{CONTINUATION_DEADLINE_MARGIN_SECS, InputRound};
