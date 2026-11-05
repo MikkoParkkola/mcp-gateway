@@ -157,41 +157,58 @@ async fn r2_a_gapped_log_reached_by_a_replay_goes_live_across_reconnects() {
         sealed.len()
     );
     std::fs::remove_file(&sealed[1].path).unwrap();
-    // A gone cursor: the counter of a kept record with a hash none has.
+    // A gone cursor: the counter of a kept record with a hash none has, from
+    // the first frame's id (its status), so no catch-up runs before it.
     let mut s = open(&state, request(STREAM, Who::Bearer(BEARER), None)).await;
     within(s.until("hello")).await;
-    call(&inv, "srv", 61);
-    let first = within(s.until("activity")).await;
+    // The probe's second per row and the rows' bound run on the paused
+    // clock, like L2 and L3: no wall-clock wait.
+    tokio::time::pause();
+    let status = within(s.until("status")).await;
     drop(s);
-    let head = first.part('i').unwrap();
+    let head = status.part('i').unwrap();
     let counter = head.split('-').next().unwrap();
-    let mut id = first
+    let mut id = status
         .id
         .unwrap()
         .replace(&head, &format!("{counter}-ffffffffffffffff"));
-    // The first connection, then three reconnects with the latest id each
-    // was given: every one goes live.
-    for (round, n) in (62..=65).enumerate() {
+    // Four reconnects, each with the latest id it was given, all go live.
+    // Every catch-up on this log meets the gap (a fresh search starts at the
+    // oldest segment), and going live skips the rows up to the head the
+    // catch-up captured, which the client reloads after its reset frame; so
+    // a row is written each second until one arrives live.
+    let mut n = 61;
+    for round in 0..4 {
         let mut again = open(&state, request(STREAM, Who::Bearer(BEARER), Some(&id))).await;
         within(again.until("hello")).await;
-        call(&inv, "srv", n);
-        let want = format!("tool_{n}");
-        let live = within(async {
+        let first = n;
+        within(async {
             loop {
-                let f = again
-                    .next()
-                    .await
-                    .unwrap_or_else(|| panic!("round {round}: the stream ended before going live"));
-                if let Some(next) = f.id.clone() {
-                    id = next;
-                }
-                if f.event == "activity" && f.data.contains(&want) {
-                    break f;
+                call(&inv, "srv", n);
+                n += 1;
+                let arrived = tokio::time::timeout(Duration::from_secs(1), async {
+                    loop {
+                        let f = again.next().await.unwrap_or_else(|| {
+                            panic!("round {round}: the stream ended before going live")
+                        });
+                        if let Some(next) = f.id.clone() {
+                            id = next;
+                        }
+                        // A replayed row from before the gap is not live.
+                        if f.event == "activity"
+                            && (first..n).any(|k| f.data.contains(&format!("tool_{k}")))
+                        {
+                            return;
+                        }
+                    }
+                })
+                .await;
+                if arrived.is_ok() {
+                    break;
                 }
             }
         })
         .await;
-        assert!(live.data.contains(&want), "round {round}");
     }
 }
 

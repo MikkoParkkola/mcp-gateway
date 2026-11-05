@@ -591,4 +591,5 @@ async fn a1g_a_demotion_during_a_catch_up_sends_no_more_of_its_page() {
 }
 
 /// The rows for the replay after a reset and the upkeep timers.
+#[path = "live_logs/recovery_tests.rs"]
 mod recovery;
