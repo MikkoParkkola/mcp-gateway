@@ -416,12 +416,19 @@ fn r5d_a_reloaded_guard_waits_for_a_restart() {
 fn r5d2_a_guard_switched_off_by_reload_keeps_running() {
     let startup = guards_on();
     let model = reloaded(&startup, &[&Config::default()]);
-    let budget = guard(&model, "budget");
-    assert_eq!(budget["running"], json!(true));
-    assert_eq!(
-        budget["settings"][0],
-        setting(&format!("{FW}.budget.enabled"), json!(false), json!(true))
-    );
+    for (name, path) in [
+        ("anomaly", "anomaly_detection"),
+        ("tenant", "tenant_guard.enabled"),
+        ("budget", "budget.enabled"),
+    ] {
+        let g = guard(&model, name);
+        assert_eq!(g["running"], json!(true), "{name}");
+        assert_eq!(
+            g["settings"][0],
+            setting(&format!("{FW}.{path}"), json!(false), json!(true)),
+            "{name}"
+        );
+    }
 }
 
 /// R6i2: R6i's refused shape in a file with the firewall off, the case the

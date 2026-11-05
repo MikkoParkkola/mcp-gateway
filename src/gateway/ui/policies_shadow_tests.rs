@@ -542,13 +542,25 @@ fn r3l_a_refused_shape_shadows_as_compiled() {
     assert_eq!(shadowed(&model, 1), vec![sh("shell_injection", &[0])]);
 
     // A refused folder rule keeps its folder check as compiled, so it still
-    // takes no part in content resolution.
-    let mut config = rules(json!([
-        { "match": "*", "action": "block", "keys": [], "allowed_roots": ["/srv"], "path_args": ["p"] },
-        { "match": "*", "action": "block", "scan": ["shell_injection"] }
-    ]));
-    config.security.firewall.enabled = false;
-    assert_eq!(shadowed(&read_model(&config), 1), vec![]);
+    // takes no part in content resolution: with both root fields, either
+    // alone, or an empty one (a folder check exists when either is present).
+    for roots in [
+        json!({ "allowed_roots": ["/srv"], "path_args": ["p"] }),
+        json!({ "allowed_roots": ["/srv"] }),
+        json!({ "path_args": ["p"] }),
+        json!({ "allowed_roots": [] }),
+    ] {
+        let mut earlier = json!({ "match": "*", "action": "block", "keys": [] });
+        for (k, v) in roots.as_object().expect("roots") {
+            earlier[k] = v.clone();
+        }
+        let mut config = rules(json!([
+            earlier,
+            { "match": "*", "action": "block", "scan": ["shell_injection"] }
+        ]));
+        config.security.firewall.enabled = false;
+        assert_eq!(shadowed(&read_model(&config), 1), vec![], "{roots}");
+    }
 }
 
 /// R2e: a present-but-empty collection counts as present.
