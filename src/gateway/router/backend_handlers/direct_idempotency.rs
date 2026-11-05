@@ -235,6 +235,11 @@ pub(super) fn deliver_replay(
             }
             #[cfg(test)]
             seams::note_served(seams::Served::Execution);
+            // Red stub: a completed replay notes may-write.
+            crate::gateway::meta_mcp::invoke::audit::note_declared_effect(
+                crate::security::decision_record::Effect::MayWrite,
+                crate::security::decision_record::EffectSource::ToolAnnotation,
+            );
             Some(response)
         }
         None => None,
