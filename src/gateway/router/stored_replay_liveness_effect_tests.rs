@@ -105,3 +105,32 @@ async fn a_lift_after_a_rotation_records_the_first_executions_slot() {
     assert_eq!(last["declared_effect"], "read_only", "{all:?}");
     assert_eq!(last["declared_effect_source"], "tool_annotation", "{all:?}");
 }
+
+/// The first execution's per-user slot is evicted after settle and comes
+/// back cold for the lift, while the shared slot declares `read` read-only:
+/// the lifted replay records no effect, never the shared slot's.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_lift_whose_stored_slot_was_evicted_records_none() {
+    let fx = fixture_with(false, true).await;
+    answer_marker(&fx);
+    let params = || invoke_params(Some("e1-evicted"), false);
+    let first = send(&fx, "tools/call", "gateway_invoke", params()).await;
+    assert!(first.to_string().contains(MARKER), "premise: dispatched: {first}");
+    let backend = fx.gateway.backends().get(BACKEND).expect("the backend");
+    backend.forget_caller_slots_for_test();
+    fx.gateway.rearm_operator_slot_for_test();
+    backend.declare_slot_effects_for_test(None, vec![declared(Some(true))]);
+    assert_eq!(
+        backend.declared_effect_for(Some(&DirectAccountGateway::operator_binding()), TOOL),
+        None,
+        "premise: the stored slot is back cold"
+    );
+    let sent = fx.gateway.tool_calls().len();
+    let again = send(&fx, "tools/call", "gateway_invoke", params()).await;
+    assert!(again.to_string().contains(MARKER), "premise: served: {again}");
+    assert_eq!(fx.gateway.tool_calls().len(), sent, "premise: not re-sent");
+    let all = decisions(&fx);
+    let last = all.last().expect("the replay's record");
+    assert_eq!(last["decided"], "replayed", "{all:?}");
+    assert!(last.get("declared_effect").is_none(), "{all:?}");
+}
