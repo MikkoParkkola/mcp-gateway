@@ -267,3 +267,56 @@ fn a_row_naming_nobody_reads_a_closed_fence() {
         Err(listener_credential::FenceRead::Closed)
     );
 }
+
+/// End to end (T5d): a record already queued for a row naming nobody is
+/// cancelled with the row's revocation, under the store lock, so it is
+/// never claimed or sent; a sibling naming someone keeps its record.
+#[test]
+fn a_revoked_nobody_rows_queued_record_is_cancelled() {
+    use crate::events::outbox::{Enqueued, OutboxCaps, OutboxRecord, OutboxState};
+    let (hub, _dir) = hub_with(&[("sub_nobody", ""), ("sub_someone", "q")]);
+    let now = chrono::Utc::now();
+    for id in ["sub_nobody", "sub_someone"] {
+        let record = OutboxRecord {
+            v: 1,
+            event_id: format!("evt_{id}"),
+            subscription_id: id.into(),
+            name: "backend.signed.tools_changed".into(),
+            backend: "signed".into(),
+            owner_scoped: false,
+            callback_host: String::new(),
+            body_b64: "e30=".into(),
+            tenants: Vec::new(),
+            attempt: 0,
+            unsent: 0,
+            next_attempt_at: now,
+            first_attempt_at: None,
+            created_at: now,
+            state: OutboxState::Pending,
+            last_status: None,
+            dead_as: None,
+            replayed: false,
+            attribution: None,
+            attribution_keys: Vec::new(),
+            firewall: None,
+            observed: None,
+        };
+        let caps = OutboxCaps {
+            global: 10,
+            per_subscription: 10,
+        };
+        assert_eq!(
+            hub.store.enqueue(record, caps).expect("io"),
+            Enqueued::Written
+        );
+    }
+    blocking(hub.revoke_unobservable(None));
+    assert!(
+        !hub.store.has_due("sub_nobody", now),
+        "the nobody row's record is cancelled with it"
+    );
+    assert!(
+        hub.store.has_due("sub_someone", now),
+        "control: the row naming someone keeps its record"
+    );
+}
