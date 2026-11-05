@@ -110,7 +110,24 @@ impl<C: Clock + Clone + Send + Sync> RateLimiter<C> {
         };
         let now = self.clock.now();
         let wait = refused.wait_time_from(now);
-        let warn = false;
+        // An admission at `a` leaves the next allowed time at most one
+        // interval after `a` (GCRA), so a longer wait means the state is from
+        // the future: the clock went back.
+        let interval = refused.quota().replenish_interval();
+        if wait > interval {
+            state.bucket = self.bucket();
+            if state.bucket.check().is_ok() {
+                return Acquire::AdmittedAfterClockStep { ahead_by: wait };
+            }
+        }
+
+        // A stamp from the future (the clock went back) is due, too.
+        let warn = state.last_warn.is_none_or(|last| {
+            now < last || Duration::from(now.duration_since(last)) >= WARN_EVERY
+        });
+        if warn {
+            state.last_warn = Some(now);
+        }
         Acquire::Refused { wait, warn }
     }
 
