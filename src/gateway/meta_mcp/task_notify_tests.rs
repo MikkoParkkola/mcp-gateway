@@ -206,7 +206,7 @@ async fn frame_for(meta: &MetaMcp, stored: crate::gateway::task_service::Committ
             stored,
             super::sealed_hold::CarriedHolds::none(),
         )),
-        |_| false,
+        |_| None,
         &subscription,
     )
     .await
