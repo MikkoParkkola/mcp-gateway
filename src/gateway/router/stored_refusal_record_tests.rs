@@ -183,3 +183,70 @@ async fn a_stored_read_of_a_tool_with_a_broken_schema_names_the_block() {
     .await;
     assert_eq!(kind_only(&fx, &got), json!({"kind": "descriptor_block"}));
 }
+
+/// A repeated task-augmented call (the same idempotency key) after a reload
+/// whose deny list names the tool is refused live, by the route stage's
+/// policy, before any stored replay is judged (MIK-9191.RULEID.3): its own
+/// invocation record names the deny entry, decided fresh, and joins the
+/// refused delivery by trace; the answer carries no id.
+#[tokio::test(flavor = "current_thread")]
+async fn a_repeated_task_call_refused_by_a_deny_entry_names_it() {
+    let fx = fixture(super::Answer::Ok, None).await;
+    let id = super::submit_task(&fx, "stored-repeat", json!({})).await;
+    let first = super::settled_task(&fx, &id).await;
+    assert!(
+        first.pointer("/result/status").and_then(Value::as_str) == Some("completed"),
+        "premise: the task completed: {first}"
+    );
+    let before = super::invocations(&fx).await.len();
+    fx.state
+        .live_config
+        .set(configured(&fx, key_admits_policy_denies));
+    let got = super::submit_task_raw(&fx, "stored-repeat", json!({})).await;
+    let expected = tool_policy_id(&fx, "deny", "alpha:read");
+    let hex = expected.as_str().trim_start_matches("tool_policy:");
+    assert!(
+        got.get("error").is_some() || got.pointer("/result/isError") == Some(&json!(true)),
+        "premise: the repeat is refused: {got}"
+    );
+    assert!(
+        !got.to_string().contains(hex),
+        "the answer names the rule: {got}"
+    );
+    let invoked = super::invocations(&fx).await;
+    let [repeat] = &invoked[before..] else {
+        panic!(
+            "wanted the repeat's one invocation record: {:?}",
+            &invoked[before..]
+        );
+    };
+    assert_eq!(
+        (
+            &repeat["decision"]["kind"],
+            &repeat["decision"]["rule_id"],
+            &repeat["decision"]["decided"],
+        ),
+        (
+            &json!("tool_policy"),
+            &json!(expected.as_str()),
+            &json!("fresh")
+        ),
+        "{repeat}"
+    );
+    assert!(
+        repeat["trace_id"].as_str().is_some_and(|t| !t.is_empty()),
+        "the repeat's record has a trace to join: {repeat}"
+    );
+    let log = std::fs::read_to_string(fx.log.path()).unwrap_or_default();
+    let delivered: Vec<Value> = log
+        .lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .filter(|row| {
+            row["event"] == "response_delivery_attempt" && row["trace_id"] == repeat["trace_id"]
+        })
+        .collect();
+    let [delivery] = delivered.as_slice() else {
+        panic!("wanted the repeat's one delivery record: {delivered:?}");
+    };
+    assert_eq!(delivery["response_effect"], json!("refused"), "{delivery}");
+}
