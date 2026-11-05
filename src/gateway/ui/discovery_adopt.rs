@@ -98,7 +98,6 @@ fn config_refusal() -> Response {
     )
 }
 
-
 const FAILED: &str = "the adopt did not complete";
 const STORE_UNAVAILABLE: &str = "secrets.store cannot take the discovered values";
 
