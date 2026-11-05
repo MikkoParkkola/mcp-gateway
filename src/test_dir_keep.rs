@@ -6,7 +6,7 @@
 
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError, Weak};
 
 /// Held as a store field; set once, by [`Self::keep`].
 #[derive(Debug, Default)]
@@ -58,7 +58,6 @@ impl TestDirKeep {
 // containing it, until its last handle drops; a log opened in an unregistered
 // temp dir is reported. The registry holds only `Weak`s, so it never keeps a
 // dir alive by itself.
-// STUB (red commit): every function below is a placeholder the rows fail on.
 
 /// A short-lived dir outside the process temp dir, in the crate root, for
 /// rows that need a path a raw comparison would not place under it.
@@ -69,76 +68,181 @@ pub(crate) fn outside_temp() -> tempfile::TempDir {
         .expect("a dir outside the temp dir")
 }
 
+/// Each registered dir in normal form, and a `Weak` of it: the registry
+/// never keeps a dir alive by itself. Advisory state, so a panic while it is
+/// held does not poison every later test's lookup.
+type Entry = (std::path::PathBuf, Weak<tempfile::TempDir>);
+static KEPT_DIRS: Mutex<Vec<Entry>> = Mutex::new(Vec::new());
+
+fn registry() -> MutexGuard<'static, Vec<Entry>> {
+    KEPT_DIRS.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+fn register(dir: tempfile::TempDir) -> Arc<tempfile::TempDir> {
+    let dir = Arc::new(dir);
+    let normal = norm(dir.path());
+    let mut entries = registry();
+    entries.retain(|(_, weak)| weak.strong_count() > 0);
+    entries.push((normal, Arc::downgrade(&dir)));
+    dir
+}
+
 /// A temp dir that any transparency log opened inside it keeps.
 pub(crate) fn kept_tempdir() -> Arc<tempfile::TempDir> {
-    Arc::new(tempfile::tempdir().expect("a temp dir"))
+    register(tempfile::tempdir().expect("a temp dir"))
 }
 
 /// [`kept_tempdir`], created inside `parent`.
 pub(crate) fn kept_tempdir_in(parent: &Path) -> Arc<tempfile::TempDir> {
-    Arc::new(tempfile::tempdir_in(parent).expect("a temp dir"))
+    register(tempfile::tempdir_in(parent).expect("a temp dir"))
 }
 
-/// Every live registered dir that contains `path`.
-pub(crate) fn kept_dirs_for(_path: &Path) -> Vec<Arc<tempfile::TempDir>> {
-    Vec::new()
+/// Every live registered dir that contains `path`: a log keeps them all, so
+/// dropping a parent dir cannot remove a child dir it lives in.
+pub(crate) fn kept_dirs_for(path: &Path) -> Vec<Arc<tempfile::TempDir>> {
+    let path = norm(path);
+    registry()
+        .iter()
+        .filter(|(dir, _)| contains(dir, &path))
+        .filter_map(|(_, weak)| weak.upgrade())
+        .collect()
 }
 
-/// `path` with its deepest existing ancestor canonicalised.
+/// `path` with its deepest existing ancestor canonicalised and the rest
+/// re-appended: the one form every comparison here uses (`/tmp` and
+/// `/private/tmp` are one dir on macOS). With no ancestor that
+/// canonicalises, `path` itself.
 pub(crate) fn norm(path: &Path) -> std::path::PathBuf {
-    path.to_path_buf()
+    let mut base = path.to_path_buf();
+    let mut rest = Vec::new();
+    loop {
+        if let Ok(canonical) = std::fs::canonicalize(&base) {
+            return rest
+                .iter()
+                .rev()
+                .fold(canonical, |acc, name| acc.join(name));
+        }
+        match (base.file_name(), base.parent()) {
+            (Some(name), Some(parent)) => {
+                rest.push(name.to_owned());
+                base = parent.to_path_buf();
+            }
+            _ => return path.to_path_buf(),
+        }
+    }
 }
 
-/// Whether `dir` contains `path`, compared per path component.
-pub(crate) fn contains(_dir: &Path, _path: &Path) -> bool {
-    false
+/// Whether `dir` contains `path`, compared per path component: `/r/a` does
+/// not contain `/r/ab/x`.
+pub(crate) fn contains(dir: &Path, path: &Path) -> bool {
+    path.starts_with(dir)
 }
 
 /// Whether `path` lies under the process temp dir.
-pub(crate) fn under_temp_root(_path: &Path) -> bool {
-    false
+pub(crate) fn under_temp_root(path: &Path) -> bool {
+    static ROOT: OnceLock<std::path::PathBuf> = OnceLock::new();
+    let root = ROOT.get_or_init(|| norm(&std::env::temp_dir()));
+    contains(root, &norm(path))
 }
 
-/// The dirs a parent test process keeps, from `MCP_GATEWAY_TEST_KEPT_DIRS`'s format.
-pub(crate) fn parse_external(_list: &std::ffi::OsStr) -> Vec<std::path::PathBuf> {
-    Vec::new()
+/// The dirs a parent test process keeps for a child it spawned, in
+/// `MCP_GATEWAY_TEST_KEPT_DIRS`'s format (`std::env::join_paths`).
+pub(crate) fn parse_external(list: &std::ffi::OsStr) -> Vec<std::path::PathBuf> {
+    std::env::split_paths(list)
+        .filter(|dir| !dir.as_os_str().is_empty())
+        .collect()
 }
 
-/// Whether one of `external` contains `path`.
-pub(crate) fn is_external_in(_external: &[std::path::PathBuf], _path: &Path) -> bool {
-    false
+/// Whether one of `external` contains `path`, both in normal form.
+pub(crate) fn is_external_in(external: &[std::path::PathBuf], path: &Path) -> bool {
+    let path = norm(path);
+    external.iter().any(|dir| contains(&norm(dir), &path))
 }
 
-/// Report a log opened at `path` that keeps no registered dir.
-pub(crate) fn report_unkept(_path: &Path) {}
+/// Whether this process's parent keeps the dir `path` lies in.
+fn is_external(path: &Path) -> bool {
+    static EXTERNAL: OnceLock<Vec<std::path::PathBuf>> = OnceLock::new();
+    let external = EXTERNAL.get_or_init(|| {
+        std::env::var_os("MCP_GATEWAY_TEST_KEPT_DIRS")
+            .map(|list| parse_external(&list))
+            .unwrap_or_default()
+    });
+    is_external_in(external, path)
+}
+
+std::thread_local! {
+    /// The open `expect_unkept` scope on this thread, if any.
+    static EXPECTED: std::cell::RefCell<Option<Vec<(std::path::PathBuf, String)>>> =
+        const { std::cell::RefCell::new(None) };
+    /// A row's checkpoint inside the next open (`before_first_fs_call`).
+    static CHECKPOINT: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Report a log opened at `path` that keeps no registered dir: one line on
+/// raw stderr naming the test, for the CI shard check, unless the path is
+/// outside the temp dir or a parent process keeps its dir. Inside an
+/// `expect_unkept` scope it is recorded there instead.
+pub(crate) fn report_unkept(path: &Path) {
+    if !under_temp_root(path) || is_external(path) {
+        return;
+    }
+    let creator = crate::test_late_write::Creator::default();
+    let recorded = EXPECTED.with(|expected| {
+        expected.borrow_mut().as_mut().map(|seen| {
+            seen.push((path.to_path_buf(), creator.name().to_owned()));
+        })
+    });
+    if recorded.is_none() {
+        crate::test_late_write::report(&format!(
+            "audit log at {} is in a temp dir no test kept; created by {}\n",
+            path.display(),
+            creator.name()
+        ));
+    }
+}
 
 /// While held, an unkept open on this thread is recorded here instead of
 /// reported, for a row that opens one on purpose.
-pub(crate) struct ExpectUnkept(());
+pub(crate) struct ExpectUnkept(Option<Vec<(std::path::PathBuf, String)>>);
 
+/// Start recording this thread's unkept opens until the guard drops.
 pub(crate) fn expect_unkept() -> ExpectUnkept {
-    ExpectUnkept(())
+    ExpectUnkept(EXPECTED.with(|expected| expected.replace(Some(Vec::new()))))
 }
 
 impl ExpectUnkept {
     /// The unkept opens recorded so far, in order: each path and the test
     /// it is attributed to.
     pub(crate) fn recorded(&self) -> Vec<(std::path::PathBuf, String)> {
-        Vec::new()
+        EXPECTED.with(|expected| expected.borrow().clone().unwrap_or_default())
+    }
+}
+
+impl Drop for ExpectUnkept {
+    fn drop(&mut self) {
+        let outer = self.0.take();
+        EXPECTED.with(|expected| *expected.borrow_mut() = outer);
     }
 }
 
 /// The normalised paths of the registry's entries, live or not yet pruned.
 pub(crate) fn registered_paths() -> Vec<std::path::PathBuf> {
-    Vec::new()
+    registry().iter().map(|(dir, _)| dir.clone()).collect()
 }
 
 /// A row's checkpoint: `f` runs once, on this thread, inside the next log
 /// open after its kept-dir lookup and before any filesystem call.
-pub(crate) fn before_first_fs_call(_f: impl FnOnce() + 'static) {}
+pub(crate) fn before_first_fs_call(f: impl FnOnce() + 'static) {
+    CHECKPOINT.with(|slot| *slot.borrow_mut() = Some(Box::new(f)));
+}
 
 /// Run and clear this thread's checkpoint, if one is set.
-pub(crate) fn run_before_first_fs_call() {}
+pub(crate) fn run_before_first_fs_call() {
+    if let Some(f) = CHECKPOINT.with(|slot| slot.borrow_mut().take()) {
+        f();
+    }
+}
 
 #[path = "test_dir_keep_registry_tests.rs"]
 mod registry_tests;
