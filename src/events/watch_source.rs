@@ -271,6 +271,16 @@ impl EventSource for WatchSource {
         poll_key(class.principal_for(principal), name, arguments)
     }
 
+    /// The default key, refused to a row carrying a per-user observation, as
+    /// [`Self::row_key`] refuses it: once the capability is offered, a key
+    /// comes from here, and the observation would go unchecked.
+    fn key_of_row(&self, sub: &Subscription, now: chrono::DateTime<chrono::Utc>) -> Option<String> {
+        if sub.obs_basis.is_some() {
+            return None;
+        }
+        Some(self.lifecycle_key(&sub.principal, &sub.name, &sub.arguments, now))
+    }
+
     fn row_key(&self, sub: &Subscription) -> Option<String> {
         // A row carrying a per-user observation is not this route's to key:
         // its observation would go unchecked here.
