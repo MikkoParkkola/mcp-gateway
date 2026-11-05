@@ -104,6 +104,7 @@ src/gateway/server/route_matrix_driver_tests/playbook_drivers.rs	stdio_playbook_
 src/gateway/server/route_matrix_driver_tests/playbook_drivers.rs	stdio_playbook_over	-	test-only (the module is cfg(test))
 src/gateway/server/route_matrix_driver_tests/playbook_drivers.rs	stdio_playbook_runs	-	test-only (the module is cfg(test))
 src/gateway/server/run.rs	run	-	the HTTP serve mode's startup and shutdown loop, started once; per-request work is in the router it builds
+src/gateway/server/run_steps.rs	drop	-	startup step of Gateway::run, once per serve: the capability scan's exit guard
 src/gateway/server/run_steps.rs	generate_gateway_key_pair	-	startup step of Gateway::run, once per serve
 src/gateway/server/run_steps.rs	managed_recovery_adapters	-	startup step of Gateway::run, once per serve
 src/gateway/server/run_steps.rs	start_capability_watcher	-	startup step of Gateway::run, once per serve

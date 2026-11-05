@@ -98,3 +98,53 @@ async fn only_a_posture_refused_reload_records_refused() {
     );
     assert_ne!(effect, Some(serde_json::json!("refused")), "{error}");
 }
+
+/// An admin capability reload while the startup capability scan is still
+/// running is refused, retryably, and changes nothing: run beside the scan's
+/// pin-mismatch check it could admit bytes that check then unloads. Once the
+/// scan completes, the same reload applies.
+/// Mutant: the refusal removed: the edit is applied during the scan.
+#[tokio::test]
+async fn an_admin_reload_during_the_startup_scan_is_refused_retryably() {
+    let dir = tempfile::tempdir().expect("dir");
+    let yaml = |desc: &str| {
+        format!(
+            "name: a\ndescription: {desc}\nproviders:\n  primary:\n    service: rest\n    config:\n      base_url: https://api.invalid\n      path: /k\n"
+        )
+    };
+    std::fs::write(dir.path().join("a.yaml"), yaml("v1")).expect("write v1");
+    let caps = Arc::new(CapabilityBackend::new(
+        "caps",
+        Arc::new(CapabilityExecutor::new()),
+    ));
+    caps.load_from_directory(dir.path().to_str().expect("utf8"))
+        .await
+        .expect("load");
+    let meta = MetaMcp::new(Arc::new(BackendRegistry::new()));
+    meta.set_capabilities(Arc::clone(&caps));
+    let description = || {
+        caps.list_capabilities()
+            .into_iter()
+            .find(|cap| cap.name == "a")
+            .map(|cap| cap.description)
+    };
+    caps.begin_initial_scan();
+    std::fs::write(dir.path().join("a.yaml"), yaml("v2")).expect("write v2");
+
+    let refused = meta
+        .reload_capabilities()
+        .await
+        .expect_err("refused while the startup scan runs");
+    assert_eq!(
+        refused.to_rpc_code(),
+        crate::error::rpc_codes::SERVER_ERROR_START,
+        "a retryable server error: {refused}"
+    );
+    assert_eq!(description().as_deref(), Some("v1"), "nothing reloaded");
+
+    caps.mark_initial_scan_complete();
+    meta.reload_capabilities()
+        .await
+        .expect("the reload applies once the scan completes");
+    assert_eq!(description().as_deref(), Some("v2"));
+}
