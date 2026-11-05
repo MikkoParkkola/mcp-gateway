@@ -263,8 +263,10 @@ async fn a_load_error_never_echoes_a_value() {
         "backends:\n  svc:\n    command: x\n    enabled: \"#secret\"\n",
     )
     .expect("write");
+    let files = mcp_gateway::gateway::test_helpers::ConfigFiles::snapshot(&path);
     let (status, answer) = patch(&router, "svc", json!({"description": "new"})).await;
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{answer}");
+    files.assert_unchanged(&path, "the edit refused for a load error");
     let answer = answer.to_string();
     assert!(!answer.contains("#secret"), "echoes the value: {answer}");
 }
@@ -278,9 +280,11 @@ async fn without_a_reload_context_an_edit_writes_nothing() {
     write_owner_only(&path, SVC).expect("write");
     let (state, _store) = make_app_state(None, Some(path.clone())).await;
     let router = create_router(state);
+    let files = mcp_gateway::gateway::test_helpers::ConfigFiles::snapshot(&path);
     let (status, answer) = patch(&router, "svc", json!({"description": "new"})).await;
     assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{answer}");
     assert_eq!(read(&path), SVC, "the file was written");
+    files.assert_unchanged(&path, "the edit with no reload context");
 }
 
 /// T10: a tab-separated inline comment counts as a comment.

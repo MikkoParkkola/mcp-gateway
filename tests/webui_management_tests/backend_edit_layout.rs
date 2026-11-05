@@ -28,10 +28,12 @@ async fn in_place_or_refused(
     holds: fn(&Config) -> bool,
 ) {
     let (router, path, _keep) = served(yaml).await;
+    let files = mcp_gateway::gateway::test_helpers::ConfigFiles::snapshot(&path);
     let (status, answer) = send_json(&router, method.clone(), uri, body.clone()).await;
     let after = read(&path);
     if status == StatusCode::CONFLICT {
         assert_eq!(after, yaml, "refused, but the file changed");
+        files.assert_unchanged(&path, "the in-place refusal");
         let message = answer.to_string();
         assert!(
             message.contains("Not saved:") && message.contains("in place"),
@@ -208,9 +210,11 @@ async fn an_edit_of_an_unparseable_file_writes_nothing() {
     let (router, path, _keep) =
         served("server: {port: 39401}\nbackends:\n  alpha:\n    command: x\n").await;
     write_owner_only(&path, broken).expect("break the file");
+    let files = mcp_gateway::gateway::test_helpers::ConfigFiles::snapshot(&path);
     let (status, body) = patch(&router, "alpha", json!({"description": "new"})).await;
     assert!(!status.is_success(), "{status}: {body}");
     assert_eq!(read(&path), broken, "the file was written");
+    files.assert_unchanged(&path, "the edit of an unparseable file");
     let message = body.to_string();
     assert!(!message.contains("--force"), "dead advice: {message}");
     assert!(!message.contains("unclosed"), "quotes the file: {message}");

@@ -7,20 +7,10 @@
 
 use super::*;
 
-/// The journal's and the staged original's bytes (`None` where absent or
-/// unreadable), to prove a refusal rewrote neither.
-fn recovery_bytes(path: &Path) -> (Option<Vec<u8>>, Option<Vec<u8>>) {
-    use crate::config_persistence::journal;
-    (
-        std::fs::read(journal::journal_path(path)).ok(),
-        std::fs::read(journal::original_path(path)).ok(),
-    )
-}
-
 /// The lock's refusal, with gateway.yaml, the journal and the staged
 /// original unchanged.
 async fn refusal(path: &Path) -> String {
-    let before = recovery_bytes(path);
+    let files = crate::gateway::test_helpers::ConfigFiles::snapshot(path);
     let message = match lock_now(path).await {
         Err(crate::config_persistence::lock::NotLocked::Failed(message)) => message,
         Err(other) => panic!("expected a refusal, got {other:?}"),
@@ -28,11 +18,7 @@ async fn refusal(path: &Path) -> String {
     };
     assert_eq!(read(path), NEXT, "gateway.yaml changed");
     assert!(crate::config_persistence::journal::exists(path));
-    assert_eq!(
-        recovery_bytes(path),
-        before,
-        "a recovery file was rewritten"
-    );
+    files.assert_unchanged(path, "the lock's refusal");
     message
 }
 

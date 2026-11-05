@@ -564,6 +564,7 @@ async fn an_unchanged_save_appends_its_intent_before_its_reload() {
     write_owner_only(&path, NEXT).expect("a hand edit adds b");
     let unchanged = || to(Expected::Any, NEXT, Replaced::Discard);
 
+    let files = crate::gateway::test_helpers::ConfigFiles::snapshot(&path);
     let refusing = Recorder::new(&path, true);
     let refused = replace_audited(
         Arc::clone(&ctx),
@@ -588,6 +589,7 @@ async fn an_unchanged_save_appends_its_intent_before_its_reload() {
         NEXT,
         "a refused unchanged save changed the file"
     );
+    files.assert_unchanged(&path, "a refused unchanged save");
 
     let recorder = Recorder::new(&path, false);
     let outcome = replace_audited(

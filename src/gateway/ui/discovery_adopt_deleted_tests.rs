@@ -7,6 +7,7 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use super::*;
+use crate::gateway::test_helpers::ConfigFiles;
 use crate::secret_store::{FilesStore, StoreKind};
 
 /// A files store that counts creates and deletes, and on its first create
@@ -112,7 +113,7 @@ async fn a_config_deleted_while_the_adopt_stores_a_value_answers_no_config_file(
         (1, 1),
         "(creates, deletes): one entry made, then discarded"
     );
-    assert!(!route.config().exists(), "gateway.yaml was recreated");
+    ConfigFiles::assert_absent(&route.config(), "the adopt on a deleted config");
     let records: Vec<Value> = std::fs::read_to_string(log.path())
         .unwrap_or_default()
         .lines()

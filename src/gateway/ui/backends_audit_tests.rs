@@ -17,7 +17,7 @@ use crate::config::{AuthConfig, Config, FailsafeConfig};
 use crate::config_persistence::journal;
 use crate::config_reload::{FileRevision, LiveConfig, ReloadContext};
 use crate::gateway::auth::AuthenticatedClient;
-use crate::gateway::test_helpers::write_owner_only;
+use crate::gateway::test_helpers::{ConfigFiles, write_owner_only};
 use crate::security::TransparencyLogger;
 
 /// Backend `a`, with a comment the splice keeps.
@@ -254,10 +254,12 @@ async fn an_audited_backend_add_appends_its_intent_first() {
     );
 
     let refused = Audited::new().await;
+    let files = ConfigFiles::snapshot(&refused.config());
     refused.log.set_append_failure_for_test(true);
     let (status, body) = refused.add("b").await;
     refused.log.set_append_failure_for_test(false);
     assert!(status.is_server_error(), "{status}: {body}");
+    files.assert_unchanged(&refused.config(), "a refused add");
     assert_eq!(refused.text(), START, "a refused intent let the add write");
     assert_eq!(
         refused.running(),
@@ -284,10 +286,12 @@ async fn an_audited_backend_remove_appends_its_intent_first() {
     );
 
     let refused = Audited::new().await;
+    let files = ConfigFiles::snapshot(&refused.config());
     refused.log.set_append_failure_for_test(true);
     let (status, body) = refused.remove("a").await;
     refused.log.set_append_failure_for_test(false);
     assert!(status.is_server_error(), "{status}: {body}");
+    files.assert_unchanged(&refused.config(), "a refused remove");
     assert_eq!(
         refused.text(),
         START,
@@ -318,10 +322,12 @@ async fn an_audited_backend_update_appends_its_intent_first() {
     );
 
     let refused = Audited::new().await;
+    let files = ConfigFiles::snapshot(&refused.config());
     refused.log.set_append_failure_for_test(true);
     let (status, body) = refused.update("a", "edited").await;
     refused.log.set_append_failure_for_test(false);
     assert!(status.is_server_error(), "{status}: {body}");
+    files.assert_unchanged(&refused.config(), "a refused update");
     assert_eq!(
         refused.text(),
         START,
@@ -353,10 +359,12 @@ async fn a_backend_update_recovers_a_pending_journal_only_after_its_intent() {
 
     let refused = Audited::new().await;
     refused.crashed_after_rename();
+    let files = ConfigFiles::snapshot(&refused.config());
     refused.log.set_append_failure_for_test(true);
     let (status, body) = refused.update("a", "edited").await;
     refused.log.set_append_failure_for_test(false);
     assert!(!status.is_success(), "{status}: {body}");
+    files.assert_unchanged(&refused.config(), "a refused recovery");
     assert_eq!(refused.text(), CRASHED, "the journal was applied unaudited");
     assert!(
         journal::journal_path(&refused.config()).exists(),
@@ -390,10 +398,12 @@ async fn a_backend_intent_names_its_operation_and_backend() {
 async fn a_no_op_update_with_a_refused_intent_applies_no_outside_change() {
     let gateway = Audited::new().await;
     write_owner_only(gateway.config(), CRASHED).expect("hand edit adds b");
+    let files = ConfigFiles::snapshot(&gateway.config());
     gateway.log.set_append_failure_for_test(true);
     let (status, body) = gateway.update("a", "").await;
     gateway.log.set_append_failure_for_test(false);
     assert!(!status.is_success(), "{status}: {body}");
+    files.assert_unchanged(&gateway.config(), "a refused no-op update");
     assert_eq!(
         gateway.running(),
         ["a"],
@@ -411,6 +421,7 @@ const NO_CONFIG_FILE: &str = "no gateway.yaml exists yet; create one with `mcp-g
 async fn the_backend_routes_refuse_a_missing_config_with_the_way_forward() {
     let gateway = Audited::new().await;
     std::fs::remove_file(gateway.config()).expect("remove config");
+    let files = ConfigFiles::snapshot(&gateway.config());
     let answers = [
         ("add", gateway.add("b").await),
         ("remove", gateway.remove("a").await),
@@ -429,6 +440,7 @@ async fn the_backend_routes_refuse_a_missing_config_with_the_way_forward() {
         "a refused route appended an intent: {:?}",
         gateway.events()
     );
+    files.assert_unchanged(&gateway.config(), "the routes refusing a missing config");
     let mut left: Vec<_> = std::fs::read_dir(gateway.dir.path())
         .expect("list")
         .map(|e| e.expect("entry").file_name().to_string_lossy().into_owned())
@@ -443,6 +455,7 @@ async fn the_backend_routes_refuse_a_missing_config_with_the_way_forward() {
 #[tokio::test]
 async fn without_a_reload_context_the_backend_routes_write_nothing() {
     let gateway = Audited::build(Reload::Absent).await;
+    let files = ConfigFiles::snapshot(&gateway.config());
     let answers = [
         ("add", gateway.add("b").await),
         ("remove", gateway.remove("a").await),
@@ -459,6 +472,7 @@ async fn without_a_reload_context_the_backend_routes_write_nothing() {
         );
     }
     assert_eq!(gateway.text(), START, "a route with no context wrote");
+    files.assert_unchanged(&gateway.config(), "the routes with no reload context");
 }
 
 /// Auth on and no audit log: a backend write is refused by the audit
@@ -474,6 +488,7 @@ async fn with_auth_on_and_no_audit_log_a_backend_add_is_refused() {
         state.live_config = Arc::new(LiveConfig::new(running));
     }
 
+    let files = ConfigFiles::snapshot(&gateway.config());
     let (status, body) = gateway.add("b").await;
 
     assert_eq!(
@@ -485,6 +500,7 @@ async fn with_auth_on_and_no_audit_log_a_backend_add_is_refused() {
         "{body}"
     );
     assert_eq!(gateway.text(), START, "the refused add wrote");
+    files.assert_unchanged(&gateway.config(), "the add refused for no audit log");
 }
 
 /// A comment-loss refusal names the comment lines under a fixed
@@ -494,6 +510,7 @@ async fn a_comment_loss_refusal_names_lines_not_the_server_path() {
     let gateway = Audited::new().await;
     let flow = "# top\nbackends: {a: {http_url: \"http://127.0.0.1:9/mcp\"}}\n";
     write_owner_only(gateway.config(), flow).expect("flow-style file");
+    let files = ConfigFiles::snapshot(&gateway.config());
     let (status, body) = gateway.update("a", "edited").await;
     assert_eq!(status, StatusCode::CONFLICT, "{body}");
     let message = body.to_string();
@@ -502,6 +519,7 @@ async fn a_comment_loss_refusal_names_lines_not_the_server_path() {
     let dir = gateway.dir.path().display().to_string();
     assert!(!message.contains(&dir), "the server path leaked: {message}");
     assert_eq!(gateway.text(), flow, "the refused edit wrote");
+    files.assert_unchanged(&gateway.config(), "the comment-loss refusal");
 }
 
 /// gateway.yaml deleted after the route's own check, while the writer waits
@@ -539,6 +557,7 @@ async fn a_config_deleted_under_the_writer_answers_no_config_file() {
         ),
         "{body}"
     );
+    ConfigFiles::assert_absent(&gateway.config(), "the write on a deleted config");
 }
 
 /// The guard's refusal of gateway.yaml or its recovery files, as every
@@ -619,6 +638,7 @@ async fn a_backend_write_on_a_group_writable_config_is_refused() {
     use std::os::unix::fs::PermissionsExt as _;
     let gateway = Audited::new().await;
     Audited::chmod(&gateway.config(), 0o620);
+    let files = ConfigFiles::snapshot(&gateway.config());
     let answers = [
         ("add", gateway.add("b").await),
         ("update", gateway.update_with_secret().await),
@@ -628,6 +648,7 @@ async fn a_backend_write_on_a_group_writable_config_is_refused() {
         gateway.assert_refused(route, answer);
     }
     assert_eq!(gateway.text(), START, "the refused file was written");
+    files.assert_unchanged(&gateway.config(), "the group-writable refusal");
     let mode = std::fs::metadata(gateway.config())
         .expect("stat")
         .permissions()
@@ -641,9 +662,11 @@ async fn a_backend_write_on_a_group_writable_config_is_refused() {
 async fn a_backend_write_on_a_world_writable_config_is_refused() {
     let gateway = Audited::new().await;
     Audited::chmod(&gateway.config(), 0o602);
+    let files = ConfigFiles::snapshot(&gateway.config());
     let answer = gateway.update_with_secret().await;
     gateway.assert_refused("update", &answer);
     assert_eq!(gateway.text(), START, "the refused file was written");
+    files.assert_unchanged(&gateway.config(), "the world-writable refusal");
 }
 
 /// A crashed write's journal the guard refuses: the update is refused with
@@ -658,19 +681,11 @@ async fn a_backend_write_with_a_refused_journal_is_refused() {
     gateway.crashed_after_rename();
     let journal = journal::journal_path(&gateway.config());
     Audited::chmod(&journal, 0o620);
-    let original = journal::original_path(&gateway.config());
-    let before = (
-        std::fs::read(&journal).expect("read journal"),
-        std::fs::read(&original).expect("read original"),
-    );
+    let files = ConfigFiles::snapshot(&gateway.config());
     let answer = gateway.update_with_secret().await;
     gateway.assert_refused("update", &answer);
     assert_eq!(gateway.text(), CRASHED, "the crashed bytes were touched");
-    assert_eq!(
-        (std::fs::read(&journal).ok(), std::fs::read(&original).ok()),
-        (Some(before.0), Some(before.1)),
-        "the refused journal or the staged original was settled or rewritten"
-    );
+    files.assert_unchanged(&gateway.config(), "the refused journal");
     assert!(
         gateway.events().iter().any(|e| e == RECOVERY),
         "no recovery intent: {:?}",
@@ -687,19 +702,11 @@ async fn a_backend_write_with_a_refused_staged_original_is_refused() {
     gateway.crashed_after_rename();
     let original = journal::original_path(&gateway.config());
     Audited::chmod(&original, 0o620);
-    let journal = journal::journal_path(&gateway.config());
-    let before = (
-        std::fs::read(&original).expect("read original"),
-        std::fs::read(&journal).expect("read journal"),
-    );
+    let files = ConfigFiles::snapshot(&gateway.config());
     let answer = gateway.update_with_secret().await;
     gateway.assert_refused("update", &answer);
     assert_eq!(gateway.text(), CRASHED, "the refused original was restored");
-    assert_eq!(
-        (std::fs::read(&original).ok(), std::fs::read(&journal).ok()),
-        (Some(before.0), Some(before.1)),
-        "the refused original or the journal was removed or rewritten"
-    );
+    files.assert_unchanged(&gateway.config(), "the refused staged original");
     assert!(
         gateway.events().iter().any(|e| e == RECOVERY),
         "no recovery intent: {:?}",

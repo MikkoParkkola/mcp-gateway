@@ -79,6 +79,7 @@ async fn test_add_backend_persists_and_duplicate_returns_409() {
     );
 
     // WHEN: add the same backend again
+    let files = mcp_gateway::gateway::test_helpers::ConfigFiles::snapshot(&config_path);
     let (status2, body2) = send_json(
         &router,
         Method::POST,
@@ -96,6 +97,7 @@ async fn test_add_backend_persists_and_duplicate_returns_409() {
         StatusCode::CONFLICT,
         "Expected 409 for duplicate, got: {body2}"
     );
+    files.assert_unchanged(&config_path, "the duplicate add");
 }
 
 #[tokio::test]
@@ -112,6 +114,7 @@ async fn test_remove_backend_not_found_returns_404() {
     let router = create_router(state);
 
     // WHEN: DELETE /ui/api/backends/nonexistent
+    let files = mcp_gateway::gateway::test_helpers::ConfigFiles::snapshot(&config_path);
     let (status, body) = send_json(
         &router,
         Method::DELETE,
@@ -126,6 +129,7 @@ async fn test_remove_backend_not_found_returns_404() {
         StatusCode::NOT_FOUND,
         "Expected 404 for unknown backend, got: {body}"
     );
+    files.assert_unchanged(&config_path, "the remove of a backend that does not exist");
 }
 
 #[tokio::test]

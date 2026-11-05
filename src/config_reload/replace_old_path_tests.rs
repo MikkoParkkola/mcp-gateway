@@ -6,6 +6,7 @@
 //! lifetime.
 
 use super::*;
+use crate::gateway::test_helpers::ConfigFiles;
 
 /// An audit log at `dir/audit.jsonl`, carried by a context's reporting: the
 /// production posture of a gateway with a transparency log.
@@ -62,6 +63,7 @@ async fn the_mutate_path_with_auth_on_and_no_log_recovers_nothing() {
     let ctx = auth_on_context(&path);
     crashed_after_rename(&path, NEXT);
 
+    let files = ConfigFiles::snapshot(&path);
     let result = ctx
         .mutate_and_reload_outcome_within(&path, WAIT, |_: &mut crate::config::Config| {
             Ok::<(), String>(())
@@ -69,6 +71,7 @@ async fn the_mutate_path_with_auth_on_and_no_log_recovers_nothing() {
         .await;
 
     assert_audited_refusal(result.as_ref().err(), "the mutate path");
+    files.assert_unchanged(&path, "the mutate path");
     assert_eq!(read(&path), NEXT, "the mutate path recovered unaudited");
     assert!(
         journal::journal_path(&path).exists(),
@@ -87,11 +90,13 @@ async fn the_whole_file_write_on_an_audited_gateway_recovers_nothing() {
     crashed_after_rename(&path, NEXT);
     let config = crate::config::Config::load(Some(&path)).expect("config loads");
 
+    let files = ConfigFiles::snapshot(&path);
     let result = ctx
         .write_and_reload_outcome_within(&path, WAIT, &config)
         .await;
 
     assert_audited_refusal(result.as_ref().err(), "the whole-file write");
+    files.assert_unchanged(&path, "the whole-file write");
     assert_eq!(
         read(&path),
         NEXT,
@@ -113,6 +118,7 @@ async fn the_mutate_path_reads_the_live_audit_posture() {
     let ctx = Arc::new(unshared(&path).with_reporting(audit_log_reporting(dir.path())));
     crashed_after_rename(&path, NEXT);
 
+    let files = ConfigFiles::snapshot(&path);
     let result = ctx
         .mutate_and_reload_outcome_within(&path, WAIT, |_: &mut crate::config::Config| {
             Ok::<(), String>(())
@@ -120,6 +126,7 @@ async fn the_mutate_path_reads_the_live_audit_posture() {
         .await;
 
     assert_audited_refusal(result.as_ref().err(), "the mutate path");
+    files.assert_unchanged(&path, "the mutate path");
     assert_eq!(read(&path), NEXT, "the mutate path recovered unaudited");
     assert!(
         journal::journal_path(&path).exists(),

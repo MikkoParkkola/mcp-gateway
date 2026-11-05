@@ -97,12 +97,7 @@ fn crashed_after_rename(path: &Path) {
 
 /// Nothing of the write is left: no config, no journal, no staged original.
 fn assert_nothing_left(path: &Path) {
-    assert!(!path.exists(), "gateway.yaml was recreated");
-    assert!(!journal::journal_path(path).exists(), "a journal was left");
-    assert!(
-        !journal::original_path(path).exists(),
-        "a staged original was left"
-    );
+    crate::gateway::test_helpers::ConfigFiles::assert_absent(path, "a deleted config's write");
 }
 
 async fn audited(
@@ -214,6 +209,7 @@ async fn a_symlinked_config_whose_target_goes_is_not_no_config_file() {
     let result = replace_detached(ctx, deleting_compute(&real), WAIT).await;
     assert!(matches!(result, Err(ReplaceError::Failed(_))), "{result:?}");
     assert!(!real.exists(), "the target was recreated");
+    assert_nothing_left(&real);
     assert!(
         std::fs::symlink_metadata(&link).is_ok_and(|m| m.file_type().is_symlink()),
         "the link was replaced"
@@ -227,9 +223,11 @@ async fn a_symlinked_config_whose_target_goes_is_not_no_config_file() {
 #[tokio::test]
 async fn a_config_symlink_removed_during_compute_is_not_no_config_file() {
     let (_dir, link, real, ctx) = linked();
+    let files = crate::gateway::test_helpers::ConfigFiles::snapshot(&real);
     let result = replace_detached(ctx, deleting_compute(&link), WAIT).await;
     assert!(matches!(result, Err(ReplaceError::Failed(_))), "{result:?}");
     assert_eq!(read(&real), START, "the target was written");
+    files.assert_unchanged(&real, "the target behind a removed link");
     assert!(
         std::fs::symlink_metadata(&link).is_err(),
         "something was created at the link"

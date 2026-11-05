@@ -282,7 +282,7 @@ async fn gh462_successful_mutations_preserve_literal_secret_references() {
         );
         let ctx = context(&path, resolved.config)
             .with_env(Arc::new(LiveEnv::new(resolved.overlay, resolved.env_paths)));
-        let before = std::fs::read(&path).unwrap();
+        let files = mcp_gateway::gateway::test_helpers::ConfigFiles::snapshot(&path);
         let result = mutate_config_and_reload(&path, with_context.then_some(&ctx), |c| {
             c.backends.get_mut("sentinel").unwrap().description = "gh462 admin edit".into();
             Ok::<_, ()>(())
@@ -301,11 +301,7 @@ async fn gh462_successful_mutations_preserve_literal_secret_references() {
                 )),
                 "the context write was not refused by the audit guard"
             );
-            assert_eq!(
-                std::fs::read(&path).unwrap(),
-                before,
-                "refused, yet the file changed"
-            );
+            files.assert_unchanged(&path, "the refused context write");
             assert_eq!(
                 saved.backends["sentinel"].description, "original operator backend",
                 "refused, yet written"
