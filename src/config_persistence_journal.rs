@@ -21,6 +21,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use super::atomic::{FileMode, Symlink, write_atomic};
+use crate::config::UnreadConfig;
 use crate::identity_grants::journal::resolved;
 
 const VERSION: u32 = 1;
@@ -62,14 +63,20 @@ pub(crate) enum Recovered {
     KeptNew,
 }
 
+/// Name suffixes of the journal and the staged original: the one pair both
+/// [`journal_path`]/[`original_path`] and their inverse [`config_beside`]
+/// read, so a rename cannot leave the inverse matching nothing.
+const JOURNAL_SUFFIX: &str = ".replace-journal";
+const ORIGINAL_SUFFIX: &str = ".replace-original";
+
 /// `.<name>.replace-journal` beside the resolved config.
 pub(crate) fn journal_path(config: &Path) -> PathBuf {
-    beside(&resolved(config), ".replace-journal")
+    beside(&resolved(config), JOURNAL_SUFFIX)
 }
 
 /// `.<name>.replace-original` beside the resolved config.
 pub(crate) fn original_path(config: &Path) -> PathBuf {
-    beside(&resolved(config), ".replace-original")
+    beside(&resolved(config), ORIGINAL_SUFFIX)
 }
 
 fn beside(target: &Path, suffix: &str) -> PathBuf {
@@ -77,6 +84,42 @@ fn beside(target: &Path, suffix: &str) -> PathBuf {
     name.push(target.file_name().unwrap_or_default());
     name.push(suffix);
     target.with_file_name(name)
+}
+
+/// The config a journal or staged original named `file` would belong to: the
+/// inverse of [`journal_path`] and [`original_path`], by name alone, on the
+/// name's own bytes, so a name that is not UTF-8 is still recognised.
+pub(crate) fn config_beside(file: &Path) -> Option<PathBuf> {
+    let name = file.file_name()?;
+    let config = [JOURNAL_SUFFIX, ORIGINAL_SUFFIX]
+        .iter()
+        .find_map(|suffix| name_before(name, suffix))?;
+    Some(file.with_file_name(config))
+}
+
+/// `name` without its leading `.` and `suffix`; `None` when it lacks either
+/// or nothing is left.
+#[cfg(unix)]
+fn name_before(name: &std::ffi::OsStr, suffix: &str) -> Option<std::ffi::OsString> {
+    use std::os::unix::ffi::OsStrExt;
+    let config = name
+        .as_bytes()
+        .strip_prefix(b".")?
+        .strip_suffix(suffix.as_bytes())?;
+    (!config.is_empty()).then(|| std::ffi::OsStr::from_bytes(config).to_os_string())
+}
+
+/// [`name_before`] on Windows, on the name's UTF-16 units, unpaired
+/// surrogates included.
+#[cfg(windows)]
+fn name_before(name: &std::ffi::OsStr, suffix: &str) -> Option<std::ffi::OsString> {
+    use std::os::windows::ffi::{OsStrExt, OsStringExt};
+    let units: Vec<u16> = name.encode_wide().collect();
+    let suffix: Vec<u16> = suffix.encode_utf16().collect();
+    let config = units
+        .strip_prefix(&[u16::from(b'.')])?
+        .strip_suffix(suffix.as_slice())?;
+    (!config.is_empty()).then(|| std::ffi::OsString::from_wide(config))
 }
 
 /// Whether a journal sits beside `config`. Cheap enough for a preflight: a
@@ -150,7 +193,19 @@ pub(crate) fn begin(target: &Path, original_revision: String) -> std::io::Result
 )]
 pub(crate) fn mark_all_renamed(target: &Path) -> std::io::Result<()> {
     let path = journal_path(target);
-    let mut journal = read(&path)?;
+    let mut journal = match read(&path) {
+        Ok(Some(journal)) => journal,
+        Ok(None) => return Err(std::io::ErrorKind::NotFound.into()),
+        Err(UnreadConfig::Refused(why)) => {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                guard_refused(&why),
+            ));
+        }
+        Err(UnreadConfig::Failed(why) | UnreadConfig::NotTheConfig(why)) => {
+            return Err(std::io::Error::other(why));
+        }
+    };
     journal.state = State::AllRenamed;
     let bytes = serde_json::to_vec(&journal).map_err(std::io::Error::other)?;
     write_atomic(&path, &bytes, FileMode::Private, Symlink::Replace)?;
@@ -184,10 +239,15 @@ pub(crate) fn finish(target: &Path) -> std::io::Result<()> {
 ///
 /// # Errors
 ///
-/// A journal that cannot be acted on: unreadable, of an unknown version,
-/// naming another file, or `staged` with its original gone or not matching
-/// its digest. Nothing is changed, and the message says what to do by hand.
-pub(crate) fn recover(config: &Path) -> Result<Recovered, String> {
+/// [`NotRecovered::Refused`] when the config guard refuses the journal or the
+/// staged original; [`NotRecovered::Failed`] for a journal that cannot be
+/// acted on otherwise: unreadable, of an unknown version, naming another file,
+/// or `staged` with its original gone or not matching its digest. Then
+/// nothing is changed, and the message says what to do by hand. One `Failed`
+/// comes after a change: the original was restored but its journal could not
+/// be removed, so the file did change and no write proceeds until the journal
+/// is gone.
+pub(crate) fn recover(config: &Path) -> Result<Recovered, NotRecovered> {
     let target = resolved(config);
     let path = journal_path(&target);
     let original = original_path(&target);
@@ -200,29 +260,30 @@ pub(crate) fn recover(config: &Path) -> Result<Recovered, String> {
         )
     };
     let journal = match read(&path) {
-        Ok(journal) => journal,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+        Ok(Some(journal)) => journal,
+        Ok(None) => {
             // A staged copy with no journal is a crash before the journal
             // existed: the file was never replaced.
             let _ = remove_if_present(&original);
             return Ok(Recovered::Nothing);
         }
-        Err(e) => {
-            return Err(format!(
+        Err(UnreadConfig::Refused(why)) => return Err(NotRecovered::Refused(guard_refused(&why))),
+        Err(UnreadConfig::Failed(e) | UnreadConfig::NotTheConfig(e)) => {
+            return Err(NotRecovered::Failed(format!(
                 "{} cannot be read ({e}); {}",
                 path.display(),
                 manual()
-            ));
+            )));
         }
     };
     if journal.target != target {
-        return Err(format!(
+        return Err(NotRecovered::Failed(format!(
             "{} names {}, not {}; {}",
             path.display(),
             journal.target.display(),
             target.display(),
             manual()
-        ));
+        )));
     }
     let recovered = match journal.state {
         State::Staged => {
@@ -230,20 +291,42 @@ pub(crate) fn recover(config: &Path) -> Result<Recovered, String> {
             if let Some(fault::Fault::Pause(pause)) = fault::get(&target) {
                 pause.enter_and_wait();
             }
-            let bytes = std::fs::read(&original).map_err(|e| {
-                format!("{} cannot be read ({e}); {}", original.display(), manual())
-            })?;
+            // The bytes restored as gateway.yaml: read through the config
+            // guard, so a staged original another account could plant or
+            // change, with a digest to match, is never restored.
+            let bytes = match crate::config::read_recovery_text(&original) {
+                Ok(Some(text)) => text.into_bytes(),
+                Ok(None) => {
+                    return Err(NotRecovered::Failed(format!(
+                        "{} cannot be read (it is gone); {}",
+                        original.display(),
+                        manual()
+                    )));
+                }
+                Err(UnreadConfig::Refused(why)) => {
+                    return Err(NotRecovered::Refused(guard_refused(&why)));
+                }
+                Err(UnreadConfig::Failed(e) | UnreadConfig::NotTheConfig(e)) => {
+                    return Err(NotRecovered::Failed(format!(
+                        "{} cannot be read ({e}); {}",
+                        original.display(),
+                        manual()
+                    )));
+                }
+            };
             if crate::hashing::sha256_hex(&bytes) != journal.original_revision {
-                return Err(format!(
+                return Err(NotRecovered::Failed(format!(
                     "{} does not match the digest its journal {} records, so it was not restored; compare it with {} by hand before restoring anything, then delete the journal",
                     original.display(),
                     path.display(),
                     target.display()
-                ));
+                )));
             }
             write_atomic(&target, &bytes, FileMode::Private, Symlink::Replace)
                 .and_then(|()| sync_dir_of(&target))
-                .map_err(|e| format!("restoring {} failed: {e}", target.display()))?;
+                .map_err(|e| {
+                    NotRecovered::Failed(format!("restoring {} failed: {e}", target.display()))
+                })?;
             Recovered::RolledBack
         }
         State::AllRenamed => Recovered::KeptNew,
@@ -255,11 +338,11 @@ pub(crate) fn recover(config: &Path) -> Result<Recovered, String> {
             // retries, and restoring the same original again is harmless.
             // The file did change, so a running gateway still owes a reload.
             note_restored(&target);
-            return Err(format!(
+            return Err(NotRecovered::Failed(format!(
                 "{} was restored, but its journal {} could not be removed ({e}); no config write proceeds until it is: delete the journal",
                 target.display(),
                 path.display()
-            ));
+            )));
         }
         // An `all_renamed` journal left behind only keeps the current file.
         tracing::warn!(error = %e, journal = %path.display(), "cleaning up a recovered replace journal failed; the next config write retries");
@@ -293,16 +376,55 @@ pub(crate) fn take_restored(config: &Path) -> bool {
         .is_some_and(|set| set.remove(&target))
 }
 
-fn read(path: &Path) -> std::io::Result<Journal> {
+/// The journal at `path`, read through the config guard (it decides which
+/// bytes are restored as gateway.yaml); `None` when there is none.
+fn read(path: &Path) -> Result<Option<Journal>, UnreadConfig> {
+    let Some(text) = crate::config::read_recovery_text(path)? else {
+        return Ok(None);
+    };
     let journal: Journal =
-        serde_json::from_slice(&std::fs::read(path)?).map_err(std::io::Error::other)?;
+        serde_json::from_str(&text).map_err(|e| UnreadConfig::Failed(e.to_string()))?;
     if journal.version != VERSION {
-        return Err(std::io::Error::other(format!(
+        return Err(UnreadConfig::Failed(format!(
             "journal version {} is not {VERSION}",
             journal.version
         )));
     }
-    Ok(journal)
+    Ok(Some(journal))
+}
+
+/// Why [`recover`] did not run a pending recovery.
+#[derive(Debug)]
+pub(crate) enum NotRecovered {
+    /// The config guard refused the journal or the staged original. The text
+    /// names no path; the guard's own text went to the log.
+    Refused(String),
+    /// Anything else; the message says what to do by hand.
+    Failed(String),
+}
+
+impl NotRecovered {
+    /// The message, whichever kind it is.
+    pub(crate) fn into_message(self) -> String {
+        match self {
+            Self::Refused(message) | Self::Failed(message) => message,
+        }
+    }
+}
+
+/// A replace journal or its staged original the config guard refused. Either
+/// may be another account's plant with a matching digest, so the answer never
+/// says to fix their owner or mode, retry with them in place, or restore from
+/// them: it calls both untrusted and says to move both aside before a retry.
+/// The guard's text, which names the file, goes to the log only.
+fn guard_refused(why: &str) -> String {
+    tracing::warn!(detail = %why, "a replace journal or its staged original was refused by the config guard");
+    "a pending config recovery was not run: its replace journal and staged original are \
+     untrusted, because the config guard refuses one of them (another account could have planted \
+     or changed it, it is not a regular file, or it is not UTF-8 text), so nothing was restored. \
+     Leave their owner and mode alone: fixing them would make the next recovery restore them. \
+     Check gateway.yaml against a known-good copy, move both files aside, then retry"
+        .to_owned()
 }
 
 fn remove_if_present(path: &Path) -> std::io::Result<()> {
