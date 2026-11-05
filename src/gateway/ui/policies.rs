@@ -38,8 +38,20 @@ pub(super) async fn read_policies(State(state): State<Arc<AppState>>, guard: Gua
 pub(super) fn read_model(config: &Config) -> Value {
     json!({
         "tool_policy": tool_policy(&config.security.tool_policy),
-        "finding_rules": super::policies_rules::finding_rules(&config.security.firewall.rules),
+        "finding_rules": finding_rules(config),
     })
+}
+
+/// The firewall's finding rules; none in a build without the firewall,
+/// whose config cannot hold any.
+#[cfg(feature = "firewall")]
+fn finding_rules(config: &Config) -> Value {
+    super::policies_rules::finding_rules(&config.security.firewall.rules)
+}
+
+#[cfg(not(feature = "firewall"))]
+fn finding_rules(_config: &Config) -> Value {
+    Value::Array(Vec::new())
 }
 
 /// The tool policy: its switches, the built-in denies and each configured
