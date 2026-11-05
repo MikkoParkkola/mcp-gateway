@@ -42,7 +42,14 @@ if [[ -f Cargo.toml ]]; then
     local name="$1"; shift
     step "$name"
     if [[ "${PREPUSH_KEEP_GOING:-0}" == "1" ]]; then
-      "$@" || { echo "FAIL: $name (keep-going: continuing)"; cheap_failed+=("$name"); }
+      # Not `"$@" || ...`: bash ignores set -e inside a function called from a `||` list, so a
+      # failing command mid-step would be lost. A subshell outside any condition keeps set -e.
+      local rc=0
+      set +e
+      ( set -e; "$@" )
+      rc=$?
+      set -e
+      (( rc == 0 )) || { echo "FAIL: $name (keep-going: continuing)"; cheap_failed+=("$name"); }
     else
       "$@"
     fi

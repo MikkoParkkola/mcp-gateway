@@ -799,6 +799,46 @@ class Runner(unittest.TestCase):
 
 
 class Step(unittest.TestCase):
+    # KG1 (SHSTEP.4): PREPUSH_KEEP_GOING=1, run on pre-push.sh's own helper and end-of-phase block:
+    # every cheap step runs, each failure is named, the hook exits 1 and its EXIT trap names the
+    # FIRST failure; a failing command inside a step fails that step even when a later command
+    # succeeds; all-green reaches the cargo phase; the default still stops at the first failure.
+    def _keep_going(self, calls, keep_going):
+        text = (HERE / "pre-push.sh").read_text()
+        prologue = text[text.index("set -euo pipefail"):text.index("\n", text.index("trap '")) + 1]
+        helper = text[text.index("  cheap_failed=()"):]
+        helper = helper[:helper.index("\n  }\n", helper.index("  cheap() {")) + 5]
+        end = text[text.index("  if (( ${#cheap_failed[@]} )); then"):]
+        end = end[:end.index("\n  fi\n") + 6]
+        stubs = ("ok_step() { true; }\n"
+                 "masked_step() { false; echo AFTER-THE-FAILING-COMMAND; }\n"
+                 "bad_step() { return 3; }\n")
+        script = prologue + helper + stubs + "".join(f'cheap "{n}" {fn}\n' for n, fn in calls) + end + "echo REACHED-CARGO\n"
+        env = {**os.environ, "PREPUSH_KEEP_GOING": "1" if keep_going else "0"}
+        return subprocess.run(["bash", "-c", script], capture_output=True, text=True, env=env, timeout=30)
+
+    def test_kg1_keep_going_names_every_failed_cheap_step(self):
+        calls = [("one", "ok_step"), ("two", "masked_step"), ("three", "ok_step"), ("four", "bad_step")]
+        done = self._keep_going(calls, keep_going=True)
+        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+        for line in ("[pre-push] three", "[pre-push] four", "FAIL: two (keep-going: continuing)",
+                     "FAIL: four (keep-going: continuing)", "FAIL: cheap steps failed (keep-going): two four"):
+            self.assertIn(line, done.stdout)
+        self.assertNotIn("AFTER-THE-FAILING-COMMAND", done.stdout)
+        self.assertNotIn("REACHED-CARGO", done.stdout)
+        self.assertEqual(done.stderr.strip().splitlines()[-1], "FAIL: pre-push stopped at step: two (exit 1)")
+
+    def test_kg1_keep_going_all_green_reaches_the_cargo_phase(self):
+        done = self._keep_going([("one", "ok_step"), ("two", "ok_step")], keep_going=True)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertIn("REACHED-CARGO", done.stdout)
+
+    def test_kg1_default_stops_at_the_first_failure(self):
+        done = self._keep_going([("one", "ok_step"), ("two", "bad_step"), ("three", "ok_step")], keep_going=False)
+        self.assertEqual(done.returncode, 3, done.stdout + done.stderr)
+        self.assertNotIn("[pre-push] three", done.stdout)
+        self.assertEqual(done.stderr.strip().splitlines()[-1], "FAIL: pre-push stopped at step: two (exit 3)")
+
     # P1: the step script fails when the runner fails, naming the step. Its
     # unconditional call from pre-push.sh is a text check (the weaker half).
     def test_p1_the_step_fails_when_the_runner_fails(self):

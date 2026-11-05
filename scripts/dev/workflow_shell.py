@@ -148,10 +148,11 @@ PYTHONS = {"python", "python3"}
 # the workflows, and as pre-push binds it.
 GATE_PYTHONS = {"scripts/gate-env/.venv/bin/python", "$GATE_PY", "${GATE_PY}"}
 SCRIPT = re.compile(r"^(?:scripts|benchmarks)/[\w./*-]+\.py$")
-# A shell-script step: `bash|sh <script>` or the script run directly. Only repo scripts under
-# scripts/ or tests/ count; a leading ./ is not part of the form.
+# A shell-script step: `bash|sh <script>` or the script run directly. Any repo-relative path
+# counts (not absolute, not $VAR, not ../); a leading ./ is not part of the form.
 SHELLS = {"bash", "sh"}
-SH_SCRIPT = re.compile(r"^(?:\./)?((?:scripts|tests)/[\w./*-]+\.sh)$")
+SH_SCRIPT = re.compile(r"^(?:\./)?(?!\.\./)((?:[\w.-]+/)+[\w.*-]+\.sh)$")
+SH_PATH = re.compile(r"(?<![\w./$-])(?:\./)?(?:[\w-][\w.-]*/)+[\w*-][\w.*-]*\.sh(?![\w.])")
 ASSIGN = re.compile(r"^([A-Za-z_]\w*)=(.*)$")
 FOR_GLOB = re.compile(r"^for\s+(\w+)\s+in\s+(\S+)\s*$")
 UNSUPPORTED = ("eval", "source", ".")
@@ -369,9 +370,11 @@ def _check_complete(run_block, found):
         for m in PY_WORD.finditer(line):
             if not (_LOOKUP_BEFORE.search(line[:m.start()]) or _INLINE_AFTER.match(line[m.end():])):
                 loose.append(line.strip())
-    if len(loose) > len(found):
+    # Only Python runs answer for Python mentions: a shell-script run must not cover a missed one.
+    pythons = [e for e in found if e.argv0 in PYTHONS or e.argv0 in GATE_PYTHONS]
+    if len(loose) > len(pythons):
         raise UnsupportedSyntax(
-            f"{len(loose)} python command(s), {len(found)} read as script executions; "
+            f"{len(loose)} python command(s), {len(pythons)} read as script executions; "
             f"a form the walker cannot read: {' | '.join(dict.fromkeys(loose))}"
         )
     scripts = {e.script for e in found}
@@ -379,6 +382,36 @@ def _check_complete(run_block, found):
     unread = [path for path in dict.fromkeys(unread) if path not in scripts]
     if unread:
         raise UnsupportedSyntax(f".py path(s) named but not read as an execution: {', '.join(unread)}")
+    # Fail closed on shell scripts too: `bash -c 'x.sh'` or a form the walker misreads names a
+    # .sh path it never records. A syntax check (`bash -n x.sh`) runs nothing and accounts for it.
+    sh_unread = [m.group(0).removeprefix("./") for line in lines for m in SH_PATH.finditer(_syntax_checks_stripped(_data_stripped(line)))]
+    sh_unread = [path for path in dict.fromkeys(sh_unread) if path not in scripts and path not in _syntax_checked_loop_items(lines)]
+    if sh_unread:
+        raise UnsupportedSyntax(f".sh path(s) named but not read as an execution: {', '.join(sh_unread)}")
+
+
+def _syntax_checked_loop_items(lines):
+    """Paths a `for VAR in a.sh b.sh; do bash -n "$VAR"` loop hands to a syntax check."""
+    text = " ; ".join(lines)
+    items = set()
+    for m in re.finditer(r"\bfor\s+(\w+)\s+in\s+([^;]+);", text):
+        var = re.escape(m.group(1))
+        if re.search(r"\b(?:ba)?sh\s+-[A-Za-z]*n[A-Za-z]*\s+\"?\$\{?" + var + r"\b", text):
+            items.update(w.strip("'\"").removeprefix("./") for w in m.group(2).split())
+    return items
+
+
+def _syntax_checks_stripped(line):
+    """`line` without its `bash -n` / `sh -n` stages, which only parse their files."""
+    kept = []
+    for piece in _chains(line):
+        for stage in _pipe_stages(piece):
+            words = stage.split()
+            flags = [w for w in words[1:] if w.startswith("-") and not w.startswith("--")]
+            if words and words[0] in SHELLS and any("n" in f[1:] for f in flags):
+                continue
+            kept.append(stage)
+    return " ; ".join(kept)
 
 
 def executions(run_block: str) -> list[Execution]:
@@ -435,6 +468,8 @@ def _stage_execution(stage, stages, bound, loops):
     direct = SH_SCRIPT.match(words[0].strip("'\""))
     if direct:
         target, rest = direct.group(1), list(words)
+        if "*" in target:
+            raise UnsupportedSyntax(f"a glob operand runs only its first match: {stage}")
     elif words[0] in PYTHONS or words[0] in GATE_PYTHONS or words[0] in SHELLS:
         # Interpreter flags (`-B`, `-I`, `-e`) come before the script; the
         # script's own flags after it are arguments and are kept.
@@ -442,7 +477,7 @@ def _stage_execution(stage, stages, bound, loops):
         flags = []
         while rest and rest[0].startswith("-") and rest[0] != "-":
             flags.append(rest.pop(0))
-            if flags[-1] == "-o" and rest:  # bash -o <option> takes its value
+            if re.fullmatch(r"-[A-Za-z]*o", flags[-1]) and rest:  # `-o pipefail`, `-eo pipefail`
                 rest.pop(0)
         # `bash -n` only parses its files (a syntax check) and executes nothing.
         if words[0] in SHELLS and any(f.startswith("-") and not f.startswith("--") and "n" in f[1:] for f in flags):
@@ -450,9 +485,13 @@ def _stage_execution(stage, stages, bound, loops):
         if not rest:
             return found
         target = rest[0].strip("'\"")
+        from_loop = False
         for var, pattern in loops.items():
             if target in ("$" + var, "${" + var + "}"):
-                target = pattern
+                target, from_loop = pattern, True
+        if "*" in target and not from_loop:
+            # `bash scripts/check-*.sh` runs the FIRST match and passes the rest as its arguments.
+            raise UnsupportedSyntax(f"a glob operand runs only its first match: {stage}")
         if words[0] in SHELLS:
             sh = SH_SCRIPT.match(target)
             if not sh:

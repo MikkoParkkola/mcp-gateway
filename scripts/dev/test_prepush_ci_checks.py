@@ -64,6 +64,9 @@ CI_ONLY: dict[tuple[str, tuple[str, ...]], str] = {
         "budget: 36 s alone would push the CI-checks stage past its 120 s budget; the pre-push kit's "
         "cheap stage runs it on Spark, and CI on every PR"
     ),
+    ("deploy/kubernetes/enterprise-alpha/scripts/kind-rollback-smoke.sh", ()): (
+        "ci-env: needs the kind cluster the workflow's kind-action step creates"
+    ),
     ("tests/public_repo_hygiene.sh", ()): (
         "budget: 16 s, over the 10 s cap for one replayed entry; it tests the hygiene checker itself, "
         "which pre-push already runs on the change, and CI runs this suite on every PR"
@@ -734,6 +737,39 @@ class Rows(unittest.TestCase):
     def test_d33_a_bash_syntax_check_is_not_an_execution(self):
         self.assertEqual(workflow_shell.executions("bash -n scripts/ci/x.sh scripts/ci/y.sh"), [])
         self.assertEqual(workflow_shell.executions("sh -n tests/z.sh"), [])
+
+    # D34-D38 (review round 1): shell forms the walker missed, misread, or credited wrongly.
+    def test_d34_a_shell_script_outside_scripts_and_tests_is_an_execution(self):
+        found = workflow_shell.executions("deploy/kubernetes/x/scripts/smoke.sh")
+        self.assertEqual([e.script for e in found], ["deploy/kubernetes/x/scripts/smoke.sh"])
+
+    def test_d35_a_bundled_o_flag_takes_its_value(self):
+        for block in ("bash -eo pipefail scripts/ci/x.sh --check", "bash -euo pipefail scripts/ci/x.sh --check"):
+            with self.subTest(block):
+                found = workflow_shell.executions(block)
+                self.assertEqual([(e.script, e.args) for e in found], [("scripts/ci/x.sh", ("--check",))])
+
+    def test_d36_a_shell_script_named_but_not_read_fails_closed(self):
+        for block in ("bash -c 'scripts/ci/x.sh --check'",
+                      'for f in scripts/ci/x.sh scripts/ci/y.sh; do bash "$f"; done'):
+            with self.subTest(block), self.assertRaises(workflow_shell.UnsupportedSyntax):
+                workflow_shell.executions(block)
+        # A loop that only syntax-checks its scripts runs none of them.
+        self.assertEqual(workflow_shell.executions('for f in scripts/ci/x.sh scripts/ci/y.sh; do bash -n "$f"; done'), [])
+
+    def test_d37_a_shell_run_does_not_cover_a_missed_python_command(self):
+        block = "python3 scripts/ci/x.py\ncommand python3 scripts/ci/x.py --strict\nbash scripts/ci/y.sh"
+        with self.assertRaises(workflow_shell.UnsupportedSyntax):
+            workflow_shell.executions(block)
+
+    def test_d38_a_literal_glob_operand_fails_closed(self):
+        # `bash scripts/ci/check-*.sh` runs the first match with the rest as its arguments.
+        for block in ("bash scripts/ci/check-*.sh", "scripts/ci/check-*.sh"):
+            with self.subTest(block), self.assertRaises(workflow_shell.UnsupportedSyntax):
+                workflow_shell.executions(block)
+        # A loop over a glob runs each match: still one form per script.
+        found = workflow_shell.executions('for f in scripts/ci/check-*.sh; do bash "$f"; done')
+        self.assertEqual([e.script for e in found], ["scripts/ci/check-*.sh"])
 
     # D29 (lead ruling 2026-10-23): the guard's exceptions are closed lists.
     def test_d29_the_guards_exception_lists_are_closed(self):
