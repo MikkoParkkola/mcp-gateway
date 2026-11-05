@@ -20,7 +20,7 @@ pub(super) const OWNER: (&str, &str) = ("https://idp.adapter.test", "alice");
 pub(super) struct Armed {
     pub(super) state: Arc<AppState>,
     pub(super) endpoint: Endpoint,
-    pub(super) dir: tempfile::TempDir,
+    pub(super) dir: Arc<tempfile::TempDir>,
     pub(super) log: Arc<crate::security::TransparencyLogger>,
     _store: crate::gateway::router::tests::FixtureDir,
 }
@@ -43,7 +43,7 @@ pub(super) async fn armed(
     policy: AuditFailurePolicy,
     configure: impl FnOnce(MetaMcp) -> MetaMcp,
 ) -> Armed {
-    let dir = tempfile::tempdir().expect("a private log directory");
+    let dir = Arc::new(tempfile::tempdir().expect("a private log directory"));
     let endpoint = Endpoint::start(hold).await;
     let log = logger(&dir, policy);
     let sink = Arc::clone(&log);

@@ -49,8 +49,8 @@ const DECISION_ONLY: &[(&str, &str, &str, &str)] = &[
     (
         "meta_mcp/admission.rs",
         "admit_meta_sync_unrefunded",
-        r"Ok\(SyncAdmission::Replay\(_, _, _, dispatched, _\)\) => Some\(dispatched\)",
-        "classifies the admission only to keep a withheld step's refusal on a replay (MIK-8361 ruling A); the replay itself is returned unchanged to its caller, which delivers its holds; pinned by row C1-stdio-nested (c1_stdio_a_replayed_nested_question_keeps_its_slot), whose replay passes this match; the fifth member is the MIK-8407 step bindings, which this site neither judges nor projects, so a change in Replay's arity is a one-line bump of this pattern with this invariant kept",
+        r"Ok\(SyncAdmission::Replay\(_, _, _, dispatched, _, _\)\) => Some\(dispatched\)",
+        "classifies the admission only to keep a withheld step's refusal on a replay (ruling A); the replay itself is returned unchanged to its caller, which delivers its holds; pinned by row C1-stdio-nested (c1_stdio_a_replayed_nested_question_keeps_its_slot), whose replay passes this match; the fifth member is the step bindings and the replay arm also carries the resolved effect slot as the sixth, neither of which this site judges or projects, so a change in Replay's arity is a one-line bump of this pattern with this invariant kept",
     ),
 ];
 
@@ -238,11 +238,11 @@ fn every_retained_output_projection_delivers_its_holds() {
 // projection shape A1 scans for (A1 scans this file too).
 const EXCUSED_LINE: &str = concat!(
     "Ok(SyncAdmission::",
-    "Replay(_, _, _, dispatched, _)) => Some(dispatched),"
+    "Replay(_, _, _, dispatched, _, _)) => Some(dispatched),"
 );
 const PAYLOAD_LINE: &str = concat!(
     "Ok(SyncAdmission::",
-    "Replay(response, _, _, dispatched, _)) => Some(dispatched),"
+    "Replay(response, _, _, dispatched, _, _)) => Some(dispatched),"
 );
 fn synthetic(arm: &str) -> String {
     format!(
