@@ -583,7 +583,9 @@ pub(crate) fn read_config_text(path: &Path) -> std::result::Result<Option<String
     // Refused, not read as a recovery file: switching class here would hide
     // the wrong caller, and a caller that hands the config read a journal or
     // staged original must fail loudly.
-    if is_recovery_file(path) {
+    // A relative path resolves against the working directory, as the read
+    // below does; without one, the path is compared as given.
+    if is_recovery_file(&std::env::current_dir().unwrap_or_default(), path) {
         return Err(UnreadConfig::NotTheConfig(format!(
             "{} is a replace journal or staged original, not a config; only crash recovery reads it",
             path.display()
@@ -611,14 +613,15 @@ fn canonical_or_parent(path: &Path) -> std::path::PathBuf {
         .unwrap_or_else(|| path.to_path_buf())
 }
 
-/// Whether `path` is the replace journal or staged original of some config:
+/// Whether `path`, resolved against `base` when relative, is the replace
+/// journal or staged original of some config:
 /// the config its name would belong to is derived, recovery's own helpers
 /// are applied to that config, and the results are compared canonical, so a
 /// symlink to one, or a spelling through another directory, is still that
 /// file. Nothing here is listed or opened, so nothing can fail open.
-fn is_recovery_file(path: &Path) -> bool {
+fn is_recovery_file(base: &Path, path: &Path) -> bool {
     use crate::config_persistence::journal::{config_beside, journal_path, original_path};
-    let target = canonical_or_parent(path);
+    let target = canonical_or_parent(&base.join(path));
     config_beside(&target).is_some_and(|config| {
         [journal_path(&config), original_path(&config)]
             .iter()
@@ -651,17 +654,11 @@ fn file_identity(path: &Path) -> std::io::Result<(u64, u128)> {
 }
 
 /// (volume serial, file id) of what `path` names, from a handle opened for
-/// attributes only, sharing everything so no writer is blocked.
+/// attributes only. Unix keeps its own stat above: the shared helper opens
+/// the file there, which would block on a FIFO.
 #[cfg(windows)]
 fn file_identity(path: &Path) -> std::io::Result<(u64, u128)> {
-    use std::os::windows::fs::OpenOptionsExt;
-    const FILE_READ_ATTRIBUTES: u32 = 0x80;
-    const SHARE_ALL: u32 = 0x7; // FILE_SHARE_READ | WRITE | DELETE
-    let file = std::fs::OpenOptions::new()
-        .access_mode(FILE_READ_ATTRIBUTES)
-        .share_mode(SHARE_ALL)
-        .open(path)?;
-    crate::win_acl::file_identity(&file)
+    crate::security::transparency_log::rotation::path_id(path)
 }
 
 /// [`read_config_text`] for a replace journal or its staged original: the

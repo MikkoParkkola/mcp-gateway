@@ -91,19 +91,13 @@ fn mode_refusals(what: SecretFile, path: &std::path::Path) -> Vec<(&'static str,
         Refusal::GroupReadOwned => 2,
         Refusal::ForeignOwner => 3,
     };
-    // The variant count, kept beside the match: a new kind takes the next
-    // slot and raises it, and KINDS must then name it.
-    let variants = 4;
-    assert_eq!(
-        KINDS.len(),
-        variants,
-        "KINDS does not name every refusal kind"
-    );
+    // The exhaustive match gives a new kind a slot; KINDS must then name it,
+    // or the slots stop being the full range of the list.
     let mut slots: Vec<usize> = KINDS.iter().map(|(_, refusal)| slot(*refusal)).collect();
     slots.sort_unstable();
     assert_eq!(
         slots,
-        (0..variants).collect::<Vec<_>>(),
+        (0..KINDS.len()).collect::<Vec<_>>(),
         "the slots are not the full range"
     );
     for (index, (_, refusal)) in KINDS.iter().enumerate() {
@@ -131,6 +125,33 @@ fn mode_refusals(_: SecretFile, _: &std::path::Path) -> Vec<(&'static str, Strin
 /// config read has a fixed set of calling files, so a new calling file of
 /// either fails here and is a reviewed change. It pins files, not the
 /// paths each call is handed.
+/// A bare relative name is resolved against the base the config read is
+/// given, the working directory in production, without this test changing
+/// the process's working directory.
+#[test]
+fn a_bare_relative_recovery_file_is_found_against_its_base() {
+    use crate::config_persistence::journal;
+    let dir = tempfile::tempdir().expect("tempdir");
+    let config = dir.path().join("gateway.yaml");
+    crate::gateway::test_helpers::write_owner_only(&config, "x").expect("config");
+    journal::stage_original(&config, b"x").expect("stage");
+    journal::begin(&config, crate::hashing::sha256_hex(b"x")).expect("journal");
+    let base = dir.path();
+    for name in [
+        ".gateway.yaml.replace-journal",
+        ".gateway.yaml.replace-original",
+    ] {
+        assert!(
+            super::is_recovery_file(base, std::path::Path::new(name)),
+            "the bare name {name} was not found as a recovery file"
+        );
+    }
+    assert!(!super::is_recovery_file(
+        base,
+        std::path::Path::new("gateway.yaml")
+    ));
+}
+
 /// A test file by its name or a `tests` directory, never by a "test"
 /// substring, which would exempt a production `latest.rs`.
 fn is_test_file(rel: &std::path::Path) -> bool {

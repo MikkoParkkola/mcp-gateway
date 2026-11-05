@@ -408,41 +408,6 @@ fn the_config_read_refuses_a_journal_or_staged_original() {
     }
 }
 
-/// Held while a row runs from another working directory: the directory is
-/// process-wide.
-static CWD: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
-/// A bare relative name, resolved against the working directory, is refused
-/// the same way.
-#[test]
-fn the_config_read_refuses_a_recovery_file_by_a_bare_relative_name() {
-    let _cwd = CWD
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    let dir = tempfile::tempdir().expect("tempdir");
-    config_with_recovery_files(dir.path());
-    let back = std::env::current_dir().expect("working directory");
-    std::env::set_current_dir(dir.path()).expect("enter");
-    let reads = [
-        ".gateway.yaml.replace-journal",
-        ".gateway.yaml.replace-original",
-        "gateway.yaml",
-    ]
-    .map(|name| crate::config::read_config_text(Path::new(name)));
-    std::env::set_current_dir(back).expect("leave");
-    let [journal, original, config] = reads;
-    for read in [journal, original] {
-        assert!(
-            matches!(read, Err(crate::config::UnreadConfig::NotTheConfig(_))),
-            "a bare relative recovery file was read as a config: {read:?}"
-        );
-    }
-    assert!(
-        matches!(&config, Ok(Some(text)) if text == START),
-        "{config:?}"
-    );
-}
-
 /// Through a symlinked config directory, the recovery files are still
 /// refused and gateway.yaml still reads.
 #[cfg(unix)]
