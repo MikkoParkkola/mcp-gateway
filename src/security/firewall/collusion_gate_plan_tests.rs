@@ -60,7 +60,13 @@ fn a_deferred_digest_is_capped_where_it_is_recorded() {
         )
         .expect("relay detection is on");
     assert_eq!(fw.relay_text_cuts(), 0, "premise: staged whole");
-    fw.record_digest(RelayCaller::Keyed("carol"), "alpha", "read", &digest);
+    fw.record_digest(
+        RelayCaller::Keyed("carol"),
+        "alpha",
+        "read",
+        &digest,
+        &fw.paired_generation_for_test(),
+    );
 
     assert_eq!(fw.relay_text_cuts(), 1, "the cap applied at the sink");
     assert!(
@@ -513,7 +519,13 @@ fn a_holder_of_a_short_redacted_run_forwards_it_unrefused() {
         .expect("bounded")
         .with_labels(vec![Some(0); 4]);
     let kept = staged.retaining_for(detector, &delivered, Some(0));
-    fw.record_digest(RelayCaller::Keyed("holder"), "alpha", "read", &kept);
+    fw.record_digest(
+        RelayCaller::Keyed("holder"),
+        "alpha",
+        "read",
+        &kept,
+        &fw.paired_generation_for_test(),
+    );
     let run = format!("{p}{m}{q}");
     fw.record_delivery(
         RelayCaller::Keyed("carol"),
@@ -523,7 +535,7 @@ fn a_holder_of_a_short_redacted_run_forwards_it_unrefused() {
     );
     let reported = |who: &str| {
         let params = json!({"name": "send", "arguments": {"text": run}});
-        fw.check_relay(
+        fw.check_relay_paired(
             RelayCaller::Keyed(who),
             "alpha",
             "send",

@@ -10,7 +10,7 @@
 
 use std::time::{Duration, Instant};
 
-use super::{CollusionDetector, RelayAction, RelayParams};
+use super::{CollusionDetector, RelayParams};
 
 const BOB: &str = "principal-bob";
 const CAROL: &str = "principal-carol";
@@ -21,7 +21,6 @@ const EGRESS: &str = "backend:post_message";
 
 fn detector() -> CollusionDetector {
     CollusionDetector::new(RelayParams {
-        action: RelayAction::Observe,
         ..RelayParams::default()
     })
 }
@@ -94,14 +93,28 @@ fn plain_records_go_before_a_sensitive_one() {
     );
 }
 
+/// What `who` sending `text` through the egress at `at` finds, where flow 1
+/// lets the 64 copies [`overflowed`] fills with leave.
+fn through_flow_1(
+    d: &CollusionDetector,
+    who: &str,
+    text: &str,
+    at: Instant,
+) -> Option<super::RelayFinding> {
+    let names: Vec<String> = (0..64).map(source).collect();
+    let recorded: Vec<(&str, u64)> = names.iter().map(|n| (n.as_str(), 1)).collect();
+    let view = super::live_stubs::masked(&recorded, (EGRESS, 1));
+    d.check_egress_under(&view, who, EGRESS, text, at)
+}
+
 /// Carol received `text` as sensitive from 64 sources whose flow (entry 1)
 /// lets it leave, at `at`, then from one more source no flow lets leave: one
 /// record past her cap.
 fn overflowed(d: &CollusionDetector, text: &str, at: Instant) {
     for i in 0..64 {
-        d.record_delivery_flows_at(&source(i), CAROL, (true, 1), text, at);
+        d.record_delivery_at(&source(i), CAROL, true, text, at);
     }
-    d.record_delivery_flows_at(RESTRICTED, CAROL, (true, 0), text, at);
+    d.record_delivery_at(RESTRICTED, CAROL, true, text, at);
 }
 
 /// `MIK-8123`: a sensitive record past the cap is never silently lost: the
@@ -114,8 +127,7 @@ fn a_restriction_past_the_cap_still_holds() {
     let text = passage();
     overflowed(&d, &text, now);
     assert!(
-        d.check_egress_flows_at(BOB, (EGRESS, 1), &text, now)
-            .is_some(),
+        through_flow_1(&d, BOB, &text, now).is_some(),
         "a restriction past the cap was lost"
     );
 }
@@ -129,10 +141,9 @@ fn an_exact_copy_does_not_excuse_what_overflowed() {
     let now = Instant::now();
     let text = passage();
     overflowed(&d, &text, now);
-    d.record_delivery_flows_at(RESTRICTED, DAVE, (false, 0), &text, now);
+    d.record_delivery_at(RESTRICTED, DAVE, false, &text, now);
     assert!(
-        d.check_egress_flows_at(DAVE, (EGRESS, 1), &text, now)
-            .is_some(),
+        through_flow_1(&d, DAVE, &text, now).is_some(),
         "an exact copy excused what overflowed"
     );
 }
@@ -156,13 +167,11 @@ fn what_overflowed_expires_with_its_own_delivery() {
         );
     }
     assert!(
-        d.check_egress_flows_at(BOB, (EGRESS, 1), &text, t0 + Duration::from_secs(300))
-            .is_some(),
+        through_flow_1(&d, BOB, &text, t0 + Duration::from_secs(300)).is_some(),
         "control: inside the window it is a finding"
     );
     assert!(
-        d.check_egress_flows_at(BOB, (EGRESS, 1), &text, t0 + Duration::from_secs(650))
-            .is_none(),
+        through_flow_1(&d, BOB, &text, t0 + Duration::from_secs(650)).is_none(),
         "plain deliveries extended what overflowed"
     );
 }
@@ -195,8 +204,7 @@ fn a_full_pool_keeps_sensitive_text_judged() {
     assert_eq!(d.pool_in_use(), 0, "the pool grew past its capacity");
     assert!(d.capped() > 0, "records past the cap are counted");
     assert!(
-        d.check_egress_flows_at(BOB, (EGRESS, 1), &text, now)
-            .is_some(),
+        through_flow_1(&d, BOB, &text, now).is_some(),
         "a full pool silenced sensitive text"
     );
 }
@@ -240,19 +248,16 @@ fn a_later_stamped_sensitive_record_never_gives_way() {
     let d = detector();
     let now = Instant::now();
     let text = passage();
-    d.record_delivery_flows_at(
-        RESTRICTED,
-        CAROL,
-        (true, 0),
-        &text,
-        now + Duration::from_secs(5),
-    );
+    d.record_delivery_at(RESTRICTED, CAROL, true, &text, now + Duration::from_secs(5));
     for i in 0..64 {
-        d.record_delivery_flows_at(&source(i), CAROL, (true, 1), &text, now);
+        d.record_delivery_at(&source(i), CAROL, true, &text, now);
     }
     assert!(
-        d.check_egress_flows_at(BOB, (EGRESS, 1), &text, now)
-            .is_some(),
+        through_flow_1(&d, BOB, &text, now).is_none(),
+        "at now the later-stamped restriction is not yet held; overflow is judged by its flows"
+    );
+    assert!(
+        through_flow_1(&d, BOB, &text, now + Duration::from_secs(5)).is_some(),
         "a later-stamped restriction gave way"
     );
 }

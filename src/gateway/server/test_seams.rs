@@ -156,6 +156,34 @@ pub(super) async fn shutdown_signal_or_trigger(
 }
 
 impl super::Gateway {
+    /// [`Self::build_meta_mcp`], then the Meta-MCP's startup live config
+    /// published, as `stdio_loop` builds and then publishes before its first
+    /// line: same generation, auth, policy epoch and startup revision. A
+    /// fixture that serves from the built Meta-MCP judges under that config,
+    /// never under none. Production's own order is pinned by the boundary
+    /// pin in `meta_mcp/boundary_pins/live_config.rs`, which skips tests.
+    #[cfg(test)]
+    pub(super) async fn build_meta_mcp_published(
+        &self,
+    ) -> crate::Result<super::build_meta::BuiltMetaMcp> {
+        let built = self.build_meta_mcp().await?;
+        let live_config = std::sync::Arc::new(
+            crate::config_reload::LiveConfig::from_prepared(
+                crate::config_reload::Generation::prepare_startup(
+                    self.config.clone(),
+                    std::sync::Arc::new(super::stdio_tasks::default_auth(
+                        self.env.startup(),
+                        std::sync::Arc::clone(&built.record_key),
+                    )),
+                ),
+            )
+            .with_policy_epoch(std::sync::Arc::clone(&built.meta_mcp.policy_epoch))
+            .with_startup_revision(built.meta_mcp.record_key(), self.env.take_startup_inputs()),
+        );
+        built.meta_mcp.set_live_config(live_config);
+        Ok(built)
+    }
+
     /// The pause at the start of this gateway's stdio dispatches, and the
     /// notice that its drain has begun (MIK-8364).
     #[cfg(test)]

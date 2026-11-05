@@ -66,6 +66,7 @@ impl Spliced {
     /// and the tail is rebuilt from its last characters. Short runs take
     /// [`Self::track`] whole; both ways reach the same state.
     pub(super) fn push(&mut self, text: &str) {
+        work::note(text.len());
         self.out.push_str(text);
         let run = match last_white_end(text) {
             Some(end) => {
@@ -87,6 +88,7 @@ impl Spliced {
         self.track(&run[..run.ceil_char_boundary(WINDOW)]);
         // A scheme wholly inside the run ends in a `://` found here.
         if !self.prefixed {
+            work::note(run.len());
             self.prefixed = run.match_indices("://").any(|(at, _)| {
                 let end = at + 3;
                 scheme_ends(&run[run.floor_char_boundary(end.saturating_sub(WINDOW))..end])
@@ -101,6 +103,7 @@ impl Spliced {
 
     /// Track `text` from the current state, one character at a time.
     fn track(&mut self, text: &str) {
+        work::note(text.len());
         let bytes = text.as_bytes();
         let mut at = 0;
         while at < bytes.len() {
@@ -183,6 +186,7 @@ fn scheme_ends(window: &str) -> bool {
 /// `None` when it holds none. Only these lead bytes start a non-ASCII
 /// whitespace character, so the rest are skipped without decoding.
 fn last_white_end(text: &str) -> Option<usize> {
+    work::note(text.len());
     let bytes = text.as_bytes();
     let mut end = bytes.len();
     while let Some(at) = bytes[..end].iter().rposition(|&b| {
@@ -205,4 +209,30 @@ pub(super) fn ends_open(text: &str) -> bool {
     let mut out = Spliced::with_capacity(0);
     out.push(text);
     out.barrier()
+}
+
+/// The bytes the writer has read and written on this thread, counted under
+/// test only: a cost row compares counts, which no load on the machine moves.
+pub(super) mod work {
+    #[cfg(test)]
+    thread_local! {
+        static BYTES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    }
+
+    /// Count `bytes` handled.
+    #[inline]
+    pub(super) fn note(bytes: usize) {
+        #[cfg(test)]
+        BYTES.with(|n| n.set(n.get() + bytes));
+        #[cfg(not(test))]
+        let _ = bytes;
+    }
+
+    /// The bytes `run` makes the writer handle on this thread.
+    #[cfg(test)]
+    pub(in crate::security::firewall::redactor) fn counted(run: impl FnOnce()) -> usize {
+        let before = BYTES.with(std::cell::Cell::get);
+        run();
+        BYTES.with(std::cell::Cell::get) - before
+    }
 }

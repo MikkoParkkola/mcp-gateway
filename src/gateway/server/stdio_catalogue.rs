@@ -54,14 +54,17 @@ fn stdio_client() -> AuthenticatedClient {
 }
 
 /// The local operator as a catalogue relay caller: one relay principal, the
-/// one `tools/call` keys.
-fn operator() -> relay::CatalogueCaller {
+/// one `tools/call` keys, judged under the generation its line was read under.
+fn operator(
+    generation: std::sync::Arc<crate::config_reload::Generation>,
+) -> relay::CatalogueCaller {
     relay::CatalogueCaller {
         key: crate::gateway::meta_mcp::LOCAL_OPERATOR_PRINCIPAL.to_owned(),
         keyed: true,
         name: "stdio".to_owned(),
         // The id the stdio dispatcher keys this connection by (MIK-7942).
         session: super::STDIO_SESSION_ID.to_owned(),
+        generation: relay::CatalogueGeneration::Pinned(generation),
     }
 }
 
@@ -70,9 +73,10 @@ pub(super) async fn dispatch(
     method: &str,
     id: RequestId,
     params: Option<&Value>,
+    generation: std::sync::Arc<crate::config_reload::Generation>,
 ) -> JsonRpcResponse {
     relay::as_caller(
-        operator(),
+        operator(generation),
         Box::pin(dispatch_catalogue(meta, method, id, params)),
     )
     .await

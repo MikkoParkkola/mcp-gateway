@@ -99,6 +99,7 @@ async fn inner_invocation_arguments_are_a_read() {
     let (registry, _calls) = counted_backend("alpha");
     let mut meta = MetaMcp::new(registry);
     meta.set_firewall(Some(Arc::clone(&fw)));
+    crate::security::firewall::collusion_live_rig::seed_meta(&meta, &fw);
     meta.share_keyring_with_for_test(&fw);
     let args =
         json!({ "server": "alpha", "tool": "read", "arguments": { "customer_id": "cust-b" } });

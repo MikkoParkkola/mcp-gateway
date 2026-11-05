@@ -92,7 +92,6 @@ async fn stdio_surfaced_tool_never_delivers_a_public_scope() {
         "fixture is public"
     );
     let meta = stdio_meta().await;
-    let policy = Arc::new(crate::security::ToolPolicy::default());
     let mtls = Arc::new(crate::mtls::MtlsPolicy::from_config(
         &crate::mtls::MtlsConfig::default(),
     ));
@@ -101,9 +100,15 @@ async fn stdio_surfaced_tool_never_delivers_a_public_scope() {
         "params": { "name": TOOL, "arguments": {} }
     });
 
-    let body = super::super::Gateway::dispatch_single(&meta, &policy, &mtls, &request, "stdio-p6")
-        .await
-        .expect("a request is answered");
+    let body = super::super::Gateway::dispatch_single(
+        &meta,
+        &crate::gateway::authz::default_line(&meta),
+        &mtls,
+        &request,
+        "stdio-p6",
+    )
+    .await
+    .expect("a request is answered");
 
     assert!(body.get("error").is_none(), "{body}");
     assert_eq!(body["result"]["isError"], false, "{body}");
