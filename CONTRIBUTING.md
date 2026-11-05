@@ -267,13 +267,14 @@ registered, then on that runner; see `scripts/ci/trusted-runner/`.
 test shards; the merge train runs them. Label a pull request `os-sensitive` when it touches file
 paths, temporary directories, file permissions or ACLs, sockets, process spawning or signals, or
 code under `cfg(windows)`, `cfg(unix)` or `target_os`: it then runs the train's four Windows
-shards, Windows clippy and the macOS lib shard on its own CI (`Windows check`, `macOS check`), so a
+shards, Windows clippy and the macOS lib shard on its own CI (`Windows check`, `macOS check`; the
+macOS integration shard stays train-only), so a
 Windows or macOS break shows on the pull request instead of failing a train. The label counts from
 the next `pull_request` event that carries it: push after labelling (an empty commit works,
 `git commit --allow-empty -m "ci: run the OS shards" && git push`) or close and reopen the pull
 request. A label added at creation (`gh pr create --label`) or a re-run of an earlier run does not
-start them. The cost is about 60-90 minutes of Windows and macOS runner time; macOS runners also
-serve every train, so the label is for changes that need it.
+start them. The slowest of those jobs takes about 60-90 minutes, on six runners at once; the macOS
+runners also serve every train, so the label is for changes that need it.
 Mutation proofs are batched: push `throwaway/mutants-<pr>` as the pull request's head plus one
 commit adding `.mutants/manifest.tsv` and the patches; one run of the Mutants workflow classifies
 every mutant (format and rules in `scripts/ci/mutants/run_mutants.py`).

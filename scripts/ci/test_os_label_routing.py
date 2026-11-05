@@ -23,13 +23,19 @@ from pathlib import Path
 import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from test_docs_only_gating import ROOT, as_train, ctx, simulate  # noqa: E402
+from test_docs_only_gating import ROOT, as_train, ctx, simulate as _simulate  # noqa: E402
+from test_throwaway_routing import evaluate  # noqa: E402
 from test_os_shards import MATRIX  # noqa: E402
 
 LABEL = "os-sensitive"
 LABEL_JOBS = {"windows-shards", "windows-clippy", "windows-check", "macos-shards", "macos-check"}
 # A labelled lane runs macOS's lib shard only: about two macOS runners serve every train.
 LABELLED_MACOS = ["lib"]
+
+
+def simulate(jobs: dict, c: dict) -> set[str]:
+    """Routing with the context's own scope decision (docs-only, failed) kept."""
+    return _simulate(jobs, c, keep_scope=True)
 
 
 def labelled(c: dict, *names: str) -> dict:
@@ -104,14 +110,64 @@ def matrix_errors(jobs: dict) -> list[str]:
             errors.append(f"{job}: a labelled lane runs {a}, not {labelled_want}")
         if LABEL not in m.group("cond"):
             errors.append(f"{job}: the matrix condition does not test the label")
-        del b  # the train list is test_os_shards.py's to check against shard_tests.py
+        # The condition picks the labelled list on a labelled lane only: a labelled
+        # train, or any unlabelled run, keeps every shard (B, test_os_shards.py's).
+        lane = ctx("pull_request", "success", "false")
+        for case, c, want in (
+            ("labelled lane", labelled(lane, LABEL), True),
+            ("labelled fork lane", labelled(as_train(copy.deepcopy(lane), head="feature/x", repo="fork/x"), LABEL), True),
+            ("labelled train", labelled(as_train(copy.deepcopy(lane)), LABEL), False),
+            ("unlabelled lane", lane, False),
+            ("unlabelled train", as_train(copy.deepcopy(lane)), False),
+        ):
+            if bool(evaluate(m.group("cond"), c)) != want:
+                errors.append(f"{job}: a {case} runs {a if not want else b}, not {a if want else b}")
+    return errors
+
+
+def evaluator_errors() -> list[str]:
+    """The evaluator's label reading, apart from any workflow."""
+    expr = f"contains(github.event.pull_request.labels.*.name, '{LABEL}')"
+    cases = {
+        "no labels": ({"labels": []}, False),
+        "no labels key": ({}, False),
+        "several labels": ({"labels": [{"name": "a"}, {"name": LABEL}, {"name": "b"}]}, True),
+        "label in other case": ({"labels": [{"name": LABEL.title()}]}, True),
+        "label prefix only": ({"labels": [{"name": LABEL + "-x"}]}, False),
+    }
+    errors = [f"evaluator: {case} reads {not want}"
+              for case, (pr, want) in cases.items()
+              if bool(evaluate(expr, {"github": {"event": {"pull_request": pr}}, "_status": {}})) != want]
+    if evaluate("contains(o.*, 'v')", {"o": {"k": "v"}, "_status": {}}) is not True:
+        errors.append("evaluator: an object projection does not list its values")
     return errors
 
 
 def self_test(jobs: dict) -> list[str]:
-    """Planted mistakes each fail: the label clause on a sixth heavy job, and a label
-    job that ignores it."""
+    """Planted mistakes each fail: the label clause on a sixth heavy job, a label job
+    that ignores it, a matrix that narrows labelled trains too, and a label that
+    skips docs-only changes where the train runs them."""
     errors = []
+    narrow_trains = copy.deepcopy(jobs)
+    shard = narrow_trains["macos-shards"]["strategy"]["matrix"]
+    no_train_exclusion = str(shard["shard"]).replace(
+        " && !(startsWith(github.head_ref, 'train/') && github.event.pull_request.head.repo.full_name == github.repository)", "")
+    if no_train_exclusion == str(shard["shard"]):
+        errors.append("self-test: the matrix's train exclusion was not found to remove")
+    else:
+        shard["shard"] = no_train_exclusion
+        if not any("labelled train runs" in e for e in matrix_errors(narrow_trains)):
+            errors.append("self-test: a matrix narrowing labelled trains was not caught")
+    docs_skip = copy.deepcopy(jobs)
+    alt = f"contains(github.event.pull_request.labels.*.name, '{LABEL}'))"
+    job = docs_skip["windows-shards"]
+    if alt not in str(job["if"]):
+        errors.append("self-test: the windows-shards label alternative was not found")
+    else:
+        job["needs"] = ["scope"]
+        job["if"] = str(job["if"]).replace(alt, alt[:-1] + " && needs.scope.outputs.docs_only != 'true')")
+        if not any(e.startswith("docs-only lane PR:") for e in routing_errors(docs_skip)):
+            errors.append("self-test: a label that skips docs-only changes was not caught")
     clause = (f" || (github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line'"
               f" && contains(github.event.pull_request.labels.*.name, '{LABEL}'))")
     widened = copy.deepcopy(jobs)
@@ -131,7 +187,7 @@ def self_test(jobs: dict) -> list[str]:
 def main() -> int:
     text = (ROOT / ".github" / "workflows" / "ci.yml").read_text()
     jobs = yaml.safe_load(text)["jobs"]
-    errors = routing_errors(jobs) + matrix_errors(jobs) + self_test(jobs)
+    errors = evaluator_errors() + routing_errors(jobs) + matrix_errors(jobs) + self_test(jobs)
     for e in errors:
         print(f"os-label: {e}", file=sys.stderr)
     if not errors:
