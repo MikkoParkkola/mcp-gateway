@@ -18,6 +18,7 @@ pub mod admin_audit;
 pub mod backend_ops;
 pub mod backends;
 pub mod capabilities;
+mod config_file;
 pub mod control_plane;
 mod dashboard;
 pub(in crate::gateway) mod decisions;

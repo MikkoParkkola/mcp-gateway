@@ -331,7 +331,7 @@ pub(super) async fn adopt_discovery(
     };
     let read = {
         let path = path.clone();
-        tokio::task::spawn_blocking(move || read_gateway(Some(&path))).await
+        tokio::task::spawn_blocking(move || read_gateway("discovery", Some(&path))).await
     };
     let Ok(Ok(gateway)) = read else {
         return fixed(
