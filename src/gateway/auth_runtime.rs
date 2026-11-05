@@ -37,10 +37,12 @@ pub(crate) struct AuthRuntime {
     // ponytail: one entry per principal ever matched since start; a derived
     // principal adds one per rotation. Prune to the current table if it grows.
     last_used: DashMap<String, i64>,
-    /// The buckets' time origin. `tokio::time::Instant` is `std::time::Instant`
-    /// outside a paused tokio runtime, so a deployment counts in real time;
-    /// a `start_paused` test advances it explicitly. Per store rather than per
-    /// process, so one test's paused timeline never anchors another's.
+    /// The buckets' time origin. Without tokio's `test-util` feature (a
+    /// dev-dependency only), `tokio::time::Instant::now()` is
+    /// `std::time::Instant::now()` on every thread, so a deployment counts in
+    /// real time; in tests it is the paused clock only inside a `start_paused`
+    /// runtime. Per store rather than per process, so one test's paused
+    /// timeline never anchors another's.
     anchor: Instant,
 }
 
