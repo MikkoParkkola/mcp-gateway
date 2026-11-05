@@ -26,17 +26,14 @@ impl BackendRegistry {
     /// handed over is in the reaper's hands, cut to `deadline`.
     pub(crate) async fn stop_all_by(&self, deadline: tokio::time::Instant) {
         self.stop_deadline.move_earlier(deadline.into_std());
-        let _sweep = RetireOnDrop(
-            self.backends
-                .iter()
-                .map(|entry| Arc::clone(entry.value()))
-                .collect(),
-        );
-        #[allow(
-            clippy::disallowed_methods,
-            reason = "Lifecycle: gateway startup, wiring or shutdown; no caller request"
-        )]
-        let stop = crate::transport::within_stop_deadline(deadline, self.stop_all());
+        // The backends to retire are the ones the stop latched and took, in
+        // one hold: a reload registering after this is refused, never stopped
+        // without being retired.
+        let backends = self.latch_and_snapshot();
+        let _sweep = RetireOnDrop(backends.clone());
+        #[cfg(test)]
+        seam::after_sweep();
+        let stop = crate::transport::within_stop_deadline(deadline, Self::stop_each(backends));
         // Bounded by the deadline as a whole: a backend waiting on a restart's
         // lifecycle lock cannot outrun the stage. What it leaves running is
         // retired by `_sweep` when this returns.
@@ -63,6 +60,31 @@ impl Drop for RetireOnDrop {
     fn drop(&mut self) {
         for backend in &self.0 {
             backend.retire_now();
+        }
+    }
+}
+
+/// Test-only hook right after the stop takes the backends it will retire,
+/// for the row that registers a backend in that window. Thread-local: its
+/// rows run on the default current-thread runtime.
+#[cfg(test)]
+pub(in crate::backend) mod seam {
+    use std::cell::RefCell;
+
+    thread_local! {
+        static AFTER_SWEEP: RefCell<Option<Box<dyn FnOnce()>>> = RefCell::new(None);
+    }
+
+    /// Run `hook` once, the next time a stop on this thread has taken them.
+    /// Unix-only, like the only row that arms it.
+    #[cfg(unix)]
+    pub(in crate::backend) fn after_sweep_runs(hook: impl FnOnce() + 'static) {
+        AFTER_SWEEP.with(|slot| *slot.borrow_mut() = Some(Box::new(hook)));
+    }
+
+    pub(super) fn after_sweep() {
+        if let Some(hook) = AFTER_SWEEP.with(|slot| slot.borrow_mut().take()) {
+            hook();
         }
     }
 }

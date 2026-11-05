@@ -102,7 +102,7 @@ pub(super) fn context(who: &Who) -> MetaMcpCallerContext<'_> {
 pub(super) fn gateway(
     endpoint: &Endpoint,
     rows: Vec<IdentityGrant>,
-    dir: Option<&tempfile::TempDir>,
+    dir: Option<&Arc<tempfile::TempDir>>,
     policy: AuditFailurePolicy,
 ) -> MetaMcp {
     let mut meta = MetaMcp::new(Arc::new(BackendRegistry::new()))
@@ -149,7 +149,10 @@ fn only(records: Vec<Value>, what: &str) -> Value {
 /// with the call's invocation record by trace.
 #[tokio::test]
 async fn grant_denial_writes_decision_record() {
-    let (endpoint, dir) = (Endpoint::start(false).await, tempfile::tempdir().unwrap());
+    let (endpoint, dir) = (
+        Endpoint::start(false).await,
+        Arc::new(tempfile::tempdir().unwrap()),
+    );
     let meta = gateway(
         &endpoint,
         vec![],
@@ -192,7 +195,10 @@ async fn grant_denial_writes_decision_record() {
 /// T2. A matching grant is one `ok` record naming the grant.
 #[tokio::test]
 async fn grant_match_writes_allow_record() {
-    let (endpoint, dir) = (Endpoint::start(false).await, tempfile::tempdir().unwrap());
+    let (endpoint, dir) = (
+        Endpoint::start(false).await,
+        Arc::new(tempfile::tempdir().unwrap()),
+    );
     let rows = vec![grant("g1", ALICE, ALICE)];
     let meta = gateway(&endpoint, rows, Some(&dir), AuditFailurePolicy::BestEffort);
 
@@ -221,7 +227,10 @@ async fn grant_match_writes_allow_record() {
 #[tokio::test]
 async fn public_capability_writes_no_decision() {
     for exposure in ["public", "shared"] {
-        let (endpoint, dir) = (Endpoint::start(false).await, tempfile::tempdir().unwrap());
+        let (endpoint, dir) = (
+            Endpoint::start(false).await,
+            Arc::new(tempfile::tempdir().unwrap()),
+        );
         let meta = gateway(
             &endpoint,
             vec![],
@@ -252,7 +261,10 @@ async fn public_capability_writes_no_decision() {
 /// D1's invocation append is untouched, so it cannot be what failed.
 #[tokio::test]
 async fn grant_decision_append_failure_is_audit_unavailable() {
-    let (endpoint, dir) = (Endpoint::start(false).await, tempfile::tempdir().unwrap());
+    let (endpoint, dir) = (
+        Endpoint::start(false).await,
+        Arc::new(tempfile::tempdir().unwrap()),
+    );
     let log = logger(&dir, AuditFailurePolicy::FailClosed);
     let mut meta = MetaMcp::new(Arc::new(BackendRegistry::new()))
         .with_identity_grants(grants(vec![grant("g1", ALICE, ALICE)]));
@@ -276,7 +288,10 @@ async fn grant_decision_record_carries_no_label() {
         (api_key("ci-key"), ("api_key", "ci-key")),
     ];
     for (who, (authority, subject)) in callers {
-        let (endpoint, dir) = (Endpoint::start(false).await, tempfile::tempdir().unwrap());
+        let (endpoint, dir) = (
+            Endpoint::start(false).await,
+            Arc::new(tempfile::tempdir().unwrap()),
+        );
         let meta = gateway(
             &endpoint,
             vec![],
@@ -305,7 +320,10 @@ async fn grant_decision_record_carries_no_label() {
 /// T17 (control). Listing and search are `Emit::Silent`: no decision.
 #[tokio::test]
 async fn listing_writes_no_decision() {
-    let (endpoint, dir) = (Endpoint::start(false).await, tempfile::tempdir().unwrap());
+    let (endpoint, dir) = (
+        Endpoint::start(false).await,
+        Arc::new(tempfile::tempdir().unwrap()),
+    );
     let meta = gateway(
         &endpoint,
         vec![],
@@ -331,7 +349,10 @@ async fn listing_writes_no_decision() {
 /// no panic, the answer unchanged.
 #[tokio::test]
 async fn direct_invoke_tool_writes_one_record() {
-    let (endpoint, dir) = (Endpoint::start(false).await, tempfile::tempdir().unwrap());
+    let (endpoint, dir) = (
+        Endpoint::start(false).await,
+        Arc::new(tempfile::tempdir().unwrap()),
+    );
     let rows = vec![grant("g1", ALICE, ALICE)];
     let meta = gateway(&endpoint, rows, Some(&dir), AuditFailurePolicy::BestEffort);
     let who = api_key("alice");
@@ -385,7 +406,10 @@ async fn no_logger_changes_nothing() {
 /// decision: the concealed -32601 answer is unchanged, and it is recorded.
 #[tokio::test]
 async fn surfaced_call_grant_denial_writes_one_record() {
-    let (endpoint, dir) = (Endpoint::start(false).await, tempfile::tempdir().unwrap());
+    let (endpoint, dir) = (
+        Endpoint::start(false).await,
+        Arc::new(tempfile::tempdir().unwrap()),
+    );
     let meta = gateway(
         &endpoint,
         vec![],

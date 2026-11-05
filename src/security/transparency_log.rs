@@ -188,6 +188,13 @@ pub struct TransparencyLogger {
     bound: bounded::Bound,
     /// Readers told of each appended record of their kind.
     subscribers: append::Subscribers,
+    /// Test-only: a share of the temporary directory this log lives in, so
+    /// the directory is removed only after the log's last handle drops. A
+    /// late append (a worker the test left running) then lands before the
+    /// directory goes, never mid-removal. Declared last, so the log's files
+    /// and lease close first.
+    #[cfg(test)]
+    test_dir: crate::test_dir_keep::TestDirKeep,
 }
 
 /// Which rung of the correlation chain supplied an invocation entry's
@@ -231,6 +238,14 @@ impl CorrelationSource {
 }
 
 impl TransparencyLogger {
+    /// Test-only: hold a share of the temporary directory this log lives in
+    /// until the log's last handle drops (see the `test_dir` field). The log
+    /// must live inside `dir`, and a second call must name the same one.
+    #[cfg(test)]
+    pub(crate) fn keep_test_dir(&self, dir: Arc<tempfile::TempDir>) {
+        self.test_dir.keep(dir, &self.path);
+    }
+
     /// Open (or create) the transparency log file and recover chain state.
     ///
     /// # Errors
@@ -313,6 +328,8 @@ impl TransparencyLogger {
             last_failure_cause: std::sync::atomic::AtomicUsize::new(usize::MAX),
             bound: bounded::Bound::default(),
             subscribers: append::Subscribers::default(),
+            #[cfg(test)]
+            test_dir: crate::test_dir_keep::TestDirKeep::default(),
         })
     }
 
@@ -642,6 +659,12 @@ mod hwm_contradiction_tests;
 #[cfg(test)]
 #[path = "transparency_log_hwm_missing_tests.rs"]
 mod hwm_missing_tests;
+#[cfg(test)]
+#[path = "transparency_log_keep_dir_tests.rs"]
+mod keep_dir_tests;
+#[cfg(test)]
+#[path = "transparency_log_keep_scan_tests.rs"]
+mod keep_scan_tests;
 #[cfg(test)]
 #[path = "transparency_log_lease_tests.rs"]
 mod lease_tests;
