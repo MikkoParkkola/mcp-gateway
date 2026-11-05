@@ -79,7 +79,13 @@ async fn r0_only_an_admin_reads_the_policies() {
     let (state, _dir) = state().await;
     let (ok, body) = get(&state, Some(client(true))).await;
     assert_eq!(ok, StatusCode::OK, "{body}");
-    assert!(body["tool_policy"].is_object() && body["finding_rules"].is_array());
+    assert!(body["tool_policy"].is_object(), "{body}");
+    // An array with the firewall built; `null` without it (E1).
+    assert_eq!(
+        body["finding_rules"].is_array(),
+        cfg!(feature = "firewall"),
+        "{body}"
+    );
     let (refused, _) = get(&state, Some(client(false))).await;
     assert_eq!(
         refused,
