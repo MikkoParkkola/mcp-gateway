@@ -265,9 +265,6 @@ mod delivery_effect_tests;
 /// A delivery record joins its invocation by trace, on both routes.
 #[cfg(all(test, feature = "firewall"))]
 mod delivery_trace_join_tests;
-/// The direct route records no declared effect yet (pinned absence).
-#[cfg(test)]
-mod direct_effect_absent_tests;
 /// The direct route's reach and its declared effect.
 #[cfg(test)]
 mod direct_effect_tests;
