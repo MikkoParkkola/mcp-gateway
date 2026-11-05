@@ -263,6 +263,10 @@ async fn a_dispatched_round_refused_by_the_firewall_settles_the_key_as_a_refusal
         )
         .with_continuations(meta.continuation()),
     )));
+    crate::security::firewall::collusion_live_rig::seed_meta(
+        &meta,
+        &meta.firewall_for_test().expect("set above"),
+    );
     meta.enable_idempotency(
         Arc::new(crate::idempotency::IdempotencyCache::new()),
         Duration::from_secs(300),

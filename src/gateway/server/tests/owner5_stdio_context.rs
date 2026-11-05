@@ -141,6 +141,8 @@ async fn stdio_refuses_an_account_dependent_call_and_serves_a_local_mutation() {
         },
     );
     let data_dir = tempfile::tempdir().expect("tempdir");
+    // The builder publishes nothing: the line is the fixture's own config.
+    let line = crate::config_reload::LiveConfig::new(config.clone()).generation();
     let built = Gateway::new(config)
         .await
         .expect("the production constructor accepts this configuration")
@@ -152,7 +154,7 @@ async fn stdio_refuses_an_account_dependent_call_and_serves_a_local_mutation() {
 
     let refused = Gateway::dispatch_single(
         &built.meta_mcp,
-        &built.tool_policy,
+        &line,
         &built.mtls_policy,
         &call(
             1,
@@ -178,7 +180,7 @@ async fn stdio_refuses_an_account_dependent_call_and_serves_a_local_mutation() {
 
     let mutated = Gateway::dispatch_single(
         &built.meta_mcp,
-        &built.tool_policy,
+        &line,
         &built.mtls_policy,
         &call(2, "gateway_set_state", &json!({"state": "triage"})),
         session,

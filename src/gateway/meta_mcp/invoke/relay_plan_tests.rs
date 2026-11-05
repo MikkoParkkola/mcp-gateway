@@ -26,7 +26,7 @@ const ENGINE: &str = "Step two was skipped because its condition was false; the 
 fn refused(firewall: &Firewall, who: &str, text: &str) -> bool {
     let params = json!({"name": "send", "arguments": {"text": text}});
     !firewall
-        .check_relay(
+        .check_relay_paired(
             RelayCaller::Keyed(who),
             "alpha",
             "send",
@@ -83,7 +83,7 @@ async fn deliver_plan(
             );
         })
         .await;
-    staged.commit(true);
+    staged.commit(true, &meta.paired_generation_for_test());
 }
 
 /// A redaction inside step A keeps step B's receipt, keeps A's unredacted
@@ -255,9 +255,9 @@ async fn a_kept_plan_receipt_stays_sensitive() {
             );
         })
         .await;
-    staged.commit(true);
+    staged.commit(true, &firewall.paired_generation_for_test());
     let params = json!({"name": "send", "arguments": {"text": PROSE}});
-    let carol = firewall.check_relay(
+    let carol = firewall.check_relay_paired(
         RelayCaller::Keyed("carol"),
         "alpha",
         "send",
@@ -318,7 +318,7 @@ async fn a_changed_plan_receipt_never_commits_unkept() {
             );
         })
         .await;
-    staged.commit(true);
+    staged.commit(true, &firewall.paired_generation_for_test());
     carol_holds(&firewall, "a", PROSE);
     assert!(
         refused(&firewall, "alice", PROSE),
@@ -398,7 +398,7 @@ async fn removing_a_middle_leaf_keeps_its_neighbours_whole() {
                 );
             })
             .await;
-        staged.commit(true);
+        staged.commit(true, &firewall.paired_generation_for_test());
         firewall.record_delivery(RelayCaller::Keyed("carol"), "alpha", "a", &step(&gone));
 
         assert!(
@@ -451,12 +451,12 @@ async fn a_short_field_step_keeps_its_receipt_through_its_run() {
             );
         })
         .await;
-    staged.commit(true);
+    staged.commit(true, &firewall.paired_generation_for_test());
     firewall.record_delivery(RelayCaller::Keyed("carol"), "alpha", "b", &row);
     let relayed = |who: &str| {
         let params = json!({"name": "send", "arguments": row.clone()});
         !firewall
-            .check_relay(
+            .check_relay_paired(
                 RelayCaller::Keyed(who),
                 "alpha",
                 "send",
@@ -506,7 +506,7 @@ async fn a_plan_steps_continuation_never_takes_its_receipts_budget() {
                 }
             })
             .await;
-        staged.commit(true);
+        staged.commit(true, &firewall.paired_generation_for_test());
         carol_holds(&firewall, "a", &prompt);
 
         let head: String = prompt.chars().take(400).collect();
@@ -550,7 +550,7 @@ async fn a_mapped_member_past_the_padding_stays_receipted() {
             );
         })
         .await;
-    staged.commit(true);
+    staged.commit(true, &firewall.paired_generation_for_test());
     carol_holds(&firewall, "a", PROSE);
 
     assert!(
@@ -587,7 +587,7 @@ async fn copies_of_a_delivered_leaf_do_not_crowd_out_a_mapped_member() {
             );
         })
         .await;
-    staged.commit(true);
+    staged.commit(true, &firewall.paired_generation_for_test());
     carol_holds(&firewall, "a", PROSE);
 
     assert!(
@@ -619,7 +619,7 @@ async fn deliver_step(
             );
         })
         .await;
-    staged.commit(true);
+    staged.commit(true, &meta.paired_generation_for_test());
 }
 
 /// MIK-7992: two short fields the plan delivers next to each other, where
@@ -655,7 +655,7 @@ async fn short_fields_delivered_adjacent_keep_their_run() {
 fn relays_row(firewall: &Firewall, who: &str, row: &Value) -> bool {
     let params = json!({"name": "send", "arguments": row});
     !firewall
-        .check_relay(
+        .check_relay_paired(
             RelayCaller::Keyed(who),
             "alpha",
             "send",

@@ -69,7 +69,7 @@ impl crate::transport::Transport for Alpha {
 fn relayed_by_bob(firewall: &Firewall, text: &str) -> bool {
     let params = json!({"name": "read", "arguments": {"text": text}});
     !firewall
-        .check_relay(
+        .check_relay_paired(
             RelayCaller::Keyed("bob"),
             "alpha",
             "read",
@@ -113,18 +113,24 @@ fn stdio_meta(answer: Value) -> (Arc<MetaMcp>, Arc<Firewall>) {
         .with_continuations(meta.continuation()),
     );
     meta.set_firewall(Some(Arc::clone(&firewall)));
+    crate::security::firewall::collusion_live_rig::seed_meta(&meta, &firewall);
     (Arc::new(meta), firewall)
 }
 
 /// `request` over stdio, answered.
 async fn dispatch(meta: &Arc<MetaMcp>, request: &Value) -> Value {
-    let policy = Arc::new(crate::security::ToolPolicy::default());
     let mtls = Arc::new(crate::mtls::MtlsPolicy::from_config(
         &crate::mtls::MtlsConfig::default(),
     ));
-    super::super::Gateway::dispatch_single(meta, &policy, &mtls, request, "stdio-r4")
-        .await
-        .expect("a request is answered")
+    super::super::Gateway::dispatch_single(
+        meta,
+        &crate::gateway::authz::default_line(meta),
+        &mtls,
+        request,
+        "stdio-r4",
+    )
+    .await
+    .expect("a request is answered")
 }
 
 #[tokio::test]

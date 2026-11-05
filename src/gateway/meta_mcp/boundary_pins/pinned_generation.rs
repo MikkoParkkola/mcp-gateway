@@ -20,9 +20,13 @@ use super::scan::{Place, Sink, walk};
 
 const ROOTS: [&str; 3] = ["src/lib.rs", "src/main.rs", "src/bin/provenance-eval.rs"];
 
-/// Why `expr`, a `MetaMcpCallerContext` literal, does not pin a generation.
+/// The struct literals that carry a request's pinned generation.
+const PINNED_TYPES: [&str; 1] = ["MetaMcpCallerContext"];
+
+/// Why `expr`, a literal of a [`PINNED_TYPES`] type, does not pin a generation.
 fn unpinned(expr: &syn::ExprStruct) -> Option<&'static str> {
-    if expr.path.segments.last()?.ident != "MetaMcpCallerContext" || expr.rest.is_some() {
+    let ident = &expr.path.segments.last()?.ident;
+    if !PINNED_TYPES.iter().any(|t| ident == t) || expr.rest.is_some() {
         return None;
     }
     let field = expr
@@ -82,65 +86,138 @@ fn g2_the_scan_flags_a_none_generation_only() {
     assert!(!flagged("Other { generation: None }"));
 }
 
-/// The file the stdio messages are dispatched from.
-const STDIO_DISPATCH: &str = "src/gateway/server/stdio_dispatch.rs";
-/// The file holding `message_generation`, the one sanctioned live read.
-const STDIO_SINGLE: &str = "src/gateway/server/stdio_single.rs";
+/// The stdio dispatch and entry files: a message is judged under the
+/// generation its line was pinned to, so neither reads the live config.
+const STDIO_FILES: [&str; 2] = [
+    "src/gateway/server/stdio_dispatch.rs",
+    "src/gateway/server/stdio_single.rs",
+];
 
-/// In the stdio dispatch and entry files: every `.live_config()` call
-/// outside `message_generation`, how many times the dispatch calls that
-/// helper, and how many live reads the helper itself makes.
+/// The stdio dispatch file, where every caller context and authorizer of a
+/// message takes the line's pinned generation.
+const STDIO_DISPATCH: &str = STDIO_FILES[0];
+
+/// Reads of the line's pinned generation (`generation.generation()`) in the
+/// dispatch: the authorizers of `dispatch_relay_scoped` and
+/// `dispatch_tools_call`, the delivery record of `dispatch_relay_scoped`,
+/// and the two caller contexts'.
+const LINE_READS: usize = 5;
+
+/// In the stdio dispatch and entry files: every live-config read, in method
+/// or fully-qualified form; which files the walk reached; the dispatch's
+/// reads of the line's generation; and each caller context's generation.
 #[derive(Default)]
 struct StdioReads {
     live: Vec<String>,
-    helper_calls: usize,
-    helper_reads: usize,
+    reached: std::collections::BTreeSet<&'static str>,
+    line_reads: usize,
+    callers: Vec<(String, bool)>,
+}
+
+/// Whether `expr` is the path `name`.
+fn is_path(expr: &syn::Expr, name: &str) -> bool {
+    matches!(expr, syn::Expr::Path(p) if p.path.is_ident(name))
 }
 
 impl Sink for StdioReads {
     fn expr(&mut self, at: &Place, expr: &syn::Expr) {
-        let dispatch = at.file.ends_with(STDIO_DISPATCH);
-        if !dispatch && !at.file.ends_with(STDIO_SINGLE) {
+        let Some(file) = STDIO_FILES.iter().find(|f| at.file.ends_with(**f)) else {
             return;
-        }
+        };
+        self.reached.insert(file);
         let func = at.func.as_deref().unwrap_or("<module>");
+        let last_segment = |call: &syn::ExprCall| match &*call.func {
+            syn::Expr::Path(p) => p.path.segments.last().map(|s| s.ident.to_string()),
+            _ => None,
+        };
         match expr {
             syn::Expr::MethodCall(call) if call.method == "live_config" => {
-                if !dispatch && func == "message_generation" {
-                    self.helper_reads += 1;
-                } else {
-                    self.live.push(format!("{}:{func}", at.file));
-                }
+                self.live.push(format!("{}:{func}", at.file));
             }
-            syn::Expr::Call(call)
-                if dispatch
-                    && matches!(&*call.func, syn::Expr::Path(path)
-                    if path.path.segments.last().is_some_and(|s| s.ident == "message_generation")) =>
+            syn::Expr::MethodCall(call)
+                if *file == STDIO_DISPATCH
+                    && call.method == "generation"
+                    && is_path(&call.receiver, "generation") =>
             {
-                self.helper_calls += 1;
+                self.line_reads += 1;
             }
+            syn::Expr::Call(call) => match last_segment(call).as_deref() {
+                Some("live_config") => self.live.push(format!("{}:{func}", at.file)),
+                Some("build_stdio_caller_context") if *file == STDIO_DISPATCH => {
+                    // The context's `(record key, generation)` argument.
+                    let pinned = call.args.last().is_some_and(|arg| {
+                        matches!(arg, syn::Expr::Tuple(t)
+                            if t.elems.last().is_some_and(|g| is_path(g, "pinned")))
+                    });
+                    self.callers.push((func.to_owned(), pinned));
+                }
+                _ => {}
+            },
             _ => {}
         }
     }
 }
 
-/// The stdio dispatch and entry files read no live config except inside
-/// `stdio_single::message_generation`, which both of the dispatch's caller
-/// contexts call to take the message's generation.
+/// The stdio dispatch and entry files read no live config at all, and every
+/// message takes the generation its line was pinned to when it was read: each
+/// caller context is given the line's `pinned` generation, and the dispatch
+/// reads the line's generation at each of its sites.
 #[test]
 fn g3_stdio_dispatch_reads_the_generation_from_the_message_line() {
     let mut reads = StdioReads::default();
     walk(crate_root(), &ROOTS, &mut reads).expect("the walk reads every module");
+    // Also proves the scan reached both files.
+    assert_eq!(
+        reads.reached.len(),
+        STDIO_FILES.len(),
+        "the walk did not reach every stdio file: {:?}",
+        reads.reached
+    );
     reads.live.sort();
     assert!(
         reads.live.is_empty(),
-        "stdio re-reads the live config outside message_generation:\n{}",
+        "stdio dispatch reads the live config:\n{}",
         reads.live.join("\n")
     );
-    // Also proves the scan reached the file.
     assert_eq!(
-        reads.helper_calls, 2,
-        "both caller contexts take the message's generation"
+        reads.callers.len(),
+        2,
+        "the dispatch builds two caller contexts: {:?}",
+        reads.callers
     );
-    assert_eq!(reads.helper_reads, 1, "the helper's one sanctioned read");
+    assert!(
+        reads.callers.iter().all(|(_, pinned)| *pinned),
+        "a stdio caller context is not given the line's pinned generation: {:?}",
+        reads.callers
+    );
+    assert_eq!(
+        reads.line_reads, LINE_READS,
+        "the dispatch's reads of the line's generation changed"
+    );
+}
+
+/// The scan rejects a live-config read in either stdio file, in method or
+/// fully-qualified form, and accepts the same call elsewhere.
+#[test]
+fn g4_the_stdio_scan_rejects_a_live_read_in_either_file() {
+    let reads_of = |file: &str, src: &str| {
+        let expr: syn::Expr = syn::parse_str(src).expect("an expression");
+        let mut reads = StdioReads::default();
+        let place = Place {
+            file: format!("/repo/{file}"),
+            func: Some("route".to_owned()),
+        };
+        reads.expr(&place, &expr);
+        reads.live.len()
+    };
+    for file in STDIO_FILES {
+        for src in ["meta_mcp.live_config()", "MetaMcp::live_config(meta_mcp)"] {
+            assert_eq!(reads_of(file, src), 1, "{file}: `{src}` was not rejected");
+        }
+    }
+    assert_eq!(
+        reads_of("src/gateway/router/handlers.rs", "meta_mcp.live_config()"),
+        0,
+        "a read outside the stdio files was rejected"
+    );
 }

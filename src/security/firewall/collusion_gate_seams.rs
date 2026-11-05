@@ -9,8 +9,9 @@ use std::time::{Duration, Instant};
 
 use serde_json::Value;
 
-use super::super::collusion::Recorded;
+use super::super::CollusionView;
 use super::super::collusion::big::{KeptStep, StepEvidence, UnreadStep};
+use super::super::collusion::{Held, Recorded};
 use super::super::collusion_digest::{Judged, UnreadReceipt};
 use super::{
     CAPACITY_METRIC, CollusionDetector, DeliveryDigest, Firewall, RelayCaller, key_path_runs,
@@ -25,7 +26,7 @@ impl Firewall {
         detector: &CollusionDetector,
         source: &str,
         caller: RelayCaller<'_>,
-        flows: u64,
+        view: &CollusionView,
         digest: &DeliveryDigest,
     ) {
         let now = self.relay.now();
@@ -41,7 +42,7 @@ impl Firewall {
                 Self::record_unread(
                     detector,
                     (source, caller),
-                    (digest.sensitive, flows),
+                    (digest.inferred, None, view),
                     recorded,
                     now,
                 );
@@ -60,7 +61,7 @@ impl Firewall {
                 Self::record_unread(
                     detector,
                     (source, caller),
-                    (digest.sensitive, flows),
+                    (digest.inferred, None, view),
                     recorded,
                     now,
                 );
@@ -84,7 +85,7 @@ impl Firewall {
         let digest = capped.as_ref().unwrap_or(digest);
         detector.record_sampled_at(
             (source, caller.key()),
-            (digest.sensitive, flows),
+            (digest.inferred, None, view),
             (
                 digest.fingerprints(detector),
                 digest.cut_fps.clone(),
@@ -106,7 +107,7 @@ impl Firewall {
     fn record_unread(
         detector: &CollusionDetector,
         (source, caller): (&str, RelayCaller<'_>),
-        held: (bool, u64),
+        held: Held<'_>,
         recorded: Recorded<'_>,
         now: std::time::Instant,
     ) {

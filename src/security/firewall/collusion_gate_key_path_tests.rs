@@ -80,7 +80,7 @@ fn reported(fw: &Firewall, who: &str, text: &str) -> bool {
 
 /// Whether `who` sending `params` is reported as a relay.
 fn relay_found(fw: &Firewall, who: &str, params: &Value) -> bool {
-    fw.check_relay(RelayCaller::Keyed(who), "alpha", "send", params, ("s", who))
+    fw.check_relay_paired(RelayCaller::Keyed(who), "alpha", "send", params, ("s", who))
         .findings
         .iter()
         .any(|f| f.scan_type == ScanType::CollusionRelay)
@@ -261,7 +261,13 @@ fn deliver_plan_step(fw: &Firewall, who: &str, tool: &str, step: &Value, answer:
         .expect("relay detection is on");
     let delivered = fw.delivered_for_plan(answer, None).expect("bounded");
     let kept = fw.cap_kept(fw.retain_delivered(staged, &delivered, None));
-    fw.record_digest(RelayCaller::Keyed(who), "alpha", tool, &kept);
+    fw.record_digest(
+        RelayCaller::Keyed(who),
+        "alpha",
+        tool,
+        &kept,
+        &fw.paired_generation_for_test(),
+    );
 }
 
 /// `pieces` as content items with a note item after the first piece.
@@ -462,6 +468,8 @@ fn the_gate_reads_a_join_seam_run_together_only() {
     );
 }
 
+#[path = "collusion_gate_live_subset_tests.rs"]
+mod live_subset_tests;
 #[path = "collusion_gate_subset_tests.rs"]
 mod subset;
 

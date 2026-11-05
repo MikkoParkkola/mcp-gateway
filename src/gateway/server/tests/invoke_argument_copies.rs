@@ -285,7 +285,7 @@ impl crate::transport::Transport for Answer {
 /// The stdio dispatcher over one in-process backend, `bench`, listing `search`.
 struct StdioStack {
     meta: Arc<crate::gateway::meta_mcp::MetaMcp>,
-    policy: Arc<crate::security::ToolPolicy>,
+    line: Arc<crate::config_reload::Generation>,
     mtls: Arc<crate::mtls::MtlsPolicy>,
     answer: Arc<Answer>,
 }
@@ -312,11 +312,10 @@ fn stdio_stack() -> StdioStack {
         })],
     );
     assert!(registry.register(backend));
+    let meta = Arc::new(crate::gateway::meta_mcp::MetaMcp::new(registry));
     StdioStack {
-        meta: Arc::new(crate::gateway::meta_mcp::MetaMcp::new(registry)),
-        policy: Arc::new(crate::security::ToolPolicy::from_config(
-            &crate::security::ToolPolicyConfig::default(),
-        )),
+        line: crate::gateway::authz::default_line(&meta),
+        meta,
         mtls: Arc::new(crate::mtls::MtlsPolicy::from_config(
             &crate::mtls::MtlsConfig::default(),
         )),
@@ -337,7 +336,7 @@ async fn stdio_dispatch_bytes(stack: &StdioStack, size: usize) -> u64 {
     let (response, measured) = measure_async(|| {
         super::super::Gateway::dispatch_single_for_client(
             &stack.meta,
-            &stack.policy,
+            &stack.line,
             &stack.mtls,
             request,
             super::super::StdioClient {
