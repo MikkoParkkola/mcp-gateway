@@ -148,6 +148,10 @@ PYTHONS = {"python", "python3"}
 # the workflows, and as pre-push binds it.
 GATE_PYTHONS = {"scripts/gate-env/.venv/bin/python", "$GATE_PY", "${GATE_PY}"}
 SCRIPT = re.compile(r"^(?:scripts|benchmarks)/[\w./*-]+\.py$")
+# A shell-script step (MIK-9315): `bash|sh <script>` or the script run directly. Only repo scripts under
+# scripts/ or tests/ count; a leading ./ is not part of the form.
+SHELLS = {"bash", "sh"}
+SH_SCRIPT = re.compile(r"^(?:\./)?((?:scripts|tests)/[\w./*-]+\.sh)$")
 ASSIGN = re.compile(r"^([A-Za-z_]\w*)=(.*)$")
 FOR_GLOB = re.compile(r"^for\s+(\w+)\s+in\s+(\S+)\s*$")
 UNSUPPORTED = ("eval", "source", ".")
@@ -428,20 +432,35 @@ def _stage_execution(stage, stages, bound, loops):
         return found
     if words[0] in UNSUPPORTED:
         raise UnsupportedSyntax(f"`{words[0]}` hides what it executes: {stage}")
-    if words[0] not in PYTHONS and words[0] not in GATE_PYTHONS:
-        return found
-    # Interpreter flags (`-B`, `-I`) come before the script; the
-    # script's own flags after it are arguments and are kept.
-    rest = list(words[1:])
-    while rest and rest[0].startswith("-") and rest[0] != "-":
-        rest.pop(0)
-    if not rest:
-        return found
-    target = rest[0].strip("'\"")
-    for var, pattern in loops.items():
-        if target in ("$" + var, "${" + var + "}"):
-            target = pattern
-    if not SCRIPT.match(target):
+    direct = SH_SCRIPT.match(words[0].strip("'\""))
+    if direct:
+        target, rest = direct.group(1), list(words)
+    elif words[0] in PYTHONS or words[0] in GATE_PYTHONS or words[0] in SHELLS:
+        # Interpreter flags (`-B`, `-I`, `-e`) come before the script; the
+        # script's own flags after it are arguments and are kept.
+        rest = list(words[1:])
+        flags = []
+        while rest and rest[0].startswith("-") and rest[0] != "-":
+            flags.append(rest.pop(0))
+            if flags[-1] == "-o" and rest:  # bash -o <option> takes its value
+                rest.pop(0)
+        # `bash -n` only parses its files (a syntax check) and executes nothing.
+        if words[0] in SHELLS and any(f.startswith("-") and not f.startswith("--") and "n" in f[1:] for f in flags):
+            return found
+        if not rest:
+            return found
+        target = rest[0].strip("'\"")
+        for var, pattern in loops.items():
+            if target in ("$" + var, "${" + var + "}"):
+                target = pattern
+        if words[0] in SHELLS:
+            sh = SH_SCRIPT.match(target)
+            if not sh:
+                return found  # `bash -c ...` and non-repo scripts are not script executions
+            target = sh.group(1)
+        elif not SCRIPT.match(target):
+            return found
+    else:
         return found
     words_after = _without_redirections(rest[1:])
     used = [v for v in bound if any(("$" + v) in w for w in words_after)]

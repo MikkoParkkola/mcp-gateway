@@ -59,6 +59,47 @@ CI_ONLY: dict[tuple[str, tuple[str, ...]], str] = {
         "120 s budget on every push; CI runs it on every PR"
     ),
     ("scripts/release/test_workflow_wiring_mutations.py", ()): "budget: 329 s alone, over the 120 s budget",
+    # Shell-script steps (MIK-9315): CI-only ones, each with the reason it cannot run before a push.
+    ("scripts/ci/check-license-headers.sh", ()): (
+        "budget: 36 s alone would push the CI-checks stage past its 120 s budget; the pre-push kit's "
+        "cheap stage runs it on Spark, and CI on every PR"
+    ),
+    ('scripts/ci/changed-scope.sh', ('$MERGE_SHA', '$PR_NUMBER', '<HEAD>')): "ci-env: classifies this PR's changes from the event's merge SHA and PR number",
+    ('scripts/ci/changed-scope.sh', ('$MERGE_SHA', '$PR_NUMBER', '<HEAD>'), ('bash scripts/ci/changed-scope.sh "$MERGE_SHA" "$PR_NUMBER" "$HEAD_SHA"', 'tee -a "$GITHUB_OUTPUT"')): "ci-env: classifies this PR's changes from the event's merge SHA and PR number",
+    ('scripts/ci/check-cap-validate-pins.sh', ('target/debug/mcp-gateway',)): 'binary: runs a built target/debug/mcp-gateway',
+    ('scripts/ci/check-recursion-margin.sh', ()): "cargo: builds and measures the gateway's stack use",
+    ('scripts/ci/mingw-debs.sh', ('download', '$HOME/mingw-debs')): 'network: fetches or installs MinGW packages with apt-get',
+    ('scripts/ci/mingw-debs.sh', ('install', '$HOME/mingw-debs')): 'network: fetches or installs MinGW packages with apt-get',
+    ('scripts/ci/mingw-debs.sh', ('key',)): 'network: fetches or installs MinGW packages with apt-get',
+    ('scripts/ci/packaged-tests.sh', ('build',)): 'cargo: builds and runs the packaged test suite',
+    ('scripts/ci/packaged-tests.sh', ('run',)): 'cargo: builds and runs the packaged test suite',
+    ('scripts/ci/smoke-full-image.sh', ('${REGISTRY}/mikkoparkkola/mcp-gateway:scan-full',)): 'artifact: runs the built container image (docker, cosign)',
+    ('scripts/ci/smoke-full-image.sh', ('ghcr.io/mikkoparkkola/mcp-gateway@${DIGEST}',)): 'artifact: runs the built container image (docker, cosign)',
+    ('scripts/ci/smoke-image.sh', ('${REGISTRY}/mikkoparkkola/mcp-gateway:scan',)): 'artifact: runs the built container image (docker, cosign)',
+    ('scripts/ci/smoke-image.sh', ('ghcr.io/mikkoparkkola/mcp-gateway@${DIGEST}',)): 'artifact: runs the built container image (docker, cosign)',
+    ('scripts/ci/verify-artifact-licenses.sh', ()): 'cargo: reads the dependency graph with cargo',
+    ('scripts/dev/check-pr-body-hygiene.sh', ()): 'ci-env: reads the pull request body from the event (PR_BODY, gh)',
+    ('scripts/dev/check-public-repo-hygiene.sh', ('--base', 'origin/$BASE_REF')): "ci-env: base is the PR's base ref; pre-push runs the same check from its merge base (step public repo hygiene)",
+    ('scripts/dev/check_clock_lint.sh', ('--self-test',)): 'cargo: runs clippy on a planted scratch tree',
+    ('scripts/dev/docker-smoke.sh', ()): 'artifact: builds and runs the gateway in docker',
+    ('scripts/dev/helm-airgap-smoke.sh', ()): 'artifact: needs docker, kind, helm and cosign',
+    ('scripts/dev/helm-chart-smoke.sh', ()): 'artifact: installs the chart into a kind cluster',
+    ('scripts/dev/helm-kind-lifecycle.sh', ()): 'artifact: installs the chart into a kind cluster',
+    ('scripts/dev/helm-kind-real-image.sh', ('${REGISTRY}/mikkoparkkola/mcp-gateway:scan',)): 'artifact: runs the built image in a kind cluster',
+    ('scripts/dev/helm-supply-chain-smoke.sh', ()): 'artifact: needs docker, helm and cosign',
+    ('scripts/dev/service-template-smoke.sh', ()): 'cargo: builds and runs target/debug/mcp-gateway in docker',
+    ('scripts/dev/usability-smoke.sh', ()): 'cargo: builds and runs target/debug/mcp-gateway',
+    ('scripts/release/grep_no_test_hook.sh', ('image-mcp-gateway',)): 'artifact: inspects the built image or release binary',
+    ('scripts/release/grep_no_test_hook.sh', ('target/release/mcp-gateway',)): 'artifact: inspects the built image or release binary',
+    ('scripts/release/nfr_upgrade_1_rehearsal.sh', ()): 'binary: runs a built target/debug/mcp-gateway (upgrade rehearsal)',
+    ('scripts/release/publish_pinned_chart.sh', ('$REHEARSAL_IMAGE', 'oci://ghcr.io/mikkoparkkola/charts'), ('TAG_COMMIT="$GITHUB_SHA" SIGNER_IDENTITY="$IDENTITY" SIGNER_ISSUER="$SIGNER_ISSUER"    CHART_NOTES="$RUNNER_TEMP/chart-notes.md"    scripts/release/publish_pinned_chart.sh "$image" "$repo"', 'tee "$RUNNER_TEMP/publish.log"')): 'release: signs and publishes a pinned chart',
+    ('scripts/release/publish_pinned_chart.sh', ('$REHEARSAL_IMAGE', 'oci://ghcr.io/mikkoparkkola/charts-rehearsal'), ('TAG_COMMIT="$GITHUB_SHA" SIGNER_IDENTITY="$IDENTITY" SIGNER_ISSUER="$SIGNER_ISSUER"    CHART_NOTES="$RUNNER_TEMP/chart-notes.md"    scripts/release/publish_pinned_chart.sh "$image" "$repo"', 'tee "$RUNNER_TEMP/publish.log"')): 'release: signs and publishes a pinned chart',
+    ('scripts/release/publish_pinned_chart.sh', ('ghcr.io/mikkoparkkola/mcp-gateway@${SIGNED_LIST}', 'oci://ghcr.io/mikkoparkkola/charts'), ('TAG_COMMIT="$GITHUB_SHA" SIGNER_IDENTITY="$IDENTITY" SIGNER_ISSUER="$SIGNER_ISSUER"    CHART_NOTES="$RUNNER_TEMP/chart-notes.md"    scripts/release/publish_pinned_chart.sh "$image" "$repo"', 'tee "$RUNNER_TEMP/publish.log"')): 'release: signs and publishes a pinned chart',
+    ('scripts/release/publish_pinned_chart.sh', ('ghcr.io/mikkoparkkola/mcp-gateway@${SIGNED_LIST}', 'oci://ghcr.io/mikkoparkkola/charts-rehearsal'), ('TAG_COMMIT="$GITHUB_SHA" SIGNER_IDENTITY="$IDENTITY" SIGNER_ISSUER="$SIGNER_ISSUER"    CHART_NOTES="$RUNNER_TEMP/chart-notes.md"    scripts/release/publish_pinned_chart.sh "$image" "$repo"', 'tee "$RUNNER_TEMP/publish.log"')): 'release: signs and publishes a pinned chart',
+    ('scripts/release/sign-release-assets.sh', ('release', '$version', '$NAME')): 'release: signs release assets',
+    ('scripts/release/verify-release-assets.sh', ('published', '$VERSION', '$NAME')): 'release: verifies published release assets',
+    ('scripts/release/verify-release-assets.sh', ('tampered', '$VERSION', '$NAME')): 'release: verifies published release assets',
+    ('scripts/test-task-sdk-recovery.sh', ()): 'cargo: builds and runs the task SDK recovery test under docker',
 }
 
 
@@ -658,6 +699,37 @@ class Rows(unittest.TestCase):
                 with self.assertRaises(workflow_shell.UnsupportedSyntax) as caught:
                     workflow_shell.executions(run)
                 self.assertIn("scripts/x.py", str(caught.exception))
+
+    # D30 (MIK-9315.SHSTEP.1): a shell-script CI step is an execution like a python one, so an
+    # unlisted one is named. Three shapes: through bash, run directly, and a tests/ suite.
+    def test_d30_an_unlisted_shell_script_step_is_named_with_its_workflow(self):
+        for run, script in (
+            ("bash scripts/ci/x.sh", "scripts/ci/x.sh"),
+            ("scripts/ci/x.sh --self-test", "scripts/ci/x.sh"),
+            ("tests/y.sh", "tests/y.sh"),
+        ):
+            with self.subTest(run):
+                self.t.workflow("ci.yml", pr_job(run))
+                found = problems(self.t.root, ci_only={})
+                self.assertTrue(any(script in p and "ci.yml" in p for p in found), found)
+
+    # D31: a listed shell-script step is in its bucket and raises nothing.
+    def test_d31_a_listed_shell_script_step_is_accepted(self):
+        self.t.workflow("ci.yml", pr_job("bash scripts/ci/x.sh --self-test"))
+        self.t.run_list("bash scripts/ci/x.sh --self-test\t5\tclosed")
+        self.assertEqual(problems(self.t.root, ci_only={}), [])
+
+    # D32: the form keeps the script's own arguments, and bash's or a leading ./ is not part of it.
+    def test_d32_a_shell_script_form_is_the_script_and_its_arguments(self):
+        for run in ("bash scripts/ci/x.sh a b", "./scripts/ci/x.sh a b", "scripts/ci/x.sh a b", "sh scripts/ci/x.sh a b"):
+            with self.subTest(run):
+                (ex,) = workflow_shell.executions(run)
+                self.assertEqual((ex.script, ex.args), ("scripts/ci/x.sh", ("a", "b")))
+
+    # D33: `bash -n` only parses its files (a syntax check); it executes no script.
+    def test_d33_a_bash_syntax_check_is_not_an_execution(self):
+        self.assertEqual(workflow_shell.executions("bash -n scripts/ci/x.sh scripts/ci/y.sh"), [])
+        self.assertEqual(workflow_shell.executions("sh -n tests/z.sh"), [])
 
     # D29 (lead ruling 2026-10-23): the guard's exceptions are closed lists.
     def test_d29_the_guards_exception_lists_are_closed(self):

@@ -592,6 +592,24 @@ class Runner(unittest.TestCase):
 
     # N3 (MIK-8787 GATE.4/5; characterization): a real failure still fails the
     # push and is compared on the merge-base.
+    # SH1 (MIK-9315.SHSTEP.3): a replayed shell-script line fails the step exactly as a python
+    # line does: red on HEAD fails and is compared with the merge base; green passes.
+    def test_sh1_a_shell_script_line_failing_on_head_fails_the_step(self):
+        f = Fixture(base={"scripts/ci/x.sh": "exit 0\n"}, head={"scripts/ci/x.sh": "echo planted >&2; exit 1\n"})
+        try:
+            report = f.run([line("bash scripts/ci/x.sh")])
+            self.assertNotEqual(report.rc, 0)
+            self.assertEqual([r.status for r in report.failures], ["failed"])
+            self.assertIn("FAILS ON HEAD", report.text)
+            self.assertIn("planted", report.text)
+        finally:
+            f.close()
+        g = Fixture(base={"scripts/ci/x.sh": "exit 0\n"}, head={"scripts/ci/x.sh": "exit 0\n"})
+        try:
+            self.assertEqual(g.run([line("bash scripts/ci/x.sh")]).rc, 0)
+        finally:
+            g.close()
+
     def test_n3_a_failing_check_still_fails_and_is_compared(self):
         report = self.f.run([line(py("raise SystemExit(3)"))])
         self.assertNotEqual(report.rc, 0)
