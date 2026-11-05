@@ -192,6 +192,8 @@ src/gateway/meta_mcp/invoke/continuation.rs	set_continuation_for_test	-	test-onl
 src/gateway/meta_mcp/invoke/continuation.rs	share_keyring_with_for_test	-	test-only helper (cfg(test))
 src/gateway/meta_mcp/invoke/continuation.rs	unbindable_continuation	-	on-path, untimed: interim rounds that cannot be bound to their caller only
 src/gateway/meta_mcp/invoke/continuation.rs	withhold_unsealed_state	http_invoke_tiny	on the HTTP gateway_invoke path
+src/gateway/meta_mcp/invoke/denial.rs	backend_miss	http_invoke_tiny	on the HTTP gateway_invoke path (the dispatch's miss of an unheld backend)
+src/gateway/meta_mcp/invoke/denial.rs	count_meta_denial	http_invoke_tiny	on the HTTP gateway_invoke path (counted before the transparency-log check)
 src/gateway/meta_mcp/invoke/dispatch.rs	accounted_dispatch	http_invoke_tiny	on the HTTP gateway_invoke path
 src/gateway/meta_mcp/invoke/dispatch.rs	admit_spend	http_invoke_tiny	on the HTTP gateway_invoke path
 src/gateway/meta_mcp/invoke/dispatch.rs	ambiguous_backend	-	on-path, untimed: refusals only, when a name is both a registry backend and the capability backend; the timed backend has no such clash
@@ -257,7 +259,6 @@ src/gateway/meta_mcp/invoke/gate.rs	capability_rule_refusal	-	on-path, untimed: 
 src/gateway/meta_mcp/invoke/gate.rs	check_call_level_policy	-	on-path, untimed: signing-enabled gateway_invoke only; the harness does not configure signing
 src/gateway/meta_mcp/invoke/gate.rs	check_visible_policy	-	on-path, untimed: signing-enabled gateway_invoke and task replay only; the harness configures neither
 src/gateway/meta_mcp/invoke/gate.rs	check_visible_policy_explained	-	on-path, untimed: check_visible_policy is it plus the note; signing-enabled gateway_invoke and task replay only
-src/gateway/meta_mcp/invoke/gate.rs	count_meta_denial	http_invoke_tiny	on the HTTP gateway_invoke path (counted before the transparency-log check)
 src/gateway/meta_mcp/invoke/gate.rs	gate_answer	http_invoke_tiny	on the HTTP gateway_invoke path (the MIK-8361 gate)
 src/gateway/meta_mcp/invoke/gate.rs	gate_lens	http_invoke_tiny	inside named_gate_answer on the HTTP gateway_invoke path; the timed tool is not withheld, so it returns the catalogue lens
 src/gateway/meta_mcp/invoke/gate.rs	gated	http_invoke_tiny	on the HTTP gateway_invoke path (the MIK-8361 gate)

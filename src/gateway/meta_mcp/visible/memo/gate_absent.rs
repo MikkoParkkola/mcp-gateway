@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! A gate's provisional miss of an unregistered backend, kept per target
-//! until that invocation's dispatch takes it (MIK-9266).
+//! until that invocation's dispatch takes it.
 
 use super::{in_memo, target_key};
 

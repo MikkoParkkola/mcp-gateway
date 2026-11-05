@@ -48,7 +48,7 @@ struct VisibilityMemo {
     resolution_error: Keyed<TargetKey, crate::Error>,
     /// Targets whose gate found the backend unregistered for an unscoped
     /// caller, provisionally: the dispatch takes the mark, and only a miss
-    /// there too records `not_found` (MIK-9266).
+    /// there too records `not_found`.
     gate_absent: Keyed<TargetKey, ()>,
     /// The surfaced state this request reads, taken at its first
     /// surfaced read, so a reload mid-request cannot split it across two maps.

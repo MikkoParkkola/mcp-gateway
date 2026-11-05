@@ -21,7 +21,7 @@ pub(super) fn backend_miss(server: &str, tool: &str) -> crate::Error {
     crate::Error::BackendNotFound(server.to_string())
 }
 
-/// D4's meta denial count for `result`, and MIK-8361's one record per call:
+/// The meta denial count for `result`, and the one record per call:
 /// the answer to a requested target the route stage or the gate refused is
 /// counted once and recorded `denied` with the refusal's own code (the
 /// returned outcome), whatever it reads as to the caller (the missing name's
