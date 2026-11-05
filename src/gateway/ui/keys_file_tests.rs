@@ -17,7 +17,6 @@ use crate::config::{ApiKeyConfig, AuthConfig, Config};
 use crate::config_reload::FileRevision;
 use crate::gateway::auth::ResolvedAuthConfig;
 use crate::gateway::auth::runtime::AuthRuntime;
-use crate::gateway::router::AppState;
 use crate::gateway::test_helpers::write_owner_only;
 
 const URI: &str = "/ui/api/keys";
