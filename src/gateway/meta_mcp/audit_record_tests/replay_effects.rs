@@ -28,6 +28,15 @@ enum First {
     Unnoted,
 }
 
+/// Which route's owner admits the call.
+#[derive(Clone, Copy)]
+enum Route {
+    /// The HTTP route stage: the caller's own principal owns the lease.
+    Http,
+    /// The stdio route: the local operator owns it.
+    Stdio,
+}
+
 fn args() -> Value {
     json!({"server": "alpha", "tool": "read", "arguments": {}})
 }
@@ -45,15 +54,15 @@ fn relist(meta: &MetaMcp, hint: Option<bool>) {
     alpha.set_read_only_declared_for_test(read_only);
 }
 
-/// Run the first execution of `args()` under an owned lease, settle it, run
+/// Run the first execution of `args` under an owned lease, settle it, run
 /// `between`, then replay it through the route stage as
 /// `dispatch_tools_call` does. The slot the repeat's admission read back, and
 /// the replay record's decision.
 async fn replayed(
     meta: &MetaMcp,
     dir: &tempfile::TempDir,
-    key: &str,
-    first: First,
+    (key, args): (&str, &Value),
+    (route, first): (Route, First),
     between: impl FnOnce(),
 ) -> (Option<PoolKey>, Value) {
     let who = api_key_caller();
@@ -65,9 +74,12 @@ async fn replayed(
         retry: &retry,
         ..context(&AllowAll, &who)
     };
-    let owner = || AdmissionOwner::for_test(ctx.owner_principal());
+    let owner = || match route {
+        Route::Http => AdmissionOwner::for_test(ctx.owner_principal()),
+        Route::Stdio => AdmissionOwner::local_operator(),
+    };
     let admitted =
-        meta.admit_meta_sync_for_test(owner(), &ctx, INVOKE, &args(), None, &RequestId::Number(1));
+        meta.admit_meta_sync_for_test(owner(), &ctx, INVOKE, args, None, &RequestId::Number(1));
     let Ok(SyncAdmission::Owned(lease)) = admitted else {
         panic!("premise: the first call owns its admission");
     };
@@ -77,14 +89,14 @@ async fn replayed(
                 execution: Some(&lease),
                 ..context(&AllowAll, &who)
             };
-            let _ = meta.invoke_tool(&args(), None, &inner).await;
+            let _ = meta.invoke_tool(args, None, &inner).await;
         }
         First::Unnoted => lease.mark_dispatched(),
     }
     lease.complete_secured(&JsonRpcResponse::success(RequestId::Number(1), ok_result()));
     between();
     let again =
-        meta.admit_meta_sync_for_test(owner(), &ctx, INVOKE, &args(), None, &RequestId::Number(2));
+        meta.admit_meta_sync_for_test(owner(), &ctx, INVOKE, args, None, &RequestId::Number(2));
     let Ok(SyncAdmission::Replay(response, audit, target, dispatched, bindings, slot)) = again else {
         panic!("premise: the repeat is admitted as a replay");
     };
@@ -92,7 +104,7 @@ async fn replayed(
     let Some((response, audit)) = meta
         .defer_or_serve_replay(
             INVOKE,
-            &args(),
+            args,
             &ctx,
             target,
             (dispatched, bindings, slot),
@@ -103,7 +115,7 @@ async fn replayed(
         panic!("premise: the replay is served, not deferred");
     };
     let answer = meta
-        .audit_replay(INVOKE, &args(), None, &ctx, response, audit)
+        .audit_replay(INVOKE, args, None, &ctx, response, audit)
         .await;
     assert!(answer.error.is_none(), "premise: delivered: {answer:?}");
     let all = records(dir);
@@ -125,7 +137,7 @@ fn assert_no_effect(decision: &Value) {
 async fn an_http_route_stage_replay_records_the_stored_slot_effect() {
     let dir = tempfile::tempdir().unwrap();
     let (meta, calls) = listing(Some(false), &dir);
-    let (stored, decision) = replayed(&meta, &dir, "e1-flip", First::Dispatched, || {
+    let (stored, decision) = replayed(&meta, &dir, ("e1-flip", &args()), (Route::Http, First::Dispatched), || {
         relist(&meta, Some(true));
     })
     .await;
@@ -145,7 +157,7 @@ async fn an_http_route_stage_replay_records_the_stored_slot_effect() {
 async fn an_http_route_stage_replay_of_a_removed_hint_records_undeclared() {
     let dir = tempfile::tempdir().unwrap();
     let (meta, _) = listing(Some(true), &dir);
-    let (stored, decision) = replayed(&meta, &dir, "e1-hint", First::Dispatched, || {
+    let (stored, decision) = replayed(&meta, &dir, ("e1-hint", &args()), (Route::Http, First::Dispatched), || {
         relist(&meta, None);
     })
     .await;
@@ -161,7 +173,7 @@ async fn a_result_stored_with_no_slot_records_none() {
     let dir = tempfile::tempdir().unwrap();
     let (meta, _) = listing(Some(true), &dir);
     relist(&meta, Some(true));
-    let (stored, decision) = replayed(&meta, &dir, "e1-none", First::Unnoted, || {}).await;
+    let (stored, decision) = replayed(&meta, &dir, ("e1-none", &args()), (Route::Http, First::Unnoted), || {}).await;
     assert_eq!(stored, None, "premise: nothing noted, nothing stored");
     let alpha = meta.backends.for_test().get("alpha").expect("alpha");
     assert_eq!(
@@ -177,7 +189,7 @@ async fn a_result_stored_with_no_slot_records_none() {
 async fn a_replay_of_a_removed_backend_records_none() {
     let dir = tempfile::tempdir().unwrap();
     let (meta, _) = listing(Some(true), &dir);
-    let (stored, decision) = replayed(&meta, &dir, "e1-gone", First::Dispatched, || {
+    let (stored, decision) = replayed(&meta, &dir, ("e1-gone", &args()), (Route::Http, First::Dispatched), || {
         assert!(meta.backends.for_test().remove("alpha"), "premise: removed");
     })
     .await;
@@ -190,12 +202,152 @@ async fn a_replay_of_a_removed_backend_records_none() {
 async fn a_replay_of_a_tool_no_longer_listed_records_none() {
     let dir = tempfile::tempdir().unwrap();
     let (meta, _) = listing(Some(true), &dir);
-    let (stored, decision) = replayed(&meta, &dir, "e1-unlisted", First::Dispatched, || {
+    let (stored, decision) = replayed(&meta, &dir, ("e1-unlisted", &args()), (Route::Http, First::Dispatched), || {
         let alpha = meta.backends.for_test().get("alpha").expect("alpha");
         alpha.prefill_tools_for_test(Vec::new());
         alpha.set_read_only_declared_for_test(&[]);
     })
     .await;
     assert_eq!(stored, Some(PoolKey::Shared), "premise: the dispatch noted its slot");
+    assert_no_effect(&decision);
+}
+
+/// A capability `lookup` on provider `caps` whose definition says `read_only`.
+fn capability(read_only: bool) -> crate::capability::CapabilityDefinition {
+    crate::capability::parse_capability(&format!(
+        "name: lookup\n\
+         description: Look one thing up\n\
+         metadata:\n\
+         \x20 exposure: public\n\
+         \x20 read_only: {read_only}\n\
+         providers:\n\
+         \x20 primary:\n\
+         \x20   service: rest\n\
+         \x20   config:\n\
+         \x20     base_url: http://127.0.0.1:9\n\
+         \x20     path: /lookup\n\
+         \x20     method: GET\n"
+    ))
+    .expect("the capability parses")
+}
+
+/// `meta` (alpha's shared slot declaring `read` read-only, a tempting
+/// fallback) with the provider `caps` serving [`capability`]`(read_only)`.
+fn with_caps(
+    dir: &tempfile::TempDir,
+    read_only: bool,
+) -> (MetaMcp, Arc<crate::capability::CapabilityBackend>) {
+    let (meta, _) = listing(Some(true), dir);
+    let executor = Arc::new(crate::capability::CapabilityExecutor::new());
+    let caps = Arc::new(crate::capability::CapabilityBackend::new("caps", executor));
+    caps.register_capability(capability(read_only)).expect("registers");
+    meta.set_capabilities(Arc::clone(&caps));
+    (meta, caps)
+}
+
+fn caps_args() -> Value {
+    json!({"server": "caps", "tool": "lookup", "arguments": {}})
+}
+
+/// A capability replay through the route stage records its live
+/// definition's `read_only` (edited from may-write to read-only between
+/// settle and replay), from the definition, with no slot needed.
+#[tokio::test]
+async fn a_capability_replay_records_its_live_definitions_effect() {
+    let dir = tempfile::tempdir().unwrap();
+    let (meta, caps) = with_caps(&dir, false);
+    let (stored, decision) = replayed(&meta, &dir, ("c-edit", &caps_args()), (Route::Http, First::Unnoted), || {
+        caps.register_capability(capability(true)).expect("replaces");
+    })
+    .await;
+    assert_eq!(stored, None, "premise: a capability needs no stored slot");
+    assert_eq!(decision["decided"], "replayed", "{decision}");
+    assert_eq!(decision["declared_effect"], "read_only", "{decision}");
+    assert_eq!(decision["declared_effect_source"], "capability_definition", "{decision}");
+}
+
+/// A capability whose definition was removed before the replay: no effect.
+#[tokio::test]
+async fn a_capability_replay_of_a_removed_definition_records_none() {
+    let dir = tempfile::tempdir().unwrap();
+    let (meta, caps) = with_caps(&dir, true);
+    let (_, decision) = replayed(&meta, &dir, ("c-gone", &caps_args()), (Route::Http, First::Unnoted), || {
+        assert!(caps.unload_capability("lookup"), "premise: unloaded");
+    })
+    .await;
+    assert_no_effect(&decision);
+}
+
+/// Hides the provider `caps` from the caller.
+struct HidesCaps;
+
+impl crate::gateway::meta_mcp::hiding::CallerHiding for HidesCaps {
+    fn hides(&self, server: &str) -> bool {
+        server == "caps"
+    }
+}
+
+/// Replay `caps`' `lookup` through `audit_replay` with the facts a
+/// capability replay carries.
+async fn replay_caps(meta: &MetaMcp) {
+    let who = api_key_caller();
+    let facts = crate::gateway::meta_mcp::admission::ReplayFacts {
+        server: Some("caps".to_owned()),
+        tool: Some("lookup".to_owned()),
+        ..Default::default()
+    };
+    let response = JsonRpcResponse::success(RequestId::Number(7), ok_result());
+    let _ = meta
+        .audit_replay(INVOKE, &caps_args(), None, &context(&AllowAll, &who), response, facts)
+        .await;
+}
+
+/// The replay effect is computed under the replaying caller's view: a
+/// caller the provider is hidden from records none, one it is not hidden
+/// from records the definition's. Called on `audit_replay` directly, since
+/// visibility refuses a hiding caller before any replay is admitted.
+#[tokio::test]
+async fn a_capability_replay_under_a_hiding_view_records_none() {
+    let dir = tempfile::tempdir().unwrap();
+    let (meta, _caps) = with_caps(&dir, true);
+    crate::gateway::meta_mcp::hiding::with_caller(Arc::new(HidesCaps), replay_caps(&meta)).await;
+    replay_caps(&meta).await;
+    let all = records(&dir);
+    assert_eq!(all.len(), 2, "{all:?}");
+    assert_no_effect(&all[0]["decision"]);
+    assert_eq!(all[1]["decision"]["declared_effect"], "read_only", "{all:?}");
+    assert_eq!(
+        all[1]["decision"]["declared_effect_source"], "capability_definition",
+        "{all:?}"
+    );
+}
+
+/// The stdio route serves the same replay under the local operator's lease:
+/// the stored slot's effect now, flipped from may-write to read-only.
+#[tokio::test]
+async fn a_stdio_replay_records_the_stored_slot_effect() {
+    let dir = tempfile::tempdir().unwrap();
+    let (meta, _) = listing(Some(false), &dir);
+    let (stored, decision) =
+        replayed(&meta, &dir, ("s-flip", &args()), (Route::Stdio, First::Dispatched), || {
+            relist(&meta, Some(true));
+        })
+        .await;
+    assert_eq!(stored, Some(PoolKey::Shared), "premise: the dispatch noted its slot");
+    assert_eq!(decision["decided"], "replayed", "{decision}");
+    assert_eq!(decision["declared_effect"], "read_only", "{decision}");
+    assert_eq!(decision["declared_effect_source"], "tool_annotation", "{decision}");
+}
+
+/// A stdio replay of a result that stored no slot records none, with the
+/// shared slot warm and declaring `read` read-only.
+#[tokio::test]
+async fn a_stdio_replay_with_no_stored_slot_records_none() {
+    let dir = tempfile::tempdir().unwrap();
+    let (meta, _) = listing(Some(true), &dir);
+    relist(&meta, Some(true));
+    let (stored, decision) =
+        replayed(&meta, &dir, ("s-none", &args()), (Route::Stdio, First::Unnoted), || {}).await;
+    assert_eq!(stored, None, "premise: nothing noted, nothing stored");
     assert_no_effect(&decision);
 }
