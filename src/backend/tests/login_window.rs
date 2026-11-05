@@ -214,7 +214,9 @@ pub(crate) async fn approve(url: &str) {
 /// Play the person approving `url`, and report whether its callback was still
 /// listening. Unlike `login_window::approve`, a closed listener is an answer
 /// here, not a fixture failure: it is exactly how a login abandoned by its
-/// caller's deadline shows itself.
+/// caller's deadline shows itself. Only this login's own listener accepts its
+/// state (a success); any other answer on the port (another login's state
+/// mismatch, after the port was reused) is not this login listening.
 pub(crate) async fn approve_if_listening(url: &str) -> bool {
     let parsed = url::Url::parse(url).unwrap();
     let query: HashMap<String, String> = parsed.query_pairs().into_owned().collect();
@@ -233,7 +235,7 @@ pub(crate) async fn approve_if_listening(url: &str) -> bool {
         .get(callback)
         .send()
         .await
-        .is_ok()
+        .is_ok_and(|answer| answer.status().is_success())
 }
 
 /// A port another login's listener took after this one closed answers this
