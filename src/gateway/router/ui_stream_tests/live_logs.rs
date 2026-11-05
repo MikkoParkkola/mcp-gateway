@@ -817,3 +817,62 @@ async fn l2_snapshots_changing_faster_than_a_send_do_not_starve_a_live_stream() 
         frame.data
     );
 }
+
+#[tokio::test]
+async fn l3_a_key_removed_under_load_gets_no_row_made_after_the_removal() {
+    let (state, _dirs, inv) = logged(false).await;
+    let mut s = open(&state, request(STREAM, Who::Bearer(SCOPED_ADMIN), None)).await;
+    within(s.until("hello")).await;
+    tokio::time::pause();
+    // L2's load: every check 1.5 s, a status change every second.
+    state
+        .dashboard_bootstrap
+        .stream_hub()
+        .slow_validation_for_test(1_500);
+    let churn = {
+        let state = Arc::clone(&state);
+        tokio::spawn(async move {
+            for i in 0.. {
+                let _ = state.backends.register(http_backend_at(
+                    &format!("churn-{i}"),
+                    "http://127.0.0.1:9/mcp",
+                ));
+                tokio::time::sleep(Duration::from_secs(1)).await;
+            }
+        })
+    };
+    call(&inv, "a", 1);
+    let first = within(s.until("activity")).await;
+    assert!(first.data.contains("tool_1"), "premise: live under load");
+    state.live_config.edit(|c| {
+        c.auth = AuthConfig {
+            api_keys: vec![standard_key()],
+            ..auth(&["a"])
+        };
+    });
+    // Calls keep coming after the removal: none may reach the removed key.
+    let writer = {
+        let inv = Arc::clone(&inv);
+        tokio::spawn(async move {
+            for n in 2.. {
+                call(&inv, "a", n);
+                tokio::time::sleep(Duration::from_millis(500)).await;
+            }
+        })
+    };
+    let mut after = Vec::new();
+    within(async {
+        while let Some(f) = s.next().await {
+            if f.event == "activity" {
+                after.push(f.data);
+            }
+        }
+    })
+    .await;
+    churn.abort();
+    writer.abort();
+    assert!(
+        after.is_empty(),
+        "no row made after the removal reaches the removed key: {after:?}"
+    );
+}
