@@ -150,7 +150,7 @@ async fn a_frame_carries_the_task_as_it_is_at_delivery() {
 }
 
 /// A gateway whose registry holds backend `alpha`, so it keeps a value set.
-fn gateway_with_alpha(dir: &tempfile::TempDir) -> (MetaMcp, Arc<BackendRegistry>) {
+fn gateway_with_alpha(dir: &Arc<tempfile::TempDir>) -> (MetaMcp, Arc<BackendRegistry>) {
     let registry = Arc::new(BackendRegistry::new());
     let alpha = crate::backend::Backend::new(
         "alpha",
@@ -221,7 +221,7 @@ const MARKED: &str = "marked-after-storing-9105";
 /// removed.
 #[tokio::test]
 async fn a_notification_removes_a_value_marked_after_the_task_was_stored() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = Arc::new(tempfile::tempdir().expect("tempdir"));
     let (meta, registry) = gateway_with_alpha(&dir);
     let stored = completed(&format!("done {MARKED}"));
     registry.mark_for_test("alpha", MARKED);
@@ -241,7 +241,7 @@ async fn a_notification_removes_a_value_marked_after_the_task_was_stored() {
 /// status-only, and the log says why the output was withheld.
 #[test]
 fn a_refused_scrub_sends_the_status_only_notification_and_says_why() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = Arc::new(tempfile::tempdir().expect("tempdir"));
     let (frame, logs) = crate::test_log_capture::capture_warnings(|| {
         tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -279,7 +279,7 @@ fn a_refused_scrub_sends_the_status_only_notification_and_says_why() {
 #[tokio::test]
 async fn a_stored_output_the_scrub_redacts_reads_as_rewritten() {
     use super::invoke::egress::EgressOutcome;
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = Arc::new(tempfile::tempdir().expect("tempdir"));
     let (meta, registry) = gateway_with_alpha(&dir);
     registry.mark_for_test("alpha", MARKED);
     let marked = completed(&format!("done {MARKED}"));
