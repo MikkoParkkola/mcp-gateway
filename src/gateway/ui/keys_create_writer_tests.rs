@@ -181,6 +181,13 @@ fn p9_uncertain_endings_are_state_uncertain() {
         );
         assert_eq!(error_of(&sent), "state_uncertain");
         assert!(!sent.body.contains("zq-detail"), "{}", sent.body);
+        // The operator's way out: re-read the list before creating again.
+        let recovery = sent.json()["recovery"].as_str().map(str::to_owned);
+        assert!(
+            recovery.is_some_and(|text| text.contains("GET /ui/api/keys")),
+            "{}",
+            sent.body
+        );
     }
 }
 
