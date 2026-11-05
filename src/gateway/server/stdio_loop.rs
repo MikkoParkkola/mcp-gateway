@@ -598,10 +598,9 @@ impl Gateway {
                         }
                         if let Some(response) = response
                             && let Ok(permit) = writer.reserve().await
+                            && cancelled.send_unless_cancelled(answers.as_ref(), permit, response)
                         {
-                            if cancelled.send_unless_cancelled(answers.as_ref(), permit, response) {
-                                super::first_list_wait::answer_queued();
-                            }
+                            super::first_list_wait::answer_queued();
                         }
                     }),
                 )))

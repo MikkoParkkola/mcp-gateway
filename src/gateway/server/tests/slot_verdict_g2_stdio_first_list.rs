@@ -7,6 +7,9 @@
 //! parent's fixture, on a paused clock.
 use super::*;
 
+use std::time::Duration;
+
+use crate::backend::Backend;
 use crate::config::TransportConfig;
 use crate::gateway::server::first_list_wait::FirstList;
 use crate::gateway::server::signing_allocation_tests::stdio_first_list::held_backend;
