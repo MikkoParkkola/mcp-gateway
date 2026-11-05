@@ -528,6 +528,10 @@ pub(crate) mod fault {
     }
 
     /// The times the fault set for `config` has fired since it was set.
+    #[cfg_attr(
+        not(feature = "webui"),
+        expect(dead_code, reason = "read by the web UI's create-key rows")
+    )]
     pub(crate) fn fired(config: &Path) -> usize {
         let key = crate::identity_grants::journal::resolved(config);
         let fired = FIRED
