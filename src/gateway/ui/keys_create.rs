@@ -83,7 +83,7 @@ fn state_uncertain() -> Response {
         StatusCode::INTERNAL_SERVER_ERROR,
         Json(json!({
             "error": "state_uncertain",
-            "recovery": "the key may or may not have been written: read GET /ui/api/keys before creating it again; a key listed there whose secret was never shown cannot be used, so remove it from gateway.yaml or rotate it",
+            "recovery": "the key may or may not have been written: read GET /ui/api/keys before creating it again; a key listed there whose secret was never shown cannot be used, so remove it from gateway.yaml and reload first",
         })),
     )
         .into_response()
@@ -381,6 +381,9 @@ async fn write_audited(
     let log = state
         .transparency_log
         .clone()
+        // No log is refused here, as the audit's own refusal, so the
+        // posture below never sees a missing log: its `Refused(NO_AUDIT_LOG)`
+        // can't reach this route's "any other Refused" answer.
         .ok_or_else(|| ReplaceError::AuditRefused(NO_AUDIT_LOG.to_owned()))?;
     let auth = GatewayAuth::of(state.live_config.running().auth.enabled);
     let who = super::admin_audit::caller_who(state, guard.client.as_ref(), guard.identity.as_ref());
