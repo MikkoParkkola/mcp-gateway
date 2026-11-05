@@ -322,7 +322,9 @@ fn p6_the_clock_is_read_again_under_the_lock() {
         .await
         .expect("the test holds the lock");
         let advance = async {
-            reached.notified().await;
+            // A route that never gets this far must fail the row, not hang it.
+            let _ =
+                tokio::time::timeout(std::time::Duration::from_secs(5), reached.notified()).await;
             std::mem::forget(crate::clock::test_clock::at_secs(NOW + 120));
             drop(held);
         };
