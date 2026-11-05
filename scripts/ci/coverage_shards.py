@@ -254,9 +254,11 @@ def digest(data: bytes) -> str:
     import hashlib
     import struct
 
-    whole = "file:" + hashlib.sha256(data).hexdigest()
+    def whole() -> str:
+        return "file:" + hashlib.sha256(data).hexdigest()
+
     if data[:4] != b"\x7fELF" or len(data) < 64 or data[4] != 2:
-        return whole
+        return whole()
     shoff, = struct.unpack_from("<Q", data, 0x28)
     shentsize, shnum, shstrndx = struct.unpack_from("<HHH", data, 0x3A)
     heads = [struct.unpack_from("<IIQQQQ", data, shoff + i * shentsize) for i in range(shnum)]
@@ -267,7 +269,7 @@ def digest(data: bytes) -> str:
         if label in COVERAGE_SECTIONS:
             found[label] = b"" if kind == 8 else data[off:off + size]  # NOBITS: no bytes
     if not found:
-        return whole
+        return whole()
     h = hashlib.sha256()
     for label in COVERAGE_SECTIONS:
         body = found.get(label)
