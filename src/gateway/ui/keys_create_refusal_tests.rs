@@ -376,3 +376,42 @@ fn p7_keyedit_refusals_are_not_written_with_hand_steps() {
     }
     let _ = ROOT;
 }
+
+/// A4: an audit append that fails, and separately one whose fsync fails, each
+/// refuse the write: 503 `audit_unavailable`, the file byte-identical, no
+/// secret.
+#[test]
+fn a4_a_failed_intent_append_or_fsync_refuses_the_write() {
+    use crate::security::transparency_log::rotation_fault::WriteFault;
+    for fault in [WriteFault::WriteError, WriteFault::SyncError] {
+        let fx = Fixture::new(Setup::default());
+        let log = fx.state.transparency_log.clone().expect("an audit log");
+        log.arm_write_fault(Some(fault));
+        refused(
+            &fx,
+            &fx.body("a"),
+            StatusCode::SERVICE_UNAVAILABLE,
+            "audit_unavailable",
+        );
+        assert_eq!(
+            log.write_faults_fired(),
+            1,
+            "{fault:?} never reached the intent"
+        );
+    }
+}
+
+/// A4 success: the intent's base revision is the original file's.
+#[test]
+fn a4_the_intent_base_is_the_original_revision() {
+    let fx = Fixture::new(Setup::default());
+    let original = fx.revision();
+    assert_eq!(
+        fx.post(Call::new(&fx.body("a"))).status,
+        StatusCode::CREATED
+    );
+    let intents = fx.records("config_key_create_intent");
+    assert_eq!(intents.len(), 1, "{}", fx.audit_text());
+    assert_eq!(intents[0]["base_revision"], original);
+    assert_ne!(fx.revision(), original);
+}
