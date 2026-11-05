@@ -51,7 +51,8 @@ fn no_conversion_turns_a_stored_identity_into_a_verified_one() {
                 pending.push(path);
             } else if path.extension().is_some_and(|e| e == "rs") {
                 // Whitespace removed, so `From< &StoredIdentity >` or a
-                // generic wrapped over lines is caught as well.
+                // generic wrapped over lines is caught as well. Comments are
+                // scanned too: one whose words join into a spelling fails it.
                 let text: String = std::fs::read_to_string(&path)
                     .expect("source")
                     .split_whitespace()

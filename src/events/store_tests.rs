@@ -414,18 +414,21 @@ fn a_stored_identity_naming_nobody_observes_as_no_one_after_a_reopen() {
         reloaded(&nobody.id).observed_as().is_none(),
         "an identity naming nobody observes as no one after a reopen"
     );
+    // Both sides unwrapped: the control cannot pass on `None == None`.
+    let expected = crate::key_server::oidc::VerifiedIdentity::checked(
+        "https://idp".into(),
+        "q".into(),
+        "q@h".into(),
+        None,
+        Vec::new(),
+    )
+    .expect("names someone");
     assert_eq!(
         reloaded(&someone.id)
             .observed_as()
-            .map(|i| i.stable_actor_id()),
-        crate::key_server::oidc::VerifiedIdentity::checked(
-            "https://idp".into(),
-            "q".into(),
-            "q@h".into(),
-            None,
-            Vec::new(),
-        )
-        .map(|i| i.stable_actor_id()),
+            .expect("a stored identity naming someone survives the reopen")
+            .stable_actor_id(),
+        expected.stable_actor_id(),
         "control: a stored identity naming someone survives the reopen"
     );
 }

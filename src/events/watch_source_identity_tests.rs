@@ -10,9 +10,10 @@ use serde_json::json;
 
 use super::*;
 
-/// A `watch.*.changed` row with a recorded class, and, when `observed`, a
-/// per-user observation basis and a stored identity naming nobody.
-fn watch_row(observed: bool) -> Subscription {
+/// A `watch.*.changed` row with a recorded class. With `Some(identity)` it
+/// carries a per-user observation basis, and the stored identity when the
+/// inner value is `Some`.
+fn watch_row(observed: Option<Option<&str>>) -> Subscription {
     let mut row = json!({
         "v": 1, "id": "w", "principal": "p", "api_key": null, "url": "https://cb",
         "name": "watch.weather.changed", "arguments": {}, "secret": "s",
@@ -21,10 +22,12 @@ fn watch_row(observed: bool) -> Subscription {
         "failed_since": null, "last_delivery_at": null, "last_error": null,
         "watch_class": serde_json::to_value(WatchClass::Free).expect("class"),
     });
-    if observed {
+    if let Some(identity) = observed {
         row["obs_basis"] = crate::events::stored_identity_fixture::basis();
-        row["observed_identity"] =
-            crate::events::stored_identity_fixture::identity("https://idp", "");
+        if let Some(subject) = identity {
+            row["observed_identity"] =
+                crate::events::stored_identity_fixture::identity("https://idp", subject);
+        }
     }
     serde_json::from_value(row).expect("a watch row")
 }
@@ -43,11 +46,24 @@ fn the_watch_route_keys_no_row_that_carries_an_observation() {
         source.offers("watch.weather.changed"),
         "premise: the capability is offered, so a key can come from key_of_row"
     );
-    let (plain, observed) = (watch_row(false), watch_row(true));
+    let plain = watch_row(None);
     assert!(
         source.row_key(&plain).is_some() && source.key_of_row(&plain, now()).is_some(),
         "control: a plain watch row is keyed by both routes"
     );
-    assert_eq!(source.row_key(&observed), None, "row_key");
-    assert_eq!(source.key_of_row(&observed, now()), None, "key_of_row");
+    // The refusal follows the observation basis, whatever the identity:
+    // naming nobody, naming someone, or absent.
+    for (case, identity) in [
+        ("nobody", Some("")),
+        ("someone", Some("q")),
+        ("absent", None),
+    ] {
+        let observed = watch_row(Some(identity));
+        assert_eq!(source.row_key(&observed), None, "{case}: row_key");
+        assert_eq!(
+            source.key_of_row(&observed, now()),
+            None,
+            "{case}: key_of_row"
+        );
+    }
 }

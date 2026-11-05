@@ -111,3 +111,26 @@ fn a_stored_identity_written_by_an_older_gateway_loads() {
         assert_eq!(as_json["groups"], json!(groups), "{literal}");
     }
 }
+
+/// The production writer: an identity the gateway verified, stored through
+/// `StoredIdentity::from`, writes the hand-written shape with every field,
+/// `name` and `groups` included, so the conversion drops nothing.
+#[test]
+fn a_verified_identity_is_stored_in_the_on_disk_shape() {
+    let verified = crate::key_server::oidc::VerifiedIdentity::checked(
+        "https://idp".into(),
+        "p".into(),
+        "p@h".into(),
+        Some("P".into()),
+        vec!["g".into(), "h".into()],
+    )
+    .expect("names someone");
+    let stored = crate::events::records::StoredIdentity::from(&verified);
+    assert_eq!(
+        serde_json::to_value(&stored).expect("serializes"),
+        serde_json::from_str::<Value>(
+            r#"{"subject":"p","email":"p@h","name":"P","groups":["g","h"],"issuer":"https://idp"}"#
+        )
+        .expect("literal parses")
+    );
+}
