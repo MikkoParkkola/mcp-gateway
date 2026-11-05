@@ -142,8 +142,11 @@ jobs:
           bash scripts/ci/coverage_shard_merge.sh $expected
       - name: Reports
         run: |
-          cargo llvm-cov report --summary-only --json --output-path cov.json
-          cargo llvm-cov report --lcov --output-path linux.lcov
+          set -o pipefail
+          # -v prints each llvm-cov command line, with every -object it reads.
+          cargo llvm-cov report -v --summary-only --json --output-path cov.json 2>&1 | tee report-json.log
+          cargo llvm-cov report -v --lcov --output-path linux.lcov 2>&1 | tee report-lcov.log
+          python3 scripts/ci/coverage_shards.py canary linux.lcov
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
@@ -152,5 +155,7 @@ jobs:
           path: |
             cov.json
             linux.lcov
+            report-json.log
+            report-lcov.log
             shards/*/run.log
             shards/*/manifest.txt
