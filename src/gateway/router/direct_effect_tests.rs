@@ -32,7 +32,9 @@ fn alice_auth() -> AuthConfig {
             allowed_tools: None,
             denied_tools: None,
             admin: false,
-            kind: crate::config::ApiKeyKind::Shared,
+            // Held by one person, so its caller carries the grant subject
+            // (`api_key`, name) the personal capability checks.
+            kind: crate::config::ApiKeyKind::Personal,
             ..Default::default()
         }],
         ..AuthConfig::default()
