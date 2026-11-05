@@ -37,6 +37,14 @@ pub(crate) enum ReplayOrigin {
     ContinuationOrigin,
 }
 
+/// What a stored execution recorded beside its answer: the steps it
+/// dispatched, the bindings they ran under and the one slot it ran on.
+pub(crate) type StoredSteps = (
+    Option<Vec<(String, String)>>,
+    Vec<super::super::admission::StepBinding>,
+    Option<crate::backend::PoolKey>,
+);
+
 /// What a served replay carries to `audit_replay`: the stored facts, and the
 /// server a `Named` target was admitted for (MIK-8520, MIK-7645 AC3). The
 /// record and receipt name that server, never the live surfaced map read
@@ -224,11 +232,7 @@ impl MetaMcp {
         arguments: &Value,
         caller: &super::super::MetaMcpCallerContext<'_>,
         target: Option<ReplayTarget>,
-        (dispatched, bindings, effect_slot): (
-            Option<Vec<(String, String)>>,
-            Vec<super::super::admission::StepBinding>,
-            Option<crate::backend::PoolKey>,
-        ),
+        (dispatched, bindings, effect_slot): StoredSteps,
         (response, audit): (JsonRpcResponse, Option<ReplayAudit>),
     ) -> Option<(JsonRpcResponse, ReplayFacts)> {
         // Derived once: every answer below, refusals included, and the

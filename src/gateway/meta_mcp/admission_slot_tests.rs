@@ -6,7 +6,7 @@
 
 use serde_json::json;
 
-use super::stored::{SlotNote, StoredDelivery};
+use super::stored::{SlotNote, StoredChain, StoredDelivery};
 use crate::backend::PoolKey;
 
 fn per_user(binding: &str) -> PoolKey {
@@ -31,10 +31,10 @@ fn the_stored_slot_survives_a_json_round_trip() {
     for slot in [None, Some(PoolKey::Shared), Some(per_user("b-1"))] {
         let stored = StoredDelivery {
             response: json!({"jsonrpc": "2.0", "result": {}}),
-            chain: Default::default(),
+            chain: StoredChain::default(),
             audit: None,
             read: None,
-            writes: Default::default(),
+            writes: crate::gateway::gateway_writes::WriteRecord::default(),
             dispatched: None,
             era: None,
             bindings: Vec::new(),
@@ -53,7 +53,11 @@ fn the_stored_slot_survives_a_json_round_trip() {
 fn a_lease_noting_two_slots_stores_none() {
     let (a, b) = (per_user("a"), per_user("b"));
     assert_eq!(settled_after(&[]), None, "nothing noted");
-    assert_eq!(settled_after(&[a.clone()]), Some(a.clone()), "one slot");
+    assert_eq!(
+        settled_after(std::slice::from_ref(&a)),
+        Some(a.clone()),
+        "one slot"
+    );
     assert_eq!(
         settled_after(&[a.clone(), a.clone()]),
         Some(a.clone()),
