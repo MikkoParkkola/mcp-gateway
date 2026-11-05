@@ -177,6 +177,8 @@ pub(super) struct Fixture {
     dispatch: tracing::Dispatch,
     /// Whether gateway.yaml exists: its absence is the expected state when not.
     has_file: bool,
+    /// Whether the audit log is on: then audit.jsonl must be there to read.
+    has_audit_log: bool,
     pub(super) dir: tempfile::TempDir,
     _store: crate::gateway::router::tests::FixtureDir,
     pub(super) state: Arc<AppState>,
@@ -243,6 +245,7 @@ impl Fixture {
             capture,
             dispatch,
             has_file: setup.file,
+            has_audit_log: setup.audit_log,
             dir,
             _store: store,
             state,
@@ -299,7 +302,8 @@ impl Fixture {
         serde_json::to_value(AuditWho::from_request(Some(client), None, key)).expect("who")
     }
 
-    pub(super) async fn send(&self, call: Call) -> Sent {
+    // Private: every row goes through `post`, so none can skip L1.
+    async fn send(&self, call: Call) -> Sent {
         let mut request = Request::builder()
             .method("POST")
             .uri(URI)
@@ -366,9 +370,11 @@ impl Fixture {
         let bytes = self.capture.0.lock().expect("capture").clone();
         sent.logs = String::from_utf8(bytes).expect("utf-8 log output");
         let secret = known.or_else(|| sent.json()["secret"].as_str().map(str::to_owned));
-        if let Some(secret) = secret {
-            self.assert_leak_free(&sent, &secret, asked["name"].as_str());
-        }
+        // Every POST is checked: a row that knows no secret and got none back
+        // would otherwise skip L1, so it fails instead.
+        let secret =
+            secret.expect("L1: set call.known, or the answer must be a 201 with its secret");
+        self.assert_leak_free(&sent, &secret, asked["name"].as_str());
         sent
     }
 
@@ -547,7 +553,15 @@ impl Fixture {
         ];
         let mut texts = vec![sent.body.clone(), sent.logs.clone()];
         for (place, path) in side {
-            let text = read_present(&path).unwrap_or_default();
+            let text = match read_present(&path) {
+                Some(text) => text,
+                // The log is opened at start, so with it on, a missing file
+                // is a lost sink, never an empty one.
+                None if place == "audit" && self.has_audit_log => {
+                    panic!("audit.jsonl is missing though the audit log is on")
+                }
+                None => String::new(),
+            };
             assert_clean(place, &text, &forbidden);
             texts.push(text);
         }
