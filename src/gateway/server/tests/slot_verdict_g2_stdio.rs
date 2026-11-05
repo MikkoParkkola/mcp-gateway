@@ -227,6 +227,8 @@ impl Stdio {
 
 #[path = "slot_verdict_g2_stdio_listing.rs"]
 mod listing;
+#[path = "slot_verdict_g2_stdio_first_list.rs"]
+mod first_list;
 
 /// The stdio gateway over the sole operator's managed backend, [`TOOL`]
 /// surfaced and the shared slot warm: the operator's slot is cold.
