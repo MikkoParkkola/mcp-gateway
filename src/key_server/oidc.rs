@@ -132,6 +132,23 @@ fn built(client: reqwest::Result<reqwest::Client>) -> Option<reqwest::Client> {
 }
 
 /// Verified identity extracted from a valid OIDC ID token.
+///
+/// Output only: it is written to audit records, but nothing can read one back
+/// from bytes, since bytes are not a verification:
+///
+/// ```compile_fail,E0277
+/// fn read(bytes: &str) -> mcp_gateway::key_server::oidc::VerifiedIdentity {
+///     serde_json::from_str(bytes).expect("an identity")
+/// }
+/// ```
+///
+/// Writing one out compiles:
+///
+/// ```
+/// fn write(identity: &mcp_gateway::key_server::oidc::VerifiedIdentity) -> String {
+///     serde_json::to_string(identity).expect("an identity")
+/// }
+/// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VerifiedIdentity {
     /// OIDC `sub` claim (opaque user ID).

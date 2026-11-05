@@ -36,6 +36,9 @@ pub mod handler;
 #[cfg(test)]
 mod identity_rules_tests;
 pub mod oidc;
+/// The output-only doc tests fail for the reason they name.
+#[cfg(test)]
+mod output_only_doc_tests;
 #[cfg(test)]
 #[path = "oidc_harness_tests.rs"]
 pub(crate) mod oidc_test_harness;
