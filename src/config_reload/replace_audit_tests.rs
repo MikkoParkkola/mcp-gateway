@@ -583,6 +583,11 @@ async fn an_unchanged_save_appends_its_intent_before_its_reload() {
         !running_has_b(&ctx),
         "a refused intent let the unchanged save reload the hand edit"
     );
+    assert_eq!(
+        read(&path),
+        NEXT,
+        "a refused unchanged save changed the file"
+    );
 
     let recorder = Recorder::new(&path, false);
     let outcome = replace_audited(
@@ -606,6 +611,7 @@ async fn an_unchanged_save_appends_its_intent_before_its_reload() {
         "an unchanged save's intent"
     );
     assert!(running_has_b(&ctx), "the unchanged save did not reload");
+    assert_eq!(read(&path), NEXT, "the unchanged save changed the file");
 }
 
 /// A gateway.yaml other accounts can write is refused at the writer's read,

@@ -282,6 +282,7 @@ async fn gh462_successful_mutations_preserve_literal_secret_references() {
         );
         let ctx = context(&path, resolved.config)
             .with_env(Arc::new(LiveEnv::new(resolved.overlay, resolved.env_paths)));
+        let before = std::fs::read(&path).unwrap();
         let result = mutate_config_and_reload(&path, with_context.then_some(&ctx), |c| {
             c.backends.get_mut("sentinel").unwrap().description = "gh462 admin edit".into();
             Ok::<_, ()>(())
@@ -292,10 +293,18 @@ async fn gh462_successful_mutations_preserve_literal_secret_references() {
         if with_context {
             // Auth is on, so a live gateway's older write path refuses before
             // any lock: it records no intent. The file stays as it was.
-            assert!(
-                matches!(&result, Err(ConfigWriteError::Failed(why)) if why.contains("audited writer")),
-                "the context write was not refused: {:?}",
-                result.as_ref().err()
+            assert_eq!(
+                result.as_ref().err(),
+                Some(&ConfigWriteError::Failed(
+                    "an audited gateway writes its config only through the audited writer"
+                        .to_owned()
+                )),
+                "the context write was not refused by the audit guard"
+            );
+            assert_eq!(
+                std::fs::read(&path).unwrap(),
+                before,
+                "refused, yet the file changed"
             );
             assert_eq!(
                 saved.backends["sentinel"].description, "original operator backend",

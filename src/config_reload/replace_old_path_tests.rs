@@ -41,6 +41,18 @@ fn auth_on_context(path: &Path) -> Arc<super::super::ReloadContext> {
     )
 }
 
+/// The guard's own refusal and nothing else: a crash, a busy lock or an
+/// unrelated failure is an error too, and must not pass for the refusal.
+fn assert_audited_refusal(err: Option<&super::super::ConfigWriteError>, what: &str) {
+    assert_eq!(
+        err,
+        Some(&super::super::ConfigWriteError::Failed(
+            "an audited gateway writes its config only through the audited writer".to_owned()
+        )),
+        "{what} was not refused by the audit guard"
+    );
+}
+
 /// The older mutate path with auth on and no audit log: a posture that
 /// requires an audit. The write is refused before any lock, so the crashed
 /// bytes and the journal stay and nothing is loaded.
@@ -56,10 +68,7 @@ async fn the_mutate_path_with_auth_on_and_no_log_recovers_nothing() {
         })
         .await;
 
-    assert!(
-        result.is_err(),
-        "the mutate path wrote on an audited gateway"
-    );
+    assert_audited_refusal(result.as_ref().err(), "the mutate path");
     assert_eq!(read(&path), NEXT, "the mutate path recovered unaudited");
     assert!(
         journal::journal_path(&path).exists(),
@@ -82,10 +91,7 @@ async fn the_whole_file_write_on_an_audited_gateway_recovers_nothing() {
         .write_and_reload_outcome_within(&path, WAIT, &config)
         .await;
 
-    assert!(
-        result.is_err(),
-        "the whole-file write wrote on an audited gateway"
-    );
+    assert_audited_refusal(result.as_ref().err(), "the whole-file write");
     assert_eq!(
         read(&path),
         NEXT,
@@ -113,10 +119,7 @@ async fn the_mutate_path_reads_the_live_audit_posture() {
         })
         .await;
 
-    assert!(
-        result.is_err(),
-        "the mutate path wrote on an audited gateway"
-    );
+    assert_audited_refusal(result.as_ref().err(), "the mutate path");
     assert_eq!(read(&path), NEXT, "the mutate path recovered unaudited");
     assert!(
         journal::journal_path(&path).exists(),
