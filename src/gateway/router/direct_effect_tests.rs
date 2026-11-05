@@ -701,3 +701,62 @@ async fn a_direct_completed_replay_of_an_evicted_slot_records_none() {
     .await;
     assert!(decision.get("declared_effect").is_none(), "{decision}");
 }
+
+/// FIXTURE.1 (canary, what reaches the record today): no secret and no
+/// caller-supplied text enters the decision object. A propagated caller
+/// whose subject (and so its per-user binding) carries canary text makes an
+/// allowed direct call; a meta call names a caller-chosen server and tool,
+/// both canaries. The configured key's secret (`k-std`) and every canary are
+/// absent from both serialised decisions.
+#[tokio::test]
+async fn the_decision_object_carries_no_secret_or_caller_text() {
+    const SUBJECT: &str = "zq-canary-subject";
+    let dir = tempfile::tempdir().expect("a log directory");
+    let fx = bound(&dir).await;
+    let alpha = fx.state.backends.get("alpha").expect("alpha");
+    let binding = format!("{SUBJECT}@aud-alpha");
+    let shared = alpha
+        .pooled_transport_for_test(&crate::backend::PoolKey::Shared)
+        .expect("the fixture's scripted transport");
+    alpha.set_pooled_transport_for_test(
+        &crate::backend::PoolKey::PerUser {
+            binding: binding.clone(),
+        },
+        shared,
+    );
+    let direct = direct_decision(&fx, &dir, "alpha", Some(SUBJECT)).await;
+
+    let before = decisions(&dir).len();
+    let invoke = json!({"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {
+        "name": "gateway_invoke",
+        "arguments": {"server": "zq-canary-server", "tool": "zq-canary-tool", "arguments": {}},
+    }});
+    let request = axum::http::Request::builder()
+        .method("POST")
+        .uri("/mcp")
+        .header("authorization", "Bearer k-std")
+        .header("content-type", "application/json")
+        .body(axum::body::Body::from(invoke.to_string()))
+        .expect("a request");
+    let _ = fx.router.clone().oneshot(request).await.expect("an answer");
+    let after = decisions(&dir).split_off(before);
+    let [meta] = after.as_slice() else {
+        panic!("premise: one meta record: {after:?}");
+    };
+
+    for decision in [&direct, meta] {
+        let text = decision.to_string();
+        for canary in [
+            "k-std",
+            SUBJECT,
+            binding.as_str(),
+            "zq-canary-server",
+            "zq-canary-tool",
+        ] {
+            assert!(
+                !text.contains(canary),
+                "{canary} entered the decision: {text}"
+            );
+        }
+    }
+}
