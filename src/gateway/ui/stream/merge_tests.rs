@@ -40,6 +40,9 @@ struct Fake {
     generation: Mutex<u64>,
     heads: Mutex<usize>,
     append_on_read: Mutex<bool>,
+    /// Every read meets a gap: the page is a reset with no half for the log
+    /// and more to read, as the real source returns one.
+    gapped: Mutex<bool>,
 }
 
 impl Fake {
@@ -53,6 +56,7 @@ impl Fake {
             generation: Mutex::new(0),
             heads: Mutex::new(0),
             append_on_read: Mutex::new(false),
+            gapped: Mutex::new(false),
         })
     }
 
@@ -133,6 +137,18 @@ impl Fake {
 
     /// Rows after `cursor` up to and including `stop`, as a source must.
     fn read_page(&self, cursor: &LogCursor, stop: &LogCursor, limit: usize) -> Page {
+        if *self.gapped.lock().unwrap() {
+            return Page {
+                rows: Vec::new(),
+                next: LogCursor::default(),
+                more: true,
+                reset: Reset {
+                    inv: true,
+                    gov: false,
+                },
+                searching: false,
+            };
+        }
         let rows = self.rows.lock().unwrap();
         let mut b = self.biggest_page.lock().unwrap();
         *b = (*b).max(limit);
@@ -525,5 +541,39 @@ async fn a_replay_with_no_visible_row_leaves_no_replay_owed() {
         merge.delivered().inv,
         Some(part(3)),
         "the finished replay is not owed again: the id resumes at the head"
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_replay_that_resets_again_goes_live_from_the_captured_head() {
+    let fake = Fake::new(3, 64);
+    *fake.gapped.lock().unwrap() = true;
+    let mut merge = LogMerge::connect(Arc::clone(&fake), (), Some(from(1))).await;
+    let mut out = Vec::new();
+    while merge.scanning() {
+        let batch = merge
+            .step()
+            .await
+            .expect("the view goes on: a gapped log goes live, it does not end");
+        for o in &batch {
+            merge.ack(o);
+        }
+        out.extend(batch);
+    }
+    assert_eq!(
+        out,
+        vec![Out::Reset],
+        "one reset frame, then the second reset sends none"
+    );
+    assert_eq!(
+        merge.delivered().inv,
+        Some(part(3)),
+        "the reset half takes the head captured when the catch-up began"
+    );
+    fake.append(false);
+    assert_eq!(
+        ids(&collect(&mut merge, 1).await),
+        vec![4],
+        "live from that head"
     );
 }
