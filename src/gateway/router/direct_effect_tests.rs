@@ -284,25 +284,61 @@ impl crate::identity_propagation::IdentityPropagation for Binds {
 /// alice's binding on `alpha`.
 const ALICE_ALPHA: &str = "alice@aud-alpha";
 
-/// The propagating fixture with its route log in `dir`, alice's per-user slot
-/// on `alpha` reachable through the fixture's scripted transport.
-async fn bound(dir: &tempfile::TempDir) -> Fx {
+/// bob's binding on `alpha`.
+const BOB_ALPHA: &str = "bob@aud-alpha";
+
+/// Whether the idempotency cache (stage 7a) answers a repeated key.
+#[derive(Clone, Copy)]
+enum Cache {
+    On,
+    Off,
+}
+
+/// The propagating fixture with its route log in `dir`, the idempotency
+/// cache as `cache` says, and alice's and bob's per-user slots on `alpha`
+/// reachable through the fixture's scripted transport.
+async fn bound_with(dir: &tempfile::TempDir, cache: Cache) -> Fx {
     let log = logger(dir, AuditFailurePolicy::FailClosed);
     let fx = super::direct_guards_fixture::fixture_propagating_logged(Answer::Ok, log, |meta| {
         meta.set_identity_propagation(Arc::new(Binds));
+        if let Cache::On = cache {
+            meta.enable_idempotency(
+                Arc::new(crate::idempotency::IdempotencyCache::new()),
+                crate::idempotency::CLEANUP_INTERVAL,
+            );
+        }
     })
     .await;
     let alpha = fx.state.backends.get("alpha").expect("alpha");
     let shared = alpha
         .pooled_transport_for_test(&crate::backend::PoolKey::Shared)
         .expect("the fixture's scripted transport");
-    alpha.set_pooled_transport_for_test(
-        &crate::backend::PoolKey::PerUser {
-            binding: ALICE_ALPHA.to_owned(),
-        },
-        shared,
-    );
+    for binding in [ALICE_ALPHA, BOB_ALPHA] {
+        alpha.set_pooled_transport_for_test(
+            &crate::backend::PoolKey::PerUser {
+                binding: binding.to_owned(),
+            },
+            Arc::clone(&shared),
+        );
+    }
     fx
+}
+
+/// [`bound_with`] with the cache off: the live-call rows.
+async fn bound(dir: &tempfile::TempDir) -> Fx {
+    bound_with(dir, Cache::Off).await
+}
+
+/// A direct call of `read` on `alpha` as `subject`, keyed `key`: the status
+/// and answer.
+async fn keyed(fx: &Fx, subject: &str, key: &str) -> (axum::http::StatusCode, Value) {
+    super::direct_continuation_tests::call(
+        fx,
+        "alpha",
+        Some(subject),
+        json!({"_meta": {(crate::protocol::mrtr::IDEMPOTENCY_KEY_META): key}}),
+    )
+    .await
 }
 
 /// A2: a propagated caller's direct call records its own bound slot's
@@ -345,4 +381,98 @@ async fn direct_effect_of_an_unlisted_bound_slot_is_its_own() {
         "premise: the call listed alice's slot from the fixture's listing"
     );
     assert_eq!(decision["declared_effect"], "undeclared", "{decision}");
+}
+
+/// alice's keyed call once, then again: the second is answered from the
+/// idempotency cache (stage 7a), with `between` run before it. The decision
+/// the hit records.
+async fn cache_hit(fx: &Fx, dir: &tempfile::TempDir, key: &str, between: impl FnOnce()) -> Value {
+    let (status, first) = keyed(fx, "alice", key).await;
+    assert!(
+        status.is_success() && first.get("result").is_some(),
+        "premise: the first call ran: {first}"
+    );
+    let _ = super::backend_handlers::direct_lease_seams::served();
+    between();
+    let before = decisions(dir).len();
+    let (_, hit) = keyed(fx, "alice", key).await;
+    assert!(
+        hit.get("result").is_some(),
+        "premise: the hit delivered: {hit}"
+    );
+    assert_eq!(
+        super::backend_handlers::direct_lease_seams::served(),
+        Some(super::backend_handlers::direct_lease_seams::Served::Cache),
+        "premise: stage 7a answered"
+    );
+    let mut after = decisions(dir).split_off(before);
+    assert_eq!(after.len(), 1, "premise: one record for the hit: {after:?}");
+    after.remove(0)
+}
+
+/// A3: a cache hit is keyed by the caller's binding, so it records what
+/// alice's own slot declares (read-only), never the shared slot's may-write.
+#[tokio::test]
+async fn a_direct_cache_hit_records_the_callers_slot_effect() {
+    let dir = tempfile::tempdir().expect("a log directory");
+    let fx = bound_with(&dir, Cache::On).await;
+    let alpha = fx.state.backends.get("alpha").expect("alpha");
+    alpha.declare_slot_effects_for_test(None, vec![read_tool(Some(false))]);
+    alpha.declare_slot_effects_for_test(Some(ALICE_ALPHA), vec![read_tool(Some(true))]);
+    let decision = cache_hit(&fx, &dir, "k-7a", || {}).await;
+    assert_eq!(decision["decided"], "replayed", "{decision}");
+    assert_eq!(decision["declared_effect"], "read_only", "{decision}");
+    assert_eq!(
+        decision["declared_effect_source"], "tool_annotation",
+        "{decision}"
+    );
+}
+
+/// A3, the declaration flipped between the call and the hit (may-write to
+/// read-only): the hit records alice's slot as it is now.
+#[tokio::test]
+async fn a_direct_cache_hit_reads_the_callers_slot_now() {
+    let dir = tempfile::tempdir().expect("a log directory");
+    let fx = bound_with(&dir, Cache::On).await;
+    let alpha = fx.state.backends.get("alpha").expect("alpha");
+    alpha.declare_slot_effects_for_test(None, vec![read_tool(Some(false))]);
+    alpha.declare_slot_effects_for_test(Some(ALICE_ALPHA), vec![read_tool(Some(false))]);
+    let decision = cache_hit(&fx, &dir, "k-7a-flip", || {
+        alpha.declare_slot_effects_for_test(Some(ALICE_ALPHA), vec![read_tool(Some(true))]);
+    })
+    .await;
+    assert_eq!(decision["declared_effect"], "read_only", "{decision}");
+}
+
+/// A3, alice's slot cold at the hit (evicted and re-armed unlisted), the
+/// shared slot declaring read-only: the hit records no effect, never the
+/// shared slot's.
+#[tokio::test]
+async fn a_direct_cache_hit_on_a_cold_slot_records_none() {
+    let dir = tempfile::tempdir().expect("a log directory");
+    let fx = bound_with(&dir, Cache::On).await;
+    let alpha = fx.state.backends.get("alpha").expect("alpha");
+    alpha.declare_slot_effects_for_test(None, vec![read_tool(Some(true))]);
+    alpha.declare_slot_effects_for_test(Some(ALICE_ALPHA), vec![read_tool(Some(true))]);
+    let shared = alpha
+        .pooled_transport_for_test(&crate::backend::PoolKey::Shared)
+        .expect("the fixture's scripted transport");
+    let decision = cache_hit(&fx, &dir, "k-7a-cold", || {
+        alpha.retire_per_user_slot_for_test(ALICE_ALPHA);
+        alpha.forget_caller_slots_for_test();
+        alpha.set_pooled_transport_for_test(
+            &crate::backend::PoolKey::PerUser {
+                binding: ALICE_ALPHA.to_owned(),
+            },
+            shared,
+        );
+    })
+    .await;
+    assert_eq!(
+        alpha.declared_effect_for(Some(ALICE_ALPHA), "read"),
+        None,
+        "premise: alice's slot stayed cold through the hit"
+    );
+    assert_eq!(decision["decided"], "replayed", "{decision}");
+    assert!(decision.get("declared_effect").is_none(), "{decision}");
 }
