@@ -118,7 +118,7 @@ impl<C: Clock + Clone + Send + Sync> RateLimiter<C> {
         if wait > interval {
             state.bucket = self.bucket();
             match state.bucket.check() {
-                Ok(_) => return Acquire::AdmittedAfterClockStep { stale_wait: wait },
+                Ok(()) => return Acquire::AdmittedAfterClockStep { stale_wait: wait },
                 Err(refused) => wait = refused.wait_time_from(now),
             }
         }
