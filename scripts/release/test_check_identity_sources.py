@@ -159,7 +159,7 @@ class RealTree(unittest.TestCase):
                 "src/gateway/router/identity.rs grant_subject_from_oauth_agent",
                 "src/gateway/router/identity.rs grant_subject_from_verified_identity",
                 "src/gateway/router/identity.rs trusted_proxy_identity",
-                "src/gateway/ui/admin_audit.rs record_admin_action_as",
+                "src/gateway/ui/admin_audit.rs caller_who",
                 "src/gateway/ui/admin_audit.rs recorded",
                 "src/gateway/ui/events.rs admitted", "src/gateway/ui/tool_call.rs via_label",
             })
