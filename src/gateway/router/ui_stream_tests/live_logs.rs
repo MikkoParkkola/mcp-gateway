@@ -148,9 +148,11 @@ async fn s3_a_scoped_admin_gets_activity_and_never_config() {
     let (state, _dirs, inv) = logged(true).await;
     let mut s = open(&state, request(STREAM, Who::Bearer(SCOPED_ADMIN), None)).await;
     let hello = within(s.until("hello")).await;
+    // No `reload`: it is a gateway-wide admin kind, and an admin key scoped
+    // to some backends holds no gateway-wide admin standing.
     assert_eq!(
         hello.json()["kinds"],
-        serde_json::json!(["status", "reload", "activity"])
+        serde_json::json!(["status", "activity"])
     );
     tokio::time::pause();
     config_change(&state);
