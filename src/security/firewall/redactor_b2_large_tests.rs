@@ -239,6 +239,10 @@ fn dense_literal(n: usize) -> String {
 /// than 2x for twice the matches.
 #[test]
 fn s15_dense_matches_read_the_literal_once_a_pass() {
+    /// `AKIA`, 16 digits and a space: one match's bytes in the literal.
+    const MATCH_BYTES: usize = 21;
+    /// Pass 1 sizes the output, pass 2 writes it; each reads the literal.
+    const PASSES: usize = 2;
     let r = redactor();
     let read = |n: usize| {
         let text = dense_literal(n);
@@ -251,16 +255,21 @@ fn s15_dense_matches_read_the_literal_once_a_pass() {
             !out.contains("AKIA"),
             "premise: every dense match is redacted"
         );
+        assert_eq!(
+            out.matches(MARK).count(),
+            n,
+            "premise: each match is its own span, one marker each"
+        );
         bytes
     };
     // Checked before the larger run, so a rescanning lookup fails here
     // rather than reading the larger literal 240,000 times.
     let half = read(30_000);
-    assert_eq!(half, 42 * 30_000, "30000 matches");
+    assert_eq!(half, MATCH_BYTES * PASSES * 30_000, "30000 matches");
     let full = read(60_000);
-    assert_eq!(full, 42 * 60_000, "60000 matches");
-    // Between 2x (linear) and 4x (a rescan per lookup), with room on both
-    // sides; the exact counts above are the sharper check.
+    assert_eq!(full, MATCH_BYTES * PASSES * 60_000, "60000 matches");
+    // The ticket's bound, between 2x (linear) and 4x (a rescan per lookup).
+    // The exact counts above imply it; it stays to state that bound.
     assert!(
         full <= half * 3,
         "60000 read {full} bytes, 30000 read {half}"
