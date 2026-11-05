@@ -56,6 +56,8 @@ async fn held_then_applied(tuning: ReloadTuning) {
 #[tokio::test(flavor = "current_thread")]
 async fn a_file_event_during_the_startup_scan_reloads_only_after_it() {
     held_then_applied(ReloadTuning {
+        // Off explicitly: the default turns the stale check on.
+        stale_check: None,
         debounce: Duration::from_millis(50),
         ..ReloadTuning::default()
     })
@@ -74,8 +76,9 @@ async fn with_the_stale_check_on_a_reload_also_waits_for_the_scan() {
     .await;
 }
 
-/// A reload held past the slow bound is named once, not silently dropped.
-/// Mutant: the warning removed: none is logged.
+/// A reload held past the slow bound is named once, not silently dropped,
+/// however often file events keep arriving meanwhile.
+/// Mutants: the warning removed, or timed from the last event: none logged.
 #[tokio::test(flavor = "current_thread")]
 async fn a_reload_held_past_the_slow_bound_is_warned_once() {
     let (_guard, counts) = crate::test_log_capture::live_counts_at(&[(Level::WARN, HELD_WARN)]);
@@ -90,8 +93,14 @@ async fn a_reload_held_past_the_slow_bound_is_warned_once() {
         },
     )
     .await;
-    event_tx.send(()).await.expect("the event lands");
+    // Events keep arriving, each past the debounce but inside the slow
+    // bound: the wait is timed from the first held reload, so it still warns.
+    for _ in 0..8 {
+        event_tx.send(()).await.expect("the event lands");
+        // timing: absence
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
     // timing: absence
-    tokio::time::sleep(Duration::from_millis(1_000)).await;
+    tokio::time::sleep(Duration::from_millis(400)).await;
     assert_eq!(counts.borrow()[0], 1, "one warning for one held reload");
 }

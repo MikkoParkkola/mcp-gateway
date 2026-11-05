@@ -161,6 +161,9 @@ struct LoopState {
     baseline: Option<Fingerprint>,
     /// One-time log lines already emitted.
     logged: LoggedOnce,
+    /// When a due reload was first held for the startup scan; measured from
+    /// here, so later file events do not reset the scan-wait warning.
+    held_since: Option<Instant>,
     /// The walk every fingerprint uses (from the tuning).
     walk: Option<WalkFn>,
 }
@@ -490,11 +493,8 @@ impl CapabilityWatcher {
             // the scan completes; this is the only way into every
             // `spawn_reload` below (the walk paths start only from here).
             if !backend.initial_scan_complete() {
-                if !state.logged.held_for_scan
-                    && state
-                        .last_event
-                        .is_some_and(|at| at.elapsed() >= reload_slow)
-                {
+                let held_since = *state.held_since.get_or_insert_with(Instant::now);
+                if !state.logged.held_for_scan && held_since.elapsed() >= reload_slow {
                     state.logged.held_for_scan = true;
                     warn!(
                         backend = %backend.name,
@@ -504,6 +504,7 @@ impl CapabilityWatcher {
                 return;
             }
             state.logged.held_for_scan = false;
+            state.held_since = None;
             if !stale_enabled {
                 let (handle, active) = Self::spawn_reload(Arc::clone(backend), changes.cloned());
                 state.in_flight = Some((handle, active, None));

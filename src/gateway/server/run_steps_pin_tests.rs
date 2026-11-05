@@ -49,13 +49,14 @@ struct Started {
 
 /// An HTTP startup's capability step over `dirs`, as `run` performs it, on
 /// the gateway's own Meta-MCP.
-async fn http_startup(dirs: &[&std::path::Path]) -> Started {
+async fn http_startup(dirs: &[&std::path::Path], setup: impl FnOnce(&Gateway)) -> Started {
     let mut config = Config::default();
     config.capabilities.enabled = true;
     config.capabilities.directories = dirs.iter().map(|d| d.display().to_string()).collect();
     let gateway = Gateway::new(config)
         .await
         .expect("VOID: the gateway builds");
+    setup(&gateway);
     let meta = gateway
         .build_meta_mcp()
         .await
@@ -131,7 +132,13 @@ async fn a_capability_changed_while_down_reaches_the_decisions_after_http_startu
 
     let dir = tempfile::tempdir().expect("VOID: a temp dir");
     let changed = changed_while_down(dir.path());
-    let started = Box::pin(http_startup(&[dir.path()])).await;
+    let steady = "name: steady_tool\ndescription: Pinned and unchanged\nproviders:\n  primary:\n    service: rest\n    config:\n      base_url: https://api.fixture.test\n      path: /v2\n";
+    std::fs::write(
+        dir.path().join("steady.yaml"),
+        rewrite_with_pin(steady, &compute_capability_hash(steady)),
+    )
+    .expect("VOID: write the neighbour");
+    let started = Box::pin(http_startup(&[dir.path()], |_| {})).await;
     let (meta, shutdown) = (&started.meta, &started.shutdown);
     let backend = meta.capabilities.read().clone().expect("VOID: installed");
     eventually("the startup scan completes", || {
@@ -145,7 +152,19 @@ async fn a_capability_changed_while_down_reaches_the_decisions_after_http_startu
         Some(&1),
         "recorded before the scan was marked complete"
     );
-    assert_eq!(recorded(meta), vec![changed]);
+    assert_eq!(
+        recorded(meta),
+        vec![changed],
+        "only the changed file is recorded"
+    );
+    assert!(
+        backend.has_capability("steady_tool"),
+        "the pinned neighbour is served"
+    );
+    assert!(
+        !backend.has_capability("changed_tool"),
+        "the changed file is not"
+    );
 
     let _set = crate::gateway::ui::decisions::start_with_source(
         meta,
@@ -191,7 +210,7 @@ async fn a_scan_with_a_failed_directory_still_lets_a_later_edit_reload() {
         )
     };
     std::fs::write(good.path().join("a.yaml"), yaml("v1")).expect("VOID: write v1");
-    let started = Box::pin(http_startup(&[failing.path(), good.path()])).await;
+    let started = Box::pin(http_startup(&[failing.path(), good.path()], |_| {})).await;
     let meta = &started.meta;
     let backend = meta.capabilities.read().clone().expect("VOID: installed");
     eventually("the startup scan completes", || {
@@ -220,8 +239,8 @@ async fn a_scan_with_a_failed_directory_still_lets_a_later_edit_reload() {
 
 /// A startup scan that panics part way is still completed, marked partial,
 /// by its exit guard, so a later edit reloads and readiness does not wait
-/// forever. The flag is set as `start_capability_watcher` returns, well
-/// inside the scan's 250 ms settle before it reads the first directory.
+/// forever. The panic is armed through the gateway's test seam before the
+/// scan is spawned.
 /// Mutant: the exit guard removed: the scan never completes, no reload.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_startup_scan_that_panics_is_completed_and_a_later_edit_reloads() {
@@ -233,14 +252,19 @@ async fn a_startup_scan_that_panics_is_completed_and_a_later_edit_reloads() {
         )
     };
     std::fs::write(first.path().join("a.yaml"), yaml("v1")).expect("VOID: write v1");
-    let started = Box::pin(http_startup(&[first.path(), second.path()])).await;
+    // Set before the scan is spawned, through the gateway's test seam: no
+    // race with the scan's settle. The feed hears the catalogue nudge the
+    // exit guard sends as it completes the scan.
+    let (feed, mut nudges) = tokio::sync::mpsc::unbounded_channel();
+    let started = Box::pin(http_startup(&[first.path(), second.path()], |gateway| {
+        gateway
+            .test_seams
+            .capability_scan_panics
+            .store(true, std::sync::atomic::Ordering::Release);
+        gateway.backends.set_change_feed(feed);
+    }))
+    .await;
     let meta = &started.meta;
-    meta.capabilities
-        .read()
-        .clone()
-        .expect("VOID: installed")
-        .scan_panics_after_first_dir
-        .store(true, std::sync::atomic::Ordering::Release);
     let backend = meta.capabilities.read().clone().expect("VOID: installed");
     eventually("the panicked scan is completed", || {
         backend.initial_scan_complete()
@@ -250,6 +274,20 @@ async fn a_startup_scan_that_panics_is_completed_and_a_later_edit_reloads() {
         !backend.initial_scan_loaded_every_directory(),
         "a scan that did not finish is marked partial"
     );
+    // `finish_initial_scan` marks the scan complete, then nudges: wait for it.
+    tokio::time::timeout(Duration::from_secs(30), async {
+        while let Some(nudge) = nudges.recv().await {
+            if matches!(
+                nudge,
+                crate::backend::tools_nudge::ToolsNudge::Catalogue { .. }
+            ) {
+                return;
+            }
+        }
+        panic!("the change feed closed with no catalogue nudge");
+    })
+    .await
+    .expect("the guard announced the catalogue it completed");
     std::fs::write(first.path().join("a.yaml"), yaml("v2-much-longer")).expect("VOID: write v2");
     let description = || {
         backend

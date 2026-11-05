@@ -50,6 +50,11 @@ pub(super) struct TestSeams {
     /// drain begins (MIK-8364 drain-window row).
     #[cfg(test)]
     pub(super) stdio_drain_started: std::sync::Arc<tokio::sync::Notify>,
+    /// Copied onto the capability backend as `start_capability_watcher`
+    /// builds it, before its startup scan is spawned: that scan then panics
+    /// after its first directory, so a row can prove the scan's exit guard.
+    #[cfg(test)]
+    pub(super) capability_scan_panics: std::sync::atomic::AtomicBool,
 }
 
 impl TestSeams {

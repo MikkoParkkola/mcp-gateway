@@ -44,6 +44,13 @@ impl Gateway {
                 &self.config.capabilities.name,
                 executor,
             ));
+            #[cfg(test)]
+            cap_backend.scan_panics_after_first_dir.store(
+                self.test_seams
+                    .capability_scan_panics
+                    .load(std::sync::atomic::Ordering::Acquire),
+                std::sync::atomic::Ordering::Release,
+            );
             // The scan below runs in the background; readiness waits on it.
             cap_backend.begin_initial_scan();
             meta_mcp.set_capabilities(Arc::clone(&cap_backend));
