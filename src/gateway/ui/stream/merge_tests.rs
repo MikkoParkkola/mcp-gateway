@@ -491,3 +491,39 @@ async fn a_replaced_log_rescans_from_the_delivered_row_not_the_old_recovery_posi
     assert_eq!(ids(&out), (3..=401).collect::<Vec<_>>());
     assert!(!out.contains(&Out::Reset));
 }
+
+#[tokio::test(start_paused = true)]
+async fn a_replay_with_no_visible_row_leaves_no_replay_owed() {
+    // Every row is hidden from this viewer: the replay after the reset
+    // delivers none, yet it is done.
+    let fake = Fake::new(0, 64);
+    for _ in 0..3 {
+        fake.append(true);
+    }
+    let stale = LogCursor {
+        inv: Some(Mark {
+            counter: 2,
+            hash16: "ffffffffffffffff".to_owned(),
+        }),
+        gov: None,
+    };
+    let mut merge = LogMerge::connect(Arc::clone(&fake), (), Some(stale)).await;
+    let mut out = Vec::new();
+    while merge.scanning() {
+        let batch = merge.next().await;
+        for o in &batch {
+            merge.ack(o);
+        }
+        out.extend(batch);
+    }
+    assert_eq!(
+        out,
+        vec![Out::Reset],
+        "premise: a reset, then only hidden rows"
+    );
+    assert_eq!(
+        merge.delivered().inv,
+        Some(part(3)),
+        "the finished replay is not owed again: the id resumes at the head"
+    );
+}
