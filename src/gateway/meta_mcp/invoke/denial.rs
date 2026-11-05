@@ -54,7 +54,7 @@ mod tests {
         clear_gate_absent, mark_gate_absent, with_visibility_memo,
     };
 
-    /// A miss the gate marked keeps not_found's code; one it did not keeps
+    /// A miss the gate marked keeps `not_found`'s code; one it did not keeps
     /// none; both answer the same plain error, and the mark is used up.
     #[tokio::test]
     async fn the_miss_records_not_found_only_after_a_gate_miss() {
