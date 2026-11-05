@@ -475,7 +475,9 @@ fn read_config(path: &Path, locked: &lock::Locked) -> Result<Option<(Config, Str
 /// is not a regular file, is refused before anything is written.
 fn read_text(path: &Path) -> Result<Option<String>, String> {
     crate::config::read_config_text(path).map_err(|e| match e {
-        crate::config::UnreadConfig::Refused(why) | crate::config::UnreadConfig::Failed(why) => {
+        crate::config::UnreadConfig::Refused(why)
+        | crate::config::UnreadConfig::Failed(why)
+        | crate::config::UnreadConfig::NotTheConfig(why) => {
             format!("Not saved: {why}")
         }
     })

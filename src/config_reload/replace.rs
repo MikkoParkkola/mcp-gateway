@@ -465,7 +465,9 @@ impl ReloadContext {
             Ok(Some(text)) => text.into_bytes(),
             Ok(None) => return Err(ReplaceError::NoConfigFile),
             Err(UnreadConfig::Refused(why)) => return Err(ReplaceError::ConfigRefused(why)),
-            Err(UnreadConfig::Failed(why)) => return Err(ReplaceError::Failed(why)),
+            Err(UnreadConfig::Failed(why) | UnreadConfig::NotTheConfig(why)) => {
+                return Err(ReplaceError::Failed(why));
+            }
         };
         if let Expected::Revision(seen) = &replace.expected {
             let now = FileRevision::of(&current);

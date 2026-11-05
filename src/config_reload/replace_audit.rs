@@ -198,7 +198,10 @@ impl ReloadContext {
             Err(crate::config::UnreadConfig::Refused(why)) => {
                 return Err(ReplaceError::ConfigRefused(why));
             }
-            Err(crate::config::UnreadConfig::Failed(why)) => {
+            Err(
+                crate::config::UnreadConfig::Failed(why)
+                | crate::config::UnreadConfig::NotTheConfig(why),
+            ) => {
                 return Err(ReplaceError::Failed(format!(
                     "reading the config for the recovery's record failed: {why}"
                 )));

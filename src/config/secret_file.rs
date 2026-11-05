@@ -564,6 +564,9 @@ pub(crate) enum UnreadConfig {
     Refused(String),
     /// Opening or reading it failed; the text names the file and the error.
     Failed(String),
+    /// The config read was handed a replace journal or staged original:
+    /// a caller bug, refused so it fails loudly.
+    NotTheConfig(String),
 }
 
 /// gateway.yaml read the way every loader reads it, for a caller that writes
@@ -575,7 +578,45 @@ pub(crate) enum UnreadConfig {
 /// [`UnreadConfig::Refused`] for a file the guard refuses,
 /// [`UnreadConfig::Failed`] when it cannot be opened or read.
 pub(crate) fn read_config_text(path: &Path) -> std::result::Result<Option<String>, UnreadConfig> {
+    // Refused, not read as a recovery file: switching class here would hide
+    // the wrong caller, and a caller that hands the config read a journal or
+    // staged original must fail loudly.
+    if is_recovery_file(path) {
+        return Err(UnreadConfig::NotTheConfig(format!(
+            "{} is a replace journal or staged original, not a config; only crash recovery reads it",
+            path.display()
+        )));
+    }
     read_text_of(path, SecretFile::Config)
+}
+
+/// `path`, canonical; for a missing file, its canonical parent plus its name.
+fn canonical_or_parent(path: &Path) -> Option<std::path::PathBuf> {
+    std::fs::canonicalize(path).ok().or_else(|| {
+        let parent = path.parent().filter(|p| !p.as_os_str().is_empty());
+        let parent = std::fs::canonicalize(parent.unwrap_or_else(|| Path::new("."))).ok()?;
+        Some(parent.join(path.file_name()?))
+    })
+}
+
+/// Whether `path` is the replace journal or staged original of a config in
+/// its directory, by the same helpers recovery builds them with, compared
+/// canonical: a symlink to one, or a spelling through another directory, is
+/// still that file.
+fn is_recovery_file(path: &Path) -> bool {
+    use crate::config_persistence::journal::{journal_path, original_path};
+    let Some(target) = canonical_or_parent(path) else {
+        return false;
+    };
+    let Some(Ok(entries)) = target.parent().map(std::fs::read_dir) else {
+        return false;
+    };
+    entries.flatten().any(|entry| {
+        let config = entry.path();
+        [journal_path(&config), original_path(&config)]
+            .iter()
+            .any(|file| canonical_or_parent(file).as_ref() == Some(&target))
+    })
 }
 
 /// [`read_config_text`] for a replace journal or its staged original: the

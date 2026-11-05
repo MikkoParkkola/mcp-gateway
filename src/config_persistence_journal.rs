@@ -160,7 +160,9 @@ pub(crate) fn mark_all_renamed(target: &Path) -> std::io::Result<()> {
                 guard_refused(&why),
             ));
         }
-        Err(UnreadConfig::Failed(why)) => return Err(std::io::Error::other(why)),
+        Err(UnreadConfig::Failed(why) | UnreadConfig::NotTheConfig(why)) => {
+            return Err(std::io::Error::other(why));
+        }
     };
     journal.state = State::AllRenamed;
     let bytes = serde_json::to_vec(&journal).map_err(std::io::Error::other)?;
@@ -224,7 +226,7 @@ pub(crate) fn recover(config: &Path) -> Result<Recovered, NotRecovered> {
             return Ok(Recovered::Nothing);
         }
         Err(UnreadConfig::Refused(why)) => return Err(NotRecovered::Refused(guard_refused(&why))),
-        Err(UnreadConfig::Failed(e)) => {
+        Err(UnreadConfig::Failed(e) | UnreadConfig::NotTheConfig(e)) => {
             return Err(NotRecovered::Failed(format!(
                 "{} cannot be read ({e}); {}",
                 path.display(),
@@ -262,7 +264,7 @@ pub(crate) fn recover(config: &Path) -> Result<Recovered, NotRecovered> {
                 Err(UnreadConfig::Refused(why)) => {
                     return Err(NotRecovered::Refused(guard_refused(&why)));
                 }
-                Err(UnreadConfig::Failed(e)) => {
+                Err(UnreadConfig::Failed(e) | UnreadConfig::NotTheConfig(e)) => {
                     return Err(NotRecovered::Failed(format!(
                         "{} cannot be read ({e}); {}",
                         original.display(),
