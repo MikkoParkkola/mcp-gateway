@@ -19,8 +19,9 @@ impl FirewallConfig {
     /// Rule `match` globs are checked only when the firewall is on.
     /// Anomaly thresholds are checked only when `anomaly_detection` is on,
     /// relay settings only when `collusion.action` is not `off`, so a config
-    /// that enables neither loads exactly as before. An empty
-    /// `memory_poisoning.scan_tools` entry is refused whatever is enabled.
+    /// that enables neither loads exactly as before. An empty or
+    /// whitespace-only `memory_poisoning.scan_tools` entry is refused whatever
+    /// is enabled.
     ///
     /// # Errors
     ///
@@ -28,7 +29,7 @@ impl FirewallConfig {
     /// `memory_poisoning.scan_tools` entry.
     pub fn validate(&self) -> Result<(), String> {
         // `scan_tools` is a substring match: an empty entry is in every tool
-        // name, and a whitespace-only one in none a tool has. Refused whatever
+        // name, and a whitespace-only entry is in none. Refused whatever
         // `enabled` says: neither is ever meant.
         let scan_tools = &self.memory_poisoning.scan_tools;
         if let Some(i) = scan_tools.iter().position(|t| t.trim().is_empty()) {
