@@ -9,7 +9,7 @@ use super::support::*;
 
 use crate::gateway::meta_mcp::grant_audit_fixture::{
     CAPS, DECISION_KIND, Endpoint, PERSONAL, capability_backend, decisions, grant, grants,
-    invocations, kept_logger, trace_of,
+    invocations, logger, trace_of,
 };
 use crate::security::audit::AuditFailurePolicy;
 
@@ -45,7 +45,7 @@ pub(super) async fn armed(
 ) -> Armed {
     let dir = Arc::new(tempfile::tempdir().expect("a private log directory"));
     let endpoint = Endpoint::start(hold).await;
-    let log = kept_logger(&dir, policy);
+    let log = logger(&dir, policy);
     let sink = Arc::clone(&log);
     let (state, store) =
         super::super::meta_fixture::test_router_app_state_with_meta(&auth(), None, move |meta| {

@@ -174,9 +174,11 @@ pub(crate) fn grants(rows: Vec<IdentityGrant>) -> LocalIdentityGrantStore {
     LocalIdentityGrantStore::from_grants(rows)
 }
 
-/// A log at `<dir>/audit.jsonl` under `policy`.
+/// A log at `<dir>/audit.jsonl` under `policy`, keeping `dir` until the
+/// log's last handle drops, so a late append from a worker the test left
+/// running lands before `dir` goes.
 pub(crate) fn logger(
-    dir: &tempfile::TempDir,
+    dir: &Arc<tempfile::TempDir>,
     policy: AuditFailurePolicy,
 ) -> Arc<TransparencyLogger> {
     let config = TransparencyLogConfig {
@@ -185,20 +187,11 @@ pub(crate) fn logger(
         key_id: "d3a".to_string(),
         ..TransparencyLogConfig::default()
     };
-    Arc::new(
+    let log = Arc::new(
         TransparencyLogger::open(Arc::new(config))
             .expect("the fixture log opens")
             .with_failure_policy(policy),
-    )
-}
-
-/// [`logger`], keeping `dir` until the log's last handle drops, so a late
-/// append from a worker the test left running lands before `dir` goes.
-pub(crate) fn kept_logger(
-    dir: &Arc<tempfile::TempDir>,
-    policy: AuditFailurePolicy,
-) -> Arc<TransparencyLogger> {
-    let log = logger(dir, policy);
+    );
     log.keep_test_dir(Arc::clone(dir));
     log
 }

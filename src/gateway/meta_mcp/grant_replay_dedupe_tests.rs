@@ -69,7 +69,7 @@ async fn poll_as(
 
 #[tokio::test]
 async fn polling_a_finished_task_records_an_unchanged_decision_once() {
-    let (endpoint, dir) = (Endpoint::start(false).await, tempfile::tempdir().unwrap());
+    let (endpoint, dir) = (Endpoint::start(false).await, Arc::new(tempfile::tempdir().unwrap()));
     let meta = gateway(
         &endpoint,
         vec![grant("g-poll", ALICE, ALICE)],
@@ -147,7 +147,7 @@ fn an_unchanged_decision_is_written_again_after_the_window() {
 /// the same caller and its unchanged decision is not written again.
 #[tokio::test]
 async fn a_relabelled_subject_is_the_same_caller() {
-    let (endpoint, dir) = (Endpoint::start(false).await, tempfile::tempdir().unwrap());
+    let (endpoint, dir) = (Endpoint::start(false).await, Arc::new(tempfile::tempdir().unwrap()));
     let meta = gateway(
         &endpoint,
         vec![grant("g-poll", ALICE, ALICE)],
@@ -174,7 +174,7 @@ async fn a_relabelled_subject_is_the_same_caller() {
 /// Alice read is still a repeat of the first.
 #[tokio::test]
 async fn each_caller_field_keeps_callers_apart() {
-    let (endpoint, dir) = (Endpoint::start(false).await, tempfile::tempdir().unwrap());
+    let (endpoint, dir) = (Endpoint::start(false).await, Arc::new(tempfile::tempdir().unwrap()));
     let meta = gateway(
         &endpoint,
         vec![grant("g-poll", ALICE, ALICE)],
@@ -224,7 +224,7 @@ async fn each_caller_field_keeps_callers_apart() {
 async fn a_suppressed_repeat_note_is_not_published() {
     use std::sync::{Arc, Mutex};
 
-    let (endpoint, dir) = (Endpoint::start(false).await, tempfile::tempdir().unwrap());
+    let (endpoint, dir) = (Endpoint::start(false).await, Arc::new(tempfile::tempdir().unwrap()));
     let meta = gateway(
         &endpoint,
         vec![],

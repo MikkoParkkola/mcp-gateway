@@ -19,7 +19,7 @@ const ALICE: (&str, &str) = ("api_key", "alice");
 
 #[tokio::test]
 async fn a_pre_binding_row_with_a_planted_member_is_refused_when_served() {
-    let (endpoint, dir) = (Endpoint::start(false).await, tempfile::tempdir().unwrap());
+    let (endpoint, dir) = (Endpoint::start(false).await, Arc::new(tempfile::tempdir().unwrap()));
     let meta = gateway(
         &endpoint,
         vec![grant("g-legacy", ALICE, ALICE)],
