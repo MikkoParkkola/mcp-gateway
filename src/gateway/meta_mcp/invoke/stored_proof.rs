@@ -141,6 +141,8 @@ impl crate::gateway::meta_mcp::MetaMcp {
                 super::super::admission::ReplayFacts {
                     audit: deferred.audit,
                     server: deferred.audit_server,
+                    tool: deferred.audit_tool,
+                    slot: deferred.effect_slot,
                 },
             )
             .await,

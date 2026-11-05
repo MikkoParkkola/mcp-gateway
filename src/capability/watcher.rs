@@ -146,7 +146,9 @@ struct LoopState {
     /// when the fingerprint equals the baseline.
     retry_incomplete: bool,
     /// When the last file event (or stale heal) arrived.
-    last_event: Option<Instant>,
+    /// On tokio's clock, so a paused test clock can step the debounce; it
+    /// reads the same monotonic time as `std::time::Instant` otherwise.
+    last_event: Option<tokio::time::Instant>,
     /// The running reload, if any: its join handle, its slow-warning
     /// bookkeeping, and the fingerprint taken before it started.
     in_flight: Option<(tokio::task::JoinHandle<bool>, InFlight, Option<Fingerprint>)>,
@@ -161,6 +163,9 @@ struct LoopState {
     baseline: Option<Fingerprint>,
     /// One-time log lines already emitted.
     logged: LoggedOnce,
+    /// When a due reload was first held for the startup scan; measured from
+    /// here, so later file events do not reset the scan-wait warning.
+    held_since: Option<tokio::time::Instant>,
     /// The walk every fingerprint uses (from the tuning).
     walk: Option<WalkFn>,
 }
@@ -195,6 +200,9 @@ struct LoggedOnce {
     stale_armed: bool,
     /// The walk-bounds skip warning.
     bounds_skip: bool,
+    /// The warning that a pending reload is waiting for the startup scan;
+    /// cleared when that reload starts, so each held reload warns once.
+    held_for_scan: bool,
 }
 
 /// Wait for a real shutdown on a broadcast channel that may also lag or lose
@@ -423,7 +431,7 @@ impl CapabilityWatcher {
                 tokio::select! {
                     maybe = event_rx.recv(), if state.events_open => {
                         if let Some(()) = maybe {
-                            state.last_event = Some(Instant::now());
+                            state.last_event = Some(tokio::time::Instant::now());
                             state.pending_reload = true;
                         } else {
                             state.events_open = false;
@@ -481,6 +489,26 @@ impl CapabilityWatcher {
             && state.in_flight.is_none()
             && state.last_event.is_some_and(|at| at.elapsed() >= debounce)
         {
+            // Never beside the startup scan: its pin-mismatch check would
+            // run against this reload and could unload bytes it restores.
+            // The reload stays pending and starts on the first tick after
+            // the scan completes; this is the only way into every
+            // `spawn_reload` below (the walk paths start only from here).
+            if !backend.initial_scan_complete() {
+                let held_since = *state
+                    .held_since
+                    .get_or_insert_with(tokio::time::Instant::now);
+                if !state.logged.held_for_scan && held_since.elapsed() >= reload_slow {
+                    state.logged.held_for_scan = true;
+                    warn!(
+                        backend = %backend.name,
+                        "capability reload waits for the startup capability scan"
+                    );
+                }
+                return;
+            }
+            state.logged.held_for_scan = false;
+            state.held_since = None;
             if !stale_enabled {
                 let (handle, active) = Self::spawn_reload(Arc::clone(backend), changes.cloned());
                 state.in_flight = Some((handle, active, None));
@@ -530,6 +558,10 @@ impl CapabilityWatcher {
             state.fingerprint_state.stalled_warned = false;
             if state.fingerprint_state.awaiting_before {
                 state.fingerprint_state.awaiting_before = false;
+                debug_assert!(
+                    backend.initial_scan_complete(),
+                    "a reload never starts beside the startup scan"
+                );
                 let (handle, active) = Self::spawn_reload(Arc::clone(backend), changes.cloned());
                 state.in_flight = Some((handle, active, found));
                 state.pending_reload = false;
@@ -546,6 +578,10 @@ impl CapabilityWatcher {
                     walk.abort();
                 }
                 state.fingerprint_state.stalled_warned = false;
+                debug_assert!(
+                    backend.initial_scan_complete(),
+                    "a reload never starts beside the startup scan"
+                );
                 let (handle, active) = Self::spawn_reload(Arc::clone(backend), changes.cloned());
                 state.in_flight = Some((handle, active, None));
                 state.pending_reload = false;
@@ -597,7 +633,7 @@ impl CapabilityWatcher {
             return;
         }
         state.pending_reload = true;
-        let now = Instant::now();
+        let now = tokio::time::Instant::now();
         state.last_event = Some(now.checked_sub(debounce).unwrap_or(now));
     }
 

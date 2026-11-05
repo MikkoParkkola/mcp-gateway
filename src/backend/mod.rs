@@ -85,10 +85,7 @@ pub(crate) use era::start_detached_http;
 pub(crate) use input_keys::{KeyAnswer, KeyAnswerKind, Lens};
 #[cfg(feature = "webui")]
 pub(crate) use metadata::{PreviewListing, list_tools_for_preview};
-#[cfg(test)]
 pub(crate) use pool::PoolKey;
-#[cfg(not(test))]
-use pool::PoolKey;
 use pool::PooledEntry;
 pub(crate) use probe::HealthTicker;
 
@@ -643,6 +640,12 @@ mod silence_resend_tests;
 #[cfg(test)]
 #[path = "slot_eviction_tests.rs"]
 mod slot_eviction_tests;
+
+// MIK-9216.EFFECT.1: the slot a settled execution stores, and the exact
+// lookup its replay makes.
+#[cfg(test)]
+#[path = "slot_effect_tests.rs"]
+mod slot_effect_tests;
 
 #[cfg(test)]
 #[path = "send_check_eviction_tests.rs"]

@@ -209,3 +209,42 @@ async fn rejected_credentials_create_no_store_entry() {
     assert_eq!(runtime.buckets.len(), 1, "the key's bucket");
     assert_eq!(runtime.breakers.len(), 1, "the key's breaker");
 }
+
+/// Each store counts from its own anchor: a store built in one paused runtime
+/// never takes its origin from another runtime's timeline, so a test that
+/// advances its clock moves no other test's buckets. With one shared anchor,
+/// a store whose runtime had run an hour ahead would fix the origin in the
+/// future, and a later store's clock would read zero until it caught up.
+#[test]
+fn each_store_counts_from_its_own_anchor() {
+    let paused = || {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .start_paused(true)
+            .build()
+            .expect("a paused runtime")
+    };
+    let rate = std::num::NonZeroU32::new(1).expect("one per minute");
+    let ahead = paused().block_on(async {
+        tokio::time::advance(Duration::from_secs(3600)).await;
+        let store = AuthRuntime::default();
+        assert!(store.admit("k".to_owned(), rate), "premise: first request");
+        store
+    });
+    paused().block_on(async {
+        let store = AuthRuntime::default();
+        assert_ne!(store.anchor, ahead.anchor, "two stores share one anchor");
+        assert!(store.admit("k".to_owned(), rate), "first request");
+        assert!(
+            !store.admit("k".to_owned(), rate),
+            "the rate of one is spent"
+        );
+        tokio::time::advance(Duration::from_secs(59)).await;
+        assert!(!store.admit("k".to_owned(), rate), "one second early");
+        tokio::time::advance(Duration::from_secs(1)).await;
+        assert!(
+            store.admit("k".to_owned(), rate),
+            "refilled at 60 s on this store's own clock"
+        );
+    });
+}

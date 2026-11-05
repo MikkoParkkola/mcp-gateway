@@ -18,7 +18,7 @@ use super::warn_limit::{WarnedAt, first_warn};
 mod plan;
 #[path = "admission_replay.rs"]
 mod replay;
-pub(crate) use replay::{ReplayFacts, ReplayOrigin, ReplayTarget};
+pub(crate) use replay::{ReplayFacts, ReplayOrigin, ReplayTarget, StoredSteps};
 #[path = "admission_era.rs"]
 mod era;
 #[path = "admission_operation.rs"]
@@ -44,6 +44,9 @@ pub(crate) struct SyncLease {
     steps: Mutex<Vec<(String, String)>>,
     /// The binding each step ran under (MIK-8407), kept for a replay.
     bindings: Mutex<Vec<stored::StepBinding>>,
+    /// The slot this execution's dispatches ran under, for a replay's
+    /// declared effect.
+    effect_slot: Mutex<stored::SlotNote>,
     /// MIK-8747: the era its stored delivery is shaped for (meta path only).
     era: Option<crate::protocol::meta::Era>,
 }
@@ -73,6 +76,11 @@ impl SyncLease {
     /// one, so its replay refuses (MIK-8407).
     pub(crate) fn note_binding(&self, (server, tool): (&str, &str), binding: Option<&str>) {
         stored::note_distinct(&mut self.bindings.lock(), (server, tool), binding);
+    }
+
+    /// Note the slot a dispatch of this execution ran under.
+    pub(crate) fn note_effect_slot(&self, slot: crate::backend::PoolKey) {
+        self.effect_slot.lock().note(slot);
     }
 
     /// The steps noted so far, for the invoke stage rows (MIK-8488).
@@ -136,6 +144,7 @@ impl SyncLease {
         let audit = self.audit.into_inner();
         let steps = self.steps.into_inner();
         let bindings = self.bindings.into_inner();
+        let effect_slot = self.effect_slot.into_inner().settled();
         if dispatches == 0
             || response.result.as_ref().is_some_and(|result| {
                 crate::protocol::mrtr::InputRequired::claims_input_required(result)
@@ -174,6 +183,7 @@ impl SyncLease {
             dispatched: Some(steps),
             era,
             bindings,
+            effect_slot,
         };
         let retained = lease.complete_secured(&serde_json::to_value(stored).unwrap_or(Value::Null))
             == Settlement::Retained;
@@ -206,13 +216,15 @@ pub(crate) enum SyncAdmission {
     /// for a plan; it steers the route-stage deferral), and the steps it
     /// dispatched (`None` in a record that predates the list, MIK-8361),
     /// which a plan replay proves live before it is served (MIK-8406), and
-    /// the binding each step ran under, judged before serving (MIK-8407).
+    /// the binding each step ran under, judged before serving (MIK-8407),
+    /// and the one slot it ran under, which its declared effect is read from.
     Replay(
         JsonRpcResponse,
         Option<ReplayAudit>,
         Option<ReplayTarget>,
         Option<Vec<(String, String)>>,
         Vec<stored::StepBinding>,
+        Option<crate::backend::PoolKey>,
     ),
 }
 
@@ -404,14 +416,7 @@ impl MetaMcp {
         match admission {
             Ok(Admission::Owned(lease)) => {
                 super::invoke::relay::note_sync_capture_key(replay_key.as_ref(), &round);
-                Ok(SyncAdmission::Owned(SyncLease {
-                    state: Mutex::new((lease, 0)),
-                    playbook: None,
-                    audit: Mutex::new(None),
-                    steps: Mutex::new(Vec::new()),
-                    bindings: Mutex::new(Vec::new()),
-                    era: None,
-                }))
+                Ok(SyncAdmission::Owned(SyncLease::fresh(lease)))
             }
             Ok(Admission::Replay(bytes)) => {
                 super::invoke::relay::note_sync_lookup_key(replay_key.as_ref(), &round);
@@ -424,12 +429,14 @@ impl MetaMcp {
                     Error::json_rpc(409, "Secured execution result is unavailable")
                 })?;
                 self.serve_stored(&mut response, request_id);
+                let (ran, bound, slot) = stored::stored_steps(&bytes);
                 Ok(SyncAdmission::Replay(
                     response,
                     audit,
                     single_target,
-                    stored::dispatched_steps(&bytes),
-                    stored::stored_bindings(&bytes),
+                    ran,
+                    bound,
+                    slot,
                 ))
             }
             Ok(Admission::InFlight) => {
@@ -629,7 +636,7 @@ impl MetaMcp {
         // gate, and any other admission answer is the one a missing step
         // gets, never the step's reason (ruling A).
         let ran = match &admission {
-            Ok(SyncAdmission::Replay(_, _, _, dispatched, _)) => Some(dispatched),
+            Ok(SyncAdmission::Replay(_, _, _, dispatched, _, _)) => Some(dispatched),
             _ => None,
         };
         if let Some(dispatched) = ran
@@ -762,6 +769,10 @@ impl MetaMcp {
 #[cfg(test)]
 #[path = "admission_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "admission_slot_tests.rs"]
+mod slot_tests;
 
 #[cfg(test)]
 #[path = "admission_round_tests.rs"]

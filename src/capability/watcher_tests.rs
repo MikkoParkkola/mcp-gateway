@@ -636,3 +636,6 @@ fn slow_reload_warns_once_and_is_not_cancelled() {
 
 #[path = "watcher_heal_tests.rs"]
 mod heal;
+
+#[path = "watcher_scan_gate_tests.rs"]
+mod scan_gate;
