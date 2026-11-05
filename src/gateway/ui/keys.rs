@@ -24,6 +24,12 @@ use super::guard::Guard;
 #[derive(Clone, Default)]
 pub(super) struct TableReads(pub(super) Arc<std::sync::atomic::AtomicUsize>);
 
+/// Under test, a request may carry a hook that runs right after the file read
+/// returns, so a row can rewrite the file between the read and the answer.
+#[cfg(test)]
+#[derive(Clone)]
+pub(super) struct AfterRead(pub(super) Arc<dyn Fn() + Send + Sync>);
+
 fn rfc3339(at: DateTime<Utc>) -> String {
     at.to_rfc3339_opts(SecondsFormat::Secs, true)
 }

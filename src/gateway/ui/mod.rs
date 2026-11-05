@@ -693,6 +693,10 @@ fn call_windows(
 mod keys_tests;
 
 #[cfg(test)]
+#[path = "keys_file_tests.rs"]
+mod keys_file_tests;
+
+#[cfg(test)]
 mod tests;
 
 #[cfg(test)]
