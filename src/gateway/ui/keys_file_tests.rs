@@ -246,11 +246,41 @@ async fn r2_a_rewrite_after_the_read_leaves_revision_and_keys_matched() {
     };
     let live = table(vec![key("alpha", ALPHA, None)]);
     let answer = get(Some(&path), live, Some(AfterRead(rewrite))).await;
+    // The premise: the rewrite really ran between the read and the answer,
+    // or this is an ordinary GET proving nothing about one read.
+    let after = std::fs::read_to_string(&path).expect("gateway.yaml");
+    assert!(after.contains("gamma"), "the after-read rewrite never ran");
     assert_eq!(names(&answer), vec![json!("alpha"), json!("beta")]);
     assert_eq!(
         answer["revision"],
         json!(FileRevision::of(yaml().as_bytes()).as_str())
     );
+}
+
+/// R1's boundary, in the source: GET builds each entry field by field from
+/// an allowlist and never serialises a key, so a field added to
+/// `ApiKeyConfig` (a digest, a principal) cannot reach the answer unseen.
+#[test]
+fn r1_get_never_serialises_a_key() {
+    let text = std::fs::read_to_string(format!(
+        "{}/src/gateway/ui/keys.rs",
+        env!("CARGO_MANIFEST_DIR")
+    ))
+    .expect("keys.rs");
+    let code = crate::test_source_text::sanitize(&crate::test_source_text::production_text(&text));
+    for serialiser in [
+        "to_value(",
+        "to_string(",
+        "to_vec(",
+        "to_writer(",
+        "Serialize",
+    ] {
+        assert!(!code.contains(serialiser), "keys.rs uses {serialiser}");
+    }
+    // A key passed whole into `json!` serialises it too.
+    for whole in ["json!(key)", "json!(config", "json!(live)"] {
+        assert!(!code.contains(whole), "keys.rs serialises {whole}");
+    }
 }
 
 /// R3: no file, and a file that cannot be loaded, each say so, carry no
