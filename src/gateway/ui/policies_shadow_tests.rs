@@ -19,10 +19,10 @@ fn sh(ty: &str, by: &[usize]) -> (String, Vec<String>) {
 #[test]
 fn r3a_a_star_rule_shadows_a_later_rule() {
     let model = read_model(&rules(json!([
-        { "match": "*", "action": "warn", "scan": ["pii"] },
-        { "match": "send_*", "action": "block", "scan": ["pii"] }
+        { "match": "*", "action": "warn", "scan": ["shell_injection"] },
+        { "match": "send_*", "action": "block", "scan": ["shell_injection"] }
     ])));
-    assert_eq!(shadowed(&model, 1), vec![sh("pii", &[0])]);
+    assert_eq!(shadowed(&model, 1), vec![sh("shell_injection", &[0])]);
     assert_eq!(shadowed(&model, 0), vec![]);
 }
 
@@ -30,12 +30,12 @@ fn r3a_a_star_rule_shadows_a_later_rule() {
 #[test]
 fn r3b_an_identical_match_shadows_each_type() {
     let model = read_model(&rules(json!([
-        { "match": "send_*", "action": "warn", "scan": ["pii", "credentials"] },
-        { "match": "send_*", "action": "block", "scan": ["pii", "credentials"] }
+        { "match": "send_*", "action": "warn", "scan": ["shell_injection", "credentials"] },
+        { "match": "send_*", "action": "block", "scan": ["shell_injection", "credentials"] }
     ])));
     assert_eq!(
         shadowed(&model, 1),
-        vec![sh("credentials", &[0]), sh("pii", &[0])]
+        vec![sh("credentials", &[0]), sh("shell_injection", &[0])]
     );
 }
 
@@ -44,13 +44,13 @@ fn r3b_an_identical_match_shadows_each_type() {
 /// rule behind a `*` rule.
 #[test]
 fn r3c_what_is_not_shadowing() {
-    let later = json!({ "match": "send_mail", "action": "block", "scan": ["pii"] });
+    let later = json!({ "match": "send_mail", "action": "block", "scan": ["shell_injection"] });
     for earlier in [
-        json!({ "match": "send_*", "action": "warn", "scan": ["pii"] }),
+        json!({ "match": "send_*", "action": "warn", "scan": ["shell_injection"] }),
         json!({ "match": "*", "action": "warn", "scan": ["credentials"] }),
-        json!({ "match": "*", "action": "warn", "scan": ["pii"], "servers": ["a"] }),
-        json!({ "match": "*", "action": "warn", "scan": ["pii"], "keys": ["k"] }),
-        json!({ "match": "*", "action": "warn", "scan": ["pii"], "except": [{ "tool": "t" }] }),
+        json!({ "match": "*", "action": "warn", "scan": ["shell_injection"], "servers": ["a"] }),
+        json!({ "match": "*", "action": "warn", "scan": ["shell_injection"], "keys": ["k"] }),
+        json!({ "match": "*", "action": "warn", "scan": ["shell_injection"], "except": [{ "tool": "t" }] }),
         json!({ "match": "*", "action": "block", "allowed_roots": ["/srv"], "path_args": ["p"] }),
     ] {
         let model = read_model(&rules(json!([earlier.clone(), later.clone()])));
@@ -63,22 +63,24 @@ fn r3c_what_is_not_shadowing() {
     assert_eq!(shadowed(&model, 1), vec![], "a root rule is never shadowed");
 }
 
-/// R3d: per type: behind an earlier `pii` rule, a later rule deciding `pii`
-/// and `credentials` is shadowed for `pii` only.
+/// R3d: per type: behind an earlier `shell_injection` rule, a later rule
+/// deciding `shell_injection` and `credentials` is shadowed for
+/// `shell_injection` only.
 #[test]
 fn r3d_shadowing_is_per_type() {
     let model = read_model(&rules(json!([
-        { "match": "*", "action": "warn", "scan": ["pii"] },
-        { "match": "*", "action": "block", "scan": ["pii", "credentials"] }
+        { "match": "*", "action": "warn", "scan": ["shell_injection"] },
+        { "match": "*", "action": "block", "scan": ["shell_injection", "credentials"] }
     ])));
-    assert_eq!(shadowed(&model, 1), vec![sh("pii", &[0])]);
+    assert_eq!(shadowed(&model, 1), vec![sh("shell_injection", &[0])]);
 }
 
-/// The offered types, in `ScanType` order: every type but the two the
-/// folder check alone produces (R3e pins the set).
-const OFFERED: [&str; 11] = [
+/// The types a rule decides, in `ScanType` order: every rule-listable type
+/// but `pii` (no scanner produces it), `budget_exceeded` (both budget
+/// outcomes force a block past the rules) and `collusion_relay` (the relay
+/// gate alone decides it). R3e pins the set.
+const DECIDED: [&str; 8] = [
     "credentials",
-    "pii",
     "prompt_injection",
     "shell_injection",
     "path_traversal",
@@ -86,37 +88,35 @@ const OFFERED: [&str; 11] = [
     "sequence_anomaly",
     "memory_poisoning",
     "cross_tenant_reach",
-    "budget_exceeded",
-    "collusion_relay",
 ];
 
-/// R3e: an empty `scan` decides every offered type: behind an empty-scan
-/// `*` rule, an empty-scan rule is shadowed for every offered type, and a
-/// `pii` rule for `pii` alone.
+/// R3e: an empty `scan` decides every type a rule decides: behind an
+/// empty-scan `*` rule, an empty-scan rule is shadowed for each of the 8,
+/// and a `shell_injection` rule for `shell_injection` alone.
 #[test]
-fn r3e_an_empty_scan_decides_every_offered_type() {
+fn r3e_an_empty_scan_decides_every_decided_type() {
     let model = read_model(&rules(json!([
         { "match": "*", "action": "warn" },
         { "match": "*", "action": "block" },
-        { "match": "send_*", "action": "block", "scan": ["pii"] }
+        { "match": "send_*", "action": "block", "scan": ["shell_injection"] }
     ])));
-    let every: Vec<_> = OFFERED.iter().map(|t| sh(t, &[0])).collect();
+    let every: Vec<_> = DECIDED.iter().map(|t| sh(t, &[0])).collect();
     assert_eq!(shadowed(&model, 1), every);
-    assert_eq!(shadowed(&model, 2), vec![sh("pii", &[0, 1])]);
+    assert_eq!(shadowed(&model, 2), vec![sh("shell_injection", &[0, 1])]);
 }
 
 /// R3f: A's action and reason do not matter, nor does B's scoping.
 #[test]
 fn r3f_shadow_eligibility_is_not_editability() {
     for earlier in [
-        json!({ "match": "*", "action": "allow", "scan": ["pii"] }),
-        json!({ "match": "*", "action": "block", "scan": ["pii"], "reason": "r" }),
+        json!({ "match": "*", "action": "allow", "scan": ["shell_injection"] }),
+        json!({ "match": "*", "action": "block", "scan": ["shell_injection"], "reason": "r" }),
     ] {
         let model = read_model(&rules(json!([
             earlier.clone(),
-            { "match": "send_*", "action": "warn", "scan": ["pii"], "servers": ["mail"] }
+            { "match": "send_*", "action": "warn", "scan": ["shell_injection"], "servers": ["mail"] }
         ])));
-        assert_eq!(shadowed(&model, 1), vec![sh("pii", &[0])], "{earlier}");
+        assert_eq!(shadowed(&model, 1), vec![sh("shell_injection", &[0])], "{earlier}");
     }
 }
 
@@ -124,8 +124,8 @@ fn r3f_shadow_eligibility_is_not_editability() {
 #[test]
 fn r3g_a_later_rule_never_shadows_an_earlier_one() {
     let model = read_model(&rules(json!([
-        { "match": "send_*", "action": "block", "scan": ["pii"] },
-        { "match": "*", "action": "warn", "scan": ["pii"] }
+        { "match": "send_*", "action": "block", "scan": ["shell_injection"] },
+        { "match": "*", "action": "warn", "scan": ["shell_injection"] }
     ])));
     assert_eq!(shadowed(&model, 0), vec![]);
 }
@@ -135,11 +135,11 @@ fn r3g_a_later_rule_never_shadows_an_earlier_one() {
 #[test]
 fn r3h_every_shadower_once_per_type() {
     let model = read_model(&rules(json!([
-        { "match": "*", "action": "warn", "scan": ["pii", "pii"] },
-        { "match": "send_*", "action": "warn", "scan": ["pii"] },
-        { "match": "send_*", "action": "block", "scan": ["pii", "pii"] }
+        { "match": "*", "action": "warn", "scan": ["shell_injection", "shell_injection"] },
+        { "match": "send_*", "action": "warn", "scan": ["shell_injection"] },
+        { "match": "send_*", "action": "block", "scan": ["shell_injection", "shell_injection"] }
     ])));
-    assert_eq!(shadowed(&model, 2), vec![sh("pii", &[0, 1])]);
+    assert_eq!(shadowed(&model, 2), vec![sh("shell_injection", &[0, 1])]);
 }
 
 /// R3i: with the firewall off, an earlier `*` rule with a present-but-empty
@@ -147,11 +147,11 @@ fn r3h_every_shadower_once_per_type() {
 #[test]
 fn r3i_present_but_empty_scoping_does_not_shadow() {
     for field in ["servers", "keys", "except"] {
-        let mut earlier = json!({ "match": "*", "action": "warn", "scan": ["pii"] });
+        let mut earlier = json!({ "match": "*", "action": "warn", "scan": ["shell_injection"] });
         earlier[field] = json!([]);
         let mut config = rules(json!([
             earlier,
-            { "match": "send_*", "action": "block", "scan": ["pii"] }
+            { "match": "send_*", "action": "block", "scan": ["shell_injection"] }
         ]));
         config.security.firewall.enabled = false;
         assert_eq!(shadowed(&read_model(&config), 1), vec![], "{field}");
@@ -196,7 +196,7 @@ fn r9_where_a_scoped_rule_applies_differently() {
         (json!({ "except": [{ "tool": "t" }] }), false, false),
     ];
     for (scope, keyed, served) in cases {
-        let mut shape = json!({ "match": "*", "action": "block", "scan": ["pii"] });
+        let mut shape = json!({ "match": "*", "action": "block", "scan": ["shell_injection"] });
         for (k, v) in scope.as_object().expect("an object") {
             shape[k] = v.clone();
         }
@@ -216,7 +216,7 @@ fn r9_where_a_scoped_rule_applies_differently() {
     }
     // R9e: present-but-empty scoping annotates as present (firewall off).
     let mut config =
-        rules(json!([{ "match": "*", "action": "block", "scan": ["pii"], "keys": [] }]));
+        rules(json!([{ "match": "*", "action": "block", "scan": ["shell_injection"], "keys": [] }]));
     config.security.firewall.enabled = false;
     assert_eq!(
         rule(&read_model(&config), 0)["scope_differs"]["key_not_known"],
@@ -355,14 +355,14 @@ fn path(i: usize) -> String {
 #[test]
 fn r2a_the_rules_in_order_with_their_paths() {
     let model = read_model(&rules(json!([
-        { "match": "*", "action": "warn", "scan": ["pii"] },
+        { "match": "*", "action": "warn", "scan": ["shell_injection"] },
         { "match": "send_*", "action": "block", "servers": ["mail"],
           "except": [{ "key": "ops" }], "reason": "outbound" }
     ])));
     let first = rule(&model, 0);
     assert_eq!(first["path"], path(0));
     assert_eq!(first["match"], "*");
-    assert_eq!(first["scan"], json!(["pii"]));
+    assert_eq!(first["scan"], json!(["shell_injection"]));
     assert_eq!(first["servers"], Value::Null);
     let second = rule(&model, 1);
     assert_eq!(second["path"], path(1));
@@ -380,15 +380,15 @@ fn r2a_the_rules_in_order_with_their_paths() {
 fn r2b_editability_and_its_reasons() {
     let cases = [
         (
-            json!({ "match": "*", "action": "warn", "scan": ["pii"] }),
+            json!({ "match": "*", "action": "warn", "scan": ["shell_injection"] }),
             json!([]),
         ),
         (
-            json!({ "match": "*", "action": "allow", "scan": ["pii"] }),
+            json!({ "match": "*", "action": "allow", "scan": ["shell_injection"] }),
             json!(["allow"]),
         ),
         (
-            json!({ "match": "*", "action": "warn", "scan": ["pii"], "reason": "r" }),
+            json!({ "match": "*", "action": "warn", "scan": ["shell_injection"], "reason": "r" }),
             json!(["reason"]),
         ),
         (
@@ -396,15 +396,15 @@ fn r2b_editability_and_its_reasons() {
             json!(["empty_scan"]),
         ),
         (
-            json!({ "match": "*", "action": "warn", "scan": ["pii"], "servers": ["a"] }),
+            json!({ "match": "*", "action": "warn", "scan": ["shell_injection"], "servers": ["a"] }),
             json!(["servers"]),
         ),
         (
-            json!({ "match": "*", "action": "warn", "scan": ["pii"], "keys": ["k"] }),
+            json!({ "match": "*", "action": "warn", "scan": ["shell_injection"], "keys": ["k"] }),
             json!(["keys"]),
         ),
         (
-            json!({ "match": "*", "action": "warn", "scan": ["pii"], "except": [{ "tool": "t" }] }),
+            json!({ "match": "*", "action": "warn", "scan": ["shell_injection"], "except": [{ "tool": "t" }] }),
             json!(["except"]),
         ),
         (
@@ -412,11 +412,11 @@ fn r2b_editability_and_its_reasons() {
             json!(["empty_scan", "root"]),
         ),
         (
-            json!({ "match": "*", "action": "warn", "scan": ["pii"], "allowed_roots": ["/srv"] }),
+            json!({ "match": "*", "action": "warn", "scan": ["shell_injection"], "allowed_roots": ["/srv"] }),
             json!(["root"]),
         ),
         (
-            json!({ "match": "*", "action": "warn", "scan": ["pii"], "path_args": ["path"] }),
+            json!({ "match": "*", "action": "warn", "scan": ["shell_injection"], "path_args": ["path"] }),
             json!(["root"]),
         ),
     ];
@@ -442,6 +442,77 @@ fn r2d_an_unoffered_type_is_read_only() {
     );
 }
 
+/// The types the Policies screen offers (ADR-029), in `ScanType` order.
+const OFFERED: [&str; 6] = [
+    "credentials",
+    "prompt_injection",
+    "shell_injection",
+    "path_traversal",
+    "sql_injection",
+    "memory_poisoning",
+];
+
+/// R2h: a one-type `warn` rule is editable exactly when its type is offered:
+/// each of the 6, and none of the other 5 rule-listable types, which are
+/// read-only `unoffered_type`.
+#[test]
+fn r2h_only_the_six_offered_types_are_editable() {
+    let unoffered = [
+        "pii",
+        "sequence_anomaly",
+        "cross_tenant_reach",
+        "budget_exceeded",
+        "collusion_relay",
+    ];
+    for ty in OFFERED.iter().chain(&unoffered) {
+        let model = read_model(&rules(json!([{ "match": "*", "action": "warn", "scan": [ty] }])));
+        let reasons = if OFFERED.contains(ty) {
+            json!([])
+        } else {
+            json!(["unoffered_type"])
+        };
+        assert_eq!(rule(&model, 0)["read_only_reasons"], reasons, "{ty}");
+    }
+}
+
+/// R3j: a rule for a type no rule decides shadows nothing and is shadowed
+/// for nothing (`pii`, `collusion_relay`, `budget_exceeded`); the guard
+/// types a rule does decide (`sequence_anomaly`, `cross_tenant_reach`) still
+/// shadow.
+#[test]
+fn r3j_only_decided_types_shadow() {
+    for ty in ["pii", "collusion_relay", "budget_exceeded"] {
+        let model = read_model(&rules(json!([
+            { "match": "*", "action": "warn", "scan": [ty] },
+            { "match": "*", "action": "block", "scan": [ty] }
+        ])));
+        assert_eq!(shadowed(&model, 1), vec![], "{ty}");
+    }
+    for ty in ["sequence_anomaly", "cross_tenant_reach"] {
+        let model = read_model(&rules(json!([
+            { "match": "*", "action": "warn", "scan": [ty] },
+            { "match": "*", "action": "block", "scan": [ty] }
+        ])));
+        assert_eq!(shadowed(&model, 1), vec![sh(ty, &[0])], "{ty}");
+    }
+}
+
+/// R3k: a mixed list decides only its decided types: `[credentials,
+/// collusion_relay]` shadows a later `credentials` rule for `credentials`,
+/// and is itself read-only `unoffered_type`.
+#[test]
+fn r3k_a_mixed_list_decides_its_decided_types() {
+    let model = read_model(&rules(json!([
+        { "match": "*", "action": "warn", "scan": ["credentials", "collusion_relay"] },
+        { "match": "*", "action": "block", "scan": ["credentials", "collusion_relay"] }
+    ])));
+    assert_eq!(shadowed(&model, 1), vec![sh("credentials", &[0])]);
+    assert_eq!(
+        rule(&model, 0)["read_only_reasons"],
+        json!(["unoffered_type"])
+    );
+}
+
 /// R2e: a present-but-empty collection counts as present.
 #[test]
 fn r2e_present_but_empty_is_present() {
@@ -452,7 +523,7 @@ fn r2e_present_but_empty_is_present() {
         ("allowed_roots", "root"),
         ("path_args", "root"),
     ] {
-        let mut shape = json!({ "match": "*", "action": "warn", "scan": ["pii"] });
+        let mut shape = json!({ "match": "*", "action": "warn", "scan": ["shell_injection"] });
         shape[field] = json!([]);
         let mut config = rules(json!([shape]));
         config.security.firewall.enabled = false;
@@ -473,7 +544,7 @@ fn r2e_present_but_empty_is_present() {
 /// R2f: two identical rules are both listed with their own paths.
 #[test]
 fn r2f_identical_rules_keep_their_own_paths() {
-    let shape = json!({ "match": "*", "action": "warn", "scan": ["pii"] });
+    let shape = json!({ "match": "*", "action": "warn", "scan": ["shell_injection"] });
     let model = read_model(&rules(json!([shape.clone(), shape])));
     assert_eq!(rule(&model, 1)["path"], path(1));
 }
