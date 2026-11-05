@@ -224,9 +224,9 @@ fn r9_where_a_scoped_rule_applies_differently() {
     );
 }
 
-/// Production constructions of `needle` per file under `src/`: comments,
-/// `use` lines, match arms and comparisons are not constructions, and test
-/// code (`*_tests.rs`, `tests/` and `*_tests/` directories, an inline `#[cfg(test)]` module
+/// Production constructions of `needle` per file under `src/`: `use` lines,
+/// match arms and comparisons are not constructions; comments, string
+/// literals and test code (`*_tests.rs`, `tests/` and `*_tests/` directories, an inline `#[cfg(test)]` module
 /// and everything after it) is skipped.
 fn constructions(needle: &str) -> std::collections::BTreeMap<String, usize> {
     fn walk(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
@@ -251,22 +251,13 @@ fn constructions(needle: &str) -> std::collections::BTreeMap<String, usize> {
     let mut found = std::collections::BTreeMap::new();
     for file in files {
         let text = std::fs::read_to_string(&file).expect("read");
-        // Cut at the first inline test module (`#[cfg(test)]` then a `mod`
-        // line opening a block); a `mod x_tests;` declaration is not one.
-        let cut = text
-            .match_indices("#[cfg(test)]\nmod ")
-            .find(|(i, _)| {
-                text[*i..]
-                    .lines()
-                    .nth(1)
-                    .is_some_and(|l| l.trim_end().ends_with('{'))
-            })
-            .map_or(text.len(), |(i, _)| i);
-        let production = &text[..cut];
+        // Test items blanked, then comments and string literals.
+        let production =
+            crate::test_source_text::sanitize(&crate::test_source_text::production_text(&text));
         let count = production
             .lines()
             .map(str::trim_start)
-            .filter(|l| !l.starts_with("//") && !l.starts_with("use "))
+            .filter(|l| !l.starts_with("use "))
             .filter(|l| l.contains(needle) && !l.contains("=>") && !l.contains("=="))
             .count();
         if count > 0 {
@@ -274,7 +265,8 @@ fn constructions(needle: &str) -> std::collections::BTreeMap<String, usize> {
                 .strip_prefix(root)
                 .expect("under the crate")
                 .to_string_lossy()
-                .into_owned();
+                // One separator on every platform, as the table spells it.
+                .replace('\\', "/");
             found.insert(rel, count);
         }
     }
