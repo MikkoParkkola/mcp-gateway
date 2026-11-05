@@ -26,7 +26,7 @@ pub(crate) async fn fixture_hardened_signed_built(
 
 /// [`fixture_hardened_signed_built`] with `log` as the state's transparency
 /// log; `build` arms the same log on the `MetaMcp`, so both routes record
-/// their deliveries in one file (MIK-8689).
+/// their deliveries in one file.
 pub(crate) async fn fixture_hardened_signed_logged(
     answer: Answer,
     log: Arc<crate::security::TransparencyLogger>,
@@ -51,7 +51,7 @@ pub(crate) async fn fixture_signed_relayed(answer: Answer) -> Fx {
 }
 
 /// [`fixture_signed_relayed`] with `log` as the state's transparency log,
-/// `build` arming the signed `MetaMcp` (MIK-8689: a delivery-record failure
+/// `build` arming the signed `MetaMcp` (where a delivery-record failure
 /// meets the relay commit).
 #[cfg(feature = "firewall")]
 pub(crate) async fn fixture_signed_relayed_logged(
@@ -70,7 +70,7 @@ pub(crate) async fn fixture_signed_relayed_logged(
 }
 
 /// [`fixture_firewalled`] with relay detection on for `alpha:read` and
-/// `alpha:resources/read`, so the direct route stages receipts (MIK-8022).
+/// `alpha:resources/read`, so the direct route stages receipts.
 #[cfg(feature = "firewall")]
 pub(crate) async fn fixture_relayed(answer: Answer) -> Fx {
     RELAY.with(|r| r.set(true));

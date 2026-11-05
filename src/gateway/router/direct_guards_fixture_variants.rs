@@ -6,7 +6,7 @@
 
 use super::*;
 
-/// [`fixture`] with `security.sanitize_input` set to `on` (MIK-8137 b3).
+/// [`fixture`] with `security.sanitize_input` set to `on`.
 pub(crate) async fn fixture_sanitizing(answer: Answer, on: bool) -> Fx {
     SANITIZE.with(|s| s.set(on));
     let fx = fixture_inner(answer, false, |meta| meta).await;
@@ -22,8 +22,8 @@ pub(crate) async fn auth_off<T, F: std::future::Future<Output = T>>(build: F) ->
     fx
 }
 
-/// Any fixture builder, run with `security.sanitize_input` = `on` (MIK-8154
-/// rows: the firewalled and code-mode fixtures under sanitization).
+/// Any fixture builder, run with `security.sanitize_input` = `on` (the
+/// firewalled and code-mode fixtures under sanitization).
 pub(crate) async fn sanitizing<T, F: std::future::Future<Output = T>>(on: bool, build: F) -> T {
     SANITIZE.with(|s| s.set(on));
     let fx = build.await;
@@ -32,8 +32,8 @@ pub(crate) async fn sanitizing<T, F: std::future::Future<Output = T>>(on: bool, 
 }
 
 /// Run `build` with the input-schema check off on both backends and nothing
-/// else armed (unsigned), so a directive-named argument reaches dispatch
-/// (MIK-8663 T2). [`fixture_hardened_signed_schema_off`] also arms signing.
+/// else armed (unsigned), so a directive-named argument reaches dispatch.
+/// [`fixture_hardened_signed_schema_off`] also arms signing.
 pub(crate) async fn schema_off<T, F: std::future::Future<Output = T>>(build: F) -> T {
     SCHEMA_OFF.with(|s| s.set(true));
     let fx = build.await;
@@ -52,7 +52,7 @@ pub(crate) async fn fixture_modern_off(answer: Answer) -> Fx {
 
 /// [`fixture_built`] with a static bearer configured, and an API key named
 /// `bearer` (its secret is `bearer`): two credentials sharing one display
-/// name (MIK-8507).
+/// name.
 pub(crate) async fn fixture_with_bearer(
     answer: Answer,
     build: impl FnOnce(MetaMcp) -> MetaMcp,
@@ -64,7 +64,7 @@ pub(crate) async fn fixture_with_bearer(
 }
 
 /// [`fixture`] with a key server attached, so its temporary tokens are
-/// credentials the auth middleware resolves (MIK-8286 R5).
+/// credentials the auth middleware resolves.
 pub(crate) async fn fixture_with_key_server(
     answer: Answer,
     key_server: Arc<crate::key_server::KeyServer>,

@@ -14,8 +14,8 @@ pub(crate) async fn fixture_firewalled(answer: Answer) -> Fx {
     fixture_inner(answer, true, |meta| meta).await
 }
 
-/// [`fixture_firewalled`] with `build` arming the `MetaMcp` (MIK-8351:
-/// a key budget on the firewalled fixture, for the give-back rows).
+/// [`fixture_firewalled`] with `build` arming the `MetaMcp` (for
+/// example a key budget on the firewalled fixture, for the give-back rows).
 #[cfg(feature = "firewall")]
 pub(crate) async fn fixture_firewalled_built(
     answer: Answer,
@@ -25,7 +25,7 @@ pub(crate) async fn fixture_firewalled_built(
 }
 
 /// [`fixture_firewalled`] with both firewalls writing their audit rows to
-/// `audit` (MIK-8137 b1: the chokepoint's `dispatch` rows).
+/// `audit` (the chokepoint's `dispatch` rows).
 #[cfg(feature = "firewall")]
 pub(crate) async fn fixture_firewalled_audited(answer: Answer, audit: std::path::PathBuf) -> Fx {
     AUDIT_LOG.with(|a| *a.borrow_mut() = Some(audit));
@@ -35,7 +35,7 @@ pub(crate) async fn fixture_firewalled_audited(answer: Answer, audit: std::path:
 }
 
 /// [`fixture_firewalled_audited`], arming the replaced `MetaMcp` with `build`
-/// (the route x check matrix's surfaced-name route, MIK-8137 b3).
+/// (the route x check matrix's surfaced-name route).
 #[cfg(feature = "firewall")]
 pub(crate) async fn fixture_firewalled_audited_built(
     answer: Answer,
@@ -66,7 +66,7 @@ pub(crate) async fn fixture_firewalled_with(
 }
 
 /// [`fixture_firewalled_with`], with no breaker, arming the `MetaMcp` with
-/// `build` (MIK-8689: a redacting rule beside the provenance signers).
+/// `build` (a redacting rule beside the provenance signers).
 #[cfg(feature = "firewall")]
 pub(crate) async fn fixture_firewalled_with_built(
     answer: Answer,
