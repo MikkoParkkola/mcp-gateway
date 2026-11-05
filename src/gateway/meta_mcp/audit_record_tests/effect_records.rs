@@ -55,7 +55,7 @@ impl crate::transport::Transport for Listing {
 }
 
 /// `meta` whose backend `alpha` lists `read` with `hint`, from a cold slot.
-fn listing(hint: Option<bool>, dir: &tempfile::TempDir) -> (MetaMcp, Arc<AtomicUsize>) {
+pub(super) fn listing(hint: Option<bool>, dir: &tempfile::TempDir) -> (MetaMcp, Arc<AtomicUsize>) {
     let meta = meta(Ok(ok_result()), dir);
     let calls = Arc::new(AtomicUsize::new(0));
     let alpha = meta.backends.for_test().get("alpha").expect("alpha");
@@ -284,13 +284,12 @@ async fn a_capability_cache_hit_records_its_definitions_effect() {
     );
 }
 
-/// A completed-execution replay (the HTTP, stdio and deferred meta replays)
-/// records `replayed` and no declared effect yet, even where the slot holds
-/// evidence: that layer does not hold the binding the replay was admitted
-/// under, and recording nothing beats reading the wrong slot. Pinned, so the
-/// absence is a known state; the change that gives it the binding flips it.
+/// A completed-execution replay that carries no named target and no stored
+/// slot records `replayed` and no declared effect, even where the slot holds
+/// evidence: recording nothing beats reading a slot it did not run under.
+/// The replays that carry both are pinned in `replay_effects`.
 #[tokio::test]
-async fn a_completed_execution_replay_records_no_declared_effect_yet() {
+async fn a_replay_with_no_stored_facts_records_no_declared_effect() {
     let dir = tempfile::tempdir().unwrap();
     let (meta, _) = listing(Some(true), &dir);
     call(&meta, &crate::protocol::mrtr::NO_RETRY).await;

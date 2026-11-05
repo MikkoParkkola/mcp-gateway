@@ -483,6 +483,7 @@ pub(super) async fn tools_call(
             target,
             dispatched,
             bindings,
+            effect_slot,
         )) => {
             // STORED.2 site 1: a retained single-call result is served only
             // on proven liveness; otherwise the call proceeds as Unprotected
@@ -496,7 +497,7 @@ pub(super) async fn tools_call(
                     &arguments,
                     &caller,
                     target,
-                    (dispatched, bindings),
+                    (dispatched, bindings, effect_slot),
                     (response, audit),
                 )
                 .await
