@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use super::keep_dir_tests::note;
 use super::{TransparencyLogConfig, TransparencyLogger};
-use crate::test_dir_keep::{expect_unkept, kept_tempdir, kept_tempdir_in};
+use crate::test_dir_keep::{expect_unkept, kept_tempdir, kept_tempdir_in, outside_temp};
 
 fn config(path: &str) -> Arc<TransparencyLogConfig> {
     Arc::new(TransparencyLogConfig {
@@ -209,4 +209,64 @@ fn a_refused_open_releases_what_it_took() {
         "a share of the dir outlived every owner"
     );
     assert!(!root.exists(), "the dir outlived every owner");
+}
+
+/// R15. A log opened through a symlinked alias of a kept dir keeps the real
+/// dir: the lookup compares normal forms, not the path as written.
+/// Mutant: the lookup on the raw path.
+#[cfg(unix)]
+#[test]
+fn a_log_opened_through_an_alias_keeps_the_real_dir() {
+    let dir = kept_tempdir();
+    let root = dir.path().to_owned();
+    let links = outside_temp();
+    let alias = links.path().join("alias");
+    std::os::unix::fs::symlink(&root, &alias).expect("a symlink");
+    let log = open(&alias.join("audit.jsonl"));
+    drop(dir);
+    note(&log);
+    assert!(root.join("audit.jsonl").is_file(), "the late append landed");
+    drop(log);
+    assert!(
+        !root.exists(),
+        "the real dir was not kept through its alias"
+    );
+}
+
+/// R16 (control). A real log opened outside the temp dir is never recorded,
+/// whichever side of the report the filter sits on.
+/// Mutant: the outside-temp filter removed from the open path.
+#[test]
+fn a_real_log_outside_the_temp_dir_records_nothing() {
+    let dir = outside_temp();
+    let unkept = expect_unkept();
+    let log = open(&dir.path().join("audit.jsonl"));
+    assert_eq!(unkept.recorded(), Vec::<(PathBuf, String)>::new());
+    drop(log);
+}
+
+/// R17. A log opened on a worker thread is attributed to the test that
+/// spawned the worker (`test_late_write::writing_for`), not to the worker.
+/// Mutant: the worker's own thread name used.
+#[test]
+fn a_worker_open_is_attributed_to_its_spawning_test() {
+    let parent = this_test();
+    let dir = tempfile::tempdir().expect("a temp dir");
+    let path = dir.path().join("audit.jsonl");
+    let spawner = parent.clone();
+    let worker_path = path.clone();
+    let recorded = std::thread::Builder::new()
+        .name("kept-dir-worker".to_owned())
+        .spawn(move || {
+            crate::test_late_write::writing_for(Some(spawner));
+            let unkept = expect_unkept();
+            let log = open(&worker_path);
+            let recorded = unkept.recorded();
+            drop(log);
+            recorded
+        })
+        .expect("a worker")
+        .join()
+        .expect("the worker does not panic");
+    assert_eq!(recorded, vec![(path, parent)]);
 }

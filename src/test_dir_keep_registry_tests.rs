@@ -8,17 +8,9 @@
 use std::path::{Path, PathBuf};
 
 use super::{
-    contains, expect_unkept, is_external_in, kept_tempdir, norm, parse_external, registered_paths,
-    report_unkept,
+    contains, expect_unkept, is_external_in, kept_tempdir, norm, outside_temp, parse_external,
+    registered_paths, report_unkept,
 };
-
-/// A short-lived dir outside the process temp dir, in the crate root.
-fn outside_temp() -> tempfile::TempDir {
-    tempfile::Builder::new()
-        .prefix("kept-dir-alias-")
-        .tempdir_in(env!("CARGO_MANIFEST_DIR"))
-        .expect("a dir outside the temp dir")
-}
 
 fn canon(path: &Path) -> PathBuf {
     std::fs::canonicalize(path).expect("an existing path")

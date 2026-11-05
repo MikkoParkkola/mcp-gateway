@@ -680,11 +680,11 @@ mod hwm_missing_tests;
 #[path = "transparency_log_keep_dir_tests.rs"]
 mod keep_dir_tests;
 #[cfg(test)]
-#[path = "transparency_log_kept_dir_tests.rs"]
-mod kept_dir_tests;
-#[cfg(test)]
 #[path = "transparency_log_keep_scan_tests.rs"]
 mod keep_scan_tests;
+#[cfg(test)]
+#[path = "transparency_log_kept_dir_tests.rs"]
+mod kept_dir_tests;
 #[cfg(test)]
 #[path = "transparency_log_lease_tests.rs"]
 mod lease_tests;

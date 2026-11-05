@@ -60,6 +60,15 @@ impl TestDirKeep {
 // dir alive by itself.
 // STUB (red commit): every function below is a placeholder the rows fail on.
 
+/// A short-lived dir outside the process temp dir, in the crate root, for
+/// rows that need a path a raw comparison would not place under it.
+pub(crate) fn outside_temp() -> tempfile::TempDir {
+    tempfile::Builder::new()
+        .prefix("kept-dir-alias-")
+        .tempdir_in(env!("CARGO_MANIFEST_DIR"))
+        .expect("a dir outside the temp dir")
+}
+
 /// A temp dir that any transparency log opened inside it keeps.
 pub(crate) fn kept_tempdir() -> Arc<tempfile::TempDir> {
     Arc::new(tempfile::tempdir().expect("a temp dir"))
