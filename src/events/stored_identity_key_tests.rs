@@ -134,3 +134,101 @@ async fn a_row_naming_nobody_is_revoked_before_anything_starts() {
         "the nobody row is revoked; the row naming someone stays"
     );
 }
+
+/// A hub with one row per `(id, subject)` on `signed`, and the services the
+/// runtime start installs.
+fn hub_with(rows: &[(&str, &str)]) -> (Arc<EventsHub>, tempfile::TempDir) {
+    hub_with_rows(rows, |_| {})
+}
+
+/// [`hub_with`], each row passed through `change` before it is admitted.
+fn hub_with_rows(
+    rows: &[(&str, &str)],
+    change: impl Fn(&mut records::Subscription),
+) -> (Arc<EventsHub>, tempfile::TempDir) {
+    let dir = tempfile::tempdir().expect("dir");
+    let events = crate::config::EventsConfig::default();
+    let hub = EventsHub::open(&events, dir.path()).expect("hub");
+    assert!(hub.runtime.services.set(Arc::new(services())).is_ok());
+    for (id, subject) in rows {
+        let mut stored = row("backend.signed.tools_changed", &identity(subject));
+        stored.id = (*id).into();
+        stored.principal = (*id).into();
+        change(&mut stored);
+        hub.store
+            .admit(
+                stored,
+                true,
+                store::Caps {
+                    per_principal: 10,
+                    global: 10,
+                },
+                chrono::Duration::zero(),
+                chrono::Utc::now(),
+                tail_policy(&events),
+            )
+            .expect("io")
+            .expect("admitted");
+    }
+    (hub, dir)
+}
+
+fn blocking<T>(work: impl std::future::Future<Output = T>) -> T {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("runtime")
+        .block_on(work)
+}
+
+const NOBODY: &str = "stored observed identity names nobody";
+
+/// The revocation of a row naming nobody is warned once, by its public
+/// handle; a row revoked for another reason is not warned as one.
+#[test]
+fn a_nobody_row_is_warned_by_its_handle_when_revoked() {
+    // The second row names someone, but its basis no longer matches the
+    // live config: it is revoked for that, not for naming nobody.
+    let (hub, _dir) = hub_with_rows(&[("sub_nobody", ""), ("sub_moved", "q")], |row| {
+        if row.id == "sub_moved" {
+            row.obs_basis.as_mut().expect("basis").audience = "https://elsewhere".into();
+        }
+    });
+    let handle = hub.handle("sub_nobody").expect("a handle");
+    let ((), warned) =
+        crate::test_log_capture::capture_warnings(|| blocking(hub.revoke_unobservable(None)));
+    assert!(
+        hub.store.subscriptions().is_empty(),
+        "premise: both revoked"
+    );
+    let lines: Vec<&str> = warned.lines().filter(|l| l.contains(NOBODY)).collect();
+    assert_eq!(
+        lines.len(),
+        1,
+        "one warn, for the nobody row only: {warned}"
+    );
+    assert!(
+        lines[0].contains(&handle),
+        "named by its handle: {}",
+        lines[0]
+    );
+    assert!(!warned.contains("sub_nobody"), "never by its stored id");
+}
+
+/// Revoking the same row twice warns once: the second finds it gone.
+#[test]
+fn a_nobody_row_revoked_twice_is_warned_once() {
+    let (hub, _dir) = hub_with(&[("sub_nobody", "")]);
+    let snapshot = hub.store.get("sub_nobody").expect("row");
+    let ((), warned) = crate::test_log_capture::capture_warnings(|| {
+        blocking(async {
+            hub.revoke(&snapshot).await;
+            hub.revoke(&snapshot).await;
+        })
+    });
+    assert_eq!(
+        warned.lines().filter(|l| l.contains(NOBODY)).count(),
+        1,
+        "{warned}"
+    );
+}
