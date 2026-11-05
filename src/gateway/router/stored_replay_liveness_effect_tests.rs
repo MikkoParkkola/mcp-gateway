@@ -7,14 +7,16 @@
 
 use super::*;
 
-/// `TOOL` declaring `readOnlyHint: hint`.
-fn declared(hint: bool) -> crate::protocol::Tool {
-    serde_json::from_value(json!({
+/// `TOOL` declaring `readOnlyHint: hint`, or no hint.
+fn declared(hint: Option<bool>) -> crate::protocol::Tool {
+    let mut tool = json!({
         "name": TOOL,
         "inputSchema": {"type": "object", "properties": {"folder": {"type": "string"}}},
-        "annotations": {"readOnlyHint": hint},
-    }))
-    .expect("a tool")
+    });
+    if let Some(hint) = hint {
+        tool["annotations"] = json!({"readOnlyHint": hint});
+    }
+    serde_json::from_value(tool).expect("a tool")
 }
 
 /// The decisions of the invocation records in `fx`'s audit log, in order.
@@ -42,8 +44,46 @@ async fn a_deferred_lift_records_the_stored_slot_effect() {
     let sent = fx.gateway.tool_calls().len();
     let backend = fx.gateway.backends().get(BACKEND).expect("the backend");
     let operator = DirectAccountGateway::operator_binding();
-    backend.declare_slot_effects_for_test(Some(&operator), vec![declared(true)]);
-    backend.declare_slot_effects_for_test(None, vec![declared(false)]);
+    backend.declare_slot_effects_for_test(Some(&operator), vec![declared(Some(true))]);
+    backend.declare_slot_effects_for_test(None, vec![declared(Some(false))]);
+    let again = send(&fx, "tools/call", "gateway_invoke", params()).await;
+    assert!(again.to_string().contains(MARKER), "premise: served: {again}");
+    assert_eq!(fx.gateway.tool_calls().len(), sent, "premise: not re-sent");
+    let all = decisions(&fx);
+    let last = all.last().expect("the replay's record");
+    assert_eq!(last["decided"], "replayed", "{all:?}");
+    assert_eq!(last["declared_effect"], "read_only", "{all:?}");
+    assert_eq!(last["declared_effect_source"], "tool_annotation", "{all:?}");
+}
+
+/// Three slots, three declarations: the slot the first execution ran under
+/// (read-only), the slot the lifting resolution selects now, after a grant
+/// rotation (may-write), and the shared slot (no hint, undeclared). The
+/// lifted replay records the first execution's slot, never the lift's.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_lift_after_a_rotation_records_the_first_executions_slot() {
+    let fx = fixture_with(false, true).await;
+    answer_marker(&fx);
+    let params = || invoke_params(Some("e1-rotate"), false);
+    let first = send(&fx, "tools/call", "gateway_invoke", params()).await;
+    assert!(first.to_string().contains(MARKER), "premise: dispatched: {first}");
+    let stored = DirectAccountGateway::operator_binding();
+    fx.gateway.rotate_operator_grant().await;
+    let now = fx
+        .meta
+        .account_strategies()
+        .managed_vault(Some("work-gmail"))
+        .expect("the managed vault")
+        .view_binding(crate::personal_accounts::identity::Principal::SoleOperator)
+        .await
+        .expect("premise: the rotated grant has a view");
+    assert_ne!(now, stored, "premise: the rotation selects a new slot");
+    fx.gateway.rearm_operator_slot_at_for_test(&now);
+    let backend = fx.gateway.backends().get(BACKEND).expect("the backend");
+    backend.declare_slot_effects_for_test(Some(&stored), vec![declared(Some(true))]);
+    backend.declare_slot_effects_for_test(Some(&now), vec![declared(Some(false))]);
+    backend.declare_slot_effects_for_test(None, vec![declared(None)]);
+    let sent = fx.gateway.tool_calls().len();
     let again = send(&fx, "tools/call", "gateway_invoke", params()).await;
     assert!(again.to_string().contains(MARKER), "premise: served: {again}");
     assert_eq!(fx.gateway.tool_calls().len(), sent, "premise: not re-sent");
