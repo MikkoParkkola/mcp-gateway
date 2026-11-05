@@ -272,7 +272,9 @@ impl EventSource for WatchSource {
     }
 
     fn row_key(&self, sub: &Subscription) -> Option<String> {
-        if !is_watch(&sub.name) {
+        // A row carrying a per-user observation is not this route's to key:
+        // its observation would go unchecked here.
+        if !is_watch(&sub.name) || sub.obs_basis.is_some() {
             return None;
         }
         // A row with no recorded class has no key until a catalogue read

@@ -149,7 +149,7 @@ fn built(client: reqwest::Result<reqwest::Client>) -> Option<reqwest::Client> {
 ///     serde_json::to_string(identity).expect("an identity")
 /// }
 /// ```
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct VerifiedIdentity {
     /// OIDC `sub` claim (opaque user ID).
     pub subject: String,

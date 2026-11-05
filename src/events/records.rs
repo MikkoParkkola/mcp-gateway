@@ -87,14 +87,57 @@ pub(crate) struct Subscription {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub watch_class: Option<WatchClass>,
     /// The identity a per-user backend observes this subscriber as, when
-    /// `binding` does not already carry it. `Debug`
-    /// leaves it out.
+    /// `binding` does not already carry it, as stored: it is verified again
+    /// only through [`StoredIdentity::verified`]. `Debug` leaves it out.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub observed_identity: Option<crate::key_server::oidc::VerifiedIdentity>,
+    pub observed_identity: Option<StoredIdentity>,
     /// The backend config the observation key was derived from (design B3):
     /// `None` on a shared backend and on rows written before it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub obs_basis: Option<super::observation::ObsBasis>,
+}
+
+/// A subscriber's observed identity as a row stores it on disk: the fields of
+/// the verified identity it was written from, in the same JSON shape, so rows
+/// written before it load unchanged. Bytes are no verification, so it never
+/// becomes a [`VerifiedIdentity`](crate::key_server::oidc::VerifiedIdentity)
+/// except through the checked constructor.
+#[derive(Clone, Serialize, Deserialize)]
+pub(crate) struct StoredIdentity {
+    subject: String,
+    email: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    name: Option<String>,
+    #[serde(default)]
+    groups: Vec<String>,
+    issuer: String,
+}
+
+impl StoredIdentity {
+    /// The verified identity these fields name, through the checked
+    /// constructor: `None` for one that names nobody (an empty or blank
+    /// issuer or subject), which then observes as no one.
+    pub(crate) fn verified(&self) -> Option<crate::key_server::oidc::VerifiedIdentity> {
+        crate::key_server::oidc::VerifiedIdentity::checked(
+            self.issuer.clone(),
+            self.subject.clone(),
+            self.email.clone(),
+            self.name.clone(),
+            self.groups.clone(),
+        )
+    }
+}
+
+impl From<&crate::key_server::oidc::VerifiedIdentity> for StoredIdentity {
+    fn from(identity: &crate::key_server::oidc::VerifiedIdentity) -> Self {
+        Self {
+            subject: identity.subject.clone(),
+            email: identity.email.clone(),
+            name: identity.name.clone(),
+            groups: identity.groups.clone(),
+            issuer: identity.issuer.clone(),
+        }
+    }
 }
 
 /// How a REST watch is polled: one shared poller for a credential-free
@@ -277,7 +320,7 @@ impl Subscription {
                 groups.clone(),
             );
         }
-        self.observed_identity.clone()
+        self.observed_identity.as_ref()?.verified()
     }
 
     /// When the row stops being live: its expiry or the bound of its hold,

@@ -65,7 +65,7 @@ fn queued_observed(hub: &EventsHub, services: &Services, port: u16, event: &str)
             .expect("observes")
             .expect("per-user");
         sub.obs_basis = Some(basis);
-        sub.observed_identity = Some(person());
+        sub.observed_identity = Some(crate::events::records::StoredIdentity::from(&person()));
     });
     let row = hub.store.subscriptions().pop().expect("row");
     let observed = hub.observed_now(&row, &config, None).expect("observable");

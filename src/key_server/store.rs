@@ -44,7 +44,7 @@ use super::oidc::VerifiedIdentity;
 ///     serde_json::to_string(token).expect("a token")
 /// }
 /// ```
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize)]
 pub struct TemporaryToken {
     /// Unique token identifier (used for revocation).
     pub jti: String,
