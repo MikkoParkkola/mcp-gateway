@@ -654,23 +654,26 @@ impl BackendRegistry {
     /// guard but changes no membership (shutdown sets the latch and snapshots
     /// the map), so readers of `with_membership` need not treat it as a change.
     pub async fn stop_all(&self) {
-        // The latch and the snapshot are taken under ONE write hold of the
-        // shutdown lock, which `register` also holds for writing across its
-        // check and insert. So a registration either completes entirely before
-        // this snapshot and is in it, or finds the latch already set and is
-        // refused. There is no interleaving in which a caller is told its
-        // backend was registered and shutdown never sees it.
-        //
-        // No await inside: the stops happen after the guard is dropped.
-        let backends: Vec<std::sync::Arc<Backend>> = {
-            let mut stopping = self.stopping.write();
-            *stopping = true;
-            self.backends
-                .iter()
-                .map(|entry| std::sync::Arc::clone(entry.value()))
-                .collect()
-        };
+        Self::stop_each(self.latch_and_snapshot()).await;
+    }
 
+    /// Set the shutdown latch and take the backends to stop, under ONE write
+    /// hold of the shutdown lock, which `register` also holds for writing
+    /// across its check and insert. So a registration either completes
+    /// entirely before this snapshot and is in it, or finds the latch already
+    /// set and is refused. There is no interleaving in which a caller is told
+    /// its backend was registered and shutdown never sees it.
+    fn latch_and_snapshot(&self) -> Vec<std::sync::Arc<Backend>> {
+        let mut stopping = self.stopping.write();
+        *stopping = true;
+        self.backends
+            .iter()
+            .map(|entry| std::sync::Arc::clone(entry.value()))
+            .collect()
+    }
+
+    /// Stop each of `backends` concurrently, logging a failure.
+    async fn stop_each(backends: Vec<std::sync::Arc<Backend>>) {
         futures::future::join_all(backends.into_iter().map(|backend| async move {
             if let Err(e) = backend.stop().await {
                 warn!(backend = %backend.name, error = %e, "Failed to stop backend");

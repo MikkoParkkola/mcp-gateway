@@ -26,19 +26,18 @@ impl BackendRegistry {
     /// handed over is in the reaper's hands, cut to `deadline`.
     pub(crate) async fn stop_all_by(&self, deadline: tokio::time::Instant) {
         self.stop_deadline.move_earlier(deadline.into_std());
-        let _sweep = RetireOnDrop(
-            self.backends
-                .iter()
-                .map(|entry| Arc::clone(entry.value()))
-                .collect(),
-        );
+        // The backends to retire are the ones the stop latched and took, in
+        // one hold: a reload registering after this is refused, never stopped
+        // without being retired.
+        let backends = self.latch_and_snapshot();
+        let _sweep = RetireOnDrop(backends.clone());
         #[cfg(test)]
         seam::after_sweep();
         #[allow(
             clippy::disallowed_methods,
             reason = "Lifecycle: gateway startup, wiring or shutdown; no caller request"
         )]
-        let stop = crate::transport::within_stop_deadline(deadline, self.stop_all());
+        let stop = crate::transport::within_stop_deadline(deadline, Self::stop_each(backends));
         // Bounded by the deadline as a whole: a backend waiting on a restart's
         // lifecycle lock cannot outrun the stage. What it leaves running is
         // retired by `_sweep` when this returns.
