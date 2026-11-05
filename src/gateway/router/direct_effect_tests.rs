@@ -173,6 +173,10 @@ async fn probe_direct_reaches_the_capability_backend() {
         !text.contains("served-"),
         "the direct call was served: {text}"
     );
+    assert!(
+        text.contains("Backend not found"),
+        "answered by something other than the absent backend: {text}"
+    );
     let after = entries(&log_dir).split_off(before);
     let records = serde_json::to_string(&after).expect("entries serialise");
     assert!(
@@ -691,6 +695,10 @@ async fn a_direct_completed_replay_of_an_unlisted_tool_records_none() {
     .await;
     assert_eq!(decision["decided"], "replayed", "{decision}");
     assert!(decision.get("declared_effect").is_none(), "{decision}");
+    assert!(
+        decision.get("declared_effect_source").is_none(),
+        "{decision}"
+    );
 }
 
 /// A4, the stored slot evicted after the run: no effect, never alice's
@@ -708,6 +716,10 @@ async fn a_direct_completed_replay_of_an_evicted_slot_records_none() {
     })
     .await;
     assert!(decision.get("declared_effect").is_none(), "{decision}");
+    assert!(
+        decision.get("declared_effect_source").is_none(),
+        "{decision}"
+    );
 }
 
 /// FIXTURE.1 (canary, what reaches the record today): no secret and no
@@ -762,4 +774,47 @@ async fn the_decision_object_carries_no_secret_or_caller_text() {
             );
         }
     }
+}
+
+/// A3, a cached failure: the backend's error answer, stored by the
+/// idempotency cache and served again (its own early-return branch), records
+/// alice's own slot (read-only), never the shared slot's may-write.
+#[tokio::test]
+async fn a_direct_cached_failure_records_the_callers_slot_effect() {
+    let dir = tempfile::tempdir().expect("a log directory");
+    let fx = bound_answering(&dir, Cache::On, Answer::RpcError(-32010)).await;
+    let alpha = fx.state.backends.get("alpha").expect("alpha");
+    alpha.declare_slot_effects_for_test(None, vec![read_tool(Some(false))]);
+    alpha.declare_slot_effects_for_test(Some(ALICE_ALPHA), vec![read_tool(Some(true))]);
+    let (_, first) = keyed(&fx, "alice", "k-7a-failure").await;
+    assert!(
+        first.get("error").is_some(),
+        "premise: the first call failed: {first}"
+    );
+    let ran = super::direct_continuation_tests::dispatched(&fx);
+    let _ = super::backend_handlers::direct_lease_seams::served();
+    let before = decisions(&dir).len();
+    let (_, hit) = keyed(&fx, "alice", "k-7a-failure").await;
+    assert!(
+        hit.get("error").is_some(),
+        "premise: the stored failure was served: {hit}"
+    );
+    assert_eq!(
+        super::backend_handlers::direct_lease_seams::served(),
+        Some(super::backend_handlers::direct_lease_seams::Served::Cache),
+        "premise: stage 7a answered"
+    );
+    assert_eq!(
+        super::direct_continuation_tests::dispatched(&fx),
+        ran,
+        "premise: nothing was sent again"
+    );
+    let mut after = decisions(&dir).split_off(before);
+    assert_eq!(after.len(), 1, "premise: one record for the hit: {after:?}");
+    let decision = after.remove(0);
+    assert_eq!(decision["declared_effect"], "read_only", "{decision}");
+    assert_eq!(
+        decision["declared_effect_source"], "tool_annotation",
+        "{decision}"
+    );
 }
