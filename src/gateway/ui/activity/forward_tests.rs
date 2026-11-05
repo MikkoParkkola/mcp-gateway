@@ -160,7 +160,8 @@ fn write_from(path: &Path, segments: &[Vec<Rec>], first_seq: u64, first_counter:
                     bytes.extend(e.to_string().as_bytes());
                     if let Rec::Padded(pad) = rec {
                         let past_cap = crate::security::transparency_log::pager::ASSEMBLY_WINDOW;
-                        bytes.extend(std::iter::repeat_n(*pad, past_cap as usize));
+                        let past_cap = usize::try_from(past_cap).expect("the cap fits in memory");
+                        bytes.extend(std::iter::repeat_n(*pad, past_cap));
                     }
                     bytes.push(b'\n');
                     out.marks.push(mark_of(&e));
