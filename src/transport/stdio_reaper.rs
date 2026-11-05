@@ -16,7 +16,167 @@ use std::time::{Duration, Instant};
 use tokio::sync::watch;
 use tracing::error;
 
-use super::child_tree::{ChildTree, Reap};
+use super::child_tree::{ChildTree, Ending, REAP_DEADLINE, Reap};
+
+/// What a stop leaves a backend's tree after its stdin closes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum StopKind {
+    /// A backend that may still save on its way out: the MCP stdio order,
+    /// within the caller's stop deadline.
+    Graceful,
+    /// A backend judged dead or unresponsive (a failed start or handshake):
+    /// the kill at once.
+    Dead,
+}
+
+/// What a graceful stop keeps back for the kill and the reap after its
+/// waits: the reap deadline, plus the margin the close waits beyond it.
+pub(crate) const KILL_RESERVE: Duration = Duration::from_secs(REAP_DEADLINE.as_secs() + 1);
+
+/// A close with no stop deadline from its caller gets this budget.
+const DEFAULT_STOP_BUDGET: Duration = Duration::from_secs(10);
+
+/// A wait shorter than this is skipped rather than sent for nothing.
+pub(super) const MIN_PHASE: Duration = Duration::from_millis(100);
+
+tokio::task_local! {
+    /// The deadline by which the caller's stop must be over, waits included.
+    static STOP_DEADLINE: tokio::time::Instant;
+}
+
+/// Run `stop` (a transport's close) under the caller's stop deadline: a
+/// graceful stop splits what is left of it into its waits and the kill, so
+/// it ends by then.
+pub(crate) async fn within_stop_deadline<F: std::future::Future>(
+    deadline: tokio::time::Instant,
+    stop: F,
+) -> F::Output {
+    STOP_DEADLINE.scope(deadline, stop).await
+}
+
+/// A gateway's stop deadline, shared with every tree its backends hand over,
+/// so a tree already in its exit waits when the gateway stop begins is cut to
+/// end by then too. Unset until the stop; after that it only moves earlier.
+#[derive(Debug)]
+pub(crate) struct StopDeadline {
+    /// Nanoseconds after [`STOP_EPOCH`]; `u64::MAX` while unset.
+    at: std::sync::atomic::AtomicU64,
+    /// Every graceful handover under this deadline, so the stop can wait for
+    /// their kills before it returns; finished ones are pruned on each add.
+    handed: parking_lot::Mutex<Vec<watch::Receiver<Reaped>>>,
+}
+
+/// The fixed origin [`StopDeadline`] counts from.
+static STOP_EPOCH: std::sync::LazyLock<Instant> = std::sync::LazyLock::new(Instant::now);
+
+impl Default for StopDeadline {
+    fn default() -> Self {
+        Self {
+            at: std::sync::atomic::AtomicU64::new(u64::MAX),
+            handed: parking_lot::Mutex::default(),
+        }
+    }
+}
+
+impl StopDeadline {
+    /// Set the deadline, or move it earlier; a later one changes nothing, so
+    /// a second stop can shorten a first one's waits, never extend them.
+    pub(crate) fn move_earlier(&self, deadline: Instant) {
+        let nanos = deadline.saturating_duration_since(*STOP_EPOCH).as_nanos();
+        let nanos = u64::try_from(nanos).unwrap_or(u64::MAX - 1);
+        self.at
+            .fetch_min(nanos, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// Track a graceful handover, so [`Self::wait_handed`] covers it.
+    pub(super) fn track(&self, handed: watch::Receiver<Reaped>) {
+        let mut all = self.handed.lock();
+        all.retain(|receiver| *receiver.borrow() == Reaped::Pending);
+        all.push(handed);
+    }
+
+    /// How many handovers are tracked, finished or not.
+    #[cfg(all(test, unix))]
+    pub(crate) fn handed_len(&self) -> usize {
+        self.handed.lock().len()
+    }
+
+    /// Wait, up to `deadline`, for every tracked handover to be ended: a tree
+    /// an earlier close handed over may still be in its waits, and its kill
+    /// must land before the gateway returns.
+    pub(crate) async fn wait_handed(&self, deadline: tokio::time::Instant) {
+        let all = self.handed.lock().clone();
+        wait_reaped(all, None, deadline).await;
+    }
+
+    /// The deadline, once set.
+    pub(crate) fn get(&self) -> Option<Instant> {
+        match self.at.load(std::sync::atomic::Ordering::SeqCst) {
+            u64::MAX => None,
+            nanos => Some(*STOP_EPOCH + Duration::from_nanos(nanos)),
+        }
+    }
+}
+
+/// What a backend does to a live stdio transport's tree without a runtime,
+/// through a trait object so the backend's types stay shallow.
+pub(crate) trait LiveTree: Send + Sync {
+    /// End the tree at once (a dead backend, a revocation).
+    fn kill_now(&self);
+    /// Hand the tree to the reaper with the graceful order fitted to `budget`.
+    fn hand_over_gracefully(&self, budget: Duration);
+}
+
+impl LiveTree for super::StdioTransport {
+    fn kill_now(&self) {
+        self.retire_tree_now();
+    }
+
+    fn hand_over_gracefully(&self, budget: Duration) {
+        self.hand_over_gracefully_now(budget);
+    }
+}
+
+/// The caller's stop deadline, when this runs inside [`within_stop_deadline`].
+pub(crate) fn stop_deadline() -> Option<tokio::time::Instant> {
+    STOP_DEADLINE.try_with(|deadline| *deadline).ok()
+}
+
+/// The graceful ending that fits `budget`: [`KILL_RESERVE`] is kept for the
+/// kill, a third of the rest goes to the wait after SIGTERM and the remainder
+/// to the wait after EOF. Stdin that could not be closed (a writer holds it)
+/// gets no EOF wait, since the child never saw EOF. Windows has no SIGTERM.
+pub(super) fn graceful_ending(budget: Duration, stdin_closed: bool) -> Ending {
+    let waits = budget.saturating_sub(KILL_RESERVE);
+    let (eof, term) = match (cfg!(unix), stdin_closed) {
+        (true, true) => {
+            let term = waits / 3;
+            (waits.saturating_sub(term), term)
+        }
+        (true, false) => (Duration::ZERO, waits),
+        (false, true) => (waits, Duration::ZERO),
+        (false, false) => (Duration::ZERO, Duration::ZERO),
+    };
+    let kept = |wait: Duration| {
+        if wait < MIN_PHASE {
+            Duration::ZERO
+        } else {
+            wait
+        }
+    };
+    match (kept(eof), kept(term)) {
+        (Duration::ZERO, Duration::ZERO) => Ending::Now,
+        (eof, term) => Ending::Graceful { eof, term },
+    }
+}
+
+/// The budget left for a stop started now: the caller's deadline, else
+/// [`DEFAULT_STOP_BUDGET`].
+fn stop_budget() -> Duration {
+    stop_deadline().map_or(DEFAULT_STOP_BUDGET, |deadline| {
+        deadline.saturating_duration_since(tokio::time::Instant::now())
+    })
+}
 
 /// How often the reaper steps the trees it holds.
 const TICK: Duration = Duration::from_millis(10);
@@ -75,11 +235,18 @@ fn start_once(
 /// Needs no runtime and never blocks.
 pub(super) fn hand_over(tree: ChildTree) -> watch::Receiver<Reaped> {
     let (done, receiver) = watch::channel(Reaped::Pending);
+    // A graceful handover joins its gateway stop deadline before its first
+    // step, so no stop's snapshot can miss a tree already in its waits.
+    if let Some(deadline) = tree.graceful_deadline() {
+        deadline.track(receiver.clone());
+    }
     let mut job = Job { tree, done };
     // The first step runs here, on the caller's thread, not on the reaper's:
-    // it sends the ownership-checked group signal now, so a gateway that
-    // exits right after dropping a transport has already signalled the
-    // backend's group. The reaper takes the rest of the order.
+    // for an `Ending::Now` tree it sends the ownership-checked group signal
+    // now, so a gateway that exits right after dropping a transport has
+    // already signalled the backend's group. A graceful ending only starts
+    // its waits here; its caller waits for the reap. The reaper takes the
+    // rest of the order.
     if !step(&mut job, Instant::now()) {
         return receiver;
     }
@@ -216,6 +383,46 @@ pub(super) async fn wait_reaped(
 }
 
 impl super::StdioTransport {
+    /// Close the child's stdin now, unless a write holds it: one stuck on a
+    /// peer that stopped reading. SIGTERM or the kill ends that one, and the
+    /// child never sees EOF. `true` when stdin was closed.
+    fn close_stdin_now(&self) -> bool {
+        match self.writer.try_lock() {
+            Ok(mut writer) => {
+                *writer = None;
+                true
+            }
+            Err(_) => false,
+        }
+    }
+
+    /// The handover of a graceful stop, synchronous and without a runtime:
+    /// retire the slot (a start finishing later installs nothing), close
+    /// stdin, and hand the tree to the reaper with the MCP stdio order
+    /// planned to fit `budget`. A later `close` waits for that reap.
+    fn hand_over_gracefully_now(&self, budget: Duration) {
+        self.connected
+            .store(false, std::sync::atomic::Ordering::SeqCst);
+        let ending = graceful_ending(budget, self.close_stdin_now());
+        {
+            let mut slot = self.child.lock();
+            slot.retired = true;
+            self.start.trip_eof();
+            if let Some(tree) = slot.tree.as_mut() {
+                tree.set_ending(ending, self.stop_deadline.get().cloned());
+            }
+            let _ = slot.take_for_reaper();
+        }
+        self.shutdown.lock().cancel();
+        self.pending.clear();
+    }
+
+    /// Join the gateway stop deadline of the backend that owns this
+    /// transport; set once, before its first start.
+    pub(crate) fn attach_stop_deadline(&self, deadline: std::sync::Arc<StopDeadline>) {
+        let _ = self.stop_deadline.set(deadline);
+    }
+
     /// The tree for a freshly spawned `child`, carrying this transport's
     /// test-only reap deadline (MIK-8360).
     #[cfg_attr(not(test), allow(clippy::unused_self))]
@@ -247,12 +454,24 @@ impl super::StdioTransport {
     /// runtime for the work itself) for every reap this slot started. Returns
     /// the handed tree's status, else the newest one an earlier reap recorded.
     pub(super) async fn end_tree(&self) -> Option<ExitStatus> {
+        self.end_tree_with(Ending::Now).await
+    }
+
+    /// [`Self::end_tree`], ending the handed tree as `ending` says; the wait
+    /// covers its waits as well as the reap.
+    async fn end_tree_with(&self, ending: Ending) -> Option<ExitStatus> {
         let (mine, all) = {
             let mut slot = self.child.lock();
+            if let Some(tree) = slot.tree.as_mut() {
+                tree.set_ending(ending, self.stop_deadline.get().cloned());
+            }
             let mine = slot.take_for_reaper();
             (mine, slot.outstanding())
         };
-        let deadline = tokio::time::Instant::now() + self.reap_deadline() + Duration::from_secs(1);
+        let deadline = tokio::time::Instant::now()
+            + ending.waits()
+            + self.reap_deadline()
+            + Duration::from_secs(1);
         let status = wait_reaped(all, mine, deadline).await;
         let mut slot = self.child.lock();
         let _ = slot.outstanding();
@@ -300,18 +519,21 @@ impl super::StdioTransport {
 
     /// What `close` does, which cannot fail: the failed-start path calls it
     /// directly instead of handling an error `close` never returns.
-    pub(super) async fn shut(&self) {
+    pub(super) async fn shut(&self, kind: StopKind) {
         self.connected
             .store(false, std::sync::atomic::Ordering::Relaxed);
 
-        // A write stuck on a peer that stopped reading holds stdin; the kill ends it.
-        if let Ok(mut writer) = self.writer.try_lock() {
-            *writer = None;
-        }
+        let stdin_closed = self.close_stdin_now();
         // The per-start stdin token first, then the tree to the reaper,
-        // waited for (bounded) with any reap a retire started earlier.
+        // waited for (bounded) with any reap a retire started earlier. No
+        // await comes before the handover, so a cancelled close cannot leave
+        // the tree unended.
         self.shutdown.lock().cancel();
-        self.end_tree().await;
+        let ending = match kind {
+            StopKind::Graceful => graceful_ending(stop_budget(), stdin_closed),
+            StopKind::Dead => Ending::Now,
+        };
+        self.end_tree_with(ending).await;
         super::tree::clear_writer(&self.writer).await;
     }
 
@@ -381,5 +603,79 @@ mod start_tests {
         });
         assert!(started.is_ok(), "the next start tries again");
         assert!(cell.get().is_some());
+    }
+}
+
+/// Every caller's stop budget yields a plan that fits it, by construction.
+#[cfg(test)]
+mod plan_tests {
+    use super::{DEFAULT_STOP_BUDGET, Ending, KILL_RESERVE, MIN_PHASE, graceful_ending};
+    use std::time::Duration;
+
+    fn total(ending: Ending) -> Duration {
+        ending.waits() + KILL_RESERVE
+    }
+
+    /// One row per caller: a gateway shutdown at the default and at a short
+    /// `shutdown_timeout`, eviction and restart (`close_stage`), a close with
+    /// no caller budget, and a budget at the reserve.
+    #[test]
+    fn every_callers_plan_fits_its_budget() {
+        let callers = [
+            (
+                "shutdown, default shutdown_timeout",
+                Duration::from_secs(30),
+            ),
+            ("shutdown, short shutdown_timeout", Duration::from_secs(9)),
+            ("eviction close_stage", Duration::from_secs(10)),
+            ("restart close_stage", Duration::from_secs(10)),
+            ("no caller budget", DEFAULT_STOP_BUDGET),
+            ("at the reserve", KILL_RESERVE),
+        ];
+        for (caller, budget) in callers {
+            for stdin_closed in [true, false] {
+                let ending = graceful_ending(budget, stdin_closed);
+                assert!(
+                    ending == Ending::Now || total(ending) <= budget,
+                    "{caller}: plan {ending:?} exceeds its budget {budget:?}"
+                );
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_split_keeps_the_reserve_and_gives_a_third_to_sigterm() {
+        // 30 s less the reserve (the 5 s reap deadline and the close's 1 s
+        // margin) leaves 24 s: a third of it after SIGTERM.
+        let waits = Duration::from_secs(24);
+        assert_eq!(
+            graceful_ending(Duration::from_secs(30), true),
+            Ending::Graceful {
+                eof: waits
+                    .checked_sub(waits / 3)
+                    .expect("a third never exceeds the whole"),
+                term: waits / 3,
+            }
+        );
+        // Stdin a writer still holds: no EOF wait, SIGTERM at once.
+        assert_eq!(
+            graceful_ending(Duration::from_secs(10), false),
+            Ending::Graceful {
+                eof: Duration::ZERO,
+                term: Duration::from_secs(4),
+            }
+        );
+    }
+
+    #[test]
+    fn a_budget_at_or_under_the_reserve_kills_at_once() {
+        assert_eq!(graceful_ending(KILL_RESERVE, true), Ending::Now);
+        assert_eq!(graceful_ending(Duration::ZERO, true), Ending::Now);
+        assert_eq!(
+            graceful_ending(KILL_RESERVE + MIN_PHASE / 2, true),
+            Ending::Now,
+            "waits under the minimum phase are skipped"
+        );
     }
 }

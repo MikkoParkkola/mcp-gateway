@@ -34,7 +34,7 @@ fn crashed_write(config: &Path) -> PathBuf {
         "original": staged,
         "original_revision": revision,
     });
-    std::fs::write(&journal, body.to_string()).unwrap();
+    write_private(&journal, &body.to_string());
     journal
 }
 

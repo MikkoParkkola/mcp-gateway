@@ -8,7 +8,7 @@
 use std::time::{Duration, Instant};
 
 use super::sketch::{Markers, SketchStore};
-use super::{CollusionDetector, RelayAction, RelayParams, RelayReason};
+use super::{CollusionDetector, RelayParams, RelayReason};
 
 const BOB: &str = "principal-bob";
 const CAROL: &str = "principal-carol";
@@ -18,7 +18,6 @@ const EGRESS: &str = "backend:post_message";
 
 fn detector() -> CollusionDetector {
     let mut d = CollusionDetector::new(RelayParams {
-        action: RelayAction::Observe,
         ..RelayParams::default()
     });
     d.keep_every_kgram();
@@ -37,9 +36,18 @@ fn source(i: usize) -> String {
     format!("backend-{i}:read_doc")
 }
 
+/// A source whose flow lets its copy leave, apart from every [`source`].
+fn filler(i: usize) -> String {
+    format!("filler-{i}:read_doc")
+}
+
 /// The reason `who` sending `text` through flow 1 is reported for, if any.
 fn reason(d: &CollusionDetector, who: &str, text: &str, now: Instant) -> Option<RelayReason> {
-    d.check_egress_flows_at(who, (EGRESS, 1), text, now)
+    // Flow 1 is the one the 64 fillers match (`overflow`).
+    let names: Vec<String> = (0..64).map(filler).collect();
+    let recorded: Vec<(&str, u64)> = names.iter().map(|n| (n.as_str(), 1)).collect();
+    let view = super::live_stubs::masked(&recorded, (EGRESS, 1));
+    d.check_egress_under(&view, who, EGRESS, text, now)
         .map(|f| f.reason)
 }
 
@@ -47,9 +55,9 @@ fn reason(d: &CollusionDetector, who: &str, text: &str, now: Instant) -> Option<
 /// leave, then from one no flow lets leave: one record past the cap.
 fn overflow(d: &CollusionDetector, who: &str, text: &str, at: Instant) {
     for i in 0..64 {
-        d.record_delivery_flows_at(&source(i), who, (true, 1), text, at);
+        d.record_delivery_at(&filler(i), who, true, text, at);
     }
-    d.record_delivery_flows_at(RESTRICTED, who, (true, 0), text, at);
+    d.record_delivery_at(RESTRICTED, who, true, text, at);
 }
 
 /// A text over the per-delivery fingerprint cap, and its last 300 words:
@@ -67,7 +75,7 @@ fn a_plain_match_beside_an_overflow_is_a_relay() {
     let now = Instant::now();
     let (a, b) = (words("a", 60), words("b", 60));
     overflow(&d, CAROL, &a, now);
-    d.record_delivery_flows_at(RESTRICTED, CAROL, (true, 0), &b, now);
+    d.record_delivery_at(RESTRICTED, CAROL, true, &b, now);
     assert_eq!(
         reason(&d, BOB, &a, now),
         Some(RelayReason::OverflowWitness),
@@ -159,7 +167,7 @@ fn an_overflowed_holder_is_named_as_lost() {
     let now = Instant::now();
     let a = words("a", 60);
     overflow(&d, BOB, &a, now);
-    d.record_delivery_flows_at(&source(70), CAROL, (true, 0), &a, now);
+    d.record_delivery_at(&source(70), CAROL, true, &a, now);
     assert_eq!(reason(&d, BOB, &a, now), Some(RelayReason::ExcuseLost));
 }
 
@@ -269,12 +277,7 @@ fn an_expired_sketch_is_not_lost() {
 /// Counters only grow, so a row reads "grew" and other rows cannot fail it.
 #[cfg(feature = "metrics")]
 fn bound_count(bound: &str) -> u64 {
-    crate::metrics::install();
-    let prefix = format!("mcp_gateway_collusion_capacity_total{{bound=\"{bound}\"}} ");
-    crate::metrics::render()
-        .lines()
-        .find_map(|l| l.strip_prefix(&prefix).and_then(|v| v.trim().parse().ok()))
-        .unwrap_or(0)
+    crate::security::firewall::collusion_live_rig::bound_count(bound)
 }
 
 /// `MIK-8201.VIS.1`: `event` grows the `bound` series.
@@ -292,7 +295,6 @@ fn every_capacity_bound_is_counted() {
     let a = words("a", 60);
     grows("fingerprint_evicted", || {
         let mut d = CollusionDetector::new(RelayParams {
-            action: RelayAction::Observe,
             max_fingerprints: 1,
             ..RelayParams::default()
         });

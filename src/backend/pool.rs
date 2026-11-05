@@ -743,7 +743,13 @@ impl Backend {
         // is already out of the pool, so abandoning the wait cannot strand a
         // caller — only, at worst, the child process, which is exactly what the
         // failure branch below already reports.
-        let close = tokio::time::timeout(self.budgets.close_stage, transport.close()).await;
+        // The close plans its exit waits to fit the same budget.
+        let budget = self.budgets.close_stage;
+        let close = crate::transport::within_stop_deadline(
+            tokio::time::Instant::now() + budget,
+            transport.close(),
+        );
+        let close = tokio::time::timeout(budget, close).await;
         match close {
             Ok(Ok(())) => {}
             Ok(Err(error)) => {

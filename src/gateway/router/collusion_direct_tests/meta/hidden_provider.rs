@@ -144,9 +144,16 @@ async fn hidden_provider_fixture() -> Fixture {
     meta.set_firewall(Some(Arc::clone(&firewall)));
     meta.enable_idempotency(Arc::new(IdempotencyCache::new()), Duration::from_secs(300));
     meta.set_capabilities(keyless_caps());
-    state_mut.firewall = Some(firewall);
+    state_mut.firewall = Some(Arc::clone(&firewall));
     state_mut.meta_mcp = Arc::new(meta);
     state_mut.mtls_policy = Arc::new(admit_both());
+    // The witness judges under the request's live config: publish the
+    // firewall's `block`, as startup builds both from one config.
+    crate::security::firewall::collusion_live_rig::pair_state(
+        &mut state,
+        &firewall,
+        crate::security::firewall::collusion_live_rig::Layer::CollusionOnly,
+    );
     Fixture {
         state,
         read,

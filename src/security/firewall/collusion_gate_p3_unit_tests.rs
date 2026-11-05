@@ -225,7 +225,13 @@ fn a_selection_without_view_room_abandons_its_sketch_and_keeps_evidence() {
         assert!(!delivered.is_unread(), "premise: the answer was read");
         detector.set_view_budget(detector.view_bytes() + 64);
         let kept = fw.cap_kept(fw.retain_delivered(digest, &delivered, None));
-        fw.record_digest(super::RelayCaller::Keyed("alice"), "alpha", "read", &kept);
+        fw.record_digest(
+            super::RelayCaller::Keyed("alice"),
+            "alpha",
+            "read",
+            &kept,
+            &fw.paired_generation_for_test(),
+        );
     }
     assert_eq!(
         detector.selection_budget_refusals(),
@@ -366,11 +372,23 @@ fn a_second_record_of_one_digest_adds_nothing() {
         .receipt_digest("alpha", "read", &step, None)
         .expect("a receipt");
     let caller = super::RelayCaller::Keyed("alice");
-    fw.record_digest(caller, "alpha", "read", &digest);
+    fw.record_digest(
+        caller,
+        "alpha",
+        "read",
+        &digest,
+        &fw.paired_generation_for_test(),
+    );
     let once = detector.sketch_positions("alpha:read", "alice").len();
     assert_eq!(once, 1, "premise: the first record sketched its rest");
     let again = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        fw.record_digest(caller, "alpha", "read", &digest);
+        fw.record_digest(
+            caller,
+            "alpha",
+            "read",
+            &digest,
+            &fw.paired_generation_for_test(),
+        );
     }));
     assert_eq!(
         again.is_err(),

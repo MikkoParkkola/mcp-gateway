@@ -12,6 +12,10 @@ mod review_regressions;
 /// MIK-8353 slice 3c: a consumed grant keeps the nonce through a submit refusal.
 mod s3c_keep;
 mod slot_release;
+/// The unbindable_caller answer is recorded as refused. Reads delivery records
+/// through the route-matrix log helpers, which build with `firewall`.
+#[cfg(feature = "firewall")]
+mod unbindable;
 use fixture::*;
 
 #[tokio::test]

@@ -185,6 +185,7 @@ fn every_entry() {
     let _ = BackendRegistry::statuses; // PLANT statuses
     let _ = BackendRegistry::remove; // PLANT remove
     let _ = BackendRegistry::stop_all; // PLANT stop_all
+    let _ = BackendRegistry::stop_all_by; // PLANT stop_all_by
     let _ = MetaMcp::resolve_propagation_credential; // PLANT propagation_credential
     let _ = MetaMcp::resolve_propagation_headers; // PLANT propagation_headers
 }

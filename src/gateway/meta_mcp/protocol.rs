@@ -170,7 +170,7 @@ impl MetaMcp {
             if crate::gateway::authz::authorize_backend(client, &backend.name).is_err() {
                 continue;
             }
-            if let Some(credential) = self.catalogue_credential_for(&backend, caller).await {
+            if let Ok(credential) = self.catalogue_credential_for(&backend, caller).await {
                 credentialed.push((backend, credential));
             }
         }

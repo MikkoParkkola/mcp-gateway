@@ -52,7 +52,7 @@ async fn reader_lock_with(config: &Path, deadline: Instant, recovery: Recovery) 
             "another writer holds the lock beside {} past the wait",
             config.display()
         )),
-        Err(NotLocked::Failed(message)) => {
+        Err(NotLocked::Failed(message) | NotLocked::Refused(message)) => {
             let probed = config.to_path_buf();
             let probe = off_runtime(move || {
                 let target = resolved(&probed);

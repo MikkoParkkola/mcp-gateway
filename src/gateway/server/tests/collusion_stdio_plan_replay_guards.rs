@@ -109,6 +109,7 @@ fn detection_on_gateway(
     on.share_execution_admission_for_test(Arc::clone(off.execution_admission()));
     on.set_firewall(Some(Arc::clone(&firewall)));
     on.share_keyring_with_for_test(&firewall);
+    crate::security::firewall::collusion_live_rig::seed_meta(&on, &firewall);
     with_replay_playbook(&mut on);
     (firewall, Arc::new(on))
 }

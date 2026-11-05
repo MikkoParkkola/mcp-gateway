@@ -56,7 +56,7 @@ fn deliver(fw: &Firewall, who: &str, text: &str) {
 
 fn relays(fw: &Firewall, who: &str, text: &str) -> bool {
     let params = json!({"name": "send", "arguments": {"text": text}});
-    fw.check_relay(
+    fw.check_relay_paired(
         RelayCaller::Keyed(who),
         "beta",
         "send",
@@ -262,7 +262,13 @@ fn a_kept_plan_steps_short_relay_is_caught_by_its_retained_fingerprints() {
         })
         .expect("a retained window no sample at m >= 2 keeps");
     let kept = fw.cap_kept(retained);
-    fw.record_digest(RelayCaller::Keyed("alice"), "alpha", "read", &kept);
+    fw.record_digest(
+        RelayCaller::Keyed("alice"),
+        "alpha",
+        "read",
+        &kept,
+        &fw.paired_generation_for_test(),
+    );
     assert!(
         relays(&fw, "bob", window),
         "a kept step's retained fingerprints were lost"

@@ -466,7 +466,7 @@ async fn meta_mcp_dispatch(
                 grant_subject.as_ref(),
                 cert_identity.as_ref(),
                 client.as_ref(),
-                session_id,
+                (session_id, &intake.generation),
             );
             // Boxed like `handle_tools_call` above: an inline future would
             // enlarge `meta_mcp_dispatch`'s own state, which every request
@@ -501,7 +501,7 @@ async fn meta_mcp_dispatch(
                 grant_subject.as_ref(),
                 cert_identity.as_ref(),
                 client.as_ref(),
-                session_id,
+                (session_id, &intake.generation),
             );
             Box::pin(relay::as_caller(
                 caller,

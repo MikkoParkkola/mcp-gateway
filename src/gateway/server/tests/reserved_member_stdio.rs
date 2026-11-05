@@ -55,17 +55,21 @@ async fn stdio_delivers_no_planted_member() {
     backend.set_transport_for_test(Arc::new(Planting));
     assert!(registry.register(backend));
     let meta = Arc::new(MetaMcp::new(registry));
-    let policy = Arc::new(crate::security::ToolPolicy::default());
     let mtls = Arc::new(crate::mtls::MtlsPolicy::from_config(
         &crate::mtls::MtlsConfig::default(),
     ));
     let request = json!({"jsonrpc": "2.0", "id": 7, "method": "tools/call",
         "params": {"name": "gateway_invoke",
                    "arguments": {"server": "alpha", "tool": "read", "arguments": {}}}});
-    let delivered =
-        super::super::Gateway::dispatch_single(&meta, &policy, &mtls, &request, "stdio-forge")
-            .await
-            .expect("a request is answered");
+    let delivered = super::super::Gateway::dispatch_single(
+        &meta,
+        &crate::gateway::authz::default_line(&meta),
+        &mtls,
+        &request,
+        "stdio-forge",
+    )
+    .await
+    .expect("a request is answered");
     assert!(delivered.get("error").is_none(), "{delivered}");
     assert_nothing_forged("stdio gateway_invoke", &delivered);
 }

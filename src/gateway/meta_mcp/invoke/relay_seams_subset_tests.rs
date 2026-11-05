@@ -72,7 +72,13 @@ fn subset_reported(servers: &[&str]) -> bool {
         add_subset_seams(&fw, &mut receipts, &answer);
     });
     for r in &receipts {
-        fw.record_digest(RelayCaller::Keyed("key-a"), &r.server, &r.tool, &r.digest);
+        fw.record_digest(
+            RelayCaller::Keyed("key-a"),
+            &r.server,
+            &r.tool,
+            &r.digest,
+            &fw.paired_generation_for_test(),
+        );
     }
     let joined = format!("{}{}", piece(0), piece(2));
     fw.record_delivery(
@@ -82,7 +88,7 @@ fn subset_reported(servers: &[&str]) -> bool {
         &json!({ "note": joined }),
     );
     let params = json!({"name": "send", "arguments": {"body": joined}});
-    fw.check_relay(
+    fw.check_relay_paired(
         RelayCaller::Keyed("key-a"),
         "alpha",
         "send",

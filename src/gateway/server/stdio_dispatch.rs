@@ -10,7 +10,6 @@ use tracing::debug;
 use super::Gateway;
 use super::StdioNonce;
 use super::stdio_route_stage::RouteStage;
-use super::stdio_single::message_generation;
 use super::{
     STDIO_CREDENTIAL_PRINCIPAL, StdioClient, stdio_catalogue, stdio_delivery,
     stdio_routing_keys_only, stdio_take_merged_client_meta, stdio_tasks,
@@ -40,7 +39,7 @@ impl Gateway {
         let session_id = client.session_id;
         let policy = ToolPolicyAuthorizer {
             tool_policy: generation.tool_policy(),
-            generation: generation.generation(),
+            generation: Some(generation.generation()),
         };
         let scope = InvokeScope::stdio(
             &policy,
@@ -155,8 +154,7 @@ impl Gateway {
                     }
                     m @ ("tasks/get" | "tasks/update" | "tasks/cancel") => {
                         let retry = crate::protocol::mrtr::RetryFields::from_params(params);
-                        let mut current = None;
-                        let live = message_generation(meta_mcp, generation, &mut current);
+                        let pinned = Some(generation.generation());
                         let caller = Self::build_stdio_caller_context(
                             true,
                             None,
@@ -164,7 +162,7 @@ impl Gateway {
                             &retry,
                             &request_shape,
                             client,
-                            (meta_mcp.record_key(), live),
+                            (meta_mcp.record_key(), pinned),
                         );
                         let shape = &request_shape;
                         stdio_tasks::serve(client.tasks, m, id, params, shape, &caller, session_id)
@@ -178,7 +176,8 @@ impl Gateway {
                         meta_mcp.handle_tools_list_with_params(id, params, Some(session_id), scope)
                     }
                     m if stdio_catalogue::METHODS.contains(&m) => {
-                        stdio_catalogue::dispatch(meta_mcp, m, id, params).await
+                        stdio_catalogue::dispatch(meta_mcp, m, id, params, generation.pinned())
+                            .await
                     }
                     "logging/setLevel" => meta_mcp.handle_logging_set_level(id, params).await,
                     "ping" => JsonRpcResponse::success(id, serde_json::json!({})),
@@ -224,7 +223,7 @@ impl Gateway {
                 signing: signing_context.as_ref(),
                 chain_source,
                 chain_nonce: chain_nonce.as_deref(),
-                generation: generation.generation(),
+                generation: Some(generation.generation()),
             },
         );
         // MIK-7887.RECEIPT.4: the receipt describes the delivered answer, with
@@ -556,7 +555,7 @@ impl Gateway {
             // step reached a backend with no policy check at all.
             let stdio_authorizer = crate::gateway::authz::ToolPolicyAuthorizer {
                 tool_policy: generation.tool_policy(),
-                generation: generation.generation(),
+                generation: Some(generation.generation()),
             };
 
             let retry = crate::protocol::mrtr::RetryFields::from_params(params);
@@ -621,8 +620,7 @@ impl Gateway {
             let granted;
             // The message's own generation, the policy's config: its budgets
             // judge the call from admission to settlement across a reload.
-            let mut current = None;
-            let live = message_generation(meta_mcp, generation, &mut current);
+            let pinned = Some(generation.generation());
             let mut caller = Self::build_stdio_caller_context(
                 is_modern,
                 protocol_revision_owned.as_deref(),
@@ -630,7 +628,7 @@ impl Gateway {
                 &retry,
                 request_shape,
                 client,
-                (meta_mcp.record_key(), live),
+                (meta_mcp.record_key(), pinned),
             );
             // The signing nonce is admitted before the route stage, so a bad
             // nonce is refused without paying for the payload
