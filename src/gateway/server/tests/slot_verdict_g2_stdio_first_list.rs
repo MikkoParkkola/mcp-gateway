@@ -39,7 +39,9 @@ async fn r11_the_first_lists_two_waits_share_one_deadline_stdio() {
                 streamable_http: Some(true),
                 protocol_version: None,
             },
-            timeout: bound - GRACE,
+            timeout: bound
+                .checked_sub(GRACE)
+                .expect("premise: a fill bound past its grace"),
             ..crate::config::BackendConfig::r2_off()
         },
         &crate::config::FailsafeConfig::default(),
@@ -77,7 +79,9 @@ async fn r11_the_first_lists_two_waits_share_one_deadline_stdio() {
     let took = started.elapsed();
     assert!(answer.get("error").is_none(), "{answer}");
     assert!(
-        took >= bound - GRACE,
+        took >= bound
+            .checked_sub(GRACE)
+            .expect("premise: a fill bound past its grace"),
         "premise: the list waited ({took:?} for a {bound:?} bound)"
     );
     assert!(

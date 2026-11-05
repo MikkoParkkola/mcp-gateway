@@ -75,9 +75,9 @@ pub(super) async fn prepare(
 /// session's flag, so later lists do not wait.
 pub(super) fn answer_queued() {
     // Outside a ticket (a batch, a direct dispatch) nothing waited.
-    drop(TICKET.try_with(|ticket| {
-        if ticket.waited.get() {
-            ticket.answered.store(true, Ordering::Release);
-        }
-    }));
+    let waited =
+        TICKET.try_with(|ticket| ticket.waited.get().then(|| Arc::clone(&ticket.answered)));
+    if let Ok(Some(answered)) = waited {
+        answered.store(true, Ordering::Release);
+    }
 }

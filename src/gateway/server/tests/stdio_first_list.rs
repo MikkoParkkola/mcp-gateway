@@ -74,10 +74,11 @@ pub(super) async fn held_backend(tools: &[&str]) -> Held {
 pub(super) async fn start(backends: &str, surfaced: &[(&str, &str)], extra: &str) -> Serve {
     let dir = tempfile::tempdir().expect("tempdir");
     let tasks = dir.path().join("tasks");
-    let surfaced: String = surfaced
+    let surfaced = surfaced
         .iter()
         .map(|(server, tool)| format!("    - server: {server}\n      tool: {tool}\n"))
-        .collect();
+        .collect::<Vec<_>>()
+        .concat();
     let yaml = format!(
         "backends:\n{backends}meta_mcp:\n  surfaced_tools:\n{surfaced}{extra}tasks:\n  store_dir: {}\n",
         serde_json::to_string(&tasks.display().to_string()).expect("a JSON string")
