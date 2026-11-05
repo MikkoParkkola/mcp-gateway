@@ -217,7 +217,16 @@ async fn ping(state: &Arc<super::AppState>, secret: &str) -> StatusCode {
 /// K5 `rate_limit` (MIK-9256.AUTHZ.1): a kept key's rate changed by reload
 /// applies on the next request, and the usage so far is kept: a reload that
 /// leaves the rate alone does not hand back the spent request.
-#[tokio::test]
+///
+/// On a paused clock (the buckets read tokio's `Instant`), so the time the
+/// reloads take spends no debt: at a wall-clock 1000/min the two raised-rate
+/// requests owed only 120 ms, which a loaded runner paid off before the
+/// lowering reload. The values follow `ClientBucket::check_at`, all at one
+/// instant `T`: rate 1 leaves the debt at `T + 60 s`; raising to 1000/min
+/// re-prices it to `T + 60 ms` with a 59.94 s burst, and two admits move it
+/// to `T + 180 ms`; lowering to 1/min re-prices that to `T + 180 s` with no
+/// burst, paid exactly 180 s later.
+#[tokio::test(start_paused = true)]
 async fn k5_a_rate_limit_changed_by_reload_applies_and_keeps_its_usage() {
     const SECRET: &str = "live-keys-rate-secret";
     let digest = crate::config::api_key_digest_spec(SECRET.as_bytes());
@@ -275,11 +284,24 @@ async fn k5_a_rate_limit_changed_by_reload_applies_and_keeps_its_usage() {
         );
     }
 
-    // And a rate lowered by reload throttles again.
+    // And a rate lowered by reload throttles again, owing the raised-rate
+    // requests at the new interval: 180 s, one second short still refused.
     reload(&state, dir.path(), entry(1, "")).await;
     assert_eq!(
         ping(&state, SECRET).await,
         StatusCode::TOO_MANY_REQUESTS,
         "the rate lowered by reload still admits"
+    );
+    tokio::time::advance(std::time::Duration::from_secs(179)).await;
+    assert_eq!(
+        ping(&state, SECRET).await,
+        StatusCode::TOO_MANY_REQUESTS,
+        "the requests owed at the raised rate were not re-priced to the lowered one"
+    );
+    tokio::time::advance(std::time::Duration::from_secs(1)).await;
+    assert_eq!(
+        ping(&state, SECRET).await,
+        StatusCode::OK,
+        "the re-priced debt is paid at T + 180 s"
     );
 }

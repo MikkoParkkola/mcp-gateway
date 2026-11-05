@@ -179,6 +179,15 @@ pub struct CapabilityBackend {
     listing: parking_lot::Mutex<Option<Vec<String>>>,
     /// Wakes the listing watch when the catalogue changes.
     listing_wake: tokio::sync::Notify,
+    /// Test-only: the HTTP startup scan panics after its first directory,
+    /// so a row can prove the scan's exit guard still completes it.
+    #[cfg(test)]
+    pub(crate) scan_panics_after_first_dir: std::sync::atomic::AtomicBool,
+    /// Test-only: how many pin-mismatch records existed at the moment the
+    /// initial scan was marked complete, so a row can prove the startup
+    /// check ran before readiness without racing it.
+    #[cfg(test)]
+    pub(crate) records_at_scan_complete: std::sync::OnceLock<usize>,
 }
 
 /// Record of a detected rug-pull event for a single capability.
@@ -212,6 +221,10 @@ impl CapabilityBackend {
             catalogue_generation: std::sync::atomic::AtomicU64::new(0),
             listing: parking_lot::Mutex::new(None),
             listing_wake: tokio::sync::Notify::new(),
+            #[cfg(test)]
+            scan_panics_after_first_dir: std::sync::atomic::AtomicBool::new(false),
+            #[cfg(test)]
+            records_at_scan_complete: std::sync::OnceLock::new(),
         }
     }
 
