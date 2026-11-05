@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import copy
 import json
-import re
 import sys
 from pathlib import Path
 
@@ -25,15 +24,12 @@ import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from test_docs_only_gating import ROOT, as_train, ctx, simulate  # noqa: E402
+from test_os_shards import MATRIX  # noqa: E402
 
 LABEL = "os-sensitive"
 LABEL_JOBS = {"windows-shards", "windows-clippy", "windows-check", "macos-shards", "macos-check"}
 # A labelled lane runs macOS's lib shard only: about two macOS runners serve every train.
 LABELLED_MACOS = ["lib"]
-MATRIX = re.compile(
-    r"^\$\{\{\s*fromjson\(\s*(?P<cond>.+?)\s*&&\s*'(?P<a>\[[^']*\])'\s*\|\|\s*'(?P<b>\[[^']*\])'\s*\)\s*\}\}$",
-    re.IGNORECASE | re.DOTALL,
-)
 
 
 def labelled(c: dict, *names: str) -> dict:

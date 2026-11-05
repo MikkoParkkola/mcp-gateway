@@ -314,8 +314,11 @@ def main() -> int:
     # The macOS cases must be able to fail: each mutant is caught by the case
     # named beside it, not merely by some case.
     import copy
+    # The train gate, with the os-sensitive label's alternative inside it.
     gate = (" && (github.event_name != 'pull_request' || (startsWith(github.head_ref, 'train/')"
-            " && github.event.pull_request.head.repo.full_name == github.repository))")
+            " && github.event.pull_request.head.repo.full_name == github.repository)"
+            " || (github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line'"
+            " && contains(github.event.pull_request.labels.*.name, 'os-sensitive')))")
     def ungate(j: dict, job: str) -> None:
         j[job]["if"] = str(j[job]["if"]).replace(gate, "")
     def waits_on_scope(j: dict) -> None:
@@ -327,7 +330,7 @@ def main() -> int:
     def fork_trains_too(j: dict) -> None:
         for job in MACOS_TRAIN:
             j[job]["if"] = str(j[job]["if"]).replace(
-                " && github.event.pull_request.head.repo.full_name == github.repository))", "))")
+                " && github.event.pull_request.head.repo.full_name == github.repository) ||", ") ||")
     def check_loses_always(j: dict) -> None:
         j["macos-check"]["if"] = str(j["macos-check"]["if"]).replace("${{ always() && ", "${{ ")
     macos_mutants = {
