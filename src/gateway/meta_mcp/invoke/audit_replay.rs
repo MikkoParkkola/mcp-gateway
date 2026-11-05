@@ -31,6 +31,7 @@ impl MetaMcp {
         crate::gateway::delivery_facts::unvouched();
         let server = facts.server.as_deref();
         self.stage_replay((tool_name, server), arguments, session_id, caller, &replay);
+        let effect = self.replay_effect(&facts, caller);
         let Some(log) = self.transparency_logger.as_ref() else {
             return replay;
         };
@@ -91,11 +92,9 @@ impl MetaMcp {
         .attribution(self, tenants, delivered);
         // Answered past every gate: nothing decided it again.
         let mut noted = crate::security::decision_record::Noted::not_redecided();
-        // Red stub (MIK-9216 red gate): every replay records MayWrite.
-        noted.note_effect(
-            crate::security::decision_record::Effect::MayWrite,
-            crate::security::decision_record::EffectSource::ToolAnnotation,
-        );
+        if let Some((effect, source)) = effect {
+            noted.note_effect(effect, source);
+        }
         let decision = Box::new(noted.decision(
             crate::security::decision_record::Decided::Replayed,
             crate::security::decision_record::Refused::No,
@@ -121,5 +120,31 @@ impl MetaMcp {
                 |id| crate::gateway::meta_mcp::error_response_preserving_status(id, &error),
             ),
         }
+    }
+
+    /// What a replay's backend tool declares now, on the slot its first
+    /// execution ran under: a capability by its live definition under this
+    /// caller's view, otherwise the stored slot's declaration. With no stored
+    /// slot no backend slot is read, so a result that stored none, or a
+    /// continuation origin (no tool), records none: never the shared slot's
+    /// or the replaying caller's.
+    fn replay_effect(
+        &self,
+        facts: &crate::gateway::meta_mcp::admission::ReplayFacts,
+        caller: &MetaMcpCallerContext<'_>,
+    ) -> Option<(
+        crate::security::decision_record::Effect,
+        crate::security::decision_record::EffectSource,
+    )> {
+        let (server, tool) = (facts.server.as_deref()?, facts.tool.as_deref()?);
+        let backend = facts.slot.as_ref().and_then(|_| {
+            self.scoped(caller.scope().authorizer.backend_grant())
+                .scoped_get(server)
+        });
+        let binding = match &facts.slot {
+            Some(crate::backend::PoolKey::PerUser { binding }) => Some(binding.as_str()),
+            Some(crate::backend::PoolKey::Shared) | None => None,
+        };
+        self.declared_effect((server, tool), backend.as_deref(), binding)
     }
 }
