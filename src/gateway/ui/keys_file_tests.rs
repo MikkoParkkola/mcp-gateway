@@ -213,8 +213,21 @@ async fn r1_the_answer_is_the_files_keys_under_its_revision() {
     );
     assert_allowlist(&answer);
     let body = answer.to_string();
-    for needle in ["key_sha256", "principal", "\"key\"", spec(ALPHA).as_str()] {
+    for needle in ["key_sha256", "principal", "\"key\""] {
         assert!(!body.contains(needle), "the body carries {needle}");
+    }
+    // Every digest the file holds (alpha, beta and beta's previous key), as
+    // its spec, its hex in both cases and the secret behind it.
+    for secret in [ALPHA, BETA, BETA_OLD] {
+        let digest = crate::config::parse_api_key_digest(&spec(secret)).expect("digest");
+        for needle in [
+            spec(secret),
+            hex::encode(digest),
+            hex::encode_upper(digest),
+            secret.to_owned(),
+        ] {
+            assert!(!body.contains(&needle), "the body carries {needle}");
+        }
     }
 }
 
