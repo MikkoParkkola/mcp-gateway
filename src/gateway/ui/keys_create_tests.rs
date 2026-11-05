@@ -229,22 +229,37 @@ fn w1_the_secret_never_enters_the_writers_input() {
         "{header}"
     );
     assert!(code.contains("secrets: None"));
-    for line in code.lines().filter(|l| !l.trim_start().starts_with("//")) {
-        let word = line
-            .split(|c: char| !(c.is_alphanumeric() || c == '_'))
-            .any(|w| w == "secret");
-        let ok = [
-            "api_key_digest_spec(",
-            "random_secret(",
-            "\"secret\"",
-            "created(",
-        ];
-        assert!(
-            !word || ok.iter().any(|o| line.contains(o)),
-            "secret used in: {line}"
-        );
-    }
+    assert_eq!(uses_of(&code, "secret"), SECRET_USES);
+    assert_eq!(uses_of(&code, "once"), ONCE_USES);
 }
+
+/// The code lines (comments left out) holding `name` as a whole word.
+fn uses_of<'a>(code: &'a str, name: &str) -> Vec<&'a str> {
+    code.lines()
+        .map(str::trim)
+        .filter(|l| !l.starts_with("//"))
+        .filter(|l| {
+            l.split(|c: char| !(c.is_alphanumeric() || c == '_'))
+                .any(|w| w == name)
+        })
+        .collect()
+}
+
+/// Every use of the generator's binding: the binding, the digest call and the
+/// 201 body (`created` takes it as `once`). An alias, a clone or a log line
+/// adds a line here and fails the pin.
+const SECRET_USES: [&str; 4] = [
+    "let secret = crate::random_secret::random_secret(\"mcpgw_\");",
+    "let digest = crate::config::api_key_digest_spec(secret.as_bytes());",
+    "}) if landed(&state, &name, &digest) => created(&name, &secret, &revision),",
+    "Json(json!({\"name\": name, \"secret\": once, \"revision\": revision.as_str()})),",
+];
+
+/// `created` holds the secret as `once`: its signature and the body only.
+const ONCE_USES: [&str; 2] = [
+    "fn created(name: &str, once: &str, revision: &FileRevision) -> Response {",
+    "Json(json!({\"name\": name, \"secret\": once, \"revision\": revision.as_str()})),",
+];
 
 /// The generator seam and the pre-write hook exist only under cfg(test).
 #[test]
