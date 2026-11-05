@@ -140,8 +140,12 @@ fn is_test(rel: &str) -> bool {
 }
 
 /// Whether `text` opens a log and never keeps a directory for one.
+/// A file opens a log without keeping its dir: it neither hands the log its
+/// dir (`keep_test_dir`) nor opens it in a registered one (`kept_tempdir`).
 fn unkept(text: &str) -> bool {
-    text.contains("TransparencyLogger::open") && !text.contains("keep_test_dir")
+    text.contains("TransparencyLogger::open")
+        && !text.contains("keep_test_dir")
+        && !text.contains("kept_tempdir")
 }
 
 fn test_sources(dir: &std::path::Path, root: &std::path::Path, out: &mut Vec<(String, String)>) {
