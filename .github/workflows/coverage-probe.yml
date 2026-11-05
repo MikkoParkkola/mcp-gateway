@@ -38,6 +38,9 @@ on:
       - "scripts/release/inventory_ledger.py"
       - "scripts/release/critical_function_coverage.py"
       - "scripts/release/critical_path_coverage.py"
+      - "scripts/ci/coverage_shards.py"
+      - "scripts/ci/coverage_shard_*.sh"
+      - "src/coverage_canary.rs"
       - ".github/workflows/coverage-probe.yml"
   workflow_dispatch:
 
@@ -55,20 +58,51 @@ env:
   CARGO_TERM_COLOR: always
   # Instrumented frames overflow the 2 MiB default test-thread stack.
   RUST_MIN_STACK: "8388608"
+  # One compiler and one cargo-llvm-cov for every Linux job: the merge refuses a part whose
+  # manifest records another rustc release or commit.
+  COVERAGE_RUST: "1.99.1"
+  COVERAGE_LLVM_COV: "0.9.1"
+  # The Linux run's parts (scripts/ci/coverage_shards.py PLANS).
+  COVERAGE_PARTS: "4"
 
 jobs:
-  linux-grade:
-    name: llvm-cov Linux, grade
+  # The Linux run is split across runners: the SDK journey alone, then the other test
+  # targets in COVERAGE_PARTS parts that are exact complements of the single command
+  # (`--all-features --tests`, the SDK test skipped). linux-grade merges their profiles and
+  # executables into one report and keeps the name the grade and coverage_grade.sh read.
+  linux-plan:
+    name: llvm-cov Linux, plan
     runs-on: ubuntu-latest
-    timeout-minutes: 300
+    timeout-minutes: 10
+    outputs:
+      parts: ${{ steps.plan.outputs.parts }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
         with:
+          toolchain: ${{ env.COVERAGE_RUST }}
+      - id: plan
+        run: |
+          set -euo pipefail
+          python3 scripts/ci/coverage_shards.py --self-test
+          cargo metadata --no-deps --format-version 1 > metadata.json
+          # Fails when a target `--tests` builds falls in no part or in two.
+          python3 scripts/ci/coverage_shards.py check "$COVERAGE_PARTS" metadata.json
+          echo "parts=$(python3 scripts/ci/coverage_shards.py plan "$COVERAGE_PARTS")" >> "$GITHUB_OUTPUT"
+
+  linux-sdk:
+    name: llvm-cov Linux, SDK journey
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        with:
+          toolchain: ${{ env.COVERAGE_RUST }}
           components: llvm-tools-preview
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - name: Install cargo-llvm-cov
-        run: cargo install cargo-llvm-cov --locked
+        run: cargo install cargo-llvm-cov --locked --version "$COVERAGE_LLVM_COV"
       - name: Pinned task SDK and Redis
         run: |
           sudo apt-get update && sudo apt-get install -y --no-install-recommends python3-venv
@@ -85,15 +119,103 @@ jobs:
         run: |
           set -o pipefail
           cargo llvm-cov clean --workspace
-          cargo llvm-cov --no-report --all-features --test task_upstream_recovery_sdk -- --test-threads 1 2>&1 | tee sdk-run.log
-      - name: Every other test target
+          python3 scripts/ci/coverage_shards.py run "$COVERAGE_PARTS" sdk 2>&1 | tee run.log
+      - name: Bundle
+        run: bash scripts/ci/coverage_shard_bundle.sh sdk
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: cov-shard-sdk
+          retention-days: 7
+          compression-level: 1
+          path: bundle/
+
+  linux-part:
+    name: llvm-cov Linux, part ${{ matrix.part }}
+    needs: linux-plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        part: ${{ fromJSON(needs.linux-plan.outputs.parts) }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        with:
+          toolchain: ${{ env.COVERAGE_RUST }}
+          components: llvm-tools-preview
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - name: Install cargo-llvm-cov
+        run: cargo install cargo-llvm-cov --locked --version "$COVERAGE_LLVM_COV"
+      - name: Run the part
+        env:
+          PART: ${{ matrix.part }}
         run: |
           set -o pipefail
-          cargo llvm-cov --no-report --all-features --tests -- --skip a_real_sdk_job_outlives_the_gateway_and_its_owner_reads_the_result 2>&1 | tee all-run.log
+          cargo llvm-cov clean --workspace
+          python3 scripts/ci/coverage_shards.py run "$COVERAGE_PARTS" "$PART" 2>&1 | tee run.log
+      - name: Bundle
+        env:
+          PART: ${{ matrix.part }}
+        run: bash scripts/ci/coverage_shard_bundle.sh "$PART"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: cov-shard-${{ matrix.part }}
+          retention-days: 7
+          compression-level: 1
+          path: bundle/
+
+  linux-grade:
+    name: llvm-cov Linux, grade
+    needs: [linux-plan, linux-sdk, linux-part]
+    # Runs whatever the parts did, and fails unless every one succeeded: a skipped or
+    # cancelled part would otherwise leave this check unreported, not red.
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Every part succeeded
+        env:
+          PLAN: ${{ needs.linux-plan.result }}
+          SDK: ${{ needs.linux-sdk.result }}
+          PARTS: ${{ needs.linux-part.result }}
+        run: |
+          echo "plan=$PLAN sdk=$SDK parts=$PARTS"
+          [ "$PLAN" = success ] && [ "$SDK" = success ] && [ "$PARTS" = success ] \
+            || { echo "::error::a Linux coverage part did not succeed"; exit 1; }
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        with:
+          toolchain: ${{ env.COVERAGE_RUST }}
+          components: llvm-tools-preview
+      - name: Install cargo-llvm-cov
+        run: cargo install cargo-llvm-cov --locked --version "$COVERAGE_LLVM_COV"
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: cov-shard-*
+          path: shards/
+      - name: Unpack every part
+        env:
+          PARTS_JSON: ${{ needs.linux-plan.outputs.parts }}
+        run: |
+          set -euo pipefail
+          read -ra expected <<< "sdk $(echo "$PARTS_JSON" | python3 -c 'import json,sys; print(" ".join(json.load(sys.stdin)))')"
+          # Fails on a missing bundle, another rustc, or an executable missing or changed.
+          bash scripts/ci/coverage_shard_merge.sh "${expected[@]}"
+          cp shards/cov-shard-sdk/run.log sdk-run.log
+          for p in "${expected[@]}"; do [ "$p" = sdk ] || cat "shards/cov-shard-$p/run.log"; done > all-run.log
       - name: Reports
         run: |
-          cargo llvm-cov report --summary-only --json --output-path cov.json
-          cargo llvm-cov report --lcov --output-path linux.lcov
+          set -o pipefail
+          # -v prints each llvm-cov command with every -object it reads.
+          cargo llvm-cov report -v --summary-only --json --output-path cov.json 2>&1 | tee report-json.log
+          cargo llvm-cov report -v --lcov --output-path linux.lcov 2>&1 | tee report-lcov.log
+          # Each report read every executable a part built with coverage sections.
+          for log in report-json.log report-lcov.log; do
+            python3 scripts/ci/coverage_shards.py objects "$log" shards/cov-shard-*/manifest.txt
+          done
+          # A never-called function must show at zero: a merge that lost binaries would drop it.
+          python3 scripts/ci/coverage_shards.py canary linux.lcov
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
@@ -104,6 +226,10 @@ jobs:
             linux.lcov
             all-run.log
             sdk-run.log
+            report-json.log
+            report-lcov.log
+            shards/*/tests.tsv
+            shards/*/manifest.txt
 
   windows-grade:
     name: llvm-cov Windows, grade

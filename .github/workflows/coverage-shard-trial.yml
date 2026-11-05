@@ -147,8 +147,8 @@ jobs:
       - name: Unpack every shard
         run: |
           set -euo pipefail
-          expected="sdk $(echo '${{ needs.plan.outputs.shards }}' | python3 -c 'import json,sys; print(" ".join(json.load(sys.stdin)))')"
-          bash scripts/ci/coverage_shard_merge.sh $expected
+          read -ra expected <<< "sdk $(echo '${{ needs.plan.outputs.shards }}' | python3 -c 'import json,sys; print(" ".join(json.load(sys.stdin)))')"
+          bash scripts/ci/coverage_shard_merge.sh "${expected[@]}"
       - name: Reports
         run: |
           set -o pipefail

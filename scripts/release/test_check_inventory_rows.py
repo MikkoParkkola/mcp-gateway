@@ -549,6 +549,10 @@ class CoverageGradeTrigger(unittest.TestCase):
             "scripts/release/inventory_ledger.py",
             "scripts/release/critical_function_coverage.py",
             "scripts/release/critical_path_coverage.py",
+            # The Linux run's parts, their merge and its canary.
+            "scripts/ci/coverage_shards.py",
+            "scripts/ci/coverage_shard_*.sh",
+            "src/coverage_canary.rs",
             ".github/workflows/coverage-probe.yml",
         }
         self.assertEqual(listed, wanted)
