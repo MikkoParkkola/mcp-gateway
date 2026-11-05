@@ -45,7 +45,8 @@ impl Gateway {
                 CapabilityExecutor::for_config(&self.config.capabilities)
                     .with_env(Arc::clone(&self.env))
                     .with_policy_epoch(Arc::clone(&meta_mcp.policy_epoch))
-                    .with_account_strategies(account_strategies),
+                    .with_account_strategies(account_strategies)
+                    .with_stop_deadline(self.backends.stop_deadline()),
             );
             let cap_backend = Arc::new(CapabilityBackend::new(
                 &self.config.capabilities.name,

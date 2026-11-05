@@ -173,7 +173,11 @@ impl IdentitySlots {
         };
         Some(tokio::spawn(async move {
             let _permit = permit;
-            match tokio::time::timeout(budget, transport.close()).await {
+            let close = crate::transport::within_stop_deadline(
+                tokio::time::Instant::now() + budget,
+                transport.close(),
+            );
+            match tokio::time::timeout(budget, close).await {
                 Ok(Ok(())) => {}
                 Ok(Err(error)) => {
                     tracing::warn!(%backend, %error, "Evicted transport failed to close cleanly");

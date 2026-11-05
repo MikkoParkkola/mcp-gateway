@@ -169,3 +169,42 @@ async fn a_later_round_refused_in_its_send_after_an_earlier_send_is_not_unsent()
          so the call's key would be released"
     );
 }
+
+/// A child backend the executor builds joins the gateway's stop deadline, so
+/// a gateway stop also cuts its stdio trees' exit waits.
+#[test]
+fn an_executor_built_backend_joins_the_gateway_stop_deadline() {
+    let deadline = Arc::new(crate::transport::StopDeadline::default());
+    let executor = CapabilityExecutor::new().with_stop_deadline(Arc::clone(&deadline));
+    let cap = capability();
+    let Some(ProcessConfig::Mcp(config)) = cap.providers.process.get("primary") else {
+        panic!("not an mcp provider");
+    };
+    let backend = Arc::new(Backend::new(
+        &format!("capability:{}", cap.name),
+        BackendConfig::default(),
+        &FailsafeConfig::default(),
+        Duration::ZERO,
+    ));
+    let workdir = Workdir::create().expect("a private work directory");
+    let lease = executor
+        .mcp_children
+        .acquire(
+            &cap,
+            config,
+            "caller",
+            (0, Duration::from_secs(30)),
+            |_| true,
+            || Ok((Arc::clone(&backend), workdir)),
+        )
+        .expect("the child is built");
+    drop(lease);
+    let joined = backend
+        .stop_deadline
+        .get()
+        .expect("the child joined a stop deadline");
+    assert!(
+        Arc::ptr_eq(joined, &deadline),
+        "the child joined the gateway's stop deadline"
+    );
+}
