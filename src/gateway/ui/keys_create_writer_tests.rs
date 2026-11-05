@@ -37,7 +37,12 @@ fn path() -> std::path::PathBuf {
 fn p9_busy_is_a_503() {
     let fx = Fixture::new(Setup::default());
     let sent = injected(&fx, || Err(ReplaceError::Busy));
-    assert_eq!(sent.status, StatusCode::SERVICE_UNAVAILABLE, "{}", sent.body);
+    assert_eq!(
+        sent.status,
+        StatusCode::SERVICE_UNAVAILABLE,
+        "{}",
+        sent.body
+    );
     assert_ne!(error_of(&sent), "audit_unavailable");
 }
 
@@ -66,7 +71,12 @@ fn p9_definite_failures_are_500s() {
     ];
     for answer in answers {
         let sent = injected(&fx, answer);
-        assert_eq!(sent.status, StatusCode::INTERNAL_SERVER_ERROR, "{}", sent.body);
+        assert_eq!(
+            sent.status,
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "{}",
+            sent.body
+        );
         assert!(!sent.body.contains("zq-detail"), "{}", sent.body);
     }
 }
@@ -77,7 +87,12 @@ fn p9_definite_failures_are_500s() {
 fn a_candidate_refusal_is_a_500_and_not_an_audit_refusal() {
     let fx = Fixture::new(Setup::default());
     let sent = injected(&fx, || Err(ReplaceError::Refused("zq-loader".into())));
-    assert_eq!(sent.status, StatusCode::INTERNAL_SERVER_ERROR, "{}", sent.body);
+    assert_eq!(
+        sent.status,
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "{}",
+        sent.body
+    );
     assert_ne!(error_of(&sent), "audit_unavailable");
     assert!(!sent.body.contains("zq-loader"), "{}", sent.body);
 }
@@ -113,15 +128,109 @@ fn p9b_writer_text_that_reads_like_the_flip_is_not_parsed() {
 fn p9_uncertain_endings_are_state_uncertain() {
     let fx = Fixture::new(Setup::default());
     let answers: [fn() -> Result<ReplaceOutcome, ReplaceError>; 4] = [
-        || Err(ReplaceError::RollbackFailed { journal: path(), error: "zq-detail".into() }),
-        || Err(ReplaceError::Unconfirmed { journal: path(), error: "zq-detail".into() }),
+        || {
+            Err(ReplaceError::RollbackFailed {
+                journal: path(),
+                error: "zq-detail".into(),
+            })
+        },
+        || {
+            Err(ReplaceError::Unconfirmed {
+                journal: path(),
+                error: "zq-detail".into(),
+            })
+        },
         || Err(ReplaceError::Failed("zq-detail".into())),
-        || Err(ReplaceError::Failed("the config write task failed: zq-detail".into())),
+        || {
+            Err(ReplaceError::Failed(
+                "the config write task failed: zq-detail".into(),
+            ))
+        },
     ];
     for answer in answers {
         let sent = injected(&fx, answer);
-        assert_eq!(sent.status, StatusCode::INTERNAL_SERVER_ERROR, "{}", sent.body);
+        assert_eq!(
+            sent.status,
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "{}",
+            sent.body
+        );
         assert_eq!(error_of(&sent), "state_uncertain");
         assert!(!sent.body.contains("zq-detail"), "{}", sent.body);
     }
+}
+
+/// The root key alone: a live table the write never reaches.
+fn root_only() -> crate::config::AuthConfig {
+    Setup::default().running
+}
+
+/// P10: the writer reports success but the live generation lacks the key: no
+/// 201, no secret, `state_uncertain`; GET's recovery read shows the entry
+/// not live, under the new revision.
+#[test]
+fn p10_a_write_the_live_generation_never_saw_is_not_a_success() {
+    let fx = Fixture::new(Setup {
+        split_live: Some(root_only()),
+        ..Setup::default()
+    });
+    let sent = fx.post(Call::new(&fx.body("late")));
+    assert_eq!(
+        sent.status,
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "{}",
+        sent.body
+    );
+    assert_eq!(error_of(&sent), "state_uncertain");
+    assert!(fx.text().contains("late"), "the write itself landed");
+    let listed = fx.get();
+    assert_eq!(listed["revision"], fx.revision());
+    let entry = listed["keys"]
+        .as_array()
+        .and_then(|k| k.iter().find(|e| e["name"] == "late"));
+    assert_eq!(entry.map(|e| e["live"].clone()), Some(Value::Bool(false)));
+    assert!(!sent.body.contains(KNOWN), "{}", sent.body);
+}
+
+/// P10 twin: a live key of the requested name under another digest is not
+/// taken as success either.
+#[test]
+fn p10_a_live_key_of_that_name_under_another_digest_is_not_success() {
+    let mut live = root_only();
+    live.api_keys.push(crate::config::ApiKeyConfig {
+        name: "twin".into(),
+        key_sha256: Some(super::keys_create_fixture_tests::spec("another-secret")),
+        backends: vec!["*".into()],
+        ..Default::default()
+    });
+    let fx = Fixture::new(Setup {
+        split_live: Some(live),
+        ..Setup::default()
+    });
+    let sent = fx.post(Call::new(&fx.body("twin")));
+    assert_eq!(
+        sent.status,
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "{}",
+        sent.body
+    );
+    assert_eq!(error_of(&sent), "state_uncertain");
+    assert!(!sent.body.contains(KNOWN), "{}", sent.body);
+}
+
+/// A4 order: the intent is appended (fsynced) before the writer commits, and
+/// the intent's base is the file as it was.
+#[test]
+fn a4_the_intent_is_durable_before_the_writer_commits() {
+    let fx = Fixture::new(Setup::default());
+    let target = crate::identity_grants::journal::resolved(&fx.path());
+    crate::config_reload::write_order::take(&target);
+    assert_eq!(
+        fx.post(Call::new(&fx.body("ordered"))).status,
+        StatusCode::CREATED
+    );
+    assert_eq!(
+        crate::config_reload::write_order::take(&target),
+        ["intent", "commit"]
+    );
 }
