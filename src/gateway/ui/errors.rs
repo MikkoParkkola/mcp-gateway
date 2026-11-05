@@ -30,6 +30,16 @@ pub(super) fn no_config_file() -> (StatusCode, Json<Value>) {
     structured_error(StatusCode::CONFLICT, "no_config_file", NO_CONFIG_FILE)
 }
 
+/// gateway.yaml could not be read, or the read guard refused it or its
+/// recovery files. Fixed text for every route that writes it: the reason
+/// names the file, so it goes to the log only.
+pub(super) fn config_refusal() -> (StatusCode, Json<Value>) {
+    flat_error(
+        StatusCode::SERVICE_UNAVAILABLE,
+        "gateway.yaml could not be loaded",
+    )
+}
+
 pub(super) fn admin_auth_required() -> (StatusCode, Json<Value>) {
     flat_error(StatusCode::FORBIDDEN, "Admin authentication required")
 }

@@ -20,7 +20,9 @@ use axum::response::{IntoResponse, Response};
 use serde::Deserialize;
 use serde_json::json;
 
-use super::super::errors::{config_path_unavailable, flat_error, no_config_file, structured_error};
+use super::super::errors::{
+    config_path_unavailable, config_refusal, flat_error, no_config_file, structured_error,
+};
 use super::super::guard::Guard;
 use super::{Gateway, name_refusal, read_gateway};
 use crate::config::SecretStoreChoice;
@@ -96,15 +98,6 @@ fn fixed(status: StatusCode, message: &'static str) -> Response {
     flat_error(status, message).into_response()
 }
 
-/// gateway.yaml could not be read or was refused: by the route's own read or
-/// by the writer's. Fixed text: the reason names the file, so it never leaves.
-fn config_refusal() -> Response {
-    fixed(
-        StatusCode::SERVICE_UNAVAILABLE,
-        "gateway.yaml could not be loaded",
-    )
-}
-
 const FAILED: &str = "the adopt did not complete";
 const STORE_UNAVAILABLE: &str = "secrets.store cannot take the discovered values";
 
@@ -173,7 +166,7 @@ pub(super) fn answer(name: &str, written: Result<ReplaceOutcome, ReplaceError>) 
                 detail = %why,
                 "discovery adopt: the config write refused gateway.yaml"
             );
-            config_refusal()
+            config_refusal().into_response()
         }
     }
 }
@@ -363,7 +356,7 @@ pub(super) async fn adopt_discovery(
         tokio::task::spawn_blocking(move || read_gateway(Some(&path))).await
     };
     let Ok(Ok(gateway)) = read else {
-        return config_refusal();
+        return config_refusal().into_response();
     };
     let Gateway::File { revision, config } = &gateway else {
         return no_config_file().into_response();

@@ -8,7 +8,9 @@ use std::sync::Arc;
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 
-use super::super::errors::{config_path_unavailable, flat_error, no_config_file, structured_error};
+use super::super::errors::{
+    config_path_unavailable, config_refusal, flat_error, no_config_file, structured_error,
+};
 use crate::config::Config;
 use crate::config_persistence::keyedit::Template;
 use crate::config_persistence::{NOT_IN_PLACE, edit_text, not_in_place};
@@ -91,22 +93,18 @@ where
     };
     let written = super::super::write_audited(state, context, replace, kind).await;
     let answered = decided.lock().take();
-    // The writer could not read a file deleted since the check above.
-    let gone = matches!(written, Err(ReplaceError::Failed(_))) && absent(&path).await;
     match (written, answered) {
         (Err(ReplaceError::Refused(why)), Some(Err((code, message)))) if why == ROUTE_ANSWERED => {
             Err(Box::new(flat_error(code, message).into_response()))
         }
         (Ok(outcome), Some(Ok(value))) => Ok((value, outcome.reload)),
         (Ok(_), _) => Err(Box::new(incomplete("no_answer"))),
-        (Err(ReplaceError::Failed(_)), _) if gone => {
-            Err(Box::new(no_config_file().into_response()))
-        }
         (Err(e), _) => Err(Box::new(refused_write(&e))),
     }
 }
 
-/// gateway.yaml is not there: the one case answered `no_config_file`.
+/// gateway.yaml is not there before any lock: answered `no_config_file`
+/// with nothing taken or written (no lock sidecar beside a missing file).
 async fn absent(path: &std::path::Path) -> bool {
     matches!(tokio::fs::metadata(path).await, Err(e) if e.kind() == std::io::ErrorKind::NotFound)
 }
@@ -176,11 +174,18 @@ fn refused_write(e: &ReplaceError) -> axum::response::Response {
         ReplaceError::RollbackFailed { .. } => incomplete("rollback_failed"),
         ReplaceError::Failed(_) => incomplete("failed"),
         ReplaceError::Secrets(_) => unwritten("secrets"),
-        // Merge: the writer's typed missing file, answered as the re-stat
-        // did; the guard's refusal is answered state-neutral until its own
-        // answer lands.
+        // gateway.yaml went while the writer held it: the shared 409.
         ReplaceError::NoConfigFile => no_config_file().into_response(),
-        ReplaceError::ConfigRefused(_) => incomplete("config_refused"),
+        // The guard refused gateway.yaml or its recovery files. Its text
+        // names the file and the fix: the log gets it, the answer never does.
+        ReplaceError::ConfigRefused(why) => {
+            tracing::warn!(
+                variant = "config_refused",
+                detail = %why,
+                "backend route: the config write refused gateway.yaml"
+            );
+            config_refusal().into_response()
+        }
     }
 }
 
