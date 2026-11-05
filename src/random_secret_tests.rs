@@ -155,6 +155,29 @@ fn random_secret_is_called_only_where_listed() {
     );
 }
 
+/// The counts above hold only while every caller names the generator in
+/// full. An alias (`random_secret as mint`), a glob (`random_secret::*`) or
+/// a grouped import (`random_secret::{..}`) would let a listed file call it
+/// any number of times under another name with its count unchanged, so none
+/// is allowed in production code (rustfmt fixes the spacing these match).
+#[test]
+fn random_secret_is_never_imported_under_another_name() {
+    let imports: Vec<(String, &str)> = production_sources()
+        .into_iter()
+        .filter(|(file, _)| file != "src/random_secret.rs")
+        .flat_map(|(file, code)| {
+            ["random_secret as", "random_secret::*", "random_secret::{"]
+                .into_iter()
+                .filter(move |form| code.contains(form))
+                .map(move |form| (file.clone(), form))
+        })
+        .collect();
+    assert!(
+        imports.is_empty(),
+        "call crate::random_secret::random_secret( in full: {imports:?}"
+    );
+}
+
 /// The randomness entry points a generator can draw from, in any spelling
 /// this codebase uses.
 const RNG_ENTRY_POINTS: &[&str] = &[
@@ -198,13 +221,15 @@ const RANDOM_BASE64URL_REVIEWED: &[(&str, &str)] = &[
     ),
     (
         "src/protocol/continuation/keyring.rs",
-        "signing-key material; base64url encodes the encrypted continuation envelope",
+        "AEAD key material; base64url encodes the encrypted continuation envelope",
     ),
 ];
 
-/// No other production code draws random bytes and base64url-encodes them
-/// unreviewed: a second credential generator would escape the caller list,
-/// whatever RNG or spelling it used.
+/// A file-level tripwire, not a proof: a production file that names one of
+/// the RNG entry points above AND uses base64url must be reviewed and listed.
+/// It does not see hex or standard-base64 generators, RNG names brought in by
+/// `use`, or a second site inside a listed file; the enforced replacement is
+/// clippy `disallowed-methods` on the RNG APIs, tracked separately.
 #[test]
 fn no_other_credential_generator_exists() {
     let mut found: Vec<String> = production_sources()
