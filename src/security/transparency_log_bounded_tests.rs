@@ -13,17 +13,6 @@ use crate::test_wait::HANG_BOUND;
 
 const BOUND: Duration = Duration::from_millis(200);
 
-/// Whether the late write cleared its generation within `HANG_BOUND`. Waits
-/// on the blocking pool, so no runtime worker is held while it waits.
-/// A test that releases a held write waits on this before its `dir` drops:
-/// the write recreates the log's folder, and nothing would remove it.
-async fn write_cleared(l: &Arc<TransparencyLogger>) -> bool {
-    let l = Arc::clone(l);
-    tokio::task::spawn_blocking(move || l.wait_write_cleared_for_test(HANG_BOUND))
-        .await
-        .expect("the wait does not panic")
-}
-
 pub(super) fn logger(
     dir: &tempfile::TempDir,
     policy: AuditFailurePolicy,
@@ -80,8 +69,7 @@ async fn stalled_append_times_out() {
     let err = call.await.unwrap().unwrap_err();
     assert_eq!(err.kind(), io::ErrorKind::TimedOut);
     assert!(l.is_stalled());
-    release.release();
-    assert!(write_cleared(&l).await, "the late write never finished");
+    l.release_and_drain(release).await;
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -98,8 +86,7 @@ async fn stall_pins_no_runtime_worker() {
     // timing: lower-bound
     tokio::time::sleep(Duration::from_millis(20)).await;
     assert!(call.await.unwrap().is_err());
-    release.release();
-    assert!(write_cleared(&l).await, "the late write never finished");
+    l.release_and_drain(release).await;
 }
 
 /// T2: callers that arrive while a write is stuck wait for the one permit
@@ -164,8 +151,7 @@ async fn stall_parks_one_blocking_thread() {
         0,
         "callers were refused, not queued on the permit"
     );
-    release.release();
-    assert!(write_cleared(&l).await, "the late write never finished");
+    l.release_and_drain(release).await;
 }
 
 /// Once stalled, fail-closed appends refuse at once: no permit wait, no
@@ -190,8 +176,7 @@ async fn fail_closed_calls_fail_fast_while_stalled() {
         }
     }
     assert_eq!(l.bound.closures_entered.load(Ordering::Acquire), 1);
-    release.release();
-    assert!(write_cleared(&l).await, "the late write never finished");
+    l.release_and_drain(release).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -211,10 +196,9 @@ async fn admit_fails_fast_while_stalled_and_late_success_clears_it() {
     );
     l.set_append_failure_for_test(false);
     // The stuck write finishes: the stall clears and calls are admitted.
-    release.release();
     // The late write finishes on another thread, however late a loaded
-    // runner schedules it: wait for its clear (MIK-8294).
-    assert!(write_cleared(&l).await, "the late write never finished");
+    // runner schedules it: wait for its clear.
+    l.release_and_drain(release).await;
     assert!(!l.is_stalled());
     assert!(l.admit().await.is_ok());
     healthy_invocation(&l).await.unwrap();
@@ -232,8 +216,7 @@ async fn best_effort_is_admitted_while_stalled() {
     assert!(invocation(&l).await.is_err());
     assert!(l.is_stalled());
     assert!(l.admit().await.is_ok(), "best effort keeps serving");
-    release.release();
-    assert!(write_cleared(&l).await, "the late write never finished");
+    l.release_and_drain(release).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -283,8 +266,7 @@ async fn late_failure_degrades_with_cause() {
     let release = stall(&l);
     assert!(invocation(&l).await.is_err());
     assert!(l.is_stalled());
-    release.release();
-    assert!(write_cleared(&l).await, "the late write never finished");
+    l.release_and_drain(release).await;
     assert!(!l.is_stalled(), "the late result cleared the stall");
     assert_eq!(l.last_failure_cause(), Some("storage_full"));
     assert!(l.admit().await.is_err(), "degraded, not healthy");
@@ -314,8 +296,7 @@ async fn append_timeout_is_counted() {
             .any(|line| line.starts_with("mcp_audit_append_timeouts_total") && line.ends_with(" 1")),
         "{rendered}"
     );
-    release.release();
-    assert!(write_cleared(&l).await, "the late write never finished");
+    l.release_and_drain(release).await;
 }
 
 /// #2252. A degraded log whose probe write hangs must be marked stalled by
@@ -361,6 +342,5 @@ async fn probe_timeout_marks_the_log_stalled() {
         probes,
         "no second probe while stalled"
     );
-    release.release();
-    assert!(write_cleared(&l).await, "the late write never finished");
+    l.release_and_drain(release).await;
 }
