@@ -612,6 +612,7 @@ impl Audited {
 #[cfg(unix)]
 #[tokio::test]
 async fn a_backend_write_on_a_group_writable_config_is_refused() {
+    use std::os::unix::fs::PermissionsExt as _;
     let gateway = Audited::new().await;
     Audited::chmod(&gateway.config(), 0o620);
     let answers = [
@@ -623,7 +624,6 @@ async fn a_backend_write_on_a_group_writable_config_is_refused() {
         gateway.assert_refused(route, answer);
     }
     assert_eq!(gateway.text(), START, "the refused file was written");
-    use std::os::unix::fs::PermissionsExt as _;
     let mode = std::fs::metadata(gateway.config())
         .expect("stat")
         .permissions()

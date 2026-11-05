@@ -52,16 +52,12 @@ async fn a_config_deleted_while_the_adopt_stores_a_value_answers_no_config_file(
         vec![stdio("tool", "npx tool", &[("API_KEY", CANARY)])],
     )
     .await;
+    let path = route.dir.path().join("audit.jsonl");
     let log = Arc::new(
         crate::security::TransparencyLogger::open(Arc::new(
             crate::security::transparency_log::TransparencyLogConfig {
                 enabled: true,
-                path: route
-                    .dir
-                    .path()
-                    .join("audit.jsonl")
-                    .to_string_lossy()
-                    .into_owned(),
+                path: path.to_string_lossy().into_owned(),
                 key_id: "adopt-deleted".to_string(),
                 ..Default::default()
             },
@@ -109,14 +105,12 @@ async fn a_config_deleted_while_the_adopt_stores_a_value_answers_no_config_file(
         "{body}"
     );
     assert_eq!(
-        creates.load(Ordering::SeqCst),
-        1,
-        "premise: one entry was made"
-    );
-    assert_eq!(
-        deletes.load(Ordering::SeqCst),
-        1,
-        "the entry was not discarded"
+        (
+            creates.load(Ordering::SeqCst),
+            deletes.load(Ordering::SeqCst)
+        ),
+        (1, 1),
+        "(creates, deletes): one entry made, then discarded"
     );
     assert!(!route.config().exists(), "gateway.yaml was recreated");
     let records: Vec<Value> = std::fs::read_to_string(log.path())
