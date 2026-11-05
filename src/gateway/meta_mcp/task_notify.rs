@@ -150,8 +150,8 @@ impl MetaMcp {
             restored_output,
             withheld,
             staged,
-            holds,
             refused_by,
+            holds,
         })
     }
 
