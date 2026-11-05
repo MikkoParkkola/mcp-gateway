@@ -545,3 +545,73 @@ fn ac_control_2_a_budget_refusal_cannot_be_downgraded_by_a_rule() {
 
 #[path = "firewall_anomaly_tests.rs"]
 mod anomaly;
+
+/// A firewall whose memory scanner watches `scan_tools` only.
+fn scanning(scan_tools: &[&str]) -> Firewall {
+    let cfg = FirewallConfig {
+        memory_poisoning: memory_scanner::MemoryPoisoningConfig {
+            scan_tools: scan_tools.iter().map(ToString::to_string).collect(),
+            ..memory_scanner::MemoryPoisoningConfig::default()
+        },
+        ..FirewallConfig::default()
+    };
+    Firewall::from_config(cfg, None)
+}
+
+fn poisoning_found(fw: &Firewall, tool: &str) -> bool {
+    let token = format!("<|{}|>", "im_start");
+    let args = json!({ "content": token });
+    fw.check_request("s1", "srv", tool, &args, "caller", "s1")
+        .findings
+        .iter()
+        .any(|f| f.scan_type == ScanType::MemoryPoisoning)
+}
+
+#[test]
+fn an_entry_with_an_uppercase_letter_scans() {
+    // The documented match is case-insensitive on both sides.
+    let fw = scanning(&["STORE"]);
+    for tool in ["store", "Store_Memory"] {
+        assert!(poisoning_found(&fw, tool), "{tool} was not scanned");
+    }
+}
+
+#[test]
+fn lowercase_lists_match_exactly_the_tools_they_matched_before() {
+    // Written out by hand from the substring rule as it stood: any change in
+    // what a lowercase list matches fails here.
+    let default = default_firewall();
+    for (tool, scanned) in [
+        ("remember", true),
+        ("batch_remember", true),
+        ("store", true),
+        ("kv_set", true),
+        ("kv_search", true),
+        ("my_remember_v2", true),
+        ("Store_Memory", true),
+        ("KV_SET", true),
+        ("restore", true),
+        ("search_web", false),
+        ("get", false),
+        ("memo", false),
+    ] {
+        assert_eq!(
+            poisoning_found(&default, tool),
+            scanned,
+            "default list, {tool}"
+        );
+    }
+    let custom = scanning(&["write_memory"]);
+    for (tool, scanned) in [
+        ("write_memory", true),
+        ("Write_Memory_v2", true),
+        ("remember", false),
+        ("store", false),
+    ] {
+        assert_eq!(
+            poisoning_found(&custom, tool),
+            scanned,
+            "custom list, {tool}"
+        );
+    }
+}

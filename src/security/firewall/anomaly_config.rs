@@ -147,6 +147,35 @@ mod tests {
         config.validate()
     }
 
+    /// `scan_tools` is a substring match, so an empty entry is in every tool
+    /// name and makes every call a memory write. Refused whatever the firewall
+    /// and the scanner say, so turning either on never surfaces it.
+    #[test]
+    fn an_empty_memory_scan_tools_entry_is_refused_at_load() {
+        for firewall in ["true", "false"] {
+            for scanner in ["true", "false"] {
+                let err = load(&format!(
+                    "    enabled: {firewall}\n    memory_poisoning:\n      enabled: {scanner}\n      \
+                     scan_tools: [\"remember\", \"\"]\n"
+                ))
+                .expect_err("an empty entry loaded")
+                .to_string();
+                assert!(
+                    err.contains("security.firewall.memory_poisoning.scan_tools[1]"),
+                    "error does not name the entry: {err}"
+                );
+                assert!(err.contains("every tool"), "error does not say why: {err}");
+            }
+        }
+    }
+
+    /// Case is no load error: matching ignores it.
+    #[test]
+    fn an_uppercase_memory_scan_tools_entry_loads() {
+        load("    memory_poisoning:\n      scan_tools: [\"STORE\", \"Kv_Set\"]\n")
+            .expect("case is no error");
+    }
+
     #[test]
     fn anomaly_ranges_refused_at_load() {
         let on = "    anomaly_detection: true\n";

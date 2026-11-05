@@ -592,6 +592,21 @@ mod tests {
         assert!(!s.is_memory_write_tool("remember"));
     }
 
+    #[test]
+    fn an_uppercase_scan_tools_entry_still_scans() {
+        // The documented match is case-insensitive on both sides: an entry
+        // written `STORE` scans `store`, `Store` and `kv_STORE_v2`.
+        let cfg = MemoryPoisoningConfig {
+            scan_tools: vec!["STORE".to_string(), "Kv_Set".to_string()],
+            ..MemoryPoisoningConfig::default()
+        };
+        let s = MemoryScanner::new(cfg);
+        for name in ["store", "Store", "kv_STORE_v2", "kv_set", "KV_SET"] {
+            assert!(s.is_memory_write_tool(name), "{name} is a memory write");
+        }
+        assert!(!s.is_memory_write_tool("search"));
+    }
+
     // ── Nested JSON values scanned recursively ────────────────────────────────
 
     #[test]
