@@ -49,10 +49,12 @@ fn during_a_catch_up_each_upkeep_runs_once_between_pages() {
             during_catch_up,
             "a catch-up after serving {served:?}"
         );
+        // Following the live logs, only a snapshot is capped: after one, a
+        // ready live row goes first. Checks and keep-alives never wait.
         assert_eq!(
             servable(served, Phase::Live),
-            u(true, true, true),
-            "the live logs cap nothing, whatever was served: {served:?}"
+            u(true, true, !served.snapshot),
+            "the live logs cap only a repeated snapshot: {served:?}"
         );
     }
 }
