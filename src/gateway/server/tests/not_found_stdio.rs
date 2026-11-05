@@ -19,7 +19,6 @@ async fn a_stdio_call_to_a_nonexistent_backend_records_not_found() {
     let mut meta = MetaMcp::new(Arc::new(BackendRegistry::new()));
     meta.enable_transparency_log(logger(&dir, AuditFailurePolicy::BestEffort));
     let meta = Arc::new(meta);
-    let tool_policy = Arc::new(crate::security::ToolPolicy::default());
     let mtls_policy = Arc::new(crate::mtls::MtlsPolicy::from_config(
         &crate::mtls::MtlsConfig::default(),
     ));
@@ -34,7 +33,7 @@ async fn a_stdio_call_to_a_nonexistent_backend_records_not_found() {
     });
     let response = super::super::Gateway::dispatch_single_for_client(
         &meta,
-        &tool_policy,
+        &crate::gateway::authz::default_line(&meta),
         &mtls_policy,
         request,
         super::super::StdioClient {
