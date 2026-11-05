@@ -37,7 +37,7 @@ providers:
 ";
 
 fn subject() -> GrantSubject {
-    GrantSubject::new("cloudflare_access", "user-123", None)
+    GrantSubject::for_test("cloudflare_access", "user-123", None)
 }
 
 async fn meta_with_grant_for(source: ProofSource) -> (MetaMcp, tempfile::TempDir) {

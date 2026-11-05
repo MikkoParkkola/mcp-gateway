@@ -314,6 +314,7 @@ async fn traditional_http_tools_list(mode: Mode) {
     let tools = listed_tools(&response);
     assert_invoke_schema(tools, mode);
     assert_foreign_tools_lack_nonce(tools);
+    gateway.stop().await;
 }
 
 async fn traditional_stdio_tools_list(mode: Mode) {
@@ -378,6 +379,7 @@ async fn http_code_mode_schemas_never_gain_nonce() {
         .call(&session, &tools_list_request(&json!("code-mode-static")))
         .await;
     assert_code_mode_surface(listed_tools(&static_list));
+    gateway.stop().await;
 }
 
 #[tokio::test]
@@ -410,6 +412,7 @@ async fn http_url_override_code_mode_does_not_borrow_invoke_nonce() {
         .call(&session, &tools_list_request(&json!("traditional-control")))
         .await;
     assert_invoke_schema(listed_tools(&traditional), Mode::Required);
+    gateway.stop().await;
 }
 
 #[tokio::test]
@@ -467,4 +470,6 @@ async fn http_exposure_filter_does_not_readd_suppressed_tools() {
     );
     assert_invoke_schema(kept, Mode::Required);
     assert_foreign_tools_lack_nonce(kept);
+    gateway.stop().await;
+    hidden_gateway.stop().await;
 }

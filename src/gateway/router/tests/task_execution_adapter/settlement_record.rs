@@ -23,6 +23,7 @@ use crate::security::firewall::tenant_guard::TenantGuardConfig;
 use crate::security::firewall::{Firewall, FirewallConfig};
 use crate::security::transparency_log::TransparencyLogConfig;
 
+mod ci_rewrite_record;
 mod races;
 
 const UPSTREAM_HANDLE: &str = "upstream-job-settlement-record";

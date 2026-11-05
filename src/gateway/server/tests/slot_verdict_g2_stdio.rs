@@ -57,7 +57,7 @@ fn valid() -> Value {
 struct TaskStore {
     tasks: Arc<StdioTasks>,
     _expiry: crate::gateway::task_service::execution::ExpirySweep,
-    _dir: tempfile::TempDir,
+    _dir: std::sync::Arc<tempfile::TempDir>,
 }
 
 /// A stdio gateway over the sole operator's managed backend, both slots warm.
@@ -116,7 +116,7 @@ impl Stdio {
             "params": {"name": TOOL, "arguments": {"folder": "inbox"}}});
         let answer = Gateway::dispatch_single_for_client(
             &self.meta,
-            &Arc::new(crate::security::ToolPolicy::default()),
+            &crate::gateway::authz::default_line(&self.meta),
             &Arc::new(crate::mtls::MtlsPolicy::from_config(
                 &crate::mtls::MtlsConfig::default(),
             )),
@@ -193,7 +193,7 @@ impl Stdio {
         let request = json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params});
         Gateway::dispatch_single_for_client(
             &self.meta,
-            &Arc::new(crate::security::ToolPolicy::default()),
+            &crate::gateway::authz::default_line(&self.meta),
             &Arc::new(crate::mtls::MtlsPolicy::from_config(
                 &crate::mtls::MtlsConfig::default(),
             )),
@@ -321,7 +321,7 @@ impl Stdio {
     /// Open the session's durable task store (the fixture otherwise serves
     /// `tasks: None`, so X14 never runs).
     async fn with_tasks(mut self) -> Self {
-        let dir = tempfile::tempdir().expect("store root");
+        let dir = std::sync::Arc::new(tempfile::tempdir().expect("store root"));
         let mut config = crate::config::Config::default();
         config.tasks.store_dir = dir.path().display().to_string();
         let (tasks, expiry) = stdio_tasks::open(
@@ -337,6 +337,7 @@ impl Stdio {
         )
         .await
         .expect("the stdio store opens");
+        tasks.service.keep_test_dir(std::sync::Arc::clone(&dir));
         self.tasks = Some(TaskStore {
             tasks,
             _expiry: expiry,
@@ -615,7 +616,7 @@ async fn x1_stdio_per_user_surfaced_name_is_sanitized() {
         "params": {"name": TOOL, "arguments": {"folder": "a\u{0}b"}}});
     let answer = Gateway::dispatch_single_for_client(
         &meta,
-        &Arc::new(crate::security::ToolPolicy::default()),
+        &crate::gateway::authz::default_line(&meta),
         &Arc::new(crate::mtls::MtlsPolicy::from_config(
             &crate::mtls::MtlsConfig::default(),
         )),

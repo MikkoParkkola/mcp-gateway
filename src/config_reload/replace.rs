@@ -21,6 +21,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use crate::config::UnreadConfig;
 use crate::config_persistence::journal;
 use crate::config_persistence::lock::{Locked, NotLocked, lock_config, lock_config_deferred};
 use crate::config_persistence::{FileMode, Symlink, write_atomic};
@@ -192,6 +193,12 @@ pub(crate) enum ReplaceError {
     Failed(String),
     /// The secret store refused the [`SecretStep`]; nothing was written.
     Secrets(SaveError<std::convert::Infallible>),
+    /// gateway.yaml does not exist; nothing was written.
+    NoConfigFile,
+    /// The read check every loader applies refused gateway.yaml (its type,
+    /// mode, owner or encoding); nothing was written. The text names the
+    /// file and the fix, for the log only.
+    ConfigRefused(String),
 }
 
 /// The writer's task, in a task of its own: dropping the caller (a request
@@ -281,6 +288,8 @@ pub(crate) fn settle_for(result: &Result<ReplaceOutcome, ReplaceError>) -> Settl
         | ReplaceError::Refused(_)
         | ReplaceError::Stage(_)
         | ReplaceError::Secrets(_)
+        | ReplaceError::NoConfigFile
+        | ReplaceError::ConfigRefused(_)
         // The rollback came back: a failed one is `RollbackFailed`.
         | ReplaceError::Unsupported(_)
         | ReplaceError::Write(_)
@@ -436,6 +445,7 @@ impl ReloadContext {
             match e {
                 NotLocked::Busy => ReplaceError::Busy,
                 NotLocked::Failed(message) => ReplaceError::Failed(message),
+                NotLocked::Refused(message) => ReplaceError::ConfigRefused(message),
             }
         })?;
         let target = locked.target.clone();
@@ -449,9 +459,17 @@ impl ReloadContext {
                 self.trusted_config.display()
             )));
         }
-        let current = std::fs::read(&target).map_err(|e| {
-            ReplaceError::Failed(format!("reading {} failed: {e}", target.display()))
-        })?;
+        // The read every loader uses, mode and owner judged on the handle read:
+        // a file another account can change is refused before any intent,
+        // entry or write, so its edit is never rewritten owner-only.
+        let current = match crate::config::read_config_text(&target) {
+            Ok(Some(text)) => text.into_bytes(),
+            Ok(None) => return Err(ReplaceError::NoConfigFile),
+            Err(UnreadConfig::Refused(why)) => return Err(ReplaceError::ConfigRefused(why)),
+            Err(UnreadConfig::Failed(why) | UnreadConfig::NotTheConfig(why)) => {
+                return Err(ReplaceError::Failed(why));
+            }
+        };
         if let Expected::Revision(seen) = &replace.expected {
             let now = FileRevision::of(&current);
             if &now != seen {
@@ -664,7 +682,7 @@ impl ReloadContext {
             Ok(_) => error,
             Err(rollback) => ReplaceError::RollbackFailed {
                 journal: journal::journal_path(target),
-                error: rollback,
+                error: rollback.into_message(),
             },
         }
     }

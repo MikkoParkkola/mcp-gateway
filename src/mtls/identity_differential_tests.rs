@@ -155,7 +155,7 @@ fn no_leaf_webpki_accepts_is_one_the_identity_parser_rejects() {
             parsed
                 .as_ref()
                 .ok()
-                .and_then(|identity| identity.common_name.clone()),
+                .and_then(|identity| identity.as_ref()?.common_name().map(str::to_owned)),
         );
         if webpki.is_ok() && parsed.is_err() {
             split.push(name);

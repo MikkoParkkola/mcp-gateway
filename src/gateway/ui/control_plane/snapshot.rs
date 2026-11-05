@@ -41,6 +41,10 @@ pub(super) fn local_runtime_snapshot(
     // decision queue, counts, coverage) sees only its own grants and events.
     let all_principals =
         ControlPlaneRbac::authorize(actor, ControlPlaneAction::ReadAllPrincipals).allowed;
+    // A caller scoped to some backends is shown nothing gateway-wide: no
+    // policy, grant or store audit event, whatever its role. Every derived
+    // field reads the snapshot, so it is narrowed here once.
+    let scoped = is_scoped(client);
     let mut snapshot = ControlPlaneSnapshot::default();
     snapshot.users.push(ControlPlaneUser {
         user_id: actor.actor_id.clone(),
@@ -58,7 +62,9 @@ pub(super) fn local_runtime_snapshot(
             });
     }
 
-    snapshot.policies = local_policy_rows(generation);
+    if !scoped {
+        snapshot.policies = local_policy_rows(generation);
+    }
 
     #[allow(
         clippy::disallowed_methods,
@@ -115,7 +121,7 @@ pub(super) fn local_runtime_snapshot(
         .meta_mcp
         .identity_grant_rows()
         .into_iter()
-        .filter(|grant| all_principals || grant_subject == Some(&grant.subject))
+        .filter(|grant| !scoped && (all_principals || grant_subject == Some(&grant.subject)))
     {
         snapshot
             .grants
@@ -137,6 +143,12 @@ pub(super) fn local_runtime_snapshot(
         snapshot
             .audit_events
             .retain(|event| event.actor_id == actor.actor_id);
+    }
+    // No written event names a backend (`pin_written_action`), so a scoped
+    // caller is shown none. The store is still read, so a failed read is
+    // still reported.
+    if scoped {
+        snapshot.audit_events.clear();
     }
 
     (snapshot, store_read_degraded)
@@ -205,11 +217,10 @@ pub(super) fn control_plane_grant_from_identity(
         grant.revoked_at.is_some() || grant.expires_at.is_some_and(|expiry| expiry <= now);
     ControlPlaneGrant {
         grant_id: grant.grant_id,
-        subject_id: grant
-            .subject
-            .label
-            .clone()
-            .unwrap_or_else(|| format!("{}:{}", grant.subject.authority, grant.subject.subject)),
+        subject_id: grant.subject.label().map_or_else(
+            || format!("{}:{}", grant.subject.authority(), grant.subject.subject()),
+            str::to_owned,
+        ),
         server_id: format!("capability:{}", grant.capability),
         tool_id: grant.tool,
         status: if revoked {
@@ -283,16 +294,32 @@ pub(super) fn local_policy_rows(
 }
 
 pub(super) fn can_view_backend(client: Option<&AuthenticatedClient>, backend_name: &str) -> bool {
-    client.is_some_and(|client| {
-        // Backend ACCESS is not inventory VISIBILITY. The anonymous identity
-        // used when authentication is disabled carries `backends: ["*"]` so
-        // that ordinary tool invocation keeps working, which handed it the
-        // whole control-plane inventory through `can_access_backend`. A scoped
-        // API key still sees the backends it is scoped to, admin or not: the
-        // scope bounds every role.
-        client.authenticated
-            && crate::gateway::authz::BackendGrant::for_ui(Some(client)).admits(backend_name)
-    })
+    snapshot_scope(client).admits(backend_name)
+}
+
+/// The backend scope the snapshot is read by. Backend ACCESS is not inventory
+/// VISIBILITY: the anonymous identity used when authentication is disabled
+/// carries `backends: ["*"]` so that tool invocation keeps working, so only
+/// an authenticated client's UI grant counts, and anyone else reaches
+/// nothing. A scoped API key sees the backends it is scoped to, admin or not.
+pub(super) fn snapshot_scope(
+    client: Option<&AuthenticatedClient>,
+) -> crate::gateway::authz::BackendGrant<'_> {
+    match client {
+        Some(client) if client.authenticated => {
+            crate::gateway::authz::BackendGrant::for_ui(Some(client))
+        }
+        _ => crate::gateway::authz::BackendGrant::Empty,
+    }
+}
+
+/// Whether the snapshot withholds its gateway-wide objects from `client`:
+/// any scope but every backend.
+pub(super) fn is_scoped(client: Option<&AuthenticatedClient>) -> bool {
+    !matches!(
+        snapshot_scope(client),
+        crate::gateway::authz::BackendGrant::Unscoped
+    )
 }
 
 pub(super) fn server_status_from_backend(
@@ -384,6 +411,18 @@ pub(super) struct ControlPlaneResponseFlags {
     pub(super) mutation_disabled_reason: Option<&'static str>,
     /// See [`ControlPlaneApiResponse`].
     pub(super) base_source: ControlPlaneBaseSource,
+    /// Whether the caller is scoped to some backends ([`is_scoped`]).
+    pub(super) reader: Reader,
+}
+
+/// Who a snapshot is read for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Reader {
+    /// A caller holding every backend, or a UI-wide admin.
+    Unscoped,
+    /// A caller scoped to some backends: shown no gateway-wide row, so it
+    /// reads no other principal's either.
+    Scoped,
 }
 
 impl ControlPlaneApiResponse {
@@ -401,6 +440,7 @@ impl ControlPlaneApiResponse {
             export_configured,
             mutation_disabled_reason,
             base_source,
+            reader,
         } = flags;
         let coverage = snapshot.domain_coverage();
         let inventory_counts = ControlPlaneInventoryCounts::from_snapshot(snapshot, &shadow_radar);
@@ -433,7 +473,7 @@ impl ControlPlaneApiResponse {
                 mutating_actions_require_audit: true,
             },
             features: feature_entitlements(mutation_enabled, export_configured),
-            authorizations: ControlPlaneAuthorizationSet::for_actor(&actor),
+            authorizations: ControlPlaneAuthorizationSet::for_actor(&actor, reader),
             coverage,
             coverage_complete: coverage.is_complete(),
             inventory_counts,
@@ -481,6 +521,15 @@ impl ControlPlaneShadowRadar {
             enterprise_boundary: handoff.enterprise_boundary,
             trustcard_input_count: handoff.trustcard_inputs.len(),
             doctor_finding_count: handoff.doctor_findings.len(),
+        }
+    }
+
+    /// The radar for a caller scoped to some backends: not run, every count
+    /// zero. Local discovery is gateway-wide, so it is withheld, not failed.
+    pub(super) fn out_of_scope() -> Self {
+        Self {
+            scan_status: "out_of_scope",
+            ..Self::scan_unavailable()
         }
     }
 
@@ -579,14 +628,24 @@ pub(super) struct ControlPlaneAuthorizationSet {
 }
 
 impl ControlPlaneAuthorizationSet {
-    pub(super) fn for_actor(actor: &ControlPlaneActor) -> Self {
+    /// A [`Reader::Scoped`] caller is withheld every gateway-wide row, so its
+    /// `read_all_principals` reads denied whatever its role allows.
+    pub(super) fn for_actor(actor: &ControlPlaneActor, reader: Reader) -> Self {
         Self {
             read_inventory: ControlPlaneRbac::authorize(actor, ControlPlaneAction::ReadInventory),
             read_evidence: ControlPlaneRbac::authorize(actor, ControlPlaneAction::ReadEvidence),
-            read_all_principals: ControlPlaneRbac::authorize(
-                actor,
-                ControlPlaneAction::ReadAllPrincipals,
-            ),
+            read_all_principals: if reader == Reader::Scoped {
+                ControlPlaneAuthorization {
+                    allowed: false,
+                    reason_code: "CONTROL_BACKEND_SCOPE".to_string(),
+                    reason: "A key scoped to some backends is shown no grant or audit event"
+                        .to_string(),
+                    audit_required: false,
+                    rollback_required: false,
+                }
+            } else {
+                ControlPlaneRbac::authorize(actor, ControlPlaneAction::ReadAllPrincipals)
+            },
             review_evidence: ControlPlaneRbac::authorize(actor, ControlPlaneAction::ReviewEvidence),
             mutate_grant: ControlPlaneRbac::authorize(actor, ControlPlaneAction::MutateGrant),
             mutate_policy: ControlPlaneRbac::authorize(actor, ControlPlaneAction::MutatePolicy),

@@ -7,7 +7,10 @@
 /// session's other rows.
 #[test]
 fn the_catalogue_caller_uses_the_stdio_session_id() {
-    assert_eq!(super::operator().session, super::super::STDIO_SESSION_ID);
+    assert_eq!(
+        super::operator(default_generation()).session,
+        super::super::STDIO_SESSION_ID
+    );
 }
 
 /// MIK-8195 W4: the catalogue relay answers only its own methods. Anything
@@ -18,8 +21,14 @@ async fn a_method_outside_the_catalogue_is_refused() {
         crate::backend::BackendRegistry::new(),
     ));
     for method in ["tools/call", "sampling/createMessage"] {
-        let answer =
-            super::dispatch(&meta, method, crate::protocol::RequestId::Number(7), None).await;
+        let answer = super::dispatch(
+            &meta,
+            method,
+            crate::protocol::RequestId::Number(7),
+            None,
+            default_generation(),
+        )
+        .await;
         assert!(answer.result.is_none(), "{method}: no result");
         let error = answer.error.unwrap_or_else(|| panic!("{method}: refused"));
         assert_eq!(error.code, -32601, "{method}");
@@ -52,4 +61,9 @@ fn t1a_stdio_caller_has_no_api_key_identity() {
         Some(expected),
         "stdio charges its nonce"
     );
+}
+
+/// The default config's generation, for a read that needs one.
+fn default_generation() -> std::sync::Arc<crate::config_reload::Generation> {
+    crate::config_reload::LiveConfig::new(crate::config::Config::default()).generation()
 }

@@ -1,8 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Shared fixture (test plan `2026-09-27-direct-route-guards-test-plan.md`
-//! "Shared fixture") for the direct-route guard cells (MIK-7597). Red-commit
-//! scaffolding only: no test module calls these yet.
+//! "Shared fixture") for the direct-route guard cells (MIK-7597).
 #![allow(dead_code)]
 
 use std::sync::Arc;
@@ -371,8 +370,6 @@ pub(crate) use answers::envelope_in;
 mod quota;
 #[path = "direct_guards_fixture_requests.rs"]
 mod requests;
-#[cfg(feature = "firewall")]
-pub(crate) use egress::fixture_hardened_signed_built_on;
 use egress::{CountingBackend, backend_transport};
 #[cfg(feature = "firewall")]
 pub(crate) use egress::{
@@ -380,6 +377,8 @@ pub(crate) use egress::{
     fixture_hardened_signed_firewalled, fixture_inspecting_on, fixture_inspection_off_on,
     fixture_observing_on, meta_firewall,
 };
+#[cfg(feature = "firewall")]
+pub(crate) use egress::{fixture_hardened_signed_built_on, fixture_logged};
 #[cfg(feature = "firewall")]
 pub(crate) use quota::Minting;
 #[cfg(feature = "cost-governance")]
@@ -767,6 +766,7 @@ async fn fixture_inner(
         META_FIREWALL.with(|f| *f.borrow_mut() = Some(Arc::clone(&meta_firewall)));
         meta.set_firewall(Some(meta_firewall));
     }
+    meta.set_live_config(Arc::clone(&state_mut.live_config)); // as startup wires it
     state_mut.meta_mcp = Arc::new(build(meta));
     let router = create_router(Arc::clone(&state));
     Fx {

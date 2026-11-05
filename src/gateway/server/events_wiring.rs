@@ -49,6 +49,8 @@ pub(super) fn install(
     }
     let store_dir = expand_home_path(&config.events.store_dir);
     let hub = crate::events::EventsHub::open(&config.events, &store_dir)?;
+    #[cfg(test)]
+    hub.opened_by_gateway();
     if config.webhooks.enabled {
         hub.set_webhook_registry(Arc::clone(webhooks));
         webhooks.write().set_events(Arc::clone(&hub));

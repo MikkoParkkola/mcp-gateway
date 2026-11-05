@@ -91,6 +91,7 @@ src/gateway/auth_resolved.rs	refuse_collisions	refuse_shared_principals	1	no-rec
 src/gateway/auth_resolved.rs	try_from_config_keyed	refuse_collisions	1	no-record	config load: the key list's collision check (refuse_collisions)
 src/gateway/auth_resolved.rs	with_keys_of	refuse_collisions	1	no-record	config reload: a reloaded key list that collides is refused whole; no call is delivered
 src/gateway/authz.rs	authorize_backend	backend_refusal	1	feeds	the authorization error; meta and stdio route stages raise it, the direct 403 is classed Denied
+src/gateway/authz.rs	decide	tool_policy_refusal	1	feeds	the stdio authorizer's tool-policy error; the stdio route stage raises it
 src/gateway/delivery_facts.rs	echo_refusal_delivered	is_echo_refusal	1	not-delivered	a predicate: whether the delivered error reads as the scrub's refusal, read with the cell's echo_refusal_built
 src/gateway/meta_mcp/account_outcome.rs	judge_account	audit_transient_refusal	1	not-delivered	audit row
 src/gateway/meta_mcp/admission.rs	admit_meta_sync_unrefunded	refuse_on_playbook_run	1	not-a-decision	client-protocol rejection: retry fields on a playbook run
@@ -126,8 +127,8 @@ src/gateway/meta_mcp/invoke/chokepoint.rs	route_request_scan	request_refusal	1	r
 src/gateway/meta_mcp/invoke/continuation.rs	redeem_retry	note_refusal	1	not-delivered	worker clock note
 src/gateway/meta_mcp/invoke/continuation.rs	seal_direct_interim	refusal	1	recorded	direct undeclared question, after dispatch; raised here
 src/gateway/meta_mcp/invoke/dispatch.rs	admit_spend	gateway_refused	1	recorded	sealed refusal, recorded at the outlet
-src/gateway/meta_mcp/invoke/dispatch_guards.rs	admit_backend_wide	gateway_refused	1	recorded	sealed refusal, recorded at the outlet
-src/gateway/meta_mcp/invoke/dispatch_guards.rs	admit_enabled_capability	gateway_refused	1	recorded	sealed refusal, recorded at the outlet
+src/gateway/meta_mcp/invoke/dispatch_guards.rs	admit_backend_wide_explained	gateway_refused	1	recorded	sealed refusal, recorded at the outlet
+src/gateway/meta_mcp/invoke/dispatch_guards.rs	admit_enabled_capability_explained	gateway_refused	1	recorded	sealed refusal, recorded at the outlet
 src/gateway/meta_mcp/invoke/dispatch_guards.rs	firewall_refusal_body	Error::ResponseFirewallRefused	1	not-delivered	the stored body a replay serves
 src/gateway/meta_mcp/invoke/egress.rs	inspect_discovery_value	Error::ResponseFirewallRefused	1	recorded	the frame is marked delivery_refusal at the outlet
 src/gateway/meta_mcp/invoke/errors.rs	of_error	is_authorization_refusal	1	not-delivered	predicate: a refusal of the caller is not sampled against the error budget
@@ -144,11 +145,11 @@ src/gateway/meta_mcp/invoke/legacy_bridge.rs	bridge_legacy_ask	Error::ResponseFi
 src/gateway/meta_mcp/invoke/legacy_bridge.rs	bridge_legacy_ask	bridge_refusal	1	recorded	bridged undeclared last round; raised while vouched
 src/gateway/meta_mcp/invoke/legacy_bridge.rs	bridge_legacy_ask	is_authorization_refusal	1	not-delivered	predicate: a parked round refusal answers as itself; the outlet records it
 src/gateway/meta_mcp/invoke/policy.rs	apply_response_gates_effect	Error::ResponseFirewallRefused	1	recorded	the frame is marked delivery_refusal at the outlet
-src/gateway/meta_mcp/invoke/policy.rs	authorize_invocation	Error::Forbidden{}	1	composite-or-replay	backstop for composite steps; a lone gateway_invoke's Forbidden is recorded by the outlet
-src/gateway/meta_mcp/invoke/policy.rs	authorize_invocation	audit_refusal	1	not-delivered	audit row
+src/gateway/meta_mcp/invoke/policy.rs	authorize_target_explained	Error::Forbidden{}	1	composite-or-replay	backstop for composite steps; a lone gateway_invoke's Forbidden is recorded by the outlet
+src/gateway/meta_mcp/invoke/policy.rs	authorize_target_explained	audit_refusal	1	not-delivered	audit row
 src/gateway/meta_mcp/invoke/policy.rs	check_attestation_scoped	gateway_refused	1	recorded	sealed refusal, recorded at the outlet
-src/gateway/meta_mcp/invoke/policy.rs	check_invocation_policy	blocked_tool_refusal	1	recorded	Protocol refusal; the route stage withholds it first (PR-2a raise)
-src/gateway/meta_mcp/invoke/policy.rs	check_invocation_policy	refuse_withheld	1	composite-or-replay	the invoke entry re-meeting a name the route stage withheld first (raised); reached by composite steps
+src/gateway/meta_mcp/invoke/policy.rs	check_invocation_policy_explained	blocked_tool_refusal	1	recorded	Protocol refusal; the route stage withholds it first (PR-2a raise)
+src/gateway/meta_mcp/invoke/policy.rs	check_invocation_policy_explained	refuse_withheld_explained	1	composite-or-replay	the invoke entry re-meeting a name the route stage withheld first (raised); reached by composite steps
 src/gateway/meta_mcp/invoke/policy.rs	refuse_unattested_plan	gateway_refused	1	recorded	sealed refusal, recorded at the outlet
 src/gateway/meta_mcp/invoke/post_dispatch.rs	settle_dispatch_error	is_authorization_refusal	1	not-delivered	predicate: a dispatch refused at its send answers as itself; the outlet records it
 src/gateway/meta_mcp/invoke/post_dispatch.rs	settle_dispatch_error	note_send_refusal	1	not-delivered	a decision note for the record (kind unrecorded); the error it reads is answered unchanged
@@ -171,7 +172,9 @@ src/gateway/meta_mcp/invoke/r2_check.rs	undeclared_key_refusal_through	catalogue
 src/gateway/meta_mcp/invoke/relay.rs	refuse_relay	relay_refusal	1	recorded	pre-send relay block on the meta route; raised while vouched
 src/gateway/meta_mcp/invoke/relay.rs	refuse_relaying_round	relay_refusal	1	recorded	pre-send relay block on a bridged round; raised while vouched
 src/gateway/meta_mcp/invoke/relay.rs	relay_refusal	Error::Forbidden{}	1	feeds	the relay block, raised by refuse_relay and refuse_relaying_round
+src/gateway/meta_mcp/invoke/relay.rs	relay_refusal	unpublished_refusal	1	feeds	the no-live-config message, wrapped in the same Forbidden as the relay block
 src/gateway/meta_mcp/invoke/relay_catalogue.rs	catalogue_refusal	Error::Forbidden{}	1	feeds	the catalogue relay refusal forward_catalogue raises
+src/gateway/meta_mcp/invoke/relay_catalogue.rs	catalogue_refusal	unpublished_refusal	1	feeds	the no-live-config message, wrapped in the same Forbidden as the catalogue relay refusal
 src/gateway/meta_mcp/invoke/relay_catalogue.rs	forward_catalogue	catalogue_refusal	1	recorded	raised here (design section 2 row)
 src/gateway/meta_mcp/invoke/resolve.rs	resolve	refuse_name_clash	1	not-a-decision	a name that is both a registry backend and the capability backend: a configuration clash (-32001, the BackendNotFound class), not a decision about the caller
 src/gateway/meta_mcp/invoke/send.rs	admit_send	refuse_relay	1	recorded	pre-send relay block, raised while vouched inside it
@@ -214,6 +217,7 @@ src/gateway/router/accounts/journeys.rs	create	refusal	5	no-record	accounts, SSE
 src/gateway/router/accounts/journeys.rs	journey_refusal	refusal	3	no-record	accounts, SSE, start-up or admin UI: no call delivery
 src/gateway/router/accounts/journeys.rs	status	journey_refusal	1	no-record	accounts, SSE, start-up or admin UI: no call delivery
 src/gateway/router/accounts/journeys.rs	status	refusal	3	no-record	accounts, SSE, start-up or admin UI: no call delivery
+src/gateway/router/authorization.rs	decide_tool_target	tool_policy_refusal	1	feeds	the HTTP tool-policy error; the route stage and the direct preflight raise it
 src/gateway/router/authorization.rs	require_admin_log_level	audit_refusal	1	not-delivered	audit row
 src/gateway/router/backend_handlers.rs	apply_backend_tool_call_security	key_refusal	1	recorded	direct undeclared key; raised in key_check where the text refuses
 src/gateway/router/backend_handlers.rs	cached_error_response	Error::ResponseFirewallRefused	1	recorded	the frame is marked delivery_refusal
@@ -223,6 +227,7 @@ src/gateway/router/backend_handlers.rs	firewall_refusal	relay_refusal	1	recorded
 src/gateway/router/backend_handlers.rs	firewall_refusal	request_refusal	1	recorded	request firewall 403, classed Denied by the direct recorder
 src/gateway/router/backend_handlers.rs	guard_tool_call	firewall_refusal	1	feeds	builds the request-firewall or relay refusal guard_tool_call returns, recorded at its own sites in firewall_refusal
 src/gateway/router/backend_handlers.rs	guard_tool_call	refusal	1	recorded	kill switch: sealed, recorded at the direct outlet
+src/gateway/router/backend_handlers.rs	guard_tool_call	take_refusal	1	not-delivered	a memo: the noted refusing check and its rule, kept for the withheld call's record
 src/gateway/router/backend_handlers.rs	guard_tool_call	withheld_refusal	1	recorded	raised above it in this fn (direct withheld call)
 src/gateway/router/backend_handlers/direct_audit.rs	audited_call_judged	audit_unavailable_refusal	1	not-a-decision	the audit sink failed
 src/gateway/router/backend_handlers/direct_caller.rs	intake_refusal	intake_refusal	1	not-a-decision	a keyed call with no execution principal
@@ -256,6 +261,7 @@ src/gateway/router/handlers/dispatch_intake_run.rs	intake_judgement	intake_refus
 src/gateway/router/handlers/dispatch_intake_session.rs	open_request_session	refusal	1	no-record	session admission
 src/gateway/router/handlers/dispatch_tools_call.rs	tools_call	Refused::of	1	recorded	Refused::answer raises; answer_malformed is a client-protocol rejection
 src/gateway/router/handlers/dispatch_tools_call.rs	tools_call	degraded_session_tool_refusal	1	not-a-decision	a session tool with no session at the capacity cap
+src/gateway/router/handlers/dispatch_tools_call/route_stage.rs	authorize_call_targets	take_refusal	1	not-delivered	a memo: the noted refusing check and its rule, kept for the withheld target's record
 src/gateway/router/handlers/dispatch_tools_call/route_stage.rs	scan_targets	request_refusal	1	recorded	route-stage request firewall, raised in this fn
 src/gateway/router/handlers/owner.rs	request_session_owner	hardened_identity_refusal	1	no-record	session owner authentication, before a call exists
 src/gateway/router/handlers/request_checks.rs	request_check_refusal	modern_method_refusal	1	not-a-decision	client-protocol rejection
@@ -283,6 +289,7 @@ src/gateway/server/start_checks.rs	http	refuse_keyless_http_anomaly	1	no-record	
 src/gateway/server/stdio_dispatch.rs	parse_and_observe	modern_method_refusal	1	not-a-decision	client-protocol rejection
 src/gateway/server/stdio_dispatch.rs	parse_and_observe	removed_method_refusal	1	not-a-decision	client-protocol rejection
 src/gateway/server/stdio_dispatch.rs	prepare_signing	refuse_malformed_nonce_early	1	not-a-decision	client-protocol rejection: a malformed signing nonce
+src/gateway/server/stdio_route_stage.rs	authorize_targets	take_refusal	1	not-delivered	a memo: the noted refusing check and its rule, kept for the withheld target's record
 src/gateway/server/stdio_tasks.rs	dispatch_get	refuse_stored_delivery	1	recorded	stdio tasks/get: StoredAnswer::deliver raises only a policy refusal
 src/gateway/server/support.rs	start_refusal	replica_state_refusal	1	not-delivered	start-up, and restart advice text inside a reload answer, never the refusal delivered
 src/gateway/server/support.rs	start_refusal	serve_refusal	1	not-delivered	start-up, and restart advice text inside a reload answer, never the refusal delivered
@@ -299,7 +306,9 @@ src/gateway/ui/backends/signin.rs	start_sign_in	refuse_host	1	no-record	admin UI
 src/gateway/ui/discovery.rs	adopt_eligible	name_refusal	1	no-record	admin UI decision set: whether a find opens an adopt item, no call delivery
 src/gateway/ui/discovery.rs	body	name_refusal	1	no-record	admin UI discovery listing: drops managed finds from the radar count, no call delivery
 src/gateway/ui/discovery.rs	listed	name_refusal	1	no-record	admin UI discovery listing: labels a find's adopt refusals, no call delivery
+src/gateway/ui/discovery_adopt.rs	adopt_discovery	config_refusal	1	no-record	admin UI discovery adopt: the route's own read of gateway.yaml failed or was refused, fixed text, no call delivery
 src/gateway/ui/discovery_adopt.rs	adopt_discovery	name_refusal	1	no-record	admin UI discovery adopt: refuses adopting a find whose name is taken, no call delivery
+src/gateway/ui/discovery_adopt.rs	answer	config_refusal	1	no-record	admin UI discovery adopt: the config writer's guarded read refused gateway.yaml, fixed text, no call delivery
 src/gateway/ui/events.rs	replay_one	refusal	1	no-record	accounts, SSE, start-up or admin UI: no call delivery
 src/gateway/ui/import.rs	fetch_error_message	ssrf_refusal	1	no-record	accounts, SSE, start-up or admin UI: no call delivery
 src/gateway/ui/overview.rs	kpi_and_servers	startup_refusal	1	no-record	the Overview's Needs-you list: a start-up denial shown to the admin, no call delivery
@@ -346,7 +355,7 @@ src/registry/mod.rs	fetch_capability	ssrf_refusal	1	no-record	registry fetch (ad
 src/secret_injection.rs	inject_rules	refusal	3	not-a-decision	a secret rule the send cannot apply: a configuration failure, not a decision about the caller
 src/security/decision_record.rs	decision	refusal	1	not-delivered	reads the noted refusing check for the audit record
 src/security/decision_record.rs	has_refusal	refusal	1	not-delivered	predicate over the noted refusing check
-src/security/decision_record.rs	refusal_kind	refusal	1	not-delivered	reads the noted refusing check for the audit record
+src/security/decision_record.rs	refusal_pair	refusal	1	not-delivered	reads the noted refusing check and its rule for the audit record
 src/security/http_diagnostics.rs	oauth_request_error	ssrf_refusal	1	pending:capability-refusals	an OAuth destination refusal, reached in a call by a token refresh (refresh_flight); fixed by the capability-refusals follow-up
 src/security/http_diagnostics.rs	safe_request_error	ssrf_refusal	1	feeds	the SSRF refusal a capability call raises at send_with_retry
 src/security/http_diagnostics.rs	safe_request_error_for	ssrf_refusal	1	feeds	the SSRF refusal a capability call raises at send_with_retry

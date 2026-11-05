@@ -60,26 +60,27 @@ pub(crate) enum RewriteMode {
 /// `url`, saving only when a line changed and `mode` applies. The error is a
 /// message ready to print.
 ///
-/// The saved text is read under the config lock, so a write landing before
-/// the save is kept (MIK-8042).
+/// The saved text is read under the config lock through the guard every
+/// loader uses (`edit_config_text`), so a write landing before the save is
+/// kept (MIK-8042) and a file another account can change is refused. A dry
+/// run writes nothing: it reads the file once, takes no lock, and only
+/// reports.
 pub(crate) fn rewrite_url_aliases_in(path: &Path, mode: RewriteMode) -> Result<UrlRewrite, String> {
-    // Refuses a FIFO or a device at once, before waiting for the lock.
-    let text = super::regular_file::read_regular_text(path)
-        .map_err(|e| format!("Failed to read {}: {e}", path.display()))?;
-    refuse_unreadable(path, &text)?;
     if mode == RewriteMode::DryRun {
+        // Refuses a FIFO or a device at once; the text only feeds the report.
+        let text = super::regular_file::read_regular_text(path)
+            .map_err(|e| format!("Failed to read {}: {e}", path.display()))?;
+        refuse_unreadable(path, &text)?;
         return Ok(rewrite_of(&text));
     }
     let mut done = None;
     edit_config_text(path, |current| {
         let text =
             current.ok_or_else(|| format!("Failed to read {}: it was removed", path.display()))?;
-        // Again on the text read under the lock: a write since the first read
-        // may have made the file unreadable.
         refuse_unreadable(path, text)?;
         let rewrite = rewrite_of(text);
         // Saved exactly when some pass changed the text.
-        let saved = (rewrite.text != *text).then(|| rewrite.text.clone());
+        let saved = rewrite.saves.then(|| rewrite.text.clone());
         done = Some(rewrite);
         Ok(saved)
     })?;
@@ -137,6 +138,7 @@ fn rewrite_of(text: &str) -> UrlRewrite {
     if let Some(text) = hashed {
         rewrite.text = text;
     }
+    rewrite.saves = rewrite.text != text;
     rewrite
 }
 

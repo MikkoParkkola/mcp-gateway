@@ -381,10 +381,10 @@ impl CapabilityExecutor {
             (_, Some(identity)) => {
                 format!(
                     "1:{}:{}|{}:{}",
-                    identity.authority.len(),
-                    identity.authority,
-                    identity.subject.len(),
-                    identity.subject
+                    identity.authority().len(),
+                    identity.authority(),
+                    identity.subject().len(),
+                    identity.subject()
                 )
             }
             (_, None) => "0:".to_string(),

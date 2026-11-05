@@ -62,13 +62,13 @@ async fn rpc_with(
 /// The route under test: meta (`/mcp`, names carry the backend) or direct
 /// (`/mcp/alpha`, bare names).
 #[derive(Clone, Copy)]
-enum Route {
+pub(super) enum Route {
     Meta,
     Direct,
 }
 
 impl Route {
-    fn path(self) -> &'static str {
+    pub(super) fn path(self) -> &'static str {
         match self {
             Self::Meta => "/mcp",
             Self::Direct => "/mcp/alpha",
@@ -84,7 +84,7 @@ impl Route {
 }
 
 /// `who` reads the resource; a delivered result.
-async fn read_resource(fx: &Fixture, route: Route, who: &str) {
+pub(super) async fn read_resource(fx: &Fixture, route: Route, who: &str) {
     let params = json!({"uri": "res://orchard"});
     let (status, body) = rpc(fx, route.path(), who, "resources/read", &params).await;
     let answer = envelope(&body);
@@ -107,23 +107,55 @@ async fn get_prompt(fx: &Fixture, route: Route, who: &str) {
 }
 
 /// `who` sends `text` as `prompts/get` arguments.
-async fn prompt_with(fx: &Fixture, route: Route, who: &str, text: &str) -> (u16, String) {
+pub(super) async fn prompt_with(
+    fx: &Fixture,
+    route: Route,
+    who: &str,
+    text: &str,
+) -> (u16, String) {
     let params = json!({"name": route.prompt(), "arguments": {"topic": text}});
     rpc(fx, route.path(), who, "prompts/get", &params).await
 }
 
-fn assert_catalogue_refused(fx: &Fixture, (_, body): &(u16, String), forwarded: usize) {
-    let answer = envelope(body);
-    assert_eq!(answer["error"]["code"], -32002, "relay not refused: {body}");
-    assert!(answer.get("result").is_none(), "{body}");
-    assert_eq!(fx.catalogue(), forwarded, "the backend was called: {body}");
+pub(super) fn assert_catalogue_refused(fx: &Fixture, response: &(u16, String), forwarded: usize) {
+    assert_catalogue_refused_as("", fx, response, forwarded);
 }
 
-fn assert_catalogue_sent(fx: &Fixture, (status, body): &(u16, String), forwarded: usize) {
+/// [`assert_catalogue_refused`] naming the row (a prefix such as `"T1c: "`).
+pub(super) fn assert_catalogue_refused_as(
+    row: &str,
+    fx: &Fixture,
+    (_, body): &(u16, String),
+    forwarded: usize,
+) {
     let answer = envelope(body);
-    assert_eq!(*status, 200, "{body}");
-    assert!(answer.get("error").is_none(), "refused: {body}");
-    assert_eq!(fx.catalogue(), forwarded, "{body}");
+    assert_eq!(
+        answer["error"]["code"], -32002,
+        "{row}relay not refused: {body}"
+    );
+    assert!(answer.get("result").is_none(), "{row}{body}");
+    assert_eq!(
+        fx.catalogue(),
+        forwarded,
+        "{row}the backend was called: {body}"
+    );
+}
+
+pub(super) fn assert_catalogue_sent(fx: &Fixture, response: &(u16, String), forwarded: usize) {
+    assert_catalogue_sent_as("", fx, response, forwarded);
+}
+
+/// [`assert_catalogue_sent`] naming the row.
+pub(super) fn assert_catalogue_sent_as(
+    row: &str,
+    fx: &Fixture,
+    (status, body): &(u16, String),
+    forwarded: usize,
+) {
+    let answer = envelope(body);
+    assert_eq!(*status, 200, "{row}not forwarded: {body}");
+    assert!(answer.get("error").is_none(), "{row}refused: {body}");
+    assert_eq!(fx.catalogue(), forwarded, "{row}{body}");
 }
 
 fn setup() -> Setup {

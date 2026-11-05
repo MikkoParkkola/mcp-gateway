@@ -4,9 +4,11 @@
 //! `MIK-8113`: the seam receipts of a plan's final answer.
 //!
 //! Bounds: one walk of the answer, one tagged pass per form in the detector,
-//! at most one receipt per contributing source and [`COMPOSITES`] composite
-//! receipts, past which the remaining seams are grouped by flow policy. Each
-//! seam fingerprint is recorded under exactly one receipt per delivery.
+//! and one receipt per distinct set of contributing sources with their own
+//! inferred facts, never merged across sets by a decision made at record:
+//! a seam is judged at witness by the lists in force, contributor by
+//! contributor. Each seam fingerprint is recorded under exactly one receipt
+//! per delivery.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
@@ -17,30 +19,15 @@ use crate::security::firewall::{DeliveryDigest, Firewall};
 use super::super::{Kind, Receipt};
 use super::PLAN_MEMBERS;
 
-/// Contributing sources, as (server, tool).
-type Sources = BTreeSet<(String, String)>;
+/// Contributing sources, as (server, tool), each with its own inferred fact.
+type Contributors = BTreeMap<(String, String), bool>;
 
-/// A seam's flow policy: its sensitivity and its distinct flow masks.
-type Policy = (bool, Vec<u64>);
-
-/// Composite receipts per delivery, by contributing-source set; the rest are
-/// grouped by policy (sensitivity and the contributors' flow masks).
-const COMPOSITES: usize = 16;
-
-/// One plan step's kept whole values, its sources and whether any of its
-/// receipts was delivered sensitive.
+/// One plan step's kept whole values and its sources, each with whether
+/// its result itself was classified sensitive.
 #[derive(Default)]
 struct Step<'r> {
     whole: HashSet<&'r str>,
-    sources: BTreeSet<(String, String)>,
-    sensitive: bool,
-}
-
-/// The seam fingerprints of one set of contributing sources, and whether
-/// any contributing step was delivered sensitive.
-struct Group {
-    sensitive: bool,
-    fps: Vec<u64>,
+    facts: Contributors,
 }
 
 /// Rebuild the seam receipts of `receipts`, the delivery's plan step
@@ -56,8 +43,10 @@ pub(in super::super) fn add_seams(fw: &Firewall, receipts: &mut Vec<Receipt>, an
         let Some(label) = r.step else { continue };
         let step = steps.entry(label).or_default();
         step.whole.extend(r.digest.whole_values());
-        step.sources.insert((r.server.clone(), r.tool.clone()));
-        step.sensitive |= r.digest.is_sensitive();
+        *step
+            .facts
+            .entry((r.server.clone(), r.tool.clone()))
+            .or_default() |= r.digest.is_inferred();
     }
     // A leaf is its step's only while the step's receipt keeps it whole: text
     // a rewrite changed, or an equal string from elsewhere, is no step's.
@@ -82,18 +71,18 @@ pub(in super::super) fn add_seams(fw: &Firewall, receipts: &mut Vec<Receipt>, an
         return;
     };
     let (key, keyed) = (caller.key.clone(), caller.keyed);
-    // Grouped by contributing sources AND sensitivity, so a fingerprint is
-    // sensitive only when its own contributors are.
-    let mut groups: BTreeMap<(Sources, bool), Vec<u64>> = BTreeMap::new();
+    // Grouped by the exact contributors and their own facts, so a
+    // fingerprint is judged only by its own contributors.
+    let mut groups: BTreeMap<Contributors, Vec<u64>> = BTreeMap::new();
     for (fp, labels) in seams {
-        let mut sources = BTreeSet::new();
-        let mut sensitive = false;
+        let mut facts = Contributors::new();
         for step in labels.iter().filter_map(|l| steps.get(l)) {
-            sources.extend(step.sources.iter().cloned());
-            sensitive |= step.sensitive;
+            for (source, inferred) in &step.facts {
+                *facts.entry(source.clone()).or_default() |= *inferred;
+            }
         }
-        if !sources.is_empty() {
-            groups.entry((sources, sensitive)).or_default().push(fp);
+        if !facts.is_empty() {
+            groups.entry(facts).or_default().push(fp);
         }
     }
     let seam = |server: String, tool: String, digest: DeliveryDigest| Receipt {
@@ -107,31 +96,13 @@ pub(in super::super) fn add_seams(fw: &Firewall, receipts: &mut Vec<Receipt>, an
         step: None,
         kind: Kind::Seam,
     };
-    let mut composites = 0;
-    let mut overflow: BTreeMap<Policy, (BTreeSet<String>, Vec<u64>)> = BTreeMap::new();
-    for ((sources, sensitive), fps) in groups {
-        let group = Group { sensitive, fps };
-        if let [(server, tool)] = sources.iter().collect::<Vec<_>>().as_slice() {
-            let digest = DeliveryDigest::of_seam(group.fps, group.sensitive, None);
+    for (facts, fps) in groups {
+        if let [((server, tool), inferred)] = facts.iter().collect::<Vec<_>>().as_slice() {
+            let digest = DeliveryDigest::of_seam(fps, **inferred, None);
             receipts.push(seam(server.clone(), tool.clone(), digest));
             continue;
         }
-        let names: BTreeSet<String> = sources.iter().map(|(s, t)| format!("{s}:{t}")).collect();
-        if composites < COMPOSITES {
-            composites += 1;
-            receipts.push(composite(&seam, names, group));
-            continue;
-        }
-        let list: Vec<String> = names.iter().cloned().collect();
-        let mut masks = fw.source_masks(&list);
-        masks.sort_unstable();
-        masks.dedup();
-        let slot = overflow.entry((group.sensitive, masks)).or_default();
-        slot.0.extend(names);
-        slot.1.extend(group.fps);
-    }
-    for ((sensitive, _), (names, fps)) in overflow {
-        receipts.push(composite(&seam, names, Group { sensitive, fps }));
+        receipts.push(composite(&seam, &facts, fps));
     }
 }
 
@@ -153,18 +124,20 @@ fn seam_fingerprints(
     seams
 }
 
-/// The composite receipt of a seam joining `names`: its identity names
-/// every contributing source, under an empty server, which no backend can
-/// be named (`:` is refused in backend names), so it never aliases one.
+/// The composite receipt of a seam joining `facts`' sources: its identity
+/// names every contributing source, under an empty server, which no backend
+/// can be named (`:` is refused in backend names), so it never aliases one.
+/// Each contributor keeps its own inferred fact.
 fn composite(
     seam: &dyn Fn(String, String, DeliveryDigest) -> Receipt,
-    names: BTreeSet<String>,
-    group: Group,
+    facts: &Contributors,
+    fps: Vec<u64>,
 ) -> Receipt {
-    let names: Vec<String> = names.into_iter().collect();
+    let names: Vec<String> = facts.keys().map(|(s, t)| format!("{s}:{t}")).collect();
+    let inferred: Box<[bool]> = facts.values().copied().collect();
     let identity = format!("seam{}", serde_json::to_string(&names).unwrap_or_default());
-    let sources = Some(names.into_boxed_slice());
-    let digest = DeliveryDigest::of_seam(group.fps, group.sensitive, sources);
+    let digest = DeliveryDigest::of_seam(fps, false, Some(names.into_boxed_slice()))
+        .with_contributor_facts(inferred);
     seam(String::new(), identity, digest)
 }
 

@@ -176,6 +176,11 @@ fn refused_write(e: &ReplaceError) -> axum::response::Response {
         ReplaceError::RollbackFailed { .. } => incomplete("rollback_failed"),
         ReplaceError::Failed(_) => incomplete("failed"),
         ReplaceError::Secrets(_) => unwritten("secrets"),
+        // Merge: the writer's typed missing file, answered as the re-stat
+        // did; the guard's refusal is answered state-neutral until its own
+        // answer lands.
+        ReplaceError::NoConfigFile => no_config_file().into_response(),
+        ReplaceError::ConfigRefused(_) => incomplete("config_refused"),
     }
 }
 

@@ -131,6 +131,7 @@ pub(super) fn compile_rule(rule: &FirewallRule) -> CompiledRule {
             except: Vec::new(),
             reason: rule.reason.clone(),
             root: None,
+            id: None,
         };
     }
     CompiledRule {
@@ -151,6 +152,7 @@ pub(super) fn compile_rule(rule: &FirewallRule) -> CompiledRule {
             .collect(),
         reason: rule.reason.clone(),
         root: None,
+        id: None,
     }
 }
 
@@ -227,22 +229,19 @@ pub(super) fn rule_applies(rule: &CompiledRule, target: RuleTarget<'_>, key: Opt
 
 /// The first rule that applies to `target` (with the concrete `key`) and
 /// whose `scan` list holds `scan_type`; an empty list holds every type.
-pub(super) fn first_matching_rule_action(
-    rules: &[CompiledRule],
+pub(super) fn first_matching_rule<'r>(
+    rules: &'r [CompiledRule],
     target: RuleTarget<'_>,
     key: Option<&str>,
     scan_type: ScanType,
-) -> Option<FirewallAction> {
-    rules
-        .iter()
-        .find(|rule| {
-            // A root rule decides only its own findings, which arrive
-            // decided; it never resolves a content finding.
-            rule.root.is_none()
-                && rule_applies(rule, target, key)
-                && (rule.scans.is_empty() || rule.scans.contains(&scan_type))
-        })
-        .map(|rule| rule.action)
+) -> Option<&'r CompiledRule> {
+    rules.iter().find(|rule| {
+        // A root rule decides only its own findings, which arrive
+        // decided; it never resolves a content finding.
+        rule.root.is_none()
+            && rule_applies(rule, target, key)
+            && (rule.scans.is_empty() || rule.scans.contains(&scan_type))
+    })
 }
 
 /// The concrete keys `target` is resolved under: its own, none, or for a key

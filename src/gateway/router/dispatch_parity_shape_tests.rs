@@ -121,6 +121,11 @@ fn t8_no_control_primitive_runs_outside_the_shared_stages() {
             "check_invocation_policy",
             fn_body(policy, "check_invocation_policy"),
         ),
+        // The plain form delegates to this one, which holds the checks.
+        (
+            "check_invocation_policy_explained",
+            fn_body(policy, "check_invocation_policy_explained"),
+        ),
         (
             "accounted_dispatch",
             fn_body(dispatch, "accounted_dispatch"),

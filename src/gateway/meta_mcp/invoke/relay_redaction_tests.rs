@@ -19,7 +19,7 @@ async fn a_redaction_keeps_the_receipt_for_the_text_still_delivered() {
             meta.restage_if_changed(snapshot, Some(&delivered), AnswerShape::Literal);
         })
         .await;
-    staged.commit(true);
+    staged.commit(true, &firewall.paired_generation_for_test());
     assert!(
         relayed_by_bob(&firewall, PROSE),
         "delivered text lost its receipt"
@@ -60,7 +60,7 @@ async fn a_redacted_wrapped_answer_keeps_the_receipt_for_its_lines() {
             meta.restage_if_changed(snapshot, Some(&delivered), AnswerShape::InvokeWrapped);
         })
         .await;
-    staged.commit(true);
+    staged.commit(true, &firewall.paired_generation_for_test());
     assert!(
         relayed_by_bob(&firewall, &lines),
         "wrapped lines lost their receipt"
@@ -87,7 +87,7 @@ async fn a_native_json_text_keeps_its_numbers_in_the_receipt() {
             meta.restage_if_changed(snapshot, Some(&delivered), AnswerShape::Literal);
         })
         .await;
-    staged.commit(true);
+    staged.commit(true, &firewall.paired_generation_for_test());
     assert!(
         relayed_by_bob(&firewall, &digits),
         "the number lost its receipt"
@@ -114,7 +114,7 @@ async fn a_redaction_over_several_receipts_drops_them() {
             );
         })
         .await;
-    staged.commit(true);
+    staged.commit(true, &firewall.paired_generation_for_test());
     assert!(!relayed_by_bob(&firewall, PROSE));
     assert!(!relayed_by_bob(&firewall, OTHER_PROSE));
 }
@@ -131,7 +131,7 @@ async fn an_unchanged_result_keeps_its_receipts() {
             meta.restage_if_changed(snapshot, Some(&value.clone()), AnswerShape::Literal);
         })
         .await;
-    staged.commit(true);
+    staged.commit(true, &firewall.paired_generation_for_test());
     assert!(relayed_by_bob(&firewall, PROSE));
 }
 
@@ -152,6 +152,6 @@ async fn a_redaction_keeps_the_sensitivity_verdict_of_the_delivery() {
             meta.restage_if_changed(snapshot, Some(&delivered), AnswerShape::Literal);
         })
         .await;
-    staged.commit(true);
+    staged.commit(true, &firewall.paired_generation_for_test());
     assert!(relayed_by_bob(&firewall, PROSE), "the verdict was lost");
 }

@@ -538,6 +538,228 @@ async fn with_auth_on_and_no_audit_log_an_adopt_is_refused() {
     );
 }
 
+/// W25: on a gateway with an audit log, an adopt appends its own paired
+/// intent (`config_adopt_intent`) before the writer changes anything.
+#[tokio::test]
+async fn an_adopt_writes_its_paired_intent_first() {
+    let mut route = Route::new(EMPTY, vec![stdio("tool", "npx tool", &[])]).await;
+    let log = Arc::new(
+        crate::security::TransparencyLogger::open(Arc::new(
+            crate::security::transparency_log::TransparencyLogConfig {
+                enabled: true,
+                path: route
+                    .dir
+                    .path()
+                    .join("audit.jsonl")
+                    .to_string_lossy()
+                    .into_owned(),
+                key_id: "adopt-intent".to_string(),
+                ..Default::default()
+            },
+        ))
+        .expect("open log"),
+    );
+    Arc::get_mut(&mut route.state)
+        .expect("state is unique")
+        .transparency_log = Some(Arc::clone(&log));
+    let (id, revision) = route.listed("tool").await;
+
+    let (status, body) = route.adopt(true, &id, &revision).await;
+
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    let events: Vec<Value> = std::fs::read_to_string(log.path())
+        .unwrap_or_default()
+        .lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .map(|entry| entry["event"].clone())
+        .collect();
+    assert!(
+        events.iter().any(|event| event == "config_adopt_intent"),
+        "W25: the adopt wrote no paired intent; the log holds {events:?}"
+    );
+}
+
+/// Auth on with no audit log: an adopt that carries a secret is refused, by
+/// the audit posture and for that reason, before the writer runs; neither
+/// gateway.yaml nor the store changes.
+#[tokio::test]
+async fn with_auth_on_and_no_audit_log_an_adopt_is_refused() {
+    let mut route = Route::new(
+        EMPTY,
+        vec![stdio("tool", "npx tool", &[("API_KEY", CANARY)])],
+    )
+    .await;
+    let mut running = Config::default();
+    running.auth.enabled = true;
+    Arc::get_mut(&mut route.state)
+        .expect("state is unique")
+        .live_config = Arc::new(LiveConfig::new(running));
+    assert!(
+        route.state.transparency_log.is_none(),
+        "premise: the gateway has no audit log"
+    );
+    let (id, revision) = route.listed("tool").await;
+    let before = route.bytes();
+
+    let (status, body) = route.adopt(true, &id, &revision).await;
+
+    assert_eq!(
+        (status, &body["error"]),
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            &Value::from("audit_log_required")
+        ),
+        "the adopt was not refused for the missing audit log: {body}"
+    );
+    assert_eq!(
+        body["message"], "auth is on but no audit log is configured; config writes are refused",
+        "{body}"
+    );
+    assert_eq!(
+        route.bytes(),
+        before,
+        "the refused adopt changed gateway.yaml"
+    );
+    assert_eq!(
+        route.entries(),
+        0,
+        "the refused adopt created a store entry"
+    );
+}
+
+/// The text every answer may not hold: the config's directory, as spelled and
+/// as resolved.
+#[cfg(unix)] // only the mode row reads it
+fn paths_of(route: &Route) -> Vec<String> {
+    let dir = route.dir.path();
+    let mut paths = vec![dir.to_string_lossy().into_owned()];
+    if let Ok(real) = dir.canonicalize() {
+        paths.push(real.to_string_lossy().into_owned());
+    }
+    paths
+}
+
+/// gateway.yaml turns group-writable after the route's own read and before
+/// the writer's: the writer reads it through the same mode check every loader
+/// uses, so another account's edit is never rewritten owner-only and loaded.
+/// Nothing is written, no store entry is made, the mode stays as found, and
+/// the answer is fixed text naming no path.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_config_others_can_write_is_refused_at_the_writers_read() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let route = Route::new(
+        EMPTY,
+        vec![stdio("tool", "npx tool", &[("API_KEY", CANARY)])],
+    )
+    .await;
+    let (id, revision) = route.listed("tool").await;
+    let path = route.config();
+    *route.clients.during.lock().expect("hook") = Some(Box::new(move || {
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o660))
+            .expect("loosen the mode");
+    }));
+
+    let (status, body) = route.adopt(true, &id, &revision).await;
+
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{body}");
+    assert_eq!(body["error"], "gateway.yaml could not be loaded", "{body}");
+    for path in paths_of(&route) {
+        assert!(!body.to_string().contains(&path), "the answer names {path}");
+    }
+    assert_eq!(
+        route.bytes(),
+        EMPTY.as_bytes(),
+        "the refused file was written"
+    );
+    assert_eq!(route.entries(), 0, "a refused write left a store entry");
+    let mode = std::fs::metadata(route.config())
+        .expect("config stat")
+        .permissions()
+        .mode();
+    assert_eq!(mode & 0o777, 0o660, "the refused file was rewritten");
+}
+
+/// gateway.yaml is removed after the route's own read and before the
+/// writer's: the answer is the route's own missing-file answer (409), not a
+/// failure, and nothing is written or saved.
+#[tokio::test]
+async fn a_config_removed_before_the_writers_read_is_no_config_file() {
+    let route = Route::new(
+        EMPTY,
+        vec![stdio("tool", "npx tool", &[("API_KEY", CANARY)])],
+    )
+    .await;
+    let (id, revision) = route.listed("tool").await;
+    let path = route.config();
+    *route.clients.during.lock().expect("hook") = Some(Box::new(move || {
+        std::fs::remove_file(&path).expect("remove the config");
+    }));
+
+    let (status, body) = route.adopt(true, &id, &revision).await;
+
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert_eq!(body["error"], "no_config_file", "{body}");
+    assert!(!route.config().exists(), "a config was written");
+    assert_eq!(route.entries(), 0, "a refused write left a store entry");
+}
+
+/// A crashed write's journal and staged original wait beside gateway.yaml,
+/// with a matching digest, and `loose` names the one another account could
+/// change. The writer's lock runs recovery first, which refuses it: the
+/// adopt answers the route's fixed 503, nothing is written or saved, and the
+/// answer names no path.
+#[cfg(unix)]
+async fn a_loose_recovery_file_answers_the_fixed_refusal(
+    loose: fn(&std::path::Path) -> std::path::PathBuf,
+) {
+    use crate::config_persistence::journal;
+    use std::os::unix::fs::PermissionsExt as _;
+    let route = Route::new(
+        EMPTY,
+        vec![stdio("tool", "npx tool", &[("API_KEY", CANARY)])],
+    )
+    .await;
+    let (id, revision) = route.listed("tool").await;
+    let path = route.config();
+    let planted = "# planted\nsecrets:\n  store: files\nbackends: {}\n";
+    journal::stage_original(&path, planted.as_bytes()).expect("stage");
+    journal::begin(&path, crate::hashing::sha256_hex(planted.as_bytes())).expect("journal");
+    std::fs::set_permissions(loose(&path), std::fs::Permissions::from_mode(0o660)).expect("loosen");
+
+    let (status, body) = route.adopt(true, &id, &revision).await;
+
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{body}");
+    assert_eq!(body["error"], "gateway.yaml could not be loaded", "{body}");
+    for path in paths_of(&route) {
+        assert!(!body.to_string().contains(&path), "the answer names {path}");
+    }
+    assert_eq!(
+        route.bytes(),
+        EMPTY.as_bytes(),
+        "the planted original was restored"
+    );
+    assert_eq!(route.entries(), 0, "a refused write left a store entry");
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_staged_original_others_can_write_answers_the_fixed_refusal() {
+    a_loose_recovery_file_answers_the_fixed_refusal(|path| {
+        crate::config_persistence::journal::original_path(path)
+    })
+    .await;
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_journal_others_can_write_answers_the_fixed_refusal() {
+    a_loose_recovery_file_answers_the_fixed_refusal(|path| {
+        crate::config_persistence::journal::journal_path(path)
+    })
+    .await;
+}
+
 /// Whether the decision set shows an open adopt item for `name`.
 fn adopt_item_open(state: &AppState, name: &str) -> bool {
     state

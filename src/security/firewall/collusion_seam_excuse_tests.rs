@@ -4,13 +4,12 @@
 //! `MIK-8205`: the seam pass's work bound (test plan 3C) and boundary
 //! equality (3D). Work is counted, never timed.
 
-use super::super::super::{CollusionDetector, K, RelayAction, RelayParams};
+use super::super::super::{CollusionDetector, K, RelayParams};
 use super::{COUNTERS, Counters, MAX_SEAM_PIECES, MAX_SEAM_SPANS, SEAM_SIDE_BYTES};
 
 /// Every k-gram kept, so a row's outcome does not depend on the hash key.
 fn detector() -> CollusionDetector {
     let mut det = CollusionDetector::new(RelayParams {
-        action: RelayAction::Observe,
         ..RelayParams::default()
     });
     det.keep_every_kgram();

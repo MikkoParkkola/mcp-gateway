@@ -31,7 +31,6 @@ src/gateway/meta_mcp/invoke/gate/fill_marks.rs	fill_marks	get_for	Discovery
 src/gateway/meta_mcp/invoke/gate/fill_marks.rs	fill_marks	membership_for	Discovery
 src/gateway/meta_mcp/invoke/gate/fill_marks.rs	filled_since	get_for	Discovery
 src/gateway/meta_mcp/invoke/gate/fill_marks.rs	filled_since	membership_for	Discovery
-src/gateway/meta_mcp/invoke/policy.rs	check_invocation_policy	scoped_get	scoped
 src/gateway/meta_mcp/invoke/propagation.rs	listener_fence_binding	get_for	Background
 src/gateway/meta_mcp/invoke/propagation.rs	mint_listener_credential	get_for	Background
 src/gateway/meta_mcp/invoke/propagation.rs	resolve_propagation_credential	get_for	Discovery

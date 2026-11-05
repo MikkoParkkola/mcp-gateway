@@ -16,7 +16,7 @@ use std::time::Duration;
 use serde_json::{Value, json};
 
 use tempfile::TempDir;
-use tokio::process::{Child, Command};
+use tokio::process::Command;
 use tokio::task::JoinHandle;
 
 pub const BACKEND: &str = "signing_fixture";
@@ -172,8 +172,9 @@ pub fn child_command(directory: &Path, config_path: &Path) -> Command {
 }
 
 pub struct HttpGateway {
-    child: Child,
-    directory: TempDir,
+    /// The gateway and every folder it writes into, stopped before they go.
+    process: gateway_bin::Reaped,
+    directory: std::path::PathBuf,
     pub url: String,
     pub client: reqwest::Client,
 }
@@ -186,6 +187,17 @@ impl HttpGateway {
     /// Run the production CLI with explicit child-local fixture environment.
     /// Overrides follow `env_clear`; they never change the test runner's process.
     pub async fn start_with_env(config: Value, env: &[(&str, &std::ffi::OsStr)]) -> Self {
+        Self::start_owning(config, env, Vec::new()).await
+    }
+
+    /// [`Self::start_with_env`], handing `owned` (a stdio backend's home, say)
+    /// to the gateway before it is waited on, so a start that fails still
+    /// keeps every folder the gateway or its backends may write into.
+    pub async fn start_owning(
+        config: Value,
+        env: &[(&str, &std::ffi::OsStr)],
+        owned: Vec<TempDir>,
+    ) -> Self {
         // Every child gets its own task store (relative to its cwd): HOME cannot
         // isolate it on Windows, and the runner's shared store is single-owner.
         let mut config = config;
@@ -206,13 +218,20 @@ impl HttpGateway {
         let log = std::fs::File::create(directory.path().join("gateway.log")).expect("gateway log");
         let mut command = child_command(directory.path(), &config_path);
         command.envs(gateway_bin::checked_env(env.iter().copied()));
-        command
-            .stdin(Stdio::null())
-            .stdout(Stdio::from(log.try_clone().expect("clone gateway log")))
-            .stderr(Stdio::from(log));
-        let child = command.spawn().expect("spawn real HTTP gateway");
+        let mut process = gateway_bin::Reaped::new(
+            command
+                .stdin(Stdio::null())
+                .stdout(Stdio::from(log.try_clone().expect("clone gateway log")))
+                .stderr(Stdio::from(log))
+                .spawn()
+                .expect("spawn real HTTP gateway"),
+        );
+        let directory = process.owning(directory).to_path_buf();
+        for folder in owned {
+            process.owning(folder);
+        }
         let mut gateway = Self {
-            child,
+            process,
             directory,
             // Learned from the child's banner below.
             url: String::new(),
@@ -223,7 +242,12 @@ impl HttpGateway {
         };
         let deadline = tokio::time::Instant::now() + IO_TIMEOUT;
         loop {
-            if let Some(status) = gateway.child.try_wait().expect("gateway process status") {
+            if let Some(status) = gateway
+                .process
+                .child_mut()
+                .try_wait()
+                .expect("gateway process status")
+            {
                 panic!(
                     "gateway startup fixture exited {status}: {}",
                     gateway.logs()
@@ -251,7 +275,12 @@ impl HttpGateway {
             );
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
-        if let Some(status) = gateway.child.try_wait().expect("gateway process status") {
+        if let Some(status) = gateway
+            .process
+            .child_mut()
+            .try_wait()
+            .expect("gateway process status")
+        {
             panic!(
                 "gateway answered /health but had exited {status}: {}",
                 gateway.logs()
@@ -267,11 +296,26 @@ impl HttpGateway {
                   `expect` would be unfulfilled in those"
     )]
     pub fn config_path(&self) -> std::path::PathBuf {
-        self.directory.path().join("gateway.yaml")
+        self.directory.join("gateway.yaml")
     }
 
     pub fn logs(&self) -> String {
-        std::fs::read_to_string(self.directory.path().join("gateway.log")).unwrap_or_default()
+        std::fs::read_to_string(self.directory.join("gateway.log")).unwrap_or_default()
+    }
+
+    /// Ends the gateway with a drain; its folders go only after it exited.
+    /// Windows has no drain signal: the stop there is a kill, whose exit
+    /// status (1) says nothing about the gateway, so only Unix checks it.
+    pub async fn stop(self) {
+        let logs = self.logs();
+        let status = self.process.stop().await;
+        #[cfg(unix)]
+        assert!(
+            status.success(),
+            "the gateway did not drain cleanly on its stop ({status}): {logs}"
+        );
+        #[cfg(not(unix))]
+        let _ = (status, logs);
     }
 
     pub async fn initialize(&self) -> String {

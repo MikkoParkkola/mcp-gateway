@@ -101,6 +101,8 @@ pub mod mtls;
 #[doc(hidden)]
 pub mod oauth;
 mod observer;
+// Only Unix readers use it: the guard opens through its own Windows path.
+#[cfg(unix)]
 mod open_nonblocking;
 pub(crate) mod personal_accounts;
 #[doc(hidden)]
@@ -165,6 +167,8 @@ pub mod stats;
 // Every caller judges a daily budget, which only a cost-governance build has.
 #[cfg(all(test, feature = "cost-governance"))]
 pub(crate) mod test_day;
+#[cfg(test)]
+mod test_dir_keep;
 #[cfg(test)]
 pub(crate) mod test_fixture_host;
 #[cfg(test)]

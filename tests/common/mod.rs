@@ -7,6 +7,7 @@
 //! harness layout, not a defect in either suite.
 #![allow(dead_code)]
 
+pub mod cert_identity;
 mod record_key;
 pub use record_key::RECORD_KEY;
 
@@ -171,6 +172,7 @@ pub async fn state(f: Fixture) -> (Arc<AppState>, tempfile::TempDir) {
         )),
         export_status: None,
         transparency_log: None,
+        governance_log: None,
         dashboard_bootstrap: Arc::new(mcp_gateway::gateway::auth::DashboardBootstrap::new()),
         tasks,
         task_executor,
@@ -252,11 +254,7 @@ pub async fn post_proven(
         .expect("request");
     request
         .extensions_mut()
-        .insert(mcp_gateway::mtls::identity::CertIdentity {
-            common_name: Some(subject.to_string()),
-            display_name: "cosmetic".to_string(),
-            ..Default::default()
-        });
+        .insert(cert_identity::cert_identity(Some(subject), None));
     let response = create_router(Arc::clone(state))
         .oneshot(request)
         .await

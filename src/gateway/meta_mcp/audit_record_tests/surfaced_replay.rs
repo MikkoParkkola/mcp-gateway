@@ -296,10 +296,10 @@ async fn r2_a_surfaced_replay_stages_its_receipt_for_the_admitted_server() {
         .collecting_staged(meta.audit_replay(NAME, &json!({}), None, &ctx, response, audit))
         .await;
     assert!(answer.error.is_none(), "premise: delivered: {answer:?}");
-    staged.commit(true);
+    staged.commit(true, &firewall.paired_generation_for_test());
     let params = json!({"name": "send", "arguments": {"text": PROSE}});
     let relayed = !firewall
-        .check_relay(
+        .check_relay_paired(
             RelayCaller::Keyed("bob"),
             "alpha",
             "send",
@@ -390,7 +390,7 @@ async fn r3_no_carried_server_records_and_stages_nothing() {
     let (_, staged) = meta
         .collecting_staged(meta.audit_replay(NAME, &json!({}), None, &ctx, replay, facts))
         .await;
-    staged.commit(true);
+    staged.commit(true, &firewall.paired_generation_for_test());
     assert!(
         records(&dir).is_empty(),
         "R3: a replay with no carried server wrote a record: {:?}",
@@ -399,7 +399,7 @@ async fn r3_no_carried_server_records_and_stages_nothing() {
     let params = json!({"name": "send", "arguments": {"text": PROSE}});
     assert!(
         firewall
-            .check_relay(
+            .check_relay_paired(
                 RelayCaller::Keyed("bob"),
                 "beta",
                 "send",

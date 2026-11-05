@@ -42,7 +42,7 @@ const BUILDERS: [&str; 11] = [
 ];
 
 /// What a refusal site does with respect to the delivery record.
-const CLASSES: [&str; 6] = [
+pub(super) const CLASSES: [&str; 6] = [
     // Frames or returns the delivered refusal and records it: a seal read at
     // an outlet, or a raise here or at the caller that delivers it (the note
     // says which). There is no class for a delivered refusal left unrecorded.
@@ -75,7 +75,7 @@ struct Found {
 
 /// A function that builds or answers a refusal, by its name: `*refusal`,
 /// `refuse_*`, or the sealed constructor `gateway_refused`.
-fn is_refusal_name(name: &str) -> bool {
+pub(super) fn is_refusal_name(name: &str) -> bool {
     name.ends_with("refusal") || name.starts_with("refuse_") || name == "gateway_refused"
 }
 
@@ -95,7 +95,7 @@ const COMBINATORS: [&str; 10] = [
 ];
 
 /// The arguments of a combinator call; none for any other expression.
-fn call_args(expr: &syn::Expr) -> Vec<&syn::Expr> {
+pub(super) fn call_args(expr: &syn::Expr) -> Vec<&syn::Expr> {
     match expr {
         syn::Expr::MethodCall(call) if COMBINATORS.contains(&call.method.to_string().as_str()) => {
             call.args.iter().collect()

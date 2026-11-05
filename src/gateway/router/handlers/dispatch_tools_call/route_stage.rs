@@ -96,8 +96,8 @@ impl<'a> RouteStage<'a> {
                         // it, as a missing target's does; a surfaced name's
                         // missing twin writes none, so the route records it.
                         if state.meta_mcp.exposes_meta_tool(self.tool_name) {
-                            let kind = audit::take_refusal_kind();
-                            memo::note_denial_code(checked.server, checked.tool, code, kind);
+                            let refusal = audit::take_refusal();
+                            memo::note_denial_code(checked.server, checked.tool, code, refusal);
                         } else {
                             let trace = refused.note_withheld(state, checked, code).await;
                             // Only a call with no other target is answered for
@@ -202,7 +202,7 @@ impl<'a> RouteStage<'a> {
                 {
                     lifecycle.renew(control_identity.clone());
                 }
-                let verdict = fw.check_request_keyed(
+                let (verdict, rule) = fw.check_request_attributed(
                     intake.generation.firewall_policy(),
                     session_id,
                     RuleTarget::routed(target.server, target.tool, client.as_ref()),
@@ -221,7 +221,7 @@ impl<'a> RouteStage<'a> {
                 }
                 if let Some((code, reason)) = verdict.request_refusal() {
                     use crate::security::decision_record::DecisionKind;
-                    audit::note_refused_by(DecisionKind::Firewall, None);
+                    audit::note_refused_by(DecisionKind::Firewall, rule);
                     // A content finding about a step names the definition: it
                     // answers as every other step refusal does (A3).
                     if index >= self.request_targets && verdict.refusal_words_content() {

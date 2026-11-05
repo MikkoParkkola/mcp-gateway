@@ -79,10 +79,15 @@ impl MetaMcp {
         tool: &str,
         scope: InvokeScope<'_>,
         session_id: Option<&str>,
-    ) -> std::result::Result<(), (Error, crate::security::decision_record::DecisionKind)> {
+    ) -> std::result::Result<(), (Error, crate::security::decision_record::Refusal)> {
         self.may_invoke_before_grants_explained(server, tool, scope, session_id)?;
         self.identity_grant_rule(server, tool, scope, Emit::Silent)
-            .map_err(|error| (error, crate::security::decision_record::DecisionKind::Grant))
+            .map_err(|error| {
+                (
+                    error,
+                    (crate::security::decision_record::DecisionKind::Grant, None),
+                )
+            })
     }
 
     /// The pieces of [`Self::may_invoke`] before identity grants.
@@ -104,12 +109,15 @@ impl MetaMcp {
         tool: &str,
         scope: InvokeScope<'_>,
         session_id: Option<&str>,
-    ) -> std::result::Result<(), (Error, crate::security::decision_record::DecisionKind)> {
+    ) -> std::result::Result<(), (Error, crate::security::decision_record::Refusal)> {
         self.caller_profile_check(session_id, (server, tool))
             .map_err(|error| {
                 (
                     error,
-                    crate::security::decision_record::DecisionKind::RoutingProfile,
+                    (
+                        crate::security::decision_record::DecisionKind::RoutingProfile,
+                        None,
+                    ),
                 )
             })?;
         // `{}`, never `Null`: invocation builds its target with an empty
@@ -125,21 +133,24 @@ impl MetaMcp {
             .decide(target)
             .emit(Emit::Silent)
             .map_err(|e| {
-                let kind = e.kind;
+                let refusal = (e.kind, e.rule_id);
                 (
                     Error::Forbidden {
                         code: e.code,
                         status: e.status.as_u16(),
                         message: e.message,
                     },
-                    kind,
+                    refusal,
                 )
             })?;
         self.admin_capability_rule(server, tool, scope.is_admin)
             .map_err(|error| {
                 (
                     error,
-                    crate::security::decision_record::DecisionKind::AdminCapability,
+                    (
+                        crate::security::decision_record::DecisionKind::AdminCapability,
+                        None,
+                    ),
                 )
             })
     }
@@ -446,22 +457,39 @@ impl MetaMcp {
         scope: InvokeScope<'_>,
         emit: Emit,
     ) -> Result<()> {
-        let verdict = self
-            .grant_evaluation(server, tool, scope)
+        // Noted only when audited: a silent evaluation is a listing's, and a
+        // listing inside a call must not name another target's check.
+        self.identity_grant_rule_explained(server, tool, scope, emit)
+            .map_err(|refusal| {
+                if emit == Emit::Audit {
+                    crate::gateway::meta_mcp::invoke::audit::noted(refusal)
+                } else {
+                    refusal.0
+                }
+            })
+    }
+
+    /// [`Self::identity_grant_rule`], with the refusing check's pair and no
+    /// note.
+    pub(super) fn identity_grant_rule_explained(
+        &self,
+        server: &str,
+        tool: &str,
+        scope: InvokeScope<'_>,
+        emit: Emit,
+    ) -> crate::security::decision_record::Explained {
+        self.grant_evaluation(server, tool, scope)
             .and_then(|evaluation| {
                 evaluation.map_or(Ok(()), |verdict| {
                     self.settle_grant(server, tool, scope, &verdict, emit)
                 })
-            });
-        // Noted only when audited: a silent evaluation is a listing's, and a
-        // listing inside a call must not name another target's check.
-        if emit == Emit::Audit && verdict.is_err() {
-            crate::gateway::meta_mcp::invoke::audit::note_refused_by(
-                crate::security::decision_record::DecisionKind::Grant,
-                None,
-            );
-        }
-        verdict
+            })
+            .map_err(|e| {
+                (
+                    e,
+                    (crate::security::decision_record::DecisionKind::Grant, None),
+                )
+            })
     }
 
     /// One evaluation of the identity grants for `(server, tool)`: `None`
