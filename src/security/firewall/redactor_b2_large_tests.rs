@@ -243,7 +243,9 @@ fn s15_dense_matches_read_the_literal_once_a_pass() {
     let read = |n: usize| {
         let text = dense_literal(n);
         let mut value = json!({ "content": [{ "type": "text", "text": text }] });
-        let bytes = super::super::large::lookups::counted(|| r.scan_and_redact(&mut value));
+        let bytes = super::super::large::lookups::counted(|| {
+            r.scan_and_redact(&mut value);
+        });
         let out = value["content"][0]["text"].as_str().expect("text");
         assert!(
             !out.contains("AKIA"),
