@@ -151,6 +151,7 @@ async fn w1_a_worker_step_record_keeps_the_scope_refusal() {
             .iter()
             .find(|(name, _)| *name == cell)
             .map(|(_, (outcome, _, _))| outcome.clone())
+            .unwrap_or_else(|| panic!("W1: no {cell} cell"))
     };
     assert_eq!(
         answer_of(GHOST),

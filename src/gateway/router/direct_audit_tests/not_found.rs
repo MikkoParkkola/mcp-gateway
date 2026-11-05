@@ -45,6 +45,12 @@ async fn a_scoped_call_to_an_unregistered_granted_backend_records_not_found() {
         "params": {"name": "gateway_invoke",
                    "arguments": {"server": "ghost", "tool": "t", "arguments": {}}}});
     let (_, answer) = post_to(&fx, "/mcp", &call.to_string(), &Caller::Key).await;
+    // The caller's answer is the scoped absent answer, unchanged by the fix.
+    assert_eq!(answer["result"]["isError"], true, "{answer}");
+    assert!(
+        answer.to_string().contains("does not list a tool named"),
+        "the scoped absent answer: {answer}"
+    );
     let record = only_invocation(&fx);
     assert_eq!(
         record["decision"]["kind"], "not_found",
