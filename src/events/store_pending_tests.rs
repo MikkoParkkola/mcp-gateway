@@ -172,7 +172,12 @@ fn claim_settle_and_unsubscribe_cancel() {
             .ready
             .is_empty()
     );
-    assert!(crate::events::records::committed_records(&dir.path().join("outbox")).is_empty());
+    assert!(
+        std::fs::read_dir(dir.path().join("outbox"))
+            .expect("dir")
+            .next()
+            .is_none()
+    );
 }
 
 #[test]
@@ -242,7 +247,11 @@ fn records_of_expired_subscriptions_are_cancelled_but_suspended_ones_kept() {
             .len(),
         1
     );
-    let on_disk = || crate::events::records::committed_records(&dir.path().join("outbox")).len();
+    let on_disk = || {
+        std::fs::read_dir(dir.path().join("outbox"))
+            .expect("dir")
+            .count()
+    };
     assert_eq!(on_disk(), 2, "the suspended subscription keeps its record");
     let past_expiry = now + crate::duration_bound::delta!(hours, 2);
     store.due(past_expiry, &HashSet::new(), ROOMY).expect("io");
@@ -324,7 +333,9 @@ fn a_resubscribe_after_expiry_inherits_no_pending_record() {
         .expect("admitted");
     assert!(matches!(store.claim("a", later).expect("io"), Claim::Skip));
     assert_eq!(
-        crate::events::records::committed_records(&dir.path().join("outbox")).len(),
+        std::fs::read_dir(dir.path().join("outbox"))
+            .expect("dir")
+            .count(),
         0,
         "the expired subscription's retry went with it"
     );
