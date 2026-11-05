@@ -27,8 +27,9 @@ use crate::config_persistence::keyedit::{
     Change, FieldPath, Scalar, Segment, Template, edit_in_place,
 };
 use crate::config_reload::{
-    AuditPosture, Expected, FileRevision, GatewayAuth, IntentKind, LiveConfig, RELOAD_LOCK_WAIT,
-    Replace, ReplaceError, ReplaceOutcome, Replaced, refuse_multi_user_flip, replace_audited,
+    AuditPosture, Expected, FileRevision, GatewayAuth, IntentKind, LiveConfig, NO_AUDIT_LOG,
+    RELOAD_LOCK_WAIT, Replace, ReplaceError, ReplaceOutcome, Replaced, refuse_multi_user_flip,
+    replace_audited,
 };
 use crate::gateway::router::AppState;
 
@@ -344,15 +345,22 @@ fn audit_unavailable() -> Response {
     coded(StatusCode::SERVICE_UNAVAILABLE, "audit_unavailable")
 }
 
-/// The key write's audit: its intent names the caller and the key. No log is
-/// no write, whatever the auth posture.
-fn audit_for(state: &AppState, guard: &Guard, name: &str) -> Option<crate::config_reload::Audit> {
-    let log = state.transparency_log.clone()?;
+/// Writes `replace` under the key write's audit: its intent names the caller
+/// and the key. No audit log is no write, whatever the auth posture.
+async fn write_audited(
+    state: &AppState,
+    guard: &Guard,
+    (name, context): (&str, Arc<crate::config_reload::ReloadContext>),
+    replace: Replace,
+) -> Result<ReplaceOutcome, ReplaceError> {
+    let log = state
+        .transparency_log
+        .clone()
+        .ok_or_else(|| ReplaceError::Refused(NO_AUDIT_LOG.to_owned()))?;
     let auth = GatewayAuth::of(state.live_config.running().auth.enabled);
     let who = super::admin_audit::caller_who(state, guard.client.as_ref(), guard.identity.as_ref());
-    AuditPosture::of(Some(log), auth)
-        .key_write(IntentKind::KeyCreate, who, name)
-        .ok()
+    let audit = AuditPosture::of(Some(log), auth).key_write(IntentKind::KeyCreate, who, name)?;
+    replace_audited(context, replace, audit, RELOAD_LOCK_WAIT).await
 }
 
 /// Whether the live generation holds `name` under `digest` (a spec): the
@@ -462,9 +470,6 @@ pub(super) async fn create_key(
     let digest = crate::config::api_key_digest_spec(secret.as_bytes());
     let name = body.name.clone();
     let entry = NewKeyEntry::of(body, digest.clone());
-    let Some(audit) = audit_for(&state, &guard, &name) else {
-        return audit_unavailable();
-    };
     let outcome = Outcome::default();
     let judge = Judge {
         live: Arc::clone(&state.live_config),
@@ -481,7 +486,7 @@ pub(super) async fn create_key(
     if let Some(axum::Extension(hook)) = &before_lock {
         (hook.0)();
     }
-    let written = replace_audited(checked.context, replace, audit, RELOAD_LOCK_WAIT).await;
+    let written = write_audited(&state, &guard, (&name, checked.context), replace).await;
     let refusal = *outcome.lock().unwrap_or_else(|e| e.into_inner());
     match written {
         Ok(ReplaceOutcome {

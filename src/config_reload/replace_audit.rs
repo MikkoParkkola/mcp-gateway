@@ -129,7 +129,6 @@ impl AuditPosture {
 
     /// The audit for a key write of `kind`: as [`Self::audit`], with the
     /// intent naming `actor` and the key `subject`.
-    #[allow(dead_code, reason = "the create route is its first caller")]
     pub(crate) fn key_write(
         self,
         kind: IntentKind,
