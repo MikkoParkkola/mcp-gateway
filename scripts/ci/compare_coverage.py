@@ -146,6 +146,15 @@ def self_test() -> int:
         twice = write(d, "l6", "lib\ta::b\tok\nlib\ta::b\tok\nlib\ta::c\tignored\nt\tx\tok\n")
         assert any("executed tests" in p for p in compare(
             table, [table], [log], [twice], singles[0], singles))
+        # The command line refuses anything but three single runs of each kind.
+        args = ["--table", table, "--tests", log, "--lcov", singles[0]]
+        three = ["--table-single", table, table, table, "--tests-single", log, log, log,
+                 "--lcov-single", *singles]
+        assert main(["x", *args, *three]) == 0
+        assert main(["x", *args, *three[:-1]]) == 2, "two lcov runs"
+        one_tests = ["--table-single", table, table, table, "--tests-single", log,
+                     "--lcov-single", *singles]
+        assert main(["x", *args, *one_tests]) == 2, "one tests file"
     print("compare_coverage self-test: ok")
     return 0
 
