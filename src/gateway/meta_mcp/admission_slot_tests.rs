@@ -75,3 +75,15 @@ fn a_lease_noting_two_slots_stores_none() {
         "a conflict is sticky"
     );
 }
+
+impl crate::gateway::meta_mcp::MetaMcp {
+    /// The slot every settled delivery stored, `None` where it stored none:
+    /// the composite rows read what a settled playbook kept.
+    pub(crate) fn stored_effect_slots_for_test(&self) -> Vec<Option<crate::backend::PoolKey>> {
+        self.execution_admission
+            .completed_bytes_for_test()
+            .iter()
+            .map(|bytes| super::stored::stored_effect_slot(bytes))
+            .collect()
+    }
+}

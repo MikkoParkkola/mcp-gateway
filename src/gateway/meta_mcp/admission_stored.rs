@@ -214,6 +214,25 @@ pub(super) fn stored_bindings(bytes: &[u8]) -> Vec<StepBinding> {
         .unwrap_or_default()
 }
 
+/// The replay of a stored execution: its answer and record facts, with the
+/// steps it dispatched, the bindings it ran under and the one slot it ran on,
+/// all read from the stored bytes.
+pub(super) fn stored_replay(
+    response: crate::protocol::JsonRpcResponse,
+    audit: Option<ReplayAudit>,
+    target: Option<super::ReplayTarget>,
+    bytes: &[u8],
+) -> super::SyncAdmission {
+    super::SyncAdmission::Replay(
+        response,
+        audit,
+        target,
+        dispatched_steps(bytes),
+        stored_bindings(bytes),
+        stored_effect_slot(bytes),
+    )
+}
+
 /// The slot a stored single-slot execution ran under, `None` when none was
 /// stored.
 pub(super) fn stored_effect_slot(bytes: &[u8]) -> Option<crate::backend::PoolKey> {

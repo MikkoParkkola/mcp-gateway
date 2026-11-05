@@ -266,25 +266,6 @@ pub(super) fn execution_arguments_cow(arguments: &mut std::borrow::Cow<'_, Value
     false
 }
 
-/// The replay of a stored execution: its answer and record facts, with the
-/// steps it dispatched, the bindings it ran under and the one slot it ran on,
-/// all read from the stored bytes.
-fn stored_replay(
-    response: JsonRpcResponse,
-    audit: Option<ReplayAudit>,
-    target: Option<ReplayTarget>,
-    bytes: &[u8],
-) -> SyncAdmission {
-    SyncAdmission::Replay(
-        response,
-        audit,
-        target,
-        stored::dispatched_steps(bytes),
-        stored::stored_bindings(bytes),
-        stored::stored_effect_slot(bytes),
-    )
-}
-
 impl MetaMcp {
     pub(crate) fn read_only_target(&self, server: &str, tool: &str) -> bool {
         if let Some(context) = self.reload_context() {
@@ -447,7 +428,12 @@ impl MetaMcp {
                     Error::json_rpc(409, "Secured execution result is unavailable")
                 })?;
                 response.id = Some(request_id.clone());
-                Ok(stored_replay(response, audit, single_target, &bytes))
+                Ok(stored::stored_replay(
+                    response,
+                    audit,
+                    single_target,
+                    &bytes,
+                ))
             }
             Ok(Admission::InFlight) => {
                 Err(Error::json_rpc(409, "Execution is already in progress"))
@@ -753,17 +739,6 @@ pub(crate) struct UnkeyedPolicy {
 }
 
 impl MetaMcp {
-    /// The slot every settled delivery stored, `None` where it stored none:
-    /// the composite rows read what a settled playbook kept.
-    #[cfg(test)]
-    pub(crate) fn stored_effect_slots_for_test(&self) -> Vec<Option<crate::backend::PoolKey>> {
-        self.execution_admission
-            .completed_bytes_for_test()
-            .iter()
-            .map(|bytes| stored::stored_effect_slot(bytes))
-            .collect()
-    }
-
     pub(crate) fn set_idempotency_key_mode(&self, mode: crate::config::IdempotencyKeyMode) {
         *self.unkeyed.mode.write() = mode;
     }
