@@ -9,7 +9,7 @@ workflow shell text instead of two that can diverge.
 """
 from __future__ import annotations
 
-import collections
+import enum
 import itertools
 import re
 import shlex
@@ -149,33 +149,29 @@ PYTHONS = {"python", "python3"}
 # the workflows, and as pre-push binds it.
 GATE_PYTHONS = {"scripts/gate-env/.venv/bin/python", "$GATE_PY", "${GATE_PY}"}
 SCRIPT = re.compile(r"^(?:scripts|benchmarks)/[\w./*-]+\.py$")
-# A shell-script step: `bash|sh <script>` or the script run directly. Any repo-relative path
-# counts (not absolute, not $VAR, not ../); a leading ./ is not part of the form.
-SHELLS = {"bash", "sh"}
-SH_SCRIPT = re.compile(r"^(?:\./)?(?!\.\./)((?:[\w.*-]+/)*[\w.*-]+\.sh)$")
-SH_PATH = re.compile(r"(?<![\w./$-])(?:\./)?(?:[\w*-][\w.*-]*/)*[\w*-][\w.*-]*\.sh(?![\w.])")
 ASSIGN = re.compile(r"^([A-Za-z_]\w*)=(.*)$")
 FOR_GLOB = re.compile(r"^for\s+(\w+)\s+in\s+(\S+)\s*$")
 UNSUPPORTED = ("eval", "source", ".")
 
+# Shell scripts (lead ruling 2026-11-05, after three review rounds each found a shell form the walker
+# misread): a .sh is never parsed out of arbitrary shell. A line (continuations joined) that names a
+# repo .sh path must be exactly one canonical form, with nothing chained (`|`, `&&`, `||`, `;`, `&`,
+# `$( )`, backticks, a `VAR=`/env prefix, `if`); only trailing redirections may follow:
+#   run           `bash <path>.sh [args]`  or  `<path>.sh [args]` (a leading ./ is not part of the form)
+#   syntax check  `bash -n <path>.sh`, or `for f in <path>.sh ...; do bash -n "$f"; done`
+# Anything else naming a .sh fails closed: rewrite the workflow line or list it CI_ONLY.
+SH_SCRIPT = re.compile(r"^(?:\./)?(?!\.\./)((?:[\w.-]+/)*[\w.-]+\.sh)$")
+# Any word ending in .sh triggers the rule, however it is spelled ($DIR/x.sh, x-*.sh, "x.sh").
+SH_MENTION = re.compile(r"\.sh(?![\w.-])")
+SH_SYNTAX_LOOP = re.compile(r'^for\s+(\w+)\s+in\s+((?:\S+\.sh\s+)*\S+\.sh)\s*;\s*do\s+bash\s+-n\s+"\$\1"\s*;\s*done$')
 
-def _interpreter_split(words):
-    """(interpreter flags, the rest) of `python|bash|sh <flags> <script> <args>`; `-o` takes its value."""
-    rest, flags = list(words[1:]), []
-    while rest and rest[0].startswith("-") and rest[0] != "-":
-        flags.append(rest.pop(0))
-        if re.fullmatch(r"-[A-Za-z]*o", flags[-1]) and rest:  # `-o pipefail`, `-eo pipefail`
-            rest.pop(0)
-    return flags, rest
 
+class ShellLines(enum.Enum):
+    """What a `run:` block's non-canonical .sh line does: STRICT raises (workflows);
+    SKIP contributes no form (pre-push.sh, read only to credit forms it already runs)."""
 
-def _is_syntax_check(words):
-    """`bash -n <files>`: parses, runs nothing. Not with -c, whose text is a command to read."""
-    if not (words and words[0] in SHELLS):
-        return False
-    flags, _ = _interpreter_split(words)
-    short = [f[1:].split("o")[0] for f in flags if not f.startswith("--")]
-    return any("n" in f for f in short) and not any("c" in f for f in short)
+    STRICT = "strict"
+    SKIP = "skip"
 
 
 def _token(word, bound):
@@ -329,8 +325,6 @@ def _command_words(piece):
         raise UnsupportedSyntax(f"{err}: {piece}") from None
     while words and (words[0] in KEYWORDS or ASSIGN.match(words[0])):
         words = words[1:]
-    if len(words) > 1 and words[0] == "command" and not words[1].startswith("-"):
-        words = words[1:]  # `command bash x.sh` runs bash; `command -v` is a lookup (LOOKUPS)
     if words and words[0] == "env":
         words = words[1:]
         while words and ASSIGN.match(words[0]):
@@ -384,7 +378,7 @@ def _data_stripped(line):
     return " ; ".join(kept)
 
 
-def _check_complete(run_block, found, stage_runs=None):
+def _check_complete(run_block, found):
     """Raise UnsupportedSyntax when the block names more Python than `found` runs."""
     lines = _guard_lines(run_block)
     loose = []
@@ -392,11 +386,9 @@ def _check_complete(run_block, found, stage_runs=None):
         for m in PY_WORD.finditer(line):
             if not (_LOOKUP_BEFORE.search(line[:m.start()]) or _INLINE_AFTER.match(line[m.end():])):
                 loose.append(line.strip())
-    # Only Python runs answer for Python mentions: a shell-script run must not cover a missed one.
-    pythons = [e for e in found if e.argv0 in PYTHONS or e.argv0 in GATE_PYTHONS]
-    if len(loose) > len(pythons):
+    if len(loose) > len(found):
         raise UnsupportedSyntax(
-            f"{len(loose)} python command(s), {len(pythons)} read as script executions; "
+            f"{len(loose)} python command(s), {len(found)} read as script executions; "
             f"a form the walker cannot read: {' | '.join(dict.fromkeys(loose))}"
         )
     scripts = {e.script for e in found}
@@ -404,64 +396,20 @@ def _check_complete(run_block, found, stage_runs=None):
     unread = [path for path in dict.fromkeys(unread) if path not in scripts]
     if unread:
         raise UnsupportedSyntax(f".py path(s) named but not read as an execution: {', '.join(unread)}")
-    # Fail closed on shell scripts too: `bash -c 'x.sh'` or a form the walker misreads names a
-    # .sh path it never records. A syntax check (`bash -n x.sh`) runs nothing and accounts for it.
-    # Every occurrence: a script recorded once must not cover a second, unread invocation of it.
-    checked = _syntax_checked_loop_items(lines)
-    named = collections.Counter(m.group(0).removeprefix("./") for line in lines
-                                for m in SH_PATH.finditer(_syntax_checks_stripped(_data_stripped(line))))
-    # One run per walker stage, not per bound variant: two bindings of one call are not two calls.
-    ran = stage_runs if stage_runs is not None else collections.Counter(e.script for e in found if e.script.endswith(".sh"))
-    sh_unread = [path for path, n in named.items() if n > ran[path] + checked[path]]
-    if sh_unread:
-        raise UnsupportedSyntax(f".sh path(s) named but not read as an execution: {', '.join(sh_unread)}")
 
 
-def _syntax_checked_loop_items(lines):
-    """Occurrences of the paths a `for VAR in a.sh b.sh; do bash -n "$VAR"` loop hands to a syntax
-    check: only when every stage using $VAR is a syntax check (`_is_syntax_check`, the walker's own
-    flag parser), so `bash -onounset "$f"` or a second `bash "$f"` accounts for nothing."""
-    text = " ; ".join(lines)
-    stages = [stage for piece in _chains(text) for stage in _pipe_stages(piece)]
-    items = collections.Counter()
-    for m in re.finditer(r"\bfor\s+(\w+)\s+in\s+([^;]+);", text):
-        use = re.compile(r"\$\{?" + re.escape(m.group(1)) + r"\b")
-        users = [stage for stage in stages if use.search(stage)]
-        def checks(stage):
-            try:
-                return _is_syntax_check(_command_words(stage))
-            except UnsupportedSyntax:
-                return False
-        if users and all(checks(stage) for stage in users):
-            items.update(w.strip("'\"").removeprefix("./") for w in m.group(2).split())
-    return items
-
-
-def _syntax_checks_stripped(line):
-    """`line` without its `bash -n` / `sh -n` stages, which only parse their files."""
-    kept = []
-    for piece in _chains(line):
-        for stage in _pipe_stages(piece):
-            try:
-                words = _command_words(stage)
-            except UnsupportedSyntax:
-                words = []
-            if _is_syntax_check(words):
-                continue
-            kept.append(stage)
-    return " ; ".join(kept)
-
-
-def executions(run_block: str) -> list[Execution]:
+def executions(run_block: str, shell_lines: ShellLines = ShellLines.STRICT,
+               ci_only_lines: frozenset = frozenset()) -> list[Execution]:
     """Every script execution in one `run:` block, in order; UnsupportedSyntax
-    when the block names Python the walker cannot account for."""
-    stage_runs = collections.Counter()
-    found = _walk(run_block, stage_runs)
-    _check_complete(run_block, found, stage_runs)
+    when the block names Python the walker cannot account for, or (STRICT) a
+    .sh in anything but a canonical line. A line in `ci_only_lines` (compared with
+    its whitespace collapsed) is CI-only by its table entry and yields nothing."""
+    found = _walk(run_block, shell_lines, ci_only_lines)
+    _check_complete(run_block, [e for e in found if not e.script.endswith(".sh")])
     return found
 
 
-def _walk(run_block: str, stage_runs=None) -> list[Execution]:
+def _walk(run_block: str, shell_lines: ShellLines = ShellLines.STRICT, ci_only_lines=frozenset()) -> list[Execution]:
     """The walker proper: every script execution it can read, in order."""
     # One word per `${{ … }}` expression, so whitespace splitting keeps it whole.
     run_block = re.sub(r"\$\{\{\s*(.*?)\s*\}\}", lambda m: "${{" + m.group(1).replace(" ", "") + "}}", run_block)
@@ -470,11 +418,20 @@ def _walk(run_block: str, stage_runs=None) -> list[Execution]:
     for raw in lines:
         if raw.strip().startswith("#"):
             continue
+        if SH_MENTION.search(raw):
+            if " ".join(raw.split()) in ci_only_lines:
+                continue
+            try:
+                found += _shell_line(raw.strip(), bound)
+            except UnsupportedSyntax:
+                if shell_lines is ShellLines.STRICT:
+                    raise
+            continue
         for pipeline in _chains(raw):
             # A substitution runs its own commands (nested ones recursively);
             # single-quoted text is data and holds none.
             for _, _, body in _lex(pipeline)[1]:
-                found += _walk(body, stage_runs)
+                found += _walk(body, shell_lines, ci_only_lines)
             stages = _pipe_stages(pipeline)
             if not stages:
                 continue
@@ -492,10 +449,7 @@ def _walk(run_block: str, stage_runs=None) -> list[Execution]:
                 continue
             # Every stage is a command: `cat f | python3 scripts/x.py` runs x.py.
             for stage in stages:
-                ran = _stage_execution(stage, stages, bound, loops)
-                if stage_runs is not None:
-                    stage_runs.update({e.script for e in ran if e.script.endswith(".sh")})
-                found += ran
+                found += _stage_execution(stage, stages, bound, loops)
     return found
 
 
@@ -507,49 +461,67 @@ def _stage_execution(stage, stages, bound, loops):
         return found
     if words[0] in UNSUPPORTED:
         raise UnsupportedSyntax(f"`{words[0]}` hides what it executes: {stage}")
-    direct = SH_SCRIPT.match(words[0].strip("'\""))
-    if not direct and words[0].strip("'\"").endswith(".sh"):
-        raise UnsupportedSyntax(f"a shell script the walker cannot resolve: {stage}")
-    if direct:
-        target, rest = direct.group(1), list(words)
-        if "*" in target:
-            raise UnsupportedSyntax(f"a glob operand runs only its first match: {stage}")
-    elif words[0] in PYTHONS or words[0] in GATE_PYTHONS or words[0] in SHELLS:
-        # Interpreter flags (`-B`, `-I`, `-e`) come before the script; the
-        # script's own flags after it are arguments and are kept.
-        flags, rest = _interpreter_split(words)
-        # `bash -n` only parses its files (a syntax check) and executes nothing.
-        if _is_syntax_check(words):
-            return found
-        if not rest:
-            return found
-        target = rest[0].strip("'\"")
-        from_loop = False
-        for var, pattern in loops.items():
-            if target in ("$" + var, "${" + var + "}"):
-                target, from_loop = pattern, True
-        if "*" in target and not from_loop and target.endswith((".py", ".sh")):
-            # `bash scripts/check-*.sh` runs the FIRST match and passes the rest as its arguments.
-            raise UnsupportedSyntax(f"a glob operand runs only its first match: {stage}")
-        if words[0] in SHELLS:
-            sh = SH_SCRIPT.match(target)
-            if not sh:
-                if target.endswith(".sh"):
-                    raise UnsupportedSyntax(f"a shell script the walker cannot resolve: {stage}")
-                return found  # `bash -c ...` is not a script execution (the path guard reads its text)
-            target = sh.group(1)
-        elif not SCRIPT.match(target):
-            return found
-    else:
+    if words[0] not in PYTHONS and words[0] not in GATE_PYTHONS:
         return found
-    words_after = _without_redirections(rest[1:])
+    # Interpreter flags (`-B`, `-I`) come before the script; the
+    # script's own flags after it are arguments and are kept.
+    rest = list(words[1:])
+    while rest and rest[0].startswith("-") and rest[0] != "-":
+        rest.pop(0)
+    if not rest:
+        return found
+    target = rest[0].strip("'\"")
+    for var, pattern in loops.items():
+        if target in ("$" + var, "${" + var + "}"):
+            target = pattern
+    if not SCRIPT.match(target):
+        return found
+    if "*" in target and not any(target == p for p in loops.values()):
+        raise UnsupportedSyntax(f"a glob operand runs only its first match: {stage}")
+    return found + _forms(words[0], target, rest[1:], stages, bound)
+
+
+def _forms(argv0, target, args, stages, bound):
+    """One Execution per combination of the bound values its arguments use."""
+    found = []
+    words_after = _without_redirections(args)
     used = [v for v in bound if any(("$" + v) in w for w in words_after)]
     for combo in itertools.product(*(bound[v] for v in used)):
         values = {v: value for v, (value, _) in zip(used, combo)}
         klass = next((k for _, k in combo if k), "")
         found.append(Execution(
-            argv0=words[0], script=target, args=tuple(_token(w, values) for w in words_after),
+            argv0=argv0, script=target, args=tuple(_token(w, values) for w in words_after),
             pipeline=tuple(stages) if len(stages) > 1 else (),
             auto_class=klass,
         ))
     return found
+
+
+def _shell_line(line, bound):
+    """The forms one line naming a .sh runs: [] for a syntax check, one per binding for a run;
+    UnsupportedSyntax for anything but a canonical line (see SH_SCRIPT above)."""
+    if SH_SYNTAX_LOOP.match(line):
+        paths = SH_SYNTAX_LOOP.match(line).group(2).split()
+        if all(SH_SCRIPT.match(p) for p in paths):
+            return []
+        raise UnsupportedSyntax(f"a syntax-check loop over a path that is not a plain repo script: {line}")
+    top, spans = _lex(line)
+    chained = [i for i, (flag, char) in enumerate(zip(top, line)) if flag and char in ";&|"
+               and not (char == "&" and ">" in line[max(i - 1, 0):i + 2])]  # 2>&1, &>f are redirections
+    if spans or chained:
+        raise UnsupportedSyntax(f"a .sh in a chained or substituted command; write it as its own line: {line}")
+    try:
+        words = _without_redirections(shlex.split(line))
+    except ValueError as err:
+        raise UnsupportedSyntax(f"{err}: {line}") from None
+    argv0 = words[0] if words else ""
+    if argv0 == "bash":
+        words = words[1:]
+        if words[:1] == ["-n"]:
+            if len(words) == 2 and SH_SCRIPT.match(words[1]):
+                return []
+            raise UnsupportedSyntax(f"`bash -n` checks one script per line (or the loop form): {line}")
+    script = SH_SCRIPT.match(words[0]) if words else None
+    if not script:
+        raise UnsupportedSyntax(f"not `bash <path>.sh [args]`, `<path>.sh [args]` or `bash -n <path>.sh`: {line}")
+    return _forms(argv0 if argv0 == "bash" else script.group(1), script.group(1), words[1:], (), bound)

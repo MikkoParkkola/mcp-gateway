@@ -72,12 +72,10 @@ CI_ONLY: dict[tuple[str, tuple[str, ...]], str] = {
         "which pre-push already runs on the change, and CI runs this suite on every PR"
     ),
     ('scripts/ci/changed-scope.sh', ('$MERGE_SHA', '$PR_NUMBER', '<HEAD>')): "ci-env: classifies this PR's changes from the event's merge SHA and PR number",
-    ('scripts/ci/changed-scope.sh', ('$MERGE_SHA', '$PR_NUMBER', '<HEAD>'), ('bash scripts/ci/changed-scope.sh "$MERGE_SHA" "$PR_NUMBER" "$HEAD_SHA"', 'tee -a "$GITHUB_OUTPUT"')): "ci-env: classifies this PR's changes from the event's merge SHA and PR number",
     ('scripts/ci/check-cap-validate-pins.sh', ('target/debug/mcp-gateway',)): 'binary: runs a built target/debug/mcp-gateway',
     ('scripts/ci/check-recursion-margin.sh', ()): "cargo: builds and measures the gateway's stack use",
     ('scripts/ci/mingw-debs.sh', ('download', '$HOME/mingw-debs')): 'network: fetches or installs MinGW packages with apt-get',
     ('scripts/ci/mingw-debs.sh', ('install', '$HOME/mingw-debs')): 'network: fetches or installs MinGW packages with apt-get',
-    ('scripts/ci/mingw-debs.sh', ('key',)): 'network: fetches or installs MinGW packages with apt-get',
     ('scripts/ci/packaged-tests.sh', ('build',)): 'cargo: builds and runs the packaged test suite',
     ('scripts/ci/packaged-tests.sh', ('run',)): 'cargo: builds and runs the packaged test suite',
     ('scripts/ci/smoke-full-image.sh', ('${REGISTRY}/mikkoparkkola/mcp-gateway:scan-full',)): 'artifact: runs the built container image (docker, cosign)',
@@ -99,13 +97,8 @@ CI_ONLY: dict[tuple[str, tuple[str, ...]], str] = {
     ('scripts/release/grep_no_test_hook.sh', ('image-mcp-gateway',)): 'artifact: inspects the built image or release binary',
     ('scripts/release/grep_no_test_hook.sh', ('target/release/mcp-gateway',)): 'artifact: inspects the built image or release binary',
     ('scripts/release/nfr_upgrade_1_rehearsal.sh', ()): 'binary: runs a built target/debug/mcp-gateway (upgrade rehearsal)',
-    ('scripts/release/publish_pinned_chart.sh', ('$REHEARSAL_IMAGE', 'oci://ghcr.io/mikkoparkkola/charts'), ('TAG_COMMIT="$GITHUB_SHA" SIGNER_IDENTITY="$IDENTITY" SIGNER_ISSUER="$SIGNER_ISSUER"    CHART_NOTES="$RUNNER_TEMP/chart-notes.md"    scripts/release/publish_pinned_chart.sh "$image" "$repo"', 'tee "$RUNNER_TEMP/publish.log"')): 'release: signs and publishes a pinned chart',
-    ('scripts/release/publish_pinned_chart.sh', ('$REHEARSAL_IMAGE', 'oci://ghcr.io/mikkoparkkola/charts-rehearsal'), ('TAG_COMMIT="$GITHUB_SHA" SIGNER_IDENTITY="$IDENTITY" SIGNER_ISSUER="$SIGNER_ISSUER"    CHART_NOTES="$RUNNER_TEMP/chart-notes.md"    scripts/release/publish_pinned_chart.sh "$image" "$repo"', 'tee "$RUNNER_TEMP/publish.log"')): 'release: signs and publishes a pinned chart',
-    ('scripts/release/publish_pinned_chart.sh', ('ghcr.io/mikkoparkkola/mcp-gateway@${SIGNED_LIST}', 'oci://ghcr.io/mikkoparkkola/charts'), ('TAG_COMMIT="$GITHUB_SHA" SIGNER_IDENTITY="$IDENTITY" SIGNER_ISSUER="$SIGNER_ISSUER"    CHART_NOTES="$RUNNER_TEMP/chart-notes.md"    scripts/release/publish_pinned_chart.sh "$image" "$repo"', 'tee "$RUNNER_TEMP/publish.log"')): 'release: signs and publishes a pinned chart',
-    ('scripts/release/publish_pinned_chart.sh', ('ghcr.io/mikkoparkkola/mcp-gateway@${SIGNED_LIST}', 'oci://ghcr.io/mikkoparkkola/charts-rehearsal'), ('TAG_COMMIT="$GITHUB_SHA" SIGNER_IDENTITY="$IDENTITY" SIGNER_ISSUER="$SIGNER_ISSUER"    CHART_NOTES="$RUNNER_TEMP/chart-notes.md"    scripts/release/publish_pinned_chart.sh "$image" "$repo"', 'tee "$RUNNER_TEMP/publish.log"')): 'release: signs and publishes a pinned chart',
     ('scripts/release/sign-release-assets.sh', ('release', '$version', '$NAME')): 'release: signs release assets',
     ('scripts/release/verify-release-assets.sh', ('published', '$VERSION', '$NAME')): 'release: verifies published release assets',
-    ('scripts/release/verify-release-assets.sh', ('tampered', '$VERSION', '$NAME')): 'release: verifies published release assets',
     ('scripts/test-task-sdk-recovery.sh', ()): 'cargo: builds and runs the task SDK recovery test under docker',
 }
 
@@ -171,17 +164,39 @@ def _steps(root, path, seen):
         yield workflow.name, step
 
 
-def _scan(root):
+# Lines that name a .sh in a non-canonical form and stay so, each CI-only with a reason
+# (workflow file, the line with its whitespace collapsed). Every other such line fails closed.
+CI_ONLY_LINES: dict[tuple[str, str], str] = {
+    ("ci.yml", 'if scripts/release/verify-release-assets.sh tampered "$VERSION" "$NAME"; then'):
+        "release: the tag release job's tampered-copy check, against a draft release",
+    ("ci.yml", 'TAG_COMMIT="$GITHUB_SHA" SIGNER_IDENTITY="$IDENTITY" SIGNER_ISSUER="$SIGNER_ISSUER" '
+               'CHART_NOTES="$RUNNER_TEMP/chart-notes.md" scripts/release/publish_pinned_chart.sh "$image" "$repo" '
+               '| tee "$RUNNER_TEMP/publish.log"'):
+        "release: publishes and signs the chart in the tag release job",
+    ("docker.yml", 'if [ "$(bash scripts/ci/changed-scope.sh "$MERGE_SHA" "$PR_NUMBER" "$HEAD_SHA")" = docs_only=true ]; then'):
+        "ci-env: classifies a pull request into main from the event's merge SHA and PR number",
+    # A grep pattern over the changed paths: it names .sh files, it runs none.
+    ("docker.yml", r"""if grep -Eq '^(Dockerfile|\.dockerignore|\.trivyignore|Cargo\.toml|Cargo\.lock|\.github/workflows/docker\.yml|\.github/osv-scanner\.toml|docker/|scripts/ci/smoke-[^/]*\.sh|scripts/dev/helm-kind-real-image\.sh|deploy/|README\.md|docs/QUICKSTART\.md|docs/DEPLOYMENT\.md|scripts/dev/(docker-smoke\.sh|smoke_fixture_server\.py|smoke-fixture-capability\.sh|assert_capability_response\.py))' <<<"$files"; then"""):
+        "ci-env: matches this pull request's changed paths against the image's inputs",
+    ("feature-combos.yml", 'echo "key=$(scripts/ci/mingw-debs.sh key)" >> "$GITHUB_OUTPUT"'):
+        "network: names the apt package cache for the Windows cross toolchain",
+}
+
+
+def _scan(root, ci_only_lines=None):
     """(form -> [workflows], form -> automatic CI_ONLY reason, problems)."""
+    lines_table = CI_ONLY_LINES if ci_only_lines is None else ci_only_lines
     forms, auto, found = {}, {}, []
-    seen = set()
+    seen, listed_seen = set(), set()
     for workflow in pr_workflows(root):
         for name, step in _steps(root, workflow, seen):
             run = step.get("run") if isinstance(step, dict) else None
             if not run:
                 continue
+            listed = frozenset(line for wf, line in lines_table if wf == name)
+            listed_seen |= {(name, " ".join(l.split())) for l in run.replace("\\\n", " ").splitlines()}
             try:
-                executed = workflow_shell.executions(run)
+                executed = workflow_shell.executions(run, ci_only_lines=listed)
             except workflow_shell.UnsupportedSyntax as err:
                 found.append(f"unsupported execution syntax in {name} step {step.get('name', '?')!r}: {err}")
                 continue
@@ -197,6 +212,11 @@ def _scan(root):
                         auto[form] = "windows: runs under a non-POSIX shell step"
                     elif ex.auto_class:
                         auto[form] = ex.auto_class
+    for key, reason in sorted(lines_table.items()):
+        if key not in listed_seen:
+            found.append(f"stale CI_ONLY line (no PR workflow has it): {key[0]}: {key[1]}")
+        if reason.split(":")[0].strip() not in CI_ONLY_CLASSES:
+            found.append(f"CI_ONLY line reason names no class from {CI_ONLY_CLASSES}: {key[1]}: {reason!r}")
     return forms, auto, found
 
 
@@ -227,15 +247,18 @@ def buckets(root: pathlib.Path, *, ci_only=None):
     table = CI_ONLY if ci_only is None else ci_only
     run = _forms_of((root / RUN_LIST).read_text()) if (root / RUN_LIST).exists() else set()
     pre_push = root / "scripts/dev/pre-push.sh"
-    already = {_form(e.script, e) for e in workflow_shell.executions(pre_push.read_text())} if pre_push.exists() else set()
-    return run, already, {**table, **_scan(root)[1]}
+    # pre-push.sh is read only to credit forms it already runs: a line it writes some other way earns nothing.
+    already = ({_form(e.script, e) for e in workflow_shell.executions(pre_push.read_text(), workflow_shell.ShellLines.SKIP)}
+               if pre_push.exists() else set())
+    return run, already, {**table, **_scan(root, ci_only_lines=None if ci_only is None else {})[1]}
 
 
 def problems(root: pathlib.Path, *, ci_only=None) -> list[str]:
     """Every drift problem, each naming its form and, when scanned, its workflows."""
     table = CI_ONLY if ci_only is None else ci_only
-    forms, auto, found = _scan(root)
-    run, already, ci = buckets(root, ci_only=table)
+    # A fixture passing its own CI_ONLY table lists no lines either; the real repo uses both tables.
+    forms, auto, found = _scan(root, ci_only_lines=None if ci_only is None else {})
+    run, already, ci = buckets(root, ci_only=ci_only)
     for form, workflows in sorted(forms.items()):
         label = _label(form) + f" ({', '.join(sorted(set(workflows)))})"
         homes = [b for b, members in (("RUN", run), ("ALREADY", already), ("CI_ONLY", ci)) if form in members]
@@ -726,112 +749,79 @@ class Rows(unittest.TestCase):
         self.t.run_list("bash scripts/ci/x.sh --self-test\t5\tclosed")
         self.assertEqual(problems(self.t.root, ci_only={}), [])
 
-    # D32: the form keeps the script's own arguments, and bash's or a leading ./ is not part of it.
-    def test_d32_a_shell_script_form_is_the_script_and_its_arguments(self):
-        for run in ("bash scripts/ci/x.sh a b", "./scripts/ci/x.sh a b", "scripts/ci/x.sh a b", "sh scripts/ci/x.sh a b"):
+    # D32: the canonical run forms. The form is the script and its own arguments (bound
+    # variables translated); `bash`, a leading ./ and trailing redirections are not part of it.
+    def test_d32_the_canonical_run_forms(self):
+        for run in ("bash scripts/ci/x.sh a b", "./scripts/ci/x.sh a b", "scripts/ci/x.sh a b",
+                    "scripts/ci/x.sh a b > out.txt 2>&1"):
             with self.subTest(run):
                 (ex,) = workflow_shell.executions(run)
                 self.assertEqual((ex.script, ex.args), ("scripts/ci/x.sh", ("a", "b")))
+        for run, script in (("x.sh", "x.sh"), ("deploy/k8s/scripts/smoke.sh", "deploy/k8s/scripts/smoke.sh")):
+            with self.subTest(run):
+                self.assertEqual([e.script for e in workflow_shell.executions(run)], [script])
+        (ex,) = workflow_shell.executions('base="$BASE_SHA"\nscripts/ci/x.sh "$base..HEAD"')
+        self.assertEqual(ex.args, ("<BASE_TIP>..HEAD",))
 
-    # D33: `bash -n` only parses its files (a syntax check); it executes no script.
-    def test_d33_a_bash_syntax_check_is_not_an_execution(self):
-        self.assertEqual(workflow_shell.executions("bash -n scripts/ci/x.sh scripts/ci/y.sh"), [])
-        self.assertEqual(workflow_shell.executions("sh -n tests/z.sh"), [])
+    # D33: the canonical syntax checks run nothing: one `bash -n <path>.sh`, or the loop form.
+    def test_d33_the_canonical_syntax_checks_run_nothing(self):
+        self.assertEqual(workflow_shell.executions("bash -n scripts/ci/x.sh"), [])
+        self.assertEqual(workflow_shell.executions('for f in scripts/ci/x.sh tests/y.sh; do bash -n "$f"; done'), [])
 
-    # D34-D38 (review round 1): shell forms the walker missed, misread, or credited wrongly.
-    def test_d34_a_shell_script_outside_scripts_and_tests_is_an_execution(self):
-        found = workflow_shell.executions("deploy/kubernetes/x/scripts/smoke.sh")
-        self.assertEqual([e.script for e in found], ["deploy/kubernetes/x/scripts/smoke.sh"])
+    # D34 (lead ruling 2026-11-05): any other line naming a .sh fails closed, whatever it would
+    # run; the walker never parses a script out of arbitrary shell.
+    def test_d34_every_other_line_naming_a_sh_fails_closed(self):
+        for line in (
+            "bash scripts/ci/x.sh | tee f", "a && scripts/ci/x.sh", "scripts/ci/x.sh || true", "scripts/ci/x.sh; echo",
+            "scripts/ci/x.sh &", 'echo "$(scripts/ci/x.sh key)"', "echo `scripts/ci/x.sh`", "if scripts/ci/x.sh; then",
+            "FOO=1 scripts/ci/x.sh", "env FOO=1 scripts/ci/x.sh", "time -p bash scripts/ci/x.sh",
+            "command bash scripts/ci/x.sh", "bash -c 'scripts/ci/x.sh'", "bash -eo pipefail scripts/ci/x.sh",
+            "bash -n scripts/ci/x.sh scripts/ci/y.sh", "sh scripts/ci/x.sh", "sh -n scripts/ci/x.sh",
+            "bash $GITHUB_WORKSPACE/scripts/ci/x.sh", '"$DIR/x.sh"', "bash scripts/ci/check-*.sh",
+            "bash scripts/ci/check-[ab].sh", "bash ../x.sh", 'echo "see scripts/ci/x.sh"',
+            'for f in scripts/ci/x.sh; do bash "$f"; done', "for f in scripts/ci/x.sh scripts/ci/y.sh; do",
+            'for f in scripts/*.sh; do bash -n "$f"; done', "bash -n +n scripts/ci/x.sh",
+            'echo "scripts/ci/x.sh --strict" | bash',
+        ):
+            with self.subTest(line), self.assertRaises(workflow_shell.UnsupportedSyntax):
+                workflow_shell.executions(line)
 
-    def test_d35_a_bundled_o_flag_takes_its_value(self):
-        for block in ("bash -eo pipefail scripts/ci/x.sh --check", "bash -euo pipefail scripts/ci/x.sh --check"):
-            with self.subTest(block):
-                found = workflow_shell.executions(block)
-                self.assertEqual([(e.script, e.args) for e in found], [("scripts/ci/x.sh", ("--check",))])
+    # D35: a line listed CI-only (exact text, whitespace collapsed) yields nothing; unlisted it fails
+    # closed; a listed line no workflow has any more is reported stale; its reason needs a class.
+    def test_d35_a_listed_ci_only_line(self):
+        line = 'echo "key=$(scripts/ci/x.sh key)" >> "$GITHUB_OUTPUT"'
+        self.assertEqual(workflow_shell.executions(line, ci_only_lines=frozenset({line})), [])
+        self.t.workflow("ci.yml", pr_job(line))
+        self.assertTrue(any("unsupported execution syntax" in p for p in problems(self.t.root, ci_only={})))
+        listed = {("ci.yml", line): "network: names a cache key", ("ci.yml", "scripts/ci/gone.sh | tee x"): "release: gone",
+                  ("ci.yml", line.replace("key)", "key2)")): "no class here"}
+        found = _scan(self.t.root, ci_only_lines=listed)[2]
+        self.assertFalse(any("unsupported" in p for p in found), found)
+        self.assertTrue(any("stale CI_ONLY line" in p and "gone.sh" in p for p in found), found)
+        self.assertTrue(any("names no class" in p for p in found), found)
 
-    def test_d36_a_shell_script_named_but_not_read_fails_closed(self):
-        for block in ("bash -c 'scripts/ci/x.sh --check'",
-                      'for f in scripts/ci/x.sh scripts/ci/y.sh; do bash "$f"; done'):
-            with self.subTest(block), self.assertRaises(workflow_shell.UnsupportedSyntax):
-                workflow_shell.executions(block)
-        # A loop that only syntax-checks its scripts runs none of them.
-        self.assertEqual(workflow_shell.executions('for f in scripts/ci/x.sh scripts/ci/y.sh; do bash -n "$f"; done'), [])
+    # D36: pre-push.sh is read only to credit forms it already runs (SKIP): a line it writes some
+    # other way earns nothing and raises nothing.
+    def test_d36_pre_push_lines_are_read_leniently(self):
+        block = 'GATE_PY="$(scripts/dev/gate-env-python.sh)"\nbash scripts/dev/x.sh "$base"'
+        found = workflow_shell.executions(block, workflow_shell.ShellLines.SKIP)
+        self.assertEqual([e.script for e in found], ["scripts/dev/x.sh"])
+        with self.assertRaises(workflow_shell.UnsupportedSyntax):
+            workflow_shell.executions(block)
 
+    # D37: a shell run does not cover a Python command the walker could not read.
     def test_d37_a_shell_run_does_not_cover_a_missed_python_command(self):
-        block = "python3 scripts/ci/x.py\ntime -p python3 scripts/ci/x.py --strict\nbash scripts/ci/y.sh"
+        block = "python3 scripts/ci/x.py\ncommand python3 scripts/ci/x.py --strict\nbash scripts/ci/y.sh"
         with self.assertRaises(workflow_shell.UnsupportedSyntax):
             workflow_shell.executions(block)
 
-    def test_d38_a_literal_glob_operand_fails_closed(self):
-        # `bash scripts/ci/check-*.sh` runs the first match with the rest as its arguments.
-        for block in ("bash scripts/ci/check-*.sh", "scripts/ci/check-*.sh"):
-            with self.subTest(block), self.assertRaises(workflow_shell.UnsupportedSyntax):
-                workflow_shell.executions(block)
-        # A loop over a glob runs each match: still one form per script.
-        found = workflow_shell.executions('for f in scripts/ci/check-*.sh; do bash "$f"; done')
-        self.assertEqual([e.script for e in found], ["scripts/ci/check-*.sh"])
-
-    # D39-D41 (review round 2): loop exemptions, unread operands, attached -o values.
-    def test_d39_a_loop_that_also_runs_its_scripts_is_not_a_syntax_check(self):
-        block = 'for f in scripts/ci/x.sh scripts/ci/y.sh; do bash -n "$f"; bash "$f"; done'
-        with self.assertRaises(workflow_shell.UnsupportedSyntax):
-            workflow_shell.executions(block)
-
-    def test_d40_a_shell_operand_the_walker_cannot_read_fails_closed(self):
-        self.assertEqual([e.script for e in workflow_shell.executions("bash x.sh")], ["x.sh"])
-        for block in ("bash $GITHUB_WORKSPACE/scripts/ci/x.sh", "bash scripts/*/x.sh",
-                      '"$GITHUB_WORKSPACE/scripts/ci/x.sh" --check'):
-            with self.subTest(block), self.assertRaises(workflow_shell.UnsupportedSyntax):
-                workflow_shell.executions(block)
-
-    def test_d41_an_attached_o_value_is_not_a_syntax_check_flag(self):
-        found = workflow_shell.executions("bash -onounset scripts/ci/x.sh")
-        self.assertEqual([e.script for e in found], ["scripts/ci/x.sh"])
-
-    # D42-D45 (review round 2, second seat): occurrences, shared flag parsing, inline code, globs.
-    def test_d42_every_occurrence_of_a_script_is_accounted_for(self):
-        found = workflow_shell.executions("bash scripts/ci/x.sh\ncommand bash scripts/ci/x.sh --strict")
-        self.assertEqual([(e.script, e.args) for e in found], [("scripts/ci/x.sh", ()), ("scripts/ci/x.sh", ("--strict",))])
-        with self.assertRaises(workflow_shell.UnsupportedSyntax):
-            workflow_shell.executions("bash scripts/ci/x.sh\ntime -p bash scripts/ci/x.sh --strict")
-
-    def test_d43_a_syntax_check_is_parsed_like_any_shell_command(self):
-        with self.assertRaises(workflow_shell.UnsupportedSyntax):
-            workflow_shell.executions('bash -c "scripts/ci/x.sh --check" -n')
-        self.assertEqual(workflow_shell.executions("env FOO=bar bash -n scripts/ci/x.sh"), [])
-
-    def test_d44_inline_code_is_not_a_glob_operand(self):
-        self.assertEqual(workflow_shell.executions("python3 -c 'print(2*3)'"), [])
+    # D38: a literal glob operand runs only its first match; inline -c code is not an operand.
+    def test_d38_a_literal_python_glob_operand_fails_closed(self):
         with self.assertRaises(workflow_shell.UnsupportedSyntax):
             workflow_shell.executions("python3 scripts/ci/check_*.py")
-
-    def test_d45_directory_and_bracket_globs(self):
-        found = workflow_shell.executions('for f in scripts/*/x.sh; do bash "$f"; done')
-        self.assertEqual([e.script for e in found], ["scripts/*/x.sh"])
-        for block in ("bash scripts/ci/check-[ab].sh", "bash scripts/ci/check-?.sh"):
-            with self.subTest(block), self.assertRaises(workflow_shell.UnsupportedSyntax):
-                workflow_shell.executions(block)
-
-    # D46-D49 (review round 3): fail-open accounting the guard still allowed.
-    def test_d46_a_syntax_checked_loop_item_does_not_cover_a_later_run(self):
-        block = 'for f in scripts/ci/x.sh; do bash -n "$f"; done\ntime -p bash scripts/ci/x.sh'
-        with self.assertRaises(workflow_shell.UnsupportedSyntax):
-            workflow_shell.executions(block)
-
-    def test_d47_a_loop_running_with_an_attached_o_value_is_not_a_syntax_check(self):
-        block = 'for f in scripts/ci/x.sh scripts/ci/y.sh; do bash -onounset "$f"; done'
-        with self.assertRaises(workflow_shell.UnsupportedSyntax):
-            workflow_shell.executions(block)
-
-    def test_d48_an_unread_root_script_fails_closed(self):
-        with self.assertRaises(workflow_shell.UnsupportedSyntax):
-            workflow_shell.executions("time -p bash x.sh")
-
-    def test_d49_bound_variants_of_one_run_do_not_cover_a_second_run(self):
-        block = ('base="$BASE_SHA"\nbase="$(git merge-base HEAD origin/x)"\n'
-                 'bash scripts/ci/x.sh "$base"\ntime -p bash scripts/ci/x.sh "$base"')
-        with self.assertRaises(workflow_shell.UnsupportedSyntax):
-            workflow_shell.executions(block)
+        self.assertEqual(workflow_shell.executions("python3 -c 'print(2*3)'"), [])
+        found = workflow_shell.executions("for f in scripts/ci/check_*.py; do\npython3 $f\ndone")
+        self.assertEqual([e.script for e in found], ["scripts/ci/check_*.py"])
 
     # D29 (lead ruling 2026-10-23): the guard's exceptions are closed lists.
     def test_d29_the_guards_exception_lists_are_closed(self):
