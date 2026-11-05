@@ -447,6 +447,25 @@ fn r6i2_a_refused_shape_with_the_firewall_off() {
     );
 }
 
+/// R6k: a refused folder rule deciding credentials before the pinned rule
+/// keeps its folder check as compiled, so it shadows the pinned rule neither
+/// fully nor partly.
+#[test]
+fn r6k_a_refused_folder_rule_does_not_shadow_the_pinned_rule() {
+    let mut config = with_rules(json!([
+        {
+            "match": "*", "action": "block", "scan": ["credentials"], "keys": [],
+            "allowed_roots": ["/srv"], "path_args": ["p"]
+        },
+        pinned(),
+    ]));
+    config.security.firewall.enabled = false;
+    let model = read_model(&config);
+    let p = &model["credentials"]["pinned_rule"];
+    assert_eq!(p["shadowed_by"], json!([]));
+    assert_eq!(p["partly_shadowed_by"], json!([]));
+}
+
 /// R5e: the cross-tenant read verdict runs whenever `arg_keys` attributes
 /// tenants and its mode is not `off` (`outbound/judge.rs` `judging`), with
 /// the tenant guard itself off and even with the firewall switched off: the

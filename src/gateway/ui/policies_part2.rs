@@ -238,9 +238,10 @@ fn is_pinned(rule: &FirewallRule) -> bool {
 /// server (a server glob never covers a call with no backend), and a tool
 /// glob of `*` or exactly the rule's own `match`. Read on the compiled rule:
 /// an entry setting no field makes a refused shape, which blocks every call.
-/// Text comparison, by design: a glob-equivalent spelling (`match: "fo*"`
-/// with `except: [{tool: "f?*"}]`) is not recognised and the rule is
-/// reported as a partial shadower, a spurious warning, never a missed one.
+/// Text comparison, by design: an exception glob that covers the match
+/// without being spelled the same (`match: "fo*"` with
+/// `except: [{tool: "f*"}]`) is not recognised and the rule is reported as a
+/// partial shadower, a spurious warning, never a missed one.
 fn excludes_every_call(rule: &FirewallRule) -> bool {
     rule.except.iter().flatten().any(|e| {
         e.key.is_none()
