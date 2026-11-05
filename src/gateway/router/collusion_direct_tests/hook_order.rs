@@ -152,6 +152,11 @@ fn called(line: &str) -> Vec<&str> {
 /// refusal (`audit::take_refusal`) reads the audit record, not a generation,
 /// so it is blanked first.
 fn reads_generation(line: &str) -> bool {
+    // The hook call is never a read, though its `run` shares a name with
+    // functions that are.
+    if line.contains(HOOK) {
+        return false;
+    }
     let line = line.replace("take_refusal(", "");
     reads_directly(&line)
         || line.contains("_refusal(")
