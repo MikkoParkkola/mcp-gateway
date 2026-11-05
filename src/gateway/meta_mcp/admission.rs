@@ -27,7 +27,7 @@ pub(crate) use operation::{OPERATION_DEFINING_META, operation_arguments};
 #[path = "admission_stored.rs"]
 mod stored;
 use era::{refuse_another_era, shaped_for_request};
-pub(crate) use stored::{ReplayAudit, StepBinding, note_distinct};
+pub(crate) use stored::{ReplayAudit, StepBinding, dispatch_slot, note_distinct};
 use stored::{StoredChain, StoredDelivery, stored_response};
 
 /// Borrowed by inner dispatches, owned by the outer request future. Dropping the
