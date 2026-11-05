@@ -279,7 +279,7 @@ fn replay_and_cache_hit_reach_the_tail() {
     );
     only(
         &source(direct),
-        "Ok((None, Some((response, bindings))))",
+        "Ok((None, Some((response, bindings, slot))))",
         direct,
     );
     only(
