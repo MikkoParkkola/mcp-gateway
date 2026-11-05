@@ -9,7 +9,7 @@ use tokio::sync::Mutex as TokioMutex;
 use crate::oauth::OAuthClient;
 use crate::{Error, Result};
 
-/// Run an interactive caller's token step in a task of its own (MIK-8339):
+/// Run an interactive caller's token step in a task of its own:
 /// the login it may lead belongs to the task, so a caller whose deadline
 /// fires drops only its wait, and a person who approves later still stores a
 /// token. The caller's scopes are carried in, so the task's marks land on the
