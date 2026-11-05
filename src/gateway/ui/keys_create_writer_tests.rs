@@ -234,3 +234,68 @@ fn a4_the_intent_is_durable_before_the_writer_commits() {
         ["intent", "commit"]
     );
 }
+
+/// P9r: a reload that refuses after the rename, and a journal that then
+/// cannot be removed, leave the file unproven (the real writer, two real
+/// faults): 500 `state_uncertain`. The secret is in neither the config nor
+/// the journal, the digest at most in `key_sha256`, and GET shows the entry
+/// under the new revision. The refusal is armed from the writer's own
+/// "commit" step: after the pre-write check, before the rename and reload,
+/// on the thread that reloads.
+#[test]
+fn p9r_a_failed_rollback_is_state_uncertain_and_leaks_nothing() {
+    use std::sync::Mutex;
+
+    use crate::config_persistence::journal::{self, fault};
+    use crate::config_reload::{refuse_hook, write_order};
+    let fx = Fixture::new(Setup::default());
+    let target = crate::identity_grants::journal::resolved(&fx.path());
+    let armed = fault::set(&target, fault::Fault::FailJournalRemove);
+    let fired = Arc::new(Mutex::new(None));
+    let cell = Arc::clone(&fired);
+    write_order::on(
+        &target,
+        "commit",
+        Arc::new(move || {
+            *cell.lock().expect("cell") = Some(refuse_hook::arm("zq-reload-refusal"));
+        }),
+    );
+    let sent = fx.post(Call::new(&fx.body("stuck")));
+    let hook = fired.lock().expect("cell").take();
+    let journal_text = std::fs::read(journal::journal_path(&target))
+        .map(|b| String::from_utf8_lossy(&b).into_owned())
+        .unwrap_or_default();
+    drop(armed);
+    write_order::take(&target);
+    let hook = hook.expect("the writer never reached its commit step");
+    assert!(
+        hook.load(std::sync::atomic::Ordering::SeqCst),
+        "the reload never took the refusal: no rollback was exercised"
+    );
+    assert_eq!(
+        sent.status,
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "{}",
+        sent.body
+    );
+    assert_eq!(error_of(&sent), "state_uncertain");
+    let digest = super::keys_create_fixture_tests::spec(KNOWN);
+    let config = fx.text();
+    for (place, text) in [
+        ("answer", &sent.body),
+        ("config", &config),
+        ("journal", &journal_text),
+    ] {
+        assert!(!text.contains(KNOWN), "the secret is in the {place}");
+    }
+    assert!(journal_text.matches(digest.as_str()).count() <= 1);
+    assert!(config.matches(digest.as_str()).count() <= 1);
+    assert!(!sent.body.contains(&digest), "{}", sent.body);
+    assert!(!sent.logs.contains(KNOWN) && !sent.logs.contains(&digest));
+    let listed = fx.get();
+    assert_eq!(listed["revision"], fx.revision());
+    let entry = listed["keys"]
+        .as_array()
+        .and_then(|k| k.iter().find(|e| e["name"] == "stuck"));
+    assert!(entry.is_none_or(|e| e["live"].is_boolean()), "{listed}");
+}
