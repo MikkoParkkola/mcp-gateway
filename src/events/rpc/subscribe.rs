@@ -119,10 +119,7 @@ impl EventsHub {
             unoffered_since: None,
             held_until: None,
             watch_class: None,
-            observed_identity: caller
-                .stored_identity(observed.as_ref())
-                .as_ref()
-                .map(crate::events::records::StoredIdentity::from),
+            observed_identity: caller.stored_identity(observed.as_ref()),
             obs_basis: observed.clone(),
         };
         // At most two passes: a cached opt-in can vanish (tail eviction)

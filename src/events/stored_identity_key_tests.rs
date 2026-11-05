@@ -224,7 +224,7 @@ fn a_nobody_row_revoked_twice_is_warned_once() {
         blocking(async {
             hub.revoke(&snapshot).await;
             hub.revoke(&snapshot).await;
-        })
+        });
     });
     assert_eq!(
         warned.lines().filter(|l| l.contains(NOBODY)).count(),

@@ -235,12 +235,15 @@ impl super::Caller {
     pub(super) fn stored_identity(
         &self,
         basis: Option<&ObsBasis>,
-    ) -> Option<crate::key_server::oidc::VerifiedIdentity> {
+    ) -> Option<super::records::StoredIdentity> {
         let bearer = matches!(
             self.credential.binding,
             Some(super::records::LiveBinding::OidcBearer { .. })
         );
-        basis.filter(|_| !bearer).and(self.identity.clone())
+        basis
+            .filter(|_| !bearer)
+            .and(self.identity.as_ref())
+            .map(super::records::StoredIdentity::from)
     }
 }
 
