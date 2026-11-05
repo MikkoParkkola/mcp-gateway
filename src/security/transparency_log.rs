@@ -294,6 +294,8 @@ impl TransparencyLogger {
         // The writer lease, held until the logger drops: every rotation,
         // retention and recovery below runs under it, and a second writer of
         // this path is refused.
+        #[cfg(test)]
+        segments::diag_note_open(&path);
         let lease = lease::acquire(&path, wait)?;
         let recovered = rotation::recover(&path, &config, &lease, rotation::now_secs(0))?;
         Ok(Self {
