@@ -66,7 +66,7 @@ impl crate::transport::Transport for Alpha {
 fn relayed_by_bob(firewall: &Firewall, text: &str) -> bool {
     let params = json!({"name": "a", "arguments": {"text": text}});
     !firewall
-        .check_relay(
+        .check_relay_paired(
             RelayCaller::Keyed("bob"),
             "alpha",
             "a",
@@ -105,17 +105,23 @@ async fn a_stdio_plan_receipts_each_step_it_delivered() {
     let mut meta = MetaMcp::new(registry);
     meta.set_firewall(Some(Arc::clone(&firewall)));
     meta.share_keyring_with_for_test(&firewall);
+    crate::security::firewall::collusion_live_rig::seed_meta(&meta, &firewall);
     let meta = Arc::new(meta);
-    let policy = Arc::new(crate::security::ToolPolicy::default());
     let mtls = Arc::new(crate::mtls::MtlsPolicy::from_config(
         &crate::mtls::MtlsConfig::default(),
     ));
     let chain = json!([{"tool": "alpha:a", "arguments": {}}, {"tool": "alpha:b", "arguments": {}}]);
     let request = json!({"jsonrpc": "2.0", "id": 7, "method": "tools/call",
                          "params": {"name": "gateway_execute", "arguments": {"chain": chain}}});
-    let read = super::super::Gateway::dispatch_single(&meta, &policy, &mtls, &request, "stdio-r2")
-        .await
-        .expect("a request is answered");
+    let read = super::super::Gateway::dispatch_single(
+        &meta,
+        &crate::gateway::authz::default_line(&meta),
+        &mtls,
+        &request,
+        "stdio-r2",
+    )
+    .await
+    .expect("a request is answered");
     assert!(
         read.get("error").is_none(),
         "base: the plan is delivered: {read}"

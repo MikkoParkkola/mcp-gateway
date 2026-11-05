@@ -273,6 +273,7 @@ pub(super) fn capture_commit(
     capture: Option<Capture>,
     receipts: &[Receipt],
     calls: ReplayCallList,
+    generation: &crate::config_reload::Generation,
 ) {
     let Some(Capture {
         key,
@@ -295,7 +296,7 @@ pub(super) fn capture_commit(
         fw.remove_replay(&key);
     } else {
         let answer_digest = answer_digest.as_deref().unwrap_or("");
-        fw.store_replay(key, &sources, calls, answer_digest, retention);
+        fw.store_replay(key, &sources, calls, answer_digest, retention, generation);
     }
 }
 

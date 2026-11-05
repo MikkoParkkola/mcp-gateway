@@ -199,11 +199,11 @@ async fn stdio_unsigned_cooldown_visible_tool_refused_with_dispatch_text() {
 impl Stdio {
     /// One stdio `tools/call` with `params` under `policy` (the parent's
     /// `rpc` serves the default policy).
-    async fn call_under(&self, policy: crate::security::ToolPolicy, params: Value) -> Value {
+    async fn call_under(&self, policy: crate::security::ToolPolicyConfig, params: Value) -> Value {
         let request = json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": params});
         Gateway::dispatch_single_for_client(
             &self.meta,
-            &Arc::new(policy),
+            &crate::gateway::authz::test_line(&self.meta, &policy),
             &Arc::new(crate::mtls::MtlsPolicy::from_config(
                 &crate::mtls::MtlsConfig::default(),
             )),
@@ -233,7 +233,7 @@ async fn stdio_signed_policy_denied_offered_tool_is_still_refused() {
     let allowed = operator(true, &valid());
     let answer = allowed
         .call_under(
-            crate::security::ToolPolicy::default(),
+            crate::security::ToolPolicyConfig::default(),
             invoke(TOOL, Some("policy-control-n1")),
         )
         .await;
@@ -243,11 +243,11 @@ async fn stdio_signed_policy_denied_offered_tool_is_still_refused() {
         "premise: the offered tool dispatches under the default policy: {answer}"
     );
     let denied = operator(true, &valid());
-    let deny = crate::security::ToolPolicy::from_config(&crate::security::ToolPolicyConfig {
+    let deny = crate::security::ToolPolicyConfig {
         deny: vec![TOOL.to_owned()],
         use_default_deny: false,
         ..crate::security::ToolPolicyConfig::default()
-    });
+    };
     let answer = denied
         .call_under(deny, invoke(TOOL, Some("policy-denied-n1")))
         .await;

@@ -47,6 +47,9 @@ struct Session {
     live: Arc<crate::config_reload::LiveConfig>,
     task: tokio::task::JoinHandle<()>,
     next_id: u64,
+    /// The Meta-MCP the session serves.
+    #[cfg_attr(not(feature = "firewall"), allow(dead_code))]
+    meta: Arc<crate::gateway::meta_mcp::MetaMcp>,
 }
 
 impl Session {
@@ -56,11 +59,23 @@ impl Session {
     /// notification still in flight when the row arms it would take the
     /// pause in place of the row's own line.
     async fn start(dir: &Path, path: std::path::PathBuf, announce: Announce) -> Self {
+        Self::start_with(dir, path, announce, |_| {}).await
+    }
+
+    /// [`Self::start`], after `setup` has seen the built gateway (a row
+    /// registering a backend of its own).
+    async fn start_with(
+        dir: &Path,
+        path: std::path::PathBuf,
+        announce: Announce,
+        setup: impl FnOnce(&Gateway),
+    ) -> Self {
         let config = Config::load(Some(&path)).expect("loads");
         let mut gateway = Gateway::new_with_path(config, Some(path))
             .await
             .expect("valid config")
             .with_data_dir(dir.to_path_buf());
+        setup(&gateway);
         let (hold, _) = gateway.stdio_drain_seams_for_test();
         let meta = gateway.stdio_meta_mcp_for_test();
         let (client, input) = tokio::io::duplex(64 * 1024);
@@ -84,6 +99,7 @@ impl Session {
             live,
             task,
             next_id: 1,
+            meta,
         };
         let id = session
             .send(
@@ -299,3 +315,7 @@ async fn a_held_stdio_line_keeps_the_tool_policy_it_was_read_under() {
         "allowed then denied: {reply}"
     );
 }
+
+#[cfg(feature = "firewall")]
+#[path = "stdio_live_collusion_tests.rs"]
+mod collusion;

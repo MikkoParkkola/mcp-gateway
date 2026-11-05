@@ -34,13 +34,12 @@ async fn dispatch(nonce: Value) -> Value {
 }
 
 async fn dispatch_on(meta: &Arc<MetaMcp>, request: Value) -> Value {
-    let tool_policy = Arc::new(crate::security::ToolPolicy::default());
     let mtls_policy = Arc::new(crate::mtls::MtlsPolicy::from_config(
         &crate::mtls::MtlsConfig::default(),
     ));
     super::super::Gateway::dispatch_single_for_client(
         meta,
-        &tool_policy,
+        &crate::gateway::authz::default_line(meta),
         &mtls_policy,
         request,
         super::super::StdioClient {
@@ -98,7 +97,7 @@ async fn signing_meta() -> (Arc<MetaMcp>, tempfile::TempDir) {
         .await
         .expect("the config is valid")
         .with_data_dir(data_dir.path().to_path_buf())
-        .build_meta_mcp()
+        .build_meta_mcp_published()
         .await
         .expect("the builder accepts it");
     assert!(built.meta_mcp.signing_enabled(), "the fixture must sign");

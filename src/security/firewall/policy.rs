@@ -169,14 +169,21 @@ impl CollusionView {
         }
     }
 
+    /// The `allowed_flows` entries (bit each) whose source matches `target`.
+    #[cfg(test)]
+    pub(crate) fn source_flows(&self, target: &str) -> u64 {
+        Self::mask(self.flows.iter().map(|(source, _)| source), target)
+    }
+
+    #[cfg(test)]
+    fn mask<'a>(patterns: impl Iterator<Item = &'a glob::Pattern>, target: &str) -> u64 {
+        patterns
+            .enumerate()
+            .filter(|(_, pattern)| pattern.matches(target))
+            .fold(0, |mask, (bit, _)| mask | (1 << bit))
+    }
+
     /// What relay detection does under this view.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "read by the relay gate once it judges under the witness's generation"
-        )
-    )]
     pub(crate) const fn action(&self) -> CollusionAction {
         self.action
     }

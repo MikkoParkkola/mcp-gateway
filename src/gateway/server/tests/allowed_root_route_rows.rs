@@ -96,7 +96,6 @@ async fn i3_execute_chain_second_step_confines_the_path() {
 #[tokio::test]
 async fn stdio_route_stage_confines_the_path() {
     let routes = Routes::new().await;
-    let policy = std::sync::Arc::new(crate::security::ToolPolicy::default());
     let mtls = std::sync::Arc::new(crate::mtls::MtlsPolicy::from_config(
         &crate::mtls::MtlsConfig::default(),
     ));
@@ -104,9 +103,10 @@ async fn stdio_route_stage_confines_the_path() {
         let request = json!({"jsonrpc": "2.0", "id": 9, "method": "tools/call", "params": {
             "name": "gateway_invoke",
             "arguments": {"server": "fs", "tool": "read_file", "arguments": {"path": path}}}});
-        let (meta, policy, mtls) = (&routes.meta, &policy, &mtls);
+        let (meta, mtls) = (&routes.meta, &mtls);
         async move {
-            super::super::Gateway::dispatch_single(meta, policy, mtls, &request, "stdio-8939")
+            let line = crate::gateway::authz::default_line(meta);
+            super::super::Gateway::dispatch_single(meta, &line, mtls, &request, "stdio-8939")
                 .await
                 .expect("a request is answered")
         }

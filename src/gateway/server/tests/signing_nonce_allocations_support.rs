@@ -304,7 +304,7 @@ impl Fixture {
             .expect("the production constructor must accept this configuration")
             .with_data_dir(data_dir.path().to_path_buf());
         let built = gateway
-            .build_meta_mcp()
+            .build_meta_mcp_published()
             .await
             .expect("the production builder must accept this configuration");
         // The meta-tool roster is a process-wide one-time initialisation that
