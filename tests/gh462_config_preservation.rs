@@ -287,9 +287,23 @@ async fn gh462_successful_mutations_preserve_literal_secret_references() {
             Ok::<_, ()>(())
         })
         .await;
-        assert!(matches!(result, Ok(ConfigMutation::Applied((), _))));
         assert_references(&path);
         let saved = Config::load_literal(Some(&path)).unwrap();
+        if with_context {
+            // Auth is on, so a live gateway's older write path refuses before
+            // any lock: it records no intent. The file stays as it was.
+            assert!(
+                matches!(&result, Err(ConfigWriteError::Failed(why)) if why.contains("audited writer")),
+                "the context write was not refused: {:?}",
+                result.as_ref().err()
+            );
+            assert_eq!(
+                saved.backends["sentinel"].description, "original operator backend",
+                "refused, yet written"
+            );
+            continue;
+        }
+        assert!(matches!(result, Ok(ConfigMutation::Applied((), _))));
         assert_eq!(
             saved.server.port, 39462,
             "admin persisted an environment override"
