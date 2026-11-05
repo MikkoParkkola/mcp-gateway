@@ -35,7 +35,7 @@ src/gateway/meta_mcp/chain_receipt.rs	refuse_chained_task	json_rpc	1	gateway	the
 src/gateway/meta_mcp/dispatch_names.rs	no_such_meta_tool	json_rpc	1	gateway	the gateway's unknown meta-tool answer
 src/gateway/meta_mcp/grant_audit.rs	invoke_tool	json_rpc	2	gateway	the gateway's grant refusal
 src/gateway/meta_mcp/invoke/admin.rs	get_stats	json_rpc	1	gateway	the gateway's admin-tool refusal
-src/gateway/meta_mcp/invoke/admin.rs	reload_capabilities	json_rpc	2	gateway	the gateway's admin-tool refusal
+src/gateway/meta_mcp/invoke/admin.rs	reload_capabilities	json_rpc	3	gateway	the gateway's admin-tool refusal
 src/gateway/meta_mcp/invoke/admin.rs	reload_config	json_rpc	2	gateway	the gateway's admin-tool refusal
 src/gateway/meta_mcp/invoke/admin.rs	run_playbook	json_rpc	2	gateway	the gateway's admin-tool refusal
 src/gateway/meta_mcp/invoke/admin.rs	webhook_status	json_rpc	1	gateway	the gateway's admin-tool refusal
