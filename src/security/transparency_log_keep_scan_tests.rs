@@ -7,8 +7,10 @@
 //! the task store's: file-level, a backstop for review.
 
 /// Test files that still open a log without keeping its directory, each to
-/// be converted. The list may only shrink: a listed file that keeps, or no
-/// longer opens a log, fails the scan until its row is removed.
+/// be converted. A listed file that keeps, or no longer opens a log, fails
+/// the scan until its row is removed. A new row is added only for a test
+/// file the release line brought in while this sweep is open; any other new
+/// unkept file fails the scan.
 const PENDING: &[&str] = &[
     "src/commands/audit_race_tests.rs",
     "src/config_reload/override_audit_tests.rs",
