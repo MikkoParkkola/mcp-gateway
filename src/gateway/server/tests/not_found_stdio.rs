@@ -9,7 +9,7 @@ use serde_json::json;
 
 use crate::backend::BackendRegistry;
 use crate::gateway::meta_mcp::MetaMcp;
-use crate::gateway::meta_mcp::grant_audit_fixture::{decisions, logger};
+use crate::gateway::meta_mcp::grant_audit_fixture::{invocations, logger};
 use crate::security::audit::AuditFailurePolicy;
 
 /// NOTFOUND.1 and NOTFOUND.3 for stdio (red first).
@@ -53,7 +53,7 @@ async fn a_stdio_call_to_a_nonexistent_backend_records_not_found() {
         response.to_string().contains("Backend not found: nowhere"),
         "the answer is the plain miss: {response}"
     );
-    let records = decisions(&dir);
+    let records = invocations(&dir);
     let [record] = records.as_slice() else {
         panic!("one record: {records:#?}");
     };
