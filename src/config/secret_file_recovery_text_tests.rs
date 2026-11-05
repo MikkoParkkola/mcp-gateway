@@ -119,15 +119,11 @@ fn mode_refusals(_: SecretFile, _: &std::path::Path) -> Vec<(&'static str, Strin
     Vec::new()
 }
 
-/// The production files (test files left out) that call the recovery-class
-/// and config-class guarded reads,
-/// pinned: only crash recovery's file calls the recovery read, and the
-/// config read has a fixed set of calling files, so a new calling file of
-/// either fails here and is a reviewed change. It pins files, not the
-/// paths each call is handed.
-/// A bare relative name is resolved against the base the config read is
-/// given, the working directory in production, without this test changing
-/// the process's working directory.
+/// The recovery-file check finds a journal and a staged original handed as
+/// bare relative names, resolved against the base it is given (the working
+/// directory in production), and does not take gateway.yaml for one. The
+/// base is a temporary directory, so this test never changes the process's
+/// working directory.
 #[test]
 fn a_bare_relative_recovery_file_is_found_against_its_base() {
     use crate::config_persistence::journal;
@@ -187,6 +183,11 @@ fn the_test_file_rule_skips_only_test_files() {
     }
 }
 
+/// The production files (test files left out) that call the recovery-class
+/// and config-class guarded reads, pinned: only crash recovery's file calls
+/// the recovery read, and the config read has a fixed set of calling files,
+/// so a new calling file of either fails here and is a reviewed change. It
+/// pins files, not the paths each call is handed.
 #[test]
 fn the_recovery_and_config_reads_have_their_known_callers() {
     let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
