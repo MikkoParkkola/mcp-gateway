@@ -635,6 +635,12 @@ mod silence_resend_tests;
 #[path = "slot_eviction_tests.rs"]
 mod slot_eviction_tests;
 
+// MIK-9216.EFFECT.1: the slot a settled execution stores, and the exact
+// lookup its replay makes.
+#[cfg(test)]
+#[path = "slot_effect_tests.rs"]
+mod slot_effect_tests;
+
 #[cfg(test)]
 #[path = "send_check_eviction_tests.rs"]
 mod send_check_eviction_tests;
