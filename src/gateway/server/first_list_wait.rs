@@ -15,6 +15,8 @@ use std::cell::Cell;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use tokio_util::sync::CancellationToken;
+
 use crate::gateway::meta_mcp::{InvokeScope, MetaMcp};
 use crate::protocol::meta::Era;
 
@@ -24,22 +26,35 @@ tokio::task_local! {
 
 struct Ticket {
     answered: Arc<AtomicBool>,
+    ending: CancellationToken,
     waited: Cell<bool>,
 }
 
-/// One per stdio session: whether a first list's answer was queued.
+/// One per stdio session: whether a first list's answer was queued, and
+/// whether the session has stopped reading.
 #[derive(Clone, Default)]
-pub(super) struct FirstList(Arc<AtomicBool>);
+pub(super) struct FirstList {
+    answered: Arc<AtomicBool>,
+    ending: CancellationToken,
+}
 
 impl FirstList {
     /// Run one dispatch, `task`, under its own ticket on this session's flag
     /// (each dispatch takes its own clone).
     pub(super) fn scope<F: Future>(self, task: F) -> impl Future<Output = F::Output> {
         let ticket = Ticket {
-            answered: self.0,
+            answered: self.answered,
+            ending: self.ending,
             waited: Cell::new(false),
         };
         TICKET.scope(ticket, task)
+    }
+
+    /// The session stopped reading (EOF, a signal, stdout gone): a first list
+    /// still waiting answers now with what it has, so the drain is not held
+    /// for a client that is leaving.
+    pub(super) fn end(&self) {
+        self.ending.cancel();
     }
 }
 
@@ -54,18 +69,26 @@ pub(super) async fn prepare(
     session_id: &str,
     era: Era,
 ) {
-    let first = matches!(era, Era::Modern)
-        && TICKET
-            .try_with(|ticket| {
+    let ending = matches!(era, Era::Modern)
+        .then(|| {
+            TICKET.try_with(|ticket| {
                 let first = !ticket.answered.load(Ordering::Acquire);
                 ticket.waited.set(first);
-                first
+                first.then(|| ticket.ending.clone())
             })
-            .unwrap_or(false);
+        })
+        .and_then(Result::ok)
+        .flatten();
     meta_mcp.revalidate_caller_slots(scope.caller).await;
     let own_views = meta_mcp.warm_listing_views(scope, Some(session_id));
-    if first {
-        tokio::join!(own_views, meta_mcp.wait_surfaced_first_fill());
+    if let Some(ending) = ending {
+        let first_fill = async {
+            tokio::select! {
+                () = meta_mcp.wait_surfaced_first_fill() => {}
+                () = ending.cancelled() => {}
+            }
+        };
+        tokio::join!(own_views, first_fill);
     } else {
         own_views.await;
     }

@@ -656,6 +656,8 @@ impl Gateway {
         // The read loop is over: the session is ending, so nothing more is
         // announced, though accepted requests still drain (MIK-8278).
         announcer.stop();
+        // A first list still waiting answers now (MIK-9309).
+        first_list.end();
         // `writer.is_closed()` as well as the flag: stdout can die during the
         // wait for a line that never comes, and the loop then leaves by the EOF
         // arm. Reporting that as an ordinary EOF would hand the operator the
