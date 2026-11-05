@@ -238,10 +238,11 @@ async fn narrowing_ends_the_stream_and_a_reorder_does_not(who: &str) {
     let (state, _bearers, _dir) = gateway().await;
     let mut s = open(&state, request(STREAM, Who::Bearer(who), None)).await;
     assert_eq!(s.until("status").await.json()["server_count"], 1);
-    // The same scope reordered and repeated is no change: past several
-    // re-check ticks the stream still delivers an in-scope change.
+    // The same scope reordered and repeated is no change. Every frame is sent
+    // only after the credential is re-checked under the current generation,
+    // so a status frame delivered after the reorder is the stream judged
+    // under it and kept open; no time window is needed.
     set_backends(&state, who, &["late", "alpha", "alpha"]);
-    tokio::time::sleep(REVOKED_WITHIN).await;
     register(&state, "late");
     assert_eq!(
         s.until("status").await.json()["server_count"],
