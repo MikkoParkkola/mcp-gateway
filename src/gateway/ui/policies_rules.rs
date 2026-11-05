@@ -224,12 +224,12 @@ fn read_only_reasons(rule: &FirewallRule, offered: &[ScanType]) -> Vec<&'static 
     out
 }
 
-/// The earlier rules that shadow rule `i`, per type: an earlier rule with
-/// `match: "*"` or the identical match, deciding the type, with no
-/// `servers`, `keys` or `except` (present but empty counts as present).
 /// `rule` as a check reads it: a shape the load refuses compiles to an
 /// unscoped `*` rule that blocks its scan types on every call
-/// (`verdict.rs` `compile_rule`); any other rule as written.
+/// (`verdict.rs` `compile_rule`), keeping its folder check, which
+/// `FirewallPolicy::compile` takes from the rule as written (so a refused
+/// root rule still takes no part in content resolution); any other rule as
+/// written.
 pub(super) fn as_compiled(rule: &FirewallRule) -> FirewallRule {
     if !refused_shape(rule) {
         return rule.clone();
@@ -242,13 +242,14 @@ pub(super) fn as_compiled(rule: &FirewallRule) -> FirewallRule {
         servers: None,
         keys: None,
         except: None,
-        allowed_roots: None,
-        path_args: None,
+        allowed_roots: rule.allowed_roots.clone(),
+        path_args: rule.path_args.clone(),
     }
 }
 
 /// The earlier rules that shadow rule `i` of `rules` (read as compiled), per
-/// scan type.
+/// type: an earlier rule with `match: "*"` or the identical match, deciding
+/// the type, with no `servers`, `keys` or `except`.
 pub(super) fn shadowed(rules: &[FirewallRule], i: usize) -> Vec<Value> {
     let later = &rules[i];
     decides(later)

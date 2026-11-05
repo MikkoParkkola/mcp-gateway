@@ -410,6 +410,36 @@ fn r5d_a_reloaded_guard_waits_for_a_restart() {
     }
 }
 
+/// R5d2: the reverse: a guard on at startup and switched off by a reload
+/// keeps running until a restart.
+#[test]
+fn r5d2_a_guard_switched_off_by_reload_keeps_running() {
+    let startup = guards_on();
+    let model = reloaded(&startup, &[&Config::default()]);
+    let budget = guard(&model, "budget");
+    assert_eq!(budget["running"], json!(true));
+    assert_eq!(
+        budget["settings"][0],
+        setting(&format!("{FW}.budget.enabled"), json!(false), json!(true))
+    );
+}
+
+/// R6i2: R6i's refused shape in a file with the firewall off, the case the
+/// load lets through: it still fully shadows the pinned rule.
+#[test]
+fn r6i2_a_refused_shape_with_the_firewall_off() {
+    let mut config = with_rules(json!([
+        { "match": "foo", "action": "warn", "scan": ["credentials"], "except": [{}] },
+        pinned(),
+    ]));
+    config.security.firewall.enabled = false;
+    let model = read_model(&config);
+    assert_eq!(
+        model["credentials"]["pinned_rule"]["shadowed_by"],
+        json!([rule_path(0)])
+    );
+}
+
 /// R5e: the cross-tenant read verdict runs whenever `arg_keys` attributes
 /// tenants and its mode is not `off` (`outbound/judge.rs` `judging`), with
 /// the tenant guard itself off and even with the firewall switched off: the

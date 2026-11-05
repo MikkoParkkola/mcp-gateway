@@ -540,6 +540,15 @@ fn r3l_a_refused_shape_shadows_as_compiled() {
     config.security.firewall.enabled = false;
     let model = read_model(&config);
     assert_eq!(shadowed(&model, 1), vec![sh("shell_injection", &[0])]);
+
+    // A refused folder rule keeps its folder check as compiled, so it still
+    // takes no part in content resolution.
+    let mut config = rules(json!([
+        { "match": "*", "action": "block", "keys": [], "allowed_roots": ["/srv"], "path_args": ["p"] },
+        { "match": "*", "action": "block", "scan": ["shell_injection"] }
+    ]));
+    config.security.firewall.enabled = false;
+    assert_eq!(shadowed(&read_model(&config), 1), vec![]);
 }
 
 /// R2e: a present-but-empty collection counts as present.
