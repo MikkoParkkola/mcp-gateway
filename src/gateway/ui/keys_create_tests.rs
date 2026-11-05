@@ -129,9 +129,9 @@ fn p8_a_file_with_no_key_list_gets_one() {
 
 /// P11: the key is live on the next call, and the reload does not report
 /// `auth` as awaiting a restart (the restart-only comparison leaves the key
-/// list out, `config_reload/diff.rs`).
+/// list out, `config_reload/diff.rs`; #4558 fixed the old misreport).
 #[test]
-fn p11_the_key_is_live_though_the_reload_reports_auth_pending() {
+fn p11_a_new_key_is_live_and_not_reported_as_awaiting_restart() {
     let fx = Fixture::new(Setup::default());
     created(&fx, &fx.body("late"));
     assert!(!fx.live.pending_restart_fields().contains(&"auth"));
