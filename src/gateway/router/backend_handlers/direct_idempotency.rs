@@ -243,11 +243,21 @@ pub(super) fn deliver_replay(
         Some(GuardOutcome::CachedResult(cached)) => {
             #[cfg(test)]
             seams::note_served(seams::Served::Cache);
+            // Red stub: a cache hit notes may-write.
+            crate::gateway::meta_mcp::invoke::audit::note_declared_effect(
+                crate::security::decision_record::Effect::MayWrite,
+                crate::security::decision_record::EffectSource::ToolAnnotation,
+            );
             Some(JsonRpcResponse::success(id.clone(), cached))
         }
         Some(GuardOutcome::CachedError(error)) => {
             #[cfg(test)]
             seams::note_served(seams::Served::Cache);
+            // Red stub: a cache hit notes may-write.
+            crate::gateway::meta_mcp::invoke::audit::note_declared_effect(
+                crate::security::decision_record::Effect::MayWrite,
+                crate::security::decision_record::EffectSource::ToolAnnotation,
+            );
             crate::gateway::meta_mcp::invoke::audit::note_cached_failure(&error);
             crate::gateway::meta_mcp::invoke::audit::counting::note_replay();
             let mut response = super::cached_error_response(Some(id.clone()), &error);
