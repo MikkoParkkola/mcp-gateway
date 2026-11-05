@@ -55,7 +55,7 @@ pub(super) struct Reopened {
     pub(super) id: String,
     /// The row's cancel state when the first gateway stopped.
     pub(super) claimed_dark: Option<UpstreamCancelState>,
-    _dir: tempfile::TempDir,
+    _dir: Arc<tempfile::TempDir>,
 }
 
 impl Reopened {
@@ -140,7 +140,7 @@ pub(super) async fn dark_claim_then_restart(
     assert_eq!(first.count(), 0, "a send ran while the clock was dark");
     let claimed_dark = f.state();
     f.service.shutdown().await.expect("the first gateway stops");
-    let service = open_service(f.dir.path()).await;
+    let service = open_service(&f.dir).await;
     let after = chrono::Duration::from_std(after).expect("a representable step");
     service.store.set_clock_for_test(Some(readable + after));
     let executor = executor_over(&service);

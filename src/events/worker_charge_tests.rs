@@ -14,13 +14,14 @@ use super::{EventsHub, Flipping, budgeted, counting_callback, logged_services, q
 #[tokio::test]
 async fn only_the_types_a_source_charges_are_charged() {
     for (name, charged) in [("probe.free", false), ("probe.flip", true)] {
-        let dir = tempfile::tempdir().expect("dir");
+        let dir = Arc::new(tempfile::tempdir().expect("dir"));
         let config = crate::config::EventsConfig {
             callback_allow_private: vec!["127.0.0.0/8".into()],
             cost_per_delivery_usd: 0.01,
             ..crate::config::EventsConfig::default()
         };
         let hub = EventsHub::open(&config, dir.path()).expect("hub");
+        hub.keep_test_dir(Arc::clone(&dir));
         hub.register_source(Arc::new(Flipping {
             admits: usize::MAX,
             asked: AtomicUsize::new(0),

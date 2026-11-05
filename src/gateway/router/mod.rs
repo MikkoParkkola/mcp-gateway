@@ -256,6 +256,9 @@ mod canary_tests;
 /// The capability editor's audit record: the change, never the content.
 #[cfg(all(test, feature = "webui"))]
 mod capability_edit_audit_tests;
+/// A context-integrity rewrite is recorded as the gateway's rewrite.
+#[cfg(all(test, feature = "firewall"))]
+mod context_integrity_effect_tests;
 /// A delivery record says what the gateway did to the answer.
 #[cfg(all(test, feature = "firewall"))]
 mod delivery_effect_tests;

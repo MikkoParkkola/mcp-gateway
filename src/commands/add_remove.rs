@@ -682,12 +682,14 @@ mod tests {
     }
 
     /// A real CLI edit after a crashed byte write: `remove` meets a pending
-    /// replace journal over an unparseable candidate, the config lock puts
-    /// the original back first, and the edit then lands on it, with its
-    /// comments kept and no journal left. The journal is planted by hand in
-    /// its on-disk form, so this also pins that format.
+    /// replace journal over an unparseable candidate and refuses, leaving the
+    /// file, the journal and the staged original as they were. The CLI holds
+    /// no audit sink, so it does not recover; a gateway reload does, and
+    /// records it when the gateway keeps an audit log. The refusal checks only
+    /// that a journal exists; the on-disk format is pinned by the startup
+    /// recovery row in `serve_load_tests`.
     #[test]
-    fn remove_recovers_a_crashed_byte_write_first() {
+    fn remove_refuses_a_crashed_byte_write_and_leaves_it_pending() {
         use sha2::Digest as _;
         let dir = TempDir::new().unwrap();
         let config = dir.path().join("gateway.yaml");
@@ -711,19 +713,21 @@ mod tests {
         )
         .unwrap();
 
-        let _ = run_remove_command("b", &config, CommentLoss::Refuse);
+        let code = run_remove_command("b", &config, CommentLoss::Refuse);
 
-        let text = std::fs::read_to_string(&config).unwrap();
-        assert!(
-            text.contains("# operator's note"),
-            "the comment survives: {text}"
+        assert_eq!(code, ExitCode::FAILURE, "the refusal fails the command");
+
+        assert_eq!(
+            std::fs::read_to_string(&config).unwrap(),
+            "backends: [not: yaml\n",
+            "nothing was written"
         );
-        assert!(
-            text.contains("a:") && !text.contains("  b:"),
-            "b removed from the original: {text}"
+        assert!(journal.exists(), "the journal is still pending");
+        assert_eq!(
+            std::fs::read_to_string(&staged).unwrap(),
+            original,
+            "the staged original is kept for the audited recovery"
         );
-        assert!(!journal.exists(), "the journal is gone");
-        assert!(!staged.exists(), "the staged original is gone");
     }
 }
 

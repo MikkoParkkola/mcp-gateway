@@ -369,6 +369,8 @@ impl TaskExecutor {
     }
 
     pub(super) fn spawn_now(&self, worker: impl std::future::Future<Output = ()> + Send + 'static) {
+        #[cfg(test)]
+        self.service.store.assert_test_dir_kept("a task worker");
         // COLLUDE.1: every worker collects its relay receipts on its own
         // task; task-locals do not cross `tokio::spawn`.
         let worker = crate::gateway::meta_mcp::invoke::relay::collecting(worker);

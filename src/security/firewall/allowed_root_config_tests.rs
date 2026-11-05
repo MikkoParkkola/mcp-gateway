@@ -73,13 +73,16 @@ fn d4_d4b_section_one_example_loads_and_confines() {
     );
     let sender = registry.get("filesystem");
     let check = |tool: &str, args: serde_json::Value| {
-        seen(&fw.rescan(
-            fw.startup_policy(),
-            on(tool),
-            &args,
-            ScanSubject::Arguments,
-            sender.as_deref(),
-        ))
+        seen(
+            &fw.rescan_attributed(
+                fw.startup_policy(),
+                on(tool),
+                &args,
+                ScanSubject::Arguments,
+                sender.as_deref(),
+            )
+            .0,
+        )
     };
     let inside = json!({"path": format!("{a_path}/notes.md")});
     assert_eq!(check("read_text_file", inside), Seen::Allowed, "D4b");
@@ -123,13 +126,16 @@ fn r34c_one_finding_per_rule_and_argument() {
     };
     let args = json!({"path": fx.path("outside/f")});
     let sender = fx.sender();
-    let verdict = fx.fw.rescan(
-        fx.fw.startup_policy(),
-        target,
-        &args,
-        ScanSubject::Arguments,
-        sender.as_deref(),
-    );
+    let verdict = fx
+        .fw
+        .rescan_attributed(
+            fx.fw.startup_policy(),
+            target,
+            &args,
+            ScanSubject::Arguments,
+            sender.as_deref(),
+        )
+        .0;
     let found = verdict
         .findings
         .iter()

@@ -23,6 +23,25 @@ pub(crate) struct FirewallPolicy {
 }
 
 impl FirewallPolicy {
+    /// [`Self::compile`] with each rule's id under `key`, hashed from the
+    /// configured rule (before any refused shape is compiled), so the rule
+    /// that decided a call can be named in its decision record. Lists hash in
+    /// configured order: reordering one gives the rule a new id.
+    pub(crate) fn compile_keyed(
+        config: &FirewallConfig,
+        key: &crate::security::rule_id::RuleKey,
+    ) -> Self {
+        let mut policy = Self::compile(config);
+        for (compiled, rule) in policy.rules.iter_mut().zip(&config.rules) {
+            // invariant: a configured rule is plain data and always serialises.
+            let bytes = serde_json::to_vec(rule).expect("a firewall rule serialises");
+            compiled.id = Some(crate::security::rule_id::RuleId::of(
+                "firewall", key, &bytes,
+            ));
+        }
+        policy
+    }
+
     /// Compile `config`'s rules. Never fails: a rule whose glob does not
     /// parse compiles to one that matches no tool, and the config load has
     /// already refused it by key path (POLICY.2).

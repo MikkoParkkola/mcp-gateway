@@ -149,7 +149,7 @@ pub(super) async fn redeeming_dispatch(
     executor: &TaskExecutor,
     ids: (&str, &str, u64),
     cancel_rx: &mut watch::Receiver<bool>,
-) -> Option<(JsonRpcResponse, Option<bool>)> {
+) -> Option<(JsonRpcResponse, Option<super::CellRefusal>)> {
     let store = &executor.service.store;
     loop {
         // A resume, or a state-only round, runs on the server the task

@@ -647,6 +647,17 @@ pub(crate) fn lock_config_blocking(
     acquire(config, deadline, Recovery::OnAcquire, &|| true, on_wait)
 }
 
+/// [`lock_config_deferred`] for a synchronous caller (the CLI): a pending
+/// journal is left where it is and reported in [`Locked::journal_pending`],
+/// for a caller that may not recover it unaudited.
+pub(crate) fn lock_config_blocking_deferred(
+    config: &Path,
+    deadline: Instant,
+    on_wait: impl FnOnce(&Path),
+) -> Result<Locked, NotLocked> {
+    acquire(config, deadline, Recovery::Deferred, &|| true, on_wait)
+}
+
 #[path = "config_persistence_lock_reader.rs"]
 mod reader;
 pub(crate) use reader::{ReaderLock, reader_lock, reader_lock_deferred};

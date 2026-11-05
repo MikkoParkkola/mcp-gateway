@@ -27,6 +27,10 @@ impl EventsHub {
     /// One attempt of record `event_id`, end to end, never on a clock before 1970 (MIK-8202).
     /// Its source verdicts share one wait on a catalogue that does not answer (MIK-7921).
     async fn attempt(self: &Arc<Self>, services: &Services, event_id: &str) {
+        // A test drives one delivery here directly, without the worker loop.
+        #[cfg(test)]
+        self.store
+            .assert_test_dir_kept("an events delivery attempt");
         let failed = std::cell::Cell::new(false);
         super::upstream_listener::FAILED_LOOKUP
             .scope(failed, self.attempt_once(services, event_id))
