@@ -45,12 +45,43 @@ fn every_type_is_listed(t: ScanType) {
     }
 }
 
+/// How the screen treats a scan type: whether it offers it (ADR-029's six)
+/// and whether a rule decides it. Exhaustive, so a new type fails to compile
+/// until it is classified for both.
+const fn class(t: ScanType) -> (bool, bool) {
+    match t {
+        ScanType::Credentials
+        | ScanType::PromptInjection
+        | ScanType::ShellInjection
+        | ScanType::PathTraversal
+        | ScanType::SqlInjection
+        | ScanType::MemoryPoisoning => (true, true),
+        // Their ordinary findings pass through the rules (ADR-029 F1b).
+        ScanType::SequenceAnomaly | ScanType::CrossTenantReach => (false, true),
+        // No scanner produces `pii`; both budget outcomes force a block past
+        // the rules; the relay gate alone decides a relay.
+        ScanType::Pii | ScanType::BudgetExceeded | ScanType::CollusionRelay => (false, false),
+        // Output-only: the folder check produces them and no rule lists them.
+        ScanType::PathOutsideRoot | ScanType::RootRefused => (false, false),
+    }
+}
+
 /// The scan types a rule's `scan` may list: every type but the loader's
 /// output-only ones.
-pub(super) fn offered() -> Vec<ScanType> {
+fn rule_listable() -> Vec<ScanType> {
     ALL.into_iter()
         .filter(|t| !OUTPUT_ONLY.contains(t))
         .collect()
+}
+
+/// The scan types the Policies screen offers, in `ScanType` order.
+pub(super) fn offered() -> Vec<ScanType> {
+    ALL.into_iter().filter(|t| class(*t).0).collect()
+}
+
+/// The scan types a rule decides, in `ScanType` order.
+fn decided() -> Vec<ScanType> {
+    rule_listable().into_iter().filter(|t| class(*t).1).collect()
 }
 
 /// A scan type's config spelling.
@@ -82,16 +113,18 @@ pub(super) const BACKEND_EXPANDED: [&str; 4] = [
     "aggregate_answer",
 ];
 
-/// The types `rule` decides: its `scan`, or every offered type when empty.
+/// The types `rule` decides: those of its `scan` a rule decides, or every
+/// such type when `scan` is empty; none for a root rule.
 /// A root rule decides only its own findings, never a content finding.
 fn decides(rule: &FirewallRule) -> Vec<ScanType> {
     if is_root(rule) {
         return Vec::new();
     }
+    let decided = decided();
     let mut types: Vec<ScanType> = if rule.scan.is_empty() {
-        offered()
+        decided
     } else {
-        rule.scan.clone()
+        rule.scan.iter().copied().filter(|t| decided.contains(t)).collect()
     };
     types.sort_by_key(|t| ALL.iter().position(|a| a == t));
     types.dedup();
