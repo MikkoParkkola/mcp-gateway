@@ -459,7 +459,7 @@ pub(super) async fn create_key(
     guard: Guard,
     #[cfg(test)] known: Option<axum::Extension<KnownSecret>>,
     #[cfg(test)] before_lock: Option<axum::Extension<BeforeLock>>,
-    #[cfg(test)] _inject: Option<axum::Extension<InjectWriter>>,
+    #[cfg(test)] inject: Option<axum::Extension<InjectWriter>>,
     body: Result<Json<CreateBody>, JsonRejection>,
 ) -> Response {
     if let Err(refused) = guard.admit() {
@@ -500,6 +500,12 @@ pub(super) async fn create_key(
     if let Some(axum::Extension(hook)) = &before_lock {
         (hook.0)();
     }
+    #[cfg(test)]
+    let written = match &inject {
+        Some(axum::Extension(injected)) => (injected.0)(),
+        None => write_audited(&state, &guard, (&name, checked.context), replace).await,
+    };
+    #[cfg(not(test))]
     let written = write_audited(&state, &guard, (&name, checked.context), replace).await;
     let refusal = *outcome
         .lock()
