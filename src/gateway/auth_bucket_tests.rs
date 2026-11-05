@@ -219,9 +219,10 @@ fn cost_against_governor() {
     assert_eq!(admitted, CHECKS as usize, "premise: nothing denied");
 
     let ours = ClientBucket::new(max);
+    let anchor = tokio::time::Instant::now();
     let start = std::time::Instant::now();
     let admitted = (0..CHECKS)
-        .filter(|_| ours.check_at(max, super::now_ns()))
+        .filter(|_| ours.check_at(max, super::ns_since(anchor)))
         .count();
     let bucket_alone = ns_per(start.elapsed());
     assert_eq!(admitted, CHECKS as usize, "premise: nothing denied");
