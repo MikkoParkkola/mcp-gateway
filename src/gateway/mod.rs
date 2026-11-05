@@ -309,6 +309,9 @@ pub mod test_helpers {
     /// disk: each file's bytes, or `None` where it is absent or unreadable.
     /// A refusal must leave all three exactly as it found them, so every
     /// refusal test snapshots them before the refused call and checks after.
+    ///
+    /// For tests in `tests/` and the crate's own tests only; not public API.
+    /// Read-only: it snapshots and asserts, and never writes.
     #[derive(Debug, Clone, PartialEq, Eq)]
     pub struct ConfigFiles {
         config: Option<Vec<u8>>,
