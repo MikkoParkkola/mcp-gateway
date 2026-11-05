@@ -10,8 +10,9 @@ src/gateway/meta_mcp/invoke/admin.rs	get_cost_report	Error::Config(..) wrapped	1
 src/gateway/meta_mcp/invoke/admin.rs	get_cost_report	Error::Config(..) wrapped	2	recorded	src/gateway/meta_mcp/invoke/admin.rs::get_cost_report
 src/gateway/meta_mcp/invoke/chokepoint.rs	authorize_requested_target	Error::ToolNotFound(..)	1	recorded	src/gateway/router/handlers/dispatch_tools_call/route_stage.rs::authorize_call_targets
 src/gateway/meta_mcp/invoke/chokepoint.rs	authorize_requested_target	via profile_withheld_capability	1	recorded	src/gateway/router/handlers/dispatch_tools_call/route_stage.rs::authorize_call_targets
+src/gateway/meta_mcp/invoke/denial.rs	backend_miss	Error::BackendNotFound(..)	1	feeds	built for dispatch_to_backend, which the refusal scan classifies (not-a-decision: a missing backend)
 src/gateway/meta_mcp/invoke/dispatch.rs	ambiguous_backend	Error::AmbiguousBackend{}	1	feeds	built for refuse_name_clash, which the refusal scan classifies (not-a-decision: a configuration clash)
-src/gateway/meta_mcp/invoke/dispatch.rs	dispatch_to_backend	Error::BackendNotFound(..)	1	not-a-decision	the judged backend is gone after a reload: an availability failure
+src/gateway/meta_mcp/invoke/dispatch.rs	dispatch_to_backend	via backend_miss	1	not-a-decision	a missing backend is no policy decision about the caller; a true absence notes not_found on the invocation record, a backend lost to a reload notes nothing
 src/gateway/meta_mcp/invoke/dispatch.rs	refuse_name_clash	via ambiguous_backend	1	not-a-decision	a configuration clash: a registry backend and the capability backend share a name
 src/gateway/meta_mcp/invoke/dispatch_guards.rs	admit_after_credential	via withheld_as_undefined	1	recorded	src/gateway/meta_mcp/invoke/gate.rs::withheld_as_undefined
 src/gateway/meta_mcp/invoke/gate.rs	as_undefined_capability	Error::ToolNotFound(..)	1	feeds	the undefined twin of a rule refusal, returned to check_visible_policy's callers
