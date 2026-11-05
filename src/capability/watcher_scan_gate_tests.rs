@@ -79,7 +79,10 @@ async fn with_the_stale_check_on_a_reload_also_waits_for_the_scan() {
 /// A reload held past the slow bound is named once, not silently dropped,
 /// however often file events keep arriving meanwhile.
 /// Mutants: the warning removed, or timed from the last event: none logged.
-#[tokio::test(flavor = "current_thread")]
+// On tokio's paused clock: every sleep below advances it exactly, so the
+// spacing against the debounce and the slow bound cannot skew on a loaded
+// runner. No reload runs in the hold, so no file work meets the paused clock.
+#[tokio::test(flavor = "current_thread", start_paused = true)]
 async fn a_reload_held_past_the_slow_bound_is_warned_once() {
     let (_guard, counts) = crate::test_log_capture::live_counts_at(&[(Level::WARN, HELD_WARN)]);
     let dir = tempfile::tempdir().expect("a tempdir for caps");
@@ -87,6 +90,7 @@ async fn a_reload_held_past_the_slow_bound_is_warned_once() {
     let (_backend, event_tx) = held_over(
         dir.path(),
         ReloadTuning {
+            stale_check: None,
             debounce: Duration::from_millis(50),
             reload_slow: Duration::from_millis(400),
             ..ReloadTuning::default()

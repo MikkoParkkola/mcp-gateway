@@ -146,7 +146,9 @@ struct LoopState {
     /// when the fingerprint equals the baseline.
     retry_incomplete: bool,
     /// When the last file event (or stale heal) arrived.
-    last_event: Option<Instant>,
+    /// On tokio's clock, so a paused test clock can step the debounce; it
+    /// reads the same monotonic time as `std::time::Instant` otherwise.
+    last_event: Option<tokio::time::Instant>,
     /// The running reload, if any: its join handle, its slow-warning
     /// bookkeeping, and the fingerprint taken before it started.
     in_flight: Option<(tokio::task::JoinHandle<bool>, InFlight, Option<Fingerprint>)>,
@@ -163,7 +165,7 @@ struct LoopState {
     logged: LoggedOnce,
     /// When a due reload was first held for the startup scan; measured from
     /// here, so later file events do not reset the scan-wait warning.
-    held_since: Option<Instant>,
+    held_since: Option<tokio::time::Instant>,
     /// The walk every fingerprint uses (from the tuning).
     walk: Option<WalkFn>,
 }
@@ -429,7 +431,7 @@ impl CapabilityWatcher {
                 tokio::select! {
                     maybe = event_rx.recv(), if state.events_open => {
                         if let Some(()) = maybe {
-                            state.last_event = Some(Instant::now());
+                            state.last_event = Some(tokio::time::Instant::now());
                             state.pending_reload = true;
                         } else {
                             state.events_open = false;
@@ -493,7 +495,9 @@ impl CapabilityWatcher {
             // the scan completes; this is the only way into every
             // `spawn_reload` below (the walk paths start only from here).
             if !backend.initial_scan_complete() {
-                let held_since = *state.held_since.get_or_insert_with(Instant::now);
+                let held_since = *state
+                    .held_since
+                    .get_or_insert_with(tokio::time::Instant::now);
                 if !state.logged.held_for_scan && held_since.elapsed() >= reload_slow {
                     state.logged.held_for_scan = true;
                     warn!(
@@ -629,7 +633,7 @@ impl CapabilityWatcher {
             return;
         }
         state.pending_reload = true;
-        let now = Instant::now();
+        let now = tokio::time::Instant::now();
         state.last_event = Some(now.checked_sub(debounce).unwrap_or(now));
     }
 
