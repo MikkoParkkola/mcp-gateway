@@ -569,11 +569,12 @@ fn active_opens(path: &Path, call: impl FnOnce()) -> u32 {
     LISTED.with(Cell::get) + u32::try_from(opened).unwrap()
 }
 
-/// The module doc's bound on one call's opens of the active file, for a call
-/// that crosses `crossed` segments: three opens per listing (rotation
-/// retries), at most three listings plus one per crossing, two direct opens.
-fn bound(crossed: u32) -> u32 {
-    3 * (3 + crossed) + 2
+/// The module doc's bound on one call's opens of the active file, for a log
+/// of `segments` segments: `9 + 6S`. The opener's fallback opens (a listed
+/// sealed segment vanished before it was opened) happen below this seam, so
+/// the counts here never include them; the bound does.
+fn bound(segments: u32) -> u32 {
+    9 + 6 * segments
 }
 
 /// Rewrite the active file with the same bytes and a new identity. Not
@@ -630,10 +631,10 @@ fn one_call_opens_the_active_file_within_its_stated_bound() {
         (2, 4, 2, 6),
         "active-file opens per call: fresh, crossing, resumed, restarted"
     );
-    for (opens, crossed) in [(fresh, 0), (crossing, 2), (resumed, 0), (restarted, 2)] {
+    for (opens, segments) in [(fresh, 1), (crossing, 3), (resumed, 3), (restarted, 3)] {
         assert!(
-            opens <= bound(crossed),
-            "{opens} opens past the bound for {crossed} crossings"
+            opens <= bound(segments),
+            "{opens} opens past the bound for {segments} segments"
         );
     }
     // At the cap: every kept segment crossed after a failed resume, the most
@@ -657,7 +658,10 @@ fn one_call_opens_the_active_file_within_its_stated_bound() {
         kept + 4,
         "two listings, one per crossing, two opens"
     );
-    assert!(at_cap <= bound(kept));
+    assert!(
+        at_cap <= bound(kept + 1),
+        "the kept sealed segments and the active file"
+    );
 }
 
 #[test]

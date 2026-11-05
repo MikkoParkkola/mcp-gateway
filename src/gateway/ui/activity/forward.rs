@@ -18,17 +18,20 @@
 //! each time the active file is opened. Opening a sealed segment reads nothing.
 //!
 //! Opens of the active file, each reading at most its first line (one capped
-//! line, `RECORD_CAP`): every listing of the segments opens it once, three
+//! line, `RECORD_CAP`). Every listing of the segments opens it once, three
 //! times when a rotation races it three times, and a call lists at most
-//! `3 + X` times (a resume, a fresh start, the end of the log, and one per
-//! segment crossed, `X`); the call also opens it itself at most twice (the
-//! resume, then the start or the crossing into it). So one call opens it at
-//! most `3 * (3 + X) + 2` times. `X` is at most the kept sealed segments,
-//! `retain_segments`: with the invocation log's default of 12, that is 47
-//! opens, and with the governance log's fixed 4, 23. A raised `retain_segments` is
-//! still bounded by the byte budget, since a crossing reads the whole
-//! segment before it: the stream's page budget (`PAGE_SCAN_BYTES`, 8 MiB)
-//! over the shortest sealed segment, one segment-opened record.
+//! `3 + X` times: a resume, a fresh start, the end of the log, and one per
+//! segment crossed (`X`). Every attempt to open a segment opens it at most
+//! once, directly or by the opener's fallback when a listed sealed segment
+//! has vanished, and a call makes at most `2S + X` attempts: the resume and
+//! the start each walk the listing, and each crossing opens one. `S` is the
+//! most segments any of the call's listings shows, and `X <= S`, so one call
+//! opens the active file at most `9 + 6S` times. `S` is the kept sealed
+//! segments plus the active file: `retain_segments + 1` once retention has
+//! run, which gives 87 opens at the invocation log's default of 12 and 39
+//! for the governance log's fixed 4. Retention runs on the next append, so
+//! after `retain_segments` is lowered `S` is, until then, the largest value
+//! the log has run under, plus 1.
 
 use std::fs::File;
 use std::io;
