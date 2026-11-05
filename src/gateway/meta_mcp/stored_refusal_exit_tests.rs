@@ -208,7 +208,7 @@ async fn the_refusing_target_of_two_is_the_one_named() {
 /// the provenance pair, which `deliver` hands to the call's delivery record.
 #[tokio::test]
 async fn a_refused_stored_repeat_carries_its_pair() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = std::sync::Arc::new(tempfile::tempdir().unwrap());
     let (_endpoint, meta) = alice_gateway(&dir).await;
     let stored = CommittedTask {
         bindings_recorded: false,

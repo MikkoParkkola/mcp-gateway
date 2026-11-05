@@ -40,6 +40,7 @@ const PENDING: &[&str] = &[
     "src/gateway/meta_mcp/invoke/ci_rewrite_gate_tests.rs",
     "src/gateway/meta_mcp/invoke/identity_propagation_enforcement_tests.rs",
     "src/gateway/meta_mcp/invoke/identity_propagation_enforcement_tests/resolution.rs",
+    "src/gateway/meta_mcp/invoke/not_found_race_tests.rs",
     "src/gateway/meta_mcp/invoke/stored_proof_tests.rs",
     "src/gateway/meta_mcp/response_delivery_tests.rs",
     "src/gateway/meta_mcp/response_security/delivery_record_tests.rs",
