@@ -232,3 +232,38 @@ fn a_nobody_row_revoked_twice_is_warned_once() {
         "{warned}"
     );
 }
+
+/// What fan-out stamps and delivery re-checks: a row naming nobody has no
+/// observation now, so it is sent nothing (T5b, isolated from revocation).
+#[test]
+fn a_row_naming_nobody_has_no_observation_now() {
+    let (hub, _dir) = hub_with(&[("sub_nobody", ""), ("sub_someone", "q")]);
+    let config: crate::config::Config = crate::yaml::from_str(CONFIG).expect("config");
+    let now = |id: &str| hub.observed_now(&hub.store.get(id).expect("row"), &config, None);
+    assert!(
+        matches!(now("sub_someone"), Ok(Some(_))),
+        "control: a row naming someone is observed"
+    );
+    assert_eq!(
+        now("sub_nobody").map(|o| o.is_some()),
+        Err(observation::ObsRefusal::NoIdentity)
+    );
+}
+
+/// A vault-style fence read for a row naming nobody is closed before any
+/// mint is asked (T5c): the control, naming someone, reaches the mint check
+/// and finds none wired.
+#[test]
+fn a_row_naming_nobody_reads_a_closed_fence() {
+    let (hub, _dir) = hub_with(&[("sub_nobody", ""), ("sub_someone", "q")]);
+    let read = |id: &str| blocking(hub.read_fence(&hub.store.get(id).expect("row")));
+    assert_eq!(
+        read("sub_someone"),
+        Err(listener_credential::FenceRead::Busy),
+        "control: reaches the mint check"
+    );
+    assert_eq!(
+        read("sub_nobody"),
+        Err(listener_credential::FenceRead::Closed)
+    );
+}
