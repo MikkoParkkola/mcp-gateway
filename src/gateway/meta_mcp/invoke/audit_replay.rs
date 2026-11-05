@@ -90,13 +90,17 @@ impl MetaMcp {
         }
         .attribution(self, tenants, delivered);
         // Answered past every gate: nothing decided it again.
-        let decision = Box::new(
-            crate::security::decision_record::Noted::not_redecided().decision(
-                crate::security::decision_record::Decided::Replayed,
-                crate::security::decision_record::Refused::No,
-                self.live_config().as_deref(),
-            ),
+        let mut noted = crate::security::decision_record::Noted::not_redecided();
+        // Red stub (MIK-9216 red gate): every replay records MayWrite.
+        noted.note_effect(
+            crate::security::decision_record::Effect::MayWrite,
+            crate::security::decision_record::EffectSource::ToolAnnotation,
         );
+        let decision = Box::new(noted.decision(
+            crate::security::decision_record::Decided::Replayed,
+            crate::security::decision_record::Refused::No,
+            self.live_config().as_deref(),
+        ));
         match self
             .write_invocation(
                 log,

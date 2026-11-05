@@ -731,6 +731,7 @@ impl Gateway {
                     target,
                     dispatched,
                     bindings,
+                    effect_slot,
                 )) => {
                     // STORED.2 site 1: a retained single-call result is
                     // served only on proven liveness; otherwise the call
@@ -744,7 +745,7 @@ impl Gateway {
                             arguments.as_ref(),
                             &caller,
                             target,
-                            (dispatched, bindings),
+                            (dispatched, bindings, effect_slot),
                             (response, audit),
                         )
                         .await

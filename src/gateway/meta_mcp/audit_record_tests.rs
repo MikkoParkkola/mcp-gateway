@@ -520,6 +520,8 @@ async fn a_replay_keeps_the_stored_class_of_its_first_execution() {
                 crate::gateway::meta_mcp::admission::ReplayFacts {
                     audit: Some(ReplayAudit::new(stored, None)),
                     server: None,
+                    tool: None,
+                    slot: None,
                 },
             )
             .await;

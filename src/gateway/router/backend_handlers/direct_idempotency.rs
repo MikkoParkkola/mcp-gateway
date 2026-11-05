@@ -142,7 +142,7 @@ pub(super) fn execution_lease(
         // The second element is the replayed execution's record facts, which
         // `/mcp` writes into its invocation record. The direct route records a
         // replay as it records a cache hit (`note_cached`), so it sets them aside.
-        Ok(SyncAdmission::Replay(response, _, _, _, bindings)) => {
+        Ok(SyncAdmission::Replay(response, _, _, _, bindings, _)) => {
             if let Some(GuardOutcome::Proceed(mut reservation)) = guarded.take() {
                 reservation.release();
             }

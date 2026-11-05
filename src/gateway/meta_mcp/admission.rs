@@ -216,13 +216,15 @@ pub(crate) enum SyncAdmission {
     /// for a plan; it steers the route-stage deferral), and the steps it
     /// dispatched (`None` in a record that predates the list, MIK-8361),
     /// which a plan replay proves live before it is served (MIK-8406), and
-    /// the binding each step ran under, judged before serving (MIK-8407).
+    /// the binding each step ran under, judged before serving (MIK-8407),
+    /// and the one slot it ran under, which its declared effect is read from.
     Replay(
         JsonRpcResponse,
         Option<ReplayAudit>,
         Option<ReplayTarget>,
         Option<Vec<(String, String)>>,
         Vec<stored::StepBinding>,
+        Option<crate::backend::PoolKey>,
     ),
 }
 
@@ -432,6 +434,7 @@ impl MetaMcp {
                     single_target,
                     stored::dispatched_steps(&bytes),
                     stored::stored_bindings(&bytes),
+                    stored::stored_effect_slot(&bytes),
                 ))
             }
             Ok(Admission::InFlight) => {
@@ -631,7 +634,7 @@ impl MetaMcp {
         // gate, and any other admission answer is the one a missing step
         // gets, never the step's reason (ruling A).
         let ran = match &admission {
-            Ok(SyncAdmission::Replay(_, _, _, dispatched, _)) => Some(dispatched),
+            Ok(SyncAdmission::Replay(_, _, _, dispatched, _, _)) => Some(dispatched),
             _ => None,
         };
         if let Some(dispatched) = ran

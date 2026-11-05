@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! The slot a settled answer stores for a replay's declared effect
-//! (MIK-9216.EFFECT): it survives the store's JSON form in every state, and
+//! (MIK-9216.EFFECT.1): it survives the store's JSON form in every state, and
 //! an execution that ran under two distinct slots stores none.
 
 use serde_json::json;

@@ -29,6 +29,10 @@ pub(crate) struct DeferredReplay {
     /// The server a `Named` target was admitted for, derived once by
     /// `defer_or_serve_replay`; the lift records under it (MIK-8520).
     pub(crate) audit_server: Option<String>,
+    /// The backend tool that target called, and the one slot the first
+    /// execution ran under, which the lift's declared effect is read from.
+    pub(crate) audit_tool: Option<String>,
+    pub(crate) effect_slot: Option<crate::backend::PoolKey>,
     pub(crate) tool_name: String,
     pub(crate) arguments: serde_json::Value,
     /// The binding each step of the stored result ran under, which the lift
@@ -65,6 +69,8 @@ mod tests {
             response: JsonRpcResponse::success(RequestId::Number(1), serde_json::json!({})),
             audit: None,
             audit_server: None,
+            audit_tool: None,
+            effect_slot: None,
             tool_name: "gateway_invoke".to_string(),
             arguments: serde_json::json!({}),
             bindings: Vec::new(),

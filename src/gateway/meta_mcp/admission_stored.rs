@@ -227,6 +227,14 @@ pub(super) fn stored_bindings(bytes: &[u8]) -> Vec<StepBinding> {
         .unwrap_or_default()
 }
 
+/// The slot a stored single-slot execution ran under, `None` when none was
+/// stored.
+pub(super) fn stored_effect_slot(bytes: &[u8]) -> Option<crate::backend::PoolKey> {
+    serde_json::from_slice::<StoredDelivery>(bytes)
+        .ok()
+        .and_then(|stored| stored.effect_slot)
+}
+
 pub(super) fn dispatched_steps(bytes: &[u8]) -> Option<Vec<(String, String)>> {
     serde_json::from_slice::<StoredDelivery>(bytes)
         .ok()
