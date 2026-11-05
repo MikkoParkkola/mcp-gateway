@@ -337,6 +337,7 @@ src/gateway/meta_mcp/invoke/identity_propagation_enforcement_tests/resolution.rs
 src/gateway/meta_mcp/invoke/intake.rs	directives	http_invoke_tiny	on the HTTP gateway_invoke path (S2, MIK-8488)
 src/gateway/meta_mcp/invoke/intake.rs	intake	http_invoke_tiny	on the HTTP gateway_invoke path (S1, MIK-8488)
 src/gateway/meta_mcp/invoke/keys.rs	admit_keys	http_invoke_tiny	on the HTTP gateway_invoke path (S4, MIK-8488)
+src/gateway/meta_mcp/invoke/keys.rs	note_dispatch_slot	http_invoke_tiny	on the HTTP gateway_invoke path: pre_send notes the dispatch's slot on its lease (keyed calls only)
 src/gateway/meta_mcp/invoke/keys.rs	pre_send	http_invoke_tiny	on the HTTP gateway_invoke path (S5, MIK-8488)
 src/gateway/meta_mcp/invoke/legacy_bridge.rs	bridge_legacy_ask	http_invoke_tiny	checked on every invoke; bridges only a legacy interim ask
 src/gateway/meta_mcp/invoke/legacy_bridge.rs	settle_bridged	-	on-path, untimed: failed legacy bridged rounds only; the timed backend answers at once
