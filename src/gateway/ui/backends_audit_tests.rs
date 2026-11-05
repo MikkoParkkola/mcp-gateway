@@ -658,14 +658,18 @@ async fn a_backend_write_with_a_refused_journal_is_refused() {
     gateway.crashed_after_rename();
     let journal = journal::journal_path(&gateway.config());
     Audited::chmod(&journal, 0o620);
-    let before = std::fs::read(&journal).expect("read journal");
+    let original = journal::original_path(&gateway.config());
+    let before = (
+        std::fs::read(&journal).expect("read journal"),
+        std::fs::read(&original).expect("read original"),
+    );
     let answer = gateway.update_with_secret().await;
     gateway.assert_refused("update", &answer);
     assert_eq!(gateway.text(), CRASHED, "the crashed bytes were touched");
     assert_eq!(
-        std::fs::read(&journal).ok(),
-        Some(before),
-        "the refused journal was settled or rewritten"
+        (std::fs::read(&journal).ok(), std::fs::read(&original).ok()),
+        (Some(before.0), Some(before.1)),
+        "the refused journal or the staged original was settled or rewritten"
     );
     assert!(
         gateway.events().iter().any(|e| e == RECOVERY),
