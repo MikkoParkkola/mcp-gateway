@@ -32,10 +32,11 @@ struct Ticket {
 pub(super) struct FirstList(Arc<AtomicBool>);
 
 impl FirstList {
-    /// Run one dispatch, `task`, under its own ticket on this session's flag.
-    pub(super) fn scope<F: Future>(&self, task: F) -> impl Future<Output = F::Output> {
+    /// Run one dispatch, `task`, under its own ticket on this session's flag
+    /// (each dispatch takes its own clone).
+    pub(super) fn scope<F: Future>(self, task: F) -> impl Future<Output = F::Output> {
         let ticket = Ticket {
-            answered: Arc::clone(&self.0),
+            answered: self.0,
             waited: Cell::new(false),
         };
         TICKET.scope(ticket, task)
