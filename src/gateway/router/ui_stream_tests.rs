@@ -222,3 +222,4 @@ mod handover;
 mod identity;
 mod live_logs;
 mod load;
+mod scope;
