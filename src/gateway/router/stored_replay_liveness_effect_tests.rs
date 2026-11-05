@@ -120,12 +120,18 @@ async fn a_lift_whose_stored_slot_was_evicted_records_none() {
         "premise: dispatched: {first}"
     );
     let backend = fx.gateway.backends().get(BACKEND).expect("the backend");
-    backend.retire_per_user_slot_for_test(&DirectAccountGateway::operator_binding());
+    let operator = DirectAccountGateway::operator_binding();
+    assert!(
+        backend.declared_effect_for(Some(&operator), TOOL).is_some(),
+        "premise: the stored slot held a declaration before the eviction"
+    );
+    // Removes the pooled slot itself (it panics if the slot is not pooled).
+    backend.retire_per_user_slot_for_test(&operator);
     backend.forget_caller_slots_for_test();
     fx.gateway.rearm_operator_slot_for_test();
     backend.declare_slot_effects_for_test(None, vec![declared(Some(true))]);
     assert_eq!(
-        backend.declared_effect_for(Some(&DirectAccountGateway::operator_binding()), TOOL),
+        backend.declared_effect_for(Some(&operator), TOOL),
         None,
         "premise: the stored slot is back cold"
     );
