@@ -77,10 +77,13 @@ impl Generation {
     /// collision checks `prepare` runs, so the startup keys authenticate
     /// before any reload.
     pub(crate) fn prepare_startup(config: Config, auth: Arc<ResolvedAuthConfig>) -> Self {
+        // The running record key: a reload keeps it, so ids stay put.
+        let rule_key = auth.record_key().rule_id_key();
         Self {
             #[cfg(feature = "firewall")]
-            firewall: Arc::new(crate::security::firewall::FirewallPolicy::compile(
+            firewall: Arc::new(crate::security::firewall::FirewallPolicy::compile_keyed(
                 &config.security.firewall,
+                &rule_key,
             )),
             #[cfg(feature = "firewall")]
             detector: crate::security::firewall::DetectorParams::of(&config.security.firewall),
@@ -88,8 +91,9 @@ impl Generation {
             collusion: Arc::new(crate::security::firewall::CollusionView::compile(
                 &config.security.firewall.collusion,
             )),
-            tool_policy: Arc::new(crate::security::ToolPolicy::from_config(
+            tool_policy: Arc::new(crate::security::ToolPolicy::from_config_keyed(
                 &config.security.tool_policy,
+                &rule_key,
             )),
             config: Arc::new(config),
             auth,
@@ -105,10 +109,12 @@ impl Generation {
         auth: Arc<ResolvedAuthConfig>,
         previous: &Self,
     ) -> Self {
+        let rule_key = auth.record_key().rule_id_key();
         Self {
             #[cfg(feature = "firewall")]
-            firewall: Arc::new(crate::security::firewall::FirewallPolicy::compile(
+            firewall: Arc::new(crate::security::firewall::FirewallPolicy::compile_keyed(
                 &config.security.firewall,
+                &rule_key,
             )),
             #[cfg(feature = "firewall")]
             detector: previous.detector,
@@ -120,8 +126,9 @@ impl Generation {
             } else {
                 Arc::clone(&previous.collusion)
             },
-            tool_policy: Arc::new(crate::security::ToolPolicy::from_config(
+            tool_policy: Arc::new(crate::security::ToolPolicy::from_config_keyed(
                 &config.security.tool_policy,
+                &rule_key,
             )),
             config: Arc::new(config),
             auth,
@@ -248,3 +255,7 @@ pub(crate) mod refuse_hook {
         Some(reason)
     }
 }
+
+#[cfg(test)]
+#[path = "generation_rule_id_tests.rs"]
+mod rule_id_tests;

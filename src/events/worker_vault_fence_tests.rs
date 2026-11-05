@@ -161,12 +161,13 @@ fn buried_as(hub: &EventsHub, event_id: &str) -> Option<String> {
 #[tokio::test]
 async fn iso_t2_a_rotation_buries_only_the_rotated_users_queued_record() {
     use std::sync::atomic::Ordering;
-    let dir = tempfile::tempdir().expect("dir");
+    let dir = Arc::new(tempfile::tempdir().expect("dir"));
     let events = crate::config::EventsConfig {
         callback_allow_private: vec!["127.0.0.0/8".into()],
         ..crate::config::EventsConfig::default()
     };
     let hub = EventsHub::open(&events, dir.path()).expect("hub");
+    hub.keep_test_dir(Arc::clone(&dir));
     let config = managed_config();
     let mut services = logged_services(dir.path());
     services.live = Arc::new(crate::config_reload::LiveConfig::new(config.clone()));
@@ -217,12 +218,13 @@ async fn iso_t2_a_rotation_buries_only_the_rotated_users_queued_record() {
 #[tokio::test]
 async fn iso_t2_an_old_run_emission_after_the_rotation_is_buried() {
     use std::sync::atomic::Ordering;
-    let dir = tempfile::tempdir().expect("dir");
+    let dir = Arc::new(tempfile::tempdir().expect("dir"));
     let events = crate::config::EventsConfig {
         callback_allow_private: vec!["127.0.0.0/8".into()],
         ..crate::config::EventsConfig::default()
     };
     let hub = EventsHub::open(&events, dir.path()).expect("hub");
+    hub.keep_test_dir(Arc::clone(&dir));
     let config = managed_config();
     let mut services = logged_services(dir.path());
     services.live = Arc::new(crate::config_reload::LiveConfig::new(config.clone()));
@@ -253,12 +255,13 @@ async fn iso_t2_an_old_run_emission_after_the_rotation_is_buried() {
 #[tokio::test]
 async fn iso_t2_a_record_under_the_new_grant_is_delivered() {
     use std::sync::atomic::Ordering;
-    let dir = tempfile::tempdir().expect("dir");
+    let dir = Arc::new(tempfile::tempdir().expect("dir"));
     let events = crate::config::EventsConfig {
         callback_allow_private: vec!["127.0.0.0/8".into()],
         ..crate::config::EventsConfig::default()
     };
     let hub = EventsHub::open(&events, dir.path()).expect("hub");
+    hub.keep_test_dir(Arc::clone(&dir));
     let config = managed_config();
     let mut services = logged_services(dir.path());
     services.live = Arc::new(crate::config_reload::LiveConfig::new(config.clone()));
@@ -320,10 +323,11 @@ fn outcomes(dir: &std::path::Path) -> Vec<String> {
 #[tokio::test]
 async fn a_busy_custody_defers_the_record_unsent() {
     use std::sync::atomic::Ordering;
-    let dir = tempfile::tempdir().expect("dir");
+    let dir = Arc::new(tempfile::tempdir().expect("dir"));
     let (port, posts) = counting_callback().await;
     {
         let (hub, services, config, fence) = fenced(dir.path(), &["u1"]);
+        hub.keep_test_dir(Arc::clone(&dir));
         *fence.refuse.lock().expect("fence") = Some(FenceRead::Busy);
         queued_for(&hub, &config, port, "u1", &fence.current("u1"));
         hub.attempt(&services, "evt_u1").await;
@@ -331,6 +335,7 @@ async fn a_busy_custody_defers_the_record_unsent() {
     }
     // A restart: the same store, a new hub.
     let (hub, services, _, fence) = fenced(dir.path(), &["u1"]);
+    hub.keep_test_dir(Arc::clone(&dir));
     *fence.refuse.lock().expect("fence") = Some(FenceRead::Busy);
     hub.attempt(&services, "evt_u1").await;
     assert_eq!(buried_as(&hub, "evt_u1"), None, "still deferred");
@@ -347,8 +352,9 @@ async fn a_busy_custody_defers_the_record_unsent() {
 #[tokio::test]
 async fn an_overdue_record_is_buried_before_the_fence_is_read() {
     use std::sync::atomic::Ordering;
-    let dir = tempfile::tempdir().expect("dir");
+    let dir = Arc::new(tempfile::tempdir().expect("dir"));
     let (hub, services, config, fence) = fenced(dir.path(), &["u1"]);
+    hub.keep_test_dir(Arc::clone(&dir));
     *fence.refuse.lock().expect("fence") = Some(FenceRead::Busy);
     let (port, posts) = counting_callback().await;
     queued_aged(&hub, &config, port, "u1", &fence.current("u1"), |record| {
@@ -370,8 +376,9 @@ async fn an_overdue_record_is_buried_before_the_fence_is_read() {
 #[tokio::test]
 async fn no_view_of_the_grant_buries_the_record() {
     use std::sync::atomic::Ordering;
-    let dir = tempfile::tempdir().expect("dir");
+    let dir = Arc::new(tempfile::tempdir().expect("dir"));
     let (hub, services, config, fence) = fenced(dir.path(), &["u1"]);
+    hub.keep_test_dir(Arc::clone(&dir));
     let (port, posts) = counting_callback().await;
     queued_for(&hub, &config, port, "u1", &fence.current("u1"));
     *fence.refuse.lock().expect("fence") = Some(FenceRead::Closed);
@@ -389,8 +396,9 @@ async fn no_view_of_the_grant_buries_the_record() {
 #[tokio::test(start_paused = true)]
 async fn a_send_past_the_fence_window_is_not_made() {
     use std::sync::atomic::Ordering;
-    let dir = tempfile::tempdir().expect("dir");
+    let dir = Arc::new(tempfile::tempdir().expect("dir"));
     let (hub, services, config, fence) = fenced(dir.path(), &["u1"]);
+    hub.keep_test_dir(Arc::clone(&dir));
     let (port, posts) = counting_callback().await;
     queued_for(&hub, &config, port, "u1", &fence.current("u1"));
     let (reached, release) = hub.before_send.arm();
@@ -411,8 +419,9 @@ async fn a_send_past_the_fence_window_is_not_made() {
 #[tokio::test]
 async fn an_unsubscribe_during_the_fence_read_cancels_the_record() {
     use std::sync::atomic::Ordering;
-    let dir = tempfile::tempdir().expect("dir");
+    let dir = Arc::new(tempfile::tempdir().expect("dir"));
     let (hub, services, config, fence) = fenced(dir.path(), &["u1"]);
+    hub.keep_test_dir(Arc::clone(&dir));
     let (port, posts) = counting_callback().await;
     queued_for(&hub, &config, port, "u1", &fence.current("u1"));
     let (reached, release) = fence.pending.arm();

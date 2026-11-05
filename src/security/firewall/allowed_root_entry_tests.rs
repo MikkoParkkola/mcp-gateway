@@ -28,13 +28,15 @@ fn admit(fx: &Fx, args: &Value) -> FirewallVerdict {
 
 fn rescan(fx: &Fx, args: &Value, subject: ScanSubject) -> FirewallVerdict {
     let sender = fx.sender();
-    fx.fw.rescan(
-        fx.fw.startup_policy(),
-        target("read_file"),
-        args,
-        subject,
-        sender.as_deref(),
-    )
+    fx.fw
+        .rescan_attributed(
+            fx.fw.startup_policy(),
+            target("read_file"),
+            args,
+            subject,
+            sender.as_deref(),
+        )
+        .0
 }
 
 /// R28: the route scan saw an inside path, the send carries an outside one:

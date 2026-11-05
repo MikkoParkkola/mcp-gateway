@@ -62,7 +62,7 @@ fn the_first_refusal_noted_is_the_one_recorded() {
 fn the_memo_kind_wins_over_a_later_note() {
     let mut noted = super::Noted::default();
     noted.refused(DecisionKind::Firewall, None);
-    noted.refused_by_memo(DecisionKind::BackendScope);
+    noted.refused_by_memo((DecisionKind::BackendScope, None));
     let denied = crate::security::audit::AuditOutcome::Denied(-32003);
     assert_eq!(recorded(&noted, denied), DecisionKind::BackendScope);
 }
@@ -101,5 +101,8 @@ fn noted_is_one_pointer_and_unboxed_until_a_note() {
     let mut noted = super::Noted::default();
     noted.refused(DecisionKind::Firewall, None);
     noted.refused(DecisionKind::Grant, None);
-    assert_eq!(noted.refusal_kind(), Some(DecisionKind::Firewall));
+    assert_eq!(
+        noted.refusal_pair().map(|(kind, _)| kind),
+        Some(DecisionKind::Firewall)
+    );
 }

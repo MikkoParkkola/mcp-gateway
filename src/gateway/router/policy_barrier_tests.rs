@@ -146,9 +146,11 @@ struct Outcome {
     message: Value,
     calls: usize,
     kind: Value,
+    /// The record's `decision.rule_id`: the configured rule that decided.
+    rule: Value,
 }
 
-fn outcome(body: &Value, calls: usize, kind: Value) -> Outcome {
+fn outcome(body: &Value, calls: usize, (kind, rule): (Value, Value)) -> Outcome {
     let refused = body.get("error").is_some()
         || body.pointer("/result/isError").and_then(Value::as_bool) == Some(true);
     let code = body.pointer("/error/code").cloned().unwrap_or(Value::Null);
@@ -163,6 +165,7 @@ fn outcome(body: &Value, calls: usize, kind: Value) -> Outcome {
         message,
         calls,
         kind,
+        rule,
     }
 }
 
@@ -236,6 +239,17 @@ async fn call(
     pinned: &Config,
     current: &Config,
 ) -> Outcome {
+    call_as(fx, (route, args), pinned, Some(current)).await
+}
+
+/// [`call`], with `current` published after the pin; `None` publishes
+/// nothing, so the request runs under the one generation it pinned.
+async fn call_as(
+    fx: &Logged,
+    (route, args): (Route, Value),
+    pinned: &Config,
+    current: Option<&Config>,
+) -> Outcome {
     fx.state.live_config.set(pinned.clone());
     let before = fx.calls.load(Ordering::SeqCst);
     // A retry's continuation is minted first, under the pinned configuration,
@@ -256,15 +270,18 @@ async fn call(
     // measured request's own.
     let recorded = invocations(fx).await.len();
     let fired = Rc::new(Cell::new(false));
-    let (live, next, flag) = (
-        std::sync::Arc::clone(&fx.state.live_config),
-        current.clone(),
-        Rc::clone(&fired),
-    );
-    seams::after_pin(move || {
-        live.set(next);
-        flag.set(true);
-    });
+    if let Some(current) = current {
+        let (live, next, flag) = (
+            std::sync::Arc::clone(&fx.state.live_config),
+            current.clone(),
+            Rc::clone(&fired),
+        );
+        seams::after_pin(move || {
+            live.set(next);
+            flag.set(true);
+        });
+    }
+    let unchanged = fx.state.live_config.generation();
     let body = match route {
         Route::Direct => {
             post_direct(fx, "alpha", "k-std", "read", args, None, None)
@@ -280,12 +297,19 @@ async fn call(
             meta_raw(fx, json!({"requestState": state, "inputResponses": args})).await
         }
     };
-    assert!(fired.get(), "the reload published after the pin");
-    assert_eq!(
-        serde_json::to_value(&*fx.state.live_config.get()).expect("config serialises"),
-        serde_json::to_value(current).expect("config serialises"),
-        "the published config is still the one the reload wrote"
-    );
+    if let Some(current) = current {
+        assert!(fired.get(), "the reload published after the pin");
+        assert_eq!(
+            serde_json::to_value(&*fx.state.live_config.get()).expect("config serialises"),
+            serde_json::to_value(current).expect("config serialises"),
+            "the published config is still the one the reload wrote"
+        );
+    } else {
+        assert!(
+            std::sync::Arc::ptr_eq(&unchanged, &fx.state.live_config.generation()),
+            "no generation was published during the request"
+        );
+    }
     // The measured request leaves exactly one invocation record: its own.
     let rows = invocations(fx).await;
     let [row] = &rows[recorded..] else {
@@ -294,8 +318,11 @@ async fn call(
             rows.len() - recorded
         );
     };
-    let kind = row["decision"]["kind"].clone();
-    outcome(&body, fx.calls.load(Ordering::SeqCst) - before, kind)
+    let decided = (
+        row["decision"]["kind"].clone(),
+        row["decision"]["rule_id"].clone(),
+    );
+    outcome(&body, fx.calls.load(Ordering::SeqCst) - before, decided)
 }
 
 /// A request pinned to `a` while `b` is current answers as `a` does, and the
@@ -429,18 +456,36 @@ async fn dispatch_rescan_follows_the_pin() {
 /// Submit `gateway_invoke alpha read` with the injection as a task on `/mcp`,
 /// and return the last `tasks/get` body once it leaves `working`.
 async fn injected_task(fx: &Fx, key: &str) -> Value {
-    use super::direct_guards_fixture::send_with_headers;
-    let modern = json!({
+    task_with(fx, key, injected()).await
+}
+
+/// [`injected_task`] with `arguments` instead of the injection: submitted,
+/// then read until it settles.
+async fn task_with(fx: &Fx, key: &str, arguments: Value) -> Value {
+    let id = submit_task(fx, key, arguments).await;
+    settled_task(fx, &id).await
+}
+
+/// The task-augmented protocol metadata every task request carries.
+fn modern_task_meta() -> Value {
+    json!({
         "io.modelcontextprotocol/protocolVersion": "2026-07-28",
         "io.modelcontextprotocol/clientCapabilities": {
             "extensions": {"io.modelcontextprotocol/tasks": {}}
         },
-    });
+    })
+}
+
+/// Submit `arguments` to `alpha`'s `read` as a task under idempotency `key`;
+/// the task's id.
+async fn submit_task(fx: &Fx, key: &str, arguments: Value) -> String {
+    use super::direct_guards_fixture::send_with_headers;
+    let modern = modern_task_meta();
     let mut submit_meta = modern.clone();
     submit_meta[crate::protocol::mrtr::IDEMPOTENCY_KEY_META] = json!(key);
     let submit = json!({
         "name": "gateway_invoke",
-        "arguments": {"server": "alpha", "tool": "read", "arguments": injected()},
+        "arguments": {"server": "alpha", "tool": "read", "arguments": arguments},
         "task": {},
         "_meta": submit_meta,
     });
@@ -451,21 +496,32 @@ async fn injected_task(fx: &Fx, key: &str) -> Value {
     ];
     let (_, created) =
         send_with_headers(fx, "/mcp", "k-std", "tools/call", submit, None, &headers).await;
-    let id = created
+    created
         .pointer("/result/taskId")
         .and_then(Value::as_str)
         .unwrap_or_else(|| panic!("the submit was refused: {created}"))
-        .to_owned();
-    let get_headers = [
+        .to_owned()
+}
+
+/// One `tasks/get` of task `id`, as `k-std`.
+async fn read_task(fx: &Fx, id: &str) -> Value {
+    use super::direct_guards_fixture::send_with_headers;
+    let headers = [
         ("mcp-protocol-version", "2026-07-28"),
         ("mcp-method", "tasks/get"),
-        ("mcp-name", id.as_str()),
+        ("mcp-name", id),
     ];
+    let get = json!({"taskId": id, "_meta": modern_task_meta()});
+    send_with_headers(fx, "/mcp", "k-std", "tasks/get", get, None, &headers)
+        .await
+        .1
+}
+
+/// Task `id` read until it is no longer working.
+async fn settled_task(fx: &Fx, id: &str) -> Value {
     tokio::time::timeout(std::time::Duration::from_secs(30), async {
         loop {
-            let get = json!({"taskId": id, "_meta": modern});
-            let (_, body) =
-                send_with_headers(fx, "/mcp", "k-std", "tasks/get", get, None, &get_headers).await;
+            let body = read_task(fx, id).await;
             if body.pointer("/result/status").and_then(Value::as_str) != Some("working") {
                 return body;
             }
@@ -523,3 +579,9 @@ async fn a_queued_task_is_not_judged_by_the_startup_rules() {
         "{got}"
     );
 }
+
+/// The rule each recording site names (keyed rule ids).
+#[path = "rule_id_record_tests.rs"]
+mod rule_ids;
+#[path = "stored_refusal_record_tests.rs"]
+mod stored_refusals;
