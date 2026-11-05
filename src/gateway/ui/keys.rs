@@ -128,12 +128,12 @@ pub(super) async fn keys(
                 .auth
                 .api_keys
                 .iter()
-                .map(|key| file_entry(&auth, &live, key))
+                .map(|key| file_entry(auth, &live, key))
                 .collect();
             json!({"revision": revision.as_str(), "keys": keys})
         }
-        Ok(Ok(Gateway::None)) => from_live(&auth, "absent"),
-        Ok(Err(_)) | Err(_) => from_live(&auth, "unloadable"),
+        Ok(Ok(Gateway::None)) => from_live(auth, "absent"),
+        Ok(Err(_)) | Err(_) => from_live(auth, "unloadable"),
     };
     Json(answer).into_response()
 }
