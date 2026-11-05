@@ -75,6 +75,20 @@ fn coded(status: StatusCode, error: &'static str) -> Response {
     (status, Json(json!({ "error": error }))).into_response()
 }
 
+/// A write whose outcome the gateway could not observe: the key may or may
+/// not be in gateway.yaml. Its secret was never returned, so the way out is
+/// to re-read the list, never to retry blindly.
+fn state_uncertain() -> Response {
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        Json(json!({
+            "error": "state_uncertain",
+            "recovery": "the key may or may not have been written: read GET /ui/api/keys before creating it again; a key listed there whose secret was never shown cannot be used, so remove it from gateway.yaml or rotate it",
+        })),
+    )
+        .into_response()
+}
+
 /// The one refusal every unreadable body gets.
 fn invalid_body() -> Response {
     structured_error(
@@ -486,7 +500,7 @@ fn refused_write(
                 | ReplaceError::Secrets(_),
             ),
         ) => fixed(StatusCode::INTERNAL_SERVER_ERROR, "the key was not created"),
-        (None, _) => coded(StatusCode::INTERNAL_SERVER_ERROR, "state_uncertain"),
+        (None, _) => state_uncertain(),
     }
 }
 
