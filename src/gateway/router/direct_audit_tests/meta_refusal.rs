@@ -239,6 +239,21 @@ fn listing(answer: &Value) -> Value {
     serde_json::from_str(text).expect("the listing is JSON")
 }
 
+/// Fill `alpha`'s and `beta`'s shared catalogues now: a listing of every
+/// backend fills a cold one behind its read, never by it, so without this it
+/// could list nothing and "alpha left out" would prove nothing.
+async fn warm_shared_catalogues(fx: &Fixture) {
+    for name in ["alpha", "beta"] {
+        fx.state
+            .backends
+            .get(name)
+            .unwrap_or_else(|| panic!("{name} is registered"))
+            .get_tools_for_binding_lent(None, crate::transport::LentCredential::default())
+            .await
+            .unwrap_or_else(|e| panic!("{name}'s catalogue fills: {e}"));
+    }
+}
+
 /// Whether `answer` is the missing-backend answer for `alpha`.
 fn answered_as_missing(answer: &Value) -> bool {
     answer.to_string().contains("alpha")
@@ -423,15 +438,26 @@ async fn meta_list_tools_of_every_backend_records_no_refused() {
     })
     .await;
     isolated.state.meta_mcp.set_multi_user(true);
-    let lists_alpha = |answer: &Value| listing(answer).to_string().contains(r#""server":"alpha""#);
+    let lists = |answer: &Value, server: &str| {
+        listing(answer)
+            .to_string()
+            .contains(&format!(r#""server":"{server}""#))
+    };
+    let lists_alpha = |answer: &Value| lists(answer, "alpha");
     let plain = fixture(Setup::default()).await;
+    warm_shared_catalogues(&plain).await;
     let (answer, _) = list_tools_of(&plain, None, &Caller::Anonymous).await;
     assert!(
         lists_alpha(&answer),
         "premise: the check sees a listed alpha: {answer}"
     );
     for (name, fx) in [("required", &required), ("isolated", &isolated)] {
+        warm_shared_catalogues(fx).await;
         let (answer, record) = list_tools_of(fx, None, &Caller::Anonymous).await;
+        assert!(
+            lists(&answer, "beta"),
+            "{name} premise: beta listed: {answer}"
+        );
         assert!(
             !lists_alpha(&answer),
             "{name} premise: alpha left out: {answer}"
