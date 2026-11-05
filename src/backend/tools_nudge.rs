@@ -313,6 +313,31 @@ impl super::Backend {
         entry.tools_cache.replace(tools, || ());
     }
 
+    /// Set the effect sets of the slot `binding` selects (admitted already)
+    /// as an accepted fill of `tools` would derive them, and nothing else: so
+    /// a row can give two slots of one backend two different declarations.
+    #[cfg(test)]
+    pub(crate) fn declare_slot_effects_for_test(
+        &self,
+        binding: Option<&str>,
+        mut tools: Vec<Tool>,
+    ) {
+        let prepared = super::prepare_tool_metadata(
+            &self.name,
+            self.flagged_tool_pins(),
+            super::Judging::Judge,
+            &mut tools,
+        );
+        let entry = self
+            .pooled_entry(&self.pool_key_for(binding))
+            .expect("test slot admitted");
+        entry.effect_listed.write().clear();
+        *entry.read_only_declared.write() = prepared.read_only_declared;
+        *entry.hint_declared.write() = prepared.hint_declared;
+        *entry.write_declared.write() = prepared.write_declared;
+        *entry.effect_listed.write() = prepared.listed;
+    }
+
     /// Have the next drain store `tools` into the shared slot right after it
     /// reads that slot.
     #[cfg(test)]
