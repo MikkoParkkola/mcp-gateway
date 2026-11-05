@@ -172,7 +172,7 @@ fn settle(backend: &str, outcome: Acquire) -> crate::Result<()> {
             }
             // The operator's view of limiter refusals: they are excluded from
             // the error budgets and from the circuit gauge, so this counter is
-            // the only place they show (F23b, MIK-7579).
+            // the only place they show.
             telemetry_metrics::counter!(
                 "mcp_backend_rate_limited_total",
                 "backend" => backend.to_string()
