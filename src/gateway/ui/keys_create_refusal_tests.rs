@@ -358,9 +358,8 @@ fn p7_keyedit_refusals_are_not_written_with_hand_steps() {
         "secrets:\n  store: files\nbackends: {{}}\nauth:\n  enabled: true\n  api_keys: &keys\n{}",
         root_item()
     );
-    let flow = format!(
-        "secrets:\n  store: files\nbackends: {{}}\nauth: {{enabled: true, api_keys: []}}\n"
-    );
+    let flow =
+        "secrets:\n  store: files\nbackends: {}\nauth: {enabled: true, api_keys: []}\n".to_owned();
     let anchored_auth = format!(
         "secrets:\n  store: files\nbackends: {{}}\nauth: &a\n  enabled: true\n  api_keys:\n{}",
         root_item()

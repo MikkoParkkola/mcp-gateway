@@ -112,13 +112,6 @@ impl Call {
             before_lock: None,
         }
     }
-
-    pub(super) fn raw(body: &str) -> Self {
-        Self {
-            body: body.to_owned(),
-            ..Self::new(&Value::Null)
-        }
-    }
 }
 
 pub(super) fn admin_client() -> AuthenticatedClient {
@@ -231,8 +224,8 @@ impl Fixture {
     /// Who the route should record for `client`.
     pub(super) fn who(&self, client: &AuthenticatedClient) -> Value {
         let generation = self.live.generation();
-        let key = generation.auth().record_key().clone();
-        serde_json::to_value(AuditWho::from_request(Some(client), None, &key)).expect("who")
+        let key = generation.auth().record_key();
+        serde_json::to_value(AuditWho::from_request(Some(client), None, key)).expect("who")
     }
 
     pub(super) async fn send(&self, call: Call) -> Sent {

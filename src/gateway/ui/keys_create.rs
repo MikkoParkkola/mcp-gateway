@@ -151,15 +151,15 @@ fn refused_field(body: &CreateBody) -> Option<&'static str> {
 }
 
 /// A requested expiry at or before now would never authenticate.
-fn expired_by(expires_at: Option<DateTime<Utc>>) -> Result<(), Response> {
+fn expired_by(expires_at: Option<DateTime<Utc>>) -> Result<(), Box<Response>> {
     let Some(at) = expires_at else { return Ok(()) };
     match crate::clock::utc_now() {
         Ok(now) if at > now => Ok(()),
-        Ok(_) => Err(invalid_field("expires_at")),
-        Err(_) => Err(fixed(
+        Ok(_) => Err(Box::new(invalid_field("expires_at"))),
+        Err(_) => Err(Box::new(fixed(
             StatusCode::SERVICE_UNAVAILABLE,
             "the clock cannot be read",
-        )),
+        ))),
     }
 }
 
@@ -171,25 +171,25 @@ struct Checked {
 
 /// The preconditions, in order: a config file, reload and a loadable file, a
 /// free name, a current revision.
-async fn preconditions(state: &AppState, body: &CreateBody) -> Result<Checked, Response> {
+async fn preconditions(state: &AppState, body: &CreateBody) -> Result<Checked, Box<Response>> {
     let path = state.config_path.clone();
     let read = tokio::task::spawn_blocking(move || read_gateway("keys", path.as_deref())).await;
     if matches!(read, Ok(Ok(Gateway::None))) {
-        return Err(coded(StatusCode::CONFLICT, "no_config_file"));
+        return Err(Box::new(coded(StatusCode::CONFLICT, "no_config_file")));
     }
     let (Ok(Ok(Gateway::File { revision, config })), Some(_)) =
         (read, state.meta_mcp.reload_context())
     else {
-        return Err(fixed(
+        return Err(Box::new(fixed(
             StatusCode::SERVICE_UNAVAILABLE,
             "reload is off or gateway.yaml could not be loaded",
-        ));
+        )));
     };
     if config.auth.api_keys.iter().any(|k| k.name == body.name) {
-        return Err(coded(StatusCode::CONFLICT, "name_taken"));
+        return Err(Box::new(coded(StatusCode::CONFLICT, "name_taken")));
     }
     if revision.as_str() != body.revision {
-        return Err(stale(&revision));
+        return Err(Box::new(stale(&revision)));
     }
     Ok(Checked {
         revision,
@@ -212,13 +212,13 @@ pub(super) async fn create_key(
     };
     let checked = match preconditions(&state, &body).await {
         Ok(checked) => checked,
-        Err(refused) => return refused,
+        Err(refused) => return *refused,
     };
     if let Some(field) = refused_field(&body) {
         return invalid_field(field);
     }
     if let Err(refused) = expired_by(body.expires_at) {
-        return refused;
+        return *refused;
     }
     #[cfg(test)]
     if let Some(axum::Extension(hook)) = &before_lock {

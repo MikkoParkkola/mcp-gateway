@@ -158,7 +158,7 @@ fn a5_the_intent_names_the_caller_and_the_key() {
     }
 }
 
-/// P12: the admin_action record carries the key name and `create`, never the
+/// P12: the `admin_action` record carries the key name and `create`, never the
 /// secret or its digest.
 #[test]
 fn p12_the_admin_action_record_names_the_key_and_the_action() {
