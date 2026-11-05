@@ -443,8 +443,10 @@ fn the_config_read_refuses_a_config_hard_linked_to_its_journal() {
 }
 
 /// A config whose name is not UTF-8 keeps its recovery files refused: the
-/// names are compared as bytes, never through a string. Not on macOS, whose
-/// filesystems refuse such a name outright.
+/// names are compared as bytes, never through a string. Recovery cannot
+/// journal such a config (the journal records paths as UTF-8 text), so the
+/// files are planted the way another account would plant them. Not on
+/// macOS, whose filesystems refuse such a name outright.
 #[cfg(all(unix, not(target_os = "macos")))]
 #[test]
 fn the_config_read_refuses_recovery_files_of_a_non_utf8_config_name() {
@@ -453,9 +455,12 @@ fn the_config_read_refuses_recovery_files_of_a_non_utf8_config_name() {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join(std::ffi::OsStr::from_bytes(b"gw\xff.yaml"));
     crate::gateway::test_helpers::write_owner_only(&path, START).expect("config");
-    journal::stage_original(&path, START.as_bytes()).expect("stage");
-    journal::begin(&path, crate::hashing::sha256_hex(START.as_bytes())).expect("journal");
+    let planted = [journal::journal_path(&path), journal::original_path(&path)];
+    for file in &planted {
+        crate::gateway::test_helpers::write_owner_only(file, START).expect("planted");
+    }
     assert_reads_as_config(&path);
-    assert_not_the_config(&journal::journal_path(&path));
-    assert_not_the_config(&journal::original_path(&path));
+    for file in &planted {
+        assert_not_the_config(file);
+    }
 }
