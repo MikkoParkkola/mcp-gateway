@@ -1,0 +1,1 @@
+src/gateway/server/run_steps.rs	drop	1	Completes the startup capability scan when it ends without completing itself (a panic or a dropped scan), marking it partial, so readiness and file reloads are not held forever; decides nothing about access

@@ -409,6 +409,35 @@ fn a_missing_middle_segment_resets_rather_than_skipping_its_rows() {
 }
 
 #[test]
+fn head_never_takes_an_over_cap_last_line_that_starts_with_a_record() {
+    // A space keeps the whole line valid JSON; an `x` makes it junk after
+    // the record. Either way the line is over the cap, so it is no record.
+    // Padded by the assembly window, and by just enough to pass the cap.
+    for (pad, just_over) in [(b' ', false), (b'x', false), (b' ', true), (b'x', true)] {
+        let d = dir();
+        let path = d.path().join("inv.jsonl");
+        let mut recs = calls(3);
+        recs.push(if just_over {
+            Rec::JustOver(pad)
+        } else {
+            Rec::Padded(pad)
+        });
+        let w = write(&path, &[recs]);
+        let complete = &w.marks[2];
+        let l = log(&path, StreamKind::Activity);
+        // An error is allowed: the bounded read may find no record.
+        if let Ok(head) = super::super::head(&l) {
+            assert_eq!(
+                head.as_ref(),
+                Some(complete),
+                "pad {:?}: the head is the newest complete record, never the padded line's",
+                pad as char
+            );
+        }
+    }
+}
+
+#[test]
 fn head_of_a_log_ending_in_a_long_unreadable_tail_is_an_error_not_empty() {
     let d = dir();
     let path = d.path().join("inv.jsonl");
@@ -522,5 +551,154 @@ fn a_backend_scoped_caller_reads_only_its_backends_calls() {
     assert!(
         !other.iter().any(|p| p.reset),
         "nothing served is not a reset"
+    );
+}
+
+/// How many times `call` opened the active file of the log at `path`: each
+/// listing of the segments opens it once (no rotation races here), plus each
+/// open of the active file itself.
+fn active_opens(path: &Path, call: impl FnOnce()) -> u32 {
+    OPENED.with(|o| o.borrow_mut().clear());
+    LISTED.with(|l| l.set(0));
+    call();
+    let active = *super::super::super::seek::segments(path)
+        .unwrap()
+        .last()
+        .expect("the log has an active file");
+    let opened = OPENED.with(|o| o.borrow().iter().filter(|s| **s == active).count());
+    LISTED.with(Cell::get) + u32::try_from(opened).unwrap()
+}
+
+/// The module doc's bound on one call's opens of the active file, for a log
+/// of `segments` segments: `9 + 6S`. The opener's fallback opens (a listed
+/// sealed segment vanished before it was opened) happen below this seam, so
+/// the counts here never include them; the bound does.
+fn bound(segments: u32) -> u32 {
+    9 + 6 * segments
+}
+
+/// Rewrite the active file with the same bytes and a new identity. Not
+/// delete-then-write: the file system can hand the freed inode straight to
+/// the new file, which then has the old identity, so the resume holds and the
+/// row fails at random. Renamed over the active one, the copy exists beside
+/// the old file, so it cannot reuse that inode.
+fn new_identity(path: &Path) {
+    let copy = path.with_extension("rewrite");
+    std::fs::copy(path, &copy).unwrap();
+    std::fs::rename(&copy, path).unwrap();
+}
+
+#[test]
+fn one_call_opens_the_active_file_within_its_stated_bound() {
+    let d = dir();
+    let path = d.path().join("inv.jsonl");
+    let l = log(&path, StreamKind::Activity);
+    let one = Limits { matches: 1, ..WIDE };
+    let five = Limits { matches: 5, ..WIDE };
+    let read = |cursor: Option<&Mark>, stop: Option<&Mark>, budget, search: &mut Search| {
+        rows_after(&l, cursor, stop, &Access::All, budget, search).unwrap()
+    };
+    // A fresh read of a log that is only its active file: one listing, one
+    // open. Crossing two sealed segments into it: three listings, one open.
+    let w = write(&path, &[calls(2)]);
+    let fresh = active_opens(&path, || {
+        read(None, w.marks.last(), WIDE, &mut Search::default());
+    });
+    let w = write(&path, &[calls(2), calls(2), calls(2)]);
+    let crossing = active_opens(&path, || {
+        read(None, w.marks.last(), WIDE, &mut Search::default());
+    });
+    // A resume in the active file: one listing, one open.
+    let mut search = Search::default();
+    read(None, w.marks.last(), five, &mut search);
+    let resumed = active_opens(&path, || {
+        read(Some(&w.marks[4]), w.marks.last(), one, &mut search);
+    });
+    // A resume that fails on a new identity, then starts over and crosses two
+    // segments into the active file again: four listings, two opens.
+    let mut search = Search::default();
+    read(None, w.marks.last(), five, &mut search);
+    new_identity(&path);
+    let restarted = active_opens(&path, || {
+        let page = read(Some(&w.marks[4]), w.marks.last(), one, &mut search);
+        assert!(
+            page.diag.restarted,
+            "premise: the new identity fails the resume"
+        );
+    });
+    assert_eq!(
+        (fresh, crossing, resumed, restarted),
+        (2, 4, 2, 6),
+        "active-file opens per call: fresh, crossing, resumed, restarted"
+    );
+    for (opens, segments) in [(fresh, 1), (crossing, 3), (resumed, 3), (restarted, 3)] {
+        assert!(
+            opens <= bound(segments),
+            "{opens} opens past the bound for {segments} segments"
+        );
+    }
+    // At the cap: every kept segment crossed after a failed resume, the most
+    // listings a call without rotation races makes.
+    let kept = 4;
+    let w = write(&path, &vec![calls(2); kept + 1]);
+    let mut search = Search::default();
+    read(
+        None,
+        w.marks.last(),
+        Limits { matches: 9, ..WIDE },
+        &mut search,
+    );
+    new_identity(&path);
+    let at_cap = active_opens(&path, || {
+        read(Some(&w.marks[8]), w.marks.last(), one, &mut search);
+    });
+    let kept = u32::try_from(kept).unwrap();
+    assert_eq!(
+        at_cap,
+        kept + 4,
+        "two listings, one per crossing, two opens"
+    );
+    assert!(
+        at_cap <= bound(kept + 1),
+        "the kept sealed segments and the active file"
+    );
+}
+
+#[test]
+fn an_unreadable_segment_reached_by_crossing_resets_the_read() {
+    let d = dir();
+    let path = d.path().join("inv.jsonl");
+    let w = write(&path, &[calls(2), calls(2), calls(2)]);
+    let segs = super::super::super::seek::segments(&path).unwrap();
+    let l = log(&path, StreamKind::Activity);
+    OPENED.with(|o| o.borrow_mut().clear());
+    // The oldest segment's identity reads; the next one's, reached by
+    // crossing, does not.
+    IDENTITY_SKIP.with(|s| s.set(1));
+    IDENTITY_FAILS.with(|f| f.set(1));
+    let page = rows_after(
+        &l,
+        None,
+        w.marks.last(),
+        &Access::All,
+        WIDE,
+        &mut Search::default(),
+    );
+    IDENTITY_SKIP.with(|s| s.set(0));
+    IDENTITY_FAILS.with(|f| f.set(0));
+    let page = page.unwrap();
+    assert_eq!(
+        OPENED.with(|o| o.borrow().clone()),
+        segs[..2].to_vec(),
+        "premise: the failed read is the crossing's, into the second segment"
+    );
+    assert!(
+        page.reset,
+        "an unreadable segment reached by crossing resets the read"
+    );
+    assert!(
+        !counters(std::slice::from_ref(&page)).iter().any(|c| *c > 2),
+        "no row past the unreadable segment is served: {:?}",
+        counters(std::slice::from_ref(&page))
     );
 }

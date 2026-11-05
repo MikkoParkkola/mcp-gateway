@@ -95,6 +95,7 @@ mod stdio_cost_persistence;
 mod grant_decision_stdio;
 #[cfg(feature = "cost-governance")]
 mod http_cost_persistence;
+mod not_found_stdio;
 
 // MIK-7272.OWNER.3 and OWNER.5 (the sub4 stdio owner test plan, I1).
 mod owner3_stdio_keying;

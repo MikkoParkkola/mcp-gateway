@@ -39,6 +39,8 @@ mod lost_round;
 mod meta_malformed_retry;
 mod meta_refusal;
 mod meta_replay;
+// A call to a backend that does not exist records not_found.
+mod not_found;
 mod refused_effect;
 /// MIK-8689 R-RECJUDGE: the judge's verdict rides the delivery record.
 #[cfg(feature = "firewall")]

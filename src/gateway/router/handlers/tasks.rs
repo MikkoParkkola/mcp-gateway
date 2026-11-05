@@ -623,10 +623,13 @@ impl crate::gateway::streaming::TaskFrames for TaskFrameSource {
         let request = RequestId::Number(0);
         let refused = |stored: &crate::gateway::task_service::CommittedTask| {
             with_policy_caller(&self.state, &live, |policy| {
-                self.state
-                    .meta_mcp
-                    .refuse_stored_delivery(&request, stored, None, live.session_id, policy)
-                    .is_some()
+                self.state.meta_mcp.refuse_stored_delivery(
+                    &request,
+                    stored,
+                    None,
+                    live.session_id,
+                    policy,
+                )
             })
         };
         // MIK-8392: the pre-pass fills this frame's account outcomes in its own

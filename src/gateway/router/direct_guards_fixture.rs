@@ -210,73 +210,10 @@ pub(crate) async fn fixture(answer: Answer, arm: impl FnOnce(&mut MetaMcp)) -> F
     .await
 }
 
-/// [`fixture`] with `security.sanitize_input` set to `on` (MIK-8137 b3).
-pub(crate) async fn fixture_sanitizing(answer: Answer, on: bool) -> Fx {
-    SANITIZE.with(|s| s.set(on));
-    let fx = fixture_inner(answer, false, |meta| meta).await;
-    SANITIZE.with(|s| s.set(false));
-    fx
-}
-
-/// Any fixture builder, run with authentication off.
-pub(crate) async fn auth_off<T, F: std::future::Future<Output = T>>(build: F) -> T {
-    AUTH_OFF.with(|s| s.set(true));
-    let fx = build.await;
-    AUTH_OFF.with(|s| s.set(false));
-    fx
-}
-
-/// Any fixture builder, run with `security.sanitize_input` = `on` (MIK-8154
-/// rows: the firewalled and code-mode fixtures under sanitization).
-pub(crate) async fn sanitizing<T, F: std::future::Future<Output = T>>(on: bool, build: F) -> T {
-    SANITIZE.with(|s| s.set(on));
-    let fx = build.await;
-    SANITIZE.with(|s| s.set(false));
-    fx
-}
-
-/// Run `build` with the input-schema check off on both backends and nothing
-/// else armed (unsigned), so a directive-named argument reaches dispatch
-/// (MIK-8663 T2). [`fixture_hardened_signed_schema_off`] also arms signing.
-pub(crate) async fn schema_off<T, F: std::future::Future<Output = T>>(build: F) -> T {
-    SCHEMA_OFF.with(|s| s.set(true));
-    let fx = build.await;
-    SCHEMA_OFF.with(|s| s.set(false));
-    fx
-}
-
 /// [`fixture`], for arming that needs the owned builder methods
 /// (`with_profile_registry`, `with_cost_governance`).
 pub(crate) async fn fixture_built(answer: Answer, build: impl FnOnce(MetaMcp) -> MetaMcp) -> Fx {
     fixture_inner(answer, false, build).await
-}
-
-/// [`fixture`] with the production firewall installed on both the router and
-/// the Meta-MCP (request scanning, response scanning, credential redaction),
-/// as `server/mod.rs` wires it.
-#[cfg(feature = "firewall")]
-pub(crate) async fn fixture_firewalled(answer: Answer) -> Fx {
-    fixture_inner(answer, true, |meta| meta).await
-}
-
-/// [`fixture_firewalled`] with `build` arming the `MetaMcp` (MIK-8351:
-/// a key budget on the firewalled fixture, for the give-back rows).
-#[cfg(feature = "firewall")]
-pub(crate) async fn fixture_firewalled_built(
-    answer: Answer,
-    build: impl FnOnce(crate::gateway::meta_mcp::MetaMcp) -> crate::gateway::meta_mcp::MetaMcp,
-) -> Fx {
-    fixture_inner(answer, true, build).await
-}
-
-/// [`fixture_firewalled`] with both firewalls writing their audit rows to
-/// `audit` (MIK-8137 b1: the chokepoint's `dispatch` rows).
-#[cfg(feature = "firewall")]
-pub(crate) async fn fixture_firewalled_audited(answer: Answer, audit: std::path::PathBuf) -> Fx {
-    AUDIT_LOG.with(|a| *a.borrow_mut() = Some(audit));
-    let fx = fixture_inner(answer, true, |meta| meta).await;
-    AUDIT_LOG.with(|a| *a.borrow_mut() = None);
-    fx
 }
 
 /// [`fixture_built`] with `transport` answering for both backends in place of
@@ -300,69 +237,19 @@ pub(crate) async fn with_transport(
     fx
 }
 
-/// [`fixture_firewalled_audited`], arming the replaced `MetaMcp` with `build`
-/// (the route x check matrix's surfaced-name route, MIK-8137 b3).
-#[cfg(feature = "firewall")]
-pub(crate) async fn fixture_firewalled_audited_built(
-    answer: Answer,
-    audit: std::path::PathBuf,
-    build: impl FnOnce(MetaMcp) -> MetaMcp,
-) -> Fx {
-    AUDIT_LOG.with(|a| *a.borrow_mut() = Some(audit));
-    let fx = fixture_inner(answer, true, build).await;
-    AUDIT_LOG.with(|a| *a.borrow_mut() = None);
-    fx
-}
-
-/// [`fixture_firewalled`] with a firewall rule for `read` and a client
-/// circuit breaker that opens after one counted failure, so a cell can tell a
-/// refusal the gateway excludes from client accounting from one it charges.
-#[cfg(feature = "firewall")]
-pub(crate) async fn fixture_firewalled_with(
-    answer: Answer,
-    rule: Option<crate::security::firewall::FirewallAction>,
-    breaker: bool,
-) -> Fx {
-    FIREWALL_RULE.with(|r| r.set(rule));
-    CLIENT_BREAKER.with(|b| b.set(breaker));
-    let fx = fixture_inner(answer, true, |meta| meta).await;
-    FIREWALL_RULE.with(|r| r.set(None));
-    CLIENT_BREAKER.with(|b| b.set(false));
-    fx
-}
-
-/// [`fixture_firewalled_with`], with no breaker, arming the `MetaMcp` with
-/// `build` (MIK-8689: a redacting rule beside the provenance signers).
-#[cfg(feature = "firewall")]
-pub(crate) async fn fixture_firewalled_with_built(
-    answer: Answer,
-    rule: Option<crate::security::firewall::FirewallAction>,
-    build: impl FnOnce(MetaMcp) -> MetaMcp,
-) -> Fx {
-    FIREWALL_RULE.with(|r| r.set(rule));
-    let fx = fixture_inner(answer, true, build).await;
-    FIREWALL_RULE.with(|r| r.set(None));
-    fx
-}
-
-/// [`fixture_firewalled_with_built`] with `log` as the state's transparency
-/// log; `build` arms the same log on the `MetaMcp`, so both routes record
-/// their deliveries in one file.
-#[cfg(feature = "firewall")]
-pub(crate) async fn fixture_firewalled_logged(
-    answer: Answer,
-    rule: Option<crate::security::firewall::FirewallAction>,
-    log: Arc<crate::security::TransparencyLogger>,
-    build: impl FnOnce(MetaMcp) -> MetaMcp,
-) -> Fx {
-    STATE_LOG.with(|l| *l.borrow_mut() = Some(log));
-    let fx = fixture_firewalled_with_built(answer, rule, build).await;
-    STATE_LOG.with(|l| *l.borrow_mut() = None);
-    fx
-}
-
 #[path = "direct_guards_fixture_answers.rs"]
 mod answers;
+#[cfg(feature = "firewall")]
+#[path = "direct_guards_fixture_firewalled.rs"]
+mod firewalled;
+#[cfg(feature = "firewall")]
+pub(crate) use firewalled::*;
+#[path = "direct_guards_fixture_signed.rs"]
+mod signed;
+pub(crate) use signed::*;
+#[path = "direct_guards_fixture_variants.rs"]
+mod variants;
+pub(crate) use variants::*;
 #[path = "direct_guards_fixture_egress.rs"]
 mod egress;
 pub(crate) use answers::envelope_in;
@@ -397,40 +284,6 @@ pub(crate) use requests::{
     initialize, post_direct, post_meta_invoke, post_meta_invoke_nonce, send, send_with_headers,
 };
 
-pub(crate) const SIGNING_KEY: &str = "direct-guards-signing-key-0123456789abcdef";
-
-/// The fixture under `security.posture: hardened` (personal keys) with message
-/// signing armed, so the direct route signs every `tools/call` it serves.
-pub(crate) async fn fixture_hardened_signed(answer: Answer, require_nonce: bool) -> Fx {
-    fixture_hardened_signed_built(answer, require_nonce, |meta| meta).await
-}
-
-/// [`fixture_hardened_signed`], arming the signed `MetaMcp` with `build`.
-pub(crate) async fn fixture_hardened_signed_built(
-    answer: Answer,
-    require_nonce: bool,
-    build: impl FnOnce(MetaMcp) -> MetaMcp,
-) -> Fx {
-    HARDENED.with(|h| h.set(true));
-    let fx = fixture_inner(answer, false, |meta| build(signing(meta, require_nonce))).await;
-    HARDENED.with(|h| h.set(false));
-    fx
-}
-
-/// [`fixture_hardened_signed_built`] with `log` as the state's transparency
-/// log; `build` arms the same log on the `MetaMcp`, so both routes record
-/// their deliveries in one file (MIK-8689).
-pub(crate) async fn fixture_hardened_signed_logged(
-    answer: Answer,
-    log: Arc<crate::security::TransparencyLogger>,
-    build: impl FnOnce(MetaMcp) -> MetaMcp,
-) -> Fx {
-    STATE_LOG.with(|l| *l.borrow_mut() = Some(log));
-    let fx = fixture_hardened_signed_built(answer, false, build).await;
-    STATE_LOG.with(|l| *l.borrow_mut() = None);
-    fx
-}
-
 /// `meta` with message signing armed under [`SIGNING_KEY`].
 fn signing(mut meta: MetaMcp, require_nonce: bool) -> MetaMcp {
     meta.enable_message_signing(
@@ -445,46 +298,7 @@ fn signing(mut meta: MetaMcp, require_nonce: bool) -> MetaMcp {
     meta
 }
 
-/// [`fixture_hardened_signed`] with relay detection on as in
-/// [`fixture_relayed`]: every direct `tools/call` is signed and staged.
-#[cfg(feature = "firewall")]
-pub(crate) async fn fixture_signed_relayed(answer: Answer) -> Fx {
-    HARDENED.with(|h| h.set(true));
-    RELAY.with(|r| r.set(true));
-    let fx = fixture_inner(answer, true, |meta| signing(meta, false)).await;
-    HARDENED.with(|h| h.set(false));
-    RELAY.with(|r| r.set(false));
-    fx
-}
-
-/// [`fixture_signed_relayed`] with `log` as the state's transparency log,
-/// `build` arming the signed `MetaMcp` (MIK-8689: a delivery-record failure
-/// meets the relay commit).
-#[cfg(feature = "firewall")]
-pub(crate) async fn fixture_signed_relayed_logged(
-    answer: Answer,
-    log: Arc<crate::security::TransparencyLogger>,
-    build: impl FnOnce(MetaMcp) -> MetaMcp,
-) -> Fx {
-    HARDENED.with(|h| h.set(true));
-    RELAY.with(|r| r.set(true));
-    STATE_LOG.with(|l| *l.borrow_mut() = Some(log));
-    let fx = fixture_inner(answer, true, |meta| build(signing(meta, false))).await;
-    HARDENED.with(|h| h.set(false));
-    RELAY.with(|r| r.set(false));
-    STATE_LOG.with(|l| *l.borrow_mut() = None);
-    fx
-}
-
-/// [`fixture_firewalled`] with relay detection on for `alpha:read` and
-/// `alpha:resources/read`, so the direct route stages receipts (MIK-8022).
-#[cfg(feature = "firewall")]
-pub(crate) async fn fixture_relayed(answer: Answer) -> Fx {
-    RELAY.with(|r| r.set(true));
-    let fx = fixture_inner(answer, true, |meta| meta).await;
-    RELAY.with(|r| r.set(false));
-    fx
-}
+pub(crate) const SIGNING_KEY: &str = "direct-guards-signing-key-0123456789abcdef";
 
 /// A key whose name the response redactor reads as a GitHub token (a fake,
 /// split so no scanner reads the source as one), so text naming it (a
@@ -492,53 +306,8 @@ pub(crate) async fn fixture_relayed(answer: Answer) -> Fx {
 #[cfg(feature = "firewall")]
 pub(crate) const CREDENTIAL_KEY: &str = concat!("ghp_", "abcdefghijklmnopqrstuvwxyz1234567890");
 
-/// [`fixture`] under the default posture with `server.modern_protocol: false`,
-/// the rollback gate that turns the 2026-07-28 revision off.
-pub(crate) async fn fixture_modern_off(answer: Answer) -> Fx {
-    MODERN_OFF.with(|m| m.set(true));
-    let fx = fixture_inner(answer, false, |meta| meta).await;
-    MODERN_OFF.with(|m| m.set(false));
-    fx
-}
-
 /// The static bearer the [`fixture_with_bearer`] fixture serves.
 pub(crate) const BEARER_SECRET: &str = "the-static-bearer";
-
-/// [`fixture_built`] with a static bearer configured, and an API key named
-/// `bearer` (its secret is `bearer`): two credentials sharing one display
-/// name (MIK-8507).
-pub(crate) async fn fixture_with_bearer(
-    answer: Answer,
-    build: impl FnOnce(MetaMcp) -> MetaMcp,
-) -> Fx {
-    WITH_BEARER.with(|b| b.set(true));
-    let fx = fixture_inner(answer, false, build).await;
-    WITH_BEARER.with(|b| b.set(false));
-    fx
-}
-
-/// [`fixture`] with a key server attached, so its temporary tokens are
-/// credentials the auth middleware resolves (MIK-8286 R5).
-pub(crate) async fn fixture_with_key_server(
-    answer: Answer,
-    key_server: Arc<crate::key_server::KeyServer>,
-) -> Fx {
-    KEY_SERVER.with(|k| *k.borrow_mut() = Some(key_server));
-    let fx = fixture_inner(answer, false, |meta| meta).await;
-    KEY_SERVER.with(|k| *k.borrow_mut() = None);
-    fx
-}
-
-/// [`fixture_firewalled`] with sequence-anomaly blocking armed: `read` was only
-/// ever followed by `other`, so a second `read` in one session scores as a
-/// never-seen transition and is blocked.
-#[cfg(feature = "firewall")]
-pub(crate) async fn fixture_firewalled_anomaly(answer: Answer) -> Fx {
-    ANOMALY.with(|a| a.set(true));
-    let fx = fixture_inner(answer, true, |meta| meta).await;
-    ANOMALY.with(|a| a.set(false));
-    fx
-}
 
 // Per-thread knobs `fixture_firewalled_with` sets around one `fixture_inner`
 // call, so the plain fixtures keep their signatures.
@@ -568,18 +337,6 @@ thread_local! {
     /// (MIK-8689: a row reads them back).
     static STATE_LOG: std::cell::RefCell<Option<Arc<crate::security::TransparencyLogger>>> =
         const { std::cell::RefCell::new(None) };
-}
-
-/// [`fixture_hardened_signed_built`] with the input-schema check off on both
-/// backends, so a call never fills a tool list before dispatch.
-pub(crate) async fn fixture_hardened_signed_schema_off(
-    answer: Answer,
-    build: impl FnOnce(MetaMcp) -> MetaMcp,
-) -> Fx {
-    SCHEMA_OFF.with(|s| s.set(true));
-    let fx = fixture_hardened_signed_built(answer, true, build).await;
-    SCHEMA_OFF.with(|s| s.set(false));
-    fx
 }
 
 #[cfg(feature = "firewall")]
