@@ -449,5 +449,23 @@ fn e0_an_empty_config_answers_with_the_defaults() {
     assert_eq!(model["tool_policy"]["enabled"], true);
     assert_eq!(model["tool_policy"]["allow"], json!([]));
     assert_eq!(model["tool_policy"]["deny"], json!([]));
-    assert_eq!(model["finding_rules"], json!([]));
+    #[cfg(feature = "firewall")]
+    assert_eq!(
+        model["finding_rules"],
+        json!([]),
+        "built, no rule configured"
+    );
+}
+
+/// A build without the firewall answers `finding_rules: null`, told apart
+/// from a built firewall with no rule (`[]`, E0).
+#[cfg(not(feature = "firewall"))]
+#[test]
+fn e1_a_build_without_the_firewall_has_no_finding_rules_section() {
+    let model = read_model(&Config::default());
+    assert_eq!(model["finding_rules"], Value::Null);
+    assert!(
+        model["tool_policy"].is_object(),
+        "the tool policy is still read"
+    );
 }

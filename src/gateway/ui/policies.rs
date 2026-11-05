@@ -42,8 +42,9 @@ pub(super) fn read_model(config: &Config) -> Value {
     })
 }
 
-/// The firewall's finding rules; none in a build without the firewall,
-/// whose config cannot hold any.
+/// The firewall's finding rules. A build without the firewall answers
+/// `null`, not `[]`: its config cannot hold rules, and an empty list would
+/// read as "the firewall is built and no rule is configured".
 #[cfg(feature = "firewall")]
 fn finding_rules(config: &Config) -> Value {
     super::policies_rules::finding_rules(&config.security.firewall.rules)
@@ -51,7 +52,7 @@ fn finding_rules(config: &Config) -> Value {
 
 #[cfg(not(feature = "firewall"))]
 fn finding_rules(_config: &Config) -> Value {
-    Value::Array(Vec::new())
+    Value::Null
 }
 
 /// The tool policy: its switches, the built-in denies and each configured
