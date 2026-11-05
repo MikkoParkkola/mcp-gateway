@@ -758,7 +758,7 @@ class Rows(unittest.TestCase):
         self.assertEqual(workflow_shell.executions('for f in scripts/ci/x.sh scripts/ci/y.sh; do bash -n "$f"; done'), [])
 
     def test_d37_a_shell_run_does_not_cover_a_missed_python_command(self):
-        block = "python3 scripts/ci/x.py\ncommand python3 scripts/ci/x.py --strict\nbash scripts/ci/y.sh"
+        block = "python3 scripts/ci/x.py\ntime -p python3 scripts/ci/x.py --strict\nbash scripts/ci/y.sh"
         with self.assertRaises(workflow_shell.UnsupportedSyntax):
             workflow_shell.executions(block)
 
@@ -787,6 +787,30 @@ class Rows(unittest.TestCase):
     def test_d41_an_attached_o_value_is_not_a_syntax_check_flag(self):
         found = workflow_shell.executions("bash -onounset scripts/ci/x.sh")
         self.assertEqual([e.script for e in found], ["scripts/ci/x.sh"])
+
+    # D42-D45 (review round 2, second seat): occurrences, shared flag parsing, inline code, globs.
+    def test_d42_every_occurrence_of_a_script_is_accounted_for(self):
+        found = workflow_shell.executions("bash scripts/ci/x.sh\ncommand bash scripts/ci/x.sh --strict")
+        self.assertEqual([(e.script, e.args) for e in found], [("scripts/ci/x.sh", ()), ("scripts/ci/x.sh", ("--strict",))])
+        with self.assertRaises(workflow_shell.UnsupportedSyntax):
+            workflow_shell.executions("bash scripts/ci/x.sh\ntime -p bash scripts/ci/x.sh --strict")
+
+    def test_d43_a_syntax_check_is_parsed_like_any_shell_command(self):
+        with self.assertRaises(workflow_shell.UnsupportedSyntax):
+            workflow_shell.executions('bash -c "scripts/ci/x.sh --check" -n')
+        self.assertEqual(workflow_shell.executions("env FOO=bar bash -n scripts/ci/x.sh"), [])
+
+    def test_d44_inline_code_is_not_a_glob_operand(self):
+        self.assertEqual(workflow_shell.executions("python3 -c 'print(2*3)'"), [])
+        with self.assertRaises(workflow_shell.UnsupportedSyntax):
+            workflow_shell.executions("python3 scripts/ci/check_*.py")
+
+    def test_d45_directory_and_bracket_globs(self):
+        found = workflow_shell.executions('for f in scripts/*/x.sh; do bash "$f"; done')
+        self.assertEqual([e.script for e in found], ["scripts/*/x.sh"])
+        for block in ("bash scripts/ci/check-[ab].sh", "bash scripts/ci/check-?.sh"):
+            with self.subTest(block), self.assertRaises(workflow_shell.UnsupportedSyntax):
+                workflow_shell.executions(block)
 
     # D29 (lead ruling 2026-10-23): the guard's exceptions are closed lists.
     def test_d29_the_guards_exception_lists_are_closed(self):

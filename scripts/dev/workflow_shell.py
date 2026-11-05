@@ -9,6 +9,7 @@ workflow shell text instead of two that can diverge.
 """
 from __future__ import annotations
 
+import collections
 import itertools
 import re
 import shlex
@@ -152,15 +153,29 @@ SCRIPT = re.compile(r"^(?:scripts|benchmarks)/[\w./*-]+\.py$")
 # counts (not absolute, not $VAR, not ../); a leading ./ is not part of the form.
 SHELLS = {"bash", "sh"}
 SH_SCRIPT = re.compile(r"^(?:\./)?(?!\.\./)((?:[\w.*-]+/)*[\w.*-]+\.sh)$")
-SH_PATH = re.compile(r"(?<![\w./$-])(?:\./)?(?:[\w-][\w.-]*/)+[\w*-][\w.*-]*\.sh(?![\w.])")
+SH_PATH = re.compile(r"(?<![\w./$-])(?:\./)?(?:[\w*-][\w.*-]*/)+[\w*-][\w.*-]*\.sh(?![\w.])")
 ASSIGN = re.compile(r"^([A-Za-z_]\w*)=(.*)$")
 FOR_GLOB = re.compile(r"^for\s+(\w+)\s+in\s+(\S+)\s*$")
 UNSUPPORTED = ("eval", "source", ".")
 
 
-def _syntax_check_flag(flag):
-    """True for a short-flag bundle holding `n` (`-n`, `-ne`), not for an `-o` value (`-onounset`)."""
-    return flag.startswith("-") and not flag.startswith("--") and "n" in flag[1:].split("o")[0]
+def _interpreter_split(words):
+    """(interpreter flags, the rest) of `python|bash|sh <flags> <script> <args>`; `-o` takes its value."""
+    rest, flags = list(words[1:]), []
+    while rest and rest[0].startswith("-") and rest[0] != "-":
+        flags.append(rest.pop(0))
+        if re.fullmatch(r"-[A-Za-z]*o", flags[-1]) and rest:  # `-o pipefail`, `-eo pipefail`
+            rest.pop(0)
+    return flags, rest
+
+
+def _is_syntax_check(words):
+    """`bash -n <files>`: parses, runs nothing. Not with -c, whose text is a command to read."""
+    if not (words and words[0] in SHELLS):
+        return False
+    flags, _ = _interpreter_split(words)
+    short = [f[1:].split("o")[0] for f in flags if not f.startswith("--")]
+    return any("n" in f for f in short) and not any("c" in f for f in short)
 
 
 def _token(word, bound):
@@ -314,6 +329,8 @@ def _command_words(piece):
         raise UnsupportedSyntax(f"{err}: {piece}") from None
     while words and (words[0] in KEYWORDS or ASSIGN.match(words[0])):
         words = words[1:]
+    if len(words) > 1 and words[0] == "command" and not words[1].startswith("-"):
+        words = words[1:]  # `command bash x.sh` runs bash; `command -v` is a lookup (LOOKUPS)
     if words and words[0] == "env":
         words = words[1:]
         while words and ASSIGN.match(words[0]):
@@ -389,8 +406,12 @@ def _check_complete(run_block, found):
         raise UnsupportedSyntax(f".py path(s) named but not read as an execution: {', '.join(unread)}")
     # Fail closed on shell scripts too: `bash -c 'x.sh'` or a form the walker misreads names a
     # .sh path it never records. A syntax check (`bash -n x.sh`) runs nothing and accounts for it.
-    sh_unread = [m.group(0).removeprefix("./") for line in lines for m in SH_PATH.finditer(_syntax_checks_stripped(_data_stripped(line)))]
-    sh_unread = [path for path in dict.fromkeys(sh_unread) if path not in scripts and path not in _syntax_checked_loop_items(lines)]
+    # Every occurrence: a script recorded once must not cover a second, unread invocation of it.
+    checked = _syntax_checked_loop_items(lines)
+    named = collections.Counter(m.group(0).removeprefix("./") for line in lines
+                                for m in SH_PATH.finditer(_syntax_checks_stripped(_data_stripped(line))))
+    ran = collections.Counter(e.script for e in found if e.script.endswith(".sh"))
+    sh_unread = [path for path, n in named.items() if path not in checked and n > ran[path]]
     if sh_unread:
         raise UnsupportedSyntax(f".sh path(s) named but not read as an execution: {', '.join(sh_unread)}")
 
@@ -413,8 +434,11 @@ def _syntax_checks_stripped(line):
     kept = []
     for piece in _chains(line):
         for stage in _pipe_stages(piece):
-            words = stage.split()
-            if words and words[0] in SHELLS and any(_syntax_check_flag(w) for w in words[1:]):
+            try:
+                words = _command_words(stage)
+            except UnsupportedSyntax:
+                words = []
+            if _is_syntax_check(words):
                 continue
             kept.append(stage)
     return " ; ".join(kept)
@@ -481,14 +505,9 @@ def _stage_execution(stage, stages, bound, loops):
     elif words[0] in PYTHONS or words[0] in GATE_PYTHONS or words[0] in SHELLS:
         # Interpreter flags (`-B`, `-I`, `-e`) come before the script; the
         # script's own flags after it are arguments and are kept.
-        rest = list(words[1:])
-        flags = []
-        while rest and rest[0].startswith("-") and rest[0] != "-":
-            flags.append(rest.pop(0))
-            if re.fullmatch(r"-[A-Za-z]*o", flags[-1]) and rest:  # `-o pipefail`, `-eo pipefail`
-                rest.pop(0)
+        flags, rest = _interpreter_split(words)
         # `bash -n` only parses its files (a syntax check) and executes nothing.
-        if words[0] in SHELLS and any(_syntax_check_flag(f) for f in flags):
+        if _is_syntax_check(words):
             return found
         if not rest:
             return found
@@ -497,7 +516,7 @@ def _stage_execution(stage, stages, bound, loops):
         for var, pattern in loops.items():
             if target in ("$" + var, "${" + var + "}"):
                 target, from_loop = pattern, True
-        if "*" in target and not from_loop:
+        if "*" in target and not from_loop and target.endswith((".py", ".sh")):
             # `bash scripts/check-*.sh` runs the FIRST match and passes the rest as its arguments.
             raise UnsupportedSyntax(f"a glob operand runs only its first match: {stage}")
         if words[0] in SHELLS:
