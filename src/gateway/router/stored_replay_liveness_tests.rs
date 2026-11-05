@@ -756,3 +756,5 @@ mod rebind;
 mod site5;
 #[path = "stored_replay_liveness_token_exchange_tests.rs"]
 mod token_exchange;
+#[path = "stored_replay_liveness_effect_tests.rs"]
+mod effect;
