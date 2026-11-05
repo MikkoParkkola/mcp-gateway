@@ -107,23 +107,33 @@ async fn stdio_meta(
 
 /// One stdio `tools/call` with `params` through the real stdio dispatch.
 async fn stdio_send(gateway_meta: &Arc<MetaMcp>, params: Value) -> Value {
-    stdio_send_under(gateway_meta, params, crate::security::ToolPolicy::default()).await
+    stdio_send_under(
+        gateway_meta,
+        params,
+        &crate::security::ToolPolicyConfig::default(),
+    )
+    .await
 }
 
 /// [`stdio_send`] under the tool policy `policy`.
 async fn stdio_send_under(
     gateway_meta: &Arc<MetaMcp>,
     params: Value,
-    policy: crate::security::ToolPolicy,
+    policy: &crate::security::ToolPolicyConfig,
 ) -> Value {
-    let policy = Arc::new(policy);
     let mtls = Arc::new(crate::mtls::MtlsPolicy::from_config(
         &crate::mtls::MtlsConfig::default(),
     ));
     let request = json!({ "jsonrpc": "2.0", "id": 7, "method": "tools/call", "params": params });
-    super::Gateway::dispatch_single(gateway_meta, &policy, &mtls, &request, "stdio-matrix")
-        .await
-        .expect("a request is answered")
+    super::Gateway::dispatch_single(
+        gateway_meta,
+        &crate::gateway::authz::test_line(gateway_meta, policy),
+        &mtls,
+        &request,
+        "stdio-matrix",
+    )
+    .await
+    .expect("a request is answered")
 }
 
 /// The params of `gateway_invoke alpha read` with `args`.
@@ -206,6 +216,7 @@ fn audited_firewall_with(
 fn arm_firewall(firewall: Arc<crate::security::firewall::Firewall>) -> impl FnOnce(&mut MetaMcp) {
     move |meta| {
         meta.share_keyring_with_for_test(&firewall);
+        crate::security::firewall::collusion_live_rig::seed_meta(meta, &firewall);
         meta.set_firewall(Some(firewall));
     }
 }
@@ -432,7 +443,7 @@ pub(crate) fn stdio_admission_then_resend() -> (Value, Value, Value, usize) {
                 });
                 super::Gateway::dispatch_single_for_client(
                     &fixture.meta,
-                    &fixture.tool_policy,
+                    &crate::gateway::authz::published_line(&fixture.meta),
                     &fixture.mtls_policy,
                     request,
                     super::StdioClient {
@@ -513,7 +524,7 @@ pub(crate) fn stdio_refund_through_delivery() -> [Delivered; 3] {
                     reads.guard(),
                     Box::pin(super::Gateway::dispatch_single_staged(
                         &fixture.meta,
-                        &fixture.tool_policy,
+                        &crate::gateway::authz::published_line(&fixture.meta),
                         &fixture.mtls_policy,
                         request.clone(),
                         super::StdioClient {

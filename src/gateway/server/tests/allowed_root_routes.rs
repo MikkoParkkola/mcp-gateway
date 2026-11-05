@@ -111,7 +111,7 @@ impl Routes {
             .expect("gateway boots")
             .with_data_dir(dir.path().to_path_buf());
         let meta = gateway
-            .build_meta_mcp()
+            .build_meta_mcp_published()
             .await
             .expect("meta-MCP builds")
             .meta_mcp;

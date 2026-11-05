@@ -53,7 +53,7 @@ pub(super) fn catalogue_caller(
     grant_subject: Option<&crate::identity_grants::GrantSubject>,
     cert_identity: Option<&CertIdentity>,
     client: Option<&AuthenticatedClient>,
-    session_id: &str,
+    (session_id, generation): (&str, &std::sync::Arc<crate::config_reload::Generation>),
 ) -> CatalogueCaller {
     let key = super::super::identity::caller_key(grant_subject, cert_identity, client);
     let keyed = !key.is_empty();
@@ -62,5 +62,6 @@ pub(super) fn catalogue_caller(
         keyed,
         name: client.map_or_else(|| "anonymous".to_owned(), |c| c.name.clone()),
         session: session_id.to_owned(),
+        generation: super::relay::CatalogueGeneration::Pinned(std::sync::Arc::clone(generation)),
     }
 }

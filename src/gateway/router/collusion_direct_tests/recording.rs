@@ -133,7 +133,8 @@ async fn an_over_cap_result_records_head_and_tail_only() {
     );
 }
 
-/// A14: `off` builds no detector and checks nothing.
+/// A14: `off` checks nothing: the read records nothing for its text and
+/// the send that relays it is not refused.
 #[tokio::test]
 async fn off_checks_nothing() {
     let fx = fixture(Setup {
@@ -142,7 +143,28 @@ async fn off_checks_nothing() {
     })
     .await;
     let firewall = fx.state.firewall.as_ref().unwrap();
-    assert!(firewall.collusion_detector().is_none());
     fx.read(Some("a")).await;
+    let detector = firewall
+        .collusion_detector()
+        .expect("built whatever the action");
+    assert_eq!(detector.tracked_fingerprints(), 0, "the read was recorded");
     assert_sent(&fx, &fx.send(Some("b"), PROSE).await, 1);
+
+    // Control: the same read under `block` is recorded, so the count moves.
+    let control = fixture(Setup {
+        action: CollusionAction::Block,
+        ..Setup::default()
+    })
+    .await;
+    control.read(Some("a")).await;
+    let recorded = control
+        .state
+        .firewall
+        .as_ref()
+        .unwrap()
+        .collusion_detector();
+    assert!(
+        recorded.expect("built").tracked_fingerprints() > 0,
+        "A14 control: a read under block was not recorded"
+    );
 }

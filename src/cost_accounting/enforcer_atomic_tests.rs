@@ -306,3 +306,53 @@ fn a_cost_below_one_micro_leaves_no_ledger_rows() {
         "zero-valued reservations stayed in the ledger"
     );
 }
+
+/// A save captures the owned names, the estimates and the
+/// creation figures in one hold of the ledger lock, the lock a seed holds.
+///
+/// The hook fires between the estimate capture and the owned-name capture.
+/// It records whether the ledger is held there, which does not depend on
+/// scheduling, and starts a seed of a new name on another thread. Held, the
+/// seed waits and lands after the save: the name is in neither list. Not
+/// held, the hook waits for the seed, so it lands inside the save and the
+/// name is saved as owned without its figure.
+#[test]
+fn a_save_never_records_an_owned_name_without_its_figure() {
+    use std::sync::{Mutex, TryLockError};
+    use std::thread::JoinHandle;
+    type Slot = Arc<Mutex<Option<(bool, Option<JoinHandle<()>>)>>>;
+
+    let _clock = crate::clock::test_clock::at_secs(1_800_000_000);
+    let enforcer = enforcer(Scope::Tool, 2);
+    let slot: Slot = Arc::default();
+    let (inner, hook_slot) = (Arc::clone(&enforcer), Arc::clone(&slot));
+    super::snapshot::BETWEEN_SAVE_CAPTURES.with(|hook| {
+        *hook.borrow_mut() = Some(Box::new(move || {
+            let held = matches!(inner.ledger.try_lock(), Err(TryLockError::WouldBlock));
+            let seed = std::thread::spawn(move || {
+                let mut budgets = BudgetLimits::default();
+                budgets.per_tool.insert("racer".to_owned(), 5.0);
+                inner.seed_estimates(&budgets);
+            });
+            let pending = if held {
+                Some(seed)
+            } else {
+                seed.join().unwrap();
+                None
+            };
+            *hook_slot.lock().unwrap() = Some((held, pending));
+        }));
+    });
+    let save = enforcer.snapshot_for_save().expect("a readable clock");
+    let (held, pending) = slot.lock().unwrap().take().expect("the hook ran");
+    if let Some(seed) = pending {
+        seed.join().unwrap();
+    }
+    assert!(held, "the save's captures ran outside the ledger lock");
+    let owned = save.tool_owned.contains(&"racer".to_owned());
+    let figured = save.tool_estimate.contains_key("racer");
+    assert_eq!(
+        owned, figured,
+        "saved as owned without its figure (or the reverse)"
+    );
+}

@@ -94,6 +94,7 @@ async fn relay_audit_has_no_injected_secret() {
     let mut meta = MetaMcp::new(registry);
     meta.set_firewall(Some(Arc::clone(&firewall)));
     meta.share_keyring_with_for_test(&firewall);
+    crate::security::firewall::collusion_live_rig::seed_meta(&meta, &firewall);
     let delivered = json!({"content": [{"type": "text", "text": PROSE}]});
     firewall.record_delivery(RelayCaller::Keyed("alice"), "alpha", "send", &delivered);
 
@@ -153,6 +154,7 @@ async fn relay_check_skips_a_caller_value_the_injector_overwrites() {
     let mut meta = MetaMcp::new(registry);
     meta.set_firewall(Some(Arc::clone(&firewall)));
     meta.share_keyring_with_for_test(&firewall);
+    crate::security::firewall::collusion_live_rig::seed_meta(&meta, &firewall);
     let delivered = json!({"content": [{"type": "text", "text": PROSE}]});
     firewall.record_delivery(RelayCaller::Keyed("alice"), "alpha", "send", &delivered);
 
@@ -208,6 +210,7 @@ async fn meta_observe_reports_a_relay_and_sends_it() {
     let mut meta = MetaMcp::new(registry);
     meta.set_firewall(Some(Arc::clone(&firewall)));
     meta.share_keyring_with_for_test(&firewall);
+    crate::security::firewall::collusion_live_rig::seed_meta(&meta, &firewall);
     let delivered = json!({"content": [{"type": "text", "text": PROSE}]});
     firewall.record_delivery(RelayCaller::Keyed("alice"), "alpha", "send", &delivered);
 
@@ -246,6 +249,7 @@ async fn http_receipts_record_only_when_emit_http_lets_the_answer_out() {
     let mut meta = MetaMcp::new(Arc::new(crate::backend::BackendRegistry::new()));
     meta.set_firewall(Some(Arc::clone(&firewall)));
     meta.share_keyring_with_for_test(&firewall);
+    crate::security::firewall::collusion_live_rig::seed_meta(&meta, &firewall);
     let meta = Arc::new(meta);
     let deliver = |delivers: bool| {
         let meta = Arc::clone(&meta);
@@ -263,7 +267,7 @@ async fn http_receipts_record_only_when_emit_http_lets_the_answer_out() {
     };
     let relayed = || {
         let params = json!({"name": "send", "arguments": {"text": PROSE}});
-        let verdict = firewall.check_relay(
+        let verdict = firewall.check_relay_paired(
             RelayCaller::Keyed("bob"),
             "alpha",
             "send",
@@ -318,6 +322,7 @@ fn relay_meta() -> (Arc<MetaMcp>, Arc<Firewall>) {
     let mut meta = MetaMcp::new(Arc::new(crate::backend::BackendRegistry::new()));
     meta.set_firewall(Some(Arc::clone(&firewall)));
     meta.share_keyring_with_for_test(&firewall);
+    crate::security::firewall::collusion_live_rig::seed_meta(&meta, &firewall);
     (Arc::new(meta), firewall)
 }
 
@@ -325,7 +330,7 @@ fn relay_meta() -> (Arc<MetaMcp>, Arc<Firewall>) {
 fn relayed_by_bob(firewall: &Firewall, text: &str) -> bool {
     let params = json!({"name": "send", "arguments": {"text": text}});
     !firewall
-        .check_relay(
+        .check_relay_paired(
             RelayCaller::Keyed("bob"),
             "alpha",
             "send",
@@ -385,7 +390,7 @@ async fn a_failed_task_error_is_receipted_by_its_classification() {
             meta.stage_stored_receipt(RelayKey::new("alice", true), None, &stored);
         })
         .await;
-    staged.commit(true);
+    staged.commit(true, &firewall.paired_generation_for_test());
     assert!(
         !relayed_by_bob(&firewall, PROSE),
         "ordinary error text is not sensitive without a rule"
@@ -414,7 +419,7 @@ async fn reading_a_multi_target_task_stages_no_receipt() {
                 meta.stage_stored_receipt(RelayKey::new("alice", true), None, &stored);
             })
             .await;
-        staged.commit(true);
+        staged.commit(true, &firewall.paired_generation_for_test());
         assert_eq!(relayed_by_bob(&firewall, PROSE), targets == 1, "{targets}");
     }
 }
@@ -448,7 +453,7 @@ async fn reading_a_failed_task_receipts_only_the_peer_error() {
                 meta.stage_stored_receipt(RelayKey::new("alice", true), None, &stored);
             })
             .await;
-        staged.commit(true);
+        staged.commit(true, &firewall.paired_generation_for_test());
         assert_eq!(
             relayed_by_bob(&firewall, PROSE),
             expect_receipt,
@@ -476,6 +481,7 @@ fn classified_only_meta() -> (Arc<MetaMcp>, Arc<Firewall>) {
     let mut meta = MetaMcp::new(Arc::new(crate::backend::BackendRegistry::new()));
     meta.set_firewall(Some(Arc::clone(&firewall)));
     meta.share_keyring_with_for_test(&firewall);
+    crate::security::firewall::collusion_live_rig::seed_meta(&meta, &firewall);
     (Arc::new(meta), firewall)
 }
 
@@ -589,7 +595,7 @@ fn a_wrapped_non_object_result_still_marks_a_relay() {
         &recorded,
     );
     let params = json!({"name": "send", "arguments": {"text": PROSE}});
-    let verdict = fw.check_relay(
+    let verdict = fw.check_relay_paired(
         RelayCaller::Keyed("b"),
         "alpha",
         "send",
@@ -696,6 +702,7 @@ async fn relay_check_reads_the_rules_of_the_backend_the_call_was_judged_on() {
     let mut meta = MetaMcp::new(registry);
     meta.set_firewall(Some(Arc::clone(&firewall)));
     meta.share_keyring_with_for_test(&firewall);
+    crate::security::firewall::collusion_live_rig::seed_meta(&meta, &firewall);
     let delivered = json!({"content": [{"type": "text", "text": PROSE}]});
     firewall.record_delivery(RelayCaller::Keyed("alice"), "alpha", "send", &delivered);
 
@@ -714,6 +721,7 @@ async fn relay_check_reads_the_rules_of_the_backend_the_call_was_judged_on() {
             retry: &retry,
         };
         meta.relay_refusal(
+            None,
             bob.relay_caller(None),
             ("", "bob"),
             ("alpha", "send"),
@@ -744,3 +752,15 @@ mod redaction;
 
 #[path = "relay_replay_receipt_tests.rs"]
 mod replay_receipt;
+
+#[path = "relay_live_tests.rs"]
+mod live;
+
+#[path = "relay_live_funnel_tests.rs"]
+mod live_funnel;
+
+#[path = "relay_live_witness_tests.rs"]
+mod live_witness;
+
+#[path = "relay_unpublished_tests.rs"]
+mod unpublished;

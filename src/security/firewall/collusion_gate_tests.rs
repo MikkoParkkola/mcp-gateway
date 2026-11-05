@@ -414,9 +414,8 @@ fn a_split_delivery_records_the_flat_copys_fingerprints() {
 fn a_split_copy_near_the_cap_keeps_both_forms() {
     use std::time::Instant;
 
-    use super::super::collusion::{CollusionDetector, RelayAction, RelayParams};
+    use super::super::collusion::{CollusionDetector, RelayParams};
     let detector = CollusionDetector::new(RelayParams {
-        action: RelayAction::Observe,
         ..RelayParams::default()
     });
     let (_, pieces) = split_copy(RECORD_CAP / 4);
@@ -436,7 +435,12 @@ fn a_split_copy_near_the_cap_keeps_both_forms() {
     assert!(!cut, "premise: under the record cap");
     let fps = digest.fingerprints(&detector);
     assert!(fps.len() > 1_024, "premise: more than one form's old share");
-    detector.record_fingerprints_at("alpha:t", "b", (false, 0), fps.clone(), Instant::now());
+    let held = (
+        false,
+        None,
+        crate::security::firewall::collusion::no_lists(),
+    );
+    detector.record_fingerprints_at("alpha:t", "b", held, fps.clone(), Instant::now());
     assert_eq!(detector.source_truncated(), 0);
     assert_eq!(detector.tracked_fingerprints(), fps.len());
 }
@@ -468,7 +472,7 @@ fn delivered(fw: &Firewall, who: &str) {
 
 fn egress(fw: &Firewall, caller: RelayCaller<'_>) -> FirewallVerdict {
     let params = json!({"name": "send", "arguments": {"text": PROSE}});
-    fw.check_relay(caller, "alpha", "send", &params, ("direct:alpha", "bob"))
+    fw.check_relay_paired(caller, "alpha", "send", &params, ("direct:alpha", "bob"))
 }
 
 /// B6: under `observe` a relay is a `Warn` verdict with one digest-only
@@ -529,7 +533,7 @@ fn flow(source: &str, egress: &str) -> AllowedFlow {
 /// An egress through `server:tool` carrying [`PROSE`], sent by `bob`.
 fn egress_via(fw: &Firewall, (server, tool): (&str, &str)) -> FirewallVerdict {
     let params = json!({"name": tool, "arguments": {"text": PROSE}});
-    fw.check_relay(
+    fw.check_relay_paired(
         RelayCaller::Keyed("bob"),
         server,
         tool,
@@ -732,7 +736,7 @@ fn observed_relay_warnings(
     let params = json!({"name": "send", "arguments": {"text": text}});
     let mut message = None;
     let records = crate::test_log_capture::records(|| {
-        message = fw.relay_block_message(
+        message = fw.relay_block_message_paired(
             RelayCaller::Keyed(caller),
             ("alpha", "send"),
             &params,

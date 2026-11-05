@@ -29,7 +29,13 @@ impl Firewall {
         result: &Value,
     ) {
         if let Some(digest) = self.delivery_digest(server, tool, result) {
-            self.record_digest(caller, server, tool, &digest);
+            self.record_digest(
+                caller,
+                server,
+                tool,
+                &digest,
+                &self.paired_generation_for_test(),
+            );
         }
     }
 
@@ -165,10 +171,10 @@ impl Firewall {
     ) -> Option<(DeliveryDigest, bool)> {
         self.relay_detector()?;
         let source = format!("{server}:{tool}");
-        let sensitive = self.relay.sources.iter().any(|p| p.matches(&source))
-            || context_integrity_sensitive(result);
+        let inferred = context_integrity_sensitive(result);
         let (leaves, values) = delivery_parts(result);
-        let (digest, cut) = of_parts(&leaves, values, sensitive);
+        let (mut digest, cut) = of_parts(&leaves, values, inferred);
+        digest.set_source(&source);
         self.count_cut(cut);
         Some((digest, cut))
     }
@@ -231,7 +237,14 @@ impl Firewall {
         server: &str,
         tool: &str,
         digest: &DeliveryDigest,
+        generation: &crate::config_reload::Generation,
     ) {
+        // The generation current at delivery decides: an effective `off`
+        // records nothing, and its lists decide retention.
+        let view = generation.collusion_view();
+        if view.action() == super::CollusionAction::Off {
+            return;
+        }
         let Some(detector) = self.relay_detector() else {
             return;
         };
@@ -249,20 +262,20 @@ impl Firewall {
             return;
         }
         let source = format!("{server}:{tool}");
+        // The source identity and inferred fact are held; the lists decide
+        // retention only.
         // MIK-8113: a seam of several sources leaves only by a flow every
         // contributing source allows.
         if let Some(sources) = digest.seam_sources.as_deref() {
-            let masks = sources.iter().map(|s| self.relay.source_flows(s)).collect();
             detector.record_seam_at(
                 &source,
                 caller.key(),
-                (digest.sensitive, masks),
+                (digest.inferred, sources, view),
                 digest.fingerprints(detector),
                 self.relay.now(),
             );
             return;
         }
-        let flows = self.relay.source_flows(&source);
-        self.record_kept(detector, &source, caller, flows, digest);
+        self.record_kept(detector, &source, caller, view, digest);
     }
 }

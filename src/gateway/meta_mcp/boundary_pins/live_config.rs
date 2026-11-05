@@ -49,7 +49,7 @@ const AUTHORIZER_GENERATIONS: [(&str, &str); 4] = [
 ];
 
 /// Every production `StdioLine` and its `generation()` body.
-const STDIO_LINE_GENERATIONS: [(&str, &str); 1] = [("Arc<Generation>", "Some(self)")];
+const STDIO_LINE_GENERATIONS: [(&str, &str); 1] = [("Arc<Generation>", "self")];
 
 /// What a serving mode does, in the order a pin wants it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

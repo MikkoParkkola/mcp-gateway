@@ -108,6 +108,7 @@ fn alpha_relay_meta(transport: Arc<dyn crate::transport::Transport>) -> MetaMcp 
     let mut meta = MetaMcp::new(registry);
     meta.set_firewall(Some(Arc::clone(&firewall)));
     meta.share_keyring_with_for_test(&firewall);
+    crate::security::firewall::collusion_live_rig::seed_meta(&meta, &firewall);
     meta
 }
 

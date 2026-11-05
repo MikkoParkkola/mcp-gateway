@@ -124,42 +124,47 @@ pub(super) async fn rig_with_mocks(
     let definition: Option<crate::playbook::PlaybookDefinition> =
         playbook.map(|p| crate::yaml::from_str(p).expect("playbook fixture must parse"));
     let handle = Arc::clone(&relay);
-    let (state, store) = super::super::meta_fixture::test_router_app_state_with_meta_and_firewall(
-        &auth,
-        None,
-        None,
-        move |mut meta| {
-            meta.share_keyring_with_for_test(&handle);
-            meta.set_firewall(Some(handle));
-            if matches!(sensitivity, Sensitivity::Verdict) {
-                use crate::context_integrity::{
-                    ContextIntegrityDecisionKind, ContextIntegrityKernel, ContextIntegrityPolicy,
-                    ContextIntegrityPolicyMode,
-                };
-                let allow = ContextIntegrityDecisionKind::Allow;
-                meta.set_context_integrity_kernel(ContextIntegrityKernel::new(
-                    ContextIntegrityPolicy {
-                        mode: ContextIntegrityPolicyMode::MonitorOnly,
-                        untrusted_instruction_decision: allow,
-                        guarded_material_decision: allow,
-                        personal_data_decision: allow,
-                        destructive_instruction_decision: allow,
-                        tool_poisoning_decision: allow,
-                        high_risk_action_decision: allow,
-                        allow_benign_read_only: true,
-                        non_bypassable: false,
-                    },
-                ));
-            }
-            if let Some(definition) = definition {
-                let mut engine = crate::playbook::PlaybookEngine::new();
-                engine.register(definition);
-                meta.set_playbook_engine(engine);
-            }
-            meta
-        },
-    )
-    .await;
+    let (mut state, store) =
+        super::super::meta_fixture::test_router_app_state_with_meta_and_firewall(
+            &auth,
+            None,
+            None,
+            move |mut meta| {
+                meta.share_keyring_with_for_test(&handle);
+                meta.set_firewall(Some(handle));
+                if matches!(sensitivity, Sensitivity::Verdict) {
+                    use crate::context_integrity::{
+                        ContextIntegrityDecisionKind, ContextIntegrityKernel,
+                        ContextIntegrityPolicy, ContextIntegrityPolicyMode,
+                    };
+                    let allow = ContextIntegrityDecisionKind::Allow;
+                    meta.set_context_integrity_kernel(ContextIntegrityKernel::new(
+                        ContextIntegrityPolicy {
+                            mode: ContextIntegrityPolicyMode::MonitorOnly,
+                            untrusted_instruction_decision: allow,
+                            guarded_material_decision: allow,
+                            personal_data_decision: allow,
+                            destructive_instruction_decision: allow,
+                            tool_poisoning_decision: allow,
+                            high_risk_action_decision: allow,
+                            allow_benign_read_only: true,
+                            non_bypassable: false,
+                        },
+                    ));
+                }
+                if let Some(definition) = definition {
+                    let mut engine = crate::playbook::PlaybookEngine::new();
+                    engine.register(definition);
+                    meta.set_playbook_engine(engine);
+                }
+                meta
+            },
+        )
+        .await;
+    crate::security::firewall::collusion_live_rig::pair_state_with_meta(
+        &mut state,
+        crate::security::firewall::collusion_live_rig::Layer::WholeSection,
+    );
     // `mock` is the probe: bob's relays go to it, and it answers only "ok",
     // so a probe never hands bob a copy of the tested text.
     register(&state, BACKEND, &answering("ok"));
@@ -586,18 +591,23 @@ async fn detection_on_gateway(
     );
     relay_fw.advance_collusion_clock_for_test(std::time::Duration::ZERO);
     let handle = Arc::clone(&relay_fw);
-    let (on, on_store) = super::super::meta_fixture::test_router_app_state_with_meta_and_firewall(
-        auth,
-        None,
-        None,
-        move |mut meta| {
-            meta.share_execution_admission_for_test(admission);
-            meta.share_keyring_with_for_test(&handle);
-            meta.set_firewall(Some(handle));
-            meta
-        },
-    )
-    .await;
+    let (mut on, on_store) =
+        super::super::meta_fixture::test_router_app_state_with_meta_and_firewall(
+            auth,
+            None,
+            None,
+            move |mut meta| {
+                meta.share_execution_admission_for_test(admission);
+                meta.share_keyring_with_for_test(&handle);
+                meta.set_firewall(Some(handle));
+                meta
+            },
+        )
+        .await;
+    crate::security::firewall::collusion_live_rig::pair_state_with_meta(
+        &mut on,
+        crate::security::firewall::collusion_live_rig::Layer::WholeSection,
+    );
     register(&on, BACKEND, &answering("ok"));
     register(&on, ALPHA, erring);
     (on, on_store)
@@ -620,7 +630,7 @@ async fn a_detection_off_answer_replayed_on_never_receipts_gateway_text() {
         key.backends.extend([ALPHA.to_string(), BETA.to_string()]);
     }
     // First gateway: no firewall, so relay detection is off.
-    let (off, _off_store) =
+    let (mut off, _off_store) =
         super::super::meta_fixture::test_router_app_state_with_meta_and_firewall(
             &auth,
             None,
@@ -628,6 +638,10 @@ async fn a_detection_off_answer_replayed_on_never_receipts_gateway_text() {
             |meta| meta,
         )
         .await;
+    crate::security::firewall::collusion_live_rig::pair_state_with_meta(
+        &mut off,
+        crate::security::firewall::collusion_live_rig::Layer::WholeSection,
+    );
     register(&off, BACKEND, &answering("ok"));
     register(&off, ALPHA, &erring);
     let call = || json!({"server": ALPHA, "tool": TOOL, "arguments": {}});
