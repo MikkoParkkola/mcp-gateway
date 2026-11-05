@@ -246,7 +246,7 @@ fn cost_against_governor() {
         for _ in 0..THREADS {
             scope.spawn(|| {
                 (0..CHECKS / THREADS).for_each(|_| {
-                    let _ = ours.check_at(max, super::now_ns());
+                    let _ = ours.check_at(max, super::ns_since(anchor));
                 });
             });
         }
