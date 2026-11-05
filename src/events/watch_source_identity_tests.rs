@@ -46,19 +46,25 @@ fn watch_row(observed: bool) -> Subscription {
     serde_json::from_value(row).expect("a watch row")
 }
 
+/// Neither way the watch source keys a row, its own row key or the key it
+/// gives once the capability is offered, keys a row carrying a per-user
+/// observation; a plain watch row is keyed by both.
 #[test]
 fn the_watch_route_keys_no_row_that_carries_an_observation() {
     let dir = tempfile::tempdir().expect("dir");
     let hub = hub(dir.path());
-    hub.install_watch_source(fake(Vec::new()) as Arc<dyn WatchHost>);
+    let host = fake(vec![target("weather", true, CredentialUse::Free)]);
+    hub.install_watch_source(host as Arc<dyn WatchHost>);
     let source = hub.source(SourceKind::RestWatch).expect("watch source");
     assert!(
-        source.row_key(&watch_row(false)).is_some(),
-        "control: a plain watch row with a recorded class is keyed"
+        source.offers("watch.weather.changed"),
+        "premise: the capability is offered, so a key can come from key_of_row"
     );
-    assert_eq!(
-        source.row_key(&watch_row(true)),
-        None,
-        "a watch row carrying an observation is never keyed by this route"
+    let (plain, observed) = (watch_row(false), watch_row(true));
+    assert!(
+        source.row_key(&plain).is_some() && source.key_of_row(&plain, now()).is_some(),
+        "control: a plain watch row is keyed by both routes"
     );
+    assert_eq!(source.row_key(&observed), None, "row_key");
+    assert_eq!(source.key_of_row(&observed, now()), None, "key_of_row");
 }
