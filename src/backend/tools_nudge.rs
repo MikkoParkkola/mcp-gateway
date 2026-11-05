@@ -317,7 +317,11 @@ impl super::Backend {
     /// as an accepted fill of `tools` would derive them, and nothing else: so
     /// a row can give two slots of one backend two different declarations.
     #[cfg(test)]
-    pub(crate) fn declare_slot_effects_for_test(&self, binding: Option<&str>, mut tools: Vec<Tool>) {
+    pub(crate) fn declare_slot_effects_for_test(
+        &self,
+        binding: Option<&str>,
+        mut tools: Vec<Tool>,
+    ) {
         let prepared = super::prepare_tool_metadata(
             &self.name,
             self.flagged_tool_pins(),

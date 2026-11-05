@@ -40,14 +40,20 @@ async fn a_deferred_lift_records_the_stored_slot_effect() {
     answer_marker(&fx);
     let params = || invoke_params(Some("e1-lift"), false);
     let first = send(&fx, "tools/call", "gateway_invoke", params()).await;
-    assert!(first.to_string().contains(MARKER), "premise: dispatched: {first}");
+    assert!(
+        first.to_string().contains(MARKER),
+        "premise: dispatched: {first}"
+    );
     let sent = fx.gateway.tool_calls().len();
     let backend = fx.gateway.backends().get(BACKEND).expect("the backend");
     let operator = DirectAccountGateway::operator_binding();
     backend.declare_slot_effects_for_test(Some(&operator), vec![declared(Some(true))]);
     backend.declare_slot_effects_for_test(None, vec![declared(Some(false))]);
     let again = send(&fx, "tools/call", "gateway_invoke", params()).await;
-    assert!(again.to_string().contains(MARKER), "premise: served: {again}");
+    assert!(
+        again.to_string().contains(MARKER),
+        "premise: served: {again}"
+    );
     assert_eq!(fx.gateway.tool_calls().len(), sent, "premise: not re-sent");
     let all = decisions(&fx);
     let last = all.last().expect("the replay's record");
@@ -66,7 +72,10 @@ async fn a_lift_after_a_rotation_records_the_first_executions_slot() {
     answer_marker(&fx);
     let params = || invoke_params(Some("e1-rotate"), false);
     let first = send(&fx, "tools/call", "gateway_invoke", params()).await;
-    assert!(first.to_string().contains(MARKER), "premise: dispatched: {first}");
+    assert!(
+        first.to_string().contains(MARKER),
+        "premise: dispatched: {first}"
+    );
     let stored = DirectAccountGateway::operator_binding();
     fx.gateway.rotate_operator_grant().await;
     let now = fx
@@ -85,7 +94,10 @@ async fn a_lift_after_a_rotation_records_the_first_executions_slot() {
     backend.declare_slot_effects_for_test(None, vec![declared(None)]);
     let sent = fx.gateway.tool_calls().len();
     let again = send(&fx, "tools/call", "gateway_invoke", params()).await;
-    assert!(again.to_string().contains(MARKER), "premise: served: {again}");
+    assert!(
+        again.to_string().contains(MARKER),
+        "premise: served: {again}"
+    );
     assert_eq!(fx.gateway.tool_calls().len(), sent, "premise: not re-sent");
     let all = decisions(&fx);
     let last = all.last().expect("the replay's record");

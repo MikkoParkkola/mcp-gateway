@@ -444,7 +444,11 @@ mod effect_slot {
     async fn a_plan_on_one_slot_stores_that_slot() {
         let fx = fixture().await;
         run_once(&fx, &Plan::Chain, "e1-one-slot").await;
-        assert_eq!(fx.gateway.tool_calls_to(BACKEND), 2, "premise: two steps ran");
+        assert_eq!(
+            fx.gateway.tool_calls_to(BACKEND),
+            2,
+            "premise: two steps ran"
+        );
         assert_eq!(
             fx.meta.stored_effect_slots_for_test(),
             vec![Some(PoolKey::PerUser {
@@ -468,9 +472,16 @@ mod effect_slot {
             playbook_params("conditional", "e1-two-slots", &json!({"deep": "true"})),
         )
         .await;
-        assert!(first.to_string().contains(MARKER), "premise: the plan ran: {first}");
+        assert!(
+            first.to_string().contains(MARKER),
+            "premise: the plan ran: {first}"
+        );
         assert_eq!(fx.gateway.tool_calls_to(BACKEND), 1, "premise: {first}");
-        assert_eq!(fx.gateway.tool_calls_to(PERSONAL_BACKEND), 1, "premise: {first}");
+        assert_eq!(
+            fx.gateway.tool_calls_to(PERSONAL_BACKEND),
+            1,
+            "premise: {first}"
+        );
         assert_eq!(fx.meta.stored_effect_slots_for_test(), vec![None]);
     }
 }

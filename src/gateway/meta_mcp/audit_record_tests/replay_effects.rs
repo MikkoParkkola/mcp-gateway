@@ -97,7 +97,8 @@ async fn replayed(
     between();
     let again =
         meta.admit_meta_sync_for_test(owner(), &ctx, INVOKE, args, None, &RequestId::Number(2));
-    let Ok(SyncAdmission::Replay(response, audit, target, dispatched, bindings, slot)) = again else {
+    let Ok(SyncAdmission::Replay(response, audit, target, dispatched, bindings, slot)) = again
+    else {
         panic!("premise: the repeat is admitted as a replay");
     };
     let stored = slot.clone();
@@ -126,7 +127,10 @@ async fn replayed(
 fn assert_no_effect(decision: &Value) {
     assert_eq!(decision["decided"], "replayed", "{decision}");
     assert!(decision.get("declared_effect").is_none(), "{decision}");
-    assert!(decision.get("declared_effect_source").is_none(), "{decision}");
+    assert!(
+        decision.get("declared_effect_source").is_none(),
+        "{decision}"
+    );
 }
 
 /// The first execution ran on the shared slot, declared may-write; the
@@ -137,19 +141,32 @@ fn assert_no_effect(decision: &Value) {
 async fn an_http_route_stage_replay_records_the_stored_slot_effect() {
     let dir = tempfile::tempdir().unwrap();
     let (meta, calls) = listing(Some(false), &dir);
-    let (stored, decision) = replayed(&meta, &dir, ("e1-flip", &args()), (Route::Http, First::Dispatched), || {
-        relist(&meta, Some(true));
-    })
+    let (stored, decision) = replayed(
+        &meta,
+        &dir,
+        ("e1-flip", &args()),
+        (Route::Http, First::Dispatched),
+        || {
+            relist(&meta, Some(true));
+        },
+    )
     .await;
     assert_eq!(
         calls.load(std::sync::atomic::Ordering::SeqCst),
         1,
         "premise: the first execution reached the backend once"
     );
-    assert_eq!(stored, Some(PoolKey::Shared), "premise: the dispatch noted its slot");
+    assert_eq!(
+        stored,
+        Some(PoolKey::Shared),
+        "premise: the dispatch noted its slot"
+    );
     assert_eq!(decision["decided"], "replayed", "{decision}");
     assert_eq!(decision["declared_effect"], "read_only", "{decision}");
-    assert_eq!(decision["declared_effect_source"], "tool_annotation", "{decision}");
+    assert_eq!(
+        decision["declared_effect_source"], "tool_annotation",
+        "{decision}"
+    );
 }
 
 /// The hint removed (the tool still listed) reads undeclared on the replay.
@@ -157,13 +174,26 @@ async fn an_http_route_stage_replay_records_the_stored_slot_effect() {
 async fn an_http_route_stage_replay_of_a_removed_hint_records_undeclared() {
     let dir = tempfile::tempdir().unwrap();
     let (meta, _) = listing(Some(true), &dir);
-    let (stored, decision) = replayed(&meta, &dir, ("e1-hint", &args()), (Route::Http, First::Dispatched), || {
-        relist(&meta, None);
-    })
+    let (stored, decision) = replayed(
+        &meta,
+        &dir,
+        ("e1-hint", &args()),
+        (Route::Http, First::Dispatched),
+        || {
+            relist(&meta, None);
+        },
+    )
     .await;
-    assert_eq!(stored, Some(PoolKey::Shared), "premise: the dispatch noted its slot");
+    assert_eq!(
+        stored,
+        Some(PoolKey::Shared),
+        "premise: the dispatch noted its slot"
+    );
     assert_eq!(decision["declared_effect"], "undeclared", "{decision}");
-    assert_eq!(decision["declared_effect_source"], "tool_annotation", "{decision}");
+    assert_eq!(
+        decision["declared_effect_source"], "tool_annotation",
+        "{decision}"
+    );
 }
 
 /// A result that stored no slot records no effect, though the shared slot is
@@ -173,7 +203,14 @@ async fn a_result_stored_with_no_slot_records_none() {
     let dir = tempfile::tempdir().unwrap();
     let (meta, _) = listing(Some(true), &dir);
     relist(&meta, Some(true));
-    let (stored, decision) = replayed(&meta, &dir, ("e1-none", &args()), (Route::Http, First::Unnoted), || {}).await;
+    let (stored, decision) = replayed(
+        &meta,
+        &dir,
+        ("e1-none", &args()),
+        (Route::Http, First::Unnoted),
+        || {},
+    )
+    .await;
     assert_eq!(stored, None, "premise: nothing noted, nothing stored");
     let alpha = meta.backends.for_test().get("alpha").expect("alpha");
     assert_eq!(
@@ -189,11 +226,21 @@ async fn a_result_stored_with_no_slot_records_none() {
 async fn a_replay_of_a_removed_backend_records_none() {
     let dir = tempfile::tempdir().unwrap();
     let (meta, _) = listing(Some(true), &dir);
-    let (stored, decision) = replayed(&meta, &dir, ("e1-gone", &args()), (Route::Http, First::Dispatched), || {
-        assert!(meta.backends.for_test().remove("alpha"), "premise: removed");
-    })
+    let (stored, decision) = replayed(
+        &meta,
+        &dir,
+        ("e1-gone", &args()),
+        (Route::Http, First::Dispatched),
+        || {
+            assert!(meta.backends.for_test().remove("alpha"), "premise: removed");
+        },
+    )
     .await;
-    assert_eq!(stored, Some(PoolKey::Shared), "premise: the dispatch noted its slot");
+    assert_eq!(
+        stored,
+        Some(PoolKey::Shared),
+        "premise: the dispatch noted its slot"
+    );
     assert_no_effect(&decision);
 }
 
@@ -202,13 +249,23 @@ async fn a_replay_of_a_removed_backend_records_none() {
 async fn a_replay_of_a_tool_no_longer_listed_records_none() {
     let dir = tempfile::tempdir().unwrap();
     let (meta, _) = listing(Some(true), &dir);
-    let (stored, decision) = replayed(&meta, &dir, ("e1-unlisted", &args()), (Route::Http, First::Dispatched), || {
-        let alpha = meta.backends.for_test().get("alpha").expect("alpha");
-        alpha.prefill_tools_for_test(Vec::new());
-        alpha.set_read_only_declared_for_test(&[]);
-    })
+    let (stored, decision) = replayed(
+        &meta,
+        &dir,
+        ("e1-unlisted", &args()),
+        (Route::Http, First::Dispatched),
+        || {
+            let alpha = meta.backends.for_test().get("alpha").expect("alpha");
+            alpha.prefill_tools_for_test(Vec::new());
+            alpha.set_read_only_declared_for_test(&[]);
+        },
+    )
     .await;
-    assert_eq!(stored, Some(PoolKey::Shared), "premise: the dispatch noted its slot");
+    assert_eq!(
+        stored,
+        Some(PoolKey::Shared),
+        "premise: the dispatch noted its slot"
+    );
     assert_no_effect(&decision);
 }
 
@@ -240,7 +297,8 @@ fn with_caps(
     let (meta, _) = listing(Some(true), dir);
     let executor = Arc::new(crate::capability::CapabilityExecutor::new());
     let caps = Arc::new(crate::capability::CapabilityBackend::new("caps", executor));
-    caps.register_capability(capability(read_only)).expect("registers");
+    caps.register_capability(capability(read_only))
+        .expect("registers");
     meta.set_capabilities(Arc::clone(&caps));
     (meta, caps)
 }
@@ -256,14 +314,24 @@ fn caps_args() -> Value {
 async fn a_capability_replay_records_its_live_definitions_effect() {
     let dir = tempfile::tempdir().unwrap();
     let (meta, caps) = with_caps(&dir, false);
-    let (stored, decision) = replayed(&meta, &dir, ("c-edit", &caps_args()), (Route::Http, First::Unnoted), || {
-        caps.register_capability(capability(true)).expect("replaces");
-    })
+    let (stored, decision) = replayed(
+        &meta,
+        &dir,
+        ("c-edit", &caps_args()),
+        (Route::Http, First::Unnoted),
+        || {
+            caps.register_capability(capability(true))
+                .expect("replaces");
+        },
+    )
     .await;
     assert_eq!(stored, None, "premise: a capability needs no stored slot");
     assert_eq!(decision["decided"], "replayed", "{decision}");
     assert_eq!(decision["declared_effect"], "read_only", "{decision}");
-    assert_eq!(decision["declared_effect_source"], "capability_definition", "{decision}");
+    assert_eq!(
+        decision["declared_effect_source"], "capability_definition",
+        "{decision}"
+    );
 }
 
 /// A capability whose definition was removed records no effect. The route
@@ -301,7 +369,14 @@ async fn replay_caps(meta: &MetaMcp) {
     };
     let response = JsonRpcResponse::success(RequestId::Number(7), ok_result());
     let _ = meta
-        .audit_replay(INVOKE, &caps_args(), None, &context(&AllowAll, &who), response, facts)
+        .audit_replay(
+            INVOKE,
+            &caps_args(),
+            None,
+            &context(&AllowAll, &who),
+            response,
+            facts,
+        )
         .await;
 }
 
@@ -318,7 +393,10 @@ async fn a_capability_replay_under_a_hiding_view_records_none() {
     let all = records(&dir);
     assert_eq!(all.len(), 2, "{all:?}");
     assert_no_effect(&all[0]["decision"]);
-    assert_eq!(all[1]["decision"]["declared_effect"], "read_only", "{all:?}");
+    assert_eq!(
+        all[1]["decision"]["declared_effect"], "read_only",
+        "{all:?}"
+    );
     assert_eq!(
         all[1]["decision"]["declared_effect_source"], "capability_definition",
         "{all:?}"
@@ -331,15 +409,27 @@ async fn a_capability_replay_under_a_hiding_view_records_none() {
 async fn a_stdio_replay_records_the_stored_slot_effect() {
     let dir = tempfile::tempdir().unwrap();
     let (meta, _) = listing(Some(false), &dir);
-    let (stored, decision) =
-        replayed(&meta, &dir, ("s-flip", &args()), (Route::Stdio, First::Dispatched), || {
+    let (stored, decision) = replayed(
+        &meta,
+        &dir,
+        ("s-flip", &args()),
+        (Route::Stdio, First::Dispatched),
+        || {
             relist(&meta, Some(true));
-        })
-        .await;
-    assert_eq!(stored, Some(PoolKey::Shared), "premise: the dispatch noted its slot");
+        },
+    )
+    .await;
+    assert_eq!(
+        stored,
+        Some(PoolKey::Shared),
+        "premise: the dispatch noted its slot"
+    );
     assert_eq!(decision["decided"], "replayed", "{decision}");
     assert_eq!(decision["declared_effect"], "read_only", "{decision}");
-    assert_eq!(decision["declared_effect_source"], "tool_annotation", "{decision}");
+    assert_eq!(
+        decision["declared_effect_source"], "tool_annotation",
+        "{decision}"
+    );
 }
 
 /// A stdio replay of a result that stored no slot records none, with the
@@ -349,8 +439,14 @@ async fn a_stdio_replay_with_no_stored_slot_records_none() {
     let dir = tempfile::tempdir().unwrap();
     let (meta, _) = listing(Some(true), &dir);
     relist(&meta, Some(true));
-    let (stored, decision) =
-        replayed(&meta, &dir, ("s-none", &args()), (Route::Stdio, First::Unnoted), || {}).await;
+    let (stored, decision) = replayed(
+        &meta,
+        &dir,
+        ("s-none", &args()),
+        (Route::Stdio, First::Unnoted),
+        || {},
+    )
+    .await;
     assert_eq!(stored, None, "premise: nothing noted, nothing stored");
     assert_no_effect(&decision);
 }
