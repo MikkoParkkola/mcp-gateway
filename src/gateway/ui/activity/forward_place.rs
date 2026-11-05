@@ -87,7 +87,7 @@ pub(super) fn open(path: &Path, seq: u64) -> io::Result<Segment> {
         return Ok(Segment::Gone);
     };
     #[cfg(test)]
-    if super::tests::identity_fails() {
+    if super::tests::identity_fails(seq) {
         return Ok(Segment::Unreadable);
     }
     Ok(match file_id(&file) {

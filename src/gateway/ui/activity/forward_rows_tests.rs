@@ -409,6 +409,30 @@ fn a_missing_middle_segment_resets_rather_than_skipping_its_rows() {
 }
 
 #[test]
+fn head_never_takes_an_over_cap_last_line_that_starts_with_a_record() {
+    // A space keeps the whole line valid JSON; an `x` makes it junk after
+    // the record. Either way the line is over the cap, so it is no record.
+    for pad in [b' ', b'x'] {
+        let d = dir();
+        let path = d.path().join("inv.jsonl");
+        let mut recs = calls(3);
+        recs.push(Rec::Padded(pad));
+        let w = write(&path, &[recs]);
+        let complete = &w.marks[2];
+        let l = log(&path, StreamKind::Activity);
+        // An error is allowed: the bounded read may find no record.
+        if let Ok(head) = super::super::head(&l) {
+            assert_eq!(
+                head.as_ref(),
+                Some(complete),
+                "pad {:?}: the head is the newest complete record, never the padded line's",
+                pad as char
+            );
+        }
+    }
+}
+
+#[test]
 fn head_of_a_log_ending_in_a_long_unreadable_tail_is_an_error_not_empty() {
     let d = dir();
     let path = d.path().join("inv.jsonl");
@@ -522,5 +546,131 @@ fn a_backend_scoped_caller_reads_only_its_backends_calls() {
     assert!(
         !other.iter().any(|p| p.reset),
         "nothing served is not a reset"
+    );
+}
+
+/// How many times `call` opened the active file of the log at `path`.
+fn active_opens(path: &Path, call: impl FnOnce()) -> usize {
+    OPENED.with(|o| o.borrow_mut().clear());
+    call();
+    let active = *super::super::super::seek::segments(path)
+        .unwrap()
+        .last()
+        .expect("the log has an active file");
+    OPENED.with(|o| o.borrow().iter().filter(|s| **s == active).count())
+}
+
+#[test]
+fn one_call_opens_the_active_file_at_most_twice() {
+    let d = dir();
+    let path = d.path().join("inv.jsonl");
+    let one = Limits { matches: 1, ..WIDE };
+    // A fresh read of a log that is only its active file, and of one that
+    // crosses into it: once each.
+    let w = write(&path, &[calls(2)]);
+    let l = log(&path, StreamKind::Activity);
+    let fresh = active_opens(&path, || {
+        rows_after(
+            &l,
+            None,
+            w.marks.last(),
+            &Access::All,
+            WIDE,
+            &mut Search::default(),
+        )
+        .unwrap();
+    });
+    let w = write(&path, &[calls(2), calls(2), calls(2)]);
+    let crossing = active_opens(&path, || {
+        rows_after(
+            &l,
+            None,
+            w.marks.last(),
+            &Access::All,
+            WIDE,
+            &mut Search::default(),
+        )
+        .unwrap();
+    });
+    // A resume in the active file: once.
+    let mut search = Search::default();
+    let five = Limits { matches: 5, ..WIDE };
+    rows_after(&l, None, w.marks.last(), &Access::All, five, &mut search).unwrap();
+    let resumed = active_opens(&path, || {
+        rows_after(
+            &l,
+            Some(&w.marks[4]),
+            w.marks.last(),
+            &Access::All,
+            one,
+            &mut search,
+        )
+        .unwrap();
+    });
+    // A resume that fails on a rewritten active file, then starts over and
+    // crosses into it again: twice, the most one call opens it.
+    let mut search = Search::default();
+    rows_after(&l, None, w.marks.last(), &Access::All, five, &mut search).unwrap();
+    let bytes = std::fs::read(&path).unwrap();
+    std::fs::remove_file(&path).unwrap();
+    std::fs::write(&path, bytes).unwrap();
+    let restarted = active_opens(&path, || {
+        let page = rows_after(
+            &l,
+            Some(&w.marks[4]),
+            w.marks.last(),
+            &Access::All,
+            one,
+            &mut search,
+        )
+        .unwrap();
+        assert!(
+            page.diag.restarted,
+            "premise: the rewritten file fails the resume"
+        );
+    });
+    assert_eq!(
+        (fresh, crossing, resumed, restarted),
+        (1, 1, 1, 2),
+        "opens of the active file per call: fresh, crossing, resumed, restarted"
+    );
+}
+
+#[test]
+fn an_unreadable_segment_reached_by_crossing_resets_the_read() {
+    let d = dir();
+    let path = d.path().join("inv.jsonl");
+    let w = write(&path, &[calls(2), calls(2), calls(2)]);
+    let segs = super::super::super::seek::segments(&path).unwrap();
+    let l = log(&path, StreamKind::Activity);
+    OPENED.with(|o| o.borrow_mut().clear());
+    // The oldest segment's identity reads; the next one's, reached by
+    // crossing, does not.
+    IDENTITY_SKIP.with(|s| s.set(1));
+    IDENTITY_FAILS.with(|f| f.set(1));
+    let page = rows_after(
+        &l,
+        None,
+        w.marks.last(),
+        &Access::All,
+        WIDE,
+        &mut Search::default(),
+    );
+    IDENTITY_SKIP.with(|s| s.set(0));
+    IDENTITY_FAILS.with(|f| f.set(0));
+    let page = page.unwrap();
+    assert_eq!(
+        OPENED.with(|o| o.borrow().clone()),
+        segs[..2].to_vec(),
+        "premise: the failed read is the crossing's, into the second segment"
+    );
+    assert!(
+        page.reset,
+        "an unreadable segment reached by crossing resets the read"
+    );
+    assert!(
+        !counters(std::slice::from_ref(&page)).iter().any(|c| *c > 2),
+        "no row past the unreadable segment is served: {:?}",
+        counters(std::slice::from_ref(&page))
     );
 }

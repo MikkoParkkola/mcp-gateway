@@ -23,8 +23,13 @@ thread_local! {
     /// Run once, after a resume has decided the segment's identity and before
     /// its first byte is read.
     static AFTER_IDENTITY: RefCell<Option<Box<dyn FnOnce()>>> = RefCell::new(None);
-    /// How many of the next identity reads fail.
+    /// How many identity reads fail, once `IDENTITY_SKIP` reads have passed.
     static IDENTITY_FAILS: Cell<u32> = const { Cell::new(0) };
+    /// How many identity reads pass before `IDENTITY_FAILS` starts failing:
+    /// 0 fails the next one, 1 the one after it.
+    static IDENTITY_SKIP: Cell<u32> = const { Cell::new(0) };
+    /// Every segment whose identity was read, by sequence, in order.
+    static OPENED: RefCell<Vec<u64>> = const { RefCell::new(Vec::new()) };
 }
 
 /// The resume's seam between deciding the identity and the first read.
@@ -34,8 +39,17 @@ pub(super) fn after_identity() {
     }
 }
 
-/// Whether this identity read should fail; each failure uses one up.
-pub(super) fn identity_fails() -> bool {
+/// Whether the identity read of segment `seq` should fail: the reads to let
+/// pass are used up first, then each failure uses one up.
+pub(super) fn identity_fails(seq: u64) -> bool {
+    OPENED.with(|o| o.borrow_mut().push(seq));
+    if IDENTITY_SKIP.with(|s| {
+        let left = s.get();
+        s.set(left.saturating_sub(1));
+        left > 0
+    }) {
+        return false;
+    }
     IDENTITY_FAILS.with(|f| {
         let left = f.get();
         f.set(left.saturating_sub(1));
@@ -64,6 +78,9 @@ enum Rec {
     Junk(usize),
     /// This many junk lines of this length each.
     Junks(usize, usize),
+    /// A whole call record, then on the same line this byte repeated past
+    /// the record cap: a line that starts with a valid record.
+    Padded(u8),
 }
 
 /// What a fixture wrote: each record's place and offsets, in counter order.
@@ -82,7 +99,7 @@ fn mark_of(entry: &Value) -> Mark {
 
 fn body(rec: &Rec, counter: u64) -> Option<Value> {
     let mut e = match rec {
-        Rec::Call(_) | Rec::Big(_) => {
+        Rec::Call(_) | Rec::Big(_) | Rec::Padded(_) => {
             let mut w = json!({"account": "a"});
             if let Rec::Call(Some((issuer, subject))) = rec {
                 w["authority"] = (*issuer).into();
@@ -141,6 +158,10 @@ fn write_from(path: &Path, segments: &[Vec<Rec>], first_seq: u64, first_counter:
                     prev = hash;
                     let start = bytes.len() as u64;
                     bytes.extend(e.to_string().as_bytes());
+                    if let Rec::Padded(pad) = rec {
+                        let past_cap = crate::security::transparency_log::pager::ASSEMBLY_WINDOW;
+                        bytes.extend(std::iter::repeat_n(*pad, past_cap as usize));
+                    }
                     bytes.push(b'\n');
                     out.marks.push(mark_of(&e));
                     out.at.push((file.clone(), start, bytes.len() as u64));
