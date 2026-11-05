@@ -233,7 +233,6 @@ pub(crate) mod order {
 
     static EVENTS: Mutex<Vec<(PathBuf, &'static str)>> = Mutex::new(Vec::new());
 
-    #[allow(dead_code, reason = "recorded at the intent append and the commit")]
     pub(super) fn record(target: &Path, event: &'static str) {
         EVENTS
             .lock()
@@ -519,10 +518,12 @@ impl ReloadContext {
                 writer: writer.clone(),
             };
             sink.append(&intent).map_err(|e| {
-                ReplaceError::Refused(format!(
+                ReplaceError::AuditRefused(format!(
                     "the audit log refused this change's record; nothing was written: {e}"
                 ))
             })?;
+            #[cfg(test)]
+            order::record(&target, "intent");
         }
         let result = match step {
             None => Ok(template.bytes().to_vec()),
@@ -593,6 +594,8 @@ impl ReloadContext {
                 reload,
             });
         }
+        #[cfg(test)]
+        order::record(target, "commit");
         self.commit(target, current, &new, replaced, entries).await
     }
 

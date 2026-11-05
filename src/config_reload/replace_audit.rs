@@ -255,7 +255,7 @@ impl ReloadContext {
             writer: None,
         };
         sink.append(&intent).map(Some).map_err(|e| {
-            ReplaceError::Refused(format!(
+            ReplaceError::AuditRefused(format!(
                 "the audit log refused the recovery's record; nothing was recovered or reloaded: {e}"
             ))
         })
