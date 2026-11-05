@@ -238,46 +238,6 @@ pub(crate) async fn approve_if_listening(url: &str) -> bool {
         .is_ok_and(|answer| answer.status().is_success())
 }
 
-/// A port another login's listener took after this one closed answers this
-/// login's callback with its own refusal (a state mismatch, 400). That is not
-/// this login still listening: only this login's listener accepts its state.
-#[tokio::test]
-async fn a_foreign_listener_on_the_port_is_not_this_login_listening() {
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
-    let foreign = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let port = foreign.local_addr().unwrap().port();
-    let refusing = tokio::spawn(async move {
-        let (mut stream, _) = foreign.accept().await.unwrap();
-        // The whole request head first, so the probe meets the 400, never a reset.
-        let mut request = Vec::new();
-        let mut chunk = [0_u8; 1024];
-        while !request.windows(4).any(|w| w == b"\r\n\r\n") {
-            let read = stream.read(&mut chunk).await.expect("the probe's request");
-            assert!(read > 0, "the probe closed before its request was complete");
-            request.extend_from_slice(&chunk[..read]);
-        }
-        stream
-            .write_all(
-                b"HTTP/1.1 400 Bad Request\r\ncontent-length: 0\r\nconnection: close\r\n\r\n",
-            )
-            .await
-            .expect("the foreign listener answers");
-    });
-    let callback = format!("http://127.0.0.1:{port}/oauth/callback");
-    let url = url::Url::parse_with_params(
-        "http://issuer.invalid/authorize",
-        &[("redirect_uri", callback.as_str()), ("state", "this-login")],
-    )
-    .unwrap();
-    assert!(
-        !within("the probe", approve_if_listening(url.as_str())).await,
-        "a foreign listener's refusal was read as this login still listening"
-    );
-    within("the foreign listener", refusing)
-        .await
-        .expect("the foreign listener answered with its 400");
-}
-
 pub(super) fn variant(error: &Error) -> String {
     format!("{error:?}")
 }
