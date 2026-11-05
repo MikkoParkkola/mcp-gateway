@@ -280,7 +280,9 @@ impl TransparencyLogger {
         self.bound.permit_waits.load(Ordering::SeqCst)
     }
 
-    /// Whether a write's generation is still in the kernel.
+    /// Whether a write's generation is still in the kernel. Its callers are
+    /// all `firewall` test modules; others drain with `release_and_drain`.
+    #[cfg(feature = "firewall")]
     pub(crate) fn write_in_flight_for_test(&self) -> bool {
         self.bound
             .state
@@ -301,6 +303,23 @@ impl TransparencyLogger {
             .wait_timeout_while(state, bound, |s| s.in_flight.is_some())
             .expect("stall lock");
         state.in_flight.is_none()
+    }
+
+    /// Release a stalled write and wait, on the blocking pool, until it has
+    /// finished, failing the test past `HANG_BOUND`. A test whose log lives
+    /// in a temporary directory calls this before that directory drops: a
+    /// released write still running then rewrites `.hwm` (and the record)
+    /// mid-removal, and the directory stays behind.
+    pub(crate) async fn release_and_drain(self: &Arc<Self>, gate: super::rotation::StallRelease) {
+        gate.release();
+        drop(gate);
+        let log = Arc::clone(self);
+        let cleared = tokio::task::spawn_blocking(move || {
+            log.wait_write_cleared_for_test(crate::test_wait::HANG_BOUND)
+        })
+        .await
+        .expect("the wait does not panic");
+        assert!(cleared, "the released audit write finished");
     }
 }
 
