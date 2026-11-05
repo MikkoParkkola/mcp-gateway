@@ -299,7 +299,10 @@ enum Cache {
 /// reachable through the fixture's scripted transport.
 async fn bound_with(dir: &tempfile::TempDir, cache: Cache) -> Fx {
     let log = logger(dir, AuditFailurePolicy::FailClosed);
+    let meta_log = Arc::clone(&log);
     let fx = super::direct_guards_fixture::fixture_propagating_logged(Answer::Ok, log, |meta| {
+        // Both routes record into one log: the meta layer's too.
+        meta.enable_transparency_log(meta_log);
         meta.set_identity_propagation(Arc::new(Binds));
         if let Cache::On = cache {
             meta.enable_idempotency(
