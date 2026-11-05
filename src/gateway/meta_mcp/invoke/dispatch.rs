@@ -410,7 +410,12 @@ impl MetaMcp {
 
         // The backend the call was judged on, not a second lookup by name a
         // reload may have answered differently (MIK-7810). None: not found.
-        let backend = captured.ok_or_else(|| Error::BackendNotFound(server.to_string()))?;
+        let Some(backend) = captured else {
+            return Err(super::denial::backend_miss(server, tool));
+        };
+        // Found after all (a reload registered it since the gate): the gate's
+        // provisional miss is this call's, and it was not a miss.
+        crate::gateway::meta_mcp::visible::memo::clear_gate_absent(server, tool);
 
         // A "did you mean?" hint off THIS CALLER'S slot (MIK-7334.CATALOGUE.1):
         // the shared one holds a catalogue this caller was never shown once a
