@@ -85,10 +85,7 @@ pub(crate) use era::start_detached_http;
 pub(crate) use input_keys::{KeyAnswer, KeyAnswerKind, Lens};
 #[cfg(feature = "webui")]
 pub(crate) use metadata::{PreviewListing, list_tools_for_preview};
-#[cfg(test)]
 pub(crate) use pool::PoolKey;
-#[cfg(not(test))]
-use pool::PoolKey;
 use pool::PooledEntry;
 pub(crate) use probe::HealthTicker;
 
