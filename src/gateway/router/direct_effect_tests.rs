@@ -32,8 +32,7 @@ fn alice_auth() -> AuthConfig {
             allowed_tools: None,
             denied_tools: None,
             admin: false,
-            // Held by one person, so its caller carries the grant subject
-            // (`api_key`, name) the personal capability checks.
+            // Held by one person; its grant subject is (`api_key`, name).
             kind: crate::config::ApiKeyKind::Personal,
             ..Default::default()
         }],
@@ -67,7 +66,7 @@ fn tools_call(name: &str, arguments: Value) -> Value {
 }
 
 /// GUARD (probe): alice holds a matched grant on the personal capability,
-/// proven by the meta route reaching it. The same capability named on the
+/// proven by the meta route passing it. The same capability named on the
 /// direct route is answered absent: nothing reaches the capability, and the
 /// direct route's record names no grant and records no declared effect.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -96,9 +95,14 @@ async fn probe_direct_reaches_the_capability_backend() {
         ),
     )
     .await;
-    assert_eq!(
-        endpoint.arrivals(),
-        1,
+    // An API-key caller passes its grant and is then refused at execution:
+    // a key carries no propagated identity (capability/execution_context.rs).
+    // So the grant matching is shown by the refusal past it, as the router's
+    // grant-key rows pin it.
+    let meta_text = through_meta.to_string();
+    assert!(
+        !meta_text.contains("Identity grant denied")
+            && meta_text.contains("caller identity is required"),
         "premise: alice's grant matches on the meta route: {through_meta}"
     );
     let before = entries(&dir).len();
