@@ -226,8 +226,8 @@ fn r9_where_a_scoped_rule_applies_differently() {
 
 /// Production constructions of `needle` per file under `src/`: `use` lines,
 /// match arms and comparisons are not constructions; comments, string
-/// literals and test code (`*_tests.rs`, `tests/` and `*_tests/` directories, an inline `#[cfg(test)]` module
-/// and everything after it) is skipped.
+/// literals and test code (`*_tests.rs` files, `tests/` and `*_tests/`
+/// directories, and each `#[cfg(test)]` item wherever it sits) are skipped.
 fn constructions(needle: &str) -> std::collections::BTreeMap<String, usize> {
     fn walk(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
         for entry in std::fs::read_dir(dir).expect("read src") {
