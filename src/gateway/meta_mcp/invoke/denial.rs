@@ -70,6 +70,7 @@ mod tests {
             assert_eq!(marked.to_string(), "Backend not found: gone");
             assert_eq!(unmarked.to_string(), "Backend not found: lost");
             assert!(!take_gate_absent("gone", "t"), "the mark was taken");
+            assert_eq!(denial_code("gone", "t"), None, "nothing kept request-wide");
         })
         .await;
     }
@@ -87,6 +88,21 @@ mod tests {
             );
             assert_eq!(count_meta_denial(&args, &missed, false), None);
             assert_eq!(denial_code("gone", "t"), None, "nothing request-wide");
+        })
+        .await;
+    }
+
+    /// A code a gate kept first wins over this call's own missing backend.
+    #[tokio::test]
+    async fn a_kept_code_wins_over_the_call_s_miss() {
+        with_visibility_memo(async {
+            crate::gateway::meta_mcp::visible::memo::note_denial_code("gone", "t", -32003, None);
+            let args = serde_json::json!({"server": "gone", "tool": "t"});
+            let missed: Result<Value> = Err(crate::Error::BackendNotFound("gone".into()));
+            assert_eq!(
+                count_meta_denial(&args, &missed, true),
+                Some(crate::security::audit::AuditOutcome::Denied(-32003))
+            );
         })
         .await;
     }
