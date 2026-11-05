@@ -76,7 +76,7 @@ jobs:
         run: |
           set -o pipefail
           cargo llvm-cov clean --workspace
-          cargo llvm-cov --no-report --all-features --test task_upstream_recovery_sdk -- --test-threads 1 2>&1 | tee run.log
+          python3 scripts/ci/coverage_shards.py run "${GITHUB_REF_NAME##*-}" sdk 2>&1 | tee run.log
       - name: Bundle
         run: bash scripts/ci/coverage_shard_bundle.sh sdk
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -158,4 +158,5 @@ jobs:
             report-json.log
             report-lcov.log
             shards/*/run.log
+            shards/*/tests.tsv
             shards/*/manifest.txt

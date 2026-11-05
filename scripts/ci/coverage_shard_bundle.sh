@@ -4,7 +4,7 @@
 # Packs one coverage shard for the merge job: its raw profiles, renamed with the shard's
 # name so two runners' files never collide (a profile is named by binary and process id),
 # and every instrumented executable `cargo llvm-cov report` would read, in a tar that keeps
-# the executable bit report needs. Writes bundle/: files.tar, run.log, manifest.txt
+# the executable bit report needs. Writes bundle/: files.tar, run.log, tests.tsv, manifest.txt
 # (sizes, each executable's coverage digest from coverage_shards.py).
 # Usage: coverage_shard_bundle.sh <shard>
 set -euo pipefail
@@ -28,6 +28,10 @@ tar -C "$t" --null -T bundle/executables.list -cf bundle/files.tar
 tar -C bundle -rf bundle/files.tar profraw
 rm -rf bundle/profraw
 cp run.log bundle/run.log
+# Each test's binary, name and outcome, from coverage_shards.py's listing: the
+# equivalence check compares these between the parts and a single job.
+[ -s tests.tsv ] || { echo "::error::shard $shard: no tests.tsv"; exit 1; }
+cp tests.tsv bundle/tests.tsv
 {
   echo "shard $shard"
   echo "profiles $n"

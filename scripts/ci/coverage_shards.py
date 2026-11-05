@@ -22,7 +22,7 @@ TMPDIR guard, as in the single job.
 
   coverage_shards.py plan <n>              print the plan's shards as JSON
   coverage_shards.py check <n> <metadata>  check the partition (file or -)
-  coverage_shards.py run <n> <shard>       run one shard (exit 1 on failure)
+  coverage_shards.py run <n> <shard>       run one shard, or `sdk` (exit 1 on failure)
   coverage_shards.py --self-test
 """
 from __future__ import annotations
@@ -36,6 +36,9 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from shard_tests import HEADER, RESULT, SDK, cargo  # noqa: E402
 
 LIB_SPLIT = "gateway::"
+# Every plan also runs the SDK journey's binary as its own part, as the single
+# job runs it alone before the rest.
+SDK_PART, SDK_TARGET = "sdk", "task_upstream_recovery_sdk"
 GLOB_A, GLOB_B, GLOB_ALL = "[a-l]*", "[!a-l]*", "*"
 BASE = ["llvm-cov", "--no-report", "--all-features"]
 _LIB_A = (["--lib"], [LIB_SPLIT])
@@ -113,8 +116,12 @@ def check(n: int, metadata: dict) -> list[str]:
 
 
 def run(n: int, shard: str, program: tuple[str, ...] = ("cargo",)) -> int:
-    args, test_args = PLANS[n][shard]
-    select = [*BASE, *args, "--", *test_args, "--skip", SDK]
+    if shard == SDK_PART:
+        # The SDK journey's binary alone, single-threaded, the same in every plan.
+        select = [*BASE, "--test", SDK_TARGET, "--", "--test-threads", "1"]
+    else:
+        args, test_args = PLANS[n][shard]
+        select = [*BASE, *args, "--", *test_args, "--skip", SDK]
     # The tests come from libtest's own listing, before anything runs, so no
     # output can interleave with a name; the run's per-binary result lines then
     # have to account for every listed test.
@@ -394,8 +401,8 @@ def main(argv: list[str]) -> int:
         for p in problems:
             print(f"::error::coverage partition: {p}")
         return 1 if problems else 0
-    if (len(argv) == 4 and argv[1] == "run" and argv[2].isdigit()
-            and argv[3] in PLANS.get(int(argv[2]), {})):
+    if (len(argv) == 4 and argv[1] == "run" and argv[2].isdigit() and int(argv[2]) in PLANS
+            and (argv[3] == SDK_PART or argv[3] in PLANS[int(argv[2])])):
         return run(int(argv[2]), argv[3])
     print(__doc__, file=sys.stderr)
     return 2
