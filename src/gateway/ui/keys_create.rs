@@ -437,6 +437,8 @@ fn variant_of(error: &ReplaceError) -> &'static str {
         ReplaceError::Unconfirmed { .. } => "unconfirmed",
         ReplaceError::Failed(_) => "failed",
         ReplaceError::Secrets(_) => "secrets",
+        ReplaceError::NoConfigFile => "no_config_file",
+        ReplaceError::ConfigRefused(_) => "config_refused",
     }
 }
 

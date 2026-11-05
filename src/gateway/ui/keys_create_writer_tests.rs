@@ -81,6 +81,31 @@ fn p9_definite_failures_are_500s() {
     }
 }
 
+/// The writer's own read check finding gateway.yaml gone, or refusing it
+/// (its type, mode, owner or encoding), wrote nothing: a definite refusal,
+/// answered as the preconditions answer the same states, never
+/// `state_uncertain`, and never with the guard's text.
+#[test]
+fn p9_a_config_the_writer_cannot_read_is_a_definite_refusal() {
+    let fx = Fixture::new(Setup::default());
+    let gone = injected(&fx, || Err(ReplaceError::NoConfigFile));
+    assert_eq!(gone.status, StatusCode::CONFLICT, "{}", gone.body);
+    assert_eq!(gone.json()["error"], "no_config_file", "{}", gone.body);
+    let refused = injected(&fx, || Err(ReplaceError::ConfigRefused("zq-guard".into())));
+    assert_eq!(
+        refused.status,
+        StatusCode::SERVICE_UNAVAILABLE,
+        "{}",
+        refused.body
+    );
+    assert!(!refused.body.contains("zq-guard"), "{}", refused.body);
+    assert!(
+        !refused.body.contains("state_uncertain"),
+        "{}",
+        refused.body
+    );
+}
+
 /// A `Refused` the audit log did not raise (a loader or slot refusal) is a
 /// 500 and never `audit_unavailable`.
 #[test]
