@@ -282,6 +282,20 @@ pub(crate) use requests::{
     initialize, post_direct, post_meta_invoke, post_meta_invoke_nonce, send, send_with_headers,
 };
 
+/// `meta` with message signing armed under [`SIGNING_KEY`].
+fn signing(mut meta: MetaMcp, require_nonce: bool) -> MetaMcp {
+    meta.enable_message_signing(
+        crate::security::message_signing::MessageSigner::new(
+            SIGNING_KEY.as_bytes().to_vec(),
+            None,
+            "hardened".into(),
+        ),
+        Duration::from_secs(300),
+        require_nonce,
+    );
+    meta
+}
+
 pub(crate) const SIGNING_KEY: &str = "direct-guards-signing-key-0123456789abcdef";
 
 /// A key whose name the response redactor reads as a GitHub token (a fake,

@@ -38,20 +38,6 @@ pub(crate) async fn fixture_hardened_signed_logged(
     fx
 }
 
-/// `meta` with message signing armed under [`SIGNING_KEY`].
-fn signing(mut meta: MetaMcp, require_nonce: bool) -> MetaMcp {
-    meta.enable_message_signing(
-        crate::security::message_signing::MessageSigner::new(
-            SIGNING_KEY.as_bytes().to_vec(),
-            None,
-            "hardened".into(),
-        ),
-        Duration::from_secs(300),
-        require_nonce,
-    );
-    meta
-}
-
 /// [`fixture_hardened_signed`] with relay detection on as in
 /// [`fixture_relayed`]: every direct `tools/call` is signed and staged.
 #[cfg(feature = "firewall")]
