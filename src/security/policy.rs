@@ -62,6 +62,7 @@ pub struct ToolPolicyConfig {
 impl ToolPolicyConfig {
     /// The built-in deny patterns `use_default_deny` adds, in order: for the
     /// Policies screen, which lists them beside the configured entries.
+    #[cfg(feature = "webui")]
     pub(crate) fn default_denies() -> &'static [&'static str] {
         DEFAULT_DENIED_PATTERNS
     }

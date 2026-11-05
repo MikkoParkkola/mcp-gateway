@@ -31,6 +31,7 @@ use crate::transition::TransitionTracker;
 mod allowed_root;
 /// The finding types no rule's `scan` may list (the folder check alone
 /// produces them): the Policies screen offers every other type.
+#[cfg(feature = "webui")]
 pub(crate) use allowed_root::OUTPUT_ONLY;
 pub(crate) use allowed_root::ScanSubject;
 #[cfg(test)]
