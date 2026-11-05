@@ -727,21 +727,16 @@ async fn the_decision_object_carries_no_secret_or_caller_text() {
     let direct = direct_decision(&fx, &dir, "alpha", Some(SUBJECT)).await;
 
     let before = decisions(&dir).len();
-    let invoke = json!({"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {
-        "name": "gateway_invoke",
-        "arguments": {"server": "zq-canary-server", "tool": "zq-canary-tool", "arguments": {}},
-    }});
-    let request = axum::http::Request::builder()
-        .method("POST")
-        .uri("/mcp")
-        .header("authorization", "Bearer k-std")
-        .header("content-type", "application/json")
-        .body(axum::body::Body::from(invoke.to_string()))
-        .expect("a request");
-    let _ = fx.router.clone().oneshot(request).await.expect("an answer");
+    let answer = call(
+        &fx,
+        "/mcp",
+        "gateway_invoke",
+        json!({"server": "zq-canary-server", "tool": "zq-canary-tool", "arguments": {}}),
+    )
+    .await;
     let after = decisions(&dir).split_off(before);
     let [meta] = after.as_slice() else {
-        panic!("premise: one meta record: {after:?}");
+        panic!("premise: one meta record: {after:?}; answer {answer}");
     };
 
     for decision in [&direct, meta] {
