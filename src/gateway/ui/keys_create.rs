@@ -8,8 +8,7 @@
 //! refusal is fixed text that names a field at most, never the body or a
 //! value. The secret is generated here and nowhere else (see `write`).
 
-#[cfg(test)]
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use axum::Json;
 use axum::extract::State;
@@ -24,7 +23,11 @@ use super::config_file::{Gateway, read_gateway};
 use super::errors::{flat_error, structured_error};
 use super::guard::Guard;
 use crate::config::{ApiKeyConfig, AuthConfig, Config, EnvOverlay};
+use crate::config_persistence::keyedit::{
+    Change, FieldPath, Scalar, Segment, Template, edit_in_place,
+};
 use crate::config_reload::FileRevision;
+use crate::config_reload::{LiveConfig, refuse_multi_user_flip};
 use crate::gateway::router::AppState;
 
 /// Under test, a request may carry the secret the route hands out, so a row
@@ -195,6 +198,142 @@ async fn preconditions(state: &AppState, body: &CreateBody) -> Result<Checked, B
         revision,
         auth: config.auth,
     })
+}
+
+/// The new key as the writer sees it: the body's fields and the digest spec.
+/// It has no field for the secret, so nothing derived from it can carry one.
+struct NewKeyEntry {
+    name: String,
+    key_sha256: String,
+    backends: Vec<String>,
+    allowed_tools: Option<Vec<String>>,
+    denied_tools: Option<Vec<String>>,
+    admin: Option<bool>,
+    rate_limit: Option<u32>,
+    expires_at: Option<DateTime<Utc>>,
+}
+
+impl NewKeyEntry {
+    fn of(body: CreateBody, key_sha256: String) -> Self {
+        Self {
+            name: body.name,
+            key_sha256,
+            backends: body.backends,
+            allowed_tools: body.allowed_tools,
+            denied_tools: body.denied_tools,
+            admin: body.admin,
+            rate_limit: body.rate_limit,
+            expires_at: body.expires_at,
+        }
+    }
+
+    /// The entry as the loader will read it, for the candidate checks.
+    fn as_key(&self) -> ApiKeyConfig {
+        ApiKeyConfig {
+            name: self.name.clone(),
+            key_sha256: Some(self.key_sha256.clone()),
+            backends: self.backends.clone(),
+            allowed_tools: self.allowed_tools.clone(),
+            denied_tools: self.denied_tools.clone(),
+            admin: self.admin.unwrap_or(false),
+            rate_limit: self.rate_limit.unwrap_or(0),
+            expires_at: self.expires_at,
+            ..ApiKeyConfig::default()
+        }
+    }
+
+    /// One new list element at `at`: each given field set in place.
+    fn changes(&self, at: usize) -> Vec<(FieldPath, Change)> {
+        let path = |field: &str| {
+            let keys = ["auth", "api_keys"].map(|k| Segment::Key(k.to_owned()));
+            let mut segments = keys.to_vec();
+            segments.extend([Segment::Index(at), Segment::Key(field.to_owned())]);
+            FieldPath(segments)
+        };
+        let text = |value: &str| Change::Set(Scalar::Str(value.to_owned()));
+        let mut out = vec![
+            (path("name"), text(&self.name)),
+            (path("key_sha256"), text(&self.key_sha256)),
+            (path("backends"), Change::List(self.backends.clone())),
+        ];
+        for (field, list) in [
+            ("allowed_tools", &self.allowed_tools),
+            ("denied_tools", &self.denied_tools),
+        ] {
+            out.extend(list.iter().map(|l| (path(field), Change::List(l.clone()))));
+        }
+        out.extend(
+            self.admin
+                .map(|a| (path("admin"), Change::Set(Scalar::Bool(a)))),
+        );
+        out.extend(
+            self.rate_limit
+                .map(|r| (path("rate_limit"), Change::Set(Scalar::Int(i64::from(r))))),
+        );
+        let expiry = self
+            .expires_at
+            .map(|at| at.to_rfc3339_opts(chrono::SecondsFormat::Secs, true));
+        out.extend(expiry.map(|at| (path("expires_at"), text(&at))));
+        out
+    }
+}
+
+/// Why the compute refused, for the route's own answer: the writer's `String`
+/// channel is never parsed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Refusal {
+    Expired,
+    Flip,
+    NotWritten,
+}
+
+/// What the compute decided, filled under the lock and read after the writer.
+type Outcome = Arc<Mutex<Option<Refusal>>>;
+
+/// What the compute reads under the lock besides the file's bytes.
+struct Judge {
+    live: Arc<LiveConfig>,
+    file_auth: AuthConfig,
+    outcome: Outcome,
+}
+
+impl Judge {
+    fn refuse(&self, why: Refusal) -> String {
+        *self.outcome.lock().unwrap_or_else(|e| e.into_inner()) = Some(why);
+        format!("{why:?}")
+    }
+
+    /// The expiry against the clock as read now, under the lock.
+    fn check_expiry(&self, expires_at: Option<DateTime<Utc>>) -> Result<(), String> {
+        let Some(at) = expires_at else { return Ok(()) };
+        match crate::clock::utc_now() {
+            Ok(now) if at > now => Ok(()),
+            _ => Err(self.refuse(Refusal::Expired)),
+        }
+    }
+
+    /// The key list with this key must not change whether the gateway is
+    /// multi-user, judged on the running config.
+    fn check_flip(&self, entry: &NewKeyEntry) -> Result<(), String> {
+        let mut wanted = self.file_auth.clone();
+        wanted.api_keys.push(entry.as_key());
+        refuse_multi_user_flip(self.live.running(), &wanted).map_err(|_| self.refuse(Refusal::Flip))
+    }
+}
+
+/// The writer's compute: appends the entry to `auth.api_keys` in place, after
+/// the expiry and the flip are judged on the bytes it was handed.
+fn compute(
+    entry: NewKeyEntry,
+    judge: Judge,
+) -> impl FnOnce(&[u8]) -> Result<Template, String> + Send {
+    move |bytes| {
+        let text = std::str::from_utf8(bytes).map_err(|_| "not utf-8".to_owned())?;
+        judge.check_expiry(entry.expires_at)?;
+        judge.check_flip(&entry)?;
+        let at = judge.file_auth.api_keys.len();
+        edit_in_place(text, &entry.changes(at)).map_err(|_| judge.refuse(Refusal::NotWritten))
+    }
 }
 
 /// `POST /ui/api/keys`.

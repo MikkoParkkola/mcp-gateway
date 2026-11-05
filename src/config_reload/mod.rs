@@ -732,6 +732,8 @@ pub async fn apply_patch(
 mod diff;
 mod generation;
 pub use generation::Generation;
+#[cfg(feature = "webui")]
+pub(crate) use generation::refuse_multi_user_flip;
 
 /// `config` with both request-path security flags off: what the router test
 /// fixtures set on `AppState` before the flags moved into the published
