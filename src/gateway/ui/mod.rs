@@ -717,3 +717,7 @@ mod keys_create_tests;
 #[cfg(test)]
 #[path = "keys_create_refusal_tests.rs"]
 mod keys_create_refusal_tests;
+
+#[cfg(test)]
+#[path = "keys_create_writer_tests.rs"]
+mod keys_create_writer_tests;

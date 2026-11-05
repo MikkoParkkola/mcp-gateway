@@ -13,7 +13,7 @@ use axum::http::{Request, StatusCode};
 use serde_json::Value;
 use tower::ServiceExt;
 
-use super::keys_create::{BeforeLock, KnownSecret};
+use super::keys_create::{BeforeLock, InjectWriter, KnownSecret};
 use crate::config::{ApiKeyConfig, AuthConfig, Config, FailsafeConfig};
 use crate::config_reload::{FileRevision, LiveConfig, ReloadContext};
 use crate::gateway::auth::AuthenticatedClient;
@@ -57,11 +57,15 @@ pub(super) struct Setup {
     pub(super) reload: bool,
     pub(super) file: bool,
     pub(super) running: AuthConfig,
+    /// When set, the handlers read this table while the reload publishes to
+    /// its own: a write the live generation never sees.
+    pub(super) split_live: Option<AuthConfig>,
 }
 
 impl Default for Setup {
     fn default() -> Self {
         Self {
+            split_live: None,
             text: yaml_of(&[root_item()]),
             audit_log: true,
             reload: true,
@@ -101,6 +105,7 @@ pub(super) struct Call {
     pub(super) client: AuthenticatedClient,
     pub(super) known: Option<String>,
     pub(super) before_lock: Option<BeforeLock>,
+    pub(super) inject: Option<InjectWriter>,
 }
 
 impl Call {
@@ -110,6 +115,7 @@ impl Call {
             client: admin_client(),
             known: Some(KNOWN.to_owned()),
             before_lock: None,
+            inject: None,
         }
     }
 }
@@ -149,10 +155,19 @@ impl Fixture {
             (None, None),
             |m| m,
         ));
-        let live = Arc::new(LiveConfig::new(Config {
+        let reload_live = Arc::new(LiveConfig::new(Config {
             auth: setup.running,
             ..Config::default()
         }));
+        let live = setup.split_live.map_or_else(
+            || Arc::clone(&reload_live),
+            |auth| {
+                Arc::new(LiveConfig::new(Config {
+                    auth,
+                    ..Config::default()
+                }))
+            },
+        );
         let unique = Arc::get_mut(&mut state).expect("state is unique");
         unique.live_config = Arc::clone(&live);
         unique.config_path = setup.file.then(|| path.clone());
@@ -162,7 +177,7 @@ impl Fixture {
         if setup.reload {
             let context = ReloadContext::new(
                 path,
-                Arc::clone(&live),
+                reload_live,
                 Arc::clone(&state.backends),
                 FailsafeConfig::default(),
                 Duration::from_secs(60),
@@ -239,6 +254,9 @@ impl Fixture {
         }
         if let Some(hook) = call.before_lock {
             request = request.extension(hook);
+        }
+        if let Some(inject) = call.inject {
+            request = request.extension(inject);
         }
         let response = super::admin_audit::audited_api_router(&self.state)
             .with_state(Arc::clone(&self.state))
