@@ -95,6 +95,7 @@ const PENDING: &[&str] = &[
     "src/gateway/router/ui_access_matrix_tests.rs",
     "src/gateway/router/ui_audit_cancel_tests.rs",
     "src/gateway/router/ui_backend_scope_tests.rs",
+    "src/gateway/router/ui_stream_tests/live_logs.rs",
     "src/gateway/router/watch_poll_parity_tests.rs",
     "src/gateway/server/audit_start_tests.rs",
     "src/gateway/server/control_plane_store/tests/key_change_tests.rs",
