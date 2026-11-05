@@ -60,9 +60,9 @@ async fn an_unbindable_destructive_call_is_recorded_as_refused() {
 }
 
 /// UNBIND.2 control: a caller the gate can name is asked, and the question is
-/// not a refusal.
+/// recorded as delivered, as before.
 #[tokio::test]
-async fn a_named_callers_confirmation_question_is_not_recorded_as_refused() {
+async fn a_named_callers_confirmation_question_is_recorded_as_delivered() {
     let (_dir, log) = temp_log(None);
     let (mock, _gate) = MockBackend::holding(Answer::ok());
     let (state, _store) = fixture_with(&mock, crate::config::Config::default(), |meta| {
@@ -77,13 +77,14 @@ async fn a_named_callers_confirmation_question_is_not_recorded_as_refused() {
         "premise: a named caller is asked: {challenge}"
     );
     let row = the_new_row(&log, before).await;
-    std::assert_ne!(row["response_effect"], "refused", "{row}");
+    std::assert_eq!(row["response_effect"], "delivered", "{row}");
 }
 
 /// UNBIND.2 control: `no_grant` (answers with no confirmation grant) is a
-/// client-protocol rejection, classed not-a-decision, and keeps its record.
+/// client-protocol rejection, classed not-a-decision, and is still recorded
+/// as delivered.
 #[tokio::test]
-async fn a_no_grant_answer_is_not_recorded_as_refused() {
+async fn a_no_grant_answer_is_recorded_as_delivered() {
     let (_dir, log) = temp_log(None);
     let (mock, _gate) = MockBackend::holding(Answer::ok());
     let (state, _store) = fixture_with(&mock, crate::config::Config::default(), |meta| {
@@ -106,5 +107,5 @@ async fn a_no_grant_answer_is_not_recorded_as_refused() {
         "premise: the no_grant answer: {answer}"
     );
     let row = the_new_row(&log, before).await;
-    std::assert_ne!(row["response_effect"], "refused", "{row}");
+    std::assert_eq!(row["response_effect"], "delivered", "{row}");
 }
