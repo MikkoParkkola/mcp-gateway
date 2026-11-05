@@ -51,13 +51,21 @@ fn admitted(outcome: Acquire) -> bool {
     !matches!(outcome, Acquire::Refused { .. })
 }
 
-/// Takes every token left at the clock's current time and returns how many.
-fn drain(l: &RateLimiter<StepClock>) -> usize {
+/// Takes every token left at the clock's current time: how many, and the
+/// refusal that stopped it.
+fn drain_to(l: &RateLimiter<StepClock>) -> (usize, Acquire) {
     let mut n = 0;
-    while admitted(l.acquire()) {
+    loop {
+        let outcome = l.acquire();
+        if !admitted(outcome) {
+            return (n, outcome);
+        }
         n += 1;
     }
-    n
+}
+
+fn drain(l: &RateLimiter<StepClock>) -> usize {
+    drain_to(l).0
 }
 
 /// R1, red on a limiter without the reset: after a burst, the clock steps
@@ -119,19 +127,22 @@ fn a_step_back_before_the_first_use_admits() {
 #[test]
 fn a_refusing_limiter_asks_for_a_warn_once_a_minute() {
     let (l, clock) = limiter(Duration::ZERO);
-    drain(&l);
-    assert!(matches!(l.acquire(), Acquire::Refused { warn: true, .. }));
+    assert!(matches!(
+        drain_to(&l).1,
+        Acquire::Refused { warn: true, .. }
+    ));
     for s in 1..60 {
         clock.set(secs(s));
-        drain(&l);
         assert!(
-            matches!(l.acquire(), Acquire::Refused { warn: false, .. }),
+            matches!(drain_to(&l).1, Acquire::Refused { warn: false, .. }),
             "at {s} s"
         );
     }
     clock.set(secs(60));
-    drain(&l);
-    assert!(matches!(l.acquire(), Acquire::Refused { warn: true, .. }));
+    assert!(matches!(
+        drain_to(&l).1,
+        Acquire::Refused { warn: true, .. }
+    ));
 }
 
 /// R4c: a WARN stamp left ahead of the clock by a step back does not mute
@@ -139,11 +150,14 @@ fn a_refusing_limiter_asks_for_a_warn_once_a_minute() {
 #[test]
 fn a_warn_stamp_from_the_future_is_due() {
     let (l, clock) = limiter(secs(3600));
-    drain(&l);
-    assert!(matches!(l.acquire(), Acquire::Refused { warn: true, .. }));
+    assert!(matches!(
+        drain_to(&l).1,
+        Acquire::Refused { warn: true, .. }
+    ));
     clock.set(secs(10));
-    assert_eq!(drain(&l), 50, "the reset call and the rebuilt bucket's 49");
-    assert!(matches!(l.acquire(), Acquire::Refused { warn: true, .. }));
+    let (taken, refusal) = drain_to(&l);
+    assert_eq!(taken, 50, "the reset call and the rebuilt bucket's 49");
+    assert!(matches!(refusal, Acquire::Refused { warn: true, .. }));
 }
 
 /// R5: the default clock is `std::time::Instant`: the bare `RateLimiter`
