@@ -37,7 +37,8 @@ EXTRA_NEEDS = {"windows-check": ["windows-clippy"]}
 # `matrix.shard == 'x'` in any spacing or quoting an expression accepts.
 # The os-sensitive label's clause, as ci.yml's OS jobs spell it (test_os_label_routing.py
 # checks what it routes).
-LABELLED = "contains(github.event.pull_request.labels.*.name, 'os-sensitive')"
+LABEL = "os-sensitive"
+LABELLED = f"contains(github.event.pull_request.labels.*.name, '{LABEL}')"
 # What a labelled lane runs, by OS; an OS absent here never narrows its matrix.
 LABELLED_LEGS = {"macos": ["lib"]}
 # fromJSON(<cond> && '<labelled list>' || '<train list>'), as GitHub reads it:

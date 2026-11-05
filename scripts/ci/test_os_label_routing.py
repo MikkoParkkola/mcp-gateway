@@ -25,12 +25,11 @@ import yaml
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from test_docs_only_gating import ROOT, as_train, ctx, simulate as _simulate  # noqa: E402
 from test_throwaway_routing import evaluate  # noqa: E402
-from test_os_shards import MATRIX  # noqa: E402
+from test_os_shards import LABEL, LABELLED_LEGS, MATRIX  # noqa: E402
 
-LABEL = "os-sensitive"
 LABEL_JOBS = {"windows-shards", "windows-clippy", "windows-check", "macos-shards", "macos-check"}
 # A labelled lane runs macOS's lib shard only: about two macOS runners serve every train.
-LABELLED_MACOS = ["lib"]
+LABELLED_MACOS = LABELLED_LEGS["macos"]
 
 
 def simulate(jobs: dict, c: dict) -> set[str]:
@@ -147,6 +146,9 @@ def self_test(jobs: dict) -> list[str]:
     """Planted mistakes each fail: the label clause on a sixth heavy job, a label job
     that ignores it, a matrix that narrows labelled trains too, and a label that
     skips docs-only changes where the train runs them."""
+    missing = sorted({"kani", "windows-check", "windows-shards", "macos-shards"} - set(jobs))
+    if missing:
+        return [f"self-test: ci.yml lacks {missing}, which the planted mistakes need"]
     errors = []
     narrow_trains = copy.deepcopy(jobs)
     shard = narrow_trains["macos-shards"]["strategy"]["matrix"]
@@ -171,16 +173,13 @@ def self_test(jobs: dict) -> list[str]:
     clause = (f" || (github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line'"
               f" && contains(github.event.pull_request.labels.*.name, '{LABEL}'))")
     widened = copy.deepcopy(jobs)
-    if "kani" in widened:
-        widened["kani"]["if"] = "${{ (" + str(widened["kani"]["if"]).strip()[3:-2].strip() + ")" + clause + " }}"
-        if not any(e.startswith("lane PR:") and "kani" in e for e in routing_errors(widened)):
-            errors.append("self-test: the label clause on kani was not caught")
+    widened["kani"]["if"] = "${{ (" + str(widened["kani"]["if"]).strip()[3:-2].strip() + ")" + clause + " }}"
+    if not any(e.startswith("lane PR:") and "kani" in e for e in routing_errors(widened)):
+        errors.append("self-test: the label clause on kani was not caught")
     narrowed = copy.deepcopy(jobs)
-    if "windows-check" in narrowed:
-        narrowed["windows-check"]["if"] = jobs.get("windows-check", {}).get("if", "")
-        narrowed["windows-check"]["if"] = str(narrowed["windows-check"]["if"]).replace(f"'{LABEL}'", "'other'")
-        if routing_errors(narrowed) == routing_errors(jobs):
-            errors.append("self-test: windows-check ignoring the label was not caught")
+    narrowed["windows-check"]["if"] = str(jobs["windows-check"]["if"]).replace(f"'{LABEL}'", "'other'")
+    if routing_errors(narrowed) == routing_errors(jobs):
+        errors.append("self-test: windows-check ignoring the label was not caught")
     return errors
 
 
