@@ -488,6 +488,9 @@ impl ReloadContext {
         fits_when_filled(&template)?;
         self.validate_template(&target, &template, step.as_ref())
             .await?;
+        // gateway.yaml deleted while the bytes were computed or checked: the
+        // missing file, before any intent or entry exists.
+        Self::still_there(&locked, &self.config_path)?;
         // The operation's own intent, once its checks pass and before any
         // entry or byte changes. Unchanged bytes write nothing but still
         // reload, which applies whatever the disk holds that the running
@@ -552,6 +555,9 @@ impl ReloadContext {
         // The path may have moved, or the config been deleted, while the
         // bytes were computed: refuse before anything is reloaded or staged,
         // rather than report on a config the path no longer names.
+        // Deleted while the entries were created: the missing file; the
+        // entries are discarded, as nothing was written.
+        Self::still_there(locked, &self.config_path)?;
         locked
             .may_write(&self.config_path)
             .map_err(ReplaceError::Unsupported)?;
@@ -577,6 +583,19 @@ impl ReloadContext {
             });
         }
         self.commit(target, current, &new, replaced, entries).await
+    }
+
+    /// `Err(NoConfigFile)` when the file read under this lock is gone now.
+    /// Read from the disk, never from the lock's snapshot: a recovery since
+    /// the lock was taken may have restored it. A link that no longer names
+    /// the locked target, or points at a missing one, is `Failed`, never a
+    /// missing config.
+    fn still_there(locked: &Locked, config: &std::path::Path) -> Result<(), ReplaceError> {
+        match locked.absent(config) {
+            Ok(true) => Err(ReplaceError::NoConfigFile),
+            Ok(false) => Ok(()),
+            Err(why) => Err(ReplaceError::Failed(why)),
+        }
     }
 
     /// Stage, journal, write, reload; then keep the new bytes or put the
