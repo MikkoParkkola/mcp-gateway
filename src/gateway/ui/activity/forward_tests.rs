@@ -81,6 +81,8 @@ enum Rec {
     /// A whole call record, then on the same line this byte repeated past
     /// the record cap: a line that starts with a valid record.
     Padded(u8),
+    /// As `Padded`, the line one byte longer than the record cap.
+    JustOver(u8),
 }
 
 /// What a fixture wrote: each record's place and offsets, in counter order.
@@ -99,7 +101,7 @@ fn mark_of(entry: &Value) -> Mark {
 
 fn body(rec: &Rec, counter: u64) -> Option<Value> {
     let mut e = match rec {
-        Rec::Call(_) | Rec::Big(_) | Rec::Padded(_) => {
+        Rec::Call(_) | Rec::Big(_) | Rec::Padded(_) | Rec::JustOver(_) => {
             let mut w = json!({"account": "a"});
             if let Rec::Call(Some((issuer, subject))) = rec {
                 w["authority"] = (*issuer).into();
@@ -158,10 +160,17 @@ fn write_from(path: &Path, segments: &[Vec<Rec>], first_seq: u64, first_counter:
                     prev = hash;
                     let start = bytes.len() as u64;
                     bytes.extend(e.to_string().as_bytes());
-                    if let Rec::Padded(pad) = rec {
-                        let past_cap = crate::security::transparency_log::pager::ASSEMBLY_WINDOW;
-                        let past_cap = usize::try_from(past_cap).expect("the cap fits in memory");
-                        bytes.extend(std::iter::repeat_n(*pad, past_cap));
+                    let window = crate::security::transparency_log::pager::ASSEMBLY_WINDOW;
+                    let window = usize::try_from(window).expect("the cap fits in memory");
+                    match rec {
+                        Rec::Padded(pad) => bytes.extend(std::iter::repeat_n(*pad, window)),
+                        // The cap is the window less one, its newline included:
+                        // pad the line to the window, one byte past the cap.
+                        Rec::JustOver(pad) => {
+                            let line = bytes.len() - usize::try_from(start).expect("in memory");
+                            bytes.extend(std::iter::repeat_n(*pad, window - line - 1));
+                        }
+                        _ => {}
                     }
                     bytes.push(b'\n');
                     out.marks.push(mark_of(&e));

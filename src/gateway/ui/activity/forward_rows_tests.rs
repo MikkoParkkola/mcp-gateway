@@ -412,11 +412,16 @@ fn a_missing_middle_segment_resets_rather_than_skipping_its_rows() {
 fn head_never_takes_an_over_cap_last_line_that_starts_with_a_record() {
     // A space keeps the whole line valid JSON; an `x` makes it junk after
     // the record. Either way the line is over the cap, so it is no record.
-    for pad in *b" x" {
+    // Padded by the assembly window, and by just enough to pass the cap.
+    for (pad, just_over) in [(b' ', false), (b'x', false), (b' ', true), (b'x', true)] {
         let d = dir();
         let path = d.path().join("inv.jsonl");
         let mut recs = calls(3);
-        recs.push(Rec::Padded(pad));
+        recs.push(if just_over {
+            Rec::JustOver(pad)
+        } else {
+            Rec::Padded(pad)
+        });
         let w = write(&path, &[recs]);
         let complete = &w.marks[2];
         let l = log(&path, StreamKind::Activity);
