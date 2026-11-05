@@ -35,8 +35,9 @@ pub(crate) enum Acquire {
     /// interval, which only a clock that went back produces. The bucket was
     /// rebuilt and this call took a token from it.
     AdmittedAfterClockStep {
-        /// How far ahead of the clock the old state was.
-        ahead_by: Duration,
+        /// The wait the old state would have imposed: at least the step
+        /// back, plus up to one burst's worth of intervals.
+        stale_wait: Duration,
     },
     /// No token. `wait` is the time until the next one; `warn` is true for at
     /// most one refusal per [`WARN_EVERY`].
@@ -109,15 +110,16 @@ impl<C: Clock + Clone + Send + Sync> RateLimiter<C> {
             return Acquire::Admitted;
         };
         let now = self.clock.now();
-        let wait = refused.wait_time_from(now);
+        let mut wait = refused.wait_time_from(now);
         // An admission at `a` leaves the next allowed time at most one
         // interval after `a` (GCRA), so a longer wait means the state is from
         // the future: the clock went back.
         let interval = refused.quota().replenish_interval();
         if wait > interval {
             state.bucket = self.bucket();
-            if state.bucket.check().is_ok() {
-                return Acquire::AdmittedAfterClockStep { ahead_by: wait };
+            match state.bucket.check() {
+                Ok(_) => return Acquire::AdmittedAfterClockStep { stale_wait: wait },
+                Err(refused) => wait = refused.wait_time_from(now),
             }
         }
 

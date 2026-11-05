@@ -54,14 +54,15 @@ fn admitted(outcome: Acquire) -> bool {
 /// Takes every token left at the clock's current time: how many, and the
 /// refusal that stopped it.
 fn drain_to(l: &RateLimiter<StepClock>) -> (usize, Acquire) {
-    let mut n = 0;
-    loop {
+    // No bucket here holds more than its burst of 50: more admissions mean
+    // a bucket that never empties, which fails here instead of hanging.
+    for n in 0..=50 {
         let outcome = l.acquire();
         if !admitted(outcome) {
             return (n, outcome);
         }
-        n += 1;
     }
+    panic!("more than one burst admitted at one instant");
 }
 
 fn drain(l: &RateLimiter<StepClock>) -> usize {
@@ -77,7 +78,7 @@ fn a_clock_stepped_back_an_hour_admits_the_next_call() {
     assert_eq!(drain(&l), 50);
     clock.set(secs(10));
     assert!(
-        matches!(l.acquire(), Acquire::AdmittedAfterClockStep { ahead_by } if ahead_by > secs(3599)),
+        matches!(l.acquire(), Acquire::AdmittedAfterClockStep { stale_wait } if stale_wait > secs(3599)),
         "a refusal asking for an hour's wait is a clock step"
     );
 }
@@ -182,10 +183,15 @@ fn racing_callers_after_a_step_share_one_rebuilt_bucket() {
     drain(&l);
     clock.set(secs(10));
     let l = Arc::new(l);
+    let start = Arc::new(std::sync::Barrier::new(8));
     let outcomes: Vec<Acquire> = (0..8)
         .map(|_| {
             let l = Arc::clone(&l);
-            std::thread::spawn(move || (0..20).map(|_| l.acquire()).collect::<Vec<_>>())
+            let start = Arc::clone(&start);
+            std::thread::spawn(move || {
+                start.wait();
+                (0..20).map(|_| l.acquire()).collect::<Vec<_>>()
+            })
         })
         .collect::<Vec<_>>()
         .into_iter()
@@ -214,4 +220,25 @@ fn small_steps_back_admit_within_one_interval() {
     }
     clock.set(secs(999));
     assert!(admitted(l.acquire()));
+}
+
+/// The public `try_acquire` keeps its answers, and a disabled limiter admits
+/// without a bucket.
+#[test]
+fn try_acquire_and_a_disabled_limiter_keep_their_answers() {
+    let (l, clock) = limiter(secs(3610));
+    for _ in 0..50 {
+        assert!(l.try_acquire());
+    }
+    assert!(!l.try_acquire());
+    clock.set(secs(10));
+    assert!(
+        l.try_acquire(),
+        "a step back admits through try_acquire too"
+    );
+
+    l.set_enabled(false);
+    for _ in 0..1000 {
+        assert_eq!(l.acquire(), Acquire::Admitted);
+    }
 }

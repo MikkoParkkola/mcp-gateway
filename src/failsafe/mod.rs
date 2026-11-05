@@ -154,10 +154,10 @@ impl Failsafe {
 fn settle(backend: &str, outcome: Acquire) -> crate::Result<()> {
     match outcome {
         Acquire::Admitted => Ok(()),
-        Acquire::AdmittedAfterClockStep { ahead_by } => {
+        Acquire::AdmittedAfterClockStep { stale_wait } => {
             tracing::warn!(
                 backend,
-                ahead_by_ms = u64::try_from(ahead_by.as_millis()).unwrap_or(u64::MAX),
+                stale_wait_ms = u64::try_from(stale_wait.as_millis()).unwrap_or(u64::MAX),
                 "backend rate limiter clock stepped back; bucket reset"
             );
             Ok(())
@@ -268,14 +268,14 @@ mod tests {
     }
 
     /// A clock-step reset admits the call and logs a WARN naming the backend
-    /// and how far ahead of the clock the old bucket was.
+    /// and the wait the old bucket would have imposed.
     #[test]
     fn a_clock_step_reset_admits_and_warns_with_the_backend() {
         let (answer, log) = crate::test_log_capture::capture_warnings(|| {
             settle(
                 "alpha",
                 Acquire::AdmittedAfterClockStep {
-                    ahead_by: Duration::from_secs(3600),
+                    stale_wait: Duration::from_secs(3600),
                 },
             )
         });
@@ -285,7 +285,7 @@ mod tests {
             .find(|l| l.contains("backend rate limiter clock stepped back; bucket reset"))
             .unwrap_or_else(|| panic!("no reset WARN in {log}"));
         assert!(line.contains("backend=\"alpha\""), "{line}");
-        assert!(line.contains("ahead_by_ms=3600000"), "{line}");
+        assert!(line.contains("stale_wait_ms=3600000"), "{line}");
     }
 
     /// A refusing limiter logs one WARN per backend naming the backend and
