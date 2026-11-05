@@ -759,6 +759,12 @@ mod slot_verdict_listing_tests;
 mod slot_verdict_listing_variant_tests;
 #[cfg(test)]
 mod slot_verdict_tests;
+/// Each refused exit of a stored read names the check that refused it.
+#[cfg(test)]
+mod stored_refusal_exit_tests;
+/// A withheld task notification names the check that refused its stored output.
+#[cfg(test)]
+mod task_notify_refused_by_tests;
 #[cfg(test)]
 mod task_notify_tests;
 /// MIK-8340 row 10: a listing follows the caller's own catalogue.

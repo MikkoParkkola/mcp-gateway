@@ -16,7 +16,7 @@ pub(super) const ROOTS: [&str; 3] = ["src/lib.rs", "src/main.rs", "src/bin/prove
 
 /// Plain-error refusal gaps, each closed by its follow-up, which deletes the
 /// slug here when it flips the last `pending:<slug>` row.
-const PENDING: [&str; 2] = ["inv2-credential-miss", "unbindable-confirmation"];
+const PENDING: [&str; 0] = [];
 
 /// Every `crate::Error` variant that is not one of the twelve: covered by
 /// the refusal scan in `delivery_framing.rs` (`Forbidden`, `GatewayRefused`,
@@ -115,6 +115,7 @@ fn the_raise_set_is_every_effect_writer() {
             "outlet",
             "raise",
             "refused",
+            "refused_by",
             "refused_while_vouched",
             "withheld"
         ]),
@@ -354,104 +355,6 @@ fn every_plain_refusal_construction_is_classified() {
     }
 }
 
-/// The bare `Error::BackendNotFound(..)` constructions in
-/// `list_tools_single_server`, in source order, each marked when it is the
-/// credential miss (inside the `let .. = self.tool_credential_for(..) else`).
-fn credential_miss_ordinal(source: &str) -> usize {
-    use syn::visit::Visit;
-    struct Find {
-        in_miss: bool,
-        in_raise: bool,
-        seen: usize,
-        miss: Option<usize>,
-    }
-    impl<'ast> Visit<'ast> for Find {
-        fn visit_local(&mut self, local: &'ast syn::Local) {
-            let miss = local.init.as_ref().is_some_and(|init| {
-                init.diverge.is_some() && quote_text(&init.expr).contains("tool_credential_for")
-            });
-            let saved = {
-                let now = self.in_miss || miss;
-                std::mem::replace(&mut self.in_miss, now)
-            };
-            syn::visit::visit_local(self, local);
-            self.in_miss = saved;
-        }
-        fn visit_expr_call(&mut self, call: &'ast syn::ExprCall) {
-            let raise = matches!(&*call.func, syn::Expr::Path(p)
-                if p.path.segments.iter().any(|s| s.ident == super::plain_refusals::FACTS));
-            if let syn::Expr::Path(p) = &*call.func
-                && !self.in_raise
-                && p.path
-                    .segments
-                    .iter()
-                    .map(|s| s.ident.to_string())
-                    .collect::<Vec<_>>()
-                    .ends_with(&["Error".to_string(), "BackendNotFound".to_string()])
-            {
-                self.seen += 1;
-                if self.in_miss {
-                    self.miss.get_or_insert(self.seen);
-                }
-            }
-            let saved = {
-                let now = self.in_raise || raise;
-                std::mem::replace(&mut self.in_raise, now)
-            };
-            syn::visit::visit_expr_call(self, call);
-            self.in_raise = saved;
-        }
-    }
-    fn quote_text(expr: &syn::Expr) -> String {
-        struct Idents<'a>(&'a mut String);
-        impl<'ast> Visit<'ast> for Idents<'_> {
-            fn visit_ident(&mut self, ident: &'ast syn::Ident) {
-                self.0.push_str(&ident.to_string());
-                self.0.push(' ');
-            }
-        }
-        let mut text = String::new();
-        Idents(&mut text).visit_expr(expr);
-        text
-    }
-    let parsed = syn::parse_file(source).expect("search.rs parses");
-    let mut find = Find {
-        in_miss: false,
-        in_raise: false,
-        seen: 0,
-        miss: None,
-    };
-    for item in &parsed.items {
-        let syn::Item::Impl(block) = item else {
-            continue;
-        };
-        for inner in &block.items {
-            if let syn::ImplItem::Fn(func) = inner
-                && func.sig.ident == "list_tools_single_server"
-            {
-                find.visit_impl_item_fn(func);
-            }
-        }
-    }
-    find.miss
-        .expect("the credential-miss BackendNotFound is in list_tools_single_server")
-}
-
-#[test]
-fn the_inv2_credential_miss_is_pending() {
-    let source = std::fs::read_to_string(crate_root().join("src/gateway/meta_mcp/search.rs"))
-        .expect("search.rs reads");
-    let ordinal = credential_miss_ordinal(&source);
-    let key = format!(
-        "src/gateway/meta_mcp/search.rs\tlist_tools_single_server\tError::BackendNotFound(..)\t{ordinal}\t"
-    );
-    let line = rows(include_str!("delivery_plain_refusals.tsv"))
-        .into_iter()
-        .find(|l| l.starts_with(&key))
-        .unwrap_or_else(|| panic!("no row for the credential miss: {key}"));
-    assert_eq!(row(line).class, "pending:inv2-credential-miss", "{line}");
-}
-
 fn error_enum(source: &str) -> syn::ItemEnum {
     syn::parse_file(source)
         .expect("src/error.rs parses")
@@ -608,10 +511,11 @@ fn unbindable_ordinal(source: &str) -> usize {
         .expect("the unbindable_caller refusal is in confirm_destructive_task_with")
 }
 
-/// Site-pinned like the credential miss (code review): moving the pending
-/// class onto a neighbouring refuse call fails.
+/// Site-pinned like the credential miss (code review): moving the recorded
+/// class onto a neighbouring refuse call fails. The unbindable answer raises
+/// `refused` in `confirm_destructive_task_with`.
 #[test]
-fn the_unbindable_confirmation_is_pending() {
+fn the_unbindable_confirmation_is_recorded() {
     let source =
         std::fs::read_to_string(crate_root().join("src/gateway/meta_mcp/task_confirmation.rs"))
             .expect("task_confirmation.rs reads");
@@ -623,7 +527,7 @@ fn the_unbindable_confirmation_is_pending() {
         .into_iter()
         .find(|l| l.starts_with(&key))
         .unwrap_or_else(|| panic!("no row for the unbindable refusal: {key}"));
-    assert_eq!(row(line).class, "pending:unbindable-confirmation", "{line}");
+    assert_eq!(row(line).class, "recorded", "{line}");
 }
 
 /// Every raise helper has at least one caller row (code review, muse): a

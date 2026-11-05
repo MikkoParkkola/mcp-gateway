@@ -148,9 +148,11 @@ async fn a_firewall_refused_bridged_round_records_refused_only_while_vouched() {
                     ..FirewallConfig::default()
                 },
             };
-            meta.set_firewall(Some(Arc::new(
+            let firewall = Arc::new(
                 Firewall::from_config(config, None).with_continuations(meta.continuation()),
-            )));
+            );
+            crate::security::firewall::collusion_live_rig::seed_meta(&meta, &firewall);
+            meta.set_firewall(Some(firewall));
             let slot = Arc::new(Slot::default());
             backend
                 .set_transport_for_test(Arc::clone(&slot) as Arc<dyn crate::transport::Transport>);

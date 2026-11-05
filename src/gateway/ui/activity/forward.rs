@@ -24,7 +24,8 @@ use std::path::Path;
 use serde_json::Value;
 
 use super::access::Access;
-use super::reader::{Limits, Line, WINDOW, Which, read_page};
+pub(in crate::gateway::ui) use super::reader::Limits;
+use super::reader::{Line, WINDOW, Which, read_page};
 use super::rows::{Kind, kind_of, row};
 
 /// After this many restarts in one catch-up, the page ends in `reset`, so a
@@ -130,7 +131,7 @@ pub(in crate::gateway::ui) struct Diagnostics {
 
 /// Rows after `cursor` up to and including `stop`, oldest first. `None` for
 /// `cursor` starts at the log's oldest kept record.
-pub(super) fn rows_after(
+pub(in crate::gateway::ui) fn rows_after(
     log: &Log<'_>,
     cursor: Option<&Mark>,
     stop: Option<&Mark>,
@@ -315,7 +316,7 @@ enum Outcome {
 }
 
 /// A record's place, from its own counter and entry hash.
-fn mark_of(entry: &Value) -> Option<Mark> {
+pub(in crate::gateway::ui) fn mark_of(entry: &Value) -> Option<Mark> {
     let counter = entry.get("counter")?.as_u64()?;
     let hash = entry.get("entry_hash")?.as_str()?.strip_prefix("sha256:")?;
     Some(Mark {

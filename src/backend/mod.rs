@@ -378,6 +378,9 @@ pub struct Backend {
     /// Where this instance's nudges go, set when a registry with a change feed
     /// holds it.
     nudge_feed: std::sync::OnceLock<tools_nudge::NudgeFeed>,
+    /// The stop deadline of the registry that holds this instance, set when
+    /// it is registered; each stdio transport it builds joins it.
+    pub(crate) stop_deadline: std::sync::OnceLock<Arc<crate::transport::StopDeadline>>,
     /// Whether a per-user store nudge is queued and unread (`MIK-8148`).
     views_dirty: tools_nudge::ViewsDirty,
     /// A tool the next drain snapshot blocks between reading the descriptor
@@ -602,7 +605,7 @@ pub(crate) struct CleanupState {
     /// design M1): a replaced transport held by a busy caller or an orphaned
     /// entry is still here, so [`Backend::retire_now`] reaches it. An entry
     /// dies with its last strong reference; the next registration prunes it.
-    pub(crate) live: Vec<std::sync::Weak<dyn crate::transport::Transport>>,
+    pub(crate) live: Vec<std::sync::Weak<dyn crate::transport::LiveTree>>,
 }
 
 // The cells read counters from a local Prometheus render.
@@ -693,6 +696,10 @@ mod a2a_lent_slot_tests;
 #[cfg(all(test, unix))]
 #[path = "frame_limit_start_tests.rs"]
 mod frame_limit_start_tests;
+
+#[cfg(all(test, unix))]
+#[path = "stop_deadline_tests.rs"]
+mod stop_deadline_tests;
 
 #[cfg(test)]
 #[path = "stateless_tools_slot_tests.rs"]

@@ -21,18 +21,31 @@ impl Backend {
     /// taken from the pool: [`Self::stop`] still closes every transport under
     /// its own deadline, and each close waits for the reap this started.
     pub(crate) fn retire_now(&self) {
-        let live: Vec<Arc<dyn Transport>> = {
-            let mut cleanups = self.replaced_transport_cleanups.lock();
-            cleanups.stopping = true;
-            cleanups
-                .live
-                .iter()
-                .filter_map(std::sync::Weak::upgrade)
-                .collect()
-        };
-        for transport in live {
-            transport.kill_tree_now();
+        for tree in self.live_stdio() {
+            tree.kill_now();
         }
+    }
+
+    /// [`Self::retire_now`]'s graceful twin, for a healthy backend let go
+    /// (an idle capability child): latch `stopping` and hand every live tree
+    /// to the reaper now, synchronously and without a runtime, with the MCP
+    /// stdio order planned to fit `budget`. The async stop that follows only
+    /// waits for those reaps.
+    pub(crate) fn hand_over_now(&self, budget: Duration) {
+        for tree in self.live_stdio() {
+            tree.hand_over_gracefully(budget);
+        }
+    }
+
+    /// Latch `stopping` and take every live stdio transport, pooled or not.
+    fn live_stdio(&self) -> Vec<Arc<dyn crate::transport::LiveTree>> {
+        let mut cleanups = self.replaced_transport_cleanups.lock();
+        cleanups.stopping = true;
+        cleanups
+            .live
+            .iter()
+            .filter_map(std::sync::Weak::upgrade)
+            .collect()
     }
 
     /// Stop the backend, draining every pooled transport slot.
@@ -212,24 +225,20 @@ impl Backend {
     /// the writer mutex, which a request blocked writing to a child that has
     /// stopped reading can hold indefinitely, and HTTP closes its sessions one
     /// after another. Without a bound here one wedged backend hangs gateway
-    /// shutdown forever - and stopping backends concurrently does not help,
-    /// because joining them waits for the slowest.
+    /// shutdown forever. The closes run together, so every pooled child gets
+    /// its EOF at once and their exit waits overlap rather than add up. The
+    /// stage ends at the caller's stop deadline when there is one (a gateway
+    /// shutdown), else after `budget`; each close plans its waits to fit.
     pub(super) async fn close_pooled_transports(
         &self,
         transports: Vec<Arc<dyn Transport>>,
         budget: Duration,
     ) {
-        let until = tokio::time::Instant::now() + budget;
-        for transport in transports {
-            let remaining = until.saturating_duration_since(tokio::time::Instant::now());
-            if remaining.is_zero() {
-                warn!(
-                    backend = %self.name,
-                    "Ran out of time closing pooled transports; abandoning the rest"
-                );
-                return;
-            }
-            match tokio::time::timeout(remaining, transport.close()).await {
+        let until = crate::transport::stop_deadline()
+            .unwrap_or_else(|| tokio::time::Instant::now() + budget);
+        let closes = transports.into_iter().map(|transport| async move {
+            let close = crate::transport::within_stop_deadline(until, transport.close());
+            match tokio::time::timeout_at(until, close).await {
                 Ok(Err(error)) => {
                     warn!(backend = %self.name, %error, "Failed to close pooled transport");
                 }
@@ -241,7 +250,8 @@ impl Backend {
                 }
                 Ok(Ok(())) => {}
             }
-        }
+        });
+        futures::future::join_all(closes).await;
     }
 
     /// Wait for starts that were already under way when shutdown began.

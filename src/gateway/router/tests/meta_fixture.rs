@@ -71,6 +71,43 @@ async fn fixture_with(
     agent_auth: AgentAuthState,
     configure: impl FnOnce(MetaMcp) -> MetaMcp,
 ) -> Fixture {
+    fixture_with_logs(auth, key_server, agent_auth, configure, None, None).await
+}
+
+/// A gateway with `auth` and no key server, writing to these transparency
+/// loggers, with the live stream's readers attached to them as server start
+/// attaches them.
+#[cfg(feature = "webui")]
+pub(in crate::gateway::router) async fn test_router_app_state_with_logs(
+    auth: &AuthConfig,
+    transparency_log: Option<Arc<crate::security::TransparencyLogger>>,
+    governance_log: Option<Arc<crate::security::TransparencyLogger>>,
+) -> Fixture {
+    let agent_auth = AgentAuthState::new(false, Arc::new(AgentRegistry::new()));
+    let fixture = fixture_with_logs(
+        auth,
+        None,
+        agent_auth,
+        |m| m,
+        transparency_log,
+        governance_log,
+    )
+    .await;
+    fixture.0.dashboard_bootstrap.stream_hub().attach_logs(
+        fixture.0.transparency_log.as_deref(),
+        fixture.0.governance_log.as_deref(),
+    );
+    fixture
+}
+
+async fn fixture_with_logs(
+    auth: &AuthConfig,
+    key_server: Option<Arc<crate::key_server::KeyServer>>,
+    agent_auth: AgentAuthState,
+    configure: impl FnOnce(MetaMcp) -> MetaMcp,
+    transparency_log: Option<Arc<crate::security::TransparencyLogger>>,
+    governance_log: Option<Arc<crate::security::TransparencyLogger>>,
+) -> Fixture {
     // As the gateway builds it: one resolver for every backend's secrets.
     let backends = Arc::new(BackendRegistry::with_secret_resolver(Arc::new(
         crate::secrets::SecretResolver::new(),
@@ -122,7 +159,8 @@ async fn fixture_with(
         control_plane_base: None,
         live_config: Arc::clone(&live_config),
         export_status: None,
-        transparency_log: None,
+        transparency_log,
+        governance_log,
         dashboard_bootstrap: std::sync::Arc::new(crate::gateway::auth::DashboardBootstrap::new()),
         tasks: task_service,
         task_executor,

@@ -68,6 +68,8 @@ struct Inner {
 struct Shared {
     boot: u64,
     inner: Mutex<Inner>,
+    /// The live feeds of the invocation and governance logs, in that order.
+    feeds: [Arc<super::feed::LogFeed>; 2],
     snapshot: watch::Sender<Snapshot>,
     /// Held by a watcher for its whole publishing life, so two never publish
     /// at once. A successor starts only after the previous watcher was
@@ -143,6 +145,10 @@ impl StreamHub {
             shared: Arc::new(Shared {
                 boot: rand::rng().random(),
                 inner: Mutex::new(Inner::default()),
+                feeds: [
+                    Arc::new(super::feed::LogFeed::new(super::id::LogName::Invocation)),
+                    Arc::new(super::feed::LogFeed::new(super::id::LogName::Governance)),
+                ],
                 snapshot: watch::channel(Snapshot::default()).0,
                 publish_lock: Arc::new(tokio::sync::Mutex::new(())),
                 #[cfg(test)]
@@ -153,6 +159,27 @@ impl StreamHub {
                 awaiting_room: std::sync::atomic::AtomicUsize::new(0),
             }),
         }
+    }
+
+    /// The live feed of one log.
+    pub(super) fn feed(&self, log: super::id::LogName) -> &Arc<super::feed::LogFeed> {
+        &self.shared.feeds[log as usize]
+    }
+
+    /// Attach the stream's readers to the gateway's two loggers, once per
+    /// process (server start); a later call attaches nothing. A gateway with
+    /// no governance log has no config feed. Returns how many it attached.
+    pub(crate) fn attach_logs(
+        &self,
+        invocation: Option<&crate::security::TransparencyLogger>,
+        governance: Option<&crate::security::TransparencyLogger>,
+    ) -> usize {
+        let attach = |log: super::id::LogName,
+                      logger: Option<&crate::security::TransparencyLogger>| {
+            logger.is_some_and(|l| self.feed(log).attach(l))
+        };
+        usize::from(attach(super::id::LogName::Invocation, invocation))
+            + usize::from(attach(super::id::LogName::Governance, governance))
     }
 
     /// This process's random boot id.

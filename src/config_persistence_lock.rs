@@ -52,6 +52,10 @@ pub(crate) enum NotLocked {
     /// platform). Writing anyway would be the unlocked write the lock
     /// exists to prevent, so the write is refused.
     Failed(String),
+    /// The lock was taken, but the pending recovery it runs first found a
+    /// replace journal or staged original the config guard refuses; nothing
+    /// was restored. The text names no path.
+    Refused(String),
 }
 
 /// One attempt. `Ok(None)` means another writer holds the lock.
@@ -436,7 +440,10 @@ fn acquire(
             // to do by hand.
             let (recovered, journal_pending) = match recovery {
                 Recovery::OnAcquire => (
-                    super::journal::recover(&target).map_err(NotLocked::Failed)?,
+                    super::journal::recover(&target).map_err(|e| match e {
+                        super::journal::NotRecovered::Refused(why) => NotLocked::Refused(why),
+                        super::journal::NotRecovered::Failed(why) => NotLocked::Failed(why),
+                    })?,
                     false,
                 ),
                 Recovery::Deferred => (Recovered::Nothing, super::journal::exists(&target)),

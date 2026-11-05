@@ -7,6 +7,7 @@ src/gateway/delivery_facts.rs	outlet	echo_refusal_delivered	1
 src/gateway/delivery_facts.rs	outlet	raise	1
 src/gateway/delivery_facts.rs	raise	facts.effect =	1
 src/gateway/delivery_facts.rs	refused	raise	1
+src/gateway/delivery_facts.rs	refused_by	facts.effect =	1
 src/gateway/delivery_facts.rs	refused_before_step	facts.last_step = Refused	1
 src/gateway/delivery_facts.rs	refused_while_vouched	facts.effect =	1
 src/gateway/delivery_facts.rs	step	facts.last_step = Refused	1
@@ -64,14 +65,15 @@ src/gateway/meta_mcp/invoke/send.rs	admit_send	refused_while_vouched	1
 src/gateway/meta_mcp/invoke/worker_clock.rs	seal	via note	1
 src/gateway/meta_mcp/protocol.rs	handle_prompts_get	raise	2
 src/gateway/meta_mcp/response_security/error_answers.rs	error_response_preserving_status	outlet	1
-src/gateway/meta_mcp/search.rs	list_tools_single_server	refused	1
+src/gateway/meta_mcp/search.rs	list_tools_single_server	refused	2
 src/gateway/meta_mcp/search/chain_exec.rs	resume_fingerprint	withheld	2
 src/gateway/meta_mcp/signing.rs	finalize_gateway_invoke_response	via note	1
 src/gateway/meta_mcp/support.rs	augment_with_predictions	via insert_noted	1
 src/gateway/meta_mcp/support.rs	augment_with_provenance	via note_written	1
 src/gateway/meta_mcp/support.rs	augment_with_trace	via note_written	1
 src/gateway/meta_mcp/support.rs	note_written	via note	1
-src/gateway/meta_mcp/task_replay.rs	deliver	raise	1
+src/gateway/meta_mcp/task_confirmation.rs	confirm_destructive_task_with	refused	1
+src/gateway/meta_mcp/task_replay.rs	deliver	refused_by	1
 src/gateway/router/backend_handlers.rs	guard_tool_call	raise	1
 src/gateway/router/backend_handlers/direct_audit.rs	audited_call_judged	raise	1
 src/gateway/router/backend_handlers/direct_dispatch.rs	answer_failure	raise	1

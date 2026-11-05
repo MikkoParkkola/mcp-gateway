@@ -14,10 +14,12 @@ use super::scan::{Place, Sink, walk};
 
 const ROOTS: [&str; 3] = ["src/lib.rs", "src/main.rs", "src/bin/provenance-eval.rs"];
 
-/// The keyed request scans: the meta chokepoint (stdio), the direct route,
-/// the `/mcp` route stage, the watch poll, and the public `check_request`
-/// itself, which delegates with the key not known.
-const KEYED_CALLERS: usize = 5;
+/// The keyed request scans, through either keyed entry point: the meta
+/// chokepoint (stdio), the watch poll and the public `check_request` (which
+/// delegates with the key not known) call `check_request_keyed`; the direct
+/// route, the `/mcp` route stage and `check_request_keyed` itself call
+/// `check_request_attributed`, which also names the deciding rule.
+const KEYED_CALLERS: usize = 6;
 
 #[derive(Default)]
 struct Calls {
@@ -40,7 +42,7 @@ impl Sink for Calls {
     fn expr(&mut self, at: &Place, expr: &syn::Expr) {
         match called(expr).as_deref() {
             Some("check_request") => self.unkeyed.push(at.file.clone()),
-            Some("check_request_keyed") => self.keyed += 1,
+            Some("check_request_keyed" | "check_request_attributed") => self.keyed += 1,
             _ => {}
         }
     }

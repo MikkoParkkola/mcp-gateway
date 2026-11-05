@@ -64,6 +64,10 @@ pub(crate) struct DispatchNotes {
     /// MIN.2: a backend answered this call (its raw response reached the
     /// response gates); a gateway refusal returned as a result did not.
     responded: bool,
+    /// This call's dispatch missed a backend its gate also found
+    /// unregistered: recorded `not_found` and denied with -32001, for this
+    /// call only.
+    not_found: bool,
     /// Whether this call's last step was a refusal before its backend.
     pre_send: crate::gateway::meta_mcp::dispatch_log::PreSend,
     /// MIN.1 gap 1: the gateway task whose raw upstream handle this dispatch
@@ -85,9 +89,11 @@ pub(crate) struct DispatchNotes {
 mod decision;
 #[path = "audit_replay.rs"]
 mod replay;
+#[cfg(test)]
+pub(crate) use decision::take_refusal_kind;
 pub(crate) use decision::{
-    after_upstream_401, note_declared_effect, note_refused_by, note_send_refusal,
-    take_refusal_kind, take_route_noted, with_route_scope,
+    after_upstream_401, note_declared_effect, note_refused_by, note_send_refusal, noted,
+    take_refusal, take_route_noted, with_route_scope,
 };
 
 /// Most process notes one record carries (a playbook may run many).
@@ -124,6 +130,11 @@ tokio::task_local! {
 /// Outside [`with_dispatch_scope`] (upstream task recovery) this does nothing.
 fn note(f: impl FnOnce(&mut DispatchNotes)) {
     let _ = NOTES.try_with(|notes| f(&mut notes.borrow_mut()));
+}
+
+/// Note that this call's dispatch missed a backend its gate found absent.
+pub(super) fn note_not_found() {
+    note(|notes| notes.not_found = true);
 }
 
 /// Note what this call's last pre-send step decided: a refusal before its
@@ -514,7 +525,7 @@ impl MetaMcp {
         mut notes: DispatchNotes,
     ) -> Result<Value> {
         // D4: counted before the log check, so auth off still counts.
-        let withheld = super::gate::count_meta_denial(args, &result);
+        let withheld = super::denial::count_meta_denial(args, &result, notes.not_found);
         self.count_invocation(args, caller, &result, &notes, withheld);
         let Some(log) = self.transparency_logger.as_ref() else {
             return result;
@@ -525,15 +536,15 @@ impl MetaMcp {
         let outcome = notes.outcome(outcome);
         // A withheld target's record carries the memo's code, so its check.
         if withheld.is_some()
-            && let Some(kind) = args
+            && let Some(refusal) = args
                 .get("server")
                 .and_then(Value::as_str)
                 .zip(args.get("tool").and_then(Value::as_str))
                 .and_then(|(server, tool)| {
-                    crate::gateway::meta_mcp::visible::memo::denial_kind(server, tool)
+                    crate::gateway::meta_mcp::visible::memo::denial(server, tool)
                 })
         {
-            notes.refused_by_memo(kind);
+            notes.refused_by_memo(refusal);
         }
         // Boxed: held across the write, it would grow every dispatch future.
         let decision = Box::new(notes.decided(self, outcome));

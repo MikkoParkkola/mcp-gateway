@@ -24,7 +24,6 @@ async fn stdio_admission_refusal_writes_one_record() {
     meta.enable_transparency_log(logger(&dir, AuditFailurePolicy::BestEffort));
     meta.set_capabilities(capability_backend(endpoint.port, ("api_key", "alice")));
     let meta = Arc::new(meta);
-    let tool_policy = Arc::new(crate::security::ToolPolicy::default());
     let mtls_policy = Arc::new(crate::mtls::MtlsPolicy::from_config(
         &crate::mtls::MtlsConfig::default(),
     ));
@@ -44,7 +43,7 @@ async fn stdio_admission_refusal_writes_one_record() {
 
     let response = super::super::Gateway::dispatch_single_for_client(
         &meta,
-        &tool_policy,
+        &crate::gateway::authz::default_line(&meta),
         &mtls_policy,
         request,
         super::super::StdioClient {

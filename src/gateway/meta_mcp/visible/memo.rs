@@ -4,7 +4,6 @@
 //! way to read or write them, and every accessor the rest of the gateway uses.
 //! A task worker's judgement ([`Judged`]) lives beside it.
 
-use super::absent::absent_name;
 use super::deferred::{DeferredReplay, DeferredReplayKey};
 use super::{Visibility, Withholding};
 
@@ -24,7 +23,7 @@ struct VisibilityMemo {
     /// (`http_nonce_alloc` ALLOC.2).
     carried_credential: Keyed<TargetKey, Box<Carried>>,
     /// MIK-8361: the route stage's refusal code, for the call's one record.
-    denial_code: Keyed<TargetKey, (i32, Option<crate::security::decision_record::DecisionKind>)>,
+    denial_code: Keyed<TargetKey, (i32, Option<crate::security::decision_record::Refusal>)>,
     judged: parking_lot::Mutex<Judged>,
     /// MIK-8392: each target account's liveness, filled once per request by
     /// the async pre-pass and only read after it. Never a [`Visibility`]: an
@@ -47,6 +46,10 @@ struct VisibilityMemo {
     /// carried to that target's dispatch so it answers without resolving
     /// (and auditing) a second time in one request.
     resolution_error: Keyed<TargetKey, crate::Error>,
+    /// Targets whose gate found the backend unregistered for an unscoped
+    /// caller, provisionally: the dispatch takes the mark, and only a miss
+    /// there too records `not_found`.
+    gate_absent: Keyed<TargetKey, ()>,
     /// The surfaced state this request reads, taken at its first
     /// surfaced read, so a reload mid-request cannot split it across two maps.
     surfaced: parking_lot::Mutex<Option<std::sync::Arc<super::SurfacedState>>>,
@@ -514,11 +517,11 @@ pub(crate) fn note_denial_code(
     server: &str,
     tool: &str,
     code: i32,
-    kind: Option<crate::security::decision_record::DecisionKind>,
+    refusal: Option<crate::security::decision_record::Refusal>,
 ) {
     in_memo(|memo| {
         memo.denial_code
-            .first(target_key(server, tool), (code, kind))
+            .first(target_key(server, tool), (code, refusal))
     });
 }
 
@@ -527,18 +530,19 @@ pub(crate) fn denial_code(server: &str, tool: &str) -> Option<i32> {
     kept_denial(server, tool).map(|(code, _)| code)
 }
 
-/// The check [`note_denial_code`] kept for `(server, tool)`, if any.
-pub(crate) fn denial_kind(
+/// The check and its rule [`note_denial_code`] kept for `(server, tool)`, as
+/// one pair read in one lookup.
+pub(crate) fn denial(
     server: &str,
     tool: &str,
-) -> Option<crate::security::decision_record::DecisionKind> {
-    kept_denial(server, tool).and_then(|(_, kind)| kind)
+) -> Option<crate::security::decision_record::Refusal> {
+    kept_denial(server, tool).and_then(|(_, refusal)| refusal)
 }
 
 fn kept_denial(
     server: &str,
     tool: &str,
-) -> Option<(i32, Option<crate::security::decision_record::DecisionKind>)> {
+) -> Option<(i32, Option<crate::security::decision_record::Refusal>)> {
     in_memo(|memo| {
         memo.denial_code
             .get(&target(server, tool) as &(dyn Pair + '_))
@@ -572,7 +576,7 @@ pub(crate) async fn with_visibility_memo<F: std::future::Future>(request: F) -> 
 ///
 /// # Errors
 ///
-/// [`absent_name`] when the memo records `server`'s `tool` as withheld.
+/// [`absent_name`](super::absent::absent_name) when the memo records `server`'s `tool` as withheld.
 pub(crate) fn refuse_withheld(server: &str, tool: &str) -> crate::Result<()> {
     absent_if_withheld(recorded_visibility(server, tool), tool)
 }
@@ -583,16 +587,10 @@ pub(crate) fn refuse_withheld(server: &str, tool: &str) -> crate::Result<()> {
 ///
 /// # Errors
 ///
-/// [`absent_name`] when `judged` is withheld.
+/// [`absent_name`](super::absent::absent_name) when `judged` is withheld.
 pub(crate) fn absent_if_withheld(judged: Option<Visibility>, tool: &str) -> crate::Result<()> {
-    match judged {
-        Some(Visibility::Withheld(reason)) => {
-            // The record names the real reason; the caller sees an absent name.
-            crate::gateway::meta_mcp::invoke::audit::note_refused_by(reason.kind(), None);
-            Err(absent_name(tool))
-        }
-        _ => Ok(()),
-    }
+    super::absent::absent_if_withheld_explained(judged, tool)
+        .map_err(crate::gateway::meta_mcp::invoke::audit::noted)
 }
 
 /// Record that this request's account check of `(server, account)` did not
@@ -786,6 +784,9 @@ pub(super) enum Scoped<T> {
 pub(super) fn recorded_in_scope(server: &str, tool: &str) -> Scoped<Option<Visibility>> {
     in_memo(|memo| memo.recorded(server, tool)).map_or(Scoped::NoMemo, Scoped::InMemo)
 }
+
+mod gate_absent;
+pub(crate) use gate_absent::{clear_gate_absent, mark_gate_absent, take_gate_absent};
 
 #[cfg(test)]
 mod account_tests;

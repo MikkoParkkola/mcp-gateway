@@ -10,21 +10,22 @@ src/gateway/meta_mcp/invoke/admin.rs	get_cost_report	Error::Config(..) wrapped	1
 src/gateway/meta_mcp/invoke/admin.rs	get_cost_report	Error::Config(..) wrapped	2	recorded	src/gateway/meta_mcp/invoke/admin.rs::get_cost_report
 src/gateway/meta_mcp/invoke/chokepoint.rs	authorize_requested_target	Error::ToolNotFound(..)	1	recorded	src/gateway/router/handlers/dispatch_tools_call/route_stage.rs::authorize_call_targets
 src/gateway/meta_mcp/invoke/chokepoint.rs	authorize_requested_target	via profile_withheld_capability	1	recorded	src/gateway/router/handlers/dispatch_tools_call/route_stage.rs::authorize_call_targets
+src/gateway/meta_mcp/invoke/denial.rs	backend_miss	Error::BackendNotFound(..)	1	feeds	built for dispatch_to_backend, which the refusal scan classifies (not-a-decision: a missing backend)
 src/gateway/meta_mcp/invoke/dispatch.rs	ambiguous_backend	Error::AmbiguousBackend{}	1	feeds	built for refuse_name_clash, which the refusal scan classifies (not-a-decision: a configuration clash)
-src/gateway/meta_mcp/invoke/dispatch.rs	dispatch_to_backend	Error::BackendNotFound(..)	1	not-a-decision	the judged backend is gone after a reload: an availability failure
+src/gateway/meta_mcp/invoke/dispatch.rs	dispatch_to_backend	via backend_miss	1	not-a-decision	a missing backend is no policy decision about the caller; a true absence notes not_found on the invocation record, a backend lost to a reload notes nothing
 src/gateway/meta_mcp/invoke/dispatch.rs	refuse_name_clash	via ambiguous_backend	1	not-a-decision	a configuration clash: a registry backend and the capability backend share a name
 src/gateway/meta_mcp/invoke/dispatch_guards.rs	admit_after_credential	via withheld_as_undefined	1	recorded	src/gateway/meta_mcp/invoke/gate.rs::withheld_as_undefined
 src/gateway/meta_mcp/invoke/gate.rs	as_undefined_capability	Error::ToolNotFound(..)	1	feeds	the undefined twin of a rule refusal, returned to check_visible_policy's callers
 src/gateway/meta_mcp/invoke/gate.rs	check_call_level_policy	Error::Protocol(..)	1	not-a-decision	client-protocol rejection: an invalid tool name with an empty server or tool
-src/gateway/meta_mcp/invoke/gate.rs	check_visible_policy	via as_undefined_capability	1	recorded	src/gateway/meta_mcp/invoke/gate.rs::withheld_for
+src/gateway/meta_mcp/invoke/gate.rs	check_visible_policy_explained	via as_undefined_capability	1	recorded	src/gateway/meta_mcp/invoke/gate.rs::withheld_for
 src/gateway/meta_mcp/invoke/gate.rs	named_gate_answer	Error::ToolNotFound(..)	1	recorded	src/gateway/meta_mcp/invoke/gate.rs::withheld_for
 src/gateway/meta_mcp/invoke/gate.rs	profile_refusal_as_undefined	via profile_withheld_capability	1	feeds	returned to withheld_as_undefined, which raises withheld for it
 src/gateway/meta_mcp/invoke/gate.rs	profile_withheld_capability	Error::ToolNotFound(..)	1	feeds	returned up the chain to withheld_as_undefined, which raises withheld for it
 src/gateway/meta_mcp/invoke/gate.rs	withheld_as_undefined	Error::ToolNotFound (in macro)	1	not-delivered	predicate: a matches! pattern reads an error, builds none
 src/gateway/meta_mcp/invoke/gate.rs	withheld_as_undefined	via profile_refusal_as_undefined	1	recorded	src/gateway/meta_mcp/invoke/gate.rs::withheld_as_undefined
-src/gateway/meta_mcp/invoke/policy.rs	check_invocation_policy	Error::Protocol(..)	1	not-a-decision	client-protocol rejection: a malformed tool name
-src/gateway/meta_mcp/invoke/policy.rs	check_invocation_policy	Error::Protocol(..)	2	recorded	src/gateway/meta_mcp/invoke/gate.rs::withheld_for
-src/gateway/meta_mcp/invoke/policy.rs	check_invocation_policy	via withheld_as_undefined	1	recorded	src/gateway/meta_mcp/invoke/gate.rs::withheld_as_undefined
+src/gateway/meta_mcp/invoke/policy.rs	check_invocation_policy_explained	Error::Protocol(..)	1	not-a-decision	client-protocol rejection: a malformed tool name
+src/gateway/meta_mcp/invoke/policy.rs	check_invocation_policy_explained	Error::Protocol(..)	2	recorded	src/gateway/meta_mcp/invoke/gate.rs::withheld_for
+src/gateway/meta_mcp/invoke/policy.rs	check_invocation_policy_explained	via withheld_as_undefined	1	recorded	src/gateway/meta_mcp/invoke/gate.rs::withheld_as_undefined
 src/gateway/meta_mcp/invoke/policy.rs	record_absent_step	Error::BackendNotFound(..)	1	feeds	returned to resume_fingerprint, which raises withheld for an absent step
 src/gateway/meta_mcp/invoke/policy.rs	record_absent_step	Error::BackendNotFound(..)	2	feeds	returned to resume_fingerprint, which raises withheld for an absent step
 src/gateway/meta_mcp/invoke/post_dispatch.rs	settle_dispatch_error	Error::BackendNotFound,Error::ToolNotFound (in macro)	1	not-delivered	predicate: a matches! pattern reads an error, builds none
@@ -41,8 +42,9 @@ src/gateway/meta_mcp/invoke/propagation.rs	resolve_caller_credential_as	via refu
 src/gateway/meta_mcp/invoke/propagation.rs	resolve_caller_credential_as	via refuse (closure)	6	not-a-decision	configuration the operator has not finished, or a credential mint failure (the code's own note)
 src/gateway/meta_mcp/invoke/stored_proof.rs	unminted_refusal	Error::Config(..)	1	feeds	built by a refusal-named function the refusal scan classifies at each call
 src/gateway/meta_mcp/search.rs	list_tools_single_server	Error::BackendNotFound(..)	1	not-a-decision	a backend the caller may reach that the registry does not hold: a true absence
-src/gateway/meta_mcp/search.rs	list_tools_single_server	Error::BackendNotFound(..)	2	pending:inv2-credential-miss	the INV-2 credential miss answers absent with no raise
+src/gateway/meta_mcp/search.rs	list_tools_single_server	Error::BackendNotFound(..)	2	not-a-decision	the caller's credential did not resolve: a failed mint, not a decision about the caller
 src/gateway/meta_mcp/search.rs	list_tools_single_server	Error::BackendNotFound(..) wrapped	1	recorded	src/gateway/meta_mcp/search.rs::list_tools_single_server
+src/gateway/meta_mcp/search.rs	list_tools_single_server	Error::BackendNotFound(..) wrapped	2	recorded	src/gateway/meta_mcp/search.rs::list_tools_single_server
 src/gateway/meta_mcp/search.rs	parse_role_filter	Error::Protocol(..)	1	not-a-decision	client-protocol rejection: a malformed role filter argument
 src/gateway/meta_mcp/search.rs	parse_role_filter	Error::Protocol(..)	2	not-a-decision	client-protocol rejection: a malformed role filter argument
 src/gateway/meta_mcp/search/chain_exec.rs	resume_fingerprint	via record_absent_step	1	recorded	src/gateway/meta_mcp/search/chain_exec.rs::resume_fingerprint
@@ -53,7 +55,7 @@ src/gateway/meta_mcp/session_tools.rs	set_state	Error::Protocol(..)	1	not-a-deci
 src/gateway/meta_mcp/task_confirmation.rs	challenge	via refuse (closure)	1	not-a-decision	the gateway cannot hold a confirmation open (clock, slot capacity, grant mint): an availability failure
 src/gateway/meta_mcp/task_confirmation.rs	challenge	via refuse (closure)	2	not-a-decision	the gateway cannot hold a confirmation open (clock, slot capacity, grant mint): an availability failure
 src/gateway/meta_mcp/task_confirmation.rs	challenge	via refuse (closure)	3	not-a-decision	the gateway cannot hold a confirmation open (clock, slot capacity, grant mint): an availability failure
-src/gateway/meta_mcp/task_confirmation.rs	confirm_destructive_task_with	via refuse (closure)	1	pending:unbindable-confirmation	a destructive call refused for a caller the gateway cannot name; nothing raises
+src/gateway/meta_mcp/task_confirmation.rs	confirm_destructive_task_with	via refuse (closure)	1	recorded	src/gateway/meta_mcp/task_confirmation.rs::confirm_destructive_task_with
 src/gateway/meta_mcp/task_confirmation.rs	confirm_destructive_task_with	via refuse (closure)	2	not-a-decision	client-protocol rejection: answers sent with no confirmation grant
 src/gateway/meta_mcp/task_confirmation/helpers.rs	refuse_grant	via refuse (closure)	1	feeds	built by a refuse_* function the refusal scan classifies at each call (not-a-decision)
 src/gateway/meta_mcp/task_replay/judging.rs	unknown_server_refusal	Error::BackendNotFound(..)	1	feeds	built by a refusal-named function the refusal scan classifies at each call
@@ -77,10 +79,10 @@ src/gateway/server/build_meta.rs	build_meta_mcp	Error::Config (as value)	1	no-re
 src/gateway/server/build_meta.rs	build_meta_mcp	Error::Config(..)	1	no-record	start-up: the gateway refuses to start, no call exists
 src/gateway/server/build_meta.rs	build_meta_mcp	Error::Config(..)	2	no-record	start-up: the gateway refuses to start, no call exists
 src/gateway/server/construct.rs	new_evaluated_inner	Error::Config(..)	1	no-record	start-up: the gateway refuses to start, no call exists
-src/gateway/server/control_plane_store.rs	build_control_plane_store	Error::Config(..)	1	no-record	start-up: the gateway refuses to start, no call exists
-src/gateway/server/control_plane_store.rs	build_control_plane_store	Error::Config(..)	2	no-record	start-up: the gateway refuses to start, no call exists
-src/gateway/server/control_plane_store.rs	build_control_plane_store	Error::Config(..)	3	no-record	start-up: the gateway refuses to start, no call exists
-src/gateway/server/control_plane_store.rs	build_control_plane_store	Error::Config(..)	4	no-record	start-up: the gateway refuses to start, no call exists
+src/gateway/server/control_plane_store.rs	build_control_plane_store_with_log	Error::Config(..)	1	no-record	start-up: the gateway refuses to start, no call exists
+src/gateway/server/control_plane_store.rs	build_control_plane_store_with_log	Error::Config(..)	2	no-record	start-up: the gateway refuses to start, no call exists
+src/gateway/server/control_plane_store.rs	build_control_plane_store_with_log	Error::Config(..)	3	no-record	start-up: the gateway refuses to start, no call exists
+src/gateway/server/control_plane_store.rs	build_control_plane_store_with_log	Error::Config(..)	4	no-record	start-up: the gateway refuses to start, no call exists
 src/gateway/server/identity_grants.rs	load_configured_identity_grants	Error::Config(..)	1	no-record	start-up: the gateway refuses to start, no call exists
 src/gateway/server/identity_grants.rs	start_identity_grant_audit	Error::Config(..)	1	no-record	start-up: the gateway refuses to start, no call exists
 src/gateway/server/run.rs	run	Error::Config(..)	1	no-record	start-up: the gateway refuses to start, no call exists

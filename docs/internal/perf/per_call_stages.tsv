@@ -65,14 +65,17 @@ src/gateway/meta_mcp/invoke/admin.rs	revive_server	-	gateway_revive_server meta-
 src/gateway/meta_mcp/invoke/admin.rs	run_playbook	-	gateway_run_playbook meta-tool only, not the tools/call path
 src/gateway/meta_mcp/invoke/admin.rs	set_playbook_engine	-	startup wiring, set once when the gateway is built
 src/gateway/meta_mcp/invoke/admin.rs	webhook_status	-	gateway_webhook_status meta-tool only, not the tools/call path
+src/gateway/meta_mcp/invoke/audit.rs	note_not_found	http_invoke_tiny	on the HTTP gateway_invoke path (the dispatch's miss of an unheld backend)
 src/gateway/meta_mcp/invoke/audit_replay.rs	audit_replay	-	on-path, untimed: replayed executions only; the timed rows execute fresh
 src/gateway/meta_mcp/invoke/audit_decision.rs	after_upstream_401	-	on-path, untimed: an upstream 401 on a managed account only; the timed rows are allowed calls
-src/gateway/meta_mcp/invoke/audit_decision.rs	take_refusal_kind	-	on-path, untimed: withheld targets only; the timed rows are allowed calls
+src/gateway/meta_mcp/invoke/audit_decision.rs	take_refusal	-	on-path, untimed: withheld targets only; the timed rows are allowed calls
+src/gateway/meta_mcp/invoke/audit_decision.rs	take_refusal_kind	-	off-path: test-only, take_refusal's kind alone for rows that pin only the kind
 src/gateway/meta_mcp/invoke/audit_decision.rs	decided	-	on-path, untimed: the invocation record's decision, built only with a transparency logger, which the harness does not configure
 src/gateway/meta_mcp/invoke/audit_decision.rs	refused_by_memo	-	on-path, untimed: withheld targets only; the timed rows are allowed calls
 src/gateway/meta_mcp/invoke/audit_decision.rs	note_decision	http_invoke_tiny	on the HTTP gateway_invoke path: note_declared_effect calls it on every dispatch
 src/gateway/meta_mcp/invoke/audit_decision.rs	note_declared_effect	http_invoke_tiny	on the HTTP gateway_invoke path: every dispatch notes its declared effect
 src/gateway/meta_mcp/invoke/audit_decision.rs	note_refused_by	-	on-path, untimed: refusals only; the timed rows are allowed calls
+src/gateway/meta_mcp/invoke/audit_decision.rs	noted	-	on-path, untimed: refusals only (a refused check's note); the timed rows are allowed calls
 src/gateway/meta_mcp/invoke/audit_decision.rs	note_send_refusal	-	on-path, untimed: failed sends only; the timed rows are allowed calls
 src/gateway/meta_mcp/invoke/audit_decision.rs	take_route_noted	-	on-path, untimed: the router refusal record only; the timed rows are allowed calls
 src/gateway/meta_mcp/invoke/audit_decision.rs	with_route_scope	http_invoke_tiny	on the HTTP gateway_invoke path
@@ -190,6 +193,8 @@ src/gateway/meta_mcp/invoke/continuation.rs	set_continuation_for_test	-	test-onl
 src/gateway/meta_mcp/invoke/continuation.rs	share_keyring_with_for_test	-	test-only helper (cfg(test))
 src/gateway/meta_mcp/invoke/continuation.rs	unbindable_continuation	-	on-path, untimed: interim rounds that cannot be bound to their caller only
 src/gateway/meta_mcp/invoke/continuation.rs	withhold_unsealed_state	http_invoke_tiny	on the HTTP gateway_invoke path
+src/gateway/meta_mcp/invoke/denial.rs	backend_miss	http_invoke_tiny	on the HTTP gateway_invoke path (the dispatch's miss of an unheld backend)
+src/gateway/meta_mcp/invoke/denial.rs	count_meta_denial	http_invoke_tiny	on the HTTP gateway_invoke path (counted before the transparency-log check)
 src/gateway/meta_mcp/invoke/dispatch.rs	accounted_dispatch	http_invoke_tiny	on the HTTP gateway_invoke path
 src/gateway/meta_mcp/invoke/dispatch.rs	admit_spend	http_invoke_tiny	on the HTTP gateway_invoke path
 src/gateway/meta_mcp/invoke/dispatch.rs	ambiguous_backend	-	on-path, untimed: refusals only, when a name is both a registry backend and the capability backend; the timed backend has no such clash
@@ -199,10 +204,14 @@ src/gateway/meta_mcp/invoke/dispatch.rs	refuse_name_clash	http_invoke_tiny	on th
 src/gateway/meta_mcp/invoke/dispatch_guards.rs	account_dispatch	http_invoke_tiny	S3 accounting at every accounted dispatch
 src/gateway/meta_mcp/invoke/dispatch_guards.rs	admit_after_credential	http_invoke_tiny	S1 policy after the credential step, before every dispatch
 src/gateway/meta_mcp/invoke/dispatch_guards.rs	admit_backend_wide	http_invoke_tiny	S1 kill-switch check, before every dispatch
+src/gateway/meta_mcp/invoke/dispatch_guards.rs	admit_backend_wide_explained	http_invoke_tiny	the S1 kill-switch check with its refusing pair; admit_backend_wide is it plus the note
 src/gateway/meta_mcp/invoke/dispatch_guards.rs	admit_enabled_capability	http_invoke_tiny	S1 capability error-rate check, before every dispatch
+src/gateway/meta_mcp/invoke/dispatch_guards.rs	admit_enabled_capability_explained	http_invoke_tiny	the S1 capability error-rate check with its refusing pair; admit_enabled_capability is it plus the note
 src/gateway/meta_mcp/invoke/dispatch_guards.rs	admit_named_target	http_invoke_tiny	S1 profile and kill-switch check, before every dispatch
+src/gateway/meta_mcp/invoke/dispatch_guards.rs	admit_named_target_explained	http_invoke_tiny	the S1 profile and kill-switch check with its refusing pair; admit_named_target is it plus the note
 src/gateway/meta_mcp/invoke/dispatch_guards.rs	admit_spend_for	http_invoke_tiny	S2 spend admission before every dispatch
 src/gateway/meta_mcp/invoke/dispatch_guards.rs	admit_target	http_invoke_tiny	S1 policy before every dispatch
+src/gateway/meta_mcp/invoke/dispatch_guards.rs	admit_target_explained	http_invoke_tiny	S1 policy with its refusing pair; admit_target is it plus the note
 src/gateway/meta_mcp/invoke/dispatch_guards.rs	class_and_spend	http_invoke_tiny	unpacked by account_dispatch at every dispatch
 src/gateway/meta_mcp/invoke/dispatch_guards.rs	defers_error_rate_cooldown	http_invoke_tiny	whether the error-rate check waits for the credential step, in the policy before every dispatch
 src/gateway/meta_mcp/invoke/dispatch_guards.rs	firewall_refusal_body	-	on-path, untimed: builds a stored firewall refusal for idempotent replay; the timed rows are fresh successful calls
@@ -250,7 +259,7 @@ src/gateway/meta_mcp/invoke/gate.rs	backstop	-	on-path, untimed: invocation-poli
 src/gateway/meta_mcp/invoke/gate.rs	capability_rule_refusal	-	on-path, untimed: capability-backend targets only; the timed target is a backend tool
 src/gateway/meta_mcp/invoke/gate.rs	check_call_level_policy	-	on-path, untimed: signing-enabled gateway_invoke only; the harness does not configure signing
 src/gateway/meta_mcp/invoke/gate.rs	check_visible_policy	-	on-path, untimed: signing-enabled gateway_invoke and task replay only; the harness configures neither
-src/gateway/meta_mcp/invoke/gate.rs	count_meta_denial	http_invoke_tiny	on the HTTP gateway_invoke path (counted before the transparency-log check)
+src/gateway/meta_mcp/invoke/gate.rs	check_visible_policy_explained	-	on-path, untimed: check_visible_policy is it plus the note; signing-enabled gateway_invoke and task replay only
 src/gateway/meta_mcp/invoke/gate.rs	gate_answer	http_invoke_tiny	on the HTTP gateway_invoke path (the MIK-8361 gate)
 src/gateway/meta_mcp/invoke/gate.rs	gate_lens	http_invoke_tiny	inside named_gate_answer on the HTTP gateway_invoke path; the timed tool is not withheld, so it returns the catalogue lens
 src/gateway/meta_mcp/invoke/gate.rs	gated	http_invoke_tiny	on the HTTP gateway_invoke path (the MIK-8361 gate)
@@ -353,10 +362,11 @@ src/gateway/meta_mcp/invoke/output_shape.rs	mismatch_shape	-	on-path, untimed: o
 src/gateway/meta_mcp/invoke/policy.rs	apply_response_contract_gate	http_invoke_tiny	on the HTTP gateway_invoke path
 src/gateway/meta_mcp/invoke/policy.rs	apply_response_gates	-	upstream task recovery (tasks/get) only; live dispatch uses apply_response_gates_effect
 src/gateway/meta_mcp/invoke/policy.rs	apply_response_gates_effect	http_invoke_tiny	on the HTTP gateway_invoke path
-src/gateway/meta_mcp/invoke/policy.rs	authorize_invocation	http_invoke_tiny	on the HTTP gateway_invoke path
+src/gateway/meta_mcp/invoke/policy.rs	authorize_target_explained	http_invoke_tiny	on the HTTP gateway_invoke path: the authorization chokepoint, with its refusing pair
 src/gateway/meta_mcp/invoke/policy.rs	check_attestation	http_invoke_tiny	on the HTTP gateway_invoke path
 src/gateway/meta_mcp/invoke/policy.rs	check_attestation_scoped	http_invoke_tiny	on the HTTP gateway_invoke path
 src/gateway/meta_mcp/invoke/policy.rs	check_invocation_policy	http_invoke_tiny	on the HTTP gateway_invoke path
+src/gateway/meta_mcp/invoke/policy.rs	check_invocation_policy_explained	http_invoke_tiny	on the HTTP gateway_invoke path; check_invocation_policy is it plus the note
 src/gateway/meta_mcp/invoke/policy.rs	note_response_gate	-	on-path, untimed: a response gate refusal only; the timed rows are allowed calls
 src/gateway/meta_mcp/invoke/policy.rs	inspect_backend_text	http_invoke_tiny	on the HTTP gateway_invoke path
 src/gateway/meta_mcp/invoke/policy.rs	invoke_tool_sourced	http_invoke_tiny	on the HTTP gateway_invoke path
@@ -452,6 +462,7 @@ src/gateway/meta_mcp/invoke/relay_staging.rs	collecting	-	direct-route and task-
 src/gateway/meta_mcp/invoke/relay_staging.rs	collecting_http	http_invoke_tiny	wraps every HTTP delivery (collects only with relay detection on); with relay detection OFF it opens the gateway-writes scope (MIK-8408 D5), +3 allocations and about 735 B per tiny gateway_invoke (371 to 374, measured); removal ticketed as MIK-8545 (v4.1.0)
 src/gateway/meta_mcp/invoke/relay_staging.rs	collecting_staged	-	on-path, untimed: only with relay detection active; the harness routes configure none
 src/gateway/meta_mcp/invoke/relay_staging.rs	commit	stdio_invoke_tiny	commits or drops the staged receipts of every judged stdio answer
+src/gateway/meta_mcp/invoke/relay_staging.rs	commit_staged	stdio_invoke_tiny	reads the generation published now for every stdio answer, then commits or drops its staged receipts under it
 src/gateway/meta_mcp/invoke/relay_staging.rs	commit_with	-	direct-route and task-executor receipt commits only
 src/gateway/meta_mcp/invoke/relay_staging.rs	discard_staged	-	task executions and task replays only, not a live tools/call
 src/gateway/meta_mcp/invoke/relay_staging.rs	drop_replay_capture	stdio_invoke_tiny	every stdio delivery admission did not retain (every unkeyed call): clears one Option field; no allocation
@@ -461,6 +472,8 @@ src/gateway/meta_mcp/invoke/relay_staging.rs	none	stdio_invoke_tiny	the no-recei
 src/gateway/meta_mcp/invoke/relay_staging.rs	plan_step	-	gateway_execute and playbook steps only, not a single gateway_invoke
 src/gateway/meta_mcp/invoke/relay_staging.rs	stage_with	-	direct /mcp/{backend} route only, not the meta tools/call path
 src/gateway/meta_mcp/invoke/relay_staging.rs	take_staged_for_test	-	test-only helper (cfg(test))
+src/gateway/meta_mcp/invoke/relay_staging.rs	unpublished	-	unreachable through binary startup, which publishes a generation before serving; a library embedding that serves before publishing reaches it (logs only)
+src/gateway/meta_mcp/invoke/relay_staging.rs	unpublished_refusal	-	unreachable through binary startup, which publishes a generation before serving; a library embedding that serves before publishing reaches it (the fail-closed refusal)
 src/gateway/meta_mcp/invoke/relay_catalogue.rs	as_caller	-	prompts/get and resources/read only, not the tools/call path
 src/gateway/meta_mcp/invoke/relay_catalogue.rs	catalogue_refusal	-	prompts/get and resources/read only, not the tools/call path
 src/gateway/meta_mcp/invoke/relay_catalogue.rs	forward_catalogue	-	prompts/get and resources/read only, not the tools/call path

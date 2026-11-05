@@ -400,3 +400,193 @@ async fn a_sigterm_in_stdio_mode_ends_the_backends_tree() {
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
 }
+
+/// The inner gateway's backend: answers `initialize`, `tools/list` and
+/// `tools/call` (marking the call in `called`), records its pid, then ignores
+/// stdin EOF and runs on. Its SIGTERM handler is its save: it writes `termed`
+/// and exits. So `termed` lands only if the inner gateway got to stop it,
+/// which it cannot while the outer kills the inner at EOF.
+const LEAF_SCRIPT: &str = r#"import json, os, signal, sys, time
+def saved(signum, frame):
+    with open("termed", "w") as f:
+        f.write("termed")
+    os._exit(0)
+signal.signal(signal.SIGTERM, saved)
+with open("leaf.pid", "w") as f:
+    f.write(str(os.getpid()))
+for line in sys.stdin:
+    msg = json.loads(line)
+    if "id" not in msg:
+        continue
+    method = msg.get("method")
+    if method == "initialize":
+        result = {"protocolVersion": msg["params"]["protocolVersion"], "capabilities": {"tools": {}},
+                  "serverInfo": {"name": "leaf", "version": "1"}}
+    elif method == "tools/list":
+        result = {"tools": [{"name": "leaf_tool", "inputSchema": {"type": "object"},
+                             "annotations": {"readOnlyHint": True}}]}
+    elif method == "tools/call":
+        open("called", "w").close()
+        result = {"content": [{"type": "text", "text": "leaf answered"}]}
+    else:
+        result = {}
+    print(json.dumps({"jsonrpc": "2.0", "id": msg["id"], "result": result}), flush=True)
+while True:
+    time.sleep(0.05)
+"#;
+
+/// The inner gateway's config: one stdio backend (the leaf), and a short
+/// `shutdown_timeout`, so its own stop of the leaf (EOF wait, then SIGTERM)
+/// fits well inside the outer's EOF wait for it.
+fn write_inner_config(root: &Path) -> std::path::PathBuf {
+    std::fs::write(root.join("leaf.py"), LEAF_SCRIPT).expect("write leaf");
+    let mut config = Config::default();
+    config.server.shutdown_timeout = Duration::from_secs(8);
+    config.auth.enabled = false;
+    config.capabilities.enabled = false;
+    config.cache.default_ttl = Duration::ZERO;
+    config.tasks.store_dir = root.join("inner-tasks").display().to_string();
+    config.backends.insert(
+        "leaf".to_string(),
+        BackendConfig {
+            enabled: true,
+            transport: TransportConfig::Stdio {
+                command: "python3 -u leaf.py".to_string(),
+                cwd: Some(root.display().to_string()),
+                protocol_version: None,
+            },
+            timeout: Duration::from_secs(30),
+            ..BackendConfig::default()
+        },
+    );
+    let path = root.join("inner.yaml");
+    mcp_gateway::gateway::test_helpers::write_owner_only(
+        &path,
+        yaml::to_string(&config).expect("inner config yaml"),
+    )
+    .expect("write inner config");
+    path
+}
+
+/// The outer gateway: HTTP, default `shutdown_timeout`, with the inner
+/// gateway as its stdio backend.
+fn write_outer_config(root: &Path, inner: &Path) -> std::path::PathBuf {
+    let mut config = Config::default();
+    config.server.host = "127.0.0.1".to_string();
+    config.server.port = gateway_bin::ANY_PORT;
+    config.auth.enabled = false;
+    config.capabilities.enabled = false;
+    config.cache.default_ttl = Duration::ZERO;
+    config.tasks.store_dir = root.join("outer-tasks").display().to_string();
+    config.backends.insert(
+        "inner".to_string(),
+        BackendConfig {
+            enabled: true,
+            transport: TransportConfig::Stdio {
+                command: format!(
+                    "\"{}\" --config \"{}\" serve --stdio",
+                    gateway_bin::path(),
+                    inner.display()
+                ),
+                cwd: Some(root.display().to_string()),
+                protocol_version: None,
+            },
+            env: std::collections::HashMap::from([(
+                "HOME".to_string(),
+                root.join("inner-home").display().to_string(),
+            )]),
+            timeout: Duration::from_secs(30),
+            ..BackendConfig::default()
+        },
+    );
+    let path = root.join("gateway.yaml");
+    mcp_gateway::gateway::test_helpers::write_owner_only(
+        &path,
+        yaml::to_string(&config).expect("outer config yaml"),
+    )
+    .expect("write outer config");
+    path
+}
+
+/// A gateway run as another's stdio backend gets to stop its own backends
+/// when the outer stops: the outer closes its stdin and waits, rather than
+/// killing it at EOF, so the inner's stop of its leaf (EOF, wait, SIGTERM)
+/// runs and the leaf's save on SIGTERM lands. Red while the outer killed
+/// every stdio backend at EOF: the inner died first and its leaf, in its own
+/// process group, was orphaned unstopped.
+#[tokio::test]
+async fn a_nested_gateway_stops_its_own_backend_when_the_outer_stops() {
+    let root = tempfile::tempdir().expect("temp root");
+    let root = root.path();
+    std::fs::create_dir_all(root.join("inner-home")).expect("inner home");
+    let inner = write_inner_config(root);
+    let config = write_outer_config(root, &inner);
+    let log = std::fs::File::create(root.join("gateway.log")).expect("log");
+
+    let mut gateway = gateway_bin::command(&root.join("home"), gateway_bin::Inherit::Environment);
+    let mut gateway = gateway
+        .env("MCP_GATEWAY_CONFIG_DIR", root.join("gateway-state"))
+        .current_dir(root)
+        .arg("--config")
+        .arg(&config)
+        .stdin(Stdio::null())
+        .stdout(Stdio::from(log.try_clone().expect("log handle")))
+        .stderr(Stdio::from(log))
+        .process_group(0)
+        .spawn()
+        .expect("the gateway binary spawns");
+    let pid = gateway.id();
+    let _cleanup = KillGroup(pid);
+
+    let client = reqwest::Client::new();
+    let base = format!("http://127.0.0.1:{}", ready_port(&client, root).await);
+    let session = open_session(&client, &base, root).await;
+    // Through the outer to the inner's `gateway_invoke`, which starts the leaf.
+    let call = json!({
+        "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+        "params": {"name": "gateway_invoke", "arguments": {
+            "server": "inner", "tool": "gateway_invoke",
+            "arguments": {"server": "leaf", "tool": "leaf_tool", "arguments": {}}
+        }}
+    });
+    let nested = post(&client, &base, Some(&session), &call);
+    let (body, _) = tokio::time::timeout(READY_BOUND, nested)
+        .await
+        .unwrap_or_else(|_| panic!("the nested call did not answer\n{}", logs(root)))
+        .unwrap_or_else(|e| panic!("the nested call failed: {e}\n{}", logs(root)));
+    assert!(
+        root.join("called").exists(),
+        "the call never reached the leaf: {body}\n{}",
+        logs(root)
+    );
+    let leaf: u32 = std::fs::read_to_string(root.join("leaf.pid"))
+        .expect("the leaf wrote its pid")
+        .trim()
+        .parse()
+        .expect("a pid");
+    let _reap_leaf = KillPid(leaf);
+
+    // SIGTERM to the outer gateway alone: its own graceful stop.
+    let signalled = std::process::Command::new("kill")
+        .args(["-TERM", &pid.to_string()])
+        .status()
+        .expect("kill runs");
+    assert!(signalled.success(), "the signal was delivered");
+    let exited = tokio::time::timeout(
+        EXIT_BOUND,
+        tokio::task::spawn_blocking(move || gateway.wait()),
+    )
+    .await;
+    assert!(
+        matches!(exited, Ok(Ok(Ok(_)))),
+        "the outer gateway exits within the bound\n{}",
+        logs(root)
+    );
+    assert_eq!(
+        std::fs::read_to_string(root.join("termed")).ok().as_deref(),
+        Some("termed"),
+        "the inner gateway was killed before it stopped its backend\n{}",
+        logs(root)
+    );
+    assert!(!alive(leaf), "the leaf outlived both gateways");
+}

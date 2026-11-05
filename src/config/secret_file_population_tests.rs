@@ -64,7 +64,7 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
     ),
     (
         "src/commands/regular_file.rs",
-        "gateway.yaml re-read by doctor (after Config::load's mode-checked read; prints key names, never values) and by upgrade (to rename backend url keys; prints line numbers and backend names, never values); opened as the loader opens it (O_NONBLOCK|O_NOCTTY, follows a symlink), regular files only, no size limit (as the guarded reader for config); the mode-checked read is lib-internal, widening it was declined",
+        "gateway.yaml read for reports that write nothing: doctor's key names (after Config::load's mode-checked read; never values) and the upgrade dry run's URL-key report (line numbers and backend names, never values); the upgrade rewrite itself reads under the config lock through the guard; opened as the loader opens it (O_NONBLOCK|O_NOCTTY, follows a symlink), regular files only, no size limit",
     ),
     (
         "src/commands/kubernetes.rs",
@@ -93,7 +93,7 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
     ),
     (
         "src/commands/upgrade.rs",
-        "version stamp, 3.x pattern notice and config backup (fs::copy keeps the mode)",
+        "version stamp, the 3.0.0 notice's read-only posture read (prints a notice, writes nothing from it) and the config backup (fs::copy keeps the mode)",
     ),
     (
         "src/commands/upgrade_webhook_notice.rs",
@@ -109,7 +109,6 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
          created at 0600 by create_new_private; File::open only fsyncs its directory",
     ),
     ("src/config/secret_file.rs", "the checked reader itself"),
-    ("src/config_persistence.rs", "owner-only atomic writer"),
     (
         "src/config_persistence_scratch.rs",
         "the scratch-and-rename writer: creates its scratch file owner-only (0600 / owner-only DACL)",
@@ -125,9 +124,9 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
     (
         "src/config_persistence_journal.rs",
         "the replace journal (paths, SHA-256 revisions and a state; no secret) and the staged \
-         original of gateway.yaml, both created owner-only by create_new_private; the original is \
-         checked against the journal's digest before it is written back; File::open only fsyncs \
-         its directory",
+         original of gateway.yaml, both created owner-only and both read back through the config \
+         guard (read_config_text) before recovery acts on them; the original is also checked \
+         against the journal's digest; File::open only fsyncs its directory",
     ),
     (
         "src/config_persistence_lock.rs",
@@ -136,17 +135,6 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
     (
         "src/config_reload/grant_audit_plan.rs",
         "grant audit state: journal ids and grant digests; no secret",
-    ),
-    (
-        "src/config_reload/replace.rs",
-        "re-reads gateway.yaml under the config lock to check the caller's revision and stage the \
-         original; the target is the canonical path this gateway loaded at start, and every write \
-         back is owner-only",
-    ),
-    (
-        "src/config_reload/replace_audit.rs",
-        "reads gateway.yaml under the config lock only to hash it for a recovery intent's base \
-         revision; the bytes are hashed, never kept or logged",
     ),
     (
         "src/control_plane/export.rs",
@@ -207,6 +195,10 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
         "cfg(test) loader reading the boundary-pin tables and their fragment files beside them, and writing scratch copies of them for its own tests; no secret",
     ),
     (
+        "src/gateway/meta_mcp/boundary_pins/plain_reads.rs",
+        "cfg(test) plain-read inventory: walks the crate's own sources and writes one fixture crate in a temp dir; its fixture text names plain reads; no secret",
+    ),
+    (
         "src/gateway/meta_mcp/boundary_pins/shipped_reads.rs",
         "cfg(test) source scanner reading Cargo.toml and the crate's own sources for the MIK-8481 unshipped-read guard; no secret",
     ),
@@ -265,7 +257,7 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
     ),
     (
         "src/open_nonblocking.rs",
-        "the loader's mode-checked read (config_persistence read_text), the guarded secret-file read and the CLI's gateway.yaml re-read (commands/regular_file.rs); opens with O_NONBLOCK|O_NOCTTY so a FIFO is refused, not waited on",
+        "the guarded secret-file read (every gateway.yaml read that feeds a write goes through it), the atomic writer's ACL probe and the CLI's read-only gateway.yaml reports (commands/regular_file.rs); opens with O_NONBLOCK|O_NOCTTY so a FIFO is refused, not waited on",
     ),
     (
         "src/personal_accounts/commit.rs",

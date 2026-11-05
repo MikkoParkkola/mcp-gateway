@@ -35,13 +35,16 @@ fn judged(fx: &Fx, policy: &FirewallPolicy) -> Seen {
         "id-1",
         sender.as_deref(),
     );
-    let rescanned = fx.fw.rescan(
-        policy,
-        target("read_file"),
-        &args,
-        ScanSubject::Arguments,
-        sender.as_deref(),
-    );
+    let rescanned = fx
+        .fw
+        .rescan_attributed(
+            policy,
+            target("read_file"),
+            &args,
+            ScanSubject::Arguments,
+            sender.as_deref(),
+        )
+        .0;
     let (a, r) = (seen(&admitted), seen(&rescanned));
     assert_eq!(a, r, "admission and rescan disagree");
     a

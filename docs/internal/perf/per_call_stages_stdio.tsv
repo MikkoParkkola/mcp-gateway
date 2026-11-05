@@ -40,6 +40,7 @@ src/gateway/server/construct.rs	with_watched_config	-	Gateway construction, once
 src/gateway/server/control_plane_store.rs	auth_on_with_store_dir	-	test-only (inline cfg(test) module)
 src/gateway/server/control_plane_store.rs	base	-	test-only (inline cfg(test) module)
 src/gateway/server/control_plane_store.rs	build_control_plane_store	-	startup control-plane store opening, once per serve
+src/gateway/server/control_plane_store.rs	build_control_plane_store_with_log	-	startup control-plane store opening, once per serve
 src/gateway/server/control_plane_store.rs	control_plane_base	-	startup control-plane store opening, once per serve
 src/gateway/server/control_plane_store.rs	default_store_path_unchanged	-	test-only (inline cfg(test) module)
 src/gateway/server/control_plane_store.rs	default_unwritable_store_degrades_without_refusing	-	test-only (inline cfg(test) module)
@@ -194,7 +195,6 @@ src/gateway/server/stdio_single.rs	dispatch_single_staged	stdio_invoke_tiny	on t
 src/gateway/server/stdio_single.rs	from_setting	-	read once at stdio start
 src/gateway/server/stdio_single.rs	observe_stdio_inbound	stdio_invoke_tiny	on the stdio single-request path
 src/gateway/server/stdio_single.rs	run_stdio	-	starts the stdio loop once
-src/gateway/server/stdio_single.rs	message_generation	stdio_invoke_tiny	the generation a stdio message is judged with, on the stdio single-request path
 src/gateway/server/stdio_single.rs	stdio_caller_context	-	test-only fixture (cfg(test)); production builds build_stdio_caller_context
 src/gateway/server/stdio_single.rs	stdio_routing_keys_only	stdio_invoke_tiny	on the stdio single-request path
 src/gateway/server/stdio_single.rs	stdio_take_merged_client_meta	-	on-path, untimed: only when params._meta must be merged into the arguments; the timed rows carry no _meta
@@ -244,6 +244,7 @@ src/gateway/server/task_runtime.rs	settle_store	-	shutdown task-store settle, of
 src/gateway/server/task_runtime.rs	shutdown	-	shutdown task-store settle, off the request path
 src/gateway/server/task_runtime.rs	within	-	shutdown deadline helper, off the request path
 src/gateway/server/test_seams.rs	bound_port_for_test	-	test seam setter, used only by tests
+src/gateway/server/test_seams.rs	build_meta_mcp_published	-	test-only seam (cfg(test))
 src/gateway/server/test_seams.rs	data_dir	-	startup data-directory resolution, once per serve
 src/gateway/server/test_seams.rs	inflight_for_test	-	test-only seam (cfg(test))
 src/gateway/server/test_seams.rs	new	-	startup seam construction, once per gateway; in tests it also records the starting test's name
