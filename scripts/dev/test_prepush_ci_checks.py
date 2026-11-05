@@ -64,6 +64,10 @@ CI_ONLY: dict[tuple[str, tuple[str, ...]], str] = {
         "budget: 36 s alone would push the CI-checks stage past its 120 s budget; the pre-push kit's "
         "cheap stage runs it on Spark, and CI on every PR"
     ),
+    ("tests/public_repo_hygiene.sh", ()): (
+        "budget: 16 s, over the 10 s cap for one replayed entry; it tests the hygiene checker itself, "
+        "which pre-push already runs on the change, and CI runs this suite on every PR"
+    ),
     ('scripts/ci/changed-scope.sh', ('$MERGE_SHA', '$PR_NUMBER', '<HEAD>')): "ci-env: classifies this PR's changes from the event's merge SHA and PR number",
     ('scripts/ci/changed-scope.sh', ('$MERGE_SHA', '$PR_NUMBER', '<HEAD>'), ('bash scripts/ci/changed-scope.sh "$MERGE_SHA" "$PR_NUMBER" "$HEAD_SHA"', 'tee -a "$GITHUB_OUTPUT"')): "ci-env: classifies this PR's changes from the event's merge SHA and PR number",
     ('scripts/ci/check-cap-validate-pins.sh', ('target/debug/mcp-gateway',)): 'binary: runs a built target/debug/mcp-gateway',

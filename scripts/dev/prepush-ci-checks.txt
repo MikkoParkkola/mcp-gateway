@@ -107,4 +107,3 @@ scripts/dev/check-commit-message-hygiene.sh <BASE_TIP>..HEAD	0	closed
 scripts/dev/check-public-repo-hygiene.sh	0	closed
 tests/artifact_licenses.sh	3	closed
 tests/commit_message_hygiene.sh	8	closed
-tests/public_repo_hygiene.sh	15	closed
