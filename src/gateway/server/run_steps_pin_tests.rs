@@ -280,7 +280,7 @@ async fn a_startup_scan_that_panics_is_completed_and_a_later_edit_reloads() {
         while let Some(nudge) = nudges.recv().await {
             if matches!(
                 &nudge,
-                crate::backend::tools_nudge::ToolsNudge::Catalogue { name: nudged } if *nudged == name
+                crate::backend::tools_nudge::ToolsNudge::Catalogue { name: announced } if *announced == name
             ) {
                 return;
             }
