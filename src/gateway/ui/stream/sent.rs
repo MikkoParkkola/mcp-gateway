@@ -9,7 +9,7 @@ use serde_json::{Value, json};
 
 use super::conn::{Conn, End, frame};
 use super::guard::{Snapshot, same_ignoring_uptime};
-use super::id::StreamId;
+use super::id::{LogCursor, StreamId};
 
 /// The delivered state of the snapshot kinds.
 pub(super) struct Sent {
@@ -37,6 +37,25 @@ impl Sent {
             ..self.id.clone()
         }
         .render()
+    }
+
+    /// The log positions every later id carries, before `hello`: the head
+    /// for a fresh connect, the resumed position for a reconnect.
+    pub(super) fn set_cursor(&mut self, cursor: LogCursor) {
+        self.id.cursor = cursor;
+    }
+
+    /// Send one log event (`activity`, `config` or `reset`) whose id carries
+    /// `cursor`, the connection's delivered positions including this frame.
+    pub(super) async fn log_event(
+        &mut self,
+        conn: &Conn,
+        event: &str,
+        cursor: LogCursor,
+        data: &Value,
+    ) -> Result<(), End> {
+        self.id.cursor = cursor;
+        conn.send(frame(event, Some(&self.id), data)).await
     }
 
     /// This caller's own status payload from the shared snapshot.

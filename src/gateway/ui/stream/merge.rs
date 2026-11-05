@@ -14,13 +14,14 @@
 //! wired yet, so `hello` advertises no log kind.
 
 use std::future::Future;
+use std::io;
 use std::sync::Arc;
 
 use serde_json::Value;
 use tokio::sync::broadcast;
 use tokio::time::Instant;
 
-use super::id::{LogCursor, LogName, LogPart};
+use super::id::{LogCursor, LogName, Mark};
 
 /// Rows per catch-up page, the list's maximum page size.
 pub(super) const PAGE: usize = 200;
@@ -33,7 +34,7 @@ pub(super) const LAG_WINDOW: std::time::Duration = std::time::Duration::from_sec
 #[derive(Clone, Debug, PartialEq)]
 pub(super) struct Row {
     pub(super) log: LogName,
-    pub(super) part: LogPart,
+    pub(super) part: Mark,
     pub(super) data: Value,
 }
 
@@ -43,7 +44,7 @@ pub(super) struct Appended {
     pub(super) log: LogName,
     /// The announced row's position and hash; the announcing hook fills it,
     /// so a row hidden from this caller still moves the view's `seen` mark.
-    pub(super) part: LogPart,
+    pub(super) part: Mark,
     /// Per log, in memory, starting at 0, and comparable only within one
     /// subscription. The source raises it when the log gets a new file id,
     /// when the file shrinks below its last write, and when a resync's tail
@@ -89,7 +90,7 @@ pub(super) trait LogSource: Send + Sync + 'static {
     /// The append hook.
     fn subscribe(&self) -> broadcast::Receiver<Appended>;
     /// The newest position this caller can read.
-    fn head(&self, access: &Self::Access) -> impl Future<Output = LogCursor> + Send;
+    fn head(&self, access: &Self::Access) -> impl Future<Output = io::Result<LogCursor>> + Send;
     /// Rows after `cursor` up to and including `stop`, oldest first, at
     /// most `limit`.
     fn rows_after(
@@ -99,7 +100,7 @@ pub(super) trait LogSource: Send + Sync + 'static {
         access: &Self::Access,
         limit: usize,
         search: &mut Self::Search,
-    ) -> impl Future<Output = Page> + Send;
+    ) -> impl Future<Output = io::Result<Page>> + Send;
     /// The allowlisted row for an announced record, or `None` when the list
     /// would not show it to this caller.
     fn frame(&self, access: &Self::Access, appended: &Appended) -> Option<Row>;
@@ -163,6 +164,14 @@ pub(super) struct LogMerge<S: LogSource> {
     search: S::Search,
     /// Resets handed out and not yet acknowledged, oldest first.
     resets: std::collections::VecDeque<Reset>,
+    /// A live announcement asked for a catch-up; its head is read at the
+    /// start of the next step, never while racing the connection's timers.
+    scan_wanted: bool,
+    /// The source failed a read: the view ends, its delivered cursor kept.
+    failed: bool,
+    /// Resets met in the current catch-up: the first replays from the
+    /// oldest record, a second ends the view instead of replaying forever.
+    replays: u8,
 }
 
 impl<S: LogSource> LogMerge<S> {
@@ -175,7 +184,13 @@ impl<S: LogSource> LogMerge<S> {
         resume: Option<LogCursor>,
     ) -> Self {
         let rx = source.subscribe();
-        let head = source.head(&access).await;
+        let (head, failed) = match source.head(&access).await {
+            Ok(head) => (head, false),
+            Err(e) => {
+                tracing::debug!(error = %e, "ui stream: the log's head could not be read");
+                (LogCursor::default(), true)
+            }
+        };
         let delivered = resume.clone().unwrap_or_else(|| head.clone());
         Self {
             source,
@@ -194,7 +209,16 @@ impl<S: LogSource> LogMerge<S> {
             stop: head,
             search: S::Search::default(),
             resets: std::collections::VecDeque::new(),
+            scan_wanted: false,
+            failed,
+            replays: 0,
         }
+    }
+
+    /// Whether the next step is a catch-up page: the connection reads it to
+    /// the end, outside its timer race, after checking entitlement.
+    pub(super) fn scanning(&self) -> bool {
+        self.scan.is_some() || self.scan_wanted
     }
 
     /// What this connection has delivered so far.
@@ -239,7 +263,7 @@ impl<S: LogSource> LogMerge<S> {
         let Some(r) = &self.recovery else {
             return self.delivered.clone();
         };
-        let pick = |d: &Option<LogPart>, r: &Option<LogPart>| match (d, r) {
+        let pick = |d: &Option<Mark>, r: &Option<Mark>| match (d, r) {
             (Some(d), Some(r)) if r.counter > d.counter => Some(r.clone()),
             (None, r) => r.clone(),
             (d, _) => d.clone(),
@@ -251,11 +275,12 @@ impl<S: LogSource> LogMerge<S> {
     }
 
     /// Whether the slow-consumer rule has closed this view.
+    #[cfg(test)]
     pub(super) fn is_too_slow(&self) -> bool {
         self.too_slow
     }
 
-    fn slot(&mut self, log: LogName) -> &mut Option<LogPart> {
+    fn slot(&mut self, log: LogName) -> &mut Option<Mark> {
         match log {
             LogName::Invocation => &mut self.delivered.inv,
             LogName::Governance => &mut self.delivered.gov,
@@ -263,64 +288,105 @@ impl<S: LogSource> LogMerge<S> {
     }
 
     /// `Lagged` recoveries so far.
+    #[cfg(test)]
     pub(super) fn lag_recoveries(&self) -> usize {
         self.lag_recoveries
     }
 
-    /// The next batch, in order: catch-up pages first, then live rows. Empty
-    /// only when the source is closed or the view is too slow. The caller
-    /// must `ack` every row it wrote before asking again.
-    pub(super) async fn next(&mut self) -> Vec<Out> {
-        while !self.too_slow {
-            if let Some(from) = self.scan.clone() {
-                let out = self.page(&from).await;
-                if !out.is_empty() {
-                    return out;
-                }
-                continue;
-            }
-            match self.rx.recv().await {
-                Ok(appended) => {
-                    if let Some(row) = self.live(&appended).await {
-                        self.unacked += 1;
-                        return vec![Out::Row(row)];
-                    }
-                }
-                Err(broadcast::error::RecvError::Lagged(missed)) => self.lagged(missed).await,
-                Err(broadcast::error::RecvError::Closed) => return Vec::new(),
-            }
+    /// One step: a catch-up page (its rows, possibly none, when the caller
+    /// may see none of them) or one live announcement's rows. `None` when the
+    /// source closed or failed, the view is too slow, or a reset's replay
+    /// reset again. The caller must `ack` every row it wrote before asking
+    /// again. The live half awaits only the broadcast receive and is safe to
+    /// cancel; a catch-up page must be awaited to its end.
+    pub(super) async fn step(&mut self) -> Option<Vec<Out>> {
+        if self.too_slow || self.failed {
+            return None;
         }
-        Vec::new()
+        if self.scan_wanted && self.begin_scan().await.is_err() {
+            self.failed = true;
+            return None;
+        }
+        if let Some(from) = self.scan.clone() {
+            return self.page(&from).await;
+        }
+        match self.rx.recv().await {
+            Ok(appended) => Some(match self.live(&appended) {
+                Some(row) => {
+                    self.unacked += 1;
+                    vec![Out::Row(row)]
+                }
+                None => Vec::new(),
+            }),
+            Err(broadcast::error::RecvError::Lagged(missed)) => {
+                self.lagged(missed);
+                Some(Vec::new())
+            }
+            Err(broadcast::error::RecvError::Closed) => None,
+        }
     }
 
-    /// Count a `Lagged` recovery and page again from the delivered position.
-    async fn lagged(&mut self, missed: u64) {
+    /// The next non-empty batch, in order: catch-up pages first, then live
+    /// rows. Empty only when the view has ended (see [`Self::step`]). The
+    /// connection drives [`Self::step`]; the merge loop's own rows use this.
+    #[cfg(test)]
+    pub(super) async fn next(&mut self) -> Vec<Out> {
+        loop {
+            match self.step().await {
+                None => return Vec::new(),
+                Some(out) if out.is_empty() => {}
+                Some(out) => return out,
+            }
+        }
+    }
+
+    /// Count a `Lagged` recovery. The catch-up needs no request here: a lag
+    /// drops the oldest announcements, all newer than the last one seen, so
+    /// the next one received lies past a gap and `classify` asks for it.
+    fn lagged(&mut self, missed: u64) {
         self.lag_recoveries += 1;
         self.too_slow = self.lag.record(Instant::now());
         tracing::debug!(
             missed,
             "ui stream: lagged, catching up from its own position"
         );
-        self.begin_scan().await;
     }
 
     /// Start paging from the delivered position up to the head as of now.
-    async fn begin_scan(&mut self) {
-        self.stop = self.source.head(&self.access).await;
+    async fn begin_scan(&mut self) -> io::Result<()> {
+        self.stop = self.source.head(&self.access).await?;
         self.seen = self.stop.clone();
         self.scan = Some(self.scan_start());
         self.search = S::Search::default();
+        self.scan_wanted = false;
+        self.replays = 0;
+        Ok(())
     }
 
-    /// One catch-up page from `from`, after yielding to the runtime.
-    async fn page(&mut self, from: &LogCursor) -> Vec<Out> {
+    /// One catch-up page from `from`, after yielding to the runtime. `None`
+    /// when the read failed or a replay reset again.
+    async fn page(&mut self, from: &LogCursor) -> Option<Vec<Out>> {
         tokio::task::yield_now().await;
-        let page = self
+        let page = match self
             .source
             .rows_after(from, &self.stop, &self.access, PAGE, &mut self.search)
-            .await;
+            .await
+        {
+            Ok(page) => page,
+            Err(e) => {
+                tracing::debug!(error = %e, "ui stream: a catch-up read failed");
+                self.failed = true;
+                return None;
+            }
+        };
         let mut out = Vec::with_capacity(page.rows.len() + 1);
         if page.reset.any() {
+            self.replays += 1;
+            if self.replays > 1 {
+                tracing::debug!("ui stream: the replay reset again, ending the view");
+                self.failed = true;
+                return None;
+            }
             tracing::debug!("ui stream: the position's row is gone, resetting");
             out.push(Out::Reset);
             self.resets.push_back(page.reset);
@@ -333,12 +399,12 @@ impl<S: LogSource> LogMerge<S> {
         self.hint = Some(page.next.clone());
         self.promote_hint();
         self.scan = (!done).then_some(page.next);
-        out
+        Some(out)
     }
 
     /// Whether a scan cursor has caught up with the captured head in both logs.
     fn reached_head(&self, next: &LogCursor) -> bool {
-        let at = |head: &Option<LogPart>, pos: &Option<LogPart>| {
+        let at = |head: &Option<Mark>, pos: &Option<Mark>| {
             head.as_ref()
                 .is_none_or(|h| pos.as_ref().is_some_and(|p| p.counter >= h.counter))
         };
@@ -347,14 +413,14 @@ impl<S: LogSource> LogMerge<S> {
 
     /// A live row for the caller. An announcement that does not follow the
     /// last one seen exactly sends the view back to the source to be checked.
-    async fn live(&mut self, appended: &Appended) -> Option<Row> {
+    fn live(&mut self, appended: &Appended) -> Option<Row> {
         let known = &mut self.generations[appended.log as usize];
         if std::mem::replace(known, appended.generation) != appended.generation {
             // The log was replaced or truncated: the source says where we are.
             // Positions in the old log mean nothing in the new one.
             self.recovery = None;
             self.hint = None;
-            self.begin_scan().await;
+            self.scan_wanted = true;
             return None;
         }
         let seen = match appended.log {
@@ -364,7 +430,7 @@ impl<S: LogSource> LogMerge<S> {
         match classify(seen.as_ref(), &appended.part) {
             Order::Skip => return None,
             Order::Gap => {
-                self.begin_scan().await;
+                self.scan_wanted = true;
                 return None;
             }
             Order::Next => *seen = Some(appended.part.clone()),
@@ -380,7 +446,7 @@ enum Order {
     Gap,
 }
 
-fn classify(seen: Option<&LogPart>, part: &LogPart) -> Order {
+fn classify(seen: Option<&Mark>, part: &Mark) -> Order {
     match seen {
         Some(s)
             if part.counter < s.counter

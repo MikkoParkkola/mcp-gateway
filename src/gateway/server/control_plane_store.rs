@@ -66,6 +66,21 @@ pub(super) fn build_control_plane_store(
     config: &Config,
     base_info: &ControlPlaneBaseInfo,
 ) -> Result<Option<Arc<dyn ControlPlaneStore>>> {
+    build_control_plane_store_with_log(config, base_info).map(|opened| opened.map(|o| o.store))
+}
+
+/// The opened store and its governance audit logger, which the web UI's live
+/// stream reads.
+pub(super) struct OpenedStore {
+    pub(super) store: Arc<dyn ControlPlaneStore>,
+    pub(super) governance_log: Arc<crate::security::TransparencyLogger>,
+}
+
+/// [`build_control_plane_store`], also handing back the governance logger.
+pub(super) fn build_control_plane_store_with_log(
+    config: &Config,
+    base_info: &ControlPlaneBaseInfo,
+) -> Result<Option<OpenedStore>> {
     let (base, source) = (&base_info.path, base_info.source);
     let path = base.display();
     if source == ControlPlaneBaseSource::Explicit && !base.is_absolute() {
@@ -89,9 +104,9 @@ pub(super) fn build_control_plane_store(
         ControlPlaneBaseSource::Default => open_store(config, base),
     };
     match (opened, source) {
-        (Ok(store), _) => {
+        (Ok(opened), _) => {
             info!(%path, ?source, "control-plane store opened");
-            Ok(Some(store))
+            Ok(Some(opened))
         }
         // Another gateway writes this governance log: two writers fork its
         // chain, so this refuses at any location, never degrades.
@@ -175,10 +190,7 @@ enum OpenFailure {
     Other(String),
 }
 
-fn open_store(
-    config: &Config,
-    base: &Path,
-) -> std::result::Result<Arc<dyn ControlPlaneStore>, OpenFailure> {
+fn open_store(config: &Config, base: &Path) -> std::result::Result<OpenedStore, OpenFailure> {
     use crate::control_plane::FileControlPlaneStore;
     use crate::security::TransparencyLogger;
     use crate::security::transparency_log::is_lease_held;
@@ -191,9 +203,13 @@ fn open_store(
             OpenFailure::Other(format!("audit log: {e}"))
         }
     })?;
-    let store = FileControlPlaneStore::open(base.join("store"), Arc::new(audit))
+    let audit = Arc::new(audit);
+    let store = FileControlPlaneStore::open(base.join("store"), Arc::clone(&audit))
         .map_err(|e| OpenFailure::Other(format!("store: {e}")))?;
-    Ok(Arc::new(store))
+    Ok(OpenedStore {
+        store: Arc::new(store),
+        governance_log: audit,
+    })
 }
 
 /// F6 (MIK 7570.GOVSTORE.1): where the governance store lives, and what a
