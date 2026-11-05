@@ -502,9 +502,14 @@ pub(super) async fn create_key(
     if let Err(refused) = guard.admit() {
         return refused.into_response();
     }
-    let Ok(Json(body)) = body else {
+    let Ok(Json(mut body)) = body else {
         return invalid_body();
     };
+    // gateway.yaml stores whole seconds: check the instant that will be
+    // written, so a sub-second expiry is never stored already past.
+    body.expires_at = body
+        .expires_at
+        .map(|at| chrono::SubsecRound::trunc_subsecs(at, 0));
     let checked = match preconditions(&state, &body).await {
         Ok(checked) => checked,
         Err(refused) => return *refused,
