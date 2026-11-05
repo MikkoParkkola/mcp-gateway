@@ -83,7 +83,7 @@ fn state_uncertain() -> Response {
         StatusCode::INTERNAL_SERVER_ERROR,
         Json(json!({
             "error": "state_uncertain",
-            "recovery": "the key may or may not have been written: read GET /ui/api/keys before creating it again; a key listed there whose secret was never shown cannot be used, so remove it from gateway.yaml and reload first",
+            "recovery": "the key may or may not have been written: read GET /ui/api/keys before creating it again; a key listed there was never handed out and cannot be used, so remove it from gateway.yaml and reload first",
         })),
     )
         .into_response()
