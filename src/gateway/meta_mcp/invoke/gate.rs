@@ -142,8 +142,26 @@ impl MetaMcp {
         session: Option<&str>,
         caller: &MetaMcpCallerContext<'_>,
     ) -> Result<()> {
-        self.check_invocation_policy(arguments, session, caller)
-            .map_err(|refusal| self.as_undefined_capability(arguments, caller, refusal))
+        self.check_visible_policy_explained(arguments, session, caller)
+            .map_err(super::audit::noted)
+    }
+
+    /// [`Self::check_visible_policy`], with the refusing check's pair and no
+    /// note. The undefined twin's answer maps only the error: the
+    /// pair is the refusing check's.
+    pub(crate) fn check_visible_policy_explained(
+        &self,
+        arguments: &Value,
+        session: Option<&str>,
+        caller: &MetaMcpCallerContext<'_>,
+    ) -> crate::security::decision_record::Explained {
+        self.check_invocation_policy_explained(arguments, session, caller)
+            .map_err(|(refusal, pair)| {
+                (
+                    self.as_undefined_capability(arguments, caller, refusal),
+                    pair,
+                )
+            })
     }
 
     /// The policy's refusal of a capability the caller may not reach (admin
@@ -507,7 +525,12 @@ impl MetaMcp {
         crate::gateway::meta_mcp::visible::memo::record_absent(server, tool);
         let scoped = self.scoped(caller.scope().authorizer.backend_grant());
         if scoped.absence(server) == Some(Absence::OutOfScope) {
-            note_denial_code(server, tool, -32003, Some(DecisionKind::BackendScope));
+            note_denial_code(
+                server,
+                tool,
+                -32003,
+                Some((DecisionKind::BackendScope, None)),
+            );
             // Outside the key's scope: refused, not merely missing.
             crate::gateway::delivery_facts::withheld();
             crate::gateway::delivery_facts::gateway_folded(-32003);
@@ -633,10 +656,10 @@ impl MetaMcp {
         // Policy, profile, admin rule, grants: known without a catalogue.
         let refused = self
             .may_invoke_explained(server, tool, scope, session_id)
-            .inspect_err(|(refusal, kind)| {
+            .inspect_err(|(error, refusal)| {
                 // The call's one record names it (MIK-8361); a code the route
                 // stage kept first stands.
-                note_denial_code(server, tool, refusal.to_rpc_code(), Some(*kind));
+                note_denial_code(server, tool, error.to_rpc_code(), Some(refusal.clone()));
             })
             .is_err();
         if let Some(cap) = self.caller_capabilities()

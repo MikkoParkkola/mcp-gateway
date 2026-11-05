@@ -151,7 +151,7 @@ The Decision's "applied per field through ADR-023's reload path" is settled here
    - **The generation current when the dispatch runs:** queued task dispatch. A task's result settles under P alone, since no request is pinned to it; a request later reads it under the answer rule.
    - **The generation current at delivery:** collusion recording (item 2).
    - **The generation current at scan time** (on `Services.live`, as a task dispatch reads it): event payload scans (`events/services.rs:357`), watch polls, notifications with no request behind them, and a stored task result sent by `notifications/tasks`. None has a request to pin.
-   - **The restart comparison** masks `tool_policy`, `firewall.rules` and `firewall.credential_redaction`, with a test that each alone reports no restart. The four live collusion fields join the mask only once the relay gate judges under the witness's generation; until then `COLLUSION_LIVE` in `config_reload/diff.rs` is false, an edit to them reports a `security` restart, and the relay gate keeps its startup lists. Each of `window_secs`, `min_matches` and `common_principals` alone still reports one, so a mask of the whole collusion object fails.
+   - **The restart comparison** masks `tool_policy`, `firewall.rules`, `firewall.credential_redaction` and the four live collusion fields (`sources`, `non_egress`, `allowed_flows`, `action`), with a test that each alone reports no restart. The collusion fields are masked only while the running detector runs the new config's window and thresholds with the firewall on (`config_reload/diff.rs`, `collusion_fields`); the relay gate judges every witness under its generation and records under the generation current at delivery. Each of `window_secs`, `min_matches` and `common_principals` alone still reports a restart, so a mask of the whole collusion object fails.
 
 ### Consequences for the policy criteria
 
@@ -180,7 +180,7 @@ The Decision's "applied per field through ADR-023's reload path" is settled here
   - Pinned sites (auth, intake, tool policy, firewall request side, collusion witness, dispatch, stdio line): the mutant reads the current generation instead of the pinned one.
   - Firewall answer side: two mutants. Ignore-R judges under P alone, and the loosening-reload, redaction-R and admitted-then-loosened rows go red. Ignore-P judges under R alone, and the tightening-reload and redaction-P rows go red.
   - Current-at-run sites (queued task dispatch, event scan, collusion recording): the mutant reads the startup firewall, or a second generation read, instead of the one the contract names.
-- **ADR-023**: its 2026-10-26 amendment (collusion restart-only) is superseded by item 2; `tool_policy`, `firewall.rules` and `firewall.credential_redaction` join its live set; the four live collusion fields join it with the relay gate's change, and stay restart-only until then.
+- **ADR-023**: its 2026-10-26 amendment (collusion restart-only) is superseded by item 2; `tool_policy`, `firewall.rules` and `firewall.credential_redaction` join its live set; the four live collusion fields join it, applied by the relay gate at each witness and record.
 
 ### Size
 

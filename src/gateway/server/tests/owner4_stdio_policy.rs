@@ -17,7 +17,7 @@ use serde_json::{Value, json};
 
 use crate::config::{BackendConfig, Config, TransportConfig};
 use crate::gateway::Gateway;
-use crate::security::{ToolPolicy, ToolPolicyConfig};
+use crate::security::ToolPolicyConfig;
 
 const BACKEND: &str = "records";
 /// The target the second policy denies.
@@ -91,8 +91,8 @@ enum Signing {
 
 struct Stdio {
     meta: Arc<crate::gateway::meta_mcp::MetaMcp>,
-    permitting: Arc<ToolPolicy>,
-    denying: Arc<ToolPolicy>,
+    permitting: Arc<crate::config_reload::Generation>,
+    denying: Arc<crate::config_reload::Generation>,
     mtls: Arc<crate::mtls::MtlsPolicy>,
     calls: Calls,
     data_dir: tempfile::TempDir,
@@ -134,16 +134,19 @@ async fn stdio_tuned(signing: Signing, tune: impl FnOnce(&mut Config, &std::path
         .await
         .expect("the production constructor accepts this configuration")
         .with_data_dir(data_dir.path().to_path_buf())
-        .build_meta_mcp()
+        .build_meta_mcp_published()
         .await
         .expect("the production builder accepts this configuration");
-    let denying = Arc::new(ToolPolicy::from_config(&ToolPolicyConfig {
-        deny: vec![DENIED.to_string()],
-        ..ToolPolicyConfig::default()
-    }));
+    let denying = crate::gateway::authz::test_line(
+        &built.meta_mcp,
+        &ToolPolicyConfig {
+            deny: vec![DENIED.to_string()],
+            ..ToolPolicyConfig::default()
+        },
+    );
     Stdio {
+        permitting: crate::gateway::authz::published_line(&built.meta_mcp),
         meta: built.meta_mcp,
-        permitting: built.tool_policy,
         denying,
         mtls: built.mtls_policy,
         calls,
@@ -168,7 +171,11 @@ fn keyed(id: &str, tool: &str, key: &str) -> Value {
 }
 
 /// The production stdio entry point, with `policy` as the policy in force.
-async fn dispatch(stdio: &Stdio, policy: &Arc<ToolPolicy>, request: Value) -> Value {
+async fn dispatch(
+    stdio: &Stdio,
+    policy: &Arc<crate::config_reload::Generation>,
+    request: Value,
+) -> Value {
     Gateway::dispatch_single_for_client(
         &stdio.meta,
         policy,
@@ -298,7 +305,7 @@ fn stdio_judges_an_invoke_nonce_after_policy() {
         .build()
         .expect("runtime");
     let stdio = runtime.block_on(stdio(Signing::On));
-    let call = |policy: &Arc<ToolPolicy>, id: &str, tool: &str| {
+    let call = |policy: &Arc<crate::config_reload::Generation>, id: &str, tool: &str| {
         let mut request = keyed(id, tool, id);
         request["params"]["arguments"]["nonce"] = Value::Null;
         observe(|| runtime.block_on(dispatch(&stdio, policy, request)))
@@ -340,7 +347,7 @@ fn stdio_answers_policy_before_a_malformed_invoke_nonce() {
         .build()
         .expect("runtime");
     let stdio = runtime.block_on(stdio(Signing::On));
-    let call = |policy: &Arc<ToolPolicy>, id: &str, tool: &str| {
+    let call = |policy: &Arc<crate::config_reload::Generation>, id: &str, tool: &str| {
         let mut request = keyed(id, tool, id);
         request["params"]["arguments"]["nonce"] = Value::Null;
         runtime.block_on(dispatch(&stdio, policy, request))

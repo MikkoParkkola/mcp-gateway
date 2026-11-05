@@ -138,16 +138,26 @@ pub(crate) struct MockBackend {
     seen: Mutex<Vec<Value>>,
     answer: Answer,
     gate: Option<Gate>,
+    /// The input schema `tools/list` reports for [`TOOL`]: open (any object)
+    /// unless a row opts into a declared one with [`Self::answering_declaring`].
+    input_schema: Value,
 }
 
 impl MockBackend {
     /// A backend that answers every call the same way, immediately.
     pub(crate) fn answering(answer: Answer) -> Arc<Self> {
+        Self::answering_declaring(answer, json!({ "type": "object" }))
+    }
+
+    /// [`Self::answering`], listing [`TOOL`] with `input_schema` instead of the
+    /// open schema, so the gateway's declared-key checks apply to its calls.
+    pub(crate) fn answering_declaring(answer: Answer, input_schema: Value) -> Arc<Self> {
         Arc::new(Self {
             calls: AtomicUsize::new(0),
             seen: Mutex::new(Vec::new()),
             answer,
             gate: None,
+            input_schema,
         })
     }
 
@@ -164,6 +174,7 @@ impl MockBackend {
                 arrived: tx,
                 release: Arc::clone(&release),
             }),
+            input_schema: json!({ "type": "object" }),
         });
         (
             mock,
@@ -240,7 +251,7 @@ impl Transport for MockBackend {
                 RequestId::Number(1),
                 json!({
                     "tools": [
-                        { "name": TOOL, "description": "d", "inputSchema": { "type": "object" } }
+                        { "name": TOOL, "description": "d", "inputSchema": self.input_schema }
                     ]
                 }),
             )),

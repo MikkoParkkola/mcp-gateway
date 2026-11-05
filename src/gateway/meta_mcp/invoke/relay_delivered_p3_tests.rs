@@ -34,7 +34,7 @@ fn observing() -> Firewall {
 /// A part under the 48-char k-gram, so only runs of parts carry k-grams.
 /// Aperiodic (letters from a seeded LCG), so a strict prefix of a part ends
 /// unlike the part itself: `p0[..40] + p2` is no substring of `p0 + p2`.
-fn piece(k: usize) -> String {
+pub(super) fn piece(k: usize) -> String {
     let mut s = 0x8066_2b00_u64 ^ (k as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15);
     let mut out = format!("p{k}:");
     while out.len() < 47 {
@@ -103,7 +103,13 @@ fn keep_over_bound_beside(fw: &Firewall, parts: &[String], outside: &[String], s
         keep_plan_receipts(fw, &mut receipts, &answer);
     });
     for r in &receipts {
-        fw.record_digest(RelayCaller::Keyed("key-a"), &r.server, &r.tool, &r.digest);
+        fw.record_digest(
+            RelayCaller::Keyed("key-a"),
+            &r.server,
+            &r.tool,
+            &r.digest,
+            &fw.paired_generation_for_test(),
+        );
     }
 }
 
@@ -117,7 +123,7 @@ fn reported_after_carol(fw: &Firewall, who: &str, text: &str) -> bool {
         &json!({ "note": text }),
     );
     let params = json!({"name": "send", "arguments": {"body": text}});
-    fw.check_relay(
+    fw.check_relay_paired(
         RelayCaller::Keyed(who),
         "alpha",
         "send",
@@ -221,7 +227,13 @@ fn keep_steps_over_bound(fw: &Firewall, steps: &[&[String]]) {
     let answer = json!({ "parts": items, "pad": pad(1_200 * 1024) });
     with_plan_members(members, || keep_plan_receipts(fw, &mut receipts, &answer));
     for r in &receipts {
-        fw.record_digest(RelayCaller::Keyed("key-a"), &r.server, &r.tool, &r.digest);
+        fw.record_digest(
+            RelayCaller::Keyed("key-a"),
+            &r.server,
+            &r.tool,
+            &r.digest,
+            &fw.paired_generation_for_test(),
+        );
     }
 }
 
@@ -294,7 +306,13 @@ fn a_key_delivered_as_a_value_gets_no_seam_on_an_over_bound_answer() {
         keep_plan_receipts(&fw, &mut receipts, &answer);
     });
     for r in &receipts {
-        fw.record_digest(RelayCaller::Keyed("key-a"), &r.server, &r.tool, &r.digest);
+        fw.record_digest(
+            RelayCaller::Keyed("key-a"),
+            &r.server,
+            &r.tool,
+            &r.digest,
+            &fw.paired_generation_for_test(),
+        );
     }
     let joined = format!("{}{}", parts[0], parts[2]);
     assert!(

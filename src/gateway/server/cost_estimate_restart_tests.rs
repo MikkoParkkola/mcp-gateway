@@ -11,18 +11,21 @@ use crate::cost_accounting::config::{BudgetLimits, CostGovernanceConfig};
 use crate::cost_accounting::enforcer::BudgetEnforcer;
 use crate::cost_accounting::persistence::{self as cost_persistence, PersistedCosts};
 
-const T: u64 = 1_800_000_000;
+pub(super) const T: u64 = 1_800_000_000;
 /// Unbudgeted rows one day map keeps (`rows::MAX_UNBUDGETED_ROWS`).
-const CAP: usize = 256;
+pub(super) const CAP: usize = 256;
 
 #[derive(Clone, Copy, Debug)]
-enum Scope {
+pub(super) enum Scope {
     Tool,
     Key,
 }
 
 impl Scope {
-    fn limits(self, budgets: &mut BudgetLimits) -> &mut std::collections::HashMap<String, f64> {
+    pub(super) fn limits(
+        self,
+        budgets: &mut BudgetLimits,
+    ) -> &mut std::collections::HashMap<String, f64> {
         match self {
             Self::Tool => &mut budgets.per_tool,
             Self::Key => &mut budgets.per_key,
@@ -30,7 +33,7 @@ impl Scope {
     }
 
     /// Spend `usd` on `name` in this scope.
-    fn spend(self, enforcer: &BudgetEnforcer, name: &str, usd: f64) {
+    pub(super) fn spend(self, enforcer: &BudgetEnforcer, name: &str, usd: f64) {
         match self {
             Self::Tool => enforcer.record_spend(name, None, usd),
             Self::Key => enforcer.record_spend("read", Some(name), usd),
@@ -38,7 +41,7 @@ impl Scope {
     }
 
     /// Whether a call priced 1.0 on `name` is admitted.
-    fn admits(self, enforcer: &BudgetEnforcer, name: &str) -> bool {
+    pub(super) fn admits(self, enforcer: &BudgetEnforcer, name: &str) -> bool {
         match self {
             Self::Tool => enforcer.check(name, None).allowed,
             Self::Key => enforcer.check("read", Some(name)).allowed,
@@ -55,7 +58,7 @@ impl Scope {
 
 /// Governance on, every call priced 1.0, `target` budgeted at `limit` in
 /// `scope` when one is given.
-fn governed(scope: Scope, limit: Option<f64>) -> CostGovernanceConfig {
+pub(super) fn governed(scope: Scope, limit: Option<f64>) -> CostGovernanceConfig {
     let mut cfg = CostGovernanceConfig {
         enabled: true,
         default_cost: 1.0,
@@ -293,41 +296,76 @@ fn t8d_a_zero_estimate_survives_a_restart() {
     }
 }
 
-/// T8e: a row restored after a non-zero overflow records that overflow as
-/// its creation figure, so a name budgeted by reload after the restart is
-/// charged the restored overflow, not the overflow that grew since.
-#[test]
-fn t8e_a_restored_row_keeps_the_restored_overflow_as_its_figure() {
-    for scope in [Scope::Tool, Scope::Key] {
-        let _clock = at_secs(T);
-        let dir = tempfile::tempdir().expect("tempdir");
-        {
-            let (_, first) = boot_cost_governance(&governed(scope, None), dir.path());
-            let first = first.expect("armed");
-            for i in 0..CAP {
-                scope.spend(&first, &format!("filler-{i}"), 0.01);
-            }
-            scope.spend(&first, "other", 3.0);
-            let persisted =
-                build_persisted_costs(&first.snapshot_for_save().expect("a readable clock"));
-            cost_persistence::save(&dir.path().join("costs.json"), &persisted).expect("save");
+/// Which shape of `costs.json` a row writes before its restart.
+#[derive(Clone, Copy, Debug)]
+enum FileFormat {
+    /// As saved before the owned names and creation figures existed.
+    Legacy,
+    /// As this build saves it.
+    Current,
+}
+
+/// T8e: a row restored after a non-zero overflow, then budgeted by reload
+/// after the restart, is charged by its creation figure, never by the
+/// overflow that grew since ($5). From a legacy file, with no creation
+/// figures saved, that figure is the restored overflow ($3), an upper bound.
+/// From a current file it is the saved figure: `filler-7`'s row was created
+/// before any overflow, so $0.
+fn t8e(scope: Scope, format: FileFormat) {
+    let _clock = at_secs(T);
+    let dir = tempfile::tempdir().expect("tempdir");
+    {
+        let (_, first) = boot_cost_governance(&governed(scope, None), dir.path());
+        let first = first.expect("armed");
+        for i in 0..CAP {
+            scope.spend(&first, &format!("filler-{i}"), 0.01);
         }
-        let (_, second) = boot_cost_governance(&governed(scope, None), dir.path());
-        let second = second.expect("armed");
-        // Overflow grows after the restart: $3 restored, $5 now.
-        scope.spend(&second, "later", 2.0);
-        let mut budgets = BudgetLimits::default();
-        scope
-            .limits(&mut budgets)
-            .insert("filler-7".to_owned(), 50.0);
-        second.seed_estimates(&budgets);
-        let snap = second.snapshot();
-        let figure = match scope {
-            Scope::Tool => snap.tool_estimate.get("filler-7").copied(),
-            Scope::Key => snap.key_estimate.get("filler-7").copied(),
-        };
-        assert_eq!(figure, Some(3.0), "{scope:?}: the restored overflow, not 5");
+        scope.spend(&first, "other", 3.0);
+        let mut persisted =
+            build_persisted_costs(&first.snapshot_for_save().expect("a readable clock"));
+        if let FileFormat::Legacy = format {
+            persisted.tool_owned = None;
+            persisted.key_owned = None;
+            persisted.tool_born = None;
+            persisted.key_born = None;
+        }
+        cost_persistence::save(&dir.path().join("costs.json"), &persisted).expect("save");
     }
+    let (_, second) = boot_cost_governance(&governed(scope, None), dir.path());
+    let second = second.expect("armed");
+    // Overflow grows after the restart: $3 restored, $5 now.
+    scope.spend(&second, "later", 2.0);
+    let mut budgets = BudgetLimits::default();
+    scope
+        .limits(&mut budgets)
+        .insert("filler-7".to_owned(), 50.0);
+    second.seed_estimates(&budgets);
+    let snap = second.snapshot();
+    let figure = match scope {
+        Scope::Tool => snap.tool_estimate.get("filler-7").copied(),
+        Scope::Key => snap.key_estimate.get("filler-7").copied(),
+    };
+    let expected = match format {
+        FileFormat::Legacy => 3.0,
+        FileFormat::Current => 0.0,
+    };
+    assert_eq!(
+        figure,
+        Some(expected),
+        "{scope:?} {format:?}: never the grown 5"
+    );
+}
+
+#[test]
+fn t8e_a_legacy_file_charges_the_restored_overflow() {
+    t8e(Scope::Tool, FileFormat::Legacy);
+    t8e(Scope::Key, FileFormat::Legacy);
+}
+
+#[test]
+fn t8e_a_current_file_charges_the_saved_creation_figure() {
+    t8e(Scope::Tool, FileFormat::Current);
+    t8e(Scope::Key, FileFormat::Current);
 }
 
 /// T8f: a restored figure at the edge of what a file may hold, added to the

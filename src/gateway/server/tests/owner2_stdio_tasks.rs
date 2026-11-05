@@ -135,7 +135,7 @@ pub(crate) async fn fixture_on_with(
         .await
         .expect("the production constructor accepts this configuration")
         .with_data_dir(data.path().to_path_buf())
-        .build_meta_mcp()
+        .build_meta_mcp_published()
         .await
         .expect("the production builder accepts this configuration");
     let tool_policy = built.tool_policy;
@@ -300,7 +300,7 @@ pub(super) fn modern_call(id: u64, tool: &str, key: &str, task: bool) -> Value {
 pub(crate) async fn dispatch(fixture: &Fixture, request: Value) -> Value {
     Gateway::dispatch_single_for_client(
         &fixture.meta,
-        &fixture.policy,
+        &crate::gateway::authz::published_line(&fixture.meta),
         &fixture.mtls,
         request,
         super::super::StdioClient {

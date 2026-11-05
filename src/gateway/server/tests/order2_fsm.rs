@@ -9,7 +9,7 @@ async fn order2_fsm_stdio_dispatch_retains_successful_owned_transitions() {
     for (id, previous, next) in [(81, "default", "triage"), (82, "triage", "complete")] {
         let response = Gateway::dispatch_single(
             &meta,
-            &test_tool_policy(),
+            &crate::gateway::authz::default_line(&meta),
             &test_mtls_policy(),
             &json!({
                 "jsonrpc": "2.0", "id": id, "method": "tools/call",

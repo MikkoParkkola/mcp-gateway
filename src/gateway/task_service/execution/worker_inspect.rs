@@ -41,7 +41,7 @@ struct Decided {
 /// machine deepens every worker path's stack by a whole dispatch.
 pub(in crate::gateway::task_service::execution) fn dispatched_in_cell<T>(
     dispatch: impl std::future::Future<Output = T>,
-) -> impl std::future::Future<Output = (T, Option<bool>)> {
+) -> impl std::future::Future<Output = (T, Option<CellRefusal>)> {
     let dispatch = Box::pin(dispatch);
     crate::gateway::delivery_facts::scope(async move {
         let dispatched = dispatch.await;
@@ -50,12 +50,27 @@ pub(in crate::gateway::task_service::execution) fn dispatched_in_cell<T>(
     })
 }
 
-/// Whether the dispatch cell holds a gateway refusal. `None` with no cell to
-/// read: the settlement then records nothing, never a false not-refused.
+/// What a dispatch cell says about a gateway refusal raised in it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(in crate::gateway::task_service::execution) struct CellRefusal {
+    /// A gateway refusal was raised in the cell.
+    pub(in crate::gateway::task_service::execution) refused: bool,
+    /// The code the latest refusal the gateway answered as a tool result was
+    /// built with: the refusing gate's own, which the settlement records
+    /// rather than one guessed from the result's shape.
+    pub(in crate::gateway::task_service::execution) withheld_code: Option<i32>,
+}
+
+/// Whether the dispatch cell holds a gateway refusal, and the gateway fold's
+/// code. `None` with no cell to read: the settlement then records nothing,
+/// never a false not-refused.
 pub(in crate::gateway::task_service::execution) fn dispatch_refusal(
     facts: Option<&crate::gateway::delivery_facts::DeliveryFacts>,
-) -> Option<bool> {
-    facts.map(crate::gateway::delivery_facts::DeliveryFacts::refused)
+) -> Option<CellRefusal> {
+    facts.map(|facts| CellRefusal {
+        refused: facts.refused(),
+        withheld_code: facts.withheld_code(),
+    })
 }
 
 /// The settlement inspection with its record. One record per settlement: the
@@ -70,7 +85,7 @@ pub(in crate::gateway::task_service::execution) async fn inspect_and_record(
     state: &crate::gateway::task_service::host::LiveHost,
     call: &TaskCall,
     (principal, id): (&str, &str),
-    (response, dispatch_refused): (crate::protocol::JsonRpcResponse, Option<bool>),
+    (response, dispatch_refused): (crate::protocol::JsonRpcResponse, Option<CellRefusal>),
 ) -> crate::protocol::JsonRpcResponse {
     crate::gateway::delivery_facts::scope(async move {
         let trace = response.invocation_trace.clone();
@@ -130,17 +145,17 @@ pub(in crate::gateway::task_service::execution) async fn inspect_and_record(
 
 /// The code a dispatch refusal is recorded with, or `None` when the cell
 /// holds no refusal (or there was no cell). It is the code the task settles
-/// with; a refusal delivered as a withheld (`isError`) result carries the
-/// firewall's, as the inspection's does. Never read from the code alone: a
-/// backend's own error with a refusal's code is not a refusal. A dispatch
-/// that still delivered a clean answer is not recorded as refused.
+/// with. A refusal delivered as a withheld (`isError`) result carries the
+/// code the refusing gate folded it with (a whole withhold `-32600`, a
+/// malformed round `-32603`, an undeclared key `-32602`, ...), and the
+/// firewall's only when no gateway fold was noted. Never read from the code
+/// alone: a backend's own error with a refusal's code is not a refusal. A
+/// dispatch that still delivered a clean answer is not recorded as refused.
 fn dispatch_refusal_code(
-    dispatch_refused: Option<bool>,
+    dispatch: Option<CellRefusal>,
     settled: &crate::protocol::JsonRpcResponse,
 ) -> Option<i32> {
-    if dispatch_refused != Some(true) {
-        return None;
-    }
+    let dispatch = dispatch.filter(|cell| cell.refused)?;
     if let Some(error) = &settled.error {
         return Some(error.code);
     }
@@ -148,8 +163,11 @@ fn dispatch_refusal_code(
         .result
         .as_ref()
         .and_then(|result| result.get("isError"));
-    (withheld == Some(&serde_json::Value::Bool(true)))
-        .then(|| crate::Error::ResponseFirewallRefused.to_rpc_code())
+    (withheld == Some(&serde_json::Value::Bool(true))).then(|| {
+        dispatch
+            .withheld_code
+            .unwrap_or_else(|| crate::Error::ResponseFirewallRefused.to_rpc_code())
+    })
 }
 
 /// The target a dispatch refusal is recorded under: the call's first
@@ -256,7 +274,7 @@ fn inspect_settled_pinned(
 
 #[cfg(test)]
 mod tests {
-    use super::{dispatch_refusal, dispatch_refusal_code, dispatched_in_cell};
+    use super::{CellRefusal, dispatch_refusal, dispatch_refusal_code, dispatched_in_cell};
     use crate::gateway::delivery_facts;
     use crate::protocol::{JsonRpcResponse, RequestId};
 
@@ -273,18 +291,70 @@ mod tests {
         )
     }
 
+    /// A cell read: whether it holds a refusal, and the gateway fold's code.
+    fn cell(refused: bool, withheld_code: Option<i32>) -> CellRefusal {
+        CellRefusal {
+            refused,
+            withheld_code,
+        }
+    }
+
     /// A refusal is recorded with the code the task settles with, and one
-    /// delivered as a withheld `isError` result with the firewall's.
+    /// delivered as a withheld `isError` result with the firewall's when no
+    /// gateway fold was noted.
     #[test]
     fn a_refusal_is_recorded_in_either_shape() {
         assert_eq!(
-            dispatch_refusal_code(Some(true), &refused_error()),
+            dispatch_refusal_code(Some(cell(true, None)), &refused_error()),
             Some(-32603)
         );
         assert_eq!(
-            dispatch_refusal_code(Some(true), &is_error_result()),
+            dispatch_refusal_code(Some(cell(true, None)), &is_error_result()),
             Some(crate::Error::ResponseFirewallRefused.to_rpc_code())
         );
+    }
+
+    /// A withheld result carries the code the refusing gate folded it with,
+    /// not the firewall's: each gate's own code is what the task settles with.
+    #[test]
+    fn a_withheld_result_carries_the_gates_own_code() {
+        for code in [-32603, -32602, -32003, -32001] {
+            assert_eq!(
+                dispatch_refusal_code(Some(cell(true, Some(code))), &is_error_result()),
+                Some(code)
+            );
+        }
+        // An error frame's own code still wins over any fold.
+        assert_eq!(
+            dispatch_refusal_code(Some(cell(true, Some(-32602))), &refused_error()),
+            Some(-32603)
+        );
+    }
+
+    /// Only the gateway's own fold is read: a backend's failure folded into
+    /// the cell leaves the firewall's code, and a gateway fold outranks it.
+    #[tokio::test]
+    async fn only_the_gateways_fold_is_read() {
+        use crate::gateway::health_metrics::{Origin, RpcError};
+        let ((), backend) = dispatched_in_cell(async {
+            delivery_facts::folded(RpcError {
+                code: -32010,
+                origin: Origin::Backend,
+            });
+            delivery_facts::refused(());
+        })
+        .await;
+        assert_eq!(backend, Some(cell(true, None)));
+        let ((), gateway) = dispatched_in_cell(async {
+            delivery_facts::folded(RpcError {
+                code: -32010,
+                origin: Origin::Backend,
+            });
+            delivery_facts::gateway_folded(-32603);
+            delivery_facts::refused(());
+        })
+        .await;
+        assert_eq!(gateway, Some(cell(true, Some(-32603))));
     }
 
     /// Paired control: a refusal's code is not a refusal. With the cell clean,
@@ -292,7 +362,10 @@ mod tests {
     #[test]
     fn the_code_alone_records_nothing() {
         for settled in [refused_error(), is_error_result()] {
-            assert_eq!(dispatch_refusal_code(Some(false), &settled), None);
+            assert_eq!(
+                dispatch_refusal_code(Some(cell(false, Some(-32603))), &settled),
+                None
+            );
             assert_eq!(dispatch_refusal_code(None, &settled), None);
         }
     }
@@ -306,8 +379,36 @@ mod tests {
             serde_json::json!({"isError": false, "content": []}),
         ] {
             let settled = JsonRpcResponse::success(RequestId::Number(0), result);
-            assert_eq!(dispatch_refusal_code(Some(true), &settled), None);
+            assert_eq!(
+                dispatch_refusal_code(Some(cell(true, Some(-32603))), &settled),
+                None
+            );
         }
+    }
+
+    /// The latest gateway fold is the one recorded: an earlier gate's fold,
+    /// even a worse-ranked one, never lends its code to a later withhold, and a
+    /// backend failure folded afterwards does not displace it.
+    #[tokio::test]
+    async fn the_latest_gateway_fold_is_recorded() {
+        use crate::gateway::health_metrics::{Origin, RpcError};
+        let ((), later) = dispatched_in_cell(async {
+            delivery_facts::gateway_folded(-32603);
+            delivery_facts::gateway_folded(-32602);
+            delivery_facts::refused(());
+        })
+        .await;
+        assert_eq!(later, Some(cell(true, Some(-32602))));
+        let ((), backend_after) = dispatched_in_cell(async {
+            delivery_facts::gateway_folded(-32603);
+            delivery_facts::folded(RpcError {
+                code: -32010,
+                origin: Origin::Backend,
+            });
+            delivery_facts::refused(());
+        })
+        .await;
+        assert_eq!(backend_after, Some(cell(true, Some(-32603))));
     }
 
     /// With no cell to read, nothing is recorded.
@@ -321,17 +422,21 @@ mod tests {
     #[tokio::test]
     async fn each_dispatch_reads_its_own_cell() {
         let ((), refused) = dispatched_in_cell(async {
+            delivery_facts::gateway_folded(-32603);
             delivery_facts::refused(());
         })
         .await;
-        assert_eq!(refused, Some(true));
+        assert_eq!(refused, Some(cell(true, Some(-32603))));
+        // A later attempt inherits neither the refusal nor its withheld code.
         let ((), clean) = dispatched_in_cell(async {}).await;
-        assert_eq!(clean, Some(false));
+        assert_eq!(clean, Some(cell(false, None)));
+        // Nor does a dispatch inside a cell that already holds both.
         let ((), inner) = delivery_facts::scope(async {
+            delivery_facts::gateway_folded(-32602);
             delivery_facts::refused(());
             dispatched_in_cell(async {}).await
         })
         .await;
-        assert_eq!(inner, Some(false));
+        assert_eq!(inner, Some(cell(false, None)));
     }
 }

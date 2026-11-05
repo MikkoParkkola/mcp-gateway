@@ -159,16 +159,21 @@ async fn invoke_read_with(meta: &Arc<MetaMcp>, arguments: Value) -> Value {
 
 /// `gateway_invoke read` with `arguments` on `server` over stdio: the answer.
 async fn invoke_read_on(meta: &Arc<MetaMcp>, server: &str, arguments: Value) -> Value {
-    let policy = Arc::new(crate::security::ToolPolicy::default());
     let mtls = Arc::new(crate::mtls::MtlsPolicy::from_config(
         &crate::mtls::MtlsConfig::default(),
     ));
     let request = json!({"jsonrpc": "2.0", "id": 7, "method": "tools/call",
         "params": {"name": "gateway_invoke",
                    "arguments": {"server": server, "tool": "read", "arguments": arguments}}});
-    super::super::Gateway::dispatch_single(meta, &policy, &mtls, &request, "stdio-inject")
-        .await
-        .expect("a request is answered")
+    super::super::Gateway::dispatch_single(
+        meta,
+        &crate::gateway::authz::default_line(meta),
+        &mtls,
+        &request,
+        "stdio-inject",
+    )
+    .await
+    .expect("a request is answered")
 }
 
 /// The call answered without an error.

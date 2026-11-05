@@ -71,7 +71,7 @@ impl crate::transport::Transport for Alpha {
 pub(super) fn relayed_by_bob(firewall: &Firewall, text: &str) -> bool {
     let params = json!({"name": "a", "arguments": {"text": text}});
     !firewall
-        .check_relay(
+        .check_relay_paired(
             RelayCaller::Keyed("bob"),
             "alpha",
             "a",
@@ -119,6 +119,7 @@ pub(super) fn stdio_meta(
     let mut meta = MetaMcp::new(registry);
     meta.set_firewall(Some(Arc::clone(&firewall)));
     meta.share_keyring_with_for_test(&firewall);
+    crate::security::firewall::collusion_live_rig::seed_meta(&meta, &firewall);
     if let Some(playbook) = playbook {
         let definition: crate::playbook::PlaybookDefinition =
             crate::yaml::from_str(playbook).expect("playbook fixture must parse");
@@ -137,13 +138,18 @@ pub(super) fn keyed_request(id: i64, name: &str, arguments: &Value) -> Value {
 }
 
 pub(super) async fn dispatch(meta: &Arc<MetaMcp>, request: &Value) -> Value {
-    let policy = Arc::new(crate::security::ToolPolicy::default());
     let mtls = Arc::new(crate::mtls::MtlsPolicy::from_config(
         &crate::mtls::MtlsConfig::default(),
     ));
-    super::super::Gateway::dispatch_single(meta, &policy, &mtls, request, "stdio-replay")
-        .await
-        .expect("a request is answered")
+    super::super::Gateway::dispatch_single(
+        meta,
+        &crate::gateway::authz::default_line(meta),
+        &mtls,
+        request,
+        "stdio-replay",
+    )
+    .await
+    .expect("a request is answered")
 }
 
 /// The shared row: deliver, lapse (P1), repeat (P2: nothing dispatched), then
@@ -302,6 +308,7 @@ async fn a_detection_off_answer_replayed_on_never_receipts_gateway_text_over_std
     on.share_execution_admission_for_test(Arc::clone(off.execution_admission()));
     on.set_firewall(Some(Arc::clone(&firewall)));
     on.share_keyring_with_for_test(&firewall);
+    crate::security::firewall::collusion_live_rig::seed_meta(&on, &firewall);
     let on = Arc::new(on);
     assert!(
         !relayed_by_bob(&firewall, PROSE),

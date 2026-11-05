@@ -40,7 +40,7 @@ pub(super) fn withheld_verdict(
     )
     .err()
     .map(|refusal| {
-        note_refused_by(refusal.kind, None);
+        note_refused_by(refusal.kind, refusal.rule_id.clone());
         refusal.code
     })
     .or_else(|| {

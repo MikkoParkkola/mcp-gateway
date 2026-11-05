@@ -36,7 +36,7 @@ async fn a_replayed_invoke_answer_stages_its_unwrapped_value() {
             meta.stage_replay(("gateway_invoke", None), &arguments, None, &caller, &replay);
         })
         .await;
-    staged.commit(true);
+    staged.commit(true, &firewall.paired_generation_for_test());
     assert!(
         relayed_by_bob(&firewall, &lines),
         "the replayed value's lines lost their receipt"
