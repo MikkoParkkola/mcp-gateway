@@ -100,6 +100,9 @@ async fn a_reload_held_past_the_slow_bound_is_warned_once() {
         // timing: absence
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
+    // Asserted before the quiet period: a timer reset by each event would
+    // still be silent here, and would only fire once the events stop.
+    assert_eq!(counts.borrow()[0], 1, "warned while events kept arriving");
     // timing: absence
     tokio::time::sleep(Duration::from_millis(400)).await;
     assert_eq!(counts.borrow()[0], 1, "one warning for one held reload");

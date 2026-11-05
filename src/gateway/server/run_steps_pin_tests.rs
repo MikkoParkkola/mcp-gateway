@@ -275,11 +275,12 @@ async fn a_startup_scan_that_panics_is_completed_and_a_later_edit_reloads() {
         "a scan that did not finish is marked partial"
     );
     // `finish_initial_scan` marks the scan complete, then nudges: wait for it.
-    tokio::time::timeout(Duration::from_secs(30), async {
+    let name = backend.name.clone();
+    tokio::time::timeout(crate::test_wait::HANG_BOUND, async {
         while let Some(nudge) = nudges.recv().await {
             if matches!(
-                nudge,
-                crate::backend::tools_nudge::ToolsNudge::Catalogue { .. }
+                &nudge,
+                crate::backend::tools_nudge::ToolsNudge::Catalogue { name: nudged } if *nudged == name
             ) {
                 return;
             }
