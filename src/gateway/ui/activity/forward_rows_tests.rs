@@ -611,8 +611,11 @@ fn one_call_opens_the_active_file_at_most_twice() {
     // crosses into it again: twice, the most one call opens it.
     let mut search = Search::default();
     rows_after(&l, None, w.marks.last(), &Access::All, five, &mut search).unwrap();
-    // A new file with the same bytes, renamed over the active one: both
-    // exist at once, so the new file cannot reuse the old one's inode.
+    // A new file with the same bytes, renamed over the active one. Not
+    // delete-then-write: the file system can hand the freed inode straight
+    // to the new file, which then has the old identity, so the resume holds
+    // and the row fails at random. Here both files exist at once, so the new
+    // one cannot reuse the old one's inode.
     let copy = path.with_extension("rewrite");
     std::fs::copy(&path, &copy).unwrap();
     std::fs::rename(&copy, &path).unwrap();
