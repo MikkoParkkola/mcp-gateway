@@ -441,3 +441,21 @@ fn the_config_read_refuses_a_config_hard_linked_to_its_journal() {
         assert_not_the_config(&path);
     }
 }
+
+/// A config whose name is not UTF-8 keeps its recovery files refused: the
+/// names are compared as bytes, never through a string. Not on macOS, whose
+/// filesystems refuse such a name outright.
+#[cfg(all(unix, not(target_os = "macos")))]
+#[test]
+fn the_config_read_refuses_recovery_files_of_a_non_utf8_config_name() {
+    use crate::config_persistence::journal;
+    use std::os::unix::ffi::OsStrExt;
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join(std::ffi::OsStr::from_bytes(b"gw\xff.yaml"));
+    crate::gateway::test_helpers::write_owner_only(&path, START).expect("config");
+    journal::stage_original(&path, START.as_bytes()).expect("stage");
+    journal::begin(&path, crate::hashing::sha256_hex(START.as_bytes())).expect("journal");
+    assert_reads_as_config(&path);
+    assert_not_the_config(&journal::journal_path(&path));
+    assert_not_the_config(&journal::original_path(&path));
+}
