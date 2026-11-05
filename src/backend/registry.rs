@@ -231,6 +231,9 @@ pub struct BackendRegistry {
     needles: DashMap<String, Arc<crate::security::needles::NeedleSet>>,
     /// How long a value stays redacted after its last send.
     redaction_grace: std::time::Duration,
+    /// Shared with every backend registered here, and through them with each
+    /// stdio tree they hand over: set first by [`Self::stop_all_by`].
+    stop_deadline: Arc<crate::transport::StopDeadline>,
 }
 
 impl BackendRegistry {
@@ -250,6 +253,7 @@ impl BackendRegistry {
             secret_resolver: None,
             needles: DashMap::new(),
             redaction_grace: std::time::Duration::from_secs(24 * 60 * 60),
+            stop_deadline: Arc::default(),
         }
     }
 
@@ -372,6 +376,7 @@ impl BackendRegistry {
             backend.stamp_destination(destinations.for_backend(&backend.name));
         }
         backend.stamp_started(self.started.clone());
+        let _ = backend.stop_deadline.set(Arc::clone(&self.stop_deadline));
         let name = backend.name.clone();
         let breaker = Arc::clone(&backend.shared_entry().failsafe.circuit_breaker);
         if let Some(observer) = self.breaker_observer.get() {
@@ -692,6 +697,9 @@ impl Destinations {
         self.policy.for_backend(self.private.contains(name))
     }
 }
+
+#[path = "registry_stop.rs"]
+mod stop;
 
 #[cfg(test)]
 mod tests {

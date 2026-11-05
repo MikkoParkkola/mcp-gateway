@@ -18,7 +18,7 @@ use std::time::Duration;
 use rustix::process::{Pid, WaitId, WaitIdOptions, waitid};
 
 use super::super::{PROTOCOL_VERSION, StdioTransport};
-use super::{ChildTree, Counts, Leader, REAP_DEADLINE, Reap, native_child};
+use super::{ChildTree, Counts, Ending, Leader, REAP_DEADLINE, Reap, native_child};
 use crate::transport::Transport;
 
 const ROW_LIMIT: Duration = Duration::from_secs(5);
@@ -765,3 +765,8 @@ fn a_line_after_the_transport_dropped_stops_the_reader() {
         );
     });
 }
+
+/// The MCP stdio stop order (EOF, wait, SIGTERM, wait, kill) and its gateway
+/// stop deadline.
+#[path = "stdio_child_tree_stop_tests.rs"]
+mod stop;
