@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! Every place production code starts a task is listed in `spawn_sites.tsv`,
+//! Every place production code starts a task with a path call
+//! (`tokio::spawn`, `spawn_blocking`) is listed in `spawn_sites.tsv`,
 //! keyed by (file, function, kind) with the number of such calls. A call's
 //! delivery record is a task-local cell, so a refusal raised inside a spawned
 //! task never reaches it: each spawn says why that loses nothing. A new site,
@@ -135,7 +136,8 @@ const CLASSES: [&str; 5] = [
     "review",
 ];
 
-/// The listed counts, and the rows that are malformed or carry no class.
+/// The listed counts, and the rows that are malformed, carry no class or
+/// repeat a (file, function, kind) key.
 fn listed() -> (Counts, Vec<String>) {
     let mut counts = Counts::new();
     let mut bad = Vec::new();
@@ -155,7 +157,12 @@ fn listed() -> (Counts, Vec<String>) {
             bad.push(format!("count is not a number: {line}"));
             continue;
         };
-        counts.insert((file.to_owned(), func.to_owned(), kind.to_owned()), n);
+        if counts
+            .insert((file.to_owned(), func.to_owned(), kind.to_owned()), n)
+            .is_some()
+        {
+            bad.push(format!("listed twice: {line}"));
+        }
     }
     (counts, bad)
 }
