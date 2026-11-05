@@ -280,7 +280,9 @@ impl TransparencyLogger {
         self.bound.permit_waits.load(Ordering::SeqCst)
     }
 
-    /// Whether a write's generation is still in the kernel.
+    /// Whether a write's generation is still in the kernel. Its callers are
+    /// all `firewall` test modules; others drain with `release_and_drain`.
+    #[cfg(feature = "firewall")]
     pub(crate) fn write_in_flight_for_test(&self) -> bool {
         self.bound
             .state
