@@ -146,10 +146,12 @@ fn r3h_every_shadower_once_per_type() {
     assert_eq!(shadowed(&model, 2), vec![sh("shell_injection", &[0, 1])]);
 }
 
-/// R3i: with the firewall off, an earlier `*` rule with a present-but-empty
-/// `servers`, `keys` or `except` shadows nothing.
+/// R3i: with the firewall off (no load validation), an earlier `*` rule
+/// with a present-but-empty `servers`, `keys` or `except` is a shape the load
+/// refuses; it compiles to an unscoped `*` block on every call, so it
+/// shadows the later rule (read as compiled, as R3l).
 #[test]
-fn r3i_present_but_empty_scoping_does_not_shadow() {
+fn r3i_present_but_empty_scoping_shadows_as_compiled() {
     for field in ["servers", "keys", "except"] {
         let mut earlier = json!({ "match": "*", "action": "warn", "scan": ["shell_injection"] });
         earlier[field] = json!([]);
@@ -158,7 +160,11 @@ fn r3i_present_but_empty_scoping_does_not_shadow() {
             { "match": "send_*", "action": "block", "scan": ["shell_injection"] }
         ]));
         config.security.firewall.enabled = false;
-        assert_eq!(shadowed(&read_model(&config), 1), vec![], "{field}");
+        assert_eq!(
+            shadowed(&read_model(&config), 1),
+            vec![sh("shell_injection", &[0])],
+            "{field}"
+        );
     }
 }
 
