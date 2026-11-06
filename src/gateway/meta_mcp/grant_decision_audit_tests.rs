@@ -10,7 +10,7 @@ use serde_json::{Value, json};
 
 use super::grant_audit_fixture::{
     CAPS, Endpoint, PERSONAL, capability_backend, capability_backend_exposed, decision_subject,
-    decisions, entries, grant, grants, invocations, log_path, logger, trace_of,
+    decisions, entries, grant, grants, invocations, log_path, logger, trace_of, wait_for_decisions,
 };
 use crate::backend::BackendRegistry;
 use crate::gateway::meta_mcp::{Authentication, MetaMcp, MetaMcpCallerContext};
@@ -171,7 +171,8 @@ async fn grant_denial_writes_decision_record() {
     );
 
     let invocation = only(invocations(&dir), "invocation record");
-    let record = only(decisions(&dir), "decision record");
+    // Written after the call settles, on the slot's own task.
+    let record = only(wait_for_decisions(&dir, 1).await, "decision record");
     assert_eq!(record["outcome"], json!("denied"), "{record}");
     assert_eq!(record["reason"], json!("missing_grant"), "{record}");
     assert!(record.get("timestamp").is_some(), "{record}");

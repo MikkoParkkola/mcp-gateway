@@ -20,7 +20,7 @@ use super::{AppState, create_router};
 use crate::config::{ApiKeyConfig, AuthConfig};
 use crate::gateway::meta_mcp::MetaMcp;
 use crate::gateway::meta_mcp::grant_audit_fixture::{
-    CAPS, Endpoint, PERSONAL, capability_backend, decisions, grants, invocations, logger,
+    CAPS, Endpoint, PERSONAL, capability_backend, grants, invocations, logger, wait_for_decisions,
 };
 use crate::gateway::routes;
 use crate::security::audit::AuditFailurePolicy;
@@ -126,7 +126,15 @@ async fn mcp_call(rig: &Rig, name: &str, arguments: &Value) -> Value {
     let router = create_router(Arc::clone(&rig.state));
     let response = router.oneshot(request).await.unwrap();
     let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-    serde_json::from_slice(&bytes).unwrap_or(Value::Null)
+    // JSON, or one SSE `data:` frame.
+    let text = String::from_utf8_lossy(&bytes).into_owned();
+    let (start, end) = (text.find('{'), text.rfind('}'));
+    match start.zip(end) {
+        Some((start, end)) => {
+            serde_json::from_str(&text[start..=end]).unwrap_or(Value::String(text))
+        }
+        None => Value::String(text),
+    }
 }
 
 /// The Activity rows an admin reads from the list route, under `query`.
@@ -154,7 +162,7 @@ async fn a_gate_refused_call_is_one_row_whose_marker_is_true() {
     let answer = mcp_call(&rig, "gateway_invoke", &invoke).await;
 
     assert_eq!(invocations(&rig.dir).len(), 1, "the call's own record: {answer}");
-    let held = decisions(&rig.dir);
+    let held = wait_for_decisions(&rig.dir, 1).await;
     assert_eq!(held.len(), 1, "{held:#?}");
     assert_eq!(held[0]["outcome"], json!("denied"), "{held:#?}");
     assert_eq!(held[0]["invocation_recorded"], json!(true), "{held:#?}");

@@ -220,6 +220,26 @@ pub(crate) fn decisions(dir: &tempfile::TempDir) -> Vec<Value> {
     entries(dir).into_iter().filter(is_decision).collect()
 }
 
+/// The grant decision records, once there are at least `count` of them. A
+/// withheld call's record is written after the call settles, on the slot's own
+/// task (design: "withheld notes are owned by their slot"), so a row reads it
+/// through this wait. Panics, showing what the log held, after 5 s.
+pub(crate) async fn wait_for_decisions(dir: &tempfile::TempDir, count: usize) -> Vec<Value> {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        let found = decisions(dir);
+        if found.len() >= count {
+            return found;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "wanted {count} decision records within 5 s; the log held {:#?}",
+            entries(dir)
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+}
+
 /// D1's invocation records: a `route`, and not a decision.
 pub(crate) fn invocations(dir: &tempfile::TempDir) -> Vec<Value> {
     entries(dir)

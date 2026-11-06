@@ -10,7 +10,7 @@ use serde_json::{Value, json};
 
 use super::grant_audit::{in_delivery_scope, with_grant_slot};
 use super::grant_audit_fixture::{
-    CAPS, Endpoint, PERSONAL, decisions, entries, grant, invocations,
+    CAPS, Endpoint, PERSONAL, decisions, entries, grant, invocations, wait_for_decisions,
 };
 use super::visible::Withholding;
 use super::grant_decision_audit_tests::{api_key, call, context, gateway, invoke_args, only};
@@ -116,7 +116,7 @@ async fn a_gate_refused_call_with_its_invocation_record_is_recorded() {
     refused_call(&dir, AuditFailurePolicy::BestEffort, false).await;
 
     only(invocations(&dir), "invocation record");
-    let record = only(decisions(&dir), "decision record");
+    let record = only(wait_for_decisions(&dir, 1).await, "decision record");
     assert_eq!(record["outcome"], json!("denied"), "{record}");
     assert_eq!(record["invocation_recorded"], json!(true), "{record}");
 }
@@ -130,21 +130,9 @@ async fn a_refusal_whose_invocation_append_failed_is_an_unrecorded_decision() {
 
         let held = entries(&dir);
         assert!(invocations(&dir).is_empty(), "{policy:?}: {held:#?}");
-        let record = only(decisions(&dir), "decision record");
+        let record = only(wait_for_decisions(&dir, 1).await, "decision record");
         let marker = &record["invocation_recorded"];
         assert_eq!(marker, &json!(false), "{policy:?}: {record}");
-    }
-}
-
-/// Wait, bounded, until the log holds `count` decision records.
-async fn wait_for_decisions(dir: &Arc<tempfile::TempDir>, count: usize) -> Vec<Value> {
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-    loop {
-        let found = decisions(dir);
-        if found.len() >= count || std::time::Instant::now() >= deadline {
-            return found;
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
     }
 }
 

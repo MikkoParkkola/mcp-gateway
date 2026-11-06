@@ -8,9 +8,12 @@
 
 use super::*;
 use crate::gateway::meta_mcp::grant_audit_fixture::{
-    CAPS, DECISION_KIND, PERSONAL, capability_backend, decisions, grant, grants, logger,
+    CAPS, DECISION_KIND, PERSONAL, capability_backend, grant, grants, logger, wait_for_decisions,
 };
 use crate::security::audit::AuditFailurePolicy;
+
+/// The documented warning of a withheld record that could not be written.
+const WARNING: &str = "The audit record of a withheld surfaced call could not be written";
 
 const ALICE: (&str, &str) = ("https://idp.example.invalid", "alice-sub");
 const BOB: (&str, &str) = ("https://idp.example.invalid", "bob-sub");
@@ -90,18 +93,30 @@ fn row7_http_one_grant_record_and_failclosed_answers_as_absent() {
         1,
         "premise: the withheld call ran: {refused}"
     );
-    let one = decisions(&counted_dir).len();
+    // Written after the call settles, on the slot's own task.
+    let one = runtime.block_on(wait_for_decisions(&counted_dir, 1)).len();
     // Under a failing decision record.
     let dir = Arc::new(tempfile::tempdir().unwrap());
     let absent_dir = Arc::new(tempfile::tempdir().unwrap());
     let (withheld, log) = runtime.block_on(gateway(endpoint.port, &dir, true));
     let (absent, _) = runtime.block_on(gateway(endpoint.port, &absent_dir, false));
     log.fail_next_append_of_kind_for_test(DECISION_KIND);
-    let (answered, warnings) =
-        crate::test_log_capture::capture_warnings(|| runtime.block_on(call(&withheld, BOB)));
+    let (_guard, mut seen) = crate::test_log_capture::live_count(WARNING);
+    let (answered, warnings) = crate::test_log_capture::capture_warnings(|| {
+        runtime.block_on(async {
+            let answer = call(&withheld, BOB).await;
+            let logged = tokio::time::timeout(
+                std::time::Duration::from_secs(5),
+                seen.wait_for(|count| *count >= 1),
+            )
+            .await;
+            assert!(logged.is_ok(), "row 7 http: the failed record was never logged");
+            answer
+        })
+    });
     let expected = runtime.block_on(call(&absent, BOB));
     runtime.block_on(call(&withheld, BOB));
-    let after = decisions(&dir).len();
+    let after = runtime.block_on(wait_for_decisions(&dir, 1)).len();
     assert_eq!(
         (one, &answered, after),
         (1, &expected, 1),
@@ -110,7 +125,7 @@ fn row7_http_one_grant_record_and_failclosed_answers_as_absent() {
     );
     assert!(
         // The text, as the upgrade note documents it for operators.
-        warnings.contains("The audit record of a withheld surfaced call could not be written"),
+        warnings.contains(WARNING),
         "row 7 http: the failed decision write was not logged as documented:\n{warnings}"
     );
 }
