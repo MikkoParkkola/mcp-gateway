@@ -648,9 +648,12 @@ impl MetaMcp {
             .request_hash()
             .map_or_else(|| sha256_of(args), str::to_owned);
         let (srv, tl) = (server.to_string(), tool.to_string());
+        // The open slot's set, taken here: the blocking op below has no task-locals.
+        let recorded = super::super::grant_audit::open_slot_recorded();
+        let call_trace = trace_id.to_string();
         let written = log
             .append_bounded(move |log| {
-                log.log_invocation_attributed(
+                let landed = log.log_invocation_attributed(
                     CorrelationKey {
                         id: &key_id,
                         source: key_source,
@@ -661,7 +664,16 @@ impl MetaMcp {
                     response_hash.as_deref(),
                     attribution,
                     Some(decision.as_ref()),
-                )
+                );
+                // Inside the op, after the write returned Ok: a caller timeout
+                // cannot skip it, and a failed write never adds the id. The
+                // call's grant decisions read this set in their own later append.
+                if landed.is_ok()
+                    && let Some(recorded) = &recorded
+                {
+                    recorded.add(&call_trace);
+                }
+                landed
             })
             .await;
         match written {
