@@ -507,10 +507,12 @@ impl TransparencyLogger {
     fn reject_reserved_keys(fields: &serde_json::Map<String, serde_json::Value>) -> io::Result<()> {
         let chain = ["counter", "prev_entry_hash", "entry_hash", "sig", "key_id"];
         // D6: only the logger writes segment records, so a caller cannot
-        // forge a seal, an open or an expiry.
+        // forge a seal, an open or an expiry; nor the id record, which would
+        // become the log's newest identity.
         let segment = rotation::RESERVED_SEGMENT_FIELDS;
         if let Some(event) = fields.get("event").and_then(serde_json::Value::as_str)
-            && event.starts_with(rotation::SEGMENT_EVENT_PREFIX)
+            && (event.starts_with(rotation::SEGMENT_EVENT_PREFIX)
+                || event == identity::EV_IDENTIFIED)
         {
             return Err(io::Error::other(format!(
                 "transparency log: event '{event}' is written only by the logger"
