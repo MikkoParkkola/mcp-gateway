@@ -63,5 +63,7 @@ fn rule_id_form() {
 fn a_joined_path_matches_a_slash_built_one() {
     let joined = std::path::Path::new("rules").join("id");
     // Compare components, not text: the separator is the platform's.
-    assert!(joined.starts_with("rules") && joined.ends_with("id") && joined.components().count() == 2);
+    assert!(
+        joined.starts_with("rules") && joined.ends_with("id") && joined.components().count() == 2
+    );
 }
