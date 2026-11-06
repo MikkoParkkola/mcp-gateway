@@ -16,6 +16,8 @@ impl std::fmt::Debug for BackendConfig {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("BackendConfig")
             .field("description", &self.description)
+            // Free text that often names a person: presence only.
+            .field("owner", &self.owner.as_ref().map(|_| "<set>"))
             .field("enabled", &self.enabled)
             .field("transport", &self.transport)
             .field("stop_when_idle_for", &self.stop_when_idle_for)
