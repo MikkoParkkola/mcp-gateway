@@ -697,3 +697,113 @@ fn the_scan_finds_every_standing_accessor() {
         );
     }
 }
+
+/// A fixture as a source file: wrapped in an item so a parser accepts it.
+fn file_of(body: &str) -> Vec<(String, String)> {
+    vec![(
+        "src/new.rs".to_owned(),
+        format!("fn fixture() {{ {body} }}"),
+    )]
+}
+
+/// How many times `needle` is found in the one fixture file.
+fn found(files: &[(String, String)], needle: &'static str) -> usize {
+    found_in(files)
+        .get(&(needle, "src/new.rs".to_owned()))
+        .copied()
+        .unwrap_or(0)
+}
+
+/// A raw identifier names the same field: `c.r#admin` reads the flag.
+#[test]
+fn the_scan_finds_a_raw_identifier_read() {
+    assert_eq!(found(&file_of("let a = c.r#admin;"), ".admin"), 1);
+}
+
+/// A struct pattern that names every field binds the flag as surely as one
+/// with `..`, outside a macro and inside one.
+#[test]
+fn the_scan_finds_a_full_field_pattern() {
+    for body in [
+        "let Small { admin, name } = s;",
+        "let _ = matches!(s, Small { admin, name });",
+        "assert_matches!(s, Small { admin, name });",
+        "check!(s => Small { name, admin });",
+    ] {
+        assert_eq!(found(&file_of(body), "{ admin, .. }"), 1, "{body}");
+    }
+}
+
+/// An accessor imported under another name is still that accessor: each
+/// call counts, and the use line itself does not. (The text finder counts the
+/// name once, in the use line, so two calls tell the finders apart.)
+#[test]
+fn the_scan_resolves_a_renamed_accessor() {
+    let renamed = vec![(
+        "src/new.rs".to_owned(),
+        "use crate::gateway::authz::admin_standing as standing;\n\
+         fn fixture() { let _ = standing(true, &[]); let _ = standing(false, &[]); }"
+            .to_owned(),
+    )];
+    assert_eq!(found(&renamed, "admin_standing"), 2);
+}
+
+/// Comments, string literals and definitions read nothing.
+#[test]
+fn the_scan_ignores_comments_strings_and_definitions() {
+    let files = vec![(
+        "src/new.rs".to_owned(),
+        "// c.admin\n/// c.admin\nfn is_gateway_admin() {}\nfn fixture() { let _ = \"c.admin\"; }"
+            .to_owned(),
+    )];
+    assert_eq!(found(&files, ".admin"), 0);
+    assert_eq!(found(&files, "is_gateway_admin"), 0);
+}
+
+/// A raw identifier in a macro no parser takes, and a bare variant through a
+/// glob import or a rename, are each one read. (Two reads through the rename:
+/// the text finder counts its use line once.)
+#[test]
+fn the_scan_finds_readers_in_token_walks_globs_and_renamed_variants() {
+    assert_eq!(found(&file_of("check!(s => c.r#admin);"), ".admin"), 1);
+    let glob = vec![(
+        "src/new.rs".to_owned(),
+        "use crate::gateway::router::authorization::CallerStanding::*;\n\
+         fn fixture(s: CallerStanding) { match s { Admin => {} _ => {} } }"
+            .to_owned(),
+    )];
+    assert_eq!(found(&glob, "CallerStanding::Admin"), 1);
+    let renamed = vec![(
+        "src/new.rs".to_owned(),
+        "use crate::gateway::router::authorization::CallerStanding::Admin as Elevated;\n\
+         fn fixture(s: CallerStanding) { match s { Elevated => {} _ => {} }; let _ = matches!(s, Elevated); }"
+            .to_owned(),
+    )];
+    assert_eq!(found(&renamed, "CallerStanding::Admin"), 2);
+}
+
+// Guard rows: green on the text finder too, they pin the new finder's handling.
+
+/// An unrelated import under a monitored name does not hide a real call.
+#[test]
+fn an_unrelated_alias_does_not_hide_a_real_accessor_call() {
+    let shadowed = vec![(
+        "src/new.rs".to_owned(),
+        "mod other { use std::mem::drop as is_admin; }\n\
+         fn fixture() { let _ = is_admin(Some(c)); }"
+            .to_owned(),
+    )];
+    assert_eq!(found(&shadowed, "is_admin("), 1);
+}
+
+/// A reader in a `matches!` guard is a read.
+#[test]
+fn the_scan_finds_a_reader_in_a_matches_guard() {
+    assert_eq!(
+        found(
+            &file_of("let _ = matches!(c, Some(x) if x.admin);"),
+            ".admin"
+        ),
+        1
+    );
+}
