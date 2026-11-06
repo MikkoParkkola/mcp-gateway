@@ -85,12 +85,13 @@ fn announce_read_verdict(config: &crate::security::firewall::FirewallConfig) {
              (tenant_guard.cross_tenant_reads: block) still runs on every transport \
              and answers may be withheld. {STOP}"
         ),
-        Some(CrossTenantReads::Observe) => info!(
+        // `off` never reaches here: the predicate is the one gate.
+        Some(_) => info!(
             "Security firewall is off; the cross-tenant read verdict \
              (tenant_guard.cross_tenant_reads: observe) still runs on every transport \
              and only flags. {STOP}"
         ),
-        Some(CrossTenantReads::Off) | None => {}
+        None => {}
     }
 }
 
