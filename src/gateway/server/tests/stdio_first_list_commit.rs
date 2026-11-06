@@ -47,9 +47,9 @@ async fn r14_a_queued_first_answer_has_committed_the_flag() {
 }
 
 /// R14b: a send outside any ticket (a batch, a direct dispatch) still queues
-/// its answer, and commits nothing.
+/// its answer; that it leaves the first-list wait armed is R16's.
 #[tokio::test]
-async fn r14b_a_send_outside_a_ticket_queues_and_commits_nothing() {
+async fn r14b_a_send_outside_a_ticket_still_queues_its_answer() {
     let dispatches = StdioDispatches::default();
     let (writer, mut stdout) = mpsc::channel::<OutboundFrame>(4);
     let cancelled = dispatches.cancelled();
