@@ -322,10 +322,12 @@ fn spawn_write(
         {
             tracing::error!(%error, "grant decision records could not be written");
         }
-        if !best_effort.is_empty()
-            && let Err(error) = write_records(&logger, &best_effort).await
-        {
-            tracing::warn!(%error, "{WITHHELD_RECORD_FAILED}");
+        if !best_effort.is_empty() {
+            #[cfg(test)]
+            seams::at_best_effort_start().await;
+            if let Err(error) = write_records(&logger, &best_effort).await {
+                tracing::warn!(%error, "{WITHHELD_RECORD_FAILED}");
+            }
         }
     });
 }
