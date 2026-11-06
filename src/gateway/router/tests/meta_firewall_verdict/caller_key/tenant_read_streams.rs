@@ -538,14 +538,15 @@ async fn listen_request_params_are_a_read() {
 }
 
 /// Firewall off, `block`: after an A read, a stream item naming B and a
-/// webhook event naming B are withheld from the GET stream; with the mode
-/// `off` (the control) both arrive. A pin that the read verdict runs on its
+/// webhook event naming B are withheld from the GET stream, each with a
+/// standalone `tenant_read` record saying `blocked`; with the mode `off`
+/// (the control) both arrive and nothing is recorded as a verdict. A pin that the read verdict runs on its
 /// own switch on the stream producers too.
 #[tokio::test]
 async fn stream_items_are_judged_with_the_firewall_off() {
     let who = caller();
     for mode in [CrossTenantReads::Off, CrossTenantReads::Block] {
-        let (state, _store) = switched_state(Switch::Off, mode, 3600, &["customer_id"]).await;
+        let (state, _store, log_dir) = logged_state_switched(Switch::Off, mode).await;
         let router = create_router(Arc::clone(&state));
         let hooks = webhook_routes(&state);
         let mut stream = Stream::open(&router).await;
@@ -567,6 +568,19 @@ async fn stream_items_are_judged_with_the_firewall_off() {
             mentions(&got, "row-78"),
             arrival == Arrival::Delivered,
             "{mode:?}: a B webhook event after an A read: {got:?}"
+        );
+        let blocked = log_lines(&log_dir)
+            .iter()
+            .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+            .filter(|r| {
+                record_field(r, "event") == Some("tenant_read")
+                    && record_field(r, "cross_tenant_read") == Some("blocked")
+            })
+            .count();
+        let expected = if mode == CrossTenantReads::Off { 0 } else { 2 };
+        assert_eq!(
+            blocked, expected,
+            "{mode:?}: standalone tenant_read records saying blocked"
         );
     }
 }

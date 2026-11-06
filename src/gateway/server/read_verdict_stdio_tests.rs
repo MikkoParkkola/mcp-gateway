@@ -20,7 +20,7 @@ const SESSION: &str = "stdio-read-verdict";
 
 /// `security.firewall.enabled` for a row.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum Switch {
+pub(crate) enum Switch {
     On,
     Off,
 }
@@ -146,7 +146,7 @@ fn verdicts(log_dir: &tempfile::TempDir) -> Vec<String> {
 
 /// A then B on one stdio Meta-MCP: whether each delivers a result, and the
 /// verdicts its delivery records carry.
-async fn a_then_b(switch: Switch, mode: CrossTenantReads) -> ([bool; 2], Vec<String>) {
+pub(crate) async fn a_then_b(switch: Switch, mode: CrossTenantReads) -> ([bool; 2], Vec<String>) {
     let log_dir = tempfile::tempdir().expect("log dir");
     let meta = judged_meta(switch, mode, &log_dir).await;
     let reads = meta.stdio_reads();
