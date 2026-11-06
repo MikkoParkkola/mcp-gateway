@@ -110,3 +110,68 @@ fn every_judge_entry_opens_with_the_judging_gate() {
         "outbound::judges asks judge::judging"
     );
 }
+
+/// The scan skips `*_tests/` folders by name, so each must be compiled only
+/// for tests: some module declaration naming it (`mod <name>`, or a
+/// `#[path]` ending in `<name>.rs` or `<name>/mod.rs`) carries `cfg(test)`
+/// in its own attribute block: the attribute and comment lines directly
+/// above it, so a neighbouring item's `cfg(test)` does not count. A production folder named `*_tests` fails
+/// here instead of hiding from the scan. Plain `tests/` folders and
+/// `*_tests.rs` files are still trusted by name.
+#[test]
+fn every_skipped_test_folder_is_compiled_only_for_tests() {
+    fn dirs(dir: &Path, out: &mut Vec<String>) {
+        for entry in std::fs::read_dir(dir).expect("read src") {
+            let path = entry.expect("dir entry").path();
+            if path.is_dir() {
+                if let Some(name) = path.file_name().and_then(|n| n.to_str())
+                    && name.ends_with("_tests")
+                {
+                    out.push(name.to_owned());
+                }
+                dirs(&path, out);
+            }
+        }
+    }
+    fn files(dir: &Path, out: &mut Vec<String>) {
+        for entry in std::fs::read_dir(dir).expect("read src") {
+            let path = entry.expect("dir entry").path();
+            if path.is_dir() {
+                files(&path, out);
+            } else if path.extension().is_some_and(|e| e == "rs") {
+                out.push(std::fs::read_to_string(&path).expect("read source"));
+            }
+        }
+    }
+    let mut skipped = Vec::new();
+    dirs(Path::new(SRC), &mut skipped);
+    assert!(!skipped.is_empty(), "premise: the tree has *_tests folders");
+    let mut texts = Vec::new();
+    files(Path::new(SRC), &mut texts);
+    let gated = |name: &str| {
+        let declares = |line: &str| {
+            let line = line.trim();
+            line.ends_with(&format!("mod {name};"))
+                || line.ends_with(&format!("mod {name} {{"))
+                || line.contains(&format!("{name}.rs\""))
+                || line.contains(&format!("{name}/mod.rs\""))
+        };
+        texts.iter().any(|text| {
+            let lines: Vec<&str> = text.lines().collect();
+            lines.iter().enumerate().any(|(i, line)| {
+                declares(line)
+                    && lines[..i]
+                        .iter()
+                        .rev()
+                        .map(|above| above.trim())
+                        .take_while(|above| above.starts_with("#[") || above.starts_with("//"))
+                        .any(|above| above.contains("cfg(") && above.contains("test"))
+            })
+        })
+    };
+    let ungated: Vec<&String> = skipped.iter().filter(|name| !gated(name)).collect();
+    assert!(
+        ungated.is_empty(),
+        "*_tests folders with no cfg(test) declaration: {ungated:?}"
+    );
+}
