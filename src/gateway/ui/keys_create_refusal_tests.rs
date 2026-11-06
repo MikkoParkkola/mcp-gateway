@@ -391,6 +391,16 @@ fn p6_the_clock_is_read_again_under_the_lock() {
     );
 }
 
+/// The 409 of a file keyedit cannot edit in place: its path and the hand steps.
+fn not_written(fx: &Fixture) -> Value {
+    let path = fx.path().display().to_string();
+    json!({"error": "not_written", "message": format!(
+        "{path} cannot be edited in place; nothing was written. Run \
+         `mcp-gateway hash-key` on the new key, add an entry to auth.api_keys \
+         with the key_sha256 it prints, then reload."
+    )})
+}
+
 /// P7: a list or `auth` keyedit cannot edit in place is 409 `not_written`
 /// with the file path and the hash-key steps.
 #[test]
@@ -410,15 +420,36 @@ fn p7_keyedit_refusals_are_not_written_with_hand_steps() {
             text,
             ..Setup::default()
         });
-        let path = fx.path().display().to_string();
-        let expected = json!({"error": "not_written", "message": format!(
-            "{path} cannot be edited in place; nothing was written. Run \
-             `mcp-gateway hash-key` on the new key, add an entry to auth.api_keys \
-             with the key_sha256 it prints, then reload."
-        )});
-        refused(&fx, &fx.body("hand"), StatusCode::CONFLICT, &expected);
+        refused(
+            &fx,
+            &fx.body("hand"),
+            StatusCode::CONFLICT,
+            &not_written(&fx),
+        );
     }
-    let _ = ROOT;
+}
+
+/// P7b: a block-style `auth` whose only flaw is a flow-style `api_keys` list
+/// is refused for that list alone.
+#[test]
+fn p7b_a_flow_style_key_list_under_a_block_auth_is_not_written() {
+    let listed = format!(
+        "[{{name: root, key_sha256: \"{}\", backends: [\"*\"], admin: true}}]",
+        spec(ROOT)
+    );
+    let text = format!(
+        "secrets:\n  store: files\nbackends: {{}}\nauth:\n  enabled: true\n  api_keys: {listed}\n"
+    );
+    let fx = Fixture::new(Setup {
+        text,
+        ..Setup::default()
+    });
+    refused(
+        &fx,
+        &fx.body("hand"),
+        StatusCode::CONFLICT,
+        &not_written(&fx),
+    );
 }
 
 /// A4: an audit append that fails, and separately one whose fsync fails, each
