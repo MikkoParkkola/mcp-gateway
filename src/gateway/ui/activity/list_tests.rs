@@ -512,4 +512,61 @@ async fn a_cancelled_read_keeps_its_permit_until_the_read_ends() {
     tokio::task::spawn_blocking(move || done_rx.recv().unwrap())
         .await
         .unwrap();
+    every_slot_returns(&reads, before).await;
+}
+
+/// Once its read ends, every slot of the pool comes back: a permit kept past
+/// the read would leak a slot for good. The read signals before its closure
+/// returns and drops the permit, so this waits (in real time) for all of them.
+async fn every_slot_returns(reads: &tokio::sync::Semaphore, all: usize) {
+    let all = u32::try_from(all).unwrap();
+    let back =
+        tokio::time::timeout(std::time::Duration::from_secs(5), reads.acquire_many(all)).await;
+    assert!(
+        matches!(back, Ok(Ok(_))),
+        "a slot stayed taken after its read ended"
+    );
+}
+
+/// Guard row: the live stream's read path holds its permit until the read
+/// ends too, even when its caller stops waiting.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_cancelled_stream_read_keeps_its_permit_until_the_read_ends() {
+    use std::sync::mpsc;
+    let (state, _dir) = crate::gateway::router::tests::audience_state(
+        &crate::config::AuthConfig::default(),
+        (None, None),
+        |meta| meta,
+    )
+    .await;
+    let reads = std::sync::Arc::clone(state.process.activity_reads());
+    let before = reads.available_permits();
+    let (entered_tx, entered_rx) = mpsc::channel::<()>();
+    let (release_tx, release_rx) = mpsc::channel::<()>();
+    let (done_tx, done_rx) = mpsc::channel::<()>();
+    let reader = std::sync::Arc::clone(&state);
+    let caller = tokio::spawn(async move {
+        super::stream_read(&reader, move |_given| {
+            entered_tx.send(()).unwrap();
+            let _ = release_rx.recv();
+            let _ = done_tx.send(());
+            Ok(())
+        })
+        .await
+    });
+    tokio::task::spawn_blocking(move || entered_rx.recv().unwrap())
+        .await
+        .unwrap();
+    caller.abort();
+    let _ = caller.await;
+    assert_eq!(
+        reads.available_permits(),
+        before - 1,
+        "the cancelled caller's stream read is still running, so its permit stays taken"
+    );
+    release_tx.send(()).unwrap();
+    tokio::task::spawn_blocking(move || done_rx.recv().unwrap())
+        .await
+        .unwrap();
+    every_slot_returns(&reads, before).await;
 }
