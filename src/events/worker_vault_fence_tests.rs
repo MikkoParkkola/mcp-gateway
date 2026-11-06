@@ -100,7 +100,7 @@ impl ListenerMint for Fence {
         self.pending.pause().await;
         match *self.refuse.lock().expect("fence") {
             Some(refused) => Err(refused),
-            None => Ok(Some(self.current(&identity.subject))),
+            None => Ok(Some(self.current(&identity.subject()))),
         }
     }
 }

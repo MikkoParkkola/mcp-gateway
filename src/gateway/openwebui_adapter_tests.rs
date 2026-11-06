@@ -58,11 +58,11 @@ fn identities_are_namespaced_and_profile_claims_are_discarded() {
         verify(&runtime("laptop"), &key, &alice).unwrap_or_else(|_| panic!("valid installation"));
     assert_ne!(a.stable_actor_id(), b.stable_actor_id());
     assert_ne!(a.stable_actor_id(), other.stable_actor_id());
-    assert_eq!(a.subject, "alice");
-    assert!(a.email.is_empty());
-    assert!(a.name.is_none());
-    assert!(a.groups.is_empty());
-    assert_ne!(a.issuer, "open-webui");
+    assert_eq!(a.subject(), "alice");
+    assert!(a.email().is_empty());
+    assert!(a.name().is_none());
+    assert!(a.groups().is_empty());
+    assert_ne!(a.issuer(), "open-webui");
 }
 
 fn trusted(installation: &str, secret: &[u8]) -> Trusted {
@@ -90,7 +90,7 @@ fn shared_header_resolves_to_exactly_one_installation() {
     // Order-independent: the second installation is reachable even though
     // it is not the first candidate tried.
     assert_ne!(first.stable_actor_id(), second.stable_actor_id());
-    assert_eq!(first.subject, second.subject);
+    assert_eq!(first.subject(), second.subject());
 
     // Signed by neither, and presented by an API key neither installation
     // lists: both are refusals, not a fallback to some other installation.
@@ -200,8 +200,8 @@ fn held_adapter_assertion_rechecks_future_issuance_after_clock_rollback() {
     assert!(verify_assertion(&adapter, &key, &forged).is_err());
     let (identity, held) = verify_assertion(&adapter, &key, &signed)
         .unwrap_or_else(|_| panic!("valid Alice at issuance"));
-    assert_eq!(identity.subject, "alice");
-    assert_ne!(identity.issuer, "open-webui");
+    assert_eq!(identity.subject(), "alice");
+    assert_ne!(identity.issuer(), "open-webui");
     assert_eq!(held.expires_at, 1_000_120);
     assert_eq!(held.skew, 30);
     assert!(held.live());
@@ -313,7 +313,7 @@ fn adapter_coherent_negative_issuance_remains_admitted() {
     let guard = crate::clock::test_clock::at_secs(10);
     let (identity, held) = verify_assertion(&adapter, &key, &signed)
         .unwrap_or_else(|_| panic!("coherent negative issuance admitted"));
-    assert_eq!(identity.subject, "alice");
+    assert_eq!(identity.subject(), "alice");
     assert_eq!(held.expires_at, 100);
     assert_eq!(held.skew, 30);
     assert!(held.live());

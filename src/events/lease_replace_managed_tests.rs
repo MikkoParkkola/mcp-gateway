@@ -44,7 +44,7 @@ impl Grants {
 #[async_trait::async_trait]
 impl ListenerMint for Grants {
     async fn mint(&self, _: &str, identity: &VerifiedIdentity) -> crate::Result<ListenerGrant> {
-        let subject = identity.subject.as_str();
+        let subject = identity.subject();
         Ok(ListenerGrant {
             headers: vec![(
                 "authorization".to_owned(),
@@ -60,7 +60,7 @@ impl ListenerMint for Grants {
         _: &str,
         identity: &VerifiedIdentity,
     ) -> Result<Option<String>, FenceRead> {
-        Ok(Some(self.binding(&identity.subject)))
+        Ok(Some(self.binding(&identity.subject())))
     }
 }
 

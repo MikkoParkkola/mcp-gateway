@@ -424,12 +424,15 @@ pub(in crate::gateway::ui) fn actor_from_client(
         if scoped && role == ControlPlaneRole::Admin {
             role = ControlPlaneRole::Auditor;
         }
-        let display_name = id.name.clone().unwrap_or_else(|| id.email.clone());
+        let display_name = id
+            .name()
+            .map(str::to_owned)
+            .unwrap_or_else(|| id.email().to_owned());
         return ControlPlaneActor {
             actor_id: id.stable_actor_id(),
             display_name,
             role,
-            group_ids: id.groups.clone(),
+            group_ids: id.groups().to_vec(),
         };
     }
 

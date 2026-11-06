@@ -189,7 +189,7 @@ impl<'a> Principal<'a> {
     /// to add itself to.
     fn parts(self) -> (&'a str, &'a str) {
         match self {
-            Self::Verified(identity) => (&identity.issuer, &identity.subject),
+            Self::Verified(identity) => (&identity.issuer(), &identity.subject()),
             Self::SoleOperator => (SOLE_OPERATOR_AUTHORITY, SOLE_OPERATOR_SUBJECT),
         }
     }

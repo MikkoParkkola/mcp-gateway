@@ -575,7 +575,7 @@ pub(super) fn task_frames(
                 !matches!(subject.authority(), "api_key" | "mtls")
                     && caller
                         .verified_identity
-                        .is_none_or(|verified| verified.issuer != subject.authority())
+                        .is_none_or(|verified| verified.issuer() != subject.authority())
             }),
     })
 }
