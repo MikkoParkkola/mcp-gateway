@@ -68,16 +68,7 @@ impl MtlsPolicy {
     /// [`PolicyDecision::Allow`] so the gateway behaves as before.
     #[must_use]
     pub fn from_config(config: &MtlsConfig) -> Self {
-        let rules = config
-            .policies
-            .iter()
-            .map(|rule| CompiledRule::from_config(rule, None))
-            .collect();
-
-        Self {
-            rules,
-            enabled: config.enabled,
-        }
+        Self::compile(config, None)
     }
 
     /// [`Self::from_config`], each rule carrying its id under `key`: the
@@ -92,14 +83,22 @@ impl MtlsPolicy {
         config: &MtlsConfig,
         key: &crate::security::rule_id::RuleKey,
     ) -> Self {
+        Self::compile(config, Some(key))
+    }
+
+    /// One pass over `config.policies`: each rule compiled, with its id when
+    /// `key` is given.
+    fn compile(config: &MtlsConfig, key: Option<&crate::security::rule_id::RuleKey>) -> Self {
         let rules = config
             .policies
             .iter()
             .map(|rule| {
-                // invariant: a derived Serialize of strings and options cannot fail.
-                let bytes = serde_json::to_vec(rule).expect("a policy rule serialises");
-                let id = crate::security::rule_id::RuleId::of("mtls", key, &bytes);
-                CompiledRule::from_config(rule, Some(id))
+                let id = key.map(|key| {
+                    // invariant: a derived Serialize of strings and options cannot fail.
+                    let bytes = serde_json::to_vec(rule).expect("a policy rule serialises");
+                    crate::security::rule_id::RuleId::of("mtls", key, &bytes)
+                });
+                CompiledRule::from_config(rule, id)
             })
             .collect();
         Self {
