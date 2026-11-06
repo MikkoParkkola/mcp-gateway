@@ -241,3 +241,12 @@ fn counters(pages: &[ForwardPage]) -> Vec<u64> {
         .flat_map(|p| p.rows.iter().map(|r| r.mark.counter))
         .collect()
 }
+
+/// The live stream serves a refused call as the list does: the activity
+/// stream keeps the refusal kind beside calls, the config stream does not.
+#[test]
+fn the_activity_stream_keeps_refusal_rows_and_the_config_stream_does_not() {
+    use super::super::rows::Kind;
+    assert!(StreamKind::Activity.keeps(Kind::Refusal));
+    assert!(!StreamKind::Config.keeps(Kind::Refusal));
+}
