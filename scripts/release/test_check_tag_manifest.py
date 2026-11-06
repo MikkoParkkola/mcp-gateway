@@ -708,8 +708,6 @@ COVERAGE_BUNDLE = ("7", "rerunning all jobs rebuilds them; multi-GB bundles per 
 SHORT_HANDOFFS = {  # (workflow, artifact name) -> (retention-days, reason)
     ("coverage-probe.yml", "cov-shard-sdk"): COVERAGE_BUNDLE,
     ("coverage-probe.yml", "cov-shard-${{ matrix.part }}"): COVERAGE_BUNDLE,
-    ("coverage-shard-trial.yml", "cov-shard-sdk"): COVERAGE_BUNDLE,
-    ("coverage-shard-trial.yml", "cov-shard-${{ matrix.shard }}"): COVERAGE_BUNDLE,
 }
 
 
