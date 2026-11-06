@@ -195,3 +195,32 @@ async fn a_blocked_withheld_writer_never_holds_the_slots_answer() {
     let held = wait_for_decisions(&dir, 2).await;
     assert_eq!(held.len(), 2, "each note written once: {held:#?}");
 }
+
+/// A finished task's stored delivery is re-checked inside the repeat scope
+/// (task reads, notification frames, repeated task-augmented calls): its
+/// call already has the original request's invocation record, so a refusal
+/// there is a delivery and says so.
+#[tokio::test]
+async fn a_refused_stored_delivery_recheck_says_recorded() {
+    let (endpoint, dir) = (
+        Endpoint::start(false).await,
+        Arc::new(tempfile::tempdir().unwrap()),
+    );
+    let meta = gateway(&endpoint, vec![], Some(&dir), AuditFailurePolicy::BestEffort);
+    let who = api_key("alice");
+    let caller = context(&who);
+    let store = Arc::new(super::grant_audit::DecisionDedupe::default());
+
+    let ((), written, _) = with_grant_slot(meta.transparency_logger.as_ref(), async {
+        let refused = super::grant_audit::in_repeat_scope(&store, "task|caller".into(), || {
+            meta.check_invocation_policy(&invoke_args(), Some("d10"), &caller)
+        });
+        assert!(refused.is_err(), "premise: the revoked grant refuses");
+    })
+    .await;
+
+    written.expect("the slot's records are written");
+    let record = only(decisions(&dir), "decision record");
+    assert_eq!(record["outcome"], json!("denied"), "{record}");
+    assert_eq!(record["invocation_recorded"], json!(true), "{record}");
+}
