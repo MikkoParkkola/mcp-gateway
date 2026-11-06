@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! The stdio session's first-list wait (MIK-9309).
+//! The stdio session's first-list wait.
 //!
 //! A modern stdio client cannot be told its tool list changed, so its first
 //! `tools/list` waits for the surfaced backends' first fill
@@ -60,7 +60,7 @@ impl FirstList {
 }
 
 /// What the stdio `tools/list` arm runs before it builds the list: the grant
-/// recheck HTTP runs first (MIK-8356), then the caller's own views as HTTP
+/// recheck HTTP runs first, then the caller's own views as HTTP
 /// warms them and, beside it from the same start, a modern first list's wait
 /// for the surfaced backends' first fill. Both are capped from that start,
 /// so the two waits never add up.

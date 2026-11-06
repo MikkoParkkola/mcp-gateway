@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! MIK-9309 rows: the first modern stdio list's wait, its bound, its once
+//! Rows for the first modern stdio list's wait: its bound, its once
 //! flag and cancellation. Fixtures in [`super::stdio_first_list`].
 
 use std::time::Duration;

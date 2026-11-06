@@ -44,7 +44,7 @@ impl Cancelled {
         let mut marks = self.0.lock();
         let task = tokio::task::try_id();
         if !task.is_some_and(|task| marks.cancelled.contains(&task)) {
-            // MIK-9309: a first list's flag commits before its answer can be
+            // A first list's flag commits before its answer can be
             // read, under the lock its cancel takes, so a later list never
             // reads it unset once the answer is out, and a cancelled one never
             // commits it.

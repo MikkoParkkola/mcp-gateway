@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! MIK-9309 R14 (C1): the first-list flag is committed by the enqueue
+//! R14: the first-list flag is committed by the enqueue
 //! itself, so once a first list's answer is queued no later list can read
 //! the flag unset and wait again. Checked at the enqueue, with no timing:
 //! the moment `send_unless_cancelled` returns, the flag must be set.

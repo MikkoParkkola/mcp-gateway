@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! MIK-9309 rows: who the first-list wait applies to and what it fills.
+//! Rows for who the first-list wait applies to and what it fills.
 //! Fixtures in [`super::stdio_first_list`].
 
 use std::sync::atomic::Ordering;
@@ -14,7 +14,7 @@ use super::stdio_first_list::{
 use super::stdio_list_changed::legacy;
 
 /// R4: a legacy session's list during a held warm-up answers at once: it is
-/// told of the change instead (the MIK-8278 rows).
+/// told of the change instead (the `stdio_list_changed` rows).
 #[tokio::test]
 async fn r4_a_legacy_first_list_does_not_wait() {
     let held = held_backend(&[TOOL]).await;

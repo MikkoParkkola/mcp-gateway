@@ -248,7 +248,7 @@ impl Gateway {
         // Whether this session began with `initialize`: only such a client
         // is told of changes (a modern one was told `listChanged: false`).
         let mut legacy_handshake = false;
-        // Whether a first list's answer was queued (MIK-9309).
+        // Whether a first list's answer was queued (`first_list_wait`).
         let first_list = super::first_list_wait::FirstList::default();
 
         // Use a fixed session ID for stdio sessions (single client, long-lived)
@@ -655,7 +655,7 @@ impl Gateway {
         // The read loop is over: the session is ending, so nothing more is
         // announced, though accepted requests still drain (MIK-8278).
         announcer.stop();
-        // A first list still waiting answers now (MIK-9309).
+        // A first list still waiting answers now (`first_list_wait`).
         first_list.end();
         // `writer.is_closed()` as well as the flag: stdout can die during the
         // wait for a line that never comes, and the loop then leaves by the EOF

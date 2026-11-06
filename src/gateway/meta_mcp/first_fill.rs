@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! A modern stdio client's first `tools/list` waits for the surfaced
-//! backends' first fill (MIK-9309).
+//! backends' first fill.
 //!
 //! A surfaced tool whose backend's shared catalogue was never filled is left
 //! out of `tools/list`. A legacy stdio session is told when the fill lands; a

@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! MIK-9309: a modern stdio client's first `tools/list` during warm-up waits,
+//! A modern stdio client's first `tools/list` during warm-up waits,
 //! bounded, for the surfaced backends' first fill, and is sent nothing unasked.
 //! The backend holds its `tools/list` answer until the row releases it, so no
 //! timing decides which side of the fill a list lands on.

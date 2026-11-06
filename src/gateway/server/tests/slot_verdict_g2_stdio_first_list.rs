@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! MIK-9309 R11, the stdio first list's two waits share one start: the own
+//! R11, the stdio first list's two waits share one start: the own
 //! view warm of a per-user backend (`warm_listing_views`) and the first
 //! list's wait for a shared surfaced backend's first fill. Each is capped
 //! from that start, so together they take one bound, never two. Uses the
