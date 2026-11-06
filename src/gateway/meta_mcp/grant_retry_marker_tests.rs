@@ -96,3 +96,51 @@ async fn a_withheld_call_without_a_continuation_is_unrecorded() {
     assert_eq!(recorded, 0, "{decision}");
     assert_eq!(decision["invocation_recorded"], json!(false), "{decision}");
 }
+
+/// One slot holds a granted call whose invocation record lands and a withheld
+/// call whose continuation is refused, so its retry dispatches nothing. The
+/// first call's trace id must not mark the second's decision.
+#[tokio::test]
+async fn another_calls_invocation_in_the_slot_never_marks_a_retry_note() {
+    use super::grant_audit_fixture::{decisions, grant};
+    let (endpoint, dir) = (
+        Endpoint::start(false).await,
+        Arc::new(tempfile::tempdir().unwrap()),
+    );
+    let alice = ("api_key", "alice");
+    let meta = gateway(
+        &endpoint,
+        vec![grant("g1", alice, alice)],
+        Some(&dir),
+        AuditFailurePolicy::BestEffort,
+    )
+    .with_surfaced_tools(vec![crate::config::SurfacedToolConfig {
+        server: CAPS.to_string(),
+        tool: PERSONAL.to_string(),
+    }]);
+    let (owner, other) = (api_key("alice"), api_key("bob"));
+    let refused_retry = RetryFields {
+        request_state: Some("not-a-continuation".to_string()),
+        ..RetryFields::default()
+    };
+
+    let log = meta.transparency_logger.as_ref();
+    let (_, written, _) = super::grant_audit::with_grant_slot(log, async {
+        let invoke = json!({"server": CAPS, "tool": PERSONAL, "arguments": {}});
+        let granted = super::grant_decision_audit_tests::call(&meta, &owner, "gateway_invoke", invoke);
+        let _ = granted.await;
+        let mut caller = context(&other);
+        caller.retry = &refused_retry;
+        let _ = meta
+            .handle_tools_call(RequestId::Number(2), PERSONAL, json!({}), Some("d17"), caller)
+            .await;
+    })
+    .await;
+
+    written.expect("the slot's records are written");
+    let held = wait_for_decisions(&dir, 2).await;
+    assert_eq!(invocations(&dir).len(), 1, "only the granted call recorded");
+    let denied = held.iter().find(|d| d["outcome"] == json!("denied"));
+    let denied = denied.unwrap_or_else(|| panic!("no denied decision: {:#?}", decisions(&dir)));
+    assert_eq!(denied["invocation_recorded"], json!(false), "{denied}");
+}
