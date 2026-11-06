@@ -276,6 +276,34 @@ fn a_log_whose_identified_record_expired_gets_no_second_one() {
 }
 
 #[test]
+fn a_log_whose_identified_record_expired_with_no_segment_left_gets_no_second_one() {
+    // GIVEN: a log whose identified record expired with its segment, and
+    // every sealed segment then gone, as the disk-full path's expiries leave
+    // it: nothing sealed, and an active open record carrying the id
+    let dir = tempfile::tempdir().unwrap();
+    let path = log_path(&dir);
+    let l = TransparencyLogger::open(cfg(&path, 1, false)).unwrap();
+    let id = l.log_id();
+    rotate_n(&l, &path, 3);
+    drop(l);
+    for seg in list_segments(&path).unwrap() {
+        std::fs::remove_file(&seg.path).unwrap();
+    }
+    assert!(identified(&path).is_empty(), "the id record expired");
+    assert_eq!(lines(&path)[0]["log_id"].as_str(), Some(id.as_str()));
+
+    // WHEN: it is reopened twice
+    for _ in 0..2 {
+        let again = TransparencyLogger::open(cfg(&path, 1, false)).unwrap();
+        assert_eq!(again.log_id(), id);
+    }
+
+    // THEN: still no identified record: a rotation's open record is no
+    // unfinished genesis
+    assert!(identified(&path).is_empty(), "no second identified record");
+}
+
+#[test]
 fn a_torn_identified_record_is_repaired_exactly_once() {
     // The torn line cut mid-record, and cut by its closing byte only: both
     // fail to parse, so recovery drops them and records the drop on line 2.
