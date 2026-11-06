@@ -218,15 +218,15 @@ async fn t2_direct_allowed_tools() {
     let calls = super::direct_guards_fixture::replace_backend_configured(&fx, "alpha", config);
     let before = records(&dir).len();
     let answer = post_direct(&fx, "alpha", "k-std", "read", json!({}), None, None).await;
-    // A withheld name is answered as an absent one: `absent_name`'s
-    // METHOD_NOT_FOUND (-32601, `absent.rs:9-11`) as a JSON-RPC error on a 200
-    // (`key_check.rs:24-27`). No denial code is noted for it, so the record
-    // reads the answer: `error` with its code (`direct_audit.rs:94-96`).
+    // On a shared backend a withheld name takes the catalogue's absent answer
+    // (`key_check.rs:147-170`, text from `input_keys.rs:101`): an `isError`
+    // result on a 200. No denial code is noted for it, so the record reads the
+    // answer: `tool_error`, with no code (`direct_audit.rs:97-99`).
     let withheld = Refusal {
         status: StatusCode::OK,
-        form: Form::RpcError,
-        outcome: "error",
-        code: Some(-32601),
+        form: Form::IsErrorResult,
+        outcome: "tool_error",
+        code: None,
     };
     let decision = refused(&fx, &dir, answer, (before, 0), withheld);
     assert_eq!(
@@ -312,13 +312,14 @@ async fn p3_direct_routing_profile_preflight() {
         super::direct_continuation_tests::dispatched(&fx),
     );
     let answer = post_direct(&fx, "alpha", "k-std", "read", json!({}), None, None).await;
-    // Answered as an absent name (-32601 on a 200, `key_check.rs:24-27`); the
-    // preflight notes the profile refusal's own code, `Error::Protocol`'s
-    // -32600 (`backend_handlers.rs:162-167`), so the record is `denied` with it
+    // Answered with the shared catalogue's absent answer, an `isError` result
+    // on a 200 (`key_check.rs:147-170`); the preflight notes the profile
+    // refusal's own code, `Error::Protocol`'s -32600
+    // (`backend_handlers.rs:162-167`), so the record is `denied` with it
     // (`direct_audit.rs:353-358`).
     let withheld_by_profile = Refusal {
         status: StatusCode::OK,
-        form: Form::RpcError,
+        form: Form::IsErrorResult,
         outcome: "denied",
         code: Some(-32600),
     };
