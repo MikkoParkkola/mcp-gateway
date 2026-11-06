@@ -182,7 +182,11 @@ impl MetaMcp {
         ) else {
             return refusal;
         };
-        match self.capability_rule_refusal((server, tool), caller.scope(), caller.is_admin) {
+        match self.capability_rule_refusal(
+            (server, tool),
+            caller.scope(),
+            caller.admin != crate::gateway::authz::AdminStanding::None,
+        ) {
             Some(rule) if rule.to_string() == refusal.to_string() => {
                 Error::ToolNotFound(tool.to_string())
             }
@@ -535,8 +539,10 @@ impl MetaMcp {
             crate::gateway::delivery_facts::withheld();
             crate::gateway::delivery_facts::gateway_folded(-32003);
         } else {
-            // Not out of scope: the name matches nothing.
+            // Not out of scope: the name matches nothing, the gateway's own
+            // refusal, recorded as an unscoped caller's missing backend is.
             super::audit::note_refused_by(DecisionKind::NotFound, None);
+            super::audit::note_not_found();
             crate::gateway::delivery_facts::gateway_folded(-32001);
         }
         self.record_withheld(server, tool, Withholding::Absent, caller, session_id)
@@ -670,7 +676,11 @@ impl MetaMcp {
         {
             // A capability the caller may not reach answers as one that is
             // not defined: the same `ToolNotFound` the grant check gives it.
-            let by_rule = self.capability_rule_refusal((server, tool), scope, caller.is_admin);
+            let by_rule = self.capability_rule_refusal(
+                (server, tool),
+                scope,
+                caller.admin != crate::gateway::authz::AdminStanding::None,
+            );
             if !refused || by_rule.is_none() {
                 return None;
             }

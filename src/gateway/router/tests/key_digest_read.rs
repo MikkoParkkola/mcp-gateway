@@ -7,7 +7,7 @@ use pretty_assertions::assert_eq;
 
 #[tokio::test]
 async fn ui_config_read_shows_no_key_digest() {
-    let mut auth = scoped_auth_config(true);
+    let mut auth = full_admin_auth_config();
     let previous = crate::config::api_key_digest_spec("previous-scoped-key".as_bytes());
     let key = &mut auth.api_keys[0];
     key.previous_key_sha256 = Some(previous.clone());

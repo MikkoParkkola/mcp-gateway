@@ -30,7 +30,7 @@ fn allow_all_ctx_declaring(
         stdio_nonce: None,
         caller_key: None,
         verified_identity: Some(&NAMED_CALLER),
-        is_admin: false,
+        admin: crate::gateway::authz::AdminStanding::None,
         surface_request: crate::gateway::recovery::SurfaceRequest::Configured,
         input_capabilities: declared,
         retry: &crate::protocol::mrtr::NO_RETRY,

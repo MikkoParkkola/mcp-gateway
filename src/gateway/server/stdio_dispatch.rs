@@ -476,7 +476,7 @@ impl Gateway {
             // dispatcher: it previously lived on the HTTP path
             // alone, so stdio was never checked and the default
             // non-admin context went unnoticed.
-            is_admin: true,
+            admin: crate::gateway::authz::AdminStanding::Gateway,
             surface_request: crate::gateway::recovery::SurfaceRequest::Configured,
             // MRTR.9 declares capabilities per request, in the same `_meta`
             // this shape was classified from, so a modern call is read there.
@@ -729,6 +729,7 @@ impl Gateway {
                     target,
                     dispatched,
                     bindings,
+                    effect_slot,
                 )) => {
                     // STORED.2 site 1: a retained single-call result is
                     // served only on proven liveness; otherwise the call
@@ -742,7 +743,7 @@ impl Gateway {
                             arguments.as_ref(),
                             &caller,
                             target,
-                            (dispatched, bindings),
+                            (dispatched, bindings, effect_slot),
                             (response, audit),
                         )
                         .await

@@ -341,28 +341,78 @@ pub(crate) fn evaluate_backend_value(
 
 /// [`evaluate_backend_value`] over every enabled backend's `headers` and
 /// `env`, in place, collecting each unresolved one's message: backend env
-/// and headers are secret slots too (ADR-028).
+/// and headers are secret slots too (ADR-028). Records each backend's
+/// credentials into `configured`, from the text as written, before the
+/// overwrite loses which values came from a secret source.
 pub(crate) fn evaluate_backends(
     backends: &mut std::collections::HashMap<String, super::BackendConfig>,
     overlay: &EnvOverlay,
     unresolved: &mut Vec<String>,
+    configured: &mut super::configured_secrets::ConfiguredByBackend,
 ) {
+    use super::configured_secrets::{ConfiguredSecrets, Slot, record};
     for (name, backend) in backends.iter_mut().filter(|(_, b)| b.enabled) {
+        let mut secrets = ConfiguredSecrets::default();
         let headers = backend
             .headers
             .iter_mut()
-            .map(|(key, value)| (format!("backends.{name}.headers.{key}"), value));
+            .map(|(key, value)| (Slot::Header, "headers", key, value));
         let env = backend
             .env
             .iter_mut()
-            .map(|(key, value)| (format!("backends.{name}.env.{key}"), value));
-        for (field, value) in headers.chain(env) {
+            .map(|(key, value)| (Slot::Env, "env", key, value));
+        for (slot, kind, key, value) in headers.chain(env) {
+            let field = format!("backends.{name}.{kind}.{key}");
             match evaluate_backend_value(&field, value, overlay) {
-                Ok(evaluated) => *value = evaluated,
+                Ok(evaluated) => {
+                    // Read from the written text: after the overwrite a
+                    // reference and a literal look the same.
+                    record(&mut secrets, slot, key, value.as_str(), &evaluated, overlay);
+                    *value = evaluated;
+                }
                 Err(message) => unresolved.push(message),
             }
         }
+        unresolved.extend(configured_refusals(name, &secrets));
+        configured.insert(name.clone(), secrets.sorted());
     }
+}
+
+/// A backend's configured credentials the redaction set cannot hold safely,
+/// one message each, naming fields and counts, never values: more than
+/// [`MAX_CONFIGURED`](super::configured_secrets::MAX_CONFIGURED) of them, or a
+/// value holding a redaction marker, which a redaction elsewhere in an
+/// answer could complete into that value.
+fn configured_refusals(
+    name: &str,
+    secrets: &super::configured_secrets::ConfiguredSecrets,
+) -> Vec<String> {
+    use super::configured_secrets::MAX_CONFIGURED;
+    let mut refusals: Vec<String> = secrets
+        .iter()
+        .filter(|secret| crate::security::secret_redaction::contains_marker(&secret.value))
+        .map(|secret| {
+            format!(
+                "backends.{name}.{}: a secret value contains a redaction marker \
+                 (`[redacted]`, `<removed>` or `{{hidden}}`); choose a value without one",
+                secret.field
+            )
+        })
+        .collect();
+    // Only what the set will hold, once per value.
+    let count = secrets
+        .iter()
+        .filter(|secret| crate::security::needles::holds(secret))
+        .map(|secret| secret.value.as_str())
+        .collect::<std::collections::HashSet<_>>()
+        .len();
+    if count > MAX_CONFIGURED {
+        refusals.push(format!(
+            "backends.{name}: {count} secret values in headers: and env:, more than the \
+             {MAX_CONFIGURED} a backend may configure"
+        ));
+    }
+    refusals
 }
 
 /// Whether `written` is a whole-value `env:`, `file:` or `keychain:` reference.

@@ -35,6 +35,12 @@ pub(crate) fn arm(path: &Path) -> Arc<Pause> {
     pause
 }
 
+/// The key of the second pause point, after `apply_patch` and before the
+/// publish: arm it with this path to stop a reload there.
+pub(crate) fn after_apply(path: &Path) -> PathBuf {
+    path.with_extension("after-apply")
+}
+
 /// Called at the start of a reload: waits there if a pause is armed for
 /// `path`, and disarms it.
 pub(crate) async fn pause_here(path: &Path) {

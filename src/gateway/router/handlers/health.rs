@@ -53,7 +53,7 @@ pub(in crate::gateway::router) async fn health_handler(
     let is_admin = request
         .extensions()
         .get::<AuthenticatedClient>()
-        .is_some_and(|c| c.admin);
+        .is_some_and(AuthenticatedClient::is_gateway_admin);
 
     let status = if healthy { "healthy" } else { "degraded" };
     // A non-admin gets `status` and `version` only: a backend count is

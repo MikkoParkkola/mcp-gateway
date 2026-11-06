@@ -343,10 +343,10 @@ async fn a_non_utf8_session_id_is_treated_as_absent() {
 #[tokio::test]
 async fn the_dashboard_shows_session_fingerprints_and_the_admin_api_takes_raw_ids() {
     use crate::gateway::router::tests::{
-        scoped_auth_config, test_router_app_state_with_auth_and_config,
+        full_admin_auth_config, test_router_app_state_with_auth_and_config,
     };
     let (state, _store) = test_router_app_state_with_auth_and_config(
-        &scoped_auth_config(true),
+        &full_admin_auth_config(),
         crate::config::Config::default(),
     )
     .await;

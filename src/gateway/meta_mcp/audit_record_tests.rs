@@ -177,7 +177,7 @@ fn context<'a>(
         stdio_nonce: None,
         caller_key: None,
         verified_identity: who.identity.as_ref(),
-        is_admin: false,
+        admin: crate::gateway::authz::AdminStanding::None,
         surface_request: crate::gateway::recovery::SurfaceRequest::Configured,
         input_capabilities: crate::protocol::meta::Declared::NONE,
         retry: &crate::protocol::mrtr::NO_RETRY,
@@ -470,6 +470,8 @@ mod surfaced_replay;
 mod decision_kinds;
 // A dispatched call records the effect its tool declared.
 mod effect_records;
+// A completed-execution replay records the stored slot's effect now.
+mod replay_effects;
 // A tool-policy refusal names its rule.
 mod rule_ids;
 // A call to a backend that does not exist records not_found.
@@ -522,6 +524,8 @@ async fn a_replay_keeps_the_stored_class_of_its_first_execution() {
                 crate::gateway::meta_mcp::admission::ReplayFacts {
                     audit: Some(ReplayAudit::new(stored, None)),
                     server: None,
+                    tool: None,
+                    slot: None,
                 },
             )
             .await;

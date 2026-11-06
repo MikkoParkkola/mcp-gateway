@@ -65,7 +65,7 @@ pub(super) const CLASSES: [&str; 6] = [
 /// Known gaps, each fixed by a follow-up that deletes its slug here when it
 /// flips the last `pending:<slug>` row: a row left pending then fails, and
 /// so does a slug with no rows.
-const PENDING: [&str; 1] = ["capability-refusals"];
+const PENDING: [&str; 0] = [];
 
 #[derive(Default)]
 struct Found {

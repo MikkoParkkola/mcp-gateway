@@ -54,7 +54,12 @@ async fn an_sso_admins_replays_carry_the_verified_issuer_and_subject() {
         "max_oidc_token_age_secs": 3600,
         "oidc": [{"issuer": issuer.url, "auto_discover": true,
                   "audiences": [issuer::AUDIENCE]}],
-        "policies": [{"match": {"issuer": issuer.url},
+        // The SSO admin holds every backend (first match wins): the
+        // dead-letter admin routes are gateway-wide, so a token scoped to
+        // `hooks` is refused them.
+        "policies": [{"match": {"issuer": issuer.url, "email": ADMIN_EMAIL},
+                      "scopes": {"backends": ["*"], "tools": ["*"]}},
+                     {"match": {"issuer": issuer.url},
                       "scopes": {"backends": ["hooks"], "tools": ["*"]}}],
     });
     cfg["control_plane"] = json!({"role_mapping": {"rules": [

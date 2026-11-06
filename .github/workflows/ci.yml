@@ -98,7 +98,9 @@ jobs:
           if [ "$EVENT" != pull_request ]; then
             echo "docs_only=false" | tee -a "$GITHUB_OUTPUT"
           else
-            bash scripts/ci/changed-scope.sh "$MERGE_SHA" "$PR_NUMBER" "$HEAD_SHA" | tee -a "$GITHUB_OUTPUT"
+            # One canonical command per line (pre-push's drift check reads no .sh in a pipeline).
+            bash scripts/ci/changed-scope.sh "$MERGE_SHA" "$PR_NUMBER" "$HEAD_SHA" > "$RUNNER_TEMP/changed-scope.out"
+            tee -a "$GITHUB_OUTPUT" < "$RUNNER_TEMP/changed-scope.out"
           fi
   public-repo-hygiene:
     name: Public repo hygiene
@@ -109,7 +111,8 @@ jobs:
         with:
           fetch-depth: 0
       - name: Validate public repo hygiene scripts
-        run: bash -n scripts/dev/check-public-repo-hygiene.sh scripts/dev/public-hygiene-patterns.sh scripts/dev/check-pr-body-hygiene.sh tests/public_repo_hygiene.sh scripts/dev/check-commit-message-hygiene.sh tests/commit_message_hygiene.sh
+        # One file per `bash -n`: it checks only its first argument.
+        run: for f in scripts/dev/check-public-repo-hygiene.sh scripts/dev/public-hygiene-patterns.sh scripts/dev/check-pr-body-hygiene.sh tests/public_repo_hygiene.sh scripts/dev/check-commit-message-hygiene.sh tests/commit_message_hygiene.sh; do bash -n "$f"; done
       - name: Validate public repo hygiene fixtures
         run: tests/public_repo_hygiene.sh
       - name: Validate commit message hygiene fixtures
@@ -208,6 +211,7 @@ jobs:
           python3 scripts/ci/check_needs.py --self-test
           python3 scripts/ci/job_time_watch.py --self-test
           python3 scripts/ci/test_os_shards.py
+          python3 scripts/ci/test_os_label_routing.py
       - name: Validate the gateway-spawn check against planted spawns
         run: python3 scripts/ci/check-gateway-spawns.py --self-test
       - name: Start the gateway in tests only through its isolating helper
@@ -559,7 +563,7 @@ jobs:
   # runner slots is the exception.
   windows-shards:
     name: Windows shard ${{ matrix.shard }}
-    if: ${{ !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) && !(github.event_name == 'push' && github.ref == 'refs/heads/docs/ranking-1-release-line') && !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && !(startsWith(github.head_ref, 'train/') && github.event.pull_request.head.repo.full_name == github.repository)) }}
+    if: ${{ !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) && !(github.event_name == 'push' && github.ref == 'refs/heads/docs/ranking-1-release-line') && (!(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && !(startsWith(github.head_ref, 'train/') && github.event.pull_request.head.repo.full_name == github.repository)) || (github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && contains(github.event.pull_request.labels.*.name, 'os-sensitive'))) }}
     runs-on: windows-2025
     timeout-minutes: 90
     strategy:
@@ -669,7 +673,7 @@ jobs:
   # (MIK-8223).
   windows-clippy:
     name: Windows clippy
-    if: ${{ !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) && !(github.event_name == 'push' && github.ref == 'refs/heads/docs/ranking-1-release-line') && !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && !(startsWith(github.head_ref, 'train/') && github.event.pull_request.head.repo.full_name == github.repository)) }}
+    if: ${{ !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) && !(github.event_name == 'push' && github.ref == 'refs/heads/docs/ranking-1-release-line') && (!(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && !(startsWith(github.head_ref, 'train/') && github.event.pull_request.head.repo.full_name == github.repository)) || (github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && contains(github.event.pull_request.labels.*.name, 'os-sensitive'))) }}
     runs-on: windows-2025
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -699,7 +703,7 @@ jobs:
   windows-check:
     name: Windows check
     needs: [windows-shards, windows-clippy]
-    if: ${{ always() && !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) && !(github.event_name == 'push' && github.ref == 'refs/heads/docs/ranking-1-release-line') && !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && !(startsWith(github.head_ref, 'train/') && github.event.pull_request.head.repo.full_name == github.repository)) }}
+    if: ${{ always() && !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) && !(github.event_name == 'push' && github.ref == 'refs/heads/docs/ranking-1-release-line') && (!(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && !(startsWith(github.head_ref, 'train/') && github.event.pull_request.head.repo.full_name == github.repository)) || (github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && contains(github.event.pull_request.labels.*.name, 'os-sensitive'))) }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -755,7 +759,7 @@ jobs:
   # caught before it merges.
   macos-shards:
     name: macOS shard ${{ matrix.shard }}
-    if: ${{ !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) && !(github.event_name == 'push' && github.ref == 'refs/heads/docs/ranking-1-release-line') && (github.event_name != 'pull_request' || (startsWith(github.head_ref, 'train/') && github.event.pull_request.head.repo.full_name == github.repository)) }}
+    if: ${{ !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) && !(github.event_name == 'push' && github.ref == 'refs/heads/docs/ranking-1-release-line') && (github.event_name != 'pull_request' || (startsWith(github.head_ref, 'train/') && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && contains(github.event.pull_request.labels.*.name, 'os-sensitive'))) }}
     runs-on: macos-latest
     # The lib shard compiles the `--lib` test binary from cold (every macOS
     # shard missed the cache on the last three trains, and a hit would save
@@ -768,7 +772,9 @@ jobs:
         # Two jobs: about two macOS runners serve trains, so a third job
         # queued behind the others, and lib-a and lib-b each compiled the
         # same lib test binary. One lib shard builds it once.
-        shard: [lib, int]
+        # A lane PR labelled os-sensitive runs the lib shard alone: these
+        # runners serve every train (test_os_label_routing.py).
+        shard: ${{ fromJSON(contains(github.event.pull_request.labels.*.name, 'os-sensitive') && !(startsWith(github.head_ref, 'train/') && github.event.pull_request.head.repo.full_name == github.repository) && '["lib"]' || '["lib","int"]') }}
     env:
       # Two build jobs on the 3-core, 7 GB runner: the default swapped. Kept
       # on measurement (MIK-8482): the slowest shard took 25.5 min (#3944
@@ -821,7 +827,7 @@ jobs:
   macos-check:
     name: macOS check
     needs: [macos-shards]
-    if: ${{ always() && !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) && !(github.event_name == 'push' && github.ref == 'refs/heads/docs/ranking-1-release-line') && (github.event_name != 'pull_request' || (startsWith(github.head_ref, 'train/') && github.event.pull_request.head.repo.full_name == github.repository)) }}
+    if: ${{ always() && !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) && !(github.event_name == 'push' && github.ref == 'refs/heads/docs/ranking-1-release-line') && (github.event_name != 'pull_request' || (startsWith(github.head_ref, 'train/') && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && contains(github.event.pull_request.labels.*.name, 'os-sensitive'))) }}
     runs-on: ubuntu-latest
     # Read this run's job timings for the limit watch below.
     permissions:
