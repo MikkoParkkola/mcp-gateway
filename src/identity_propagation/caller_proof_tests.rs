@@ -77,11 +77,11 @@ fn the_stdio_principal_text_is_not_a_local_transport() {
 #[test]
 fn a_verified_identity_outranks_every_provenance() {
     let identity = crate::key_server::oidc::VerifiedIdentity::for_test(
-        "alice".into(),
-        "alice@example.com".into(),
+        "alice",
+        "alice@example.com",
         None,
         Vec::new(),
-        "https://identity.example".into(),
+        "https://identity.example",
     );
 
     for provenance in [

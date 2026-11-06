@@ -37,13 +37,7 @@ accounts:
 }
 
 fn identity(issuer: &str) -> VerifiedIdentity {
-    VerifiedIdentity::for_test(
-        "alice".into(),
-        String::new(),
-        None,
-        Vec::new(),
-        issuer.into(),
-    )
+    VerifiedIdentity::for_test("alice", String::new(), None, Vec::new(), issuer)
 }
 
 /// T-POST-NOBRIDGE (OIDC half): only the bridge adapter's namespace passes.

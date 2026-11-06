@@ -60,11 +60,11 @@ fn backend() -> BackendDescriptor {
 /// A verified caller, exactly as `key_server::oidc` produces one.
 fn identity() -> VerifiedIdentity {
     VerifiedIdentity::for_test(
-        "alice-subject-8f21".into(),
-        "alice@example.com".into(),
+        "alice-subject-8f21",
+        "alice@example.com",
         Some("Alice Example".into()),
         vec!["engineering".into()],
-        "https://identity.example".into(),
+        "https://identity.example",
     )
 }
 

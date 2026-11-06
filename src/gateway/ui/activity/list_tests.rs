@@ -107,11 +107,11 @@ fn client(admin: bool, authenticated: bool) -> AuthenticatedClient {
 
 fn identity(issuer: &str, subject: &str, group: &str) -> VerifiedIdentity {
     VerifiedIdentity::for_test(
-        subject.into(),
+        subject,
         format!("{subject}@corp"),
         None,
         vec![group.into()],
-        issuer.into(),
+        issuer,
     )
 }
 

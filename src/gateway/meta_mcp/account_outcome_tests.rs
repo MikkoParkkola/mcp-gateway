@@ -180,10 +180,10 @@ async fn an_unbindable_principal_reads_unavailable_without_a_custody_read() {
     let (strategy, custody) = vault(Answer::Lease { revision: REVISION });
     let nameless = VerifiedIdentity::for_test(
         String::new(),
-        "nobody@example.invalid".into(),
+        "nobody@example.invalid",
         None,
         vec![],
-        "https://issuer.example.invalid".into(),
+        "https://issuer.example.invalid",
     );
     let classified = strategy
         .view_binding_classified(Principal::Verified(&nameless))

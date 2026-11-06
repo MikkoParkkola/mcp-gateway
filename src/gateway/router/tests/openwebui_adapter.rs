@@ -170,11 +170,11 @@ accounts:
             request
                 .extensions_mut()
                 .insert(crate::key_server::oidc::VerifiedIdentity::for_test(
-                    "another-user".into(),
+                    "another-user",
                     String::new(),
                     None,
                     Vec::new(),
-                    "https://identity.invalid".into(),
+                    "https://identity.invalid",
                 ));
         }
         let response = router.clone().oneshot(request).await.unwrap();

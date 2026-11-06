@@ -11,11 +11,11 @@ use crate::key_server::oidc::VerifiedIdentity;
 
 fn person(subject: &str) -> VerifiedIdentity {
     VerifiedIdentity::for_test(
-        subject.into(),
+        subject,
         format!("{subject}@example.com"),
         None,
         vec!["g".into()],
-        "https://idp".into(),
+        "https://idp",
     )
 }
 

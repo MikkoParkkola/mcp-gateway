@@ -27,11 +27,11 @@ fn domain_err<T>(result: Result<T, IdentityBindingError>, what: &str) -> Identit
 /// A verified principal exactly as the request path produces it.
 fn identity() -> VerifiedIdentity {
     VerifiedIdentity::for_test(
-        SUBJECT.into(),
-        "alice@example.com".into(),
+        SUBJECT,
+        "alice@example.com",
         Some("Alice Example".into()),
         vec!["engineering".into()],
-        ISSUER.into(),
+        ISSUER,
     )
 }
 
@@ -90,10 +90,7 @@ fn display_fields_never_enter_the_key_but_issuer_and_subject_always_do() {
     let base = digest_of(&identity(), &descriptor(), "base");
 
     for (label, mutated) in [
-        (
-            "email",
-            identity().with_email("alice.example@other.test".into()),
-        ),
+        ("email", identity().with_email("alice.example@other.test")),
         ("name", identity().with_name(Some("Alice Renamed".into()))),
         ("name cleared", identity().with_name(None)),
         ("groups", identity().with_groups(vec!["finance".into()])),
@@ -109,12 +106,9 @@ fn display_fields_never_enter_the_key_but_issuer_and_subject_always_do() {
     for (label, mutated) in [
         (
             "issuer",
-            identity().with_issuer("https://other-idp.example".into()),
+            identity().with_issuer("https://other-idp.example"),
         ),
-        (
-            "subject",
-            identity().with_subject("bob-subject-3c07".into()),
-        ),
+        ("subject", identity().with_subject("bob-subject-3c07")),
     ] {
         assert_ne!(
             digest_of(&mutated, &descriptor(), label),
@@ -134,12 +128,12 @@ fn each_of_the_five_tuple_fields_changes_the_digest() {
     let variants = [
         (
             "principal_authority",
-            identity().with_issuer("https://other-idp.example".into()),
+            identity().with_issuer("https://other-idp.example"),
             descriptor(),
         ),
         (
             "principal_subject",
-            identity().with_subject("carol-subject-11ab".into()),
+            identity().with_subject("carol-subject-11ab"),
             descriptor(),
         ),
         (

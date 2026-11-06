@@ -17,11 +17,11 @@ const SIGNED: &str = "backends:\n  signed:\n    http_url: https://h/mcp\n    \
 
 fn person(subject: &str) -> VerifiedIdentity {
     VerifiedIdentity::for_test(
-        subject.into(),
+        subject,
         format!("{subject}@example.com"),
         None,
         Vec::new(),
-        "https://idp".into(),
+        "https://idp",
     )
 }
 

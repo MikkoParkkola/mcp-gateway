@@ -36,11 +36,11 @@ fn managed_config() -> crate::config::Config {
 
 fn person(subject: &str) -> VerifiedIdentity {
     VerifiedIdentity::for_test(
-        subject.into(),
+        subject,
         format!("{subject}@example.com"),
         None,
         Vec::new(),
-        "https://idp".into(),
+        "https://idp",
     )
 }
 

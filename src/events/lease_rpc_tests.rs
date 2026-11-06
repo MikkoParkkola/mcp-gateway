@@ -27,11 +27,11 @@ const CONFIG: &str = "backends:\n  \
 
 fn person(subject: &str) -> VerifiedIdentity {
     VerifiedIdentity::for_test(
-        subject.into(),
+        subject,
         format!("{subject}@mail.test"),
         None,
         Vec::new(),
-        "https://idp".into(),
+        "https://idp",
     )
 }
 
