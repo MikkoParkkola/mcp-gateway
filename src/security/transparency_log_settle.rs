@@ -94,21 +94,45 @@ pub(crate) struct Appended {
     pub(crate) counter: u64,
 }
 
-/// Why nothing was settled.
+/// Why a settle did not report `Appended`.
 #[derive(Debug)]
 pub(crate) enum Unsettled {
-    /// The live logger holds another log than the journal is bound to.
+    /// The live logger holds another log than the journal is bound to;
+    /// nothing was appended.
     OtherLog,
-    /// The append failed; nothing is claimed.
+    /// A payload the rules refuse; nothing was appended, and a retry with
+    /// the same payload cannot succeed.
+    Invalid(InvalidPayload),
+    /// Nothing was appended, and nothing can land later; retryable.
     Refused(io::Error),
+    /// The write was dispatched and its completion is not confirmed: it may
+    /// still land. Retryable; the reader collapses a repeat.
+    Unconfirmed(io::Error),
 }
 
-/// Test seams (V.1): settle refuses before its append, or after it.
+/// Which rule refused a payload.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum InvalidPayload {
+    /// `kind` is absent or null.
+    KindMissing,
+    /// `kind` is not a string.
+    KindNotString,
+    /// `kind` lacks the settle prefix, or names nothing after it.
+    KindNotPrefixed,
+    /// A field the chain, the envelope, a segment or settle itself owns.
+    ReservedField,
+    /// The record is over the record cap.
+    Oversized,
+}
+
+/// Test seams (V.1): settle refuses before its append, or after it, or its
+/// task panics once it has started.
 #[cfg(test)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum FailSettle {
     BeforeAppend,
     AfterAppend,
+    PanicInTask,
 }
 
 /// The settle events no caller may append. The intent events are not here
@@ -240,6 +264,14 @@ impl TransparencyLogger {
             )));
         }
         Ok(())
+    }
+
+    /// Hold settle's blocking task before it starts any work: a task queued
+    /// but not started.
+    pub(crate) fn hold_settle_task_for_test(&self) -> super::rotation::StallRelease {
+        let gate = std::sync::Arc::new(super::rotation::StallGate::default());
+        *self.hooks.settle_start.lock().unwrap() = Some(std::sync::Arc::clone(&gate));
+        super::rotation::StallRelease(gate)
     }
 
     /// The V.1 `Bind(OtherLog)` seam: settle sees `id` as the logger's own,

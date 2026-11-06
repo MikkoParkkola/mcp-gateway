@@ -110,6 +110,8 @@ pub(crate) struct TestHooks {
     pub(crate) settle_fault: std::sync::Mutex<Option<super::super::settle::FailSettle>>,
     /// The id settle sees as the logger's (V.1 `Bind(OtherLog)`).
     pub(crate) presented_id: std::sync::Mutex<Option<super::super::identity::LogId>>,
+    /// Holds settle's blocking task before it starts.
+    pub(crate) settle_start: std::sync::Mutex<Option<std::sync::Arc<StallGate>>>,
     pub(crate) fault_fired: std::sync::atomic::AtomicUsize,
     pub(crate) clock_offset: std::sync::atomic::AtomicI64,
     /// F20: the next write blocks on this gate (a stalled filesystem).
