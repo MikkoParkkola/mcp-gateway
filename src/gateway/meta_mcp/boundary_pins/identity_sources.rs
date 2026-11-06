@@ -4,8 +4,8 @@
 //! `identity_sources.tsv`, keyed by (file, owner, kind): each call of a
 //! checked constructor or the certificate parser and each struct literal of
 //! the three identity types, with its count; each macro that names one of
-//! them; and, in the three modules that define them, every production item
-//! with a fingerprint of its tokens. A new site, a changed count or
+//! them; and each of the three files that define them, with a hash of its
+//! exact bytes. A new site, a changed count or
 //! fingerprint, a stale row or a row with no reason fails.
 //!
 //! Refused outright, whatever the table says: renaming one of the types by
@@ -15,7 +15,7 @@
 //!
 //! Outside the defining modules the compiler is the guard for fields: they are
 //! private, and privacy is checked after macro expansion. Inside them the
-//! fingerprints are, so any edit there is a reviewed row.
+//! file hash is, so any edit there is a reviewed row.
 
 use std::collections::BTreeMap;
 
@@ -25,7 +25,7 @@ use super::scan::{Place, Sink, expr_attrs, item_attrs, test_only, walk};
 
 const ROOTS: [&str; 3] = ["src/lib.rs", "src/main.rs", "src/bin/provenance-eval.rs"];
 
-/// (file, owner, kind) -> count, or fingerprint for kind `item`.
+/// (file, owner, kind) -> count, or the file hash for kind `file`.
 pub(super) type Rows = BTreeMap<(String, String, String), String>;
 
 /// What one scan found: the rows, and the forms refused outright.
@@ -120,11 +120,6 @@ impl Visitor<'_> {
         self.scan.refused.push(at);
     }
 
-    fn fingerprint(&mut self, owner: String, node: &impl quote::ToTokens) {
-        let key = (self.file.to_owned(), owner, "item".to_owned());
-        self.scan.rows.insert(key, fingerprint(node));
-    }
-
     /// The identity type a path's first segment names: the type itself, or
     /// `Self` inside an impl of one.
     fn named_type(&self, segment: &syn::PathSegment) -> Option<String> {
@@ -165,9 +160,7 @@ impl Visitor<'_> {
             _ => {}
         }
         let name = item_name(item);
-        if self.leaf && !matches!(item, I::Use(_)) {
-            self.fingerprint(name.clone(), item);
-        }
+
         self.owner.push(name);
         syn::visit::visit_item(self, item);
         self.owner.pop();
@@ -190,9 +183,7 @@ impl Visitor<'_> {
                 continue;
             }
             let owner = format!("{ty}::{name}");
-            if self.leaf {
-                self.fingerprint(owner.clone(), inner);
-            }
+
             self.owner.push(owner);
             syn::visit::visit_impl_item(self, inner);
             self.owner.pop();
@@ -300,6 +291,12 @@ struct Files(Scan);
 impl Sink for Files {
     fn file(&mut self, at: &Place, file: &syn::File) {
         scan_file(&at.file, file, &mut self.0);
+        if LEAVES.contains(&at.file.as_str()) {
+            let path = crate_root().join(&at.file);
+            let bytes = std::fs::read(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+            let key = (at.file.clone(), "<file>".to_owned(), "file".to_owned());
+            self.0.rows.insert(key, file_fingerprint(&bytes));
+        }
     }
 }
 
@@ -376,58 +373,10 @@ fn names_identity(mac: &syn::Macro, in_impl: bool) -> bool {
     false
 }
 
-/// A hash of a node's tokens: identifiers, punctuation and literal text
-/// verbatim, groups by delimiter, doc attributes left out. Whitespace and
-/// comments are not tokens, so rustfmt and a doc edit leave it unchanged.
-fn fingerprint(node: &impl quote::ToTokens) -> String {
-    let buffer = syn::buffer::TokenBuffer::new2(node.to_token_stream());
-    let mut text = String::new();
-    encode(buffer.begin(), &mut text);
-    let digest = <sha2::Sha256 as sha2::Digest>::digest(text.as_bytes());
-    hex::encode(digest)[..16].to_owned()
-}
-
-fn encode(mut cursor: syn::buffer::Cursor<'_>, out: &mut String) {
-    while !cursor.eof() {
-        if let Some(next) = doc_attribute(cursor) {
-            cursor = next;
-        } else if let Some((ident, next)) = cursor.ident() {
-            out.push_str(&format!("i{ident} "));
-            cursor = next;
-        } else if let Some((punct, next)) = cursor.punct() {
-            out.push_str(&format!("p{}{:?} ", punct.as_char(), punct.spacing()));
-            cursor = next;
-        } else if let Some((lit, next)) = cursor.literal() {
-            out.push_str(&format!("l{lit} "));
-            cursor = next;
-        } else if let Some((life, next)) = cursor.lifetime() {
-            out.push_str(&format!("'{} ", life.ident));
-            cursor = next;
-        } else if let Some((inside, delim, _, next)) = cursor.any_group() {
-            out.push_str(&format!("({delim:?} "));
-            encode(inside, out);
-            out.push_str(") ");
-            cursor = next;
-        } else {
-            break;
-        }
-    }
-}
-
-/// The cursor after a `#[doc ..]` or `#![doc ..]` attribute at `cursor`.
-fn doc_attribute(cursor: syn::buffer::Cursor<'_>) -> Option<syn::buffer::Cursor<'_>> {
-    let (hash, mut next) = cursor.punct()?;
-    if hash.as_char() != '#' {
-        return None;
-    }
-    if let Some((bang, after)) = next.punct()
-        && bang.as_char() == '!'
-    {
-        next = after;
-    }
-    let (inside, _, _, after) = next.any_group()?;
-    let (ident, _) = inside.ident()?;
-    (ident == "doc").then_some(after)
+/// The fingerprint of a defining module: a hash of its exact bytes, so any
+/// edit to the file, whitespace and test sections included, is a reviewed row.
+pub(super) fn file_fingerprint(bytes: &[u8]) -> String {
+    hex::encode(<sha2::Sha256 as sha2::Digest>::digest(bytes))
 }
 
 /// (file, owner, kind) -> (value, the table file listing it).

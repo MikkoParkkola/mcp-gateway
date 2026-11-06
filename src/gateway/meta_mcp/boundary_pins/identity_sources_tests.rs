@@ -3,8 +3,8 @@
 //! Fixture rows for the identity-source pin: each way to create, alias or
 //! change an identity in production code is either a counted row or refused.
 
-use super::fragments::{live_base, pin_table, scratch_table, without_first_row};
-use super::identity_sources::{Scan, crate_scan, differences, scan_file};
+use super::super::fragments::{live_base, pin_table, scratch_table, without_first_row};
+use super::{LEAVES, Scan, crate_scan, differences, file_fingerprint, scan_file};
 
 const LEAF: &str = "src/identity_grants/subject.rs";
 const OTHER: &str = "src/a.rs";
@@ -146,65 +146,35 @@ fn a_macro_naming_an_identity_type_is_a_row() {
     );
 }
 
-fn fingerprint(source: &str, owner: &str) -> String {
-    value(&scanned(LEAF, source), owner, "item").expect("a fingerprint row")
-}
-
 #[test]
-fn every_production_item_in_a_leaf_module_has_a_fingerprint() {
-    let scan = scanned(
-        LEAF,
-        "pub struct GrantSubject { authority: String }\nimpl GrantSubject { pub fn authority(&self) -> &str { &self.authority } }",
-    );
-    for owner in ["GrantSubject", "GrantSubject::authority"] {
-        assert!(
-            value(&scan, owner, "item").is_some(),
-            "{owner}: {:?}",
-            scan.rows
-        );
+fn each_defining_module_has_a_whole_file_hash_row() {
+    let scan = crate_scan();
+    for file in LEAVES {
+        let row = scan
+            .rows
+            .get(&(file.to_owned(), "<file>".to_owned(), "file".to_owned()));
+        assert!(row.is_some_and(|h| h.len() == 64), "{file}: {row:?}");
     }
 }
 
+/// The hash is of the exact bytes: whitespace, a comment or one character
+/// inside a string literal changes it (`"admin"` and `"admin "` differ).
 #[test]
-fn an_edited_item_changes_its_fingerprint() {
-    let before = fingerprint(
-        "impl GrantSubject { pub fn label(&self) -> Option<&str> { self.label.as_deref() } }",
-        "GrantSubject::label",
-    );
-    let after = fingerprint(
-        "impl GrantSubject { pub fn label(&mut self) -> Option<&str> { self.label.take(); None } }",
-        "GrantSubject::label",
-    );
-    assert_ne!(before, after);
-}
-
-#[test]
-fn a_test_only_item_in_a_leaf_module_has_no_row() {
-    let scan = scanned(
-        LEAF,
-        "#[cfg(test)] impl GrantSubject { pub(crate) fn for_test() {} }",
-    );
-    assert!(scan.rows.is_empty(), "{:?}", scan.rows);
-}
-
-#[test]
-fn whitespace_and_doc_comments_do_not_change_a_fingerprint() {
-    let tight = fingerprint(
-        "impl GrantSubject { pub fn a(&self) -> &str { &self.authority } }",
-        "GrantSubject::a",
-    );
-    let loose = fingerprint(
-        "impl GrantSubject {\n    /// The authority.\n    pub fn a( &self ) -> &str {\n        &self.authority\n    }\n}",
-        "GrantSubject::a",
-    );
-    assert_eq!(tight, loose);
-}
-
-#[test]
-fn a_change_inside_a_string_literal_changes_a_fingerprint() {
-    let a = fingerprint(r#"const ADMIN: &str = "admin";"#, "ADMIN");
-    let b = fingerprint(r#"const ADMIN: &str = "admin ";"#, "ADMIN");
-    assert_ne!(a, b);
+fn any_byte_change_to_a_defining_module_changes_its_hash() {
+    let base = file_fingerprint(b"const ADMIN: &str = \"admin\";\n");
+    for edited in [
+        &b"const ADMIN: &str = \"admin \";\n"[..],
+        b"const ADMIN: &str  = \"admin\";\n",
+        b"/// Doc.\nconst ADMIN: &str = \"admin\";\n",
+    ] {
+        assert_ne!(
+            base,
+            file_fingerprint(edited),
+            "{}",
+            String::from_utf8_lossy(edited)
+        );
+    }
+    assert_eq!(base, file_fingerprint(b"const ADMIN: &str = \"admin\";\n"));
 }
 
 #[test]
