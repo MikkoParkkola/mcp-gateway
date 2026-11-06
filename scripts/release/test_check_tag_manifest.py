@@ -698,6 +698,29 @@ def gate_steps(workflow, job):
 # reports `days: 90`. upload-artifact clamps `retention-days` to that value.
 HANDOFF_RETENTION_DAYS = 90
 
+# Handoffs kept for less, each by exact (workflow, artifact name) and with its
+# reason. A coverage part's bundle feeds only its run's grade job: an expired
+# one costs re-running the whole run, never a lost publish, and it holds the
+# part's instrumented binaries and profiles (0.07-3.5 GB per part per PR run).
+SHORT_HANDOFFS = {
+    ("coverage-probe.yml", "cov-shard-sdk"): "a rerun rebuilds them; multi-GB bundles per PR run",
+    ("coverage-probe.yml", "cov-shard-${{ matrix.part }}"): "a rerun rebuilds them; multi-GB bundles per PR run",
+    ("coverage-shard-trial.yml", "cov-shard-sdk"): "a rerun rebuilds them; multi-GB bundles per PR run",
+    ("coverage-shard-trial.yml", "cov-shard-${{ matrix.shard }}"): "a rerun rebuilds them; multi-GB bundles per PR run",
+}
+
+
+def wrong_handoffs(handoffs) -> list[str]:
+    """Each (workflow, step, artifact name, retention-days) handoff not kept
+    for HANDOFF_RETENTION_DAYS, unless SHORT_HANDOFFS names exactly it; a
+    short one must still write its days out."""
+    return [
+        f"{workflow}: {step} ({name}) retention-days {days or 'unset'}"
+        for workflow, step, name, days in handoffs
+        if days != [str(HANDOFF_RETENTION_DAYS)]
+        and not ((workflow, name) in SHORT_HANDOFFS and days)
+    ]
+
 # The oldest cosign the workflows may install. v2.6.5 fixes GHSA-fx35-mq7g-6g98
 # (verification bypass via a public key in a legacy bundle); v2.6.2 fixed
 # GHSA-whqx-f9j3-ch6m (verification accepts any valid Rekor entry under
@@ -2801,21 +2824,39 @@ class WorkflowWiring(unittest.TestCase):
                 if not any(fnmatch.fnmatchcase(name, k) for k in wanted):
                     continue
                 days = artifact_keys(block, ("retention-days",))
-                handoffs.append((path.name, block[0].strip(), days))
+                handoffs.append((path.name, block[0].strip(), name, days))
         # release.yml's binaries, ci.yml's and docker.yml's image digests. One
         # missing means the scan stopped seeing a handoff, not that it went
         # away; a count across all workflows would let a new one elsewhere
         # hide the loss.
         for workflow in ("release.yml", "ci.yml", "docker.yml"):
             self.assertIn(workflow, {h[0] for h in handoffs}, handoffs)
-        wrong = [
-            f"{workflow}: {step} retention-days {days or 'unset'}"
-            for workflow, step, days in handoffs
-            if days != [str(HANDOFF_RETENTION_DAYS)]
-        ]
+        wrong = wrong_handoffs(handoffs)
         self.assertEqual(
             wrong, [], f"handoff retention is not the repository's {HANDOFF_RETENTION_DAYS} days"
         )
+
+        # Every exemption still names a handoff the scan sees, so a renamed
+        # artifact cannot leave a stale entry that a new one could match.
+        seen = {(h[0], h[2]) for h in handoffs}
+        self.assertEqual(sorted(set(SHORT_HANDOFFS) - seen), [], "stale SHORT_HANDOFFS entries")
+
+    def test_only_the_named_coverage_bundles_are_kept_short(self):
+        # The exemption is exact: a release-style handoff, another artifact
+        # of the same workflow, the same name in another workflow, or an
+        # exempt one with its days unset all still fail.
+        step = "- uses: actions/upload-artifact@x"
+        cases = [
+            (("release.yml", step, "dist", ["7"]), True),
+            (("release.yml", step, "dist", ["90"]), False),
+            (("coverage-probe.yml", step, "cov-shard-sdk", ["7"]), False),
+            (("coverage-probe.yml", step, "cov-shard-sdk", []), True),
+            (("coverage-probe.yml", step, "coverage-linux", ["7"]), True),
+            (("coverage-probe.yml", step, "cov-shard-other", ["7"]), True),
+            (("ci.yml", step, "cov-shard-sdk", ["7"]), True),
+        ]
+        for handoff, flagged in cases:
+            self.assertEqual(bool(wrong_handoffs([handoff])), flagged, handoff)
 
 
 # The smoke gate is a shell script, not a workflow, so it is read directly.

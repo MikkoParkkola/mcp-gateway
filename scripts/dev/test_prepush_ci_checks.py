@@ -53,6 +53,8 @@ CI_ONLY: dict[tuple[str, tuple[str, ...]], str] = {
     ("scripts/release/check_scope_acceptance.py", ("--publish-check",)): "release: publish-time form",
     ("scripts/release/check_tag_manifest.py", ()): "release: needs a tag in GITHUB_REF_NAME",
     ("scripts/release/critical_function_coverage.py", ("$@",)): "artifact: reads a cargo llvm-cov profile",
+    # Two invocations, not a duplicate: coverage-probe.yml bundles each part
+    # ($PART) and, in a job of its own, the SDK journey (sdk).
     ("scripts/ci/coverage_shard_bundle.sh", ("$PART",)): "artifact: packs a part's coverage profiles and instrumented binaries",
     ("scripts/ci/coverage_shard_bundle.sh", ("sdk",)): "artifact: packs the SDK part's coverage profiles and instrumented binaries",
     ("scripts/ci/coverage_shard_merge.sh", ("${expected[@]}",)): "artifact: unpacks the parts' coverage bundles into target/",
