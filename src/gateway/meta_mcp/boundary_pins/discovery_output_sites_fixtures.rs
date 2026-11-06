@@ -105,6 +105,10 @@ fn the_output_scan_finds_each_argument_form() {
             "f warn! e.name",
         ),
         (
+            "use crate::cli_support::shown;\nfn shown_path(p: &Path) -> String { let s = shown(&p.to_string_lossy()); s.to_string() }\nfn f(p: &Path) { tracing::debug!(\"{}\", shown_path(p)); }",
+            "f debug! shown_path(..)",
+        ),
+        (
             "fn f(e: E) { println!(concat!(\"{\", \"name}\")); }",
             "f println! <format not a literal>",
         ),
@@ -122,6 +126,8 @@ fn shown_literals_and_test_code_pass() {
         "fn f(e: E) { println!(\"{}\", crate::cli_support::shown(&e.name)); }",
         "use mcp_gateway::cli_support::{Shown, shown};\nfn f(e: E) { s.push_str(&shown(&e.name)); }",
         "#[cfg(test)]\nfn t(e: E) { println!(\"{}\", e.name); }",
+        "use crate::cli_support::shown;\nfn shown_path(p: &Path) -> Shown { shown(&p.to_string_lossy()) }\nfn f(p: &Path) { tracing::debug!(\"{}\", shown_path(p)); }",
+        "fn field(out: &mut String, label: &str, value: &Shown) { s.push_str(\"x\"); println!(\"{value}\"); }",
     ];
     for source in clean {
         assert_eq!(found(source), Vec::<String>::new(), "{source}");

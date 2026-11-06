@@ -90,6 +90,10 @@ struct FileNames {
     aliases: BTreeMap<String, String>,
     shown_imported: bool,
     shown_defined: bool,
+    /// Functions whose whole body is one `shown(..)` call (`shown_path`).
+    helpers: BTreeSet<String>,
+    /// Per function, its parameters typed `Shown`: only `shown` builds one.
+    shown_params: BTreeMap<String, BTreeSet<String>>,
 }
 
 /// The scan's findings: argument counts per key, and parse failures.
@@ -97,6 +101,9 @@ struct FileNames {
 pub(super) struct Sites {
     pub(super) counts: BTreeMap<Key, usize>,
     names: BTreeMap<String, FileNames>,
+    /// Escape helpers of every scoped file (`super::shown_path` is called
+    /// from a child module).
+    helpers: BTreeSet<String>,
 }
 
 impl Sites {
@@ -112,6 +119,37 @@ impl Sites {
 
     fn names(&self, file: &str) -> Option<&FileNames> {
         self.names.get(file)
+    }
+
+    /// Whether `expr` needs no row: a literal, the shared escape or an escape
+    /// helper, or a parameter of this function typed `Shown`.
+    fn passes(&self, at: &Place, expr: &syn::Expr) -> bool {
+        let expr = match expr {
+            syn::Expr::Reference(r) => &*r.expr,
+            syn::Expr::Paren(p) => &*p.expr,
+            other => other,
+        };
+        let names = self.names(&at.file);
+        match expr {
+            syn::Expr::Lit(_) => true,
+            syn::Expr::Path(p) => self.shown_param(at, &path_text(&p.path)),
+            syn::Expr::Call(call) => {
+                let syn::Expr::Path(func) = &*call.func else {
+                    return false;
+                };
+                let path = path_text(&func.path);
+                let last = path.rsplit("::").next().unwrap_or_default();
+                calls_shown(&path, &at.file, names) || self.helpers.contains(last)
+            }
+            _ => false,
+        }
+    }
+
+    /// Whether `name` is a parameter of this function typed `Shown`.
+    fn shown_param(&self, at: &Place, name: &str) -> bool {
+        self.names(&at.file)
+            .and_then(|n| n.shown_params.get(at.func.as_deref().unwrap_or_default()))
+            .is_some_and(|params| params.contains(name))
     }
 }
 
@@ -150,24 +188,17 @@ fn path_text(path: &syn::Path) -> String {
         .join("::")
 }
 
-/// Whether `expr` is the shared escape: `crate::cli_support::shown(..)`,
-/// `mcp_gateway::cli_support::shown(..)`, or a bare `shown(..)` in a file
-/// that imports that one and defines no `shown` of its own.
-fn is_shown(expr: &syn::Expr, names: Option<&FileNames>) -> bool {
-    let expr = match expr {
-        syn::Expr::Reference(r) => &*r.expr,
-        syn::Expr::Paren(p) => &*p.expr,
-        other => other,
-    };
-    let syn::Expr::Call(call) = expr else {
-        return false;
-    };
-    let syn::Expr::Path(func) = &*call.func else {
-        return false;
-    };
-    match path_text(&func.path).as_str() {
+/// Whether `call` names the shared escape: `crate::cli_support::shown`,
+/// `mcp_gateway::cli_support::shown`, a bare `shown` in `cli_support.rs` (its
+/// definition) or in a file that imports that one and defines no `shown` of
+/// its own.
+fn calls_shown(path: &str, file: &str, names: Option<&FileNames>) -> bool {
+    match path {
         "crate::cli_support::shown" | "mcp_gateway::cli_support::shown" => true,
-        "shown" => names.is_some_and(|n| n.shown_imported && !n.shown_defined),
+        "shown" => {
+            file == "src/cli_support.rs"
+                || names.is_some_and(|n| n.shown_imported && !n.shown_defined)
+        }
         _ => false,
     }
 }
@@ -245,8 +276,7 @@ impl Sites {
             syn::Expr::Assign(a) => &*a.right,
             other => other,
         };
-        let shown = is_shown(expr, self.names(&at.file));
-        if !shown && !matches!(expr, syn::Expr::Lit(_)) {
+        if !self.passes(at, expr) {
             self.note(at, site, text(expr));
         }
         self.nested(at, expr);
@@ -270,7 +300,7 @@ impl Sites {
                 })
                 .collect();
             for name in captures(&s.value()) {
-                if !named.contains(&name) {
+                if !named.contains(&name) && !self.shown_param(at, &name) {
                     self.note(at, site, format!("{{{name}}}"));
                 }
             }
@@ -413,6 +443,45 @@ impl<'ast> Visit<'ast> for Nested<'_> {
     }
 }
 
+/// Whether a function body is exactly one call of the shared escape: an
+/// escape helper such as `shown_path`, accepted where it is called.
+fn is_helper(block: &syn::Block) -> bool {
+    let [syn::Stmt::Expr(syn::Expr::Call(call), None)] = block.stmts.as_slice() else {
+        return false;
+    };
+    let syn::Expr::Path(func) = &*call.func else {
+        return false;
+    };
+    matches!(
+        path_text(&func.path).as_str(),
+        "shown" | "crate::cli_support::shown" | "mcp_gateway::cli_support::shown"
+    )
+}
+
+/// The parameters of `sig` typed `Shown` (or `&Shown`).
+fn shown_params(sig: &syn::Signature, out: &mut BTreeMap<String, BTreeSet<String>>) {
+    for input in &sig.inputs {
+        let syn::FnArg::Typed(arg) = input else {
+            continue;
+        };
+        let mut ty = &*arg.ty;
+        while let syn::Type::Reference(r) = ty {
+            ty = &r.elem;
+        }
+        if let (syn::Pat::Ident(name), syn::Type::Path(path)) = (&*arg.pat, ty)
+            && path
+                .path
+                .segments
+                .last()
+                .is_some_and(|s| s.ident == "Shown")
+        {
+            out.entry(sig.ident.to_string())
+                .or_default()
+                .insert(name.ident.to_string());
+        }
+    }
+}
+
 /// The names a file's `use` declarations bring in that the scan relies on.
 fn file_names(file: &syn::File) -> FileNames {
     let mut names = FileNames::default();
@@ -473,7 +542,22 @@ fn file_names(file: &syn::File) -> FileNames {
                     }
                 }
             }
-            syn::Item::Fn(f) if f.sig.ident == "shown" => names.shown_defined = true,
+            syn::Item::Fn(f) => {
+                if f.sig.ident == "shown" {
+                    names.shown_defined = true;
+                }
+                if is_helper(&f.block) {
+                    names.helpers.insert(f.sig.ident.to_string());
+                }
+                shown_params(&f.sig, &mut names.shown_params);
+            }
+            syn::Item::Impl(block) => {
+                for member in &block.items {
+                    if let syn::ImplItem::Fn(method) = member {
+                        shown_params(&method.sig, &mut names.shown_params);
+                    }
+                }
+            }
             _ => {}
         }
     }
@@ -482,7 +566,14 @@ fn file_names(file: &syn::File) -> FileNames {
 
 impl Sink for Sites {
     fn file(&mut self, at: &Place, file: &syn::File) {
-        self.names.insert(at.file.clone(), file_names(file));
+        let names = file_names(file);
+        if in_scope(&Place {
+            file: at.file.clone(),
+            func: None,
+        }) {
+            self.helpers.extend(names.helpers.iter().cloned());
+        }
+        self.names.insert(at.file.clone(), names);
     }
 
     fn expr(&mut self, at: &Place, expr: &syn::Expr) {
@@ -504,8 +595,7 @@ impl Sink for Sites {
                 }
             }
             syn::Expr::Binary(bin) if matches!(bin.op, syn::BinOp::AddAssign(_)) => {
-                let shown = is_shown(&bin.right, self.names(&at.file));
-                if !shown && !matches!(&*bin.right, syn::Expr::Lit(_)) {
+                if !self.passes(at, &bin.right) {
                     self.note(at, "+=", text(&bin.right));
                 }
             }
