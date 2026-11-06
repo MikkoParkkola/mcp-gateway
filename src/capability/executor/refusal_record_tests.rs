@@ -125,6 +125,7 @@ async fn a_malformed_url_records_no_refusal() {
         ("file:///tmp/rpc", "has no host"),
         ("rpc-path-only", "not absolute"),
         ("http://[::1/rpc", "Invalid URL"),
+        ("foo:///rpc", "has no host"),
     ] {
         for service in ["rest", "graphql", "jsonrpc"] {
             let (error, effect) = Box::pin(call(service, target, false)).await;

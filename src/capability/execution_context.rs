@@ -305,7 +305,10 @@ pub(crate) enum RefusalTest<'a> {
     /// A destination check: only an SSRF refusal is one.
     Destination,
     /// The cleartext-credential check of the URL: a refusal only when the URL
-    /// names a host the credential would reach ([`names_a_host`]).
+    /// names a host the credential would reach ([`names_a_host`]). The error
+    /// itself is not inspected: use it only for an error of
+    /// [`require_tls_for_credentials`] (or a check built on it) for this same
+    /// URL, whose only failure for a URL naming a host is the cleartext refusal.
     Cleartext(&'a str),
 }
 
@@ -676,7 +679,12 @@ mod tests {
         let mut fails = Vec::new();
         for (case, error, test, expect) in cases {
             let effect = recorded_effect(error, test).await;
-            if (effect == refused) != expect {
+            let ok = if expect {
+                effect == refused
+            } else {
+                effect.is_none()
+            };
+            if !ok {
                 fails.push(format!("{case}: response_effect {effect:?}"));
             }
         }
