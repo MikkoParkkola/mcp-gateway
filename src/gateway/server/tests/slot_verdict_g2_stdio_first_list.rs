@@ -57,6 +57,40 @@ const SHARED_TOOL: &str = "held_shared_tool";
 /// The fill bound's grace over a backend's call timeout (`LIST_FILL_WAIT_GRACE`).
 const GRACE: Duration = Duration::from_secs(1);
 
+/// A shared backend named [`SHARED`] with call timeout `timeout`, whose
+/// `tools/list` never answers, and the count of lists it was asked for.
+fn held_shared(timeout: Duration) -> (Arc<Backend>, Arc<std::sync::atomic::AtomicUsize>) {
+    let lists = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let shared = Arc::new(Backend::new(
+        SHARED,
+        crate::config::BackendConfig {
+            transport: TransportConfig::Http {
+                // Never dialled: the slot's transport is the in-process one below.
+                http_url: "http://127.0.0.1:9/".to_string(),
+                streamable_http: Some(true),
+                protocol_version: None,
+            },
+            timeout,
+            ..crate::config::BackendConfig::r2_off()
+        },
+        &crate::config::FailsafeConfig::default(),
+        Duration::from_secs(60),
+    ));
+    shared.set_transport_for_test(Arc::new(HeldList {
+        lists: Arc::clone(&lists),
+        never: tokio::sync::Notify::new(),
+    }));
+    (shared, lists)
+}
+
+/// `tools/list` params declaring the 2026 era in full.
+fn modern_params() -> Value {
+    json!({"_meta": {
+        "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+        "io.modelcontextprotocol/clientCapabilities": {},
+    }})
+}
+
 #[tokio::test(start_paused = true)]
 async fn r11_the_first_lists_two_waits_share_one_deadline_stdio() {
     let mut gateway =
@@ -68,28 +102,11 @@ async fn r11_the_first_lists_two_waits_share_one_deadline_stdio() {
     );
     let bound = per_user.tools_fill_bound();
     // A shared backend that never answers its tools/list, with the same bound.
-    let lists = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-    let shared = Arc::new(Backend::new(
-        SHARED,
-        crate::config::BackendConfig {
-            transport: TransportConfig::Http {
-                // Never dialled: the slot's transport is the in-process one below.
-                http_url: "http://127.0.0.1:9/".to_string(),
-                streamable_http: Some(true),
-                protocol_version: None,
-            },
-            timeout: bound
-                .checked_sub(GRACE)
-                .expect("premise: a fill bound past its grace"),
-            ..crate::config::BackendConfig::r2_off()
-        },
-        &crate::config::FailsafeConfig::default(),
-        Duration::from_secs(60),
-    ));
-    shared.set_transport_for_test(Arc::new(HeldList {
-        lists: Arc::clone(&lists),
-        never: tokio::sync::Notify::new(),
-    }));
+    let (shared, lists) = held_shared(
+        bound
+            .checked_sub(GRACE)
+            .expect("premise: a fill bound past its grace"),
+    );
     assert!(
         gateway.backends().register(shared),
         "premise: the shared backend registers"
@@ -113,14 +130,7 @@ async fn r11_the_first_lists_two_waits_share_one_deadline_stdio() {
     };
     let started = tokio::time::Instant::now();
     let answer = FirstList::default()
-        .scope(stdio.rpc(
-            1,
-            "tools/list",
-            json!({"_meta": {
-                "io.modelcontextprotocol/protocolVersion": "2026-07-28",
-                "io.modelcontextprotocol/clientCapabilities": {},
-            }}),
-        ))
+        .scope(stdio.rpc(1, "tools/list", modern_params()))
         .await;
     let took = started.elapsed();
     // Both waits ran: the own-view warm stopped at its pre-pass, and the
@@ -143,5 +153,58 @@ async fn r11_the_first_lists_two_waits_share_one_deadline_stdio() {
     assert!(
         took < bound + bound / 2,
         "the two waits added up: {took:?} for one {bound:?} bound"
+    );
+}
+
+/// R2c: a surfaced backend whose own call timeout runs past the listing cap:
+/// the first list answers at the cap (30 s), not at the backend's timeout,
+/// with the tools it has and no error.
+#[tokio::test(start_paused = true)]
+async fn r2c_the_first_wait_ends_at_the_listing_cap_stdio() {
+    let mut gateway =
+        DirectAccountGateway::new_in(ServeMode::Stdio, AuthConfig::default(), &Binding::Connected);
+    let cap = crate::gateway::meta_mcp::LISTING_DEADLINE_CAP;
+    let (shared, lists) = held_shared(cap * 4);
+    assert!(
+        gateway.backends().register(shared),
+        "premise: the shared backend registers"
+    );
+    let meta = Arc::new(
+        gateway
+            .take_meta()
+            .with_surfaced_tools(vec![SurfacedToolConfig {
+                server: SHARED.to_string(),
+                tool: SHARED_TOOL.to_string(),
+            }]),
+    );
+    let stdio = Stdio {
+        gateway,
+        meta,
+        tasks: None,
+    };
+    let started = tokio::time::Instant::now();
+    let answer = FirstList::default()
+        .scope(stdio.rpc(1, "tools/list", modern_params()))
+        .await;
+    let took = started.elapsed();
+    assert!(
+        lists.load(std::sync::atomic::Ordering::SeqCst) >= 1,
+        "premise: the first list's fill asked the shared backend"
+    );
+    assert!(
+        answer.get("error").is_none(),
+        "an expired wait answered an error: {answer}"
+    );
+    let listed = answer["result"]["tools"].to_string();
+    assert!(!listed.contains(SHARED_TOOL), "{answer}");
+    assert!(
+        took >= cap
+            .checked_sub(GRACE)
+            .expect("premise: a cap past its grace"),
+        "premise: the first list waited ({took:?})"
+    );
+    assert!(
+        took < cap + GRACE,
+        "the first wait ran past the {cap:?} cap: {took:?}"
     );
 }

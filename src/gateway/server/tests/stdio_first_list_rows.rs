@@ -107,7 +107,7 @@ async fn r3b_a_cancelled_first_list_leaves_the_wait_armed() {
         answer_within(&mut serve, 2, AT_ONCE, &mut seen)
             .await
             .is_none(),
-        "premise: the first list waits while the backend is held"
+        "the first list did not wait while the backend is held"
     );
     serve
         .send(
