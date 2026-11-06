@@ -71,7 +71,7 @@ pub(super) async fn cap_discover(
                         ));
                     }
                     Err(e) => {
-                        eprintln!("❌ Failed to write config: {e}");
+                        eprintln!("{}", failure_line("Failed to write config", &e));
                         return ExitCode::FAILURE;
                     }
                 }
@@ -82,7 +82,7 @@ pub(super) async fn cap_discover(
             ExitCode::SUCCESS
         }
         Err(e) => {
-            eprintln!("❌ Discovery failed: {e}");
+            eprintln!("{}", failure_line("Discovery failed", &e));
             ExitCode::FAILURE
         }
     }
@@ -180,7 +180,7 @@ async fn cap_discover_shadow(
                 );
             }
             Err(e) => {
-                eprintln!("❌ Failed to adopt shadow servers: {e}");
+                eprintln!("{}", failure_line("Failed to adopt shadow servers", &e));
                 return ExitCode::FAILURE;
             }
         }
@@ -231,3 +231,13 @@ fn print_discovered_servers(servers: &[mcp_gateway::discovery::DiscoveredServer]
 fn print_server_entry(server: &mcp_gateway::discovery::DiscoveredServer) {
     print!("{}", render_server_entry(server));
 }
+
+/// The terminal line for a failed step: an error can carry a path or text
+/// from a client's config file.
+fn failure_line(what: &str, error: &impl std::fmt::Display) -> String {
+    format!("❌ {what}: {error}")
+}
+
+#[cfg(test)]
+#[path = "server_scan_failure_tests.rs"]
+mod failure_tests;
