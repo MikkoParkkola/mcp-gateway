@@ -140,14 +140,20 @@ impl Aliases {
     /// Every reading of `segments`: as written, for a single bare name as a
     /// member of each glob, and through each binding of a reading's first
     /// segment, repeated, so a rename of a rename (`use S::Admin as E;` after
-    /// `use CallerStanding as S;`) reaches the full path. Capped, so a cycle of
-    /// renames ends.
+    /// `use CallerStanding as S;`) reaches the full path, but never through
+    /// the same name twice on one chain. Capped as a backstop; a file that
+    /// reaches the cap fails named.
     fn readings(&self, segments: &[String]) -> Vec<Vec<String>> {
         const CAP: usize = 64;
-        let mut out = vec![segments.to_vec()];
+        // Each reading with the names already expanded to reach it: a name is
+        // never expanded twice on one chain, so `use guard::guard;` gives
+        // `guard::guard` once, and a cycle of renames ends.
+        let mut out: Vec<(Vec<String>, std::collections::BTreeSet<String>)> =
+            vec![(segments.to_vec(), std::collections::BTreeSet::new())];
         if let [only] = segments {
             for glob in &self.globs {
-                out.push(glob.iter().chain(std::iter::once(only)).cloned().collect());
+                let reading = glob.iter().chain(std::iter::once(only)).cloned().collect();
+                out.push((reading, std::collections::BTreeSet::new()));
             }
         }
         let mut next = 0;
@@ -156,19 +162,24 @@ impl Aliases {
                 self.capped.set(true);
                 break;
             }
-            let current = out[next].clone();
+            let (current, used) = out[next].clone();
             next += 1;
             let Some((first, rest)) = current.split_first() else {
                 continue;
             };
+            if used.contains(first) {
+                continue;
+            }
             for full in self.named.get(first).into_iter().flatten() {
                 let reading: Vec<String> = full.iter().chain(rest).cloned().collect();
-                if !out.contains(&reading) {
-                    out.push(reading);
+                if !out.iter().any(|(r, _)| *r == reading) {
+                    let mut used = used.clone();
+                    used.insert(first.clone());
+                    out.push((reading, used));
                 }
             }
         }
-        out
+        out.into_iter().map(|(reading, _)| reading).collect()
     }
 }
 

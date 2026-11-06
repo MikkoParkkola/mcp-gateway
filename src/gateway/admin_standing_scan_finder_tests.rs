@@ -344,6 +344,15 @@ fn the_token_walk_matches_parsed_syntax_and_a_capped_expansion_fails_named() {
         all.keys().all(|(_, file)| file != "src/new.rs"),
         "a cycle of renames ends, reads nothing and is not capped: {all:?}"
     );
+    let same_name = vec![(
+        "src/new.rs".to_owned(),
+        "mod guard { pub fn guard() {} }\nuse guard::guard;\nfn fixture() { guard(); }".to_owned(),
+    )];
+    let all = found_in(&same_name);
+    assert!(
+        all.keys().all(|(_, file)| file != "src/new.rs"),
+        "a function imported from a module of the same name expands once: {all:?}"
+    );
 }
 
 // Guard rows: green on the text finder too, they pin the new finder's handling.
