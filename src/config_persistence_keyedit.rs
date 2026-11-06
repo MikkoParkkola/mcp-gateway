@@ -189,30 +189,6 @@ pub(crate) struct Template {
     hunks: Vec<Hunk>,
 }
 
-/// One run of changed lines: original lines removed or replaced, and the
-/// lines that take their place. Kept lines are never in a hunk.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct Hunk {
-    /// The first original line of the run, 1-based; for a pure insertion,
-    /// the original line it follows (0: the start of the file).
-    pub(crate) old_start: usize,
-    /// The original lines of the run, 0-based, in order.
-    pub(crate) old: Vec<usize>,
-    /// The first edited line of the run, 1-based (for a pure removal, the
-    /// edited line it follows).
-    pub(crate) new_start: usize,
-    pub(crate) new: Vec<NewLine>,
-}
-
-/// A line an edit wrote, without its ending.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct NewLine {
-    pub(crate) text: String,
-    /// For a line whose value was replaced: the original line, 0-based, and
-    /// how many of its leading and trailing bytes (ending aside) it kept.
-    pub(crate) replaced: Option<(usize, usize, usize)>,
-}
-
 impl Template {
     /// A template whose every slot range holds exactly its own field's
     /// placeholder, in order and disjoint; anything else is refused, so a
@@ -800,6 +776,7 @@ pub(crate) fn expected_text(original: &str, changes: &[(FieldPath, Change)]) -> 
 
 #[path = "config_persistence_keyedit_shape.rs"]
 mod shape;
+pub(crate) use shape::{Hunk, NewLine};
 
 #[path = "config_persistence_keyedit_revoke.rs"]
 mod revoke;

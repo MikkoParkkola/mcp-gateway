@@ -115,11 +115,35 @@ pub(super) enum Origin {
     Inserted,
 }
 
+/// One run of changed lines: original lines removed or replaced, and the
+/// lines that take their place. Kept lines are never in a hunk.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Hunk {
+    /// The first original line of the run, 1-based; for a pure insertion,
+    /// the original line it follows (0: the start of the file).
+    pub(crate) old_start: usize,
+    /// The original lines of the run, 0-based, in order.
+    pub(crate) old: Vec<usize>,
+    /// The first edited line of the run, 1-based (for a pure removal, the
+    /// edited line it follows).
+    pub(crate) new_start: usize,
+    pub(crate) new: Vec<NewLine>,
+}
+
+/// A line an edit wrote, without its ending.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct NewLine {
+    pub(crate) text: String,
+    /// For a line whose value was replaced: the original line, 0-based, and
+    /// how many of its leading and trailing bytes (ending aside) it kept.
+    pub(crate) replaced: Option<(usize, usize, usize)>,
+}
+
 /// A hunk being built: where it starts, and its lines so far.
 #[derive(Default)]
 struct Run {
     old: Vec<usize>,
-    new: Vec<super::NewLine>,
+    new: Vec<NewLine>,
     /// For a run with no original line: the original line it follows.
     after_old: Option<usize>,
     /// For a run with no new line: the edited line it follows.
@@ -143,18 +167,18 @@ impl Run {
     ) {
         self.after_new.get_or_insert(written);
         self.after_old.get_or_insert(next);
-        self.new.push(super::NewLine {
+        self.new.push(NewLine {
             text: text.to_owned(),
             replaced,
         });
     }
 
-    fn flush(&mut self, out: &mut Vec<super::Hunk>, written: usize) {
+    fn flush(&mut self, out: &mut Vec<Hunk>, written: usize) {
         let run = std::mem::take(self);
         if run.old.is_empty() && run.new.is_empty() {
             return;
         }
-        out.push(super::Hunk {
+        out.push(Hunk {
             old_start: run
                 .old
                 .first()
@@ -303,7 +327,7 @@ impl Lines {
     /// The changed lines against `original`: each maximal run of original
     /// lines removed or replaced, with the lines written in their place.
     /// Kept lines end a run and are never in one.
-    pub(super) fn hunks(&self, original: &str) -> Vec<super::Hunk> {
+    pub(super) fn hunks(&self, original: &str) -> Vec<Hunk> {
         let total = original.split_inclusive('\n').count();
         let mut out = Vec::new();
         let mut run = Run::default();
