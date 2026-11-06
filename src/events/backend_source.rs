@@ -212,7 +212,8 @@ impl EventSource for BackendSource {
     ) -> Option<String> {
         let shared = || backend_key(None, &sub.name, &sub.arguments);
         let Some((backend, _)) = parse_name(&sub.name) else {
-            return shared();
+            // A per-user row is never keyed as shared, whatever its name.
+            return sub.obs_basis.is_none().then(shared).flatten();
         };
         let live = self
             .upstream

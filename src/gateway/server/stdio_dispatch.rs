@@ -476,7 +476,7 @@ impl Gateway {
             // dispatcher: it previously lived on the HTTP path
             // alone, so stdio was never checked and the default
             // non-admin context went unnoticed.
-            is_admin: true,
+            admin: crate::gateway::authz::AdminStanding::Gateway,
             surface_request: crate::gateway::recovery::SurfaceRequest::Configured,
             // MRTR.9 declares capabilities per request, in the same `_meta`
             // this shape was classified from, so a modern call is read there.

@@ -646,6 +646,9 @@ pub struct LiveEnv {
     /// What the startup load read, taken once when the server publishes its
     /// first config, so the raw bytes never ride along for the process life.
     startup_inputs: std::sync::Mutex<Option<crate::config_reload::revision::RawInputs>>,
+    /// The startup load's configured backend credentials, taken once by the
+    /// gateway's registry before it registers a backend.
+    startup_configured: std::sync::Mutex<Option<super::configured_secrets::ConfiguredByBackend>>,
 }
 
 impl Default for LiveEnv {
@@ -666,6 +669,7 @@ impl LiveEnv {
             overlay: RwLock::new(overlay),
             env_paths,
             startup_inputs: std::sync::Mutex::new(None),
+            startup_configured: std::sync::Mutex::new(None),
         }
     }
 
@@ -690,6 +694,16 @@ impl LiveEnv {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .take()
+    }
+
+    /// The startup load's configured backend credentials, once; empty for an
+    /// environment no load produced, and on every later call.
+    pub(crate) fn take_startup_configured(&self) -> super::configured_secrets::ConfiguredByBackend {
+        self.startup_configured
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take()
+            .unwrap_or_default()
     }
 
     /// The overlay in force. Cheap enough for the request path.
@@ -752,6 +766,10 @@ pub struct Evaluated {
     /// What the evaluation read, for the config revision. Raw until publish
     /// reduces it to keyed digests; empty for a literal load.
     pub(crate) inputs: crate::config_reload::revision::RawInputs,
+    /// Each backend's configured credentials, for the registry to hold
+    /// redacted. Crate-private and beside the config, never on
+    /// it.
+    pub(crate) configured: super::configured_secrets::ConfiguredByBackend,
 }
 
 impl Evaluated {
@@ -765,6 +783,10 @@ impl Evaluated {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner) =
             Some(std::mem::take(&mut self.inputs));
+        *env.startup_configured
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) =
+            Some(std::mem::take(&mut self.configured));
         env
     }
 }

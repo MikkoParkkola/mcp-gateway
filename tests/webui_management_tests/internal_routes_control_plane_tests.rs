@@ -46,13 +46,14 @@ pub(super) const ROWS: &[Row] = &[
         [401, 403, 503, 503],
         [401, 403, 409],
     ),
-    // control_plane.rs:72, :89 (export_status_handler: 404 `configured: false` when unset)
+    // control_plane.rs:72, :89 (export_status_handler: 404 `configured: false` when unset).
+    // The counters are gateway-wide: the Auditor key, scoped to `docs`, is refused.
     row_cfg(
         "/ui/api/control-plane/export-status",
         Method::GET,
         "/ui/api/control-plane/export-status",
         Payload::None,
-        [401, 403, 404, 404],
-        [401, 200, 200],
+        [401, 403, 403, 404],
+        [401, 403, 200],
     ),
 ];

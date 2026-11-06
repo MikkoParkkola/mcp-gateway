@@ -295,7 +295,7 @@ async fn an_expired_tasks_event_reaches_named_and_all_task_subscribers() {
         record_key: Some(crate::gateway::record_principal::test_key_arc()),
     };
     hub.fan_out(&services, &event).await;
-    let queued = std::fs::read_dir(events_dir.path().join("outbox")).map_or(0, Iterator::count);
+    let queued = crate::events::records::committed_records(&events_dir.path().join("outbox")).len();
     assert_eq!(queued, 2, "a record for each subscriber");
     assert_eq!(hub.store.subscriptions().len(), 2, "none was revoked");
 }
@@ -423,6 +423,10 @@ fn a_resource_update_matches_only_its_uri() {
 
 #[path = "reconcile_table_backend_tests.rs"]
 mod reconcile_table;
+
+/// A per-user row whose stored identity names nobody gets no listener key.
+#[path = "stored_identity_key_tests.rs"]
+mod stored_identity_key;
 
 /// MIK-8668 X-SHA golden, computed independently (Python hashlib over the
 /// compact JSON bytes `["p","u"]`).

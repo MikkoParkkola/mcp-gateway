@@ -19,7 +19,8 @@ fn admin_auth() -> AuthConfig {
             expires_at: None,
             name: "principal-admin".to_string(),
             rate_limit: 0,
-            backends: vec![BACKEND.to_string()],
+            // Every backend: the revive hint is a gateway-wide admin power.
+            backends: vec!["*".to_string()],
             allowed_tools: None,
             denied_tools: None,
             admin: true,

@@ -146,16 +146,20 @@ impl MetaMcp {
                 (error, pair)
             })
             .and_then(|()| {
-                self.admin_capability_rule(server, tool, caller.is_admin)
-                    .map_err(|e| {
+                self.admin_capability_rule(
+                    server,
+                    tool,
+                    caller.admin != crate::gateway::authz::AdminStanding::None,
+                )
+                .map_err(|e| {
+                    (
+                        e,
                         (
-                            e,
-                            (
-                                crate::security::decision_record::DecisionKind::AdminCapability,
-                                None,
-                            ),
-                        )
-                    })
+                            crate::security::decision_record::DecisionKind::AdminCapability,
+                            None,
+                        ),
+                    )
+                })
             });
         if let Err((e, pair)) = refusal {
             let (transport, name) = (authorizer.transport(), authorizer.caller_name());
@@ -414,6 +418,9 @@ impl MetaMcp {
                 crate::security::decision_record::DecisionKind::NotFound,
                 None,
             ));
+            // A denial with the miss's code; out of scope, the memo's -32003
+            // was kept first and wins.
+            notes.mark_not_found();
             self.audit_invocation(&args, session_id, caller, &recorded_trace, missing, notes)
                 .await
         });

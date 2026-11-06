@@ -205,7 +205,7 @@ async fn call(meta: &MetaMcp, client: &Client) -> crate::Result<Value> {
         agent_id: None,
         agent_declared: None,
         grant_subject: None,
-        is_admin: false,
+        admin: crate::gateway::authz::AdminStanding::None,
         surface_request: crate::gateway::recovery::SurfaceRequest::Configured,
         input_capabilities: declared,
         retry: &retry,

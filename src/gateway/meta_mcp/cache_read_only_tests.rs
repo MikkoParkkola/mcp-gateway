@@ -419,3 +419,8 @@ async fn a_call_to_a_removed_backend_is_never_answered_from_cache() {
 
 #[path = "cache_read_only_slot_tests.rs"]
 mod slot;
+
+/// A cache hit stored before a value was marked secret is scrubbed
+/// when it is served.
+#[path = "cache_marked_later_tests.rs"]
+mod cache_marked_later;
