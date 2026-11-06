@@ -110,6 +110,11 @@ pub(super) fn resolve(path: &Path, sealed: &[Segment]) -> io::Result<Option<LogI
 /// log whose identified record expired with its segment is never repaired,
 /// even once the disk-full path has expired every sealed segment.
 ///
+/// Accepted exception: an upgraded beta log whose active file was lost mints
+/// its id onto the open record that continues its (id-less) sealed segments,
+/// which links to them; killed before its identified record, it keeps that id
+/// on every reopen and never gains the record.
+///
 /// # Errors
 ///
 /// The active file cannot be read.
@@ -166,8 +171,9 @@ pub(super) fn predecessor_evidence(
 /// lost predecessor. Read apart from the chain checks, so a log that also
 /// fails them (its mark survived and names the lost records) still reports
 /// it. `checked` is the `entry_hash` of the record the chain checks
-/// authenticated as that file's first, if they got that far; the text says
-/// "unverified" otherwise.
+/// authenticated as that file's first, if they got that far. The warning
+/// reads as verified only when the record read here is that one, so bytes
+/// swapped in between the two reads are labelled "unverified".
 ///
 /// # Errors
 ///
@@ -188,7 +194,8 @@ pub(super) fn predecessor_warning(
     else {
         return Ok(None);
     };
-    let how = if checked.is_some() {
+    let read = head.as_ref().and_then(|v| v.get("entry_hash")?.as_str());
+    let how = if checked.is_some() && read == checked {
         ""
     } else {
         " (unverified: the chain check did not authenticate this record)"
