@@ -78,6 +78,30 @@ impl MtlsPolicy {
         }
     }
 
+    /// [`Self::from_config`], each rule carrying its keyed id.
+    #[allow(dead_code)] // red-first skeleton
+    #[must_use]
+    pub(crate) fn from_config_keyed(
+        config: &MtlsConfig,
+        _key: &crate::security::rule_id::RuleKey,
+    ) -> Self {
+        // red-first skeleton
+        Self::from_config(config)
+    }
+
+    /// [`Self::evaluate`], with the id of the rule that decided.
+    #[allow(dead_code)] // red-first skeleton
+    #[must_use]
+    pub(crate) fn evaluate_explained(
+        &self,
+        identity: Option<&CertIdentity>,
+        backend: &str,
+        tool: &str,
+    ) -> (PolicyDecision, Option<&crate::security::rule_id::RuleId>) {
+        // red-first skeleton
+        (self.evaluate(identity, backend, tool), None)
+    }
+
     /// Evaluate whether `(identity, backend, tool)` is permitted.
     ///
     /// When mTLS is disabled, returns [`PolicyDecision::Allow`] to preserve

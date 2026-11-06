@@ -191,7 +191,8 @@ impl ReloadContext {
 
         let subjects = changed_grant_subjects(&outgoing, &incoming_rows);
         let delta = grant_delta::grant_delta(&outgoing, &incoming_rows);
-        crate::gateway::publish_identity_grants(&sink.store, &sink.epoch, incoming);
+        // red-first skeleton: the sink does not carry the key yet.
+        crate::gateway::publish_identity_grants(&sink.store, &sink.epoch, incoming, None);
         self.live_config.set_grants(Some(&bytes));
         drop(bytes);
 

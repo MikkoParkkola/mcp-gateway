@@ -629,6 +629,7 @@ pub(crate) fn publish_identity_grants(
     sink: &RwLock<LocalIdentityGrantStore>,
     epoch: &AtomicU64,
     grants: LocalIdentityGrantStore,
+    _key: Option<&crate::security::rule_id::RuleKey>, // red-first skeleton
 ) {
     let mut lock = sink.write();
     *lock = grants;

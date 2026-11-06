@@ -510,7 +510,13 @@ impl MetaMcp {
     /// `policy_epoch_tests`, whose cells publish an empty store into an empty
     /// one and require the epoch to move: to them the publish IS the event.
     pub fn set_identity_grants(&self, grants: LocalIdentityGrantStore) {
-        publish_identity_grants(&self.identity_grants, &self.policy_epoch, grants);
+        let key = self.record_key.as_deref().map(|k| k.rule_id_key());
+        publish_identity_grants(
+            &self.identity_grants,
+            &self.policy_epoch,
+            grants,
+            key.as_ref(),
+        );
     }
 
     /// The shared grant sink and its epoch, for a publisher outside `MetaMcp`.

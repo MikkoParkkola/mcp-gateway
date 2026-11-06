@@ -146,6 +146,7 @@ pub(super) async fn start_identity_grant_audit(
             &live,
             &epoch,
             crate::identity_grants::LocalIdentityGrantStore::from_grants(rows),
+            None, // red-first skeleton: the sink does not return the key yet.
         );
     };
     match outcome {

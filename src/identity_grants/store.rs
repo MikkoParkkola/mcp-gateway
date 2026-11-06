@@ -27,6 +27,22 @@ impl LocalIdentityGrantStore {
         store
     }
 
+    /// This store with every row's keyed id beside it.
+    #[allow(dead_code)] // red-first skeleton
+    #[must_use]
+    pub(crate) fn with_rule_ids(self, _key: &crate::security::rule_id::RuleKey) -> Self {
+        // red-first skeleton
+        self
+    }
+
+    /// The keyed id of grant `grant_id`, when this store is keyed.
+    #[allow(dead_code)] // red-first skeleton
+    #[must_use]
+    pub(crate) fn rule_id(&self, _grant_id: &str) -> Option<&crate::security::rule_id::RuleId> {
+        // red-first skeleton
+        None
+    }
+
     /// Number of grant rows in the store.
     #[must_use]
     pub fn len(&self) -> usize {
