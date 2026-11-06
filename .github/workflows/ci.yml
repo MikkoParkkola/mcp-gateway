@@ -752,7 +752,7 @@ jobs:
           DOCS_ONLY: ${{ needs.scope.result == 'success' && needs.scope.outputs.docs_only == 'true' }}
         run: |
           if [ "$TRAIN" != true ]; then
-            echo "Heavy checks deferred to the merge train: not run on this pull request, not passed." | tee -a "$GITHUB_STEP_SUMMARY"
+            echo "Heavy checks are judged on the merge train; on this pull request each heavy job's own check decides." | tee -a "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
           skippable=()
