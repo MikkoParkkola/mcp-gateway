@@ -159,15 +159,15 @@ fn wrong_kind_bad_value_and_bad_param_are_refused_before_any_read() {
 /// F3: a field's `Apply` is what a reload does with a change to it alone.
 #[test]
 fn each_fields_apply_matches_the_reload_classifier() {
-    let base = Config::default();
+    // Both sides through the same extraction, so only the field differs.
+    let base = Config::from_file_text("").expect("an empty file extracts");
     for field in FIELDS {
         let changed = Config::from_file_text(&file_with(field.id)).expect("extracts");
-        let restarts =
-            !crate::config_reload::diff::pending_restart_fields(&base, &changed).is_empty();
+        let pending = crate::config_reload::diff::pending_restart_fields(&base, &changed);
         assert_eq!(
             field.apply == Apply::Restart,
-            restarts,
-            "{}: the table says {:?}",
+            !pending.is_empty(),
+            "{}: the table says {:?}; the reload lists {pending:?}",
             field.id,
             field.apply
         );
