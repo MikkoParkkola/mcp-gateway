@@ -1,0 +1,1 @@
+src/gateway/router/backend_handlers/direct_idempotency.rs	note_caller_slot_effect	1	Notes on the call's decision what the caller's own slot declares for the tool (live direct call and 7a cache hit); records only, decides nothing

@@ -205,15 +205,6 @@ pub(super) fn refusal_to_meet(
         .map(|(_, refusal)| refusal)
 }
 
-/// The steps a stored execution was served, if its record lists them.
-/// The bindings a stored delivery recorded (MIK-8407); none for a record
-/// that cannot be decoded, which then has no response to serve either.
-pub(super) fn stored_bindings(bytes: &[u8]) -> Vec<StepBinding> {
-    serde_json::from_slice::<StoredDelivery>(bytes)
-        .map(|stored| stored.bindings)
-        .unwrap_or_default()
-}
-
 impl super::SyncLease {
     /// The lease of a fresh execution: nothing noted yet.
     pub(super) fn fresh(lease: crate::idempotency::admission::Lease) -> Self {
@@ -229,29 +220,14 @@ impl super::SyncLease {
     }
 }
 
-/// What a stored execution recorded beside its answer, read from its bytes:
-/// the steps it dispatched, the bindings they ran under and the one slot it
-/// ran on.
+/// What a stored execution recorded beside its answer, read from its bytes
+/// in one parse: the steps it was served (if its record lists them), the
+/// binding each ran under, and the one slot it ran on. A record that cannot
+/// be decoded lists none of them, and has no response to serve either.
 pub(super) fn stored_steps(bytes: &[u8]) -> super::StoredSteps {
-    (
-        dispatched_steps(bytes),
-        stored_bindings(bytes),
-        stored_effect_slot(bytes),
-    )
-}
-
-/// The slot a stored single-slot execution ran under, `None` when none was
-/// stored.
-pub(super) fn stored_effect_slot(bytes: &[u8]) -> Option<crate::backend::PoolKey> {
-    serde_json::from_slice::<StoredDelivery>(bytes)
-        .ok()
-        .and_then(|stored| stored.effect_slot)
-}
-
-pub(super) fn dispatched_steps(bytes: &[u8]) -> Option<Vec<(String, String)>> {
-    serde_json::from_slice::<StoredDelivery>(bytes)
-        .ok()
-        .and_then(|stored| stored.dispatched)
+    serde_json::from_slice::<StoredDelivery>(bytes).map_or((None, Vec::new(), None), |stored| {
+        (stored.dispatched, stored.bindings, stored.effect_slot)
+    })
 }
 
 /// The era the stored delivery was shaped for (MIK-8747), read without

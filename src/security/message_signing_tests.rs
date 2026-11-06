@@ -171,15 +171,19 @@ fn validate_secret_rejects_empty_secret() {
 
 // ── Cleanup task (tokio) ──────────────────────────────────────────────────
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn spawn_nonce_cleanup_task_evicts_expired() {
-    // GIVEN: a store with zero-window entries
-    let store = Arc::new(NonceStore::new(Duration::ZERO));
+    // A nonce past its window is evicted. On the paused clock the task's ticks
+    // run before the virtual wait returns, however loaded the host, and the
+    // store's injected clock is moved past the window, so neither real time nor
+    // scheduling decides the result (the idempotency twin, #1821).
+    let store = Arc::new(NonceStore::with_clock_for_test(100_000, 10_000));
     store.check_and_register("task-nonce").unwrap();
-    assert_eq!(store.len(), 1);
+    assert_eq!(store.len(), 1, "the fixture registered the nonce to evict");
+    store.advance_for_test(301);
 
-    // WHEN: cleanup task runs
     spawn_nonce_cleanup_task(Arc::clone(&store), Duration::from_millis(10));
+    // Let the cleanup run during 50 ms of virtual time.
     tokio::time::sleep(Duration::from_millis(50)).await;
 
     // THEN: entry evicted
