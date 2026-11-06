@@ -84,14 +84,19 @@ pub(super) fn in_repeat_scope<T>(
     task_and_caller: String,
     check: impl FnOnce() -> T,
 ) -> T {
-    REPEAT_SCOPE.sync_scope((Arc::clone(store), task_and_caller), check)
+    // A re-check of a stored delivery (a task read, a notification frame, a
+    // repeated task-augmented call) is a delivery: the call already has the
+    // invocation record of its original request. Repeat suppression above is
+    // unchanged; this only sets the decision's marker.
+    REPEAT_SCOPE.sync_scope((Arc::clone(store), task_and_caller), || {
+        in_delivery_scope(check)
+    })
 }
 
 /// Run `check` as a delivery re-check: the call it is about already has its
 /// invocation record, from the original request, so the decisions it notes
 /// say so.
-#[allow(dead_code)] // wired to its production sites in the next commits
-pub(super) fn in_delivery_scope<T>(check: impl FnOnce() -> T) -> T {
+pub(crate) fn in_delivery_scope<T>(check: impl FnOnce() -> T) -> T {
     DELIVERY.sync_scope((), check)
 }
 
