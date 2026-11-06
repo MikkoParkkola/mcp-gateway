@@ -173,7 +173,7 @@ async fn n5_direct_not_found_by_lookup() {
 
 /// N1: on the meta route's HTTP gate, a scoped key names a server in its
 /// grant that is not registered: the gate answers the absent step
-/// (`gate.rs:539` in `absent_answer`, from `gate_answer`, `gate.rs:584`). The
+/// (`gate.rs:544` in `absent_answer`, from `gate_answer`, `gate.rs:584`). The
 /// in-process `invoke_tool` skips this gate (it reaches N2's site instead).
 #[tokio::test]
 async fn n1_meta_not_found_at_the_gate() {
@@ -186,13 +186,13 @@ async fn n1_meta_not_found_at_the_gate() {
     let answer =
         post_meta_invoke(&fx, "k-alpha-ghost", "ghost", "read", json!({}), None, None).await;
     // The gate's absent answer is an `isError` result naming the tool as
-    // unlisted (`gate.rs:544-545`), on a 200; a result reads as `tool_error`
-    // with no code (`audit.rs:68-70`).
+    // unlisted, on a 200; the gate marks the miss not-found (`gate.rs:545`),
+    // so the record is `denied` with the miss's -32001 (`denial.rs:44-47`).
     let absent = Refusal {
         status: StatusCode::OK,
         form: Form::IsErrorResult,
-        outcome: "tool_error",
-        code: None,
+        outcome: "denied",
+        code: Some(-32001),
     };
     let decision = refused(&fx, &dir, answer, before, absent);
     assert_row(

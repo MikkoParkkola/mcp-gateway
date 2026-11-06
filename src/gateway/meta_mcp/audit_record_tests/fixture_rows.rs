@@ -164,7 +164,7 @@ async fn t1_meta_allowed_tools() {
     };
     let (meta, sent) = table_meta(&dir, config);
     // The gate answers a withheld tool as an absent one, an `isError` result
-    // (`gate.rs:296`); a tool result reads as `tool_error`, with no code
+    // (`gate.rs:300`); a tool result reads as `tool_error`, with no code
     // (`audit.rs:68-70`).
     let withheld = Refusal {
         form: Form::IsErrorResult,
@@ -230,15 +230,15 @@ fn without_read(meta: MetaMcp) -> MetaMcp {
 }
 
 /// P2: the session's routing profile leaves the tool out, judged at the
-/// gate's invoke-scope check (`visibility.rs:118`, reached through
-/// `may_invoke_explained`, `gate.rs:660`; confirmed by the site probe).
+/// gate's invoke-scope check (`visibility.rs:119`, reached through
+/// `may_invoke_explained`, `gate.rs:666`; confirmed by the site probe).
 #[tokio::test]
 async fn p2_meta_routing_profile_in_scope() {
     let dir = tempfile::tempdir().expect("a log directory");
     let (meta, sent) = table_meta(&dir, BackendConfig::default());
     let meta = without_read(meta);
     // The gate notes the profile refusal's own code, `Error::Protocol`'s
-    // -32600 (`gate.rs:665`), which the record keeps as `denied`
+    // -32600 (`gate.rs:671`), which the record keeps as `denied`
     // (`denial.rs:45-47`); the caller is answered as for an absent tool.
     let profiled = Refusal {
         form: Form::IsErrorResult,
@@ -377,7 +377,7 @@ async fn t4_policy_allowed_tools() {
 /// T5: `allowed_tools` at the invocation policy's check of a visibility the
 /// request already recorded (`absent.rs:21`, from `refuse_withheld_explained`,
 /// `policy.rs:46`; found while coding). On the gate's own path the gate
-/// answers the withheld name first (T1, `visibility.rs:266`), so this unit
+/// answers the withheld name first (T1, `visibility.rs:275`), so this unit
 /// row records the request's verdict in its memo, as the gate does, and runs
 /// the policy under it.
 #[tokio::test]
@@ -419,9 +419,9 @@ async fn t5_policy_allowed_tools_from_the_memo() {
 }
 
 /// N3: a chain step that resumes on a backend the registry no longer holds
-/// (`policy.rs:414`, in `record_absent_step`, which `chain_exec.rs:227`
+/// (`policy.rs:418`, in `record_absent_step`, which `chain_exec.rs:227`
 /// calls). The step is recorded without dispatch: its notes name `not_found`
-/// (`policy.rs:412-416`).
+/// (`policy.rs:416-420`).
 #[tokio::test]
 async fn n3_chain_step_not_found() {
     let dir = tempfile::tempdir().expect("a log directory");
@@ -431,7 +431,7 @@ async fn n3_chain_step_not_found() {
     let error = meta
         .record_absent_step(("nowhere", "read", &json!({})), None, &caller, None)
         .await;
-    // The step answers the plain miss (`policy.rs:421-424`).
+    // The step answers the plain miss (`policy.rs:428-431`).
     assert!(
         matches!(error, crate::Error::BackendNotFound(ref name) if name == "nowhere"),
         "{error:?}"
@@ -445,10 +445,9 @@ async fn n3_chain_step_not_found() {
     let [record] = all.as_slice() else {
         panic!("premise: one invocation record: {all:?}");
     };
-    // With no absence given, no denial code is noted, so the record reads
-    // the miss itself: `Error::BackendNotFound` is `invalid` with its -32001
-    // (`audit.rs:82-86`).
-    assert_eq!(record["outcome"], "invalid", "{record}");
+    // The step marks its miss not-found (`policy.rs:423`), so the record is
+    // `denied` with the miss's -32001 (`denial.rs:44-47`).
+    assert_eq!(record["outcome"], "denied", "{record}");
     assert_eq!(record["error_code"], json!(-32001), "{record}");
     let row = DecisionRow {
         rule_id: RuleId::Absent("the target matches nothing"),

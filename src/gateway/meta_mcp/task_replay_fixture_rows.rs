@@ -35,7 +35,7 @@ async fn t3_task_replay_allowed_tools() {
     let meta = MetaMcp::new(registry);
     let scope = crate::gateway::meta_mcp::InvokeScope {
         authorizer: &AllowAll,
-        is_admin: false,
+        admin: crate::gateway::authz::AdminStanding::None,
         api_key_name: None,
         grant_key: None,
         agent_id: None,
