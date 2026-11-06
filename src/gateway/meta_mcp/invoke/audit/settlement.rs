@@ -126,9 +126,10 @@ impl MetaMcp {
     /// settlement refused (`refused`, with the code the task settles with) or
     /// rewrote the answer, before the transition commits. `trace_id` is the worker dispatch's invocation trace,
     /// so the record joins that dispatch record; `result` is the settled answer
-    /// (`None` for a refusal). The facts come from the open cell. A
-    /// composite's record names its join (`joined_by`); `None` writes no
-    /// such member, so a single-target record's bytes are unchanged.
+    /// (`None` for a refusal). The facts come from the open cell.
+    /// `joined_by` appears only on a composite's dispatch-refusal record,
+    /// whose `trace_id` is the ended-on step's trace or the task id; `None`
+    /// writes no such member, so every other record's bytes are unchanged.
     ///
     /// Returns whether the transition may commit as proposed: `false` only
     /// when the write failed under [`AuditFailurePolicy::FailClosed`], and the
