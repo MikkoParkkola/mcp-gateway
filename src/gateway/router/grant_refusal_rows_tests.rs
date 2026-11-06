@@ -175,3 +175,25 @@ async fn a_route_refused_gateway_invoke_is_one_blocked_row() {
     assert_eq!(rows[0]["server"], json!(CAPS), "{rows:#?}");
     assert_eq!(rows[0]["tool"], json!(PERSONAL), "{rows:#?}");
 }
+
+/// A surfaced tool the caller's key withholds (`denied_tools`), where the
+/// grant also denies, called by its own name: no invocation record, one
+/// blocked row naming the server and tool, matched by its filters.
+#[tokio::test]
+async fn a_denied_tools_surfaced_call_is_one_blocked_row() {
+    let endpoint = Endpoint::start(false).await;
+    let rig = rig(&endpoint, AuditFailurePolicy::BestEffort, true, true).await;
+
+    let answer = mcp_call(&rig, PERSONAL, &json!({})).await;
+
+    let held = wait_for_decisions(&rig.dir, 1).await;
+    assert_eq!(held.len(), 1, "{held:#?}: {answer}");
+    assert_eq!(held[0]["invocation_recorded"], json!(false), "{held:#?}");
+    assert!(invocations(&rig.dir).is_empty(), "no record of the call's own");
+    for query in ["", "&outcome=blocked", "&server=personal_caps", "&q=calendar_read_day"] {
+        let rows = activity(&rig, query).await;
+        assert_eq!(rows.len(), 1, "{query}: {rows:#?}");
+        assert_eq!(rows[0]["outcome"], json!("blocked"), "{query}: {rows:#?}");
+        assert_eq!(rows[0]["tool"], json!(PERSONAL), "{query}: {rows:#?}");
+    }
+}
