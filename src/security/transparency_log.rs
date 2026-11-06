@@ -694,6 +694,9 @@ mod identity_tests;
 #[path = "transparency_log_kill_tests.rs"]
 mod kill_tests;
 #[cfg(test)]
+#[path = "transparency_log_predecessor_tests.rs"]
+mod predecessor_tests;
+#[cfg(test)]
 #[path = "transparency_log_keep_dir_tests.rs"]
 mod keep_dir_tests;
 #[cfg(test)]
