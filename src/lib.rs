@@ -352,5 +352,6 @@ pub(crate) mod test_tempdir;
 /// assertion message, which Kani's `assert!` ignores, so under `cfg(kani)` it is unused.
 #[doc(hidden)]
 pub fn kani_red_probe(what: &str) {
-    assert!(std::hint::black_box(true), "{what}");
+    let len = what.len();
+    assert!(std::hint::black_box(len < usize::MAX), "{what}");
 }
