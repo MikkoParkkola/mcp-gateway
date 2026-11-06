@@ -312,3 +312,30 @@ fn a_running_authenticated_gateway_takes_its_first_key_and_a_rule_naming_it() {
     let (outcome, _live) = reload_after(&startup, &reload);
     outcome.expect("the first key and its rule reload together");
 }
+
+/// The fail-open stays closed: with authentication running and no API key,
+/// a reload adding a rule scoped to a key it does not configure is refused,
+/// naming the rule; the rule would apply to no caller.
+#[test]
+fn a_running_authenticated_gateway_refuses_a_keyed_rule_with_no_key() {
+    let bearer =
+        "auth:\n  enabled: true\n  bearer_token: \"zq-bearer-for-the-first-key-row-000000\"\n";
+    let startup = format!("{bearer}{}", firewall(true, VALID));
+    let reload = format!(
+        "{bearer}{}",
+        firewall(
+            true,
+            "{match: \"*\", scan: [credentials], action: block, keys: [k]}"
+        )
+    );
+    let (outcome, live) = reload_after(&startup, &reload);
+    let refused = outcome.expect_err("a key reference with no key is refused");
+    assert!(
+        refused.contains("security.firewall.rules[0].keys[0] needs API-key authentication"),
+        "{refused}"
+    );
+    assert!(
+        live.get().security.firewall.rules[0].keys.is_none(),
+        "the running rules stay"
+    );
+}
