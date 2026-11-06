@@ -5,9 +5,9 @@
 //! is bound to. Settle never decides an outcome: it records the payload it
 //! is given, unchanged. Records carry no paths, values, secrets or error
 //! text; the payload types below hold none.
-#![cfg_attr(
-    not(test),
-    expect(dead_code, reason = "the config writer calls settle in the next step")
+#![expect(
+    dead_code,
+    reason = "the config writer, the next step, builds the intent roles and reasons"
 )]
 
 use std::io;
