@@ -150,6 +150,14 @@ fn a_restart_after_the_active_file_was_deleted_names_the_surviving_mark() {
     // WHEN: a new process opens it (killed once its logger is built)
     killed_at(At::LoggerBuilt, dir.path());
 
+    // THEN: the new genesis's id holds across two reopens
+    let id = lines(&path)[0]["log_id"].as_str().unwrap().to_string();
+    for _ in 0..2 {
+        let again =
+            TransparencyLogger::open(cfg(&path, 12, false)).expect("the lease went with the child");
+        assert_eq!(again.log_id().as_str(), id);
+    }
+
     // THEN: the new genesis's open record names the mark that survived, and
     // no previous id (the mark holds none)
     let head = lines(&path);
