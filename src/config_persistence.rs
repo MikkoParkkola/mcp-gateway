@@ -115,9 +115,12 @@ use scratch::{create_scratch_exclusive, is_transient, scratch_candidate};
 ///
 /// With no journal pending there is nothing to do and no lock is taken: the
 /// file is whole, since every writer replaces it by atomic rename. With one,
-/// the config lock is taken (waiting up to [`CLI_LOCK_WAIT`]) and recovers it
-/// ([`journal::recover`]): back to the original, or keeping bytes a reload
-/// accepted.
+/// the config lock is taken (waiting up to [`CLI_LOCK_WAIT`]) and the journal
+/// recovered ([`journal::recover`]): back to the original, or keeping bytes a
+/// reload accepted. First, the config that recovery leaves is worked out
+/// without writing it and loaded, and the recovery's intent is appended to
+/// that config's audit log, so the record lands where the gateway that starts
+/// will write. A recovery that cannot be recorded recovers nothing.
 ///
 /// # Errors
 ///
@@ -129,8 +132,8 @@ pub fn recover_before_start(config: &Path) -> Result<(), String> {
     if !lock::journal_pending(config) {
         return Ok(());
     }
-    match lock::lock_config_blocking(config, Instant::now() + CLI_LOCK_WAIT, |_| {}) {
-        Ok(_locked) => Ok(()),
+    match lock::lock_config_blocking_deferred(config, Instant::now() + CLI_LOCK_WAIT, |_| {}) {
+        Ok(locked) => recover_audited(&locked),
         Err(lock::NotLocked::Busy) => Err(format!(
             "{} has a pending write and another writer holds its lock; start again when it finishes",
             config.display()
@@ -145,6 +148,39 @@ pub fn recover_before_start(config: &Path) -> Result<(), String> {
             None => message,
         }),
     }
+}
+
+/// [`recover_before_start`] under the lock: the intent into the surviving
+/// config's audit log, then the recovery.
+fn recover_audited(locked: &lock::Locked) -> Result<(), String> {
+    let message = |e: journal::NotRecovered| match e {
+        journal::NotRecovered::Refused(why) | journal::NotRecovered::Failed(why) => why,
+    };
+    if locked.journal_pending {
+        // `None`: the journal went after the lock reported it, so recovery
+        // below only clears a stray staged copy and changes no config.
+        if let Some(text) = journal::surviving_text(&locked.target).map_err(message)? {
+            let config = crate::config::Config::load_evaluated_text(&locked.target, &text)
+                .map_err(|e| {
+                    unrecorded(locked, &format!("the config it leaves does not load: {e}"))
+                })?
+                .config;
+            crate::config_reload::startup_recovery_intent(locked, &config)
+                .map_err(|why| unrecorded(locked, &why))?;
+        }
+    }
+    journal::recover(&locked.target).map(drop).map_err(message)
+}
+
+/// A pending journal whose recovery cannot be recorded: nothing was
+/// recovered, and the operator is told how to finish by hand.
+fn unrecorded(locked: &lock::Locked, why: &str) -> String {
+    let target = locked.target.display();
+    format!(
+        "{journal} is pending beside {target}, but its recovery cannot be recorded in the audit log: {why}. Nothing was recovered. Fix that and start again, or recover by hand: if the journal's state is staged, restore the staged original {original} over {target} only if its SHA-256 matches the journal's original_revision, then delete the journal; if it is all_renamed, only delete the journal. Either way, record the recovery yourself",
+        journal = journal::journal_path(&locked.target).display(),
+        original = journal::original_path(&locked.target).display(),
+    )
 }
 
 /// Take the config lock for a CLI write, waiting up to [`CLI_LOCK_WAIT`].

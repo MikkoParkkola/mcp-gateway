@@ -93,6 +93,24 @@ impl super::Config {
         Ok((evaluated.config, file.text))
     }
 
+    /// `text` evaluated as the file at `path` exactly as
+    /// [`super::Config::load_evaluated`] evaluates a file read from disk (same
+    /// home, env files, secret resolution and validation), only with the
+    /// bytes supplied: startup's look at the config a pending journal's
+    /// recovery would leave, before that recovery writes it.
+    pub(crate) fn load_evaluated_text(path: &Path, text: &str) -> Result<super::Evaluated> {
+        let file = ConfigFile {
+            path: path.to_path_buf(),
+            text: text.to_owned(),
+        };
+        Self::evaluate(
+            Some(&file),
+            &super::SystemHome,
+            super::Tolerance::Fail,
+            super::Expansion::Resolve,
+        )
+    }
+
     /// `text` loaded as the file at `path` would be on a reload against
     /// `env_paths`, with `pending` names resolving above the env files: the
     /// config writer's full validation of a template whose secret slots name
