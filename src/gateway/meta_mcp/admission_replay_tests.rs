@@ -84,7 +84,7 @@ async fn an_unrecorded_deferral_fails_closed() {
                 tool: "read".to_string(),
                 origin: super::super::ReplayOrigin::Named,
             }),
-            (None, Vec::new()),
+            (None, Vec::new(), None),
             (stored, None),
         )
         .await;
@@ -146,7 +146,7 @@ async fn p8_legacy_a_plan_record_with_no_step_list_judges_its_declared_targets()
             &arguments,
             &ctx(&AllowAll),
             None,
-            (None, Vec::new()),
+            (None, Vec::new(), None),
             (stored.clone(), None),
         )
         .await
@@ -179,7 +179,7 @@ async fn p8_empty_a_plan_record_that_dispatched_nothing_is_served() {
             &arguments,
             &ctx(&AllowAll),
             None,
-            (Some(Vec::new()), Vec::new()),
+            (Some(Vec::new()), Vec::new(), None),
             (stored.clone(), None),
         )
         .await
@@ -209,7 +209,7 @@ async fn p8_noid_a_stored_plan_replay_with_no_request_id_fails_closed() {
             &arguments,
             &ctx(&AllowAll),
             None,
-            (Some(Vec::new()), Vec::new()),
+            (Some(Vec::new()), Vec::new(), None),
             (stored, None),
         )
         .await
@@ -269,6 +269,7 @@ async fn p8_rebind_a_step_rebound_while_the_plan_walk_runs_is_refused() {
             (
                 Some(Vec::new()),
                 vec![("idp".to_owned(), "read".to_owned(), None)],
+                None,
             ),
             (stored.clone(), Some(audit)),
         )

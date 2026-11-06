@@ -55,8 +55,8 @@ pub(super) struct TaskIntentRequest<'a> {
     pub agent_declared: Option<crate::security::DeclaredAgentLabel<'a>>,
     /// Grant subject the worker re-authorizes against.
     pub grant_subject: Option<crate::identity_grants::GrantSubject>,
-    /// Whether the caller holds admin rights on this gateway.
-    pub is_admin: bool,
+    /// The caller's admin standing on this gateway.
+    pub(crate) admin: crate::gateway::authz::AdminStanding,
     /// What this caller may invoke: a surfaced name withheld from it makes no
     /// task (MIK-8340).
     pub scope: crate::gateway::meta_mcp::InvokeScope<'a>,
@@ -141,7 +141,7 @@ pub(super) fn task_intent_for_call(
             ),
             crate::gateway::meta_mcp::Authentication::of(req.client),
             crate::security::audit::CredentialKind::of(req.client),
-            req.is_admin,
+            req.admin,
             req.input_capabilities,
             req.session_id
                 .filter(|id| !id.is_empty())
@@ -183,7 +183,7 @@ pub(super) struct RecoveryCaller<'a> {
     pub agent_declared: Option<crate::security::DeclaredAgentLabel<'a>>,
     pub grant_subject: Option<crate::identity_grants::GrantSubject>,
     pub verified_identity: Option<&'a VerifiedIdentity>,
-    pub is_admin: bool,
+    pub(crate) admin: crate::gateway::authz::AdminStanding,
     pub input_capabilities: Declared,
     pub session_id: Option<&'a str>,
 }
@@ -250,7 +250,7 @@ fn policy_context<'a>(
         stdio_nonce: None,
         caller_key: Some(caller_key).filter(|key| !key.is_empty()),
         verified_identity: caller.verified_identity,
-        is_admin: caller.is_admin,
+        admin: caller.admin,
         surface_request: crate::gateway::recovery::SurfaceRequest::Configured,
         input_capabilities: caller.input_capabilities,
         confirmation: crate::gateway::destructive_confirmation::ConfirmationChannel::Unavailable,
@@ -482,7 +482,7 @@ fn update_caller(
         ),
         crate::gateway::meta_mcp::Authentication::of(caller.client),
         crate::security::audit::CredentialKind::of(caller.client),
-        caller.is_admin,
+        caller.admin,
         caller.input_capabilities,
         caller
             .session_id
@@ -616,17 +616,20 @@ impl crate::gateway::streaming::TaskFrames for TaskFrameSource {
             agent_declared: None,
             grant_subject: self.grant_subject.clone(),
             verified_identity: self.verified_identity.as_ref(),
-            is_admin: reader.admin,
+            admin: reader.admin_standing(),
             input_capabilities: self.input_capabilities,
             session_id: self.session_id.as_deref(),
         };
         let request = RequestId::Number(0);
         let refused = |stored: &crate::gateway::task_service::CommittedTask| {
             with_policy_caller(&self.state, &live, |policy| {
-                self.state
-                    .meta_mcp
-                    .refuse_stored_delivery(&request, stored, None, live.session_id, policy)
-                    .is_some()
+                self.state.meta_mcp.refuse_stored_delivery(
+                    &request,
+                    stored,
+                    None,
+                    live.session_id,
+                    policy,
+                )
             })
         };
         // MIK-8392: the pre-pass fills this frame's account outcomes in its own

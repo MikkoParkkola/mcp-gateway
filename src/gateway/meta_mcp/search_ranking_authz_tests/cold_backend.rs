@@ -418,7 +418,7 @@ async fn a_filtered_tools_list_never_fills_a_backend_the_caller_may_not_see() {
     let meta = meta_over(&backend);
     let scope = crate::gateway::meta_mcp::InvokeScope {
         authorizer: &NoBackends,
-        is_admin: false,
+        admin: crate::gateway::authz::AdminStanding::None,
         api_key_name: None,
         grant_key: None,
         agent_id: None,

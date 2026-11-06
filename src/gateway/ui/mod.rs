@@ -11,6 +11,9 @@
 
 mod access_report;
 mod access_table;
+/// Every admin route refuses a backend-scoped admin.
+#[cfg(test)]
+mod admin_scope_tests;
 #[cfg(test)]
 pub(in crate::gateway) use self::access_table::plain_rows;
 mod activity;
@@ -31,6 +34,13 @@ mod history;
 pub mod import;
 mod keys;
 mod overview;
+mod policies;
+#[cfg(feature = "firewall")]
+mod policies_rules;
+#[cfg(all(test, feature = "firewall"))]
+mod policies_shadow_tests;
+#[cfg(test)]
+mod policies_tests;
 mod preview;
 mod preview_identity;
 mod refusals;
@@ -85,12 +95,13 @@ const INDEX_HTML: &str = include_str!("index.html");
 /// Returns `true` when the caller has admin-level access.
 ///
 /// Admin access follows a credential: the bearer, an API key with `admin: true`,
-/// or an SSO identity while a `role: admin` mapping rule matches it (E1). The
-/// identity used when authentication is disabled is NOT admin, because an
+/// or an SSO identity while a `role: admin` mapping rule matches it (E1),
+/// scoped to every backend: a backend-scoped admin has no gateway-wide admin
+/// standing. The identity used when authentication is disabled is NOT admin, because an
 /// unauthenticated gateway cannot tell its operator from any other caller that
 /// reaches the port.
 fn is_admin(client: Option<&AuthenticatedClient>) -> bool {
-    client.is_some_and(|c| c.admin)
+    client.is_some_and(AuthenticatedClient::is_gateway_admin)
 }
 
 /// Build the authenticated `/ui/api/*` and `/dashboard` sub-router.
@@ -116,6 +127,7 @@ pub fn api_router() -> Router<Arc<AppState>> {
         .merge(import::import_router())
         .merge(discovery::discovery_router())
         .merge(decisions::decisions_router())
+        .merge(policies::policies_router())
         .merge(history::history_router())
         .merge(stream::stream_router());
 

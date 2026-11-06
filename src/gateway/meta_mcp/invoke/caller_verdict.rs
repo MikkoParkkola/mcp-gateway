@@ -575,6 +575,9 @@ mod dispatch_seam {
 }
 
 #[cfg(test)]
+#[path = "not_found_race_tests.rs"]
+mod not_found_race_tests;
+#[cfg(test)]
 #[path = "noview_cooldown_tests.rs"]
 mod noview_cooldown_tests;
 

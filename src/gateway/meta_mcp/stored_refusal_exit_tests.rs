@@ -60,7 +60,7 @@ async fn read(meta: &MetaMcp, stored: &CommittedTask) -> (bool, Option<Value>) {
 
 /// Alice's gateway, with the endpoint it serves through: held by the row,
 /// so the endpoint lives as long as the gateway.
-async fn alice_gateway(dir: &tempfile::TempDir) -> (Endpoint, MetaMcp) {
+async fn alice_gateway(dir: &std::sync::Arc<tempfile::TempDir>) -> (Endpoint, MetaMcp) {
     let endpoint = Endpoint::start(false).await;
     let meta = gateway(
         &endpoint,
@@ -73,14 +73,14 @@ async fn alice_gateway(dir: &tempfile::TempDir) -> (Endpoint, MetaMcp) {
 
 #[tokio::test]
 async fn a_served_read_carries_no_refusal() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = std::sync::Arc::new(tempfile::tempdir().unwrap());
     let (_endpoint, meta) = alice_gateway(&dir).await;
     assert_eq!(read(&meta, &finished_task()).await, (false, None));
 }
 
 #[tokio::test]
 async fn a_legacy_row_without_bindings_is_refused_for_provenance() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = std::sync::Arc::new(tempfile::tempdir().unwrap());
     let (_endpoint, meta) = alice_gateway(&dir).await;
     let stored = CommittedTask {
         bindings_recorded: false,
@@ -94,7 +94,7 @@ async fn a_legacy_row_without_bindings_is_refused_for_provenance() {
 
 #[tokio::test]
 async fn a_row_without_recorded_targets_is_refused_for_provenance() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = std::sync::Arc::new(tempfile::tempdir().unwrap());
     let (_endpoint, meta) = alice_gateway(&dir).await;
     let stored = CommittedTask {
         targets: Vec::new(),
@@ -112,7 +112,7 @@ async fn a_row_without_recorded_targets_is_refused_for_provenance() {
 /// still names the grant.
 #[tokio::test]
 async fn a_revoked_grant_is_named_on_every_poll() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = std::sync::Arc::new(tempfile::tempdir().unwrap());
     let (_endpoint, meta) = alice_gateway(&dir).await;
     let stored = finished_task();
     meta.set_identity_grants(grants(vec![]));
@@ -130,7 +130,7 @@ async fn a_revoked_grant_is_named_on_every_poll() {
 /// provenance.
 #[tokio::test]
 async fn a_rebound_result_is_refused_for_provenance() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = std::sync::Arc::new(tempfile::tempdir().unwrap());
     let (_endpoint, meta) = alice_gateway(&dir).await;
     let stored = CommittedTask {
         bindings: vec![(
@@ -167,7 +167,7 @@ async fn a_rebound_result_is_refused_for_provenance() {
 #[tokio::test]
 async fn the_refusing_target_of_two_is_the_one_named() {
     const UNGRANTED: &str = "calendar_write_day";
-    let dir = tempfile::tempdir().unwrap();
+    let dir = std::sync::Arc::new(tempfile::tempdir().unwrap());
     let (endpoint, meta) = alice_gateway(&dir).await;
     let base_url = crate::test_fixture_host::fixture_url(endpoint.port);
     let second = crate::capability::parse_capability(&format!(
@@ -200,5 +200,50 @@ async fn the_refusing_target_of_two_is_the_one_named() {
     assert_eq!(
         read(&meta, &stored).await,
         (true, Some(json!({"kind": "grant"})))
+    );
+}
+
+/// A repeated task-augmented call judged against a stored task it may not
+/// be served (no recorded bindings): its stored-repeat judgement refuses with
+/// the provenance pair, which `deliver` hands to the call's delivery record.
+#[tokio::test]
+async fn a_refused_stored_repeat_carries_its_pair() {
+    let dir = std::sync::Arc::new(tempfile::tempdir().unwrap());
+    let (_endpoint, meta) = alice_gateway(&dir).await;
+    let stored = CommittedTask {
+        bindings_recorded: false,
+        ..finished_task()
+    };
+    let alice = api_key("alice");
+    let caller = context(&alice);
+    let (answer, written, _) = with_grant_slot(meta.transparency_logger.as_ref(), async {
+        meta.refuse_stored_repeat(&RequestId::Number(1), &stored, None, Some("s"), &caller)
+    })
+    .await;
+    written.expect("the slot's records are written");
+    let pair = answer
+        .as_ref()
+        .and_then(super::task_replay::StoredAnswer::refused_by)
+        .map(|r| serde_json::to_value(r).expect("RefusedBy serialises"));
+    assert_eq!(pair, Some(json!({"kind": "provenance"})));
+    // Through delivery: the repeated call delivers the answer in its own
+    // cell, and that cell's record names the check.
+    let answer = answer.expect("a refused repeat");
+    let fields = crate::gateway::delivery_facts::scope(async move {
+        let _frame = answer.deliver();
+        let mut fields = serde_json::Map::new();
+        crate::gateway::delivery_facts::record_fields(
+            crate::gateway::delivery_facts::snapshot().as_ref(),
+            false,
+            &mut fields,
+        );
+        fields
+    })
+    .await;
+    assert_eq!(fields["response_effect"], json!("refused"), "{fields:?}");
+    assert_eq!(
+        fields["refused_by"],
+        json!({"kind": "provenance"}),
+        "{fields:?}"
     );
 }

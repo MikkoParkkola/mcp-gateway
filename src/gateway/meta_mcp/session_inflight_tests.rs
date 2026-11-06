@@ -125,7 +125,7 @@ pub(super) fn context(retry: &crate::protocol::mrtr::RetryFields) -> MetaMcpCall
         agent_id: None,
         agent_declared: None,
         grant_subject: None,
-        is_admin: false,
+        admin: crate::gateway::authz::AdminStanding::None,
         surface_request: crate::gateway::recovery::SurfaceRequest::Configured,
         input_capabilities: declared,
         retry,

@@ -71,9 +71,9 @@ pub struct MetaMcpCallerContext<'a> {
     pub(crate) stdio_nonce: Option<&'a crate::gateway::server::StdioNonce>,
     /// The caller's `router::identity::caller_key`, set by HTTP only; see `experiment_key`.
     pub(crate) caller_key: Option<&'a str>,
-    /// Whether the caller holds admin: meta-tools with admin-only PARAMETERS cannot be gated by
+    /// The caller's admin standing: meta-tools with admin-only PARAMETERS cannot be gated by
     /// the tool-name allow-list in `router::authorization`, which knows only whole tools.
-    pub is_admin: bool,
+    pub(crate) admin: crate::gateway::authz::AdminStanding,
     /// The meta-tool surface this request asked for; recovery hints follow it (MIK-7974).
     pub(crate) surface_request: crate::gateway::recovery::SurfaceRequest,
     /// What this caller declared on **this** request.
@@ -157,7 +157,7 @@ impl<'a> MetaMcpCallerContext<'a> {
     pub fn scope(&self) -> InvokeScope<'_> {
         InvokeScope {
             authorizer: self.authorizer,
-            is_admin: self.is_admin,
+            admin: self.admin,
             api_key_name: self.api_key_name,
             grant_key: self.api_key_identity(),
             agent_id: self.agent_id,
@@ -243,7 +243,7 @@ impl<'a> MetaMcpCallerContext<'a> {
             verified_identity: self.verified_identity,
             stdio_nonce: self.stdio_nonce,
             caller_key: self.caller_key,
-            is_admin: self.is_admin,
+            admin: self.admin,
             surface_request: self.surface_request,
             input_capabilities: self.input_capabilities,
             confirmation: self.confirmation.clone(),

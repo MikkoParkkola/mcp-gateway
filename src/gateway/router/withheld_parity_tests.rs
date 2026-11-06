@@ -408,7 +408,7 @@ fn row11_scope(reason: Reason) -> crate::gateway::meta_mcp::InvokeScope<'static>
         } else {
             &ALLOW
         },
-        is_admin: false,
+        admin: crate::gateway::authz::AdminStanding::None,
         api_key_name: None,
         grant_key: None,
         agent_id: None,

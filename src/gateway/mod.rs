@@ -62,6 +62,8 @@ pub mod oauth;
 // else, so no caller outside the gateway can install it without the standard
 // auth layer that must run first.
 #[cfg(test)]
+mod admin_standing_scan_tests;
+#[cfg(test)]
 pub(crate) mod chain_test_support;
 // Every egress matrix it feeds is `firewall`-gated.
 #[cfg(all(test, feature = "firewall"))]

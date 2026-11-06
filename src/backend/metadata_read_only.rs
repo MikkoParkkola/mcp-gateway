@@ -259,19 +259,48 @@ impl Backend {
         binding: Option<&str>,
         tool: &str,
     ) -> Option<crate::security::decision_record::Effect> {
-        let slot = self.tools_slot(binding);
-        let (read_only, write) = (slot.read_only_declared.read(), slot.write_declared.read());
-        let (hint, listed) = (slot.hint_declared.read(), slot.effect_listed.read());
-        crate::backend::annotations::declared_effect(
-            tool,
-            crate::backend::annotations::DeclaredHints {
-                read_only_declared: &read_only,
-                write_declared: &write,
-                hint_declared: &hint,
-                listed: &listed,
-            },
-        )
+        slot_effect(&self.tools_slot(binding), tool)
     }
+
+    /// The slot `binding` selects, by the resolution the dispatch uses: what
+    /// a settled execution stores, so its replay reads that slot itself.
+    #[must_use]
+    pub(crate) fn slot_key_for(&self, binding: Option<&str>) -> crate::backend::PoolKey {
+        self.pool_key_for(binding)
+    }
+
+    /// The declared effect of `tool` in exactly the slot `key`, as of its last
+    /// `tools/list`. A lookup, never a create, and never resolved again: a
+    /// slot this backend does not hold (evicted, or one a configuration
+    /// change no longer selects), a cold one, or evidence that cannot say,
+    /// gives `None`.
+    #[must_use]
+    pub(crate) fn declared_effect_at(
+        &self,
+        key: &crate::backend::PoolKey,
+        tool: &str,
+    ) -> Option<crate::security::decision_record::Effect> {
+        let slot = self.pool.get(key).map(|slot| Arc::clone(slot.value()))?;
+        slot_effect(&slot, tool)
+    }
+}
+
+/// What `slot`'s declarations say `tool` may do.
+fn slot_effect(
+    slot: &crate::backend::pool::PooledEntry,
+    tool: &str,
+) -> Option<crate::security::decision_record::Effect> {
+    let (read_only, write) = (slot.read_only_declared.read(), slot.write_declared.read());
+    let (hint, listed) = (slot.hint_declared.read(), slot.effect_listed.read());
+    crate::backend::annotations::declared_effect(
+        tool,
+        crate::backend::annotations::DeclaredHints {
+            read_only_declared: &read_only,
+            write_declared: &write,
+            hint_declared: &hint,
+            listed: &listed,
+        },
+    )
 }
 
 /// One page's sets, read before any gate dropped a name.

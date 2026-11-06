@@ -429,6 +429,8 @@ async fn l3_a_deferred_replay_is_taken_only_by_its_own_key_once() {
         ),
         audit: None,
         audit_server: None,
+        audit_tool: None,
+        effect_slot: None,
         tool_name: "gateway_invoke".to_string(),
         arguments: json!({}),
         bindings: Vec::new(),

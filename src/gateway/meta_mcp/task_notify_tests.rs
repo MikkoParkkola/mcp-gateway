@@ -36,7 +36,7 @@ fn reader() -> Reader<'static> {
 }
 
 fn gateway(
-    dir: &tempfile::TempDir,
+    dir: &Arc<tempfile::TempDir>,
     policy: AuditFailurePolicy,
 ) -> (MetaMcp, Arc<crate::security::TransparencyLogger>) {
     let log = logger(dir, policy);
@@ -48,12 +48,12 @@ fn gateway(
 /// A frame is tagged with the subscription and written to the log as sent.
 #[tokio::test]
 async fn a_delivered_task_frame_is_tagged_and_logged_as_sent() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = Arc::new(tempfile::tempdir().expect("tempdir"));
     let (meta, _log) = gateway(&dir, AuditFailurePolicy::FailClosed);
     let subscription = SubscriptionId::of_request(RequestId::Number(5));
 
     let pending = meta
-        .task_notification_frame(&published(), None, |_| false, &subscription)
+        .task_notification_frame(&published(), None, |_| None, &subscription)
         .await
         .expect("a frame is built");
     let frame = pending.frame.clone();
@@ -81,13 +81,13 @@ async fn a_delivered_task_frame_is_tagged_and_logged_as_sent() {
 /// delivered, as a `tasks/get` response is not.
 #[tokio::test]
 async fn a_task_frame_that_cannot_be_logged_is_withheld_when_fail_closed() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = Arc::new(tempfile::tempdir().expect("tempdir"));
     let (meta, log) = gateway(&dir, AuditFailurePolicy::FailClosed);
     let subscription = SubscriptionId::of_request(RequestId::Number(6));
     log.fail_next_append_for_test();
 
     let pending = meta
-        .task_notification_frame(&published(), None, |_| false, &subscription)
+        .task_notification_frame(&published(), None, |_| None, &subscription)
         .await
         .expect("a frame is built");
     let frame = pending.frame.clone();
@@ -102,7 +102,7 @@ async fn a_task_frame_that_cannot_be_logged_is_withheld_when_fail_closed() {
 /// delivered after it completed, is sent as the completed task, whole.
 #[tokio::test]
 async fn a_frame_carries_the_task_as_it_is_at_delivery() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = Arc::new(tempfile::tempdir().expect("tempdir"));
     let (meta, _log) = gateway(&dir, AuditFailurePolicy::FailClosed);
     let subscription = SubscriptionId::of_request(RequestId::Number(7));
     let mut task = crate::protocol::tasks::Task::create("gateway_invoke")
@@ -136,7 +136,7 @@ async fn a_frame_carries_the_task_as_it_is_at_delivery() {
                 stored,
                 super::sealed_hold::CarriedHolds::none(),
             )),
-            |_| false,
+            |_| None,
             &subscription,
         )
         .await
