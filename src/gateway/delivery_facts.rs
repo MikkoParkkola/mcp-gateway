@@ -473,7 +473,31 @@ pub(crate) fn stamp_folded(frame: &mut crate::protocol::JsonRpcResponse) {
 }
 
 mod composite;
-pub(crate) use composite::{CompositeEnd, composite_ended};
+pub(crate) use composite::CompositeEnd;
+
+/// The composite ends as `end`. It records `refused` when it fails while its
+/// latest step's refusal still stands: the step it ends on was refused. That
+/// step's record trace and code are kept then, and dropped otherwise ([`step`]).
+pub(crate) fn composite_ended(end: CompositeEnd) {
+    with(|facts| {
+        if end == CompositeEnd::Failed && facts.last_step == LastStep::Refused {
+            facts.effect = facts.effect.max(ResponseEffect::Refused);
+            // The refusing gate's own code, which the plan's wrapper error
+            // would otherwise replace in the settlement record.
+            if let Some(code) = facts.last_step_withheld.take() {
+                facts.withheld_code = Some(code);
+            }
+        } else {
+            forget_last_step(facts);
+        }
+        // A composite that fails ends on its latest step's fold; one that
+        // succeeds carries only the failures it reported.
+        let ended_on = facts.last_step_folded.take();
+        if end == CompositeEnd::Failed {
+            facts.folded = worst(facts.folded, ended_on);
+        }
+    });
+}
 
 /// Run `f` with the facts suspended: a scan of a value that is not delivered
 /// (a receipt copy, a classification probe) writes into a cell that is thrown
