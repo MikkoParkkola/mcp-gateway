@@ -123,7 +123,10 @@ fn run_audit_verify(
             let msg = result
                 .error_message
                 .unwrap_or_else(|| "unknown error".to_string());
-            eprintln!("✗ Chain verification FAILED at counter {at}: {msg}");
+            eprintln!(
+                "✗ Chain verification FAILED at counter {at}: {}",
+                shown(&msg)
+            );
             // A failing log can still name what it replaced: never drop that.
             print_warnings(&result.warnings);
             if !signed && result.signed_entry_seen {
@@ -137,11 +140,27 @@ fn run_audit_verify(
 }
 
 /// Every verify warning, on stderr: the one place they are rendered, on the
-/// passing and the failing path alike.
+/// passing and the failing path alike, each through [`shown`].
 fn print_warnings(warnings: &[String]) {
     for warning in warnings {
-        eprintln!("warning: {warning}");
+        eprintln!("warning: {}", shown(warning));
     }
+}
+
+/// `text` for the terminal: verify output carries text read from the log,
+/// so each control character (C0, C1 and DEL; a CR or LF inside a value too)
+/// is written visibly as its `\u{..}` escape and cannot move the cursor,
+/// recolour or rewrite a line. Printable text is unchanged.
+fn shown(text: &str) -> String {
+    text.chars()
+        .map(|c| {
+            if c.is_control() {
+                c.escape_unicode().to_string()
+            } else {
+                c.to_string()
+            }
+        })
+        .collect()
 }
 
 /// Dispatch an `audit` subcommand (transparency log chain verification / session query).
