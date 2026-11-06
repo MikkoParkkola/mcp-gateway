@@ -100,8 +100,8 @@ fn actor_id_is_collision_safe() {
     b.subject = "c".to_string();
     // Precondition: the naive format genuinely collides for this pair.
     assert_eq!(
-        format!("oidc:{}:{}", a.issuer, a.subject),
-        format!("oidc:{}:{}", b.issuer, b.subject),
+        format!("oidc:{}:{}", a.issuer(), a.subject()),
+        format!("oidc:{}:{}", b.issuer(), b.subject()),
         "test is only meaningful if the naive format collides here"
     );
     let id_a =
