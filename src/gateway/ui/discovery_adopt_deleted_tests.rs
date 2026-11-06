@@ -45,6 +45,28 @@ impl SecretStore for Deleting {
     }
 }
 
+/// An audit log in a directory of its own that the log keeps.
+fn audit_log() -> Arc<crate::security::TransparencyLogger> {
+    let dir = Arc::new(tempfile::tempdir().expect("log dir"));
+    let log = Arc::new(
+        crate::security::TransparencyLogger::open(Arc::new(
+            crate::security::transparency_log::TransparencyLogConfig {
+                enabled: true,
+                path: dir
+                    .path()
+                    .join("audit.jsonl")
+                    .to_string_lossy()
+                    .into_owned(),
+                key_id: "adopt-deleted".to_string(),
+                ..Default::default()
+            },
+        ))
+        .expect("open log"),
+    );
+    log.keep_test_dir(dir);
+    log
+}
+
 #[tokio::test]
 async fn a_config_deleted_while_the_adopt_stores_a_value_answers_no_config_file() {
     use tower::ServiceExt as _;
@@ -53,18 +75,7 @@ async fn a_config_deleted_while_the_adopt_stores_a_value_answers_no_config_file(
         vec![stdio("tool", "npx tool", &[("API_KEY", CANARY)])],
     )
     .await;
-    let path = route.dir.path().join("audit.jsonl");
-    let log = Arc::new(
-        crate::security::TransparencyLogger::open(Arc::new(
-            crate::security::transparency_log::TransparencyLogConfig {
-                enabled: true,
-                path: path.to_string_lossy().into_owned(),
-                key_id: "adopt-deleted".to_string(),
-                ..Default::default()
-            },
-        ))
-        .expect("open log"),
-    );
+    let log = audit_log();
     Arc::get_mut(&mut route.state)
         .expect("state is unique")
         .transparency_log = Some(Arc::clone(&log));

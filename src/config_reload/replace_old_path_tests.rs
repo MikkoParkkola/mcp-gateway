@@ -8,20 +8,27 @@
 use super::*;
 use crate::gateway::test_helpers::ConfigFiles;
 
-/// An audit log at `dir/audit.jsonl`, carried by a context's reporting: the
-/// production posture of a gateway with a transparency log.
-fn audit_log_reporting(dir: &Path) -> super::super::refusals::ReloadReporting {
+/// An audit log in a directory of its own that the log keeps, carried by a
+/// context's reporting: the production posture of a gateway with a
+/// transparency log.
+fn audit_log_reporting() -> super::super::refusals::ReloadReporting {
+    let dir = Arc::new(tempfile::tempdir().expect("log dir"));
     let log = Arc::new(
         crate::security::TransparencyLogger::open(Arc::new(
             crate::security::transparency_log::TransparencyLogConfig {
                 enabled: true,
-                path: dir.join("audit.jsonl").to_string_lossy().into_owned(),
+                path: dir
+                    .path()
+                    .join("audit.jsonl")
+                    .to_string_lossy()
+                    .into_owned(),
                 key_id: "posture".to_string(),
                 ..Default::default()
             },
         ))
         .expect("log opens"),
     );
+    log.keep_test_dir(dir);
     super::super::refusals::ReloadReporting::default().with_audit_log(Some(log))
 }
 
@@ -85,8 +92,8 @@ async fn the_mutate_path_with_auth_on_and_no_log_recovers_nothing() {
 /// the crashed bytes and the journal stay and nothing is loaded.
 #[tokio::test]
 async fn the_whole_file_write_on_an_audited_gateway_recovers_nothing() {
-    let (dir, path, _) = setup();
-    let ctx = Arc::new(unshared(&path).with_reporting(audit_log_reporting(dir.path())));
+    let (_dir, path, _) = setup();
+    let ctx = Arc::new(unshared(&path).with_reporting(audit_log_reporting()));
     crashed_after_rename(&path, NEXT);
     let config = crate::config::Config::load(Some(&path)).expect("config loads");
 
@@ -114,8 +121,8 @@ async fn the_whole_file_write_on_an_audited_gateway_recovers_nothing() {
 /// recovery sink installed, so the mutate is refused and recovers nothing.
 #[tokio::test]
 async fn the_mutate_path_reads_the_live_audit_posture() {
-    let (dir, path, _) = setup();
-    let ctx = Arc::new(unshared(&path).with_reporting(audit_log_reporting(dir.path())));
+    let (_dir, path, _) = setup();
+    let ctx = Arc::new(unshared(&path).with_reporting(audit_log_reporting()));
     crashed_after_rename(&path, NEXT);
 
     let files = ConfigFiles::snapshot(&path);

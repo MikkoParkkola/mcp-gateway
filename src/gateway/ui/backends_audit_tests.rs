@@ -28,7 +28,7 @@ const CRASHED: &str = "# keep me\nbackends:\n  a:\n    http_url: \"http://127.0.
 
 /// A gateway over `START` in a temp dir, with an audit log beside it.
 struct Audited {
-    dir: tempfile::TempDir,
+    dir: Arc<tempfile::TempDir>,
     _store: crate::gateway::router::tests::FixtureDir,
     state: Arc<AppState>,
     ctx: Arc<ReloadContext>,
@@ -48,7 +48,7 @@ impl Audited {
     }
 
     async fn build(reload: Reload) -> Self {
-        let dir = tempfile::tempdir().expect("dir");
+        let dir = Arc::new(tempfile::tempdir().expect("dir"));
         let path = dir.path().join("gateway.yaml");
         write_owner_only(&path, START).expect("write config");
         let (mut state, store) = crate::gateway::router::tests::audience_state(
@@ -72,6 +72,7 @@ impl Audited {
             ))
             .expect("open log"),
         );
+        log.keep_test_dir(Arc::clone(&dir));
         {
             let state = Arc::get_mut(&mut state).expect("state is unique");
             state.config_path = Some(path.clone());
