@@ -11,12 +11,16 @@ use axum::body::to_bytes;
 use serde_json::{Value, json};
 use tower::ServiceExt;
 
-use super::direct_guards_fixture::{Answer, Fx, fixture_logged};
+#[cfg(feature = "firewall")]
+use super::direct_guards_fixture::fixture_logged;
+use super::direct_guards_fixture::{Answer, Fx};
 use crate::gateway::meta_mcp::grant_audit_fixture::{entries, logger};
 use crate::security::audit::AuditFailurePolicy;
 
-/// The capability provider and its personal capability.
+/// The capability provider and its personal capability (the probe rows).
+#[cfg(feature = "firewall")]
 const CAPS: &str = "caps";
+#[cfg(feature = "firewall")]
 const PROBE: &str = "owned_probe";
 /// The certificate subject that owns the capability and holds its grant.
 const OWNER: &str = "agent-a";
@@ -25,6 +29,7 @@ const KEY: &str = "k-std";
 
 /// A personal REST capability [`PROBE`], owned by mTLS subject [`OWNER`],
 /// served by `port`'s `/probe`.
+#[cfg(feature = "firewall")]
 fn personal_probe(port: u16) -> String {
     let base_url = crate::test_fixture_host::fixture_url(port);
     format!(
