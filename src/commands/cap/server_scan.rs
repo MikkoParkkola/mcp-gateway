@@ -235,7 +235,10 @@ fn print_server_entry(server: &mcp_gateway::discovery::DiscoveredServer) {
 /// The terminal line for a failed step: an error can carry a path or text
 /// from a client's config file.
 fn failure_line(what: &str, error: &impl std::fmt::Display) -> String {
-    format!("❌ {what}: {error}")
+    format!(
+        "❌ {what}: {}",
+        mcp_gateway::cli_support::shown(&error.to_string())
+    )
 }
 
 #[cfg(test)]
