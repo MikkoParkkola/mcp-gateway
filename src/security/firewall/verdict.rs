@@ -96,20 +96,13 @@ impl FirewallVerdict {
 
 // ─── Rule helpers ─────────────────────────────────────────────────────────────
 
-pub(super) fn compile_rule(rule: &FirewallRule) -> CompiledRule {
-    // The guarantee is the load: `FirewallConfig::validate` refuses an invalid
-    // glob while the firewall is on. Should one get here anyway (an embedder
-    // that skips the load), the rule is a refused shape, below.
-    let pattern = glob::Pattern::new(&rule.tool_match).ok();
-    let globs = |list: &[String]| list.iter().map(|g| glob::Pattern::new(g).ok()).collect();
-    // The scopes are refused at load too: an empty `servers`, `keys` or
-    // `except` list, a glob that does not parse (`match` or a scope's), or an
-    // exception setting no field. A shape that got here anyway fails closed: the rule
-    // blocks its finding types on every call. Covering no call would not do:
-    // a later `allow` rule would then decide, and neither would keeping a
-    // `warn` or `allow` rule's action.
+/// Whether `rule` has a shape the load refuses: an empty `servers`, `keys`
+/// or `except` list, a glob that does not parse (`match` or a scope's), or
+/// an exception setting no field. Such a rule compiles fail-closed (below),
+/// and the Policies screen reads it as compiled.
+pub(crate) fn refused_shape(rule: &FirewallRule) -> bool {
     let unparsed = |glob: Option<&String>| glob.is_some_and(|g| glob::Pattern::new(g).is_err());
-    let refused_shape = pattern.is_none()
+    glob::Pattern::new(&rule.tool_match).is_err()
         || rule
             .servers
             .as_ref()
@@ -120,8 +113,19 @@ pub(super) fn compile_rule(rule: &FirewallRule) -> CompiledRule {
             (entry.server.is_none() && entry.tool.is_none() && entry.key.is_none())
                 || unparsed(entry.server.as_ref())
                 || unparsed(entry.tool.as_ref())
-        });
-    if refused_shape {
+        })
+}
+
+pub(super) fn compile_rule(rule: &FirewallRule) -> CompiledRule {
+    // The guarantee is the load: `FirewallConfig::validate` refuses an invalid
+    // glob or scope while the firewall is on. A shape that got here anyway (an
+    // embedder that skips the load, or a file published with the firewall
+    // off) fails closed: the rule blocks its finding types on every call.
+    // Covering no call would not do: a later `allow` rule would then decide,
+    // and neither would keeping a `warn` or `allow` rule's action.
+    let pattern = glob::Pattern::new(&rule.tool_match).ok();
+    let globs = |list: &[String]| list.iter().map(|g| glob::Pattern::new(g).ok()).collect();
+    if refused_shape(rule) {
         return CompiledRule {
             pattern: glob::Pattern::new("*").ok(),
             action: FirewallAction::Block,
