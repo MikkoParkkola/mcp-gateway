@@ -19,6 +19,11 @@
 //! Regenerating either is a reviewed diff, never a silent refresh: run this
 //! test, copy the printed table, and put the diff in front of a reviewer.
 
+use std::path::Path;
+
+use super::fragments::{
+    Table, live_base, multiset_delta, pin_table, scratch_table, without_first_row,
+};
 use super::packaged::crate_root;
 use super::scan::{Place, Sink, walk};
 
@@ -218,66 +223,116 @@ fn found() -> Found {
     found
 }
 
-fn table(rows: &std::collections::BTreeMap<String, usize>) -> Vec<String> {
+fn table_of(rows: &std::collections::BTreeMap<String, usize>) -> Vec<String> {
     rows.iter().map(|(key, n)| format!("{key}\t{n}")).collect()
-}
-
-fn pinned(text: &str, columns: usize) -> Vec<String> {
-    let mut rows: Vec<String> = text
-        .lines()
-        .filter(|l| !l.starts_with('#') && !l.trim().is_empty())
-        .map(|l| l.split('\t').take(columns).collect::<Vec<_>>().join("\t"))
-        .collect();
-    rows.sort();
-    rows
 }
 
 const REGENERATE: &str = "regenerate: cargo test --lib delivery_framing -- --nocapture, copy the \
                           printed table into the .tsv, and have the diff reviewed";
 
-#[test]
-fn every_generic_framing_site_is_inventoried() {
-    let have = table(&found().builders);
-    let want = pinned(include_str!("delivery_framing_inventory.tsv"), 4);
-    if have != want {
-        println!(
-            "BEGIN delivery_framing_inventory.tsv\n{}\nEND",
-            have.join("\n")
-        );
-    }
-    assert_eq!(have, want, "framing sites changed; {REGENERATE}");
+/// The rows of `table` cut to their first `columns` columns (the key and its
+/// count), each with the file holding it.
+fn keyed_rows(table: &Table, columns: usize) -> Vec<(&Path, String)> {
+    // RED STUB: reads only the base `<name>.tsv`, as before fragments.
+    table
+        .rows()
+        .iter()
+        .filter(|(file, _)| {
+            file.extension().is_some_and(|e| e == "tsv") && !file.to_string_lossy().contains(".d/")
+        })
+        .map(|(file, line)| {
+            let key = line
+                .split('\t')
+                .take(columns)
+                .collect::<Vec<_>>()
+                .join("\t");
+            (file.as_path(), key)
+        })
+        .collect()
 }
 
-#[test]
-fn every_refusal_site_is_classified() {
-    let have = table(&found().refusals);
-    let text = include_str!("delivery_refusals.tsv");
-    let want = pinned(text, 4);
-    if have != want {
-        println!("BEGIN delivery_refusals.tsv\n{}\nEND", have.join("\n"));
-    }
-    assert_eq!(
-        have, want,
-        "refusal sites changed; classify each new one; {REGENERATE}"
-    );
-    for row in text
-        .lines()
-        .filter(|l| !l.starts_with('#') && !l.trim().is_empty())
-    {
+/// `computed` against the pinned rows of `table` (`name`), as multisets of
+/// their first four columns: a site that appears, vanishes or changes count,
+/// and a key listed twice in any files, fail, naming the files.
+fn compare(name: &str, computed: &[String], table: &Table) -> Result<(), String> {
+    let rows = keyed_rows(table, 4);
+    let pinned: Vec<(&Path, &str)> = rows.iter().map(|(f, r)| (*f, r.as_str())).collect();
+    multiset_delta(name, computed, &pinned).map_or(Ok(()), Err)
+}
+
+/// The framing inventory against `table`.
+fn framing_check(table: &Table) -> Result<(), String> {
+    compare(
+        "delivery_framing_inventory",
+        &table_of(&found().builders),
+        table,
+    )
+}
+
+/// The refusal sites against `table`, then every row's class: one of
+/// [`CLASSES`], or a `pending:` slug still in [`PENDING`].
+fn refusals_check(table: &Table) -> Result<(), String> {
+    compare("delivery_refusals", &table_of(&found().refusals), table)?;
+    for (_, row) in table.rows() {
         let class = row.split('\t').nth(4).unwrap_or("");
         let pending = class
             .strip_prefix("pending:")
             .is_some_and(|slug| PENDING.contains(&slug));
-        assert!(
-            CLASSES.contains(&class) || pending,
-            "unclassified refusal site: {row}"
-        );
+        if !(CLASSES.contains(&class) || pending) {
+            return Err(format!("unclassified refusal site: {row}"));
+        }
     }
     // A slug whose last row was flipped must go too, or it re-admits rows.
+    let text = table.text();
     for slug in PENDING {
-        assert!(
-            text.contains(&format!("\tpending:{slug}\t")),
-            "pending:{slug} has no rows left; delete it from PENDING"
-        );
+        if !text.contains(&format!("\tpending:{slug}\t")) {
+            return Err(format!(
+                "pending:{slug} has no rows left; delete it from PENDING"
+            ));
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn every_generic_framing_site_is_inventoried() {
+    framing_check(&pin_table("delivery_framing_inventory"))
+        .unwrap_or_else(|m| panic!("framing sites changed; {REGENERATE}\n{m}"));
+}
+
+#[test]
+fn every_refusal_site_is_classified() {
+    refusals_check(&pin_table("delivery_refusals")).unwrap_or_else(|m| {
+        panic!("refusal sites changed; classify each new one; {REGENERATE}\n{m}")
+    });
+}
+
+/// A real row held only by a fragment (`<name>.d/<n>.tsv`) still counts, so
+/// a change adds its rows in a file of its own and two changes never edit
+/// one file.
+#[test]
+fn a_pinned_row_held_only_in_a_fragment_counts() {
+    let (base, moved) = without_first_row(&live_base("delivery_framing_inventory"));
+    let (_root, table) = scratch_table("delivery_framing_inventory", &base, &[("0.tsv", &moved)]);
+    framing_check(&table).unwrap_or_else(|m| panic!("{m}"));
+    let (base, moved) = without_first_row(&live_base("delivery_refusals"));
+    let (_root, table) = scratch_table("delivery_refusals", &base, &[("0.tsv", &moved)]);
+    refusals_check(&table).unwrap_or_else(|m| panic!("{m}"));
+}
+
+/// A key listed in the base and again in a fragment fails, naming the
+/// fragment: two copies of one site are never merged into one.
+#[test]
+fn a_key_in_the_base_and_a_fragment_fails() {
+    for name in ["delivery_framing_inventory", "delivery_refusals"] {
+        let (_, first) = without_first_row(&live_base(name));
+        let (_root, table) = scratch_table(name, &live_base(name), &[("0.tsv", &first)]);
+        let check = if name == "delivery_refusals" {
+            refusals_check
+        } else {
+            framing_check
+        };
+        let err = check(&table).expect_err("a key listed twice fails");
+        assert!(err.contains("0.tsv"), "{name}: {err}");
     }
 }
