@@ -201,3 +201,41 @@ async fn a_scoped_or_own_caller_sees_only_its_own_refusals() {
     mine.sort();
     assert_eq!(mine, vec!["on_a", "on_b"], "own rows only, not subject t's");
 }
+
+#[tokio::test]
+async fn a_refusal_appears_in_both_exports_and_its_receipt_shows_the_decision() {
+    let dir = tempfile::tempdir().unwrap();
+    let logs = mixed(&dir);
+    let listed = rows(&logs, &Access::All, ListQuery::default()).await;
+    let refused = listed.iter().find(|r| r["tool"] == "refused").unwrap();
+    let id = super::receipt::parse_id(refused["id"].as_str().unwrap()).unwrap();
+    let receipt = super::receipt::receipt(&logs.invocation, &id, &Access::All, None)
+        .unwrap()
+        .expect("the refusal has a receipt");
+    assert_eq!(receipt["decision"]["reason"], "missing_grant", "{receipt}");
+    assert_eq!(receipt["decision"]["scope"], "execute", "{receipt}");
+    assert_eq!(receipt["outcome"], "blocked", "{receipt}");
+    // Both export formats are built from the one collection, then the CSV is
+    // written from it: the row is in the collection and in the CSV text.
+    let collected = super::export::collect(
+        &logs.invocation,
+        None,
+        &super::rows::Filter::default(),
+        &Access::All,
+        None,
+        super::export::CAPS,
+        super::export::csv_size,
+    )
+    .unwrap();
+    assert!(
+        collected.rows.iter().any(|r| r["tool"] == "refused" && r["outcome"] == "blocked"),
+        "{:?}",
+        collected.rows
+    );
+    assert!(
+        !collected.rows.iter().any(|r| r["tool"] == "has_record"),
+        "a recorded denial is not exported"
+    );
+    let csv = super::export::csv(&collected);
+    assert!(csv.contains("refused"), "{csv}");
+}
