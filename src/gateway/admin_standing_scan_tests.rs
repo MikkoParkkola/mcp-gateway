@@ -172,14 +172,22 @@ impl Aliases {
             }
             for full in self.named.get(first).into_iter().flatten() {
                 let reading: Vec<String> = full.iter().chain(rest).cloned().collect();
-                if !out.iter().any(|(r, _)| *r == reading) {
-                    let mut used = used.clone();
-                    used.insert(first.clone());
+                let mut used = used.clone();
+                used.insert(first.clone());
+                // The same reading reached by another chain is kept: that chain
+                // may still expand a name this one has used.
+                if !out.iter().any(|(r, u)| *r == reading && *u == used) {
                     out.push((reading, used));
                 }
             }
         }
-        out.into_iter().map(|(reading, _)| reading).collect()
+        let mut readings: Vec<Vec<String>> = Vec::new();
+        for (reading, _) in out {
+            if !readings.contains(&reading) {
+                readings.push(reading);
+            }
+        }
+        readings
     }
 }
 
