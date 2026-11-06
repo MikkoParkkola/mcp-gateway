@@ -21,6 +21,25 @@ pub(super) fn structured_error(
     json_body(status, structured_error_body(code, message))
 }
 
+/// Why a config write found no gateway.yaml to write into, and the way
+/// forward: every web UI route that edits the file answers it.
+const NO_CONFIG_FILE: &str = "no gateway.yaml exists yet; create one with `mcp-gateway init --profile local` (see QUICKSTART), then retry";
+
+/// 409 `no_config_file`: nothing is written; the operator creates the file.
+pub(super) fn no_config_file() -> (StatusCode, Json<Value>) {
+    structured_error(StatusCode::CONFLICT, "no_config_file", NO_CONFIG_FILE)
+}
+
+/// gateway.yaml could not be read, or the read guard refused it or its
+/// recovery files. Fixed text for every route that writes it: the reason
+/// names the file, so it goes to the log only.
+pub(super) fn config_refusal() -> (StatusCode, Json<Value>) {
+    flat_error(
+        StatusCode::SERVICE_UNAVAILABLE,
+        "gateway.yaml could not be loaded",
+    )
+}
+
 pub(super) fn admin_auth_required() -> (StatusCode, Json<Value>) {
     flat_error(StatusCode::FORBIDDEN, "Admin authentication required")
 }

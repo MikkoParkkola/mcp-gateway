@@ -62,6 +62,12 @@ src/gateway/server/events_wiring.rs	install	-	startup events-hub and webhook wir
 src/gateway/server/events_wiring.rs	fence_binding	-	off-path: the events hub's fence read for a delivery and a listener run, never a tools/call
 src/gateway/server/events_wiring.rs	listener_mint_for_test	-	test-only: compiled out of every build but tests
 src/gateway/server/events_wiring.rs	mint	-	off-path: the events hub's per-user listener mint, never a tools/call
+src/gateway/server/first_list_wait.rs	answer_queued	stdio_invoke_tiny	every single stdio answer runs it inside send_unless_cancelled; it commits the first-list flag only for a list that waited
+src/gateway/server/first_list_wait.rs	answered_for_test	-	test-only helper (cfg(test))
+src/gateway/server/first_list_wait.rs	end	-	not per call: once per session, when the read loop stops
+src/gateway/server/first_list_wait.rs	mark_waited_for_test	-	test-only helper (cfg(test))
+src/gateway/server/first_list_wait.rs	prepare	-	not on the tools/call path: stdio tools/list only (the grant recheck and own-view warm it already ran, and the first-list wait)
+src/gateway/server/first_list_wait.rs	scope	stdio_invoke_tiny	wraps every spawned stdio dispatch in the session's first-list ticket
 src/gateway/server/identity_grants.rs	audit_startup	-	startup identity-grant audit, before serving
 src/gateway/server/identity_grants.rs	from	-	startup identity-grant audit error conversion, before serving
 src/gateway/server/identity_grants.rs	identity_grant_sink_for	-	startup and reload grant-sink construction, not per call

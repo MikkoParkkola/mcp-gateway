@@ -29,6 +29,7 @@ mod counter_wiring;
 mod events_wiring;
 #[cfg(test)]
 pub(crate) use events_wiring::listener_mint_for_test;
+mod first_list_wait;
 #[cfg(test)]
 mod gh475_budget_decides_tests;
 mod identity_grants;
