@@ -244,7 +244,7 @@ def run(os_kind: str, shard: str, program: tuple[str, ...] = ("cargo",)) -> int:
 
 
 RUNNER_NAME = ".shard-runner.sh"
-BINARIES_FILE = ".shard-binaries"
+BY_BINARY = "by-binary"
 
 
 def write_runner(tmp: str) -> str:
@@ -463,9 +463,9 @@ def self_test() -> int:
 
 
 def per_binary_rows() -> None:
-    """Each test binary gets its own TMPDIR, so a leftover names the binary that left it."""
-    # The runner itself: a binary named by cargo with its hash suffix runs with TMPDIR set to a folder
-    # named after the target, recorded in BINARIES_FILE.
+    """Each test binary gets its own TMPDIR under BY_BINARY, so a leftover names the binary that left it."""
+    # The runner itself: a binary named by cargo with its hash suffix runs with TMPDIR set to
+    # BY_BINARY/<target>, which the runner creates.
     with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as bins:
         runner = write_runner(tmp)
         stub = os.path.join(bins, "a0_per_caller_cache-0123456789abcdef")
@@ -474,44 +474,60 @@ def per_binary_rows() -> None:
         os.chmod(stub, 0o755)
         out = subprocess.run([runner, stub], env={**os.environ, "TMPDIR": tmp},
                              capture_output=True, text=True, check=True).stdout
-        want = os.path.join(tmp, "a0_per_caller_cache")
+        want = os.path.join(tmp, BY_BINARY, "a0_per_caller_cache")
         assert out == want, f"the binary's TMPDIR is {out!r}, not {want!r}"
         assert os.path.isdir(want), "the runner creates the binary's folder"
-        with open(os.path.join(tmp, BINARIES_FILE)) as f:
-            assert f.read().split() == ["a0_per_caller_cache"], "the runner records the binary"
+        # Its exit status is the binary's.
+        with open(stub, "w") as f:
+            f.write("#!/bin/sh\nexit 7\n")
+        assert subprocess.run([runner, stub], env={**os.environ, "TMPDIR": tmp}).returncode == 7, \
+            "the runner keeps the binary's exit status"
     # cargo is told to use it.
     cfg = runner_config("/x/r.sh")
     assert cfg == ["--config", "target.'cfg(all())'.runner=['/x/r.sh']"], cfg
-    # End to end through run_steps: a fake cargo that starts a stub test binary through the runner its
-    # --config names, as real cargo does. The binary leaves a task record in its own TMPDIR.
+    # End to end through run_steps: a fake cargo that starts stub test binaries through the runner its
+    # --config names, as real cargo does. PLANT selects what each binary leaves in its own TMPDIR.
     with tempfile.TemporaryDirectory() as bins:
-        stub = os.path.join(bins, "gh452_session_owner-fedcba9876543210")
-        with open(stub, "w") as f:
-            f.write('#!/bin/sh\n[ -z "$PLANT_LEAK" ] || { mkdir -p "$TMPDIR/.tmpXyZ789/tasks"; '
-                    ': > "$TMPDIR/.tmpXyZ789/tasks/task-x.json"; }\n'
-                    '[ -z "$PLANT_HOME" ] || { mkdir -p "$TMPDIR/.tmpHoMe12/tasks/stdio"; '
-                    ': > "$TMPDIR/.tmpHoMe12/tasks/stdio/store.lease"; }\n')
-        os.chmod(stub, 0o755)
+        stubs = []
+        for name in ("gh452_session_owner-fedcba9876543210", "a0_per_caller_cache-0123456789abcdef"):
+            stub = os.path.join(bins, name)
+            with open(stub, "w") as f:
+                f.write('#!/bin/sh\ncase " $PLANT " in *" leak "*) mkdir -p "$TMPDIR/.tmpXyZ789/tasks"; '
+                        ': > "$TMPDIR/.tmpXyZ789/tasks/task-x.json" ;; esac\n'
+                        'case " $PLANT " in *" home "*) mkdir -p "$TMPDIR/.tmpHoMe12/tasks/stdio"; '
+                        ': > "$TMPDIR/.tmpHoMe12/tasks/stdio/store.lease" ;; esac\n')
+            os.chmod(stub, 0o755)
+            stubs.append(stub)
         fake_cargo = (sys.executable, "-c", (
             "import os, re, subprocess, sys\n"
             "args = sys.argv[1:]\n"
             "cfg = [args[i + 1] for i, a in enumerate(args) if a == '--config']\n"
             "run = [re.search(r\"runner=\\['(.*)'\\]\", c).group(1) for c in cfg if 'runner=' in c]\n"
-            f"cmd = [*run, {stub!r}]\n"
-            "subprocess.run(cmd, check=True)\n"
+            f"for stub in {stubs!r}:\n"
+            "    subprocess.run([*run, stub], check=True)\n"
             "print('     Running unittests src/lib.rs (x)')\n"
             "print('running 99999 tests')\n"
             "print('test result: ok. 99999 passed; 0 failed; 0 ignored')\n"))
-        for flag, want in (("PLANT_LEAK", ["left in TMPDIR: gh452_session_owner/.tmpXyZ789 (tasks/task-x.json 0B)"]),
-                           ("PLANT_HOME", [])):
-            os.environ[flag] = "1"
+        def run(plant: str) -> list[str]:
+            os.environ["PLANT"] = plant
             try:
-                got = run_steps("linux", "lib-a", fake_cargo)
+                return run_steps("linux", "lib-a", fake_cargo)
             finally:
-                del os.environ[flag]
-            assert got == want, f"{flag}: {got}"
-        assert run_steps("linux", "lib-a", fake_cargo) == [], "a clean binary leaves its folder only"
-
+                del os.environ["PLANT"]
+        # A task record each binary leaves is named under its own binary, the same entry name in both.
+        got = run("leak")
+        assert got == ["left in TMPDIR: a0_per_caller_cache/.tmpXyZ789 (tasks/task-x.json 0B)",
+                       "left in TMPDIR: gh452_session_owner/.tmpXyZ789 (tasks/task-x.json 0B)"], got
+        # A known leftover inside a binary's folder stays tolerated, and its count is shared across
+        # binaries (two here, within the allowance of three).
+        assert run("home") == [], run("home")
+        assert run("") == [], "clean binaries leave only their empty folders"
+    # The allowance is shared across binaries: four known leftovers in four binaries fail on the fourth.
+    home = [".mcp-gateway/protocol-revision-telemetry/window.json", "tasks/stdio/store.lease"]
+    four = {f"bin{i}/.tmpAb12C{i}": home for i in range(4)}
+    assert unexpected(four) == ["bin3/.tmpAb12C3"], unexpected(four)
+    # An unexpected empty folder at the top of TMPDIR still fails, as before.
+    assert unexpected({"stray": []}) == ["stray"]
 
 def main(argv: list[str]) -> int:
     if argv[1:] == ["--self-test"]:
