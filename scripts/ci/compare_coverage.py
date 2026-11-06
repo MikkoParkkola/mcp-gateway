@@ -67,7 +67,7 @@ def lines(path: str) -> dict[tuple[str, int], int]:
 
 
 def compare(table: str, singles_tables: list[str], ran_tsv: list[str], single_tsv: list[str],
-            lcov: str, single_lcovs: list[str]) -> list[str]:
+            lcov: str, single_lcovs: list[str], notes: list[str] | None = None) -> list[str]:
     problems = []
     sharded = open(table, encoding="utf-8").read().splitlines()
     for other in singles_tables:
@@ -155,8 +155,109 @@ def self_test() -> int:
         one_tests = ["--table-single", table, table, table, "--tests-single", log,
                      "--lcov-single", *singles]
         assert main(["x", *args, *one_tests]) == 2, "one tests file"
+    failed = shard7_rows()
+    if failed:
+        print(f"compare_coverage self-test: FAILED {failed}")
+        return 1
     print("compare_coverage self-test: ok")
     return 0
+
+
+def shard7_rows() -> list[str]:
+    """The SHARD.7 rows (lead ruling 2026-11-06): a coverage loss fails only
+    when every single run covered the line; the rest is a note. Each row runs
+    on its own, so one failing does not hide the others."""
+    def write(d: str, name: str, text: str) -> str:
+        path = os.path.join(d, name)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(text)
+        return path
+
+    def lcov(hits: dict[int, int]) -> str:
+        body = "".join(f"DA:{n},{c}\n" for n, c in sorted(hits.items()))
+        return f"SF:/home/runner/work/x/x/src/a.rs\n{body}end_of_record\n"
+
+    def table(rows: list[tuple[str, int, int, list[int]]]) -> str:
+        return "".join(f"ok\t{c * 100 / t:6.2f}%\t{c}/{t}\tsrc/a.rs:{name}#1\tlines 1-9\tmissed={missed}\n"
+                       for name, c, t, missed in rows)
+
+    failed = []
+    with tempfile.TemporaryDirectory() as d:
+        log = write(d, "log", "lib\ta::b\tok\n")
+
+        def run(split_lcov, single_lcovs, split_table, single_tables):
+            notes: list[str] = []
+            problems = compare(write(d, "st", split_table),
+                               [write(d, f"t{i}", t) for i, t in enumerate(single_tables)],
+                               [log], [log, log, log],
+                               write(d, "sl", split_lcov),
+                               [write(d, f"l{i}", c) for i, c in enumerate(single_lcovs)],
+                               notes)
+            return problems, notes
+
+        same = table([("f", 4, 5, [5])])
+
+        def deterministic_loss():
+            singles = [lcov({1: 1, 2: 1}), lcov({1: 2, 2: 1}), lcov({1: 1, 2: 3})]
+            problems, _ = run(lcov({1: 1, 2: 0}), singles, same, [same] * 3)
+            assert any("not sharded" in p for p in problems), problems
+
+        def race_line_gained():
+            singles = [lcov({1: 1, 2: 0})] * 3
+            problems, notes = run(lcov({1: 1, 2: 1}), singles, same, [same] * 3)
+            assert problems == [], problems
+            assert any("gained" in n and "a.rs" in n for n in notes), notes
+
+        def partial_loss_is_a_note():
+            singles = [lcov({1: 1, 2: 1}), lcov({1: 1, 2: 1}), lcov({1: 1, 2: 0})]
+            problems, notes = run(lcov({1: 1, 2: 0}), singles, same, [same] * 3)
+            assert problems == [], problems
+            assert any("covered by 2/3 singles" in n for n in notes), notes
+
+        def below_min_without_deterministic_loss():
+            # Each single covers a different race line; the split covers neither.
+            singles_t = [table([("f", 4, 5, [3])]), table([("f", 4, 5, [2])]), table([("f", 4, 5, [2])])]
+            split_t = table([("f", 3, 5, [2, 3])])
+            problems, notes = run(lcov({1: 1}), [lcov({1: 1})] * 3, split_t, singles_t)
+            assert problems == [], problems
+            assert any("src/a.rs:f#1" in n and "below" in n and "2/3" in n for n in notes), notes
+
+        def below_min_by_deterministic_loss():
+            singles = [lcov({1: 1, 2: 1})] * 3
+            split_t = table([("f", 3, 5, [1, 5])])
+            problems, _ = run(lcov({1: 0, 2: 1}), singles, split_t, [same] * 3)
+            assert any("not sharded" in p for p in problems), problems
+
+        def above_max_is_a_note():
+            split_t = table([("f", 5, 5, [])])
+            problems, notes = run(lcov({1: 1}), [lcov({1: 1})] * 3, split_t, [same] * 3)
+            assert problems == [], problems
+            assert any("src/a.rs:f#1" in n and "above" in n for n in notes), notes
+
+        def count_kept_but_lines_swapped():
+            # Same count: the split loses a 2/3 line and gains a 0/3 one.
+            singles = [lcov({1: 1, 2: 1, 3: 0}), lcov({1: 1, 2: 1, 3: 0}), lcov({1: 1, 2: 0, 3: 0})]
+            problems, notes = run(lcov({1: 1, 2: 0, 3: 1}), singles, same, [same] * 3)
+            assert problems == [], problems
+            assert any("covered by 2/3 singles" in n for n in notes), notes
+            assert any("gained" in n for n in notes), notes
+
+        def structural_mismatch_fails():
+            dup = same + same
+            other_total = table([("f", 4, 6, [5, 6])])
+            missing = table([("g", 4, 5, [5])])
+            for split_t, why in ((dup, "duplicate"), (other_total, "total"), (missing, "function")):
+                problems, _ = run(lcov({1: 1}), [lcov({1: 1})] * 3, split_t, [same] * 3)
+                assert any(why in p for p in problems), (why, problems)
+
+        for row in (deterministic_loss, race_line_gained, partial_loss_is_a_note,
+                    below_min_without_deterministic_loss, below_min_by_deterministic_loss,
+                    above_max_is_a_note, count_kept_but_lines_swapped, structural_mismatch_fails):
+            try:
+                row()
+            except Exception as e:  # noqa: BLE001  (a row's failure, reported by name)
+                failed.append(f"{row.__name__}: {type(e).__name__} {e}")
+    return failed
 
 
 def main(argv: list[str]) -> int:
