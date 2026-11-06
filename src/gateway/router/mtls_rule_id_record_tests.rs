@@ -272,8 +272,10 @@ async fn hidden_backend(fx: &Logged, cn: Option<&str>) {
 #[tokio::test(flavor = "current_thread")]
 async fn a_production_built_mtls_policy_records_its_rule_id() {
     let dir = tempfile::tempdir().expect("a temp dir");
-    let mut config = crate::config::Config::default();
-    config.mtls = enabled(deny_write_rules());
+    let mut config = crate::config::Config {
+        mtls: enabled(deny_write_rules()),
+        ..crate::config::Config::default()
+    };
     config.tasks.store_dir = dir.path().join("tasks").to_string_lossy().into_owned();
     let gateway = crate::gateway::Gateway::new(config)
         .await
