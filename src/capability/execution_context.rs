@@ -289,6 +289,14 @@ pub(crate) fn require_tls_for_credentials(url: &str) -> Result<()> {
     ))
 }
 
+/// Whether [`require_tls_for_credentials`] refusing `url` is a policy refusal:
+/// the URL names a host the credential would reach in cleartext. A value that
+/// does not parse, or names no host, is refused with the same message but is
+/// a configuration error, so its record says nothing was refused.
+pub(crate) fn names_a_host(url: &str) -> bool {
+    url::Url::parse(url).is_ok_and(|u| u.host().is_some())
+}
+
 /// [`require_tls_for_credentials`] when the request carries a credential:
 /// `auth` injects one (as a header, an account header, or the `auth.param`
 /// query parameter), or one of `templates` fills in a gateway secret

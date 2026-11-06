@@ -26,7 +26,24 @@ use tracing::debug;
 use super::oidc::VerifiedIdentity;
 
 /// A temporary gateway token issued after OIDC verification.
-#[derive(Clone, Serialize, Deserialize)]
+///
+/// Output only, like the identity it carries: a token is never read back
+/// from bytes.
+///
+/// ```compile_fail,E0277
+/// fn read(bytes: &str) -> mcp_gateway::key_server::TemporaryToken {
+///     serde_json::from_str(bytes).expect("a token")
+/// }
+/// ```
+///
+/// Writing one out compiles:
+///
+/// ```
+/// fn write(token: &mcp_gateway::key_server::TemporaryToken) -> String {
+///     serde_json::to_string(token).expect("a token")
+/// }
+/// ```
+#[derive(Clone, Serialize)]
 pub struct TemporaryToken {
     /// Unique token identifier (used for revocation).
     pub jti: String,

@@ -342,7 +342,7 @@ async fn dispatch(
     let generation = state.generation();
     // K15: the key that created this task, as the current table holds it: a
     // reload since the round was accepted can refuse the continuation.
-    let rejudged = match state.rejudge(owned.authorizer(), &generation) {
+    let rejudged = match state.rejudge(owned.authorizer(), owned.verified_identity(), &generation) {
         Ok(rejudged) => rejudged,
         Err(refused) => return Some(*refused),
     };

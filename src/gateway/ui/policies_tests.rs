@@ -12,7 +12,8 @@ use axum::http::{Method, StatusCode};
 use serde_json::{Value, json};
 
 use super::guard::Guard;
-use super::policies::{read_model, read_policies};
+use super::policies::read_policies;
+use super::policies_test_support::read_model;
 use crate::config::Config;
 use crate::gateway::auth::AuthenticatedClient;
 use crate::gateway::router::AppState;
@@ -474,4 +475,38 @@ fn e1_a_build_without_the_firewall_has_no_finding_rules_section() {
         model["tool_policy"].is_object(),
         "the tool policy is still read"
     );
+}
+
+/// R8: exactly the four tool limits, in ADR-029's display order ("Tool
+/// limits"), each with its setting and where it is edited. Display order, not
+/// enforcement order: on HTTP the key's backend scope runs before the global
+/// policy and its tool scope after.
+#[test]
+fn r8_the_four_tool_limits() {
+    let model = read_model(&Config::default());
+    assert_eq!(
+        model["tool_limits"],
+        json!([
+            { "limit": "global", "setting": "security.tool_policy", "edited_on": "policies_screen" },
+            {
+                "limit": "key",
+                "setting": "auth.api_keys[].allowed_tools, auth.api_keys[].denied_tools and the key's backend scope",
+                "edited_on": "keys_screen"
+            },
+            { "limit": "certificate", "setting": "mtls policy", "edited_on": "gateway_yaml" },
+            { "limit": "agent", "setting": "OAuth agent scopes", "edited_on": "gateway_yaml" },
+        ])
+    );
+}
+
+/// E2: a build without the firewall answers `null` for the four sections
+/// that need it, and still lists the tool limits.
+#[cfg(not(feature = "firewall"))]
+#[test]
+fn e2_a_build_without_the_firewall_has_no_part_two_firewall_sections() {
+    let model = read_model(&Config::default());
+    for section in ["scan_types", "guards", "credentials", "relay"] {
+        assert_eq!(model.get(section), Some(&Value::Null), "{section}");
+    }
+    assert!(model["tool_limits"].is_array(), "{model}");
 }

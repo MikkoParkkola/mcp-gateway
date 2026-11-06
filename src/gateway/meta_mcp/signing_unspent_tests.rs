@@ -84,7 +84,7 @@ fn assert_unspent(meta: &MetaMcp, refused: (&str, &Value), caller: &MetaMcpCalle
 #[tokio::test]
 async fn an_admin_refusal_leaves_the_nonce_unspent() {
     let caller = ctx(&AllowAll);
-    assert!(!caller.is_admin);
+    assert_ne!(caller.admin, crate::gateway::authz::AdminStanding::Gateway);
     assert_unspent(&meta(), ("gateway_get_stats", &json!({})), &caller);
 }
 
@@ -93,7 +93,7 @@ async fn an_admin_refusal_leaves_the_nonce_unspent() {
 #[tokio::test]
 async fn an_unconfirmable_destructive_call_leaves_the_nonce_unspent() {
     let mut caller = ctx(&AllowAll);
-    caller.is_admin = true;
+    caller.admin = crate::gateway::authz::AdminStanding::Gateway;
     assert_unspent(
         &meta(),
         ("gateway_kill_server", &json!({"server": "x"})),
@@ -166,7 +166,7 @@ fn elicit_caller(
 ) -> MetaMcpCallerContext<'_> {
     use crate::gateway::destructive_confirmation::ConfirmationChannel;
     let mut caller = ctx(&AllowAll);
-    caller.is_admin = true;
+    caller.admin = crate::gateway::authz::AdminStanding::Gateway;
     caller.confirmation = ConfirmationChannel::Elicit { proxy, policy };
     caller
 }
@@ -395,7 +395,7 @@ async fn admission_refusal_frees_nonce(
             crate::gateway::record_principal::RecordPrincipal::none(),
             crate::gateway::meta_mcp::Authentication::Anonymous,
             crate::security::audit::CredentialKind::None,
-            false,
+            crate::gateway::authz::AdminStanding::None,
             crate::protocol::meta::Declared::NONE,
             None,
             None,

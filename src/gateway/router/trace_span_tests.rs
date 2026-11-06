@@ -12,12 +12,12 @@ use axum::http::Request;
 use tower::ServiceExt;
 
 use super::create_router;
-use super::tests::{scoped_auth_config, test_router_app_state_with_auth_and_config};
+use super::tests::{full_admin_auth_config, test_router_app_state_with_auth_and_config};
 use crate::gateway::session_id::log_capture::capture_debug;
 
 async fn traced(requests: Vec<Request<Body>>) -> String {
     let (state, _store) = test_router_app_state_with_auth_and_config(
-        &scoped_auth_config(true),
+        &full_admin_auth_config(),
         crate::config::Config::default(),
     )
     .await;
@@ -108,7 +108,7 @@ fn t2b_an_unmatched_request_is_not_echoed() {
 #[tokio::test]
 async fn t3_costs_select_a_session_by_header_not_query() {
     let (state, _store) = test_router_app_state_with_auth_and_config(
-        &scoped_auth_config(true),
+        &full_admin_auth_config(),
         crate::config::Config::default(),
     )
     .await;

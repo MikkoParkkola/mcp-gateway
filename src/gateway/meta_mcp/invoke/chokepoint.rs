@@ -350,13 +350,17 @@ impl MetaMcp {
         } else {
             // Allowed: the record, when this stage owns it, then the admin rule.
             let _allowed = decision.emit(on_allow);
-            self.admin_capability_rule(server, tool, scope.is_admin)
-                .inspect_err(|_| {
-                    super::audit::note_refused_by(
-                        crate::security::decision_record::DecisionKind::AdminCapability,
-                        None,
-                    );
-                })
+            self.admin_capability_rule(
+                server,
+                tool,
+                scope.admin != crate::gateway::authz::AdminStanding::None,
+            )
+            .inspect_err(|_| {
+                super::audit::note_refused_by(
+                    crate::security::decision_record::DecisionKind::AdminCapability,
+                    None,
+                );
+            })
         };
         if let Err(e) = refusal {
             let (transport, name) = (authorizer.transport(), authorizer.caller_name());
