@@ -746,3 +746,7 @@ mod bounded_clock_compile_red_tests;
 #[cfg(test)]
 #[path = "transparency_log_settle_tests.rs"]
 mod settle_tests;
+
+#[cfg(test)]
+#[path = "transparency_log_settle_bound_tests.rs"]
+mod settle_bound_tests;

@@ -18,7 +18,7 @@ use super::settle::{FailSettle, InvalidPayload, Reason, Role, SettledBy, Unsettl
 use super::*;
 
 /// An outcome payload as the journal would freeze it.
-fn payload() -> Map<String, Value> {
+pub(super) fn payload() -> Map<String, Value> {
     let settled_by = SettledBy {
         token: "attempt-1".into(),
         intent_counter: 7,
@@ -35,7 +35,7 @@ fn payload() -> Map<String, Value> {
 }
 
 /// The log's bytes and its mark's, to prove nothing was appended.
-fn on_disk(path: &Path) -> (Vec<u8>, Vec<u8>) {
+pub(super) fn on_disk(path: &Path) -> (Vec<u8>, Vec<u8>) {
     let read = |p: &Path| std::fs::read(p).unwrap_or_default();
     (read(path), read(&sibling(path, "hwm")))
 }
@@ -46,7 +46,7 @@ async fn settled(l: &Arc<TransparencyLogger>, own: &LogId, token: &str) {
     assert!(got.is_ok(), "{token}: {got:?}");
 }
 
-fn records_of(path: &Path, token: &str) -> Vec<Value> {
+pub(super) fn records_of(path: &Path, token: &str) -> Vec<Value> {
     lines(path)
         .into_iter()
         .filter(|v| v["token"].as_str() == Some(token))
