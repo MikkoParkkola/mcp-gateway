@@ -469,7 +469,9 @@ async fn p3b_direct_routing_profile_preflight_per_user() {
 /// so a fresh allowed call records it (`:268-272`). The effect is `alpha`'s
 /// shared slot's declaration, as the live call notes it for an unpropagated
 /// caller (`direct_idempotency.rs:315-325`). Control: `k-deny`, whose own
-/// tool list denies `read`, is refused.
+/// tool list denies `read`, is refused. Coupling: that refusal is answered
+/// through the shared catalogue's absent answer (`key_check.rs:147-170`), so a
+/// mutant there fails this row's control as well as T2 and P3.
 #[tokio::test]
 async fn a6b_direct_no_rule() {
     let dir = Arc::new(tempfile::tempdir().expect("a log directory"));
