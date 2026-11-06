@@ -224,3 +224,38 @@ async fn a_refused_stored_delivery_recheck_says_recorded() {
     assert_eq!(record["outcome"], json!("denied"), "{record}");
     assert_eq!(record["invocation_recorded"], json!(true), "{record}");
 }
+
+/// A call cancelled while its invocation append is in the kernel: the append
+/// survives the cancellation and lands, and the guard writes the withheld
+/// note behind it, so the note says recorded and the call is one row.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_call_cancelled_during_its_invocation_append_is_one_recorded_decision() {
+    let (endpoint, dir) = (
+        Endpoint::start(false).await,
+        Arc::new(tempfile::tempdir().unwrap()),
+    );
+    let meta = Arc::new(gateway(&endpoint, vec![], Some(&dir), AuditFailurePolicy::BestEffort));
+    let log = meta.transparency_logger.clone().expect("the gateway logs");
+    let gate = log.stall_next_write_for_test(std::time::Duration::from_secs(30));
+    let running = tokio::spawn({
+        let meta = Arc::clone(&meta);
+        async move {
+            let who = api_key("alice");
+            call(&meta, &who, "gateway_invoke", invoke_args()).await
+        }
+    });
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while !log.write_in_flight_for_test() && std::time::Instant::now() < deadline {
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    }
+    assert!(log.write_in_flight_for_test(), "premise: the append is in flight");
+
+    running.abort();
+    let _ = running.await;
+    log.release_and_drain(gate).await;
+
+    let held = wait_for_decisions(&dir, 1).await;
+    assert_eq!(held.len(), 1, "{held:#?}");
+    assert_eq!(held[0]["invocation_recorded"], json!(true), "{held:#?}");
+    assert_eq!(invocations(&dir).len(), 1, "the append survived the cancel");
+}
