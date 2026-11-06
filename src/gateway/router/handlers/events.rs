@@ -119,10 +119,10 @@ impl Presented {
             }
             CredentialKind::OidcBearer => {
                 self.identity.as_ref().map(|id| LiveBinding::OidcBearer {
-                    issuer: id.issuer.clone(),
-                    subject: id.subject.clone(),
-                    email: id.email.clone(),
-                    groups: id.groups.clone(),
+                    issuer: id.issuer().to_owned(),
+                    subject: id.subject().to_owned(),
+                    email: id.email().to_owned(),
+                    groups: id.groups().to_vec(),
                     issued_at: facts.issued_at,
                     provider_sha256: facts.provider_sha256.clone(),
                 })
