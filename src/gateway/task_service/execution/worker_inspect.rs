@@ -60,7 +60,9 @@ pub(in crate::gateway::task_service::execution) struct CellRefusal {
     /// rather than one guessed from the result's shape.
     pub(in crate::gateway::task_service::execution) withheld_code: Option<i32>,
     /// The record trace of the step a composite ended refused on, which its
-    /// settlement joins; `None` for a single-target dispatch.
+    /// settlement joins (`joined_by: step_trace`). `None` for a single-target
+    /// dispatch, and for a composite with no usable step trace, whose record
+    /// then joins by task id (`joined_by: task_id`).
     pub(in crate::gateway::task_service::execution) ended_on: Option<std::sync::Arc<str>>,
 }
 
@@ -132,17 +134,26 @@ pub(in crate::gateway::task_service::execution) async fn inspect_and_record(
             tool: &tool,
             id,
         };
+        // A composite joins its ended-on step, else the task id; a
+        // single-target record keeps the dispatch's trace.
         let trace_id = match &join {
-            Some((_, Some(step))) => &**step,
-            Some((_, None)) => id,
+            Some(step) => step.as_deref().unwrap_or(id),
             None => trace.as_deref().unwrap_or(id),
         };
+        let joined_by = join.as_ref().map(|step| {
+            use crate::gateway::meta_mcp::invoke::audit::SettlementJoin;
+            if step.is_some() {
+                SettlementJoin::StepTrace
+            } else {
+                SettlementJoin::TaskId
+            }
+        });
         let kept = state
             .meta_mcp()
             .record_task_settlement(
                 task,
                 (trace_id, principal),
-                (refused, join.as_ref().map(|(join, _)| *join)),
+                (refused, joined_by),
                 settled.result.as_ref(),
             )
             .await;
@@ -199,20 +210,11 @@ fn composite_refusal_code(
     Some(dispatch.and_then(|cell| cell.withheld_code).unwrap_or(code))
 }
 
-/// What a composite's settlement record joins by, with the step trace for
-/// [`SettlementJoin::StepTrace`]: the step the plan ended refused on, or the
-/// task id when the cell kept no usable trace from that step.
-fn composite_join(
-    dispatch: Option<&CellRefusal>,
-) -> (
-    crate::gateway::meta_mcp::invoke::audit::SettlementJoin,
-    Option<std::sync::Arc<str>>,
-) {
-    use crate::gateway::meta_mcp::invoke::audit::SettlementJoin;
-    match dispatch.and_then(|cell| cell.ended_on.clone()) {
-        Some(step) => (SettlementJoin::StepTrace, Some(step)),
-        None => (SettlementJoin::TaskId, None),
-    }
+/// The step trace a composite's settlement record joins: the step the plan
+/// ended refused on, or `None` when the cell kept no usable trace from it,
+/// and the record then joins by task id.
+fn composite_join(dispatch: Option<&CellRefusal>) -> Option<std::sync::Arc<str>> {
+    dispatch.and_then(|cell| cell.ended_on.clone())
 }
 
 /// The target a dispatch refusal is recorded under: the call's first
@@ -320,8 +322,8 @@ fn inspect_settled_pinned(
 #[cfg(test)]
 mod tests {
     use super::{
-        CellRefusal, composite_refusal_code, dispatch_refusal, dispatch_refusal_code,
-        dispatched_in_cell,
+        CellRefusal, composite_join, composite_refusal_code, dispatch_refusal,
+        dispatch_refusal_code, dispatched_in_cell,
     };
     use crate::gateway::delivery_facts;
     use crate::protocol::{JsonRpcResponse, RequestId};
@@ -485,6 +487,24 @@ mod tests {
             );
         }
         assert_eq!(composite_refusal_code(None, &refused_error()), None);
+    }
+
+    /// A composite joins the step trace its cell kept, and the task id
+    /// (`None`) when the cell kept none or there is no cell.
+    #[test]
+    fn a_composite_joins_only_the_step_trace_its_cell_kept() {
+        let traced = CellRefusal {
+            ended_on: Some("step-trace".into()),
+            ..cell(true, Some(-32003))
+        };
+        let cases = [
+            (Some(&traced), Some("step-trace")),
+            (Some(&cell(true, Some(-32003))), None),
+            (None, None),
+        ];
+        for (dispatch, want) in cases {
+            assert_eq!(composite_join(dispatch).as_deref(), want, "{dispatch:?}");
+        }
     }
 
     /// With no cell to read, nothing is recorded.
