@@ -192,6 +192,19 @@ async fn read(response: Response) -> (StatusCode, Value) {
     )
 }
 
+impl Panel {
+    /// Backend `name` as the loader reads it back from gateway.yaml (values as
+    /// written, references unresolved).
+    fn written(&self, name: &str) -> crate::config::BackendConfig {
+        let (config, _) = Config::load_literal_with_text(&self.path()).expect("gateway.yaml loads");
+        config
+            .backends
+            .get(name)
+            .cloned()
+            .expect("the backend is in gateway.yaml")
+    }
+}
+
 /// No submitted value in an answer, in its decoded strings or its raw form.
 fn no_value(body: &Value, value: &str) {
     assert!(
@@ -324,6 +337,19 @@ async fn t2_references_templates_and_empty_values_are_kept_and_store_nothing() {
             "{kept} was not written as given:\n{text}"
         );
     }
+    let env = panel.written("b").env;
+    for (key, value) in [
+        ("EMPTY", ""),
+        ("TEMPLATE", "${SOME_VAR}"),
+        ("BEARER", "Bearer ${SOME_VAR}"),
+        ("REF", reference.as_str()),
+    ] {
+        assert_eq!(
+            env.get(key).map(String::as_str),
+            Some(value),
+            "{key} as written: {env:?}"
+        );
+    }
 }
 
 /// T3b/T3c: a literal beside a template and a literal default are refused by
@@ -349,7 +375,16 @@ async fn t3b_a_literal_beside_a_template_is_refused_by_field_before_the_store() 
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
     assert_eq!(body["error"], "literal_in_value", "{body}");
     assert_eq!(body["refusals"], expected, "{body}");
-    let (status, body2) = panel.update("a", json!({"env": env})).await;
+    let (status, body2) = panel
+        .update_seamed(
+            "a",
+            json!({"env": env}),
+            Some(BackendStoreForTest {
+                store: Some(Arc::clone(&store) as Arc<dyn SecretStore + Send + Sync>),
+                after_precheck: None,
+            }),
+        )
+        .await;
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body2}");
     assert_eq!(body2["refusals"], expected, "{body2}");
     for b in [&body, &body2] {
@@ -381,10 +416,12 @@ async fn t4_a_duplicate_or_missing_backend_answers_first_and_touches_no_store() 
     };
     let (status, body) = panel.add_seamed(literal_add("a"), Some(seam())).await;
     assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    no_value(&body, TOKEN);
     let (status, body) = panel
         .update_seamed("missing", json!({"env": {"K": TOKEN}}), Some(seam()))
         .await;
     assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+    no_value(&body, TOKEN);
     let (status, body) = panel
         .update_seamed("missing", json!({"env": {"K": "sk-${X}"}}), Some(seam()))
         .await;
@@ -393,6 +430,7 @@ async fn t4_a_duplicate_or_missing_backend_answers_first_and_touches_no_store() 
         StatusCode::NOT_FOUND,
         "a refused value answered before the 404: {body}"
     );
+    no_value(&body, "sk-$");
     assert_eq!(store.calls(), 0, "a refused save touched the store");
     assert_eq!(panel.text(), before);
     assert!(panel.entries().is_empty(), "{:?}", panel.entries());
@@ -405,6 +443,7 @@ async fn t5_an_update_stores_only_the_key_it_sets_and_carries_the_rest() {
     let panel = Panel::new().await;
     let (status, body) = panel.update("a", json!({"env": {"NEW": TOKEN}})).await;
     assert_eq!(status, StatusCode::OK, "{body}");
+    no_value(&body, TOKEN);
     let text = panel.text();
     assert!(!text.contains(TOKEN), "{text}");
     assert!(
@@ -462,6 +501,7 @@ async fn t9_a_registry_header_token_is_stored_as_the_whole_header_value() {
         .add(json!({"name": "github", "env": {"GITHUB_TOKEN": TOKEN}}))
         .await;
     assert_eq!(status, StatusCode::CREATED, "{body}");
+    no_value(&body, TOKEN);
     let text = panel.text();
     assert!(
         !text.contains(TOKEN),
@@ -472,6 +512,18 @@ async fn t9_a_registry_header_token_is_stored_as_the_whole_header_value() {
         "{body}"
     );
     assert_eq!(panel.entries().len(), 1, "{:?}", panel.entries());
+    // The whole header value, as the registry's template spliced it
+    // (`Bearer ${GITHUB_TOKEN}`, server_registry_entries.rs), is the entry.
+    let reference = body["secrets_stored"][0]["reference"]
+        .as_str()
+        .expect("reference");
+    let path = reference.strip_prefix("file:").expect("a file reference");
+    let stored = crate::config::secret_ref::read_file_ref(
+        "backends.github.headers.Authorization",
+        std::path::Path::new(path),
+    )
+    .expect("the reference resolves");
+    assert_eq!(stored, format!("Bearer {TOKEN}"));
 }
 
 /// T10: the round trip: the reference gateway.yaml now holds resolves, through
@@ -571,6 +623,7 @@ async fn t12_a_failure_after_the_first_entry_leaves_no_entry_and_no_change() {
     let (status, answer) = panel.add_into(body, Some(store)).await;
     assert!(status.is_server_error(), "{status}: {answer}");
     no_value(&answer, TOKEN);
+    no_value(&answer, "another-literal");
     assert_eq!(panel.text(), before, "a failed save wrote");
     assert!(
         panel.entries().is_empty(),
