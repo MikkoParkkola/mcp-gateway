@@ -562,8 +562,9 @@ mod revoke;
 mod list;
 
 /// H1 (MIK-9232): an edit's hunks follow its line origins: kept lines never
-/// appear, a replaced line is one old and one new line, an inserted run and
-/// a removed run are each one hunk; a CRLF copy gives the same hunks.
+/// appear, a replaced line is one old and one new line, adjacent changed
+/// lines are one hunk, an inserted run is one hunk; a CRLF copy gives the
+/// same hunks.
 #[test]
 fn hunks_follow_line_origins() {
     use super::{Hunk, NewLine};
@@ -574,20 +575,15 @@ fn hunks_follow_line_origins() {
         (path("e.f"), Change::Set(Scalar::Int(7))),
     ];
     let want = vec![
+        // Lines 1-3 change together: one hunk, as a unified diff has it.
         Hunk {
             old_start: 1,
-            old: vec![0],
+            old: vec![0, 1, 2],
             new_start: 1,
             new: vec![NewLine {
                 text: "a: 5".into(),
                 replaced: Some((0, 3, 0)),
             }],
-        },
-        Hunk {
-            old_start: 2,
-            old: vec![1, 2],
-            new_start: 1,
-            new: vec![],
         },
         Hunk {
             old_start: 4,
