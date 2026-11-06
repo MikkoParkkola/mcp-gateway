@@ -159,3 +159,53 @@ async fn a_lift_whose_stored_slot_was_evicted_reads_it_as_refilled() {
     assert_eq!(last["declared_effect"], "undeclared", "{all:?}");
     assert_eq!(last["declared_effect_source"], "tool_annotation", "{all:?}");
 }
+
+/// After a grant rotation the old stored slot is evicted and never listed
+/// again: the repeat lists only the slot the rotated grant selects. The
+/// lifted replay looks the stored slot up as stored, finds nothing, and
+/// records no effect, never the new slot's (may-write) or the shared
+/// slot's (read-only).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_lift_whose_stored_slot_stays_absent_after_a_rotation_records_none() {
+    let fx = fixture_with(false, true).await;
+    answer_marker(&fx);
+    let params = || invoke_params(Some("e1-rotate-absent"), false);
+    let first = send(&fx, "tools/call", "gateway_invoke", params()).await;
+    assert!(
+        first.to_string().contains(MARKER),
+        "premise: dispatched: {first}"
+    );
+    let stored = DirectAccountGateway::operator_binding();
+    fx.gateway.rotate_operator_grant().await;
+    let now = fx
+        .meta
+        .account_strategies()
+        .managed_vault(Some("work-gmail"))
+        .expect("the managed vault")
+        .view_binding(crate::personal_accounts::identity::Principal::SoleOperator)
+        .await
+        .expect("premise: the rotated grant has a view");
+    assert_ne!(now, stored, "premise: the rotation selects a new slot");
+    let backend = fx.gateway.backends().get(BACKEND).expect("the backend");
+    backend.retire_per_user_slot_for_test(&stored);
+    fx.gateway.rearm_operator_slot_at_for_test(&now);
+    backend.declare_slot_effects_for_test(Some(&now), vec![declared(Some(false))]);
+    backend.declare_slot_effects_for_test(None, vec![declared(Some(true))]);
+    let sent = fx.gateway.tool_calls().len();
+    let again = send(&fx, "tools/call", "gateway_invoke", params()).await;
+    assert!(
+        again.to_string().contains(MARKER),
+        "premise: served: {again}"
+    );
+    assert_eq!(fx.gateway.tool_calls().len(), sent, "premise: not re-sent");
+    assert!(
+        backend
+            .pooled_transport_for_test(&crate::backend::PoolKey::PerUser { binding: stored })
+            .is_none(),
+        "premise: the stored slot stayed absent"
+    );
+    let all = decisions(&fx);
+    let last = all.last().expect("the replay's record");
+    assert_eq!(last["decided"], "replayed", "{all:?}");
+    assert!(last.get("declared_effect").is_none(), "{all:?}");
+}

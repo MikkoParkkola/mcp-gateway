@@ -603,6 +603,8 @@ async fn backend_handler_inner(
         Ok(admitted) => admitted,
         Err(response) => return response,
     };
+    // What the called tool declared, from the slot this dispatch runs under.
+    direct_idempotency::note_caller_slot_effect(scope, &propagation, admitted.call.tool);
     direct_dispatch::dispatch(scope, &envelope, (&preflight, &propagation), admitted).await
 }
 
