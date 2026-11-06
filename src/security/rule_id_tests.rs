@@ -58,9 +58,10 @@ fn rule_id_form() {
     );
 }
 
-/// A path built with a hard-coded `/` differs from a joined one on Windows only.
+/// A joined path, compared by its components, matches on every platform.
 #[test]
 fn a_joined_path_matches_a_slash_built_one() {
     let joined = std::path::Path::new("rules").join("id");
-    assert_eq!(joined.to_string_lossy(), "rules/id");
+    // Compare components, not text: the separator is the platform's.
+    assert!(joined.starts_with("rules") && joined.ends_with("id") && joined.components().count() == 2);
 }
