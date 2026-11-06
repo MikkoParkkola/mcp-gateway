@@ -36,49 +36,51 @@ struct Access {
 /// The splicing macros the crate is known to define: file, macro, the
 /// fingerprint of the body as reviewed ([`body_fingerprint`]), and why it
 /// cannot reach the read history. The real walk must find exactly these, so a
-/// new splice, any change to a listed body and a stale entry all fail.
+/// new splice, any change to a listed body and a stale entry all fail. A new
+/// fingerprint is accepted only after re-checking that reason against the new
+/// body.
 const SPLICES: [(&str, &str, u64, &str); 7] = [
     (
         "src/config_reload/diff.rs",
         "sections",
         0x7d7c_30a8_74df_c9cd,
-        "reads one named config field on the running and wanted configs",
+        "only reads fields, named at its call sites in diff.rs, of two config values; no config field is the read history",
     ),
     (
         "src/duration_bound.rs",
         "delta",
         0xc340_7321_5edc_4345,
-        "calls a chrono TimeDelta constructor named by the macro's own arms",
+        "$try comes only from its own arms (try_weeks ..) and is called on chrono::TimeDelta, never on a caller's value",
     ),
     (
         "src/gateway/meta_mcp/dispatch_names.rs",
         "meta_arms",
         0x6bb1_f53b_93a3_9354,
-        "names MetaArm enum variants from its own table",
+        "splices variant names into the MetaArm enum it defines; it calls nothing",
     ),
     (
         "src/personal_accounts/commit.rs",
         "boundary",
         0x7368_4427_9eab_5355,
-        "names a test fault-injection Boundary variant",
+        "splices a Boundary variant into a test-only fault hook; it calls nothing on a caller's value",
     ),
     (
         "src/security/firewall/collusion_seam_excuse.rs",
         "count",
         0xc0a1_a90d_4d8f_1107,
-        "increments a named test counter field",
+        "splices a field of the test-only thread-local counters; it reads no firewall",
     ),
     (
         "src/yaml/de/mod.rs",
         "typed",
         0x2346_1eff_ee83_d4fe,
-        "calls a method on the YAML deserializer the macro is given",
+        "calls the named method on the deserializer `$de.follow()` returns, never on a firewall",
     ),
     (
         "src/yaml/ser.rs",
         "refuse",
         0x46f1_6387_20d2_0b3a,
-        "defines Serializer methods that refuse, by name",
+        "defines refusing Serializer methods by name; it calls none of them",
     ),
 ];
 
