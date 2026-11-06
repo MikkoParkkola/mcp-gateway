@@ -484,3 +484,47 @@ async fn a_refused_redirect_step_marks_the_plan_only_when_it_ends_it() {
         assert_eq!(terminal, Some("refused".into()), "{location}: terminal");
     }
 }
+
+/// Answers every name with one private address.
+struct PrivateAnswer;
+
+impl crate::security::ssrf::HostResolver for PrivateAnswer {
+    fn lookup(
+        &self,
+        _host: &str,
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = crate::Result<Vec<std::net::IpAddr>>> + Send + '_>,
+    > {
+        Box::pin(async { Ok(vec![std::net::IpAddr::from([10, 0, 0, 1])]) })
+    }
+}
+
+/// A hop to a NAME that passes the hop check but that the pin resolves to a
+/// private address: the pin refuses the connection, which arrives as a
+/// connect error rather than a redirect error. It is still the gateway's
+/// refusal of the redirect's destination, and the call records `refused`.
+#[tokio::test]
+async fn a_redirect_to_a_name_the_pin_refuses_records_refused() {
+    let app = axum::Router::new().route(
+        "/",
+        axum::routing::get(|| async {
+            (
+                axum::http::StatusCode::FOUND,
+                [(axum::http::header::LOCATION, "https://private-host.test/x")],
+            )
+        }),
+    );
+    let port = serve(app).await;
+    let client = super::client::build_over(
+        reqwest::Client::builder().no_proxy().dns_resolver(
+            crate::security::ssrf::PinningResolver::new(PrivateAnswer)
+                .with_policy(crate::security::ssrf::DestinationPolicy::Public),
+        ),
+    );
+    let (ok, effect) = Box::pin(effect_of_send(
+        client.get(format!("http://127.0.0.1:{port}/")),
+    ))
+    .await;
+    assert!(!ok, "premise: the pin refused the hop");
+    assert_eq!(effect, Some("refused".into()));
+}

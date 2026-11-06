@@ -286,6 +286,18 @@ fn t1e_the_backend_registry_surface_is_pinned() {
         "remove",
         "is_stopping (test)",
         "stop_all",
+        // None hands out a backend. The load's configured-credential
+        // record is stored, compared by name (names only back) and scrubbed
+        // against; the two hooks are test-only.
+        "set_load_record",
+        // Reads and clears whether the record was set; hands out nothing.
+        "take_load_record",
+        "marking_changes",
+        "scrub_stored",
+        "scrub_stored_value",
+        "scrub_stored_text",
+        "mark_for_test (test)",
+        "overflow_for_test (test)",
         // `stop_all` planned to a deadline: banned like it.
         "stop_all_by",
         // Hands out the stop deadline cell, for backends built outside the

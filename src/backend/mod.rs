@@ -307,6 +307,9 @@ pub struct Backend {
     /// The values this backend's rules resolved to, shared with every
     /// instance of its name; stamped by its registry.
     needles: std::sync::OnceLock<Arc<crate::security::needles::NeedleSet>>,
+    /// The configured `headers:`/`env:` credentials this instance was seeded
+    /// with: held redacted while it is registered, compared on reload.
+    configured: std::sync::OnceLock<crate::config::configured_secrets::ConfiguredSecrets>,
     /// Where this backend says its shared start succeeded; stamped by its
     /// registry (MIK-8347). Unstamped: nobody listens.
     started: std::sync::OnceLock<tokio::sync::broadcast::Sender<String>>,
