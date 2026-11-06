@@ -505,27 +505,35 @@ async fn update_backend(
     )
     .await;
 
+    match mutation {
+        Ok(written) => {
+            ticket.committed(&updated);
+            updated_answer(&updated, written)
+        }
+        Err(answer) => *answer,
+    }
+}
+
+/// The answer to a committed update: its reload, each stored secret's field
+/// and reference, and the tool selection's change when it had one.
+fn updated_answer(
+    updated: &str,
+    written: write::Written<Option<(Option<Vec<String>>, Option<Vec<String>>)>>,
+) -> axum::response::Response {
     let write::Written {
         value: selection,
         reload,
         secrets,
-    } = match mutation {
-        Ok(updated_with) => {
-            ticket.committed(&updated);
-            updated_with
-        }
-        Err(answer) => return *answer,
-    };
-
+    } = written;
     let mut response = Json(json!({
         "status": "updated",
         "name": updated,
         "reload": reload,
-        "secrets_stored": slotting::stored(&updated, &secrets),
+        "secrets_stored": slotting::stored(updated, &secrets),
     }))
     .into_response();
     if let Some((before, after)) = selection {
-        attach_selection(&mut response, &updated, before.as_deref(), after.as_deref());
+        attach_selection(&mut response, updated, before.as_deref(), after.as_deref());
     }
     response
 }

@@ -93,7 +93,7 @@ impl Panel {
             return Vec::new();
         };
         let mut names: Vec<String> = dir
-            .filter_map(|e| e.ok())
+            .filter_map(Result::ok)
             .map(|e| e.file_name().to_string_lossy().into_owned())
             .filter(|n| !n.starts_with('.'))
             .collect();
