@@ -617,9 +617,18 @@ async fn a3_grant_match() {
         !answer.to_string().contains("served-"),
         "control: served without the grant: {answer}"
     );
-    // Refused outright: an error, or a result marked `isError`.
+    // Refused as the grant check refuses it: an unreachable capability answers
+    // as an undefined one, `Error::ToolNotFound` (`gate.rs:678-690`), whose
+    // text is "Tool not found: '<tool>'" (`error.rs:284`); a non-null error or a
+    // result marked `isError`.
     assert!(
-        answer.get("error").is_some() || answer["result"]["isError"] == true,
+        answer
+            .to_string()
+            .contains(&format!("Tool not found: '{PROBE}'")),
+        "control: not the grant check's refusal: {answer}"
+    );
+    assert!(
+        answer.get("error").is_some_and(|e| !e.is_null()) || answer["result"]["isError"] == true,
         "control: no refusal without the grant: {answer}"
     );
     assert_eq!(
