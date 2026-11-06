@@ -5,7 +5,7 @@
 
 use std::path::{Path, PathBuf};
 
-use super::identity_tests::identified;
+use super::identity_tests::{beta_shape, identified};
 use super::kill::{self, At};
 use super::rotation_tests::{append, cfg, event, lines, verify};
 use super::segments::read_hwm;
@@ -24,9 +24,10 @@ pub(super) fn kill_log(dir: &Path) -> PathBuf {
 }
 
 /// Run [`child`] killed at `at` over the log in `dir`, and assert it got
-/// there: a child that ran no row, or never reached the boundary, leaves no
-/// marker. Its exit status is not the check (an abort reads differently per
-/// platform, and the drop-instead-of-abort mutant exits cleanly).
+/// there by dying: a child that ran no row, or never reached the boundary,
+/// leaves no marker, and one that reached it but did not abort exits
+/// cleanly. Only success is refused, since an abort's status differs per
+/// platform.
 pub(super) fn killed_at(at: At, dir: &Path) {
     let out = std::process::Command::new(std::env::current_exe().unwrap())
         .args([
@@ -39,6 +40,12 @@ pub(super) fn killed_at(at: At, dir: &Path) {
         .env(KILL_DIR, dir)
         .output()
         .unwrap();
+    // An abort never exits cleanly: a zero exit means the child did not
+    // die at the boundary, whatever it reached.
+    assert!(
+        !out.status.success(),
+        "the child exited cleanly instead of aborting at {at:?}"
+    );
     assert!(
         dir.join(MARKER).exists(),
         "the child never reached {at:?}:\n{}\n{}",
@@ -163,4 +170,33 @@ fn a_restart_after_the_active_file_was_deleted_names_the_surviving_mark() {
         "{:?}",
         r.warnings
     );
+}
+
+#[test]
+fn a_kill_before_the_upgrade_records_its_id_is_finished_on_reopen() {
+    // GIVEN: a beta log (no id anywhere), and a child that opens it under
+    // this version and is killed before the identified record
+    let dir = tempfile::tempdir().unwrap();
+    let path = kill_log(dir.path());
+    let first = TransparencyLogger::open(cfg(&path, 12, false)).unwrap();
+    append(&first, 0);
+    drop(first);
+    beta_shape(&path);
+    killed_at(At::BeforeIdentified, dir.path());
+    assert!(
+        identified(&path).is_empty(),
+        "the kill landed before the record"
+    );
+
+    // WHEN: the log is reopened twice
+    let id = TransparencyLogger::open(cfg(&path, 12, false))
+        .expect("the lease went with the child")
+        .log_id();
+    let again = TransparencyLogger::open(cfg(&path, 12, false)).unwrap();
+
+    // THEN: one identified record, and the id it names holds across reopens
+    assert_eq!(again.log_id(), id);
+    let found = identified(&path);
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert_eq!(found[0]["log_id"].as_str(), Some(id.as_str()));
 }

@@ -32,7 +32,7 @@ pub(super) fn identified(path: &Path) -> Vec<Value> {
 /// Rewrite a one-segment 4.0 log as a beta one: no `log_id` on the open
 /// record, no identified record, re-chained, and `.hwm` re-minted at the new
 /// tail with the same fixed layout.
-fn beta_shape(path: &Path) {
+pub(super) fn beta_shape(path: &Path) {
     let c = cfg(path, 12, false);
     let (mut prev, mut counter, mut body) = ("genesis".to_string(), 0_u64, String::new());
     for v in lines(path)
@@ -159,6 +159,7 @@ fn a_log_replaced_under_a_live_logger_is_adopted_with_its_id() {
     assert_eq!(l.log_id().as_str(), their_id, "the logger adopted the id");
     let raised = l.subscribers.raised();
     assert!(raised.contains(&"log_id"), "raised: {raised:?}");
+    assert!(!raised.contains(&"tail"), "raised: {raised:?}");
 }
 
 /// Cut a fresh log back to its genesis open record, as a crash after that
@@ -228,4 +229,61 @@ fn a_log_whose_identified_record_expired_gets_no_second_one() {
     // THEN: the same id, and still no identified record
     assert_eq!(again.log_id(), id);
     assert!(identified(&path).is_empty(), "no second identified record");
+}
+
+#[test]
+fn a_torn_identified_record_is_repaired_exactly_once() {
+    // The torn line cut mid-record, and cut by its closing byte only: both
+    // fail to parse, so recovery drops them and records the drop on line 2.
+    let cuts: [fn(usize) -> usize; 2] = [|n| n / 2, |n| n - 1];
+    for keep in cuts {
+        // GIVEN: a genesis whose identified record was torn mid-write
+        let dir = tempfile::tempdir().unwrap();
+        let path = log_path(&dir);
+        let id = TransparencyLogger::open(cfg(&path, 12, false))
+            .unwrap()
+            .log_id();
+        let whole = std::fs::read_to_string(&path).unwrap();
+        let identified_line = whole.lines().nth(1).unwrap().to_string();
+        unfinish_genesis(&path, true);
+        let torn = &identified_line.as_bytes()[..keep(identified_line.len())];
+        let mut f = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap();
+        std::io::Write::write_all(&mut f, torn).unwrap();
+        drop(f);
+
+        // WHEN: it is recovered twice
+        for _ in 0..2 {
+            let again = TransparencyLogger::open(cfg(&path, 12, false)).unwrap();
+            assert_eq!(again.log_id(), id);
+        }
+
+        // THEN: exactly one identified record, naming the open record's id
+        let found = identified(&path);
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert_eq!(found[0]["log_id"].as_str(), Some(id.as_str()));
+    }
+}
+
+#[test]
+fn the_id_scan_finds_an_identified_record_after_an_oversized_line() {
+    // GIVEN: a beta active file whose identified record follows a line over
+    // the record cap
+    let dir = tempfile::tempdir().unwrap();
+    let path = log_path(&dir);
+    let open = r#"{"event":"audit_segment_opened","segment_seq":0,"counter":1}"#;
+    let huge = "x".repeat(rotation::MAX_RECORD_BYTES + 16);
+    let named = r#"{"event":"audit_log_identified","log_id":"after-the-big-one"}"#;
+    std::fs::write(&path, format!("{open}\n{huge}\n{named}\n")).unwrap();
+
+    // WHEN: the id is resolved
+    let found = identity::resolve(&path, &[]).unwrap();
+
+    // THEN: the record past the oversized line is found
+    assert_eq!(
+        found.map(|id| id.as_str().to_string()).as_deref(),
+        Some("after-the-big-one")
+    );
 }
