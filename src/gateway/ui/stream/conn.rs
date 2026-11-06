@@ -378,11 +378,19 @@ async fn drive(
         }
         if let (Pass::Page, Some(i)) = (&pass, scan) {
             served = Upkeeps::default();
+            #[cfg(test)]
+            conn.state
+                .dashboard_bootstrap
+                .stream_hub()
+                .page_gate()
+                .await;
             conn.require_entitled().await?;
             let step = match logs[i].as_mut() {
                 Some(m) => m.step().await,
                 None => None,
             };
+            #[cfg(test)]
+            conn.state.dashboard_bootstrap.stream_hub().page_read();
             let Some(outs) = step else {
                 return Ok(End::LogEnded);
             };

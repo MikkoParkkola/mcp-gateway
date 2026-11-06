@@ -5,12 +5,12 @@
 
 use super::*;
 
-const ISSUER: &str = "https://issuer.test";
+pub(super) const ISSUER: &str = "https://issuer.test";
 const ADMIN_RULE: &str =
     "rules: [{ issuer: \"https://issuer.test\", group: ops-admins, role: admin }]";
 
 /// A key-server temporary token for a member of `ops-admins`.
-fn token(groups: &[&str]) -> crate::key_server::TemporaryToken {
+pub(super) fn token(groups: &[&str]) -> crate::key_server::TemporaryToken {
     use crate::key_server::InMemoryTokenStore;
     let now = crate::clock::unix_secs().expect("the test clock reads");
     crate::key_server::TemporaryToken {
@@ -35,7 +35,7 @@ fn token(groups: &[&str]) -> crate::key_server::TemporaryToken {
 }
 
 /// Publish `yaml` as `control_plane.role_mapping`, as a reload would.
-fn set_mapping(state: &AppState, yaml: &str) {
+pub(super) fn set_mapping(state: &AppState, yaml: &str) {
     let mut config = (*state.live_config.get()).clone();
     config.control_plane.role_mapping = crate::yaml::from_str(yaml).expect("rules parse");
     state.live_config.set(config);
