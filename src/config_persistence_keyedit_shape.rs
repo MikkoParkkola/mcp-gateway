@@ -115,6 +115,61 @@ pub(super) enum Origin {
     Inserted,
 }
 
+/// A hunk being built: where it starts, and its lines so far.
+#[derive(Default)]
+struct Run {
+    old: Vec<usize>,
+    new: Vec<super::NewLine>,
+    /// For a run with no original line: the original line it follows.
+    after_old: Option<usize>,
+    /// For a run with no new line: the edited line it follows.
+    after_new: Option<usize>,
+}
+
+impl Run {
+    fn removed(&mut self, lines: std::ops::Range<usize>, next: usize) {
+        if !lines.is_empty() {
+            self.after_old.get_or_insert(next);
+        }
+        self.old.extend(lines);
+    }
+
+    fn wrote(
+        &mut self,
+        text: &str,
+        replaced: Option<(usize, usize, usize)>,
+        written: usize,
+        next: usize,
+    ) {
+        self.after_new.get_or_insert(written);
+        self.after_old.get_or_insert(next);
+        self.new.push(super::NewLine {
+            text: text.to_owned(),
+            replaced,
+        });
+    }
+
+    fn flush(&mut self, out: &mut Vec<super::Hunk>, written: usize) {
+        let run = std::mem::take(self);
+        if run.old.is_empty() && run.new.is_empty() {
+            return;
+        }
+        out.push(super::Hunk {
+            old_start: run
+                .old
+                .first()
+                .map_or(run.after_old.unwrap_or(0), |first| first + 1),
+            new_start: if run.new.is_empty() {
+                written
+            } else {
+                run.after_new.unwrap_or(written) + 1
+            },
+            old: run.old,
+            new: run.new,
+        });
+    }
+}
+
 /// The text being edited, line by line, each line with its ending and its
 /// origin.
 pub(super) struct Lines {
@@ -243,6 +298,43 @@ impl Lines {
             Origin::Kept(i) | Origin::Replaced { line: i, .. } => Some(i + 1),
             Origin::Inserted => None,
         }
+    }
+
+    /// The changed lines against `original`: each maximal run of original
+    /// lines removed or replaced, with the lines written in their place.
+    /// Kept lines end a run and are never in one.
+    pub(super) fn hunks(&self, original: &str) -> Vec<super::Hunk> {
+        let total = original.split_inclusive('\n').count();
+        let mut out = Vec::new();
+        let mut run = Run::default();
+        // The next original line not yet accounted for, and the edited lines
+        // written so far.
+        let (mut next, mut written) = (0usize, 0usize);
+        for (text, origin) in &self.lines {
+            let text = split_ending(text).0;
+            match *origin {
+                Origin::Kept(i) => {
+                    run.removed(next..i, next);
+                    run.flush(&mut out, written);
+                    next = i + 1;
+                }
+                Origin::Replaced {
+                    line,
+                    before,
+                    after,
+                } => {
+                    run.removed(next..line, next);
+                    run.old.push(line);
+                    run.wrote(text, Some((line, before, after)), written, next);
+                    next = line + 1;
+                }
+                Origin::Inserted => run.wrote(text, None, written, next),
+            }
+            written += 1;
+        }
+        run.removed(next..total, next);
+        run.flush(&mut out, written);
+        out
     }
 
     /// The original lines still in the text, kept or with a value replaced.

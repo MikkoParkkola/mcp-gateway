@@ -186,8 +186,95 @@ pub(crate) enum EditRefused {
 /// `edit` with every entry checked against its field, the owner's empty
 /// value mapped to a removal. Nothing is read.
 pub(crate) fn checked(edit: &PreviewEdit) -> Result<PreviewEdit, EditRefused> {
-    let _ = edit;
-    Ok(PreviewEdit::default())
+    let mut out = Vec::with_capacity(edit.fields.len());
+    for (n, (id, param, value)) in edit.fields.iter().enumerate() {
+        let spec = id.spec();
+        let bad_param = |why: &str| EditRefused::BadParam(*id, why.to_owned());
+        let takes = |seg: Seg| spec.path.contains(&seg);
+        match (takes(Seg::Backend), param.backend.is_some()) {
+            (true, false) => return Err(bad_param("needs a backend")),
+            (false, true) => return Err(bad_param("takes no backend")),
+            _ => {}
+        }
+        match (takes(Seg::Index), param.index.is_some()) {
+            (true, false) => return Err(bad_param("needs an index")),
+            (false, true) => return Err(bad_param("takes no index")),
+            _ => {}
+        }
+        if edit.fields[..n]
+            .iter()
+            .any(|(other, p, _)| other == id && p == param)
+        {
+            return Err(bad_param("named twice"));
+        }
+        let value = match (value, spec.kind) {
+            (PreviewValue::Secret, None) | (PreviewValue::Remove, None) => value.clone(),
+            (PreviewValue::Set(_), None) | (PreviewValue::Secret, Some(_)) => {
+                return Err(EditRefused::WrongKind(*id));
+            }
+            // A list element's fields are all required (an alert has two).
+            (PreviewValue::Remove, Some(_)) if takes(Seg::Index) => {
+                return Err(bad_param("a required alert field"));
+            }
+            (PreviewValue::Remove, Some(_)) => PreviewValue::Remove,
+            (PreviewValue::Set(scalar), Some(kind)) => {
+                let scalar =
+                    of_kind(scalar, kind).map_err(|why| EditRefused::BadValue(*id, why))?;
+                // The owner as `BackendConfig::owner()` reads it: an empty
+                // trimmed value is no owner.
+                match &scalar {
+                    Scalar::Str(s) if spec.id == "backends.owner" && s.trim().is_empty() => {
+                        PreviewValue::Remove
+                    }
+                    _ => PreviewValue::Set(scalar),
+                }
+            }
+        };
+        out.push((*id, param.clone(), value));
+    }
+    Ok(PreviewEdit { fields: out })
+}
+
+/// `scalar` when `kind` holds it (an integer is accepted as a number), or
+/// why not.
+fn of_kind(scalar: &Scalar, kind: ValueKind) -> Result<Scalar, String> {
+    match (kind, scalar) {
+        (ValueKind::Bool, Scalar::Bool(_)) => Ok(scalar.clone()),
+        (ValueKind::Bool, _) => Err("expected a boolean".to_owned()),
+        (ValueKind::Int { min, max }, Scalar::Int(n)) => (min..=max)
+            .contains(n)
+            .then(|| scalar.clone())
+            .ok_or_else(|| "out of range".to_owned()),
+        (ValueKind::Int { .. }, _) => Err("expected an integer".to_owned()),
+        (ValueKind::Num { min }, Scalar::Num(n)) => (n.get() >= min)
+            .then(|| scalar.clone())
+            .ok_or_else(|| format!("below {min}")),
+        (ValueKind::Num { min }, Scalar::Int(n)) => {
+            #[expect(clippy::cast_precision_loss, reason = "an amount, not an id")]
+            let as_float = *n as f64;
+            match crate::config_persistence::keyedit::FiniteF64::new(as_float) {
+                Some(f) if as_float >= min => Ok(Scalar::Num(f)),
+                _ => Err(format!("below {min}")),
+            }
+        }
+        (ValueKind::Num { .. }, _) => Err("expected a number".to_owned()),
+        (ValueKind::Str { max_chars }, Scalar::Str(s)) => {
+            if s.chars().any(char::is_control) {
+                Err("a control character".to_owned())
+            } else if let Some(max) = max_chars
+                && s.trim().chars().count() > max
+            {
+                Err(format!("over {max} characters"))
+            } else {
+                Ok(scalar.clone())
+            }
+        }
+        (ValueKind::Enum(words), Scalar::Str(s)) => words
+            .contains(&s.as_str())
+            .then(|| scalar.clone())
+            .ok_or_else(|| format!("not one of {}", words.join(", "))),
+        (ValueKind::Str { .. } | ValueKind::Enum(_), _) => Err("expected a string".to_owned()),
+    }
 }
 
 #[cfg(test)]

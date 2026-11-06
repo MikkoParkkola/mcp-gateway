@@ -13,11 +13,15 @@
     expect(dead_code, reason = "first caller: the settings diff route (U8 PR c)")
 )]
 
-use crate::config_persistence::keyedit::{GiveUp, Segment};
+use crate::config::UnreadConfig;
+use crate::config_persistence::keyedit::{
+    self, Change, ComputeRefusal, FieldPath, GiveUp, Segment,
+};
 use crate::config_reload::ReloadContext;
-use crate::config_reload::ui_fields::{EditRefused, FieldId, PreviewEdit};
+use crate::config_reload::ui_fields::{EditRefused, FieldId, PreviewEdit, PreviewValue, Seg};
+use crate::yaml::Value;
 
-use super::FileRevision;
+use super::{FileRevision, ReplaceError};
 
 /// A preview of one edit.
 #[derive(Debug, Clone, PartialEq)]
@@ -51,7 +55,27 @@ pub(crate) struct ShownHunk {
 impl UnifiedDiff {
     /// The diff as text: the two file headers, then each hunk.
     pub(crate) fn render(&self) -> String {
-        String::new()
+        let mut out = String::from("--- a/gateway.yaml\n+++ b/gateway.yaml\n");
+        for hunk in &self.hunks {
+            out.push_str(&format!(
+                "@@ -{},{} +{},{} @@\n",
+                hunk.old_start,
+                hunk.old.len(),
+                hunk.new_start,
+                hunk.new.len()
+            ));
+            for line in &hunk.old {
+                out.push('-');
+                out.push_str(line);
+                out.push('\n');
+            }
+            for line in &hunk.new {
+                out.push('+');
+                out.push_str(line);
+                out.push('\n');
+            }
+        }
+        out
     }
 }
 
@@ -86,8 +110,32 @@ pub(crate) enum PatchStep {
 /// A step's path as the operator types it: keys joined by `.`, a position
 /// as `[n]`, a key that is not plain double-quoted.
 pub(crate) fn path_text(path: &[Segment]) -> String {
-    let _ = path;
-    String::new()
+    let mut out = String::new();
+    for segment in path {
+        match segment {
+            Segment::Key(key) => {
+                if !out.is_empty() {
+                    out.push('.');
+                }
+                let plain = !key.is_empty()
+                    && !key.starts_with('-')
+                    && key
+                        .chars()
+                        .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-');
+                if plain {
+                    out.push_str(key);
+                } else {
+                    out.push_str(&crate::yaml::double_quoted(key));
+                }
+            }
+            Segment::Index(at) => {
+                out.push('[');
+                out.push_str(&at.to_string());
+                out.push(']');
+            }
+        }
+    }
+    out
 }
 
 /// Why the file was not previewed.
@@ -130,9 +178,219 @@ pub(crate) async fn ui_diff(
     ctx: &ReloadContext,
     edit: &PreviewEdit,
 ) -> Result<UiPreview, UiRefused> {
-    let _ = (ctx, edit);
-    Err(UiRefused::Unsupported("not built yet".to_owned()))
+    let edit = crate::config_reload::ui_fields::checked(edit)?;
+    let (target, text) = read(ctx)?;
+    let revision = FileRevision::of(text.as_bytes());
+    let doc = match crate::yaml::from_str::<Value>(&text) {
+        Ok(Value::Null) => Value::Mapping(crate::yaml::Mapping::new()),
+        Ok(doc) => doc,
+        Err(e) => {
+            return Err(UiRefused::Invalid(format!(
+                "gateway.yaml does not parse: {e}"
+            )));
+        }
+    };
+    let changes = resolve(&edit, &doc)?;
+    let secrets: Vec<FieldPath> = edit
+        .fields
+        .iter()
+        .zip(&changes)
+        .filter(|((id, ..), _)| id.spec().secret())
+        .map(|(_, (path, _))| path.clone())
+        .collect();
+    let shown = match keyedit::edit_in_place(&text, &changes) {
+        Ok(template) => {
+            validate(ctx, &target, &template).await?;
+            match show::diff(&text, &changes, &secrets, template.hunks()) {
+                Ok(diff) => Shown::Diff(diff),
+                Err(code) => Shown::Patch(patch(
+                    &changes,
+                    code,
+                    "the change cannot be shown masked",
+                    true,
+                )),
+            }
+        }
+        Err(ComputeRefusal::Unprovable { code, reason }) => {
+            let expected = keyedit::expected_text(&text, &changes).ok_or_else(|| {
+                UiRefused::Unsupported("the edit cannot be followed in gateway.yaml".to_owned())
+            })?;
+            let slots: Vec<_> = changes
+                .iter()
+                .filter_map(|(_, change)| match change {
+                    Change::Secret(id) => Some(id.clone()),
+                    _ => None,
+                })
+                .collect();
+            let template = keyedit::Template::from_placeholders(expected.into_bytes(), &slots)
+                .map_err(|_| {
+                    UiRefused::Unsupported(
+                        "the edit's secret slots could not be checked".to_owned(),
+                    )
+                })?;
+            validate(ctx, &target, &template).await?;
+            Shown::Patch(patch(&changes, code, &reason, false))
+        }
+        Err(ComputeRefusal::SlotMismatch) => {
+            return Err(UiRefused::Unsupported(
+                "the edit's secret slots do not match".to_owned(),
+            ));
+        }
+    };
+    Ok(UiPreview { revision, shown })
 }
+
+/// Each entry as the editor's change at its path, the path's parameters
+/// resolved against `doc`, the bytes read (never the loaded config): a
+/// backend must be in the file; an alert index must be in the file's list,
+/// or the edit's new indices must run on from its end with every field of
+/// each new element set.
+fn resolve(edit: &PreviewEdit, doc: &Value) -> Result<Vec<(FieldPath, Change)>, UiRefused> {
+    let alerts = doc
+        .get("cost_governance")
+        .and_then(|c| c.get("alerts"))
+        .and_then(Value::as_sequence)
+        .map_or(0, Vec::len);
+    let element_fields: Vec<FieldId> = crate::config_reload::ui_fields::FIELDS
+        .iter()
+        .filter(|spec| spec.path.contains(&Seg::Index))
+        .filter_map(|spec| FieldId::of(spec.id))
+        .collect();
+    let mut new: std::collections::BTreeSet<usize> = std::collections::BTreeSet::new();
+    let mut out = Vec::with_capacity(edit.fields.len());
+    for (id, param, value) in &edit.fields {
+        let bad = |why: String| UiRefused::BadParam(*id, why);
+        let mut path = Vec::new();
+        for seg in id.spec().path {
+            path.push(match seg {
+                Seg::Key(k) => Segment::Key((*k).to_owned()),
+                Seg::Backend => {
+                    let name = param.backend.clone().unwrap_or_default();
+                    let known = doc
+                        .get("backends")
+                        .and_then(Value::as_mapping)
+                        .is_some_and(|m| m.get(&Value::from(name.as_str())).is_some());
+                    if !known {
+                        return Err(bad(format!("gateway.yaml has no backend {name:?}")));
+                    }
+                    Segment::Key(name)
+                }
+                Seg::Index => {
+                    let at = param.index.unwrap_or_default();
+                    if at >= alerts {
+                        new.insert(at);
+                    }
+                    Segment::Index(at)
+                }
+            });
+        }
+        let path = FieldPath(path);
+        let change = match value {
+            PreviewValue::Set(scalar) => Change::Set(scalar.clone()),
+            PreviewValue::Remove => Change::Remove,
+            PreviewValue::Secret => Change::Secret(path.slot()),
+        };
+        out.push((path, change));
+    }
+    // New elements run on from the end, each complete.
+    for (n, at) in new.iter().enumerate() {
+        let complete = element_fields.iter().all(|field| {
+            edit.fields.iter().any(|(id, p, v)| {
+                id == field && p.index == Some(*at) && matches!(v, PreviewValue::Set(_))
+            })
+        });
+        if *at != alerts + n || !complete {
+            let id = edit
+                .fields
+                .iter()
+                .find(|(_, p, _)| p.index == Some(*at))
+                .map(|(id, ..)| *id)
+                .expect("a new index came from an entry");
+            return Err(UiRefused::BadParam(
+                id,
+                format!(
+                    "alert {at}: gateway.yaml lists {alerts}; a new alert follows the last and sets every field"
+                ),
+            ));
+        }
+    }
+    Ok(out)
+}
+
+/// The patch for `changes`: one step per change, in order. `withhold`
+/// leaves every value out (a diff that could not be masked).
+fn patch(changes: &[(FieldPath, Change)], code: GiveUp, reason: &str, withhold: bool) -> Patch {
+    let steps = changes
+        .iter()
+        .map(|(path, change)| {
+            let path = path.0.clone();
+            match change {
+                Change::Remove => PatchStep::Remove { path },
+                Change::Secret(_) => PatchStep::SetSecret { path },
+                other => PatchStep::Set {
+                    path,
+                    value: if withhold {
+                        None
+                    } else {
+                        keyedit::value_text(other)
+                    },
+                },
+            }
+        })
+        .collect();
+    Patch {
+        code,
+        reason: reason.to_owned(),
+        line: None,
+        steps,
+    }
+}
+
+/// The trusted target and its text, read as the writer reads it, with no
+/// lock and no recovery.
+fn read(ctx: &ReloadContext) -> Result<(std::path::PathBuf, String), UiRefused> {
+    if crate::config_persistence::lock::journal_pending(&ctx.config_path) {
+        return Err(UiRefused::Preview(PreviewRefused::Recovering));
+    }
+    let target = crate::identity_grants::journal::resolved(&ctx.config_path);
+    if target != ctx.trusted_config {
+        return Err(UiRefused::Preview(PreviewRefused::Untrusted(format!(
+            "{} now resolves to {}, not to {}, the file this gateway started on",
+            ctx.config_path.display(),
+            target.display(),
+            ctx.trusted_config.display()
+        ))));
+    }
+    match crate::config::read_config_text(&target) {
+        Ok(Some(text)) => Ok((target, text)),
+        Ok(None) => Err(UiRefused::Preview(PreviewRefused::NoConfigFile)),
+        Err(
+            UnreadConfig::Refused(why)
+            | UnreadConfig::Failed(why)
+            | UnreadConfig::NotTheConfig(why),
+        ) => Err(UiRefused::Preview(PreviewRefused::Unread(why))),
+    }
+}
+
+/// The writer's own check before any write, on stand-ins for the slots.
+async fn validate(
+    ctx: &ReloadContext,
+    target: &std::path::Path,
+    template: &keyedit::Template,
+) -> Result<(), UiRefused> {
+    ctx.validate_template(target, template, None)
+        .await
+        .map_err(|e| match e {
+            ReplaceError::Refused(why) | ReplaceError::ReloadRefused(why) => {
+                UiRefused::Invalid(why)
+            }
+            ReplaceError::Failed(why) => UiRefused::Unsupported(why),
+            other => UiRefused::Unsupported(format!("{other:?}")),
+        })
+}
+
+#[path = "ui_diff_show.rs"]
+mod show;
 
 #[cfg(test)]
 #[path = "ui_diff_tests.rs"]

@@ -97,6 +97,10 @@ impl FiniteF64 {
     pub(crate) fn new(value: f64) -> Option<Self> {
         value.is_finite().then_some(Self(value))
     }
+
+    pub(crate) fn get(self) -> f64 {
+        self.0
+    }
 }
 
 // No NaN is ever held, so equality is total.
@@ -430,6 +434,7 @@ pub(crate) fn edit_in_place(
     slots.sort_by_key(|(_, range)| range.start);
     let mut template = Template::checked(edited.into_bytes(), slots)?;
     template.dropped = dropped;
+    template.hunks = lines.hunks(original);
     Ok(template)
 }
 
@@ -532,6 +537,17 @@ fn deleted_as_planned(
 }
 
 /// The value text `change` writes; `None` for a removal.
+/// The YAML text the editor writes for `change`'s value (a secret as its
+/// slot placeholder); `None` for a removal.
+pub(crate) fn value_text(change: &Change) -> Option<String> {
+    rendered(change)
+}
+
+/// The quoted placeholder text a secret slot holds in a template.
+pub(crate) fn slot_text(id: &SlotId) -> String {
+    quoted_placeholder(id)
+}
+
 fn rendered(change: &Change) -> Option<String> {
     Some(match change {
         Change::Set(Scalar::Str(s)) => crate::yaml::double_quoted(s),
@@ -746,10 +762,15 @@ fn expected_value(change: &Change) -> Option<Value> {
 }
 
 /// Proof 1: `edited` parses to `original` with exactly `changes` applied,
-/// each secret slot holding its own placeholder. Value equality only: the
-/// parser refuses anchors, aliases and tags on any node an edit touches
-/// before this runs.
+/// each secret slot holding its own placeholder, and holds every anchor and
+/// alias the original does. Equal values alone are not enough: an alias
+/// replaced by its value compares equal and detaches the shared value. The
+/// editor never writes an anchor or an alias, so an unchanged count proves
+/// none was dropped.
 fn meaning_holds(original: &str, changes: &[(FieldPath, Change)], edited: &str) -> bool {
+    if crate::yaml::anchors_and_aliases(original) != crate::yaml::anchors_and_aliases(edited) {
+        return false;
+    }
     let Ok(doc) = crate::yaml::from_str::<Value>(original) else {
         return false;
     };
@@ -770,8 +791,11 @@ fn meaning_holds(original: &str, changes: &[(FieldPath, Change)], edited: &str) 
 /// the in-place proofs refused. Secret slots hold their placeholders.
 /// `None` when `original` does not parse or a path cannot be followed.
 pub(crate) fn expected_text(original: &str, changes: &[(FieldPath, Change)]) -> Option<String> {
-    let _ = (original, changes);
-    None
+    let doc = match crate::yaml::from_str::<Value>(original).ok()? {
+        Value::Null if shape::no_content(original) => Value::Mapping(crate::yaml::Mapping::new()),
+        doc => doc,
+    };
+    crate::yaml::to_string(&shape::expected(&doc, changes)?).ok()
 }
 
 #[path = "config_persistence_keyedit_shape.rs"]

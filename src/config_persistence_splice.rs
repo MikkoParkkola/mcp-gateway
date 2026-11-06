@@ -70,6 +70,16 @@ pub(super) fn with_backend_edited(
         }
         (None, None) => return None,
     };
+    // An added or edited entry keeps every anchor and alias: the splice never
+    // writes either, so a lower count means an alias was expanded or an
+    // anchor dropped, which detaches a shared value though the values
+    // compare equal. A removed entry may take its own with it.
+    let removed = config.backends.get(name).is_none();
+    if !removed
+        && crate::yaml::anchors_and_aliases(original)? != crate::yaml::anchors_and_aliases(&edited)?
+    {
+        return None;
+    }
     let got: Value = crate::yaml::from_str(&edited).ok()?;
     // The text must also load as `config` itself: `original` is re-read at
     // write time, and a file another writer changed since `before` was
