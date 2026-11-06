@@ -40,6 +40,7 @@ struct EndpointState {
     arrivals: Arc<AtomicUsize>,
     arrived: Arc<tokio::sync::Notify>,
     release: Option<Arc<tokio::sync::Semaphore>>,
+    body: Value,
 }
 
 async fn answer(
@@ -52,13 +53,22 @@ async fn answer(
     {
         permit.forget();
     }
-    axum::Json(json!({ "day": "2026-09-27", "events": [] }))
+    axum::Json(state.body.clone())
 }
 
 impl Endpoint {
     /// An endpoint that answers at once (`hold == false`) or holds every
     /// request until [`Self::release`].
     pub(crate) async fn start(hold: bool) -> Self {
+        Self::start_as(hold, json!({ "day": "2026-09-27", "events": [] })).await
+    }
+
+    /// An endpoint that answers at once with `body`.
+    pub(crate) async fn start_with_body(body: Value) -> Self {
+        Self::start_as(false, body).await
+    }
+
+    async fn start_as(hold: bool, body: Value) -> Self {
         let arrivals = Arc::new(AtomicUsize::new(0));
         let arrived = Arc::new(tokio::sync::Notify::new());
         let release = Arc::new(tokio::sync::Semaphore::new(0));
@@ -66,6 +76,7 @@ impl Endpoint {
             arrivals: Arc::clone(&arrivals),
             arrived: Arc::clone(&arrived),
             release: hold.then(|| Arc::clone(&release)),
+            body,
         };
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
             .await

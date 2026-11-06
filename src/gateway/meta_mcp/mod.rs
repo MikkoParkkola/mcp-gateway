@@ -735,6 +735,9 @@ mod grant_retry_marker_tests;
 /// A chain resume step refused before it dispatches.
 #[cfg(test)]
 mod grant_chain_resume_tests;
+/// The recovery read's premise: a capability task holds no upstream handle.
+#[cfg(test)]
+mod grant_recovery_premise_tests;
 #[cfg(test)]
 mod grant_replay_dedupe_tests;
 #[cfg(test)]
