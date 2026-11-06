@@ -30,46 +30,65 @@ struct Access {
 
 impl Access {
     /// A macro's arguments are tokens, not parsed expressions, so they are
-    /// matched as text with the spacing removed.
+    /// matched as text with the spacing and every `r#` removed: a path that
+    /// ends in `::reads` / `::reserve` (not followed by more of a name), and a
+    /// method call `.reads(` / `.reserve(`, with or without a turbofish. A
+    /// bare `.reads` is a field, not counted.
     fn tokens(&mut self, at: &Place, mac: &syn::Macro) {
         let text: String = mac
             .tokens
             .to_string()
             .chars()
             .filter(|c| !c.is_whitespace())
-            .collect();
-        for _ in 0..(text.matches(".reads()").count() + text.matches("::reads(").count()) {
+            .collect::<String>()
+            .replace("r#", "");
+        let count = |name: &str| {
+            let path = format!("::{name}");
+            let paths = text
+                .match_indices(&path)
+                .filter(|(i, _)| {
+                    !text[i + path.len()..].starts_with(|c: char| c.is_alphanumeric() || c == '_')
+                })
+                .count();
+            let calls = text.matches(&format!(".{name}(")).count()
+                + text.matches(&format!(".{name}::<")).count();
+            paths + calls
+        };
+        for _ in 0..count("reads") {
             self.readers.push(at.file.clone());
         }
-        for _ in 0..(text.matches(".reserve(").count() + text.matches("::reserve(").count()) {
+        for _ in 0..count("reserve") {
             self.reservers.push(at.file.clone());
+        }
+    }
+
+    fn found(&mut self, at: &Place, name: &str) {
+        match name {
+            "reads" => self.readers.push(at.file.clone()),
+            "reserve" => self.reservers.push(at.file.clone()),
+            _ => {}
         }
     }
 }
 
 impl Sink for Access {
     fn expr(&mut self, at: &Place, expr: &syn::Expr) {
+        use syn::ext::IdentExt;
         match expr {
-            syn::Expr::MethodCall(call) if call.method == "reads" && call.args.is_empty() => {
-                self.readers.push(at.file.clone());
+            syn::Expr::MethodCall(call) => {
+                let name = call.method.unraw().to_string();
+                if name == "reserve" || (name == "reads" && call.args.is_empty()) {
+                    self.found(at, &name);
+                }
             }
-            syn::Expr::MethodCall(call) if call.method == "reserve" => {
-                self.reservers.push(at.file.clone());
-            }
-            // A path call: `Firewall::reads(&f)`, `ReadHistory::reserve(&h, ..)`.
-            syn::Expr::Call(call) => {
-                if let syn::Expr::Path(path) = &*call.func {
-                    match path
-                        .path
-                        .segments
-                        .last()
-                        .map(|s| s.ident.to_string())
-                        .as_deref()
-                    {
-                        Some("reads") => self.readers.push(at.file.clone()),
-                        Some("reserve") => self.reservers.push(at.file.clone()),
-                        _ => {}
-                    }
+            // A path taken anywhere, called or not: `Firewall::reads(&f)`,
+            // `let read = Firewall::reads;`, `(Firewall::reads)(f)`, `<T>::reads`.
+            // A call's callee reaches the sink as its own expression, so a call
+            // counts once. One segment is a local or free name: `use` cannot
+            // import an associated function.
+            syn::Expr::Path(path) if path.qself.is_some() || path.path.segments.len() >= 2 => {
+                if let Some(last) = path.path.segments.last() {
+                    self.found(at, &last.ident.unraw().to_string());
                 }
             }
             syn::Expr::Macro(mac) => self.tokens(at, &mac.mac),
