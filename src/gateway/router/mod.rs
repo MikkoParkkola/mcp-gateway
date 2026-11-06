@@ -268,6 +268,9 @@ mod delivery_trace_join_tests;
 /// The direct route's reach and its declared effect.
 #[cfg(test)]
 mod direct_effect_tests;
+/// The decision fixture table's HTTP rows (direct route and the meta HTTP gate).
+#[cfg(all(test, feature = "firewall"))]
+mod decision_fixture_rows;
 /// A late refusal keeps its own code, and its run keeps the key.
 #[cfg(all(test, feature = "firewall"))]
 mod late_refusal_lease_tests;
