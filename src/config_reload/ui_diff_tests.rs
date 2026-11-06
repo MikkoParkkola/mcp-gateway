@@ -646,16 +646,20 @@ async fn an_escaped_newline_in_an_old_reference_gives_the_valueless_patch() {
     assert!(!format!("{patch:?}").contains("forged"), "{patch:?}");
 }
 
-/// D27 (a pin): a typed value equal to a slot's placeholder text is refused
-/// by the editor before any masking (`config_persistence_keyedit.rs`: "the
-/// file already holds a slot placeholder"), so masking never rewrites a
-/// typed value.
+/// D27: a typed value equal to a slot's placeholder text is refused,
+/// never masked: the editor gives up on an edit whose text holds a slot's
+/// placeholder twice ("the file already holds a slot placeholder",
+/// `config_persistence_keyedit.rs` `edit_in_place`), and the patch path's
+/// check of the expected document refuses it too
+/// (`Template::from_placeholders`: each placeholder exactly once), which
+/// `ui_diff` reports as `Unsupported` (`ui_diff.rs`, "the edit's secret slots
+/// could not be checked").
 #[tokio::test]
-async fn a_typed_value_equal_to_a_placeholder_gives_the_patch() {
+async fn a_typed_value_equal_to_a_placeholder_is_refused() {
     let (_dir, _path, ctx) = gateway("environment: \"dev\"\nauth:\n  bearer_token: \"old\"\n");
-    let got = preview(
+    let got = ui_diff(
         &ctx,
-        vec![
+        &edit(vec![
             set(
                 "environment",
                 Param::default(),
@@ -666,10 +670,10 @@ async fn a_typed_value_equal_to_a_placeholder_gives_the_patch() {
                 Param::default(),
                 PreviewValue::Secret,
             ),
-        ],
+        ]),
     )
     .await;
-    assert!(matches!(got.shown, Shown::Patch(_)), "{:?}", got.shown);
+    assert!(matches!(got, Err(UiRefused::Unsupported(_))), "{got:?}");
 }
 
 /// D29: a CRLF file shows the same lines as its LF copy, the comment as a
