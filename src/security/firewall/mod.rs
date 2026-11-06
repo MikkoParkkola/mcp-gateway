@@ -44,6 +44,8 @@ pub(crate) use collusion_gate::SENSITIVE_CLASSES;
 /// The rule shapes the load refuses, which compile fail-closed.
 #[cfg(feature = "webui")]
 pub(crate) use verdict::refused_shape;
+mod refused_rules;
+pub(crate) use refused_rules::{KeyNames, key_problem, refuse_while_running};
 pub mod anomaly;
 pub(crate) mod anomaly_config;
 mod anomaly_gate;
