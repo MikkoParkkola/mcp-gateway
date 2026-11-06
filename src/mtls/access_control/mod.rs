@@ -50,8 +50,10 @@ pub enum PolicyDecision {
 
 /// Compiled mTLS access control policy.
 ///
-/// Build once at startup with [`MtlsPolicy::from_config`], then call
-/// [`MtlsPolicy::evaluate`] on every tool invocation.
+/// A production builder compiles it once at startup with
+/// `MtlsPolicy::from_config_keyed`, so each rule carries the keyed id a
+/// refusal records; [`MtlsPolicy::from_config`] builds the same policy with
+/// no ids. Call [`MtlsPolicy::evaluate`] on every tool invocation.
 #[derive(Debug, Clone)]
 pub struct MtlsPolicy {
     rules: Vec<CompiledRule>,
@@ -69,7 +71,7 @@ impl MtlsPolicy {
         let rules = config
             .policies
             .iter()
-            .map(CompiledRule::from_config)
+            .map(|rule| CompiledRule::from_config(rule, None))
             .collect();
 
         Self {
@@ -78,19 +80,38 @@ impl MtlsPolicy {
         }
     }
 
-    /// [`Self::from_config`], each rule carrying its keyed id.
-    #[allow(dead_code)] // red-first skeleton
+    /// [`Self::from_config`], each rule carrying its id under `key`: the
+    /// HMAC of the rule's serde form, computed in the same pass that compiles
+    /// it, so an id can never sit beside another rule.
+    ///
+    /// The id hashes every field `PolicyRuleConfig` serialises. A field added
+    /// later must skip serialising its default, or every configured rule's id
+    /// rotates; a golden row pins today's form.
     #[must_use]
     pub(crate) fn from_config_keyed(
         config: &MtlsConfig,
-        _key: &crate::security::rule_id::RuleKey,
+        key: &crate::security::rule_id::RuleKey,
     ) -> Self {
-        // red-first skeleton
-        Self::from_config(config)
+        let rules = config
+            .policies
+            .iter()
+            .map(|rule| {
+                // invariant: a derived Serialize of strings and options cannot fail.
+                let bytes = serde_json::to_vec(rule).expect("a policy rule serialises");
+                let id = crate::security::rule_id::RuleId::of("mtls", key, &bytes);
+                CompiledRule::from_config(rule, Some(id))
+            })
+            .collect();
+        Self {
+            rules,
+            enabled: config.enabled,
+        }
     }
 
-    /// [`Self::evaluate`], with the id of the rule that decided.
-    #[allow(dead_code)] // red-first skeleton
+    /// [`Self::evaluate`], with the id of the rule that decided: the first
+    /// rule matching the certificate. `None` when the policy is off, when no
+    /// certificate is presented, when no rule matches, and when the policy
+    /// was built unkeyed.
     #[must_use]
     pub(crate) fn evaluate_explained(
         &self,
@@ -98,8 +119,17 @@ impl MtlsPolicy {
         backend: &str,
         tool: &str,
     ) -> (PolicyDecision, Option<&crate::security::rule_id::RuleId>) {
-        // red-first skeleton
-        (self.evaluate(identity, backend, tool), None)
+        if !self.enabled {
+            return (PolicyDecision::Allow, None);
+        }
+        let Some(id) = identity else {
+            return (PolicyDecision::Deny, None);
+        };
+        match self.rules.iter().find(|rule| rule.matches(id)) {
+            Some(rule) => (rule.decide(backend, tool), rule.id.as_ref()),
+            // Fail-closed: no rule matched.
+            None => (PolicyDecision::Deny, None),
+        }
     }
 
     /// Evaluate whether `(identity, backend, tool)` is permitted.
@@ -116,22 +146,7 @@ impl MtlsPolicy {
         backend: &str,
         tool: &str,
     ) -> PolicyDecision {
-        if !self.enabled {
-            return PolicyDecision::Allow;
-        }
-
-        let Some(id) = identity else {
-            return PolicyDecision::Deny;
-        };
-
-        for rule in &self.rules {
-            if rule.matches(id) {
-                return rule.decide(backend, tool);
-            }
-        }
-
-        // Fail-closed: no rule matched.
-        PolicyDecision::Deny
+        self.evaluate_explained(identity, backend, tool).0
     }
 
     /// Whether every tool on `backend` is refused to `identity`, decided from
@@ -173,11 +188,14 @@ struct CompiledRule {
     criteria: CompiledCriteria,
     allow: CompiledScope,
     deny: CompiledScope,
+    /// The rule's keyed id; `None` when the policy was built unkeyed.
+    id: Option<crate::security::rule_id::RuleId>,
 }
 
 impl CompiledRule {
-    fn from_config(rule: &PolicyRuleConfig) -> Self {
+    fn from_config(rule: &PolicyRuleConfig, id: Option<crate::security::rule_id::RuleId>) -> Self {
         Self {
+            id,
             criteria: CompiledCriteria::from_config(&rule.match_criteria),
             allow: CompiledScope::from_config(&rule.allow),
             deny: CompiledScope::from_config(&rule.deny),
