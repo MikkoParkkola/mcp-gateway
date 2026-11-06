@@ -286,3 +286,28 @@ async fn an_append_that_outlives_its_caller_marks_the_decision_recorded() {
     assert_eq!(held[0]["invocation_recorded"], json!(true), "{held:#?}");
     assert_eq!(invocations(&dir).len(), 1, "the late append landed");
 }
+
+/// A slow upstream: the call's decision is written once, after the call's
+/// invocation record, and says so.
+#[tokio::test]
+async fn a_slow_call_writes_its_decision_once_after_its_invocation_record() {
+    let endpoint = Arc::new(Endpoint::start(true).await);
+    let dir = Arc::new(tempfile::tempdir().unwrap());
+    let rows = vec![grant("g1", ALICE, ALICE)];
+    let meta = Arc::new(gateway(&endpoint, rows, Some(&dir), AuditFailurePolicy::BestEffort));
+    let running = tokio::spawn({
+        let meta = Arc::clone(&meta);
+        async move { call(&meta, &api_key("alice"), "gateway_invoke", invoke_args()).await }
+    });
+    endpoint.wait_for_arrivals(1).await;
+    assert!(invocations(&dir).is_empty(), "premise: the call is still running");
+
+    endpoint.release();
+    let answer = running.await.expect("the call task completes");
+
+    assert!(answer.get("error").is_none(), "{answer}");
+    let held = wait_for_decisions(&dir, 1).await;
+    assert_eq!(held.len(), 1, "written once: {held:#?}");
+    assert_eq!(held[0]["invocation_recorded"], json!(true), "{held:#?}");
+    assert_eq!(invocations(&dir).len(), 1, "the call's own record");
+}
