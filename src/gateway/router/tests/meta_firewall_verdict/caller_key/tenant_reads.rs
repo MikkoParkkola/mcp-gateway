@@ -183,7 +183,7 @@ impl Transport for NotifyingBackend {
 async fn logged_router() -> (
     axum::Router,
     crate::gateway::router::tests::FixtureDir,
-    tempfile::TempDir,
+    Arc<tempfile::TempDir>,
 ) {
     logged_router_in(CrossTenantReads::Observe).await
 }
@@ -194,10 +194,10 @@ async fn logged_router_in(
 ) -> (
     axum::Router,
     crate::gateway::router::tests::FixtureDir,
-    tempfile::TempDir,
+    Arc<tempfile::TempDir>,
 ) {
     let (state, store) = split_state(mode, 3600).await;
-    let log_dir = tempfile::tempdir().expect("a log directory");
+    let log_dir = Arc::new(tempfile::tempdir().expect("a log directory"));
     let log = Arc::new(
         TransparencyLogger::open(Arc::new(TransparencyLogConfig {
             enabled: true,
@@ -211,6 +211,8 @@ async fn logged_router_in(
         }))
         .expect("open log"),
     );
+    // A late append lands before the directory goes.
+    log.keep_test_dir(Arc::clone(&log_dir));
     let mut app = Arc::try_unwrap(state).unwrap_or_else(|_| panic!("fixture state is exclusive"));
     let mut meta =
         Arc::try_unwrap(app.meta_mcp).unwrap_or_else(|_| panic!("fixture meta is exclusive"));

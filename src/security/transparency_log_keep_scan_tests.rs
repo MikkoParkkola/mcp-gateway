@@ -84,7 +84,6 @@ const PENDING: &[&str] = &[
     "src/gateway/router/stored_replay_liveness_idp_fixture.rs",
     "src/gateway/router/stored_replay_liveness_tests.rs",
     "src/gateway/router/stored_replay_liveness_tests/rebind.rs",
-    "src/gateway/router/tests/meta_firewall_verdict/caller_key/tenant_reads.rs",
     "src/gateway/router/tests/meta_firewall_verdict/list_and_task_block/direct_counted.rs",
     "src/gateway/router/tests/meta_state_fixtures.rs",
     "src/gateway/router/tests/openwebui_adapter/connect_offer.rs",
