@@ -201,7 +201,7 @@ async fn r2c_the_first_wait_ends_at_the_listing_cap_stdio() {
         took >= cap
             .checked_sub(GRACE)
             .expect("premise: a cap past its grace"),
-        "premise: the first list waited ({took:?})"
+        "the first list answered before the {cap:?} cap: {took:?}"
     );
     assert!(
         took < cap + GRACE,
