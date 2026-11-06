@@ -45,7 +45,9 @@ pub(crate) use collusion_gate::SENSITIVE_CLASSES;
 #[cfg(feature = "webui")]
 pub(crate) use verdict::refused_shape;
 mod refused_rules;
-pub(crate) use refused_rules::{RuleKeys, key_problem, refuse_while_running};
+pub(crate) use refused_rules::{
+    RuleKeys, first_refusal, key_problem, refuse_while_running, warn_refused_at_load,
+};
 pub mod anomaly;
 pub(crate) mod anomaly_config;
 mod anomaly_gate;

@@ -142,3 +142,41 @@ pub(crate) fn refuse_while_running(running: &Config, candidate: &Config) -> Resu
     }
     Ok(())
 }
+
+/// Rule `i`'s first problem in the load's order (key references, then the
+/// `match` glob, then scopes, then folder rules), or `None` when the
+/// firewall-on load would take it.
+pub(crate) fn first_refusal(i: usize, rule: &FirewallRule, keys: &RuleKeys<'_>) -> Option<String> {
+    key_problem(i, rule, keys)
+        .and_then(|()| super::verdict::glob_problem(i, rule))
+        .and_then(|()| super::verdict::scope_problem(i, rule))
+        .and_then(|()| super::allowed_root::validate_rule(i, rule))
+        .err()
+}
+
+/// A load with the firewall off takes a rule the firewall-on load refuses
+/// (a 3.5 config may hold one, dormant): each such rule warns once, naming
+/// it, since turning the firewall on is refused until it is fixed.
+pub(crate) fn warn_refused_at_load(config: &Config) {
+    if config.security.firewall.enabled {
+        return;
+    }
+    let keys = RuleKeys::of(config);
+    for (i, rule) in config.security.firewall.rules.iter().enumerate() {
+        let Some(message) = first_refusal(i, rule, &keys) else {
+            continue;
+        };
+        // Keyed on the rule too: a changed rule warns again.
+        if crate::config::log_once::first_time(&format!("firewall-refused-rule:{message}:{rule:?}"))
+        {
+            tracing::warn!(
+                "{message}; it does nothing while the firewall is off, and turning the firewall \
+                 on is refused until the rule is fixed or removed"
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+#[path = "refused_rules_tests.rs"]
+mod tests;
