@@ -158,7 +158,11 @@ def run_gate_step(gate: dict, c: dict, results: dict[str, str], root: Path = ROO
     holding a mutated check_needs.py)."""
     step = next(st for st in gate.get("steps", []) if st.get("name") == STEP)
     env = {k: "true" if evaluate(str(v), c) else "false" for k, v in (step.get("env") or {}).items() if k != "NEEDS"}
-    needs = {job: {"result": r, "outputs": {}} for job, r in results.items()}
+    # Only the jobs the gate declares in `needs` reach toJSON(needs) on a runner, so a job the gate
+    # forgot cannot be judged here either (a fixed list once let a gate without kani pass its rows).
+    declared = gate.get("needs") or []
+    declared = {declared} if isinstance(declared, str) else set(declared)
+    needs = {job: {"result": r, "outputs": {}} for job, r in results.items() if job in declared}
     with tempfile.NamedTemporaryFile() as summary:
         env.update(NEEDS=json.dumps(needs), GITHUB_STEP_SUMMARY=summary.name, PATH=os.environ.get("PATH", ""))
         # The shell a `run:` step gets on a Linux runner.
