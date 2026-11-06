@@ -25,13 +25,20 @@ pub(super) enum Kind {
     Config,
     AdminAction,
     /// A call an identity grant refused that has no invocation record of its
-    /// own (stub: never produced yet).
+    /// own: read from its grant decision record, listed as a blocked call.
     Refusal,
 }
 
 impl Kind {
+    /// A call, or a refused call read from its grant decision: the kinds that
+    /// name a server, a tool and a caller.
+    pub(super) const fn is_call(self) -> bool {
+        matches!(self, Self::Call | Self::Refusal)
+    }
+
     fn as_str(self) -> &'static str {
         match self {
+            // A refusal is a blocked call; only its source record differs.
             Self::Call | Self::Refusal => "call",
             Self::Config => "config",
             Self::AdminAction => "admin_action",
@@ -66,6 +73,17 @@ pub(super) fn kind_of(line: &Line) -> Option<Kind> {
     match line.log {
         Which::Governance => {
             (str_field(e, "kind") == Some("control_plane_audit")).then_some(Kind::Config)
+        }
+        // A grant decision is a row only when it is a denial whose writer
+        // recorded that the call got no invocation record of its own. A
+        // record without the field (written before it existed) counts as
+        // recorded, so no call is ever listed twice.
+        Which::Invocation
+            if str_field(e, "kind") == Some(crate::decisions::GRANT_DECISION_KIND) =>
+        {
+            (str_field(e, "outcome") == Some("denied")
+                && e.get("invocation_recorded") == Some(&Value::Bool(false)))
+            .then_some(Kind::Refusal)
         }
         Which::Invocation => match str_field(e, "event") {
             Some("admin_action") => Some(Kind::AdminAction),
@@ -154,11 +172,26 @@ pub(super) fn row(line: &Line, secret: Option<&[u8]>) -> Option<Value> {
             row.insert("who".into(), who.into());
             row.insert("findings".into(), FINDINGS_NOT_RECORDED.into());
         }
+        Kind::Refusal => {
+            copy(&mut row, e, &["server", "tool", "trace_id"]);
+            row.insert("outcome".into(), FeedOutcome::Blocked.as_str().into());
+            let mut decision = Map::new();
+            copy(
+                &mut decision,
+                e,
+                &["reason", "scope", "capability", "grant_id"],
+            );
+            row.insert("decision".into(), decision.into());
+            let mut who = Map::new();
+            if let Some(w) = e.get("who") {
+                copy(&mut who, w, &["account", "authority", "subject"]);
+            }
+            row.insert("who".into(), who.into());
+        }
         Kind::Config => {
             copy(&mut row, e, &["action", "actor_id", "target_id"]);
             row.insert("outcome".into(), "change".into());
         }
-        Kind::Refusal => {}
         Kind::AdminAction => {
             copy(
                 &mut row,
@@ -188,7 +221,7 @@ impl Filter {
         let e = &line.entry;
         let who_account = || e.get("who").and_then(|w| str_field(w, "account"));
         if let Some(want) = self.outcome
-            && (kind != Kind::Call || feed_outcome(e) != Some(want))
+            && (!kind.is_call() || feed_outcome(e) != Some(want))
         {
             return false;
         }
@@ -214,7 +247,7 @@ impl Filter {
         if let Some(q) = &self.q {
             let tool = str_field(e, "tool");
             let hit = tool.is_some_and(|t| t.contains(q.as_str()))
-                || (kind == Kind::Call && str_field(e, "trace_id") == Some(q.as_str()));
+                || (kind.is_call() && str_field(e, "trace_id") == Some(q.as_str()));
             if !hit {
                 return false;
             }
@@ -238,7 +271,7 @@ impl Filter {
 /// caller's. Never `who.principal`, which changes on every token refresh; a
 /// row with no verified subject, and every config or admin row, is no one's.
 pub(super) fn owned_by(line: &Line, kind: Kind, issuer: &str, subject: &str) -> bool {
-    kind == Kind::Call
+    kind.is_call()
         && line.entry.get("who").is_some_and(|w| {
             str_field(w, "authority") == Some(issuer) && str_field(w, "subject") == Some(subject)
         })
@@ -248,7 +281,7 @@ pub(super) fn owned_by(line: &Line, kind: Kind, issuer: &str, subject: &str) -> 
 /// a call names its backend (`server`). Config rows are grant and policy
 /// changes and admin actions are gateway-wide, so neither is in any scope.
 pub(super) fn in_scope(line: &Line, kind: Kind, backends: &[String]) -> bool {
-    kind == Kind::Call
+    kind.is_call()
         && str_field(&line.entry, "server")
             .is_some_and(|server| BackendGrant::of_list(backends).admits(server))
 }
