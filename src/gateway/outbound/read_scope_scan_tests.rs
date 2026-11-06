@@ -153,7 +153,7 @@ fn every_judge_entry_opens_with_the_judging_gate() {
 /// module, and accepts the real gate.
 #[test]
 fn the_gate_check_refuses_each_ungated_shape() {
-    let source = r#"
+    let source = r"
         pub(crate) fn gated(firewall: &Firewall) {
             let Some((guard, mode)) = judging(firewall) else { return; };
         }
@@ -170,7 +170,7 @@ fn the_gate_check_refuses_each_ungated_shape() {
             pub(crate) fn inner(firewall: &Firewall) {}
         }
         fn private(firewall: &Firewall) {}
-    "#;
+    ";
     let file = syn::parse_file(source).expect("the fixture parses");
     let (gated, mut ungated) = entries(&file.items);
     ungated.sort();
