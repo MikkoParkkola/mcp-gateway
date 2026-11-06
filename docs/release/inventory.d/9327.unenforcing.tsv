@@ -1,0 +1,2 @@
+src/gateway/server/build_meta.rs	read_verdict_without_firewall	1	Says whether the startup notice applies (firewall off, arg_keys set, cross_tenant_reads not off); only the notice reads it, and the read verdict itself never does, so it decides nothing about access
+src/gateway/server/build_meta.rs	announce_read_verdict	1	Logs one startup line saying the cross-tenant read verdict still runs with the firewall off; writes a log line and decides nothing about access

@@ -3787,7 +3787,7 @@ the key lists it again. `mcp-gateway cap list` marks each one the gateway would 
 
 ## 130. Frames naming a second tenant for one caller are recorded, or withheld
 
-**Startup:** no notice, applies only with `security.firewall.tenant_guard.arg_keys` set
+**Startup:** no notice, but every start logs a line when `security.firewall.enabled` is false and the check is on (a warning with `block`, info with `observe`), and only with `security.firewall.tenant_guard.arg_keys` set
 
 With `arg_keys` set, every frame the gateway sends a caller is checked for the tenants it names:
 answers and errors, notifications, server-to-client requests and webhook deliveries, on HTTP, the
@@ -3798,6 +3798,8 @@ frames name more than one tenant inside `window_secs`, the new key
 `tenant_guard.cross_tenant_reads` decides: `observe` (the default) writes a `tenant_read`
 audit record with `cross_tenant_read: flagged` (for an answer on `POST /mcp`, `/mcp/{name}` or stdio, the same fields ride the answer's own `response_delivery_attempt` record, written over the frame the judge left, so it costs no second record), `block` withholds the frame with a JSON-RPC
 error, and `off` checks nothing. A caller with no identity is recorded as `unattributable`.
+The check runs on its own switch: it does not stop when `security.firewall.enabled` is false.
+To stop it, set `cross_tenant_reads: off`.
 On those three routes a dispatched answer that names a tenant writes no `event: tenant_read`
 record: its read fields (`caller_key`, `tenants`, `attribution`, `cross_tenant_read`) ride its
 `response_delivery_attempt` record. Notifications, server requests, stream events and the few
