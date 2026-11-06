@@ -122,6 +122,22 @@ pub(crate) const RESERVED_EVENTS: [&str; 4] = [
 ];
 
 impl TransparencyLogger {
+    /// [`Self::settle_now`] for an async caller. Not bounded yet: it runs the
+    /// synchronous core in place, with no F20 permit.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::settle_now`].
+    pub(crate) async fn settle(
+        self: &std::sync::Arc<Self>,
+        binding: &LogId,
+        token: &str,
+        role: Role,
+        payload: Map<String, Value>,
+    ) -> Result<Appended, Unsettled> {
+        self.settle_now(binding, token, role, payload)
+    }
+
     /// Append `payload` as the `role` record of `token`, synced, into the log
     /// the journal bound as `binding`, under this logger's lease and lock.
     /// The payload is written as given; settle adds only `event` and `token`.
@@ -132,7 +148,7 @@ impl TransparencyLogger {
     /// after the tail is re-read (a rebuild can adopt another log), and
     /// [`Unsettled::Refused`] when the payload names a field settle or the
     /// chain owns, or the append fails: nothing is claimed either way.
-    pub(crate) fn settle(
+    fn settle_now(
         &self,
         binding: &LogId,
         token: &str,

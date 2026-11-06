@@ -4,6 +4,7 @@
 //! a refusal claims nothing.
 
 use std::path::Path;
+use std::sync::Arc;
 
 use serde_json::{Map, Value, json};
 
@@ -37,8 +38,8 @@ fn on_disk(path: &Path) -> (Vec<u8>, Vec<u8>) {
 }
 
 /// Settle an outcome for `token`, bound to `own`, that must land.
-fn settled(l: &TransparencyLogger, own: &LogId, token: &str) {
-    let got = l.settle(own, token, Role::Outcome, payload());
+async fn settled(l: &Arc<TransparencyLogger>, own: &LogId, token: &str) {
+    let got = l.settle(own, token, Role::Outcome, payload()).await;
     assert!(got.is_ok(), "{token}: {got:?}");
 }
 
@@ -49,16 +50,16 @@ fn records_of(path: &Path, token: &str) -> Vec<Value> {
         .collect()
 }
 
-#[test]
-fn settle_appends_the_payload_unchanged_into_the_bound_log() {
+#[tokio::test]
+async fn settle_appends_the_payload_unchanged_into_the_bound_log() {
     // GIVEN: a live logger with a record
     let dir = tempfile::tempdir().unwrap();
     let path = log_path(&dir);
-    let l = TransparencyLogger::open(cfg(&path, 12, false)).unwrap();
+    let l = Arc::new(TransparencyLogger::open(cfg(&path, 12, false)).unwrap());
     append(&l, 0);
 
     // WHEN: an outcome is settled against the logger's own id
-    let got = l.settle(&l.log_id(), "w-1", Role::Outcome, payload());
+    let got = l.settle(&l.log_id(), "w-1", Role::Outcome, payload()).await;
 
     // THEN: it is the log's last record on disk, at the counter returned,
     // with the role's event, the token and every payload field as given
@@ -78,40 +79,40 @@ fn settle_appends_the_payload_unchanged_into_the_bound_log() {
     );
 }
 
-#[test]
-fn settle_bound_to_another_log_appends_nothing() {
+#[tokio::test]
+async fn settle_bound_to_another_log_appends_nothing() {
     for presented in [false, true] {
         // GIVEN: a binding that is not the logger's id: another id, or the
         // logger presenting another (the Bind(OtherLog) seam)
         let dir = tempfile::tempdir().unwrap();
         let path = log_path(&dir);
-        let l = TransparencyLogger::open(cfg(&path, 12, false)).unwrap();
+        let l = Arc::new(TransparencyLogger::open(cfg(&path, 12, false)).unwrap());
         // `own` is the id settle sees as the logger's.
         let (mut binding, mut own) = (LogId::mint(), l.log_id());
         if presented {
             (binding, own) = (own, LogId::mint());
             l.present_log_id_for_test(own.clone());
         }
-        settled(&l, &own, "w-0");
+        settled(&l, &own, "w-0").await;
         let before = on_disk(&path);
 
         // WHEN: it is settled, between two settles bound to the logger's id
-        let got = l.settle(&binding, "w-1", Role::Outcome, payload());
+        let got = l.settle(&binding, "w-1", Role::Outcome, payload()).await;
 
         // THEN: OtherLog, and the log and its mark are byte-for-byte as before;
         // the settles around it land
         assert!(matches!(got, Err(Unsettled::OtherLog)), "{got:?}");
         assert!(on_disk(&path) == before, "presented: {presented}");
-        settled(&l, &own, "w-2");
+        settled(&l, &own, "w-2").await;
     }
 }
 
-#[test]
-fn settle_after_its_log_was_replaced_lands_in_neither_log() {
+#[tokio::test]
+async fn settle_after_its_log_was_replaced_lands_in_neither_log() {
     // GIVEN: a live logger, and another log swapped in under it
     let dir = tempfile::tempdir().unwrap();
     let path = log_path(&dir);
-    let l = TransparencyLogger::open(cfg(&path, 12, false)).unwrap();
+    let l = Arc::new(TransparencyLogger::open(cfg(&path, 12, false)).unwrap());
     append(&l, 0);
     let binding = l.log_id();
     let other = tempfile::tempdir().unwrap();
@@ -124,7 +125,7 @@ fn settle_after_its_log_was_replaced_lands_in_neither_log() {
     swap_in(&sibling(&theirs, "hwm"), &sibling(&path, "hwm"));
 
     // WHEN: it is settled with the binding it held
-    let got = l.settle(&binding, "w-1", Role::Outcome, payload());
+    let got = l.settle(&binding, "w-1", Role::Outcome, payload()).await;
 
     // THEN: OtherLog, found after the rebuild adopted the other id, and no
     // record names the token in either log
@@ -133,15 +134,15 @@ fn settle_after_its_log_was_replaced_lands_in_neither_log() {
     assert!(records_of(&theirs, "w-1").is_empty());
 }
 
-#[test]
-fn a_refused_settle_appends_nothing() {
+#[tokio::test]
+async fn a_refused_settle_appends_nothing() {
     for refusal in ["sync", "before", "event", "token"] {
         // GIVEN: a live logger, a failing sync, the BeforeAppend seam, or a
         // payload that names the event or the token itself
         let dir = tempfile::tempdir().unwrap();
         let path = log_path(&dir);
-        let l = TransparencyLogger::open(cfg(&path, 12, false)).unwrap();
-        settled(&l, &l.log_id(), "w-0");
+        let l = Arc::new(TransparencyLogger::open(cfg(&path, 12, false)).unwrap());
+        settled(&l, &l.log_id(), "w-0").await;
         let mut given = payload();
         match refusal {
             "sync" => l.arm_write_fault(Some(WriteFault::SyncError)),
@@ -151,7 +152,7 @@ fn a_refused_settle_appends_nothing() {
         let before = on_disk(&path);
 
         // WHEN: it is settled
-        let got = l.settle(&l.log_id(), "w-1", Role::Outcome, given);
+        let got = l.settle(&l.log_id(), "w-1", Role::Outcome, given).await;
 
         // THEN: Refused, and the log and its mark are as before
         assert!(
@@ -160,20 +161,20 @@ fn a_refused_settle_appends_nothing() {
         );
         assert!(on_disk(&path) == before, "{refusal}");
         // The refusal was that call's only: the next settle lands.
-        settled(&l, &l.log_id(), "w-2");
+        settled(&l, &l.log_id(), "w-2").await;
     }
 }
 
-#[test]
-fn a_settle_refused_after_its_append_leaves_the_record_for_dedup() {
+#[tokio::test]
+async fn a_settle_refused_after_its_append_leaves_the_record_for_dedup() {
     // GIVEN: the AfterAppend seam
     let dir = tempfile::tempdir().unwrap();
     let path = log_path(&dir);
-    let l = TransparencyLogger::open(cfg(&path, 12, false)).unwrap();
+    let l = Arc::new(TransparencyLogger::open(cfg(&path, 12, false)).unwrap());
     l.arm_settle_fault(FailSettle::AfterAppend);
 
     // WHEN: it is settled
-    let got = l.settle(&l.log_id(), "w-1", Role::Outcome, payload());
+    let got = l.settle(&l.log_id(), "w-1", Role::Outcome, payload()).await;
 
     // THEN: Refused, with the synced record on disk: the replay repeats it
     // and the reader collapses the pair
@@ -191,7 +192,7 @@ fn settle_events_name_their_role_and_callers_cannot_write_them() {
     ];
     let dir = tempfile::tempdir().unwrap();
     let path = log_path(&dir);
-    let l = TransparencyLogger::open(cfg(&path, 12, false)).unwrap();
+    let l = Arc::new(TransparencyLogger::open(cfg(&path, 12, false)).unwrap());
     for (role, name) in roles {
         assert_eq!(role.event(), name);
         // A caller naming the event is refused, and nothing is appended.
