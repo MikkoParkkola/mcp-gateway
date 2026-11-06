@@ -299,7 +299,7 @@ impl TransparencyLogger {
         // retention and recovery below runs under it, and a second writer of
         // this path is refused.
         let lease = lease::acquire(&path, wait)?;
-        let recovered = rotation::recover(&path, &config, &lease, rotation::now_secs(0))?;
+        let (recovered, log_id) = rotation::recover(&path, &config, &lease, rotation::now_secs(0))?;
         Ok(Self {
             inner: Mutex::new(Inner {
                 file: recovered.file,
@@ -310,7 +310,7 @@ impl TransparencyLogger {
             config,
             path,
             lease,
-            log_id: identity::LogId::mint(),
+            log_id,
             // Production installs the resolved key through with_record_key
             // (build_meta_mcp); a logger opened in test code starts keyed.
             #[cfg(not(test))]
@@ -355,6 +355,10 @@ impl TransparencyLogger {
     /// The log's identity: reused from the log's own records on open, minted
     /// (and recorded once) only when it has none.
     #[must_use]
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "read by the settle step, which binds to it")
+    )]
     pub(crate) fn log_id(&self) -> &identity::LogId {
         &self.log_id
     }

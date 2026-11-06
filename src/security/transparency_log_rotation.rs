@@ -16,6 +16,7 @@ use std::path::Path;
 use serde_json::{Map, Value};
 
 use super::hwm_scan::{contradicted, hwm_missing_in, newest_finding};
+use super::identity::{self, LogId};
 use super::segments::{self, HighWater, Segment};
 use super::{
     MAX_TAIL_SCAN_BYTES, TransparencyLogConfig, chain_line, read_last_nonempty_line,
@@ -211,12 +212,15 @@ pub(super) struct Recovered {
 ///
 /// An I/O error, a complete but unparseable final line (as before D6), or a
 /// newest sealed segment with no seal while the active file is missing (F16).
+///
+/// Also returns the log's identity: reused from its records, or minted and
+/// recorded once when it has none.
 pub(super) fn recover(
     path: &Path,
     config: &TransparencyLogConfig,
     _guard: &ExclusiveFileLock,
     now: Option<u64>,
-) -> io::Result<Recovered> {
+) -> io::Result<(Recovered, LogId)> {
     let secret = config.shared_secret.as_bytes();
     let sealed = segments::list_segments(path)?;
     let hw = segments::read_hwm(path, secret, &config.key_id);
@@ -231,7 +235,10 @@ pub(super) fn recover(
     let committed_drop = dropped.is_some_and(|d| hw.as_ref().is_some_and(|h| h.counter >= d));
     // A tail that ends below the authenticated mark lost committed records
     // whether the cut was torn or fell on a newline (MIK-7712).
-    let (mut state, below_mark) = reopen_tail(path, config, &sealed, hw.as_ref(), now)?;
+    let existing = identity::resolve(path, &sealed)?;
+    let minted = existing.is_none();
+    let id = existing.unwrap_or_else(LogId::mint);
+    let (mut state, below_mark) = reopen_tail(path, config, &sealed, hw.as_ref(), now, &id)?;
     finish_pending_expiry(path)?;
     // The active file holds the finding from its open record or a marker,
     // and the newest sealed segment from its own; either can be edited, so
@@ -282,21 +289,47 @@ pub(super) fn recover(
         }
     }
     if hw.is_none() && state.counter > 0 {
-        let mark = HighWater {
-            counter: state.counter,
-            entry_hash: state.last_entry_hash.clone(),
-            segment_seq: state.seg.seq,
-        };
-        segments::write_hwm(
-            path,
-            &segments::encode_hwm(&mark, secret, &config.key_id)?,
-            true,
-        )?;
+        mark_tail(path, config, &state)?;
+    }
+    // After the first mark, so a crash before it still leaves the genesis-only
+    // log the verifier accepts; the mark then moves to the identified record.
+    if minted {
+        record_identity(&mut state, config, &id)?;
+        mark_tail(path, config, &state)?;
     }
     state.seg.id = file_id(&state.file)?;
     state.seg.sealed = segments::list_segments(path)?.len();
     segments::sync_dir(path)?;
-    Ok(state)
+    Ok((state, id))
+}
+
+/// Write `.hwm` at the tail `state` holds.
+fn mark_tail(path: &Path, config: &TransparencyLogConfig, state: &Recovered) -> io::Result<()> {
+    let mark = HighWater {
+        counter: state.counter,
+        entry_hash: state.last_entry_hash.clone(),
+        segment_seq: state.seg.seq,
+    };
+    let bytes = segments::encode_hwm(&mark, config.shared_secret.as_bytes(), &config.key_id)?;
+    segments::write_hwm(path, &bytes, true)
+}
+
+/// Chain the one record that names a freshly minted id onto the tail.
+fn record_identity(
+    state: &mut Recovered,
+    config: &TransparencyLogConfig,
+    id: &LogId,
+) -> io::Result<()> {
+    state.last_entry_hash = write_synced(
+        &mut state.file,
+        config,
+        identity::identified_fields(id),
+        state.counter + 1,
+        &state.last_entry_hash,
+    )?;
+    state.counter += 1;
+    state.seg.has_records = true;
+    Ok(())
 }
 
 /// Reopen the active segment from whatever its tail holds, and say whether
@@ -309,6 +342,7 @@ fn reopen_tail(
     sealed: &[Segment],
     hw: Option<&HighWater>,
     now: Option<u64>,
+    id: &LogId,
 ) -> io::Result<(Recovered, bool)> {
     match read_last_nonempty_line(path) {
         Ok(Some(line)) => {
@@ -322,7 +356,7 @@ fn reopen_tail(
                 let sealed = segments::list_segments(path)?;
                 let behind = contradicted(path, &sealed, hw, counter, &hash, config)?;
                 let carry = lost_from(newest_finding(&sealed, config)?, behind, counter);
-                let state = open_after_seal(path, config, &sealed, hw, now, carry)?;
+                let state = open_after_seal(path, config, &sealed, hw, now, carry, id)?;
                 Ok((state, behind))
             } else {
                 let (resumed, misplaced) = resume_active(path, counter, hash, sealed, hw, now)?;
@@ -331,9 +365,9 @@ fn reopen_tail(
                 Ok((resumed, below_mark))
             }
         }
-        Ok(None) => reopen_after_seal(path, config, sealed, hw, now),
+        Ok(None) => reopen_after_seal(path, config, sealed, hw, now, id),
         Err(e) if e.kind() == io::ErrorKind::NotFound => {
-            reopen_after_seal(path, config, sealed, hw, now)
+            reopen_after_seal(path, config, sealed, hw, now, id)
         }
         Err(e) => Err(e),
     }
@@ -346,6 +380,7 @@ fn reopen_after_seal(
     sealed: &[Segment],
     hw: Option<&HighWater>,
     now: Option<u64>,
+    id: &LogId,
 ) -> io::Result<(Recovered, bool)> {
     let (tail, tail_hash) = match sealed.last() {
         Some(segment) => seal_of(segment)?.unwrap_or_default(),
@@ -353,7 +388,7 @@ fn reopen_after_seal(
     };
     let below_mark = contradicted(path, sealed, hw, tail, &tail_hash, config)?;
     let carry = lost_from(newest_finding(sealed, config)?, below_mark, tail);
-    let state = open_after_seal(path, config, sealed, hw, now, carry)?;
+    let state = open_after_seal(path, config, sealed, hw, now, carry, id)?;
     Ok((state, below_mark))
 }
 
@@ -433,6 +468,7 @@ pub(super) fn open_after_seal(
     hw: Option<&HighWater>,
     now: Option<u64>,
     carry: Option<u64>,
+    id: &LogId,
 ) -> io::Result<Recovered> {
     // Truncate, never `create_new`: an empty or torn-open active may exist.
     let fresh = || {
@@ -459,7 +495,11 @@ pub(super) fn open_after_seal(
             // never-rotated log from a pre-D6 one and require `.hwm` (#2275).
             let fields = housekeeping(
                 EV_OPENED,
-                &[("segment_seq", 0.into()), ("segment_opened_at", now.into())],
+                &[
+                    ("segment_seq", 0.into()),
+                    ("segment_opened_at", now.into()),
+                    ("log_id", id.as_str().into()),
+                ],
             );
             let hash = write_synced(&mut fresh()?, config, fields, 1, "genesis")?;
             return Ok(Recovered {
@@ -481,6 +521,7 @@ pub(super) fn open_after_seal(
             // can resume here; verify still reports the missing counters.
             ("prev_segment_final_hash", hw.entry_hash.clone().into()),
             ("segment_opened_at", now.into()),
+            ("log_id", id.as_str().into()),
         ];
         if let Some(at) = carry {
             extra.push((HWM_MISSING_AT, at.into()));
@@ -520,6 +561,7 @@ pub(super) fn open_after_seal(
         ("prev_segment_seq", newest.seq.into()),
         ("prev_segment_final_hash", seal_hash.clone().into()),
         ("segment_opened_at", now.into()),
+        ("log_id", id.as_str().into()),
     ];
     if let Some(at) = carry {
         extra.push((HWM_MISSING_AT, at.into()));

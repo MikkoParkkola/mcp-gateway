@@ -285,7 +285,7 @@ impl TransparencyLogger {
     /// writer rotated, finish a half-done rotation, or continue the counter
     /// past a deleted active file (2.8, 2.13).
     fn rebuild(&self, inner: &mut Inner, path: &Path, g: &ExclusiveFileLock) -> io::Result<()> {
-        let r = recover(path, &self.config, g, self.now())?;
+        let (r, _) = recover(path, &self.config, g, self.now())?;
         // A finding this writer already holds is never forgotten (#2294).
         let known = inner.seg.hwm_missing_at;
         // A tail that is not this writer's last record: the log it extends
@@ -504,6 +504,7 @@ impl TransparencyLogger {
             Some(&hw),
             now,
             inner.seg.hwm_missing_at,
+            &self.log_id,
         )?;
         inner.file = r.file;
         inner.counter = r.counter;
