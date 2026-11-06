@@ -261,7 +261,7 @@ jobs:
   upgrade-rehearsal:
     name: Upgrade rehearsal (3.5.1 -> this build)
     needs: scope
-    if: ${{ !cancelled() && (needs.scope.result != 'success' || needs.scope.outputs.docs_only != 'true') && !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) && !(github.event_name == 'push' && github.ref == 'refs/heads/docs/ranking-1-release-line') && !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && !(startsWith(github.head_ref, 'train/') && github.event.pull_request.head.repo.full_name == github.repository)) }}
+    if: ${{ !cancelled() && (needs.scope.result != 'success' || needs.scope.outputs.docs_only != 'true') && !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) && !(github.event_name == 'push' && github.ref == 'refs/heads/docs/ranking-1-release-line') }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
@@ -549,15 +549,16 @@ jobs:
         run: python3 scripts/ci/check-codeql-ignore.py
 
   # Feature combinations run on every release-line push (feature-combos.yml)
-  # and, before it lands, on a merge train: a pull request into the release line
-  # from a `train/` branch in this repository. No other pull request runs them,
-  # which keeps it to about one run per train. A docs-only train skips them like
-  # the other build jobs.
-  feature-combos-train:
+  # and, before a change lands, on its pull request into the release line, lane
+  # or merge train, so a feature-gating break fails the pull request that made
+  # it. A docs-only or throwaway pull request skips them. heavy-gate judges them
+  # on the train, where a lane run that predates them would leave them
+  # unrequired.
+  feature-combos-pr:
     needs: scope
     permissions:
       contents: read
-    if: ${{ !cancelled() && github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && startsWith(github.head_ref, 'train/') && github.event.pull_request.head.repo.full_name == github.repository && (needs.scope.result != 'success' || needs.scope.outputs.docs_only != 'true') }}
+    if: ${{ !cancelled() && github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && !(github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) && (needs.scope.result != 'success' || needs.scope.outputs.docs_only != 'true') }}
     uses: ./.github/workflows/feature-combos.yml
 
   # The Windows suite as shards (MIK-8482): `windows-check` below is the
@@ -567,7 +568,7 @@ jobs:
   # runner slots is the exception.
   windows-shards:
     name: Windows shard ${{ matrix.shard }}
-    if: ${{ !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) && !(github.event_name == 'push' && github.ref == 'refs/heads/docs/ranking-1-release-line') && (!(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && !(startsWith(github.head_ref, 'train/') && github.event.pull_request.head.repo.full_name == github.repository)) || (github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && contains(github.event.pull_request.labels.*.name, 'os-sensitive'))) }}
+    if: ${{ !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) && !(github.event_name == 'push' && github.ref == 'refs/heads/docs/ranking-1-release-line') }}
     runs-on: windows-2025
     timeout-minutes: 90
     strategy:
@@ -677,7 +678,7 @@ jobs:
   # (MIK-8223).
   windows-clippy:
     name: Windows clippy
-    if: ${{ !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) && !(github.event_name == 'push' && github.ref == 'refs/heads/docs/ranking-1-release-line') && (!(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && !(startsWith(github.head_ref, 'train/') && github.event.pull_request.head.repo.full_name == github.repository)) || (github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && contains(github.event.pull_request.labels.*.name, 'os-sensitive'))) }}
+    if: ${{ !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) && !(github.event_name == 'push' && github.ref == 'refs/heads/docs/ranking-1-release-line') }}
     runs-on: windows-2025
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -703,11 +704,12 @@ jobs:
   # succeeded: a skipped or cancelled one is red (scripts/ci/check_needs.py).
   # always() so a failed shard still yields a verdict; the skip guards are the
   # shards' own, so a throwaway PR or a post-merge push skips this as before;
-  # a lane PR into the release line skips it with them (heavy-gate).
+  # a lane PR into the release line runs it with them, and heavy-gate judges
+  # it on the train.
   windows-check:
     name: Windows check
     needs: [windows-shards, windows-clippy]
-    if: ${{ always() && !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) && !(github.event_name == 'push' && github.ref == 'refs/heads/docs/ranking-1-release-line') && (!(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && !(startsWith(github.head_ref, 'train/') && github.event.pull_request.head.repo.full_name == github.repository)) || (github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && contains(github.event.pull_request.labels.*.name, 'os-sensitive'))) }}
+    if: ${{ always() && !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) && !(github.event_name == 'push' && github.ref == 'refs/heads/docs/ranking-1-release-line') }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -719,23 +721,21 @@ jobs:
         run: python3 scripts/ci/check_needs.py windows-shards windows-clippy
 
   # The heavy jobs (the Windows shards, clippy and check, release tooling
-  # tests, Task SDK recovery, gws dry-run, Linux keychain, upgrade
-  # rehearsal) skip a lane pull request into the release line and run on its
-  # merge train (a `train/` branch in this repository), which is how every
-  # change lands; every other event runs them as before. Kani is not one of
-  # them: a lane pull request runs it too, so code that does not compile under
-  # cfg(kani) fails its own CI rather than a train. This job still judges Kani
-  # on the train: a train needs its PRs' own passing checks plus this job, and
-  # a PR whose CI skipped Kani would otherwise leave a red Kani unrequired there.
-  # This job is their
-  # verdict on every release-line pull request but a throwaway one: on a lane
-  # it passes without judging, which makes it a check every lane passed, so
-  # the merge train needs it to pass on the train, where it fails unless every
-  # heavy job succeeded (on a docs-only train, the ones the docs-only rule
-  # skips may skip). scripts/ci/test_heavy_train_gating.py pins the routing.
+  # tests, Task SDK recovery, gws dry-run, Linux keychain, Kani, upgrade
+  # rehearsal, feature combinations) run on lane pull requests too, by their
+  # docs-only rule, so a break fails the pull request that made it. This job
+  # is their verdict on every release-line pull request but a throwaway one: on
+  # a lane it passes without judging (the lane's own checks fail it), which
+  # makes it a check every lane passed, so the merge train needs it to pass on
+  # the train, where it fails unless every heavy job succeeded (on a docs-only
+  # train, the ones the docs-only rule skips may skip). It judges them on the
+  # train because a train's required checks are its pull requests' own checks
+  # plus this one, and a pull request whose CI predates a job, or skipped it,
+  # would leave a red one unrequired there.
+  # scripts/ci/test_heavy_train_gating.py pins the routing.
   heavy-gate:
     name: Heavy checks (merge train)
-    needs: [scope, windows-shards, windows-clippy, windows-check, release-script-tests, task-sdk-recovery, gws-dry-run, linux-keychain, kani, upgrade-rehearsal]
+    needs: [scope, windows-shards, windows-clippy, windows-check, release-script-tests, task-sdk-recovery, gws-dry-run, linux-keychain, kani, upgrade-rehearsal, feature-combos-pr]
     if: ${{ always() && github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && !(github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -752,14 +752,14 @@ jobs:
           DOCS_ONLY: ${{ needs.scope.result == 'success' && needs.scope.outputs.docs_only == 'true' }}
         run: |
           if [ "$TRAIN" != true ]; then
-            echo "Heavy checks deferred to the merge train: not run on this pull request, not passed." | tee -a "$GITHUB_STEP_SUMMARY"
+            echo "Heavy checks are judged on the merge train; on this pull request each heavy job's own check decides." | tee -a "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
           skippable=()
           if [ "$DOCS_ONLY" = true ]; then
-            skippable=(--allow-skipped task-sdk-recovery,gws-dry-run,linux-keychain,kani,upgrade-rehearsal)
+            skippable=(--allow-skipped task-sdk-recovery,gws-dry-run,linux-keychain,kani,upgrade-rehearsal,feature-combos-pr)
           fi
-          python3 scripts/ci/check_needs.py "${skippable[@]}" scope windows-shards windows-clippy windows-check release-script-tests task-sdk-recovery gws-dry-run linux-keychain kani upgrade-rehearsal
+          python3 scripts/ci/check_needs.py "${skippable[@]}" scope windows-shards windows-clippy windows-check release-script-tests task-sdk-recovery gws-dry-run linux-keychain kani upgrade-rehearsal feature-combos-pr
   # The macOS suite as shards (MIK-8482); `macos-check` is the aggregate.
   # On a pull request it runs only for a merge train (a `train/` branch in
   # this repository): the account's few macOS runners go to trains, and every
@@ -1038,7 +1038,7 @@ jobs:
   gws-dry-run:
     name: gws dry-run conformance
     needs: scope
-    if: ${{ !cancelled() && (needs.scope.result != 'success' || needs.scope.outputs.docs_only != 'true') && !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) && !(github.event_name == 'push' && github.ref == 'refs/heads/docs/ranking-1-release-line') && !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && !(startsWith(github.head_ref, 'train/') && github.event.pull_request.head.repo.full_name == github.repository)) }}
+    if: ${{ !cancelled() && (needs.scope.result != 'success' || needs.scope.outputs.docs_only != 'true') && !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) && !(github.event_name == 'push' && github.ref == 'refs/heads/docs/ranking-1-release-line') }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -1065,7 +1065,7 @@ jobs:
   linux-keychain:
     name: Linux keychain against gnome-keyring
     needs: scope
-    if: ${{ !cancelled() && (needs.scope.result != 'success' || needs.scope.outputs.docs_only != 'true') && !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) && !(github.event_name == 'push' && github.ref == 'refs/heads/docs/ranking-1-release-line') && !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && !(startsWith(github.head_ref, 'train/') && github.event.pull_request.head.repo.full_name == github.repository)) }}
+    if: ${{ !cancelled() && (needs.scope.result != 'success' || needs.scope.outputs.docs_only != 'true') && !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) && !(github.event_name == 'push' && github.ref == 'refs/heads/docs/ranking-1-release-line') }}
     runs-on: ubuntu-latest
     timeout-minutes: 40
     permissions:
@@ -1103,7 +1103,7 @@ jobs:
   # pull request skips it; a failed scope decision runs it (fail-open).
   task-sdk-recovery:
     needs: scope
-    if: ${{ !cancelled() && (needs.scope.result != 'success' || needs.scope.outputs.docs_only != 'true') && !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) && !(github.event_name == 'push' && github.ref == 'refs/heads/docs/ranking-1-release-line') && !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && !(startsWith(github.head_ref, 'train/') && github.event.pull_request.head.repo.full_name == github.repository)) }}
+    if: ${{ !cancelled() && (needs.scope.result != 'success' || needs.scope.outputs.docs_only != 'true') && !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) && !(github.event_name == 'push' && github.ref == 'refs/heads/docs/ranking-1-release-line') }}
     uses: ./.github/workflows/task-sdk-recovery.yml
 
   # Release signing's own tests read nothing live, so they fail every ref:
@@ -1362,7 +1362,7 @@ jobs:
     name: Release tooling unit tests
     runs-on: ubuntu-latest
     # Below runs-on: the wiring mutation harness anchors on name + runs-on.
-    if: ${{ !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) && !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && !(startsWith(github.head_ref, 'train/') && github.event.pull_request.head.repo.full_name == github.repository)) }}
+    if: ${{ !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install PyYAML 6.0.2 (the cosign floor parses workflows)
