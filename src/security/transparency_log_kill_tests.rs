@@ -231,6 +231,7 @@ fn a_kill_after_a_replacing_genesis_keeps_its_predecessor_evidence() {
     assert!(identified(&path).is_empty(), "killed first: {left:?}");
     let hw = &left[0][PREDECESSOR]["previous_high_water"];
     assert_eq!(hw["counter"].as_u64(), Some(mark.counter), "{left:?}");
+    assert_eq!(hw["entry_hash"].as_str(), Some(mark.entry_hash.as_str()));
     let id = left[0]["log_id"].as_str().unwrap().to_string();
 
     // WHEN: the log is reopened twice
@@ -279,6 +280,7 @@ fn a_rotated_log_whose_files_vanished_finishes_its_new_genesis_on_reopen() {
     assert_eq!(left[0]["segment_seq"].as_u64(), Some(mark.segment_seq));
     let hw = &left[0][PREDECESSOR]["previous_high_water"];
     assert_eq!(hw["counter"].as_u64(), Some(mark.counter), "{left:?}");
+    assert_eq!(hw["entry_hash"].as_str(), Some(mark.entry_hash.as_str()));
     let id = left[0]["log_id"].as_str().unwrap().to_string();
 
     // WHEN: the log is reopened twice

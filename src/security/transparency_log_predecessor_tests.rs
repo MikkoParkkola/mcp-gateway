@@ -7,7 +7,7 @@
 
 use serde_json::Value;
 
-use super::rotation_tests::{append, cfg, event, lines, log_path, rotate_n, verify};
+use super::rotation_tests::{append, cfg, event, lines, log_path, rewrite_line, rotate_n, verify};
 use super::segments::{read_hwm, sibling};
 use super::*;
 use crate::test_log_capture::capture_warnings;
@@ -198,29 +198,101 @@ fn a_continuing_log_whose_active_file_vanished_names_no_predecessor() {
     }
 }
 
-#[test]
-fn the_predecessor_warning_is_verified_only_for_the_checked_record() {
-    // GIVEN: a genesis open record naming a lost predecessor, which verify
-    // authenticates (no mark survived, so the chain is whole)
-    let dir = tempfile::tempdir().unwrap();
-    let path = log_path(&dir);
+/// A log whose live logger saw its active file and mark deleted: its new
+/// genesis open record names the old id only. Returns the log and that id.
+fn replaced_genesis(dir: &tempfile::TempDir) -> (std::path::PathBuf, String) {
+    let path = log_path(dir);
     let l = TransparencyLogger::open(cfg(&path, 12, false)).unwrap();
     append(&l, 0);
+    let old = l.log_id().as_str().to_string();
     std::fs::remove_file(&path).unwrap();
     std::fs::remove_file(sibling(&path, "hwm")).unwrap();
     append(&l, 1);
-    let head = lines(&path).remove(0);
-    let mut another = head.clone();
-    another["entry_hash"] = "sha256:another".into();
-    assert!(head.get(PREDECESSOR).is_some(), "{head}");
+    (path, old)
+}
 
-    // WHEN: the warning is read for the checked record, for another one (the
-    // bytes changed between the two reads), and for none
-    let warn = |c| identity::predecessor_warning(&path, c).unwrap().unwrap();
-    let (same, other, none) = (warn(Some(&head)), warn(Some(&another)), warn(None));
+/// The warning a verified record naming `named` reads as.
+fn verified_warning(path: &std::path::Path, named: &str) -> String {
+    format!(
+        "{} starts a new log after its predecessor went missing: {named}",
+        path.display()
+    )
+}
 
-    // THEN: only the checked record's warning reads as verified
-    assert!(!same.contains("unverified"), "{same}");
-    assert!(other.contains("unverified"), "{other}");
-    assert!(none.contains("unverified"), "{none}");
+#[test]
+fn the_predecessor_warning_shows_the_checked_record_not_a_swapped_one() {
+    // GIVEN: the checked genesis open record, and the file's first line then
+    // swapped for one naming another id under the same entry_hash string
+    let dir = tempfile::tempdir().unwrap();
+    let (path, old) = replaced_genesis(&dir);
+    let mut all = lines(&path);
+    let checked = all[0].clone();
+    all[0][PREDECESSOR]["previous_log_id"] = "edited".into();
+    let body = all
+        .iter()
+        .fold(String::new(), |acc, v| acc + &v.to_string() + "\n");
+    std::fs::write(&path, body).unwrap();
+
+    // WHEN: the warning is built for the checked record
+    let warned = identity::predecessor_warning(&path, Some(&checked)).unwrap();
+
+    // THEN: it names the checked evidence, verified, never the swapped one
+    let want = verified_warning(&path, &format!("previous log_id {old}"));
+    assert_eq!(warned.as_deref(), Some(want.as_str()));
+}
+
+#[test]
+fn an_edited_predecessor_field_fails_the_chain_and_reads_unverified() {
+    // GIVEN: a genesis open record whose evidence was edited, its entry_hash
+    // string kept
+    let dir = tempfile::tempdir().unwrap();
+    let (path, _) = replaced_genesis(&dir);
+    let mut all = lines(&path);
+    all[0][PREDECESSOR]["previous_log_id"] = "edited".into();
+    let body = all
+        .iter()
+        .fold(String::new(), |acc, v| acc + &v.to_string() + "\n");
+    std::fs::write(&path, body).unwrap();
+
+    // WHEN: it is verified
+    let r = verify(&path, false);
+
+    // THEN: the chain fails at that record, and the warning is unverified
+    assert!(!r.ok, "an edited record cannot verify");
+    let msg = r.error_message.unwrap_or_default();
+    assert!(msg.contains("entry_hash mismatch"), "{msg}");
+    let named: Vec<&String> = r.warnings.iter().filter(|w| w.contains("edited")).collect();
+    assert_eq!(named.len(), 1, "{:?}", r.warnings);
+    assert!(named[0].contains("unverified"), "{named:?}");
+}
+
+#[test]
+fn a_clean_replacing_genesis_warns_verified_with_its_own_evidence() {
+    // GIVEN: an untouched replacing genesis
+    let dir = tempfile::tempdir().unwrap();
+    let (path, old) = replaced_genesis(&dir);
+
+    // WHEN: it is verified
+    let r = verify(&path, false);
+
+    // THEN: it passes, with exactly the checked record's evidence, verified
+    assert!(r.ok, "{:?}", r.error_message);
+    let want = verified_warning(&path, &format!("previous log_id {old}"));
+    assert_eq!(r.warnings, [want]);
+}
+
+#[test]
+fn an_evidence_object_with_no_parts_reads_as_no_evidence_fields() {
+    // GIVEN: a genesis open record whose evidence object names nothing
+    let dir = tempfile::tempdir().unwrap();
+    let (path, _) = replaced_genesis(&dir);
+    rewrite_line(&path, 0, |v| v[PREDECESSOR] = serde_json::json!({}));
+    let checked = lines(&path).remove(0);
+
+    // WHEN: the warning is built for it
+    let warned = identity::predecessor_warning(&path, Some(&checked)).unwrap();
+
+    // THEN: it says so, with no dangling separator
+    let want = verified_warning(&path, "no evidence fields");
+    assert_eq!(warned.as_deref(), Some(want.as_str()));
 }
