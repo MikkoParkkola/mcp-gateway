@@ -22,7 +22,6 @@
 //! records before the answer leaves, failing closed under `FailClosed`.
 
 use crate::error::rpc_codes::INTERNAL_ERROR;
-use std::collections::HashSet;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
@@ -37,8 +36,14 @@ use crate::security::TransparencyLogger;
 use crate::security::audit::{AuditEnvelope, AuditFailurePolicy, AuditOutcome, AuditWho};
 use crate::{Error, Result};
 
+mod marker;
+mod withheld;
+pub(super) use withheld::{WITHHELD_RECORD_FAILED, note_withheld_best_effort};
+pub(crate) use marker::in_delivery_scope;
+pub(super) use marker::{RecordedSet, RetryCell, note_retry_trace, with_retry_trace};
 mod repeat;
 pub(crate) use repeat::DecisionDedupe;
+pub(super) use repeat::RepeatMark;
 #[cfg(test)]
 pub(super) use repeat::{REPEAT_WINDOW, RepeatLedger};
 
@@ -67,12 +72,6 @@ tokio::task_local! {
     /// Set while a finished task's stored delivery is re-checked: the
     /// suppression store and the task-and-caller half of the repeat key.
     static REPEAT_SCOPE: (Arc<DecisionDedupe>, String);
-    /// Set while a delivery is re-checked: its call already has the
-    /// invocation record of the original request.
-    static DELIVERY: ();
-    /// Filled by a retry's dispatch with the trace id it opens; read by the
-    /// withheld notes taken in the same scope.
-    static RETRY_TRACE: RetryCell;
 }
 
 /// How long a re-check record waits for the repeat check and its append
@@ -96,107 +95,10 @@ pub(super) fn in_repeat_scope<T>(
     })
 }
 
-/// Run `check` as a delivery re-check: the call it is about already has its
-/// invocation record, from the original request, so the decisions it notes
-/// say so.
-pub(crate) fn in_delivery_scope<T>(check: impl FnOnce() -> T) -> T {
-    DELIVERY.sync_scope((), check)
-}
-
-/// The trace ids whose invocation record landed in the log, shared by the
-/// notes of one slot. An invocation writer adds its id inside its own append
-/// op, after the write returned `Ok`; appends are serialized, so a decision
-/// appended later sees every earlier append's real outcome.
-#[derive(Clone, Default)]
-pub(super) struct RecordedSet(Arc<Mutex<HashSet<String>>>);
-
-impl RecordedSet {
-    pub(super) fn add(&self, trace_id: &str) {
-        self.0
-            .lock()
-            .expect("recorded set lock")
-            .insert(trace_id.to_owned());
-    }
-
-    fn contains(&self, trace_id: &str) -> bool {
-        self.0.lock().expect("recorded set lock").contains(trace_id)
-    }
-}
-
-impl std::fmt::Debug for RecordedSet {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("RecordedSet")
-    }
-}
-
-impl PartialEq for RecordedSet {
-    fn eq(&self, other: &Self) -> bool {
-        Arc::ptr_eq(&self.0, &other.0)
-    }
-}
-
-impl Eq for RecordedSet {}
-
-/// The trace id of the retry a withheld call routes to, once its dispatch
-/// has opened one. Shared by the notes taken in the same [`with_retry_trace`].
-#[derive(Clone, Default)]
-pub(super) struct RetryCell(Arc<std::sync::OnceLock<String>>);
-
-impl std::fmt::Debug for RetryCell {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("RetryCell")
-    }
-}
-
-impl PartialEq for RetryCell {
-    fn eq(&self, other: &Self) -> bool {
-        Arc::ptr_eq(&self.0, &other.0)
-    }
-}
-
-impl Eq for RetryCell {}
-
-/// Run `work`, a withheld call's note and its retry dispatch, so the retry's
-/// trace id reaches the note: the note says the call has an invocation record
-/// only when that retry's own record landed.
-pub(super) async fn with_retry_trace<F: Future>(work: F) -> F::Output {
-    RETRY_TRACE.scope(RetryCell::default(), work).await
-}
-
-/// Called by the retry's dispatch with the trace id it opens.
-pub(super) fn note_retry_trace(trace_id: &str) {
-    let _ = RETRY_TRACE.try_with(|cell| cell.0.set(trace_id.to_owned()));
-}
-
 /// The open slot's recorded set, for an invocation writer to add to.
 pub(super) fn open_slot_recorded() -> Option<RecordedSet> {
     GRANT_SLOT.try_with(|slot| slot.recorded.clone()).ok()
 }
-
-/// A re-check note's suppression key and decision fingerprint.
-#[derive(Clone)]
-pub(super) struct RepeatMark {
-    store: Arc<DecisionDedupe>,
-    key: String,
-    decision: String,
-}
-
-impl std::fmt::Debug for RepeatMark {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("RepeatMark")
-            .field("key", &self.key)
-            .field("decision", &self.decision)
-            .finish_non_exhaustive()
-    }
-}
-
-impl PartialEq for RepeatMark {
-    fn eq(&self, other: &Self) -> bool {
-        self.key == other.key && self.decision == other.decision
-    }
-}
-
-impl Eq for RepeatMark {}
 
 /// One grant decision noted inside a slot, keyed by the check's own inputs.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -263,9 +165,9 @@ impl GrantNote {
             fields,
             subject: event.subject.as_ref().map(|s| s.subject().to_owned()),
             repeat: None,
-            delivery: DELIVERY.try_with(|()| ()).is_ok(),
+            delivery: marker::delivery_scoped(),
             recorded: open_slot_recorded().unwrap_or_default(),
-            retry: RETRY_TRACE.try_with(Clone::clone).ok(),
+            retry: marker::current_retry(),
         }
     }
 
@@ -281,7 +183,7 @@ impl GrantNote {
             || self
                 .retry
                 .as_ref()
-                .and_then(|cell| cell.0.get())
+                .and_then(RetryCell::id)
                 .is_some_and(|trace| self.recorded.contains(trace))
     }
 
@@ -535,42 +437,6 @@ pub(crate) async fn flush_open_slot() -> Result<()> {
         return Ok(());
     }
     write_owned(&logger, notes).await
-}
-
-/// The one warning a failed best-effort withheld record logs (MIK-8340 A5
-/// item 9); the upgrade note tells operators to alert on it.
-pub(super) const WITHHELD_RECORD_FAILED: &str = "The audit record of a withheld surfaced call could not be written; \
-     the call is answered as a name that matches no tool";
-
-/// The `FailClosed` exception of MIK-8340 A5 item 9, for the withheld surfaced
-/// call's own grant record ONLY: run `noting`, then move the decisions it
-/// noted out of the slot's fail-closed notes into its best-effort list and
-/// return at once. The slot opener writes that list after the wrapped work
-/// returns (so after the call's own invocation append), on its own task; a
-/// failed write logs [`WITHHELD_RECORD_FAILED`] and never becomes the
-/// request's verdict (under `FailClosed` it would answer -32005 and reveal the
-/// name exists). No caller waits for the write. Every note added before
-/// `noting` stays in the slot and fails closed as before. Outside a slot
-/// `noting` runs alone and its note is written at once. Any other use is a
-/// new exception and needs its own design decision.
-pub(super) async fn note_withheld_best_effort<T>(_server: &str, noting: impl FnOnce() -> T) -> T {
-    let before = GRANT_SLOT
-        .try_with(|slot| slot.notes.lock().expect("grant slot lock").len())
-        .ok();
-    let output = noting();
-    let _ = before.map(|before| {
-        GRANT_SLOT.try_with(|slot| {
-            let mut held = slot.notes.lock().expect("grant slot lock");
-            let at = before.min(held.len());
-            let taken = held.split_off(at);
-            drop(held);
-            slot.best_effort
-                .lock()
-                .expect("grant slot lock")
-                .extend(taken);
-        })
-    });
-    output
 }
 
 /// Note `event` for `(server, tool)` into the open slot. Outside every slot
