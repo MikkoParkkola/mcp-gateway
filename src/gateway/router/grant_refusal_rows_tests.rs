@@ -151,9 +151,9 @@ async fn a_gate_refused_call_is_one_row_whose_marker_is_true() {
     let rig = rig(&endpoint, AuditFailurePolicy::BestEffort, false, false).await;
 
     let invoke = json!({"server": CAPS, "tool": PERSONAL, "arguments": {}});
-    mcp_call(&rig, "gateway_invoke", &invoke).await;
+    let answer = mcp_call(&rig, "gateway_invoke", &invoke).await;
 
-    assert_eq!(invocations(&rig.dir).len(), 1, "the call's own record");
+    assert_eq!(invocations(&rig.dir).len(), 1, "the call's own record: {answer}");
     let held = decisions(&rig.dir);
     assert_eq!(held.len(), 1, "{held:#?}");
     assert_eq!(held[0]["outcome"], json!("denied"), "{held:#?}");
