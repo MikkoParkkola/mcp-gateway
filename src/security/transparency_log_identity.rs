@@ -152,26 +152,23 @@ fn each_line(path: &Path, mut visit: impl FnMut(&str) -> bool) -> io::Result<()>
 
 /// The last identified record in one file. Reads every line, as lossy text
 /// like the other recovery readers, so an odd byte never hides the record.
-/// ponytail: a full scan per open, and only a log whose open record has no
-/// id reaches it; index the id in the open record's successor if it shows.
+/// ponytail: a full scan, reached only while the newest open record has no
+/// id: from the upgrade of a beta log until its first rotation. In that
+/// window it runs on every recovery (each synced append's rebuild included)
+/// and can cover the active file and every retained segment; index the id in
+/// the open record's successor if it shows in a profile.
 fn newest_identified(path: &Path) -> io::Result<Option<LogId>> {
-    let file = match File::open(path) {
-        Ok(f) => f,
-        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
-        Err(e) => return Err(e),
-    };
-    let (mut reader, mut buf, mut found) = (BufReader::new(file), Vec::new(), None);
-    while reader.read_until(b'\n', &mut buf)? > 0 {
-        let line = String::from_utf8_lossy(&buf);
+    let mut found = None;
+    each_line(path, |line| {
         if line.contains(EV_IDENTIFIED)
-            && let Some(id) = serde_json::from_str::<Value>(&line)
+            && let Some(id) = serde_json::from_str::<Value>(line)
                 .ok()
                 .filter(|v| is_event(v, EV_IDENTIFIED))
                 .and_then(|v| id_of(&v))
         {
             found = Some(id);
         }
-        buf.clear();
-    }
+        true
+    })?;
     Ok(found)
 }
