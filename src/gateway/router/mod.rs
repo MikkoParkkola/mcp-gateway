@@ -244,6 +244,9 @@ mod u17_ui_shell_tests;
 /// The web UI API's access answers per path, method and caller, pinned.
 #[cfg(all(test, feature = "webui"))]
 mod ui_access_matrix_tests;
+/// Identity-grant refusals through `/mcp`, read back as Activity rows.
+#[cfg(all(test, feature = "webui"))]
+mod grant_refusal_rows_tests;
 /// The web UI compressed by the router's one rule.
 #[cfg(all(test, feature = "webui"))]
 mod ui_compression_tests;

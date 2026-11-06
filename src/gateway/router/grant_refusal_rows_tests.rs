@@ -1,0 +1,162 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+//! Calls refused by an identity grant, through `/mcp`, read back through the
+//! Activity route: a refusal with no invocation record of its own is one
+//! blocked row, and a call with an invocation record is one row. Every row
+//! asserts the raw record counts first.
+
+use std::net::SocketAddr;
+use std::sync::Arc;
+use std::time::Duration;
+
+use axum::body::{Body, to_bytes};
+use axum::extract::ConnectInfo;
+use axum::http::{Request, header};
+use serde_json::{Value, json};
+use tower::ServiceExt;
+
+use super::tests::meta_fixture::test_router_app_state_with_logs;
+use super::{AppState, create_router};
+use crate::config::{ApiKeyConfig, AuthConfig};
+use crate::gateway::meta_mcp::MetaMcp;
+use crate::gateway::meta_mcp::grant_audit_fixture::{
+    CAPS, Endpoint, PERSONAL, capability_backend, decisions, grants, invocations, logger,
+};
+use crate::gateway::routes;
+use crate::security::audit::AuditFailurePolicy;
+
+const ISSUER: &str = "https://idp.example.invalid";
+const SUBJECT: &str = "alice-sub";
+const ADMIN_KEY: &str = "refusal-admin-key";
+const CALLER_KEY: &str = "refusal-caller-key";
+
+fn key(secret: &str, admin: bool, denied: Option<&str>) -> ApiKeyConfig {
+    ApiKeyConfig {
+        key: None,
+        key_sha256: Some(crate::config::api_key_digest_spec(secret.as_bytes())),
+        expires_at: None,
+        name: secret.to_string(),
+        rate_limit: 0,
+        backends: vec!["*".to_string()],
+        allowed_tools: None,
+        denied_tools: denied.map(|tool| vec![tool.to_string()]),
+        admin,
+        kind: crate::config::ApiKeyKind::Shared,
+        ..Default::default()
+    }
+}
+
+/// A gateway whose Meta-MCP and Activity route share one log in `dir`.
+struct Rig {
+    state: Arc<AppState>,
+    dir: Arc<tempfile::TempDir>,
+    _store: super::tests::FixtureDir,
+}
+
+/// The personal capability is owned by the caller, who holds no grant. It is
+/// surfaced when `surface`, and the caller's key denies it when `denied`.
+async fn rig(endpoint: &Endpoint, policy: AuditFailurePolicy, surface: bool, denied: bool) -> Rig {
+    let dir = Arc::new(tempfile::tempdir().unwrap());
+    let log = logger(&dir, policy);
+    let auth = AuthConfig {
+        enabled: true,
+        api_keys: vec![
+            key(ADMIN_KEY, true, None),
+            key(CALLER_KEY, false, denied.then_some(PERSONAL)),
+        ],
+        public_paths: vec!["/health".to_string()],
+        ..AuthConfig::default()
+    };
+    let (mut state, store) = test_router_app_state_with_logs(&auth, Some(Arc::clone(&log)), None).await;
+    let st = Arc::get_mut(&mut state).expect("state is unique");
+    let mut meta = MetaMcp::with_features(
+        Arc::clone(&st.backends),
+        None,
+        None,
+        None,
+        Duration::from_secs(600),
+    )
+    .with_code_mode(true);
+    meta.set_live_config(Arc::clone(&st.live_config));
+    meta.enable_transparency_log(log);
+    if surface {
+        meta = meta.with_surfaced_tools(vec![crate::config::SurfacedToolConfig {
+            server: CAPS.to_string(),
+            tool: PERSONAL.to_string(),
+        }]);
+    }
+    meta.set_identity_grants(grants(vec![]));
+    meta.set_capabilities(capability_backend(endpoint.port, (ISSUER, SUBJECT)));
+    st.meta_mcp = Arc::new(meta);
+    Rig {
+        state,
+        dir,
+        _store: store,
+    }
+}
+
+fn identity() -> crate::key_server::oidc::VerifiedIdentity {
+    crate::key_server::oidc::VerifiedIdentity {
+        subject: SUBJECT.to_string(),
+        email: format!("{SUBJECT}@example.invalid"),
+        name: None,
+        groups: vec![],
+        issuer: ISSUER.to_string(),
+    }
+}
+
+/// One `tools/call` of `name` by the caller, over `/mcp`.
+async fn mcp_call(rig: &Rig, name: &str, arguments: &Value) -> Value {
+    let meta = json!({"io.modelcontextprotocol/protocolVersion": "2026-07-28",
+                      "io.modelcontextprotocol/clientCapabilities": {}});
+    let body = json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                      "params": {"name": name, "arguments": arguments, "_meta": meta}});
+    let mut request = Request::builder()
+        .method("POST")
+        .uri("/mcp")
+        .header("content-type", "application/json")
+        .header("accept", "application/json, text/event-stream")
+        .header("mcp-protocol-version", "2026-07-28")
+        .header("mcp-method", "tools/call")
+        .header("mcp-name", name)
+        .header(header::AUTHORIZATION, format!("Bearer {CALLER_KEY}"))
+        .body(Body::from(body.to_string()))
+        .unwrap();
+    request.extensions_mut().insert(identity());
+    let router = create_router(Arc::clone(&rig.state));
+    let response = router.oneshot(request).await.unwrap();
+    let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    serde_json::from_slice(&bytes).unwrap_or(Value::Null)
+}
+
+/// The Activity rows an admin reads from the list route, under `query`.
+async fn activity(rig: &Rig, query: &str) -> Vec<Value> {
+    let request = Request::builder()
+        .method("GET")
+        .uri(format!("{}?limit=200{query}", routes::UI_ACTIVITY))
+        .extension(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 52_345))))
+        .header(header::AUTHORIZATION, format!("Bearer {ADMIN_KEY}"))
+        .body(Body::empty())
+        .unwrap();
+    let router = create_router(Arc::clone(&rig.state));
+    let response = router.oneshot(request).await.unwrap();
+    let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let page: Value = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
+    page["rows"].as_array().cloned().unwrap_or_default()
+}
+
+#[tokio::test]
+async fn a_gate_refused_call_is_one_row_whose_marker_is_true() {
+    let endpoint = Endpoint::start(false).await;
+    let rig = rig(&endpoint, AuditFailurePolicy::BestEffort, false, false).await;
+
+    let invoke = json!({"server": CAPS, "tool": PERSONAL, "arguments": {}});
+    mcp_call(&rig, "gateway_invoke", &invoke).await;
+
+    assert_eq!(invocations(&rig.dir).len(), 1, "the call's own record");
+    let held = decisions(&rig.dir);
+    assert_eq!(held.len(), 1, "{held:#?}");
+    assert_eq!(held[0]["outcome"], json!("denied"), "{held:#?}");
+    assert_eq!(held[0]["invocation_recorded"], json!(true), "{held:#?}");
+    assert_eq!(activity(&rig, "").await.len(), 1, "listed once");
+}
