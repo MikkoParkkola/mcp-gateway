@@ -347,8 +347,8 @@ fn intact_signed_log_passes_signed_verify() {
     assert_eq!(result.entries_checked, 4);
 }
 
-/// Rewrite the log from `entries`; tamper tests edit `entries[1]`, the caller
-/// record after the open record, so the tail and `.hwm` still agree.
+/// Rewrite the log from `entries`; tamper tests edit `entries[1]`, the
+/// identified record after the open record, so the tail and `.hwm` still agree.
 fn write_entries(path: &Path, entries: &[serde_json::Value]) {
     let body: String = entries
         .iter()
