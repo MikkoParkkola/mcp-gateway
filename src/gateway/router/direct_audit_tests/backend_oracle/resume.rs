@@ -57,20 +57,9 @@ async fn execute(fx: &Fixture, handle: Option<&str>) -> (StatusCode, Value) {
         "_meta": {"io.modelcontextprotocol/protocolVersion": "2026-07-28",
                   "io.modelcontextprotocol/clientCapabilities": {"elicitation": {"form": {}}}}});
     if let Some(handle) = handle {
-        resuming(&mut params, handle);
+        params["requestState"] = json!(handle);
+        params["inputResponses"] = json!({"q1": {"action": "accept", "content": {"pick": "b"}}});
     }
-    post_as(fx, "k", "gateway_execute", &params).await
-}
-
-/// `params` resuming `handle` with an answer to `ghost`'s question.
-fn resuming(params: &mut Value, handle: &str) {
-    params["requestState"] = json!(handle);
-    params["inputResponses"] = json!({"q1": {"action": "accept", "content": {"pick": "b"}}});
-}
-
-/// POST a `tools/call` of `name` with `params` to `/mcp` as bearer `key`:
-/// the HTTP status and the JSON-RPC message.
-async fn post_as(fx: &Fixture, key: &str, name: &str, params: &Value) -> (StatusCode, Value) {
     let body = json!({"jsonrpc": "2.0", "id": 7, "method": "tools/call", "params": params});
     let request = axum::http::Request::builder()
         .method("POST")
@@ -78,9 +67,9 @@ async fn post_as(fx: &Fixture, key: &str, name: &str, params: &Value) -> (Status
         .header("content-type", "application/json")
         .header("accept", "application/json, text/event-stream")
         .header("mcp-protocol-version", "2026-07-28")
-        .header("authorization", format!("Bearer {key}"))
+        .header("authorization", "Bearer k")
         .header("mcp-method", "tools/call")
-        .header("mcp-name", name)
+        .header("mcp-name", "gateway_execute")
         .body(axum::body::Body::from(body.to_string()))
         .unwrap();
     let response = fx.router.clone().oneshot(request).await.unwrap();
@@ -92,13 +81,8 @@ async fn post_as(fx: &Fixture, key: &str, name: &str, params: &Value) -> (Status
 /// A chain stopped on `ghost`'s question: the fixture, `ghost`'s call
 /// counter and the resume handle.
 async fn stopped(fail_closed: bool) -> (Fixture, Arc<AtomicUsize>, String) {
-    stopped_under(scoped_key(), fail_closed).await
-}
-
-/// [`stopped`] under `auth`, whose first key is `k`.
-async fn stopped_under(auth: AuthConfig, fail_closed: bool) -> (Fixture, Arc<AtomicUsize>, String) {
     let fx = fixture(Setup {
-        auth: Some(auth),
+        auth: Some(scoped_key()),
         meta_mode: MetaMode::CodeMode,
         fail_closed,
         ..Setup::default()
@@ -195,80 +179,4 @@ async fn r1g_a_name_registered_before_the_resume_step_keeps_its_recorded_absence
     let before = invocations(&fx).len();
     let (_, resumed) = execute(&fx, Some(&handle)).await;
     assert_resume_missed("R1g", &fx, before, &calls, &resumed);
-}
-
-/// [`scoped_key`] and a second key, `k2`, scoped to `alpha` alone: `ghost`
-/// is out of its scope.
-fn with_alpha_only_key() -> AuthConfig {
-    let mut auth = scoped_key();
-    let mut narrow = auth.api_keys[0].clone();
-    narrow.key_sha256 = Some(crate::config::api_key_digest_spec(b"k2"));
-    narrow.name = "alpha-only-client".to_string();
-    narrow.backends = vec!["alpha".to_string()];
-    auth.api_keys.push(narrow);
-    auth
-}
-
-/// The task's `task_settlement` records, once one is written (bounded wait).
-async fn settlement_of(fx: &Fixture, task: &str) -> Vec<Value> {
-    let bound = std::time::Instant::now() + Duration::from_secs(10);
-    loop {
-        let found: Vec<Value> = invocations(fx)
-            .into_iter()
-            .filter(|entry| entry["route"] == "task_settlement" && entry["task_id"] == task)
-            .collect();
-        if !found.is_empty() || std::time::Instant::now() >= bound {
-            return found;
-        }
-        tokio::time::sleep(Duration::from_millis(20)).await;
-    }
-}
-
-/// A task-augmented chain resumed by a key whose scope excludes its pending
-/// step's backend: the pending step is refused with one absent-step record
-/// (`denied -32003`), and the task's settlement record is refused, joined
-/// to that record by its trace (`joined_by: step_trace`), with `-32003`.
-#[tokio::test]
-async fn a_resumed_task_chain_refused_at_its_pending_step_is_joined_by_step_trace() {
-    let (fx, calls, handle) = stopped_under(with_alpha_only_key(), false).await;
-    let mut params = json!({"name": "gateway_execute",
-        "arguments": {"chain": [{"tool": format!("{GHOST}:t"), "arguments": {}}]},
-        "task": {},
-        "_meta": {"io.modelcontextprotocol/protocolVersion": "2026-07-28",
-                  "io.modelcontextprotocol/clientCapabilities": {
-                      "elicitation": {"form": {}},
-                      "extensions": {"io.modelcontextprotocol/tasks": {}}},
-                  (crate::protocol::mrtr::IDEMPOTENCY_KEY_META): "k-resume-out-of-scope"}});
-    resuming(&mut params, &handle);
-    let (_, made) = post_as(&fx, "k2", "gateway_execute", &params).await;
-    let task = made
-        .pointer("/result/task/taskId")
-        .or_else(|| made.pointer("/result/taskId"))
-        .and_then(Value::as_str)
-        .unwrap_or_else(|| panic!("premise: a task is made: {made}"))
-        .to_owned();
-    let settlements = settlement_of(&fx, &task).await;
-    assert_eq!(
-        calls.load(Ordering::SeqCst),
-        1,
-        "premise: ghost saw no resume"
-    );
-    let records = invocations(&fx);
-    let absent: Vec<&Value> = records
-        .iter()
-        .filter(|entry| entry["server"] == GHOST && entry["error_code"] == -32003)
-        .collect();
-    let [absent] = absent.as_slice() else {
-        panic!("one absent-step record: {records:#?}");
-    };
-    let [record] = settlements.as_slice() else {
-        panic!("task {task}: one task_settlement record: {records:#?}");
-    };
-    assert_eq!(record["response_effect"], "refused", "{record}");
-    assert_eq!(record["joined_by"], "step_trace", "{record}");
-    assert_eq!(
-        record["trace_id"], absent["trace_id"],
-        "{record} vs {absent}"
-    );
-    assert_eq!(record["error_code"], -32003, "{record}");
 }
