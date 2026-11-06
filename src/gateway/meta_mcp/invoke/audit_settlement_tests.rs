@@ -348,3 +348,17 @@ async fn g_panic_a_settlement_without_the_record_key_writes_nothing_unkeyed() {
         )
         .await;
 }
+
+/// A composite record's join is written as its snake_case name.
+#[test]
+fn a_settlement_join_serialises_as_its_snake_case_name() {
+    use super::SettlementJoin;
+    assert_eq!(
+        serde_json::to_value(SettlementJoin::StepTrace).unwrap(),
+        json!("step_trace")
+    );
+    assert_eq!(
+        serde_json::to_value(SettlementJoin::TaskId).unwrap(),
+        json!("task_id")
+    );
+}

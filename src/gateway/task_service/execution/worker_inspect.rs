@@ -126,7 +126,7 @@ pub(in crate::gateway::task_service::execution) async fn inspect_and_record(
             .record_task_settlement(
                 task,
                 (trace_id, principal),
-                refused,
+                (refused, None),
                 settled.result.as_ref(),
             )
             .await;
