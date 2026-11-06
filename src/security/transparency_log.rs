@@ -750,3 +750,7 @@ mod settle_tests;
 #[cfg(test)]
 #[path = "transparency_log_settle_bound_tests.rs"]
 mod settle_bound_tests;
+
+#[cfg(test)]
+#[path = "transparency_log_settle_kind_tests.rs"]
+mod settle_kind_tests;
