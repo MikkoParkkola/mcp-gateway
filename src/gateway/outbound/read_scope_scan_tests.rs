@@ -155,6 +155,30 @@ struct Entries {
     taken: std::collections::HashSet<String>,
 }
 
+/// Whether `ty` is a type an exposed `const` may have: a primitive number,
+/// `bool`, `char` or `&str`. A function pointer would export an ungated way
+/// in under a name no entry check sees.
+fn plain_value(ty: &syn::Type) -> bool {
+    const PRIMITIVES: [&str; 16] = [
+        "i8", "i16", "i32", "i64", "i128", "isize", "u8", "u16", "u32", "u64", "u128", "usize",
+        "f32", "f64", "bool", "char",
+    ];
+    match ty {
+        syn::Type::Path(p) => {
+            p.qself.is_none()
+                && p.path.segments.len() == 1
+                && p.path.segments[0].arguments.is_none()
+                && PRIMITIVES.contains(&plain(&p.path.segments[0].ident).as_str())
+        }
+        syn::Type::Reference(r) => {
+            r.mutability.is_none()
+                && matches!(&*r.elem, syn::Type::Path(p) if p.qself.is_none()
+                    && p.path.is_ident("str"))
+        }
+        _ => false,
+    }
+}
+
 /// Whether every attribute is a doc comment.
 fn doc_only(attrs: &[syn::Attribute]) -> bool {
     attrs.iter().all(|a| a.path().is_ident("doc"))
@@ -261,7 +285,8 @@ fn entries(file: &syn::File, found: &mut Entries) {
                 (!doc_only(&u.attrs)).then(|| "an attribute on a `use`".to_owned())
             }
             syn::Item::Const(c) => (!doc_only(&c.attrs)
-                || !matches!(*c.expr, syn::Expr::Lit(_) | syn::Expr::Path(_)))
+                || !matches!(*c.expr, syn::Expr::Lit(_) | syn::Expr::Path(_))
+                || (!matches!(c.vis, syn::Visibility::Inherited) && !plain_value(&c.ty)))
             .then(|| format!("const {}", name(&c.ident))),
             syn::Item::Mod(m) if m.content.is_some() && cfg_test_only(&m.attrs) => {
                 test_modules += 1;
@@ -431,6 +456,12 @@ fn the_gate_check_refuses_each_ungated_shape() {
             debug_assert!(true);
         }
         pub(crate) use inner::hidden;
+        pub(crate) const UNCHECKED: fn(&Firewall, Payload) -> OutboundFrame = unchecked;
+        fn unchecked(_: &Firewall, payload: Payload) -> OutboundFrame {
+            OutboundFrame::unjudged(payload)
+        }
+        pub(crate) const LIMIT: usize = 3;
+        pub(crate) const TEXT: &str = FIXED_TEXT;
     ";
     let file = syn::parse_file(source).expect("the fixture parses");
     let mut found = Entries {
@@ -465,6 +496,7 @@ fn the_gate_check_refuses_each_ungated_shape() {
             "a macro in with_macro",
             "an attribute on hinted",
             "an exposed `use`",
+            "const UNCHECKED",
             "const _",
             "impl Judge",
             "item macro some_macro",
@@ -732,5 +764,11 @@ fn the_judges_check_refuses_each_other_shape() {
     assert!(
         chain_check(&swapped).is_err(),
         "an attribute macro on `mod judge;` is refused"
+    );
+    swapped[2].0 = "#[cfg(feature = \"firewall\")]\n#[path = \"judge.rs\"]\nmod checked_judge;\n\
+        #[cfg(feature = \"firewall\")]\nmod judge { pub(crate) use super::checked_judge::delivered; }\n";
+    assert!(
+        chain_check(&swapped).is_err(),
+        "an inline `mod judge` standing in for the checked file is refused"
     );
 }
