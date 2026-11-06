@@ -563,6 +563,35 @@ fn r3l_a_refused_shape_shadows_as_compiled() {
     }
 }
 
+/// R3m: each rule says whether the firewall-on load refuses it, with the
+/// load's message and how it compiles meanwhile: a scope problem blocks
+/// everywhere, a key problem compiles as written; a valid rule is `null`.
+#[test]
+fn r3m_a_rule_the_load_refuses_is_flagged_with_its_compiled_form() {
+    let mut config = rules(json!([
+        { "match": "*", "action": "warn", "scan": ["pii"], "except": [{}] },
+        { "match": "*", "action": "block", "scan": ["pii"], "keys": ["k"] },
+        { "match": "ok", "action": "warn", "scan": ["pii"] }
+    ]));
+    config.security.firewall.enabled = false;
+    let model = read_model(&config);
+    assert_eq!(
+        rule(&model, 0)["refused"],
+        json!({
+            "message": "security.firewall.rules[0].except[0] sets no field",
+            "compiles_to": "block_all"
+        })
+    );
+    assert_eq!(
+        rule(&model, 1)["refused"],
+        json!({
+            "message": "security.firewall.rules[1].keys[0] needs API-key authentication (auth.enabled with auth.api_keys)",
+            "compiles_to": "as_written"
+        })
+    );
+    assert_eq!(rule(&model, 2)["refused"], Value::Null);
+}
+
 /// R2e: a present-but-empty collection counts as present.
 #[test]
 fn r2e_present_but_empty_is_present() {
