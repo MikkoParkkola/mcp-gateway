@@ -23,6 +23,7 @@ src/capability/backend.rs	call_tool_with_context	refuse_unless_read_only	1	recor
 src/capability/discovery/chain.rs	probe_single	record_ssrf_refusal	1	no-record	capability discovery probing, not a call
 src/capability/discovery/mod.rs	discover	ssrf_refusal	1	no-record	capability discovery, not a call
 src/capability/execution_context.rs	validate_capability_url_for_context	refuse_loopback_name	1	recorded	a capability URL naming loopback: each caller raises refused while vouched (the REST request in executor/mod.rs, the token endpoint in credentials.rs)
+src/capability/execution_context.rs	record_refusal	is_ssrf_refusal	1	not-delivered	predicate: the one guard for the capability executor's checks that also fail on a malformed URL (REST, the token endpoint and its refresh flight before the config wrap hides the refusal, GraphQL, JSON-RPC); only a destination refusal records refused
 src/capability/executor/cli.rs	execute_cli	refuse_egress	1	recorded	a CLI capability naming a network destination: the call site raises refused while vouched
 src/capability/executor/cli_argv.rs	build_cli_invocation	refuse_nul	1	not-a-decision	a NUL byte in an argument: a malformed request
 src/capability/executor/cli_argv.rs	push_each	refuse_nul	1	not-a-decision	a NUL byte in an argument: a malformed request
@@ -32,13 +33,9 @@ src/capability/executor/client.rs	configured	refuse_hop	2	recorded	refuse_hop ra
 src/capability/executor/client.rs	configured	refuse_loopback_name	1	feeds	a redirect hop naming loopback: refuse_hop delivers it and raises refused while vouched
 src/capability/executor/client.rs	send_with_retry	note_redirect_refusal	2	recorded	a cleartext downgrade the redirect policy refused (RedirectRefused): the send raises refused while vouched, on both send paths; the caller still receives the transport error
 src/capability/executor/client.rs	send_with_retry	ssrf_refusal	2	recorded	a capability HTTP call the SSRF guard refuses: both send paths raise refused while vouched
-src/capability/executor/credentials.rs	refresh_provider_token	is_ssrf_refusal	2	not-delivered	predicate: a destination refusal of the token endpoint, or of the refresh flight before the config wrap hides it, is recorded; a malformed URL is not
-src/capability/executor/graphql.rs	execute	is_ssrf_refusal	1	not-delivered	predicate: only a destination refusal of the endpoint records refused; a malformed URL is a configuration error
 src/capability/executor/graphql.rs	execute	refuse_loopback_name	1	recorded	a GraphQL endpoint naming loopback: the call site raises refused while vouched
-src/capability/executor/jsonrpc.rs	execute	is_ssrf_refusal	1	not-delivered	predicate: only a destination refusal of the endpoint records refused; a malformed URL is a configuration error
 src/capability/executor/jsonrpc.rs	execute	refuse_loopback_name	1	recorded	a JSON-RPC endpoint naming loopback: the call site raises refused while vouched
 src/capability/executor/mcp.rs	execute_mcp	refuse_egress	1	recorded	an MCP capability naming a network destination: the call site raises refused while vouched
-src/capability/executor/mod.rs	execute_provider_with_context	is_ssrf_refusal	1	not-delivered	predicate: only a destination refusal of the REST URL records refused; a malformed URL is a configuration error
 src/capability/loader.rs	load_capability_file	refuse_unloadable	1	no-record	capability load
 src/capability/openapi/convert.rs	fetch_error_message	ssrf_refusal	1	no-record	OpenAPI import (admin UI), not a call
 src/commands/config_write.rs	rewrite_url_aliases_in	refuse_unreadable	2	no-record	a CLI config rewrite

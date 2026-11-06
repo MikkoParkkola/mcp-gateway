@@ -297,6 +297,39 @@ pub(crate) fn names_a_host(url: &str) -> bool {
     url::Url::parse(url).is_ok_and(|u| u.host().is_some())
 }
 
+/// What decides whether a check's error on a capability call path is a
+/// policy refusal, which the call's record says, rather than a configuration
+/// error such as a malformed or hostless URL, which it does not.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum RefusalTest<'a> {
+    /// A destination check: only an SSRF refusal is one.
+    Destination,
+    /// The cleartext-credential check of the URL: a refusal only when the URL
+    /// names a host the credential would reach ([`names_a_host`]).
+    Cleartext(&'a str),
+}
+
+/// Record `refused` on the open delivery when `error` is a policy refusal
+/// under `test`; a configuration error records nothing. The one guard for
+/// every capability executor site whose check can also fail on a malformed
+/// URL.
+///
+/// Recording at the first refused provider is right only because a declared
+/// `providers.fallback` is never executed (CAP-011,
+/// `capability::validator::checks`). If fallback is ever wired, a refused
+/// primary followed by a delivered fallback would leave the record saying
+/// refused (the effect only rises), so that work must revisit where a
+/// capability call's refusal is recorded.
+pub(crate) fn record_refusal(error: &Error, test: RefusalTest<'_>) {
+    let refused = match test {
+        RefusalTest::Destination => crate::security::ssrf::is_ssrf_refusal(error),
+        RefusalTest::Cleartext(url) => names_a_host(url),
+    };
+    if refused {
+        crate::gateway::delivery_facts::refused_while_vouched();
+    }
+}
+
 /// [`require_tls_for_credentials`] when the request carries a credential:
 /// `auth` injects one (as a header, an account header, or the `auth.param`
 /// query parameter), or one of `templates` fills in a gateway secret
@@ -579,6 +612,75 @@ mod tests {
         ] {
             assert_eq!(names_a_host(url), named, "{url}");
         }
+    }
+
+    /// What `record_refusal` leaves on a fresh delivery's record for `error`
+    /// under `test`.
+    async fn recorded_effect(error: Error, test: RefusalTest<'_>) -> Option<serde_json::Value> {
+        let facts = crate::gateway::delivery_facts::scope(async {
+            record_refusal(&error, test);
+            crate::gateway::delivery_facts::snapshot()
+        })
+        .await;
+        let mut fields = serde_json::Map::new();
+        crate::gateway::delivery_facts::record_fields(facts.as_ref(), false, &mut fields);
+        fields.get("response_effect").cloned()
+    }
+
+    /// The shared guard records a policy refusal and nothing else: an SSRF
+    /// refusal under `Destination`, a cleartext refusal of a URL that names a
+    /// host under `Cleartext`. A configuration error records nothing under
+    /// either, on every site that uses it, the token endpoint included.
+    #[tokio::test]
+    async fn the_refusal_guard_records_only_a_policy_refusal() {
+        let ssrf = || {
+            Error::Protocol(format!(
+                "{}: host targets a private address",
+                crate::security::ssrf::SSRF_BLOCKED
+            ))
+        };
+        let config = || Error::Config("URL has no host".to_string());
+        let refused = Some(serde_json::Value::from("refused"));
+        let cases = [
+            (
+                "destination, SSRF refusal",
+                ssrf(),
+                RefusalTest::Destination,
+                true,
+            ),
+            (
+                "destination, configuration error",
+                config(),
+                RefusalTest::Destination,
+                false,
+            ),
+            (
+                "cleartext, named host",
+                config(),
+                RefusalTest::Cleartext("http://api.invalid/x"),
+                true,
+            ),
+            (
+                "cleartext, no host",
+                config(),
+                RefusalTest::Cleartext("file:///tmp/x"),
+                false,
+            ),
+            (
+                "cleartext, unparsable",
+                config(),
+                RefusalTest::Cleartext("http://[::1/x"),
+                false,
+            ),
+        ];
+        let mut fails = Vec::new();
+        for (case, error, test, expect) in cases {
+            let effect = recorded_effect(error, test).await;
+            if (effect == refused) != expect {
+                fails.push(format!("{case}: response_effect {effect:?}"));
+            }
+        }
+        assert!(fails.is_empty(), "{fails:#?}");
     }
 
     /// No hostless token endpoint passes the cleartext check, so the
