@@ -30,7 +30,7 @@ pub(crate) enum Switch {
 async fn judged_meta(
     switch: Switch,
     mode: CrossTenantReads,
-    log_dir: &tempfile::TempDir,
+    log_dir: &Arc<tempfile::TempDir>,
 ) -> Arc<MetaMcp> {
     judged_meta_answering(switch, mode, log_dir, text_result("ok")).await
 }
@@ -39,7 +39,7 @@ async fn judged_meta(
 async fn judged_meta_answering(
     switch: Switch,
     mode: CrossTenantReads,
-    log_dir: &tempfile::TempDir,
+    log_dir: &Arc<tempfile::TempDir>,
     answer: Value,
 ) -> Arc<MetaMcp> {
     let firewall = Firewall::from_config(
@@ -67,6 +67,8 @@ async fn judged_meta_answering(
         ..TransparencyLogConfig::default()
     }))
     .expect("open log");
+    // A late append lands before the directory goes.
+    log.keep_test_dir(Arc::clone(log_dir));
     let transport = Arc::new(Counting {
         calls: Arc::new(AtomicUsize::new(0)),
         answer,
@@ -150,7 +152,7 @@ fn verdicts(log_dir: &tempfile::TempDir) -> Vec<String> {
 /// A then B on one stdio Meta-MCP: whether each delivers a result, and the
 /// verdicts its delivery records carry.
 pub(crate) async fn a_then_b(switch: Switch, mode: CrossTenantReads) -> ([bool; 2], Vec<String>) {
-    let log_dir = tempfile::tempdir().expect("log dir");
+    let log_dir = Arc::new(tempfile::tempdir().expect("log dir"));
     let meta = judged_meta(switch, mode, &log_dir).await;
     let reads = meta.stdio_reads();
     let a = read(&meta, &reads, 1, A).await.delivers_result();
@@ -205,7 +207,7 @@ async fn stdio_judges_with_the_firewall_off() {
 /// names another tenant, so A can come only from the answer's attribution.
 #[tokio::test]
 async fn the_invocation_record_names_tenants_with_the_firewall_off() {
-    let log_dir = tempfile::tempdir().expect("log dir");
+    let log_dir = Arc::new(tempfile::tempdir().expect("log dir"));
     let answer = text_result(&json!({ "customer_id": A }).to_string());
     let meta = judged_meta_answering(Switch::Off, CrossTenantReads::Off, &log_dir, answer).await;
     let reads = meta.stdio_reads();

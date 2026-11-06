@@ -560,9 +560,16 @@ fn tenant_reads(log_dir: &tempfile::TempDir) -> (usize, usize) {
     (records.len(), blocked)
 }
 
-/// Whether one event carries every marker in `all`.
-fn one_event_with(events: &[String], all: &[&str]) -> bool {
-    events.iter().any(|e| all.iter().all(|m| e.contains(m)))
+/// Whether two different events carry `first`'s markers and `second`'s.
+fn two_events_with(events: &[String], first: &[&str], second: &[&str]) -> bool {
+    let has = |e: &String, all: &[&str]| all.iter().all(|m| e.contains(m));
+    events.iter().enumerate().any(|(i, a)| {
+        has(a, first)
+            && events
+                .iter()
+                .enumerate()
+                .any(|(j, b)| i != j && has(b, second))
+    })
 }
 
 /// Firewall off, `block`: after an A read, a stream item naming B and a
@@ -589,10 +596,8 @@ async fn stream_items_are_judged_with_the_firewall_off() {
 
         if mode == CrossTenantReads::Off {
             // The notification is the event naming its uri and B; the
-            // webhook event is the one naming its kind.
-            let both = |e: &[String]| {
-                one_event_with(e, &["rows://latest", B]) && one_event_with(e, &["row-78"])
-            };
+            // webhook event is the one naming its kind; two events, not one.
+            let both = |e: &[String]| two_events_with(e, &["rows://latest", B], &["row-78"]);
             let got = stream.arrive(both).await;
             assert!(both(&got), "control: off delivers both B frames: {got:?}");
             state
