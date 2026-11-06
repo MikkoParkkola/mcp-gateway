@@ -29,6 +29,7 @@ python3 scripts/ci/test_feature_shards.py	0	closed
 python3 scripts/ci/test_heavy_train_gating.py	1	closed
 python3 scripts/ci/test_os_shards.py	1	closed
 python3 scripts/ci/test_os_label_routing.py	1	closed
+python3 scripts/ci/test_mingw_debs.py	1	closed
 python3 scripts/ci/test_release_features.py	0	closed
 python3 scripts/ci/test_throwaway_routing.py	1	closed
 python3 scripts/dev/check-event-source-scope.py <BASE_TIP>	1	closed

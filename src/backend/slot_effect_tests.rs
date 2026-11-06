@@ -11,17 +11,24 @@ use super::{Backend, PoolKey};
 use crate::config::BackendConfig;
 use crate::security::decision_record::Effect;
 
-/// A backend named `name`, propagating identity per user when `per_user`.
+/// A backend propagating identity per user when `per_user`, else none.
 fn backend(per_user: bool) -> Arc<Backend> {
+    propagating(per_user.then_some(crate::identity_propagation::SessionMode::PerUser))
+}
+
+/// A backend propagating identity in session mode `mode`, or none.
+fn propagating(mode: Option<crate::identity_propagation::SessionMode>) -> Arc<Backend> {
     let identity_propagation =
-        per_user.then(|| crate::identity_propagation::IdentityPropagationConfig {
-            strategy: crate::identity_propagation::PropagationStrategyKind::SignedAssertion,
-            audience: "mem".to_string(),
-            required: true,
-            session_mode: crate::identity_propagation::SessionMode::PerUser,
-            token_exchange_endpoint: None,
-            token_exchange_scope: None,
-        });
+        mode.map(
+            |session_mode| crate::identity_propagation::IdentityPropagationConfig {
+                strategy: crate::identity_propagation::PropagationStrategyKind::SignedAssertion,
+                audience: "mem".to_string(),
+                required: true,
+                session_mode,
+                token_exchange_endpoint: None,
+                token_exchange_scope: None,
+            },
+        );
     Arc::new(Backend::new(
         "mem",
         BackendConfig {
@@ -54,6 +61,16 @@ fn the_stored_slot_is_the_one_the_backend_resolves() {
         }
     );
     assert_eq!(backend(true).slot_key_for(None), PoolKey::Shared);
+    // A stateless propagating backend still keys a bound caller to its own
+    // slot: both propagating session modes are one arm (pool.rs pool_key_for).
+    let stateless = propagating(Some(crate::identity_propagation::SessionMode::Stateless));
+    assert_eq!(
+        stateless.slot_key_for(Some("b-1")),
+        PoolKey::PerUser {
+            binding: "b-1".to_owned()
+        }
+    );
+    assert_eq!(stateless.slot_key_for(None), PoolKey::Shared);
 }
 
 /// The exact lookup: a warm slot reads its own declaration, never another

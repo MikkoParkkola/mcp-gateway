@@ -225,6 +225,8 @@ impl Stdio {
     }
 }
 
+#[path = "slot_verdict_g2_stdio_first_list.rs"]
+mod first_list;
 #[path = "slot_verdict_g2_stdio_listing.rs"]
 mod listing;
 

@@ -216,6 +216,10 @@ jobs:
       # (MIK-9252.SHARD.7): its rows run here, not only where it was written.
       - name: Validate the sharded-coverage comparison against planted runs
         run: python3 scripts/ci/compare_coverage.py --self-test
+      # The Windows target shard's mingw download: bounded per attempt and
+      # retried once, so a trickling mirror cannot outlast the job.
+      - name: Validate the mingw package download bounds
+        run: python3 scripts/ci/test_mingw_debs.py
       - name: Validate the gateway-spawn check against planted spawns
         run: python3 scripts/ci/check-gateway-spawns.py --self-test
       - name: Start the gateway in tests only through its isolating helper

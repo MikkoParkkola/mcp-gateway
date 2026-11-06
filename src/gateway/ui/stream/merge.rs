@@ -170,7 +170,8 @@ pub(super) struct LogMerge<S: LogSource> {
     /// The source failed a read: the view ends, its delivered cursor kept.
     failed: bool,
     /// Resets met in the current catch-up: the first replays from the
-    /// oldest record, a second ends the view instead of replaying forever.
+    /// oldest record, a second goes live from the captured head instead of
+    /// replaying forever.
     replays: u8,
 }
 
@@ -235,11 +236,13 @@ impl<S: LogSource> LogMerge<S> {
                     inv: true,
                     gov: true,
                 });
+                // Not `None`, which an id reads as "not carried, start at the
+                // head": the replay is owed until its first row is acked.
                 if gone.inv {
-                    self.delivered.inv = None;
+                    self.delivered.inv = Some(super::id::replay_pending());
                 }
                 if gone.gov {
-                    self.delivered.gov = None;
+                    self.delivered.gov = Some(super::id::replay_pending());
                 }
                 self.recovery = None;
             }
@@ -253,6 +256,20 @@ impl<S: LogSource> LogMerge<S> {
         if self.unacked == 0
             && let Some(hint) = self.hint.take()
         {
+            // Everything up to the hint is delivered or not this viewer's,
+            // so a replay still marked owed is done that far: the id moves
+            // on even when the replay showed this viewer no row. Only to a
+            // real position: a reset page's hint has no half for its log.
+            for (delivered, reached) in [
+                (&mut self.delivered.inv, &hint.inv),
+                (&mut self.delivered.gov, &hint.gov),
+            ] {
+                if delivered.as_ref().is_some_and(super::id::is_replay_pending)
+                    && let Some(reached) = reached
+                {
+                    *delivered = Some(reached.clone());
+                }
+            }
             self.recovery = Some(hint);
         }
     }
@@ -295,8 +312,9 @@ impl<S: LogSource> LogMerge<S> {
 
     /// One step: a catch-up page (its rows, possibly none, when the caller
     /// may see none of them) or one live announcement's rows. `None` when the
-    /// source closed or failed, the view is too slow, or a reset's replay
-    /// reset again. The caller must `ack` every row it wrote before asking
+    /// source closed or failed or the view is too slow; a reset's replay that
+    /// resets again goes live from the captured head instead, with no second
+    /// reset frame. The caller must `ack` every row it wrote before asking
     /// again. The live half awaits only the broadcast receive and is safe to
     /// cancel; a catch-up page must be awaited to its end.
     pub(super) async fn step(&mut self) -> Option<Vec<Out>> {
@@ -364,7 +382,7 @@ impl<S: LogSource> LogMerge<S> {
     }
 
     /// One catch-up page from `from`, after yielding to the runtime. `None`
-    /// when the read failed or a replay reset again.
+    /// when the read failed.
     async fn page(&mut self, from: &LogCursor) -> Option<Vec<Out>> {
         tokio::task::yield_now().await;
         let page = match self
@@ -383,9 +401,24 @@ impl<S: LogSource> LogMerge<S> {
         if page.reset.any() {
             self.replays += 1;
             if self.replays > 1 {
-                tracing::debug!("ui stream: the replay reset again, ending the view");
-                self.failed = true;
-                return None;
+                // The replay from the oldest record met a gap that stays. The
+                // client already holds the reset frame and reloads: the reset
+                // log goes live from the head captured when this catch-up
+                // began. Ending the view instead would leave the client's id
+                // on the replay-pending marker, so every reconnect would
+                // replay, reset twice and end, and the stream never go live.
+                tracing::debug!("ui stream: the replay reset again, going live from the head");
+                if page.reset.inv {
+                    self.delivered.inv.clone_from(&self.stop.inv);
+                }
+                if page.reset.gov {
+                    self.delivered.gov.clone_from(&self.stop.gov);
+                }
+                self.recovery = None;
+                self.hint = None;
+                self.scan = None;
+                self.search = S::Search::default();
+                return Some(Vec::new());
             }
             tracing::debug!("ui stream: the position's row is gone, resetting");
             out.push(Out::Reset);
