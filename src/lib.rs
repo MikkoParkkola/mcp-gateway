@@ -347,3 +347,10 @@ pub(crate) mod test_symlink;
 // Every caller is a firewall-gated test (allowed-root rows).
 #[cfg(all(test, feature = "firewall"))]
 pub(crate) mod test_tempdir;
+
+/// Red proof for the Kani job on lane pull requests (not for merge): `what` is used only in the
+/// assertion message, which Kani's `assert!` ignores, so under `cfg(kani)` it is unused.
+#[doc(hidden)]
+pub fn kani_red_probe(what: &str) {
+    assert!(std::hint::black_box(true), "{what}");
+}
