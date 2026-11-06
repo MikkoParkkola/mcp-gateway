@@ -427,7 +427,7 @@ const ADMIN_READERS: &[(&str, &str, usize, &str)] = &[
         "{ admin, .. }",
         "src/gateway/meta_mcp/boundary_pins/key_field_rows.rs",
         1,
-        "none: an exhaustive field list on ApiKeyConfig::default(), the value discarded",
+        "none: an exhaustive field list (no `..`) on ApiKeyConfig::default(), the value discarded",
     ),
 ];
 
