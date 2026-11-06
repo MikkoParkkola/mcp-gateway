@@ -282,10 +282,13 @@ fn a_log_whose_identified_record_expired_with_no_segment_left_gets_no_second_one
     // it: nothing sealed, and an active open record carrying the id
     let dir = tempfile::tempdir().unwrap();
     let path = log_path(&dir);
-    let l = TransparencyLogger::open(cfg(&path, 1, false)).unwrap();
+    let l = TransparencyLogger::open(cfg(&path, 12, false)).unwrap();
     let id = l.log_id();
-    rotate_n(&l, &path, 3);
+    rotate_n(&l, &path, 2);
     drop(l);
+    let trimmed = TransparencyLogger::open(cfg(&path, 1, false)).unwrap();
+    append(&trimmed, 0);
+    drop(trimmed);
     for seg in list_segments(&path).unwrap() {
         std::fs::remove_file(&seg.path).unwrap();
     }
