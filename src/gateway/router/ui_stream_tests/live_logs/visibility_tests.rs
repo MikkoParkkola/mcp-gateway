@@ -127,6 +127,9 @@ async fn demoted_between_pages(after: &str, role: Option<crate::control_plane::C
     }
     tokio::time::pause();
     let hub = state.dashboard_bootstrap.stream_hub();
+    // The hub counts every page read, armed or not, and a first connection
+    // can run a catch-up of its own: count from here.
+    let before = hub.pages_read_for_test();
     hub.arm_page_gate_for_test();
     hub.release_pages_for_test(2);
     let mut again = open(&state, request(STREAM, Who::Bearer(&bearer), Some(&id))).await;
@@ -136,6 +139,8 @@ async fn demoted_between_pages(after: &str, role: Option<crate::control_plane::C
     // demotion is left to read after it. The parked loop sends nothing more.
     within(async {
         while hub.pages_at_gate_for_test() < 3 {
+            // Idle until parked: a frame, or a quiet 100 ms; a loop that never
+            // parks is failed by the outer bound.
             if let Ok(f) = tokio::time::timeout(Duration::from_millis(100), again.next()).await {
                 f.expect("the catch-up is still open");
             }
@@ -145,7 +150,11 @@ async fn demoted_between_pages(after: &str, role: Option<crate::control_plane::C
         }
     })
     .await;
-    assert_eq!(hub.pages_read_for_test(), 2, "premise: two pages read, the third waits");
+    assert_eq!(
+        hub.pages_read_for_test() - before,
+        2,
+        "premise: two pages read, the third waits"
+    );
     let read = hub.pages_read_for_test();
     set_mapping(&state, after);
     assert_eq!(
