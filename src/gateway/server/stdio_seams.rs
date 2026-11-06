@@ -95,6 +95,24 @@ pub(crate) async fn after_commit() {
 }
 
 thread_local! {
+    // One-shot, as `ARMED`: the next answer just after it was queued.
+    static QUEUED: Arc<crate::test_pause::Slot> = Arc::new(crate::test_pause::Slot::default());
+}
+
+/// Park the next answer just after it was queued, before its task goes on
+/// (MIK-9309 R14: a later list sent there must not wait again).
+pub(crate) fn pause_after_queued_for_test() -> PauseHandle {
+    let (reached, release) = QUEUED.with(|slot| slot.arm());
+    PauseHandle { reached, release }
+}
+
+/// Called by the serve loop just after an answer was queued.
+pub(crate) async fn after_queued() {
+    let slot = QUEUED.with(Arc::clone);
+    slot.pause().await;
+}
+
+thread_local! {
     static ANNOUNCER: RefCell<Option<std::sync::Weak<()>>> = const { RefCell::new(None) };
 }
 

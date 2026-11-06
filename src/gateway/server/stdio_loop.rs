@@ -600,6 +600,8 @@ impl Gateway {
                             && let Ok(permit) = writer.reserve().await
                             && cancelled.send_unless_cancelled(answers.as_ref(), permit, response)
                         {
+                            #[cfg(test)]
+                            super::stdio_seams::after_queued().await;
                             super::first_list_wait::answer_queued();
                         }
                     }),

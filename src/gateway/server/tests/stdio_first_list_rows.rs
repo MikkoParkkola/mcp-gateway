@@ -159,3 +159,27 @@ async fn r13_overlapping_first_lists_both_hold_the_tool() {
     }
     serve.close().await;
 }
+
+/// R14 (C1): a list sent after the first list's answer was queued, while that
+/// answer's task has not gone on, does not wait again. The first wait runs out
+/// (backend timeout 4 s, never answered) and its task is parked just after the
+/// queue; the second list must answer at once although the backend is still
+/// cold.
+#[tokio::test]
+async fn r14_a_list_after_the_first_answer_was_queued_does_not_wait() {
+    let (mut serve, _held) = modern_during_warm_up(Some("4s")).await;
+    let pause = crate::gateway::server::stdio_seams::pause_after_queued_for_test();
+    let mut seen = Vec::new();
+    serve.send(&modern(2, "tools/list")).await;
+    tokio::time::timeout(ARRIVAL, pause.reached())
+        .await
+        .expect("premise: the first list's answer was queued");
+    serve.send(&modern(3, "tools/list")).await;
+    let second = answer_within(&mut serve, 3, AT_ONCE, &mut seen).await;
+    pause.release();
+    assert!(
+        second.is_some(),
+        "a list sent after the first answer was queued waited again"
+    );
+    serve.close().await;
+}
