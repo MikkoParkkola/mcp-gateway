@@ -163,7 +163,7 @@ fn caller() -> crate::gateway::meta_mcp::MetaMcpCallerContext<'static> {
         stdio_nonce: None,
         caller_key: None,
         verified_identity: None,
-        is_admin: false,
+        admin: crate::gateway::authz::AdminStanding::None,
         surface_request: crate::gateway::recovery::SurfaceRequest::Configured,
         input_capabilities: crate::protocol::meta::Declared::NONE,
         retry: &crate::protocol::mrtr::NO_RETRY,

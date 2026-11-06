@@ -793,6 +793,12 @@ pub(crate) fn insert_notification_refused_by(
     }
 }
 
+/// Every stored answer leaving the gateway is scrubbed against the values
+/// current when it is sent; the exits are enumerated.
+#[cfg(test)]
+#[path = "stored_scrub_pin_tests.rs"]
+mod stored_scrub_pin_tests;
+
 #[cfg(test)]
 #[path = "delivery_facts_tests.rs"]
 mod tests;

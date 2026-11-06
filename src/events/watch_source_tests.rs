@@ -611,3 +611,7 @@ fn a_projection_digest_is_sha256_tagged_hex() {
         "sha256:015abd7f5cc57a2dd94b7590f04ad8084273905ee33ec5cebeae62276a97f862"
     );
 }
+
+/// A watch row carrying an observation is never keyed by the watch route.
+#[path = "watch_source_identity_tests.rs"]
+mod identity_rows;

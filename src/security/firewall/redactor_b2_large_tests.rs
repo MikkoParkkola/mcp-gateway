@@ -185,37 +185,12 @@ fn s7_over_the_cap_cost() {
     });
     let text = over_cap(&format!(r#"[{{"v":"{}",{keys}"z":0}}]"#, secret_url()));
     ratios.push(time_against_base("one span across 100000 keys", &text));
-    // One literal of many matches and no escape: each escape lookup must
-    // stay a forward step, not a rescan of the literal (gpt review).
-    // Linear: twice the matches may cost at most about twice the time.
-    let dense = |n: usize| {
-        let mut body = String::new();
-        for i in 0..n {
-            use std::fmt::Write as _;
-            write!(body, "AKIA{i:016} ").expect("writes");
-        }
-        over_cap(&format!(r#"{{"s":"{body}"}}"#))
-    };
-    let warm = redactor();
-    let timed = |text: &str| {
-        let mut value = json!({ "content": [{ "type": "text", "text": text }] });
-        let started = std::time::Instant::now();
-        warm.scan_and_redact(&mut value);
-        let took = started.elapsed();
-        let out = value["content"][0]["text"].as_str().expect("text");
-        assert!(!out.contains("AKIA"), "every dense match is redacted");
-        took
-    };
-    let (half, full) = (timed(&dense(30_000)), timed(&dense(60_000)));
-    let scaling = full.as_secs_f64() / half.as_secs_f64();
-    println!("dense matches: 30000 in {half:?}, 60000 in {full:?}, scaling {scaling:.2}");
-    assert!(
-        scaling < 3.0,
-        "dense-match scaling {scaling:.2}: not linear"
-    );
+    // One literal of many matches and no escape, against base. That each
+    // escape lookup stays a forward step is counted, not timed, by
+    // `s15_dense_matches_read_the_literal_once_a_pass`.
     ratios.push(time_against(
         "60000 matches in one literal",
-        &dense(60_000),
+        &dense_literal(60_000),
         false,
     ));
     // No secret at all: every JSON leaf over the cap now takes the walk (MIK-8756
@@ -242,6 +217,63 @@ fn s7_over_the_cap_cost() {
     for (label, ratio) in ratios {
         println!("{label}: {ratio:.2}x of the whole-value path (STREAM.4 bar 3x)");
     }
+}
+
+/// One string literal of `n` AWS-key-shaped matches, no escape, over the cap.
+fn dense_literal(n: usize) -> String {
+    let mut body = String::new();
+    for i in 0..n {
+        use std::fmt::Write as _;
+        write!(body, "AKIA{i:016} ").expect("writes");
+    }
+    over_cap(&format!(r#"{{"s":"{body}"}}"#))
+}
+
+/// Each escape lookup is a forward step, never a rescan of its literal
+/// (a review finding on F1). Counted in the literal bytes the lookups read,
+/// not timed, so a busy runner cannot fail it. Each match is 21 bytes
+/// (`AKIA`, 16 digits, a space) and the walk reads the literal once in
+/// each of its two passes: 42 bytes a match when linear. A lookup that
+/// rescanned the literal would read all of it twice a match in each pass,
+/// 84 n squared bytes: 60,000 times more at 30000 matches, and 4x rather
+/// than 2x for twice the matches.
+#[test]
+fn s15_dense_matches_read_the_literal_once_a_pass() {
+    /// `AKIA`, 16 digits and a space: one match's bytes in the literal.
+    const MATCH_BYTES: usize = 21;
+    /// Pass 1 sizes the output, pass 2 writes it; each reads the literal.
+    const PASSES: usize = 2;
+    let r = redactor();
+    let read = |n: usize| {
+        let text = dense_literal(n);
+        let mut value = json!({ "content": [{ "type": "text", "text": text }] });
+        let bytes = super::super::large::lookups::counted(|| {
+            r.scan_and_redact(&mut value);
+        });
+        let out = value["content"][0]["text"].as_str().expect("text");
+        assert!(
+            !out.contains("AKIA"),
+            "premise: every dense match is redacted"
+        );
+        assert_eq!(
+            out.matches(MARK).count(),
+            n,
+            "premise: each match is its own span, one marker each"
+        );
+        bytes
+    };
+    // Checked before the larger run, so a rescanning lookup fails here
+    // rather than reading the larger literal 240,000 times.
+    let half = read(30_000);
+    assert_eq!(half, MATCH_BYTES * PASSES * 30_000, "30000 matches");
+    let full = read(60_000);
+    assert_eq!(full, MATCH_BYTES * PASSES * 60_000, "60000 matches");
+    // The ticket's bound, between 2x (linear) and 4x (a rescan per lookup).
+    // The exact counts above imply it; it stays to state that bound.
+    assert!(
+        full <= half * 3,
+        "60000 read {full} bytes, 30000 read {half}"
+    );
 }
 
 fn time_against_base(label: &str, text: &str) -> (String, f64) {

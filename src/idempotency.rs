@@ -597,6 +597,18 @@ impl IdempotencyCache {
         );
     }
 
+    /// Test seam: every stored entry becomes the stored failure `error`,
+    /// bound to the request it was admitted for, so a row can reach the
+    /// cached-error replay through a key the real call path scoped.
+    #[cfg(test)]
+    pub(crate) fn fail_every_entry_for_test(&self, error: &Value) {
+        let now = self.now();
+        for mut entry in self.entries.iter_mut() {
+            let fingerprint = entry.fingerprint.clone();
+            *entry = Entry::new(IdempotencyState::Failed(error.clone(), now), &fingerprint);
+        }
+    }
+
     /// Remove `key` entirely (used when a call fails and should be retryable).
     pub fn remove(&self, key: &str) {
         self.entries.remove(key);

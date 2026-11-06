@@ -106,7 +106,9 @@ fn subscribe_to(f: &Fixture, principal: &str, backend: &str, subject: &str, url:
         .expect("observes")
         .expect("per-user");
     row.obs_basis = Some(observed);
-    row.observed_identity = Some(person(subject));
+    row.observed_identity = Some(crate::events::records::StoredIdentity::from(&person(
+        subject,
+    )));
     let id = row.id.clone();
     f.hub
         .store

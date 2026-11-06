@@ -12,6 +12,7 @@ use crate::control_plane::{
     ControlPlaneGrant, ControlPlaneMutation, ControlPlanePolicy, ControlPlaneRole,
     ControlPlaneRoleMappingConfig, ControlPlaneRollbackPlan, ControlPlaneStore,
 };
+use crate::gateway::authz::AdminStanding;
 use crate::key_server::oidc::VerifiedIdentity;
 use axum::Json;
 use axum::extract::{Extension, State};
@@ -401,17 +402,28 @@ pub(super) fn apply_mutation(
 /// When a verified identity is present, the role comes from the issuer-scoped
 /// role mapping; an identity that matches no rule gets `Viewer`, which reads
 /// only its own grants and audit events. With no verified identity, an admin
-/// key is `Admin` and any other caller `Viewer`. `Auditor` is only ever an
-/// explicit role rule, since it reads every principal's rows.
+/// key is `Admin` and any other caller `Viewer`. `Auditor` is otherwise only
+/// an explicit role rule, since it reads every principal's rows.
+///
+/// `Admin` is gateway-wide: a caller whose UI scope is not every
+/// backend, by its key or its token's policy, is capped at `Auditor`, read
+/// breadth that the scoped snapshot bounds to its backends.
 pub(in crate::gateway::ui) fn actor_from_client(
     client: Option<&AuthenticatedClient>,
     identity: Option<&VerifiedIdentity>,
     role_mapping: &ControlPlaneRoleMappingConfig,
 ) -> ControlPlaneActor {
     if let Some(id) = identity {
-        let role = role_mapping
+        let mut role = role_mapping
             .resolve_role(id)
             .unwrap_or(ControlPlaneRole::Viewer);
+        let scoped = client.is_some_and(|c| {
+            crate::gateway::authz::BackendGrant::for_ui(Some(c))
+                != crate::gateway::authz::BackendGrant::Unscoped
+        });
+        if scoped && role == ControlPlaneRole::Admin {
+            role = ControlPlaneRole::Auditor;
+        }
         let display_name = id.name.clone().unwrap_or_else(|| id.email.clone());
         return ControlPlaneActor {
             actor_id: id.stable_actor_id(),
@@ -421,13 +433,18 @@ pub(in crate::gateway::ui) fn actor_from_client(
         };
     }
 
-    let (name, role, group_id) = match client {
-        Some(client) if client.admin => (
+    let (name, role, group_id) = match client.map(|c| (c, c.admin_standing())) {
+        Some((client, AdminStanding::Gateway)) => (
             client.name.clone(),
             ControlPlaneRole::Admin,
             "local-admins".to_string(),
         ),
-        Some(client) => (
+        Some((client, AdminStanding::InScope)) => (
+            client.name.clone(),
+            ControlPlaneRole::Auditor,
+            "local-admins".to_string(),
+        ),
+        Some((client, AdminStanding::None)) => (
             client.name.clone(),
             ControlPlaneRole::Viewer,
             "local-viewers".to_string(),

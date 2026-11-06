@@ -299,6 +299,11 @@ pub(crate) async fn with_dispatch_scope<F: std::future::Future>(
 }
 
 impl DispatchNotes {
+    /// [`note_not_found`] for notes built outside a dispatch scope.
+    pub(super) fn mark_not_found(&mut self) {
+        self.not_found = true;
+    }
+
     /// MIN.2: whether a backend answered this call.
     pub(crate) const fn responded(&self) -> bool {
         self.responded

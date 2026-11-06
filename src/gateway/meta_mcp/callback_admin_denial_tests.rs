@@ -61,7 +61,7 @@ async fn non_admin_callback_registration_is_refused_as_forbidden() {
     let dir = tempfile::tempdir().unwrap();
     let meta = meta(&dir).await;
     let caller = anonymous_caller();
-    assert!(!caller.is_admin);
+    assert_ne!(caller.admin, crate::gateway::authz::AdminStanding::Gateway);
 
     let err = meta
         .invoke_tool(&args(), None, &caller)
@@ -75,7 +75,7 @@ async fn non_admin_callback_registration_is_refused_as_forbidden() {
     // Control: the guard is what differs. An admin passes it and fails later,
     // at the network, with something that is not a refusal.
     let admin = MetaMcpCallerContext {
-        is_admin: true,
+        admin: crate::gateway::authz::AdminStanding::Gateway,
         ..anonymous_caller()
     };
     let outcome = meta.invoke_tool(&args(), None, &admin).await;
@@ -85,6 +85,27 @@ async fn non_admin_callback_registration_is_refused_as_forbidden() {
             Err(crate::Error::Forbidden { .. } | crate::Error::ToolNotFound(_))
         ),
         "an admin must not be refused: {outcome:?}"
+    );
+}
+
+/// Admin breadth inside the scope: an admin scoped to
+/// some backends keeps the admin-only capabilities on a backend it reaches.
+/// The backend check runs first, so the rule reads `InScope` as admin.
+#[tokio::test]
+async fn an_in_scope_admin_keeps_callback_registration() {
+    let dir = tempfile::tempdir().unwrap();
+    let meta = meta(&dir).await;
+    let scoped = MetaMcpCallerContext {
+        admin: crate::gateway::authz::AdminStanding::InScope,
+        ..anonymous_caller()
+    };
+    let outcome = meta.invoke_tool(&args(), None, &scoped).await;
+    assert!(
+        !matches!(
+            outcome,
+            Err(crate::Error::Forbidden { .. } | crate::Error::ToolNotFound(_))
+        ),
+        "an in-scope admin must not be refused: {outcome:?}"
     );
 }
 

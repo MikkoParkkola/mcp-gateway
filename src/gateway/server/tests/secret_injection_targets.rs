@@ -259,6 +259,8 @@ async fn after_reload_resolving(
         assert!(registry.register(backend));
     }
     let meta = Arc::new(MetaMcp::new(Arc::clone(&registry)));
+    // As a reload does before it applies its patch.
+    registry.set_load_record(crate::config::configured_secrets::ConfiguredByBackend::default());
     let applied = crate::config_reload::apply_patch(
         &patch,
         &registry,

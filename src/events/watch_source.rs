@@ -62,6 +62,14 @@ fn is_watch(name: &str) -> bool {
     name.starts_with(PREFIX) && name.ends_with(SUFFIX)
 }
 
+/// Whether this source keys no row because the row carries a per-user
+/// observation, which neither of its keys would check. The one test both of
+/// its key routes ([`EventSource::row_key`] and [`EventSource::key_of_row`])
+/// apply, so they cannot drift apart.
+fn carries_observation(sub: &Subscription) -> bool {
+    sub.obs_basis.is_some()
+}
+
 /// A poller's lifecycle key: the principal it runs for (none when shared),
 /// the event name and the arguments. Serialized with sorted keys and every
 /// integer kept, so arguments differing past 2^53 are two pollers.
@@ -271,8 +279,20 @@ impl EventSource for WatchSource {
         poll_key(class.principal_for(principal), name, arguments)
     }
 
+    /// The default key, refused to a row carrying a per-user observation, as
+    /// [`Self::row_key`] refuses it: once the capability is offered, a key
+    /// comes from here, and the observation would go unchecked.
+    fn key_of_row(&self, sub: &Subscription, now: chrono::DateTime<chrono::Utc>) -> Option<String> {
+        if carries_observation(sub) {
+            return None;
+        }
+        Some(self.lifecycle_key(&sub.principal, &sub.name, &sub.arguments, now))
+    }
+
     fn row_key(&self, sub: &Subscription) -> Option<String> {
-        if !is_watch(&sub.name) {
+        // A row carrying a per-user observation is not this route's to key:
+        // its observation would go unchecked here.
+        if !is_watch(&sub.name) || carries_observation(sub) {
             return None;
         }
         // A row with no recorded class has no key until a catalogue read
