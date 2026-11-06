@@ -26,66 +26,148 @@ struct Access {
     readers: Vec<String>,
     /// Files with a production `.reserve(..)` call, one entry per call.
     reservers: Vec<String>,
-    /// `macro_rules!` definitions whose body calls something named by a
-    /// metavariable (`$f.$m()`, `$t::$m(v)`): a caller could pass `reads` and
-    /// no text would say so. By file, macro name and the splices found; refused
-    /// unless listed in [`SPLICES`].
-    splices: Vec<(String, String, String)>,
+    /// `macro_rules!` definitions that splice a metavariable into a member or
+    /// path position, call one, or call a repetition: a caller could pass
+    /// `reads` and no text would say so. By file, macro name and the
+    /// fingerprint of the whole body; refused unless listed in [`SPLICES`].
+    splices: Vec<(String, String, u64)>,
 }
 
-/// The splicing macros the crate is known to define: file, macro, the exact
-/// splices its body holds (so the reviewed body is pinned), and why it cannot
-/// reach the read history. The real walk must find exactly these, so a new
-/// splice, a changed body and a stale entry all fail.
-const SPLICES: [(&str, &str, &str, &str); 2] = [
+/// The splicing macros the crate is known to define: file, macro, the
+/// fingerprint of the body as reviewed ([`body_fingerprint`]), and why it
+/// cannot reach the read history. The real walk must find exactly these, so a
+/// new splice, any change to a listed body and a stale entry all fail.
+const SPLICES: [(&str, &str, u64, &str); 7] = [
+    (
+        "src/config_reload/diff.rs",
+        "sections",
+        0x7d7c_30a8_74df_c9cd,
+        "reads one named config field on the running and wanted configs",
+    ),
     (
         "src/duration_bound.rs",
         "delta",
-        "::$try(",
-        "calls a chrono TimeDelta constructor named by the macro's own arms (try_weeks, ..)",
+        0xc340_7321_5edc_4345,
+        "calls a chrono TimeDelta constructor named by the macro's own arms",
+    ),
+    (
+        "src/gateway/meta_mcp/dispatch_names.rs",
+        "meta_arms",
+        0x6bb1_f53b_93a3_9354,
+        "names MetaArm enum variants from its own table",
+    ),
+    (
+        "src/personal_accounts/commit.rs",
+        "boundary",
+        0x7368_4427_9eab_5355,
+        "names a test fault-injection Boundary variant",
+    ),
+    (
+        "src/security/firewall/collusion_seam_excuse.rs",
+        "count",
+        0xc0a1_a90d_4d8f_1107,
+        "increments a named test counter field",
     ),
     (
         "src/yaml/de/mod.rs",
         "typed",
-        ".$method(",
-        "calls a deserializer method on the YAML deserializer the macro is given",
+        0x2346_1eff_ee83_d4fe,
+        "calls a method on the YAML deserializer the macro is given",
+    ),
+    (
+        "src/yaml/ser.rs",
+        "refuse",
+        0x46f1_6387_20d2_0b3a,
+        "defines Serializer methods that refuse, by name",
     ),
 ];
 
-/// The splices in a `macro_rules!` body that call something named by a
-/// metavariable, in order, with spacing and `r#` removed: after `.` or `::`,
-/// a metavariable (`$m`) followed by `(` or `::<`, or a repetition (`$($m)+`)
-/// in that place, whatever follows it.
-fn call_splices(mac: &syn::Macro) -> Vec<String> {
-    let text: String = mac
-        .tokens
+/// A macro body with spacing and `r#` removed, as the splice check reads it.
+fn macro_text(mac: &syn::Macro) -> String {
+    mac.tokens
         .to_string()
         .chars()
         .filter(|c| !c.is_whitespace())
         .collect::<String>()
-        .replace("r#", "");
+        .replace("r#", "")
+}
+
+/// A 64-bit FNV-1a hash of the body's [`macro_text`]: a listed macro is
+/// pinned to its reviewed body, so a changed receiver fails.
+fn body_fingerprint(mac: &syn::Macro) -> u64 {
+    macro_text(mac).bytes().fold(0xcbf2_9ce4_8422_2325, |h, b| {
+        (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3)
+    })
+}
+
+/// The splices in a `macro_rules!` body, in order: a metavariable or a
+/// repetition right after `.` or `::` (`$f.$m`, `<$t>::$m`, `$f$(.$m)*`),
+/// and a metavariable or a repetition that is called (`$m(`, `$m::<`,
+/// `$($m)+(`). `$crate` is not one. A member or path splice is reported
+/// whatever follows it: a fail-closed rule, so no spelling of the call
+/// escapes it.
+fn call_splices(mac: &syn::Macro) -> Vec<String> {
+    let text = macro_text(mac);
+    let bytes = text.as_bytes();
+    let ident_end = |from: usize| {
+        text[from..]
+            .find(|c: char| !(c.is_alphanumeric() || c == '_'))
+            .map_or(text.len(), |e| e + from)
+    };
+    // Past the `$( .. )` group opening at `open`, its separator and operator.
+    let group_end = |open: usize| {
+        let mut depth = 0usize;
+        let mut i = open;
+        while i < bytes.len() {
+            match bytes[i] {
+                b'(' => depth += 1,
+                b')' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        break;
+                    }
+                }
+                _ => {}
+            }
+            i += 1;
+        }
+        let mut end = (i + 1).min(bytes.len());
+        let op = |at: usize| at < bytes.len() && matches!(bytes[at], b'*' | b'+' | b'?');
+        if !op(end) && end < bytes.len() {
+            end += 1;
+        }
+        if op(end) {
+            end += 1;
+        }
+        end
+    };
+    let called = |at: usize| text[at..].starts_with('(') || text[at..].starts_with("::<");
     let mut found = Vec::new();
-    for lead in [".$", "::$"] {
-        for (i, _) in text.match_indices(lead) {
-            let rest = &text[i + lead.len()..];
-            if rest.starts_with('(') {
-                let end = rest.find(')').map_or(rest.len(), |e| e + 1);
-                found.push((i, format!("{lead}{}", &rest[..end])));
-                continue;
-            }
-            let name = rest
-                .find(|c: char| !(c.is_alphanumeric() || c == '_'))
-                .unwrap_or(rest.len());
-            let after = &rest[name..];
-            if name > 0 && (after.starts_with('(') || after.starts_with("::<")) {
-                let tail = if after.starts_with('(') { "(" } else { "::<" };
-                found.push((i, format!("{lead}{}{tail}", &rest[..name])));
-            }
+    for (i, _) in text.match_indices('$') {
+        let after = i + 1;
+        if text[after..].starts_with("crate") && ident_end(after) == after + 5 {
+            continue;
+        }
+        let end = if text[after..].starts_with('(') {
+            group_end(after)
+        } else {
+            ident_end(after)
+        };
+        if end == after {
+            continue;
+        }
+        let lead = if text[..i].ends_with('.') {
+            "."
+        } else if text[..i].ends_with("::") {
+            "::"
+        } else {
+            ""
+        };
+        if !lead.is_empty() || called(end) {
+            found.push(format!("{lead}{}", &text[i..end]));
         }
     }
-    found.sort();
-    found.dedup();
-    found.into_iter().map(|(_, s)| s).collect()
+    found
 }
 
 impl Access {
@@ -165,13 +247,13 @@ impl Sink for Access {
     fn item(&mut self, at: &Place, item: &syn::Item) {
         if let syn::Item::Macro(mac) = item {
             if mac.mac.path.is_ident("macro_rules") {
-                let found = call_splices(&mac.mac);
-                if !found.is_empty() {
+                if !call_splices(&mac.mac).is_empty() {
                     let name = mac
                         .ident
                         .as_ref()
                         .map_or_else(String::new, ToString::to_string);
-                    self.splices.push((at.file.clone(), name, found.join(" ")));
+                    self.splices
+                        .push((at.file.clone(), name, body_fingerprint(&mac.mac)));
                 }
             }
             self.tokens(at, &mac.mac);
@@ -190,12 +272,14 @@ fn names_the_history(file: &str) -> bool {
 fn the_read_history_is_reached_from_the_judge_alone() {
     let mut access = Access::default();
     walk(crate_root(), &ROOTS, &mut access).expect("the crate walks");
-    let allowed: Vec<(String, String, String)> = SPLICES
+    let allowed: Vec<(String, String, u64)> = SPLICES
         .iter()
-        .map(|(file, name, found, _)| ((*file).to_owned(), (*name).to_owned(), (*found).to_owned()))
+        .map(|(file, name, print, _)| ((*file).to_owned(), (*name).to_owned(), *print))
         .collect();
+    let mut found = access.splices.clone();
+    found.sort();
     assert_eq!(
-        access.splices, allowed,
+        found, allowed,
         "a macro_rules! that calls a method named by a metavariable could reach the read history \
          unseen: refuse it, or list it in SPLICES with why it cannot (a stale entry fails too)"
     );
@@ -220,39 +304,44 @@ fn the_read_history_is_reached_from_the_judge_alone() {
     );
 }
 
-/// A `macro_rules!` that calls something named by a metavariable is
-/// reported, however the name is spliced: a method, a raw-name metavariable,
-/// a repetition, a path or a qualified call, with or without a turbofish.
-/// `call!(firewall, reads)` would reach the history with no `reads` in the
-/// macro's text. A fixed call, a field and an uncalled variant are not.
+/// Every way a `macro_rules!` body can splice a name into a call is reported,
+/// each splice exactly: a member or path splice whatever follows it, a raw
+/// name, a repetition (around the name or around the member), a bare callee,
+/// a parenthesised or deferred path call. A fixed call and `$crate` are not.
 #[test]
 fn a_macro_that_splices_a_call_is_reported() {
-    let at = Place {
-        file: "src/elsewhere.rs".to_owned(),
-        func: None,
-    };
-    let mut access = Access::default();
-    for source in [
-        "macro_rules! method { ($f:expr, $m:ident) => { $f.$m() }; }",
-        "macro_rules! turbo { ($f:expr, $m:ident) => { $f.$m::<u8>() }; }",
-        "macro_rules! raw { ($f:expr, $r#m:ident) => { $f.$r#m() }; }",
-        "macro_rules! repeat { ($f:expr, $($m:ident)+) => { $f.$($m)+() }; }",
-        "macro_rules! path { ($t:ty, $m:ident, $v:expr) => { $t::$m($v) }; }",
-        "macro_rules! qualified { ($t:ty, $m:ident, $v:expr) => { <$t>::$m($v) }; }",
-        "macro_rules! fixed { ($f:expr) => { $f.len() }; }",
-        "macro_rules! field { ($f:expr, $x:ident) => { $f.$x }; }",
-        "macro_rules! variant { ($v:ident) => { Kind::$v }; }",
+    for (source, want) in [
+        ("($f:expr, $m:ident) => { $f.$m() }", &[".$m"][..]),
+        ("($f:expr, $m:ident) => { $f.$m::<u8>() }", &[".$m"]),
+        ("($f:expr, $r#m:ident) => { $f.$r#m() }", &[".$m"]),
+        ("($f:expr, $($m:ident)+) => { $f.$($m)+() }", &[".$($m)+"]),
+        (
+            "($f:expr, $($m:ident)*) => { $f$(.$m)*() }",
+            &["$(.$m)*", ".$m"],
+        ),
+        ("($t:ty, $m:ident, $v:expr) => { $t::$m($v) }", &["::$m"]),
+        ("($t:ty, $m:ident, $v:expr) => { <$t>::$m($v) }", &["::$m"]),
+        (
+            "($t:ty, $m:ident, $v:expr) => { (<$t>::$m)($v) }",
+            &["::$m"],
+        ),
+        (
+            "($t:ty, $m:ident, $v:expr) => { { let f = <$t>::$m; f($v) } }",
+            &["::$m"],
+        ),
+        ("($m:path, $v:expr) => { $m($v) }", &["$m"]),
+        ("($f:expr, $x:ident) => { $f.$x }", &[".$x"]),
+        ("($v:ident) => { Kind::$v }", &["::$v"]),
+        ("($f:expr) => { $f.len() }", &[]),
+        ("($f:expr) => { $crate::helpers::run($f) }", &[]),
     ] {
-        let item: syn::Item = syn::parse_str(source).expect("an item");
-        access.item(&at, &item);
+        let item: syn::Item =
+            syn::parse_str(&format!("macro_rules! m {{ {source}; }}")).expect("a macro_rules item");
+        let syn::Item::Macro(mac) = item else {
+            unreachable!("parsed as a macro");
+        };
+        assert_eq!(call_splices(&mac.mac), want, "{source}");
     }
-    let names: Vec<&str> = access.splices.iter().map(|(_, n, _)| n.as_str()).collect();
-    assert_eq!(
-        names,
-        ["method", "turbo", "raw", "repeat", "path", "qualified"],
-        "every called splice is reported, and nothing else: {:?}",
-        access.splices
-    );
 }
 
 /// What the walk does with an expression (scan.rs `visit_expr`): the sink
