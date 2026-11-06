@@ -12,7 +12,7 @@ use pretty_assertions::assert_eq;
 
 /// A contract that fails closed: an answer from a tool with no declared
 /// contract is refused inside the dispatch, with `-32603`.
-fn fail_closed() -> ResponseContractConfig {
+pub(super) fn fail_closed() -> ResponseContractConfig {
     ResponseContractConfig {
         enabled: true,
         action_mode: true,
@@ -23,7 +23,7 @@ fn fail_closed() -> ResponseContractConfig {
 
 /// A contract that refuses only an answer carrying the mock's final text: an
 /// interim round with no text passes, the answer after it is refused.
-fn refusing_final_answer() -> ResponseContractConfig {
+pub(super) fn refusing_final_answer() -> ResponseContractConfig {
     let mut contract = ResponseContractConfig {
         enabled: true,
         action_mode: true,
@@ -40,7 +40,7 @@ fn refusing_final_answer() -> ResponseContractConfig {
     contract
 }
 
-async fn contract_state(
+pub(super) async fn contract_state(
     log: Arc<crate::security::TransparencyLogger>,
     contract: Option<ResponseContractConfig>,
 ) -> (Arc<AppState>, crate::gateway::router::tests::FixtureDir) {
@@ -88,7 +88,7 @@ async fn settled_task_with(
     (task, settled, entries, mock.calls())
 }
 
-async fn settled_task(
+pub(super) async fn settled_task(
     answer: Answer,
     contract: Option<ResponseContractConfig>,
 ) -> (String, Value, Vec<Value>) {
@@ -98,12 +98,12 @@ async fn settled_task(
     (task, settled, entries)
 }
 
-fn clean_answer() -> Answer {
+pub(super) fn clean_answer() -> Answer {
     Answer::Result(json!({"content": [{"type": "text", "text": "ok"}], "isError": false}))
 }
 
 /// The task's `task_settlement` records.
-fn settlements<'a>(entries: &'a [Value], task: &str) -> Vec<&'a Value> {
+pub(super) fn settlements<'a>(entries: &'a [Value], task: &str) -> Vec<&'a Value> {
     entries
         .iter()
         .filter(|entry| entry["route"] == "task_settlement" && entry["task_id"] == task)
