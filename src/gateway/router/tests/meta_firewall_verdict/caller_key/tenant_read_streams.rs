@@ -61,6 +61,16 @@ impl Stream {
     /// caller's assert then says what was missing), and then any more within
     /// `QUIET`, where an extra that must not arrive would show.
     async fn drain_until(&mut self, enough: impl Fn(&[String]) -> bool) -> Vec<String> {
+        let mut out = self.arrive(enough).await;
+        // timing: absence
+        out.extend(self.drain_for_absence(QUIET).await);
+        out
+    }
+
+    /// Payloads until `enough` holds for them, or `HANG_BOUND` passes or the
+    /// stream ends (the caller's assert then says what was missing), with no
+    /// window after: for a row that proves absence by order, not by waiting.
+    async fn arrive(&mut self, enough: impl Fn(&[String]) -> bool) -> Vec<String> {
         let deadline = tokio::time::Instant::now() + HANG_BOUND;
         let mut out = self.take_events();
         while !enough(&out) {
@@ -72,28 +82,34 @@ impl Stream {
                 _ => return out,
             }
         }
-        // timing: absence
-        out.extend(self.drain_for_absence(QUIET).await);
         out
     }
 
     /// The whole events buffered so far, as `data:` payloads.
     fn take_events(&mut self) -> Vec<String> {
-        let mut out = Vec::new();
-        while let Some(end) = self.buffer.find("\n\n") {
-            let block: String = self.buffer.drain(..end + 2).collect();
-            if block.contains("event: connected") {
-                continue;
-            }
-            out.extend(
-                block
-                    .lines()
-                    .filter_map(|l| l.strip_prefix("data: "))
-                    .map(str::to_string),
-            );
-        }
-        out
+        events_in(&mut self.buffer)
     }
+}
+
+/// Drain the whole events from `buffer`: one entry per event, its `data:`
+/// lines joined, so a row that counts events cannot count one event's two
+/// lines as two. The `connected` event is skipped.
+fn events_in(buffer: &mut String) -> Vec<String> {
+    let mut out = Vec::new();
+    while let Some(end) = buffer.find("\n\n") {
+        let block: String = buffer.drain(..end + 2).collect();
+        if block.contains("event: connected") {
+            continue;
+        }
+        let data: Vec<&str> = block
+            .lines()
+            .filter_map(|l| l.strip_prefix("data: "))
+            .collect();
+        if !data.is_empty() {
+            out.push(data.join("\n"));
+        }
+    }
+    out
 }
 
 fn names(tenant: &str) -> TaggedNotification {
@@ -535,4 +551,118 @@ async fn listen_request_params_are_a_read() {
             );
         }
     }
+}
+
+/// The standalone `tenant_read` records in `log_dir`, and how many of them
+/// say `blocked`.
+fn tenant_reads(log_dir: &tempfile::TempDir) -> (usize, usize) {
+    let records: Vec<Value> = log_lines(log_dir)
+        .iter()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .filter(|r| record_field(r, "event") == Some("tenant_read"))
+        .collect();
+    let blocked = records
+        .iter()
+        .filter(|r| record_field(r, "cross_tenant_read") == Some("blocked"))
+        .count();
+    (records.len(), blocked)
+}
+
+/// Whether two different events carry `first`'s markers and `second`'s.
+fn two_events_with(events: &[String], first: &[&str], second: &[&str]) -> bool {
+    let has = |e: &String, all: &[&str]| all.iter().all(|m| e.contains(m));
+    events.iter().enumerate().any(|(i, a)| {
+        has(a, first)
+            && events
+                .iter()
+                .enumerate()
+                .any(|(j, b)| i != j && has(b, second))
+    })
+}
+
+/// Firewall off, `block`: after an A read, a stream item naming B and a
+/// webhook event naming B are withheld from the GET stream, each with a
+/// standalone `tenant_read` record saying `blocked`; with the mode `off`
+/// (the control) each arrives as its own event and no `tenant_read` record
+/// is written. No quiet window: the block waits for its two records, then
+/// proves the B frames absent by an A frame broadcast after them arriving,
+/// with no B before it (one subscriber's frames keep their order); the
+/// control's zero is read after the rejection audit's barrier.
+#[tokio::test]
+async fn stream_items_are_judged_with_the_firewall_off() {
+    let who = caller();
+    for mode in [CrossTenantReads::Off, CrossTenantReads::Block] {
+        let (state, _store, log_dir) = logged_state_switched(Switch::Off, mode).await;
+        let router = create_router(Arc::clone(&state));
+        let hooks = webhook_routes(&state);
+        let mut stream = Stream::open(&router).await;
+
+        let (a, _, body) = send(&router, call_with(&who, true, None, 0, &reading(A))).await;
+        assert_eq!(a, Delivered, "{body}");
+        state.multiplexer.broadcast(names(B));
+        post_webhook(&hooks, &json!({ "kind": "row-78", "customer_id": B })).await;
+
+        if mode == CrossTenantReads::Off {
+            // The notification is the event naming its uri and B; the
+            // webhook event is the one naming its kind; two events, not one.
+            let both = |e: &[String]| two_events_with(e, &["rows://latest", B], &["row-78"]);
+            let got = stream.arrive(both).await;
+            assert!(both(&got), "control: off delivers both B frames: {got:?}");
+            state
+                .meta_mcp
+                .rejection_audit()
+                .settled(crate::gateway::outbound::REJECTION_AUDIT_PERMITS)
+                .await;
+            assert_eq!(
+                tenant_reads(&log_dir).0,
+                0,
+                "control: off writes no tenant_read record"
+            );
+            continue;
+        }
+
+        let recorded = crate::test_wait::wait_until(HANG_BOUND, || {
+            let n = tenant_reads(&log_dir).1;
+            async move {
+                if n == 2 {
+                    std::ops::ControlFlow::Break(n)
+                } else {
+                    std::ops::ControlFlow::Continue(format!("{n} blocked records"))
+                }
+            }
+        })
+        .await;
+        assert_eq!(
+            recorded,
+            Ok(2),
+            "a standalone tenant_read record for each withheld B frame"
+        );
+        state.multiplexer.broadcast(names(A));
+        let got = stream.arrive(|e| mentions(e, A)).await;
+        assert!(
+            mentions(&got, A),
+            "premise: the later A frame arrives, so the order proves absence: {got:?}"
+        );
+        assert!(
+            !mentions(&got, B) && !mentions(&got, "row-78"),
+            "a B frame reached an A reader ahead of the later A frame: {got:?}"
+        );
+    }
+}
+
+/// One SSE event carrying both markers on two `data:` lines is one event, so
+/// the control's two-event check refuses it; two events pass it.
+#[test]
+fn one_event_with_two_data_lines_is_not_two_events() {
+    let note = r#"{"uri":"rows://latest","customer_id":"cust-b"}"#;
+    let hook = r#"{"kind":"row-78"}"#;
+    let markers: (&[&str], &[&str]) = (&["rows://latest", B], &["row-78"]);
+    let mut one = format!("data: {note}\ndata: {hook}\n\n");
+    let events = events_in(&mut one);
+    assert_eq!(events.len(), 1, "one event: {events:?}");
+    assert!(!two_events_with(&events, markers.0, markers.1));
+    let mut two = format!("data: {note}\n\ndata: {hook}\n\n");
+    let events = events_in(&mut two);
+    assert_eq!(events.len(), 2, "two events: {events:?}");
+    assert!(two_events_with(&events, markers.0, markers.1));
 }
