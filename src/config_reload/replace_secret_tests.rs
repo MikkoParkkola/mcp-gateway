@@ -735,3 +735,6 @@ async fn two_secrets_for_one_field_are_refused_before_any_entry() {
 
 #[path = "replace_guard_tests.rs"]
 mod guard;
+
+#[path = "replace_deleted_tests.rs"]
+mod deleted;

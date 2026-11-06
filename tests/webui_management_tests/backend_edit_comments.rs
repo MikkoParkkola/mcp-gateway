@@ -5,28 +5,14 @@
 
 use super::*;
 
-/// Where the write lands: through a live `ReloadContext`, or straight to the
-/// file with no gateway running.
-#[derive(Clone, Copy, Debug)]
-enum Route {
-    Live,
-    File,
-}
-
-/// A router over `yaml` written to a fresh gateway.yaml.
-async fn served(yaml: &str, route: Route) -> (axum::Router, std::path::PathBuf, Vec<TempDir>) {
+/// A router over `yaml` written to a fresh gateway.yaml, with a live
+/// `ReloadContext`: the backend routes write only through one.
+async fn served(yaml: &str) -> (axum::Router, std::path::PathBuf, Vec<TempDir>) {
     let tmp = TempDir::new().expect("tmp");
     let path = tmp.path().join("gateway.yaml");
     write_owner_only(&path, yaml).expect("write");
-    let (state, store) = match route {
-        Route::File => make_app_state(None, Some(path.clone())).await,
-        Route::Live => {
-            let config = Config::load_literal(Some(&path)).expect("fixture loads");
-            let (state, _live, store) =
-                make_app_state_with_reload(config, None, path.clone()).await;
-            (state, store)
-        }
-    };
+    let config = Config::load_literal(Some(&path)).expect("fixture loads");
+    let (state, _live, store) = make_app_state_with_reload(config, None, path.clone()).await;
     (create_router(state), path, vec![tmp, store])
 }
 
@@ -59,23 +45,21 @@ command: \"echo svc\"  # pinned for the demo\n    description: old\n    env:\n  
 /// T1 KEEP.2: a description edit changes one line and nothing else.
 #[tokio::test]
 async fn an_edit_changes_only_its_own_line() {
-    for route in [Route::Live, Route::File] {
-        let (router, path, _keep) = served(SVC, route).await;
-        let (status, body) = patch(&router, "svc", json!({"description": "new"})).await;
-        assert_eq!(status, StatusCode::OK, "{route:?}: {body}");
-        assert_eq!(
-            read(&path),
-            SVC.replace("description: old", "description: new"),
-            "{route:?}"
-        );
-    }
+    let (router, path, _keep) = served(SVC).await;
+    let (status, body) = patch(&router, "svc", json!({"description": "new"})).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        read(&path),
+        SVC.replace("description: old", "description: new"),
+        ""
+    );
 }
 
 /// T1 fixtures: CRLF line endings and a missing final newline.
 #[tokio::test]
 async fn an_edit_keeps_comments_in_crlf_and_unterminated_files() {
     for yaml in [SVC.replace('\n', "\r\n"), SVC.trim_end().to_owned()] {
-        let (router, path, _keep) = served(&yaml, Route::File).await;
+        let (router, path, _keep) = served(&yaml).await;
         let (status, body) = patch(&router, "svc", json!({"description": "new"})).await;
         assert_eq!(status, StatusCode::OK, "{body}");
         let after = read(&path);
@@ -93,7 +77,7 @@ async fn an_edit_keeps_comments_in_crlf_and_unterminated_files() {
 #[tokio::test]
 async fn an_edit_keeps_crlf_line_endings() {
     let yaml = SVC.replace('\n', "\r\n");
-    let (router, path, _keep) = served(&yaml, Route::File).await;
+    let (router, path, _keep) = served(&yaml).await;
     let (status, body) = patch(&router, "svc", json!({"description": "new"})).await;
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(
@@ -105,7 +89,7 @@ async fn an_edit_keeps_crlf_line_endings() {
 /// T2 KEEP.2: an env key is appended inside the block `env:`, its comment kept.
 #[tokio::test]
 async fn an_env_edit_appends_inside_the_block() {
-    let (router, path, _keep) = served(SVC, Route::File).await;
+    let (router, path, _keep) = served(SVC).await;
     let (status, body) = patch(&router, "svc", json!({"env": {"B": "2"}})).await;
     assert_eq!(status, StatusCode::OK, "{body}");
     let after = read(&path);
@@ -123,26 +107,23 @@ async fn an_env_edit_appends_inside_the_block() {
     );
 }
 
-/// No-op PATCH: the value is already there, so nothing is written. A live
+/// No-op PATCH: the value is already there, so nothing is written. The
 /// gateway still reloads: retrying a PATCH whose reload failed finds its value
 /// on disk, and skipping the reload would leave the runtime stale.
 #[tokio::test]
 async fn an_edit_that_changes_nothing_writes_nothing() {
-    for route in [Route::Live, Route::File] {
-        let (router, path, _keep) = served(SVC, route).await;
-        let (status, body) = patch(&router, "svc", json!({"description": "old"})).await;
-        assert_eq!(status, StatusCode::OK, "{route:?}: {body}");
-        let reloaded = body["reload"].is_object();
-        assert_eq!(reloaded, matches!(route, Route::Live), "{route:?}: {body}");
-        assert_eq!(read(&path), SVC, "{route:?}");
-    }
+    let (router, path, _keep) = served(SVC).await;
+    let (status, body) = patch(&router, "svc", json!({"description": "old"})).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(body["reload"].is_object(), "{body}");
+    assert_eq!(read(&path), SVC);
 }
 
 /// T3 KEEP.2: the inline comment on `enabled:` is carried onto the new value.
 #[tokio::test]
 async fn an_inline_comment_follows_its_edited_value() {
     let yaml = "backends:\n  svc:\n    command: x\n    enabled: true  # on for the pilot\n";
-    let (router, path, _keep) = served(yaml, Route::File).await;
+    let (router, path, _keep) = served(yaml).await;
     let (status, body) = patch(&router, "svc", json!({"enabled": false})).await;
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(read(&path), yaml.replace("enabled: true", "enabled: false"));
@@ -157,7 +138,7 @@ async fn an_apostrophe_does_not_hide_the_inline_comment() {
         let yaml = format!(
             "backends:\n  svc:\n    command: x\n    description: {value}  # shown in the panel\n"
         );
-        let (router, path, _keep) = served(&yaml, Route::File).await;
+        let (router, path, _keep) = served(&yaml).await;
         let (status, body) = patch(&router, "svc", json!({"description": "new"})).await;
         assert_eq!(status, StatusCode::OK, "{value}: {body}");
         assert_eq!(read(&path), yaml.replace(value, "new"), "{value}");
@@ -170,7 +151,7 @@ async fn an_apostrophe_does_not_hide_the_inline_comment() {
 async fn clearing_a_value_keeps_the_comments_around_it() {
     let yaml = "backends:\n  svc:\n    command: x\n    # stop when quiet\n    \
                 stop_when_idle_for: 10m\n    # shown in the panel\n    description: d\n";
-    let (router, path, _keep) = served(yaml, Route::File).await;
+    let (router, path, _keep) = served(yaml).await;
     let (status, body) = patch(&router, "svc", json!({"stop_when_idle_for_secs": 0})).await;
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(
@@ -185,7 +166,7 @@ async fn clearing_a_value_keeps_the_comments_around_it() {
 async fn a_transport_switch_keeps_unrelated_comments() {
     let yaml = "backends:\n  svc:\n    # the local build\n    command: \"echo a\"  # until the remote is up\n    \
                 description: d  # shown in the panel\n    env:\n      # vault\n      A: \"1\"\n";
-    let (router, path, _keep) = served(yaml, Route::File).await;
+    let (router, path, _keep) = served(yaml).await;
     let url = "https://mcp.example.test/mcp";
     let (status, body) = patch(&router, "svc", json!({"url": url})).await;
     assert_eq!(status, StatusCode::OK, "{body}");
@@ -202,28 +183,23 @@ async fn a_transport_switch_keeps_unrelated_comments() {
     );
 }
 
-/// A refusal on `route`: 409 naming the line of `comment`, never its text
+/// A refusal: 409 naming the line of `comment`, never its text
 /// (a `#` can sit inside a quoted secret), and the file byte-identical.
 async fn refused(yaml: &str, name: &str, body: Value, comment: &str) {
     let line = 1 + yaml
         .lines()
         .position(|l| l.contains(comment))
         .expect("the fixture holds the comment");
-    for route in [Route::Live, Route::File] {
-        let (router, path, _keep) = served(yaml, route).await;
-        let (status, answer) = patch(&router, name, body.clone()).await;
-        assert_eq!(status, StatusCode::CONFLICT, "{route:?}: {answer}");
-        let answer = answer.to_string();
-        assert!(
-            answer.contains(&format!("line {line}")),
-            "{route:?}: names line {line}: {answer}"
-        );
-        assert!(
-            !answer.contains(comment),
-            "{route:?}: echoes file text: {answer}"
-        );
-        assert_eq!(read(&path), yaml, "{route:?}: the file was written");
-    }
+    let (router, path, _keep) = served(yaml).await;
+    let (status, answer) = patch(&router, name, body.clone()).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{answer}");
+    let answer = answer.to_string();
+    assert!(
+        answer.contains(&format!("line {line}")),
+        "names line {line}: {answer}"
+    );
+    assert!(!answer.contains(comment), "echoes file text: {answer}");
+    assert_eq!(read(&path), yaml, "the file was written");
 }
 
 /// T5 REFUSE.1: a flow-style `backends` cannot be spliced; the edit is refused.
@@ -279,37 +255,36 @@ async fn a_refusal_never_echoes_a_quoted_secret() {
 
 /// A file that stops loading after the gateway started: the load error can
 /// quote the offending value, so the 500 must not carry it.
-async fn load_error_hides_the_value(route: Route) {
-    let (router, path, _keep) = served(SVC, route).await;
+#[tokio::test]
+async fn a_load_error_never_echoes_a_value() {
+    let (router, path, _keep) = served(SVC).await;
     write_owner_only(
         &path,
         "backends:\n  svc:\n    command: x\n    enabled: \"#secret\"\n",
     )
     .expect("write");
+    let files = mcp_gateway::gateway::test_helpers::ConfigFiles::snapshot(&path);
     let (status, answer) = patch(&router, "svc", json!({"description": "new"})).await;
-    assert_eq!(
-        status,
-        StatusCode::INTERNAL_SERVER_ERROR,
-        "{route:?}: {answer}"
-    );
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{answer}");
+    files.assert_unchanged(&path, "the edit refused for a load error");
     let answer = answer.to_string();
-    assert!(answer.contains("Failed to load"), "{route:?}: {answer}");
-    assert!(
-        !answer.contains("#secret"),
-        "{route:?}: echoes the value: {answer}"
-    );
+    assert!(!answer.contains("#secret"), "echoes the value: {answer}");
 }
 
-/// Site `ReloadContext::mutate_locked` (live gateway).
+/// No gateway running to reload (a config path, no `ReloadContext`): the
+/// edit fails closed with 503 and the file is not written.
 #[tokio::test]
-async fn a_live_load_error_never_echoes_a_value() {
-    load_error_hides_the_value(Route::Live).await;
-}
-
-/// Site `mutate_config_and_reload_with` (no gateway running).
-#[tokio::test]
-async fn a_file_load_error_never_echoes_a_value() {
-    load_error_hides_the_value(Route::File).await;
+async fn without_a_reload_context_an_edit_writes_nothing() {
+    let tmp = TempDir::new().expect("tmp");
+    let path = tmp.path().join("gateway.yaml");
+    write_owner_only(&path, SVC).expect("write");
+    let (state, _store) = make_app_state(None, Some(path.clone())).await;
+    let router = create_router(state);
+    let files = mcp_gateway::gateway::test_helpers::ConfigFiles::snapshot(&path);
+    let (status, answer) = patch(&router, "svc", json!({"description": "new"})).await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{answer}");
+    assert_eq!(read(&path), SVC, "the file was written");
+    files.assert_unchanged(&path, "the edit with no reload context");
 }
 
 /// T10: a tab-separated inline comment counts as a comment.
@@ -327,7 +302,7 @@ async fn a_tab_separated_comment_is_not_lost_silently() {
 /// T8 guard (green since #3090): add and remove over HTTP keep every comment.
 #[tokio::test]
 async fn add_and_remove_over_http_keep_comments() {
-    let (router, path, _keep) = served(SVC, Route::File).await;
+    let (router, path, _keep) = served(SVC).await;
     let (status, body) = send_json(
         &router,
         Method::POST,
@@ -348,7 +323,7 @@ async fn add_and_remove_over_http_keep_comments() {
 async fn delete_keeps_every_comment_outside_the_entry() {
     let yaml = "# lead\nbackends:\n  # why a\n  a:\n    command: x\n    # inside a\n    \
                 description: d\n  # why b\n  b:\n    command: y\n";
-    let (router, path, _keep) = served(yaml, Route::File).await;
+    let (router, path, _keep) = served(yaml).await;
     let (status, body) = send_json(&router, Method::DELETE, "/ui/api/backends/a", None).await;
     // MIK-8051: the comment inside `a` (line 6) went with it, and the
     // response says so; DEL-NOTE.1.
@@ -369,7 +344,7 @@ async fn delete_keeps_every_comment_outside_the_entry() {
 #[tokio::test]
 async fn a_delete_note_never_carries_comment_text() {
     let yaml = "backends:\n  a:\n    command: x  # token-s3cr3t-value\n  b:\n    command: y\n";
-    let (router, _path, _keep) = served(yaml, Route::File).await;
+    let (router, _path, _keep) = served(yaml).await;
     let (status, body) = send_json(&router, Method::DELETE, "/ui/api/backends/a", None).await;
     assert_eq!(status, StatusCode::OK, "{body}");
     let text = body.to_string();
@@ -381,7 +356,7 @@ async fn a_delete_note_never_carries_comment_text() {
 #[tokio::test]
 async fn a_delete_without_comments_keeps_no_content() {
     let yaml = "# lead\nbackends:\n  a:\n    command: x\n  b:\n    command: y\n";
-    let (router, _path, _keep) = served(yaml, Route::File).await;
+    let (router, _path, _keep) = served(yaml).await;
     let (status, body) = send_json(&router, Method::DELETE, "/ui/api/backends/a", None).await;
     assert_eq!(status, StatusCode::NO_CONTENT, "{body}");
 }
