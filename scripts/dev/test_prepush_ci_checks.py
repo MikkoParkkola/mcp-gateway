@@ -39,7 +39,7 @@ CI_ONLY: dict[tuple[str, tuple[str, ...]], str] = {
     ("scripts/ci/job_time_watch.py", ("macos-shards",)): "ci-env: reads this run's jobs from the Actions API (GITHUB_RUN_ID, actions: read)",
     ("scripts/ci/check_needs.py", ("test-shards",)): "ci-env: reads NEEDS from ${{ toJSON(needs) }}",
     ("scripts/ci/check_needs.py", ("windows-shards", "windows-clippy")): "ci-env: reads NEEDS from ${{ toJSON(needs) }}",
-    ("scripts/ci/check_needs.py", ("${skippable[@]}", "scope", "windows-shards", "windows-clippy", "windows-check", "release-script-tests", "task-sdk-recovery", "gws-dry-run", "linux-keychain", "upgrade-rehearsal")): "ci-env: reads NEEDS from ${{ toJSON(needs) }} (heavy-gate)",
+    ("scripts/ci/check_needs.py", ("${skippable[@]}", "scope", "windows-shards", "windows-clippy", "windows-check", "release-script-tests", "task-sdk-recovery", "gws-dry-run", "linux-keychain", "kani", "upgrade-rehearsal")): "ci-env: reads NEEDS from ${{ toJSON(needs) }} (heavy-gate)",
     ("scripts/ci/shard_tests.py", ("run", "linux", "${{matrix.shard}}")): "cargo: runs cargo test shards",
     ("scripts/ci/shard_tests.py", ("run", "macos", "${{matrix.shard}}")): "cargo: runs cargo test shards",
     ("scripts/dev/check-registry-packages.py", ()): "network: live npm/PyPI/HTTP lookups",

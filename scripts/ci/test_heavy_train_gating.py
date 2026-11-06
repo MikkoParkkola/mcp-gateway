@@ -34,8 +34,12 @@ from test_os_label_routing import LABEL_JOBS  # noqa: E402
 from test_throwaway_routing import evaluate  # noqa: E402
 
 HEAVY = HEAVY_TRAIN
+# What the gate judges on a train: the heavy jobs, plus Kani. Kani also runs on lane pull requests
+# (MIK-9353), but a train's required checks come from its PRs' own checks plus this gate, and a PR
+# whose CI predates that, or that skipped Kani, would leave a red Kani unrequired on the train.
+GATE_JUDGED = HEAVY | {"kani"}
 # Skipped on a docs-only change by the docs-only rule, train or not.
-DOCS_SKIPPED = HEAVY & SKIPPED
+DOCS_SKIPPED = GATE_JUDGED & SKIPPED
 GATE = HEAVY_GATE
 GATE_NAME = "Heavy checks (merge train)"
 STEP = "Every heavy job succeeded on a merge train"
@@ -115,12 +119,12 @@ def gate_errors(jobs: dict) -> list[str]:
         errors.append(f"{GATE}: name is {gate.get('name')!r}, not {GATE_NAME!r} (the merge train needs it by name)")
     needs = gate.get("needs") or []
     needs = {needs} if isinstance(needs, str) else set(needs)
-    if needs != HEAVY | {"scope"}:
-        errors.append(f"{GATE}: needs {sorted(needs)}, not every heavy job plus scope")
+    if needs != GATE_JUDGED | {"scope"}:
+        errors.append(f"{GATE}: needs {sorted(needs)}, not every heavy job plus kani and scope")
     if gate.get("permissions") != {"contents": "read"}:
         errors.append(f"{GATE}: permissions must be contents: read alone")
     run = " ".join(str(s.get("run", "")) for s in gate.get("steps", []))
-    for job in sorted(HEAVY):
+    for job in sorted(GATE_JUDGED):
         if job not in run:
             errors.append(f"{GATE}: its verdict does not name {job}")
     if "check_needs.py" not in run:
@@ -172,7 +176,7 @@ def gate_step_errors(jobs: dict, root: Path = ROOT) -> list[str]:
         return [f"{GATE}: no step named {STEP!r}"]
     if str((step.get("env") or {}).get("NEEDS", "")).replace(" ", "") != "${{toJSON(needs)}}":
         return [f"{GATE} step: NEEDS is not ${{{{ toJSON(needs) }}}}"]
-    every = sorted(HEAVY | {"scope"})
+    every = sorted(GATE_JUDGED | {"scope"})
     def results(**changed: str) -> dict[str, str]:
         out = {job: "success" for job in every}
         out.update({job.replace("_", "-"): r for job, r in changed.items()})
@@ -188,6 +192,11 @@ def gate_step_errors(jobs: dict, root: Path = ROOT) -> list[str]:
         "fork train branch, heavy jobs skipped": (fork, dict(results(), **skipped_heavy), True),
         "train, all succeeded": (train, results(), True),
         "train, a heavy job failed": (train, results(**{"linux-keychain": "failure"}), False),
+        # MIK-9353: Kani runs on lanes too, and the gate still refuses a train whose Kani failed.
+        "train, Kani failed": (train, results(kani="failure"), False),
+        "train, Kani skipped": (train, results(kani="skipped"), False),
+        "lane, Kani failed (its own check fails the lane, not this gate)": (lane, results(kani="failure"), True),
+        "docs-only train, Kani skipped": (docs_train, dict(results(), **{j: "skipped" for j in DOCS_SKIPPED}), True),
         "train, a heavy job cancelled": (train, results(windows_check="cancelled"), False),
         "train, a heavy job skipped": (train, results(linux_keychain="skipped"), False),
         "train, Windows skipped": (train, results(windows_shards="skipped"), False),
@@ -220,7 +229,7 @@ def main() -> int:
         j["release-script-tests"]["if"] = str(j["release-script-tests"]["if"]).replace(
             CLAUSE, CLAUSE.replace(" && github.event.pull_request.head.repo.full_name == github.repository))", "))"))
     def gate_forgets(j: dict) -> None:
-        j[GATE]["needs"] = sorted((HEAVY | {"scope"}) - {"linux-keychain"})
+        j[GATE]["needs"] = sorted((GATE_JUDGED | {"scope"}) - {"linux-keychain"})
     def train_inverted(j: dict) -> None:
         for st in j[GATE]["steps"]:
             if st.get("name") == STEP:
@@ -237,7 +246,7 @@ def main() -> int:
         "a fork's train branch counts as a train": (
             forks_count, "release-script-tests: train branch from a fork runs"),
         "the gate stops waiting for a heavy job": (
-            gate_forgets, f"{GATE}: needs {sorted((HEAVY | {'scope'}) - {'linux-keychain'})}, not every heavy job plus scope"),
+            gate_forgets, f"{GATE}: needs {sorted((GATE_JUDGED | {'scope'}) - {'linux-keychain'})}, not every heavy job plus kani and scope"),
     }
     for label, (mutate, expected) in mutants.items():
         mutated = copy.deepcopy(jobs)

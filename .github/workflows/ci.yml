@@ -720,7 +720,10 @@ jobs:
   # merge train (a `train/` branch in this repository), which is how every
   # change lands; every other event runs them as before. Kani is not one of
   # them: a lane pull request runs it too, so code that does not compile under
-  # cfg(kani) fails its own CI rather than a train. This job is their
+  # cfg(kani) fails its own CI rather than a train. This job still judges Kani
+  # on the train: a train needs its PRs' own passing checks plus this job, and
+  # a PR whose CI skipped Kani would otherwise leave a red Kani unrequired there.
+  # This job is their
   # verdict on every release-line pull request but a throwaway one: on a lane
   # it passes without judging, which makes it a check every lane passed, so
   # the merge train needs it to pass on the train, where it fails unless every
@@ -728,7 +731,7 @@ jobs:
   # skips may skip). scripts/ci/test_heavy_train_gating.py pins the routing.
   heavy-gate:
     name: Heavy checks (merge train)
-    needs: [scope, windows-shards, windows-clippy, windows-check, release-script-tests, task-sdk-recovery, gws-dry-run, linux-keychain, upgrade-rehearsal]
+    needs: [scope, windows-shards, windows-clippy, windows-check, release-script-tests, task-sdk-recovery, gws-dry-run, linux-keychain, kani, upgrade-rehearsal]
     if: ${{ always() && github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && !(github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -750,9 +753,9 @@ jobs:
           fi
           skippable=()
           if [ "$DOCS_ONLY" = true ]; then
-            skippable=(--allow-skipped task-sdk-recovery,gws-dry-run,linux-keychain,upgrade-rehearsal)
+            skippable=(--allow-skipped task-sdk-recovery,gws-dry-run,linux-keychain,kani,upgrade-rehearsal)
           fi
-          python3 scripts/ci/check_needs.py "${skippable[@]}" scope windows-shards windows-clippy windows-check release-script-tests task-sdk-recovery gws-dry-run linux-keychain upgrade-rehearsal
+          python3 scripts/ci/check_needs.py "${skippable[@]}" scope windows-shards windows-clippy windows-check release-script-tests task-sdk-recovery gws-dry-run linux-keychain kani upgrade-rehearsal
   # The macOS suite as shards (MIK-8482); `macos-check` is the aggregate.
   # On a pull request it runs only for a merge train (a `train/` branch in
   # this repository): the account's few macOS runners go to trains, and every
