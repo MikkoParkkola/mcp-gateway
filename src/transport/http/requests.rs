@@ -5,8 +5,6 @@
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
-use tokio::sync::Mutex as TokioMutex;
-
 use reqwest::header;
 use serde_json::Value;
 use tracing::{debug, info};
@@ -22,7 +20,6 @@ use super::{
     peer_refusal, require_secure_oauth_target,
 };
 use crate::gateway::trace;
-use crate::oauth::OAuthClient;
 use crate::oauth::login_gate::{self, Provenance};
 use crate::protocol::era::PeerEra;
 use crate::protocol::meta::MODERN_VERSIONS;
@@ -36,6 +33,10 @@ use crate::security::http_diagnostics::{
     status_refusal,
 };
 use crate::{Error, Result};
+
+#[path = "requests_detach_token.rs"]
+mod detach_token;
+use detach_token::detach_token_step;
 
 impl HttpTransport {
     /// Build an [`header::HeaderMap`] according to `mode`.
@@ -753,43 +754,6 @@ impl HttpTransport {
     }
 }
 
-/// Run an interactive caller's token step in a task of its own (MIK-8339):
-/// the login it may lead belongs to the task, so a caller whose deadline
-/// fires drops only its wait, and a person who approves later still stores a
-/// token. The caller's scopes are carried in, so the task's marks land on the
-/// caller's own Provenance. Before it holds the client, the task observes a
-/// restart or stop and ends at the authorization window; no timeout ever
-/// wraps a live Lead (the Lead stage bounds itself, in `authorize_until`).
-async fn detach_token_step(
-    oauth: Arc<TokioMutex<OAuthClient>>,
-    gate: Arc<crate::oauth::login_gate::LoginGate>,
-    set_out: crate::oauth::login_gate::SetOut,
-    backend: String,
-) -> Result<String> {
-    let crate::oauth::login_gate::SetOut {
-        since,
-        cohort,
-        deadline,
-    } = set_out;
-    #[cfg(test)]
-    gate.note_detached();
-    let carried = crate::oauth::login_gate::carry_scopes();
-    let task = tokio::spawn(carried.run(async move {
-        let mut client = gate
-            .bounded(since, &cohort, &backend, deadline, oauth.lock_owned())
-            .await?;
-        // Bounded as the wait for the client is: a re-discovery is a fetch.
-        let rediscover = client.rediscover_if_moved();
-        gate.bounded(since, &cohort, &backend, deadline, rediscover)
-            .await??;
-        client
-            .get_token_detached(true, since, &cohort, deadline)
-            .await
-    }));
-    task.await
-        .map_err(|e| Error::OAuth(format!("the detached token step failed: {e}")))?
-}
-
 /// Whose credential a request's headers carry.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum CredentialOrigin {
@@ -798,3 +762,7 @@ enum CredentialOrigin {
     /// A subscriber's, lent per request by a credential source: neither.
     Lent,
 }
+
+#[cfg(test)]
+#[path = "token_refusal_tests.rs"]
+mod token_refusal_tests;
