@@ -54,18 +54,27 @@ fn generated(rng: &mut StdRng) -> String {
 fn shown_matches_the_per_backslash_reference_on_generated_input() {
     // GIVEN: a fixed seed, so every run checks the same inputs
     let mut rng = StdRng::seed_from_u64(9318);
-    for case in 0..5_000 {
+    for _ in 0..5_000 {
         let text = generated(&mut rng);
         // WHEN / THEN: the same output as the version it replaced
-        assert_eq!(
-            shown(&text).to_string(),
-            reference(&text),
-            "case {case}: {text:?}"
-        );
+        assert_eq!(shown(&text).to_string(), reference(&text), "{text:?}");
     }
     // And the fixed shapes: a Windows path, and runs at the end of the text.
     for text in ["C:\\Users\\me", "end\\", "end\\\\\\", "\\", ""] {
         assert_eq!(shown(text).to_string(), reference(text), "{text:?}");
+    }
+}
+
+#[test]
+fn shown_matches_the_reference_on_short_runs_before_each_kind_of_suffix() {
+    // Runs of 0-4 backslashes before: the end, a lone `u`, `u{`, plain
+    // ASCII, and hidden characters of 2, 3 and 4 bytes.
+    let suffixes = ["", "u", "u{", "a", "\u{85}", "\u{200b}", "\u{e0001}"];
+    for run in 0..=4 {
+        for suffix in suffixes {
+            let text = "\\".repeat(run) + suffix;
+            assert_eq!(shown(&text).to_string(), reference(&text), "{text:?}");
+        }
     }
 }
 
@@ -84,7 +93,8 @@ fn a_long_backslash_run_renders_within_the_hang_bound() {
     // GIVEN: one long run of backslashes before `u{`
     let text = "\\".repeat(HUGE) + "u{";
 
-    // WHEN: it is shown on its own thread
+    // WHEN: it is shown on its own thread. A thread that times out is not
+    // stopped: it keeps running until it finishes or the process exits.
     let (done, finished) = mpsc::channel();
     std::thread::spawn(move || {
         let _ = done.send(shown(&text).to_string().len());
@@ -93,6 +103,11 @@ fn a_long_backslash_run_renders_within_the_hang_bound() {
     // THEN: it finishes within the bound, every backslash doubled
     let len = finished
         .recv_timeout(HANG_BOUND)
-        .unwrap_or_else(|_| panic!("shown did not finish within {HANG_BOUND:?}"));
+        .unwrap_or_else(|e| match e {
+            mpsc::RecvTimeoutError::Timeout => {
+                panic!("shown did not finish within {HANG_BOUND:?}")
+            }
+            mpsc::RecvTimeoutError::Disconnected => panic!("shown panicked on its thread"),
+        });
     assert_eq!(len, 2 * HUGE + 2);
 }

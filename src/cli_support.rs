@@ -72,7 +72,9 @@ pub fn shown(text: &str) -> Shown {
             // time linear in its length.
             let after = rest.trim_start_matches('\\');
             let unit = if escapes_next(after) { "\\\\" } else { "\\" };
-            out.push_str(&unit.repeat(rest.len() - after.len()));
+            for _ in 0..rest.len() - after.len() {
+                out.push_str(unit);
+            }
             rest = after;
             continue;
         }
