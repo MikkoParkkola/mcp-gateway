@@ -548,22 +548,51 @@ impl Aliases {
         aliases
     }
 
-    /// Every reading of `segments`: as written, through each binding of its
-    /// first segment, and, for a single bare name, as a member of each glob.
+    /// Every reading of `segments`: as written, for a single bare name as a
+    /// member of each glob, and through each binding of a reading's first
+    /// segment, repeated, so a rename of a rename (`use S::Admin as E;` after
+    /// `use CallerStanding as S;`) reaches the full path. Capped, so a cycle of
+    /// renames ends.
     fn readings(&self, segments: &[String]) -> Vec<Vec<String>> {
+        const CAP: usize = 64;
         let mut out = vec![segments.to_vec()];
-        if let Some((first, rest)) = segments.split_first() {
-            for full in self.named.get(first).into_iter().flatten() {
-                out.push(full.iter().chain(rest).cloned().collect());
+        if let [only] = segments {
+            for glob in &self.globs {
+                out.push(glob.iter().chain(std::iter::once(only)).cloned().collect());
             }
-            if rest.is_empty() {
-                for glob in &self.globs {
-                    out.push(glob.iter().chain(std::iter::once(first)).cloned().collect());
+        }
+        let mut next = 0;
+        while next < out.len() && out.len() < CAP {
+            let current = out[next].clone();
+            next += 1;
+            let Some((first, rest)) = current.split_first() else {
+                continue;
+            };
+            for full in self.named.get(first).into_iter().flatten() {
+                let reading: Vec<String> = full.iter().chain(rest).cloned().collect();
+                if !out.contains(&reading) {
+                    out.push(reading);
                 }
             }
         }
         out
     }
+}
+
+/// The keys a path reads through any of `readings`: a `Path` shape it ends
+/// with, and a callable it names, called or taken as a value
+/// (`let f = CallerStanding::of_client;`, `AdminStanding::is_gateway(s)`).
+fn path_keys(readings: &[Vec<String>]) -> Vec<&'static str> {
+    SHAPES
+        .iter()
+        .filter(|(_, shape)| match shape {
+            Shape::Path(tail) | Shape::Call(tail) => readings.iter().any(|r| ends_with(r, tail)),
+            Shape::QualifiedCall(last) | Shape::NullaryMethod(last) => readings
+                .iter()
+                .any(|r| r.len() >= 2 && r.last().is_some_and(|l| l == last)),
+        })
+        .map(|(key, _)| *key)
+        .collect()
 }
 
 fn ends_with(path: &[String], tail: &[&str]) -> bool {
@@ -592,33 +621,12 @@ impl Finder<'_> {
         *self.counts.entry(key).or_default() += 1;
     }
 
-    /// One occurrence of a path: each `Path` shape any of its readings ends
-    /// with counts once.
+    /// One occurrence of a path, called or not: each key it reads through
+    /// any of its readings ([`path_keys`]) counts once. A call's callee is
+    /// visited as a path, so a direct call counts once too.
     fn path_occurrence(&mut self, segments: &[String]) {
-        let readings = self.aliases.readings(segments);
-        for (key, shape) in SHAPES {
-            if let Shape::Path(tail) = shape
-                && readings.iter().any(|r| ends_with(r, tail))
-            {
-                self.add(key);
-            }
-        }
-    }
-
-    /// One call of a path: each `Call` or `QualifiedCall` shape counts once.
-    fn call_occurrence(&mut self, segments: &[String]) {
-        let readings = self.aliases.readings(segments);
-        for (key, shape) in SHAPES {
-            let hit = match shape {
-                Shape::Call(tail) => readings.iter().any(|r| ends_with(r, tail)),
-                Shape::QualifiedCall(last) => readings
-                    .iter()
-                    .any(|r| r.len() >= 2 && r.last().is_some_and(|l| l == last)),
-                _ => false,
-            };
-            if hit {
-                self.add(key);
-            }
+        for key in path_keys(&self.aliases.readings(segments)) {
+            self.add(key);
         }
     }
 
@@ -673,13 +681,6 @@ impl<'ast> syn::visit::Visit<'ast> for Finder<'_> {
         syn::visit::visit_path(self, path);
     }
 
-    fn visit_expr_call(&mut self, call: &'ast syn::ExprCall) {
-        if let syn::Expr::Path(func) = &*call.func {
-            self.call_occurrence(&segments(&func.path));
-        }
-        syn::visit::visit_expr_call(self, call);
-    }
-
     fn visit_expr_method_call(&mut self, call: &'ast syn::ExprMethodCall) {
         self.method_occurrence(&plain(&call.method), call.args.is_empty());
         syn::visit::visit_expr_method_call(self, call);
@@ -712,8 +713,14 @@ impl<'ast> syn::visit::Visit<'ast> for Finder<'_> {
     }
 
     fn visit_attribute(&mut self, attr: &'ast syn::Attribute) {
-        if let syn::Meta::List(list) = &attr.meta {
-            macro_body(self, Body::List(list));
+        match &attr.meta {
+            syn::Meta::List(list) => macro_body(self, Body::List(list)),
+            syn::Meta::NameValue(pair) => {
+                let was = std::mem::replace(&mut self.in_macro, true);
+                self.visit_expr(&pair.value);
+                self.in_macro = was;
+            }
+            syn::Meta::Path(_) => {}
         }
     }
 }
@@ -856,15 +863,35 @@ fn walk(finder: &mut Finder<'_>, trees: &[Tok]) {
                 if after_dot && name == "admin" && !called {
                     finder.add(".admin");
                 }
+                // A callable counts called or taken as a value, as in parsed
+                // syntax ([`path_keys`]).
+                let mut any = false;
                 for (key, shape) in SHAPES {
                     let hit = match shape {
-                        Shape::Path(tail) => tail_matches(tail),
-                        Shape::Call(tail) => called && tail_matches(tail),
-                        Shape::QualifiedCall(last) => called && qualified && *last == name.as_str(),
-                        Shape::NullaryMethod(m) => after_dot && empty_call && *m == name.as_str(),
+                        Shape::Path(tail) | Shape::Call(tail) => tail_matches(tail),
+                        Shape::QualifiedCall(last) => qualified && *last == name.as_str(),
+                        Shape::NullaryMethod(m) => {
+                            ((after_dot && empty_call) || qualified) && *m == name.as_str()
+                        }
                     };
                     if hit {
                         finder.add(key);
+                        any = true;
+                    }
+                }
+                // Not monitored as written: resolve it, with the segment
+                // before it, through the file's imports.
+                if !any && !after_dot {
+                    let path: Vec<String> = before
+                        .map(str::to_owned)
+                        .into_iter()
+                        .chain(std::iter::once(name.clone()))
+                        .collect();
+                    let readings = finder.aliases.readings(&path);
+                    if readings.len() > 1 {
+                        for key in path_keys(&readings) {
+                            finder.add(key);
+                        }
                     }
                 }
             }
@@ -1102,6 +1129,124 @@ fn the_scan_finds_readers_in_token_walks_globs_and_renamed_variants() {
             .to_owned(),
     )];
     assert_eq!(found(&renamed, "CallerStanding::Admin"), 2);
+}
+
+/// Imports reach into a macro no parser takes and chain through each other:
+/// a renamed variant or type in a token walk, and a rename of a rename, are
+/// each one read; a name already monitored is not counted twice.
+#[test]
+fn the_scan_resolves_imports_in_token_walks_and_through_chains() {
+    let file = |uses: &str, body: &str| {
+        vec![(
+            "src/new.rs".to_owned(),
+            format!("{uses}\nfn fixture() {{ {body} }}"),
+        )]
+    };
+    let standing = "use crate::gateway::router::authorization::CallerStanding";
+    for (uses, body) in [
+        (
+            format!("{standing}::Admin as Elevated;"),
+            "check!(s => Elevated);",
+        ),
+        (format!("{standing} as S;"), "check!(s => S::Admin);"),
+        (
+            format!("{standing} as S;\nuse S::Admin as Elevated;"),
+            "let x = Elevated;",
+        ),
+        (
+            format!("{standing} as S;\nuse S::Admin as Elevated;"),
+            "check!(s => Elevated);",
+        ),
+        (
+            "use crate::gateway::router::authorization::CallerStanding::*;".to_owned(),
+            "check!(s => Admin);",
+        ),
+    ] {
+        assert_eq!(
+            found(&file(&uses, body), "CallerStanding::Admin"),
+            1,
+            "{uses} {body}"
+        );
+    }
+    let direct = file(
+        "use crate::gateway::authz::is_gateway_admin;",
+        "check!(s => is_gateway_admin);",
+    );
+    assert_eq!(found(&direct, "is_gateway_admin"), 1, "counted once");
+    let renamed = file(
+        "use crate::gateway::authz::admin_standing as standing;",
+        "check!(s => standing(c));",
+    );
+    assert_eq!(
+        found(&renamed, "admin_standing"),
+        1,
+        "a renamed accessor in a token walk"
+    );
+}
+
+/// A reader in an attribute's value or arguments is a read; a file that does
+/// not parse, and one local name bound to two paths one of which is
+/// monitored, each fail named; a namespaced `matches!` is parsed like the
+/// bare one.
+#[test]
+fn the_scan_reads_attributes_and_names_what_it_cannot_vouch_for() {
+    assert_eq!(
+        found(&file_of("#[audit = c.r#admin] let a = 1;"), ".admin"),
+        1,
+        "an attribute value"
+    );
+    assert_eq!(
+        found(&file_of("#[audit(c.admin)] let a = 1;"), ".admin"),
+        1,
+        "attribute arguments"
+    );
+    assert_eq!(
+        found(
+            &file_of("let _ = std::matches!(s, Small { admin, .. });"),
+            "{ admin, .. }"
+        ),
+        1,
+        "a namespaced matches!"
+    );
+    let broken = vec![("src/new.rs".to_owned(), "fn fixture( {".to_owned())];
+    assert_eq!(found(&broken, "<does not parse>"), 1, "an unparsed file");
+    let conflict = vec![(
+        "src/new.rs".to_owned(),
+        "mod a { use crate::gateway::authz::is_gateway_admin as check; }\n\
+         mod b { use std::mem::drop as check; }\n\
+         fn fixture() { check(c); }"
+            .to_owned(),
+    )];
+    assert_eq!(
+        found(&conflict, "<conflicting import>"),
+        1,
+        "a monitored conflict"
+    );
+}
+
+/// A monitored function taken as a value, or a monitored method called
+/// through its type, is a read as surely as a call: each counts once.
+#[test]
+fn the_scan_finds_callable_readers_taken_as_values() {
+    for (body, key) in [
+        (
+            "let f = CallerStanding::of_client; f(client);",
+            "CallerStanding::of_client(",
+        ),
+        ("let f = resolve_role; f(k);", "resolve_role("),
+        ("let _ = keys.iter().map(is_admin);", "is_admin("),
+        (
+            "let _ = AdminStanding::is_gateway(standing);",
+            "is_gateway()",
+        ),
+        ("let _ = Thing::for_ui;", "::for_ui("),
+        (
+            "let _ = CallerStanding::of_client(c);",
+            "CallerStanding::of_client(",
+        ),
+    ] {
+        assert_eq!(found(&file_of(body), key), 1, "{body}");
+    }
 }
 
 // Guard rows: green on the text finder too, they pin the new finder's handling.
