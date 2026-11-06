@@ -13,7 +13,9 @@ use super::reload_context::replace::{
 use crate::security::audit::AuditWho;
 
 /// An audit log in `dir`, and the posture of a gateway with auth on over it.
-fn posture(dir: &tempfile::TempDir) -> (Arc<crate::security::TransparencyLogger>, AuditPosture) {
+fn posture(
+    dir: &Arc<tempfile::TempDir>,
+) -> (Arc<crate::security::TransparencyLogger>, AuditPosture) {
     let log = Arc::new(
         crate::security::TransparencyLogger::open(Arc::new(
             crate::security::transparency_log::TransparencyLogConfig {
@@ -29,6 +31,8 @@ fn posture(dir: &tempfile::TempDir) -> (Arc<crate::security::TransparencyLogger>
         ))
         .expect("open log"),
     );
+    // The log keeps its directory until its last handle.
+    log.keep_test_dir(Arc::clone(dir));
     let posture = AuditPosture::of(Some(Arc::clone(&log)), GatewayAuth::On);
     (log, posture)
 }
@@ -82,7 +86,7 @@ fn append(audit: Audit) {
 
 #[test]
 fn a_key_write_intent_names_its_actor_and_key() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = Arc::new(tempfile::tempdir().expect("tempdir"));
     let (log, posture) = posture(&dir);
     let audit = posture
         .key_write(IntentKind::KeyCreate, admin(), "alpha")
@@ -103,7 +107,7 @@ fn every_other_kind_keeps_naming_the_gateway() {
         IntentKind::Restore,
         IntentKind::Recovery,
     ] {
-        let dir = tempfile::tempdir().expect("tempdir");
+        let dir = Arc::new(tempfile::tempdir().expect("tempdir"));
         let (log, posture) = posture(&dir);
         append(posture.audit(kind).expect("an audited posture"));
         let record = only_record(&log);

@@ -143,13 +143,12 @@ fn p11_a_new_key_is_live_and_not_reported_as_awaiting_restart() {
 /// admin key and for a dashboard session.
 #[test]
 fn a5_the_intent_names_the_caller_and_the_key() {
+    use crate::gateway::record_principal::InternalPrincipal;
     // The fields `auth_clients::dashboard_client` gives a valid session.
     let session = crate::gateway::auth::AuthenticatedClient {
         quota_principal: Some(crate::gateway::auth::QuotaPrincipal::dashboard_session()),
         name: "dashboard".into(),
-        principal: crate::gateway::record_principal::InternalPrincipal::new(
-            "dashboard-session".into(),
-        ),
+        principal: InternalPrincipal::new("dashboard-session".into()),
         rate_limit: 0,
         backends: vec!["*".into()],
         allowed_tools: None,

@@ -179,7 +179,7 @@ pub(super) struct Fixture {
     has_file: bool,
     /// Whether the audit log is on: then audit.jsonl must be there to read.
     has_audit_log: bool,
-    pub(super) dir: tempfile::TempDir,
+    pub(super) dir: Arc<tempfile::TempDir>,
     _store: crate::gateway::router::tests::FixtureDir,
     pub(super) state: Arc<AppState>,
     pub(super) live: Arc<LiveConfig>,
@@ -200,7 +200,7 @@ impl Fixture {
                 .finish(),
         );
         let rt = capturing_runtime(&dispatch);
-        let dir = tempfile::tempdir().expect("dir");
+        let dir = Arc::new(tempfile::tempdir().expect("dir"));
         let path = dir.path().join("gateway.yaml");
         if setup.file {
             write_owner_only(&path, &setup.text).expect("write config");
@@ -398,8 +398,10 @@ impl Fixture {
     }
 }
 
-fn open_log(dir: &tempfile::TempDir) -> crate::security::TransparencyLogger {
-    crate::security::TransparencyLogger::open(Arc::new(
+/// The fixture's audit log, which keeps its directory until its last handle,
+/// so a late write lands before the directory goes.
+fn open_log(dir: &Arc<tempfile::TempDir>) -> crate::security::TransparencyLogger {
+    let log = crate::security::TransparencyLogger::open(Arc::new(
         crate::security::transparency_log::TransparencyLogConfig {
             enabled: true,
             path: dir
@@ -411,7 +413,9 @@ fn open_log(dir: &tempfile::TempDir) -> crate::security::TransparencyLogger {
             ..Default::default()
         },
     ))
-    .expect("open log")
+    .expect("open log");
+    log.keep_test_dir(Arc::clone(dir));
+    log
 }
 
 /// Every spelling of `bytes` the leak checks refuse: hex in both cases,
