@@ -19,9 +19,6 @@ use super::grant_decision_audit_tests::{api_key, context, gateway};
 use crate::protocol::RequestId;
 use crate::security::audit::AuditFailurePolicy;
 
-/// The documented warning of a withheld record that could not be written.
-const WITHHELD_WARNING: &str = "The audit record of a withheld surfaced call could not be written";
-
 /// The capability's owner, granted on the control.
 const ALICE: (&str, &str) = ("api_key", "alice");
 
