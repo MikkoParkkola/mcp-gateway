@@ -234,6 +234,7 @@ async fn a_later_step_refused_before_it_runs_is_joined_by_task_id() {
 /// not reachable here: the fixture credentials see only the mock backend.
 #[tokio::test]
 async fn a_composite_record_names_the_gateway_and_the_composite_tool() {
+    assert_ne!(BACKEND, "gateway", "premise: the backend is not named as the gateway");
     let fx = fixture(Some(refusing_final_answer())).await;
     let mock = MockBackend::answering(Answer::Sequence(vec![clean(), refusable()]));
     register(&fx.state, BACKEND, &mock);
@@ -242,6 +243,7 @@ async fn a_composite_record_names_the_gateway_and_the_composite_tool() {
         .await;
     assert_eq!(mock.calls(), 2, "premise: both steps ran");
     let record = refused_settlement(&entries, &task);
+    assert_ne!(record["server"], BACKEND, "{record}");
     assert_eq!(record["server"], "gateway", "{record}");
     assert_eq!(record["tool"], "gateway_execute", "{record}");
 }
