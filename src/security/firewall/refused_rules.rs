@@ -29,14 +29,14 @@ impl FirewallRuns {
 
 /// The API keys a rule's `keys` and exceptions' `key` can name.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum KeyNames<'a> {
+pub(crate) enum RuleKeys<'a> {
     /// API-key authentication is on, with these keys.
     Configured(Vec<&'a str>),
     /// No caller carries a key: authentication is off, or has no API keys.
     AuthOff,
 }
 
-impl<'a> KeyNames<'a> {
+impl<'a> RuleKeys<'a> {
     /// What `config`'s own `auth` section offers.
     pub(crate) fn of(config: &'a Config) -> Self {
         let auth = &config.auth;
@@ -63,7 +63,7 @@ impl<'a> KeyNames<'a> {
 pub(crate) fn key_problem(
     i: usize,
     rule: &FirewallRule,
-    keys: &KeyNames<'_>,
+    keys: &RuleKeys<'_>,
 ) -> Result<(), String> {
     let path = format!("security.firewall.rules[{i}]");
     let named = rule
@@ -84,15 +84,15 @@ pub(crate) fn key_problem(
         });
     for (at, name) in named.chain(excepted) {
         match keys {
-            KeyNames::AuthOff => {
+            RuleKeys::AuthOff => {
                 return Err(format!(
                     "{at} needs API-key authentication (auth.enabled with auth.api_keys)"
                 ));
             }
-            KeyNames::Configured(known) if !known.contains(&name.as_str()) => {
+            RuleKeys::Configured(known) if !known.contains(&name.as_str()) => {
                 return Err(format!("{at} names no configured API key"));
             }
-            KeyNames::Configured(_) => {}
+            RuleKeys::Configured(_) => {}
         }
     }
     Ok(())
@@ -115,8 +115,8 @@ pub(crate) fn refuse_while_running(running: &Config, candidate: &Config) -> Resu
         return Ok(());
     }
     let rules = &candidate.security.firewall.rules;
-    let own = KeyNames::of(candidate);
-    let live = KeyNames::running(running, candidate);
+    let own = RuleKeys::of(candidate);
+    let live = RuleKeys::running(running, candidate);
     for (i, rule) in rules.iter().enumerate() {
         key_problem(i, rule, &own).map_err(|e| e + FIX_OR_RESTART_OFF)?;
         key_problem(i, rule, &live).map_err(|e| e + KEYS_NEED_RESTART)?;

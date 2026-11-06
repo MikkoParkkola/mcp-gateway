@@ -25,7 +25,7 @@ impl Config {
         if !firewall.enabled {
             return Ok(());
         }
-        let keys = crate::security::firewall::KeyNames::of(self);
+        let keys = crate::security::firewall::RuleKeys::of(self);
         for (i, rule) in firewall.rules.iter().enumerate() {
             crate::security::firewall::key_problem(i, rule, &keys)
                 .map_err(Error::ConfigValidation)?;
