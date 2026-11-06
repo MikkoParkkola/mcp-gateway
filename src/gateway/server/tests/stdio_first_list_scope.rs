@@ -24,8 +24,10 @@ async fn r4_a_legacy_first_list_does_not_wait() {
     serve
         .send(&json!({"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}}))
         .await;
-    let answer = answer_within(&mut serve, 2, AT_ONCE, &mut Vec::new()).await;
-    assert!(answer.is_some(), "a legacy first list waited");
+    let answer = answer_within(&mut serve, 2, AT_ONCE, &mut Vec::new())
+        .await
+        .expect("a legacy first list waited");
+    assert!(answer["result"]["tools"].is_array(), "{answer}");
     serve.close().await;
 }
 
@@ -39,8 +41,10 @@ async fn r7_code_mode_does_not_wait() {
     serve.send(&modern(1, "server/discover")).await;
     serve.reply(1, &mut Vec::new()).await;
     serve.send(&modern(2, "tools/list")).await;
-    let answer = answer_within(&mut serve, 2, AT_ONCE, &mut Vec::new()).await;
-    assert!(answer.is_some(), "a Code Mode first list waited");
+    let answer = answer_within(&mut serve, 2, AT_ONCE, &mut Vec::new())
+        .await
+        .expect("a Code Mode first list waited");
+    assert!(answer["result"]["tools"].is_array(), "{answer}");
     serve.close().await;
 }
 
@@ -118,6 +122,12 @@ async fn r10_a_backend_off_the_warm_start_list_is_filled_by_the_first_list() {
 async fn r12_eof_during_the_first_wait_ends_the_session() {
     let (mut serve, _held) = modern_during_warm_up(None).await;
     serve.send(&modern(2, "tools/list")).await;
+    assert!(
+        answer_within(&mut serve, 2, AT_ONCE, &mut Vec::new())
+            .await
+            .is_none(),
+        "premise: the first list is waiting when stdin closes"
+    );
     // `close` asserts the session returns Ok within its arrival bound.
     serve.close().await;
 }
@@ -138,6 +148,29 @@ async fn r15_a_tool_the_profile_excludes_is_not_waited_for() {
     assert!(
         answer.is_some(),
         "a first list waited for a tool its profile excludes"
+    );
+    serve.close().await;
+}
+
+/// R16: a modern `tools/list` inside a batch does not take the first-list
+/// wait (batches run outside a ticket): it answers at once while the
+/// surfaced backend is held.
+#[tokio::test]
+async fn r16_a_batched_first_list_does_not_wait() {
+    let (mut serve, _held) = modern_during_warm_up(None).await;
+    serve.send(&json!([modern(2, "tools/list")])).await;
+    let frame = serve
+        .next(AT_ONCE)
+        .await
+        .expect("a batched first list waited");
+    let answers = frame
+        .as_array()
+        .unwrap_or_else(|| panic!("not a batch answer: {frame}"));
+    assert!(
+        answers
+            .iter()
+            .any(|answer| answer["id"] == json!(2) && answer["result"]["tools"].is_array()),
+        "{frame}"
     );
     serve.close().await;
 }

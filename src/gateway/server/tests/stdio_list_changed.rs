@@ -302,6 +302,10 @@ async fn t7_a_modern_stdio_client_is_told_false_and_sent_nothing() {
         !serve.list_changed_within(ARRIVAL).await,
         "a modern stdio client was sent an unsolicited list_changed"
     );
+    assert!(
+        serve.tool_names(9).await.iter().any(|name| name == PROBE),
+        "premise: the probe was loaded, so silence was not for want of a change"
+    );
     serve.close().await;
 }
 

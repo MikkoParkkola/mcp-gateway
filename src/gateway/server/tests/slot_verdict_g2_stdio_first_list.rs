@@ -151,7 +151,7 @@ async fn r11_the_first_lists_two_waits_share_one_deadline_stdio() {
         "premise: the list waited ({took:?} for a {bound:?} bound)"
     );
     assert!(
-        took < bound + bound / 2,
+        took < bound + GRACE,
         "the two waits added up: {took:?} for one {bound:?} bound"
     );
 }
@@ -195,8 +195,19 @@ async fn r2c_the_first_wait_ends_at_the_listing_cap_stdio() {
         answer.get("error").is_none(),
         "an expired wait answered an error: {answer}"
     );
-    let listed = answer["result"]["tools"].to_string();
-    assert!(!listed.contains(SHARED_TOOL), "{answer}");
+    let listed = answer["result"]["tools"]
+        .as_array()
+        .unwrap_or_else(|| panic!("the expired wait answered no tools array: {answer}"));
+    assert!(
+        listed
+            .iter()
+            .any(|tool| tool["name"] == "gateway_list_servers"),
+        "the expired wait dropped the tools it had: {answer}"
+    );
+    assert!(
+        listed.iter().all(|tool| tool["name"] != SHARED_TOOL),
+        "{answer}"
+    );
     assert!(
         took >= cap
             .checked_sub(GRACE)

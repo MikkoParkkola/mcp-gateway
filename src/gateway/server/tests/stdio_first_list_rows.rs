@@ -126,6 +126,10 @@ async fn r3b_a_cancelled_first_list_leaves_the_wait_armed() {
         .await
         .expect("the retry answers once the fill lands");
     assert!(holds(&retry, TOOL), "{retry}");
+    // Keep reading: a late answer to the cancelled list would follow the retry's.
+    while let Some(frame) = serve.next(AT_ONCE).await {
+        seen.push(frame);
+    }
     assert!(
         seen.iter().all(|frame| frame["id"] != json!(2)),
         "the cancelled list was answered: {seen:?}"
@@ -146,6 +150,10 @@ async fn r13_overlapping_first_lists_both_hold_the_tool() {
             .await
             .is_none(),
         "the first list did not wait"
+    );
+    assert!(
+        seen.iter().all(|frame| frame["id"] != json!(3)),
+        "the second list did not wait: {seen:?}"
     );
     held.release.send(true).expect("the backend is serving");
     for id in [2, 3] {
