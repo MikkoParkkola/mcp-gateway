@@ -57,3 +57,10 @@ fn rule_id_form() {
             .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
     );
 }
+
+/// A path built with a hard-coded `/` differs from a joined one on Windows only.
+#[test]
+fn a_joined_path_matches_a_slash_built_one() {
+    let joined = std::path::Path::new("rules").join("id");
+    assert_eq!(joined.to_string_lossy(), "rules/id");
+}
