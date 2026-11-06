@@ -15,7 +15,7 @@ fn a_failure_line_escapes_client_text_in_its_error() {
         "Failed to write config",
         "Failed to adopt shadow servers",
     ] {
-        let line = failure_line(what, &error);
+        let line = failure_line(what, &error).to_string();
         assert!(
             !line.contains('\u{1b}') && !line.contains('\u{202e}'),
             "{line:?}"

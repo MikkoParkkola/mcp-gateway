@@ -304,13 +304,11 @@ impl Default for AutoDiscovery {
     }
 }
 
-/// The log line for a scan that failed: its error can carry a path or text
-/// from a client's config file.
-fn scan_failed(what: &str, error: &impl std::fmt::Display) -> String {
-    format!(
-        "{what} scan failed: {}",
-        crate::cli_support::shown(&error.to_string())
-    )
+/// The log line for a scan that failed, escaped whole: its error can carry a
+/// path or text from a client's config file. One `shown` call, so the
+/// discovery output guard accepts it where it is logged.
+fn scan_failed(what: &str, error: &impl std::fmt::Display) -> crate::cli_support::Shown {
+    crate::cli_support::shown(&format!("{what} scan failed: {error}"))
 }
 
 #[cfg(test)]

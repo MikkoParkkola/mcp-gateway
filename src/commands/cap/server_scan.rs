@@ -232,13 +232,11 @@ fn print_server_entry(server: &mcp_gateway::discovery::DiscoveredServer) {
     print!("{}", render_server_entry(server));
 }
 
-/// The terminal line for a failed step: an error can carry a path or text
-/// from a client's config file.
-fn failure_line(what: &str, error: &impl std::fmt::Display) -> String {
-    format!(
-        "❌ {what}: {}",
-        mcp_gateway::cli_support::shown(&error.to_string())
-    )
+/// The terminal line for a failed step, escaped whole: an error can carry a
+/// path or text from a client's config file. One `shown` call, so the
+/// discovery output guard accepts it where it is printed.
+fn failure_line(what: &str, error: &impl std::fmt::Display) -> mcp_gateway::cli_support::Shown {
+    mcp_gateway::cli_support::shown(&format!("❌ {what}: {error}"))
 }
 
 #[cfg(test)]

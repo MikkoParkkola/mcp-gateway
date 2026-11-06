@@ -10,7 +10,7 @@ use super::scan_failed;
 fn a_scan_failure_line_escapes_client_text_in_its_error() {
     let error = anyhow::anyhow!("cannot read /home/u/\u{1b}[31mevil\u{202e}.json");
     for what in ["Config", "Process"] {
-        let line = scan_failed(what, &error);
+        let line = scan_failed(what, &error).to_string();
         assert!(
             !line.contains('\u{1b}') && !line.contains('\u{202e}'),
             "{line:?}"
