@@ -484,6 +484,9 @@ impl Gateway {
             transparency_log,
             governance_log,
             dashboard_bootstrap,
+            // The one ProcessFacts of this process: its Activity read slots bound
+            // every read the process runs. A second listener shares this state (or
+            // this ProcessFacts); building another would double the bound.
             process: Arc::new(ProcessFacts::new(started, counters.upgrade.clone())),
         });
         // The live stream's two feeds, attached once per process.
