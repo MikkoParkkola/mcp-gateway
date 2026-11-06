@@ -623,3 +623,8 @@ async fn s2_activity_and_config_arrive_within_a_second_of_the_change() {
 /// The rows for the replay after a reset and the upkeep timers.
 #[path = "live_logs/recovery_tests.rs"]
 mod recovery;
+
+/// Who sees which row: a demotion between pages, a reordered scoped key,
+/// another subject's live call.
+#[path = "live_logs/visibility_tests.rs"]
+mod visibility;
