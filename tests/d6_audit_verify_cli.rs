@@ -147,3 +147,46 @@ fn audit_verify_checks_the_log_against_an_anchor() {
         );
     }
 }
+
+/// An unrotated log with records whose active file was deleted with its
+/// `.hwm` kept, then reopened: the new genesis names the surviving mark.
+fn log_with_deleted_active(path: &Path) {
+    let open = || {
+        TransparencyLogger::open(Arc::new(TransparencyLogConfig {
+            enabled: true,
+            path: path.to_string_lossy().into_owned(),
+            key_id: "cli".into(),
+            shared_secret: String::new(),
+            rotation: RotationConfig::default(),
+        }))
+        .unwrap()
+    };
+    let l = open();
+    for i in 0..2 {
+        l.log_invocation("s", "c", "srv", &format!("t{i}"), "a", "b")
+            .unwrap();
+    }
+    drop(l);
+    std::fs::remove_file(path).unwrap();
+    drop(open());
+}
+
+#[test]
+fn audit_verify_prints_its_warnings_when_the_chain_fails() {
+    // GIVEN: a log whose active file was deleted with its mark kept
+    let dir = tempfile::tempdir().unwrap();
+    let log = dir.path().join("transparency.jsonl");
+    log_with_deleted_active(&log);
+
+    // WHEN: it is verified as a process
+    let (ok, text) = verify(dir.path(), &log, false);
+
+    // THEN: it fails naming the deletion, and still prints the predecessor
+    // warning, unverified
+    assert!(!ok, "{text}");
+    assert!(text.contains("the active segment was deleted"), "{text}");
+    let warned = text
+        .lines()
+        .find(|l| l.starts_with("warning:") && l.contains("predecessor went missing"));
+    assert!(warned.is_some_and(|w| w.contains("unverified")), "{text}");
+}
