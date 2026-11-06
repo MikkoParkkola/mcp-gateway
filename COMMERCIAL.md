@@ -30,22 +30,82 @@ Examples that require a commercial license:
 
 These examples are **illustrative**. What counts as noncommercial (and therefore
 free) is defined by the **PolyForm Noncommercial License 1.0.0** text itself (see
-`LICENSE-NONCOMMERCIAL`); this document does not expand or narrow that
-definition. Where an example and the license text differ, the license text
-governs. If your use is genuinely noncommercial under that license, no commercial
+`LICENSE-NONCOMMERCIAL`). The additional nonprofit permission below supplements
+that license; these examples do not otherwise expand or narrow its definition.
+Where an example and the license text differ, the license text governs. If your
+use is genuinely noncommercial under that license, no commercial
 license is needed; if you are unsure, ask (contact below).
 
 ## Standard commercial license
 
-Companies can buy a standard commercial-use license through GitHub Sponsors:
+The standard license covers **one company or organization and one named Mikko
+Parkkola project**. Here, a named project means a product such as `mcp-gateway`,
+`nab`, or `trvl`; it does **not** mean each of your applications, repositories,
+agents, or deployments. Buying a license for `mcp-gateway` does not license the
+other projects.
 
-- EUR 500/month per named project.
-- Covers one company or organization using `mcp-gateway` Noncommercial-licensed code while sponsorship remains active.
-- Covers routine internal business use, private forks, wrappers, private integrations, and shared internal services for that organization.
-- Requires the sponsoring company to identify the licensed project, such as `mcp-gateway`, in the sponsor note or by email.
-- Does not include support, SLA, custom development, indemnity, trademark rights, sublicensing, resale, or the right to offer `mcp-gateway` as a hosted or managed service to third parties unless separately agreed in writing.
+| License | Eligibility | GitHub Sponsors | Direct invoice |
+| --- | --- | --- | --- |
+| Small business | One organization with no more than five people | USD 100/month | EUR 100/month |
+| Organization | One organization, without a headcount limit | USD 500/month | EUR 500/month |
 
-The standard license is intended to be simple enough for normal team, department, or manager-level purchasing. It is not a blanket license for all Mikko Parkkola projects.
+The small-business headcount is the total number of people working in the
+organization, including working owners, employees, and regular contractors;
+it is not the number of gateway users. Each license covers one legal entity
+or sole proprietorship. Separate subsidiaries and affiliates are not included.
+If the organization grows beyond five people, use the Organization license
+from the next monthly renewal.
+
+GitHub Sponsors charges in **USD**. The **EUR** prices are separate direct-invoice
+offers, not currency conversions. Contact the licensor to arrange an invoice
+before relying on that purchase route.
+
+Both standard licenses:
+
+- Cover routine internal business use, private forks, wrappers, private
+  integrations, and shared internal services for the licensed organization
+  during the paid license period.
+- Include the same software features. There are no license-imposed limits on
+  internal users, applications, environments, deployments, MCP servers, tools,
+  agents, or calls. Small-business eligibility still depends on the
+  organization's total headcount. Hardware, model, and third-party service
+  costs remain yours.
+- Require you to identify the licensed organization and named project. After
+  choosing a commercial-license tier, email **mikko.parkkola@iki.fi** with the
+  organization's legal name, your sponsoring GitHub account, and the product
+  name (`mcp-gateway`). A project-tagged link helps attribution but does not
+  replace these details.
+- Do not include support, SLA, custom development, indemnity, trademark rights,
+  sublicensing, resale, access to unpublished repositories, or the right to
+  offer `mcp-gateway` as a hosted or managed service to third parties unless
+  separately agreed in writing.
+
+Canceling renewal does not shorten a period already paid for. When the paid
+period ends, commercial use must stop unless another applicable license or
+written agreement permits it. Uses already permitted by the noncommercial
+license remain permitted.
+
+Existing sponsors retain the benefits promised for their existing tier, and
+existing written commercial agreements continue to govern. These offers do
+not remove those commitments or earlier MIT rights.
+
+## Free use and optional support
+
+Noncommercial use and the nonprofit, educational, public-research, government,
+and other public-benefit uses permitted by `LICENSE-NONCOMMERCIAL` remain free.
+The licensor additionally grants non-profit organizations permission to use the
+software at no charge: use by a non-profit organization is a permitted purpose
+under `LICENSE-NONCOMMERCIAL`, subject to that license's other conditions. This
+additional permission does not narrow any rights that license already grants.
+They use the same software, including its security and context-engineering
+features. No sponsorship is required for those permitted uses.
+
+The Coffee (USD 5 one-time), Supporter (USD 5/month), and Sustainer
+(USD 25/month) tiers are optional contributions to maintenance. They do not
+purchase a commercial license, support, an SLA, or custom work. Custom support
+contributions also do not grant commercial rights unless separately agreed
+in writing. Choose a commercial-license tier when commercial permission is
+required.
 
 ## Custom commercial terms
 
@@ -67,7 +127,8 @@ core files in the 3.x line from v3.3.0 onward.
 
 ## Contact
 
-- **Buy a standard license:** https://github.com/sponsors/MikkoParkkola
+- **Buy a standard license or contribute optional support:**
+  https://github.com/sponsors/MikkoParkkola?metadata_project=mcp-gateway
 - **Custom terms, annual invoicing, procurement, resale, or licensing
   questions:** email **mikko.parkkola@iki.fi**.
 
