@@ -295,3 +295,32 @@ async fn a_single_target_refusal_record_has_no_join_member() {
     assert_eq!(record["response_effect"], "refused", "premise: {record}");
     assert!(record.get("joined_by").is_none(), "{record}");
 }
+
+/// A playbook whose first step would carry a sealed envelope from the
+/// caller's own input is refused before that step runs: no step dispatched,
+/// so the record joins by task id and names the refusal's own code.
+#[tokio::test]
+async fn a_first_step_refused_before_it_runs_is_joined_by_task_id() {
+    let fx = fixture(None).await;
+    let token = sealed_token(&fx.state).await;
+    let mock = MockBackend::answering(Answer::Result(clean()));
+    register(&fx.state, BACKEND, &mock);
+    register_playbook(&fx.state, "abort", &[json!({ "t": "$inputs.t" })]);
+    let request = keyed(
+        modern(
+            1,
+            "tools/call",
+            json!({ "name": "gateway_run_playbook",
+                    "arguments": { "name": "gated", "arguments": { "t": token } },
+                    "task": {} }),
+            true,
+        ),
+        "key-a",
+    );
+    let (task, entries) = fx.run("key-a", request).await;
+    assert_eq!(mock.calls(), 0, "premise: no step was dispatched");
+    let record = refused_settlement(&entries, &task);
+    assert_eq!(record["joined_by"], "task_id", "{record}");
+    assert_eq!(record["trace_id"], task.as_str(), "{record}");
+    assert_eq!(record["error_code"], -32003, "{record}");
+}
