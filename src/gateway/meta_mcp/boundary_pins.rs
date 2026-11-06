@@ -10,6 +10,7 @@ mod backend_json_rpc_patterns;
 mod caller_view;
 mod ci_wiring;
 mod creation_sites;
+mod discovery_output_sites;
 mod delivery_framing;
 mod discarded_sends;
 mod echo_rows_real_transports;
