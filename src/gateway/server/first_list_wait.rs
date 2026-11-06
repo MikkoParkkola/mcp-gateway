@@ -94,8 +94,9 @@ pub(super) async fn prepare(
     }
 }
 
-/// After an answer was queued: a list that waited as the first commits the
-/// session's flag, so later lists do not wait.
+/// As an answer is queued, under the cancel lock (`send_unless_cancelled`):
+/// a list that waited as the first commits the session's flag, so later lists
+/// do not wait.
 pub(super) fn answer_queued() {
     // Outside a ticket (a batch, a direct dispatch) nothing waited.
     let waited =
