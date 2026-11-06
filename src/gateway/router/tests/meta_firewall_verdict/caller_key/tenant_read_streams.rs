@@ -87,21 +87,29 @@ impl Stream {
 
     /// The whole events buffered so far, as `data:` payloads.
     fn take_events(&mut self) -> Vec<String> {
-        let mut out = Vec::new();
-        while let Some(end) = self.buffer.find("\n\n") {
-            let block: String = self.buffer.drain(..end + 2).collect();
-            if block.contains("event: connected") {
-                continue;
-            }
-            out.extend(
-                block
-                    .lines()
-                    .filter_map(|l| l.strip_prefix("data: "))
-                    .map(str::to_string),
-            );
-        }
-        out
+        events_in(&mut self.buffer)
     }
+}
+
+/// Drain the whole events from `buffer`: one entry per event, its `data:`
+/// lines joined, so a row that counts events cannot count one event's two
+/// lines as two. The `connected` event is skipped.
+fn events_in(buffer: &mut String) -> Vec<String> {
+    let mut out = Vec::new();
+    while let Some(end) = buffer.find("\n\n") {
+        let block: String = buffer.drain(..end + 2).collect();
+        if block.contains("event: connected") {
+            continue;
+        }
+        let data: Vec<&str> = block
+            .lines()
+            .filter_map(|l| l.strip_prefix("data: "))
+            .collect();
+        if !data.is_empty() {
+            out.push(data.join("\n"));
+        }
+    }
+    out
 }
 
 fn names(tenant: &str) -> TaggedNotification {
@@ -640,4 +648,21 @@ async fn stream_items_are_judged_with_the_firewall_off() {
             "a B frame reached an A reader ahead of the later A frame: {got:?}"
         );
     }
+}
+
+/// One SSE event carrying both markers on two `data:` lines is one event, so
+/// the control's two-event check refuses it; two events pass it.
+#[test]
+fn one_event_with_two_data_lines_is_not_two_events() {
+    let note = r#"{"uri":"rows://latest","customer_id":"cust-b"}"#;
+    let hook = r#"{"kind":"row-78"}"#;
+    let markers: (&[&str], &[&str]) = (&["rows://latest", B], &["row-78"]);
+    let mut one = format!("data: {note}\ndata: {hook}\n\n");
+    let events = events_in(&mut one);
+    assert_eq!(events.len(), 1, "one event: {events:?}");
+    assert!(!two_events_with(&events, markers.0, markers.1));
+    let mut two = format!("data: {note}\n\ndata: {hook}\n\n");
+    let events = events_in(&mut two);
+    assert_eq!(events.len(), 2, "two events: {events:?}");
+    assert!(two_events_with(&events, markers.0, markers.1));
 }
