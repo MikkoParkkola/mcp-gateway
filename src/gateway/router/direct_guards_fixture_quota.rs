@@ -65,6 +65,19 @@ pub(crate) async fn fixture_propagating(answer: Answer, arm: impl FnOnce(&mut Me
     fx
 }
 
+/// [`fixture_propagating`] with `log` as the router state's transparency
+/// log, so the direct route's records land where a row can read them.
+pub(crate) async fn fixture_propagating_logged(
+    answer: Answer,
+    log: Arc<crate::security::TransparencyLogger>,
+    arm: impl FnOnce(&mut MetaMcp),
+) -> Fx {
+    super::STATE_LOG.with(|l| *l.borrow_mut() = Some(log));
+    let fx = fixture_propagating(answer, arm).await;
+    super::STATE_LOG.with(|l| *l.borrow_mut() = None);
+    fx
+}
+
 /// [`fixture_firewalled_audited_built`] with a call budget of `calls` per window
 /// on both firewalls (MIK-8362: a playbook's steps spend what a direct call spends).
 #[cfg(feature = "firewall")]
