@@ -43,7 +43,8 @@ async fn test_add_backend_persists_and_duplicate_returns_409() {
     let yaml = crate::yaml::to_string(&cfg).unwrap();
     write_owner_only(&config_path, &yaml).unwrap();
 
-    let (state, _store) = make_app_state(None, Some(config_path.clone())).await;
+    let (state, _live, _store) =
+        make_app_state_with_reload(cfg.clone(), None, config_path.clone()).await;
     let router = create_router(state);
 
     // WHEN: add a new backend
@@ -63,10 +64,10 @@ async fn test_add_backend_persists_and_duplicate_returns_409() {
     assert_eq!(status, StatusCode::CREATED, "Expected 201, got: {body}");
     assert_eq!(body["status"], "created");
     assert_eq!(body["name"], "integration-test-backend");
-    // AND: reload is null — no ReloadContext in test state (no live watcher)
+    // AND: the write's reload is reported
     assert!(
-        body["reload"].is_null(),
-        "reload should be null without a live ReloadContext, got: {}",
+        body["reload"].is_object(),
+        "the reload outcome is reported, got: {}",
         body["reload"]
     );
 
@@ -78,6 +79,7 @@ async fn test_add_backend_persists_and_duplicate_returns_409() {
     );
 
     // WHEN: add the same backend again
+    let files = mcp_gateway::gateway::test_helpers::ConfigFiles::snapshot(&config_path);
     let (status2, body2) = send_json(
         &router,
         Method::POST,
@@ -95,6 +97,7 @@ async fn test_add_backend_persists_and_duplicate_returns_409() {
         StatusCode::CONFLICT,
         "Expected 409 for duplicate, got: {body2}"
     );
+    files.assert_unchanged(&config_path, "the duplicate add");
 }
 
 #[tokio::test]
@@ -106,10 +109,12 @@ async fn test_remove_backend_not_found_returns_404() {
     let yaml = crate::yaml::to_string(&cfg).unwrap();
     write_owner_only(&config_path, &yaml).unwrap();
 
-    let (state, _store) = make_app_state(None, Some(config_path)).await;
+    let (state, _live, _store) =
+        make_app_state_with_reload(cfg.clone(), None, config_path.clone()).await;
     let router = create_router(state);
 
     // WHEN: DELETE /ui/api/backends/nonexistent
+    let files = mcp_gateway::gateway::test_helpers::ConfigFiles::snapshot(&config_path);
     let (status, body) = send_json(
         &router,
         Method::DELETE,
@@ -124,6 +129,7 @@ async fn test_remove_backend_not_found_returns_404() {
         StatusCode::NOT_FOUND,
         "Expected 404 for unknown backend, got: {body}"
     );
+    files.assert_unchanged(&config_path, "the remove of a backend that does not exist");
 }
 
 #[tokio::test]
@@ -135,7 +141,8 @@ async fn test_add_remove_backend_lifecycle() {
     let yaml = crate::yaml::to_string(&cfg).unwrap();
     write_owner_only(&config_path, &yaml).unwrap();
 
-    let (state, _store) = make_app_state(None, Some(config_path.clone())).await;
+    let (state, _live, _store) =
+        make_app_state_with_reload(cfg.clone(), None, config_path.clone()).await;
     let router = create_router(state);
 
     // WHEN: add a backend
@@ -192,7 +199,8 @@ async fn test_patch_backend_updates_description() {
     let yaml = crate::yaml::to_string(&cfg).unwrap();
     write_owner_only(&config_path, &yaml).unwrap();
 
-    let (state, _store) = make_app_state(None, Some(config_path.clone())).await;
+    let (state, _live, _store) =
+        make_app_state_with_reload(cfg.clone(), None, config_path.clone()).await;
     let router = create_router(state);
 
     // WHEN: PATCH /ui/api/backends/patch-me with a new description
@@ -208,10 +216,10 @@ async fn test_patch_backend_updates_description() {
     assert_eq!(status, StatusCode::OK, "Expected 200 on PATCH, got: {body}");
     assert_eq!(body["status"], "updated");
     assert_eq!(body["name"], "patch-me");
-    // AND: reload is null — no ReloadContext in test state (no live watcher)
+    // AND: the write's reload is reported
     assert!(
-        body["reload"].is_null(),
-        "reload should be null without a live ReloadContext, got: {}",
+        body["reload"].is_object(),
+        "the reload outcome is reported, got: {}",
         body["reload"]
     );
 

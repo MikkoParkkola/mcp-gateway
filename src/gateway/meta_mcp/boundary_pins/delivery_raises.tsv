@@ -1,14 +1,17 @@
 # file	fn	needle	count (see plain_refusals.rs)
 src/capability/backend.rs	call_tool_with_context	refused_while_vouched	1
+src/capability/execution_context.rs	record_refusal	refused_while_vouched	1
 src/capability/executor/cli.rs	execute_cli	refused_while_vouched	1
 src/capability/executor/client.rs	note_redirect_refusal	refused_while_vouched	1
 src/capability/executor/client.rs	send_with_retry	refused_while_vouched	2
 src/capability/executor/client.rs	send_with_retry	via note_redirect_refusal	2
-src/capability/executor/credentials.rs	refresh_provider_token	refused_while_vouched	3
-src/capability/executor/graphql.rs	execute	refused_while_vouched	3
-src/capability/executor/jsonrpc.rs	execute	refused_while_vouched	3
+src/capability/executor/credentials.rs	refresh_provider_token	via record_refusal	3
+src/capability/executor/graphql.rs	execute	refused_while_vouched	2
+src/capability/executor/graphql.rs	execute	via record_refusal	1
+src/capability/executor/jsonrpc.rs	execute	refused_while_vouched	2
+src/capability/executor/jsonrpc.rs	execute	via record_refusal	1
 src/capability/executor/mcp.rs	execute_mcp	refused_while_vouched	1
-src/capability/executor/mod.rs	execute_provider_with_context	refused_while_vouched	2
+src/capability/executor/mod.rs	execute_provider_with_context	via record_refusal	2
 src/gateway/delivery_facts.rs	composite_ended	facts.effect =	1
 src/gateway/delivery_facts.rs	echo_refusal_delivered	facts.effect =	1
 src/gateway/delivery_facts.rs	outlet	echo_refusal_delivered	1

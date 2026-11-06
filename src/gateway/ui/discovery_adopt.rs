@@ -20,15 +20,17 @@ use axum::response::{IntoResponse, Response};
 use serde::Deserialize;
 use serde_json::json;
 
-use super::super::errors::{config_path_unavailable, flat_error, structured_error};
+use super::super::errors::{
+    config_path_unavailable, config_refusal, flat_error, no_config_file, structured_error,
+};
 use super::super::guard::Guard;
 use super::{Gateway, name_refusal, read_gateway};
 use crate::config::SecretStoreChoice;
 use crate::config_persistence::keyedit::{Segment, SlotId, Template};
 use crate::config_persistence::{NOT_IN_PLACE, edit_text};
 use crate::config_reload::{
-    AuditPosture, Expected, FileRevision, GatewayAuth, IntentKind, NO_AUDIT_LOG, RELOAD_LOCK_WAIT,
-    Replace, ReplaceError, ReplaceOutcome, Replaced, SecretStep, replace_audited,
+    Expected, FileRevision, IntentKind, NO_AUDIT_LOG, RELOAD_LOCK_WAIT, Replace, ReplaceError,
+    ReplaceOutcome, Replaced, SecretStep,
 };
 use crate::discovery::DiscoveredServer;
 use crate::discovery::adopt::{AdoptRefusal, Adoption, Literal, adoption, refusals};
@@ -40,6 +42,13 @@ use crate::secret_store::{
 
 /// A secret store the writer can save into.
 type Store = Arc<dyn SecretStore + Send + Sync>;
+
+/// Test-only: the store an adopt saves into instead of the configured one,
+/// as a request extension (the pattern of the injected `DiscoveryCache`).
+/// Absent from every non-test build.
+#[cfg(test)]
+#[derive(Clone)]
+pub(super) struct AdoptStoreForTest(pub(super) Store);
 
 /// The compute's refusal when the name is already a backend in the bytes
 /// it was handed.
@@ -87,24 +96,6 @@ fn stale(current: &FileRevision) -> Response {
 
 fn fixed(status: StatusCode, message: &'static str) -> Response {
     flat_error(status, message).into_response()
-}
-
-/// gateway.yaml could not be read or was refused: by the route's own read or
-/// by the writer's. Fixed text: the reason names the file, so it never leaves.
-fn config_refusal() -> Response {
-    fixed(
-        StatusCode::SERVICE_UNAVAILABLE,
-        "gateway.yaml could not be loaded",
-    )
-}
-
-/// There is no gateway.yaml to adopt into.
-fn no_config_file() -> Response {
-    (
-        StatusCode::CONFLICT,
-        Json(json!({"error": "no_config_file"})),
-    )
-        .into_response()
 }
 
 const FAILED: &str = "the adopt did not complete";
@@ -171,7 +162,7 @@ pub(super) fn answer(name: &str, written: Result<ReplaceOutcome, ReplaceError>) 
         Err(ReplaceError::RollbackFailed { .. }) => failed("rollback_failed"),
         Err(ReplaceError::Unconfirmed { .. }) => failed("unconfirmed"),
         Err(ReplaceError::Failed(_)) => failed("failed"),
-        Err(ReplaceError::NoConfigFile) => no_config_file(),
+        Err(ReplaceError::NoConfigFile) => no_config_file().into_response(),
         // The guard's text names the file and the fix: the server log gets
         // it, the answer never does.
         Err(ReplaceError::ConfigRefused(why)) => {
@@ -180,7 +171,7 @@ pub(super) fn answer(name: &str, written: Result<ReplaceOutcome, ReplaceError>) 
                 detail = %why,
                 "discovery adopt: the config write refused gateway.yaml"
             );
-            config_refusal()
+            config_refusal().into_response()
         }
     }
 }
@@ -347,6 +338,7 @@ fn invalid_body() -> Response {
 pub(super) async fn adopt_discovery(
     State(state): State<Arc<AppState>>,
     injected: Option<Extension<Arc<DiscoveryCache>>>,
+    #[cfg(test)] store_for_test: Option<Extension<AdoptStoreForTest>>,
     guard: Guard,
     body: Result<Json<AdoptBody>, JsonRejection>,
 ) -> Response {
@@ -369,10 +361,10 @@ pub(super) async fn adopt_discovery(
         tokio::task::spawn_blocking(move || read_gateway("discovery", Some(&path))).await
     };
     let Ok(Ok(gateway)) = read else {
-        return config_refusal();
+        return config_refusal().into_response();
     };
     let Gateway::File { revision, config } = &gateway else {
-        return no_config_file();
+        return no_config_file().into_response();
     };
     if revision.as_str() != body.revision {
         return stale(revision);
@@ -415,6 +407,11 @@ pub(super) async fn adopt_discovery(
             Err(refused) => return *refused,
         }
     };
+    #[cfg(test)]
+    let opened = match (opened, store_for_test) {
+        (Some((_, vault)), Some(Extension(AdoptStoreForTest(store)))) => Some((store, vault)),
+        (opened, _) => opened,
+    };
     if let Some((store, _)) = &opened {
         let over = over_limit(&adoption, store);
         if !over.is_empty() {
@@ -441,20 +438,10 @@ pub(super) async fn adopt_discovery(
         replaced: Replaced::Discard,
         secrets,
     };
-    answer(&name, write_audited(&state, context, replace).await)
-}
-
-/// Writes `replace` under this gateway's audit posture: its own intent first
-/// on an audited gateway (`config_adopt_intent`), refused outright with auth
-/// on and no audit log.
-async fn write_audited(
-    state: &AppState,
-    context: Arc<crate::config_reload::ReloadContext>,
-    replace: Replace,
-) -> Result<ReplaceOutcome, ReplaceError> {
-    let auth = GatewayAuth::of(state.live_config.running().auth.enabled);
-    let audit = AuditPosture::of(state.transparency_log.clone(), auth).audit(IntentKind::Adopt)?;
-    replace_audited(context, replace, audit, RELOAD_LOCK_WAIT).await
+    answer(
+        &name,
+        super::super::write_audited(&state, context, replace, IntentKind::Adopt).await,
+    )
 }
 
 #[cfg(test)]

@@ -116,7 +116,12 @@ impl LogSource for ActivitySource {
         limit: usize,
         search: &mut Search,
     ) -> impl Future<Output = io::Result<Page>> + Send {
-        let (from, to) = (self.half(cursor).cloned(), self.half(stop).cloned());
+        // A pending replay reads from the oldest kept record: no cursor.
+        let from = self
+            .half(cursor)
+            .filter(|m| !super::id::is_replay_pending(m))
+            .cloned();
+        let to = self.half(stop).cloned();
         let (path, kind, generation) = (self.path.clone(), self.kind, self.feed.generation());
         let access = access.clone();
         let mut owned = std::mem::take(search);

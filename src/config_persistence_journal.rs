@@ -252,14 +252,6 @@ pub(crate) fn recover(config: &Path) -> Result<Recovered, NotRecovered> {
     let target = resolved(config);
     let path = journal_path(&target);
     let original = original_path(&target);
-    let manual = || {
-        format!(
-            "copy the staged original {} over {}, then delete {}",
-            original.display(),
-            target.display(),
-            path.display()
-        )
-    };
     let journal = match read(&path) {
         Ok(Some(journal)) => journal,
         Ok(None) => {
@@ -269,21 +261,25 @@ pub(crate) fn recover(config: &Path) -> Result<Recovered, NotRecovered> {
             return Ok(Recovered::Nothing);
         }
         Err(UnreadConfig::Refused(why)) => return Err(NotRecovered::Refused(guard_refused(&why))),
+        // Its state is unknown, and it may be `all_renamed`: the step is
+        // conditional on what the operator finds in it.
         Err(UnreadConfig::Failed(e) | UnreadConfig::NotTheConfig(e)) => {
             return Err(NotRecovered::Failed(format!(
-                "{} cannot be read ({e}); {}",
-                path.display(),
-                manual()
+                "{journal} cannot be read ({e}); nothing was changed. Its state is unknown, so leave {target} as it is until you have inspected the journal. If it names {target} and its state is staged, restore the staged original {original} over {target} only if its SHA-256 matches the journal's original_revision, then delete the journal; if its state is all_renamed, only delete the journal; if it names another file, restore nothing over {target}",
+                journal = path.display(),
+                target = target.display(),
+                original = original.display(),
             )));
         }
     };
+    // Another file's journal says nothing about this one: no restore over it,
+    // and the journal stays until that file is resolved.
     if journal.target != target {
         return Err(NotRecovered::Failed(format!(
-            "{} names {}, not {}; {}",
-            path.display(),
-            journal.target.display(),
-            target.display(),
-            manual()
+            "{journal} names {other}, not {target}; nothing was changed. Resolve that journal for {other} first: restore nothing over {target}, and do not delete the journal",
+            journal = path.display(),
+            other = journal.target.display(),
+            target = target.display(),
         )));
     }
     let recovered = match journal.state {
@@ -294,25 +290,24 @@ pub(crate) fn recover(config: &Path) -> Result<Recovered, NotRecovered> {
             }
             // The bytes restored as gateway.yaml: read through the config
             // guard, so a staged original another account could plant or
-            // change, with a digest to match, is never restored.
+            // change, with a digest to match, is never restored. With no
+            // original to restore, the file is checked by hand.
+            let unreadable = |e: &dyn std::fmt::Display| {
+                NotRecovered::Failed(format!(
+                    "{original} cannot be read ({e}); nothing was changed. Do not restore it: check {target} by hand against the change that was being made, then delete the journal {journal}",
+                    original = original.display(),
+                    target = target.display(),
+                    journal = path.display(),
+                ))
+            };
             let bytes = match crate::config::read_recovery_text(&original) {
                 Ok(Some(text)) => text.into_bytes(),
-                Ok(None) => {
-                    return Err(NotRecovered::Failed(format!(
-                        "{} cannot be read (it is gone); {}",
-                        original.display(),
-                        manual()
-                    )));
-                }
+                Ok(None) => return Err(unreadable(&"it is gone")),
                 Err(UnreadConfig::Refused(why)) => {
                     return Err(NotRecovered::Refused(guard_refused(&why)));
                 }
                 Err(UnreadConfig::Failed(e) | UnreadConfig::NotTheConfig(e)) => {
-                    return Err(NotRecovered::Failed(format!(
-                        "{} cannot be read ({e}); {}",
-                        original.display(),
-                        manual()
-                    )));
+                    return Err(unreadable(&e));
                 }
             };
             if crate::hashing::sha256_hex(&bytes) != journal.original_revision {
