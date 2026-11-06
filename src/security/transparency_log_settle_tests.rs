@@ -1,7 +1,9 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Settle: the payload lands unchanged and synced, only in the bound log;
-//! a refusal claims nothing.
+//! a refusal claims nothing. Whether a payload holds paths, values or
+//! secrets is its producer's (the journal's) to keep out; settle checks only
+//! the fields it and the chain own.
 
 use std::path::Path;
 use std::sync::Arc;
@@ -10,10 +12,9 @@ use serde_json::{Map, Value, json};
 
 use super::identity::LogId;
 use super::identity_tests::swap_in;
-use super::rotation::WriteFault;
 use super::rotation_tests::{append, cfg, event, lines, log_path};
 use super::segments::sibling;
-use super::settle::{FailSettle, Reason, Role, SettledBy, Unsettled};
+use super::settle::{FailSettle, InvalidPayload, Reason, Role, SettledBy, Unsettled};
 use super::*;
 
 /// An outcome payload as the journal would freeze it.
@@ -22,7 +23,9 @@ fn payload() -> Map<String, Value> {
         token: "attempt-1".into(),
         intent_counter: 7,
     };
+    // `kind` carries the settle prefix (delta S2'), as the journal writes it.
     let v = json!({
+        "kind": "settle.save",
         "intent_counter": 3,
         "result": "written",
         "reason": Reason::Committed,
@@ -136,16 +139,23 @@ async fn settle_after_its_log_was_replaced_lands_in_neither_log() {
 
 #[tokio::test]
 async fn a_refused_settle_appends_nothing() {
-    for refusal in ["sync", "before", "event", "token"] {
-        // GIVEN: a live logger, a failing sync, the BeforeAppend seam, or a
-        // payload that names the event or the token itself
+    for refusal in [
+        "before",
+        "event",
+        "token",
+        "counter",
+        "outcome",
+        "segment_seq",
+    ] {
+        // GIVEN: a live logger and the BeforeAppend seam, or a payload naming
+        // a field settle (event, token), the chain (counter), the envelope
+        // (outcome) or a segment (segment_seq) owns
         let dir = tempfile::tempdir().unwrap();
         let path = log_path(&dir);
         let l = Arc::new(TransparencyLogger::open(cfg(&path, 12, false)).unwrap());
         settled(&l, &l.log_id(), "w-0").await;
         let mut given = payload();
         match refusal {
-            "sync" => l.arm_write_fault(Some(WriteFault::SyncError)),
             "before" => l.arm_settle_fault(FailSettle::BeforeAppend),
             key => drop(given.insert(key.into(), "forged".into())),
         }
@@ -154,9 +164,13 @@ async fn a_refused_settle_appends_nothing() {
         // WHEN: it is settled
         let got = l.settle(&l.log_id(), "w-1", Role::Outcome, given).await;
 
-        // THEN: Refused, and the log and its mark are as before
+        // THEN: Refused before the append, Invalid for a payload (no retry
+        // can pass it), and the log and its mark are as before
+        let want_invalid = refusal != "before";
+        let invalid = matches!(got, Err(Unsettled::Invalid(InvalidPayload::ReservedField)));
+        let refused = matches!(got, Err(Unsettled::Refused(_)));
         assert!(
-            matches!(got, Err(Unsettled::Refused(_))),
+            if want_invalid { invalid } else { refused },
             "{refusal}: {got:?}"
         );
         assert!(on_disk(&path) == before, "{refusal}");
@@ -166,7 +180,7 @@ async fn a_refused_settle_appends_nothing() {
 }
 
 #[tokio::test]
-async fn a_settle_refused_after_its_append_leaves_the_record_for_dedup() {
+async fn a_settle_failing_after_its_append_is_unconfirmed() {
     // GIVEN: the AfterAppend seam
     let dir = tempfile::tempdir().unwrap();
     let path = log_path(&dir);
@@ -176,9 +190,8 @@ async fn a_settle_refused_after_its_append_leaves_the_record_for_dedup() {
     // WHEN: it is settled
     let got = l.settle(&l.log_id(), "w-1", Role::Outcome, payload()).await;
 
-    // THEN: Refused, with the synced record on disk: the replay repeats it
-    // and the reader collapses the pair
-    assert!(matches!(got, Err(Unsettled::Refused(_))), "{got:?}");
+    // THEN: Unconfirmed, and the record is on disk
+    assert!(matches!(got, Err(Unsettled::Unconfirmed(_))), "{got:?}");
     assert_eq!(records_of(&path, "w-1").len(), 1);
 }
 
