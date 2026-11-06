@@ -121,8 +121,8 @@ fn caller_of(
         account: client.name.clone(),
         authenticated: true,
         grant: Some(GrantSubject::for_test(
-            identity.issuer.as_str(),
-            identity.subject.as_str(),
+            identity.issuer(),
+            identity.subject(),
             None,
         )),
         identity: Some(identity),

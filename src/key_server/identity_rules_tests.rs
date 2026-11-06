@@ -85,7 +85,7 @@ async fn missing_email_verified_is_unverified() {
     let h = Harness::start(&config_yaml("[]", &policies(&rules))).await;
     let token = h.mint(ISS_A, "attacker", &json!({"email": "ceo@corp.com"}));
     let id = h.verify(&token).await.expect("signature is valid");
-    assert_eq!(id.email, "", "no email_verified claim means no email");
+    assert_eq!(id.email(), "", "no email_verified claim means no email");
     assert!(
         h.ks.policy
             .resolve_scopes(&id, &RequestedScopes::default())
@@ -124,7 +124,7 @@ async fn verified_email_matches() {
             &json!({"email": "ceo@corp.com", "email_verified": verified}),
         );
         let id = h.verify(&token).await.expect("valid");
-        assert_eq!(id.email, "ceo@corp.com", "email_verified={verified}");
+        assert_eq!(id.email(), "ceo@corp.com", "email_verified={verified}");
         let (status, body) = h.exchange(&token).await;
         assert_eq!(status, 200, "email_verified={verified}: {body}");
     }
@@ -399,7 +399,7 @@ async fn token_from_an_uppercase_https_or_loopback_issuer_verifies() {
             .verify(&token, &AGE)
             .await
             .unwrap_or_else(|e| panic!("{issuer}: {e}"));
-        assert_eq!(id.issuer, issuer);
+        assert_eq!(id.issuer(), issuer);
     }
 }
 

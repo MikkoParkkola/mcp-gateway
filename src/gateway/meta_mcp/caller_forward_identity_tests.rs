@@ -41,7 +41,7 @@ impl crate::identity_propagation::IdentityPropagation for CountingMint {
         crate::identity_propagation::PropagationError,
     > {
         self.mints.fetch_add(1, Ordering::SeqCst);
-        let subject_key = identity.subject.clone();
+        let subject_key = identity.subject().to_owned();
         Ok(crate::identity_propagation::PropagatedCredential {
             expiry_synthetic: false,
             headers: vec![(

@@ -31,7 +31,7 @@ fn doc_test(source: &str, name: &str, fence: &str) -> Vec<String> {
 fn each_output_only_type_fails_to_read_and_writes_out() {
     for (source, name, path, arg) in [
         (
-            include_str!("oidc.rs"),
+            include_str!("oidc/verified.rs"),
             "VerifiedIdentity",
             "mcp_gateway::key_server::oidc::VerifiedIdentity",
             "identity",
