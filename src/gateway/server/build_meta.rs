@@ -154,7 +154,6 @@ impl Gateway {
         // ── Security policies ────────────────────────────────────────────────
         #[cfg(test)]
         let tool_policy = Arc::new(ToolPolicy::from_config(&self.config.security.tool_policy));
-        let mtls_policy = Arc::new(MtlsPolicy::from_config(&self.config.mtls));
 
         // ── Usage stats + search ranker with on-disk persistence ─────────────
         let usage_stats = Some(Arc::new(UsageStats::new()));
@@ -173,6 +172,12 @@ impl Gateway {
             &self.env.get(),
             &data_dir,
         )?);
+        // Built under the record key, so each rule carries the id a refusal
+        // records. mTLS and the key are both restart-only: compiled once.
+        let mtls_policy = Arc::new(MtlsPolicy::from_config_keyed(
+            &self.config.mtls,
+            &record_key.rule_id_key(),
+        ));
 
         let ranker_path = data_dir.join("usage.json");
         let ranker = Arc::new(SearchRanker::new());
@@ -542,5 +547,18 @@ impl Gateway {
             record_key,
             transparency_log,
         })
+    }
+}
+
+#[cfg(test)]
+impl Gateway {
+    /// The mTLS policy the production builder compiles from this gateway's
+    /// config, with the rule key its ids are computed under, for a row that
+    /// installs that policy on a router.
+    pub(crate) async fn built_mtls_policy_for_test(
+        &self,
+    ) -> Result<(Arc<MtlsPolicy>, crate::security::rule_id::RuleKey)> {
+        let built = self.build_meta_mcp().await?;
+        Ok((built.mtls_policy, built.record_key.rule_id_key()))
     }
 }
