@@ -247,3 +247,68 @@ async fn a_write_carrying_a_refused_rule_is_refused_while_the_firewall_runs() {
         "the whole write wrote nothing"
     );
 }
+
+const OFF_VALID: &str = "security:\n  firewall:\n    enabled: false\n    rules:\n      - {match: \"foo\", scan: [credentials], action: warn}\n";
+const OFF_DORMANT: &str = "security:\n  firewall:\n    enabled: false\n    rules:\n      - {match: \"foo\", scan: [credentials], action: warn, except: [{}]}\n";
+const OFF_DORMANT_PORT: &str = "server:\n  port: 39995\nsecurity:\n  firewall:\n    enabled: false\n    rules:\n      - {match: \"foo\", scan: [credentials], action: warn, except: [{}]}\n";
+
+/// A replace of `start` after a hand edit to `edited` (never reloaded), with
+/// `OFF_DORMANT_PORT`.
+async fn replace_after_edit(start: &str, edited: &str) -> (Result<(), String>, String) {
+    use super::reload_context::replace::{Expected, Replaced, replace_detached};
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("gateway.yaml");
+    write_owner_only(&path, start).expect("write");
+    let ctx = super::replace_test_support::context(&path);
+    write_owner_only(&path, edited).expect("hand edit");
+    let outcome = replace_detached(
+        ctx,
+        super::replace_test_support::to(Expected::Any, OFF_DORMANT_PORT, Replaced::Discard),
+        super::replace_test_support::WAIT,
+    )
+    .await
+    .map(|_| ())
+    .map_err(|e| format!("{e:?}"));
+    (outcome, std::fs::read_to_string(&path).expect("read"))
+}
+
+/// A replace judges which refused rules it carries against the bytes it
+/// replaces, not the published config: a rule hand-edited in and never
+/// reloaded is carried by a replace that keeps it.
+#[tokio::test]
+async fn a_replace_carries_a_refused_rule_the_replaced_bytes_hold() {
+    let (outcome, after) = replace_after_edit(OFF_VALID, OFF_DORMANT).await;
+    outcome.expect("the refused rule on disk is carried");
+    assert_eq!(after, OFF_DORMANT_PORT);
+}
+
+/// The other side: a refused rule the published config holds but the bytes
+/// on disk no longer do is not carried; a replace putting it back adds it.
+#[tokio::test]
+async fn a_replace_cannot_restore_a_refused_rule_dropped_on_disk() {
+    let (outcome, after) = replace_after_edit(OFF_DORMANT, OFF_VALID).await;
+    let refused = outcome.expect_err("the rule is added again");
+    assert!(refused.contains("except[0] sets no field"), "{refused}");
+    assert_eq!(after, OFF_VALID, "nothing written");
+}
+
+/// A gateway started with authentication on and only a bearer token can
+/// reload its first API key, live; a rule naming that key in the same reload
+/// is taken: whether authentication is on is the running process's, the
+/// keys are the reload's.
+#[test]
+fn a_running_authenticated_gateway_takes_its_first_key_and_a_rule_naming_it() {
+    let bearer =
+        "auth:\n  enabled: true\n  bearer_token: \"zq-bearer-for-the-first-key-row-000000\"\n";
+    let startup = format!("{bearer}{}", firewall(true, VALID));
+    let reload = format!(
+        "{bearer}  api_keys:\n    - name: k\n      key_sha256: \"sha256:{}\"\n{}",
+        "1".repeat(64),
+        firewall(
+            true,
+            "{match: \"*\", scan: [credentials], action: block, keys: [k]}"
+        )
+    );
+    let (outcome, _live) = reload_after(&startup, &reload);
+    outcome.expect("the first key and its rule reload together");
+}
