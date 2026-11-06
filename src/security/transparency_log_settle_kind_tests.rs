@@ -100,6 +100,8 @@ async fn settle_refuses_every_payload_outside_its_namespace_as_invalid() {
     }
 }
 
+// Readers subscribe only in a build with the web UI.
+#[cfg(feature = "webui")]
 #[tokio::test]
 async fn a_settle_record_reaches_only_readers_of_its_settle_kind() {
     // GIVEN: readers of a plain kind, of "save", of `settle.save` and of

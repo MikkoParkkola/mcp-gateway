@@ -102,6 +102,8 @@ async fn a_settle_task_queued_past_the_bound_is_unconfirmed_and_lands_once() {
     assert_eq!(records_of(&path, "w-1").len(), 1);
 }
 
+// Readers subscribe only in a build with the web UI.
+#[cfg(feature = "webui")]
 #[tokio::test(flavor = "multi_thread")]
 async fn a_stalled_write_is_unconfirmed_and_its_retry_is_delivered_twice() {
     // GIVEN: readers of `settle.save` and of plain `save`, and the next write
