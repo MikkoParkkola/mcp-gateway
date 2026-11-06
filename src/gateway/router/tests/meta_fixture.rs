@@ -83,10 +83,24 @@ pub(in crate::gateway::router) async fn test_router_app_state_with_logs(
     transparency_log: Option<Arc<crate::security::TransparencyLogger>>,
     governance_log: Option<Arc<crate::security::TransparencyLogger>>,
 ) -> Fixture {
+    test_router_app_state_with_logs_and_key_server(auth, None, transparency_log, governance_log)
+        .await
+}
+
+/// [`test_router_app_state_with_logs`] with a key server, for stream rows
+/// whose caller is a key-server token: every recheck resolves its identity
+/// again through the key server.
+#[cfg(feature = "webui")]
+pub(in crate::gateway::router) async fn test_router_app_state_with_logs_and_key_server(
+    auth: &AuthConfig,
+    key_server: Option<Arc<crate::key_server::KeyServer>>,
+    transparency_log: Option<Arc<crate::security::TransparencyLogger>>,
+    governance_log: Option<Arc<crate::security::TransparencyLogger>>,
+) -> Fixture {
     let agent_auth = AgentAuthState::new(false, Arc::new(AgentRegistry::new()));
     let fixture = fixture_with_logs(
         auth,
-        None,
+        key_server,
         agent_auth,
         |m| m,
         transparency_log,

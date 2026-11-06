@@ -273,7 +273,9 @@ pub(crate) use quota::{MINT_MODES, fixture_optional_failing_mint};
 use quota::{fixture_backend_config, fixture_failsafe, propagating_route_log};
 #[cfg(feature = "firewall")]
 pub(crate) use quota::{fixture_firewalled_budget_built, fixture_propagating_budgeted};
-pub(crate) use quota::{fixture_propagating, fixture_propagating_signed};
+pub(crate) use quota::{
+    fixture_propagating, fixture_propagating_logged, fixture_propagating_signed,
+};
 pub(crate) use quota::{fixture_signed_with_secrets, fixture_with_secrets};
 // Its only caller, the stored-echo rows, needs the firewall feature.
 #[cfg(feature = "firewall")]

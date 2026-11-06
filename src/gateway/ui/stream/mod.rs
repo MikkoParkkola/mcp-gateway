@@ -145,6 +145,7 @@ async fn stream(
         kinds: kinds_for(&client, access.as_ref(), &state),
         access,
         admin: is_admin(Some(&client)),
+        scope: conn::ui_scope(&client),
         state: Arc::clone(&state),
         auth,
         held,

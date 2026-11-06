@@ -280,6 +280,7 @@ fn patch_summary_lists_all_change_types() {
         backends_added: vec![("x".to_string(), BackendConfig::default())],
         backends_removed: vec!["y".to_string()],
         backends_modified: vec![("z".to_string(), BackendConfig::default())],
+        backends_display_changed: vec!["w".to_string()],
         server_changed: true,
         profiles_changed: true,
     };
@@ -288,6 +289,7 @@ fn patch_summary_lists_all_change_types() {
     assert!(s.contains("added backends"), "missing added: {s}");
     assert!(s.contains("removed backends"), "missing removed: {s}");
     assert!(s.contains("modified backends"), "missing modified: {s}");
+    assert!(s.contains("owner changed: [w]"), "missing owner: {s}");
     assert!(s.contains("restart required"), "missing server: {s}");
     assert!(s.contains("profiles"), "missing profiles: {s}");
 }

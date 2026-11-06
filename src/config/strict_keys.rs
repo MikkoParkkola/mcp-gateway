@@ -147,6 +147,7 @@ fn is_annotation(key: &str) -> bool {
 const KNOWN_BACKEND_KEYS: &[&str] = &[
     // BackendConfig
     "description",
+    "owner",
     "enabled",
     "stop_when_idle_for",
     "max_frame_bytes",

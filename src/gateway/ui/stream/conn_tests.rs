@@ -49,10 +49,13 @@ fn during_a_catch_up_each_upkeep_runs_once_between_pages() {
             during_catch_up,
             "a catch-up after serving {served:?}"
         );
+        // Following the live logs, a snapshot leaves the live logs owed one
+        // look: nothing is servable until it is paid; otherwise everything.
+        let owed = served.snapshot;
         assert_eq!(
             servable(served, Phase::Live),
-            u(true, true, true),
-            "the live logs cap nothing, whatever was served: {served:?}"
+            u(!owed, !owed, !owed),
+            "the live logs after serving {served:?}"
         );
     }
 }
