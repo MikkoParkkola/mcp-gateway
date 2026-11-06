@@ -317,7 +317,12 @@ fn the_token_walk_matches_parsed_syntax_and_a_capped_expansion_fails_named() {
         1,
         "and what it imports"
     );
-    let globs: String = (0..70).map(|i| format!("use crate::m{i}::*;\n")).collect();
+    let mut globs = String::new();
+    for i in 0..70 {
+        globs.push_str("use crate::m");
+        globs.push_str(&i.to_string());
+        globs.push_str("::*;\n");
+    }
     let crowded = vec![(
         "src/new.rs".to_owned(),
         format!(
