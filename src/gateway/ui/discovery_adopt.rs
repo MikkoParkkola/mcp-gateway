@@ -20,15 +20,15 @@ use axum::response::{IntoResponse, Response};
 use serde::Deserialize;
 use serde_json::json;
 
-use super::super::errors::{config_path_unavailable, flat_error, structured_error};
+use super::super::errors::{config_path_unavailable, flat_error, stale, structured_error};
 use super::super::guard::Guard;
 use super::{Gateway, name_refusal, read_gateway};
 use crate::config::SecretStoreChoice;
 use crate::config_persistence::keyedit::{Segment, SlotId, Template};
 use crate::config_persistence::{NOT_IN_PLACE, edit_text};
 use crate::config_reload::{
-    AuditPosture, Expected, FileRevision, GatewayAuth, IntentKind, NO_AUDIT_LOG, RELOAD_LOCK_WAIT,
-    Replace, ReplaceError, ReplaceOutcome, Replaced, SecretStep, replace_audited,
+    AuditPosture, Expected, GatewayAuth, IntentKind, NO_AUDIT_LOG, RELOAD_LOCK_WAIT, Replace,
+    ReplaceError, ReplaceOutcome, Replaced, SecretStep, replace_audited,
 };
 use crate::discovery::DiscoveredServer;
 use crate::discovery::adopt::{AdoptRefusal, Adoption, Literal, adoption, refusals};
@@ -73,14 +73,6 @@ fn not_adoptable(reasons: &[(&'static str, String)]) -> Response {
     (
         status,
         Json(json!({"error": "not_adoptable", "refusals": refusals})),
-    )
-        .into_response()
-}
-
-fn stale(current: &FileRevision) -> Response {
-    (
-        StatusCode::CONFLICT,
-        Json(json!({"error": "stale", "current": current.as_str()})),
     )
         .into_response()
 }
@@ -135,7 +127,7 @@ pub(super) fn answer(name: &str, written: Result<ReplaceOutcome, ReplaceError>) 
             .into_response(),
         // An add always changes the bytes; unchanged ones mean nothing was added.
         Ok(ReplaceOutcome { revision: None, .. }) => failed("unchanged"),
-        Err(ReplaceError::Stale { current }) => stale(&current),
+        Err(ReplaceError::Stale { current }) => stale(&current).into_response(),
         Err(ReplaceError::Busy) => fixed(
             StatusCode::SERVICE_UNAVAILABLE,
             "the config is being written; retry",
@@ -375,7 +367,7 @@ pub(super) async fn adopt_discovery(
         return no_config_file();
     };
     if revision.as_str() != body.revision {
-        return stale(revision);
+        return stale(revision).into_response();
     }
     let Some(context) = state.meta_mcp.reload_context() else {
         return fixed(
