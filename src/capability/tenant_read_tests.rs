@@ -29,13 +29,26 @@ use crate::security::hash_argument;
 const KEY: &str = "api_key:one";
 
 fn firewall() -> Arc<Firewall> {
+    firewall_in(Switch::On, CrossTenantReads::Observe)
+}
+
+/// `security.firewall.enabled` for a row.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Switch {
+    On,
+    Off,
+}
+
+/// [`firewall`] with the switch at `switch` and the verdict in `mode`.
+fn firewall_in(switch: Switch, mode: CrossTenantReads) -> Arc<Firewall> {
     Arc::new(Firewall::from_config(
         FirewallConfig {
+            enabled: switch == Switch::On,
             tenant_guard: TenantGuardConfig {
                 enabled: false,
                 window_secs: 3600,
                 arg_keys: vec!["customer_id".to_string()],
-                cross_tenant_reads: CrossTenantReads::Observe,
+                cross_tenant_reads: mode,
                 ..TenantGuardConfig::default()
             },
             ..FirewallConfig::default()
@@ -197,5 +210,42 @@ async fn capability_cache_hit_without_stored_attribution_counts_as_unread() {
     assert!(
         hidden.uninspected,
         "a hit stored without attribution counts as unread: {hidden:?}"
+    );
+}
+
+/// Attribution keeps running with the firewall off: a transform that drops
+/// B's key still leaves B's raw-response attribution, so under `block` the
+/// transformed B read after an A read is withheld.
+#[tokio::test]
+async fn transform_attribution_runs_with_the_firewall_off() {
+    let fw = firewall_in(Switch::Off, CrossTenantReads::Block);
+    let (executor, capability, _hits) = projecting_executor().await;
+    let (value, hidden) = read(&fw, &executor, &capability).await;
+    assert_eq!(value, json!({ "note": "x" }), "premise: B's key is dropped");
+    assert_eq!(
+        judged_after_a(&fw, value, &hidden),
+        Some(ReadVerdict::Blocked),
+        "a transformed B read after an A read is withheld with the firewall off"
+    );
+}
+
+/// Attribution keeps running with the firewall off: a cache hit restores the
+/// stored B attribution, so under `block` the cached B read after an A read
+/// is withheld.
+#[tokio::test]
+async fn cache_hit_attribution_runs_with_the_firewall_off() {
+    let fw = firewall_in(Switch::Off, CrossTenantReads::Block);
+    let (executor, capability, hits) = projecting_executor().await;
+    let _miss = read(&fw, &executor, &capability).await;
+    let (value, hidden) = read(&fw, &executor, &capability).await;
+    assert_eq!(
+        hits.load(Ordering::SeqCst),
+        1,
+        "premise: the second read is a hit"
+    );
+    assert_eq!(
+        judged_after_a(&fw, value, &hidden),
+        Some(ReadVerdict::Blocked),
+        "a cached B read after an A read is withheld with the firewall off"
     );
 }
