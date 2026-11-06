@@ -326,3 +326,47 @@ async fn p4_admission_routing_profile() {
         &refusal("p4_admission_routing_profile", "routing_profile"),
     );
 }
+
+/// T4: `allowed_tools` at the invocation policy (`policy.rs:94`, via
+/// `blocked_tool_kind`; found while coding). Every call that meets the gate
+/// is withheld there first (T1: `held_verdict` reports a blocked tool as
+/// withheld even with no list, `input_keys.rs:132-134`), so this site serves
+/// the callers that check the policy without the gate: task recovery reads
+/// (`tasks.rs:368`), chain steps (`chain_exec.rs:241`), playbook steps
+/// (`admission_plan.rs:101`, `:156`) and the sync admission
+/// (`admission.rs:505`). This unit row calls the policy directly, as they do,
+/// and builds the decision the route would from the notes it left.
+#[tokio::test]
+async fn t4_policy_allowed_tools() {
+    use crate::gateway::meta_mcp::invoke::audit::with_dispatch_scope;
+    let dir = tempfile::tempdir().expect("a log directory");
+    let config = BackendConfig {
+        allowed_tools: Some(vec!["write".to_string()]),
+        ..BackendConfig::default()
+    };
+    let (meta, sent) = table_meta(&dir, config);
+    let who = api_key_caller();
+    let args = json!({"server": "alpha", "tool": "read", "arguments": {}});
+    let (checked, notes) = with_dispatch_scope(async {
+        meta.check_invocation_policy(&args, None, &context(&AllowAll, &who))
+    })
+    .await;
+    // The policy refuses with `Error::Protocol` (`policy.rs:92`), whose code
+    // is -32600.
+    let error = checked.expect_err("premise: the policy refuses the tool");
+    assert!(matches!(error, crate::Error::Protocol(_)), "{error:?}");
+    assert_eq!(error.to_rpc_code(), -32600, "{error:?}");
+    assert_eq!(
+        sent.load(Ordering::SeqCst),
+        0,
+        "the backend was sent the call"
+    );
+    let outcome = crate::security::audit::AuditOutcome::from_result(&Err(error))
+        .expect("an outcome for a refusal");
+    let decision =
+        serde_json::to_value(notes.decided(&meta, outcome)).expect("a decision serialises");
+    assert_row(
+        &decision,
+        &refusal("t4_policy_allowed_tools", "allowed_tools"),
+    );
+}
