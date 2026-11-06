@@ -7,7 +7,7 @@
 
 use serde_json::Value;
 
-use super::rotation_tests::{append, cfg, event, lines, log_path, verify};
+use super::rotation_tests::{append, cfg, event, lines, log_path, rotate_n, verify};
 use super::segments::{read_hwm, sibling};
 use super::*;
 use crate::test_log_capture::capture_warnings;
@@ -160,4 +160,40 @@ fn a_caller_cannot_append_the_retired_predecessor_event() {
     // THEN: refused, nothing appended
     assert!(refused.is_err(), "the retired name stays the logger's");
     assert_eq!(lines(&path).len(), before);
+}
+
+#[test]
+fn a_continuing_log_whose_active_file_vanished_names_no_predecessor() {
+    for live in [false, true] {
+        // GIVEN: a rotated log, its id on the sealed segment's open record
+        let dir = tempfile::tempdir().unwrap();
+        let path = log_path(&dir);
+        let l = TransparencyLogger::open(cfg(&path, 12, false)).unwrap();
+        let id = l.log_id();
+        rotate_n(&l, &path, 1);
+        append(&l, 0);
+
+        // WHEN: its active file is deleted, then the live logger writes, or
+        // a new logger opens it
+        std::fs::remove_file(&path).unwrap();
+        let after = if live {
+            append(&l, 1);
+            l.log_id()
+        } else {
+            drop(l);
+            TransparencyLogger::open(cfg(&path, 12, false))
+                .unwrap()
+                .log_id()
+        };
+
+        // THEN: the same id, and the new open record names no predecessor
+        assert_eq!(after, id, "live: {live}");
+        let head = lines(&path);
+        assert_eq!(event(&head[0]), Some(rotation::EV_OPENED), "{head:?}");
+        assert!(
+            head[0].get(PREDECESSOR).is_none(),
+            "live: {live}: {}",
+            head[0]
+        );
+    }
 }
