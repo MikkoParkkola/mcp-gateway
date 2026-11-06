@@ -514,17 +514,22 @@ fn plain(ident: &syn::Ident) -> String {
 }
 
 /// The file's `use` bindings: each local name with every full path it may
-/// stand for, and the paths globbed into scope. File-wide: a binding in one
-/// module is applied everywhere in the file, which can only add matches.
+/// stand for, the paths globbed into scope, and the free functions the file
+/// defines. File-wide: a binding in one module is applied everywhere in the
+/// file, which can only add matches.
 #[derive(Default)]
 struct Aliases {
     named: std::collections::BTreeMap<String, Vec<Vec<String>>>,
     globs: Vec<Vec<String>>,
+    fns: std::collections::BTreeSet<String>,
 }
 
 impl Aliases {
     fn of(file: &syn::File) -> Self {
-        struct Uses(Vec<(Vec<String>, Option<String>)>);
+        struct Uses(
+            Vec<(Vec<String>, Option<String>)>,
+            std::collections::BTreeSet<String>,
+        );
         impl<'ast> syn::visit::Visit<'ast> for Uses {
             fn visit_item_use(&mut self, item: &'ast syn::ItemUse) {
                 crate::gateway::syn_scan_support::bindings(
@@ -533,11 +538,18 @@ impl Aliases {
                     &mut self.0,
                 );
             }
+            fn visit_item_fn(&mut self, item: &'ast syn::ItemFn) {
+                self.1.insert(plain(&item.sig.ident));
+                syn::visit::visit_item_fn(self, item);
+            }
         }
-        let mut uses = Uses(Vec::new());
+        let mut uses = Uses(Vec::new(), std::collections::BTreeSet::new());
         syn::visit::Visit::visit_file(&mut uses, file);
         let unraw = |s: &str| s.strip_prefix("r#").unwrap_or(s).to_owned();
-        let mut aliases = Self::default();
+        let mut aliases = Self {
+            fns: std::mem::take(&mut uses.1),
+            ..Self::default()
+        };
         for (full, local) in uses.0 {
             let full: Vec<String> = full.iter().map(|s| unraw(s)).collect();
             match local {
@@ -582,9 +594,11 @@ impl Aliases {
 /// The keys a path reads through any of `readings`: a `Path` shape it ends
 /// with, and a callable it names, called or taken as a value
 /// (`let f = CallerStanding::of_client;`, `AdminStanding::is_gateway(s)`).
-fn path_keys(readings: &[Vec<String>]) -> Vec<&'static str> {
+/// `paths_only` drops the callables, for a local name that is not called.
+fn path_keys(readings: &[Vec<String>], paths_only: bool) -> Vec<&'static str> {
     SHAPES
         .iter()
+        .filter(|(_, shape)| !paths_only || matches!(shape, Shape::Path(_)))
         .filter(|(_, shape)| match shape {
             Shape::Path(tail) | Shape::Call(tail) => readings.iter().any(|r| ends_with(r, tail)),
             Shape::QualifiedCall(last) | Shape::NullaryMethod(last) => readings
@@ -621,11 +635,16 @@ impl Finder<'_> {
         *self.counts.entry(key).or_default() += 1;
     }
 
-    /// One occurrence of a path, called or not: each key it reads through
-    /// any of its readings ([`path_keys`]) counts once. A call's callee is
-    /// visited as a path, so a direct call counts once too.
-    fn path_occurrence(&mut self, segments: &[String]) {
-        for key in path_keys(&self.aliases.readings(segments)) {
+    /// One occurrence of a path: each key it reads through any of its
+    /// readings ([`path_keys`]) counts once. A bare name that no import binds
+    /// and the file defines no function by is a local (a `bool` named
+    /// `is_admin`) unless it is called, so it counts for a callable only as a
+    /// callee.
+    fn path_occurrence(&mut self, segments: &[String], called: bool) {
+        let readings = self.aliases.readings(segments);
+        let local =
+            segments.len() == 1 && readings.len() == 1 && !self.aliases.fns.contains(&segments[0]);
+        for key in path_keys(&readings, local && !called) {
             self.add(key);
         }
     }
@@ -677,8 +696,28 @@ impl<'ast> syn::visit::Visit<'ast> for Finder<'_> {
     }
 
     fn visit_path(&mut self, path: &'ast syn::Path) {
-        self.path_occurrence(&segments(path));
+        self.path_occurrence(&segments(path), false);
         syn::visit::visit_path(self, path);
+    }
+
+    fn visit_expr_call(&mut self, call: &'ast syn::ExprCall) {
+        // The callee is visited here, as called, and not again as a path.
+        if let syn::Expr::Path(func) = &*call.func
+            && func.qself.is_none()
+        {
+            for attr in call.attrs.iter().chain(&func.attrs) {
+                self.visit_attribute(attr);
+            }
+            self.path_occurrence(&segments(&func.path), true);
+            for segment in &func.path.segments {
+                self.visit_path_arguments(&segment.arguments);
+            }
+            for arg in &call.args {
+                self.visit_expr(arg);
+            }
+            return;
+        }
+        syn::visit::visit_expr_call(self, call);
     }
 
     fn visit_expr_method_call(&mut self, call: &'ast syn::ExprMethodCall) {
@@ -691,7 +730,7 @@ impl<'ast> syn::visit::Visit<'ast> for Finder<'_> {
         if pat.subpat.is_none() && pat.by_ref.is_none() && pat.mutability.is_none() {
             let name = vec![plain(&pat.ident)];
             if self.aliases.readings(&name).len() > 1 {
-                self.path_occurrence(&name);
+                self.path_occurrence(&name, false);
             }
         }
         syn::visit::visit_pat_ident(self, pat);
@@ -868,7 +907,9 @@ fn walk(finder: &mut Finder<'_>, trees: &[Tok]) {
                 let mut any = false;
                 for (key, shape) in SHAPES {
                     let hit = match shape {
-                        Shape::Path(tail) | Shape::Call(tail) => tail_matches(tail),
+                        Shape::Path(tail) => tail_matches(tail),
+                        // A bare name not called is a local, as in parsed syntax.
+                        Shape::Call(tail) => (called || qualified) && tail_matches(tail),
                         Shape::QualifiedCall(last) => qualified && *last == name.as_str(),
                         Shape::NullaryMethod(m) => {
                             ((after_dot && empty_call) || qualified) && *m == name.as_str()
@@ -889,7 +930,7 @@ fn walk(finder: &mut Finder<'_>, trees: &[Tok]) {
                         .collect();
                     let readings = finder.aliases.readings(&path);
                     if readings.len() > 1 {
-                        for key in path_keys(&readings) {
+                        for key in path_keys(&readings, false) {
                             finder.add(key);
                         }
                     }
@@ -1233,8 +1274,14 @@ fn the_scan_finds_callable_readers_taken_as_values() {
             "let f = CallerStanding::of_client; f(client);",
             "CallerStanding::of_client(",
         ),
-        ("let f = resolve_role; f(k);", "resolve_role("),
-        ("let _ = keys.iter().map(is_admin);", "is_admin("),
+        (
+            "use crate::gateway::authz::resolve_role; let f = resolve_role; f(k);",
+            "resolve_role(",
+        ),
+        (
+            "use crate::gateway::ui::is_admin; let _ = keys.iter().map(is_admin);",
+            "is_admin(",
+        ),
         (
             "let _ = AdminStanding::is_gateway(standing);",
             "is_gateway()",
@@ -1247,6 +1294,20 @@ fn the_scan_finds_callable_readers_taken_as_values() {
     ] {
         assert_eq!(found(&file_of(body), key), 1, "{body}");
     }
+    assert_eq!(
+        found(&file_of("let is_admin = true; if is_admin {}"), "is_admin("),
+        0,
+        "a local named like a reader, never called, is not one"
+    );
+    let defined = vec![(
+        "src/new.rs".to_owned(),
+        "fn resolve_role() {}\nfn fixture() { let f = resolve_role; }".to_owned(),
+    )];
+    assert_eq!(
+        found(&defined, "resolve_role("),
+        1,
+        "a function the file defines, taken as a value"
+    );
 }
 
 // Guard rows: green on the text finder too, they pin the new finder's handling.
