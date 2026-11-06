@@ -7,8 +7,8 @@ use std::path::{Path, PathBuf};
 
 use super::identity_tests::{beta_shape, identified};
 use super::kill::{self, At};
-use super::rotation_tests::{append, cfg, event, lines, verify};
-use super::segments::read_hwm;
+use super::rotation_tests::{append, cfg, lines, rotate_n, verify};
+use super::segments::{list_segments, read_hwm};
 use super::*;
 
 /// The boundary the child is killed at, by name.
@@ -241,4 +241,42 @@ fn a_kill_after_a_replacing_genesis_keeps_its_predecessor_evidence() {
     let warned: Vec<&String> = r.warnings.iter().filter(|w| w.contains(&named)).collect();
     assert_eq!(warned.len(), 1, "{:?}", r.warnings);
     assert!(warned[0].contains("unverified"), "{warned:?}");
+}
+
+#[test]
+fn a_rotated_log_whose_files_vanished_finishes_its_new_genesis_on_reopen() {
+    // GIVEN: a rotated log whose writer is gone, its active file and sealed
+    // segments deleted and its mark (naming a segment past 0) kept; a new
+    // process killed after the new genesis's open record, before its
+    // identified record
+    let dir = tempfile::tempdir().unwrap();
+    let path = kill_log(dir.path());
+    let first = TransparencyLogger::open(cfg(&path, 12, false)).unwrap();
+    rotate_n(&first, &path, 1);
+    append(&first, 0);
+    drop(first);
+    let mark = read_hwm(&path, b"", "test").unwrap();
+    assert!(mark.segment_seq > 0, "the fixture rotated: {mark:?}");
+    for seg in list_segments(&path).unwrap() {
+        std::fs::remove_file(&seg.path).unwrap();
+    }
+    std::fs::remove_file(&path).unwrap();
+    killed_at(At::BeforeIdentified, dir.path());
+    let left = lines(&path);
+    assert!(identified(&path).is_empty(), "killed first: {left:?}");
+    assert_eq!(left[0]["segment_seq"].as_u64(), Some(mark.segment_seq));
+    let id = left[0]["log_id"].as_str().unwrap().to_string();
+
+    // WHEN: the log is reopened twice
+    for _ in 0..2 {
+        let again =
+            TransparencyLogger::open(cfg(&path, 12, false)).expect("the lease went with the child");
+        // THEN: the genesis's id holds
+        assert_eq!(again.log_id().as_str(), id);
+    }
+
+    // THEN: exactly one identified record, naming that id
+    let found = identified(&path);
+    assert_eq!(found.len(), 1, "{:?}", lines(&path));
+    assert_eq!(found[0]["log_id"].as_str(), Some(id.as_str()));
 }
