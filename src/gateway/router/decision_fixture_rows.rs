@@ -462,3 +462,66 @@ async fn p3b_direct_routing_profile_preflight_per_user() {
         ),
     );
 }
+
+/// A6b: nothing restricts a direct call (`k-std`, no tool policy). MIK-9205
+/// does not flip this row. The record is `default_allow` with no rule id:
+/// `Checks::allowed` has no fresh-call caller (`decision_record.rs:193, 231`),
+/// so a fresh allowed call records it (`:268-272`). The effect is `alpha`'s
+/// shared slot's declaration, as the live call notes it for an unpropagated
+/// caller (`direct_idempotency.rs:315-325`). Control: `k-deny`, whose own
+/// tool list denies `read`, is refused.
+#[tokio::test]
+async fn a6b_direct_no_rule() {
+    let dir = Arc::new(tempfile::tempdir().expect("a log directory"));
+    let fx = table(&dir).await;
+    let alpha = fx.state.backends.get("alpha").expect("alpha");
+    let read: crate::protocol::Tool = serde_json::from_value(json!({
+        "name": "read",
+        "inputSchema": {"type": "object"},
+        "annotations": {"readOnlyHint": true},
+    }))
+    .expect("a tool");
+    alpha.declare_slot_effects_for_test(None, vec![read]);
+    let before = (
+        records(&dir).len(),
+        super::direct_continuation_tests::dispatched(&fx),
+    );
+    let (status, body) = post_direct(&fx, "alpha", "k-std", "read", json!({}), None, None).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(
+        body.get("result").is_some() && body["result"]["isError"] != true,
+        "premise: delivered: {body}"
+    );
+    assert_eq!(
+        super::direct_continuation_tests::dispatched(&fx),
+        before.1 + 1,
+        "premise: the backend was sent the call once"
+    );
+    let mut all = records(&dir);
+    let new = all.split_off(before.0);
+    let [record] = new.as_slice() else {
+        panic!("premise: one new invocation record: {new:?}");
+    };
+    assert_eq!(record["outcome"], "ok", "{record}");
+    let row = DecisionRow {
+        name: "a6b_direct_no_rule",
+        kind: "default_allow",
+        rule_id: RuleId::Absent("no rule restricted this call"),
+        grant_id: None,
+        findings: Findings::NotRun,
+        effect: Some(("read_only", "tool_annotation")),
+        decided: "fresh",
+    };
+    assert_row(&record["decision"], &row);
+    let sent = super::direct_continuation_tests::dispatched(&fx);
+    let (status, body) = post_direct(&fx, "alpha", "k-deny", "read", json!({}), None, None).await;
+    assert!(
+        body.get("error").is_some() || body["result"]["isError"] == true,
+        "control: k-deny was not refused: {status} {body}"
+    );
+    assert_eq!(
+        super::direct_continuation_tests::dispatched(&fx),
+        sent,
+        "control: the backend was sent k-deny's call"
+    );
+}
