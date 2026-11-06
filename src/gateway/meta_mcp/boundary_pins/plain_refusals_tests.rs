@@ -137,6 +137,7 @@ fn refused_before_step_is_the_refusal_state_writer() {
 fn the_raise_helpers_are_listed() {
     let (_, derived) = crate_collect();
     let want: BTreeSet<String> = [
+        "src/capability/execution_context.rs::record_refusal",
         "src/capability/executor/client.rs::note_redirect_refusal",
         "src/gateway/meta_mcp/invoke/gate.rs::withheld_for",
         "src/gateway/meta_mcp/invoke/gateway_writes.rs::insert_noted",

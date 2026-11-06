@@ -59,7 +59,7 @@ impl FileRevision {
 
 /// What the file must hold for the write to go ahead.
 #[cfg_attr(
-    not(test),
+    not(any(test, feature = "webui")),
     expect(
         dead_code,
         reason = "first callers: the web UI settings save and the configuration-history restore"
@@ -149,7 +149,7 @@ pub(crate) struct ReplaceOutcome {
     pub(crate) kept_beside: Option<PathBuf>,
     /// The reload that accepted it.
     #[cfg_attr(
-        test,
+        all(test, not(feature = "webui")),
         expect(
             dead_code,
             reason = "first callers: the web UI settings save and the configuration-history restore"
@@ -230,8 +230,9 @@ async fn spawn_locked(
 #[path = "replace_audit.rs"]
 mod audit;
 pub(crate) use audit::{Audit, Intent, IntentSink};
+pub(crate) use audit::{AuditPosture, GatewayAuth};
 #[cfg(feature = "webui")]
-pub(crate) use audit::{AuditPosture, GatewayAuth, NO_AUDIT_LOG};
+pub(crate) use audit::{BackendOp, NO_AUDIT_LOG};
 #[cfg(test)]
 pub(crate) use audit::{IntentId, replace_detached};
 #[cfg(any(test, feature = "webui"))]
@@ -492,17 +493,20 @@ impl ReloadContext {
         fits_when_filled(&template)?;
         self.validate_template(&target, &template, step.as_ref())
             .await?;
+        // gateway.yaml deleted while the bytes were computed or checked: the
+        // missing file, before any intent or entry exists.
+        Self::still_there(&locked, &self.config_path)?;
         // The operation's own intent, once its checks pass and before any
-        // entry or byte changes. Unchanged bytes write nothing, so they
-        // record nothing.
+        // entry or byte changes. Unchanged bytes write nothing but still
+        // reload, which applies whatever the disk holds that the running
+        // config does not: recorded as an outside change, since no loaded
+        // revision is kept to tell (over-reports, never under-reports).
         let unchanged = step.is_none() && template.bytes() == current.as_slice();
-        if let Audit::Required { sink, kind } = &mut audit
-            && !unchanged
-        {
+        if let Audit::Required { sink, kind } = &mut audit {
             let intent = Intent {
-                kind: *kind,
+                kind: kind.clone(),
                 base: FileRevision::of(&current),
-                outside_change: false,
+                outside_change: unchanged,
                 recovery_intent_id,
             };
             sink.append(&intent).map_err(|e| {
@@ -556,6 +560,9 @@ impl ReloadContext {
         // The path may have moved, or the config been deleted, while the
         // bytes were computed: refuse before anything is reloaded or staged,
         // rather than report on a config the path no longer names.
+        // Deleted while the entries were created: the missing file; the
+        // entries are discarded, as nothing was written.
+        Self::still_there(locked, &self.config_path)?;
         locked
             .may_write(&self.config_path)
             .map_err(ReplaceError::Unsupported)?;
@@ -581,6 +588,19 @@ impl ReloadContext {
             });
         }
         self.commit(target, current, &new, replaced, entries).await
+    }
+
+    /// `Err(NoConfigFile)` when the file read under this lock is gone now.
+    /// Read from the disk, never from the lock's snapshot: a recovery since
+    /// the lock was taken may have restored it. A link that no longer names
+    /// the locked target, or points at a missing one, is `Failed`, never a
+    /// missing config.
+    fn still_there(locked: &Locked, config: &std::path::Path) -> Result<(), ReplaceError> {
+        match locked.absent(config) {
+            Ok(true) => Err(ReplaceError::NoConfigFile),
+            Ok(false) => Ok(()),
+            Err(why) => Err(ReplaceError::Failed(why)),
+        }
     }
 
     /// Stage, journal, write, reload; then keep the new bytes or put the

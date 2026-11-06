@@ -76,7 +76,7 @@ backend" and "fails a capability file" first.**
 | 49 | The audit log rotates at 64 MiB and keeps 12 sealed segments; `audit verify` reads every segment and detects a deleted or truncated active file | Copy or archive the segments together, never rotate the log externally, and size the volume for `(retain_segments + 1) x max_segment_bytes` (Helm refuses an emptyDir too small) |
 | 50 | Every hot-path audit append is bounded (5 s wait, 5 s write); a stalled audit disk answers 503 and `/readyz` reports `stalled` instead of hanging the gateway | Alert on `mcp_audit_append_timeouts_total` and the `stalled` `/readyz` body; a mount that never recovers needs a restart |
 | 51 | A `role_mapping` `role: admin` rule grants full gateway admin; a domain-only admin rule fails the load | Review existing `role: admin` rules; replace a domain-only one with `group` or `email` |
-| 52 | Only `tools.listChanged` is advertised, and only over HTTP; `resources/subscribe` and `resources/unsubscribe` are refused on `/mcp` (`/mcp/{name}` still forwards them) | Drop any wait for `resources/updated`, `resources/list_changed` or `prompts/list_changed`; poll `resources/list` or `prompts/list` instead |
+| 52 | Only `tools.listChanged` is advertised: over HTTP, and to a stdio session that began with `initialize`; a 2026-07-28 stdio client's first `tools/list` waits up to 30 s for surfaced backends instead; `resources/subscribe` and `resources/unsubscribe` are refused on `/mcp` (`/mcp/{name}` still forwards them) | Drop any wait for `resources/updated`, `resources/list_changed` or `prompts/list_changed`; poll `resources/list` or `prompts/list` instead |
 | 53 | A backend's own rate-limit refusal reads `Rate limit exceeded for backend 'x'` (hint `RATE_LIMITED`, code still -32000) and no longer counts against the error budgets or `mcp_backend_circuit_state` | Match the new text in clients and alerts that looked for "Circuit breaker open"; watch `mcp_backend_rate_limited_total` for throttling |
 | 54 | An mTLS key, OAuth token file, capability `file:` credential or `--ca-key` other users can read is refused; an mTLS cert, CRL, grants or control-plane file they can change is refused (Unix) | `chmod 600` a secret file, `chmod go-w` a trust file; on Kubernetes mount a key Secret with `defaultMode: 288` and `fsGroup` |
 | 55 | A `tools/call` carrying `inputResponses` without the `requestState` the gateway issued is refused with `-32602` instead of being forwarded | Echo the `requestState` from the `input_required` result on every retry; send `inputResponses` only as an answer to it |
@@ -1762,8 +1762,14 @@ control_plane:
   JSON-RPC notification. 3.x wrapped it in a gateway envelope (`event: notification`,
   `{"source","event_type","data"}`) that MCP clients do not read; a client parsing that
   envelope reads `method` at the top level instead.
-- `serve --stdio` reports `tools.listChanged: false`, because it has no channel for an
-  unsolicited notification.
+- `serve --stdio` tells a session that began with `initialize` `tools.listChanged: true`
+  and sends it `notifications/tools/list_changed`. A 2026-07-28 client never sends
+  `initialize` and can be told only through `subscriptions/listen`, which stdio does not
+  serve yet (planned for 4.0.1), so `server/discover` tells it `false`. Instead, its first
+  `tools/list` waits, up to 30 s, for each surfaced backend's first tool fetch, so the list
+  it caches holds them. If the wait runs out, the answer holds the tools that are ready, and
+  a backend still being fetched stays out of that client's list until it lists again.
+  Closing the session (EOF, Ctrl+C) ends the wait at once.
 - **`resources/subscribe` and `resources/unsubscribe` are refused** with `-32601`, "this
   gateway does not deliver resources/updated", instead of being forwarded to the backend.
   To see changes, poll `resources/list` or `resources/read`.
