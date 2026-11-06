@@ -630,8 +630,8 @@ async fn a_masking_refusal_withholds_every_value() {
 /// and no part of it shown.
 #[tokio::test]
 async fn an_escaped_newline_in_an_old_reference_gives_the_valueless_patch() {
-    let (_dir, path, ctx) = gateway("environment: \"dev\"\n");
-    rewrite(&path, "auth:\n  bearer_token: \"env:OLD\\n+forged\"\n");
+    let (_dir, config, ctx) = gateway("environment: \"dev\"\n");
+    rewrite(&config, "auth:\n  bearer_token: \"env:OLD\\n+forged\"\n");
     let got = preview(
         &ctx,
         vec![(
