@@ -33,23 +33,75 @@ fn is_firewall_ref(ty: &syn::Type) -> bool {
         .is_some_and(|s| s.ident == "Firewall")
 }
 
+/// Names one module brings into its own scope that a bare identifier
+/// pattern would match instead of binding: every `use` leaf and rename, and
+/// every `const` and `static`. A `use` does not reach into child modules, so
+/// each module's set is its own ([`entries`] swaps it per module).
+fn taken_names(items: &[syn::Item]) -> std::collections::HashSet<String> {
+    fn tree(t: &syn::UseTree, out: &mut std::collections::HashSet<String>) {
+        match t {
+            syn::UseTree::Path(p) => tree(&p.tree, out),
+            syn::UseTree::Name(n) => {
+                out.insert(n.ident.to_string());
+            }
+            syn::UseTree::Rename(r) => {
+                out.insert(r.rename.to_string());
+            }
+            syn::UseTree::Group(g) => g.items.iter().for_each(|i| tree(i, out)),
+            syn::UseTree::Glob(_) => {
+                out.insert("*".to_owned());
+            }
+        }
+    }
+    let mut out = std::collections::HashSet::new();
+    for item in items {
+        match item {
+            syn::Item::Use(u) => tree(&u.tree, &mut out),
+            syn::Item::Const(c) => {
+                out.insert(c.ident.to_string());
+            }
+            syn::Item::Static(s) => {
+                out.insert(s.ident.to_string());
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
 /// Whether `pat` matches every value of its type: a binding or `_`, alone
-/// or in a tuple. `Some((guard, CrossTenantReads::Off))` is not: it would
-/// send every judged call to the unjudged `else`.
-fn irrefutable(pat: &syn::Pat) -> bool {
+/// or in a tuple. A name counts as a binding only if it is lowercase and is
+/// no name the judge brings into scope (`taken`): `Some((guard, Off))` with
+/// `Off` imported, or with `use ..::Off as off`, narrows instead of binding,
+/// and would send every judged call to the unjudged `else`. A glob import
+/// in `taken` (`*`) refuses every bare name, since any could be imported.
+fn irrefutable(pat: &syn::Pat, taken: &std::collections::HashSet<String>) -> bool {
     match pat {
-        syn::Pat::Ident(binding) => binding.subpat.is_none(),
+        syn::Pat::Ident(binding) => {
+            let name = binding.ident.to_string();
+            binding.subpat.is_none()
+                && name
+                    .chars()
+                    .next()
+                    .is_some_and(|c| c.is_ascii_lowercase() || c == '_')
+                && !taken.contains(&name)
+                && !taken.contains("*")
+        }
         syn::Pat::Wild(_) => true,
-        syn::Pat::Tuple(tuple) => tuple.elems.iter().all(irrefutable),
+        syn::Pat::Tuple(tuple) => tuple.elems.iter().all(|p| irrefutable(p, taken)),
         _ => false,
     }
 }
 
 /// Whether `stmt` is `let Some(<irrefutable>) = judging(firewall) else { .. };`.
-fn is_judging_gate(stmt: &syn::Stmt) -> bool {
+fn is_judging_gate(stmt: &syn::Stmt, taken: &std::collections::HashSet<String>) -> bool {
     let syn::Stmt::Local(local) = stmt else {
         return false;
     };
+    // Any attribute could compile the gate out (`#[cfg(any())]`).
+    if !local.attrs.is_empty() {
+        return false;
+    }
     // The gate binds `Some(..)` whatever the guard and mode are: an inverted
     // `let None = ..` runs the body exactly when the verdict is off, and a
     // narrowing payload skips judging whenever it is on.
@@ -58,7 +110,7 @@ fn is_judging_gate(stmt: &syn::Stmt) -> bool {
     };
     if !bound.path.is_ident("Some")
         || bound.elems.len() != 1
-        || !bound.elems.iter().all(irrefutable)
+        || !bound.elems.iter().all(|p| irrefutable(p, taken))
     {
         return false;
     }
@@ -91,8 +143,11 @@ struct Entries {
     /// Exposed functions taking a `&Firewall` that do not.
     ungated: Vec<String>,
     /// Items the walk cannot see into, so an entry could hide there: an
-    /// out-of-line module, an item macro, an exposed `use`.
+    /// out-of-line module, an item macro (also inside an `impl` or a
+    /// trait), an exposed `use`.
     unsupported: Vec<String>,
+    /// Names the judge brings into scope ([`taken_names`]).
+    taken: std::collections::HashSet<String>,
 }
 
 impl Entries {
@@ -108,7 +163,11 @@ impl Entries {
             return;
         }
         let name = sig.ident.to_string();
-        if block.stmts.first().is_some_and(is_judging_gate) {
+        if block
+            .stmts
+            .first()
+            .is_some_and(|stmt| is_judging_gate(stmt, &self.taken))
+        {
             self.gated.push(name);
         } else {
             self.ungated.push(name);
@@ -131,23 +190,39 @@ fn entries(items: &[syn::Item], top: bool, found: &mut Entries) {
             }
             syn::Item::Impl(block) => {
                 for inner in &block.items {
-                    if let syn::ImplItem::Fn(m) = inner {
-                        let open = block.trait_.is_some() || exposed(&m.vis);
-                        found.check(&m.sig, open, false, &m.block);
+                    match inner {
+                        syn::ImplItem::Fn(m) => {
+                            let open = block.trait_.is_some() || exposed(&m.vis);
+                            found.check(&m.sig, open, false, &m.block);
+                        }
+                        syn::ImplItem::Macro(_) => {
+                            found.unsupported.push("a macro in an impl".to_owned());
+                        }
+                        _ => {}
                     }
                 }
             }
             syn::Item::Trait(t) => {
                 for inner in &t.items {
-                    if let syn::TraitItem::Fn(m) = inner
-                        && let Some(body) = &m.default
-                    {
-                        found.check(&m.sig, exposed(&t.vis), false, body);
+                    match inner {
+                        syn::TraitItem::Fn(m) => {
+                            if let Some(body) = &m.default {
+                                found.check(&m.sig, exposed(&t.vis), false, body);
+                            }
+                        }
+                        syn::TraitItem::Macro(_) => {
+                            found.unsupported.push("a macro in a trait".to_owned());
+                        }
+                        _ => {}
                     }
                 }
             }
             syn::Item::Mod(module) => match &module.content {
-                Some((_, inner)) => entries(inner, false, found),
+                Some((_, inner)) => {
+                    let outer = std::mem::replace(&mut found.taken, taken_names(inner));
+                    entries(inner, false, found);
+                    found.taken = outer;
+                }
                 None => found.unsupported.push(format!("mod {};", module.ident)),
             },
             syn::Item::Macro(mac) => found.unsupported.push(format!(
@@ -172,7 +247,10 @@ fn entries(items: &[syn::Item], top: bool, found: &mut Entries) {
 fn every_judge_entry_opens_with_the_judging_gate() {
     let source = std::fs::read_to_string(format!("{SRC}/{JUDGE}")).expect("read judge");
     let file = syn::parse_file(&source).expect("the judge parses");
-    let mut found = Entries::default();
+    let mut found = Entries {
+        taken: taken_names(&file.items),
+        ..Entries::default()
+    };
     entries(&file.items, true, &mut found);
     assert!(
         found.unsupported.is_empty(),
@@ -206,10 +284,12 @@ fn every_judge_entry_opens_with_the_judging_gate() {
 
 /// The checker accepts the real gate (as a free function, a method and a
 /// function two modules down) and skips private functions, and refuses each
-/// ungated shape: an inverted gate, a narrowing gate, an ungated inherent,
-/// trait-impl and default trait method, an ungated nested function, and an
-/// exempt name used anywhere but at the top level. Items it cannot see into
-/// are reported.
+/// ungated shape: an inverted gate, a narrowing gate (a variant by path or
+/// through a lowercase `use` alias), a gate under an attribute that can
+/// compile it out, an ungated inherent, trait-impl and default trait method,
+/// an ungated nested function, and an exempt name used anywhere but at the
+/// top level. Items it cannot see into, macros in `impl` and trait bodies
+/// included, are reported.
 #[test]
 fn the_gate_check_refuses_each_ungated_shape() {
     let source = r"
@@ -221,6 +301,20 @@ fn the_gate_check_refuses_each_ungated_shape() {
         }
         pub(crate) fn narrowing(firewall: &Firewall) {
             let Some((guard, CrossTenantReads::Off)) = judging(firewall) else { return; };
+        }
+        use CrossTenantReads::Off as off;
+        pub(crate) fn aliased(firewall: &Firewall) {
+            let Some((guard, off)) = judging(firewall) else { return; };
+        }
+        pub(crate) fn disabled(firewall: &Firewall) {
+            #[cfg(any())]
+            let Some((guard, mode)) = judging(firewall) else { return; };
+        }
+        impl Generated {
+            make_entry!();
+        }
+        pub(crate) trait Made {
+            make_entry!();
         }
         impl Judge {
             pub(crate) fn gated_method(&self, firewall: &Firewall) {
@@ -252,7 +346,10 @@ fn the_gate_check_refuses_each_ungated_shape() {
         pub(crate) fn attribute(firewall: &Firewall) {}
     ";
     let file = syn::parse_file(source).expect("the fixture parses");
-    let mut found = Entries::default();
+    let mut found = Entries {
+        taken: taken_names(&file.items),
+        ..Entries::default()
+    };
     entries(&file.items, true, &mut found);
     found.gated.sort();
     found.ungated.sort();
@@ -260,8 +357,10 @@ fn the_gate_check_refuses_each_ungated_shape() {
     assert_eq!(
         found.ungated,
         [
+            "aliased",
             "attribute",
             "defaulted",
+            "disabled",
             "entry",
             "inner",
             "inverted",
@@ -272,5 +371,16 @@ fn the_gate_check_refuses_each_ungated_shape() {
         "each exposed ungated shape is caught; the top-level `attribute` is exempt, \
          the method and nested fn sharing an exempt name are not"
     );
-    assert_eq!(found.unsupported.len(), 3, "{:?}", found.unsupported);
+    found.unsupported.sort();
+    assert_eq!(
+        found.unsupported,
+        [
+            "a macro in a trait",
+            "a macro in an impl",
+            "an exposed `use`",
+            "item macro Some(\"some_macro\")",
+            "mod elsewhere;",
+        ],
+        "each item the walk cannot see into is reported"
+    );
 }
