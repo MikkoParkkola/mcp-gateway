@@ -3781,7 +3781,7 @@ the key lists it again. `mcp-gateway cap list` marks each one the gateway would 
 
 ## 130. Frames naming a second tenant for one caller are recorded, or withheld
 
-**Startup:** prints a notice, when `security.firewall.enabled` is false and the check is on (a warning with `block`, info with `observe`), and only with `security.firewall.tenant_guard.arg_keys` set
+**Startup:** no notice, but every start logs a line when `security.firewall.enabled` is false and the check is on (a warning with `block`, info with `observe`), and only with `security.firewall.tenant_guard.arg_keys` set
 
 With `arg_keys` set, every frame the gateway sends a caller is checked for the tenants it names:
 answers and errors, notifications, server-to-client requests and webhook deliveries, on HTTP, the
