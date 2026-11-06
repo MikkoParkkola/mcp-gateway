@@ -216,6 +216,18 @@ pub(crate) fn is_template_syntax(text: &str) -> bool {
     refuse_stray(&text[end..]).is_ok()
 }
 
+/// The literal text a template value may carry: one auth scheme word and a
+/// space, before the template.
+const SCHEME_PREFIXES: &[&str] = &["Bearer ", "Basic ", "Token ", "Bot "];
+
+/// Whether the text of `value` outside its templates is nothing, or one
+/// scheme prefix in front of them.
+pub(crate) fn only_scheme_beside_templates(value: &str) -> bool {
+    let outside = literal_outside_templates(value);
+    outside.is_empty()
+        || (SCHEME_PREFIXES.contains(&outside.as_str()) && value.starts_with(&outside))
+}
+
 /// The text of `text` outside its `${NAME}` references, in order.
 pub(crate) fn literal_outside_templates(text: &str) -> String {
     TEMPLATE.replace_all(text, "").into_owned()

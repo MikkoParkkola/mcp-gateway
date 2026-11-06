@@ -13,7 +13,7 @@
 //! beside a template refuses: it may be a secret, and only the whole value
 //! can move to the store.
 
-use crate::config::secret_ref::{has_literal_default, literal_outside_templates};
+use crate::config::secret_ref::{has_literal_default, only_scheme_beside_templates};
 use crate::config::{Config, TransportConfig, is_reference};
 
 use super::DiscoveredServer;
@@ -50,18 +50,6 @@ impl AdoptRefusal {
             Self::LiteralInTemplate => "literal_in_template",
         }
     }
-}
-
-/// The literal text a template value may carry: one auth scheme word and a
-/// space, before the template.
-const SCHEME_PREFIXES: &[&str] = &["Bearer ", "Basic ", "Token ", "Bot "];
-
-/// Whether the text of `value` outside its templates is nothing, or one
-/// scheme prefix in front of them.
-fn only_scheme_beside_templates(value: &str) -> bool {
-    let outside = literal_outside_templates(value);
-    outside.is_empty()
-        || (SCHEME_PREFIXES.contains(&outside.as_str()) && value.starts_with(&outside))
 }
 
 /// Every reason `server` is not adoptable, each with the client field it

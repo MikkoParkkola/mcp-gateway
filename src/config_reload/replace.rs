@@ -156,6 +156,10 @@ pub(crate) struct ReplaceOutcome {
         )
     )]
     pub(crate) reload: ReloadOutcome,
+    /// Each stored secret's field and the reference the written file holds for
+    /// it, in the secret step's order; empty without one. Read from this write
+    /// itself, never from the file afterwards (another writer may follow).
+    pub(crate) secrets: Vec<(String, String)>,
 }
 
 /// Why nothing was applied. Every kind but `RollbackFailed` and
@@ -484,6 +488,10 @@ impl ReloadContext {
         // secrets, before any entry exists: a refusal creates nothing.
         let template = (replace.compute)(&current).map_err(ReplaceError::Refused)?;
         let step = replace.secrets.filter(|step| !step.values.is_empty());
+        let fields: Vec<String> = step
+            .as_ref()
+            .map(|step| step.values.iter().map(|v| v.field.clone()).collect())
+            .unwrap_or_default();
         same_fields(&template, step.as_ref())?;
         fits_when_filled(&template)?;
         self.validate_template(&target, &template, step.as_ref())
@@ -527,6 +535,14 @@ impl ReloadContext {
             }
             Err(refused) => Err(refused),
         };
+        // The references this write filled, by field, read before the
+        // entries are settled (a kept entry's reference is what the file holds).
+        let result = result.map(|mut outcome| {
+            if let Some(pending) = &entries.pending {
+                outcome.secrets = fields.into_iter().zip(pending.refs().iter().cloned()).collect();
+            }
+            outcome
+        });
         // The config locks go before any store call: a discard's keychain
         // deletes must not hold up the next writer. A death in between is
         // the `Entries` guard's.
@@ -580,6 +596,7 @@ impl ReloadContext {
                 revision: None,
                 kept_beside: None,
                 reload,
+                secrets: Vec::new(),
             });
         }
         self.commit(target, current, &new, replaced, entries).await
@@ -681,6 +698,7 @@ impl ReloadContext {
                     revision: Some(FileRevision::of(new)),
                     kept_beside,
                     reload,
+                    secrets: Vec::new(),
                 })
             }
             Err(refusal) => {
