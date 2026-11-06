@@ -69,10 +69,14 @@ fn shown_matches_the_per_backslash_reference_on_generated_input() {
     }
 }
 
-/// Backslashes before `u{` in the hang-guard row. Measured once on the CI
-/// test profile (debug): the reference passes 1 s at REF_1S backslashes, so
-/// at this size it needs about (HUGE / REF_1S)² seconds, far past
-/// [`HANG_BOUND`], while [`shown`] takes LINEAR_MS here.
+/// Backslashes before `u{` in the hang-guard row, sized from one measurement
+/// of the reference and of [`shown`] on Spark's debug test build (2026-11-06):
+/// the reference took 0.88 s at 10 000 backslashes, 3.5 s at 20 000, 13.9 s
+/// at 40 000 and 53.9 s at 80 000, quadratic as expected; [`shown`] took
+/// 0.4 ms at 20 000 and 4.0 ms at 200 000. So it passes 1 s near 10 700,
+/// where [`shown`] is far under 50 ms, and at this size the reference would
+/// need about 340 s, ten times [`HANG_BOUND`]: the bound fails it, never a
+/// slow but linear run.
 const HUGE: usize = 200_000;
 
 #[test]
