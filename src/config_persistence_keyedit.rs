@@ -779,6 +779,9 @@ mod shape;
 pub(crate) use shape::Hunk;
 #[cfg(test)]
 pub(crate) use shape::NewLine;
+/// Whether a node's path from the parser is `path`: the one comparison the
+/// editor and the preview's verifier share.
+pub(crate) use shape::same as is_node_at;
 
 #[path = "config_persistence_keyedit_revoke.rs"]
 mod revoke;

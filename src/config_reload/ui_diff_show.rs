@@ -7,8 +7,8 @@
 
 use std::ops::Range;
 
-use crate::config_persistence::keyedit::{self, Change, FieldPath, GiveUp, Hunk, Segment};
-use crate::yaml::{Node, Step};
+use crate::config_persistence::keyedit::{self, Change, FieldPath, GiveUp, Hunk};
+use crate::yaml::Node;
 
 use super::{ShownHunk, UnifiedDiff};
 
@@ -114,15 +114,6 @@ fn tail(rest: &str) -> Option<String> {
     }
 }
 
-fn same_path(node: &[Step], path: &[Segment]) -> bool {
-    node.len() == path.len()
-        && node.iter().zip(path).all(|(n, p)| match (n, p) {
-            (Step::Key(a), Segment::Key(b)) => a == b,
-            (Step::Index(a), Segment::Index(b)) => a == b,
-            _ => false,
-        })
-}
-
 /// Original line `line`, starting at byte `at`, as it may be shown, or
 /// `None` when it holds a byte the edit does not own.
 fn admit(
@@ -142,7 +133,10 @@ fn admit(
     if !(lead.is_empty() || lead.trim_end_matches([' ', '\t']) == "-") {
         return None;
     }
-    if changes.iter().any(|(p, _)| same_path(&keyed.path, &p.0)) {
+    if changes
+        .iter()
+        .any(|(p, _)| keyedit::is_node_at(&keyed.path, &p.0))
+    {
         // A changed field: its value must lie on this line, alone.
         if keyed.end > at + line.len() || !on_line(&keyed.bytes) {
             return None;
@@ -153,13 +147,20 @@ fn admit(
             return None;
         }
         let text = &line[value.clone()];
-        let secret = secrets.iter().any(|p| same_path(&keyed.path, &p.0));
+        let secret = secrets
+            .iter()
+            .any(|p| keyedit::is_node_at(&keyed.path, &p.0));
         let shown_value = if secret {
             let literal = crate::yaml::from_str::<crate::yaml::Value>(text).ok()?;
             crate::config::secret_slot(literal.as_str().unwrap_or_default())
         } else {
             text.to_owned()
         };
+        // A reference is shown as written once decoded: an escaped newline
+        // would print as a line of its own.
+        if shown_value.chars().any(char::is_control) {
+            return None;
+        }
         return Some(Admitted {
             shown: format!(
                 "{}{shown_value}{}",
@@ -173,7 +174,7 @@ fn admit(
     let parent = changes.iter().any(|(p, c)| {
         *c == Change::Remove
             && p.0.len() > keyed.path.len()
-            && same_path(&keyed.path, &p.0[..keyed.path.len()])
+            && keyedit::is_node_at(&keyed.path, &p.0[..keyed.path.len()])
     });
     let rest = &line[key.end..];
     if parent && rest.starts_with(':') && keyed.end > at + line.len() {

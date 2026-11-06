@@ -451,7 +451,7 @@ pub(super) fn nodes(text: &str) -> Result<Vec<Node>, ComputeRefusal> {
         .map_err(|_| unprovable("the parser gives no node positions for this file"))
 }
 
-fn same(steps: &[Step], path: &[Segment]) -> bool {
+pub(crate) fn same(steps: &[Step], path: &[Segment]) -> bool {
     steps.len() == path.len()
         && steps
             .iter()

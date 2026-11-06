@@ -70,8 +70,9 @@ const ALERT_ACTIONS: &[&str] = &["log", "notify", "block"];
 
 /// Every setting the UI may change, in the order an edit applies them.
 /// `apply` is what a reload does with a change to that field alone (row F3
-/// checks it against the reload's classifier, which lists the whole
-/// `cost_governance` section as needing a restart).
+/// checks it against the reload's classifier): turning cost governance on
+/// or off needs a restart; its budgets and alerts apply on reload while it
+/// stays on.
 pub(crate) const FIELDS: &[FieldSpec] = &[
     FieldSpec {
         id: "environment",
@@ -113,7 +114,7 @@ pub(crate) const FIELDS: &[FieldSpec] = &[
             Seg::Key("daily"),
         ],
         kind: Some(ValueKind::Num { min: 0.0 }),
-        apply: Apply::Restart,
+        apply: Apply::Live,
     },
     #[cfg(feature = "cost-governance")]
     FieldSpec {
@@ -125,7 +126,7 @@ pub(crate) const FIELDS: &[FieldSpec] = &[
             Seg::Key("at_percent"),
         ],
         kind: Some(ValueKind::Int { min: 0, max: 100 }),
-        apply: Apply::Restart,
+        apply: Apply::Live,
     },
     #[cfg(feature = "cost-governance")]
     FieldSpec {
@@ -137,7 +138,7 @@ pub(crate) const FIELDS: &[FieldSpec] = &[
             Seg::Key("action"),
         ],
         kind: Some(ValueKind::Enum(ALERT_ACTIONS)),
-        apply: Apply::Restart,
+        apply: Apply::Live,
     },
     FieldSpec {
         id: "backends.owner",
@@ -243,6 +244,9 @@ pub(crate) fn checked(edit: &PreviewEdit) -> Result<PreviewEdit, EditRefused> {
         };
         out.push((*id, param.clone(), value));
     }
+    // Table order, then index: the order an edit applies in and a patch
+    // lists its steps in, whatever order the caller sent.
+    out.sort_by_key(|(id, param, _)| (id.0, param.index));
     Ok(PreviewEdit { fields: out })
 }
 
