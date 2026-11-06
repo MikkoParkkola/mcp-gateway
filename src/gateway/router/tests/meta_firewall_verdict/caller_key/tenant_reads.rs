@@ -38,6 +38,7 @@ use Outcome::Delivered;
 /// in `mode`, on the process history `reads` (startup shares one between
 /// both firewalls, `Gateway::response_firewall`).
 fn reads_firewall(
+    switch: Switch,
     mode: CrossTenantReads,
     window_secs: u64,
     reads: &Arc<ReadHistory>,
@@ -47,6 +48,7 @@ fn reads_firewall(
     Arc::new(
         Firewall::from_config(
             FirewallConfig {
+                enabled: switch == Switch::On,
                 tenant_guard: TenantGuardConfig {
                     enabled: false,
                     window_secs,
@@ -92,12 +94,29 @@ async fn keyed_state(
     window: u64,
     arg_keys: &[&str],
 ) -> (Arc<AppState>, crate::gateway::router::tests::FixtureDir) {
+    switched_state(Switch::On, mode, window, arg_keys).await
+}
+
+/// `security.firewall.enabled` for a fixture.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Switch {
+    On,
+    Off,
+}
+
+/// [`keyed_state`] with the firewall switch at `switch`.
+async fn switched_state(
+    switch: Switch,
+    mode: CrossTenantReads,
+    window: u64,
+    arg_keys: &[&str],
+) -> (Arc<AppState>, crate::gateway::router::tests::FixtureDir) {
     let reads = ReadHistory::shared();
     // One keyring for both, as startup pairs them (#2210, MIK-8276).
     let keys = Arc::new(crate::protocol::continuation::ContinuationState::new());
     let (handler, meta) = (
-        reads_firewall(mode, window, &reads, arg_keys, &keys),
-        reads_firewall(mode, window, &reads, arg_keys, &keys),
+        reads_firewall(switch, mode, window, &reads, arg_keys, &keys),
+        reads_firewall(switch, mode, window, &reads, arg_keys, &keys),
     );
     let (state, store) =
         super::super::state_with_firewalls_and_auth(handler, meta, &one_key()).await;
@@ -177,7 +196,19 @@ async fn logged_router_in(
     crate::gateway::router::tests::FixtureDir,
     tempfile::TempDir,
 ) {
-    let (state, store) = split_state(mode, 3600).await;
+    logged_router_switched(Switch::On, mode).await
+}
+
+/// [`logged_router_in`] with the firewall switch at `switch`.
+async fn logged_router_switched(
+    switch: Switch,
+    mode: CrossTenantReads,
+) -> (
+    axum::Router,
+    crate::gateway::router::tests::FixtureDir,
+    tempfile::TempDir,
+) {
+    let (state, store) = switched_state(switch, mode, 3600, &["customer_id"]).await;
     let log_dir = tempfile::tempdir().expect("a log directory");
     let log = Arc::new(
         TransparencyLogger::open(Arc::new(TransparencyLogConfig {
@@ -601,3 +632,6 @@ async fn delayed_sse_body_keeps_reservation() {
 
 #[path = "tenant_read_streams.rs"]
 mod streams;
+
+#[path = "tenant_read_firewall_off.rs"]
+mod firewall_off;

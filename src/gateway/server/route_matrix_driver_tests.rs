@@ -28,6 +28,9 @@ pub(crate) use super::signing_allocation_tests::route_matrix_stdio_tasks::{
 #[path = "route_matrix_driver_era_tests.rs"]
 pub(crate) mod era;
 mod playbook_drivers;
+/// The cross-tenant read verdict on stdio, firewall on and off.
+#[path = "read_verdict_stdio_tests.rs"]
+mod read_verdict;
 #[path = "route_matrix_driver_response_tests.rs"]
 pub(crate) mod response;
 pub(crate) use playbook_drivers::{

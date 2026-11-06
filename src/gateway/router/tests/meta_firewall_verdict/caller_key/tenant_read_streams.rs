@@ -536,3 +536,37 @@ async fn listen_request_params_are_a_read() {
         }
     }
 }
+
+/// Firewall off, `block`: after an A read, a stream item naming B and a
+/// webhook event naming B are withheld from the GET stream; with the mode
+/// `off` (the control) both arrive. A pin that the read verdict runs on its
+/// own switch on the stream producers too.
+#[tokio::test]
+async fn stream_items_are_judged_with_the_firewall_off() {
+    let who = caller();
+    for mode in [CrossTenantReads::Off, CrossTenantReads::Block] {
+        let (state, _store) = switched_state(Switch::Off, mode, 3600, &["customer_id"]).await;
+        let router = create_router(Arc::clone(&state));
+        let hooks = webhook_routes(&state);
+        let mut stream = Stream::open(&router).await;
+        let _ = stream.drain_for_absence(QUIET).await;
+
+        let (a, _, body) = send(&router, call_with(&who, true, None, 0, &reading(A))).await;
+        assert_eq!(a, Delivered, "{body}");
+        let arrival = Arrival::when(mode == CrossTenantReads::Off);
+        state.multiplexer.broadcast(names(B));
+        let got = expect(&mut stream, B, arrival).await;
+        assert_eq!(
+            mentions(&got, B),
+            arrival == Arrival::Delivered,
+            "{mode:?}: a B stream item after an A read: {got:?}"
+        );
+        post_webhook(&hooks, &json!({ "kind": "row-78", "customer_id": B })).await;
+        let got = expect(&mut stream, "row-78", arrival).await;
+        assert_eq!(
+            mentions(&got, "row-78"),
+            arrival == Arrival::Delivered,
+            "{mode:?}: a B webhook event after an A read: {got:?}"
+        );
+    }
+}
