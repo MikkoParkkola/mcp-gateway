@@ -134,10 +134,10 @@ impl Visitor<'_> {
     }
 
     fn item(&mut self, item: &syn::Item) {
+        use syn::Item as I;
         if test_only(item_attrs(item)) {
             return;
         }
-        use syn::Item as I;
         match item {
             I::Mod(m) => {
                 if self.leaf {
@@ -145,7 +145,9 @@ impl Visitor<'_> {
                 }
                 if let Some((_, items)) = &m.content {
                     self.owner.push(m.ident.to_string());
-                    items.iter().for_each(|i| self.item(i));
+                    for inner in items {
+                        self.item(inner);
+                    }
                     self.owner.pop();
                 }
                 return;
