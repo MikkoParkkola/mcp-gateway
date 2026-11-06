@@ -121,7 +121,15 @@ async fn refused(meta: &MetaMcp, dir: &tempfile::TempDir, server: &str, want: Re
             );
             (Form::IsErrorResult, result.to_string())
         }
-        Err(error) => (Form::RpcError, format!("{error:?}")),
+        Err(error) => {
+            // The code the caller is answered with, checked on its own.
+            assert_eq!(
+                Some(i64::from(error.to_rpc_code())),
+                want.code,
+                "the answer's code: {error:?}"
+            );
+            (Form::RpcError, format!("{error:?}"))
+        }
     };
     assert_eq!(form, want.form, "the answer's form: {answer}");
     let all = records(dir);
@@ -153,8 +161,9 @@ const fn refusal(name: &'static str, kind: &'static str) -> DecisionRow {
     }
 }
 
-/// T1: the backend's `allowed_tools` leaves `read` out (`visible.rs:46`,
-/// `Withholding::Unselected`, via `descriptor_gate.rs:305`).
+/// T1: the backend's `allowed_tools` leaves `read` out. The gate's withheld
+/// path records it in `record_withheld` (`visibility.rs:275`), the kind taken
+/// from `Withholding::Unselected` (confirmed by a probe of that site).
 #[tokio::test]
 async fn t1_meta_allowed_tools() {
     let dir = tempfile::tempdir().expect("a log directory");

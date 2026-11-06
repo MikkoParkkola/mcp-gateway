@@ -288,7 +288,8 @@ async fn c2_direct_capability_disabled() {
 /// preflight before any credential (`direct_preflight.rs:51`). P4, the same
 /// check at the direct admission (`dispatch_guards.rs:204` via
 /// `direct_guards.rs:36`), runs after it on the same profile, so it refuses
-/// only when the profile changes between the two: a reload guard, no row.
+/// only when the profile changes between the two (a reload guard); that site
+/// is pinned by the unit row `p4_admission_routing_profile`.
 #[tokio::test]
 async fn p3_direct_routing_profile_preflight() {
     use crate::routing_profile::{ProfileRegistry, RoutingProfileConfig};
@@ -395,6 +396,14 @@ async fn t2b_direct_allowed_tools_per_user() {
         outcome: "error",
         code: Some(code),
     };
+    // The code the caller is answered with, checked on its own: `absent_name`'s
+    // METHOD_NOT_FOUND (`absent.rs:9-11`), whatever the record keeps.
+    assert_eq!(
+        answer.1.pointer("/error/code").and_then(Value::as_i64),
+        Some(-32601),
+        "the answer's code: {}",
+        answer.1
+    );
     let decision = refused(&fx, &dir, answer, (before, 0), withheld);
     assert_eq!(
         calls.load(std::sync::atomic::Ordering::SeqCst),
@@ -447,6 +456,14 @@ async fn p3b_direct_routing_profile_preflight_per_user() {
         outcome: "denied",
         code: Some(-32600),
     };
+    // The code the caller is answered with, checked on its own: `absent_name`'s
+    // METHOD_NOT_FOUND (`absent.rs:9-11`), whatever the record keeps.
+    assert_eq!(
+        answer.1.pointer("/error/code").and_then(Value::as_i64),
+        Some(-32601),
+        "the answer's code: {}",
+        answer.1
+    );
     let decision = refused(&fx, &dir, answer, (before, 0), withheld);
     assert_eq!(
         calls.load(std::sync::atomic::Ordering::SeqCst),
@@ -565,7 +582,10 @@ async fn a3_grant_match() {
     let granted: Vec<&Value> = new.iter().filter(|r| r.get("decision").is_none()).collect();
     assert!(
         matches!(granted.as_slice(), [grant]
-            if grant["grant_id"] == "g-direct-probe" && grant["kind"] == "identity_grant_decision"),
+            if grant["grant_id"] == "g-direct-probe"
+                && grant["kind"] == "identity_grant_decision"
+                // An allowed grant's record is `ok` (`grant_audit.rs:185-186`).
+                && grant["outcome"] == "ok"),
         "premise: one grant record naming the matched grant: {new:?}"
     );
     let invoked: Vec<&Value> = new.iter().filter(|r| r.get("decision").is_some()).collect();
@@ -596,6 +616,11 @@ async fn a3_grant_match() {
     assert!(
         !answer.to_string().contains("served-"),
         "control: served without the grant: {answer}"
+    );
+    // Refused outright: an error, or a result marked `isError`.
+    assert!(
+        answer.get("error").is_some() || answer["result"]["isError"] == true,
+        "control: no refusal without the grant: {answer}"
     );
     assert_eq!(
         hits.load(std::sync::atomic::Ordering::SeqCst),

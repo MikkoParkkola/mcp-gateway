@@ -86,6 +86,12 @@ async fn refused_control(authorizer: &(dyn ToolAuthorizer + Sync), what: &str) {
     );
     assert_eq!(sent, 0, "control: {what}: the backend was sent the call");
     assert_ne!(record["outcome"], "ok", "control: {what}: {record}");
+    // Every control here is a tool-policy refusal: a refused name is withheld
+    // as `Withholding::Refused`, whose kind is `tool_policy` (`Withholding::kind`).
+    assert_eq!(
+        record["decision"]["kind"], "tool_policy",
+        "control: {what}: {record}"
+    );
 }
 
 /// A1: a tool-policy allow-list entry admits the call over a default deny.
@@ -110,8 +116,10 @@ async fn a1_allow_list_pattern() {
         &decision,
         &allowed("a1_allow_list_pattern", "flipped by MIK-9205"),
     );
+    // Only the matching entry removed: the decoy stays, and cannot admit it.
     let without = policy(&ToolPolicyConfig {
         default_action: PolicyAction::Deny,
+        allow: vec!["beta:other".to_string()],
         use_default_deny: false,
         ..ToolPolicyConfig::default()
     });
@@ -120,7 +128,7 @@ async fn a1_allow_list_pattern() {
             tool_policy: &without,
             generation: None,
         },
-        "removing the allow entry",
+        "removing the matching allow entry",
     )
     .await;
 }
@@ -231,7 +239,8 @@ async fn shell_call_under(
 /// of it: the constructor's `request_findings: None` (`decision_record.rs:305`)
 /// is the only production line that sets the field, so findings stay `NotRun`
 /// (an audit gap, on the register; flipped when the request-findings writer
-/// lands). Control: the same firewall with no rule blocks the call.
+/// lands). Control: the same firewall with only the non-matching rule blocks
+/// the call.
 #[cfg(feature = "firewall")]
 #[tokio::test]
 async fn a4_firewall_allow_rule() {
@@ -253,7 +262,7 @@ async fn a4_firewall_allow_rule() {
         tool_match: "write".to_string(),
         ..soften.clone()
     };
-    let (delivered, sent, record) = shell_call_under(vec![elsewhere, soften]).await;
+    let (delivered, sent, record) = shell_call_under(vec![elsewhere.clone(), soften]).await;
     assert!(
         delivered,
         "premise: the softened call is delivered: {record}"
@@ -265,7 +274,8 @@ async fn a4_firewall_allow_rule() {
         &record["decision"],
         &allowed("a4_firewall_allow_rule", "flipped by MIK-9205"),
     );
-    let (delivered, sent, record) = shell_call_under(Vec::new()).await;
+    // Only the matching rule removed: the decoy stays, and cannot admit it.
+    let (delivered, sent, record) = shell_call_under(vec![elsewhere]).await;
     assert!(
         !delivered,
         "control: no rule did not block the call: {record}"

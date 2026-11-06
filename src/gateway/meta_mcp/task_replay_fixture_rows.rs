@@ -51,4 +51,14 @@ async fn t3_task_replay_allowed_tools() {
     })
     .await;
     assert_eq!(noted, Some((DecisionKind::AllowedTools, None)));
+    // Control: the tool `allowed_tools` keeps is not refused, and notes nothing.
+    let kept = with_route_scope(async {
+        assert!(
+            !meta.refused_without_catalogue(&backend, ("alpha", "write"), scope, None),
+            "control: the permitted tool is refused"
+        );
+        take_refusal()
+    })
+    .await;
+    assert_eq!(kept, None, "control: the permitted tool noted a refusal");
 }
