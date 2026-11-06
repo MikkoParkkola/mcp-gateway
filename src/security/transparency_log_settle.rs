@@ -3,8 +3,9 @@
 //! Settle: append one journaled config-write record on the live logger,
 //! under its own lease and lock, synced, and only into the log the journal
 //! is bound to. Settle never decides an outcome: it records the payload it
-//! is given, unchanged. Records carry no paths, values, secrets or error
-//! text; the payload types below hold none.
+//! is given, unchanged. Settle checks only the fields it and the chain own;
+//! keeping paths, values, secrets and error text out of a payload is its
+//! producer's (the journal's) job.
 #![expect(
     dead_code,
     reason = "the config writer, the next step, builds the intent roles and reasons"
@@ -16,6 +17,7 @@ use serde::Serialize;
 use serde_json::{Map, Value};
 
 use super::TransparencyLogger;
+use super::bounded::Dispatch;
 use super::identity::LogId;
 
 /// The kind of config write an intent names.
@@ -135,6 +137,11 @@ pub(crate) enum FailSettle {
     PanicInTask,
 }
 
+/// The kind prefix of every settle record (delta S2'): no other append may
+/// write a kind that starts with it, so a reader of a plain kind never sees
+/// a settle record.
+pub(crate) const KIND_PREFIX: &str = "settle.";
+
 /// The settle events no caller may append. The intent events are not here
 /// yet: today's writer still appends them itself, and they are reserved when
 /// it moves to settle.
@@ -146,12 +153,21 @@ pub(crate) const RESERVED_EVENTS: [&str; 4] = [
 ];
 
 impl TransparencyLogger {
-    /// [`Self::settle_now`] for an async caller. Not bounded yet: it runs the
-    /// synchronous core in place, with no F20 permit.
+    /// Append `payload` as the `role` record of `token`, synced, into the log
+    /// the journal bound as `binding`, under this logger's lease and lock and
+    /// the F20 bound: it answers within twice [`super::bounded::AUDIT_APPEND_TIMEOUT`].
+    /// The payload is written as given; settle adds only `event` (from `role`)
+    /// and `token`. Two settles of one payload, token and role write equal
+    /// records but for the envelope and chain fields.
     ///
     /// # Errors
     ///
-    /// As [`Self::settle_now`].
+    /// [`Unsettled::Invalid`] for a payload the rules refuse,
+    /// [`Unsettled::Refused`] when nothing was written and nothing can land
+    /// (the permit was not taken, or the task failed before its first byte),
+    /// [`Unsettled::OtherLog`] when this logger holds another log, and
+    /// [`Unsettled::Unconfirmed`] once a write was dispatched and is not
+    /// confirmed: it may still land.
     pub(crate) async fn settle(
         self: &std::sync::Arc<Self>,
         binding: &LogId,
@@ -159,46 +175,65 @@ impl TransparencyLogger {
         role: Role,
         payload: Map<String, Value>,
     ) -> Result<Appended, Unsettled> {
-        self.settle_now(binding, token, role, payload)
+        let fields = settle_fields(token, role, payload).map_err(Unsettled::Invalid)?;
+        let binding = binding.clone();
+        match self
+            .dispatch_bounded(None, move |l| l.settle_now(&binding, fields))
+            .await
+        {
+            Dispatch::NotStarted(e) => Err(Unsettled::Refused(e)),
+            Dispatch::Joined(settled) => settled,
+            Dispatch::Unconfirmed(e) => Err(Unsettled::Unconfirmed(e)),
+        }
     }
 
-    /// Append `payload` as the `role` record of `token`, synced, into the log
-    /// the journal bound as `binding`, under this logger's lease and lock.
-    /// The payload is written as given; settle adds only `event` and `token`.
-    ///
-    /// # Errors
-    ///
-    /// [`Unsettled::OtherLog`] when this logger holds another log, checked
-    /// after the tail is re-read (a rebuild can adopt another log), and
-    /// [`Unsettled::Refused`] when the payload names a field settle or the
-    /// chain owns, or the append fails: nothing is claimed either way.
+    /// The synchronous core, on the blocking task under the permit: re-read
+    /// the tail, check the binding after that (a rebuild can adopt another
+    /// log), then write `fields` synced.
     fn settle_now(
         &self,
         binding: &LogId,
-        token: &str,
-        role: Role,
-        payload: Map<String, Value>,
+        fields: Map<String, Value>,
     ) -> Result<Appended, Unsettled> {
-        let fields = settle_fields(token, role, payload).map_err(Unsettled::Refused)?;
+        #[cfg(test)]
+        self.settle_task_started();
+        // Before the first byte: a failure here is Refused, and counted.
+        let refused = |e: io::Error| {
+            self.record_append(Some(&e));
+            Unsettled::Refused(e)
+        };
         let mut inner = self
             .inner
             .lock()
-            .map_err(|_| Unsettled::Refused(io::Error::other("transparency log mutex poisoned")))?;
-        self.refresh(&mut inner, true).map_err(Unsettled::Refused)?;
+            .map_err(|_| refused(io::Error::other("transparency log mutex poisoned")))?;
+        self.refresh(&mut inner, true).map_err(refused)?;
         if self.presented_id(&inner.log_id) != *binding {
             return Err(Unsettled::OtherLog);
         }
         #[cfg(test)]
-        self.settle_fault_at(FailSettle::BeforeAppend)?;
-        let written = self.append_refreshed(&mut inner, fields, true);
-        // As every append: a failure counts toward the log's health, except
-        // an oversized record, which is refused for that call only.
-        if !written.as_ref().is_err_and(super::rotation::is_oversized) {
-            self.record_append(written.as_ref().err());
+        if self.settle_fault_at(FailSettle::BeforeAppend) {
+            return Err(Unsettled::Refused(io::Error::other(
+                "injected settle refusal",
+            )));
         }
-        written.map_err(Unsettled::Refused)?;
+        // Once the write begins, a failure may have left bytes, or a sync
+        // unproven: Unconfirmed, whatever the cut-back did.
+        match self.append_refreshed(&mut inner, fields, true) {
+            Err(e) if super::rotation::is_oversized(&e) => {
+                return Err(Unsettled::Invalid(InvalidPayload::Oversized));
+            }
+            Err(e) => {
+                self.record_append(Some(&e));
+                return Err(Unsettled::Unconfirmed(e));
+            }
+            Ok(_) => self.record_append(None),
+        }
         #[cfg(test)]
-        self.settle_fault_at(FailSettle::AfterAppend)?;
+        if self.settle_fault_at(FailSettle::AfterAppend) {
+            return Err(Unsettled::Unconfirmed(io::Error::other(
+                "injected settle failure",
+            )));
+        }
         Ok(Appended {
             id: inner.log_id.clone(),
             counter: inner.counter,
@@ -222,23 +257,32 @@ impl TransparencyLogger {
     }
 }
 
-/// The record settle writes: the payload as given, plus its role's event and
-/// the token. A payload naming either, or a chain, envelope or segment field,
-/// is refused rather than overwritten.
+/// The record settle writes: the payload as given, plus `event` (from the
+/// role) and `token`. A payload naming either, or a chain, envelope or
+/// segment field, or a `kind` outside [`KIND_PREFIX`], is refused rather
+/// than rewritten.
 fn settle_fields(
     token: &str,
     role: Role,
     payload: Map<String, Value>,
-) -> io::Result<Map<String, Value>> {
-    TransparencyLogger::reject_reserved_fields(&payload)?;
-    if let Some(key) = ["event", "token"]
+) -> Result<Map<String, Value>, InvalidPayload> {
+    let owned = ["event", "token"]
         .into_iter()
-        .find(|k| payload.contains_key(*k))
-    {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!("settle: the payload names '{key}', which settle writes"),
-        ));
+        .any(|k| payload.contains_key(k));
+    if owned || TransparencyLogger::reject_reserved_fields(&payload).is_err() {
+        return Err(InvalidPayload::ReservedField);
+    }
+    match payload.get("kind") {
+        None | Some(Value::Null) => return Err(InvalidPayload::KindMissing),
+        Some(Value::String(kind)) => {
+            let named = kind
+                .strip_prefix(KIND_PREFIX)
+                .is_some_and(|rest| !rest.is_empty());
+            if !named {
+                return Err(InvalidPayload::KindNotPrefixed);
+            }
+        }
+        Some(_) => return Err(InvalidPayload::KindNotString),
     }
     let mut fields = payload;
     fields.insert("event".into(), role.event().into());
@@ -254,16 +298,26 @@ impl TransparencyLogger {
         *self.hooks.settle_fault.lock().unwrap() = Some(fault);
     }
 
-    /// Refuse here if `at` is armed, once.
-    fn settle_fault_at(&self, at: FailSettle) -> Result<(), Unsettled> {
+    /// Whether `at` was armed; disarms it.
+    fn settle_fault_at(&self, at: FailSettle) -> bool {
         let mut armed = self.hooks.settle_fault.lock().unwrap();
-        if *armed == Some(at) {
+        let fired = *armed == Some(at);
+        if fired {
             *armed = None;
-            return Err(Unsettled::Refused(io::Error::other(
-                "injected settle refusal",
-            )));
         }
-        Ok(())
+        fired
+    }
+
+    /// The task's start: wait at an armed start gate, or panic when armed.
+    fn settle_task_started(&self) {
+        let gate = self.hooks.settle_start.lock().unwrap().take();
+        if let Some(gate) = gate {
+            gate.hold();
+        }
+        assert!(
+            !self.settle_fault_at(FailSettle::PanicInTask),
+            "injected settle task panic"
+        );
     }
 
     /// Hold settle's blocking task before it starts any work: a task queued

@@ -530,6 +530,15 @@ impl TransparencyLogger {
                 "transparency log: event '{event}' is written only by the logger"
             )));
         }
+        // Settle records own the `settle.` kinds: a reader of one never sees
+        // another writer's record (a non-string kind matches no reader).
+        if let Some(kind) = fields.get("kind").and_then(serde_json::Value::as_str)
+            && kind.starts_with(settle::KIND_PREFIX)
+        {
+            return Err(io::Error::other(format!(
+                "transparency log: kind '{kind}' is written only by settle"
+            )));
+        }
         Self::reject_reserved_fields(fields)
     }
 

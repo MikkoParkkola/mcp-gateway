@@ -199,7 +199,12 @@ impl Subscribers {
 }
 
 impl TransparencyLogger {
-    /// Tell `reader` of every record of `kind` written from now on.
+    /// Tell `reader` of every record of `kind` written from now on, at least
+    /// once: a settle whose write was unconfirmed and then retried can land
+    /// twice, and the reader is told of both. The two carry the same `role`
+    /// (its `event`), `token` and caller payload, and differ only in the
+    /// envelope and chain fields; a reader of a `settle.` kind dedupes by
+    /// (token, role).
     #[cfg(feature = "webui")]
     pub(crate) fn subscribe(&self, kind: &str, reader: Subscriber) {
         if let Ok(mut readers) = self.subscribers.by_kind.write() {
