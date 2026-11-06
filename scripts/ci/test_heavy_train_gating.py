@@ -34,8 +34,8 @@ from test_os_label_routing import LABEL_JOBS  # noqa: E402
 from test_throwaway_routing import evaluate  # noqa: E402
 
 HEAVY = HEAVY_TRAIN
-# What the gate judges on a train: the heavy jobs, plus Kani. Kani also runs on lane pull requests
-# (MIK-9353), but a train's required checks come from its PRs' own checks plus this gate, and a PR
+# What the gate judges on a train: the heavy jobs, plus Kani. Kani also runs on lane pull requests,
+# but a train's required checks come from its PRs' own checks plus this gate, and a PR
 # whose CI predates that, or that skipped Kani, would leave a red Kani unrequired on the train.
 GATE_JUDGED = HEAVY | {"kani"}
 # Skipped on a docs-only change by the docs-only rule, train or not.
@@ -196,7 +196,7 @@ def gate_step_errors(jobs: dict, root: Path = ROOT) -> list[str]:
         "fork train branch, heavy jobs skipped": (fork, dict(results(), **skipped_heavy), True),
         "train, all succeeded": (train, results(), True),
         "train, a heavy job failed": (train, results(**{"linux-keychain": "failure"}), False),
-        # MIK-9353: Kani runs on lanes too, and the gate still refuses a train whose Kani failed.
+        # Kani runs on lanes too, and the gate still refuses a train whose Kani failed.
         "train, Kani failed": (train, results(kani="failure"), False),
         "train, Kani skipped": (train, results(kani="skipped"), False),
         "lane, Kani failed (its own check fails the lane, not this gate)": (lane, results(kani="failure"), True),
