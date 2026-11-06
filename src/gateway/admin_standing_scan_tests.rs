@@ -192,8 +192,14 @@ const ADMIN_READERS: &[(&str, &str, usize, &str)] = &[
     (
         ".admin",
         "src/gateway/ui/keys.rs",
-        1,
-        "the key listing shows the config flag",
+        2,
+        "no standing: each listed key's own flag, file and live entries (r1 lists false and true under one admin caller); the caller's standing is the route guard's Admin",
+    ),
+    (
+        ".admin",
+        "src/gateway/ui/keys_create.rs",
+        3,
+        "no standing: the created key's own flag, from the body into the entry, its validation probe and the write (p8b: an admin caller's minimal body writes false); the caller's standing is the route guard's Admin",
     ),
     (
         ".admin",
