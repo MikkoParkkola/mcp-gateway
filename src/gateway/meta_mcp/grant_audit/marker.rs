@@ -43,6 +43,7 @@ pub(in crate::gateway::meta_mcp) struct RecordedSet(Arc<Mutex<HashSet<String>>>)
 
 impl RecordedSet {
     pub(in crate::gateway::meta_mcp) fn add(&self, trace_id: &str) {
+        // invariant: nothing panics while holding the set lock, so it is never poisoned.
         self.0
             .lock()
             .expect("recorded set lock")
@@ -50,6 +51,7 @@ impl RecordedSet {
     }
 
     pub(super) fn contains(&self, trace_id: &str) -> bool {
+        // invariant: nothing panics while holding the set lock, so it is never poisoned.
         self.0.lock().expect("recorded set lock").contains(trace_id)
     }
 }

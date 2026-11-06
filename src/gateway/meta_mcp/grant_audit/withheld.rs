@@ -18,17 +18,23 @@ pub(in crate::gateway::meta_mcp) const WITHHELD_RECORD_FAILED: &str = "The audit
 /// `noting` stays in the slot and fails closed as before. Outside a slot
 /// `noting` runs alone and its note is written at once. Any other use is a
 /// new exception and needs its own design decision.
-pub(in crate::gateway::meta_mcp) async fn note_withheld_best_effort<T>(_server: &str, noting: impl FnOnce() -> T) -> T {
+pub(in crate::gateway::meta_mcp) async fn note_withheld_best_effort<T>(
+    _server: &str,
+    noting: impl FnOnce() -> T,
+) -> T {
+    // invariant: nothing panics while holding the slot lock, so it is never poisoned.
     let before = super::GRANT_SLOT
         .try_with(|slot| slot.notes.lock().expect("grant slot lock").len())
         .ok();
     let output = noting();
     let _ = before.map(|before| {
         super::GRANT_SLOT.try_with(|slot| {
+            // invariant: nothing panics while holding the slot lock, so it is never poisoned.
             let mut held = slot.notes.lock().expect("grant slot lock");
             let at = before.min(held.len());
             let taken = held.split_off(at);
             drop(held);
+            // invariant: nothing panics while holding the slot lock, so it is never poisoned.
             slot.best_effort
                 .lock()
                 .expect("grant slot lock")

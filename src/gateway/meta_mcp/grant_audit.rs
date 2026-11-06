@@ -242,6 +242,7 @@ struct SlotGuard {
 impl Drop for SlotGuard {
     fn drop(&mut self) {
         let pending = std::mem::take(&mut *self.slot.notes.lock().expect("grant slot lock"));
+        // invariant: nothing panics while holding the slot lock, so it is never poisoned.
         let best_effort =
             std::mem::take(&mut *self.slot.best_effort.lock().expect("grant slot lock"));
         if !pending.is_empty() || !best_effort.is_empty() {
@@ -383,6 +384,7 @@ pub(super) async fn with_grant_slot<F: Future>(
     let output = GRANT_SLOT.scope(Arc::clone(&guard.slot), future).await;
     let notes = std::mem::take(&mut *guard.slot.notes.lock().expect("grant slot lock"));
     let answer_id = guard.slot.answer_id.get().cloned();
+    // invariant: nothing panics while holding the slot lock, so it is never poisoned.
     let best_effort =
         std::mem::take(&mut *guard.slot.best_effort.lock().expect("grant slot lock"));
     // A slot that collected no decision has nothing to write, so no flush
