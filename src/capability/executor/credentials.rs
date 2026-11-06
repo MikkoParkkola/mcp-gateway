@@ -9,6 +9,7 @@ use serde_json::Value;
 use tracing::{info, warn};
 
 use crate::capability::CapabilityExecutionContext;
+use crate::capability::execution_context::{RefusalTest, record_refusal};
 use crate::identity_propagation::AccountCredential;
 use crate::oauth::TokenInfo;
 use crate::personal_accounts::config::DescriptorMode;
@@ -414,20 +415,10 @@ impl CapabilityExecutor {
         // The refresh token and client secret go only where the capability's
         // own request may go (#2113): the same destination check, before any
         // byte is sent.
-        super::super::require_tls_for_credentials(token_endpoint).inspect_err(|_| {
-            // A malformed endpoint is a configuration error, not a refusal.
-            if crate::capability::execution_context::names_a_host(token_endpoint) {
-                crate::gateway::delivery_facts::refused_while_vouched();
-            }
-        })?;
-        super::super::validate_capability_url_for_context(token_endpoint, context).inspect_err(
-            |e| {
-                // A malformed URL is a configuration error, not a refusal.
-                if crate::security::ssrf::is_ssrf_refusal(e) {
-                    crate::gateway::delivery_facts::refused_while_vouched();
-                }
-            },
-        )?;
+        super::super::require_tls_for_credentials(token_endpoint)
+            .inspect_err(|e| record_refusal(e, RefusalTest::Cleartext(token_endpoint)))?;
+        super::super::validate_capability_url_for_context(token_endpoint, context)
+            .inspect_err(|e| record_refusal(e, RefusalTest::Destination))?;
         // Read before the flight: the keychain lookup may block, and the
         // secret does not depend on the token.
         let keychain_key = format!("{provider}-client-secret");
@@ -451,9 +442,7 @@ impl CapabilityExecutor {
             }
             // Recorded before the wrap: the wrapped error no longer reads as
             // a destination refusal.
-            if crate::security::ssrf::is_ssrf_refusal(&error) {
-                crate::gateway::delivery_facts::refused_while_vouched();
-            }
+            record_refusal(&error, RefusalTest::Destination);
             Error::Config(format!(
                 "OAuth refresh request to '{}' for '{provider}' failed: {error}",
                 crate::security::sanitize::redact_url_for_diagnostics(token_endpoint)

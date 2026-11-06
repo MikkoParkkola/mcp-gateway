@@ -146,7 +146,7 @@ def self_test(jobs: dict) -> list[str]:
     """Planted mistakes each fail: the label clause on a sixth heavy job, a label job
     that ignores it, a matrix that narrows labelled trains too, and a label that
     skips docs-only changes where the train runs them."""
-    missing = sorted({"kani", "windows-check", "windows-shards", "macos-shards"} - set(jobs))
+    missing = sorted({"linux-keychain", "windows-check", "windows-shards", "macos-shards"} - set(jobs))
     if missing:
         return [f"self-test: ci.yml lacks {missing}, which the planted mistakes need"]
     errors = []
@@ -173,9 +173,9 @@ def self_test(jobs: dict) -> list[str]:
     clause = (f" || (github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line'"
               f" && contains(github.event.pull_request.labels.*.name, '{LABEL}'))")
     widened = copy.deepcopy(jobs)
-    widened["kani"]["if"] = "${{ (" + str(widened["kani"]["if"]).strip()[3:-2].strip() + ")" + clause + " }}"
-    if not any(e.startswith("lane PR:") and "kani" in e for e in routing_errors(widened)):
-        errors.append("self-test: the label clause on kani was not caught")
+    widened["linux-keychain"]["if"] = "${{ (" + str(widened["linux-keychain"]["if"]).strip()[3:-2].strip() + ")" + clause + " }}"
+    if not any(e.startswith("lane PR:") and "linux-keychain" in e for e in routing_errors(widened)):
+        errors.append("self-test: the label clause on linux-keychain was not caught")
     narrowed = copy.deepcopy(jobs)
     narrowed["windows-check"]["if"] = str(jobs["windows-check"]["if"]).replace(f"'{LABEL}'", "'other'")
     if routing_errors(narrowed) == routing_errors(jobs):

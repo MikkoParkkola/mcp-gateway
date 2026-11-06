@@ -10,11 +10,17 @@ use serde_json::{Value, json};
 use super::conn::{Conn, End, frame};
 use super::guard::{Snapshot, same_ignoring_uptime};
 use super::id::{LogCursor, StreamId};
+use crate::gateway::authz::BackendGrant;
+use crate::gateway::ui::status::{StatusView, status_body};
 
 /// The delivered state of the snapshot kinds.
 pub(super) struct Sent {
     id: StreamId,
     status: Option<Value>,
+    /// Status frames sent so far: a scoped connection's status id part. Its
+    /// counts are its own, so the shared generation would move with change
+    /// outside its scope.
+    status_frames: u64,
 }
 
 impl Sent {
@@ -25,15 +31,16 @@ impl Sent {
                 ..StreamId::default()
             },
             status: None,
+            status_frames: 0,
         }
     }
 
     /// The composite at the head, for `hello`: a client with no id yet keeps
     /// this as its position.
-    pub(super) fn head(&self, snap: &Snapshot, admin: bool) -> String {
+    pub(super) fn head(&self, snap: &Snapshot, conn: &Conn) -> String {
         StreamId {
-            status: Some(snap.status_gen_for(admin)),
-            reload: admin.then_some(snap.reload_gen),
+            status: Some(self.status_part(snap, conn)),
+            reload: conn.admin.then_some(snap.reload_gen),
             ..self.id.clone()
         }
         .render()
@@ -58,9 +65,28 @@ impl Sent {
         conn.send(frame(event, Some(&self.id), data)).await
     }
 
-    /// This caller's own status payload from the shared snapshot.
+    /// The status part of this connection's ids.
+    fn status_part(&self, snap: &Snapshot, conn: &Conn) -> u64 {
+        if conn.scope.is_some() {
+            self.status_frames
+        } else {
+            snap.status_gen_for(conn.admin)
+        }
+    }
+
+    /// This caller's own status payload. The scope decides first, as on the
+    /// status route: a scoped caller, admin or not, gets the counts of its
+    /// own backends, built afresh; an unscoped one the shared snapshot's view.
     fn projected(conn: &Conn, snap: &Snapshot) -> Value {
-        let mut body = if conn.admin { &snap.full } else { &snap.counts }.clone();
+        let mut body = match &conn.scope {
+            Some(backends) => status_body(
+                &conn.state,
+                StatusView::CountsOnly,
+                BackendGrant::of_list(backends),
+            ),
+            None if conn.admin => snap.full.clone(),
+            None => snap.counts.clone(),
+        };
         body["auth"] = conn.facts.clone();
         body
     }
@@ -74,7 +100,8 @@ impl Sent {
             .as_ref()
             .is_none_or(|last| !same_ignoring_uptime(last, &payload));
         if changed {
-            self.id.status = Some(snap.status_gen_for(conn.admin));
+            self.status_frames += 1;
+            self.id.status = Some(self.status_part(snap, conn));
             conn.send(frame("status", Some(&self.id), &payload)).await?;
             self.status = Some(payload);
         }

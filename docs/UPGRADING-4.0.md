@@ -76,7 +76,7 @@ backend" and "fails a capability file" first.**
 | 49 | The audit log rotates at 64 MiB and keeps 12 sealed segments; `audit verify` reads every segment and detects a deleted or truncated active file | Copy or archive the segments together, never rotate the log externally, and size the volume for `(retain_segments + 1) x max_segment_bytes` (Helm refuses an emptyDir too small) |
 | 50 | Every hot-path audit append is bounded (5 s wait, 5 s write); a stalled audit disk answers 503 and `/readyz` reports `stalled` instead of hanging the gateway | Alert on `mcp_audit_append_timeouts_total` and the `stalled` `/readyz` body; a mount that never recovers needs a restart |
 | 51 | A `role_mapping` `role: admin` rule grants full gateway admin; a domain-only admin rule fails the load | Review existing `role: admin` rules; replace a domain-only one with `group` or `email` |
-| 52 | Only `tools.listChanged` is advertised, and only over HTTP; `resources/subscribe` and `resources/unsubscribe` are refused on `/mcp` (`/mcp/{name}` still forwards them) | Drop any wait for `resources/updated`, `resources/list_changed` or `prompts/list_changed`; poll `resources/list` or `prompts/list` instead |
+| 52 | Only `tools.listChanged` is advertised: over HTTP, and to a stdio session that began with `initialize`; a 2026-07-28 stdio client's first `tools/list` waits up to 30 s for surfaced backends instead; `resources/subscribe` and `resources/unsubscribe` are refused on `/mcp` (`/mcp/{name}` still forwards them) | Drop any wait for `resources/updated`, `resources/list_changed` or `prompts/list_changed`; poll `resources/list` or `prompts/list` instead |
 | 53 | A backend's own rate-limit refusal reads `Rate limit exceeded for backend 'x'` (hint `RATE_LIMITED`, code still -32000) and no longer counts against the error budgets or `mcp_backend_circuit_state` | Match the new text in clients and alerts that looked for "Circuit breaker open"; watch `mcp_backend_rate_limited_total` for throttling |
 | 54 | An mTLS key, OAuth token file, capability `file:` credential or `--ca-key` other users can read is refused; an mTLS cert, CRL, grants or control-plane file they can change is refused (Unix) | `chmod 600` a secret file, `chmod go-w` a trust file; on Kubernetes mount a key Secret with `defaultMode: 288` and `fsGroup` |
 | 55 | A `tools/call` carrying `inputResponses` without the `requestState` the gateway issued is refused with `-32602` instead of being forwarded | Echo the `requestState` from the `input_required` result on every retry; send `inputResponses` only as an answer to it |
@@ -1762,8 +1762,14 @@ control_plane:
   JSON-RPC notification. 3.x wrapped it in a gateway envelope (`event: notification`,
   `{"source","event_type","data"}`) that MCP clients do not read; a client parsing that
   envelope reads `method` at the top level instead.
-- `serve --stdio` reports `tools.listChanged: false`, because it has no channel for an
-  unsolicited notification.
+- `serve --stdio` tells a session that began with `initialize` `tools.listChanged: true`
+  and sends it `notifications/tools/list_changed`. A 2026-07-28 client never sends
+  `initialize` and can be told only through `subscriptions/listen`, which stdio does not
+  serve yet (planned for 4.0.1), so `server/discover` tells it `false`. Instead, its first
+  `tools/list` waits, up to 30 s, for each surfaced backend's first tool fetch, so the list
+  it caches holds them. If the wait runs out, the answer holds the tools that are ready, and
+  a backend still being fetched stays out of that client's list until it lists again.
+  Closing the session (EOF, Ctrl+C) ends the wait at once.
 - **`resources/subscribe` and `resources/unsubscribe` are refused** with `-32601`, "this
   gateway does not deliver resources/updated", instead of being forwarded to the backend.
   To see changes, poll `resources/list` or `resources/read`.
@@ -3781,7 +3787,7 @@ the key lists it again. `mcp-gateway cap list` marks each one the gateway would 
 
 ## 130. Frames naming a second tenant for one caller are recorded, or withheld
 
-**Startup:** no notice, applies only with `security.firewall.tenant_guard.arg_keys` set
+**Startup:** no notice, but every start logs a line when `security.firewall.enabled` is false and the check is on (a warning with `block`, info with `observe`), and only with `security.firewall.tenant_guard.arg_keys` set
 
 With `arg_keys` set, every frame the gateway sends a caller is checked for the tenants it names:
 answers and errors, notifications, server-to-client requests and webhook deliveries, on HTTP, the
@@ -3792,6 +3798,8 @@ frames name more than one tenant inside `window_secs`, the new key
 `tenant_guard.cross_tenant_reads` decides: `observe` (the default) writes a `tenant_read`
 audit record with `cross_tenant_read: flagged` (for an answer on `POST /mcp`, `/mcp/{name}` or stdio, the same fields ride the answer's own `response_delivery_attempt` record, written over the frame the judge left, so it costs no second record), `block` withholds the frame with a JSON-RPC
 error, and `off` checks nothing. A caller with no identity is recorded as `unattributable`.
+The check runs on its own switch: it does not stop when `security.firewall.enabled` is false.
+To stop it, set `cross_tenant_reads: off`.
 On those three routes a dispatched answer that names a tenant writes no `event: tenant_read`
 record: its read fields (`caller_key`, `tenants`, `attribution`, `cross_tenant_read`) ride its
 `response_delivery_attempt` record. Notifications, server requests, stream events and the few
@@ -4791,9 +4799,10 @@ mounted. Derived items work out their value when unset. Removed items are refuse
 | `/ui/api/activity` | hidden | the Activity list: admin, a mapped auditor, or a mapped developer's own calls; any other credential 403 (UPGRADING 176); documented as the bundled UI's private API, not an integration surface |  |
 | `/ui/api/activity/export` | hidden | the Activity export: signed NDJSON (409 without a provenance key) or CSV, same access as the list; checked offline by `audit verify --export` |  |
 | `/ui/api/activity/{id}` | hidden | one Activity row's receipt, same access as the list; 404 for a row the caller may not read |  |
-| `/ui/api/backends`, `/ui/api/backends/{name}`, `/ui/api/backends/{name}/revive`, `/ui/api/capabilities`, `/ui/api/capabilities/{name}`, `/ui/api/capabilities/{name}/validate`, `/ui/api/config`, `/ui/api/control-plane`, `/ui/api/control-plane/decisions`, `/ui/api/control-plane/export-status`, `/ui/api/control-plane/grants`, `/ui/api/control-plane/policies`, `/ui/api/costs`, `/ui/api/dashboard-link`, `/ui/api/events/dead-letters/replay`, `/ui/api/events/dead-letters/{id}/replay`, `/ui/api/import/openapi`, `/ui/api/import/openapi/preview`, `/ui/api/overview`, `/ui/api/registry`, `/ui/api/registry/search`, `/ui/api/reload`, `/ui/api/tools` | hidden | stays mounted with today's admin/redacted split; documented as the bundled UI's private API, not an integration surface |  |
+| `/ui/api/backends`, `/ui/api/backends/{name}`, `/ui/api/backends/{name}/revive`, `/ui/api/capabilities`, `/ui/api/capabilities/{name}`, `/ui/api/capabilities/{name}/validate`, `/ui/api/control-plane`, `/ui/api/control-plane/decisions`, `/ui/api/control-plane/export-status`, `/ui/api/control-plane/grants`, `/ui/api/control-plane/policies`, `/ui/api/costs`, `/ui/api/dashboard-link`, `/ui/api/events/dead-letters/replay`, `/ui/api/events/dead-letters/{id}/replay`, `/ui/api/import/openapi`, `/ui/api/import/openapi/preview`, `/ui/api/overview`, `/ui/api/registry`, `/ui/api/registry/search`, `/ui/api/reload`, `/ui/api/tools` | hidden | stays mounted with today's admin/redacted split; documented as the bundled UI's private API, not an integration surface |  |
 | `/ui/api/backends/{name}/signin` | hidden | an admin with a valid dashboard session starts an OAuth backend's sign-in (POST, JSON only; the state is read on GET `/ui/api/status`, in each `servers[]` row, as `sign_in.status`: `not_oauth`, `not_yet_checked`, `signed_in`, `expired`, `never_signed_in`, `re_sign_in_after_upgrade`, `waiting_elsewhere` or `provider_changed`); 403 `dashboard_session_required`, 409 `not_oauth`, 409 `gateway_host_required` off the gateway host, 409 `sign_in_in_progress` while another login holds the backend; the link and the flow are the starter's only; documented as the bundled UI's private API, not an integration surface |  |
 | `/ui/api/backends/{name}/signin/confirm` | hidden | the starter confirms (saves the held token) or cancels the sign-in by its attempt id; cancel works in any phase; 404 `no_sign_in` for another session or attempt, 409 `sign_in_not_ready` before the callback; documented as the bundled UI's private API, not an integration surface |  |
+| `/ui/api/config` | hidden | stays mounted with today's admin/redacted split; documented as the bundled UI's private API, not an integration surface; each `servers[]` entry carries `owner` (`backends.<name>.owner`, trimmed, or `null`), read from the published config; `owner` is never on `/ui/api/status` |  |
 | `/ui/api/decisions` | hidden | admin only; the decisions an admin has open (access requests refused for a missing grant, capabilities whose file no longer matches its pin, unmanaged servers another MCP client's config file names, and client config files that could not be read), each with an opaque id, what it waits on and display-safe fields only; read-only, answered from memory, 503 naming each source still being read |  |
 | `/ui/api/decisions/count` | hidden | admin only; how many decisions an admin has open, and their revision; read-only, answered from memory with no item copied, the list's 503 while a source is still being read |  |
 | `/ui/api/discovery` | hidden | admin only; servers named in other MCP clients' config files on this host (ADR-021), with whether each could be adopted; read-only, no value, argument or full path |  |

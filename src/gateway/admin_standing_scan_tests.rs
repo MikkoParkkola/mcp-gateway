@@ -191,15 +191,9 @@ const ADMIN_READERS: &[(&str, &str, usize, &str)] = &[
     ),
     (
         ".admin",
-        "src/gateway/ui/stream/conn.rs",
-        1,
-        "Gateway: set from ui::is_admin",
-    ),
-    (
-        ".admin",
         "src/gateway/ui/stream/sent.rs",
-        2,
-        "Gateway: set from ui::is_admin",
+        3,
+        "Gateway: set from ui::is_admin; full view only when the scope is unscoped",
     ),
     (
         "CallerStanding::Admin",
@@ -422,6 +416,12 @@ const ADMIN_READERS: &[(&str, &str, usize, &str)] = &[
         "src/gateway/ui/status.rs",
         1,
         "the status scope beside the Gateway check",
+    ),
+    (
+        "::for_ui(",
+        "src/gateway/ui/stream/conn.rs",
+        1,
+        "the stream's status scope, the status route's rule beside the Gateway check",
     ),
     (
         "{ admin, .. }",

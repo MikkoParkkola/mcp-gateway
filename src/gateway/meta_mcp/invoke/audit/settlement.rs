@@ -127,6 +127,9 @@ impl MetaMcp {
     /// rewrote the answer, before the transition commits. `trace_id` is the worker dispatch's invocation trace,
     /// so the record joins that dispatch record; `result` is the settled answer
     /// (`None` for a refusal). The facts come from the open cell.
+    /// `joined_by` appears only on a composite's dispatch-refusal record,
+    /// whose `trace_id` is the ended-on step's trace or the task id; `None`
+    /// writes no such member, so every other record's bytes are unchanged.
     ///
     /// Returns whether the transition may commit as proposed: `false` only
     /// when the write failed under [`AuditFailurePolicy::FailClosed`], and the
@@ -135,7 +138,7 @@ impl MetaMcp {
         &self,
         task: SettledTask<'_>,
         (trace_id, principal): (&str, &str),
-        refused: Option<i32>,
+        (refused, joined_by): (Option<i32>, Option<super::SettlementJoin>),
         result: Option<&serde_json::Value>,
     ) -> bool {
         if self.transparency_logger.is_none() {
@@ -149,6 +152,11 @@ impl MetaMcp {
         };
         let mut extra = serde_json::Map::new();
         decided_fields(refused.is_some(), &mut extra);
+        if let Some(join) = joined_by {
+            // invariant: a unit variant always serialises.
+            let join = serde_json::to_value(join).expect("SettlementJoin serialises");
+            extra.insert("joined_by".into(), join);
+        }
         let envelope = AuditEnvelope {
             trace_id: Some(trace_id.to_owned()),
             otel_trace_id: None,
