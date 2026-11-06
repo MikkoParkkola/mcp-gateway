@@ -600,7 +600,7 @@ impl Finder<'_> {
             if let Shape::Path(tail) = shape
                 && readings.iter().any(|r| ends_with(r, tail))
             {
-                self.add(*key);
+                self.add(key);
             }
         }
     }
@@ -617,7 +617,7 @@ impl Finder<'_> {
                 _ => false,
             };
             if hit {
-                self.add(*key);
+                self.add(key);
             }
         }
     }
@@ -626,13 +626,12 @@ impl Finder<'_> {
     fn method_occurrence(&mut self, method: &str, nullary: bool) {
         for (key, shape) in SHAPES {
             let hit = match shape {
-                Shape::Call(tail) => tail.len() == 1 && tail[0] == method,
-                Shape::Path(tail) => tail.len() == 1 && tail[0] == method,
+                Shape::Call(tail) | Shape::Path(tail) => tail.len() == 1 && tail[0] == method,
                 Shape::NullaryMethod(name) => nullary && *name == method,
                 Shape::QualifiedCall(_) => false,
             };
             if hit {
-                self.add(*key);
+                self.add(key);
             }
         }
     }
@@ -865,7 +864,7 @@ fn walk(finder: &mut Finder<'_>, trees: &[Tok]) {
                         Shape::NullaryMethod(m) => after_dot && empty_call && *m == name.as_str(),
                     };
                     if hit {
-                        finder.add(*key);
+                        finder.add(key);
                     }
                 }
             }
