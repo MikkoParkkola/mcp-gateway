@@ -313,7 +313,7 @@ struct Judge {
 }
 
 impl Judge {
-    fn refuse(&self, why: Refusal) -> String {
+    fn refuse_with(&self, why: Refusal) -> String {
         *self
             .outcome
             .lock()
@@ -326,7 +326,7 @@ impl Judge {
         let Some(at) = expires_at else { return Ok(()) };
         match crate::clock::utc_now() {
             Ok(now) if !crate::config::api_key_expired(Some(at), now) => Ok(()),
-            _ => Err(self.refuse(Refusal::Expired)),
+            _ => Err(self.refuse_with(Refusal::Expired)),
         }
     }
 
@@ -335,7 +335,8 @@ impl Judge {
     fn check_flip(&self, entry: &NewKeyEntry) -> Result<(), String> {
         let mut wanted = self.file_auth.clone();
         wanted.api_keys.push(entry.as_key());
-        refuse_multi_user_flip(self.live.running(), &wanted).map_err(|_| self.refuse(Refusal::Flip))
+        refuse_multi_user_flip(self.live.running(), &wanted)
+            .map_err(|_| self.refuse_with(Refusal::Flip))
     }
 }
 
@@ -350,7 +351,7 @@ fn compute(
         judge.check_expiry(entry.expires_at)?;
         judge.check_flip(&entry)?;
         let at = judge.file_auth.api_keys.len();
-        edit_in_place(text, &entry.changes(at)).map_err(|_| judge.refuse(Refusal::NotWritten))
+        edit_in_place(text, &entry.changes(at)).map_err(|_| judge.refuse_with(Refusal::NotWritten))
     }
 }
 
