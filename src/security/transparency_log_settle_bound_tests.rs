@@ -33,7 +33,8 @@ async fn settle_once(
     l: &Arc<TransparencyLogger>,
     token: &str,
 ) -> Result<super::settle::Appended, Unsettled> {
-    let call = l.settle(&l.log_id(), token, Role::Outcome, payload());
+    let own = l.log_id();
+    let call = l.settle(&own, token, Role::Outcome, payload());
     tokio::time::timeout(WITHIN, call)
         .await
         .expect("settle answers within twice the F20 bound")
@@ -140,8 +141,9 @@ async fn a_stalled_write_is_unconfirmed_and_its_retry_is_delivered_twice() {
     assert_eq!(records_of(&path, "w-1").len(), 2);
     let told = told.lock().unwrap();
     assert_eq!(told.len(), 2, "plain `save` is told nothing");
+    let given = payload();
     let equal = |f: &Map<String, Value>| {
-        let keys = payload()
+        let keys = given
             .keys()
             .cloned()
             .chain(["event".into(), "token".into()]);
