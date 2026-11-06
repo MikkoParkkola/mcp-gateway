@@ -17,7 +17,13 @@ const MAPPING: &str = "rules: [{ issuer: \"https://issuer.test\", group: auditor
 /// the token's bearer and identity.
 async fn keyed(
     groups: &[&str],
-) -> (Arc<AppState>, impl Sized, Arc<TransparencyLogger>, String, VerifiedIdentity) {
+) -> (
+    Arc<AppState>,
+    impl Sized,
+    Arc<TransparencyLogger>,
+    String,
+    VerifiedIdentity,
+) {
     let tok = token(groups);
     let (bearer, me) = (tok.token.clone(), tok.identity.clone());
     let key_server = Arc::new(crate::key_server::KeyServer::new(
@@ -53,8 +59,15 @@ fn actor(issuer: &str, subject: &str) -> String {
 
 /// A call by `who` (an actor id) on `server`, named `tool_{n}`.
 fn call_as(log: &TransparencyLogger, who: &str, server: &str, n: usize) {
-    log.log_invocation("s", who, server, &format!("tool_{n}"), "sha256:aa", "sha256:bb")
-        .expect("the call is logged");
+    log.log_invocation(
+        "s",
+        who,
+        server,
+        &format!("tool_{n}"),
+        "sha256:aa",
+        "sha256:bb",
+    )
+    .expect("the call is logged");
 }
 
 /// Whether a frame's row is the call named `tool_{n}`.
@@ -68,7 +81,12 @@ async fn s2b_another_subjects_call_on_the_live_path_sends_no_frame() {
     let mut s = open(&state, request(STREAM, Who::Bearer(&bearer), None)).await;
     within(s.until("hello")).await;
     call_as(&inv, &actor(ISSUER, "other"), "srv", 1);
-    call_as(&inv, &actor("https://other-issuer.test", &me.subject), "srv", 2);
+    call_as(
+        &inv,
+        &actor("https://other-issuer.test", &me.subject),
+        "srv",
+        2,
+    );
     call_as(&inv, "c", "srv", 3);
     call_as(&inv, &me.stable_actor_id(), "srv", 4);
     let first = within(s.until("activity")).await;
@@ -94,7 +112,11 @@ async fn sc_a_reordered_scoped_key_keeps_its_stream_and_a_narrowed_one_ends_it()
         .iter()
         .find(|k| k.name == SCOPED_ADMIN)
         .expect("the reload publishes the scoped key");
-    assert_eq!(key.backends, vec!["b", "a", "a"], "premise: the list is reordered");
+    assert_eq!(
+        key.backends,
+        vec!["b", "a", "a"],
+        "premise: the list is reordered"
+    );
     // Still open after four recheck periods: `ended_within` cannot say this,
     // as it reads on until the stream ends and only then checks the time.
     assert!(
@@ -162,14 +184,23 @@ async fn demoted_between_pages(after: &str, role: Option<crate::control_plane::C
     let read = hub.pages_read_for_test();
     set_mapping(&state, after);
     assert_eq!(
-        state.live_config.get().control_plane.role_mapping.resolve_role(&me),
+        state
+            .live_config
+            .get()
+            .control_plane
+            .role_mapping
+            .resolve_role(&me),
         role,
         "premise: the published mapping demotes the caller"
     );
     hub.release_pages_for_test(1);
     within(async {
         while let Some(f) = again.next().await {
-            assert_ne!(f.event, "activity", "a row sent after the demotion: {}", f.data);
+            assert_ne!(
+                f.event, "activity",
+                "a row sent after the demotion: {}",
+                f.data
+            );
         }
     })
     .await;
