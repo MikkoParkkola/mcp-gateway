@@ -48,26 +48,35 @@ fn production_files(root: &std::path::Path) -> Vec<String> {
     out
 }
 
+/// The listed rows, file -> (calls, class), and the rows refused. A row
+/// needs file, calls, class and reason, and a known class.
+fn listed(text: &str) -> (BTreeMap<String, (usize, String)>, Vec<String>) {
+    let mut rows = BTreeMap::new();
+    let bad = Vec::new();
+    for l in text
+        .lines()
+        .filter(|l| !l.starts_with('#') && !l.trim().is_empty())
+    {
+        let cols: Vec<&str> = l.split('\t').collect();
+        assert_eq!(cols.len(), 4, "row needs file, calls, class, reason: {l}");
+        assert!(
+            ["by-design", "not-a-call-path", "listing"].contains(&cols[2])
+                && !cols[3].trim().is_empty(),
+            "row needs a known class and a reason: {l}"
+        );
+        rows.insert(
+            cols[0].to_owned(),
+            (cols[1].parse().expect("calls"), cols[2].to_owned()),
+        );
+    }
+    (rows, bad)
+}
+
 #[test]
 fn every_unfiltered_capability_read_is_classified() {
     let root = crate_root();
-    let listed: BTreeMap<String, (usize, String)> = include_str!("caller_view.tsv")
-        .lines()
-        .filter(|l| !l.starts_with('#') && !l.trim().is_empty())
-        .map(|l| {
-            let cols: Vec<&str> = l.split('\t').collect();
-            assert_eq!(cols.len(), 4, "row needs file, calls, class, reason: {l}");
-            assert!(
-                ["by-design", "not-a-call-path", "listing"].contains(&cols[2])
-                    && !cols[3].trim().is_empty(),
-                "row needs a known class and a reason: {l}"
-            );
-            (
-                cols[0].to_owned(),
-                (cols[1].parse().expect("calls"), cols[2].to_owned()),
-            )
-        })
-        .collect();
+    let (listed, bad) = listed(include_str!("caller_view.tsv"));
+    assert!(bad.is_empty(), "{bad:#?}");
     let mut found = BTreeMap::new();
     for rel in production_files(root) {
         let text = std::fs::read_to_string(root.join(&rel)).expect("source readable");
@@ -93,4 +102,16 @@ fn every_unfiltered_capability_read_is_classified() {
         problems.push(format!("{file}: listed, but no read is left"));
     }
     assert!(problems.is_empty(), "{problems:#?}");
+}
+
+/// A file listed twice is refused, not silently overwritten.
+#[test]
+fn a_file_listed_twice_is_refused() {
+    let text = include_str!("caller_view.tsv");
+    let (_, first) = super::fragments::without_first_row(text);
+    let (_, bad) = listed(&format!("{text}{first}"));
+    assert!(
+        bad.contains(&format!("listed twice: {}", first.trim_end())),
+        "{bad:#?}"
+    );
 }

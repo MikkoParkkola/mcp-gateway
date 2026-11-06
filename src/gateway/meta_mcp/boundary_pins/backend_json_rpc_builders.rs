@@ -259,3 +259,32 @@ fn only_the_listed_constructors_may_write_the_literal() {
     assert!(!is_constructor(&at("src/error.rs", "to_rpc_code")));
     assert!(!is_constructor(&at("src/lib.rs", "backend_json_rpc")));
 }
+
+/// A key listed twice is refused, not silently overwritten by the later row.
+#[test]
+fn a_key_listed_twice_is_refused() {
+    let (_, first) = super::fragments::without_first_row(LISTED);
+    let wrong = diff(&Found::new(), &format!("{LISTED}{first}"));
+    let repeat = format!("listed twice: {}", first.trim_end());
+    assert!(wrong.contains(&repeat), "{wrong:#?}");
+}
+
+/// A repeat with another count is refused whichever row comes first.
+#[test]
+fn a_key_listed_twice_with_another_count_is_refused_in_either_order() {
+    let (rest, first) = super::fragments::without_first_row(LISTED);
+    let mut cols: Vec<&str> = first.trim_end().split('\t').collect();
+    let other = (cols[3].parse::<usize>().expect("a count") + 1).to_string();
+    cols[3] = &other;
+    let changed = format!("{}\n", cols.join("\t"));
+    for text in [
+        format!("{rest}{first}{changed}"),
+        format!("{rest}{changed}{first}"),
+    ] {
+        let wrong = diff(&Found::new(), &text);
+        assert!(
+            wrong.iter().any(|w| w.starts_with("listed twice: ")),
+            "{wrong:#?}"
+        );
+    }
+}
