@@ -123,6 +123,13 @@ const MAX_RENAME_TRIES: usize = 1024;
 /// do not, so a needle formed at the edge of one is not formed by the next.
 const MARKERS: [&str; 3] = ["[redacted]", "<removed>", "{hidden}"];
 
+/// Whether `value` holds a marker: a redaction next to it could complete it.
+/// Its one caller is config load's refusal of a configured secret value that
+/// holds a marker (`config::secret_ref`); the markers themselves stay private.
+pub(crate) fn contains_marker(value: &str) -> bool {
+    MARKERS.iter().any(|marker| value.contains(marker))
+}
+
 /// The first marker containing no needle, or nothing at all.
 fn marker_for(needles: &[&str]) -> &'static str {
     MARKERS
@@ -249,6 +256,28 @@ impl Compiled {
     pub(crate) fn needles(&self) -> &[String] {
         &self.needles
     }
+}
+
+/// Whether `value` holds none of `compiled`'s needles in a string or a key.
+/// One set's render never forms its own needles (it writes the first marker
+/// that forms none), but a later set's marker can complete an earlier set's
+/// value: the stored scrub, which runs set after set, checks with this.
+pub(crate) fn holds_no_needle(value: &Value, compiled: &Compiled) -> bool {
+    fn clean(value: &Value, matcher: &AhoCorasick) -> bool {
+        match value {
+            Value::String(text) => !matcher.is_match(text),
+            Value::Array(items) => items.iter().all(|item| clean(item, matcher)),
+            Value::Object(fields) => fields
+                .iter()
+                .all(|(key, item)| !matcher.is_match(key) && clean(item, matcher)),
+            _ => true,
+        }
+    }
+    // No automaton: every value was replaced whole by a marker no needle is in.
+    compiled
+        .matcher
+        .as_ref()
+        .is_none_or(|matcher| clean(value, matcher))
 }
 
 /// [`redact_value`] with a list compiled beforehand.

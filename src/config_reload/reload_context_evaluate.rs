@@ -21,6 +21,9 @@ pub(in crate::config_reload) struct EvaluatedReload {
     pub(in crate::config_reload) secret_refs: std::collections::BTreeSet<String>,
     /// What this evaluation read; digested when it is published.
     pub(in crate::config_reload) inputs: crate::config_reload::revision::RawInputs,
+    /// Each backend's configured credentials, pinned before this load is
+    /// published.
+    pub(in crate::config_reload) configured: crate::config::configured_secrets::ConfiguredByBackend,
 }
 
 pub(in crate::config_reload) fn load_config_patch(
@@ -43,6 +46,7 @@ pub(in crate::config_reload) fn load_config_patch(
         overlay: evaluated.overlay,
         secret_refs: evaluated.secret_refs,
         inputs: evaluated.inputs,
+        configured: evaluated.configured,
     })
 }
 
