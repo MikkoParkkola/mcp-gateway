@@ -17,6 +17,8 @@ mod admin_scope_tests;
 #[cfg(test)]
 pub(in crate::gateway) use self::access_table::plain_rows;
 mod activity;
+#[cfg(test)]
+pub(crate) use activity::listed_rows_for_test;
 pub mod admin_audit;
 pub mod backend_ops;
 pub mod backends;

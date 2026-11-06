@@ -9,7 +9,7 @@ use std::sync::Arc;
 use serde_json::{Value, json};
 
 use super::grant_audit::{in_delivery_scope, with_grant_slot};
-use super::grant_audit_fixture::{CAPS, Endpoint, decisions, grant, invocations};
+use super::grant_audit_fixture::{CAPS, Endpoint, decisions, entries, grant, invocations, log_path};
 use super::grant_decision_audit_tests::{api_key, call, context, gateway, invoke_args, only};
 use crate::security::audit::AuditFailurePolicy;
 
@@ -87,4 +87,58 @@ async fn every_decision_names_the_server_it_was_asked_about() {
     .await;
 
     assert_eq!(record["server"], json!(CAPS), "{record}");
+}
+
+/// An ungranted gateway logging to `dir` under `policy`: a call through
+/// `gateway_invoke` is refused at the gate, with its own invocation record.
+async fn refused_call(
+    dir: &Arc<tempfile::TempDir>,
+    policy: AuditFailurePolicy,
+    fail_invocation_append: bool,
+) -> Value {
+    let endpoint = Endpoint::start(false).await;
+    let meta = gateway(&endpoint, vec![], Some(dir), policy);
+    if fail_invocation_append {
+        let log = meta.transparency_logger.as_ref().expect("the gateway logs");
+        // The invocation record's route; the decision record has none.
+        log.fail_next_append_of_kind_for_test("meta");
+    }
+    call(&meta, &api_key("alice"), "gateway_invoke", invoke_args()).await
+}
+
+/// The Activity rows the log at `dir` lists.
+async fn listed(dir: &tempfile::TempDir) -> Vec<Value> {
+    crate::gateway::ui::listed_rows_for_test(&log_path(dir)).await
+}
+
+#[tokio::test]
+async fn a_gate_refused_call_with_its_invocation_record_is_one_row() {
+    let dir = Arc::new(tempfile::tempdir().unwrap());
+
+    refused_call(&dir, AuditFailurePolicy::BestEffort, false).await;
+
+    only(invocations(&dir), "invocation record");
+    let record = only(decisions(&dir), "decision record");
+    assert_eq!(record["outcome"], json!("denied"), "{record}");
+    assert_eq!(record["invocation_recorded"], json!(true), "{record}");
+    assert_eq!(listed(&dir).await.len(), 1, "the call is listed once");
+}
+
+#[tokio::test]
+async fn a_refusal_whose_invocation_append_failed_is_one_blocked_row() {
+    for policy in [AuditFailurePolicy::FailClosed, AuditFailurePolicy::BestEffort] {
+        let dir = Arc::new(tempfile::tempdir().unwrap());
+
+        refused_call(&dir, policy, true).await;
+
+        let held = entries(&dir);
+        assert!(invocations(&dir).is_empty(), "{policy:?}: {held:#?}");
+        let record = only(decisions(&dir), "decision record");
+        let marker = &record["invocation_recorded"];
+        assert_eq!(marker, &json!(false), "{policy:?}: {record}");
+        let rows = listed(&dir).await;
+        assert_eq!(rows.len(), 1, "{policy:?}: {rows:#?}");
+        assert_eq!(rows[0]["outcome"], json!("blocked"), "{policy:?}");
+        assert_eq!(rows[0]["server"], json!(CAPS), "{policy:?}");
+    }
 }
