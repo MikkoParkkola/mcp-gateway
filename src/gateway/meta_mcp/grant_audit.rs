@@ -77,6 +77,14 @@ pub(super) fn in_repeat_scope<T>(
     REPEAT_SCOPE.sync_scope((Arc::clone(store), task_and_caller), check)
 }
 
+/// Run `check` as a delivery re-check: the call it is about already has its
+/// invocation record, so the decisions it notes say so.
+// Stub: no scope yet, so the marker cannot see it.
+#[allow(dead_code)]
+pub(super) fn in_delivery_scope<T>(check: impl FnOnce() -> T) -> T {
+    check()
+}
+
 /// A re-check note's suppression key and decision fingerprint.
 #[derive(Clone)]
 pub(super) struct RepeatMark {

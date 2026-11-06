@@ -115,12 +115,12 @@ pub(super) fn gateway(
     meta
 }
 
-fn invoke_args() -> Value {
+pub(super) fn invoke_args() -> Value {
     json!({ "server": CAPS, "tool": PERSONAL, "arguments": {} })
 }
 
 /// One `tools/call` through the dispatch tail, answered as the client sees it.
-async fn call(meta: &MetaMcp, who: &Who, tool_name: &str, arguments: Value) -> Value {
+pub(super) async fn call(meta: &MetaMcp, who: &Who, tool_name: &str, arguments: Value) -> Value {
     let response = Box::pin(meta.handle_tools_call(
         RequestId::Number(1),
         tool_name,
@@ -136,7 +136,7 @@ fn error_code(answer: &Value) -> Option<i64> {
     answer.pointer("/error/code").and_then(Value::as_i64)
 }
 
-fn only(records: Vec<Value>, what: &str) -> Value {
+pub(super) fn only(records: Vec<Value>, what: &str) -> Value {
     assert_eq!(
         records.len(),
         1,

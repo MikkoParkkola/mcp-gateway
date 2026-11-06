@@ -726,6 +726,9 @@ pub(super) mod grant_audit_fixture;
 mod grant_decision_audit_tests;
 #[cfg(test)]
 mod grant_decision_slot_tests;
+/// The decision record's `server` and `invocation_recorded`.
+#[cfg(test)]
+mod grant_marker_tests;
 #[cfg(test)]
 mod grant_replay_dedupe_tests;
 #[cfg(test)]
