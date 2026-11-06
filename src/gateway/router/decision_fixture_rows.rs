@@ -602,24 +602,39 @@ async fn a3_grant_match() {
     );
 }
 
-/// An enabled mTLS policy whose one rule matches certificate CN `cn` and
-/// allows `alpha`'s `read`; first match wins, and no match denies
+/// An enabled mTLS policy: a rule for CN `nobody`, then one that matches
+/// certificate CN `cn` and allows `alpha`'s `read`; first match wins, and no match denies
 /// (`access_control/mod.rs:99-112`).
 fn mtls_policy_for(cn: &str) -> Arc<crate::mtls::MtlsPolicy> {
     use crate::mtls::config::{CertMatchConfig, MtlsConfig, PolicyRuleConfig, ToolScopeConfig};
     Arc::new(crate::mtls::MtlsPolicy::from_config(&MtlsConfig {
         enabled: true,
-        policies: vec![PolicyRuleConfig {
-            match_criteria: CertMatchConfig {
-                cn: Some(cn.to_string()),
-                ..CertMatchConfig::default()
+        policies: vec![
+            // A non-matching rule first, so a first-rule mutant is told apart
+            // from the matched rule when the allowing rule is recorded.
+            PolicyRuleConfig {
+                match_criteria: CertMatchConfig {
+                    cn: Some("nobody".to_string()),
+                    ..CertMatchConfig::default()
+                },
+                allow: ToolScopeConfig {
+                    backends: vec!["alpha".to_string()],
+                    tools: vec!["read".to_string()],
+                },
+                ..PolicyRuleConfig::default()
             },
-            allow: ToolScopeConfig {
-                backends: vec!["alpha".to_string()],
-                tools: vec!["read".to_string()],
+            PolicyRuleConfig {
+                match_criteria: CertMatchConfig {
+                    cn: Some(cn.to_string()),
+                    ..CertMatchConfig::default()
+                },
+                allow: ToolScopeConfig {
+                    backends: vec!["alpha".to_string()],
+                    tools: vec!["read".to_string()],
+                },
+                ..PolicyRuleConfig::default()
             },
-            ..PolicyRuleConfig::default()
-        }],
+        ],
         ..MtlsConfig::default()
     }))
 }

@@ -94,7 +94,9 @@ async fn refused_control(authorizer: &(dyn ToolAuthorizer + Sync), what: &str) {
 async fn a1_allow_list_pattern() {
     let with_entry = policy(&ToolPolicyConfig {
         default_action: PolicyAction::Deny,
-        allow: vec!["alpha:read".to_string()],
+        // A non-matching entry first: when the matched entry is recorded, a
+        // first-entry mutant is told apart from it.
+        allow: vec!["beta:other".to_string(), "alpha:read".to_string()],
         use_default_deny: false,
         ..ToolPolicyConfig::default()
     });
@@ -245,7 +247,13 @@ async fn a4_firewall_allow_rule() {
         allowed_roots: None,
         path_args: None,
     };
-    let (delivered, sent, record) = shell_call_under(vec![soften]).await;
+    // A non-matching rule first (another tool), so a first-rule mutant is told
+    // apart from the matched rule when the allowing rule is recorded.
+    let elsewhere = FirewallRule {
+        tool_match: "write".to_string(),
+        ..soften.clone()
+    };
+    let (delivered, sent, record) = shell_call_under(vec![elsewhere, soften]).await;
     assert!(
         delivered,
         "premise: the softened call is delivered: {record}"
