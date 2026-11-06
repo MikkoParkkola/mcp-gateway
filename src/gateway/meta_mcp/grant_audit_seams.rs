@@ -156,6 +156,7 @@ pub(crate) fn inject_note_for_test(server: &str, tool: &str, when: Inject) {
         repeat: None,
         delivery: false,
         recorded: super::RecordedSet::default(),
+        retry: None,
     };
     match when {
         Inject::NextSlotOpen => ON_OPEN.with(|n| n.borrow_mut().push(note)),

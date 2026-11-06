@@ -31,6 +31,7 @@ fn note(server: &str, tool: &str, trace: Option<&str>, allowed: bool) -> GrantNo
         repeat: None,
         delivery: false,
         recorded: super::grant_audit::RecordedSet::default(),
+        retry: None,
     }
 }
 

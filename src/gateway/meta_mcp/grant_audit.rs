@@ -70,6 +70,9 @@ tokio::task_local! {
     /// Set while a delivery is re-checked: its call already has the
     /// invocation record of the original request.
     static DELIVERY: ();
+    /// Filled by a retry's dispatch with the trace id it opens; read by the
+    /// withheld notes taken in the same scope.
+    static RETRY_TRACE: RetryCell;
 }
 
 /// How long a re-check record waits for the repeat check and its append
@@ -134,6 +137,37 @@ impl PartialEq for RecordedSet {
 
 impl Eq for RecordedSet {}
 
+/// The trace id of the retry a withheld call routes to, once its dispatch
+/// has opened one. Shared by the notes taken in the same [`with_retry_trace`].
+#[derive(Clone, Default)]
+pub(super) struct RetryCell(Arc<std::sync::OnceLock<String>>);
+
+impl std::fmt::Debug for RetryCell {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("RetryCell")
+    }
+}
+
+impl PartialEq for RetryCell {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+impl Eq for RetryCell {}
+
+/// Run `work`, a withheld call's note and its retry dispatch, so the retry's
+/// trace id reaches the note: the note says the call has an invocation record
+/// only when that retry's own record landed.
+pub(super) async fn with_retry_trace<F: Future>(work: F) -> F::Output {
+    RETRY_TRACE.scope(RetryCell::default(), work).await
+}
+
+/// Called by the retry's dispatch with the trace id it opens.
+pub(super) fn note_retry_trace(trace_id: &str) {
+    let _ = RETRY_TRACE.try_with(|cell| cell.0.set(trace_id.to_owned()));
+}
+
 /// The open slot's recorded set, for an invocation writer to add to.
 pub(super) fn open_slot_recorded() -> Option<RecordedSet> {
     GRANT_SLOT.try_with(|slot| slot.recorded.clone()).ok()
@@ -185,6 +219,8 @@ pub(super) struct GrantNote {
     pub(super) delivery: bool,
     /// The open slot's recorded set; empty for a note taken outside a slot.
     pub(super) recorded: RecordedSet,
+    /// The retry a withheld call routed to, when taken inside one.
+    pub(super) retry: Option<RetryCell>,
 }
 
 impl GrantNote {
@@ -229,6 +265,7 @@ impl GrantNote {
             repeat: None,
             delivery: DELIVERY.try_with(|()| ()).is_ok(),
             recorded: open_slot_recorded().unwrap_or_default(),
+            retry: RETRY_TRACE.try_with(Clone::clone).ok(),
         }
     }
 
@@ -240,6 +277,11 @@ impl GrantNote {
             || self
                 .trace_id
                 .as_deref()
+                .is_some_and(|trace| self.recorded.contains(trace))
+            || self
+                .retry
+                .as_ref()
+                .and_then(|cell| cell.0.get())
                 .is_some_and(|trace| self.recorded.contains(trace))
     }
 
