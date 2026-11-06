@@ -430,9 +430,12 @@ async fn a_flow_sibling_on_the_edited_line_gives_the_valueless_patch() {
         )],
     )
     .await;
-    let shown = format!("{:?}", got.shown);
-    assert!(matches!(got.shown, Shown::Patch(_)), "{shown}");
-    assert!(!shown.contains("flow-secret"), "{shown}");
+    // The editor refuses to insert into a flow mapping before any diff is
+    // built (`config_persistence_keyedit.rs`: insertion gives up when the
+    // parent is flow style); the verifier's own flow case is D14.
+    let patch = patch_of(&got);
+    assert_eq!(patch.code, GiveUp::Flow, "{patch:?}");
+    assert!(!format!("{patch:?}").contains("flow-secret"), "{patch:?}");
 }
 
 /// D16: a link to the startup file previews; one repointed since is
@@ -619,5 +622,115 @@ async fn a_masking_refusal_withholds_every_value() {
                 path: vec![key("auth"), key("bearer_token")],
             },
         ]
+    );
+}
+
+/// D26: an old secret reference whose quoted spelling escapes a newline
+/// (`"env:OLD\n+forged"`) would print as two lines: the valueless patch,
+/// and no part of it shown.
+#[tokio::test]
+async fn an_escaped_newline_in_an_old_reference_gives_the_valueless_patch() {
+    let (_dir, path, ctx) = gateway("environment: \"dev\"\n");
+    rewrite(&path, "auth:\n  bearer_token: \"env:OLD\\n+forged\"\n");
+    let got = preview(
+        &ctx,
+        vec![(
+            id("auth.bearer_token"),
+            Param::default(),
+            PreviewValue::Secret,
+        )],
+    )
+    .await;
+    let patch = patch_of(&got);
+    assert_eq!(patch.code, GiveUp::SecretSpan, "{patch:?}");
+    assert!(!format!("{patch:?}").contains("forged"), "{patch:?}");
+}
+
+/// D27 (a pin): a typed value equal to a slot's placeholder text is refused
+/// by the editor before any masking (`config_persistence_keyedit.rs`: "the
+/// file already holds a slot placeholder"), so masking never rewrites a
+/// typed value.
+#[tokio::test]
+async fn a_typed_value_equal_to_a_placeholder_gives_the_patch() {
+    let (_dir, _path, ctx) = gateway("environment: \"dev\"\nauth:\n  bearer_token: \"old\"\n");
+    let got = preview(
+        &ctx,
+        vec![
+            set(
+                "environment",
+                Param::default(),
+                s("__mcpgw_slot_auth.bearer_token__"),
+            ),
+            (
+                id("auth.bearer_token"),
+                Param::default(),
+                PreviewValue::Secret,
+            ),
+        ],
+    )
+    .await;
+    assert!(matches!(got.shown, Shown::Patch(_)), "{:?}", got.shown);
+}
+
+/// D29: a CRLF file shows the same lines as its LF copy, the comment as a
+/// marker.
+#[tokio::test]
+async fn a_crlf_file_shows_the_same_lines() {
+    let (_dir, _path, ctx) = gateway("# note\r\nenvironment: \"dev\"  # why\r\n");
+    let got = preview(&ctx, vec![set("environment", Param::default(), s("prod"))]).await;
+    assert_eq!(
+        diff_text(&got),
+        "--- a/gateway.yaml\n+++ b/gateway.yaml\n@@ -2,1 +2,1 @@\n-environment: \"dev\"  # <comment>\n+environment: \"prod\"  # <comment>\n"
+    );
+}
+
+/// D19b: a reordered batch previews as the table-ordered one, and its
+/// steps follow the table, then the index.
+#[cfg(feature = "cost-governance")]
+#[tokio::test]
+async fn a_reordered_alert_batch_gives_the_table_ordered_patch() {
+    let (_dir, _path, ctx) = gateway("environment: \"dev\"\n");
+    let mut fields = alert(1, 80, "notify");
+    fields.extend(alert(0, 50, "log"));
+    let got = preview(&ctx, fields).await;
+    let patch = patch_of(&got);
+    let order: Vec<String> = patch
+        .steps
+        .iter()
+        .map(|step| match step {
+            PatchStep::Set { path, .. } => path_text(path),
+            other => panic!("{other:?}"),
+        })
+        .collect();
+    assert_eq!(
+        order,
+        [
+            "cost_governance.alerts[0].at_percent",
+            "cost_governance.alerts[1].at_percent",
+            "cost_governance.alerts[0].action",
+            "cost_governance.alerts[1].action",
+        ]
+    );
+}
+
+/// D28: an alert field on its element's dash line shows that line, dash
+/// and all.
+#[cfg(feature = "cost-governance")]
+#[tokio::test]
+async fn an_alert_on_its_dash_line_shows_that_line() {
+    let text = "cost_governance:\n  alerts:\n    - at_percent: 50\n      action: \"log\"\n";
+    let (_dir, _path, ctx) = gateway(text);
+    let got = preview(
+        &ctx,
+        vec![set(
+            "cost_governance.alerts.at_percent",
+            at(0),
+            Scalar::Int(60),
+        )],
+    )
+    .await;
+    assert_eq!(
+        diff_text(&got),
+        "--- a/gateway.yaml\n+++ b/gateway.yaml\n@@ -3,1 +3,1 @@\n-    - at_percent: 50\n+    - at_percent: 60\n"
     );
 }

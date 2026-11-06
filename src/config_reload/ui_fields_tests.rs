@@ -156,18 +156,31 @@ fn wrong_kind_bad_value_and_bad_param_are_refused_before_any_read() {
     }
 }
 
-/// F3: a field's `Apply` is what a reload does with a change to it alone.
+/// F3: a field's `Apply` is what a reload does with a change to it alone,
+/// in the setting the field is edited in: budgets and alerts apply on
+/// reload while governance is on on both sides (`config_reload/diff.rs`,
+/// `cost_governance_differs`), so they are judged with governance on;
+/// turning governance itself on or off is restart-only.
 #[test]
 fn each_fields_apply_matches_the_reload_classifier() {
-    // Both sides through the same extraction, so only the field differs.
-    let base = Config::from_file_text("").expect("an empty file extracts");
+    const GOVERNED: &str = "cost_governance:\n  enabled: true\n";
     for field in FIELDS {
-        // F1's `auth.enabled: false` is the default, so F3 turns it on.
-        let text = match field.id {
-            "auth.enabled" => "auth:\n  enabled: true\n".to_owned(),
-            other => file_with(other),
+        // Both sides through the same extraction, so only the field differs.
+        let (before, after) = match field.id {
+            // F1's `auth.enabled: false` is the default, so F3 turns it on.
+            "auth.enabled" => (String::new(), "auth:\n  enabled: true\n".to_owned()),
+            "cost_governance.budgets.daily" => (
+                GOVERNED.to_owned(),
+                format!("{GOVERNED}  budgets:\n    daily: 2.5\n"),
+            ),
+            "cost_governance.alerts.at_percent" | "cost_governance.alerts.action" => (
+                GOVERNED.to_owned(),
+                format!("{GOVERNED}  alerts:\n    - at_percent: 50\n      action: \"log\"\n"),
+            ),
+            other => (String::new(), file_with(other)),
         };
-        let changed = Config::from_file_text(&text).expect("extracts");
+        let base = Config::from_file_text(&before).expect("extracts");
+        let changed = Config::from_file_text(&after).expect("extracts");
         let pending = crate::config_reload::diff::pending_restart_fields(&base, &changed);
         assert_eq!(
             field.apply == Apply::Restart,
