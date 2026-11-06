@@ -594,12 +594,16 @@ impl super::MetaMcp {
         // record names no invocation trace, and states no effect or findings,
         // as no one step's facts describe what the composite delivers.
         crate::gateway::delivery_facts::unvouched();
-        let trace_id = crate::gateway::trace::generate();
         // Each step's facts stay in a cell of its own: a step refusal the
         // composite carries on past never marks what the composite delivers.
-        let sourced = crate::gateway::delivery_facts::step(
-            self.invoke_tool_with_source(args, session_id, caller, trace_id),
-        )
+        // The trace is noted inside that cell, as the one the step's record
+        // carries, for a settlement that joins the step the plan ended on.
+        let sourced = crate::gateway::delivery_facts::step(async {
+            let trace_id = crate::gateway::trace::generate();
+            crate::gateway::delivery_facts::note_step_trace(&trace_id);
+            self.invoke_tool_with_source(args, session_id, caller, trace_id)
+                .await
+        })
         .await;
         match sourced {
             Ok(super::invoke::SourcedOutcome::Live((value, _, _))) => Ok(value),

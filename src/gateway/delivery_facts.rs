@@ -118,6 +118,17 @@ pub(crate) struct DeliveryFacts {
     /// The check that refused a stored task's answer, and its rule when a
     /// configured rule decided: the first one raised.
     refused_by: Option<crate::security::decision_record::RefusedBy>,
+    /// The invocation trace of the record this step cell's step wrote
+    /// ([`note_step_trace`]); read by [`step`] when the step ends.
+    noted_trace: Option<std::sync::Arc<str>>,
+    /// The latest composite step's record trace and its `withheld_code`,
+    /// under the keep/drop rule documented on [`step`].
+    last_step_trace: Option<std::sync::Arc<str>>,
+    last_step_withheld: Option<i32>,
+    /// The record trace of the step the composite ended refused on: written
+    /// by [`composite_ended`] alone, so a trace a step left is never read as
+    /// the end unless the end kept it.
+    ended_on: Option<std::sync::Arc<str>>,
 }
 
 /// What the injected-value scrub did during a delivery.
@@ -186,6 +197,10 @@ impl Default for DeliveryFacts {
             last_step_folded: None,
             error_of: ErrorOf::Own,
             refused_by: None,
+            noted_trace: None,
+            last_step_trace: None,
+            last_step_withheld: None,
+            ended_on: None,
         }
     }
 }
@@ -228,6 +243,12 @@ impl DeliveryFacts {
     /// built with. `None` when the gateway folded no refusal of its own.
     pub(crate) fn withheld_code(&self) -> Option<i32> {
         self.withheld_code
+    }
+
+    /// The record trace of the step a composite ended refused on: kept only
+    /// by [`composite_ended`] for a plan that Failed on a refused step.
+    pub(crate) fn ended_on(&self) -> Option<std::sync::Arc<str>> {
+        self.ended_on.clone()
     }
 
     /// The strongest effect: this cell's own, raised to `Rewritten` when the
@@ -284,19 +305,32 @@ pub(crate) async fn discarded<F: std::future::Future>(future: F) -> F::Output {
 /// Only the latest step's note is kept: a later step replaces it. A step
 /// names one target, so a step answered absent for a policy reason is
 /// refused ([`withheld`]).
+///
+/// The step's record trace ([`note_step_trace`]) and its `withheld_code` go
+/// up as `last_step_trace` and `last_step_withheld`, under one rule: both are
+/// set (or emptied) by every step that ends, both are cleared by
+/// [`step_absorbed`] and [`refused_before_step`], and [`composite_ended`]
+/// keeps them only when the plan Failed on a refused step, moving the trace
+/// into `ended_on` (the only trace a settlement reads) and the code into the
+/// plan cell's `withheld_code`; otherwise it drops them and empties
+/// `ended_on`. A step whose trace was never noted leaves no trace, never an
+/// earlier step's.
 pub(crate) async fn step<F: std::future::Future>(future: F) -> F::Output {
     let cell = DeliveryFacts {
         lone_target: true,
         ..nested_cell()
     };
-    let (output, refused, folded, error_of) = FACTS
+    let (output, (refused, folded, error_of), (trace, withheld)) = FACTS
         .scope(RefCell::new(cell), async {
             let output = future.await;
-            let (refused, folded, error_of) = FACTS.with(|cell| {
+            let ended = FACTS.with(|cell| {
                 let cell = cell.borrow();
-                (cell.refused(), cell.folded, cell.error_of)
+                (
+                    (cell.refused(), cell.folded, cell.error_of),
+                    (cell.noted_trace.clone(), cell.withheld_code),
+                )
             });
-            (output, refused, folded, error_of)
+            (output, ended.0, ended.1)
         })
         .await;
     with(|facts| {
@@ -310,6 +344,8 @@ pub(crate) async fn step<F: std::future::Future>(future: F) -> F::Output {
         // a single execute), which the delivered error then counts as.
         facts.last_step_folded = folded;
         facts.error_of = error_of;
+        facts.last_step_trace = trace;
+        facts.last_step_withheld = withheld;
     });
     output
 }
@@ -318,7 +354,10 @@ pub(crate) async fn step<F: std::future::Future>(future: F) -> F::Output {
 /// refusal of a step's arguments, a resumed chain's pending step): the
 /// composite now ends on that refusal unless it carries on past it.
 pub(crate) fn refused_before_step() {
-    with(|facts| facts.last_step = LastStep::Refused);
+    with(|facts| {
+        facts.last_step = LastStep::Refused;
+        forget_last_step(facts);
+    });
 }
 
 /// The composite carried on past its latest step's failure (a playbook's
@@ -331,6 +370,7 @@ pub(crate) fn step_absorbed() {
         // the wrapper built for it is not what is delivered.
         facts.last_step_folded = None;
         facts.error_of = ErrorOf::Own;
+        forget_last_step(facts);
     });
 }
 
@@ -426,46 +466,32 @@ pub(crate) fn stamp_folded(frame: &mut crate::protocol::JsonRpcResponse) {
     }
 }
 
-/// How a composite ended.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum CompositeEnd {
-    Succeeded,
-    /// In an error, or a tool error result.
-    Failed,
-}
-
-impl CompositeEnd {
-    /// `Failed` for an error or a tool error result (`isError: true`).
-    pub(crate) fn of(result: &crate::Result<Value>) -> Self {
-        match result {
-            Ok(answer) if !crate::protocol::cacheable::is_error(answer) => Self::Succeeded,
-            _ => Self::Failed,
-        }
-    }
-
-    /// `Failed` for an error: a composite whose output is not a tool result.
-    #[cfg(test)]
-    pub(crate) fn of_outcome<T>(result: &crate::Result<T>) -> Self {
-        if result.is_err() {
-            Self::Failed
-        } else {
-            Self::Succeeded
-        }
-    }
-}
+mod composite;
+use composite::forget_last_step;
+pub(crate) use composite::{CompositeEnd, note_step_trace};
 
 /// The composite ends as `end`. It records `refused` when it fails while its
-/// latest step's refusal still stands: the step it ends on was refused.
+/// latest step's refusal still stands: the step it ends on was refused. That
+/// step's record trace and code are kept then, and dropped otherwise ([`step`]).
 pub(crate) fn composite_ended(end: CompositeEnd) {
     with(|facts| {
         if end == CompositeEnd::Failed && facts.last_step == LastStep::Refused {
             facts.effect = facts.effect.max(ResponseEffect::Refused);
+            // The refusing gate's own code, which the plan's wrapper error
+            // would otherwise replace in the settlement record.
+            if let Some(code) = facts.last_step_withheld.take() {
+                facts.withheld_code = Some(code);
+            }
+            facts.ended_on = facts.last_step_trace.take();
+        } else {
+            forget_last_step(facts);
+            facts.ended_on = None;
         }
         // A composite that fails ends on its latest step's fold; one that
         // succeeds carries only the failures it reported.
-        let ended_on = facts.last_step_folded.take();
+        let ended_fold = facts.last_step_folded.take();
         if end == CompositeEnd::Failed {
-            facts.folded = worst(facts.folded, ended_on);
+            facts.folded = worst(facts.folded, ended_fold);
         }
     });
 }

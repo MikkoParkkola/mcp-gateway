@@ -104,17 +104,18 @@ async fn r1c_a_replay_that_shows_nothing_leaves_later_ids_without_the_marker() {
     .await;
     within(again.until("hello")).await;
     within(again.until("reset")).await;
-    // Two status changes: during a catch-up a snapshot is served at most
-    // once before the next page, so the second follows the replay's page.
-    for name in ["docs-1", "docs-2"] {
+    // The first two status changes: during a catch-up a snapshot is served at
+    // most once before the next page, so the second follows the replay's page.
+    // Each change is inside the key's scope (a and b, none registered by the
+    // fixture): a scoped viewer's status counts only its own backends, so a
+    // backend outside the scope would send it no status frame at all.
+    for name in ["a", "b"] {
         let _ = state
             .backends
             .register(http_backend_at(name, "http://127.0.0.1:9/mcp"));
         within(again.until("status")).await;
     }
-    let _ = state
-        .backends
-        .register(http_backend_at("docs-3", "http://127.0.0.1:9/mcp"));
+    assert!(state.backends.remove("a"), "a was registered");
     let after = within(again.until("status")).await;
     assert_ne!(
         after.part('i').as_deref(),

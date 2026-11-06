@@ -167,7 +167,11 @@ def run_gate_step(gate: dict, c: dict, results: dict[str, str], root: Path = ROO
     holding a mutated check_needs.py)."""
     step = next(st for st in gate.get("steps", []) if st.get("name") == STEP)
     env = {k: "true" if evaluate(str(v), c) else "false" for k, v in (step.get("env") or {}).items() if k != "NEEDS"}
-    needs = {job: {"result": r, "outputs": {}} for job, r in results.items()}
+    # Only the jobs the gate declares in `needs` reach toJSON(needs) on a runner, so a job the gate
+    # forgot cannot be judged here either (a fixed list once let a gate without kani pass its rows).
+    declared = gate.get("needs") or []
+    declared = {declared} if isinstance(declared, str) else set(declared)
+    needs = {job: {"result": r, "outputs": {}} for job, r in results.items() if job in declared}
     with tempfile.NamedTemporaryFile() as summary:
         env.update(NEEDS=json.dumps(needs), GITHUB_STEP_SUMMARY=summary.name, PATH=os.environ.get("PATH", ""))
         # The shell a `run:` step gets on a Linux runner.
@@ -197,19 +201,24 @@ def gate_step_errors(jobs: dict, root: Path = ROOT) -> list[str]:
     skipped_heavy = {job: "skipped" for job in HEAVY}
     cases = {
         "lane, heavy jobs skipped": (lane, results(**{j.replace("-", "_"): "skipped" for j in HEAVY}), True),
-        "lane, a heavy job failed": (lane, results(kani="failure"), True),
+        "lane, a heavy job failed": (lane, results(**{"linux-keychain": "failure"}), True),
         "fork train branch, heavy jobs skipped": (fork, dict(results(), **skipped_heavy), True),
         "train, all succeeded": (train, results(), True),
-        "train, a heavy job failed": (train, results(kani="failure"), False),
+        "train, a heavy job failed": (train, results(**{"linux-keychain": "failure"}), False),
+        # Kani runs on lanes too, and the gate still refuses a train whose Kani failed.
+        "train, Kani failed": (train, results(kani="failure"), False),
+        "train, Kani skipped": (train, results(kani="skipped"), False),
+        "lane, Kani failed (its own check fails the lane, not this gate)": (lane, results(kani="failure"), True),
+        "docs-only train, Kani skipped": (docs_train, dict(results(), **{j: "skipped" for j in DOCS_SKIPPED}), True),
         "train, a heavy job cancelled": (train, results(windows_check="cancelled"), False),
         "train, a heavy job skipped": (train, results(linux_keychain="skipped"), False),
         "train, Windows skipped": (train, results(windows_shards="skipped"), False),
         "docs-only train, docs-only skips": (docs_train, dict(results(), **{j: "skipped" for j in DOCS_SKIPPED}), True),
         "docs-only train, Windows skipped": (docs_train, results(windows_check="skipped"), False),
-        "train, a heavy job missing from needs": (train, {j: "success" for j in every if j != "kani"}, False),
+        "train, a heavy job missing from needs": (train, {j: "success" for j in every if j != "linux-keychain"}, False),
         # Only `skipped` is a docs-only allowance: a docs-skipped job that ran
         # and failed, or was cancelled, still fails the train.
-        "docs-only train, a docs-skipped job failed": (docs_train, results(kani="failure"), False),
+        "docs-only train, a docs-skipped job failed": (docs_train, results(**{"linux-keychain": "failure"}), False),
         "docs-only train, a docs-skipped job cancelled": (docs_train, results(gws_dry_run="cancelled"), False),
         # Feature combinations are judged like the rest: a lane PR whose CI predates them
         # would otherwise leave a red one unrequired on the train.

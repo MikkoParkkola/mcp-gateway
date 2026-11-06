@@ -212,6 +212,10 @@ jobs:
           python3 scripts/ci/job_time_watch.py --self-test
           python3 scripts/ci/test_os_shards.py
           python3 scripts/ci/test_os_label_routing.py
+      # The Windows target shard's mingw download: bounded per attempt and
+      # retried once, so a trickling mirror cannot outlast the job.
+      - name: Validate the mingw package download bounds
+        run: python3 scripts/ci/test_mingw_debs.py
       - name: Validate the gateway-spawn check against planted spawns
         run: python3 scripts/ci/check-gateway-spawns.py --self-test
       - name: Start the gateway in tests only through its isolating helper
@@ -1308,6 +1312,9 @@ jobs:
   kani:
     name: Kani
     needs: scope
+    # Not train-only: a lane pull request that is not docs-only runs it, so code that does
+    # not compile under cfg(kani) fails its own CI. Compiling is the whole cost (about 7 min; the 5
+    # harnesses verify in under a second), so this is the full job, not a compile-only leg.
     if: ${{ !cancelled() && (needs.scope.result != 'success' || needs.scope.outputs.docs_only != 'true') && !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) && !(github.event_name == 'push' && github.ref == 'refs/heads/docs/ranking-1-release-line') }}
     # Kani's current toolchain is validated against Ubuntu 22.04. Keep this
     # job pinned to that image rather than following latest.

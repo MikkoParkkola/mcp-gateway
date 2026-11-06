@@ -44,6 +44,12 @@ cargo kani setup
 cargo kani --output-format=terse
 ```
 
+CI runs these proofs (the `Kani` job) on every pull request that is not docs-only,
+merge trains included, so code that does not build under `cfg(kani)` fails its own
+pull request. Under Kani, `assert!` ignores its message arguments: a variable used
+only in an assertion message is unused there and fails the build with
+`unused variable`. Use it outside the message, or do not bind it.
+
 ### Windows test coverage
 
 The `Windows check` job runs `cargo test --all-features --tests --no-fail-fast`: the
