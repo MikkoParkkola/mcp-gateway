@@ -68,7 +68,11 @@ fn table_meta(dir: &tempfile::TempDir, config: BackendConfig) -> (MetaMcp, Arc<A
     let _ = registry.register(backend);
     let logger = crate::security::TransparencyLogger::open(Arc::new(TransparencyLogConfig {
         enabled: true,
-        path: dir.path().join("audit.jsonl").to_string_lossy().into_owned(),
+        path: dir
+            .path()
+            .join("audit.jsonl")
+            .to_string_lossy()
+            .into_owned(),
         key_id: "d1".to_string(),
         ..TransparencyLogConfig::default()
     }))
@@ -78,30 +82,59 @@ fn table_meta(dir: &tempfile::TempDir, config: BackendConfig) -> (MetaMcp, Arc<A
     (meta, sent)
 }
 
-/// `server`'s `read`, invoked by an API-key caller inside one request memo:
-/// the answer as the caller sees it (an error, or an `isError` result), and
-/// the call's one decision. The record must show a refusal: an outcome other
-/// than `ok`, with an error code.
-async fn refused(meta: &MetaMcp, dir: &tempfile::TempDir, server: &str) -> (String, Value) {
+/// How a refused call is answered to its caller.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Form {
+    /// A tool result with `isError: true`.
+    IsErrorResult,
+    /// A JSON-RPC error.
+    RpcError,
+}
+
+/// What a refusal row expects of the call's record and answer, each value
+/// read from the source line its row cites.
+#[derive(Debug, Clone, Copy)]
+struct Refusal {
+    form: Form,
+    /// The record's `outcome`.
+    outcome: &'static str,
+    /// The record's `error_code`; `None` requires the key absent.
+    code: Option<i64>,
+}
+
+/// `server`'s `read`, invoked by an API-key caller inside one request memo,
+/// refused as `want` says: its answer's form and its record's outcome and
+/// code. Returns the call's one decision.
+async fn refused(meta: &MetaMcp, dir: &tempfile::TempDir, server: &str, want: Refusal) -> Value {
     let who = api_key_caller();
     let args = json!({"server": server, "tool": "read", "arguments": {}});
     let answer =
         with_visibility_memo(meta.invoke_tool(&args, None, &context(&AllowAll, &who))).await;
-    let answer = match answer {
+    let (form, answer) = match answer {
         Ok(result) => {
-            assert_eq!(result["isError"], true, "premise: the call is refused: {result}");
-            result.to_string()
+            assert_eq!(
+                result["isError"], true,
+                "premise: the call is refused: {result}"
+            );
+            (Form::IsErrorResult, result.to_string())
         }
-        Err(error) => format!("{error:?}"),
+        Err(error) => (Form::RpcError, format!("{error:?}")),
     };
+    assert_eq!(form, want.form, "the answer's form: {answer}");
     let all = records(dir);
     let [record] = all.as_slice() else {
         panic!("premise: one invocation record: {all:?}; answer {answer}");
     };
-    eprintln!("ROWPROBE {answer} || outcome={} code={} decision={}", record["outcome"], record["error_code"], record["decision"]);
-    assert_ne!(record["outcome"], "ok", "{answer}: {record}");
-    assert!(record["error_code"].is_i64(), "{answer}: {record}");
-    (answer, record["decision"].clone())
+    assert_eq!(record["outcome"], want.outcome, "{answer}: {record}");
+    assert_eq!(
+        record.get("error_code").and_then(Value::as_i64),
+        want.code,
+        "{answer}: {record}"
+    );
+    if want.code.is_none() {
+        assert!(record.get("error_code").is_none(), "{answer}: {record}");
+    }
+    record["decision"].clone()
 }
 
 /// A refusal row: `kind` at a kind-only site, nothing else recorded.
@@ -127,9 +160,24 @@ async fn t1_meta_allowed_tools() {
         ..BackendConfig::default()
     };
     let (meta, sent) = table_meta(&dir, config);
-    let (error, decision) = refused(&meta, &dir, "alpha").await;
-    assert_eq!(sent.load(Ordering::SeqCst), 0, "the backend was sent the call: {error}");
-    assert_row(&decision, &refusal("t1_meta_allowed_tools", "allowed_tools"));
+    // The gate answers a withheld tool as an absent one, an `isError` result
+    // (`gate.rs:296`); a tool result reads as `tool_error`, with no code
+    // (`audit.rs:68-70`).
+    let withheld = Refusal {
+        form: Form::IsErrorResult,
+        outcome: "tool_error",
+        code: None,
+    };
+    let decision = refused(&meta, &dir, "alpha", withheld).await;
+    assert_eq!(
+        sent.load(Ordering::SeqCst),
+        0,
+        "the backend was sent the call"
+    );
+    assert_row(
+        &decision,
+        &refusal("t1_meta_allowed_tools", "allowed_tools"),
+    );
 }
 
 /// C1: a disabled capability (`dispatch_guards.rs:319`, in `admit_target`).
@@ -146,9 +194,23 @@ async fn c1_meta_capability_disabled() {
         meta.kill_switch.is_capability_disabled("alpha", "read"),
         "premise: the capability is disabled"
     );
-    let (error, decision) = refused(&meta, &dir, "alpha").await;
-    assert_eq!(sent.load(Ordering::SeqCst), 0, "the backend was sent the call: {error}");
-    assert_row(&decision, &refusal("c1_meta_capability_disabled", "capability_disabled"));
+    // `Error::gateway_refused(-32000, ..)` (`dispatch_guards.rs:308`), an
+    // error that reads as `error` with its own code (`audit.rs:94`).
+    let disabled = Refusal {
+        form: Form::RpcError,
+        outcome: "error",
+        code: Some(-32000),
+    };
+    let decision = refused(&meta, &dir, "alpha", disabled).await;
+    assert_eq!(
+        sent.load(Ordering::SeqCst),
+        0,
+        "the backend was sent the call"
+    );
+    assert_row(
+        &decision,
+        &refusal("c1_meta_capability_disabled", "capability_disabled"),
+    );
 }
 
 /// The gateway's default routing profile leaves `read` out.
@@ -164,31 +226,58 @@ fn without_read(meta: MetaMcp) -> MetaMcp {
     meta.with_profile_registry(ProfileRegistry::from_config(&profiles, "restricted"))
 }
 
-/// P1: the routing profile leaves the tool out (`dispatch_guards.rs:204`, in
-/// `admit_target`). P2 (`visibility.rs:118`) is the same profile at the
-/// invoke-scope check; the site mutants tell which of the two this call
-/// reaches first.
+/// P2: the session's routing profile leaves the tool out, judged at the
+/// gate's invoke-scope check (`visibility.rs:118`, reached through
+/// `may_invoke_explained`, `gate.rs:660`; confirmed by the site probe).
 #[tokio::test]
-async fn p1_meta_routing_profile_at_admission() {
+async fn p2_meta_routing_profile_in_scope() {
     let dir = tempfile::tempdir().expect("a log directory");
     let (meta, sent) = table_meta(&dir, BackendConfig::default());
     let meta = without_read(meta);
-    let (error, decision) = refused(&meta, &dir, "alpha").await;
-    assert_eq!(sent.load(Ordering::SeqCst), 0, "the backend was sent the call: {error}");
-    assert_row(&decision, &refusal("p1_meta_routing_profile_at_admission", "routing_profile"));
+    // The gate notes the profile refusal's own code, `Error::Protocol`'s
+    // -32600 (`gate.rs:665`), which the record keeps as `denied`
+    // (`denial.rs:45-47`); the caller is answered as for an absent tool.
+    let profiled = Refusal {
+        form: Form::IsErrorResult,
+        outcome: "denied",
+        code: Some(-32600),
+    };
+    let decision = refused(&meta, &dir, "alpha", profiled).await;
+    assert_eq!(
+        sent.load(Ordering::SeqCst),
+        0,
+        "the backend was sent the call"
+    );
+    assert_row(
+        &decision,
+        &refusal("p2_meta_routing_profile_in_scope", "routing_profile"),
+    );
 }
 
-/// N1: an unscoped caller names a server that matches nothing (`gate.rs:539`,
-/// `denial.rs:21` or `policy.rs:414`; the site mutants tell which it reaches).
+/// N2: an unscoped caller names a server that matches nothing; the gate
+/// marks the name absent and the dispatch's miss notes `not_found`
+/// (`denial.rs:21`; confirmed by the site probe).
 #[tokio::test]
-async fn n1_meta_not_found() {
+async fn n2_meta_not_found_at_dispatch() {
     let dir = tempfile::tempdir().expect("a log directory");
     let (meta, sent) = table_meta(&dir, BackendConfig::default());
-    let (error, decision) = refused(&meta, &dir, "nowhere").await;
-    assert_eq!(sent.load(Ordering::SeqCst), 0, "a backend was sent the call: {error}");
+    // The miss is answered as an `isError` result with a recovery hint
+    // (`errors.rs:54-66`); its record is `denied` with the miss's -32001
+    // (`denial.rs:45-47`).
+    let missed = Refusal {
+        form: Form::IsErrorResult,
+        outcome: "denied",
+        code: Some(-32001),
+    };
+    let decision = refused(&meta, &dir, "nowhere", missed).await;
+    assert_eq!(
+        sent.load(Ordering::SeqCst),
+        0,
+        "a backend was sent the call"
+    );
     let row = DecisionRow {
         rule_id: RuleId::Absent("the target matches nothing"),
-        ..refusal("n1_meta_not_found", "not_found")
+        ..refusal("n2_meta_not_found_at_dispatch", "not_found")
     };
     assert_row(&decision, &row);
 }
