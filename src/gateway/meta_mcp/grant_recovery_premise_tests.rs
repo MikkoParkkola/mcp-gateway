@@ -42,7 +42,10 @@ async fn a_capability_call_never_offers_an_armed_submission_a_handle() {
     )
     .await;
 
-    assert!(answer.get("error").is_none(), "premise: the call ran: {answer}");
+    assert!(
+        answer.get("error").is_none(),
+        "premise: the call ran: {answer}"
+    );
     assert_eq!(endpoint.arrivals(), 1, "premise: the endpoint was reached");
     assert_eq!(submission.handle(), None, "a capability task held a handle");
     let _ = wait_for_decisions(&dir, 1).await;

@@ -176,6 +176,9 @@ mod f13_text_a_tests;
 mod firewall_publish_fixture;
 #[cfg(all(test, feature = "webui"))]
 mod gateway_status_tests;
+/// Identity-grant refusals through `/mcp`, read back as Activity rows.
+#[cfg(all(test, feature = "webui"))]
+mod grant_refusal_rows_tests;
 /// GH1942.HARDEN.1 rows 10 and 11: hardened requires declared elicitation.
 #[cfg(test)]
 mod hardened_elicitation_tests;
@@ -244,9 +247,6 @@ mod u17_ui_shell_tests;
 /// The web UI API's access answers per path, method and caller, pinned.
 #[cfg(all(test, feature = "webui"))]
 mod ui_access_matrix_tests;
-/// Identity-grant refusals through `/mcp`, read back as Activity rows.
-#[cfg(all(test, feature = "webui"))]
-mod grant_refusal_rows_tests;
 /// The web UI compressed by the router's one rule.
 #[cfg(all(test, feature = "webui"))]
 mod ui_compression_tests;

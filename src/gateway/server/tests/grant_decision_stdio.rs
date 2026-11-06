@@ -71,7 +71,12 @@ async fn stdio_admission_refusal_writes_one_record() {
     assert_eq!(records.len(), 1, "{records:#?}");
     assert_eq!(records[0]["outcome"], json!("denied"), "{:#?}", records[0]);
     // Refused at admission: no invocation record, so Activity lists it.
-    assert_eq!(records[0]["invocation_recorded"], json!(false), "{:#?}", records[0]);
+    assert_eq!(
+        records[0]["invocation_recorded"],
+        json!(false),
+        "{:#?}",
+        records[0]
+    );
     assert_eq!(records[0]["server"], json!(CAPS), "{:#?}", records[0]);
 }
 
@@ -120,7 +125,10 @@ fn a_signed_stdio_refusal_writes_one_unrecorded_decision() {
         )
         .await
         .expect("a request carrying an id is answered");
-        assert!(response.get("error").is_some(), "premise: refused: {response}");
+        assert!(
+            response.get("error").is_some(),
+            "premise: refused: {response}"
+        );
         let entries: Vec<Value> = std::fs::read_to_string(&log)
             .unwrap_or_default()
             .lines()

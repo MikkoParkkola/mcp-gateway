@@ -38,9 +38,9 @@ use crate::{Error, Result};
 
 mod marker;
 mod withheld;
-pub(super) use withheld::{WITHHELD_RECORD_FAILED, note_withheld_best_effort};
 pub(super) use marker::in_delivery_scope;
 pub(super) use marker::{RecordedSet, RetryCell, note_retry_trace, with_retry_trace};
+pub(super) use withheld::{WITHHELD_RECORD_FAILED, note_withheld_best_effort};
 mod repeat;
 pub(crate) use repeat::DecisionDedupe;
 pub(super) use repeat::RepeatMark;
@@ -385,8 +385,7 @@ pub(super) async fn with_grant_slot<F: Future>(
     let notes = std::mem::take(&mut *guard.slot.notes.lock().expect("grant slot lock"));
     let answer_id = guard.slot.answer_id.get().cloned();
     // invariant: nothing panics while holding the slot lock, so it is never poisoned.
-    let best_effort =
-        std::mem::take(&mut *guard.slot.best_effort.lock().expect("grant slot lock"));
+    let best_effort = std::mem::take(&mut *guard.slot.best_effort.lock().expect("grant slot lock"));
     // A slot that collected no decision has nothing to write, so no flush
     // task: every `/mcp` request opens a slot, and most decide nothing.
     let written = if notes.is_empty() {

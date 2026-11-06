@@ -107,4 +107,3 @@ pub(in crate::gateway::meta_mcp) async fn with_retry_trace<F: Future>(work: F) -
 pub(in crate::gateway::meta_mcp) fn note_retry_trace(trace_id: &str) {
     let _ = RETRY_TRACE.try_with(|cell| cell.0.set(trace_id.to_owned()));
 }
-

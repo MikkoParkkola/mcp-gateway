@@ -12,9 +12,9 @@ use super::grant_audit::{in_delivery_scope, with_grant_slot};
 use super::grant_audit_fixture::{
     CAPS, Endpoint, PERSONAL, decisions, entries, grant, invocations, wait_for_decisions,
 };
+use super::grant_decision_audit_tests::{api_key, call, context, gateway, invoke_args, only};
 use super::visible::Withholding;
 use crate::gateway::authz::Emit;
-use super::grant_decision_audit_tests::{api_key, call, context, gateway, invoke_args, only};
 use crate::security::audit::AuditFailurePolicy;
 
 const ALICE: (&str, &str) = ("api_key", "alice");
@@ -124,7 +124,10 @@ async fn a_gate_refused_call_with_its_invocation_record_is_recorded() {
 
 #[tokio::test]
 async fn a_refusal_whose_invocation_append_failed_is_an_unrecorded_decision() {
-    for policy in [AuditFailurePolicy::FailClosed, AuditFailurePolicy::BestEffort] {
+    for policy in [
+        AuditFailurePolicy::FailClosed,
+        AuditFailurePolicy::BestEffort,
+    ] {
         let dir = Arc::new(tempfile::tempdir().unwrap());
 
         refused_call(&dir, policy, true).await;
@@ -143,7 +146,12 @@ async fn a_withheld_note_outside_any_slot_is_written_at_once_unrecorded() {
         Endpoint::start(false).await,
         Arc::new(tempfile::tempdir().unwrap()),
     );
-    let meta = gateway(&endpoint, vec![], Some(&dir), AuditFailurePolicy::BestEffort);
+    let meta = gateway(
+        &endpoint,
+        vec![],
+        Some(&dir),
+        AuditFailurePolicy::BestEffort,
+    );
     let who = api_key("alice");
     let _unslotted = super::grant_audit::allow_unslotted_check_for_test();
 
@@ -153,7 +161,10 @@ async fn a_withheld_note_outside_any_slot_is_written_at_once_unrecorded() {
     let held = wait_for_decisions(&dir, 1).await;
     assert_eq!(held.len(), 1, "{held:#?}");
     assert_eq!(held[0]["invocation_recorded"], json!(false), "{held:#?}");
-    assert!(invocations(&dir).is_empty(), "no slot means no invocation record");
+    assert!(
+        invocations(&dir).is_empty(),
+        "no slot means no invocation record"
+    );
 }
 
 static DENY: crate::gateway::authz::DenyAll = crate::gateway::authz::DenyAll;
@@ -206,7 +217,12 @@ async fn a_refused_stored_delivery_recheck_says_recorded() {
         Endpoint::start(false).await,
         Arc::new(tempfile::tempdir().unwrap()),
     );
-    let meta = gateway(&endpoint, vec![], Some(&dir), AuditFailurePolicy::BestEffort);
+    let meta = gateway(
+        &endpoint,
+        vec![],
+        Some(&dir),
+        AuditFailurePolicy::BestEffort,
+    );
     let who = api_key("alice");
     let caller = context(&who);
     let store = Arc::new(super::grant_audit::DecisionDedupe::default());
@@ -234,7 +250,12 @@ async fn a_call_cancelled_during_its_invocation_append_is_one_recorded_decision(
         Endpoint::start(false).await,
         Arc::new(tempfile::tempdir().unwrap()),
     );
-    let meta = Arc::new(gateway(&endpoint, vec![], Some(&dir), AuditFailurePolicy::BestEffort));
+    let meta = Arc::new(gateway(
+        &endpoint,
+        vec![],
+        Some(&dir),
+        AuditFailurePolicy::BestEffort,
+    ));
     let log = meta.transparency_logger.clone().expect("the gateway logs");
     let gate = log.stall_next_write_for_test(std::time::Duration::from_secs(30));
     let running = tokio::spawn({
@@ -248,7 +269,10 @@ async fn a_call_cancelled_during_its_invocation_append_is_one_recorded_decision(
     while !log.write_in_flight_for_test() && std::time::Instant::now() < deadline {
         tokio::time::sleep(std::time::Duration::from_millis(5)).await;
     }
-    assert!(log.write_in_flight_for_test(), "premise: the append is in flight");
+    assert!(
+        log.write_in_flight_for_test(),
+        "premise: the append is in flight"
+    );
 
     running.abort();
     let _ = running.await;
@@ -269,15 +293,26 @@ async fn an_append_that_outlives_its_caller_marks_the_decision_recorded() {
         Endpoint::start(false).await,
         Arc::new(tempfile::tempdir().unwrap()),
     );
-    let meta = gateway(&endpoint, vec![], Some(&dir), AuditFailurePolicy::BestEffort);
+    let meta = gateway(
+        &endpoint,
+        vec![],
+        Some(&dir),
+        AuditFailurePolicy::BestEffort,
+    );
     let log = meta.transparency_logger.clone().expect("the gateway logs");
     let gate = log.stall_next_write_for_test(std::time::Duration::from_millis(100));
     let hold = super::grant_audit::seams::hold_next_best_effort_write_for_test();
 
     let _answered = call(&meta, &api_key("alice"), "gateway_invoke", invoke_args()).await;
     let parked = tokio::time::timeout(std::time::Duration::from_secs(10), hold.held()).await;
-    assert!(parked.is_ok(), "premise: the withheld write reached its hold");
-    assert!(invocations(&dir).is_empty(), "premise: the append is still stuck");
+    assert!(
+        parked.is_ok(),
+        "premise: the withheld write reached its hold"
+    );
+    assert!(
+        invocations(&dir).is_empty(),
+        "premise: the append is still stuck"
+    );
     log.release_and_drain(gate).await;
     hold.release();
 
@@ -294,13 +329,21 @@ async fn a_slow_call_writes_its_decision_once_after_its_invocation_record() {
     let endpoint = Arc::new(Endpoint::start(true).await);
     let dir = Arc::new(tempfile::tempdir().unwrap());
     let rows = vec![grant("g1", ALICE, ALICE)];
-    let meta = Arc::new(gateway(&endpoint, rows, Some(&dir), AuditFailurePolicy::BestEffort));
+    let meta = Arc::new(gateway(
+        &endpoint,
+        rows,
+        Some(&dir),
+        AuditFailurePolicy::BestEffort,
+    ));
     let running = tokio::spawn({
         let meta = Arc::clone(&meta);
         async move { call(&meta, &api_key("alice"), "gateway_invoke", invoke_args()).await }
     });
     endpoint.wait_for_arrivals(1).await;
-    assert!(invocations(&dir).is_empty(), "premise: the call is still running");
+    assert!(
+        invocations(&dir).is_empty(),
+        "premise: the call is still running"
+    );
 
     endpoint.release();
     let answer = running.await.expect("the call task completes");

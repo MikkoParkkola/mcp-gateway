@@ -48,11 +48,16 @@ async fn withheld_call(continuation: bool, fail_invocation: bool) -> (serde_json
         Endpoint::start(false).await,
         Arc::new(tempfile::tempdir().unwrap()),
     );
-    let meta = gateway(&endpoint, vec![], Some(&dir), AuditFailurePolicy::BestEffort)
-        .with_surfaced_tools(vec![crate::config::SurfacedToolConfig {
-            server: CAPS.to_string(),
-            tool: PERSONAL.to_string(),
-        }]);
+    let meta = gateway(
+        &endpoint,
+        vec![],
+        Some(&dir),
+        AuditFailurePolicy::BestEffort,
+    )
+    .with_surfaced_tools(vec![crate::config::SurfacedToolConfig {
+        server: CAPS.to_string(),
+        tool: PERSONAL.to_string(),
+    }]);
     let retry = if continuation {
         live_retry(&meta).await
     } else {
@@ -66,7 +71,13 @@ async fn withheld_call(continuation: bool, fail_invocation: bool) -> (serde_json
     let mut caller = context(&who);
     caller.retry = &retry;
     let _ = meta
-        .handle_tools_call(RequestId::Number(1), PERSONAL, json!({}), Some("d12"), caller)
+        .handle_tools_call(
+            RequestId::Number(1),
+            PERSONAL,
+            json!({}),
+            Some("d12"),
+            caller,
+        )
         .await;
     let held = wait_for_decisions(&dir, 1).await;
     assert_eq!(held.len(), 1, "{held:#?}");
@@ -127,12 +138,19 @@ async fn another_calls_invocation_in_the_slot_never_marks_a_retry_note() {
     let log = meta.transparency_logger.as_ref();
     let (_, written, _) = super::grant_audit::with_grant_slot(log, async {
         let invoke = json!({"server": CAPS, "tool": PERSONAL, "arguments": {}});
-        let granted = super::grant_decision_audit_tests::call(&meta, &owner, "gateway_invoke", invoke);
+        let granted =
+            super::grant_decision_audit_tests::call(&meta, &owner, "gateway_invoke", invoke);
         let _ = granted.await;
         let mut caller = context(&other);
         caller.retry = &refused_retry;
         let _ = meta
-            .handle_tools_call(RequestId::Number(2), PERSONAL, json!({}), Some("d17"), caller)
+            .handle_tools_call(
+                RequestId::Number(2),
+                PERSONAL,
+                json!({}),
+                Some("d17"),
+                caller,
+            )
             .await;
     })
     .await;

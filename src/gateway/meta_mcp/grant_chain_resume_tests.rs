@@ -55,7 +55,13 @@ async fn resume_after_revocation(dir: &Arc<tempfile::TempDir>) -> Value {
     let mut caller = context(&who);
     caller.retry = &retry;
     let response = meta
-        .handle_tools_call(RequestId::Number(1), "gateway_execute", chain, Some("d19"), caller)
+        .handle_tools_call(
+            RequestId::Number(1),
+            "gateway_execute",
+            chain,
+            Some("d19"),
+            caller,
+        )
         .await;
     serde_json::to_value(&response).expect("a response serialises")
 }
@@ -73,5 +79,8 @@ async fn a_resume_step_withheld_by_visibility_writes_one_unrecorded_decision() {
     assert_eq!(held.len(), 1, "{held:#?}: {answer}");
     assert_eq!(held[0]["outcome"], json!("denied"), "{held:#?}");
     assert_eq!(held[0]["invocation_recorded"], json!(false), "{held:#?}");
-    assert!(invocations(&dir).is_empty(), "the step never dispatched: {answer}");
+    assert!(
+        invocations(&dir).is_empty(),
+        "the step never dispatched: {answer}"
+    );
 }

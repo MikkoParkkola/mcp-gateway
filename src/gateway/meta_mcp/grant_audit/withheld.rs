@@ -43,4 +43,3 @@ pub(in crate::gateway::meta_mcp) async fn note_withheld_best_effort<T>(
     });
     output
 }
-

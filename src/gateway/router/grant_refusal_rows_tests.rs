@@ -67,7 +67,8 @@ async fn rig(endpoint: &Endpoint, policy: AuditFailurePolicy, surface: bool, den
         public_paths: vec!["/health".to_string()],
         ..AuthConfig::default()
     };
-    let (mut state, store) = test_router_app_state_with_logs(&auth, Some(Arc::clone(&log)), None).await;
+    let (mut state, store) =
+        test_router_app_state_with_logs(&auth, Some(Arc::clone(&log)), None).await;
     let st = Arc::get_mut(&mut state).expect("state is unique");
     let mut meta = MetaMcp::with_features(
         Arc::clone(&st.backends),
@@ -168,7 +169,10 @@ async fn a_route_refused_gateway_invoke_is_one_blocked_row() {
     assert_eq!(held.len(), 1, "{held:#?}: {answer}");
     assert_eq!(held[0]["outcome"], json!("denied"), "{held:#?}");
     assert_eq!(held[0]["invocation_recorded"], json!(false), "{held:#?}");
-    assert!(invocations(&rig.dir).is_empty(), "no record of the call's own: {answer}");
+    assert!(
+        invocations(&rig.dir).is_empty(),
+        "no record of the call's own: {answer}"
+    );
     let rows = activity(&rig, "").await;
     assert_eq!(rows.len(), 1, "{rows:#?}");
     assert_eq!(rows[0]["outcome"], json!("blocked"), "{rows:#?}");
@@ -189,8 +193,16 @@ async fn a_denied_tools_surfaced_call_is_one_blocked_row() {
     let held = wait_for_decisions(&rig.dir, 1).await;
     assert_eq!(held.len(), 1, "{held:#?}: {answer}");
     assert_eq!(held[0]["invocation_recorded"], json!(false), "{held:#?}");
-    assert!(invocations(&rig.dir).is_empty(), "no record of the call's own");
-    for query in ["", "&outcome=blocked", "&server=personal_caps", "&q=calendar_read_day"] {
+    assert!(
+        invocations(&rig.dir).is_empty(),
+        "no record of the call's own"
+    );
+    for query in [
+        "",
+        "&outcome=blocked",
+        "&server=personal_caps",
+        "&q=calendar_read_day",
+    ] {
         let rows = activity(&rig, query).await;
         assert_eq!(rows.len(), 1, "{query}: {rows:#?}");
         assert_eq!(rows[0]["outcome"], json!("blocked"), "{query}: {rows:#?}");
