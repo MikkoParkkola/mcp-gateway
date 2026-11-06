@@ -180,3 +180,88 @@ async fn a6a_meta_no_rule() {
     )
     .await;
 }
+
+/// A gateway whose request firewall carries `rules`, and `alpha`'s `read`
+/// invoked on it with a shell-injection argument, a High finding that the
+/// severity fallback blocks (`verdict.rs:279`) unless a rule softens it:
+/// whether the call was delivered, the calls `alpha` was sent, its record.
+#[cfg(feature = "firewall")]
+async fn shell_call_under(
+    rules: Vec<crate::security::firewall::FirewallRule>,
+) -> (bool, usize, Value) {
+    use crate::security::firewall::{Firewall, FirewallConfig};
+    let dir = tempfile::tempdir().expect("a log directory");
+    let (mut meta, sent) = table_meta(&dir, BackendConfig::default());
+    meta.set_firewall(Some(std::sync::Arc::new(
+        Firewall::from_config(
+            FirewallConfig {
+                rules,
+                ..FirewallConfig::default()
+            },
+            None,
+        )
+        .with_continuations(meta.continuation()),
+    )));
+    // A firewalled gateway serves relays from a published live config, as
+    // `tenants.rs` seeds it (`relay_staging.rs:229` panics without one).
+    crate::security::firewall::collusion_live_rig::seed_meta(
+        &meta,
+        &meta.firewall_for_test().expect("set above"),
+    );
+    let who = api_key_caller();
+    // Split, as `allowed_root_rule_id_tests` builds it: the scanner sees the
+    // whole command.
+    let cmd = ["; rm -", "rf /"].concat();
+    let args = json!({"server": "alpha", "tool": "read", "arguments": {"cmd": cmd}});
+    let answer =
+        with_visibility_memo(meta.invoke_tool(&args, None, &context(&AllowAll, &who))).await;
+    let delivered = matches!(&answer, Ok(result) if result["isError"] != true);
+    let all = records(&dir);
+    let [record] = all.as_slice() else {
+        panic!("premise: one invocation record: {all:?}; answer {answer:?}");
+    };
+    (delivered, sent.load(Ordering::SeqCst), record.clone())
+}
+
+/// A4: a firewall Allow rule softens the shell-injection finding that would
+/// block the call. Recorded `default_allow` today (flipped by MIK-9205); the
+/// firewall found and allowed a High finding, but the decision keeps no trace
+/// of it: the constructor's `request_findings: None` (`decision_record.rs:305`)
+/// is the only production line that sets the field, so findings stay `NotRun`
+/// (an audit gap, on the register; flipped when the request-findings writer
+/// lands). Control: the same firewall with no rule blocks the call.
+#[cfg(feature = "firewall")]
+#[tokio::test]
+async fn a4_firewall_allow_rule() {
+    use crate::security::firewall::{FirewallAction, FirewallRule, ScanType};
+    let soften = FirewallRule {
+        tool_match: "read".to_string(),
+        action: FirewallAction::Allow,
+        reason: None,
+        scan: vec![ScanType::ShellInjection],
+        servers: None,
+        keys: None,
+        except: None,
+        allowed_roots: None,
+        path_args: None,
+    };
+    let (delivered, sent, record) = shell_call_under(vec![soften]).await;
+    assert!(
+        delivered,
+        "premise: the softened call is delivered: {record}"
+    );
+    assert_eq!(sent, 1, "premise: the backend was sent the call once");
+    assert_eq!(record["outcome"], "ok", "{record}");
+    // flipped by MIK-9205
+    assert_row(
+        &record["decision"],
+        &allowed("a4_firewall_allow_rule", "flipped by MIK-9205"),
+    );
+    let (delivered, sent, record) = shell_call_under(Vec::new()).await;
+    assert!(
+        !delivered,
+        "control: no rule did not block the call: {record}"
+    );
+    assert_eq!(sent, 0, "control: the backend was sent the call");
+    assert_eq!(record["decision"]["kind"], "firewall", "control: {record}");
+}
