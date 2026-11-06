@@ -313,9 +313,9 @@ pub(crate) enum RefusalTest<'a> {
 }
 
 /// Record `refused` on the open delivery when `error` is a policy refusal
-/// under `test`; a configuration error records nothing. The one guard for
-/// every capability executor site whose check can also fail on a malformed
-/// URL.
+/// under `test`; a configuration error records no refusal (the record still
+/// reads `delivered`). The one guard for every capability executor site
+/// whose check can also fail on a malformed URL.
 ///
 /// Recording at the first refused provider is right only because a declared
 /// `providers.fallback` is never executed (CAP-011,
@@ -632,7 +632,7 @@ mod tests {
 
     /// The shared guard records a policy refusal and nothing else: an SSRF
     /// refusal under `Destination`, a cleartext refusal of a URL that names a
-    /// host under `Cleartext`. A configuration error records nothing under
+    /// host under `Cleartext`. A configuration error records no refusal under
     /// either, on every site that uses it, the token endpoint included.
     #[tokio::test]
     async fn the_refusal_guard_records_only_a_policy_refusal() {
