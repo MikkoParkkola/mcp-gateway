@@ -583,7 +583,7 @@ async fn an_unchanged_save_appends_its_intent_before_its_reload() {
     )
     .await;
     assert!(
-        matches!(refused, Err(ReplaceError::Refused(_))),
+        matches!(refused, Err(ReplaceError::AuditRefused(_))),
         "{refused:?}"
     );
     assert!(
