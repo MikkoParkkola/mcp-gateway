@@ -81,8 +81,9 @@ async fn judged_meta_answering(
     .await
 }
 
-/// One stdio `gateway_invoke alpha read` naming `tenant`, dispatched and
-/// judged as the stdio loop does.
+/// One stdio `gateway_invoke alpha read` naming `tenant`, dispatched,
+/// judged and written as the stdio loop does: stdout taking the frame
+/// (`stdio_written`, `stdio_writer.rs`) is what commits the read.
 async fn read(meta: &Arc<MetaMcp>, reads: &StdioReads, n: u64, tenant: &str) -> OutboundFrame {
     let request = json!({ "jsonrpc": "2.0", "id": n, "method": "tools/call",
         "params": invoke_read(&json!({ "customer_id": tenant })) });
@@ -111,14 +112,16 @@ async fn read(meta: &Arc<MetaMcp>, reads: &StdioReads, n: u64, tenant: &str) -> 
     )
     .await;
     let answer = answer.expect("a request carrying an id is answered");
-    super::super::Gateway::judge_and_commit(
+    let frame = super::super::Gateway::judge_and_commit(
         meta,
         reads,
         SESSION,
         (answer, request.get("params"), hidden.as_ref()),
         staged,
     )
-    .await
+    .await;
+    frame.stdio_written();
+    frame
 }
 
 /// The `cross_tenant_read` values on the log's delivery records, in order,

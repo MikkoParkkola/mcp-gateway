@@ -12,13 +12,17 @@ const JUDGE: &str = "gateway/outbound/judge.rs";
 const HISTORY: &str = "security/tenant_reads.rs";
 
 /// Production sources under `src/`, relative to it: test files and test
-/// directories left out.
+/// directories (`tests/`, `*_tests/`) left out.
 fn production_sources() -> Vec<(String, String)> {
     fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
         for entry in std::fs::read_dir(dir).expect("read src") {
             let path = entry.expect("dir entry").path();
             if path.is_dir() {
-                if path.file_name().is_some_and(|n| n != "tests") {
+                let test_dir = path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .is_some_and(|n| n == "tests" || n.ends_with("_tests"));
+                if !test_dir {
                     walk(&path, out);
                 }
             } else if path.extension().is_some_and(|e| e == "rs") {
