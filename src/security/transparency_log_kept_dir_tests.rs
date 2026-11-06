@@ -3,7 +3,7 @@
 //! A log opened inside a registered temp dir (`crate::test_dir_keep`) keeps
 //! that dir, and every registered dir containing it, from before its first
 //! filesystem call until its last handle drops. A log in an unregistered temp
-//! dir is named instead (MIK-8986 part 2, PR 1).
+//! dir is named instead.
 
 use std::path::Path;
 use std::sync::{Arc, Weak};

@@ -53,7 +53,7 @@ impl TestDirKeep {
     }
 }
 
-// The registry of kept temp dirs (MIK-8986 part 2). A transparency log opened
+// The registry of kept temp dirs. A transparency log opened
 // inside a dir from `kept_tempdir()` keeps that dir, and every registered dir
 // containing it, until its last handle drops; a log opened in an unregistered
 // temp dir is reported. The registry holds only `Weak`s, so it never keeps a

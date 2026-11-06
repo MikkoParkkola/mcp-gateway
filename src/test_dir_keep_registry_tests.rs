@@ -2,8 +2,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! The kept-dir registry's path rules: one normal form for every comparison,
 //! containment per path component, the temp-dir filter on the report, the
-//! format a parent process hands its kept dirs on in, and pruning
-//! (MIK-8986 part 2, PR 1).
+//! format a parent process hands its kept dirs on in, and pruning.
 
 use std::path::{Path, PathBuf};
 
