@@ -121,11 +121,11 @@ fn mtls_rule_ids_are_keyed_and_stable() {
     );
 }
 
-/// Computed once from `RuleId::of` and pasted: a change to the rule's serde
+/// Computed once from `RuleId::of` on Spark and pasted: a change to the rule's serde
 /// form (a field added without `skip_serializing_if`, a rename) breaks this,
 /// because it rotates every configured rule's id.
-const GOLDEN_FORM: &str = "PASTE";
-const GOLDEN_ID: &str = "PASTE";
+const GOLDEN_FORM: &str = "{\"match\":{\"cn\":\"agent-1\",\"ou\":null,\"san_uri\":null,\"san_dns\":null,\"any\":null},\"allow\":{\"backends\":[\"*\"],\"tools\":[\"*\"]},\"deny\":{\"backends\":[],\"tools\":[\"write\"]}}";
+const GOLDEN_ID: &str = "mtls:33b399957189fd71800e528a230b8f079f89d17bf169c65984f8be16c92e6e36";
 
 #[test]
 fn mtls_rule_id_hashes_the_configured_rule() {

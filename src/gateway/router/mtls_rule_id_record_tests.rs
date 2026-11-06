@@ -157,35 +157,39 @@ async fn an_mtls_allow_list_exclusion_records_its_rule_id_on_the_direct_route() 
 }
 
 /// No certificate, and a certificate no rule matches: refused by mTLS, and
-/// no rule is named.
+/// no rule is named. On `gateway_invoke` only: the direct route answers such
+/// a caller as a backend that does not exist (the policy refuses the whole
+/// backend by name), recorded as `not_found`.
 #[tokio::test(flavor = "current_thread")]
 async fn an_mtls_refusal_with_no_certificate_or_no_matching_rule_records_no_rule_id() {
     let fx = with_policy(enabled(deny_write_rules())).await;
-    for route in [Route::MetaInvoke, Route::Direct] {
-        for cn in [None, Some("stranger")] {
-            let got = call_cert(&fx, route, "read", cn).await;
-            assert!(
-                got.refused && got.kind == "mtls",
-                "{route:?} {cn:?}: {got:?}"
-            );
-            assert!(
-                got.rule.is_null(),
-                "{route:?} {cn:?}: expected no rule_id: {got:?}"
-            );
-        }
+    let route = Route::MetaInvoke;
+    for cn in [None, Some("stranger")] {
+        let got = call_cert(&fx, route, "read", cn).await;
+        assert!(
+            got.refused && got.kind == "mtls",
+            "{route:?} {cn:?}: {got:?}"
+        );
+        assert!(
+            got.rule.is_null(),
+            "{route:?} {cn:?}: expected no rule_id: {got:?}"
+        );
     }
 }
 
-/// A disabled policy, even one whose rule would refuse, notes nothing.
+/// A disabled policy, even one whose rule B would refuse `read`, notes
+/// nothing: the call goes through.
 #[tokio::test(flavor = "current_thread")]
 async fn a_disabled_mtls_policy_notes_nothing() {
-    let mut config = enabled(deny_write_rules());
+    let mut rules = deny_write_rules();
+    rules[1].deny.tools = vec!["read".to_string()];
+    let mut config = enabled(rules);
     config.enabled = false;
     let fx = with_policy(config).await;
     for route in [Route::MetaInvoke, Route::Direct] {
-        let got = call_cert(&fx, route, "write", Some("agent-1")).await;
+        let got = call_cert(&fx, route, "read", Some("agent-1")).await;
         assert!(
-            !got.refused && got.kind != "mtls" && got.rule.is_null(),
+            !got.refused && got.calls == 1 && got.kind != "mtls" && got.rule.is_null(),
             "{route:?}: {got:?}"
         );
     }

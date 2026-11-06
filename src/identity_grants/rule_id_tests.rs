@@ -108,9 +108,9 @@ fn a_keyed_grant_store_keeps_ids_in_step_through_upsert_and_revoke() {
     assert_eq!(got, want, "revoked g1: expected {want:?}, got {got:?}");
 }
 
-/// Computed once from `RuleId::of` and pasted, so a change to the grant
+/// Computed once from `RuleId::of` on Spark and pasted, so a change to the grant
 /// row's serde form, which would rotate every grant's id, is seen.
-const GOLDEN_ID: &str = "PASTE";
+const GOLDEN_ID: &str = "grant:3102953d0b22447af1fa5ea2789ac63601706c7b81811258bc20e762b73e563e";
 
 #[test]
 fn a_grant_rule_id_hashes_the_whole_row() {

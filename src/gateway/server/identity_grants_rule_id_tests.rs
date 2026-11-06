@@ -36,6 +36,10 @@ fn published(
 #[tokio::test]
 async fn a_grant_store_published_by_set_identity_grants_is_keyed() {
     let dir = tempfile::tempdir().unwrap();
+    // The startup read needs a grant file.
+    apply_change(&grants_path(dir.path()), true, add(row("g0", "r")))
+        .await
+        .unwrap();
     let s = Box::pin(Started::run(config(dir.path(), true)))
         .await
         .unwrap();
