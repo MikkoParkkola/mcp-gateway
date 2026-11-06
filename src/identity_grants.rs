@@ -650,3 +650,6 @@ mod tests;
 #[cfg(test)]
 #[path = "identity_grants_agent_key_tests.rs"]
 mod agent_key_tests;
+
+#[cfg(test)]
+mod rule_id_tests;
