@@ -107,7 +107,11 @@ async fn o7b_a_backend_missing_from_the_generation_has_no_owner() {
     let (state, _dir) = test_router_app_state_with_auth(&auth()).await;
     let _ = state.backends.register(http_backend_at("ghost", URL));
     let body = get(&state, crate::gateway::routes::UI_CONFIG, Some(ADMIN)).await;
-    assert_eq!(server(&body, "ghost")["owner"], Value::Null, "{body}");
+    assert_eq!(
+        server(&body, "ghost").get("owner"),
+        Some(&Value::Null),
+        "{body}"
+    );
 }
 
 /// O9: `/ui/api/status`, open to every caller, never carries an owner: not
