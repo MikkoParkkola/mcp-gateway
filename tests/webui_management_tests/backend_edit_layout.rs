@@ -324,14 +324,16 @@ async fn every_patchable_field_edits_the_gateways_own_output_in_place() {
         (
             "env, merged into a map",
             "s",
-            json!({"env": {"B": "2"}}),
+            // A reference, which the panel keeps as typed: a literal would go
+            // to the secret store and the file would hold a store reference.
+            json!({"env": {"B": "env:B_VALUE"}}),
             |b| {
                 b.env.get("A").map(String::as_str) == Some("1")
-                    && b.env.get("B").map(String::as_str) == Some("2")
+                    && b.env.get("B").map(String::as_str) == Some("env:B_VALUE")
             },
         ),
-        ("env, a first map", "h", json!({"env": {"B": "2"}}), |b| {
-            b.env.get("B").map(String::as_str) == Some("2")
+        ("env, a first map", "h", json!({"env": {"B": "env:B_VALUE"}}), |b| {
+            b.env.get("B").map(String::as_str) == Some("env:B_VALUE")
         }),
         ("enabled", "s", json!({"enabled": false}), |b| !b.enabled),
         (
