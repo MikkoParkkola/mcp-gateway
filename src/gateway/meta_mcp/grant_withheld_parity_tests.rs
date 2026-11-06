@@ -111,10 +111,12 @@ fn row7_failed_grant_record_on_a_withheld_name_answers_as_absent() {
                 seen.wait_for(|count| *count >= 1),
             )
             .await;
-            assert!(logged.is_ok(), "row 7: the failed record was never logged");
-            answer
+            (answer, logged.is_ok())
         })
     });
+    let ((answered, logged), warnings) = (answered, warnings);
+    let held = super::grant_audit_fixture::entries(&dir);
+    assert!(logged, "row 7: the failed record was never logged:\n{warnings}\n{held:#?}");
     let expected = runtime.block_on(call(&absent));
     assert_eq!(
         answered, expected,

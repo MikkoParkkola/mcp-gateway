@@ -110,10 +110,12 @@ fn row7_http_one_grant_record_and_failclosed_answers_as_absent() {
                 seen.wait_for(|count| *count >= 1),
             )
             .await;
-            assert!(logged.is_ok(), "row 7 http: the failed record was never logged");
-            answer
+            (answer, logged.is_ok())
         })
     });
+    let ((answered, logged), warnings) = (answered, warnings);
+    let held = crate::gateway::meta_mcp::grant_audit_fixture::entries(&dir);
+    assert!(logged, "row 7 http: the failed record was never logged:\n{warnings}\n{held:#?}");
     let expected = runtime.block_on(call(&absent, BOB));
     runtime.block_on(call(&withheld, BOB));
     let after = runtime.block_on(wait_for_decisions(&dir, 1)).len();

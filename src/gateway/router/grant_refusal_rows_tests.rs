@@ -153,18 +153,25 @@ async fn activity(rig: &Rig, query: &str) -> Vec<Value> {
     page["rows"].as_array().cloned().unwrap_or_default()
 }
 
+/// A `gateway_invoke` whose capability target the grant denies is refused at
+/// the route stage (answered as an absent tool), before any invocation record
+/// exists: its decision says so, and Activity lists it once, as blocked.
 #[tokio::test]
-async fn a_gate_refused_call_is_one_row_whose_marker_is_true() {
+async fn a_route_refused_gateway_invoke_is_one_blocked_row() {
     let endpoint = Endpoint::start(false).await;
     let rig = rig(&endpoint, AuditFailurePolicy::BestEffort, false, false).await;
 
     let invoke = json!({"server": CAPS, "tool": PERSONAL, "arguments": {}});
     let answer = mcp_call(&rig, "gateway_invoke", &invoke).await;
 
-    assert_eq!(invocations(&rig.dir).len(), 1, "the call's own record: {answer}");
     let held = wait_for_decisions(&rig.dir, 1).await;
-    assert_eq!(held.len(), 1, "{held:#?}");
+    assert_eq!(held.len(), 1, "{held:#?}: {answer}");
     assert_eq!(held[0]["outcome"], json!("denied"), "{held:#?}");
-    assert_eq!(held[0]["invocation_recorded"], json!(true), "{held:#?}");
-    assert_eq!(activity(&rig, "").await.len(), 1, "listed once");
+    assert_eq!(held[0]["invocation_recorded"], json!(false), "{held:#?}");
+    assert!(invocations(&rig.dir).is_empty(), "no record of the call's own: {answer}");
+    let rows = activity(&rig, "").await;
+    assert_eq!(rows.len(), 1, "{rows:#?}");
+    assert_eq!(rows[0]["outcome"], json!("blocked"), "{rows:#?}");
+    assert_eq!(rows[0]["server"], json!(CAPS), "{rows:#?}");
+    assert_eq!(rows[0]["tool"], json!(PERSONAL), "{rows:#?}");
 }
