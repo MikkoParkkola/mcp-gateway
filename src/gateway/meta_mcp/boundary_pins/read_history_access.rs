@@ -26,37 +26,66 @@ struct Access {
     readers: Vec<String>,
     /// Files with a production `.reserve(..)` call, one entry per call.
     reservers: Vec<String>,
-    /// `macro_rules!` definitions, by file and name, whose body calls a method
-    /// named by a metavariable (`$f.$m()`): a caller could pass `reads` and no
-    /// text would say so. Refused unless allowlisted in [`SPLICES`].
-    splices: Vec<(String, String)>,
+    /// `macro_rules!` definitions whose body calls something named by a
+    /// metavariable (`$f.$m()`, `$t::$m(v)`): a caller could pass `reads` and
+    /// no text would say so. By file, macro name and the splices found; refused
+    /// unless listed in [`SPLICES`].
+    splices: Vec<(String, String, String)>,
 }
 
-/// The method-splicing macros the crate is known to define, each with why it
-/// cannot reach the read history. The real walk must find exactly these, so
-/// a new one fails and a stale entry fails too.
-const SPLICES: [(&str, &str, &str); 1] = [(
-    "src/yaml/de/mod.rs",
-    "typed",
-    "the YAML deserializer's typed-visit helper: calls a serde Visitor method",
-)];
+/// The splicing macros the crate is known to define: file, macro, the exact
+/// splices its body holds (so the reviewed body is pinned), and why it cannot
+/// reach the read history. The real walk must find exactly these, so a new
+/// splice, a changed body and a stale entry all fail.
+const SPLICES: [(&str, &str, &str, &str); 2] = [
+    (
+        "src/duration_bound.rs",
+        "delta",
+        "::$try(",
+        "calls a chrono TimeDelta constructor named by the macro's own arms (try_weeks, ..)",
+    ),
+    (
+        "src/yaml/de/mod.rs",
+        "typed",
+        ".$method(",
+        "calls a deserializer method on the YAML deserializer the macro is given",
+    ),
+];
 
-/// Whether a `macro_rules!` body calls a method whose name is a metavariable:
-/// `.$name(` or `.$name::<`, compared with spacing removed.
-fn splices_a_method(mac: &syn::Macro) -> bool {
+/// The splices in a `macro_rules!` body that call something named by a
+/// metavariable, in order, with spacing and `r#` removed: after `.` or `::`,
+/// a metavariable (`$m`) followed by `(` or `::<`, or a repetition (`$($m)+`)
+/// in that place, whatever follows it.
+fn call_splices(mac: &syn::Macro) -> Vec<String> {
     let text: String = mac
         .tokens
         .to_string()
         .chars()
         .filter(|c| !c.is_whitespace())
-        .collect();
-    text.match_indices(".$").any(|(i, _)| {
-        let rest = &text[i + 2..];
-        let name = rest
-            .find(|c: char| !(c.is_alphanumeric() || c == '_'))
-            .unwrap_or(rest.len());
-        name > 0 && (rest[name..].starts_with('(') || rest[name..].starts_with("::<"))
-    })
+        .collect::<String>()
+        .replace("r#", "");
+    let mut found = Vec::new();
+    for lead in [".$", "::$"] {
+        for (i, _) in text.match_indices(lead) {
+            let rest = &text[i + lead.len()..];
+            if rest.starts_with('(') {
+                let end = rest.find(')').map_or(rest.len(), |e| e + 1);
+                found.push((i, format!("{lead}{}", &rest[..end])));
+                continue;
+            }
+            let name = rest
+                .find(|c: char| !(c.is_alphanumeric() || c == '_'))
+                .unwrap_or(rest.len());
+            let after = &rest[name..];
+            if name > 0 && (after.starts_with('(') || after.starts_with("::<")) {
+                let tail = if after.starts_with('(') { "(" } else { "::<" };
+                found.push((i, format!("{lead}{}{tail}", &rest[..name])));
+            }
+        }
+    }
+    found.sort();
+    found.dedup();
+    found.into_iter().map(|(_, s)| s).collect()
 }
 
 impl Access {
@@ -135,12 +164,15 @@ impl Sink for Access {
 
     fn item(&mut self, at: &Place, item: &syn::Item) {
         if let syn::Item::Macro(mac) = item {
-            if mac.mac.path.is_ident("macro_rules") && splices_a_method(&mac.mac) {
-                let name = mac
-                    .ident
-                    .as_ref()
-                    .map_or_else(String::new, ToString::to_string);
-                self.splices.push((at.file.clone(), name));
+            if mac.mac.path.is_ident("macro_rules") {
+                let found = call_splices(&mac.mac);
+                if !found.is_empty() {
+                    let name = mac
+                        .ident
+                        .as_ref()
+                        .map_or_else(String::new, ToString::to_string);
+                    self.splices.push((at.file.clone(), name, found.join(" ")));
+                }
             }
             self.tokens(at, &mac.mac);
         }
@@ -158,9 +190,9 @@ fn names_the_history(file: &str) -> bool {
 fn the_read_history_is_reached_from_the_judge_alone() {
     let mut access = Access::default();
     walk(crate_root(), &ROOTS, &mut access).expect("the crate walks");
-    let allowed: Vec<(String, String)> = SPLICES
+    let allowed: Vec<(String, String, String)> = SPLICES
         .iter()
-        .map(|(file, name, _)| ((*file).to_owned(), (*name).to_owned()))
+        .map(|(file, name, found, _)| ((*file).to_owned(), (*name).to_owned(), (*found).to_owned()))
         .collect();
     assert_eq!(
         access.splices, allowed,
@@ -188,27 +220,39 @@ fn the_read_history_is_reached_from_the_judge_alone() {
     );
 }
 
-/// A `macro_rules!` that calls a method named by a metavariable is reported,
-/// whatever the method: `call!(firewall, reads)` would reach the history with
-/// no `reads` in the macro's text. One calling a fixed method is not.
+/// A `macro_rules!` that calls something named by a metavariable is
+/// reported, however the name is spliced: a method, a raw-name metavariable,
+/// a repetition, a path or a qualified call, with or without a turbofish.
+/// `call!(firewall, reads)` would reach the history with no `reads` in the
+/// macro's text. A fixed call, a field and an uncalled variant are not.
 #[test]
-fn a_macro_that_splices_a_method_name_is_reported() {
+fn a_macro_that_splices_a_call_is_reported() {
     let at = Place {
         file: "src/elsewhere.rs".to_owned(),
         func: None,
     };
     let mut access = Access::default();
     for source in [
-        "macro_rules! call { ($f:expr, $m:ident) => { $f.$m() }; }",
+        "macro_rules! method { ($f:expr, $m:ident) => { $f.$m() }; }",
         "macro_rules! turbo { ($f:expr, $m:ident) => { $f.$m::<u8>() }; }",
+        "macro_rules! raw { ($f:expr, $r#m:ident) => { $f.$r#m() }; }",
+        "macro_rules! repeat { ($f:expr, $($m:ident)+) => { $f.$($m)+() }; }",
+        "macro_rules! path { ($t:ty, $m:ident, $v:expr) => { $t::$m($v) }; }",
+        "macro_rules! qualified { ($t:ty, $m:ident, $v:expr) => { <$t>::$m($v) }; }",
         "macro_rules! fixed { ($f:expr) => { $f.len() }; }",
         "macro_rules! field { ($f:expr, $x:ident) => { $f.$x }; }",
+        "macro_rules! variant { ($v:ident) => { Kind::$v }; }",
     ] {
         let item: syn::Item = syn::parse_str(source).expect("an item");
         access.item(&at, &item);
     }
-    let names: Vec<&str> = access.splices.iter().map(|(_, n)| n.as_str()).collect();
-    assert_eq!(names, ["call", "turbo"], "only method splices are reported");
+    let names: Vec<&str> = access.splices.iter().map(|(_, n, _)| n.as_str()).collect();
+    assert_eq!(
+        names,
+        ["method", "turbo", "raw", "repeat", "path", "qualified"],
+        "every called splice is reported, and nothing else: {:?}",
+        access.splices
+    );
 }
 
 /// What the walk does with an expression (scan.rs `visit_expr`): the sink
