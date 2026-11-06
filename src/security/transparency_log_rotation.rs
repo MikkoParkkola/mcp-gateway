@@ -304,6 +304,8 @@ pub(super) fn recover(
     // After the first mark, so a crash before it still leaves the genesis-only
     // log the verifier accepts; the mark then moves to the identified record.
     if minted || unfinished {
+        #[cfg(test)]
+        super::kill::point(super::kill::At::BeforeIdentified);
         record_identity(&mut state, config, &id)?;
         write_mark(
             path,

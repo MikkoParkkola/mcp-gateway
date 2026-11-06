@@ -84,6 +84,9 @@ mod bounded;
 mod hwm_scan;
 #[path = "transparency_log_identity.rs"]
 pub(crate) mod identity;
+#[cfg(test)]
+#[path = "transparency_log_kill.rs"]
+mod kill;
 #[path = "transparency_log_rotation.rs"]
 pub(crate) mod rotation;
 /// Test seam for the write-fault injector, for tests outside this module.
@@ -687,6 +690,9 @@ mod hwm_missing_tests;
 #[cfg(test)]
 #[path = "transparency_log_identity_tests.rs"]
 mod identity_tests;
+#[cfg(test)]
+#[path = "transparency_log_kill_tests.rs"]
+mod kill_tests;
 #[cfg(test)]
 #[path = "transparency_log_keep_dir_tests.rs"]
 mod keep_dir_tests;
