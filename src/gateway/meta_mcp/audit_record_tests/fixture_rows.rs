@@ -281,3 +281,48 @@ async fn n2_meta_not_found_at_dispatch() {
     };
     assert_row(&decision, &row);
 }
+
+/// P4: the routing profile at admission (`dispatch_guards.rs:204` in
+/// `admit_named_target_explained`). Over HTTP the preflight and the
+/// invoke-scope check run the same profile first, so admission refuses only
+/// when the profile changes after them (a reload: `admit_after_credential`,
+/// `dispatch_guards.rs:242`). This unit row calls admission directly with a
+/// profile that excludes the tool, as if it had changed after preflight, and
+/// builds the decision the route would from the notes admission left.
+#[tokio::test]
+async fn p4_admission_routing_profile() {
+    use crate::gateway::meta_mcp::invoke::audit::with_dispatch_scope;
+    use crate::gateway::meta_mcp::invoke::dispatch_guards::BackendCall;
+    let dir = tempfile::tempdir().expect("a log directory");
+    let (meta, sent) = table_meta(&dir, BackendConfig::default());
+    let meta = without_read(meta);
+    let call = BackendCall {
+        server: "alpha",
+        tool: "read",
+        session_id: None,
+        api_key_name: None,
+        cost_key: None,
+        trace_id: "",
+        caller_key: None,
+        generation: None,
+    };
+    let (admitted, notes) = with_dispatch_scope(async { meta.admit_target(&call) }).await;
+    // The profile's refusal is `Error::Protocol` (`accessors.rs:129-131`),
+    // whose code is -32600.
+    let error = admitted.expect_err("premise: admission refuses the tool");
+    assert!(matches!(error, crate::Error::Protocol(_)), "{error:?}");
+    assert_eq!(error.to_rpc_code(), -32600, "{error:?}");
+    assert_eq!(
+        sent.load(Ordering::SeqCst),
+        0,
+        "the backend was sent the call"
+    );
+    let outcome = crate::security::audit::AuditOutcome::from_result(&Err(error))
+        .expect("an outcome for a refusal");
+    let decision =
+        serde_json::to_value(notes.decided(&meta, outcome)).expect("a decision serialises");
+    assert_row(
+        &decision,
+        &refusal("p4_admission_routing_profile", "routing_profile"),
+    );
+}

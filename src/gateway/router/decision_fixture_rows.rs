@@ -204,3 +204,131 @@ async fn n1_meta_not_found_at_the_gate() {
         ),
     );
 }
+
+/// T2: the backend's `allowed_tools` leaves `read` out; the direct preflight
+/// withholds it (`direct_preflight.rs:60`, via `blocked_tool_kind`).
+#[tokio::test]
+async fn t2_direct_allowed_tools() {
+    let dir = Arc::new(tempfile::tempdir().expect("a log directory"));
+    let fx = table(&dir).await;
+    let config = crate::config::BackendConfig {
+        allowed_tools: Some(vec!["write".to_string()]),
+        ..crate::config::BackendConfig::default()
+    };
+    let calls = super::direct_guards_fixture::replace_backend_configured(&fx, "alpha", config);
+    let before = records(&dir).len();
+    let answer = post_direct(&fx, "alpha", "k-std", "read", json!({}), None, None).await;
+    // A withheld name is answered as an absent one: `absent_name`'s
+    // METHOD_NOT_FOUND (-32601, `absent.rs:9-11`) as a JSON-RPC error on a 200
+    // (`key_check.rs:24-27`). No denial code is noted for it, so the record
+    // reads the answer: `error` with its code (`direct_audit.rs:94-96`).
+    let withheld = Refusal {
+        status: StatusCode::OK,
+        form: Form::RpcError,
+        outcome: "error",
+        code: Some(-32601),
+    };
+    let decision = refused(&fx, &dir, answer, (before, 0), withheld);
+    assert_eq!(
+        calls.load(std::sync::atomic::Ordering::SeqCst),
+        0,
+        "alpha was sent the call"
+    );
+    assert_row(
+        &decision,
+        &refusal(
+            "t2_direct_allowed_tools",
+            "allowed_tools",
+            "kind-only site: noted with no rule id",
+        ),
+    );
+}
+
+/// C2: a disabled capability, met at the direct admission
+/// (`dispatch_guards.rs:319` in `admit_target`, via `direct_guards.rs:36`).
+#[tokio::test]
+async fn c2_direct_capability_disabled() {
+    let dir = Arc::new(tempfile::tempdir().expect("a log directory"));
+    let fx = table(&dir).await;
+    let budget = crate::kill_switch::CapabilityErrorBudgetConfig::default();
+    let kill = fx.state.meta_mcp.kill_switch();
+    for _ in 0..20 {
+        kill.record_capability_failure("alpha", "read", &budget);
+    }
+    assert!(
+        kill.is_capability_disabled("alpha", "read"),
+        "premise: the capability is disabled"
+    );
+    let before = (
+        records(&dir).len(),
+        super::direct_continuation_tests::dispatched(&fx),
+    );
+    let answer = post_direct(&fx, "alpha", "k-std", "read", json!({}), None, None).await;
+    // The refusal is answered with its own code, -32000 (`dispatch_guards.rs:308`),
+    // as a JSON-RPC error on a 200 (`direct_dispatch.rs:265-270`), read as
+    // `error` with that code (`direct_audit.rs:94-96`).
+    let disabled = Refusal {
+        status: StatusCode::OK,
+        form: Form::RpcError,
+        outcome: "error",
+        code: Some(-32000),
+    };
+    let decision = refused(&fx, &dir, answer, before, disabled);
+    assert_row(
+        &decision,
+        &refusal(
+            "c2_direct_capability_disabled",
+            "capability_disabled",
+            "kind-only site: noted with no rule id",
+        ),
+    );
+}
+
+/// P3: the session's routing profile leaves `read` out, met in the direct
+/// preflight before any credential (`direct_preflight.rs:51`). P4, the same
+/// check at the direct admission (`dispatch_guards.rs:204` via
+/// `direct_guards.rs:36`), runs after it on the same profile, so it refuses
+/// only when the profile changes between the two: a reload guard, no row.
+#[tokio::test]
+async fn p3_direct_routing_profile_preflight() {
+    use crate::routing_profile::{ProfileRegistry, RoutingProfileConfig};
+    let dir = Arc::new(tempfile::tempdir().expect("a log directory"));
+    let log = logger(&dir, AuditFailurePolicy::FailClosed);
+    let meta_log = Arc::clone(&log);
+    let profiles = std::collections::HashMap::from([(
+        "restricted".to_string(),
+        RoutingProfileConfig {
+            deny_tools: Some(vec!["read".to_string()]),
+            ..RoutingProfileConfig::default()
+        },
+    )]);
+    let fx = fixture_logged(Answer::Ok, log, |mut meta| {
+        meta.enable_transparency_log(meta_log);
+        meta.with_profile_registry(ProfileRegistry::from_config(&profiles, "restricted"))
+    })
+    .await;
+    let before = (
+        records(&dir).len(),
+        super::direct_continuation_tests::dispatched(&fx),
+    );
+    let answer = post_direct(&fx, "alpha", "k-std", "read", json!({}), None, None).await;
+    // Answered as an absent name (-32601 on a 200, `key_check.rs:24-27`); the
+    // preflight notes the profile refusal's own code, `Error::Protocol`'s
+    // -32600 (`backend_handlers.rs:162-167`), so the record is `denied` with it
+    // (`direct_audit.rs:353-358`).
+    let withheld_by_profile = Refusal {
+        status: StatusCode::OK,
+        form: Form::RpcError,
+        outcome: "denied",
+        code: Some(-32600),
+    };
+    let decision = refused(&fx, &dir, answer, before, withheld_by_profile);
+    assert_row(
+        &decision,
+        &refusal(
+            "p3_direct_routing_profile_preflight",
+            "routing_profile",
+            "kind-only site: noted with no rule id",
+        ),
+    );
+}
