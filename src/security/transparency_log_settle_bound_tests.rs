@@ -40,6 +40,9 @@ async fn settle_once(
         .expect("settle answers within twice the F20 bound")
 }
 
+/// What a reader was told: the record's kind and its fields.
+type Told = Arc<std::sync::Mutex<Vec<(String, Map<String, Value>)>>>;
+
 /// Wait until `token` has `n` records, for at most the hang bound.
 async fn records_reach(path: &std::path::Path, token: &str, n: usize) {
     let deadline = tokio::time::Instant::now() + crate::test_wait::HANG_BOUND;
@@ -81,7 +84,7 @@ async fn a_settle_that_cannot_take_the_permit_is_refused_and_starts_no_task() {
             .load(std::sync::atomic::Ordering::SeqCst),
         tasks
     );
-    assert!(on_disk(&path) == before);
+    assert_eq!(on_disk(&path), before);
     drop(held);
     assert!(settle_once(&l, "w-2").await.is_ok());
 }
@@ -111,7 +114,7 @@ async fn a_stalled_write_is_unconfirmed_and_its_retry_is_delivered_twice() {
     // stalled past the bound
     let dir = tempfile::tempdir().unwrap();
     let (path, l) = opened(&dir);
-    let told: Arc<std::sync::Mutex<Vec<(String, Map<String, Value>)>>> = Arc::default();
+    let told: Told = Arc::default();
     for kind in ["save", "settle.save"] {
         let sink = Arc::clone(&told);
         l.subscribe(
