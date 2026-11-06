@@ -123,22 +123,38 @@ async fn a_denial_with_no_invocation_record_is_one_blocked_row() {
 async fn a_refusal_row_matches_the_outcome_server_caller_and_tool_filters() {
     let dir = tempfile::tempdir().unwrap();
     let logs = mixed(&dir);
-    let q = |outcome: Option<&str>, server: Option<&str>, caller: Option<&str>, text: Option<&str>| {
-        ListQuery {
-            outcome: outcome.map(str::to_string),
-            server: server.map(str::to_string),
-            caller: caller.map(str::to_string),
-            q: text.map(str::to_string),
-            ..ListQuery::default()
-        }
-    };
+    let q =
+        |outcome: Option<&str>, server: Option<&str>, caller: Option<&str>, text: Option<&str>| {
+            ListQuery {
+                outcome: outcome.map(str::to_string),
+                server: server.map(str::to_string),
+                caller: caller.map(str::to_string),
+                q: text.map(str::to_string),
+                ..ListQuery::default()
+            }
+        };
     let blocked = rows(&logs, &Access::All, q(Some("blocked"), None, None, None)).await;
     assert_eq!(tools(&blocked), vec!["refused"], "outcome=blocked");
-    let by_server = rows(&logs, &Access::All, q(Some("blocked"), Some("srv"), None, None)).await;
+    let by_server = rows(
+        &logs,
+        &Access::All,
+        q(Some("blocked"), Some("srv"), None, None),
+    )
+    .await;
     assert_eq!(tools(&by_server), vec!["refused"], "server=srv");
-    let other = rows(&logs, &Access::All, q(Some("blocked"), Some("other"), None, None)).await;
+    let other = rows(
+        &logs,
+        &Access::All,
+        q(Some("blocked"), Some("other"), None, None),
+    )
+    .await;
     assert!(other.is_empty(), "server=other: {other:?}");
-    let by_caller = rows(&logs, &Access::All, q(Some("blocked"), None, Some("s"), None)).await;
+    let by_caller = rows(
+        &logs,
+        &Access::All,
+        q(Some("blocked"), None, Some("s"), None),
+    )
+    .await;
     assert_eq!(tools(&by_caller), vec!["refused"], "caller=s");
     let by_tool = rows(&logs, &Access::All, q(None, None, None, Some("refused"))).await;
     assert_eq!(tools(&by_tool), vec!["refused"], "q=refused");
@@ -228,7 +244,10 @@ async fn a_refusal_appears_in_both_exports_and_its_receipt_shows_the_decision() 
     )
     .unwrap();
     assert!(
-        collected.rows.iter().any(|r| r["tool"] == "refused" && r["outcome"] == "blocked"),
+        collected
+            .rows
+            .iter()
+            .any(|r| r["tool"] == "refused" && r["outcome"] == "blocked"),
         "{:?}",
         collected.rows
     );
