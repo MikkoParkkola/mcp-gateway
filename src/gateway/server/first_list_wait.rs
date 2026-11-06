@@ -104,3 +104,17 @@ pub(super) fn answer_queued() {
         answered.store(true, Ordering::Release);
     }
 }
+
+/// Test-only: mark the current dispatch's ticket as a first list that waited.
+#[cfg(test)]
+pub(super) fn mark_waited_for_test() {
+    TICKET.with(|ticket| ticket.waited.set(true));
+}
+
+#[cfg(test)]
+impl FirstList {
+    /// Test-only: whether a first list's answer was committed.
+    pub(super) fn answered_for_test(&self) -> bool {
+        self.answered.load(Ordering::Acquire)
+    }
+}

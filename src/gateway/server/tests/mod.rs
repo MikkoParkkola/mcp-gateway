@@ -64,6 +64,7 @@ mod reserved_member_stdio;
 mod secret_injection_targets;
 mod stdio_cache_scope;
 mod stdio_first_list;
+mod stdio_first_list_commit;
 mod stdio_first_list_rows;
 mod stdio_first_list_scope;
 mod stdio_list_changed;
