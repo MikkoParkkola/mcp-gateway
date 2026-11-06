@@ -122,3 +122,80 @@ fn settle_after_its_log_was_replaced_lands_in_neither_log() {
     assert!(records_of(&path, "w-1").is_empty());
     assert!(records_of(&theirs, "w-1").is_empty());
 }
+
+#[test]
+fn a_refused_settle_appends_nothing() {
+    for refusal in ["sync", "before", "event", "token"] {
+        // GIVEN: a live logger, a failing sync, the BeforeAppend seam, or a
+        // payload that names the event or the token itself
+        let dir = tempfile::tempdir().unwrap();
+        let path = log_path(&dir);
+        let l = TransparencyLogger::open(cfg(&path, 12, false)).unwrap();
+        append(&l, 0);
+        let mut given = payload();
+        match refusal {
+            "sync" => l.arm_write_fault(Some(WriteFault::SyncError)),
+            "before" => l.arm_settle_fault(FailSettle::BeforeAppend),
+            key => drop(given.insert(key.into(), "forged".into())),
+        }
+        let before = on_disk(&path);
+
+        // WHEN: it is settled
+        let got = l.settle(&l.log_id(), "w-1", Role::Outcome, given);
+
+        // THEN: Refused, and the log and its mark are as before
+        assert!(
+            matches!(got, Err(Unsettled::Refused(_))),
+            "{refusal}: {got:?}"
+        );
+        assert!(on_disk(&path) == before, "{refusal}");
+    }
+}
+
+#[test]
+fn a_settle_refused_after_its_append_leaves_the_record_for_dedup() {
+    // GIVEN: the AfterAppend seam
+    let dir = tempfile::tempdir().unwrap();
+    let path = log_path(&dir);
+    let l = TransparencyLogger::open(cfg(&path, 12, false)).unwrap();
+    l.arm_settle_fault(FailSettle::AfterAppend);
+
+    // WHEN: it is settled
+    let got = l.settle(&l.log_id(), "w-1", Role::Outcome, payload());
+
+    // THEN: Refused, with the synced record on disk: the replay repeats it
+    // and the reader collapses the pair
+    assert!(matches!(got, Err(Unsettled::Refused(_))), "{got:?}");
+    assert_eq!(records_of(&path, "w-1").len(), 1);
+}
+
+#[test]
+fn settle_events_name_their_role_and_callers_cannot_write_them() {
+    let roles = [
+        (Role::Outcome, "config_write_outcome"),
+        (Role::Abandoned, "config_write_abandoned"),
+        (Role::Deferred, "config_write_deferred"),
+        (Role::DeliveryStopped, "config_write_delivery_stopped"),
+    ];
+    let dir = tempfile::tempdir().unwrap();
+    let path = log_path(&dir);
+    let l = TransparencyLogger::open(cfg(&path, 12, false)).unwrap();
+    for (role, name) in roles {
+        assert_eq!(role.event(), name);
+        // A caller naming the event is refused, and nothing is appended.
+        let before = on_disk(&path);
+        let mut forged = Map::new();
+        forged.insert("event".into(), name.into());
+        let refused = l.append_event(forged, &AuditEnvelope::gateway());
+        assert!(refused.is_err(), "{name}");
+        assert!(on_disk(&path) == before, "{name}");
+    }
+}
+
+#[test]
+fn reasons_have_one_wire_form_each() {
+    let wire = |r: Reason| serde_json::to_value(r).unwrap();
+    assert_eq!(wire(Reason::RolledBack), "rolled_back");
+    assert_eq!(wire(Reason::OperatorAbandoned), "operator_abandoned");
+    assert_eq!(wire(Reason::RenamedNotDurable), "renamed_not_durable");
+}
