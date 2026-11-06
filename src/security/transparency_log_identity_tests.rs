@@ -29,11 +29,13 @@ pub(super) fn identified(path: &Path) -> Vec<Value> {
         .collect()
 }
 
-/// Rewrite a one-segment log as `records` (their `entry_hash` dropped),
-/// re-chained, with `.hwm` re-minted at the new tail in the same fixed
-/// layout.
-fn rechain(path: &Path, records: impl IntoIterator<Item = serde_json::Map<String, Value>>) {
-    let c = cfg(path, 12, false);
+/// Write `records` (their `entry_hash` dropped) to `file`, re-chained from
+/// genesis; returns the last counter and entry hash.
+pub(super) fn chain_file(
+    file: &Path,
+    records: impl IntoIterator<Item = serde_json::Map<String, Value>>,
+) -> (u64, String) {
+    let c = cfg(file, 12, false);
     let (mut prev, mut counter, mut body) = ("genesis".to_string(), 0_u64, String::new());
     for mut fields in records {
         fields.remove("entry_hash");
@@ -42,10 +44,17 @@ fn rechain(path: &Path, records: impl IntoIterator<Item = serde_json::Map<String
         body += &(line + "\n");
         prev = hash;
     }
-    std::fs::write(path, body).unwrap();
+    std::fs::write(file, body).unwrap();
+    (counter, prev)
+}
+
+/// Rewrite a one-segment log as `records`, re-chained, with `.hwm`
+/// re-minted at the new tail in the same fixed layout.
+fn rechain(path: &Path, records: impl IntoIterator<Item = serde_json::Map<String, Value>>) {
+    let (counter, entry_hash) = chain_file(path, records);
     let mark = HighWater {
         counter,
-        entry_hash: prev,
+        entry_hash,
         segment_seq: 0,
     };
     // Remove first: an in-place rewrite would keep any longer tail.
@@ -53,18 +62,23 @@ fn rechain(path: &Path, records: impl IntoIterator<Item = serde_json::Map<String
     write_hwm(path, &encode_hwm(&mark, b"", "test").unwrap(), true).unwrap();
 }
 
-/// Rewrite a one-segment 4.0 log as a beta one: no `log_id` on the open
+/// The records of `file` as a beta log wrote them: no `log_id` on any
 /// record, no identified record.
-pub(super) fn beta_shape(path: &Path) {
-    let beta = lines(path)
+pub(super) fn beta_records(file: &Path) -> Vec<serde_json::Map<String, Value>> {
+    lines(file)
         .into_iter()
         .filter(|v| event(v) != Some(EV_IDENTIFIED))
         .map(|v| {
             let mut fields = v.as_object().unwrap().clone();
             fields.remove("log_id");
             fields
-        });
-    rechain(path, beta.collect::<Vec<_>>());
+        })
+        .collect()
+}
+
+/// Rewrite a one-segment 4.0 log as a beta one.
+pub(super) fn beta_shape(path: &Path) {
+    rechain(path, beta_records(path));
 }
 
 #[test]
