@@ -525,3 +525,79 @@ async fn a6b_direct_no_rule() {
         "control: the backend was sent k-deny's call"
     );
 }
+
+/// A3: an execute grant admits the owner's call to its personal capability
+/// on the meta route. Recorded `default_allow` today (flipped by MIK-9205,
+/// which records the grant as the allowing check), with no `grant_id`: the
+/// decision constructor sets none (`decision_record.rs:304`; flipped when the
+/// grant id is written). The effect is the capability's own definition,
+/// `read_only: true` (`pre_dispatch.rs:77-86`). Control: without the grant,
+/// the same call is refused and the upstream is not hit.
+#[tokio::test]
+async fn a3_grant_match() {
+    use super::direct_effect_tests::{CAPS, PROBE, call, owned_capability};
+    let (fx, hits, dir) = owned_capability(true).await;
+    let before = records(&dir).len();
+    let answer = call(
+        &fx,
+        "/mcp",
+        "gateway_invoke",
+        json!({"server": CAPS, "tool": PROBE, "arguments": {}}),
+    )
+    .await;
+    assert!(
+        answer.to_string().contains("served-1"),
+        "premise: delivered: {answer}"
+    );
+    assert_eq!(
+        hits.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "premise: one upstream hit"
+    );
+    let mut all = records(&dir);
+    let new = all.split_off(before);
+    // The grant check writes its own record beside the invocation's
+    // (`GrantNote::project`, `grant_audit.rs:127-163`): kind
+    // `identity_grant_decision` (`:45`, `:129`), the matched `grant_id` (`:143-145`),
+    // and no decision object among its fields.
+    let granted: Vec<&Value> = new.iter().filter(|r| r.get("decision").is_none()).collect();
+    assert!(
+        matches!(granted.as_slice(), [grant]
+            if grant["grant_id"] == "g-direct-probe" && grant["kind"] == "identity_grant_decision"),
+        "premise: one grant record naming the matched grant: {new:?}"
+    );
+    let invoked: Vec<&Value> = new.iter().filter(|r| r.get("decision").is_some()).collect();
+    let [record] = invoked.as_slice() else {
+        panic!("premise: one invocation record: {new:?}");
+    };
+    assert_eq!(record["outcome"], "ok", "{record}");
+    // flipped by MIK-9205
+    let row = DecisionRow {
+        name: "a3_grant_match",
+        kind: "default_allow",
+        rule_id: RuleId::Absent("flipped by MIK-9205"),
+        grant_id: None,
+        findings: Findings::NotRun,
+        effect: Some(("read_only", "capability_definition")),
+        decided: "fresh",
+    };
+    assert_row(&record["decision"], &row);
+
+    let (fx, hits, _dir) = owned_capability(false).await;
+    let answer = call(
+        &fx,
+        "/mcp",
+        "gateway_invoke",
+        json!({"server": CAPS, "tool": PROBE, "arguments": {}}),
+    )
+    .await;
+    assert!(
+        !answer.to_string().contains("served-"),
+        "control: served without the grant: {answer}"
+    );
+    assert_eq!(
+        hits.load(std::sync::atomic::Ordering::SeqCst),
+        0,
+        "control: the upstream was hit without the grant"
+    );
+}
