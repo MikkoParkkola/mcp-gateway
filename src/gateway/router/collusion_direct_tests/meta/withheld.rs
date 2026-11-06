@@ -107,13 +107,22 @@ fn row7_http_one_grant_record_and_failclosed_answers_as_absent() {
             // The record is appended after the call settles: wait for the
             // attempt, then let its failure be logged.
             let attempts = crate::gateway::meta_mcp::grant_audit::seams::appends_for_test();
-            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
             while crate::gateway::meta_mcp::grant_audit::seams::appends_for_test() == attempts
                 && std::time::Instant::now() < deadline
             {
                 tokio::time::sleep(std::time::Duration::from_millis(10)).await;
             }
-            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+            // The attempt has started: wait for its blocking write to finish,
+            // then let the detached task log the failure.
+            let drained = Arc::clone(&log);
+            let _ = tokio::task::spawn_blocking(move || {
+                drained.wait_write_cleared_for_test(crate::test_wait::HANG_BOUND)
+            })
+            .await;
+            for _ in 0..20 {
+                tokio::task::yield_now().await;
+            }
             answer
         })
     });

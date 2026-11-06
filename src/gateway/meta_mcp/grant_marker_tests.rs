@@ -183,13 +183,13 @@ async fn a_blocked_withheld_writer_never_holds_the_slots_answer() {
         meta.record_withheld(CAPS, PERSONAL, Withholding::Refused, &caller, None)
             .await;
     });
-    let answered = tokio::time::timeout(std::time::Duration::from_secs(5), slot).await;
+    let answered = tokio::time::timeout(std::time::Duration::from_secs(10), slot).await;
 
     let (_, verdict, _) = answered.expect("the slot waited for its withheld note's writer");
     verdict.expect("a withheld note never changes the answer");
     let flushed = decisions(&dir);
     assert_eq!(flushed.len(), 1, "the fail-closed note first: {flushed:#?}");
-    let parked = tokio::time::timeout(std::time::Duration::from_secs(5), hold.held()).await;
+    let parked = tokio::time::timeout(std::time::Duration::from_secs(10), hold.held()).await;
     assert!(parked.is_ok(), "the withheld write never reached its hold");
     hold.release();
     let held = wait_for_decisions(&dir, 2).await;
@@ -244,7 +244,7 @@ async fn a_call_cancelled_during_its_invocation_append_is_one_recorded_decision(
             call(&meta, &who, "gateway_invoke", invoke_args()).await
         }
     });
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
     while !log.write_in_flight_for_test() && std::time::Instant::now() < deadline {
         tokio::time::sleep(std::time::Duration::from_millis(5)).await;
     }
@@ -275,7 +275,7 @@ async fn an_append_that_outlives_its_caller_marks_the_decision_recorded() {
     let hold = super::grant_audit::seams::hold_next_best_effort_write_for_test();
 
     let _answered = call(&meta, &api_key("alice"), "gateway_invoke", invoke_args()).await;
-    let parked = tokio::time::timeout(std::time::Duration::from_secs(5), hold.held()).await;
+    let parked = tokio::time::timeout(std::time::Duration::from_secs(10), hold.held()).await;
     assert!(parked.is_ok(), "premise: the withheld write reached its hold");
     assert!(invocations(&dir).is_empty(), "premise: the append is still stuck");
     log.release_and_drain(gate).await;

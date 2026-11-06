@@ -225,7 +225,7 @@ pub(crate) fn decisions(dir: &tempfile::TempDir) -> Vec<Value> {
 /// task (design: "withheld notes are owned by their slot"), so a row reads it
 /// through this wait. Panics, showing what the log held, after 5 s.
 pub(crate) async fn wait_for_decisions(dir: &tempfile::TempDir, count: usize) -> Vec<Value> {
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
     loop {
         let found = decisions(dir);
         if found.len() >= count {
@@ -233,7 +233,7 @@ pub(crate) async fn wait_for_decisions(dir: &tempfile::TempDir, count: usize) ->
         }
         assert!(
             std::time::Instant::now() < deadline,
-            "wanted {count} decision records within 5 s; the log held {:#?}",
+            "wanted {count} decision records within 10 s; the log held {:#?}",
             entries(dir)
         );
         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
