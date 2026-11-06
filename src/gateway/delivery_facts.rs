@@ -125,6 +125,10 @@ pub(crate) struct DeliveryFacts {
     /// under the keep/drop rule documented on [`step`].
     last_step_trace: Option<std::sync::Arc<str>>,
     last_step_withheld: Option<i32>,
+    /// The record trace of the step the composite ended refused on: written
+    /// by [`composite_ended`] alone, so a trace a step left is never read as
+    /// the end unless the end kept it.
+    ended_on: Option<std::sync::Arc<str>>,
 }
 
 /// What the injected-value scrub did during a delivery.
@@ -196,6 +200,7 @@ impl Default for DeliveryFacts {
             noted_trace: None,
             last_step_trace: None,
             last_step_withheld: None,
+            ended_on: None,
         }
     }
 }
@@ -243,7 +248,7 @@ impl DeliveryFacts {
     /// The record trace of the step a composite ended refused on: kept only
     /// by [`composite_ended`] for a plan that Failed on a refused step.
     pub(crate) fn ended_on(&self) -> Option<std::sync::Arc<str>> {
-        self.last_step_trace.clone()
+        self.ended_on.clone()
     }
 
     /// The strongest effect: this cell's own, raised to `Rewritten` when the
@@ -305,9 +310,11 @@ pub(crate) async fn discarded<F: std::future::Future>(future: F) -> F::Output {
 /// up as `last_step_trace` and `last_step_withheld`, under one rule: both are
 /// set (or emptied) by every step that ends, both are cleared by
 /// [`step_absorbed`] and [`refused_before_step`], and [`composite_ended`]
-/// keeps them only when the plan Failed on a refused step, moving the code
-/// into the plan cell's `withheld_code`; otherwise it drops them. A step
-/// whose trace was never noted leaves no trace, never an earlier step's.
+/// keeps them only when the plan Failed on a refused step, moving the trace
+/// into `ended_on` (the only trace a settlement reads) and the code into the
+/// plan cell's `withheld_code`; otherwise it drops them and empties
+/// `ended_on`. A step whose trace was never noted leaves no trace, never an
+/// earlier step's.
 pub(crate) async fn step<F: std::future::Future>(future: F) -> F::Output {
     let cell = DeliveryFacts {
         lone_target: true,
@@ -487,14 +494,16 @@ pub(crate) fn composite_ended(end: CompositeEnd) {
             if let Some(code) = facts.last_step_withheld.take() {
                 facts.withheld_code = Some(code);
             }
+            facts.ended_on = facts.last_step_trace.take();
         } else {
             forget_last_step(facts);
+            facts.ended_on = None;
         }
         // A composite that fails ends on its latest step's fold; one that
         // succeeds carries only the failures it reported.
-        let ended_on = facts.last_step_folded.take();
+        let ended_fold = facts.last_step_folded.take();
         if end == CompositeEnd::Failed {
-            facts.folded = worst(facts.folded, ended_on);
+            facts.folded = worst(facts.folded, ended_fold);
         }
     });
 }
