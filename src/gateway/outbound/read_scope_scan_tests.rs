@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! Each judge entry point opens with the `judging` gate (every function the
-//! judge exposes that takes a firewall, found by parsing it), and the
+//! Each judge entry point opens with the `judging` gate (every function or
+//! method the judge exposes, found by parsing it, bar two named ones), and the
 //! frame-level check asks the same gate, so the verdict decides whether to judge in one
 //! place. That only the judge reaches the read history is pinned by the
 //! production-node scan in `meta_mcp::boundary_pins::read_history_access`.
@@ -9,8 +9,11 @@
 const SRC: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/src");
 const JUDGE: &str = "gateway/outbound/judge.rs";
 
-/// Functions of the judge that take a firewall but are not entry points to
-/// the verdict, each with why it needs no gate.
+/// The judge's exposed top-level functions that are not entry points to the
+/// verdict, each with why it needs no gate. Every other exposed function or
+/// method of the judge is an entry, whatever its parameters, so a new way
+/// in (generic, by trait, through another type) cannot be missed by how it
+/// is spelled.
 const NOT_ENTRIES: [(&str, &str); 2] = [
     ("judging", "the gate itself"),
     (
@@ -18,20 +21,6 @@ const NOT_ENTRIES: [(&str, &str); 2] = [
         "labels a raw value's tenants for an outbox record; never reaches the read history",
     ),
 ];
-
-/// Whether `ty` is `&Firewall`.
-fn is_firewall_ref(ty: &syn::Type) -> bool {
-    let syn::Type::Reference(reference) = ty else {
-        return false;
-    };
-    let syn::Type::Path(path) = &*reference.elem else {
-        return false;
-    };
-    path.path
-        .segments
-        .last()
-        .is_some_and(|s| s.ident == "Firewall")
-}
 
 /// Names one module brings into its own scope that a bare identifier
 /// pattern would match instead of binding: every `use` leaf and rename, and
@@ -138,9 +127,9 @@ fn is_judging_gate(stmt: &syn::Stmt, taken: &std::collections::HashSet<String>) 
 /// What the walk of the judge found.
 #[derive(Default)]
 struct Entries {
-    /// Exposed functions taking a `&Firewall` that open with the gate.
+    /// Exposed functions that open with the gate.
     gated: Vec<String>,
-    /// Exposed functions taking a `&Firewall` that do not.
+    /// Exposed functions that do not.
     ungated: Vec<String>,
     /// Items the walk cannot see into, so an entry could hide there: an
     /// out-of-line module, an item macro (also inside an `impl` or a
@@ -155,11 +144,7 @@ impl Entries {
     /// judge; `exempt` whether it is a top-level free function named in
     /// [`NOT_ENTRIES`].
     fn check(&mut self, sig: &syn::Signature, exposed: bool, exempt: bool, block: &syn::Block) {
-        let takes_firewall = sig
-            .inputs
-            .iter()
-            .any(|input| matches!(input, syn::FnArg::Typed(arg) if is_firewall_ref(&arg.ty)));
-        if !exposed || !takes_firewall || exempt {
+        if !exposed || exempt {
             return;
         }
         let name = sig.ident.to_string();
@@ -238,8 +223,8 @@ fn entries(items: &[syn::Item], top: bool, found: &mut Entries) {
 }
 
 /// Every function of the judge reachable from outside it (`pub` of any
-/// scope, a trait impl's method, or an exposed trait's default method) that
-/// takes a `&Firewall` opens with the `judging` gate, so a new entry point
+/// scope, a trait impl's method, or an exposed trait's default method),
+/// whatever its parameters, opens with the `judging` gate, so a new entry point
 /// added later fails here unless it is gated or is one of the top-level free
 /// functions named in [`NOT_ENTRIES`] with its reason. An item the walk
 /// cannot see into fails it too, so a future one is a decision, not a gap.
@@ -306,6 +291,7 @@ fn the_gate_check_refuses_each_ungated_shape() {
         pub(crate) fn aliased(firewall: &Firewall) {
             let Some((guard, off)) = judging(firewall) else { return; };
         }
+        pub(crate) fn generic<F: AsRef<Firewall>>(firewall: &F) {}
         pub(crate) fn disabled(firewall: &Firewall) {
             #[cfg(any())]
             let Some((guard, mode)) = judging(firewall) else { return; };
@@ -362,6 +348,7 @@ fn the_gate_check_refuses_each_ungated_shape() {
             "defaulted",
             "disabled",
             "entry",
+            "generic",
             "inner",
             "inverted",
             "judging",
