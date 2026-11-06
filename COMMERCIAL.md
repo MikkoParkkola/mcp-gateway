@@ -102,10 +102,13 @@ features. No sponsorship is required for those permitted uses.
 
 The Coffee (USD 5 one-time), Supporter (USD 5/month), and Sustainer
 (USD 25/month) tiers are optional contributions to maintenance. They do not
-purchase a commercial license, support, an SLA, or custom work. Custom support
-contributions also do not grant commercial rights unless separately agreed
-in writing. Choose a commercial-license tier when commercial permission is
-required.
+purchase a commercial license, support, an SLA, or custom work. Custom payments
+receive the benefits of the tier GitHub assigns. A custom monthly
+payment assigned to a commercial tier is subject to that tier's eligibility,
+one-organization/one-product scope, and registration requirements. Paying more
+does not license additional products. One-time payments and payments with no
+assigned commercial tier are optional support and do not grant commercial
+rights. Choose a commercial-license tier when commercial permission is required.
 
 ## Custom commercial terms
 
