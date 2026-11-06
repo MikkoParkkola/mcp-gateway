@@ -39,9 +39,15 @@ pub(crate) enum RuleKeys<'a> {
 impl<'a> RuleKeys<'a> {
     /// What `config`'s own `auth` section offers.
     pub(crate) fn of(config: &'a Config) -> Self {
-        let auth = &config.auth;
-        if auth.enabled && !auth.api_keys.is_empty() {
-            Self::Configured(auth.api_keys.iter().map(|key| key.name.as_str()).collect())
+        if keyed(config) {
+            Self::Configured(
+                config
+                    .auth
+                    .api_keys
+                    .iter()
+                    .map(|key| key.name.as_str())
+                    .collect(),
+            )
         } else {
             Self::AuthOff
         }
@@ -50,11 +56,17 @@ impl<'a> RuleKeys<'a> {
     /// What a reload of `candidate` offers while `running` runs: keys reload
     /// live, but whether authentication is on is the running process's.
     fn running(running: &Config, candidate: &'a Config) -> Self {
-        match Self::of(running) {
-            Self::AuthOff => Self::AuthOff,
-            Self::Configured(_) => Self::of(candidate),
+        if keyed(running) {
+            Self::of(candidate)
+        } else {
+            Self::AuthOff
         }
     }
+}
+
+/// Whether `config` has API-key authentication: on, with at least one key.
+fn keyed(config: &Config) -> bool {
+    config.auth.enabled && !config.auth.api_keys.is_empty()
 }
 
 /// Rule `i`'s `keys` entries and exceptions' `key` must name a configured API
