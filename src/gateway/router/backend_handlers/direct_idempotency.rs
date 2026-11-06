@@ -132,13 +132,20 @@ pub(super) fn execution_lease(
             if binds_passthrough(scope) {
                 lease.note_binding((scope.name, tool), propagation.identity_key.as_deref());
             }
+            // The slot it runs under, for a completed replay's declared effect.
+            lease.note_effect_slot(
+                scope
+                    .route
+                    .backend
+                    .slot_key_for(propagation.identity_key.as_deref()),
+            );
             Ok((Some(lease), None))
         }
         // Released before the replay's delivery begins, not when it ends.
         // The second element is the replayed execution's record facts, which
         // `/mcp` writes into its invocation record. The direct route records a
         // replay as it records a cache hit (`note_cached`), so it sets them aside.
-        Ok(SyncAdmission::Replay(response, _, _, _, bindings)) => {
+        Ok(SyncAdmission::Replay(response, _, _, _, bindings, _)) => {
             if let Some(GuardOutcome::Proceed(mut reservation)) = guarded.take() {
                 reservation.release();
             }
@@ -302,6 +309,11 @@ fn replay_scan(
     ),
     response: &mut JsonRpcResponse,
 ) {
+    // Every stored answer this route serves (a 7a result or error, a 7b
+    // replay) passes here: scrubbed against the values current now, so a
+    // value marked secret after it was stored is removed, and a refused
+    // scrub makes the fixed refusal the answer.
+    let _ = state.backends.scrub_stored(response);
     let method = envelope.method.as_str();
     let target = super::direct_dispatch::screen_target(call, method);
     super::super::direct_guards::scan_direct_egress(

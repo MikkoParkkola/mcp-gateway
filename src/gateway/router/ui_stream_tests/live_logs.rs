@@ -148,9 +148,11 @@ async fn s3_a_scoped_admin_gets_activity_and_never_config() {
     let (state, _dirs, inv) = logged(true).await;
     let mut s = open(&state, request(STREAM, Who::Bearer(SCOPED_ADMIN), None)).await;
     let hello = within(s.until("hello")).await;
+    // No `reload`: it is a gateway-wide admin kind, and an admin key scoped
+    // to some backends holds no gateway-wide admin standing.
     assert_eq!(
         hello.json()["kinds"],
-        serde_json::json!(["status", "reload", "activity"])
+        serde_json::json!(["status", "activity"])
     );
     tokio::time::pause();
     config_change(&state);
@@ -587,5 +589,35 @@ async fn a1g_a_demotion_during_a_catch_up_sends_no_more_of_its_page() {
     assert!(
         after <= 2,
         "the narrowed access stops the page at its next frame: {after} rows sent after it"
+    );
+}
+
+#[tokio::test]
+async fn s2_activity_and_config_arrive_within_a_second_of_the_change() {
+    let (state, _dirs, inv) = logged(true).await;
+    let mut s = open(&state, request(STREAM, Who::Bearer(BEARER), None)).await;
+    within(s.until("hello")).await;
+    // A bound on the paused, virtual clock, not the wall clock: it moves only
+    // when every task waits on a timer. A frame the broadcast pushes arrives
+    // with the clock under a second past its change; a delivery that waited
+    // on a timer of a second or more (a poll, a tick) would move it past.
+    tokio::time::pause();
+    let changed = tokio::time::Instant::now();
+    call(&inv, "srv", 1);
+    let call_frame = within(s.until("activity")).await;
+    let activity = changed.elapsed();
+    let changed = tokio::time::Instant::now();
+    config_change(&state);
+    let config_frame = within(s.until("config")).await;
+    let config = changed.elapsed();
+    assert!(
+        call_frame.data.contains("tool_1") && config_frame.data.contains("mutate_grant"),
+        "the frames are these changes: {} / {}",
+        call_frame.data,
+        config_frame.data
+    );
+    assert!(
+        activity < Duration::from_secs(1) && config < Duration::from_secs(1),
+        "each event within a second of its change: activity {activity:?}, config {config:?}"
     );
 }

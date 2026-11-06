@@ -129,6 +129,10 @@ fn assert_resume_missed(
     assert_eq!(new.len(), 1, "{row}: the resume writes one record: {new:?}");
     assert_eq!(new[0]["server"], GHOST, "{row}: {new:?}");
     assert_eq!(new[0]["error_code"], -32001, "{row}: {new:?}");
+    // The name matches nothing: the gateway's own refusal, as an unscoped
+    // caller's missing backend records it.
+    assert_eq!(new[0]["decision"]["kind"], "not_found", "{row}: {new:?}");
+    assert_eq!(new[0]["outcome"], "denied", "{row}: {new:?}");
 }
 
 /// R1 (d4, GPT F1; §2a cell 10), `ghost` cell: unregistered between the stop

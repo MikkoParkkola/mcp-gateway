@@ -12,7 +12,10 @@ use super::*;
 async fn cost_report_refuses_the_admin_view_for_a_non_admin() {
     let meta = make_meta_mcp();
     let caller = allow_all_ctx();
-    assert!(!caller.is_admin, "the default caller holds no admin");
+    assert!(
+        caller.admin != crate::gateway::authz::AdminStanding::Gateway,
+        "the default caller holds no admin"
+    );
 
     for flag in ["include_all_sessions", "include_all_keys"] {
         let args = json!({ flag: true });
@@ -117,7 +120,7 @@ auth:
     meta.set_capabilities(cap_backend);
 
     let caller = allow_all_ctx();
-    assert!(!caller.is_admin);
+    assert_ne!(caller.admin, crate::gateway::authz::AdminStanding::Gateway);
 
     let args = json!({
         "server": "caps",
@@ -137,7 +140,7 @@ auth:
     // An admin caller reaches the capability. It fails at the network, which is
     // the point: the guard is what differs, not the outcome.
     let admin_caller = MetaMcpCallerContext {
-        is_admin: true,
+        admin: crate::gateway::authz::AdminStanding::Gateway,
         input_capabilities: crate::protocol::meta::Declared::NONE,
         retry: &crate::protocol::mrtr::NO_RETRY,
         ..allow_all_ctx()
@@ -160,7 +163,7 @@ fn the_stdio_caller_is_the_operator() {
     // that drops it fails here rather than silently removing the tools.
     let default_caller = allow_all_ctx();
     assert!(
-        !default_caller.is_admin,
+        default_caller.admin != crate::gateway::authz::AdminStanding::Gateway,
         "the DEFAULT must stay non-admin: every network path uses it"
     );
 }
@@ -183,7 +186,10 @@ fn a_playbook_carries_the_caller_identity() {
         Some("scoped-client".to_string()),
         "the caller identity must survive into the playbook invoker"
     );
-    assert!(!caller.is_admin, "the default caller holds no admin");
+    assert!(
+        caller.admin != crate::gateway::authz::AdminStanding::Gateway,
+        "the default caller holds no admin"
+    );
 }
 
 /// A global meta-tool is refused at the DISPATCHER, not only at the HTTP router.
@@ -233,7 +239,7 @@ async fn global_meta_tool_reaches_an_admin_caller() {
         json!({}),
         Some("sess-dispatcher-admin"),
         crate::gateway::meta_mcp::MetaMcpCallerContext {
-            is_admin: true,
+            admin: crate::gateway::authz::AdminStanding::Gateway,
             input_capabilities: crate::protocol::meta::Declared::NONE,
             retry: &crate::protocol::mrtr::NO_RETRY,
             ..allow_all_ctx()

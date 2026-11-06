@@ -17,6 +17,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use super::*;
+use crate::backend::BackendRegistry;
 use crate::config::LiveEnv;
 use std::path::PathBuf;
 

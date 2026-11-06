@@ -165,7 +165,18 @@ impl HttpTransport {
                 Ok::<String, crate::Error>(oauth.backend_name().to_string())
             });
 
-            let backend_name = oauth_task.await.map_err(|e| join_failure(&e))??;
+            // The task's raise cannot reach this call's record, so a
+            // destination refusal is recorded here; only for an interactive
+            // caller, whose answer is this error (a non-interactive one turns
+            // it into an answer of its own).
+            let backend_name = oauth_task
+                .await
+                .map_err(|e| join_failure(&e))?
+                .inspect_err(|e| {
+                    if interactive && crate::security::ssrf::is_ssrf_refusal(e) {
+                        crate::gateway::delivery_facts::refused_while_vouched();
+                    }
+                })?;
 
             // Spawn background refresh task now that we have a valid token.
             // Reconnect/session-expiry re-enters initialize() (see request()),

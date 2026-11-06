@@ -39,7 +39,9 @@ fn watching(config: &crate::config::Config, subject: &str, uri: &str) -> Subscri
         .expect("observes")
         .expect("per-user backend");
     row.obs_basis = Some(basis);
-    row.observed_identity = Some(person(subject));
+    row.observed_identity = Some(crate::events::records::StoredIdentity::from(&person(
+        subject,
+    )));
     row
 }
 

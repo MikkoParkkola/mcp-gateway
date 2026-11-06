@@ -13,8 +13,9 @@
 //! equivalence rows.
 
 use std::num::NonZeroU32;
-use std::sync::{Arc, OnceLock};
-use std::time::Instant;
+use std::sync::Arc;
+
+use tokio::time::Instant;
 
 use dashmap::DashMap;
 
@@ -26,7 +27,7 @@ const MINUTE_NS: u128 = 60_000_000_000;
 
 /// The shared per-client store, keyed by the credential's state key, never by
 /// a display name.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub(crate) struct AuthRuntime {
     buckets: DashMap<String, Arc<ClientBucket>>,
     breakers: DashMap<String, Arc<CircuitBreaker>>,
@@ -36,6 +37,24 @@ pub(crate) struct AuthRuntime {
     // ponytail: one entry per principal ever matched since start; a derived
     // principal adds one per rotation. Prune to the current table if it grows.
     last_used: DashMap<String, i64>,
+    /// The buckets' time origin. Without tokio's `test-util` feature (a
+    /// dev-dependency only), `tokio::time::Instant::now()` is
+    /// `std::time::Instant::now()` on every thread, so a deployment counts in
+    /// real time; in tests it is the paused clock only inside a runtime whose
+    /// clock is paused. Per store rather than per process, so one test's paused
+    /// timeline never anchors another's.
+    anchor: Instant,
+}
+
+impl Default for AuthRuntime {
+    fn default() -> Self {
+        Self {
+            buckets: DashMap::new(),
+            breakers: DashMap::new(),
+            last_used: DashMap::new(),
+            anchor: Instant::now(),
+        }
+    }
 }
 
 impl AuthRuntime {
@@ -48,7 +67,7 @@ impl AuthRuntime {
             .entry(key)
             .or_insert_with(|| Arc::new(ClientBucket::new(rate)))
             .clone();
-        bucket.check_at(rate, now_ns())
+        bucket.check_at(rate, ns_since(self.anchor))
     }
 
     /// `key`'s breaker, made under `config` on first use and labelled for logs
@@ -111,7 +130,7 @@ struct BucketState {
     /// computed when the rate is set rather than on every check.
     pricing: Pricing,
     /// The theoretical arrival time of the next request, in nanoseconds on
-    /// [`now_ns`]'s clock; `None` until the first request.
+    /// [`ns_since`]'s clock; `None` until the first request.
     tat: Option<u64>,
 }
 
@@ -177,10 +196,9 @@ fn interval(rate: NonZeroU32) -> u64 {
         .max(1)
 }
 
-/// Nanoseconds since the first bucket check in this process.
-fn now_ns() -> u64 {
-    static ANCHOR: OnceLock<Instant> = OnceLock::new();
-    u64::try_from(ANCHOR.get_or_init(Instant::now).elapsed().as_nanos()).unwrap_or(u64::MAX)
+/// Nanoseconds since `anchor` on the tokio clock.
+fn ns_since(anchor: Instant) -> u64 {
+    u64::try_from(anchor.elapsed().as_nanos()).unwrap_or(u64::MAX)
 }
 
 #[cfg(test)]

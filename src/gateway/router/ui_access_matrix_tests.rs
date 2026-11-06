@@ -314,6 +314,7 @@ fn paths() -> Vec<&'static str> {
         routes::UI_REFUSALS,
         routes::UI_DECISIONS,
         routes::UI_DECISIONS_COUNT,
+        routes::UI_POLICIES,
         routes::UI_GATEWAY,
         routes::UI_KEYS,
         routes::UI_CONFIG,
@@ -804,7 +805,6 @@ mod report;
 #[path = "ui_backend_scope_tests.rs"]
 mod backend_scope;
 
-/// Each UI role check against the mapping pinned on the request, through the
-/// same fixture.
+/// Each UI role check against the mapping pinned on the request, through the same fixture.
 #[path = "ui_pinned_mapping_tests.rs"]
 mod pinned_mapping;
