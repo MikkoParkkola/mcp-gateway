@@ -55,7 +55,10 @@ impl crate::transport::Transport for Counted {
 
 /// One table gateway: backend `alpha` under `config`, logging to `dir`, and
 /// the count of calls `alpha` was sent.
-fn table_meta(dir: &tempfile::TempDir, config: BackendConfig) -> (MetaMcp, Arc<AtomicUsize>) {
+pub(super) fn table_meta(
+    dir: &tempfile::TempDir,
+    config: BackendConfig,
+) -> (MetaMcp, Arc<AtomicUsize>) {
     let sent = Arc::new(AtomicUsize::new(0));
     let registry = Arc::new(BackendRegistry::new());
     let backend = Arc::new(Backend::new(
