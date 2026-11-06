@@ -350,19 +350,6 @@ pub(crate) async fn step<F: std::future::Future>(future: F) -> F::Output {
     output
 }
 
-/// The open step cell's step wrote its record under `trace`: the trace a
-/// composite settlement joins when the plan ends refused on this step.
-pub(crate) fn note_step_trace(trace: &str) {
-    with(|facts| facts.noted_trace = Some(trace.into()));
-}
-
-/// Forget the latest step's record trace and code: what the composite can
-/// end on is no longer that step.
-fn forget_last_step(facts: &mut DeliveryFacts) {
-    facts.last_step_trace = None;
-    facts.last_step_withheld = None;
-}
-
 /// The composite's next step was refused before it could run (a playbook's
 /// refusal of a step's arguments, a resumed chain's pending step): the
 /// composite now ends on that refusal unless it carries on past it.
@@ -480,7 +467,8 @@ pub(crate) fn stamp_folded(frame: &mut crate::protocol::JsonRpcResponse) {
 }
 
 mod composite;
-pub(crate) use composite::CompositeEnd;
+use composite::forget_last_step;
+pub(crate) use composite::{CompositeEnd, note_step_trace};
 
 /// The composite ends as `end`. It records `refused` when it fails while its
 /// latest step's refusal still stands: the step it ends on was refused. That
