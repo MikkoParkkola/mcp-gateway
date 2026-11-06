@@ -78,7 +78,7 @@ impl StreamKind {
     /// Whether a row of `kind` belongs on this stream.
     fn keeps(self, kind: Kind) -> bool {
         match self {
-            Self::Activity => matches!(kind, Kind::Call | Kind::AdminAction),
+            Self::Activity => matches!(kind, Kind::Call | Kind::Refusal | Kind::AdminAction),
             Self::Config => kind == Kind::Config,
         }
     }
