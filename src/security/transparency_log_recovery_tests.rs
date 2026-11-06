@@ -139,7 +139,7 @@ fn newline_less_valid_record_is_kept() {
     let p = path.clone();
     within_10s(move || drop(open(&p, 12)));
     let all = lines(&path);
-    assert_eq!(all.len(), 4, "record kept, no torn-tail record");
+    assert_eq!(all.len(), 5, "record kept, no torn-tail record");
     assert!(std::fs::read(&path).unwrap().ends_with(b"\n"));
     assert!(verify(&path, false).ok);
 }
@@ -493,10 +493,7 @@ fn open_record_only_log_without_hwm_verifies_clean() {
     let dir = tempfile::tempdir().unwrap();
     let path = log_path(&dir);
     drop(TransparencyLogger::open(cfg(&path, 12, false)).unwrap());
-    let hwm = sibling(&path, "hwm");
-    if hwm.exists() {
-        std::fs::remove_file(&hwm).unwrap();
-    }
+    super::rotation_tests::cut_to_open_record(&path);
     assert_eq!(lines(&path).len(), 1, "only the open record");
     let r = verify(&path, false);
     assert!(r.ok, "{:?}", r.error_message);

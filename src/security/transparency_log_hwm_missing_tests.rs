@@ -535,10 +535,7 @@ fn a_genesis_only_log_is_not_marked() {
     let dir = tempfile::tempdir().unwrap();
     let path = log_path(&dir);
     drop(TransparencyLogger::open(cfg(&path, 12, false)).unwrap());
-    let hwm = sibling(&path, "hwm");
-    if hwm.exists() {
-        delete_hwm(&path);
-    }
+    super::rotation_tests::cut_to_open_record(&path);
     let l = TransparencyLogger::open(cfg(&path, 12, false)).unwrap();
     append(&l, 9);
     drop(l);
