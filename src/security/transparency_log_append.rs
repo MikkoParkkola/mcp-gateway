@@ -245,10 +245,16 @@ impl TransparencyLogger {
         fields: Map<String, Value>,
         resync: bool,
     ) -> io::Result<String> {
-        let published = self.subscribers.wants(&fields).then(|| fields.clone());
+        self.refresh(inner, resync)?;
+        self.append_refreshed(inner, fields, resync)
+    }
+
+    /// Bring `inner` to the log on disk before an append: every append
+    /// checks for a rotated or deleted path, on every writer, and a synced
+    /// (governance) append always re-reads the tail. A rebuild here can
+    /// adopt another log's id, so a check on the id belongs after this.
+    pub(super) fn refresh(&self, inner: &mut Inner, resync: bool) -> io::Result<()> {
         let path = self.path();
-        // Every append checks for a rotated or deleted path, on every
-        // writer; a synced (governance) append always re-reads the tail.
         let moved = match path_id(&path) {
             Ok(id) => id != inner.seg.id,
             Err(e) if e.kind() == io::ErrorKind::NotFound => true,
@@ -257,6 +263,19 @@ impl TransparencyLogger {
         if moved || resync {
             self.rebuild(inner, &path, &self.lease)?;
         }
+        Ok(())
+    }
+
+    /// [`Self::append_locked`] after its [`Self::refresh`]: rotate or trim
+    /// when due, then write (synced when `sync`).
+    pub(super) fn append_refreshed(
+        &self,
+        inner: &mut Inner,
+        fields: Map<String, Value>,
+        resync: bool,
+    ) -> io::Result<String> {
+        let published = self.subscribers.wants(&fields).then(|| fields.clone());
+        let path = self.path();
         let (line, _) = chain_line(
             &self.config,
             fields.clone(),
