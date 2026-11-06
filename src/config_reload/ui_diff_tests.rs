@@ -358,10 +358,13 @@ async fn a_typed_value_is_echoed_as_typed() {
     );
 }
 
-/// The reload's own refusal of a posture change (`security::posture::
-/// reload_refusal`): the file is hand-edited to `posture: hardened` after
-/// the gateway started on `standard`.
-const POSTURE_REFUSED: &str = "security.posture requires restart";
+/// A hand edit to `posture: hardened` after the gateway started on
+/// `standard`: the loader refuses it first, since a hardened posture turns
+/// message signing on (`security/posture.rs`, before `resolve_with_env`) and
+/// no shared secret is set (`security/message_signing.rs`, the 32-byte rule);
+/// the writer's check reports a load refusal as "Failed to parse config: ..."
+/// (`config_reload/replace_validate.rs`). Either refusal is `Invalid`.
+const POSTURE_REFUSED: &str = "Failed to parse config";
 
 /// D21: a provable edit whose result the reload would refuse is `Invalid`.
 #[tokio::test]
