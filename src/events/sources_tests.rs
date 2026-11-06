@@ -424,6 +424,10 @@ fn a_resource_update_matches_only_its_uri() {
 #[path = "reconcile_table_backend_tests.rs"]
 mod reconcile_table;
 
+/// A per-user row whose stored identity names nobody gets no listener key.
+#[path = "stored_identity_key_tests.rs"]
+mod stored_identity_key;
+
 /// MIK-8668 X-SHA golden, computed independently (Python hashlib over the
 /// compact JSON bytes `["p","u"]`).
 #[test]
