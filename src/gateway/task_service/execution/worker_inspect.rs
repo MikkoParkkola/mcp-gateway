@@ -116,10 +116,10 @@ pub(in crate::gateway::task_service::execution) async fn inspect_and_record(
             }
             // A composite names itself: its plan may reach several backends.
             None if !interim => {
-                let cell = dispatch_refused.as_ref();
-                composite_refusal_code(cell, &settled).map(|code| {
+                let refusal = dispatch_refused.as_ref();
+                composite_refusal_code(refusal, &settled).map(|code| {
                     let target = ("gateway".to_owned(), call.tool.clone());
-                    (target, Some(code), Some(composite_join(cell)))
+                    (target, Some(code), Some(composite_join(refusal)))
                 })
             }
             None => None,
