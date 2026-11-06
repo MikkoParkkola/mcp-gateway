@@ -1,0 +1,4 @@
+src/gateway/server/first_list_wait.rs	scope	1	Scopes one stdio dispatch under the session's first-list ticket, so its tools/list arm and its enqueue share one flag; decides nothing about access
+src/gateway/server/first_list_wait.rs	end	1	Ends a first list's wait for surfaced fills when the stdio session stops reading, so shutdown is not held for it; decides nothing about access
+src/gateway/server/first_list_wait.rs	prepare	1	Runs the grant recheck and own-view warm as before, and beside them a 2026-era first list's bounded wait for surfaced fills; it delays an answer only, and what the list shows is still decided by the listing
+src/gateway/server/first_list_wait.rs	answer_queued	1	Marks the session's first list answered as its answer is queued, under the cancel lock, so later lists do not wait; decides nothing about access
