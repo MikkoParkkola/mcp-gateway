@@ -168,12 +168,12 @@ pub(super) fn predecessor_evidence(
 }
 
 /// Verify's warning for a log whose oldest file opens with a record naming a
-/// lost predecessor. Read apart from the chain checks, so a log that also
-/// fails them (its mark survived and names the lost records) still reports
-/// it. `checked` is the `entry_hash` of the record the chain checks
-/// authenticated as that file's first, if they got that far. The warning
-/// reads as verified only when the record read here is that one, so bytes
-/// swapped in between the two reads are labelled "unverified".
+/// lost predecessor. `checked` is that first record as the chain checks
+/// parsed and authenticated it: the warning is built from it alone, verified,
+/// so nothing read later can change what it says. When the checks did not
+/// reach or pass that record (a log that fails them still reports its
+/// predecessor), the file's first line is read here and the warning is
+/// always labelled "unverified".
 ///
 /// # Errors
 ///
@@ -182,33 +182,36 @@ pub(super) fn predecessor_warning(
     path: &Path,
     checked: Option<&Value>,
 ) -> io::Result<Option<String>> {
+    if let Some(head) = checked {
+        return Ok(warning_for(path, head, true));
+    }
     let head = match segments::read_first_line(path) {
         Ok(line) => line.and_then(|l| serde_json::from_str::<Value>(&l).ok()),
         Err(e) if e.kind() == io::ErrorKind::NotFound => None,
         Err(e) => return Err(e),
     };
-    let Some(evidence) = head
-        .as_ref()
-        .filter(|v| is_event(v, EV_OPENED))
-        .and_then(|v| v.get(PREDECESSOR_MISSING))
-    else {
-        return Ok(None);
-    };
-    let read = head.as_ref().and_then(|v| v.get("entry_hash")?.as_str());
-    let checked = checked.and_then(|v| v.get("entry_hash")?.as_str());
-    let how = if checked.is_some() && read == checked {
+    Ok(head.and_then(|v| warning_for(path, &v, false)))
+}
+
+/// The warning for `head`, if it is an open record naming a predecessor.
+fn warning_for(path: &Path, head: &Value, verified: bool) -> Option<String> {
+    let evidence = Some(head)
+        .filter(|v| is_event(v, EV_OPENED))?
+        .get(PREDECESSOR_MISSING)?;
+    let how = if verified {
         ""
     } else {
         " (unverified: the chain check did not authenticate this record)"
     };
-    Ok(Some(format!(
+    Some(format!(
         "{} starts a new log after its predecessor went missing{how}: {}",
         path.display(),
         evidence_text(evidence)
-    )))
+    ))
 }
 
-/// The evidence a `predecessor_missing` field names, as text.
+/// The evidence a `predecessor_missing` field names, as text; an object
+/// naming neither part reads as "no evidence fields".
 fn evidence_text(evidence: &Value) -> String {
     let mut named = Vec::new();
     if let Some(id) = evidence.get("previous_log_id").and_then(Value::as_str) {
@@ -220,6 +223,9 @@ fn evidence_text(evidence: &Value) -> String {
         named.push(format!(
             "previous high-water mark at counter {counter} ({hash})"
         ));
+    }
+    if named.is_empty() {
+        return "no evidence fields".to_string();
     }
     named.join(", ")
 }
