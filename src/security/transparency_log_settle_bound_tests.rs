@@ -36,6 +36,21 @@ async fn settle_once(
     l.settle(&own, token, Role::Outcome, payload()).await
 }
 
+/// Settle answers within twice its bound (10 s at the default); a real-clock
+/// row gives up well past that, naming the call, so a hang fails the row.
+const WATCHDOG: Duration = Duration::from_secs(30);
+
+/// A real-clock settle of `token`, failing the row if `what` hangs.
+async fn settle_watched(
+    l: &Arc<TransparencyLogger>,
+    token: &str,
+    what: &str,
+) -> Result<super::settle::Appended, Unsettled> {
+    tokio::time::timeout(WATCHDOG, settle_once(l, token))
+        .await
+        .unwrap_or_else(|_| panic!("{what} did not return within {WATCHDOG:?}"))
+}
+
 type Pending = tokio::task::JoinHandle<Result<super::settle::Appended, Unsettled>>;
 
 /// Start a settle of `token` on the runtime, so the clock can move under it.
@@ -111,13 +126,17 @@ async fn a_settle_with_the_permit_closed_or_the_log_stalled_is_refused_at_once()
         // GIVEN: the permit closed, or a write stalled past its bound
         let dir = tempfile::tempdir().unwrap();
         let (path, l) = opened(&dir);
-        assert!(settle_once(&l, "w-0").await.is_ok());
+        assert!(
+            settle_watched(&l, "w-0", "the settle before the refusal")
+                .await
+                .is_ok()
+        );
         let stall = (refusal == "stalled").then(|| {
             let stall = l.stall_next_write_for_test(Duration::from_millis(100));
             (stall, Arc::clone(&l))
         });
         if let Some((_, l)) = &stall {
-            let got = settle_once(l, "w-stuck").await;
+            let got = settle_watched(l, "w-stuck", "the settle that stalls").await;
             assert!(matches!(got, Err(Unsettled::Unconfirmed(_))), "{got:?}");
             assert!(l.is_stalled());
         } else {
@@ -127,7 +146,7 @@ async fn a_settle_with_the_permit_closed_or_the_log_stalled_is_refused_at_once()
         let waits = l.permit_waits_for_test();
 
         // WHEN: it is settled
-        let got = settle_once(&l, "w-1").await;
+        let got = settle_watched(&l, "w-1", "the refused settle").await;
 
         // THEN: Refused, no task started, nothing appended
         assert!(
@@ -228,11 +247,11 @@ async fn a_stalled_write_is_unconfirmed_and_its_retry_is_delivered_twice() {
     let stall = l.stall_next_write_for_test(Duration::from_millis(100));
 
     // WHEN: it is settled, the write released and drained, then retried
-    let got = settle_once(&l, "w-1").await;
+    let got = settle_watched(&l, "w-1", "the stalled settle").await;
     l.release_and_drain(stall).await;
     let landed = records_of(&path, "w-1").len();
     *l.bound.limit.lock().unwrap() = super::bounded::AUDIT_APPEND_TIMEOUT;
-    let retried = settle_once(&l, "w-1").await;
+    let retried = settle_watched(&l, "w-1", "the retried settle").await;
 
     // THEN: Unconfirmed, landed once, then Appended; two records, and the
     // `settle.save` reader told twice with equal role, token and payload
@@ -260,7 +279,11 @@ async fn a_failed_or_partial_write_or_sync_or_a_panic_is_unconfirmed() {
         // GIVEN: a sync that fails, a write cut short, or a task that panics
         let dir = tempfile::tempdir().unwrap();
         let (path, l) = opened(&dir);
-        assert!(settle_once(&l, "w-0").await.is_ok());
+        assert!(
+            settle_watched(&l, "w-0", "the settle before the fault")
+                .await
+                .is_ok()
+        );
         let fired = l.write_faults_fired();
         match fault {
             "sync" => l.arm_write_fault(Some(WriteFault::SyncError)),
@@ -269,7 +292,7 @@ async fn a_failed_or_partial_write_or_sync_or_a_panic_is_unconfirmed() {
         }
 
         // WHEN: it is settled
-        let got = settle_once(&l, "w-1").await;
+        let got = settle_watched(&l, "w-1", "the faulted settle").await;
 
         // THEN: the fault fired, and the result is Unconfirmed by it, not by
         // a timeout: the write was dispatched, its landing unproven
@@ -291,14 +314,18 @@ async fn a_refresh_failure_is_refused_and_counted_like_a_failed_append() {
     // GIVEN: the active file replaced by one recovery cannot read
     let dir = tempfile::tempdir().unwrap();
     let (path, l) = opened(&dir);
-    assert!(settle_once(&l, "w-0").await.is_ok());
+    assert!(
+        settle_watched(&l, "w-0", "the settle before the refresh failure")
+            .await
+            .is_ok()
+    );
     let failures = l.append_failures();
     let swapped = path.with_extension("swap");
     std::fs::write(&swapped, "not a record\n").unwrap();
     std::fs::rename(&swapped, &path).unwrap();
 
     // WHEN: it is settled
-    let got = settle_once(&l, "w-1").await;
+    let got = settle_watched(&l, "w-1", "the settle after the refresh failure").await;
 
     // THEN: Refused before any byte, and the log's health counts it
     assert!(matches!(got, Err(Unsettled::Refused(_))), "{got:?}");
