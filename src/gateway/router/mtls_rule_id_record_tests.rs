@@ -55,7 +55,10 @@ async fn send_cert(
 ) -> (Value, Value, usize) {
     let (uri, params) = match route {
         Route::Direct => ("/mcp/alpha", json!({"name": tool, "arguments": {}})),
-        Route::MetaInvoke | Route::MetaRetry => (
+        // An mTLS refusal comes before dispatch, so no backend question is
+        // asked and no continuation is minted: there is no retry to send.
+        Route::MetaRetry => panic!("an mTLS refusal leaves no continuation to retry"),
+        Route::MetaInvoke => (
             "/mcp",
             json!({"name": "gateway_invoke",
                    "arguments": {"server": "alpha", "tool": tool, "arguments": {}}}),
@@ -116,7 +119,12 @@ async fn refused_by_b(route: Route, rules: Vec<PolicyRuleConfig>) {
     let deciding = rules[1].clone();
     let fx = with_policy(enabled(rules)).await;
     let expected = mtls_id(&rule_key(&fx), &deciding);
-    let got = call_cert(&fx, route, "write", Some("agent-1")).await;
+    let (body, row, calls) = send_cert(&fx, route, "write", Some("agent-1")).await;
+    let decided = (
+        row["decision"]["kind"].clone(),
+        row["decision"]["rule_id"].clone(),
+    );
+    let got = outcome(&body, calls, decided);
     assert!(
         got.refused && got.calls == 0 && got.kind == "mtls",
         "{route:?}: premise, refused by mTLS: {got:?}"
@@ -128,11 +136,12 @@ async fn refused_by_b(route: Route, rules: Vec<PolicyRuleConfig>) {
         expected.as_str(),
         got.rule
     );
+    // The whole answer, not only its code and message, names no rule.
+    let delivered = body.to_string();
     let hex = expected.as_str().trim_start_matches("mtls:");
-    let delivered = format!("{}{}", got.code, got.message);
     assert!(
-        !delivered.contains(hex),
-        "{route:?}: the refusal names the rule: {got:?}"
+        !delivered.contains("mtls:") && !delivered.contains(hex),
+        "{route:?}: the answer names the rule: {delivered}"
     );
 }
 
@@ -208,16 +217,23 @@ async fn a_disabled_mtls_policy_notes_nothing() {
 }
 
 /// The direct route hides a backend the policy refuses by name: a caller
-/// with no certificate is refused every tool on `alpha`
+/// with no certificate, or one no rule matches, is refused every tool on
+/// `alpha`
 /// (`caller_hiding.rs:151-159`, `refused_by_name` through
 /// `mtls_policy.refuses_backend`), so the answer is the missing backend's,
 /// recorded as `not_found` with no rule. Neither the answer nor the record
 /// names a tool of the backend or says that certificate policy refused.
 #[tokio::test(flavor = "current_thread")]
-async fn a_direct_call_with_no_certificate_answers_backend_not_found() {
+async fn a_direct_call_no_rule_admits_answers_backend_not_found() {
     let fx = with_policy(enabled(deny_write_rules())).await;
-    let (body, row, calls) = send_cert(&fx, Route::Direct, "read", None).await;
-    assert_eq!(calls, 0, "{body}");
+    for cn in [None, Some("stranger")] {
+        hidden_backend(&fx, cn).await;
+    }
+}
+
+async fn hidden_backend(fx: &Logged, cn: Option<&str>) {
+    let (body, row, calls) = send_cert(fx, Route::Direct, "read", cn).await;
+    assert_eq!(calls, 0, "{cn:?}: {body}");
     assert_eq!(
         body.pointer("/error/message"),
         Some(&json!("Backend not found: alpha")),
