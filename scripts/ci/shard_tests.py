@@ -243,6 +243,24 @@ def run(os_kind: str, shard: str, program: tuple[str, ...] = ("cargo",)) -> int:
     return 1 if failed else 0
 
 
+RUNNER_NAME = ".shard-runner.sh"
+BINARIES_FILE = ".shard-binaries"
+
+
+def write_runner(tmp: str) -> str:
+    """The cargo runner every test binary starts through: stub, runs the binary as is."""
+    path = os.path.join(tmp, RUNNER_NAME)
+    with open(path, "w") as f:
+        f.write('#!/bin/sh\nexec "$@"\n')
+    os.chmod(path, 0o755)
+    return path
+
+
+def runner_config(path: str) -> list[str]:
+    """Cargo arguments that start each test binary through `path`: stub, none."""
+    return []
+
+
 def run_steps(os_kind: str, shard: str, program: tuple[str, ...] = ("cargo",)) -> list[str]:
     failed = []
     tmp = tempfile.mkdtemp(prefix="shard-tmp-") if os_kind in TMP_GUARDED else None
@@ -439,8 +457,60 @@ def self_test() -> int:
         assert found[".tmpHome01"] == sorted(home), found
         assert found[".tmpLink01"] == ["audit.jsonl.hwm", "elsewhere"], found
         assert unexpected(found) == [".tmpHome02", ".tmpLink01"], found
+    per_binary_rows()
     print("shard_tests self-test: ok")
     return 0
+
+
+def per_binary_rows() -> None:
+    """Each test binary gets its own TMPDIR, so a leftover names the binary that left it."""
+    # The runner itself: a binary named by cargo with its hash suffix runs with TMPDIR set to a folder
+    # named after the target, recorded in BINARIES_FILE.
+    with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as bins:
+        runner = write_runner(tmp)
+        stub = os.path.join(bins, "a0_per_caller_cache-0123456789abcdef")
+        with open(stub, "w") as f:
+            f.write('#!/bin/sh\nprintf %s "$TMPDIR"\n')
+        os.chmod(stub, 0o755)
+        out = subprocess.run([runner, stub], env={**os.environ, "TMPDIR": tmp},
+                             capture_output=True, text=True, check=True).stdout
+        want = os.path.join(tmp, "a0_per_caller_cache")
+        assert out == want, f"the binary's TMPDIR is {out!r}, not {want!r}"
+        assert os.path.isdir(want), "the runner creates the binary's folder"
+        with open(os.path.join(tmp, BINARIES_FILE)) as f:
+            assert f.read().split() == ["a0_per_caller_cache"], "the runner records the binary"
+    # cargo is told to use it.
+    cfg = runner_config("/x/r.sh")
+    assert cfg == ["--config", "target.'cfg(all())'.runner=['/x/r.sh']"], cfg
+    # End to end through run_steps: a fake cargo that starts a stub test binary through the runner its
+    # --config names, as real cargo does. The binary leaves a task record in its own TMPDIR.
+    with tempfile.TemporaryDirectory() as bins:
+        stub = os.path.join(bins, "gh452_session_owner-fedcba9876543210")
+        with open(stub, "w") as f:
+            f.write('#!/bin/sh\n[ -z "$PLANT_LEAK" ] || { mkdir -p "$TMPDIR/.tmpXyZ789/tasks"; '
+                    ': > "$TMPDIR/.tmpXyZ789/tasks/task-x.json"; }\n'
+                    '[ -z "$PLANT_HOME" ] || { mkdir -p "$TMPDIR/.tmpHoMe12/tasks/stdio"; '
+                    ': > "$TMPDIR/.tmpHoMe12/tasks/stdio/store.lease"; }\n')
+        os.chmod(stub, 0o755)
+        fake_cargo = (sys.executable, "-c", (
+            "import os, re, subprocess, sys\n"
+            "args = sys.argv[1:]\n"
+            "cfg = [args[i + 1] for i, a in enumerate(args) if a == '--config']\n"
+            "run = [re.search(r\"runner=\\['(.*)'\\]\", c).group(1) for c in cfg if 'runner=' in c]\n"
+            f"cmd = [*run, {stub!r}]\n"
+            "subprocess.run(cmd, check=True)\n"
+            "print('     Running unittests src/lib.rs (x)')\n"
+            "print('running 99999 tests')\n"
+            "print('test result: ok. 99999 passed; 0 failed; 0 ignored')\n"))
+        for flag, want in (("PLANT_LEAK", ["left in TMPDIR: gh452_session_owner/.tmpXyZ789 (tasks/task-x.json 0B)"]),
+                           ("PLANT_HOME", [])):
+            os.environ[flag] = "1"
+            try:
+                got = run_steps("linux", "lib-a", fake_cargo)
+            finally:
+                del os.environ[flag]
+            assert got == want, f"{flag}: {got}"
+        assert run_steps("linux", "lib-a", fake_cargo) == [], "a clean binary leaves its folder only"
 
 
 def main(argv: list[str]) -> int:
