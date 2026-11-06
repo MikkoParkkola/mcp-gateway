@@ -61,6 +61,9 @@ impl FieldSpec {
 const ALERT_ACTIONS: &[&str] = &["log", "notify", "block"];
 
 /// Every setting the UI may change, in the order an edit applies them.
+/// `apply` is what a reload does with a change to that field alone (row F3
+/// checks it against the reload's classifier, which lists the whole
+/// `cost_governance` section as needing a restart).
 pub(crate) const FIELDS: &[FieldSpec] = &[
     FieldSpec {
         id: "environment",
@@ -91,7 +94,7 @@ pub(crate) const FIELDS: &[FieldSpec] = &[
         id: "cost_governance.enabled",
         path: &[Seg::Key("cost_governance"), Seg::Key("enabled")],
         kind: Some(ValueKind::Bool),
-        apply: Apply::Live,
+        apply: Apply::Restart,
     },
     #[cfg(feature = "cost-governance")]
     FieldSpec {
@@ -102,7 +105,7 @@ pub(crate) const FIELDS: &[FieldSpec] = &[
             Seg::Key("daily"),
         ],
         kind: Some(ValueKind::Num { min: 0.0 }),
-        apply: Apply::Live,
+        apply: Apply::Restart,
     },
     #[cfg(feature = "cost-governance")]
     FieldSpec {
@@ -114,7 +117,7 @@ pub(crate) const FIELDS: &[FieldSpec] = &[
             Seg::Key("at_percent"),
         ],
         kind: Some(ValueKind::Int { min: 0, max: 100 }),
-        apply: Apply::Live,
+        apply: Apply::Restart,
     },
     #[cfg(feature = "cost-governance")]
     FieldSpec {
@@ -126,7 +129,7 @@ pub(crate) const FIELDS: &[FieldSpec] = &[
             Seg::Key("action"),
         ],
         kind: Some(ValueKind::Enum(ALERT_ACTIONS)),
-        apply: Apply::Live,
+        apply: Apply::Restart,
     },
     FieldSpec {
         id: "backends.owner",
