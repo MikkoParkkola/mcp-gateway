@@ -471,10 +471,11 @@ async fn t9_a_registry_header_token_is_stored_as_the_whole_header_value() {
     assert_eq!(panel.entries().len(), 1, "{:?}", panel.entries());
 }
 
-/// T10: the stored entry holds exactly the value given (the files store keeps
-/// one file per entry, named by the reference).
+/// T10: the round trip: the reference gateway.yaml now holds resolves, through
+/// the loader's own `file:` reader, to exactly the value given (the files store
+/// writes one trailing newline and the reader drops one: files.rs, secret_ref.rs).
 #[tokio::test]
-async fn t10_the_stored_entry_holds_the_value_given() {
+async fn t10_the_stored_reference_resolves_to_the_value_given() {
     let panel = Panel::new().await;
     let (_, body) = panel.add(literal_add("b")).await;
     let reference = body["secrets_stored"][0]["reference"]
@@ -484,7 +485,12 @@ async fn t10_the_stored_entry_holds_the_value_given() {
     let path = reference
         .strip_prefix("file:")
         .expect("a file reference from the files store");
-    assert_eq!(std::fs::read_to_string(path).expect("entry reads"), TOKEN);
+    let resolved = crate::config::secret_ref::read_file_ref(
+        "backends.b.env.API_KEY",
+        std::path::Path::new(path),
+    )
+    .expect("the reference resolves");
+    assert_eq!(resolved, TOKEN);
 }
 
 /// T13: the shared rule is the CLI's too: `add_backend` refuses a literal
