@@ -106,7 +106,10 @@ async fn settle_bound_to_another_log_appends_nothing() {
         // the settles around it land
         assert!(matches!(got, Err(Unsettled::OtherLog)), "{got:?}");
         assert!(on_disk(&path) == before, "presented: {presented}");
-        settled(&l, &own, "w-2").await;
+        let after = l.settle(&own, "w-2", Role::Outcome, payload()).await;
+        assert!(after.is_ok(), "presented: {presented}: {after:?}");
+        assert!(records_of(&path, "w-1").is_empty());
+        assert_eq!(records_of(&path, "w-2").len(), 1, "presented: {presented}");
     }
 }
 
@@ -124,6 +127,8 @@ async fn settle_after_its_log_was_replaced_lands_in_neither_log() {
         &TransparencyLogger::open(cfg(&theirs, 12, false)).unwrap(),
         0,
     );
+    // A read handle on the original active file, which the swap unlinks.
+    let mut original = std::fs::File::open(&path).unwrap();
     swap_in(&theirs, &path);
     swap_in(&sibling(&theirs, "hwm"), &sibling(&path, "hwm"));
 
@@ -135,6 +140,10 @@ async fn settle_after_its_log_was_replaced_lands_in_neither_log() {
     assert!(matches!(got, Err(Unsettled::OtherLog)), "{got:?}");
     assert!(records_of(&path, "w-1").is_empty());
     assert!(records_of(&theirs, "w-1").is_empty());
+    // Nor through the original file's inode: no append went to the old fd.
+    let mut old = String::new();
+    std::io::Read::read_to_string(&mut original, &mut old).unwrap();
+    assert!(!old.contains("\"w-1\""), "{old}");
 }
 
 #[tokio::test]
@@ -223,9 +232,44 @@ fn settle_events_name_their_role_and_callers_cannot_write_them() {
 }
 
 #[test]
-fn reasons_have_one_wire_form_each() {
-    let wire = |r: Reason| serde_json::to_value(r).unwrap();
-    assert_eq!(wire(Reason::RolledBack), "rolled_back");
-    assert_eq!(wire(Reason::OperatorAbandoned), "operator_abandoned");
-    assert_eq!(wire(Reason::RenamedNotDurable), "renamed_not_durable");
+fn every_role_names_its_event() {
+    // Expected names: II.3's record table (design-9318-B.md:270-275).
+    use super::settle::IntentKind;
+    let roles = [
+        (Role::Intent(IntentKind::Save), "config_save_intent"),
+        (Role::Intent(IntentKind::Adopt), "config_adopt_intent"),
+        (Role::Intent(IntentKind::Restore), "config_restore_intent"),
+        (Role::Intent(IntentKind::Backend), "config_backend_intent"),
+        (Role::RecoveryIntent, "config_recovery_intent"),
+        (Role::Outcome, "config_write_outcome"),
+        (Role::Abandoned, "config_write_abandoned"),
+        (Role::Deferred, "config_write_deferred"),
+        (Role::DeliveryStopped, "config_write_delivery_stopped"),
+    ];
+    for (role, name) in roles {
+        assert_eq!(role.event(), name, "{role:?}");
+    }
+}
+
+#[test]
+fn every_reason_has_one_wire_form() {
+    // Expected spellings: II.3's closed reason list (design-9318-B.md:278-280)
+    // and the deferral reasons in the deferred row (:274).
+    let reasons = [
+        (Reason::Committed, "committed"),
+        (Reason::RolledBack, "rolled_back"),
+        (Reason::KeptNew, "kept_new"),
+        (Reason::NothingPending, "nothing_pending"),
+        (Reason::DeletedDuringCompute, "deleted_during_compute"),
+        (Reason::ComputeRefused, "compute_refused"),
+        (Reason::SecretsRefused, "secrets_refused"),
+        (Reason::WriterDied, "writer_died"),
+        (Reason::Panicked, "panicked"),
+        (Reason::OperatorAbandoned, "operator_abandoned"),
+        (Reason::RenamedNotDurable, "renamed_not_durable"),
+        (Reason::LeftToRecovery, "left_to_recovery"),
+    ];
+    for (reason, wire) in reasons {
+        assert_eq!(serde_json::to_value(reason).unwrap(), wire, "{reason:?}");
+    }
 }
