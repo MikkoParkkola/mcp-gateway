@@ -132,7 +132,9 @@ impl Default for FirewallConfig {
 
 /// A firewall rule: match tool name with a glob pattern and override the
 /// default severity-based action.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+// Equality decides which refused rules a write carries over unchanged
+// (`refused_rules::refuse_authored`): a new field is part of a rule's identity.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FirewallRule {
     /// Glob pattern matching tool names (e.g., `"exec_*"`, `"*_delete*"`, `"*"`).
     ///
@@ -171,7 +173,7 @@ pub struct FirewallRule {
 
 /// One exception on a firewall rule. A call matches it when it matches every
 /// field set; an entry with no field set is refused at load.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RuleException {
     /// A glob over the backend's registry name.
     #[serde(default, skip_serializing_if = "Option::is_none")]

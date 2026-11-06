@@ -282,10 +282,17 @@ fn listed(text: &str) -> (IsErrorRows, CallRows, Vec<String>) {
             continue;
         };
         let owned = |i: usize| cols[i].to_owned();
-        if cols[0] == "is_error" {
-            is_error.insert((owned(1), owned(2)), (n, owned(4)));
+        // A repeat within one table would overwrite the earlier row and hide
+        // it; an is_error row and a call row are separate facts.
+        let repeated = if cols[0] == "is_error" {
+            is_error
+                .insert((owned(1), owned(2)), (n, owned(4)))
+                .is_some()
         } else {
-            calls.insert((owned(0), owned(1), owned(2)), n);
+            calls.insert((owned(0), owned(1), owned(2)), n).is_some()
+        };
+        if repeated {
+            bad.push(format!("listed twice: {line}"));
         }
     }
     (is_error, calls, bad)
@@ -504,4 +511,37 @@ setter\tfolded\tsrc/lib.rs\t1
             .any(|w| w.starts_with("dispatch-error, no folded call")),
         "{wrong:?}"
     );
+}
+
+/// The first row of `LISTED` whose first column is `kind`.
+fn first_row(kind: &str) -> String {
+    LISTED
+        .lines()
+        .find(|l| l.split('\t').next() == Some(kind))
+        .unwrap_or_else(|| panic!("a {kind} row"))
+        .to_owned()
+}
+
+/// An `is_error` row listed twice is refused, not silently overwritten.
+#[test]
+fn an_is_error_row_listed_twice_is_refused() {
+    let row = first_row("is_error");
+    let (_, _, bad) = listed(&format!("{LISTED}{row}\n"));
+    assert!(bad.contains(&format!("listed twice: {row}")), "{bad:#?}");
+}
+
+/// A call row listed twice is refused, not silently overwritten.
+#[test]
+fn a_call_row_listed_twice_is_refused() {
+    let row = first_row("setter");
+    let (_, _, bad) = listed(&format!("{LISTED}{row}\n"));
+    assert!(bad.contains(&format!("listed twice: {row}")), "{bad:#?}");
+}
+
+/// The two maps are separate facts: the live table, with its `is_error` and
+/// call rows, has no repeat.
+#[test]
+fn the_live_rows_hold_no_repeat() {
+    let (_, _, bad) = listed(LISTED);
+    assert!(bad.is_empty(), "{bad:#?}");
 }
