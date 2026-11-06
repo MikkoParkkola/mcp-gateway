@@ -441,6 +441,32 @@ pub(crate) fn remove_record(dir: &Path, name: &str) -> std::io::Result<()> {
     }
 }
 
+/// Whether `path` names a committed record: a `*.json` file. A rewrite's
+/// staged copy (`.{name}.{n}.tmp`, [`write_record`]) is not one.
+fn is_record_file(path: &Path) -> bool {
+    path.extension().and_then(|e| e.to_str()) == Some("json")
+}
+
+/// The committed record files in `dir`, test builds only, sorted. A rewrite
+/// stages a hidden `.{name}.{n}.tmp` file beside its record until the rename
+/// ([`write_record`]), so a raw listing reads a record twice while the worker
+/// settles an attempt. The filter is the loader's own ([`is_record_file`]).
+#[cfg(test)]
+pub(crate) fn committed_records(dir: &Path) -> Vec<PathBuf> {
+    let mut paths: Vec<PathBuf> = std::fs::read_dir(dir).map_or_else(
+        |_| Vec::new(),
+        |entries| {
+            entries
+                .flatten()
+                .map(|e| e.path())
+                .filter(|p| is_record_file(p))
+                .collect()
+        },
+    );
+    paths.sort();
+    paths
+}
+
 /// Every `*.json` record in `dir` this build can load. A record of an
 /// unreadable version or shape is skipped and logged, never deleted.
 pub(crate) fn load_records<T: for<'de> Deserialize<'de>>(dir: &Path) -> Vec<(PathBuf, T)> {
@@ -449,7 +475,7 @@ pub(crate) fn load_records<T: for<'de> Deserialize<'de>>(dir: &Path) -> Vec<(Pat
     };
     let mut records = Vec::new();
     for path in entries.flatten().map(|e| e.path()) {
-        if path.extension().and_then(|e| e.to_str()) != Some("json") {
+        if !is_record_file(&path) {
             continue;
         }
         // Mode-checked on the handle it is read from: a subscription file

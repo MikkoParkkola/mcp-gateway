@@ -11,6 +11,9 @@
 
 mod access_report;
 mod access_table;
+/// Every admin route refuses a backend-scoped admin.
+#[cfg(test)]
+mod admin_scope_tests;
 #[cfg(test)]
 pub(in crate::gateway) use self::access_table::plain_rows;
 mod activity;
@@ -74,12 +77,13 @@ const INDEX_HTML: &str = include_str!("index.html");
 /// Returns `true` when the caller has admin-level access.
 ///
 /// Admin access follows a credential: the bearer, an API key with `admin: true`,
-/// or an SSO identity while a `role: admin` mapping rule matches it (E1). The
-/// identity used when authentication is disabled is NOT admin, because an
+/// or an SSO identity while a `role: admin` mapping rule matches it (E1),
+/// scoped to every backend: a backend-scoped admin has no gateway-wide admin
+/// standing. The identity used when authentication is disabled is NOT admin, because an
 /// unauthenticated gateway cannot tell its operator from any other caller that
 /// reaches the port.
 fn is_admin(client: Option<&AuthenticatedClient>) -> bool {
-    client.is_some_and(|c| c.admin)
+    client.is_some_and(AuthenticatedClient::is_gateway_admin)
 }
 
 /// Build the authenticated `/ui/api/*` and `/dashboard` sub-router.

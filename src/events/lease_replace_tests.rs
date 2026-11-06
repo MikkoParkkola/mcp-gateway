@@ -205,25 +205,20 @@ async fn two_token_peer_in(wire: Wire, tokens: [String; 2]) -> TwoTokenPeer {
 
 /// The subscription and lease stamp of every record in `f`'s outbox.
 fn outbox_rows(f: &Fixture) -> Vec<(String, Option<String>)> {
-    std::fs::read_dir(f.dir.path().join("outbox"))
-        .map(|entries| {
-            entries
-                .flatten()
-                .map(|e| {
-                    let record: serde_json::Value =
-                        serde_json::from_slice(&std::fs::read(e.path()).expect("read"))
-                            .expect("record");
-                    (
-                        record["subscription_id"]
-                            .as_str()
-                            .unwrap_or_default()
-                            .to_owned(),
-                        record["observed"]["lease"].as_str().map(str::to_owned),
-                    )
-                })
-                .collect()
+    crate::events::records::committed_records(&f.dir.path().join("outbox"))
+        .iter()
+        .map(|p| {
+            let record: serde_json::Value =
+                serde_json::from_slice(&std::fs::read(p).expect("read")).expect("record");
+            (
+                record["subscription_id"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_owned(),
+                record["observed"]["lease"].as_str().map(str::to_owned),
+            )
         })
-        .unwrap_or_default()
+        .collect()
 }
 
 /// The lease stamp of every record in `f`'s outbox.

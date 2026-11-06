@@ -233,17 +233,11 @@ fn event(upstream_id: &str) -> SourceEvent {
 
 /// The committed outbox records under `dir`, as JSON.
 fn outbox(dir: &std::path::Path) -> Vec<Value> {
-    std::fs::read_dir(dir.join("outbox")).map_or_else(
-        |_| Vec::new(),
-        |entries| {
-            entries
-                .filter_map(Result::ok)
-                .filter(|e| !e.file_name().to_string_lossy().starts_with('.'))
-                .filter_map(|e| std::fs::read_to_string(e.path()).ok())
-                .filter_map(|t| serde_json::from_str(&t).ok())
-                .collect()
-        },
-    )
+    crate::events::records::committed_records(&dir.join("outbox"))
+        .iter()
+        .filter_map(|p| std::fs::read_to_string(p).ok())
+        .filter_map(|t| serde_json::from_str(&t).ok())
+        .collect()
 }
 
 // H1: the subscribe answer's handle is the keyed alias, never the stored id.
@@ -658,14 +652,9 @@ async fn h5_an_enqueued_record_keeps_its_event_id_and_gets_the_alias_header() {
     hub.fan_out(&services(), &event("up-5")).await;
     drop(hub);
     // Stamp the enqueued record with a pre-upgrade eventId.
-    let path = std::fs::read_dir(dir.path().join("outbox"))
-        .expect("outbox")
-        .filter_map(Result::ok)
-        .map(|e| e.path())
-        .find(|p| {
-            !p.file_name()
-                .is_some_and(|n| n.to_string_lossy().starts_with('.'))
-        })
+    let path = crate::events::records::committed_records(&dir.path().join("outbox"))
+        .into_iter()
+        .next()
         .expect("one record");
     let mut record: Value =
         serde_json::from_str(&std::fs::read_to_string(&path).expect("read")).expect("json");

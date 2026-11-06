@@ -331,7 +331,10 @@ pub(super) fn caller_context<'a>(
         stdio_nonce: None,
         caller_key: Some(caller_key).filter(|key| !key.is_empty()),
         verified_identity: intake.verified_identity.as_ref(),
-        is_admin: client.as_ref().is_some_and(|c| c.admin),
+        admin: client.as_ref().map_or(
+            crate::gateway::authz::AdminStanding::None,
+            crate::gateway::auth::AuthenticatedClient::admin_standing,
+        ),
         surface_request: intake.surface_request,
         input_capabilities: intake.declared_capabilities,
         retry,

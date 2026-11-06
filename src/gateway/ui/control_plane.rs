@@ -91,7 +91,8 @@ async fn require_authenticated(
 
 /// GET the SIEM export status (MIK-6703 SIEM.RUN.2): per-source forwarded/lag/
 /// max-lag/re-anchor/error counters. Requires read-inventory RBAC. Returns 404
-/// (via a `configured: false` body) when export is not running.
+/// (via a `configured: false` body) when export is not running. The counters
+/// are gateway-wide, so a backend-scoped caller is refused.
 async fn export_status_handler(
     State(state): State<Arc<AppState>>,
     Extension(generation): Extension<Arc<crate::config_reload::Generation>>,
@@ -104,7 +105,10 @@ async fn export_status_handler(
             &generation.config().control_plane.role_mapping,
         );
         match check {
-            CpCheck::Action(action) if ControlPlaneRbac::authorize(&actor, action).allowed => {
+            CpCheck::Action(action)
+                if !snapshot::is_scoped(client)
+                    && ControlPlaneRbac::authorize(&actor, action).allowed =>
+            {
                 Ok(())
             }
             _ => Err(Box::new(

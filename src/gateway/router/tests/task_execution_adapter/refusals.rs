@@ -484,3 +484,64 @@ async fn e5_a_non_object_settings_value_is_not_a_tasks_declaration() {
         );
     }
 }
+
+/// Every admin meta-tool, as a task call sent the way a modern client sends
+/// it, is refused to an admin key scoped to one backend with the admin 403,
+/// and no task record is made. The control: an unscoped admin's task kill
+/// call passes the admin gate and is answered by the destructive gate, so the
+/// refusal is the admin check and not the transport.
+#[tokio::test]
+async fn a_backend_scoped_admin_is_refused_every_admin_tool_as_a_task() {
+    let mut auth = two_principal_auth();
+    auth.api_keys.push(crate::config::ApiKeyConfig {
+        key_sha256: Some(crate::config::api_key_digest_spec(b"key-scoped-admin")),
+        name: "principal-scoped-admin".to_string(),
+        backends: vec![BACKEND.to_string()],
+        admin: true,
+        kind: crate::config::ApiKeyKind::Shared,
+        ..Default::default()
+    });
+    let (state, _store) = fixture_state(&auth).await;
+    register(&state, BACKEND, &MockBackend::answering(Answer::ok()));
+    let call = |id: i64, tool: &str| {
+        keyed(
+            modern(
+                id,
+                "tools/call",
+                json!({ "name": tool, "arguments": { "name": BACKEND }, "task": {} }),
+                true,
+            ),
+            &format!("scoped-admin-{id}"),
+        )
+    };
+
+    let (_, control) = post_full(&state, "key-admin", call(900, "gateway_kill_server")).await;
+    std::assert_eq!(
+        control
+            .pointer("/result/resultType")
+            .and_then(Value::as_str),
+        Some("input_required"),
+        "control: an unscoped admin's task call passes the admin gate: {control}"
+    );
+
+    for (id, tool) in (901..).zip(crate::gateway::router::ADMIN_META_TOOLS) {
+        let (status, refused) = post_full(&state, "key-scoped-admin", call(id, tool)).await;
+        std::assert_ne!(
+            status,
+            StatusCode::BAD_REQUEST,
+            "{tool}: a transport refusal is not the admin check: {refused}"
+        );
+        std::assert_eq!(status, StatusCode::FORBIDDEN, "{tool}: {refused}");
+        std::assert_eq!(refused["error"]["code"], -32600, "{tool}: {refused}");
+        assert!(
+            refused["error"]["message"]
+                .as_str()
+                .is_some_and(|m| m.contains("requires admin access")),
+            "{tool}: {refused}"
+        );
+        assert!(
+            refused.pointer("/result/taskId").is_none(),
+            "{tool}: a task was created: {refused}"
+        );
+    }
+}
