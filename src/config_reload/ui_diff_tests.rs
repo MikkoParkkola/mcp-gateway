@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! The settings preview (MIK-9232 D rows).
+//! The settings preview (rows D1-D25).
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;

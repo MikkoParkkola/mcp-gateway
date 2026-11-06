@@ -561,7 +561,7 @@ mod revoke;
 #[path = "config_persistence_keyedit_list_tests.rs"]
 mod list;
 
-/// H1 (MIK-9232): an edit's hunks follow its line origins: kept lines never
+/// H1: an edit's hunks follow its line origins: kept lines never
 /// appear, a replaced line is one old and one new line, adjacent changed
 /// lines are one hunk, an inserted run is one hunk; a CRLF copy gives the
 /// same hunks.
@@ -610,7 +610,7 @@ fn hunks_follow_line_origins() {
     );
 }
 
-/// S2 (MIK-9232, DIFF.3): the meaning proof alone refuses an alias expanded
+/// S2: the meaning proof alone refuses an alias expanded
 /// to its value, though the values compare equal.
 #[test]
 fn the_meaning_check_alone_refuses_an_alias_expansion() {

@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! The field table and its early checks (MIK-9232 F1-F5).
+//! The field table and its early checks (rows F1-F5).
 
 use super::{Apply, EditRefused, FIELDS, FieldId, Param, PreviewEdit, PreviewValue, checked};
 use crate::config::Config;

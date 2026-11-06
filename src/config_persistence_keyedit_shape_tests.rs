@@ -68,7 +68,7 @@ fn a_lone_carriage_return_is_not_an_ending() {
     assert!(!proven("a: 1\nb: 2\n", |l| l[1].0 = "b: 2\r".to_owned()));
 }
 
-/// S3 (MIK-9232, DIFF.3): the bytes proof alone refuses a kept line whose
+/// S3: the bytes proof alone refuses a kept line whose
 /// bytes changed, though the text means the same.
 #[test]
 fn the_bytes_check_alone_refuses_a_changed_kept_line() {

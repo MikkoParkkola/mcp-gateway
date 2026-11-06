@@ -417,7 +417,7 @@ fn backend_edited(
 
 const SPLICE_URL: &str = "http://127.0.0.1:9/mcp";
 
-/// S1 (MIK-9232, DIFF.3): an edit that would expand an alias into its value
+/// S1: an edit that would expand an alias into its value
 /// is refused: the shared value would silently detach.
 #[test]
 fn a_dropped_alias_in_a_backend_edit_is_refused() {

@@ -256,7 +256,8 @@ fn resolve(edit: &PreviewEdit, doc: &Value) -> Result<Vec<(FieldPath, Change)>, 
         .filter(|spec| spec.path.contains(&Seg::Index))
         .filter_map(|spec| FieldId::of(spec.id))
         .collect();
-    let mut new: std::collections::BTreeSet<usize> = std::collections::BTreeSet::new();
+    // Each new index, with the first entry that names it.
+    let mut new: std::collections::BTreeMap<usize, FieldId> = std::collections::BTreeMap::new();
     let mut out = Vec::with_capacity(edit.fields.len());
     for (id, param, value) in &edit.fields {
         let bad = |why: String| UiRefused::BadParam(*id, why);
@@ -278,7 +279,7 @@ fn resolve(edit: &PreviewEdit, doc: &Value) -> Result<Vec<(FieldPath, Change)>, 
                 Seg::Index => {
                     let at = param.index.unwrap_or_default();
                     if at >= alerts {
-                        new.insert(at);
+                        new.entry(at).or_insert(*id);
                     }
                     Segment::Index(at)
                 }
@@ -293,21 +294,15 @@ fn resolve(edit: &PreviewEdit, doc: &Value) -> Result<Vec<(FieldPath, Change)>, 
         out.push((path, change));
     }
     // New elements run on from the end, each complete.
-    for (n, at) in new.iter().enumerate() {
+    for (n, (at, id)) in new.iter().enumerate() {
         let complete = element_fields.iter().all(|field| {
             edit.fields.iter().any(|(id, p, v)| {
                 id == field && p.index == Some(*at) && matches!(v, PreviewValue::Set(_))
             })
         });
         if *at != alerts + n || !complete {
-            let id = edit
-                .fields
-                .iter()
-                .find(|(_, p, _)| p.index == Some(*at))
-                .map(|(id, ..)| *id)
-                .expect("a new index came from an entry");
             return Err(UiRefused::BadParam(
-                id,
+                *id,
                 format!(
                     "alert {at}: gateway.yaml lists {alerts}; a new alert follows the last and sets every field"
                 ),
