@@ -332,9 +332,12 @@ async fn every_patchable_field_edits_the_gateways_own_output_in_place() {
                     && b.env.get("B").map(String::as_str) == Some("env:B_VALUE")
             },
         ),
-        ("env, a first map", "h", json!({"env": {"B": "env:B_VALUE"}}), |b| {
-            b.env.get("B").map(String::as_str) == Some("env:B_VALUE")
-        }),
+        (
+            "env, a first map",
+            "h",
+            json!({"env": {"B": "env:B_VALUE"}}),
+            |b| b.env.get("B").map(String::as_str) == Some("env:B_VALUE"),
+        ),
         ("enabled", "s", json!({"enabled": false}), |b| !b.enabled),
         (
             "idle stop, changed",

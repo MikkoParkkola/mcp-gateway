@@ -121,12 +121,19 @@ async fn a_plain_env_value_edited_in_the_panel_is_stored_not_written() {
     assert_eq!(status, StatusCode::OK, "{body}");
     assert!(!body.to_string().contains(VALUE), "{body}");
     let after = read(&path);
-    assert!(!after.contains(VALUE), "the value reached gateway.yaml:\n{after}");
+    assert!(
+        !after.contains(VALUE),
+        "the value reached gateway.yaml:\n{after}"
+    );
     kept_in_order(SVC, &after);
     let config = Config::load_literal(Some(&path)).expect("loads");
     let written = config.backends["svc"].env.get("B").cloned().expect("B");
     assert_eq!(body["secrets_stored"][0]["field"], "env.B", "{body}");
-    assert_eq!(body["secrets_stored"][0]["reference"], written.as_str(), "{body}");
+    assert_eq!(
+        body["secrets_stored"][0]["reference"],
+        written.as_str(),
+        "{body}"
+    );
 }
 
 /// No-op PATCH: the value is already there, so nothing is written. The
