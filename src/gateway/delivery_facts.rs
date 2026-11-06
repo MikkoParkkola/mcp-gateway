@@ -349,13 +349,6 @@ pub(crate) fn note_step_trace(trace: &str) {
     with(|facts| facts.noted_trace = Some(trace.into()));
 }
 
-/// The gateway refused this step with `code`, noted where no fold carries it
-/// (an absent step's recorded denial): the code a settlement names, with no
-/// effect on the error count.
-pub(crate) fn note_gate_code(code: i32) {
-    with(|facts| facts.withheld_code = Some(code));
-}
-
 /// Forget the latest step's record trace and code: what the composite can
 /// end on is no longer that step.
 fn forget_last_step(facts: &mut DeliveryFacts) {
