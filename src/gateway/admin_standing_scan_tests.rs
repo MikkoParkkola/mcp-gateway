@@ -846,10 +846,12 @@ fn token_walk(finder: &mut Finder<'_>, body: Body<'_>) {
 }
 
 fn walk(finder: &mut Finder<'_>, trees: &[Tok]) {
-    let ident = |t: Option<&Tok>| match t {
-        Some(Tok::Ident(i)) => Some(i.as_str()),
-        _ => None,
-    };
+    fn ident(t: Option<&Tok>) -> Option<&str> {
+        match t {
+            Some(Tok::Ident(i)) => Some(i.as_str()),
+            _ => None,
+        }
+    }
     let punct = |t: Option<&Tok>, c: char| matches!(t, Some(Tok::Punct(p)) if *p == c);
     let at = |i: usize, back: usize| i.checked_sub(back).and_then(|k| trees.get(k));
     for (i, tree) in trees.iter().enumerate() {
