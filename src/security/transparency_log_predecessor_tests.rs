@@ -219,6 +219,15 @@ fn verified_warning(path: &std::path::Path, named: &str) -> String {
     )
 }
 
+/// Write `records` to `path` as they are: no re-chaining, so an edited
+/// record keeps its stored `entry_hash` string.
+fn write_lines(path: &std::path::Path, records: &[Value]) {
+    let body = records
+        .iter()
+        .fold(String::new(), |acc, v| acc + &v.to_string() + "\n");
+    std::fs::write(path, body).unwrap();
+}
+
 #[test]
 fn the_predecessor_warning_shows_the_checked_record_not_a_swapped_one() {
     // GIVEN: the checked genesis open record, and the file's first line then
@@ -228,10 +237,7 @@ fn the_predecessor_warning_shows_the_checked_record_not_a_swapped_one() {
     let mut all = lines(&path);
     let checked = all[0].clone();
     all[0][PREDECESSOR]["previous_log_id"] = "edited".into();
-    let body = all
-        .iter()
-        .fold(String::new(), |acc, v| acc + &v.to_string() + "\n");
-    std::fs::write(&path, body).unwrap();
+    write_lines(&path, &all);
 
     // WHEN: the warning is built for the checked record
     let warned = identity::predecessor_warning(&path, Some(&checked)).unwrap();
@@ -249,10 +255,7 @@ fn an_edited_predecessor_field_fails_the_chain_and_reads_unverified() {
     let (path, _) = replaced_genesis(&dir);
     let mut all = lines(&path);
     all[0][PREDECESSOR]["previous_log_id"] = "edited".into();
-    let body = all
-        .iter()
-        .fold(String::new(), |acc, v| acc + &v.to_string() + "\n");
-    std::fs::write(&path, body).unwrap();
+    write_lines(&path, &all);
 
     // WHEN: it is verified
     let r = verify(&path, false);
@@ -295,4 +298,30 @@ fn an_evidence_object_with_no_parts_reads_as_no_evidence_fields() {
     // THEN: it says so, with no dangling separator
     let want = verified_warning(&path, "no evidence fields");
     assert_eq!(warned.as_deref(), Some(want.as_str()));
+}
+
+#[test]
+fn a_first_line_swapped_after_the_chain_check_warns_with_the_checked_record() {
+    // GIVEN: an untouched replacing genesis, and its first line swapped for
+    // one naming another id (entry_hash string kept) once the chain check
+    // has run and before the warning is built
+    let dir = tempfile::tempdir().unwrap();
+    let (path, old) = replaced_genesis(&dir);
+    let swapped = path.clone();
+    verify::AFTER_STREAM.with(|h| {
+        *h.borrow_mut() = Some(Box::new(move || {
+            let mut all = lines(&swapped);
+            all[0][PREDECESSOR]["previous_log_id"] = "edited".into();
+            write_lines(&swapped, &all);
+        }));
+    });
+
+    // WHEN: it is verified
+    let r = verify(&path, false);
+
+    // THEN: the hook ran, and the warning shows the checked record, verified
+    assert_eq!(lines(&path)[0][PREDECESSOR]["previous_log_id"], "edited");
+    assert!(r.ok, "{:?}", r.error_message);
+    let want = verified_warning(&path, &format!("previous log_id {old}"));
+    assert_eq!(r.warnings, [want]);
 }
