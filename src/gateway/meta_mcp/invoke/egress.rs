@@ -76,9 +76,7 @@ pub(crate) struct Egress<'a> {
 pub(crate) enum EgressOutcome {
     /// Nothing acted on it.
     Delivered,
-    /// A finding was redacted in place; the frame is delivered. Only the
-    /// firewall redacts, so a build without it never constructs this.
-    #[cfg_attr(not(feature = "firewall"), allow(dead_code))]
+    /// A finding was redacted in place; the frame is delivered.
     Rewritten,
     /// A policy refused it; the frame is now the delivery refusal.
     Refused,
@@ -588,6 +586,25 @@ impl MetaMcp {
         generation: Option<&crate::config_reload::Generation>,
         value: &mut Value,
     ) -> EgressOutcome {
+        // Scrubbed on the way out against the values current now: a value
+        // marked secret after this output was stored is removed. A refused
+        // scrub withholds the output: `tasks/get` answers the delivery
+        // refusal, a notification goes out status-only. A redaction makes the
+        // output no longer the stored text: at least Rewritten, so a
+        // notification commits no relay receipts for the original.
+        let Ok(scrubbed) = self.backends.scrub_stored_value(value) else {
+            tracing::warn!(
+                task = %task.task.id(),
+                "stored task output withheld: a credential the gateway keeps redacted \
+                 could not be removed from it (its backend's redaction set is full)"
+            );
+            return EgressOutcome::Refused;
+        };
+        let floor = if scrubbed == crate::security::needles::Scrubbed::Redacted {
+            EgressOutcome::Rewritten
+        } else {
+            EgressOutcome::Delivered
+        };
         let targets = stored_targets(task);
         let (server, tool) = (targets[0].server.as_str(), targets[0].tool.as_str());
         let correlation = ResponseCorrelation {
@@ -607,7 +624,7 @@ impl MetaMcp {
             firewall: self.firewall.as_deref(),
             generation,
         };
-        self.firewall_result(value, &at)
+        self.firewall_result(value, &at).max(floor)
     }
 
     /// [`Self::scan_stored_task`] on a `tasks/get` answer: a refusal becomes

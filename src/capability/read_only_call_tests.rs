@@ -92,3 +92,28 @@ async fn a_read_only_call_refuses_a_capability_not_served_over_rest() {
         "refused before any request: {refused}"
     );
 }
+
+/// A read-only call's refusal is the call's answer: its delivery records
+/// `refused`.
+#[tokio::test]
+async fn a_read_only_refusal_records_refused() {
+    use crate::gateway::delivery_facts;
+    let backend = CapabilityBackend::new("test", Arc::new(CapabilityExecutor::new()));
+    backend
+        .register_capability(capability(false))
+        .expect("registered");
+    let (outcome, facts) = Box::pin(delivery_facts::scope(async {
+        let outcome = read_only_call_as(false, backend.call_tool("probe", json!({}))).await;
+        (outcome, delivery_facts::snapshot())
+    }))
+    .await;
+    let error = outcome.expect_err("refused");
+    assert!(error.to_string().contains("not read-only"), "{error}");
+    let mut fields = serde_json::Map::new();
+    delivery_facts::record_fields(facts.as_ref(), false, &mut fields);
+    assert_eq!(
+        fields.get("response_effect"),
+        Some(&"refused".into()),
+        "{fields:?}"
+    );
+}
