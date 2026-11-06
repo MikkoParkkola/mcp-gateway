@@ -36,9 +36,9 @@ fn on_disk(path: &Path) -> (Vec<u8>, Vec<u8>) {
     (read(path), read(&sibling(path, "hwm")))
 }
 
-/// Settle an outcome for `token` that must land.
-fn settled(l: &TransparencyLogger, token: &str) {
-    let got = l.settle(&l.log_id(), token, Role::Outcome, payload());
+/// Settle an outcome for `token`, bound to `own`, that must land.
+fn settled(l: &TransparencyLogger, own: &LogId, token: &str) {
+    let got = l.settle(own, token, Role::Outcome, payload());
     assert!(got.is_ok(), "{token}: {got:?}");
 }
 
@@ -86,12 +86,13 @@ fn settle_bound_to_another_log_appends_nothing() {
         let dir = tempfile::tempdir().unwrap();
         let path = log_path(&dir);
         let l = TransparencyLogger::open(cfg(&path, 12, false)).unwrap();
-        let mut binding = LogId::mint();
+        // `own` is the id settle sees as the logger's.
+        let (mut binding, mut own) = (LogId::mint(), l.log_id());
         if presented {
-            binding = l.log_id();
-            l.present_log_id_for_test(LogId::mint());
+            (binding, own) = (own, LogId::mint());
+            l.present_log_id_for_test(own.clone());
         }
-        settled(&l, "w-0");
+        settled(&l, &own, "w-0");
         let before = on_disk(&path);
 
         // WHEN: it is settled, between two settles bound to the logger's id
@@ -101,7 +102,7 @@ fn settle_bound_to_another_log_appends_nothing() {
         // the settles around it land
         assert!(matches!(got, Err(Unsettled::OtherLog)), "{got:?}");
         assert!(on_disk(&path) == before, "presented: {presented}");
-        settled(&l, "w-2");
+        settled(&l, &own, "w-2");
     }
 }
 
@@ -140,7 +141,7 @@ fn a_refused_settle_appends_nothing() {
         let dir = tempfile::tempdir().unwrap();
         let path = log_path(&dir);
         let l = TransparencyLogger::open(cfg(&path, 12, false)).unwrap();
-        settled(&l, "w-0");
+        settled(&l, &l.log_id(), "w-0");
         let mut given = payload();
         match refusal {
             "sync" => l.arm_write_fault(Some(WriteFault::SyncError)),
@@ -159,7 +160,7 @@ fn a_refused_settle_appends_nothing() {
         );
         assert!(on_disk(&path) == before, "{refusal}");
         // The refusal was that call's only: the next settle lands.
-        settled(&l, "w-2");
+        settled(&l, &l.log_id(), "w-2");
     }
 }
 
