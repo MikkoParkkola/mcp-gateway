@@ -11,7 +11,7 @@ use serde_json::json;
 use super::super::grant_audit_fixture::{Endpoint, PERSONAL, decisions, grant, invocations};
 use super::{Who, api_key, call, gateway, invoke_args, only};
 use crate::identity_grants::IdentityGrant;
-use crate::security::audit::{AuditFailurePolicy, CredentialKind};
+use crate::security::audit::AuditFailurePolicy;
 use crate::security::rule_id::RuleKey;
 
 const ALICE: (&str, &str) = ("api_key", "alice");
@@ -75,16 +75,9 @@ async fn refused_without_ids(case: &str, (who, reason): (Who, &str), row: Identi
     );
 }
 
-/// A key caller with no grant subject: the grant rule has no identity.
-fn no_identity() -> Who {
-    Who {
-        kind: CredentialKind::ApiKey,
-        api_key_name: Some("anon".to_string()),
-        grant_subject: None,
-        identity: None,
-    }
-}
-
+/// Every denial the fixtures reach. `missing_identity` and `missing_owner`
+/// are not among them: through this route a key caller with no grant subject
+/// is refused as `owner_mismatch`, and every fixture capability names an owner.
 #[tokio::test]
 async fn a_grant_refusal_records_no_rule_or_grant_id() {
     let mut other = grant("g-other", ALICE, ALICE);
@@ -117,12 +110,6 @@ async fn a_grant_refusal_records_no_rule_or_grant_id() {
             api_key("bob"),
             "owner_mismatch",
             grant("g-bob", BOB, BOB),
-        ),
-        (
-            "no identity",
-            no_identity(),
-            "missing_identity",
-            grant("g-a", ALICE, ALICE),
         ),
     ];
     for (case, who, reason, row) in cases {

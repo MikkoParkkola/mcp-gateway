@@ -128,7 +128,8 @@ fn a_grant_rule_id_hashes_the_whole_row() {
 
 /// Computed once from `RuleId::of` on Spark and pasted: a row with every
 /// optional field set, so a change to how any of them serialises is seen.
-const GOLDEN_FULL_ID: &str = "PASTE";
+const GOLDEN_FULL_ID: &str =
+    "grant:8ba7e07083ae7f618dbba27cf729b8545d99a4300e1922ff23675fceb0df9b40";
 
 #[test]
 fn a_grant_rule_id_hashes_every_optional_field() {

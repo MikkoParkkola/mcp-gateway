@@ -246,9 +246,18 @@ async fn hidden_backend(fx: &Logged, cn: Option<&str>) {
     );
     assert_eq!(row["decision"]["kind"], json!("not_found"), "{row}");
     assert!(row["decision"].get("rule_id").is_none(), "{row}");
+    // The record's `who` names a certificate caller by its authority
+    // (`mtls`) and subject: that is who called, not why it was refused.
     let (answer, record) = (body.to_string(), row.to_string());
+    let decision = row["decision"].to_string();
     for word in ["write", "mtls", "certificate"] {
         assert!(!answer.contains(word), "the answer says {word}: {answer}");
+        assert!(
+            !decision.contains(word),
+            "the decision says {word}: {decision}"
+        );
+    }
+    for word in ["write", "certificate"] {
         assert!(!record.contains(word), "the record says {word}: {record}");
     }
     assert!(
