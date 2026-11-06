@@ -33,18 +33,19 @@ async fn fixture(contract: Option<ResponseContractConfig>) -> Fixture {
 
 impl Fixture {
     /// One task-augmented `request` as `key`, run to its terminal state: the
-    /// task id and every record in the log.
-    async fn run(&self, key: &str, request: Value) -> (String, Vec<Value>) {
+    /// task id, its terminal `tasks/get` read and every record in the log. A
+    /// log that cannot be read or a line that is not JSON fails the row.
+    async fn run(&self, key: &str, request: Value) -> (String, Value, Vec<Value>) {
         use crate::gateway::router::route_matrix_driver_tests::response::delivery_rows;
         let task = task_id(&post(&self.state, key, request).await);
-        let _ = poll_until_terminal(&self.state, key, &task).await;
+        let settled = poll_until_terminal(&self.state, key, &task).await;
         let _ = delivery_rows(&self.log).await;
         let entries = std::fs::read_to_string(self.log.path())
-            .unwrap_or_default()
+            .expect("the transparency log reads")
             .lines()
-            .filter_map(|line| serde_json::from_str(line).ok())
+            .map(|line| serde_json::from_str(line).expect("every log line is JSON"))
             .collect();
-        (task, entries)
+        (task, settled, entries)
     }
 }
 
@@ -56,8 +57,20 @@ fn refusable() -> Value {
     })
 }
 
+/// The text a clean step delivers, distinct enough to find in a plan's result.
+const DELIVERED: &str = "delivered-clean-step";
+
 fn clean() -> Value {
-    json!({"content": [{"type": "text", "text": "ok"}], "isError": false})
+    json!({"content": [{"type": "text", "text": DELIVERED}], "isError": false})
+}
+
+/// The task completed and its result carries the delivered text.
+fn assert_delivered(settled: &Value) {
+    assert_eq!(status_of(settled), "completed", "{settled}");
+    let result = settled
+        .pointer("/result/result")
+        .unwrap_or_else(|| panic!("a completed task carries its result: {settled}"));
+    assert!(result.to_string().contains(DELIVERED), "{settled}");
 }
 
 /// A task-augmented `gateway_execute` chain over `tools`.
@@ -158,7 +171,7 @@ async fn a_chain_refused_at_its_last_step_is_joined_by_step_trace() {
     let fx = fixture(Some(refusing_final_answer())).await;
     let mock = MockBackend::answering(Answer::Sequence(vec![clean(), refusable()]));
     register(&fx.state, BACKEND, &mock);
-    let (task, entries) = fx
+    let (task, _settled, entries) = fx
         .run("key-a", chain_task("key-a", &[mock_tool(), mock_tool()]))
         .await;
     assert_eq!(mock.calls(), 2, "premise: both steps ran");
@@ -180,7 +193,7 @@ async fn an_aborting_playbook_refused_at_a_step_is_joined_by_step_trace() {
     let mock = MockBackend::answering(Answer::Sequence(vec![clean(), refusable()]));
     register(&fx.state, BACKEND, &mock);
     register_playbook(&fx.state, "abort", &[json!({}), json!({})]);
-    let (task, entries) = fx.run("key-a", playbook_task("key-a")).await;
+    let (task, _settled, entries) = fx.run("key-a", playbook_task("key-a")).await;
     assert_eq!(mock.calls(), 2, "premise: both steps ran");
     let record = refused_settlement(&entries, &task);
     let step = refused_step_record(&entries, &task);
@@ -221,7 +234,7 @@ async fn a_later_step_refused_before_it_runs_is_joined_by_task_id() {
     let mock = MockBackend::answering(Answer::Result(answer));
     register(&fx.state, BACKEND, &mock);
     register_playbook(&fx.state, "abort", &[json!({}), json!({ "t": "$first" })]);
-    let (task, entries) = fx.run("key-a", playbook_task("key-a")).await;
+    let (task, _settled, entries) = fx.run("key-a", playbook_task("key-a")).await;
     assert_eq!(mock.calls(), 1, "premise: only the first step ran");
     let record = refused_settlement(&entries, &task);
     assert_eq!(record["joined_by"], "task_id", "{record}");
@@ -241,7 +254,7 @@ async fn a_composite_record_names_the_gateway_and_the_composite_tool() {
     let fx = fixture(Some(refusing_final_answer())).await;
     let mock = MockBackend::answering(Answer::Sequence(vec![clean(), refusable()]));
     register(&fx.state, BACKEND, &mock);
-    let (task, entries) = fx
+    let (task, _settled, entries) = fx
         .run("key-a", chain_task("key-a", &[mock_tool(), mock_tool()]))
         .await;
     assert_eq!(mock.calls(), 2, "premise: both steps ran");
@@ -259,8 +272,9 @@ async fn a_playbook_that_continues_past_a_refusal_writes_no_refused_record() {
     let mock = MockBackend::answering(Answer::Sequence(vec![refusable(), clean()]));
     register(&fx.state, BACKEND, &mock);
     register_playbook(&fx.state, "continue", &[json!({}), json!({})]);
-    let (task, entries) = fx.run("key-a", playbook_task("key-a")).await;
+    let (task, settled, entries) = fx.run("key-a", playbook_task("key-a")).await;
     assert_eq!(mock.calls(), 2, "premise: the second step ran");
+    assert_delivered(&settled);
     assert!(
         settlements(&entries, &task)
             .iter()
@@ -275,10 +289,11 @@ async fn a_composite_that_succeeds_writes_no_settlement_record() {
     let fx = fixture(Some(refusing_final_answer())).await;
     let mock = MockBackend::answering(Answer::Result(clean()));
     register(&fx.state, BACKEND, &mock);
-    let (task, entries) = fx
+    let (task, settled, entries) = fx
         .run("key-a", chain_task("key-a", &[mock_tool(), mock_tool()]))
         .await;
     assert_eq!(mock.calls(), 2, "premise: both steps ran");
+    assert_delivered(&settled);
     assert!(settlements(&entries, &task).is_empty(), "{entries:#?}");
 }
 
@@ -317,7 +332,7 @@ async fn a_first_step_refused_before_it_runs_is_joined_by_task_id() {
         ),
         "key-a",
     );
-    let (task, entries) = fx.run("key-a", request).await;
+    let (task, _settled, entries) = fx.run("key-a", request).await;
     assert_eq!(mock.calls(), 0, "premise: no step was dispatched");
     let record = refused_settlement(&entries, &task);
     assert_eq!(record["joined_by"], "task_id", "{record}");
