@@ -28,13 +28,25 @@ impl MetaMcp {
     /// Each fill runs as its own task, so a list cancelled or cut short here
     /// never aborts it: the cache still fills, and a later list shows it. A
     /// backend refusing a shared session is `warm_listing_views`' to warm.
-    pub(crate) async fn wait_surfaced_first_fill(&self) {
+    /// Only a tool this caller would be shown is waited for: the routing
+    /// profile and the listing predicate, in `resolve_surfaced_tool`'s order.
+    pub(crate) async fn wait_surfaced_first_fill(
+        &self,
+        scope: super::InvokeScope<'_>,
+        session_id: Option<&str>,
+    ) {
         // Code Mode lists no surfaced tools: nothing to wait for.
         if self.code_mode_enabled {
             return;
         }
+        let profile = self.active_profile(session_id);
         let mut cold: Vec<Arc<Backend>> = Vec::new();
         for surfaced in &self.surfaced_state().tools {
+            if profile.check(&surfaced.server, &surfaced.tool).is_err()
+                || !self.shows_shared_name(&surfaced.server, &surfaced.tool, scope, session_id)
+            {
+                continue;
+            }
             let Some(backend) = self
                 .backends
                 .get_for(Unscoped::Visibility, &surfaced.server)

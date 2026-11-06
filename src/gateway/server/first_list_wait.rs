@@ -84,7 +84,7 @@ pub(super) async fn prepare(
     if let Some(ending) = ending {
         let first_fill = async {
             tokio::select! {
-                () = meta_mcp.wait_surfaced_first_fill() => {}
+                () = meta_mcp.wait_surfaced_first_fill(scope, Some(session_id)) => {}
                 () = ending.cancelled() => {}
             }
         };

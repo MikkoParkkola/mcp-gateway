@@ -121,3 +121,23 @@ async fn r12_eof_during_the_first_wait_ends_the_session() {
     // `close` asserts the session returns Ok within its arrival bound.
     serve.close().await;
 }
+
+/// R15: a surfaced tool the session's routing profile excludes is never
+/// shown, so its cold backend is not waited for: the first list answers at
+/// once while that backend is held.
+#[tokio::test]
+async fn r15_a_tool_the_profile_excludes_is_not_waited_for() {
+    let held = held_backend(&[TOOL]).await;
+    let extra = "routing_profiles:\n  narrow:\n    description: \"no held\"\n    deny_backends: [\"held\"]\ndefault_routing_profile: narrow\n";
+    let mut serve = start(&entry("held", &held, None), &[("held", TOOL)], extra).await;
+    asked(&held, 1).await;
+    serve.send(&modern(1, "server/discover")).await;
+    serve.reply(1, &mut Vec::new()).await;
+    serve.send(&modern(2, "tools/list")).await;
+    let answer = answer_within(&mut serve, 2, AT_ONCE, &mut Vec::new()).await;
+    assert!(
+        answer.is_some(),
+        "a first list waited for a tool its profile excludes"
+    );
+    serve.close().await;
+}
