@@ -17,7 +17,7 @@ use serde_json::Value;
 
 use super::*;
 use crate::config::{AuthConfig, Config, FailsafeConfig, TransportConfig};
-use crate::config_reload::{LiveConfig, ReloadContext};
+use crate::config_reload::{FileRevision, LiveConfig, ReloadContext};
 use crate::discovery::config_scanner::ConfigScanner;
 use crate::discovery::config_scanner::client_scan::{ClientScan, Fingerprint};
 use crate::discovery::listing::ScanSource;
