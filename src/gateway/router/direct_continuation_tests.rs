@@ -21,13 +21,13 @@ pub(super) const BACKENDS: [&str; 2] = ["alpha", "alpha-pt"];
 pub(super) const BACKEND_STATE: &str = "backend-state-1";
 
 fn identity(subject: &str) -> VerifiedIdentity {
-    VerifiedIdentity {
-        subject: subject.to_string(),
-        email: format!("{subject}@example.invalid"),
-        name: None,
-        groups: vec![],
-        issuer: "https://a.example.invalid".to_string(),
-    }
+    VerifiedIdentity::for_test(
+        subject.to_string(),
+        format!("{subject}@example.invalid"),
+        None,
+        vec![],
+        "https://a.example.invalid".to_string(),
+    )
 }
 
 /// `tools/call read` on `/mcp/{backend}` as key `k-std`, carrying `subject`'s

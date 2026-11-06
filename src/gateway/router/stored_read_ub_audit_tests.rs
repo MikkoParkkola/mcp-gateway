@@ -63,13 +63,13 @@ async fn ub_an_unbindable_callers_repeat_writes_the_live_calls_audit_records() {
             .expect("a request");
         request
             .extensions_mut()
-            .insert(crate::key_server::oidc::VerifiedIdentity {
-                subject: String::new(),
-                email: "nobody@example.invalid".to_string(),
-                name: None,
-                groups: vec![],
-                issuer: "https://issuer.example.invalid".to_string(),
-            });
+            .insert(crate::key_server::oidc::VerifiedIdentity::for_test(
+                String::new(),
+                "nobody@example.invalid".to_string(),
+                None,
+                vec![],
+                "https://issuer.example.invalid".to_string(),
+            ));
         let router = router.clone();
         async move {
             let response = router.oneshot(request).await.expect("an answer");

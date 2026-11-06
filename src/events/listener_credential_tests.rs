@@ -65,13 +65,13 @@ fn run_on(mint: &Arc<Scripted>) -> Arc<RunFence> {
     Arc::new(RunFence {
         mint: Arc::clone(mint) as Arc<dyn ListenerMint>,
         backend: "managed".to_owned(),
-        identity: VerifiedIdentity {
-            subject: "u1".into(),
-            email: "u1@example.com".into(),
-            name: None,
-            groups: Vec::new(),
-            issuer: "https://idp".into(),
-        },
+        identity: VerifiedIdentity::for_test(
+            "u1".into(),
+            "u1@example.com".into(),
+            None,
+            Vec::new(),
+            "https://idp".into(),
+        ),
         binding: OnceLock::new(),
         ended: AtomicBool::new(false),
     })

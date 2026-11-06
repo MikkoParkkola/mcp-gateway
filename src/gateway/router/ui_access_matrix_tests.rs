@@ -130,16 +130,16 @@ impl Caller {
             Self::OidcUnmapped | Self::AdminKeyUnmapped => (ISSUER, "nobody-1", "nobody"),
             _ => return None,
         };
-        Some(VerifiedIdentity {
-            subject: subject.to_string(),
-            email: format!(
+        Some(VerifiedIdentity::for_test(
+            subject.to_string(),
+            format!(
                 "{}@example.test",
                 if subject.is_empty() { "x" } else { subject }
             ),
-            name: None,
-            groups: vec![group.to_string()],
-            issuer: issuer.to_string(),
-        })
+            None,
+            vec![group.to_string()],
+            issuer.to_string(),
+        ))
     }
 }
 

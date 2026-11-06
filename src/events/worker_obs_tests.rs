@@ -20,13 +20,13 @@ const CONFIG: &str = "backends:\n  \
 const NAME: &str = "backend.pt.tools_changed";
 
 fn person() -> VerifiedIdentity {
-    VerifiedIdentity {
-        subject: "p".into(),
-        email: "p@mail.test".into(),
-        name: None,
-        groups: Vec::new(),
-        issuer: "https://idp".into(),
-    }
+    VerifiedIdentity::for_test(
+        "p".into(),
+        "p@mail.test".into(),
+        None,
+        Vec::new(),
+        "https://idp".into(),
+    )
 }
 
 fn services(dir: &std::path::Path) -> Services {

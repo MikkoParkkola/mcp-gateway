@@ -210,13 +210,13 @@ pub(super) const AUDIENCE: &str = "https://ledger.internal";
 pub(super) const ISSUER: &str = "https://idp.example";
 
 fn identity(subject: &str) -> VerifiedIdentity {
-    VerifiedIdentity {
-        subject: subject.to_string(),
-        email: format!("{subject}@corp"),
-        name: None,
-        groups: vec![],
-        issuer: ISSUER.to_string(),
-    }
+    VerifiedIdentity::for_test(
+        subject.to_string(),
+        format!("{subject}@corp"),
+        None,
+        vec![],
+        ISSUER.to_string(),
+    )
 }
 
 /// A PATH A binding, produced by the PRODUCTION credential producer, plus the

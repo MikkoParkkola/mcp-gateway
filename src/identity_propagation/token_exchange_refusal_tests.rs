@@ -10,13 +10,13 @@ use tokio::net::TcpListener;
 use super::*;
 
 fn identity() -> VerifiedIdentity {
-    VerifiedIdentity {
-        subject: "alice".to_owned(),
-        email: String::new(),
-        name: None,
-        groups: Vec::new(),
-        issuer: "https://idp.invalid".to_owned(),
-    }
+    VerifiedIdentity::for_test(
+        "alice".to_owned(),
+        String::new(),
+        None,
+        Vec::new(),
+        "https://idp.invalid".to_owned(),
+    )
 }
 
 fn strategy() -> TokenExchangeStrategy {

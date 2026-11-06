@@ -173,13 +173,13 @@ pub(super) fn settled(status: crate::protocol::tasks::TaskStatus) -> bool {
 }
 
 pub(super) fn alice() -> String {
-    crate::key_server::oidc::VerifiedIdentity {
-        subject: "alice".to_string(),
-        email: "alice@adapter.test".to_string(),
-        name: None,
-        groups: Vec::new(),
-        issuer: "https://idp.adapter.test".to_string(),
-    }
+    crate::key_server::oidc::VerifiedIdentity::for_test(
+        "alice".to_string(),
+        "alice@adapter.test".to_string(),
+        None,
+        Vec::new(),
+        "https://idp.adapter.test".to_string(),
+    )
     .stable_actor_id()
 }
 

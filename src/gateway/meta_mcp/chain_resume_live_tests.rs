@@ -135,13 +135,13 @@ fn meta_over(stub: Arc<AsksOnce>) -> MetaMcp {
 /// Not decoration: `mint_continuation` refuses to mint without a principal
 /// fingerprint, so a caller without one can never be stopped at all.
 fn identity() -> VerifiedIdentity {
-    VerifiedIdentity {
-        subject: "user-1".to_string(),
-        email: "user@example.test".to_string(),
-        name: None,
-        groups: Vec::new(),
-        issuer: "https://issuer.example.test".to_string(),
-    }
+    VerifiedIdentity::for_test(
+        "user-1".to_string(),
+        "user@example.test".to_string(),
+        None,
+        Vec::new(),
+        "https://issuer.example.test".to_string(),
+    )
 }
 
 /// A caller that declared elicitation and carries an identity — the two things

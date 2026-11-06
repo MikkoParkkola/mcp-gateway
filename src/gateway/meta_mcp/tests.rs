@@ -285,12 +285,14 @@ mod refusal_stage_rows;
 /// a fixture without one would test the refusal it does not mention instead of
 /// the capability gate it does.
 static NAMED_CALLER: std::sync::LazyLock<crate::key_server::oidc::VerifiedIdentity> =
-    std::sync::LazyLock::new(|| crate::key_server::oidc::VerifiedIdentity {
-        subject: "traveller-1".to_string(),
-        email: "traveller@example.test".to_string(),
-        name: None,
-        groups: vec![],
-        issuer: "https://idp.example.test".to_string(),
+    std::sync::LazyLock::new(|| {
+        crate::key_server::oidc::VerifiedIdentity::for_test(
+            "traveller-1".to_string(),
+            "traveller@example.test".to_string(),
+            None,
+            vec![],
+            "https://idp.example.test".to_string(),
+        )
     });
 
 /// What a client declared, read through the production parser.

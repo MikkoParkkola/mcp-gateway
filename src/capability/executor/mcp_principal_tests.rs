@@ -139,13 +139,13 @@ fn an_empty_digest_is_still_refused_on_a_multi_user_gateway() {
 /// T10: a verified identity beats the credential owner, as it does today.
 #[test]
 fn a_verified_identity_beats_the_credential_owner() {
-    let identity = std::sync::Arc::new(crate::key_server::oidc::VerifiedIdentity {
-        subject: "alice".to_owned(),
-        email: "alice@example.test".to_owned(),
-        name: None,
-        groups: Vec::new(),
-        issuer: "https://idp.example.test".to_owned(),
-    });
+    let identity = std::sync::Arc::new(crate::key_server::oidc::VerifiedIdentity::for_test(
+        "alice".to_owned(),
+        "alice@example.test".to_owned(),
+        None,
+        Vec::new(),
+        "https://idp.example.test".to_owned(),
+    ));
     let verified = CapabilityExecutionContext {
         verified_identity: Some(std::sync::Arc::clone(&identity)),
         ..api_key("credential:5e1f0a2b3c4d")

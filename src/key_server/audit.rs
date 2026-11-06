@@ -180,13 +180,13 @@ mod tests {
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
     fn make_identity() -> VerifiedIdentity {
-        VerifiedIdentity {
-            subject: "sub123".to_string(),
-            email: "alice@company.com".to_string(),
-            name: Some("Alice".to_string()),
-            groups: Vec::new(),
-            issuer: "https://accounts.google.com".to_string(),
-        }
+        VerifiedIdentity::for_test(
+            "sub123".to_string(),
+            "alice@company.com".to_string(),
+            Some("Alice".to_string()),
+            Vec::new(),
+            "https://accounts.google.com".to_string(),
+        )
     }
 
     fn make_token() -> TemporaryToken {

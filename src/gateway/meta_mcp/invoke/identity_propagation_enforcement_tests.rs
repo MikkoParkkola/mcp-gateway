@@ -35,13 +35,13 @@ fn idp_cfg(required: bool) -> IdentityPropagationConfig {
 }
 
 fn identity() -> VerifiedIdentity {
-    VerifiedIdentity {
-        subject: "alice".to_string(),
-        email: "alice@corp".to_string(),
-        name: None,
-        groups: vec![],
-        issuer: "https://idp".to_string(),
-    }
+    VerifiedIdentity::for_test(
+        "alice".to_string(),
+        "alice@corp".to_string(),
+        None,
+        vec![],
+        "https://idp".to_string(),
+    )
 }
 
 // MIK-6740 IDP4.1/4.2 — the Meta-MCP `gateway_invoke` route audits every

@@ -214,21 +214,25 @@ async fn ac_cache_4e_two_protocol_revisions_do_not_share_one_cache_entry() {
 }
 
 static CACHE_PRINCIPAL_ALICE: std::sync::LazyLock<crate::key_server::oidc::VerifiedIdentity> =
-    std::sync::LazyLock::new(|| crate::key_server::oidc::VerifiedIdentity {
-        subject: "alice".to_string(),
-        email: "alice@example.test".to_string(),
-        name: None,
-        groups: vec![],
-        issuer: "https://idp.example.test".to_string(),
+    std::sync::LazyLock::new(|| {
+        crate::key_server::oidc::VerifiedIdentity::for_test(
+            "alice".to_string(),
+            "alice@example.test".to_string(),
+            None,
+            vec![],
+            "https://idp.example.test".to_string(),
+        )
     });
 
 static CACHE_PRINCIPAL_BOB: std::sync::LazyLock<crate::key_server::oidc::VerifiedIdentity> =
-    std::sync::LazyLock::new(|| crate::key_server::oidc::VerifiedIdentity {
-        subject: "bob".to_string(),
-        email: "bob@example.test".to_string(),
-        name: None,
-        groups: vec![],
-        issuer: "https://idp.example.test".to_string(),
+    std::sync::LazyLock::new(|| {
+        crate::key_server::oidc::VerifiedIdentity::for_test(
+            "bob".to_string(),
+            "bob@example.test".to_string(),
+            None,
+            vec![],
+            "https://idp.example.test".to_string(),
+        )
     });
 
 /// CACHE.4.c — the two principals of 4.b, through the live cache.

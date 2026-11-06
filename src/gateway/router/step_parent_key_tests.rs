@@ -15,13 +15,13 @@ use crate::key_server::oidc::VerifiedIdentity;
 use crate::protocol::mrtr::IDEMPOTENCY_KEY_META;
 
 fn alice() -> VerifiedIdentity {
-    VerifiedIdentity {
-        subject: "alice".to_string(),
-        email: "alice@example.invalid".to_string(),
-        name: None,
-        groups: vec![],
-        issuer: "https://a.example.invalid".to_string(),
-    }
+    VerifiedIdentity::for_test(
+        "alice".to_string(),
+        "alice@example.invalid".to_string(),
+        None,
+        vec![],
+        "https://a.example.invalid".to_string(),
+    )
 }
 
 /// One modern `tools/call` of the meta tool `name` on `/mcp` as alice, under

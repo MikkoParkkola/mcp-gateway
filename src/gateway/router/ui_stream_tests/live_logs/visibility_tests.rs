@@ -47,13 +47,13 @@ async fn keyed(
 
 /// The OIDC actor id of `subject` under `issuer`, as a call records it.
 fn actor(issuer: &str, subject: &str) -> String {
-    VerifiedIdentity {
-        subject: subject.to_owned(),
-        email: format!("{subject}@example.test"),
-        name: None,
-        groups: vec![],
-        issuer: issuer.to_owned(),
-    }
+    VerifiedIdentity::for_test(
+        subject.to_owned(),
+        format!("{subject}@example.test"),
+        None,
+        vec![],
+        issuer.to_owned(),
+    )
     .stable_actor_id()
 }
 
@@ -83,7 +83,7 @@ async fn s2b_another_subjects_call_on_the_live_path_sends_no_frame() {
     call_as(&inv, &actor(ISSUER, "other"), "srv", 1);
     call_as(
         &inv,
-        &actor("https://other-issuer.test", &me.subject),
+        &actor("https://other-issuer.test", me.subject()),
         "srv",
         2,
     );

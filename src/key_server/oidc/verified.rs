@@ -72,17 +72,17 @@ use serde::Serialize;
 #[derive(Debug, Clone, Serialize)]
 pub struct VerifiedIdentity {
     /// OIDC `sub` claim (opaque user ID).
-    pub subject: String,
+    subject: String,
     /// Email address from the token claims.
-    pub email: String,
+    email: String,
     /// Display name (optional).
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub name: Option<String>,
+    name: Option<String>,
     /// Group memberships (from custom claims).
     #[serde(default)]
-    pub groups: Vec<String>,
+    groups: Vec<String>,
     /// Issuer URL.
-    pub issuer: String,
+    issuer: String,
 }
 
 impl VerifiedIdentity {
@@ -156,6 +156,65 @@ impl VerifiedIdentity {
     #[must_use]
     pub fn issuer(&self) -> &str {
         &self.issuer
+    }
+}
+
+/// Test construction, which bypasses [`VerifiedIdentity::checked`] so a row
+/// can hold an identity that names nobody. Compiled only into the crate's own
+/// tests and visible only inside the crate: no build and no other crate can
+/// make an identity this way.
+#[cfg(test)]
+impl VerifiedIdentity {
+    /// An identity from its five parts, in field order.
+    pub(crate) fn for_test(
+        subject: impl Into<String>,
+        email: impl Into<String>,
+        name: Option<String>,
+        groups: Vec<String>,
+        issuer: impl Into<String>,
+    ) -> Self {
+        Self {
+            subject: subject.into(),
+            email: email.into(),
+            name,
+            groups,
+            issuer: issuer.into(),
+        }
+    }
+
+    /// This identity with another subject.
+    #[must_use]
+    pub(crate) fn with_subject(mut self, subject: impl Into<String>) -> Self {
+        self.subject = subject.into();
+        self
+    }
+
+    /// This identity with another email.
+    #[must_use]
+    pub(crate) fn with_email(mut self, email: impl Into<String>) -> Self {
+        self.email = email.into();
+        self
+    }
+
+    /// This identity with another issuer.
+    #[must_use]
+    pub(crate) fn with_issuer(mut self, issuer: impl Into<String>) -> Self {
+        self.issuer = issuer.into();
+        self
+    }
+
+    /// This identity with another display name.
+    #[must_use]
+    pub(crate) fn with_name(mut self, name: Option<String>) -> Self {
+        self.name = name;
+        self
+    }
+
+    /// This identity with other groups.
+    #[must_use]
+    pub(crate) fn with_groups(mut self, groups: Vec<String>) -> Self {
+        self.groups = groups;
+        self
     }
 }
 
