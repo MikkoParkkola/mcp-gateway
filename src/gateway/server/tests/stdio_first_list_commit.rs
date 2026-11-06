@@ -31,7 +31,9 @@ async fn r14_a_queued_first_answer_has_committed_the_flag() {
             OutboundFrame::gateway_stdio(json!({"jsonrpc": "2.0", "id": 2, "result": {}})),
         );
         // What a later list would read now, before this task goes on.
-        drop(report.send(probe.answered_for_test()));
+        report
+            .send(probe.answered_for_test())
+            .expect("the row awaits the report");
     }));
     let committed = reported.await.expect("the dispatch reported");
     assert!(
