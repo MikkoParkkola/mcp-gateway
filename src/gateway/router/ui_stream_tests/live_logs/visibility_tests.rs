@@ -114,8 +114,8 @@ async fn sc_a_reordered_scoped_key_keeps_its_stream_and_a_narrowed_one_ends_it()
 /// page gate before its third page with no frame in flight; `after` is then
 /// published as the role mapping and one page is released. The stream must
 /// send no further row, end, and read no further page.
-async fn demoted_between_pages(after: &str) {
-    let (state, _keep, inv, bearer, _me) = keyed(&["auditors"]).await;
+async fn demoted_between_pages(after: &str, role: Option<crate::control_plane::ControlPlaneRole>) {
+    let (state, _keep, inv, bearer, me) = keyed(&["auditors"]).await;
     let other = actor(ISSUER, "other");
     let mut s = open(&state, request(STREAM, Who::Bearer(&bearer), None)).await;
     within(s.until("hello")).await;
@@ -148,6 +148,11 @@ async fn demoted_between_pages(after: &str) {
     assert_eq!(hub.pages_read_for_test(), 2, "premise: two pages read, the third waits");
     let read = hub.pages_read_for_test();
     set_mapping(&state, after);
+    assert_eq!(
+        state.live_config.get().control_plane.role_mapping.resolve_role(&me),
+        role,
+        "premise: the published mapping demotes the caller"
+    );
     hub.release_pages_for_test(1);
     within(async {
         while let Some(f) = again.next().await {
@@ -166,11 +171,12 @@ async fn demoted_between_pages(after: &str) {
 async fn a1b_an_auditor_demoted_between_pages_reads_and_sends_no_more() {
     demoted_between_pages(
         "rules: [{ issuer: \"https://issuer.test\", group: auditors, role: developer }]",
+        Some(crate::control_plane::ControlPlaneRole::Developer),
     )
     .await;
 }
 
 #[tokio::test]
 async fn a1b2_an_auditor_whose_role_is_removed_between_pages_reads_and_sends_no_more() {
-    demoted_between_pages("rules: []").await;
+    demoted_between_pages("rules: []", None).await;
 }
