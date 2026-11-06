@@ -184,19 +184,19 @@ def gate_step_errors(jobs: dict, root: Path = ROOT) -> list[str]:
     skipped_heavy = {job: "skipped" for job in HEAVY}
     cases = {
         "lane, heavy jobs skipped": (lane, results(**{j.replace("-", "_"): "skipped" for j in HEAVY}), True),
-        "lane, a heavy job failed": (lane, results(kani="failure"), True),
+        "lane, a heavy job failed": (lane, results(**{"linux-keychain": "failure"}), True),
         "fork train branch, heavy jobs skipped": (fork, dict(results(), **skipped_heavy), True),
         "train, all succeeded": (train, results(), True),
-        "train, a heavy job failed": (train, results(kani="failure"), False),
+        "train, a heavy job failed": (train, results(**{"linux-keychain": "failure"}), False),
         "train, a heavy job cancelled": (train, results(windows_check="cancelled"), False),
         "train, a heavy job skipped": (train, results(linux_keychain="skipped"), False),
         "train, Windows skipped": (train, results(windows_shards="skipped"), False),
         "docs-only train, docs-only skips": (docs_train, dict(results(), **{j: "skipped" for j in DOCS_SKIPPED}), True),
         "docs-only train, Windows skipped": (docs_train, results(windows_check="skipped"), False),
-        "train, a heavy job missing from needs": (train, {j: "success" for j in every if j != "kani"}, False),
+        "train, a heavy job missing from needs": (train, {j: "success" for j in every if j != "linux-keychain"}, False),
         # Only `skipped` is a docs-only allowance: a docs-skipped job that ran
         # and failed, or was cancelled, still fails the train.
-        "docs-only train, a docs-skipped job failed": (docs_train, results(kani="failure"), False),
+        "docs-only train, a docs-skipped job failed": (docs_train, results(**{"linux-keychain": "failure"}), False),
         "docs-only train, a docs-skipped job cancelled": (docs_train, results(gws_dry_run="cancelled"), False),
     }
     errors = []
@@ -212,7 +212,7 @@ def main() -> int:
     errors = heavy_errors(jobs) + gate_errors(jobs) + gate_step_errors(jobs)
     # Each mutant is caught by the case named beside it.
     def drop_clause(j: dict) -> None:
-        j["kani"]["if"] = str(j["kani"]["if"]).replace(CLAUSE, "")
+        j["linux-keychain"]["if"] = str(j["linux-keychain"]["if"]).replace(CLAUSE, "")
     def trains_skip_too(j: dict) -> None:
         inner = CLAUSE[len(" && "):]
         j["windows-shards"]["if"] = str(j["windows-shards"]["if"]).replace(inner, inner.replace(" && !(startsWith", " && (startsWith"))
@@ -232,7 +232,7 @@ def main() -> int:
     mutants = {
         "the gate step judges lanes and passes trains": (train_inverted, f"{GATE} step: train, a heavy job failed passes (exit 0)"),
         "the gate step always allows the docs-only skips": (docs_always, f"{GATE} step: train, a heavy job skipped passes (exit 0)"),
-        "a heavy job loses its train clause": (drop_clause, "kani: its if lacks the train clause"),
+        "a heavy job loses its train clause": (drop_clause, "linux-keychain: its if lacks the train clause"),
         "the clause skips trains too": (trains_skip_too, "windows-shards: code train skips"),
         "a fork's train branch counts as a train": (
             forks_count, "release-script-tests: train branch from a fork runs"),

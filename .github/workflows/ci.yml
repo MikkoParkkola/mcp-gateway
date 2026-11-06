@@ -715,10 +715,12 @@ jobs:
         run: python3 scripts/ci/check_needs.py windows-shards windows-clippy
 
   # The heavy jobs (the Windows shards, clippy and check, release tooling
-  # tests, Task SDK recovery, gws dry-run, Linux keychain, Kani, upgrade
+  # tests, Task SDK recovery, gws dry-run, Linux keychain, upgrade
   # rehearsal) skip a lane pull request into the release line and run on its
   # merge train (a `train/` branch in this repository), which is how every
-  # change lands; every other event runs them as before. This job is their
+  # change lands; every other event runs them as before. Kani is not one of
+  # them: a lane pull request runs it too, so code that does not compile under
+  # cfg(kani) fails its own CI rather than a train. This job is their
   # verdict on every release-line pull request but a throwaway one: on a lane
   # it passes without judging, which makes it a check every lane passed, so
   # the merge train needs it to pass on the train, where it fails unless every
@@ -726,7 +728,7 @@ jobs:
   # skips may skip). scripts/ci/test_heavy_train_gating.py pins the routing.
   heavy-gate:
     name: Heavy checks (merge train)
-    needs: [scope, windows-shards, windows-clippy, windows-check, release-script-tests, task-sdk-recovery, gws-dry-run, linux-keychain, kani, upgrade-rehearsal]
+    needs: [scope, windows-shards, windows-clippy, windows-check, release-script-tests, task-sdk-recovery, gws-dry-run, linux-keychain, upgrade-rehearsal]
     if: ${{ always() && github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && !(github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -748,9 +750,9 @@ jobs:
           fi
           skippable=()
           if [ "$DOCS_ONLY" = true ]; then
-            skippable=(--allow-skipped task-sdk-recovery,gws-dry-run,linux-keychain,kani,upgrade-rehearsal)
+            skippable=(--allow-skipped task-sdk-recovery,gws-dry-run,linux-keychain,upgrade-rehearsal)
           fi
-          python3 scripts/ci/check_needs.py "${skippable[@]}" scope windows-shards windows-clippy windows-check release-script-tests task-sdk-recovery gws-dry-run linux-keychain kani upgrade-rehearsal
+          python3 scripts/ci/check_needs.py "${skippable[@]}" scope windows-shards windows-clippy windows-check release-script-tests task-sdk-recovery gws-dry-run linux-keychain upgrade-rehearsal
   # The macOS suite as shards (MIK-8482); `macos-check` is the aggregate.
   # On a pull request it runs only for a merge train (a `train/` branch in
   # this repository): the account's few macOS runners go to trains, and every
@@ -1303,7 +1305,10 @@ jobs:
   kani:
     name: Kani
     needs: scope
-    if: ${{ !cancelled() && (needs.scope.result != 'success' || needs.scope.outputs.docs_only != 'true') && !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) && !(github.event_name == 'push' && github.ref == 'refs/heads/docs/ranking-1-release-line') && !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && !(startsWith(github.head_ref, 'train/') && github.event.pull_request.head.repo.full_name == github.repository)) }}
+    # Not train-only (MIK-9353): a lane pull request that is not docs-only runs it, so code that does
+    # not compile under cfg(kani) fails its own CI. Compiling is the whole cost (about 7 min; the 5
+    # harnesses verify in under a second), so this is the full job, not a compile-only leg.
+    if: ${{ !cancelled() && (needs.scope.result != 'success' || needs.scope.outputs.docs_only != 'true') && !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) && !(github.event_name == 'push' && github.ref == 'refs/heads/docs/ranking-1-release-line') }}
     # Kani's current toolchain is validated against Ubuntu 22.04. Keep this
     # job pinned to that image rather than following latest.
     runs-on: ubuntu-22.04
