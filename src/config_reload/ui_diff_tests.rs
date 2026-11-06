@@ -585,3 +585,39 @@ fn the_verifier_refuses_a_foreign_original_line() {
         vec!["environment: \"dev\"  # <comment>".to_owned()]
     );
 }
+
+/// D25 (written after the code, disclosed): a patch given because the diff
+/// could not be masked carries no value at all, not even a typed one
+/// (`ui_diff.rs`, the verifier's refusal calls `patch(.., true)`; the
+/// `Patch` invariant in the spec).
+#[tokio::test]
+async fn a_masking_refusal_withholds_every_value() {
+    let (_dir, _path, ctx) =
+        gateway("environment: \"dev\"\nauth:\n  bearer_token: |\n    multi-line-secret\n");
+    let got = preview(
+        &ctx,
+        vec![
+            set("environment", Param::default(), s("prod")),
+            (
+                id("auth.bearer_token"),
+                Param::default(),
+                PreviewValue::Remove,
+            ),
+        ],
+    )
+    .await;
+    let patch = patch_of(&got);
+    assert_eq!(patch.code, GiveUp::SecretSpan, "{patch:?}");
+    assert_eq!(
+        patch.steps,
+        vec![
+            PatchStep::Set {
+                path: vec![key("environment")],
+                value: None,
+            },
+            PatchStep::Remove {
+                path: vec![key("auth"), key("bearer_token")],
+            },
+        ]
+    );
+}
