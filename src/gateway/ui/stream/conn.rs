@@ -65,8 +65,7 @@ pub(super) enum End {
     CredentialChanged,
     ValidationTimeout,
     Lifetime,
-    /// A log source closed or failed, or a reset's replay reset again: the
-    /// client reconnects with its id.
+    /// A log source closed or failed: the client reconnects with its id.
     LogEnded,
 }
 
@@ -148,6 +147,17 @@ impl Conn {
             .validation_hangs()
         {
             std::future::pending::<()>().await;
+        }
+        #[cfg(test)]
+        {
+            let delay = self
+                .state
+                .dashboard_bootstrap
+                .stream_hub()
+                .validation_delay();
+            if !delay.is_zero() {
+                tokio::time::sleep(delay).await;
+            }
         }
         let Some(caller) = current_caller(&self.auth, self.held.as_ref()).await else {
             return false;
@@ -271,6 +281,9 @@ async fn write(
             }
         }
     }
+    // A page can move the delivered position with no row to carry it (a
+    // replay that showed this viewer nothing): later frames' ids follow it.
+    sent.set_cursor(delivered(logs));
     Ok(())
 }
 
@@ -324,9 +337,6 @@ async fn drive(
         } else {
             Phase::Live
         };
-        if phase == Phase::Live {
-            served = Upkeeps::default();
-        }
         let may = servable(served, phase);
         let [activity, config] = &mut logs;
         let pass = tokio::select! {
@@ -335,11 +345,16 @@ async fn drive(
             () = tokio::time::sleep_until(deadline) => return Ok(End::Lifetime),
             _ = recheck.tick(), if may.recheck => {
                 if let Err(end) = conn.upkeep().await { return Ok(end); }
+                // The next check is a period after this one ends, not after
+                // it began: a check slower than the period would otherwise be
+                // due again at once and win every pass of the biased race.
+                recheck.reset();
                 served.recheck = true;
                 Pass::Upkept
             }
             _ = keep.tick(), if may.keep => {
                 conn.send(Bytes::from_static(b": keep-alive\n\n")).await?;
+                keep.reset();
                 served.keep = true;
                 Pass::Upkept
             }
@@ -348,11 +363,19 @@ async fn drive(
                 let snap = rx.borrow_and_update().clone();
                 sent.deliver(conn, &snap).await?;
                 served.snapshot = true;
-                Pass::Upkept
+                Pass::Snapshot
             }
             () = std::future::ready(()), if scan.is_some() => Pass::Page,
             (i, out) = live_either(activity, config), if scan.is_none() => Pass::Live(i, out),
+            // After the live receives: reached only when no live row is ready.
+            () = std::future::ready(()), if phase == Phase::Live && served.snapshot => Pass::LiveTurn,
         };
+        // A snapshot leaves the live logs owed one look: only a live row, or
+        // a look that found none, pays it. A check due meanwhile would
+        // otherwise lift the cap and let the next snapshot win again.
+        if phase == Phase::Live && matches!(pass, Pass::Live(..) | Pass::LiveTurn) {
+            served = Upkeeps::default();
+        }
         if let (Pass::Page, Some(i)) = (&pass, scan) {
             served = Upkeeps::default();
             conn.require_entitled().await?;
@@ -371,7 +394,7 @@ async fn drive(
             Pass::Live(i, Some(outs)) => write(conn, &mut sent, &mut logs, i, outs).await?,
             // Served what was due; the next pass serves the next due one, or
             // the page.
-            Pass::Upkept | Pass::Page => {}
+            Pass::Upkept | Pass::Snapshot | Pass::LiveTurn | Pass::Page => {}
         }
     }
 }
@@ -402,13 +425,18 @@ impl Upkeeps {
 }
 
 /// Which upkeeps the next pass may serve, given those `served` since the
-/// last page. Following the live logs, every one. During a catch-up, each at
-/// most once between pages: an upkeep that falls due again while it is
-/// served (a recheck slower than its period, a snapshot faster than the
+/// last page. Following the live logs, every one, except that a snapshot
+/// leaves the live logs owed one look first: nothing is servable until a
+/// live row is sent or a look finds none, so a snapshot changing faster than
+/// it is sent cannot hold ready rows back, and on an idle stream the debt
+/// lasts one pass. During a catch-up,
+/// each at most once between pages: an upkeep that falls due again while it
+/// is served (a recheck slower than its period, a snapshot faster than the
 /// reader) cannot hold the next page back, which follows once nothing
 /// servable is due.
 fn servable(served: Upkeeps, phase: Phase) -> Upkeeps {
     match phase {
+        Phase::Live if served.snapshot => Upkeeps::default(),
         Phase::Live => Upkeeps::ALL,
         Phase::CatchUp => Upkeeps {
             recheck: !served.recheck,
@@ -420,8 +448,12 @@ fn servable(served: Upkeeps, phase: Phase) -> Upkeeps {
 
 /// What one pass of the connection's race did.
 enum Pass {
-    /// Served one due upkeep: a check, a keep-alive or a snapshot.
+    /// Served one due upkeep: a check or a keep-alive.
     Upkept,
+    /// Sent one snapshot.
+    Snapshot,
+    /// Looked at the live logs after a snapshot and found no row ready.
+    LiveTurn,
     /// Nothing was due and a scan is pending: read its next page.
     Page,
     /// A live announcement from this log, or `None` when it closed.
