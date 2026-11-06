@@ -5,8 +5,9 @@
 
 use std::path::{Path, PathBuf};
 
+use super::identity_tests::identified;
 use super::kill::{self, At};
-use super::rotation_tests::cfg;
+use super::rotation_tests::{cfg, lines, verify};
 use super::*;
 
 /// The boundary the child is killed at, by name.
@@ -62,4 +63,63 @@ fn child() {
     let logger = TransparencyLogger::open(cfg(&path, 12, false)).unwrap();
     kill::point(At::LoggerBuilt);
     drop(logger);
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn crash_S2() {
+    // GIVEN: a child killed just after its logger was built (id minted and
+    // recorded), its lease released only by its death
+    let dir = tempfile::tempdir().unwrap();
+    killed_at(At::LoggerBuilt, dir.path());
+    let path = kill_log(dir.path());
+    let id = lines(&path)[0]["log_id"].as_str().unwrap().to_string();
+
+    // WHEN: the log is reopened twice
+    for _ in 0..2 {
+        let again =
+            TransparencyLogger::open(cfg(&path, 12, false)).expect("the lease went with the child");
+        // THEN: the same id
+        assert_eq!(again.log_id().as_str(), id);
+    }
+
+    // THEN: never a second identified record
+    let found = identified(&path);
+    assert_eq!(
+        found.len(),
+        1,
+        "never a second identified record: {found:?}"
+    );
+    assert_eq!(found[0]["log_id"].as_str(), Some(id.as_str()));
+}
+
+#[test]
+fn a_kill_before_the_identified_record_is_finished_on_reopen() {
+    // GIVEN: a child killed after the genesis open record, before the
+    // identified record that names its id
+    let dir = tempfile::tempdir().unwrap();
+    killed_at(At::BeforeIdentified, dir.path());
+    let path = kill_log(dir.path());
+    let left = lines(&path);
+    assert_eq!(
+        left.len(),
+        1,
+        "the kill landed after the open record: {left:?}"
+    );
+    let id = left[0]["log_id"].as_str().unwrap().to_string();
+
+    // WHEN: the log is reopened twice
+    for _ in 0..2 {
+        let again =
+            TransparencyLogger::open(cfg(&path, 12, false)).expect("the lease went with the child");
+        // THEN: the open record's id
+        assert_eq!(again.log_id().as_str(), id);
+    }
+
+    // THEN: exactly one identified record naming it, and verify passes
+    let found = identified(&path);
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert_eq!(found[0]["log_id"].as_str(), Some(id.as_str()));
+    let r = verify(&path, false);
+    assert!(r.ok, "{:?}", r.error_message);
 }

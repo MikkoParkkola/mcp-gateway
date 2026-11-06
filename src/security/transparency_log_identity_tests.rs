@@ -22,7 +22,7 @@ fn all_records(path: &Path) -> Vec<Value> {
     all
 }
 
-fn identified(path: &Path) -> Vec<Value> {
+pub(super) fn identified(path: &Path) -> Vec<Value> {
     let all = all_records(path);
     all.into_iter()
         .filter(|v| event(v) == Some(EV_IDENTIFIED))
@@ -96,29 +96,6 @@ fn log_id_upgrade() {
     assert!(read_hwm(&path, b"", "test").is_some());
     let r = verify(&path, false);
     assert!(r.ok, "{:?}", r.error_message);
-}
-
-#[test]
-#[allow(non_snake_case)]
-fn crash_S2() {
-    // GIVEN: a logger just built (an in-process drop stands in for the kill)
-    let dir = tempfile::tempdir().unwrap();
-    let path = log_path(&dir);
-    let built = TransparencyLogger::open(cfg(&path, 12, false)).unwrap();
-    let id = built.log_id();
-    drop(built);
-
-    // WHEN: the log is reopened twice
-    for _ in 0..2 {
-        let again = TransparencyLogger::open(cfg(&path, 12, false)).unwrap();
-        // THEN: the same id, and still one identified record
-        assert_eq!(again.log_id(), id);
-        drop(again);
-    }
-    let found = identified(&path);
-    assert_eq!(found.len(), 1, "never a second identified record");
-    assert_eq!(found[0]["log_id"].as_str(), Some(id.as_str()));
-    assert_eq!(lines(&path)[0]["log_id"].as_str(), Some(id.as_str()));
 }
 
 #[test]
