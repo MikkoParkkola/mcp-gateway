@@ -31,7 +31,8 @@ impl CapabilityExecutor {
         params: &Value,
         context: &CapabilityExecutionContext,
     ) -> Result<Value> {
-        refuse_egress(capability)?;
+        refuse_egress(capability)
+            .inspect_err(|_| crate::gateway::delivery_facts::refused_while_vouched())?;
         let params = confine_paths(capability, params, &self.process_policy.files)?;
         let invocation = build_cli_invocation(config, &params, &capability.schema.input)?;
         // The slot first: no credential is fetched and no directory made for a

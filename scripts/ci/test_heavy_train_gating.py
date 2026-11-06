@@ -30,6 +30,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from test_docs_only_gating import (  # noqa: E402
     HEAVY_GATE, HEAVY_TRAIN, POST_MERGE_SKIPPED, ROOT, SKIPPED, as_train, ctx, runs,
 )
+from test_os_label_routing import LABEL_JOBS  # noqa: E402
 from test_throwaway_routing import evaluate  # noqa: E402
 
 HEAVY = HEAVY_TRAIN
@@ -41,6 +42,11 @@ STEP = "Every heavy job succeeded on a merge train"
 CLAUSE = (" && !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line'"
           " && !(startsWith(github.head_ref, 'train/')"
           " && github.event.pull_request.head.repo.full_name == github.repository))")
+# The OS jobs a lane labelled os-sensitive runs too (test_os_label_routing.py):
+# the train clause with the label as its alternative.
+LABEL_CLAUSE = (" && (" + CLAUSE[len(" && "):]
+                + " || (github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line'"
+                " && contains(github.event.pull_request.labels.*.name, 'os-sensitive')))")
 
 
 def contexts() -> dict[str, tuple[dict, bool]]:
@@ -88,7 +94,7 @@ def heavy_errors(jobs: dict) -> list[str]:
     errors = [f"HEAVY names a job ci.yml lacks: {j}" for j in sorted(HEAVY - set(jobs))]
     for job in sorted(HEAVY & set(jobs)):
         cond = str(jobs[job].get("if", ""))
-        if CLAUSE not in cond:
+        if (LABEL_CLAUSE if job in LABEL_JOBS else CLAUSE) not in cond:
             errors.append(f"{job}: its if lacks the train clause")
         for label, (c, lane) in contexts().items():
             c = with_needs(jobs[job], c, "success")
@@ -208,7 +214,8 @@ def main() -> int:
     def drop_clause(j: dict) -> None:
         j["kani"]["if"] = str(j["kani"]["if"]).replace(CLAUSE, "")
     def trains_skip_too(j: dict) -> None:
-        j["windows-shards"]["if"] = str(j["windows-shards"]["if"]).replace(CLAUSE, CLAUSE.replace(" && !(startsWith", " && (startsWith"))
+        inner = CLAUSE[len(" && "):]
+        j["windows-shards"]["if"] = str(j["windows-shards"]["if"]).replace(inner, inner.replace(" && !(startsWith", " && (startsWith"))
     def forks_count(j: dict) -> None:
         j["release-script-tests"]["if"] = str(j["release-script-tests"]["if"]).replace(
             CLAUSE, CLAUSE.replace(" && github.event.pull_request.head.repo.full_name == github.repository))", "))"))
