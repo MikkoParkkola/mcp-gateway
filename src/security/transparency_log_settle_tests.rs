@@ -34,10 +34,24 @@ pub(super) fn payload() -> Map<String, Value> {
     v.as_object().unwrap().clone()
 }
 
-/// The log's bytes and its mark's, to prove nothing was appended.
+/// The log's bytes and its mark's, to prove nothing was appended. A file
+/// that is absent reads as empty; any other read error fails the row.
 pub(super) fn on_disk(path: &Path) -> (Vec<u8>, Vec<u8>) {
-    let read = |p: &Path| std::fs::read(p).unwrap_or_default();
+    let read = |p: &Path| match std::fs::read(p) {
+        Ok(bytes) => bytes,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+        Err(e) => panic!("{}: {e}", p.display()),
+    };
     (read(path), read(&sibling(path, "hwm")))
+}
+
+/// Every byte of the file behind `file`, read from its start.
+fn whole(file: &mut std::fs::File) -> Vec<u8> {
+    use std::io::{Read, Seek};
+    file.rewind().unwrap();
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes).unwrap();
+    bytes
 }
 
 /// Settle an outcome for `token`, bound to `own`, that must land.
@@ -129,6 +143,7 @@ async fn settle_after_its_log_was_replaced_lands_in_neither_log() {
     );
     // A read handle on the original active file, which the swap unlinks.
     let mut original = std::fs::File::open(&path).unwrap();
+    let original_bytes = whole(&mut original);
     swap_in(&theirs, &path);
     swap_in(&sibling(&theirs, "hwm"), &sibling(&path, "hwm"));
 
@@ -141,9 +156,7 @@ async fn settle_after_its_log_was_replaced_lands_in_neither_log() {
     assert!(records_of(&path, "w-1").is_empty());
     assert!(records_of(&theirs, "w-1").is_empty());
     // Nor through the original file's inode: no append went to the old fd.
-    let mut old = String::new();
-    std::io::Read::read_to_string(&mut original, &mut old).unwrap();
-    assert!(!old.contains("\"w-1\""), "{old}");
+    assert_eq!(whole(&mut original), original_bytes);
 }
 
 #[tokio::test]
