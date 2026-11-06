@@ -326,7 +326,7 @@ async fn drive(
     let mut recheck = interval_at(start + RECHECK, RECHECK);
     recheck.set_missed_tick_behavior(MissedTickBehavior::Delay);
     let first = first_snapshot(conn, rx, &mut recheck, deadline).await?;
-    let hello = json!({"kinds": conn.kinds, "head": sent.head(&first, &conn)});
+    let hello = json!({"kinds": conn.kinds, "head": sent.head(&first, conn)});
     conn.send(hello_frame(&hello)).await?;
     sent.deliver(conn, &first).await?;
     let mut keep = interval_at(Instant::now() + KEEP_ALIVE, KEEP_ALIVE);
