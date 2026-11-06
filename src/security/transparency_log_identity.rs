@@ -6,12 +6,12 @@
 
 use std::fmt;
 use std::fs::File;
-use std::io::{self, BufRead, BufReader};
+use std::io::{self, BufRead, BufReader, Read};
 use std::path::Path;
 
 use serde_json::Value;
 
-use super::rotation::EV_OPENED;
+use super::rotation::{EV_OPENED, MAX_RECORD_BYTES};
 use super::segments::{self, Segment};
 
 /// Names a log that has no segment open record to carry its id (a log
@@ -77,6 +77,38 @@ pub(super) fn resolve(path: &Path, sealed: &[Segment]) -> io::Result<Option<LogI
     Ok(None)
 }
 
+/// Whether the active file is a genesis left unfinished: the log's first
+/// segment (nothing sealed), whose open record carries an id that the next
+/// record does not name. A crash between the genesis open record (and its
+/// first mark) and the identified record leaves exactly this, because the
+/// fresh-log path writes the identified record second; so the first two
+/// lines decide it, cheaply, on every recovery. A beta log's open record has
+/// no id (it mints instead), and a log whose identified record retention
+/// expired has sealed segments, so neither is repaired.
+///
+/// # Errors
+///
+/// The active file cannot be read.
+pub(super) fn unfinished_genesis(path: &Path, sealed: &[Segment]) -> io::Result<bool> {
+    if !sealed.is_empty() {
+        return Ok(false);
+    }
+    let mut head: Vec<Option<Value>> = Vec::with_capacity(2);
+    each_line(path, |line| {
+        if !line.trim().is_empty() {
+            head.push(serde_json::from_str(line.trim()).ok());
+        }
+        head.len() < 2
+    })?;
+    let parsed = |i: usize| head.get(i).and_then(Option::as_ref);
+    let genesis_with_id = parsed(0).is_some_and(|v| {
+        is_event(v, EV_OPENED)
+            && v.get("segment_seq").and_then(Value::as_u64) == Some(0)
+            && id_of(v).is_some()
+    });
+    Ok(genesis_with_id && !parsed(1).is_some_and(|v| is_event(v, EV_IDENTIFIED)))
+}
+
 /// The fields of the record that names a fresh id.
 pub(super) fn identified_fields(id: &LogId) -> serde_json::Map<String, Value> {
     super::rotation::housekeeping(EV_IDENTIFIED, &[("log_id", id.as_str().into())])
@@ -89,6 +121,33 @@ fn is_event(v: &Value, event: &str) -> bool {
 fn id_of(v: &Value) -> Option<LogId> {
     let id = v.get("log_id")?.as_str()?;
     Some(LogId(id.to_string()))
+}
+
+/// Visit each line of `path` as lossy text, oldest first, until `visit`
+/// returns false. A line over the record cap is skipped unread, as
+/// `hwm_missing_in` does, so no line allocates without bound. A missing file
+/// has no lines.
+fn each_line(path: &Path, mut visit: impl FnMut(&str) -> bool) -> io::Result<()> {
+    let mut reader = match File::open(path) {
+        Ok(f) => BufReader::new(f),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err(e),
+    };
+    let mut buf = Vec::new();
+    loop {
+        buf.clear();
+        let cap = MAX_RECORD_BYTES as u64 + 1;
+        if (&mut reader).take(cap).read_until(b'\n', &mut buf)? == 0 {
+            return Ok(());
+        }
+        if buf.last() != Some(&b'\n') && buf.len() > MAX_RECORD_BYTES {
+            reader.skip_until(b'\n')?;
+            continue;
+        }
+        if !visit(&String::from_utf8_lossy(&buf)) {
+            return Ok(());
+        }
+    }
 }
 
 /// The last identified record in one file. Reads every line, as lossy text

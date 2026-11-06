@@ -237,6 +237,9 @@ pub(super) fn recover(
     // whether the cut was torn or fell on a newline (MIK-7712).
     let existing = identity::resolve(path, &sealed)?;
     let minted = existing.is_none();
+    // A genesis cut short before its identified record gets it now, with the
+    // id its open record already carries.
+    let unfinished = !minted && identity::unfinished_genesis(path, &sealed)?;
     let id = existing.unwrap_or_else(LogId::mint);
     let (mut state, below_mark) = reopen_tail(path, config, &sealed, hw.as_ref(), now, &id)?;
     finish_pending_expiry(path)?;
@@ -293,7 +296,7 @@ pub(super) fn recover(
     }
     // After the first mark, so a crash before it still leaves the genesis-only
     // log the verifier accepts; the mark then moves to the identified record.
-    if minted {
+    if minted || unfinished {
         record_identity(&mut state, config, &id)?;
         mark_tail(path, config, &state)?;
     }
