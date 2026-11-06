@@ -53,6 +53,8 @@ fn beta_shape(path: &Path) {
         entry_hash: prev,
         segment_seq: 0,
     };
+    // Remove first: an in-place rewrite would keep any longer tail.
+    std::fs::remove_file(sibling(path, "hwm")).unwrap();
     write_hwm(path, &encode_hwm(&mark, b"", "test").unwrap(), true).unwrap();
 }
 
@@ -73,6 +75,10 @@ fn log_id_upgrade() {
     let l = TransparencyLogger::open(cfg(&path, 12, false)).unwrap();
     let id = l.log_id().clone();
     let upgraded = std::fs::read(sibling(&path, "hwm")).unwrap();
+    // `.hwm` first, before any record or verify check: same fixed length as
+    // the beta layout, and the id nowhere in it.
+    assert_eq!(upgraded.len(), hwm_before.len(), "`.hwm` layout unchanged");
+    assert!(!String::from_utf8_lossy(&upgraded).contains(id.as_str()));
     drop(l);
     let l = TransparencyLogger::open(cfg(&path, 12, false)).unwrap();
     rotate_n(&l, &path, 1);
@@ -85,7 +91,6 @@ fn log_id_upgrade() {
     let opened = lines(&path);
     assert_eq!(event(&opened[0]), Some(rotation::EV_OPENED));
     assert_eq!(opened[0]["log_id"].as_str(), Some(id.as_str()), "rotation");
-    assert_eq!(upgraded.len(), hwm_before.len(), "`.hwm` layout unchanged");
     let hwm = std::fs::read(sibling(&path, "hwm")).unwrap();
     assert!(!String::from_utf8_lossy(&hwm).contains(id.as_str()));
     assert!(read_hwm(&path, b"", "test").is_some());
@@ -114,4 +119,27 @@ fn crash_S2() {
     assert_eq!(found.len(), 1, "never a second identified record");
     assert_eq!(found[0]["log_id"].as_str(), Some(id.as_str()));
     assert_eq!(lines(&path)[0]["log_id"].as_str(), Some(id.as_str()));
+}
+
+#[test]
+fn a_caller_cannot_append_an_audit_log_identified_record() {
+    // GIVEN: a log with its minted id
+    let dir = tempfile::tempdir().unwrap();
+    let path = log_path(&dir);
+    let l = TransparencyLogger::open(cfg(&path, 12, false)).unwrap();
+    let id = l.log_id().clone();
+    let before = all_records(&path).len();
+
+    // WHEN: a caller tries to name another id
+    let mut forged = serde_json::Map::new();
+    forged.insert("event".into(), EV_IDENTIFIED.into());
+    forged.insert("log_id".into(), "forged".into());
+    let refused = l.append_event(forged, &AuditEnvelope::gateway());
+
+    // THEN: it is refused, nothing is appended, and a reopen keeps the id
+    assert!(refused.is_err(), "the event is the logger's alone");
+    assert_eq!(all_records(&path).len(), before);
+    drop(l);
+    let again = TransparencyLogger::open(cfg(&path, 12, false)).unwrap();
+    assert_eq!(again.log_id(), &id);
 }
