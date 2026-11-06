@@ -261,15 +261,13 @@ impl Sink for Access {
 
     fn item(&mut self, at: &Place, item: &syn::Item) {
         if let syn::Item::Macro(mac) = item {
-            if mac.mac.path.is_ident("macro_rules") {
-                if !call_splices(&mac.mac).is_empty() {
-                    let name = mac
-                        .ident
-                        .as_ref()
-                        .map_or_else(String::new, ToString::to_string);
-                    self.splices
-                        .push((at.file.clone(), name, body_fingerprint(&mac.mac)));
-                }
+            if mac.mac.path.is_ident("macro_rules") && !call_splices(&mac.mac).is_empty() {
+                let name = mac
+                    .ident
+                    .as_ref()
+                    .map_or_else(String::new, ToString::to_string);
+                self.splices
+                    .push((at.file.clone(), name, body_fingerprint(&mac.mac)));
             }
             self.tokens(at, &mac.mac);
         }

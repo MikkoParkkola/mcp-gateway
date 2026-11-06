@@ -12,7 +12,10 @@ use super::*;
 /// other than `use`, `const` with a literal or path value and `fn`, any
 /// attribute but `doc`, and any macro is reported unsupported; one inline
 /// `#[cfg(test)]` module is skipped.
+// One fixture file holds every gate shape, so each expected list reads
+// against the whole file the checker walks; splitting it would hide that.
 #[test]
+#[allow(clippy::too_many_lines)]
 fn the_gate_check_refuses_each_ungated_shape() {
     let source = r"
         pub(crate) fn gated(firewall: &Firewall) {
@@ -202,7 +205,10 @@ pub(crate) fn judges(guard: Option<&Guard>) -> bool {
 /// a missing or extra attribute, an early return, a local module, a generic
 /// parameter or a cfg'd parameter are each refused. A module declaration on
 /// the way to the judge carrying a non-cfg attribute is refused too.
+// One table of mutated judges() bodies against the one real shape: splitting
+// it would hide that each case differs from the same source by one edit.
 #[test]
+#[allow(clippy::too_many_lines)]
 fn the_judges_check_refuses_each_other_shape() {
     assert_eq!(
         judges_check(REAL_JUDGES),
