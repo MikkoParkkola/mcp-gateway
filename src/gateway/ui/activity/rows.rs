@@ -24,12 +24,15 @@ pub(super) enum Kind {
     Call,
     Config,
     AdminAction,
+    /// A call an identity grant refused that has no invocation record of its
+    /// own (stub: never produced yet).
+    Refusal,
 }
 
 impl Kind {
     fn as_str(self) -> &'static str {
         match self {
-            Self::Call => "call",
+            Self::Call | Self::Refusal => "call",
             Self::Config => "config",
             Self::AdminAction => "admin_action",
         }
@@ -155,6 +158,7 @@ pub(super) fn row(line: &Line, secret: Option<&[u8]>) -> Option<Value> {
             copy(&mut row, e, &["action", "actor_id", "target_id"]);
             row.insert("outcome".into(), "change".into());
         }
+        Kind::Refusal => {}
         Kind::AdminAction => {
             copy(
                 &mut row,
@@ -190,7 +194,7 @@ impl Filter {
         }
         if let Some(server) = &self.server {
             let have = match kind {
-                Kind::Call => str_field(e, "server"),
+                Kind::Call | Kind::Refusal => str_field(e, "server"),
                 Kind::Config => str_field(e, "target_id"),
                 Kind::AdminAction => None,
             };
@@ -200,7 +204,7 @@ impl Filter {
         }
         if let Some(caller) = &self.caller {
             let have = match kind {
-                Kind::Call | Kind::AdminAction => who_account(),
+                Kind::Call | Kind::Refusal | Kind::AdminAction => who_account(),
                 Kind::Config => str_field(e, "actor_id"),
             };
             if have != Some(caller.as_str()) {

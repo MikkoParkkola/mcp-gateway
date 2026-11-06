@@ -99,7 +99,7 @@ pub(super) fn add_evidence(body: &mut Map<String, Value>, kind: Kind, e: &Value)
             body.insert("decision".into(), NOT_RECORDED.into());
             body.insert("reach".into(), NOT_RECORDED.into());
         }
-        Kind::AdminAction => {}
+        Kind::AdminAction | Kind::Refusal => {}
     }
 }
 
