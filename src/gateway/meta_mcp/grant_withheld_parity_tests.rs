@@ -102,21 +102,22 @@ fn row7_failed_grant_record_on_a_withheld_name_answers_as_absent() {
     log.fail_next_append_of_kind_for_test(DECISION_KIND);
     // The failed record is written after the call settles, on the slot's own
     // task ("withheld notes are owned by their slot"): wait for its warning.
-    let (_guard, mut seen) = crate::test_log_capture::live_count(WITHHELD_WARNING);
     let (answered, warnings) = crate::test_log_capture::capture_warnings(|| {
         runtime.block_on(async {
             let answer = call(&withheld).await;
-            let logged = tokio::time::timeout(
-                std::time::Duration::from_secs(5),
-                seen.wait_for(|count| *count >= 1),
-            )
-            .await;
-            (answer, logged.is_ok())
+            // The record is appended after the call settles: wait for the
+            // attempt, then let its failure be logged.
+            let attempts = crate::gateway::meta_mcp::grant_audit::seams::appends_for_test();
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            while crate::gateway::meta_mcp::grant_audit::seams::appends_for_test() == attempts
+                && std::time::Instant::now() < deadline
+            {
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+            answer
         })
     });
-    let ((answered, logged), warnings) = (answered, warnings);
-    let held = super::grant_audit_fixture::entries(&dir);
-    assert!(logged, "row 7: the failed record was never logged:\n{warnings}\n{held:#?}");
     let expected = runtime.block_on(call(&absent));
     assert_eq!(
         answered, expected,

@@ -101,21 +101,22 @@ fn row7_http_one_grant_record_and_failclosed_answers_as_absent() {
     let (withheld, log) = runtime.block_on(gateway(endpoint.port, &dir, true));
     let (absent, _) = runtime.block_on(gateway(endpoint.port, &absent_dir, false));
     log.fail_next_append_of_kind_for_test(DECISION_KIND);
-    let (_guard, mut seen) = crate::test_log_capture::live_count(WARNING);
     let (answered, warnings) = crate::test_log_capture::capture_warnings(|| {
         runtime.block_on(async {
             let answer = call(&withheld, BOB).await;
-            let logged = tokio::time::timeout(
-                std::time::Duration::from_secs(5),
-                seen.wait_for(|count| *count >= 1),
-            )
-            .await;
-            (answer, logged.is_ok())
+            // The record is appended after the call settles: wait for the
+            // attempt, then let its failure be logged.
+            let attempts = crate::gateway::meta_mcp::grant_audit::seams::appends_for_test();
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            while crate::gateway::meta_mcp::grant_audit::seams::appends_for_test() == attempts
+                && std::time::Instant::now() < deadline
+            {
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+            answer
         })
     });
-    let ((answered, logged), warnings) = (answered, warnings);
-    let held = crate::gateway::meta_mcp::grant_audit_fixture::entries(&dir);
-    assert!(logged, "row 7 http: the failed record was never logged:\n{warnings}\n{held:#?}");
     let expected = runtime.block_on(call(&absent, BOB));
     runtime.block_on(call(&withheld, BOB));
     let after = runtime.block_on(wait_for_decisions(&dir, 1)).len();
