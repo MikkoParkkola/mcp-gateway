@@ -292,13 +292,27 @@ pub(super) fn recover(
         }
     }
     if hw.is_none() && state.counter > 0 {
-        mark_tail(path, config, &state)?;
+        write_mark(
+            path,
+            config,
+            state.counter,
+            &state.last_entry_hash,
+            state.seg.seq,
+            true,
+        )?;
     }
     // After the first mark, so a crash before it still leaves the genesis-only
     // log the verifier accepts; the mark then moves to the identified record.
     if minted || unfinished {
         record_identity(&mut state, config, &id)?;
-        mark_tail(path, config, &state)?;
+        write_mark(
+            path,
+            config,
+            state.counter,
+            &state.last_entry_hash,
+            state.seg.seq,
+            true,
+        )?;
     }
     state.seg.id = file_id(&state.file)?;
     state.seg.sealed = segments::list_segments(path)?.len();
@@ -306,15 +320,24 @@ pub(super) fn recover(
     Ok((state, id))
 }
 
-/// Write `.hwm` at the tail `state` holds.
-fn mark_tail(path: &Path, config: &TransparencyLogConfig, state: &Recovered) -> io::Result<()> {
+/// Write `.hwm` at a tail: the last record's `counter` and `entry_hash`, in
+/// segment `segment_seq`. The one mark writer: recovery propagates its
+/// error, an append only warns (its record is already written).
+pub(super) fn write_mark(
+    path: &Path,
+    config: &TransparencyLogConfig,
+    counter: u64,
+    entry_hash: &str,
+    segment_seq: u64,
+    sync: bool,
+) -> io::Result<()> {
     let mark = HighWater {
-        counter: state.counter,
-        entry_hash: state.last_entry_hash.clone(),
-        segment_seq: state.seg.seq,
+        counter,
+        entry_hash: entry_hash.to_string(),
+        segment_seq,
     };
     let bytes = segments::encode_hwm(&mark, config.shared_secret.as_bytes(), &config.key_id)?;
-    segments::write_hwm(path, &bytes, true)
+    segments::write_hwm(path, &bytes, sync)
 }
 
 /// Chain the one record that names a freshly minted id onto the tail.

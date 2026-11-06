@@ -10,7 +10,7 @@ use serde_json::{Map, Value};
 
 use super::rotation::{
     EV_EXPIRED, EV_SEALED, FileId, MAX_RECORD_BYTES, OversizedRecord, file_id, housekeeping,
-    now_secs, open_after_seal, path_id, record_head, recover, seal_of,
+    now_secs, open_after_seal, path_id, record_head, recover, seal_of, write_mark,
 };
 use super::segments::{self, HighWater, Segment};
 use super::{Inner, TransparencyLogger, chain_line, read_last_nonempty_line};
@@ -456,17 +456,14 @@ impl TransparencyLogger {
         self.hooks
             .created_by
             .witness("audit log high-water mark", path);
-        let mark = HighWater {
-            counter: inner.counter,
-            entry_hash: inner.last_entry_hash.clone(),
-            segment_seq: inner.seg.seq,
-        };
-        let written = segments::encode_hwm(
-            &mark,
-            self.config.shared_secret.as_bytes(),
-            &self.config.key_id,
-        )
-        .and_then(|bytes| segments::write_hwm(path, &bytes, sync));
+        let written = write_mark(
+            path,
+            &self.config,
+            inner.counter,
+            &inner.last_entry_hash,
+            inner.seg.seq,
+            sync,
+        );
         if let Err(e) = written {
             tracing::warn!(error = %e, "audit log: high-water mark not written");
         }
