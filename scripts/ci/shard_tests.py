@@ -179,6 +179,28 @@ def cargo(
     return p.wait(), lines
 
 
+def leftovers(tmp: str) -> dict[str, str]:
+    """Every entry left in a shard's TMPDIR, by name, with its path. An entry a test binary left in
+    its own BY_BINARY/<binary> folder is named `<binary>/<entry>`; an empty binary folder is no
+    leftover. The runner itself is not one. Everything else at the top is checked as it is."""
+    out = {}
+    for name in os.listdir(tmp):
+        path = os.path.join(tmp, name)
+        if name == RUNNER_NAME:
+            continue
+        if name == BY_BINARY and os.path.isdir(path) and not os.path.islink(path):
+            for binary in os.listdir(path):
+                folder = os.path.join(path, binary)
+                if not os.path.isdir(folder) or os.path.islink(folder):
+                    out[f"{BY_BINARY}/{binary}"] = folder
+                    continue
+                for entry in os.listdir(folder):
+                    out[f"{binary}/{entry}"] = os.path.join(folder, entry)
+            continue
+        out[name] = path
+    return out
+
+
 def unexpected(entries: dict[str, list[str]],
                known: list[tuple[str, str, int, str]] = KNOWN_LEFTOVERS) -> list[str]:
     """The entries `known` does not allow. An entry is allowed when its name
@@ -190,7 +212,7 @@ def unexpected(entries: dict[str, list[str]],
         files = entries[name]
         for pattern, holds, most, _why in known:
             key = (pattern, holds)
-            if (re.fullmatch(pattern, name) and files
+            if (re.fullmatch(pattern, name.rsplit("/", 1)[-1]) and files
                     and all(re.fullmatch(holds, f) for f in files)
                     and used.get(key, 0) < most):
                 used[key] = used.get(key, 0) + 1
@@ -247,27 +269,40 @@ RUNNER_NAME = ".shard-runner.sh"
 BY_BINARY = "by-binary"
 
 
+# One shared TMPDIR cannot say which test binary left an entry. Every test binary starts through
+# this runner instead, with TMPDIR set to BY_BINARY/<target> (cargo's `-<hash>` suffix dropped), so
+# a leftover is reported under the binary that left it. A gateway a test spawns inherits that TMPDIR.
+RUNNER_SH = """#!/bin/sh
+b=${1##*/}
+b=${b%-*}
+d="$TMPDIR/by-binary/$b"
+mkdir -p "$d" || exit 1
+TMPDIR=$d exec "$@"
+"""
+
+
 def write_runner(tmp: str) -> str:
-    """The cargo runner every test binary starts through: stub, runs the binary as is."""
+    """Write the cargo runner into `tmp` and return its path."""
     path = os.path.join(tmp, RUNNER_NAME)
     with open(path, "w") as f:
-        f.write('#!/bin/sh\nexec "$@"\n')
+        f.write(RUNNER_SH.replace("by-binary", BY_BINARY))
     os.chmod(path, 0o755)
     return path
 
 
 def runner_config(path: str) -> list[str]:
-    """Cargo arguments that start each test binary through `path`: stub, none."""
-    return []
+    """Cargo arguments that start each test binary, on any host triple, through `path`."""
+    return ["--config", f"target.'cfg(all())'.runner=['{path}']"]
 
 
 def run_steps(os_kind: str, shard: str, program: tuple[str, ...] = ("cargo",)) -> list[str]:
     failed = []
     tmp = tempfile.mkdtemp(prefix="shard-tmp-") if os_kind in TMP_GUARDED else None
     env = {**os.environ, "TMPDIR": tmp} if tmp else None
+    runner = runner_config(write_runner(tmp)) if tmp else []
     for step, cargo_args, test_args, floor in SHARDS[os_kind][shard]:
         rc, lines = cargo(
-            [*BASE, *cargo_args, "--", *test_args, *OUTPUT.get(os_kind, []), *SKIPS[os_kind]],
+            [*runner, *BASE, *cargo_args, "--", *test_args, *OUTPUT.get(os_kind, []), *SKIPS[os_kind]],
             program,
             env,
         )
@@ -285,16 +320,15 @@ def run_steps(os_kind: str, shard: str, program: tuple[str, ...] = ("cargo",)) -
         if rc != 0:
             failed.append(f"examples: cargo build exited {rc}")
     if tmp:
-        names = os.listdir(tmp)
-        bad = unexpected({name: files_in(os.path.join(tmp, name)) for name in names})
+        paths = leftovers(tmp)
+        bad = unexpected({name: files_in(path) for name, path in paths.items()})
         # Tolerated entries are printed too: which ones count against the
         # allowance is only sort order, so the cause can sit in either list.
-        for name in sorted(set(names) - set(bad)):
+        for name in sorted(set(paths) - set(bad)):
             print(f"::notice::{os_kind} {shard} tolerated in TMPDIR: {name} "
-                  f"({contents(os.path.join(tmp, name))})")
+                  f"({contents(paths[name])})")
         # A failure lists every file: the writer may be named by the last one.
-        failed += [f"left in TMPDIR: {name} ({contents(os.path.join(tmp, name), None)})"
-                   for name in bad]
+        failed += [f"left in TMPDIR: {name} ({contents(paths[name], None)})" for name in bad]
         shutil.rmtree(tmp, ignore_errors=True)
     return failed
 
