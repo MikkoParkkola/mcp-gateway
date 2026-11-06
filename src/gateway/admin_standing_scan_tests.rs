@@ -17,14 +17,8 @@ const ADMIN_READERS: &[(&str, &str, usize, &str)] = &[
     (
         "resolve_role(",
         "src/control_plane/role_mapping.rs",
-        11,
+        10,
         "the role mapping itself",
-    ),
-    (
-        "grants_admin(",
-        "src/control_plane/role_mapping.rs",
-        1,
-        "its definition",
     ),
     (
         ".admin",
@@ -208,12 +202,6 @@ const ADMIN_READERS: &[(&str, &str, usize, &str)] = &[
         "Gateway: set from ui::is_admin",
     ),
     (
-        ".admin",
-        "src/key_server/handler.rs",
-        1,
-        "a doc comment naming key_server.admin",
-    ),
-    (
         "CallerStanding::Admin",
         "src/gateway/meta_mcp/handlers.rs",
         1,
@@ -269,12 +257,6 @@ const ADMIN_READERS: &[(&str, &str, usize, &str)] = &[
     ),
     (
         "is_gateway_admin",
-        "src/gateway/auth_caller.rs",
-        1,
-        "its definition: admin_standing() is Gateway",
-    ),
-    (
-        "is_gateway_admin",
         "src/gateway/router/backend_handlers/costs.rs",
         1,
         "Gateway: /api/costs",
@@ -306,7 +288,7 @@ const ADMIN_READERS: &[(&str, &str, usize, &str)] = &[
     (
         "admin_standing",
         "src/gateway/auth_caller.rs",
-        4,
+        2,
         "the accessor and is_gateway_admin",
     ),
     (
@@ -314,18 +296,6 @@ const ADMIN_READERS: &[(&str, &str, usize, &str)] = &[
         "src/gateway/auth_resolved.rs",
         2,
         "InScope: the load warning; Gateway: session liveness",
-    ),
-    (
-        "admin_standing",
-        "src/gateway/authz.rs",
-        1,
-        "the rule itself",
-    ),
-    (
-        "admin_standing",
-        "src/gateway/mod.rs",
-        1,
-        "this scan's module name",
     ),
     (
         "admin_standing",
@@ -414,7 +384,7 @@ const ADMIN_READERS: &[(&str, &str, usize, &str)] = &[
     (
         "is_admin(",
         "src/gateway/ui/mod.rs",
-        2,
+        1,
         "its definition and the auth facts",
     ),
     (
@@ -428,12 +398,6 @@ const ADMIN_READERS: &[(&str, &str, usize, &str)] = &[
         "src/gateway/ui/stream/mod.rs",
         2,
         "Gateway: the stream's reload kind and full view",
-    ),
-    (
-        "is_admin(",
-        "src/security/data_flow.rs",
-        2,
-        "unrelated: data-flow classifier test names",
     ),
     (
         "::for_ui(",
@@ -458,6 +422,12 @@ const ADMIN_READERS: &[(&str, &str, usize, &str)] = &[
         "src/gateway/ui/status.rs",
         1,
         "the status scope beside the Gateway check",
+    ),
+    (
+        "{ admin, .. }",
+        "src/gateway/meta_mcp/boundary_pins/key_field_rows.rs",
+        1,
+        "none: an exhaustive field list on ApiKeyConfig::default(), the value discarded",
     ),
 ];
 
