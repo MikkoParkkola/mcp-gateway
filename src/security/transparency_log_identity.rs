@@ -180,7 +180,7 @@ pub(super) fn predecessor_evidence(
 /// The file cannot be read.
 pub(super) fn predecessor_warning(
     path: &Path,
-    checked: Option<&str>,
+    checked: Option<&Value>,
 ) -> io::Result<Option<String>> {
     let head = match segments::read_first_line(path) {
         Ok(line) => line.and_then(|l| serde_json::from_str::<Value>(&l).ok()),
@@ -195,6 +195,7 @@ pub(super) fn predecessor_warning(
         return Ok(None);
     };
     let read = head.as_ref().and_then(|v| v.get("entry_hash")?.as_str());
+    let checked = checked.and_then(|v| v.get("entry_hash")?.as_str());
     let how = if checked.is_some() && read == checked {
         ""
     } else {

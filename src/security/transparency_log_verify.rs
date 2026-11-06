@@ -315,10 +315,10 @@ struct Stream<'a> {
     pin_counter: Option<u64>,
     at_pin: Option<String>,
     boundary: Option<(u64, String)>,
-    /// The `entry_hash` of the oldest file's first record once it passed the
+    /// The oldest file's first record, as parsed, once it passed the
     /// per-entry checks: the predecessor evidence is authenticated only on
     /// that record.
-    head_checked: Option<String>,
+    head_checked: Option<Value>,
 }
 
 type Verdict = Result<(), (Option<u64>, String)>;
@@ -376,7 +376,7 @@ impl<'a> Stream<'a> {
         // records) still names the log it replaced.
         if let Some((_, oldest)) = files.first()
             && let Some(warning) =
-                super::identity::predecessor_warning(oldest, self.head_checked.as_deref())?
+                super::identity::predecessor_warning(oldest, self.head_checked.as_ref())?
         {
             self.result.warnings.push(warning);
         }
@@ -444,7 +444,7 @@ impl<'a> Stream<'a> {
                     return Ok(Err(e));
                 }
                 if index == 0 && ln == 0 {
-                    self.head_checked = field_str(&entry, "entry_hash").map(str::to_string);
+                    self.head_checked = Some(entry.clone());
                 }
                 match field_str(&entry, "event") {
                     Some(EV_SEALED) => {

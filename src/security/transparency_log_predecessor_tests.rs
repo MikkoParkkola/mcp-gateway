@@ -210,17 +210,14 @@ fn the_predecessor_warning_is_verified_only_for_the_checked_record() {
     std::fs::remove_file(sibling(&path, "hwm")).unwrap();
     append(&l, 1);
     let head = lines(&path).remove(0);
-    let checked = head["entry_hash"].as_str().unwrap();
+    let mut another = head.clone();
+    another["entry_hash"] = "sha256:another".into();
     assert!(head.get(PREDECESSOR).is_some(), "{head}");
 
     // WHEN: the warning is read for the checked record, for another one (the
     // bytes changed between the two reads), and for none
     let warn = |c| identity::predecessor_warning(&path, c).unwrap().unwrap();
-    let (same, other, none) = (
-        warn(Some(checked)),
-        warn(Some("sha256:another")),
-        warn(None),
-    );
+    let (same, other, none) = (warn(Some(&head)), warn(Some(&another)), warn(None));
 
     // THEN: only the checked record's warning reads as verified
     assert!(!same.contains("unverified"), "{same}");
