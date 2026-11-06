@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! The verified identity a valid OIDC token yields, and everything that
 //! touches its fields: the checked constructor every production source goes
-//! through (MIK-8286), the stable actor id, and the read-only accessors.
+//! through, the stable actor id, and the read-only accessors.
 //! Re-exported as `crate::key_server::oidc::VerifiedIdentity`.
 
 use serde::Serialize;
@@ -42,8 +42,8 @@ pub struct VerifiedIdentity {
 }
 
 impl VerifiedIdentity {
-    /// The only way production code builds a caller's verified identity
-    /// (MIK-8286): `None` when the issuer or the subject is empty, since such
+    /// The only way production code builds a caller's verified identity:
+    /// `None` when the issuer or the subject is empty, since such
     /// an identity names nobody and its actor id would merge every such
     /// caller at the issuer. It checks only that the identity names someone
     /// (a non-empty, non-blank issuer and subject): verifying the token the
@@ -68,8 +68,8 @@ impl VerifiedIdentity {
     ///
     /// A naive `format!("oidc:{issuer}:{subject}")` collides when an issuer
     /// contains `:` — e.g. issuer `https://idp/a` + subject `b:c` vs issuer
-    /// `https://idp/a:b` + subject `c` both render `oidc:https://idp/a:b:c`
-    /// (MIK-6702 CP.ID.1). Length-prefixing each component makes the boundary
+    /// `https://idp/a:b` + subject `c` both render `oidc:https://idp/a:b:c`.
+    /// Length-prefixing each component makes the boundary
     /// unambiguous, so distinct (issuer, subject) pairs always map to distinct
     /// ids. Not a role-escalation path (roles come from the verified identity,
     /// not the id), but it prevents audit / user-identity row collisions.

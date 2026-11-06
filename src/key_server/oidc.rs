@@ -132,7 +132,7 @@ fn built(client: reqwest::Result<reqwest::Client>) -> Option<reqwest::Client> {
 }
 
 // The verified identity and everything that touches its fields: `checked`,
-// `stable_actor_id` and the accessors, in one leaf module (MIK-9207 VI.1).
+// `stable_actor_id` and the accessors, in one leaf module.
 mod verified;
 pub use verified::VerifiedIdentity;
 
