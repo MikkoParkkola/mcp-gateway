@@ -63,7 +63,7 @@ fn every_field_path_loads_under_the_strict_key_check() {
     for field in FIELDS {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("gateway.yaml");
-        crate::gateway::test_helpers::write_owner_only(&path, &file_with(field.id)).expect("write");
+        crate::gateway::test_helpers::write_owner_only(&path, file_with(field.id)).expect("write");
         if let Err(e) = Config::load(Some(&path)) {
             panic!("{}: {e:#}", field.id);
         }

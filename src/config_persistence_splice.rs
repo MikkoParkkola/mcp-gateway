@@ -74,7 +74,7 @@ pub(super) fn with_backend_edited(
     // writes either, so a lower count means an alias was expanded or an
     // anchor dropped, which detaches a shared value though the values
     // compare equal. A removed entry may take its own with it.
-    let removed = config.backends.get(name).is_none();
+    let removed = !config.backends.contains_key(name);
     if !removed
         && crate::yaml::anchors_and_aliases(original)? != crate::yaml::anchors_and_aliases(&edited)?
     {

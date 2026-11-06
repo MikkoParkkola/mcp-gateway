@@ -13,6 +13,8 @@
     expect(dead_code, reason = "first caller: the settings diff route (U8 PR c)")
 )]
 
+use std::fmt::Write as _;
+
 use crate::config::UnreadConfig;
 use crate::config_persistence::keyedit::{
     self, Change, ComputeRefusal, FieldPath, GiveUp, Segment,
@@ -57,13 +59,15 @@ impl UnifiedDiff {
     pub(crate) fn render(&self) -> String {
         let mut out = String::from("--- a/gateway.yaml\n+++ b/gateway.yaml\n");
         for hunk in &self.hunks {
-            out.push_str(&format!(
-                "@@ -{},{} +{},{} @@\n",
+            // Writing to a String cannot fail.
+            let _ = writeln!(
+                out,
+                "@@ -{},{} +{},{} @@",
                 hunk.old_start,
                 hunk.old.len(),
                 hunk.new_start,
                 hunk.new.len()
-            ));
+            );
             for line in &hunk.old {
                 out.push('-');
                 out.push_str(line);
@@ -270,7 +274,7 @@ fn resolve(edit: &PreviewEdit, doc: &Value) -> Result<Vec<(FieldPath, Change)>, 
                     let known = doc
                         .get("backends")
                         .and_then(Value::as_mapping)
-                        .is_some_and(|m| m.get(&Value::from(name.as_str())).is_some());
+                        .is_some_and(|m| m.get(Value::from(name.as_str())).is_some());
                     if !known {
                         return Err(bad(format!("gateway.yaml has no backend {name:?}")));
                     }

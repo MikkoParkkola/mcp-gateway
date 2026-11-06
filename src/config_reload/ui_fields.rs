@@ -27,6 +27,13 @@ pub(crate) enum Seg {
 /// What a plain field holds. A secret field has none: it is only ever set
 /// to a store reference, never to a value sent to it.
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[cfg_attr(
+    all(test, not(feature = "cost-governance")),
+    expect(
+        dead_code,
+        reason = "the integer, number and word fields are all cost governance fields"
+    )
+)]
 pub(crate) enum ValueKind {
     Bool,
     Int { min: i64, max: i64 },
@@ -58,6 +65,7 @@ impl FieldSpec {
     }
 }
 
+#[cfg(feature = "cost-governance")]
 const ALERT_ACTIONS: &[&str] = &["log", "notify", "block"];
 
 /// Every setting the UI may change, in the order an edit applies them.
@@ -211,7 +219,7 @@ pub(crate) fn checked(edit: &PreviewEdit) -> Result<PreviewEdit, EditRefused> {
             return Err(bad_param("named twice"));
         }
         let value = match (value, spec.kind) {
-            (PreviewValue::Secret, None) | (PreviewValue::Remove, None) => value.clone(),
+            (PreviewValue::Secret | PreviewValue::Remove, None) => value.clone(),
             (PreviewValue::Set(_), None) | (PreviewValue::Secret, Some(_)) => {
                 return Err(EditRefused::WrongKind(*id));
             }

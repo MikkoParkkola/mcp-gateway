@@ -776,7 +776,9 @@ pub(crate) fn expected_text(original: &str, changes: &[(FieldPath, Change)]) -> 
 
 #[path = "config_persistence_keyedit_shape.rs"]
 mod shape;
-pub(crate) use shape::{Hunk, NewLine};
+pub(crate) use shape::Hunk;
+#[cfg(test)]
+pub(crate) use shape::NewLine;
 
 #[path = "config_persistence_keyedit_revoke.rs"]
 mod revoke;

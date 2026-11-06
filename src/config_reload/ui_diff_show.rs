@@ -142,8 +142,7 @@ fn admit(
     if !(lead.is_empty() || lead.trim_end_matches([' ', '\t']) == "-") {
         return None;
     }
-    let changed = changes.iter().any(|(p, _)| same_path(&keyed.path, &p.0));
-    if changed {
+    if changes.iter().any(|(p, _)| same_path(&keyed.path, &p.0)) {
         // A changed field: its value must lie on this line, alone.
         if keyed.end > at + line.len() || !on_line(&keyed.bytes) {
             return None;
