@@ -259,3 +259,30 @@ async fn a_call_cancelled_during_its_invocation_append_is_one_recorded_decision(
     assert_eq!(held[0]["invocation_recorded"], json!(true), "{held:#?}");
     assert_eq!(invocations(&dir).len(), 1, "the append survived the cancel");
 }
+
+/// An invocation append that outlives its caller's timeout and then lands:
+/// the decision, appended after it, reads the landed trace id, so the call
+/// is one row. The withheld write is parked until the append has landed.
+#[tokio::test]
+async fn an_append_that_outlives_its_caller_marks_the_decision_recorded() {
+    let (endpoint, dir) = (
+        Endpoint::start(false).await,
+        Arc::new(tempfile::tempdir().unwrap()),
+    );
+    let meta = gateway(&endpoint, vec![], Some(&dir), AuditFailurePolicy::BestEffort);
+    let log = meta.transparency_logger.clone().expect("the gateway logs");
+    let gate = log.stall_next_write_for_test(std::time::Duration::from_millis(100));
+    let hold = super::grant_audit::seams::hold_next_best_effort_write_for_test();
+
+    let _answered = call(&meta, &api_key("alice"), "gateway_invoke", invoke_args()).await;
+    let parked = tokio::time::timeout(std::time::Duration::from_secs(5), hold.held()).await;
+    assert!(parked.is_ok(), "premise: the withheld write reached its hold");
+    assert!(invocations(&dir).is_empty(), "premise: the append is still stuck");
+    log.release_and_drain(gate).await;
+    hold.release();
+
+    let held = wait_for_decisions(&dir, 1).await;
+    assert_eq!(held.len(), 1, "{held:#?}");
+    assert_eq!(held[0]["invocation_recorded"], json!(true), "{held:#?}");
+    assert_eq!(invocations(&dir).len(), 1, "the late append landed");
+}
