@@ -537,11 +537,26 @@ async fn listen_request_params_are_a_read() {
     }
 }
 
+/// The standalone `tenant_read` records in `log_dir` saying `blocked`.
+fn blocked_reads(log_dir: &tempfile::TempDir) -> usize {
+    log_lines(log_dir)
+        .iter()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .filter(|r| {
+            record_field(r, "event") == Some("tenant_read")
+                && record_field(r, "cross_tenant_read") == Some("blocked")
+        })
+        .count()
+}
+
 /// Firewall off, `block`: after an A read, a stream item naming B and a
 /// webhook event naming B are withheld from the GET stream, each with a
 /// standalone `tenant_read` record saying `blocked`; with the mode `off`
-/// (the control) both arrive and nothing is recorded as a verdict. A pin that the read verdict runs on its
-/// own switch on the stream producers too.
+/// (the control) both arrive and no verdict is recorded. No quiet window:
+/// the block waits for its two records, then proves the B frames absent by
+/// an A frame broadcast after them arriving with no B before it (one
+/// subscriber's frames keep their order); the control's zero is read after
+/// the rejection audit's barrier.
 #[tokio::test]
 async fn stream_items_are_judged_with_the_firewall_off() {
     let who = caller();
@@ -550,37 +565,54 @@ async fn stream_items_are_judged_with_the_firewall_off() {
         let router = create_router(Arc::clone(&state));
         let hooks = webhook_routes(&state);
         let mut stream = Stream::open(&router).await;
-        let _ = stream.drain_for_absence(QUIET).await;
 
         let (a, _, body) = send(&router, call_with(&who, true, None, 0, &reading(A))).await;
         assert_eq!(a, Delivered, "{body}");
-        let arrival = Arrival::when(mode == CrossTenantReads::Off);
         state.multiplexer.broadcast(names(B));
-        let got = expect(&mut stream, B, arrival).await;
-        assert_eq!(
-            mentions(&got, B),
-            arrival == Arrival::Delivered,
-            "{mode:?}: a B stream item after an A read: {got:?}"
-        );
         post_webhook(&hooks, &json!({ "kind": "row-78", "customer_id": B })).await;
-        let got = expect(&mut stream, "row-78", arrival).await;
+
+        if mode == CrossTenantReads::Off {
+            let got = stream
+                .drain_until(|e| mentions(e, B) && mentions(e, "row-78"))
+                .await;
+            assert!(
+                mentions(&got, B) && mentions(&got, "row-78"),
+                "control: off delivers both B frames: {got:?}"
+            );
+            state
+                .meta_mcp
+                .rejection_audit()
+                .settled(crate::gateway::outbound::REJECTION_AUDIT_PERMITS as u32)
+                .await;
+            assert_eq!(
+                blocked_reads(&log_dir),
+                0,
+                "control: off records no verdict"
+            );
+            continue;
+        }
+
+        let recorded = crate::test_wait::wait_until(HANG_BOUND, || {
+            let n = blocked_reads(&log_dir);
+            async move {
+                if n == 2 {
+                    std::ops::ControlFlow::Break(n)
+                } else {
+                    std::ops::ControlFlow::Continue(format!("{n} blocked records"))
+                }
+            }
+        })
+        .await;
         assert_eq!(
-            mentions(&got, "row-78"),
-            arrival == Arrival::Delivered,
-            "{mode:?}: a B webhook event after an A read: {got:?}"
+            recorded,
+            Ok(2),
+            "a standalone tenant_read record for each withheld B frame"
         );
-        let blocked = log_lines(&log_dir)
-            .iter()
-            .filter_map(|line| serde_json::from_str::<Value>(line).ok())
-            .filter(|r| {
-                record_field(r, "event") == Some("tenant_read")
-                    && record_field(r, "cross_tenant_read") == Some("blocked")
-            })
-            .count();
-        let expected = if mode == CrossTenantReads::Off { 0 } else { 2 };
-        assert_eq!(
-            blocked, expected,
-            "{mode:?}: standalone tenant_read records saying blocked"
+        state.multiplexer.broadcast(names(A));
+        let got = stream.drain_until(|e| mentions(e, A)).await;
+        assert!(
+            !mentions(&got, B) && !mentions(&got, "row-78"),
+            "a B frame reached an A reader ahead of the later A frame: {got:?}"
         );
     }
 }
