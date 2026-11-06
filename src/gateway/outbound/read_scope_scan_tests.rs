@@ -158,7 +158,9 @@ struct Entries {
 /// Whether `ty` is a type an exposed `const` may have: a primitive number,
 /// `bool`, `char` or `&str`. A function pointer would export an ungated way
 /// in under a name no entry check sees.
-fn plain_value(ty: &syn::Type) -> bool {
+/// A primitive name the file imports (`use ..::Ptr as usize;`), or any name
+/// under a glob import, may stand for anything, so it is not plain.
+fn plain_value(ty: &syn::Type, taken: &std::collections::HashSet<String>) -> bool {
     const PRIMITIVES: [&str; 16] = [
         "i8", "i16", "i32", "i64", "i128", "isize", "u8", "u16", "u32", "u64", "u128", "usize",
         "f32", "f64", "bool", "char",
@@ -169,11 +171,15 @@ fn plain_value(ty: &syn::Type) -> bool {
                 && p.path.segments.len() == 1
                 && p.path.segments[0].arguments.is_none()
                 && PRIMITIVES.contains(&plain(&p.path.segments[0].ident).as_str())
+                && !taken.contains(&plain(&p.path.segments[0].ident))
+                && !taken.contains("*")
         }
         syn::Type::Reference(r) => {
             r.mutability.is_none()
                 && matches!(&*r.elem, syn::Type::Path(p) if p.qself.is_none()
                     && p.path.is_ident("str"))
+                && !taken.contains("str")
+                && !taken.contains("*")
         }
         _ => false,
     }
@@ -236,7 +242,8 @@ impl Entries {
             return;
         }
         let mut inside = Inside::default();
-        syn::visit::Visit::visit_block(&mut inside, &f.block);
+        // The whole item: a macro in a signature (`fn f(_: ty!())`) counts too.
+        syn::visit::Visit::visit_item_fn(&mut inside, f);
         if inside.macros > 0 {
             self.unsupported.push(format!("a macro in {name}"));
             return;
@@ -284,10 +291,16 @@ fn entries(file: &syn::File, found: &mut Entries) {
             syn::Item::Use(u) => {
                 (!doc_only(&u.attrs)).then(|| "an attribute on a `use`".to_owned())
             }
-            syn::Item::Const(c) => (!doc_only(&c.attrs)
-                || !matches!(*c.expr, syn::Expr::Lit(_) | syn::Expr::Path(_))
-                || (!matches!(c.vis, syn::Visibility::Inherited) && !plain_value(&c.ty)))
-            .then(|| format!("const {}", name(&c.ident))),
+            syn::Item::Const(c) => {
+                let mut inside = Inside::default();
+                syn::visit::Visit::visit_item_const(&mut inside, c);
+                (!doc_only(&c.attrs)
+                    || inside.macros > 0
+                    || !matches!(*c.expr, syn::Expr::Lit(_) | syn::Expr::Path(_))
+                    || (!matches!(c.vis, syn::Visibility::Inherited)
+                        && !plain_value(&c.ty, &found.taken)))
+                .then(|| format!("const {}", name(&c.ident)))
+            }
             syn::Item::Mod(m) if m.content.is_some() && cfg_test_only(&m.attrs) => {
                 test_modules += 1;
                 None
@@ -508,6 +521,26 @@ fn the_gate_check_refuses_each_ungated_shape() {
         ],
         "each item the check does not accept is reported; the cfg(test) module is skipped"
     );
+    let disguised = syn::parse_file(
+        r"
+        use crate::elsewhere::Ptr as usize;
+        pub(crate) const SNEAK: usize = unchecked;
+        fn helper(_: ty!()) {}
+        const WIDE: [u8; len!()] = BYTES;
+    ",
+    )
+    .expect("the fixture parses");
+    let mut found = Entries {
+        taken: taken_names(&disguised.items),
+        ..Entries::default()
+    };
+    entries(&disguised, &mut found);
+    found.unsupported.sort();
+    assert_eq!(
+        found.unsupported,
+        ["a macro in helper", "const SNEAK", "const WIDE"],
+        "a primitive name the file imports is not plain; a macro outside a body is still a macro"
+    );
 }
 
 /// Whether `expr` is the plain path `segs`, every segment unrawed.
@@ -585,6 +618,27 @@ fn asks_the_gate(tail: &syn::Expr) -> bool {
         && path_is(&call.args[0], &[p.as_str()])
 }
 
+/// Whether `ty` is exactly `Option<&Guard>`: a guard of another type could
+/// answer `is_some_and` without asking the gate.
+fn option_of_guard_ref(ty: &syn::Type) -> bool {
+    let syn::Type::Path(option) = ty else {
+        return false;
+    };
+    let [segment] = option.path.segments.iter().collect::<Vec<_>>()[..] else {
+        return false;
+    };
+    let syn::PathArguments::AngleBracketed(args) = &segment.arguments else {
+        return false;
+    };
+    option.qself.is_none()
+        && plain(&segment.ident) == "Option"
+        && args.args.len() == 1
+        && matches!(&args.args[0], syn::GenericArgument::Type(syn::Type::Reference(r))
+            if r.mutability.is_none()
+                && r.lifetime.is_none()
+                && matches!(&*r.elem, syn::Type::Path(g) if g.qself.is_none() && g.path.is_ident("Guard")))
+}
+
 /// Whether `source` holds `outbound::judges` in its one accepted shape: doc
 /// comments only, no generics, one parameter `guard`, and a body of exactly
 /// the firewall block asking the gate and the no-firewall block answering
@@ -603,7 +657,8 @@ fn judges_check(source: &str) -> Result<(), String> {
     let one_guard = sig.inputs.len() == 1
         && matches!(&sig.inputs[0], syn::FnArg::Typed(t) if t.attrs.is_empty()
             && matches!(&*t.pat, syn::Pat::Ident(p) if plain(&p.ident) == "guard"
-                && p.subpat.is_none() && p.by_ref.is_none() && p.mutability.is_none()));
+                && p.subpat.is_none() && p.by_ref.is_none() && p.mutability.is_none())
+            && option_of_guard_ref(&t.ty));
     if !doc_only(&f.attrs)
         || !sig.generics.params.is_empty()
         || sig.generics.where_clause.is_some()
@@ -656,10 +711,9 @@ fn chain_check(chain: &[(&str, &str)]) -> Result<(), String> {
             return Err(format!("mod {module} is not declared once"));
         };
         if decl.content.is_some()
-            || !decl
-                .attrs
-                .iter()
-                .all(|a| a.path().is_ident("doc") || a.path().is_ident("cfg"))
+            || !decl.attrs.iter().all(|a| {
+                a.path().is_ident("doc") || firewall_cfg(std::slice::from_ref(a)) == Some(true)
+            })
         {
             return Err(format!("mod {module} carries another attribute"));
         }
@@ -741,6 +795,11 @@ fn the_judges_check_refuses_each_other_shape() {
             "fn judges(guard",
             "fn judges(#[cfg(test)] guard",
         ),
+        (
+            "guard_type",
+            "guard: Option<&Guard>",
+            "guard: Option<&Custom>",
+        ),
     ] {
         assert_eq!(
             REAL_JUDGES.matches(from).count(),
@@ -770,5 +829,10 @@ fn the_judges_check_refuses_each_other_shape() {
     assert!(
         chain_check(&swapped).is_err(),
         "an inline `mod judge` standing in for the checked file is refused"
+    );
+    swapped[2].0 = "#[cfg(any())]\nmod judge;\n";
+    assert!(
+        chain_check(&swapped).is_err(),
+        "a cfg other than the firewall feature is refused"
     );
 }
