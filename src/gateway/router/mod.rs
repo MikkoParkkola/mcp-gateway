@@ -361,6 +361,8 @@ mod stored_replay_liveness_tests;
 /// A UI write's admin record outlives a client cancel with its handler.
 #[cfg(all(test, feature = "webui"))]
 mod ui_audit_cancel_tests;
+#[cfg(all(test, feature = "webui"))]
+mod ui_owner_tests;
 #[cfg(test)]
 mod webhook_mount_tests;
 /// MIK-8340: a withheld surfaced name answers as an absent one.

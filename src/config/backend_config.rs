@@ -14,6 +14,11 @@ use super::{
 pub struct BackendConfig {
     /// Human-readable description.
     pub description: String,
+    /// Who owns this server, as free text (a team or a person), shown in the
+    /// server page's Details. Stored as written; read through
+    /// [`Self::owner`], which trims it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner: Option<String>,
     /// Whether backend is enabled.
     pub enabled: bool,
     /// Transport type.
@@ -116,6 +121,7 @@ impl Default for BackendConfig {
     fn default() -> Self {
         Self {
             description: String::new(),
+            owner: None,
             enabled: true,
             transport: TransportConfig::default(),
             stop_when_idle_for: None,
@@ -336,5 +342,13 @@ impl TransportConfig {
     #[must_use]
     pub fn carries_identity_headers(&self) -> bool {
         !matches!(self, Self::Stdio { .. } | Self::WebSocket { .. })
+    }
+}
+
+impl BackendConfig {
+    /// The server's owner, if any.
+    #[must_use]
+    pub fn owner(&self) -> Option<&str> {
+        self.owner.as_deref()
     }
 }
