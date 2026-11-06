@@ -208,6 +208,8 @@ struct Limited {
     /// The create (counting from 1) that fails, if any.
     fail_create: Option<usize>,
     creates: std::sync::atomic::AtomicUsize,
+    /// Every call made on this store, of any kind: a refused save must make none.
+    touched: std::sync::atomic::AtomicUsize,
 }
 
 impl Limited {
@@ -218,24 +220,39 @@ impl Limited {
             time_out: false,
             fail_create: None,
             creates: std::sync::atomic::AtomicUsize::new(0),
+            touched: std::sync::atomic::AtomicUsize::new(0),
         }
+    }
+
+    fn touch(&self) {
+        self.touched
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    fn calls(&self) -> usize {
+        self.touched.load(std::sync::atomic::Ordering::SeqCst)
     }
 }
 
 impl SecretStore for Limited {
     fn kind(&self) -> StoreKind {
+        self.touch();
         self.inner.kind()
     }
     fn limit(&self) -> usize {
+        self.touch();
         self.limit
     }
     fn probe(&self) -> Result<(), StoreError> {
+        self.touch();
         self.inner.probe()
     }
     fn exists(&self, name: &str) -> Result<bool, StoreError> {
+        self.touch();
         self.inner.exists(name)
     }
     fn create(&self, name: &str, value: &[u8]) -> Result<String, StoreError> {
+        self.touch();
         if self.time_out {
             return Err(StoreError::TimedOut);
         }
@@ -249,6 +266,7 @@ impl SecretStore for Limited {
         self.inner.create(name, value)
     }
     fn delete(&self, name: &str) -> Result<(), StoreError> {
+        self.touch();
         self.inner.delete(name)
     }
 }
@@ -319,8 +337,12 @@ async fn t3b_a_literal_beside_a_template_is_refused_by_field_before_the_store() 
         {"reason": "literal_in_template", "field": "env.A"},
         {"reason": "literal_default", "field": "env.B"},
     ]);
+    let store = Arc::new(Limited::new(panel.dir.path()));
     let (status, body) = panel
-        .add(json!({"name": "b", "url": "http://127.0.0.1:9/mcp", "env": env}))
+        .add_into(
+            json!({"name": "b", "url": "http://127.0.0.1:9/mcp", "env": env}),
+            Some(Arc::clone(&store) as Arc<dyn SecretStore + Send + Sync>),
+        )
         .await;
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
     assert_eq!(body["error"], "literal_in_value", "{body}");
@@ -332,6 +354,7 @@ async fn t3b_a_literal_beside_a_template_is_refused_by_field_before_the_store() 
         no_value(b, "literal-default");
         no_value(b, "sk-$");
     }
+    assert_eq!(store.calls(), 0, "a refused value touched the store");
     assert_eq!(panel.text(), before, "a refused save wrote");
     assert!(
         panel.entries().is_empty(),
@@ -341,24 +364,33 @@ async fn t3b_a_literal_beside_a_template_is_refused_by_field_before_the_store() 
 }
 
 /// T4/T4b and I1: a duplicate add (409) and an update of a missing backend
-/// (404) answer before the value rule and the store, with a literal or a
-/// refused value alike.
+/// (404) answer before the value rule and before any store is touched (the
+/// counting store sees no call: on a keychain host, no keychain is probed),
+/// with a literal or a refused value alike.
 #[tokio::test]
-async fn t4_a_duplicate_or_missing_backend_answers_first_and_stores_nothing() {
+async fn t4_a_duplicate_or_missing_backend_answers_first_and_touches_no_store() {
     let panel = Panel::new().await;
     let before = panel.text();
-    let (status, body) = panel.add(literal_add("a")).await;
+    let store = Arc::new(Limited::new(panel.dir.path()));
+    let seam = || BackendStoreForTest {
+        store: Some(Arc::clone(&store) as Arc<dyn SecretStore + Send + Sync>),
+        after_precheck: None,
+    };
+    let (status, body) = panel.add_seamed(literal_add("a"), Some(seam())).await;
     assert_eq!(status, StatusCode::CONFLICT, "{body}");
-    let (status, body) = panel.update("missing", json!({"env": {"K": TOKEN}})).await;
+    let (status, body) = panel
+        .update_seamed("missing", json!({"env": {"K": TOKEN}}), Some(seam()))
+        .await;
     assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
     let (status, body) = panel
-        .update("missing", json!({"env": {"K": "sk-${X}"}}))
+        .update_seamed("missing", json!({"env": {"K": "sk-${X}"}}), Some(seam()))
         .await;
     assert_eq!(
         status,
         StatusCode::NOT_FOUND,
         "a refused value answered before the 404: {body}"
     );
+    assert_eq!(store.calls(), 0, "a refused save touched the store");
     assert_eq!(panel.text(), before);
     assert!(panel.entries().is_empty(), "{:?}", panel.entries());
 }
