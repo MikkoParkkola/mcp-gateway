@@ -142,11 +142,12 @@ fn is_test(rel: &str) -> bool {
 /// Whether `text` opens a log and never keeps a directory for one.
 /// A file opens a log without keeping its dir: it neither hands the log its
 /// dir (`keep_test_dir`) nor opens it in a registered one (a `kept_tempdir(`
-/// call; a mention in prose does not count).
+/// or `kept_tempdir_in(` call; a mention in prose does not count).
 fn unkept(text: &str) -> bool {
     text.contains("TransparencyLogger::open")
         && !text.contains("keep_test_dir")
         && !text.contains("kept_tempdir(")
+        && !text.contains("kept_tempdir_in(")
 }
 
 fn test_sources(dir: &std::path::Path, root: &std::path::Path, out: &mut Vec<(String, String)>) {
@@ -206,5 +207,8 @@ fn the_scan_tells_a_kept_log_from_an_unkept_one() {
     // R14 (MIK-8986 part 2): a dir from `kept_tempdir()` is kept by the open.
     assert!(!unkept(
         "let dir = kept_tempdir();\nlet log = TransparencyLogger::open(cfg).unwrap();"
+    ));
+    assert!(!unkept(
+        "let dir = kept_tempdir_in(parent);\nlet log = TransparencyLogger::open(cfg).unwrap();"
     ));
 }

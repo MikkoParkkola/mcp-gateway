@@ -118,6 +118,20 @@ pub(crate) fn kept_dirs_for(path: &Path) -> Vec<Arc<tempfile::TempDir>> {
 /// exist yet is resolved lexically against what came before it. With no
 /// ancestor that canonicalises, `path` itself.
 pub(crate) fn norm(path: &Path) -> std::path::PathBuf {
+    // Resolving a `..` can bring an existing symlink into the part already
+    // re-appended (`A/missing/../link`): pass again until nothing changes.
+    let mut current = norm_once(path);
+    for _ in 0..8 {
+        let next = norm_once(&current);
+        if next == current {
+            break;
+        }
+        current = next;
+    }
+    current
+}
+
+fn norm_once(path: &Path) -> std::path::PathBuf {
     let Ok(mut base) = std::path::absolute(path) else {
         return path.to_path_buf();
     };

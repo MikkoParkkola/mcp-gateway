@@ -139,3 +139,21 @@ fn norm_anchors_relative_paths_and_resolves_dot_dot() {
         cwd.join("audit.jsonl")
     );
 }
+
+/// R20. A `..` past a missing component can bring an existing symlink into
+/// the re-appended part: `norm` resolves it as well.
+/// Mutant: one pass only.
+#[cfg(unix)]
+#[test]
+fn norm_resolves_a_symlink_reached_after_dot_dot() {
+    let a = tempfile::tempdir().expect("a temp dir");
+    let b = tempfile::tempdir().expect("another temp dir");
+    std::os::unix::fs::symlink(b.path(), a.path().join("link")).expect("a symlink");
+    let through = a
+        .path()
+        .join("missing")
+        .join("..")
+        .join("link")
+        .join("audit.jsonl");
+    assert_eq!(norm(&through), canon(b.path()).join("audit.jsonl"));
+}
