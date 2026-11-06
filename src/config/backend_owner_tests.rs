@@ -82,9 +82,7 @@ fn o3_at_most_two_hundred_characters_once_trimmed() {
 /// the firewall off as well (the check is unconditional).
 #[test]
 fn o4_a_control_character_anywhere_is_refused() {
-    for value in [
-        "a\nb", "a\tb", "a\u{7}b", "\nAna", "Ana\t", "\n", "a\u{85}b",
-    ] {
+    for value in ["a\nb", "a\tb", "a\u{7}b", "\nAna", "Ana\t", "\n"] {
         refused_naming_owner(load(&owner_line(value)), &format!("{value:?}"));
         refused_naming_owner(
             load(&format!("{}    enabled: false\n", owner_line(value))),
@@ -109,4 +107,24 @@ fn o8_no_owner_serialises_no_key() {
         mapping.keys().all(|k| k.as_str() != Some("owner")),
         "{mapping:?}"
     );
+}
+
+/// O4b: a C1 control (U+0085, NEL) is refused too (`char::is_control`, not
+/// only ASCII). The YAML loader already refuses U+0085 in a file, before
+/// any config check, so this pins the check itself, for the paths that
+/// build a config without YAML (the UI's writer).
+#[test]
+fn o4b_a_c1_control_is_refused() {
+    let mut config = Config::default();
+    config.backends.insert(
+        "svc".to_string(),
+        BackendConfig {
+            owner: Some("a\u{85}b".to_string()),
+            ..BackendConfig::default()
+        },
+    );
+    let error = config
+        .validate_backend_owners()
+        .expect_err("a C1 control is refused");
+    assert!(error.to_string().contains("backends.svc.owner"), "{error}");
 }
