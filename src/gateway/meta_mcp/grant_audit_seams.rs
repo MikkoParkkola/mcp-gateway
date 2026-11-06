@@ -69,6 +69,7 @@ pub(crate) struct SpawnSnapshot {
 
 thread_local! {
     static HOLD: RefCell<Option<Arc<Hold>>> = const { RefCell::new(None) };
+    static HOLD_BEST_EFFORT: RefCell<Option<Arc<Hold>>> = const { RefCell::new(None) };
     static FAIL_AT: Cell<usize> = const { Cell::new(0) };
     static APPENDS: Cell<usize> = const { Cell::new(0) };
     static ON_OPEN: RefCell<Vec<GrantNote>> = const { RefCell::new(Vec::new()) };
@@ -86,7 +87,24 @@ pub(crate) fn hold_next_write_for_test() -> HoldHandle {
 }
 
 pub(super) async fn at_write_start() {
-    let Some(hold) = HOLD.with(|h| h.borrow_mut().take()) else {
+    park_at(&HOLD).await;
+}
+
+/// S5: park the next best-effort (withheld-note) write at its start, so a row
+/// can prove nothing awaits it and that it cannot take the append permit
+/// ahead of the slot's own flush.
+pub(crate) fn hold_next_best_effort_write_for_test() -> HoldHandle {
+    let hold = Arc::new(Hold::default());
+    HOLD_BEST_EFFORT.with(|h| *h.borrow_mut() = Some(Arc::clone(&hold)));
+    HoldHandle(hold)
+}
+
+pub(super) async fn at_best_effort_start() {
+    park_at(&HOLD_BEST_EFFORT).await;
+}
+
+async fn park_at(cell: &'static std::thread::LocalKey<RefCell<Option<Arc<Hold>>>>) {
+    let Some(hold) = cell.with(|h| h.borrow_mut().take()) else {
         return;
     };
     HOLDS_SIGNALLED.with(|n| n.set(n.get() + 1));

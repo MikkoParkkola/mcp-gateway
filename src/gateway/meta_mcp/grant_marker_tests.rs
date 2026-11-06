@@ -13,6 +13,7 @@ use super::grant_audit_fixture::{
     CAPS, Endpoint, PERSONAL, decisions, entries, grant, invocations, wait_for_decisions,
 };
 use super::visible::Withholding;
+use crate::gateway::authz::Emit;
 use super::grant_decision_audit_tests::{api_key, call, context, gateway, invoke_args, only};
 use crate::security::audit::AuditFailurePolicy;
 
@@ -155,20 +156,30 @@ async fn a_withheld_note_outside_any_slot_is_written_at_once_unrecorded() {
     assert!(invocations(&dir).is_empty(), "no slot means no invocation record");
 }
 
-/// The writer of a slotted withheld note is parked at its start (the S1
-/// seam): the slot still returns, so no caller path awaits that write.
+static DENY: crate::gateway::authz::DenyAll = crate::gateway::authz::DenyAll;
+
+/// The best-effort write of a slotted withheld note is parked at its start
+/// (S5): the slot's answer still arrives, so no caller path awaits it, and
+/// the slot's own fail-closed note is already written, so the held write
+/// cannot have taken the append permit ahead of that flush.
 #[tokio::test]
 async fn a_blocked_withheld_writer_never_holds_the_slots_answer() {
     let (endpoint, dir) = (
         Endpoint::start(false).await,
         Arc::new(tempfile::tempdir().unwrap()),
     );
-    let meta = gateway(&endpoint, vec![], Some(&dir), AuditFailurePolicy::FailClosed);
+    let rows = vec![grant("g1", ALICE, ALICE)];
+    let meta = gateway(&endpoint, rows, Some(&dir), AuditFailurePolicy::FailClosed);
     let who = api_key("alice");
-    let caller = context(&who);
-    let hold = super::grant_audit::seams::hold_next_write_for_test();
+    let mut caller = context(&who);
+    caller.authorizer = &DENY;
+    let hold = super::grant_audit::seams::hold_next_best_effort_write_for_test();
 
     let slot = with_grant_slot(meta.transparency_logger.as_ref(), async {
+        // An ordinary fail-closed note, then the withheld call's own.
+        let scope = caller.scope();
+        let first = meta.identity_grant_rule(CAPS, PERSONAL, scope, Emit::Audit);
+        assert!(first.is_ok(), "premise: alice holds the grant");
         meta.record_withheld(CAPS, PERSONAL, Withholding::Refused, &caller, None)
             .await;
     });
@@ -176,8 +187,11 @@ async fn a_blocked_withheld_writer_never_holds_the_slots_answer() {
 
     let (_, verdict, _) = answered.expect("the slot waited for its withheld note's writer");
     verdict.expect("a withheld note never changes the answer");
-    hold.held().await;
+    let flushed = decisions(&dir);
+    assert_eq!(flushed.len(), 1, "the fail-closed note first: {flushed:#?}");
+    let parked = tokio::time::timeout(std::time::Duration::from_secs(5), hold.held()).await;
+    assert!(parked.is_ok(), "the withheld write never reached its hold");
     hold.release();
-    let held = wait_for_decisions(&dir, 1).await;
-    assert_eq!(held.len(), 1, "written once, after the release: {held:#?}");
+    let held = wait_for_decisions(&dir, 2).await;
+    assert_eq!(held.len(), 2, "each note written once: {held:#?}");
 }
