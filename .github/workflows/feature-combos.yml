@@ -106,7 +106,12 @@ jobs:
       - name: Name the mingw package cache
         id: mingw-key
         if: matrix.target == 'x86_64-pc-windows-gnu'
-        run: echo "key=$(scripts/ci/mingw-debs.sh key)" >> "$GITHUB_OUTPUT"
+        run: |
+          echo "key=$(scripts/ci/mingw-debs.sh key)" >> "$GITHUB_OUTPUT"
+          echo "prefix=$(scripts/ci/mingw-debs.sh prefix)" >> "$GITHUB_OUTPUT"
+      # A new runner image misses the exact key until a fill covers it, so the
+      # newest set of the same OS is restored instead; train 40j2 lost a run
+      # to a 43-minute mirror fetch on the first job of a new image.
       - name: Restore the mingw packages
         id: mingw-cache
         if: matrix.target == 'x86_64-pc-windows-gnu'
@@ -114,16 +119,37 @@ jobs:
         with:
           path: ~/mingw-debs
           key: ${{ steps.mingw-key.outputs.key }}
+          restore-keys: ${{ steps.mingw-key.outputs.prefix }}
       - name: Install the mingw C toolchain
         if: matrix.target == 'x86_64-pc-windows-gnu'
         env:
           CACHE_HIT: ${{ steps.mingw-cache.outputs.cache-hit }}
+          MATCHED: ${{ steps.mingw-cache.outputs.cache-matched-key }}
         run: |
           set -euo pipefail
-          if [ "$CACHE_HIT" != true ]; then
-            echo "::warning::mingw deb cache miss for this runner image: installing from the Ubuntu mirror. The mingw packages workflow (mingw-debs.yml) fills the cache."
-            scripts/ci/mingw-debs.sh download "$HOME/mingw-debs"
+          if [ "$CACHE_HIT" = true ]; then
+            scripts/ci/mingw-debs.sh install "$HOME/mingw-debs"
+            exit 0
           fi
+          # Another image's set: logged with what it installed, so a version
+          # drift shows in the log; one that does not install falls back to
+          # the mirror from an empty directory.
+          if [ -n "$MATCHED" ]; then
+            echo "::warning::mingw deb cache: no set for this runner image; using $MATCHED"
+            set +e
+            scripts/ci/mingw-debs.sh install "$HOME/mingw-debs"
+            installed=$?
+            set -e
+            if [ "$installed" -eq 0 ]; then
+              echo "mingw fallback: restored $MATCHED, installed gcc-mingw-w64-x86-64 $(dpkg-query -W -f '${Version}' gcc-mingw-w64-x86-64)"
+              exit 0
+            fi
+            echo "::warning::the $MATCHED set did not install on this image: fetching from the Ubuntu mirror"
+            rm -rf "$HOME/mingw-debs"
+          else
+            echo "::warning::mingw deb cache miss for this runner image: installing from the Ubuntu mirror. The mingw packages workflow (mingw-debs.yml) fills the cache."
+          fi
+          scripts/ci/mingw-debs.sh download "$HOME/mingw-debs"
           scripts/ci/mingw-debs.sh install "$HOME/mingw-debs"
       # After the install, so only a set that installed is cached. A hit saves
       # nothing; a lost race with another run on the same image only warns.

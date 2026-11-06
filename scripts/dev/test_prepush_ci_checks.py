@@ -180,6 +180,8 @@ CI_ONLY_LINES: dict[tuple[str, str], str] = {
         "ci-env: matches this pull request's changed paths against the image's inputs",
     ("feature-combos.yml", 'echo "key=$(scripts/ci/mingw-debs.sh key)" >> "$GITHUB_OUTPUT"'):
         "network: names the apt package cache for the Windows cross toolchain",
+    ("feature-combos.yml", 'echo "prefix=$(scripts/ci/mingw-debs.sh prefix)" >> "$GITHUB_OUTPUT"'):
+        "network: names the apt package cache for the Windows cross toolchain",
 }
 
 
