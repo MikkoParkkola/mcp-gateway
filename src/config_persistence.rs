@@ -449,13 +449,19 @@ fn edit_locked<T>(
         return Ok(false);
     };
     // Fail closed (GH462): bytes that do not parse are never written.
-    Config::from_file_text(&text).map_err(|e| {
+    let parsed = Config::from_file_text(&text).map_err(|e| {
         format!(
             "Not saved: the new {} does not parse as a config: {e}",
             path.display()
         )
     })?;
     write_yaml_at(&locked.target, &text)?;
+    // A text writer carries the file through (`init`, `upgrade`): a rule the
+    // firewall-on load refuses stays as it was, and warns.
+    #[cfg(feature = "firewall")]
+    crate::security::firewall::warn_refused_rules(&parsed);
+    #[cfg(not(feature = "firewall"))]
+    let _ = parsed;
     Ok(true)
 }
 
@@ -533,6 +539,11 @@ fn render(
 ) -> Result<Option<(String, Vec<String>)>, Unwritten> {
     config
         .validate_with_env(&config.env_overlay())
+        .map_err(|e| format!("Failed to validate config: {e}"))?;
+    // A rule the firewall-on load refuses is written only as carried over
+    // unchanged, whatever `enabled` says: the rules apply on a reload.
+    #[cfg(feature = "firewall")]
+    crate::security::firewall::refuse_authored(before, config)
         .map_err(|e| format!("Failed to validate config: {e}"))?;
     if let (Some(before), Some(text)) = (before, text) {
         let value = |c: &Config| serde_json::to_value(c).ok();

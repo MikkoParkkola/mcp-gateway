@@ -123,6 +123,21 @@ impl ReloadContext {
         if let Some(step) = step {
             refuse_shared_credentials(step, &evaluated.config, &evaluated.overlay)?;
         }
+        // A replacement writes every rule: one the firewall-on load refuses
+        // goes in only as carried over unchanged, and none while it runs.
+        #[cfg(feature = "firewall")]
+        {
+            let refused =
+                |e: String| ReplaceError::ReloadRefused(format!("Failed to validate config: {e}"));
+            crate::security::firewall::refuse_while_running(
+                self.live_config.running(),
+                &evaluated.config,
+            )
+            .map_err(refused)?;
+            let current = self.live_config.get();
+            crate::security::firewall::refuse_authored(Some(&*current), &evaluated.config)
+                .map_err(refused)?;
+        }
         let patch = crate::config_reload::compute_diff(&self.live_config.get(), &evaluated.config);
         self.refuse_candidate(EvaluatedReload {
             config: evaluated.config,

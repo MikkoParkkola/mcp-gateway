@@ -158,9 +158,15 @@ pub(crate) fn first_refusal(i: usize, rule: &FirewallRule, keys: &RuleKeys<'_>) 
 /// (a 3.5 config may hold one, dormant): each such rule warns once, naming
 /// it, since turning the firewall on is refused until it is fixed.
 pub(crate) fn warn_refused_at_load(config: &Config) {
-    if config.security.firewall.enabled {
-        return;
+    if !config.security.firewall.enabled {
+        warn_refused_rules(config);
     }
+}
+
+/// Each rule in `config` the firewall-on load refuses warns once, naming it.
+/// Also for a write that carries the file through (`init`, `upgrade`'s URL
+/// rewrite): it keeps the rule as it is and says so.
+pub(crate) fn warn_refused_rules(config: &Config) {
     let keys = RuleKeys::of(config);
     for (i, rule) in config.security.firewall.rules.iter().enumerate() {
         let Some(message) = first_refusal(i, rule, &keys) else {
@@ -175,6 +181,27 @@ pub(crate) fn warn_refused_at_load(config: &Config) {
             );
         }
     }
+}
+
+/// A write of `after` over the file's `before`: a rule the firewall-on load
+/// refuses is written only when it is carried over unchanged, each copy in
+/// `before` carrying at most one in `after`. An added or changed one is
+/// refused, naming it. A carried one stays, and the load's warning names it.
+pub(crate) fn refuse_authored(before: Option<&Config>, after: &Config) -> Result<(), String> {
+    let keys = RuleKeys::of(after);
+    let mut unclaimed: Vec<&FirewallRule> =
+        before.map_or_else(Vec::new, |b| b.security.firewall.rules.iter().collect());
+    for (i, rule) in after.security.firewall.rules.iter().enumerate() {
+        let Some(message) = first_refusal(i, rule, &keys) else {
+            continue;
+        };
+        if let Some(at) = unclaimed.iter().position(|r| *r == rule) {
+            unclaimed.swap_remove(at);
+            continue;
+        }
+        return Err(format!("{message}; fix or remove the rule"));
+    }
+    Ok(())
 }
 
 #[cfg(test)]

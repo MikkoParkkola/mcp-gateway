@@ -46,7 +46,8 @@ pub(crate) use collusion_gate::SENSITIVE_CLASSES;
 pub(crate) use verdict::refused_shape;
 mod refused_rules;
 pub(crate) use refused_rules::{
-    RuleKeys, first_refusal, key_problem, refuse_while_running, warn_refused_at_load,
+    RuleKeys, first_refusal, key_problem, refuse_authored, refuse_while_running,
+    warn_refused_at_load, warn_refused_rules,
 };
 pub mod anomaly;
 pub(crate) mod anomaly_config;
