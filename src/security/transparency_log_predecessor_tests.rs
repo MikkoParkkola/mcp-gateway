@@ -1,8 +1,9 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! A log whose active file vanished starts again with a new id, and that
-//! identity change leaves a trace: a reserved marker after the new genesis's
-//! identified record, a warning naming both ids, and a verify warning.
+//! identity change leaves a trace: the new genesis's open record names what
+//! survived of the old log, the logger warns naming both ids, and verify
+//! warns.
 
 use serde_json::Value;
 
@@ -11,7 +12,8 @@ use super::segments::{read_hwm, sibling};
 use super::*;
 use crate::test_log_capture::capture_warnings;
 
-const PREDECESSOR: &str = "audit_log_predecessor_missing";
+/// The open-record field naming what survived of a lost predecessor.
+const PREDECESSOR: &str = "predecessor_missing";
 
 /// The events of `records` in order, a caller record (no event) as "".
 fn events(records: &[Value]) -> Vec<&str> {
@@ -36,36 +38,28 @@ fn a_log_deleted_under_a_live_logger_names_its_predecessor() {
         }
         let ((), warned) = capture_warnings(|| append(&l, 1));
 
-        // THEN: the new genesis, as the mark-missing path leaves it, then the
-        // marker naming the old id and the identified record
+        // THEN: the new genesis's open record carries the evidence, then the
+        // mark-missing record when the mark was kept, then the identified record
         let head = lines(&path);
-        let at = if keep_hwm {
-            assert_eq!(
-                events(&head),
-                [
-                    rotation::EV_OPENED,
-                    rotation::EV_HWM_MISSING,
-                    PREDECESSOR,
-                    identity::EV_IDENTIFIED,
-                    ""
-                ],
-                "{head:?}"
-            );
-            assert_eq!(head[0]["counter"].as_u64(), Some(mark.counter + 1));
-            assert_eq!(head[0][rotation::HWM_MISSING_AT].as_u64(), Some(1));
-            2
-        } else {
-            let want = [
+        let want: &[&str] = if keep_hwm {
+            &[
                 rotation::EV_OPENED,
-                PREDECESSOR,
+                rotation::EV_HWM_MISSING,
                 identity::EV_IDENTIFIED,
                 "",
-            ];
-            assert_eq!(events(&head), want, "{head:?}");
-            assert_eq!(head[0]["counter"].as_u64(), Some(1));
-            1
+            ]
+        } else {
+            &[rotation::EV_OPENED, identity::EV_IDENTIFIED, ""]
         };
-        let marker = &head[at];
+        assert_eq!(events(&head), want, "{head:?}");
+        let at = want.len() - 2;
+        if keep_hwm {
+            assert_eq!(head[0]["counter"].as_u64(), Some(mark.counter + 1));
+            assert_eq!(head[0][rotation::HWM_MISSING_AT].as_u64(), Some(1));
+        } else {
+            assert_eq!(head[0]["counter"].as_u64(), Some(1));
+        }
+        let marker = &head[0][PREDECESSOR];
         assert_eq!(marker["previous_log_id"].as_str(), Some(old.as_str()));
         if keep_hwm {
             let hw = &marker["previous_high_water"];
@@ -78,21 +72,28 @@ fn a_log_deleted_under_a_live_logger_names_its_predecessor() {
         // THEN: the logger holds the new id, raised as an identity change
         let new = l.log_id();
         assert_ne!(new, old, "keep_hwm: {keep_hwm}");
-        assert_eq!(head[at + 1]["log_id"].as_str(), Some(new.as_str()));
+        assert_eq!(head[0]["log_id"].as_str(), Some(new.as_str()));
+        assert_eq!(head[at]["log_id"].as_str(), Some(new.as_str()));
         let raised = l.subscribers.raised();
         assert!(raised.contains(&"log_id"), "{raised:?}");
         assert!(!raised.contains(&"tail"), "{raised:?}");
-        assert!(warned.contains(old.as_str()), "{warned}");
-        assert!(warned.contains(new.as_str()), "{warned}");
-
-        // THEN: verify reports the marker by the old id; with the mark kept it
-        // also fails, naming the deletion, as before
-        let r = verify(&path, false);
         assert!(
-            r.warnings.iter().any(|w| w.contains(old.as_str())),
-            "{:?}",
-            r.warnings
+            warned.contains(&format!("previous_log_id={old}")),
+            "{warned}"
         );
+        assert!(warned.contains(&format!(" log_id={new}")), "{warned}");
+
+        // THEN: verify reports the evidence by the old id; with the mark kept
+        // it also fails, naming the deletion, before it authenticates the open
+        // record, so the warning says the evidence is unverified
+        let r = verify(&path, false);
+        let named: Vec<&String> = r
+            .warnings
+            .iter()
+            .filter(|w| w.contains(old.as_str()))
+            .collect();
+        assert_eq!(named.len(), 1, "{:?}", r.warnings);
+        assert_eq!(named[0].contains("unverified"), keep_hwm, "{named:?}");
         if keep_hwm {
             let msg = r.error_message.unwrap_or_default();
             assert!(msg.contains("the active segment was deleted"), "{msg}");
@@ -113,28 +114,31 @@ fn a_cold_fresh_log_and_its_reopen_record_no_predecessor() {
     let again = TransparencyLogger::open(cfg(&path, 12, false)).unwrap();
     append(&again, 1);
 
-    // THEN: no marker, and verify warns of none
-    assert!(!events(&lines(&path)).contains(&PREDECESSOR));
+    // THEN: no open record carries the field, and verify warns of none
+    assert!(lines(&path).iter().all(|v| v.get(PREDECESSOR).is_none()));
     let r = verify(&path, false);
     assert!(r.ok, "{:?}", r.error_message);
     assert!(r.warnings.is_empty(), "{:?}", r.warnings);
 }
 
 #[test]
-fn a_caller_cannot_append_an_audit_log_predecessor_missing_record() {
+fn a_caller_cannot_append_an_open_record_naming_a_predecessor() {
     // GIVEN: a log
     let dir = tempfile::tempdir().unwrap();
     let path = log_path(&dir);
     let l = TransparencyLogger::open(cfg(&path, 12, false)).unwrap();
     let before = lines(&path).len();
 
-    // WHEN: a caller names the reserved event
+    // WHEN: a caller writes an open record carrying the field
     let mut forged = serde_json::Map::new();
-    forged.insert("event".into(), PREDECESSOR.into());
-    forged.insert("previous_log_id".into(), "forged".into());
+    forged.insert("event".into(), rotation::EV_OPENED.into());
+    forged.insert(
+        PREDECESSOR.into(),
+        serde_json::json!({ "previous_log_id": "forged" }),
+    );
     let refused = l.append_event(forged, &AuditEnvelope::gateway());
 
     // THEN: refused, nothing appended
-    assert!(refused.is_err(), "the event is the logger's alone");
+    assert!(refused.is_err(), "open records are the logger's alone");
     assert_eq!(lines(&path).len(), before);
 }

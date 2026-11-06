@@ -17,6 +17,8 @@ const KILL_AT: &str = "MCP_GW_TEST_AUDIT_KILL_AT";
 const KILL_DIR: &str = "MCP_GW_TEST_AUDIT_KILL_DIR";
 /// Written by the child on reaching the boundary, before it aborts.
 const MARKER: &str = "killed";
+/// The open-record field naming what survived of a lost predecessor.
+const PREDECESSOR: &str = "predecessor_missing";
 
 /// The log a kill row's child writes in `dir`.
 pub(super) fn kill_log(dir: &Path) -> PathBuf {
@@ -149,15 +151,11 @@ fn a_restart_after_the_active_file_was_deleted_names_the_surviving_mark() {
     // WHEN: a new process opens it (killed once its logger is built)
     killed_at(At::LoggerBuilt, dir.path());
 
-    // THEN: right before the identified record, the marker names the mark
-    // that survived, and no previous id (the mark holds none)
+    // THEN: the new genesis's open record names the mark that survived, and
+    // no previous id (the mark holds none)
     let head = lines(&path);
-    let at = head
-        .iter()
-        .position(|v| event(v) == Some("audit_log_predecessor_missing"))
-        .unwrap_or_else(|| panic!("no predecessor marker: {head:?}"));
-    assert_eq!(event(&head[at + 1]), Some(identity::EV_IDENTIFIED));
-    let marker = &head[at];
+    let marker = &head[0][PREDECESSOR];
+    assert!(marker.is_object(), "no predecessor evidence: {head:?}");
     assert!(marker.get("previous_log_id").is_none(), "{marker}");
     let hw = &marker["previous_high_water"];
     assert_eq!(hw["counter"].as_u64(), Some(mark.counter));
@@ -203,10 +201,10 @@ fn a_kill_before_the_upgrade_records_its_id_is_finished_on_reopen() {
 }
 
 #[test]
-fn a_kill_between_the_identity_records_keeps_the_marker() {
+fn a_kill_after_a_replacing_genesis_keeps_its_predecessor_evidence() {
     // GIVEN: a log with records, its writer gone, its active file deleted
-    // and its mark kept; a new process killed between the new genesis's two
-    // identity records
+    // and its mark kept; a new process killed after the new genesis's open
+    // record, before its identified record
     let dir = tempfile::tempdir().unwrap();
     let path = kill_log(dir.path());
     let first = TransparencyLogger::open(cfg(&path, 12, false)).unwrap();
@@ -214,41 +212,34 @@ fn a_kill_between_the_identity_records_keeps_the_marker() {
     drop(first);
     let mark = read_hwm(&path, b"", "test").unwrap();
     std::fs::remove_file(&path).unwrap();
-    killed_at(At::BetweenIdentityRecords, dir.path());
+    killed_at(At::BeforeIdentified, dir.path());
+    let left = lines(&path);
+    assert!(identified(&path).is_empty(), "killed first: {left:?}");
+    let id = left[0]["log_id"].as_str().unwrap().to_string();
 
     // WHEN: the log is reopened twice
-    let id = TransparencyLogger::open(cfg(&path, 12, false))
-        .expect("the lease went with the child")
-        .log_id();
-    let again = TransparencyLogger::open(cfg(&path, 12, false)).unwrap();
-    assert_eq!(again.log_id(), id, "the id holds across reopens");
+    for _ in 0..2 {
+        let again =
+            TransparencyLogger::open(cfg(&path, 12, false)).expect("the lease went with the child");
+        // THEN: the genesis's id holds
+        assert_eq!(again.log_id().as_str(), id);
+    }
 
-    // THEN: exactly one marker, naming the surviving mark, then exactly one
-    // identified record naming the open record's id
+    // THEN: the open record still names the surviving mark, and exactly one
+    // identified record names the open record's id
     let head = lines(&path);
-    let markers: Vec<usize> = (0..head.len())
-        .filter(|&i| event(&head[i]) == Some("audit_log_predecessor_missing"))
-        .collect();
-    assert_eq!(markers.len(), 1, "one marker: {head:?}");
-    let at = markers[0];
-    assert_eq!(
-        head[at]["previous_high_water"]["counter"].as_u64(),
-        Some(mark.counter)
-    );
-    assert_eq!(identified(&path).len(), 1, "one identified: {head:?}");
-    // The reopen finds `.hwm` still at the lost log's counter, so the
-    // mark-missing path records that again before the repair's identified
-    // record.
-    assert_eq!(event(&head[at + 1]), Some(rotation::EV_HWM_MISSING));
-    assert_eq!(event(&head[at + 2]), Some(identity::EV_IDENTIFIED));
-    assert_eq!(head[at + 2]["log_id"].as_str(), Some(id.as_str()));
+    let hw = &head[0][PREDECESSOR]["previous_high_water"];
+    assert_eq!(hw["counter"].as_u64(), Some(mark.counter), "{head:?}");
+    assert_eq!(hw["entry_hash"].as_str(), Some(mark.entry_hash.as_str()));
+    let found = identified(&path);
+    assert_eq!(found.len(), 1, "one identified: {head:?}");
+    assert_eq!(found[0]["log_id"].as_str(), Some(id.as_str()));
 
-    // THEN: verify still reports the marker
+    // THEN: verify reports it by the mark's counter, unverified: the chain
+    // check stops at the deleted counters before that record
     let r = verify(&path, false);
     let named = format!("counter {}", mark.counter);
-    assert!(
-        r.warnings.iter().any(|w| w.contains(&named)),
-        "{:?}",
-        r.warnings
-    );
+    let warned: Vec<&String> = r.warnings.iter().filter(|w| w.contains(&named)).collect();
+    assert_eq!(warned.len(), 1, "{:?}", r.warnings);
+    assert!(warned[0].contains("unverified"), "{warned:?}");
 }
