@@ -370,3 +370,47 @@ async fn t4_policy_allowed_tools() {
         &refusal("t4_policy_allowed_tools", "allowed_tools"),
     );
 }
+
+/// T5: `allowed_tools` at the invocation policy's check of a visibility the
+/// request already recorded (`absent.rs:21`, from `refuse_withheld_explained`,
+/// `policy.rs:46`; found while coding). On the gate's own path the gate
+/// answers the withheld name first (T1, `visibility.rs:266`), so this unit
+/// row records the request's verdict in its memo, as the gate does, and runs
+/// the policy under it.
+#[tokio::test]
+async fn t5_policy_allowed_tools_from_the_memo() {
+    use crate::gateway::meta_mcp::invoke::audit::with_dispatch_scope;
+    use crate::gateway::meta_mcp::visible::memo::record_visibility;
+    use crate::gateway::meta_mcp::visible::{Visibility, Withholding};
+    let dir = tempfile::tempdir().expect("a log directory");
+    let (meta, sent) = table_meta(&dir, BackendConfig::default());
+    let who = api_key_caller();
+    let args = json!({"server": "alpha", "tool": "read", "arguments": {}});
+    let (checked, notes) = with_visibility_memo(with_dispatch_scope(async {
+        record_visibility(
+            "alpha",
+            "read",
+            Visibility::Withheld(Withholding::Unselected),
+        );
+        meta.check_invocation_policy(&args, None, &context(&AllowAll, &who))
+    }))
+    .await;
+    // Answered as an absent name: `absent_name`'s METHOD_NOT_FOUND
+    // (`absent.rs:9-11`), -32601.
+    let error = checked.expect_err("premise: the policy refuses the tool");
+    assert!(matches!(error, crate::Error::JsonRpc { .. }), "{error:?}");
+    assert_eq!(error.to_rpc_code(), -32601, "{error:?}");
+    assert_eq!(
+        sent.load(Ordering::SeqCst),
+        0,
+        "the backend was sent the call"
+    );
+    let outcome = crate::security::audit::AuditOutcome::from_result(&Err(error))
+        .expect("an outcome for a refusal");
+    let decision =
+        serde_json::to_value(notes.decided(&meta, outcome)).expect("a decision serialises");
+    assert_row(
+        &decision,
+        &refusal("t5_policy_allowed_tools_from_the_memo", "allowed_tools"),
+    );
+}
