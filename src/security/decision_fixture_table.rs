@@ -181,16 +181,27 @@ mod tests {
     /// key is removed.
     #[test]
     fn every_pinned_field_fails_the_full_row_when_it_differs() {
-        let edits: [Edit; 18] = [
+        let edits: [Edit; 21] = [
             ("v", |d| d["v"] = json!(1)),
             ("v removed", |d| remove(d, "v")),
             ("kind", |d| d["kind"] = json!("firewall")),
+            ("kind removed", |d| remove(d, "kind")),
             ("rule_id", |d| d["rule_id"] = json!("r-2")),
             ("rule_id removed", |d| remove(d, "rule_id")),
             ("grant_id", |d| d["grant_id"] = json!("g-2")),
             ("grant_id removed", |d| remove(d, "grant_id")),
             ("findings removed", |d| remove(d, "request_findings")),
             ("findings clean", |d| d["request_findings"] = json!([])),
+            ("finding scan type", |d| {
+                d["request_findings"][0]["scan_type"] = json!("injection");
+            }),
+            ("finding added", |d| {
+                let extra = d["request_findings"][0].clone();
+                d["request_findings"]
+                    .as_array_mut()
+                    .expect("a list")
+                    .push(extra);
+            }),
             ("finding severity", |d| {
                 d["request_findings"][0]["severity"] = json!("low");
             }),
@@ -273,5 +284,25 @@ mod tests {
         assert_row(&decision, &row);
         decision["declared_effect_source"] = json!("tool_annotation");
         assert!(fails(&decision, &row), "the wrong source passed");
+    }
+
+    /// Raised findings are compared in order.
+    #[test]
+    fn raised_findings_are_pinned_in_order() {
+        let row = DecisionRow {
+            findings: Findings::Raised(&[
+                ("secret", "high", "arguments"),
+                ("injection", "medium", "arguments"),
+            ]),
+            ..BARE
+        };
+        let secret = json!({"scan_type": "secret", "severity": "high", "location": "arguments"});
+        let injection =
+            json!({"scan_type": "injection", "severity": "medium", "location": "arguments"});
+        let mut decision = bare();
+        decision["request_findings"] = json!([secret, injection]);
+        assert_row(&decision, &row);
+        decision["request_findings"] = json!([injection, secret]);
+        assert!(fails(&decision, &row), "reordered findings passed");
     }
 }
