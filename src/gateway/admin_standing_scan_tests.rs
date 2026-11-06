@@ -461,22 +461,9 @@ const ADMIN_READERS: &[(&str, &str, usize, &str)] = &[
     ),
 ];
 
-const NEEDLES: &[&str] = &[
-    ".admin",
-    "resolve_role(",
-    "grants_admin(",
-    "CallerStanding::of(",
-    "CallerStanding::of_client(",
-    "CallerStanding::Admin",
-    DESTRUCTURED,
-    "is_gateway_admin",
-    "admin_standing",
-    "is_gateway()",
-    "is_admin(",
-    "::for_ui(",
-];
-
-/// Not a literal needle: a struct pattern binding an `admin` field.
+/// The key for a struct pattern that binds an `admin` field, with or without a
+/// rest (`..`): the name is kept from the text finder, so the inventory reads
+/// as before.
 const DESTRUCTURED: &str = "{ admin, .. }";
 
 /// Whether `path`, relative to the crate, is test-only source.
@@ -510,77 +497,436 @@ fn production_sources(
     }
 }
 
-/// Occurrences of `needle` in `text`. `.admin` counts only the whole field
-/// name, so `.admin_standing()` and `.admin_token` are not reads of the flag.
-fn count(text: &str, needle: &str) -> usize {
-    if needle == DESTRUCTURED {
-        return destructured_admin(text);
-    }
-    if needle != ".admin" {
-        return text.matches(needle).count();
-    }
-    text.match_indices(needle)
-        .filter(|(at, _)| {
-            text[at + needle.len()..]
-                .chars()
-                .next()
-                .is_none_or(|c| !(c.is_alphanumeric() || c == '_'))
-        })
-        .count()
+// ─── The finder: readers by syntax, not text ───────────────────────────────
+
+/// A monitored name, as the inventory keys it, and the shape that reads it.
+#[derive(Clone, Copy)]
+enum Shape {
+    /// A path ending in these segments, wherever it appears (expression,
+    /// pattern, function reference): `is_gateway_admin`, `admin_standing`,
+    /// `CallerStanding::Admin`.
+    Path(&'static [&'static str]),
+    /// A call of a path ending in these segments, or a method call of the
+    /// last one: `is_admin(`, `resolve_role(`, `CallerStanding::of(`.
+    Call(&'static [&'static str]),
+    /// A call of a path of at least two segments ending in this one: `::for_ui(`.
+    QualifiedCall(&'static str),
+    /// A method call with no arguments: `is_gateway()`.
+    NullaryMethod(&'static str),
 }
 
-/// Struct patterns that bind an `admin` field and end in a rest pattern:
-/// `{ admin, .. }`, `{ admin: flag, .. }`, `{ admin: _, .. }`. A struct
-/// literal with update syntax (`{ admin: true, ..base }`) is a write and does
-/// not end in a bare `..`. A pattern naming every field without `..` is not
-/// found: the clients have too many fields for that to be written by hand.
-fn destructured_admin(text: &str) -> usize {
-    let bytes = text.as_bytes();
-    text.match_indices("admin")
-        .filter(|(at, _)| {
-            let before = text[..*at].chars().next_back();
-            if before.is_some_and(|c| c.is_alphanumeric() || matches!(c, '_' | '.' | '"')) {
-                return false;
+const SHAPES: &[(&str, Shape)] = &[
+    ("resolve_role(", Shape::Call(&["resolve_role"])),
+    ("grants_admin(", Shape::Call(&["grants_admin"])),
+    (
+        "CallerStanding::of(",
+        Shape::Call(&["CallerStanding", "of"]),
+    ),
+    (
+        "CallerStanding::of_client(",
+        Shape::Call(&["CallerStanding", "of_client"]),
+    ),
+    (
+        "CallerStanding::Admin",
+        Shape::Path(&["CallerStanding", "Admin"]),
+    ),
+    ("is_gateway_admin", Shape::Path(&["is_gateway_admin"])),
+    ("admin_standing", Shape::Path(&["admin_standing"])),
+    ("is_gateway()", Shape::NullaryMethod("is_gateway")),
+    ("is_admin(", Shape::Call(&["is_admin"])),
+    ("::for_ui(", Shape::QualifiedCall("for_ui")),
+];
+
+/// An identifier as written, with any `r#` removed: `r#admin` is `admin`.
+fn plain(ident: &syn::Ident) -> String {
+    use syn::ext::IdentExt;
+    ident.unraw().to_string()
+}
+
+/// The file's `use` bindings: each local name with every full path it may
+/// stand for, and the paths globbed into scope. File-wide: a binding in one
+/// module is applied everywhere in the file, which can only add matches.
+#[derive(Default)]
+struct Aliases {
+    named: std::collections::BTreeMap<String, Vec<Vec<String>>>,
+    globs: Vec<Vec<String>>,
+}
+
+impl Aliases {
+    fn of(file: &syn::File) -> Self {
+        struct Uses(Vec<(Vec<String>, Option<String>)>);
+        impl<'ast> syn::visit::Visit<'ast> for Uses {
+            fn visit_item_use(&mut self, item: &'ast syn::ItemUse) {
+                crate::gateway::syn_scan_support::bindings(
+                    &item.tree,
+                    &mut Vec::new(),
+                    &mut self.0,
+                );
             }
-            let after = text[at + "admin".len()..].trim_start();
-            let field =
-                after.starts_with(',') || (after.starts_with(':') && !after.starts_with("::"));
-            field
-                && enclosing_group(bytes, *at)
-                    .is_some_and(|(open, close)| text[open + 1..close].trim_end().ends_with(".."))
-        })
-        .count()
+        }
+        let mut uses = Uses(Vec::new());
+        syn::visit::Visit::visit_file(&mut uses, file);
+        let unraw = |s: &str| s.strip_prefix("r#").unwrap_or(s).to_owned();
+        let mut aliases = Self::default();
+        for (full, local) in uses.0 {
+            let full: Vec<String> = full.iter().map(|s| unraw(s)).collect();
+            match local {
+                Some(local) => aliases.named.entry(unraw(&local)).or_default().push(full),
+                None => aliases.globs.push(full),
+            }
+        }
+        aliases
+    }
+
+    /// Every reading of `segments`: as written, through each binding of its
+    /// first segment, and, for a single bare name, as a member of each glob.
+    fn readings(&self, segments: &[String]) -> Vec<Vec<String>> {
+        let mut out = vec![segments.to_vec()];
+        if let Some((first, rest)) = segments.split_first() {
+            for full in self.named.get(first).into_iter().flatten() {
+                out.push(full.iter().chain(rest).cloned().collect());
+            }
+            if rest.is_empty() {
+                for glob in &self.globs {
+                    out.push(glob.iter().chain(std::iter::once(first)).cloned().collect());
+                }
+            }
+        }
+        out
+    }
 }
 
-/// The `{ .. }` group around byte `at`, by brace depth.
-fn enclosing_group(bytes: &[u8], at: usize) -> Option<(usize, usize)> {
-    let mut depth = 0usize;
-    let open = (0..at).rev().find(|&i| match bytes[i] {
-        b'}' => {
-            depth += 1;
-            false
+fn ends_with(path: &[String], tail: &[&str]) -> bool {
+    path.len() >= tail.len()
+        && path[path.len() - tail.len()..]
+            .iter()
+            .zip(tail)
+            .all(|(a, b)| a == b)
+}
+
+fn segments(path: &syn::Path) -> Vec<String> {
+    path.segments.iter().map(|s| plain(&s.ident)).collect()
+}
+
+/// Counts per inventory key in one file. `in_macro` marks syntax recovered
+/// from a macro or attribute body, where a base-less struct expression may be
+/// a pattern written in expression position and so counts as one.
+struct Finder<'a> {
+    aliases: &'a Aliases,
+    counts: std::collections::BTreeMap<&'static str, usize>,
+    in_macro: bool,
+}
+
+impl Finder<'_> {
+    fn add(&mut self, key: &'static str) {
+        *self.counts.entry(key).or_default() += 1;
+    }
+
+    /// One occurrence of a path: each `Path` shape any of its readings ends
+    /// with counts once.
+    fn path_occurrence(&mut self, segments: &[String]) {
+        let readings = self.aliases.readings(segments);
+        for (key, shape) in SHAPES {
+            if let Shape::Path(tail) = shape
+                && readings.iter().any(|r| ends_with(r, tail))
+            {
+                self.add(*key);
+            }
         }
-        b'{' if depth == 0 => true,
-        b'{' => {
-            depth -= 1;
-            false
+    }
+
+    /// One call of a path: each `Call` or `QualifiedCall` shape counts once.
+    fn call_occurrence(&mut self, segments: &[String]) {
+        let readings = self.aliases.readings(segments);
+        for (key, shape) in SHAPES {
+            let hit = match shape {
+                Shape::Call(tail) => readings.iter().any(|r| ends_with(r, tail)),
+                Shape::QualifiedCall(last) => readings
+                    .iter()
+                    .any(|r| r.len() >= 2 && r.last().is_some_and(|l| l == last)),
+                _ => false,
+            };
+            if hit {
+                self.add(*key);
+            }
         }
-        _ => false,
-    })?;
-    let mut depth = 0usize;
-    let close = (open + 1..bytes.len()).find(|&i| match bytes[i] {
-        b'{' => {
-            depth += 1;
-            false
+    }
+
+    /// One method call: by its name alone, as a method has no path to resolve.
+    fn method_occurrence(&mut self, method: &str, nullary: bool) {
+        for (key, shape) in SHAPES {
+            let hit = match shape {
+                Shape::Call(tail) => tail.len() == 1 && tail[0] == method,
+                Shape::Path(tail) => tail.len() == 1 && tail[0] == method,
+                Shape::NullaryMethod(name) => nullary && *name == method,
+                Shape::QualifiedCall(_) => false,
+            };
+            if hit {
+                self.add(*key);
+            }
         }
-        b'}' if depth == 0 => true,
-        b'}' => {
-            depth -= 1;
-            false
+    }
+
+    fn binds_admin<'f>(mut members: impl Iterator<Item = &'f syn::Member>) -> bool {
+        members.any(|m| matches!(m, syn::Member::Named(ident) if plain(ident) == "admin"))
+    }
+}
+
+impl<'ast> syn::visit::Visit<'ast> for Finder<'_> {
+    fn visit_expr_field(&mut self, field: &'ast syn::ExprField) {
+        if matches!(&field.member, syn::Member::Named(ident) if plain(ident) == "admin") {
+            self.add(".admin");
         }
-        _ => false,
-    })?;
-    Some((open, close))
+        syn::visit::visit_expr_field(self, field);
+    }
+
+    fn visit_pat_struct(&mut self, pat: &'ast syn::PatStruct) {
+        if Self::binds_admin(pat.fields.iter().map(|f| &f.member)) {
+            self.add(DESTRUCTURED);
+        }
+        syn::visit::visit_pat_struct(self, pat);
+    }
+
+    fn visit_expr_struct(&mut self, expr: &'ast syn::ExprStruct) {
+        // A struct literal is a write, except inside a macro body, where a
+        // base-less one may be a pattern: counted, failing closed.
+        if self.in_macro
+            && expr.rest.is_none()
+            && Self::binds_admin(expr.fields.iter().map(|f| &f.member))
+        {
+            self.add(DESTRUCTURED);
+        }
+        syn::visit::visit_expr_struct(self, expr);
+    }
+
+    fn visit_path(&mut self, path: &'ast syn::Path) {
+        self.path_occurrence(&segments(path));
+        syn::visit::visit_path(self, path);
+    }
+
+    fn visit_expr_call(&mut self, call: &'ast syn::ExprCall) {
+        if let syn::Expr::Path(func) = &*call.func {
+            self.call_occurrence(&segments(&func.path));
+        }
+        syn::visit::visit_expr_call(self, call);
+    }
+
+    fn visit_expr_method_call(&mut self, call: &'ast syn::ExprMethodCall) {
+        self.method_occurrence(&plain(&call.method), call.args.is_empty());
+        syn::visit::visit_expr_method_call(self, call);
+    }
+
+    fn visit_pat_ident(&mut self, pat: &'ast syn::PatIdent) {
+        // A bare name in a pattern may be a variant brought in by `use`.
+        if pat.subpat.is_none() && pat.by_ref.is_none() && pat.mutability.is_none() {
+            let name = vec![plain(&pat.ident)];
+            if self.aliases.readings(&name).len() > 1 {
+                self.path_occurrence(&name);
+            }
+        }
+        syn::visit::visit_pat_ident(self, pat);
+    }
+
+    fn visit_macro(&mut self, mac: &'ast syn::Macro) {
+        self.visit_path(&mac.path);
+        if let Some((expr, pat, guard)) = crate::gateway::syn_scan_support::matches_parts(mac) {
+            let was = std::mem::replace(&mut self.in_macro, true);
+            self.visit_expr(&expr);
+            self.visit_pat(&pat);
+            if let Some(guard) = &guard {
+                self.visit_expr(guard);
+            }
+            self.in_macro = was;
+        } else {
+            macro_body(self, Body::Mac(mac));
+        }
+    }
+
+    fn visit_attribute(&mut self, attr: &'ast syn::Attribute) {
+        if let syn::Meta::List(list) = &attr.meta {
+            macro_body(self, Body::List(list));
+        }
+    }
+}
+
+/// A macro's or an attribute's body, parsed in place, so no token-stream type
+/// is named and no dependency is added.
+#[derive(Clone, Copy)]
+enum Body<'a> {
+    Mac(&'a syn::Macro),
+    List(&'a syn::MetaList),
+}
+
+impl Body<'_> {
+    fn parse<T>(self, parser: impl syn::parse::Parser<Output = T>) -> syn::Result<T> {
+        match self {
+            Self::Mac(mac) => mac.parse_body_with(parser),
+            Self::List(list) => list.parse_args_with(parser),
+        }
+    }
+}
+
+/// Visit whatever syntax a macro or attribute body holds, as a macro body:
+/// comma-separated expressions, else comma-separated patterns, else, as a last
+/// resort, a walk of its tokens.
+fn macro_body(finder: &mut Finder<'_>, body: Body<'_>) {
+    use syn::visit::Visit;
+    let was = std::mem::replace(&mut finder.in_macro, true);
+    let exprs =
+        body.parse(syn::punctuated::Punctuated::<syn::Expr, syn::Token![,]>::parse_terminated);
+    if let Ok(exprs) = exprs {
+        for expr in &exprs {
+            finder.visit_expr(expr);
+        }
+    } else if let Ok(pats) = body.parse(|input: syn::parse::ParseStream| {
+        syn::punctuated::Punctuated::<syn::Pat, syn::Token![,]>::parse_terminated_with(
+            input,
+            syn::Pat::parse_multi_with_leading_vert,
+        )
+    }) {
+        for pat in &pats {
+            finder.visit_pat(pat);
+        }
+    } else {
+        token_walk(finder, body);
+    }
+    finder.in_macro = was;
+}
+
+/// A token, reduced to what the walk needs, read with syn's parse API.
+enum Tok {
+    Ident(String),
+    Punct(char),
+    /// A delimited group: `true` for braces.
+    Group(bool, Vec<Tok>),
+    Other,
+}
+
+fn toks(input: syn::parse::ParseStream) -> syn::Result<Vec<Tok>> {
+    let mut out = Vec::new();
+    while !input.is_empty() {
+        if input.peek(syn::token::Brace) {
+            let inner;
+            syn::braced!(inner in input);
+            out.push(Tok::Group(true, toks(&inner)?));
+        } else if input.peek(syn::token::Paren) {
+            let inner;
+            syn::parenthesized!(inner in input);
+            out.push(Tok::Group(false, toks(&inner)?));
+        } else if input.peek(syn::token::Bracket) {
+            let inner;
+            syn::bracketed!(inner in input);
+            out.push(Tok::Group(false, toks(&inner)?));
+        } else {
+            out.push(input.step(|cursor| {
+                if let Some((ident, rest)) = cursor.ident() {
+                    return Ok((Tok::Ident(plain(&ident)), rest));
+                }
+                if let Some((punct, rest)) = cursor.punct() {
+                    return Ok((Tok::Punct(punct.as_char()), rest));
+                }
+                match cursor.token_tree() {
+                    Some((_, rest)) => Ok((Tok::Other, rest)),
+                    None => Err(cursor.error("no token")),
+                }
+            })?);
+        }
+    }
+    Ok(out)
+}
+
+/// The last resort, for a body no parser takes: `.admin`, a brace group with
+/// an `admin` field (before `,`, before a single `:`, or last), and the
+/// monitored names, a multi-segment one only after its own `Segment ::`. Every
+/// identifier is compared after unrawing.
+fn token_walk(finder: &mut Finder<'_>, body: Body<'_>) {
+    if let Ok(trees) = body.parse(toks) {
+        walk(finder, &trees);
+    }
+}
+
+fn walk(finder: &mut Finder<'_>, trees: &[Tok]) {
+    let ident = |t: Option<&Tok>| match t {
+        Some(Tok::Ident(i)) => Some(i.as_str()),
+        _ => None,
+    };
+    let punct = |t: Option<&Tok>, c: char| matches!(t, Some(Tok::Punct(p)) if *p == c);
+    let at = |i: usize, back: usize| i.checked_sub(back).and_then(|k| trees.get(k));
+    for (i, tree) in trees.iter().enumerate() {
+        match tree {
+            Tok::Group(brace, inner) => {
+                if *brace {
+                    let binds = inner.iter().enumerate().any(|(j, t)| {
+                        matches!(t, Tok::Ident(n) if n == "admin")
+                            && !punct(j.checked_sub(1).and_then(|k| inner.get(k)), '.')
+                            && (j + 1 == inner.len()
+                                || punct(inner.get(j + 1), ',')
+                                || (punct(inner.get(j + 1), ':') && !punct(inner.get(j + 2), ':')))
+                    });
+                    if binds {
+                        finder.add(DESTRUCTURED);
+                    }
+                }
+                walk(finder, inner);
+            }
+            Tok::Ident(name) => {
+                let after_dot = punct(at(i, 1), '.');
+                let called = matches!(trees.get(i + 1), Some(Tok::Group(false, _)));
+                let empty_call =
+                    matches!(trees.get(i + 1), Some(Tok::Group(false, g)) if g.is_empty());
+                let qualified = punct(at(i, 1), ':') && punct(at(i, 2), ':');
+                // `A :: B`: the segment before this one, if any.
+                let before = if qualified { ident(at(i, 3)) } else { None };
+                let tail_matches = |tail: &[&str]| match tail {
+                    [last] => *last == name.as_str(),
+                    [.., prev, last] => *last == name.as_str() && before == Some(*prev),
+                    [] => false,
+                };
+                if after_dot && name == "admin" && !called {
+                    finder.add(".admin");
+                }
+                for (key, shape) in SHAPES {
+                    let hit = match shape {
+                        Shape::Path(tail) => tail_matches(tail),
+                        Shape::Call(tail) => called && tail_matches(tail),
+                        Shape::QualifiedCall(last) => called && qualified && *last == name.as_str(),
+                        Shape::NullaryMethod(m) => after_dot && empty_call && *m == name.as_str(),
+                    };
+                    if hit {
+                        finder.add(*key);
+                    }
+                }
+            }
+            Tok::Punct(_) | Tok::Other => {}
+        }
+    }
+}
+
+/// The key a file that does not parse is found under: no reader can be
+/// vouched for in it, so it fails the scan, named.
+const UNPARSED: &str = "<does not parse>";
+/// The key a file is found under when one local name is bound to two
+/// different paths and one of them is monitored.
+const CONFLICT: &str = "<conflicting import>";
+
+/// Whether any binding of one local name to two different paths reaches a
+/// monitored name: an unrelated pair (a `cfg(unix)` and `cfg(windows)` import
+/// of one trait) is not.
+fn conflicting(aliases: &Aliases) -> bool {
+    aliases.named.values().any(|fulls| {
+        let mut distinct = fulls.clone();
+        distinct.sort();
+        distinct.dedup();
+        distinct.len() > 1
+            && distinct.iter().any(|full| {
+                SHAPES.iter().any(|(_, shape)| match shape {
+                    Shape::Path(tail) | Shape::Call(tail) => ends_with(full, tail),
+                    Shape::QualifiedCall(last) | Shape::NullaryMethod(last) => {
+                        full.last().is_some_and(|l| l == last)
+                    }
+                })
+            })
+    })
 }
 
 fn found_in(
@@ -588,11 +934,22 @@ fn found_in(
 ) -> std::collections::BTreeMap<(&'static str, String), usize> {
     let mut found = std::collections::BTreeMap::new();
     for (name, text) in files {
-        for needle in NEEDLES {
-            let n = count(text, needle);
-            if n > 0 {
-                found.insert((*needle, name.clone()), n);
-            }
+        let Ok(file) = syn::parse_file(text) else {
+            found.insert((UNPARSED, name.clone()), 1);
+            continue;
+        };
+        let aliases = Aliases::of(&file);
+        if conflicting(&aliases) {
+            found.insert((CONFLICT, name.clone()), 1);
+        }
+        let mut finder = Finder {
+            aliases: &aliases,
+            counts: std::collections::BTreeMap::new(),
+            in_macro: false,
+        };
+        syn::visit::Visit::visit_file(&mut finder, &file);
+        for (key, n) in finder.counts {
+            found.insert((key, name.clone()), n);
         }
     }
     found
@@ -632,10 +989,7 @@ fn every_admin_standing_reader_is_inventoried() {
 /// accessor is not.
 #[test]
 fn the_scan_finds_a_new_raw_admin_read() {
-    let files = vec![(
-        "src/new.rs".to_owned(),
-        "let a = client.admin; let b = client.admin_standing();".to_owned(),
-    )];
+    let files = file_of("let a = client.admin; let b = client.admin_standing();");
     assert_eq!(
         found_in(&files).get(&(".admin", "src/new.rs".to_owned())),
         Some(&1)
@@ -654,7 +1008,7 @@ fn the_scan_finds_a_destructured_read_and_a_direct_admin_standing() {
         ("Caller { admin: true, ..base }", 0),
     ];
     for (text, want) in cells {
-        let files = vec![("src/new.rs".to_owned(), text.to_owned())];
+        let files = file_of(text);
         assert_eq!(
             found_in(&files)
                 .get(&("{ admin, .. }", "src/new.rs".to_owned()))
@@ -664,10 +1018,7 @@ fn the_scan_finds_a_destructured_read_and_a_direct_admin_standing() {
             "{text}"
         );
     }
-    let files = vec![(
-        "src/new.rs".to_owned(),
-        "let s = CallerStanding::Admin;".to_owned(),
-    )];
+    let files = file_of("let s = CallerStanding::Admin;");
     assert_eq!(
         found_in(&files).get(&("CallerStanding::Admin", "src/new.rs".to_owned())),
         Some(&1)
@@ -689,7 +1040,7 @@ fn the_scan_finds_every_standing_accessor() {
         ("if is_admin(Some(c)) {}", "is_admin("),
         ("let g = BackendGrant::for_ui(Some(c));", "::for_ui("),
     ] {
-        let files = vec![("src/new.rs".to_owned(), text.to_owned())];
+        let files = file_of(text);
         assert_eq!(
             found_in(&files).get(&(needle, "src/new.rs".to_owned())),
             Some(&1),
