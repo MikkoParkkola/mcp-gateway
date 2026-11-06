@@ -274,12 +274,12 @@ fn replay_and_cache_hit_reach_the_tail() {
     let direct = "src/gateway/router/backend_handlers/direct_idempotency.rs";
     only(
         &source(direct),
-        "Ok(SyncAdmission::Replay(response, _, _, _, bindings, _)) => {",
+        "Ok(SyncAdmission::Replay(response, _, _, _, bindings, slot)) => {",
         direct,
     );
     only(
         &source(direct),
-        "Ok((None, Some((response, bindings))))",
+        "Ok((None, Some((response, bindings, slot))))",
         direct,
     );
     only(

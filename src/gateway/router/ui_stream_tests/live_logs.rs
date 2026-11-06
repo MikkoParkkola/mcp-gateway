@@ -621,3 +621,7 @@ async fn s2_activity_and_config_arrive_within_a_second_of_the_change() {
         "each event within a second of its change: activity {activity:?}, config {config:?}"
     );
 }
+
+/// The rows for the replay after a reset and the upkeep timers.
+#[path = "live_logs/recovery_tests.rs"]
+mod recovery;
