@@ -332,7 +332,9 @@ async fn t2_references_templates_and_empty_values_are_kept_and_store_nothing() {
 async fn t3b_a_literal_beside_a_template_is_refused_by_field_before_the_store() {
     let panel = Panel::new().await;
     let before = panel.text();
-    let env = json!({"A": "sk-${X}", "B": "${X:-literal-default}"});
+    // With a plain literal beside them, so a refusal checked after the store step
+    // would touch the store.
+    let env = json!({"A": "sk-${X}", "B": "${X:-literal-default}", "C": TOKEN});
     let expected = json!([
         {"reason": "literal_in_template", "field": "env.A"},
         {"reason": "literal_default", "field": "env.B"},
@@ -353,6 +355,7 @@ async fn t3b_a_literal_beside_a_template_is_refused_by_field_before_the_store() 
     for b in [&body, &body2] {
         no_value(b, "literal-default");
         no_value(b, "sk-$");
+        no_value(b, TOKEN);
     }
     assert_eq!(store.calls(), 0, "a refused value touched the store");
     assert_eq!(panel.text(), before, "a refused save wrote");
