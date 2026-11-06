@@ -162,7 +162,12 @@ fn each_fields_apply_matches_the_reload_classifier() {
     // Both sides through the same extraction, so only the field differs.
     let base = Config::from_file_text("").expect("an empty file extracts");
     for field in FIELDS {
-        let changed = Config::from_file_text(&file_with(field.id)).expect("extracts");
+        // F1's `auth.enabled: false` is the default, so F3 turns it on.
+        let text = match field.id {
+            "auth.enabled" => "auth:\n  enabled: true\n".to_owned(),
+            other => file_with(other),
+        };
+        let changed = Config::from_file_text(&text).expect("extracts");
         let pending = crate::config_reload::diff::pending_restart_fields(&base, &changed);
         assert_eq!(
             field.apply == Apply::Restart,

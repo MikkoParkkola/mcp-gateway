@@ -358,36 +358,48 @@ async fn a_typed_value_is_echoed_as_typed() {
     );
 }
 
-/// D21: a provable edit the loader refuses is `Invalid`.
+/// The reload's own refusal of a posture change (`security::posture::
+/// reload_refusal`): the file is hand-edited to `posture: hardened` after
+/// the gateway started on `standard`.
+const POSTURE_REFUSED: &str = "security.posture requires restart";
+
+/// D21: a provable edit whose result the reload would refuse is `Invalid`.
 #[tokio::test]
 async fn an_edit_the_loader_refuses_is_invalid() {
-    let (_dir, _path, ctx) = gateway("auth:\n  enabled: false\n");
+    let (_dir, path, ctx) = gateway("environment: \"dev\"\n");
+    rewrite(
+        &path,
+        "environment: \"dev\"\nsecurity:\n  posture: hardened\n",
+    );
     let got = ui_diff(
         &ctx,
-        &edit(vec![set(
-            "auth.enabled",
-            Param::default(),
-            Scalar::Bool(true),
-        )]),
+        &edit(vec![set("environment", Param::default(), s("prod"))]),
     )
     .await;
-    assert!(matches!(got, Err(UiRefused::Invalid(_))), "{got:?}");
+    assert!(
+        matches!(&got, Err(UiRefused::Invalid(why)) if why.contains(POSTURE_REFUSED)),
+        "{got:?}"
+    );
 }
 
-/// D22: an unprovable edit the loader refuses is `Invalid`, not a patch.
+/// D22: an unprovable edit whose result the reload would refuse is
+/// `Invalid`, not a patch.
 #[tokio::test]
 async fn an_unprovable_edit_the_loader_refuses_is_invalid_not_a_patch() {
-    let (_dir, _path, ctx) = gateway("x-a: &f false\nauth:\n  enabled: *f\n");
+    let (_dir, path, ctx) = gateway("environment: \"dev\"\n");
+    rewrite(
+        &path,
+        "x-e: &e \"dev\"\nenvironment: *e\nsecurity:\n  posture: hardened\n",
+    );
     let got = ui_diff(
         &ctx,
-        &edit(vec![set(
-            "auth.enabled",
-            Param::default(),
-            Scalar::Bool(true),
-        )]),
+        &edit(vec![set("environment", Param::default(), s("prod"))]),
     )
     .await;
-    assert!(matches!(got, Err(UiRefused::Invalid(_))), "{got:?}");
+    assert!(
+        matches!(&got, Err(UiRefused::Invalid(why)) if why.contains(POSTURE_REFUSED)),
+        "{got:?}"
+    );
 }
 
 /// D23: a trailing comment on the edited line shows as a marker, never its
