@@ -102,11 +102,18 @@ POST_MERGE_SKIPPED = {
 POST_MERGE_PUSH = {"event_name": "push", "ref": f"refs/heads/{RELEASE_LINE}"}
 
 
-def simulate(jobs: dict, c: dict) -> set[str]:
+def simulate(jobs: dict, c: dict, keep_scope: bool = False) -> set[str]:
     """Jobs that run, resolving `needs` in order with each prerequisite's own
-    simulated result, so a kept job behind a skipped one counts as skipped."""
+    simulated result, so a kept job behind a skipped one counts as skipped.
+    `keep_scope`: take the scope job's result and outputs from `c` (a docs-only or
+    failed decision) instead of simulating it as a successful code change."""
     results: dict[str, str] = {}
     pending = dict(jobs)
+    scope_outputs = {"docs_only": "false"}
+    if keep_scope and "scope" in pending:
+        results["scope"] = c["needs"]["scope"]["result"]
+        scope_outputs = c["needs"]["scope"]["outputs"]
+        del pending["scope"]
     while pending:
         progressed = False
         for name, job in list(pending.items()):
@@ -114,8 +121,8 @@ def simulate(jobs: dict, c: dict) -> set[str]:
             needs = [needs] if isinstance(needs, str) else needs
             if any(n not in results for n in needs):
                 continue
-            outputs = {"docs_only": "false"}
-            local = dict(c, needs={n: {"result": results[n], "outputs": outputs if n == "scope" else {}} for n in needs})
+            local = dict(c, needs={n: {"result": results[n], "outputs": scope_outputs if n == "scope" else {}}
+                                   for n in needs})
             results[name] = "success" if runs(job, local) else "skipped"
             del pending[name]
             progressed = True
@@ -314,8 +321,11 @@ def main() -> int:
     # The macOS cases must be able to fail: each mutant is caught by the case
     # named beside it, not merely by some case.
     import copy
+    # The train gate, with the os-sensitive label's alternative inside it.
     gate = (" && (github.event_name != 'pull_request' || (startsWith(github.head_ref, 'train/')"
-            " && github.event.pull_request.head.repo.full_name == github.repository))")
+            " && github.event.pull_request.head.repo.full_name == github.repository)"
+            " || (github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line'"
+            " && contains(github.event.pull_request.labels.*.name, 'os-sensitive')))")
     def ungate(j: dict, job: str) -> None:
         j[job]["if"] = str(j[job]["if"]).replace(gate, "")
     def waits_on_scope(j: dict) -> None:
@@ -327,7 +337,7 @@ def main() -> int:
     def fork_trains_too(j: dict) -> None:
         for job in MACOS_TRAIN:
             j[job]["if"] = str(j[job]["if"]).replace(
-                " && github.event.pull_request.head.repo.full_name == github.repository))", "))")
+                " && github.event.pull_request.head.repo.full_name == github.repository) ||", ") ||")
     def check_loses_always(j: dict) -> None:
         j["macos-check"]["if"] = str(j["macos-check"]["if"]).replace("${{ always() && ", "${{ ")
     macos_mutants = {
