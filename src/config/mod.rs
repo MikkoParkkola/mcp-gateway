@@ -728,6 +728,8 @@ pub mod humantime_serde;
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+mod backend_owner_tests;
+#[cfg(test)]
 mod backend_refs_tests;
 #[cfg(test)]
 mod backend_url_tests;
