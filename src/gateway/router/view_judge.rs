@@ -172,7 +172,7 @@ fn digest_for(
         .or(caller.identity.as_ref());
     let scope = InvokeScope {
         authorizer: &authorizer,
-        is_admin: client.admin,
+        admin: client.admin_standing(),
         api_key_name: Some(&client.name),
         grant_key: client.api_key_identity(),
         agent_id: agent.proven_agent_id(),

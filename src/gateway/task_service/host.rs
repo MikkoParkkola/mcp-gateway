@@ -165,26 +165,34 @@ impl LiveHost {
     }
 
     /// K15: the captured HTTP identity as `generation`'s key table holds it
-    /// now, for queued or continued work about to dispatch. `Ok(None)` keeps
-    /// the captured one (not an API-key caller, or a stdio host, which holds
-    /// none). `Err` is the dispatch's answer: the key that admitted the work
-    /// is gone, expired, re-issued or demoted, and nothing is sent.
+    /// now, for queued or continued work about to dispatch; a key-server or
+    /// OIDC caller is re-judged from its verified `identity` under the
+    /// generation's role mapping. `Ok(None)` keeps the captured one (nothing
+    /// to redo, or a stdio host, which holds none). `Err` is the dispatch's
+    /// answer: the credential that admitted the work is gone, expired,
+    /// re-issued or demoted, and nothing is sent.
     pub(crate) fn rejudge(
         &self,
         router: &OwnedRouterAuthorizer,
+        identity: Option<&crate::key_server::oidc::VerifiedIdentity>,
         generation: &crate::config_reload::Generation,
     ) -> Result<Option<OwnedRouterAuthorizer>, Box<JsonRpcResponse>> {
         let Self::Http(_) = self else {
             return Ok(None);
         };
         router
-            .rejudged(generation.auth(), crate::clock::utc_now().ok())
+            .rejudged(
+                generation.auth(),
+                identity,
+                &generation.config().control_plane.role_mapping,
+                crate::clock::utc_now().ok(),
+            )
             .map_err(|_| {
                 Box::new(JsonRpcResponse::error(
                     Some(crate::protocol::RequestId::Number(0)),
                     -32003,
-                    "The API key this task was created with is no longer valid: a config \
-                     reload removed, expired, re-issued or demoted it.",
+                    "The credential this task was created with is no longer valid as it \
+                     was: a config reload removed, expired, re-issued or demoted it.",
                 ))
             })
     }

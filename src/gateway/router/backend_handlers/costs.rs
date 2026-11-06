@@ -31,7 +31,7 @@ pub(in crate::gateway::router) async fn costs_handler(
     if !request
         .extensions()
         .get::<AuthenticatedClient>()
-        .is_some_and(|c| c.admin)
+        .is_some_and(AuthenticatedClient::is_gateway_admin)
     {
         return (
             StatusCode::FORBIDDEN,

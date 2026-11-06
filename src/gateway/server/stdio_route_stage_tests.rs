@@ -80,7 +80,7 @@ async fn route_stage_as<T>(
     let meta = MetaMcp::new(registry);
     let scope = crate::gateway::meta_mcp::InvokeScope {
         authorizer,
-        is_admin: false,
+        admin: crate::gateway::authz::AdminStanding::None,
         api_key_name: None,
         grant_key: None,
         agent_id: None,

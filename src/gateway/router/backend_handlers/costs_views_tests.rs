@@ -13,7 +13,7 @@ use tower::ServiceExt;
 
 use crate::gateway::router::create_router;
 use crate::gateway::router::tests::{
-    scoped_auth_config, test_router_app_state_with_auth_and_config,
+    full_admin_auth_config, test_router_app_state_with_auth_and_config,
 };
 
 async fn call(
@@ -47,8 +47,9 @@ async fn admin_state() -> (
     Arc<crate::gateway::router::AppState>,
     crate::gateway::router::tests::FixtureDir,
 ) {
+    // The costs route is gateway-wide: it needs an admin scoped to every backend.
     test_router_app_state_with_auth_and_config(
-        &scoped_auth_config(true),
+        &full_admin_auth_config(),
         crate::config::Config::default(),
     )
     .await

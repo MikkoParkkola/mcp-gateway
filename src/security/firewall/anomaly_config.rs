@@ -19,12 +19,31 @@ impl FirewallConfig {
     /// Rule `match` globs are checked only when the firewall is on.
     /// Anomaly thresholds are checked only when `anomaly_detection` is on,
     /// relay settings only when `collusion.action` is not `off`, so a config
-    /// that enables neither loads exactly as before.
+    /// that enables neither loads exactly as before. An empty or
+    /// whitespace-only `memory_poisoning.scan_tools` entry is refused whatever
+    /// is enabled.
     ///
     /// # Errors
     ///
-    /// A message naming the first out-of-range field.
+    /// A message naming the first out-of-range field, or the first blank
+    /// `memory_poisoning.scan_tools` entry.
     pub fn validate(&self) -> Result<(), String> {
+        // `scan_tools` is a substring match: an empty entry is in every tool
+        // name, and a whitespace-only entry is in none. Refused whatever
+        // `enabled` says: neither is ever meant.
+        let scan_tools = &self.memory_poisoning.scan_tools;
+        if let Some(i) = scan_tools.iter().position(|t| t.trim().is_empty()) {
+            let why = if scan_tools[i].is_empty() {
+                "is empty, which matches every tool, so every call would be scanned as a \
+                 memory write"
+            } else {
+                "is only whitespace, which matches no tool, so it scans nothing"
+            };
+            return Err(format!(
+                "security.firewall.memory_poisoning.scan_tools[{i}] {why}. Remove it, or list \
+                 the memory tools' names"
+            ));
+        }
         // A `match` glob that does not parse would fail open at runtime, so it
         // is refused while the rules can run. The message names the rule's
         // path, not its text.
@@ -145,6 +164,56 @@ mod tests {
         let yaml = format!("security:\n  firewall:\n{anomaly}");
         let config: Config = crate::yaml::from_str(&yaml).expect("the YAML parses");
         config.validate()
+    }
+
+    /// `scan_tools` is a substring match, so an empty entry is in every tool
+    /// name and makes every call a memory write. Refused whatever the firewall
+    /// and the scanner say, so turning either on never surfaces it.
+    #[test]
+    fn an_empty_memory_scan_tools_entry_is_refused_at_load() {
+        for firewall in ["true", "false"] {
+            for scanner in ["true", "false"] {
+                let err = load(&format!(
+                    "    enabled: {firewall}\n    memory_poisoning:\n      enabled: {scanner}\n      \
+                     scan_tools: [\"remember\", \"\"]\n"
+                ))
+                .expect_err("an empty entry loaded")
+                .to_string();
+                assert!(
+                    err.contains("security.firewall.memory_poisoning.scan_tools[1]"),
+                    "error does not name the entry: {err}"
+                );
+                assert!(err.contains("every tool"), "error does not say why: {err}");
+            }
+        }
+    }
+
+    /// The boundaries of the refusal: an empty list loads (it scans nothing,
+    /// as configured); an empty entry first is refused at index 0; a
+    /// whitespace-only entry is refused as matching nothing.
+    #[test]
+    fn scan_tools_refusal_boundaries() {
+        load("    memory_poisoning:\n      scan_tools: []\n").expect("an empty list loads");
+        for (list, at, why) in [
+            ("[\"\", \"store\"]", "scan_tools[0]", "every tool"),
+            ("[\"store\", \"  \"]", "scan_tools[1]", "matches no tool"),
+            ("[\"\\t\"]", "scan_tools[0]", "matches no tool"),
+        ] {
+            let err = load(&format!(
+                "    memory_poisoning:\n      scan_tools: {list}\n"
+            ))
+            .expect_err("a blank entry loaded")
+            .to_string();
+            assert!(err.contains(at), "{list}: {err}");
+            assert!(err.contains(why), "{list}: {err}");
+        }
+    }
+
+    /// Case is no load error: matching ignores it.
+    #[test]
+    fn an_uppercase_memory_scan_tools_entry_loads() {
+        load("    memory_poisoning:\n      scan_tools: [\"STORE\", \"Kv_Set\"]\n")
+            .expect("case is no error");
     }
 
     #[test]

@@ -257,7 +257,7 @@ async fn gateway_reload_config_surfaces_restart_required_fields() {
         // reload REPORTS, not about the gate — an operator running it holds
         // a credential.
         MetaMcpCallerContext {
-            is_admin: true,
+            admin: crate::gateway::authz::AdminStanding::Gateway,
             input_capabilities: crate::protocol::meta::Declared::NONE,
             retry: &crate::protocol::mrtr::NO_RETRY,
             ..allow_all_ctx()

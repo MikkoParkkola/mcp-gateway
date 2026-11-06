@@ -136,13 +136,27 @@ fn assert_tasks_made(row: &str, cells: &[(&str, (String, Fixture, bool))]) {
 
 /// W1 (d5, GPT F2; §2a cell 13), record half: the worker has no route-stage
 /// memo, so the step's own record must keep its reason: `beta` and `nosuch`
-/// `denied -32003`, and `ghost` not `denied`. Green at the tip through
+/// `denied -32003`, and `ghost` never the scope refusal. A missing backend is
+/// the gateway's own refusal too (scoped parity, the later ruling), so
+/// `ghost` records `not_found`, `denied -32001`; only the record moved, and
+/// its task answers as the other cells' do (also pinned by R2). Green at the tip through
 /// `may_invoke`'s note (`gate.rs:472`). At the tip intake refuses `nosuch`'s
 /// task (the O1 split), so that cell is checked here once S1 lets it through.
 #[tokio::test]
 async fn w1_a_worker_step_record_keeps_the_scope_refusal() {
     let cells = worker_cells().await;
     assert_tasks_made("W1", &cells);
+    let answer_of = |cell: &str| {
+        cells.iter().find(|(name, _)| *name == cell).map_or_else(
+            || panic!("W1: no {cell} cell"),
+            |(_, (outcome, _, _))| outcome.clone(),
+        )
+    };
+    assert_eq!(
+        answer_of(GHOST),
+        answer_of(WITHHELD),
+        "W1: ghost's task answers as an out-of-scope one does"
+    );
     for (name, (outcome, fx, worked)) in cells {
         if !worked {
             continue;
@@ -150,7 +164,16 @@ async fn w1_a_worker_step_record_keeps_the_scope_refusal() {
         let records = step_record(&fx, name);
         assert_eq!(records.len(), 1, "W1 {name}: {records:?} (task: {outcome})");
         if name == GHOST {
-            assert_ne!(records[0]["outcome"], "denied", "W1 {name}: {records:?}");
+            assert_eq!(
+                records[0]["decision"]["kind"], "not_found",
+                "W1 {name}: {records:?}"
+            );
+            assert_eq!(records[0]["outcome"], "denied", "W1 {name}: {records:?}");
+            assert_eq!(records[0]["error_code"], -32001, "W1 {name}: {records:?}");
+            assert_ne!(
+                records[0]["error_code"], -32003,
+                "W1 {name}: never the scope refusal"
+            );
         } else {
             assert_eq!(records[0]["outcome"], "denied", "W1 {name}: {records:?}");
             assert_eq!(records[0]["error_code"], -32003, "W1 {name}: {records:?}");

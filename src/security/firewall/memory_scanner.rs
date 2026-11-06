@@ -151,7 +151,12 @@ impl MemoryScanner {
     ///
     /// Panics on startup if any pattern is invalid regex — this is a
     /// programming error caught during development, not a runtime condition.
-    pub fn new(config: MemoryPoisoningConfig) -> Self {
+    pub fn new(mut config: MemoryPoisoningConfig) -> Self {
+        // The match is case-insensitive on both sides: `is_memory_write_tool`
+        // lowercases the tool name, so the entries are lowercased once here.
+        for entry in &mut config.scan_tools {
+            *entry = entry.to_lowercase();
+        }
         Self {
             instruction_injection: RegexSet::new(INSTRUCTION_INJECTION_PATTERNS)
                 .expect("instruction injection patterns must compile"),
@@ -590,6 +595,21 @@ mod tests {
         let s = MemoryScanner::new(cfg);
         assert!(s.is_memory_write_tool("write_memory"));
         assert!(!s.is_memory_write_tool("remember"));
+    }
+
+    #[test]
+    fn an_uppercase_scan_tools_entry_still_scans() {
+        // The documented match is case-insensitive on both sides: an entry
+        // written `STORE` scans `store`, `Store` and `kv_STORE_v2`.
+        let cfg = MemoryPoisoningConfig {
+            scan_tools: vec!["STORE".to_string(), "Kv_Set".to_string()],
+            ..MemoryPoisoningConfig::default()
+        };
+        let s = MemoryScanner::new(cfg);
+        for name in ["store", "Store", "kv_STORE_v2", "kv_set", "KV_SET"] {
+            assert!(s.is_memory_write_tool(name), "{name} is a memory write");
+        }
+        assert!(!s.is_memory_write_tool("search"));
     }
 
     // ── Nested JSON values scanned recursively ────────────────────────────────

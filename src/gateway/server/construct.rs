@@ -123,6 +123,10 @@ impl Gateway {
         // one, so the decision has to be made before it, not after.
         let bound_accounts = crate::config::account_bindings::compile(&config)?;
 
+        // The startup load's configured `headers:`/`env:` credentials, held
+        // by the registry before any backend registers and seeds from them.
+        backends.set_load_record(env.take_startup_configured());
+
         // Register backends
         for (name, backend_config) in config.enabled_backends() {
             let effective = match bound_accounts.get(name) {
@@ -151,6 +155,9 @@ impl Gateway {
             );
             info!(backend = %name, transport = %backend_config.transport.transport_type(), "Registered backend");
         }
+        // Startup's registrations used the record: a later patch must set its
+        // own before it applies.
+        let _ = backends.take_load_record();
         if let Some(warning) = config.remote_provenance_warning() {
             warn!("{warning}");
         }

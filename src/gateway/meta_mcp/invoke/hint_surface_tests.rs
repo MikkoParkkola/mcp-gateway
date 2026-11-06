@@ -23,7 +23,11 @@ async fn breaker_hint(exposed: Option<&[&str]>, is_admin: bool) -> String {
         meta = meta.with_exposed_meta_tools(&names);
     }
     let caller = MetaMcpCallerContext {
-        is_admin,
+        admin: if is_admin {
+            crate::gateway::authz::AdminStanding::Gateway
+        } else {
+            crate::gateway::authz::AdminStanding::None
+        },
         ..ctx(&AllowAll)
     };
     let answer: Value = meta

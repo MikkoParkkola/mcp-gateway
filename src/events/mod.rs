@@ -449,6 +449,9 @@ fn tail_policy(config: &EventsConfig) -> store::TailPolicy {
 #[cfg(test)]
 #[path = "lifecycle_tests.rs"]
 mod lifecycle_tests;
+/// The per-user stored row the stored-identity rows share.
+#[cfg(test)]
+pub(crate) mod stored_identity_fixture;
 
 #[cfg(test)]
 #[path = "handle_alias_tests.rs"]

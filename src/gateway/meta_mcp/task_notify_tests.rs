@@ -148,3 +148,156 @@ async fn a_frame_carries_the_task_as_it_is_at_delivery() {
     );
     assert_eq!(pending.frame["params"]["status"], json!("completed"));
 }
+
+/// A gateway whose registry holds backend `alpha`, so it keeps a value set.
+fn gateway_with_alpha(dir: &Arc<tempfile::TempDir>) -> (MetaMcp, Arc<BackendRegistry>) {
+    let registry = Arc::new(BackendRegistry::new());
+    let alpha = crate::backend::Backend::new(
+        "alpha",
+        crate::config::BackendConfig {
+            transport: crate::config::TransportConfig::Stdio {
+                command: "/nonexistent-mcp-binary".to_string(),
+                cwd: None,
+                protocol_version: None,
+            },
+            ..crate::config::BackendConfig::default()
+        },
+        &crate::config::FailsafeConfig::default(),
+        std::time::Duration::from_secs(60),
+    );
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "Test: registers the backend whose value set the row marks"
+    )]
+    let registered = registry.register(Arc::new(alpha));
+    assert!(registered, "premise: registered");
+    let log = logger(dir, AuditFailurePolicy::FailClosed);
+    let mut meta = MetaMcp::new(Arc::clone(&registry));
+    meta.enable_transparency_log(log);
+    (meta, registry)
+}
+
+/// A completed task whose stored result says `text`.
+fn completed(text: &str) -> crate::gateway::task_service::CommittedTask {
+    let mut task = crate::protocol::tasks::Task::create("gateway_invoke")
+        .expect("the test clock reads after 1970");
+    task.complete(&json!({ "content": [{ "type": "text", "text": text }] }))
+        .expect("a live task takes its outcome");
+    crate::gateway::task_service::CommittedTask {
+        task,
+        revision: 2,
+        targets: Vec::new(),
+        targets_recorded: true,
+        output_free: false,
+        error_author: None,
+        owner_digest: String::new(),
+        gateway_writes: crate::gateway::gateway_writes::WriteRecord::default(),
+        bindings: Vec::new(),
+        bindings_recorded: true,
+    }
+}
+
+/// The frame a subscriber gets for `stored`, built on one thread.
+async fn frame_for(meta: &MetaMcp, stored: crate::gateway::task_service::CommittedTask) -> Value {
+    let subscription = SubscriptionId::of_request(RequestId::Number(7));
+    meta.task_notification_frame(
+        &published(),
+        Some(super::sealed_hold::Held::new(
+            stored,
+            super::sealed_hold::CarriedHolds::none(),
+        )),
+        |_| None,
+        &subscription,
+    )
+    .await
+    .expect("a frame is built")
+    .frame
+}
+
+const MARKED: &str = "marked-after-storing-9105";
+
+/// A task notification carries stored output scrubbed against the values
+/// current when it is sent: a value marked after the task was stored is
+/// removed.
+#[tokio::test]
+async fn a_notification_removes_a_value_marked_after_the_task_was_stored() {
+    let dir = Arc::new(tempfile::tempdir().expect("tempdir"));
+    let (meta, registry) = gateway_with_alpha(&dir);
+    let stored = completed(&format!("done {MARKED}"));
+    registry.mark_for_test("alpha", MARKED);
+    let frame = frame_for(&meta, stored).await;
+    let text = frame.to_string();
+    assert!(
+        !text.contains(MARKED),
+        "the notification carries the value: {frame}"
+    );
+    assert!(
+        text.contains("[redacted]"),
+        "the output was dropped, not redacted: {frame}"
+    );
+}
+
+/// When the scrub refuses (a full value set), the notification goes out
+/// status-only, and the log says why the output was withheld.
+#[test]
+fn a_refused_scrub_sends_the_status_only_notification_and_says_why() {
+    let dir = Arc::new(tempfile::tempdir().expect("tempdir"));
+    let (frame, logs) = crate::test_log_capture::capture_warnings(|| {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("a runtime")
+            .block_on(async {
+                let (meta, registry) = gateway_with_alpha(&dir);
+                registry.overflow_for_test("alpha");
+                frame_for(&meta, completed(&format!("done {MARKED}"))).await
+            })
+    });
+    assert!(
+        frame["params"].get("result").is_none(),
+        "the withheld output was sent: {frame}"
+    );
+    assert_eq!(
+        frame["params"]["status"],
+        json!("completed"),
+        "not the published status: {frame}"
+    );
+    assert!(
+        logs.contains("stored task output withheld"),
+        "the log does not say why: {logs}"
+    );
+    assert!(
+        !logs.contains(MARKED),
+        "the log carries stored output: {logs}"
+    );
+}
+
+/// Stored task output the scrub redacts is not the stored text any more, so
+/// the scan says it was rewritten: a notification carrying it commits no
+/// relay receipts for the original. Output with nothing to remove still
+/// reads as delivered.
+#[tokio::test]
+async fn a_stored_output_the_scrub_redacts_reads_as_rewritten() {
+    use super::invoke::egress::EgressOutcome;
+    let dir = Arc::new(tempfile::tempdir().expect("tempdir"));
+    let (meta, registry) = gateway_with_alpha(&dir);
+    registry.mark_for_test("alpha", MARKED);
+    let marked = completed(&format!("done {MARKED}"));
+    let mut value = marked.delivered_wire();
+    assert_eq!(
+        meta.scan_stored_task(&marked, None, &mut value),
+        EgressOutcome::Rewritten,
+        "a redacted stored output read as delivered: {value}"
+    );
+    assert!(
+        !value.to_string().contains(MARKED),
+        "premise: the value was removed: {value}"
+    );
+    let clean = completed("done, nothing secret");
+    let mut value = clean.delivered_wire();
+    assert_eq!(
+        meta.scan_stored_task(&clean, None, &mut value),
+        EgressOutcome::Delivered,
+        "clean stored output read as rewritten: {value}"
+    );
+}

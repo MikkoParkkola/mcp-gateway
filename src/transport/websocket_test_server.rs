@@ -35,6 +35,9 @@ pub(crate) enum Behaviour {
     CloseFirstCall,
     /// Answer `initialize`, then never answer anything.
     SilentRequests,
+    /// As `Normal`, but a `tools/call` answers with the headers of the
+    /// upgrade request its connection arrived with.
+    EchoUpgradeHeaders,
     /// Reject an `initialize` proposing anything outside `speaks` with a
     /// version-mismatch error that lists `speaks`; answer one inside it by
     /// selecting `selects`, whatever was proposed.
@@ -214,8 +217,11 @@ fn answer(frame: &Value, behaviour: Behaviour, seen: &Seen) -> Option<Vec<Value>
                 return None;
             }
             let token = frame["params"]["_meta"]["progressToken"].clone();
-            let echo =
-                json!({ "wire_id": id, "token": token, "arguments": frame["params"]["arguments"] });
+            let echo = if behaviour == Behaviour::EchoUpgradeHeaders {
+                json!({ "upgrade_headers": seen.upgrade_headers.lock().last().cloned() })
+            } else {
+                json!({ "wire_id": id, "token": token, "arguments": frame["params"]["arguments"] })
+            };
             let mut frames = Vec::new();
             if !token.is_null() {
                 frames.push(json!({

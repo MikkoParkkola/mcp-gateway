@@ -594,7 +594,8 @@ impl CapabilityExecutor {
         params: &Value,
         context: &CapabilityExecutionContext,
     ) -> Result<Value> {
-        super::cli::refuse_egress(capability)?;
+        super::cli::refuse_egress(capability)
+            .inspect_err(|_| crate::gateway::delivery_facts::refused_while_vouched())?;
         let params = super::cli::confine_paths(capability, params, &self.process_policy.files)?;
         let Selected {
             tool,

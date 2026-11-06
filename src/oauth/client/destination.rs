@@ -274,6 +274,12 @@ fn cleartext_refusal(what: &str) -> String {
 #[path = "destination_tests.rs"]
 mod tests;
 
+/// Test builds only: the HTTP transport's token-step test
+/// (`transport/http/token_refusal_tests.rs`) drives its detached refresh
+/// with a client whose refresh the destination policy refuses.
+#[cfg(test)]
+pub(crate) use tests::client_with_refused_refresh;
+
 #[cfg(test)]
 #[path = "cleartext_tests.rs"]
 mod cleartext_tests;
