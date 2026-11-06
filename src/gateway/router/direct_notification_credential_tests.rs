@@ -42,12 +42,12 @@ impl crate::identity_propagation::IdentityPropagation for Mint {
         crate::identity_propagation::PropagatedCredential,
         crate::identity_propagation::PropagationError,
     > {
-        if identity.subject == "mallory" {
+        if identity.subject() == "mallory" {
             return Err(crate::identity_propagation::PropagationError::Refuse(
                 "no grant for this principal".to_string(),
             ));
         }
-        let subject_key = identity.subject.clone();
+        let subject_key = identity.subject().to_owned();
         Ok(crate::identity_propagation::PropagatedCredential {
             expiry_synthetic: false,
             headers: vec![(

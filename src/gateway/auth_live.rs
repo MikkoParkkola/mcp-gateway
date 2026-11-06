@@ -292,7 +292,7 @@ pub(super) async fn key_server_credential(
                 expires_at,
                 jti,
                 issued_at,
-                provider_sha256: provider_fingerprint(ks, &identity.issuer),
+                provider_sha256: provider_fingerprint(ks, identity.issuer()),
             },
             identity,
         },

@@ -75,7 +75,7 @@ impl crate::identity_propagation::IdentityPropagation for PerIdentityMint {
         if self.0.hang_mints.load(SeqCst) {
             std::future::pending::<()>().await;
         }
-        let subject_key = identity.subject.clone();
+        let subject_key = identity.subject().to_owned();
         Ok(crate::identity_propagation::PropagatedCredential {
             expiry_synthetic: false,
             headers: vec![(
