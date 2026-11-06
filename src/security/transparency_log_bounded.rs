@@ -280,6 +280,11 @@ impl TransparencyLogger {
 
 #[cfg(test)]
 impl TransparencyLogger {
+    /// Close the append permit, as a logger shutting down would.
+    pub(crate) fn close_append_permit_for_test(&self) {
+        self.bound.permit.close();
+    }
+
     /// Take the one append permit, as an append in progress holds it.
     pub(crate) async fn hold_append_permit_for_test(&self) -> tokio::sync::OwnedSemaphorePermit {
         Arc::clone(&self.bound.permit)
