@@ -337,9 +337,9 @@ accounts:
     };
     let desk_identity = resolved(&desk).expect("desk assertion resolves");
     let laptop_identity = resolved(&laptop).expect("laptop assertion resolves");
-    assert_eq!(desk_identity.subject, "alice");
-    assert_eq!(laptop_identity.subject, "alice");
-    assert_ne!(desk_identity.issuer, laptop_identity.issuer);
+    assert_eq!(desk_identity.subject(), "alice");
+    assert_eq!(laptop_identity.subject(), "alice");
+    assert_ne!(desk_identity.issuer(), laptop_identity.issuer());
     assert_ne!(
         desk_identity.stable_actor_id(),
         laptop_identity.stable_actor_id()

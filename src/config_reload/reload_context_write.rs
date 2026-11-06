@@ -90,6 +90,12 @@ impl ReloadContext {
             .await
             .inspect_err(|_| self.reporting.tally.skipped())?;
         locked.may_write(path)?;
+        // While the firewall runs, nothing it would refuse is written: the
+        // reload that follows would refuse it, leaving the file and the
+        // running rules apart.
+        #[cfg(feature = "firewall")]
+        crate::security::firewall::refuse_while_running(self.live_config.running(), config)
+            .map_err(|e| format!("Failed to validate config: {e}"))?;
         crate::config_persistence::write_config_with(
             &locked.target,
             config,
@@ -193,6 +199,9 @@ impl ReloadContext {
         // A write that changes nothing still reloads: a retry after a failed
         // reload finds its value on disk and must not leave the runtime stale.
         locked.may_write(path)?;
+        #[cfg(feature = "firewall")]
+        crate::security::firewall::refuse_while_running(self.live_config.running(), &config)
+            .map_err(|e| format!("Failed to validate config: {e}"))?;
         crate::config_persistence::write_config_with(target, &config, mode, &locked.held)?;
         let outcome = self
             .reload_outcome_locked_at(target)

@@ -76,8 +76,11 @@ MACOS_TRAIN = {"macos-shards", "macos-check"}
 # them out (their docs-only membership above still applies on a train).
 HEAVY_TRAIN = {
     "windows-shards", "windows-clippy", "windows-check", "release-script-tests",
-    "task-sdk-recovery", "gws-dry-run", "linux-keychain", "kani", "upgrade-rehearsal",
+    "task-sdk-recovery", "gws-dry-run", "linux-keychain", "upgrade-rehearsal",
 }
+# Kani is not train-only: a lane pull request that is not docs-only runs it too, so code that
+# does not compile under cfg(kani) fails its own CI, not a train (train 40l attempt 2 lost a full
+# train CI to two assert!-only variables). It stays in SKIPPED and POST_MERGE_SKIPPED.
 HEAVY_GATE = "heavy-gate"
 BINARY_STEPS = ("Build the shipped binary", "Verify pins with cap validate (real files accepted, tampered copy refused)")
 

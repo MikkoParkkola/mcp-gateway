@@ -238,7 +238,7 @@ impl TokenStore for InMemoryTokenStore {
 
         for entry in &self.by_bearer {
             let identity = &entry.value().identity;
-            if identity.issuer == issuer && identity.subject == subject {
+            if identity.issuer() == issuer && identity.subject() == subject {
                 jtis_to_revoke.push(entry.value().jti.clone());
             }
         }
@@ -255,7 +255,9 @@ impl TokenStore for InMemoryTokenStore {
             .iter()
             .filter(|e| {
                 let identity = &e.value().identity;
-                identity.issuer == issuer && identity.subject == subject && !e.value().aged_out()
+                identity.issuer() == issuer
+                    && identity.subject() == subject
+                    && !e.value().aged_out()
             })
             .count()
     }
@@ -380,7 +382,7 @@ mod tests {
 
         // THEN: the token is returned
         assert!(found.is_some());
-        assert_eq!(found.unwrap().identity.email, "alice@company.com");
+        assert_eq!(found.unwrap().identity.email(), "alice@company.com");
     }
 
     #[tokio::test]

@@ -109,7 +109,10 @@ fn tool_limits() -> Value {
 /// read as "the firewall is built and no rule is configured".
 #[cfg(feature = "firewall")]
 fn finding_rules(config: &Config) -> Value {
-    super::policies_rules::finding_rules(&config.security.firewall.rules)
+    super::policies_rules::finding_rules(
+        &config.security.firewall.rules,
+        &crate::security::firewall::RuleKeys::of(config),
+    )
 }
 
 #[cfg(not(feature = "firewall"))]

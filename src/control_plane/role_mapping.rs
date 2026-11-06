@@ -105,13 +105,18 @@ impl ControlPlaneRoleRule {
     /// True when `identity` satisfies this rule: the issuer must match exactly
     /// AND every present discriminator must match.
     fn matches(&self, identity: &VerifiedIdentity) -> bool {
-        if identity.issuer != self.issuer {
+        if identity.issuer() != self.issuer {
             return false;
         }
         if let Some(group) = &self.group {
             // Symmetric with email/domain: an empty rule group, or an empty
             // identity group entry, must never match.
-            if group.is_empty() || !identity.groups.iter().any(|g| !g.is_empty() && g == group) {
+            if group.is_empty()
+                || !identity
+                    .groups()
+                    .iter()
+                    .any(|g| !g.is_empty() && g == group)
+            {
                 return false;
             }
         }
@@ -120,8 +125,8 @@ impl ControlPlaneRoleRule {
             // match: a token with no `email` claim resolves to "" and must not
             // satisfy an email discriminator.
             if email.is_empty()
-                || identity.email.is_empty()
-                || !identity.email.eq_ignore_ascii_case(email)
+                || identity.email().is_empty()
+                || !identity.email().eq_ignore_ascii_case(email)
             {
                 return false;
             }
@@ -130,7 +135,7 @@ impl ControlPlaneRoleRule {
             // `email_domain` is `None` for a missing email or one without
             // exactly one `@`, so neither can satisfy a domain rule.
             if domain.is_empty()
-                || !email_domain(&identity.email).is_some_and(|d| d.eq_ignore_ascii_case(domain))
+                || !email_domain(identity.email()).is_some_and(|d| d.eq_ignore_ascii_case(domain))
             {
                 return false;
             }

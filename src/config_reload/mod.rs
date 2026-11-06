@@ -739,6 +739,8 @@ mod grant_reload_trigger_tests;
 /// that changes which of them are secret.
 #[cfg(test)]
 mod configured_secrets_reload_tests;
+#[cfg(all(test, feature = "firewall"))]
+mod firewall_shape_reload_tests;
 #[cfg(test)]
 mod grant_audit_crash_tests;
 #[cfg(test)]
