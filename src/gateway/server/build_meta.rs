@@ -59,6 +59,41 @@ pub(super) struct BuiltMetaMcp {
     pub(super) transparency_log: Option<Arc<crate::security::TransparencyLogger>>,
 }
 
+/// The read verdict's mode when it runs while the firewall is off: it runs
+/// on its own switch (`arg_keys` set, `cross_tenant_reads` not `off`), not on
+/// `security.firewall.enabled`.
+#[cfg(feature = "firewall")]
+fn read_verdict_without_firewall(
+    config: &crate::security::firewall::FirewallConfig,
+) -> Option<crate::security::firewall::tenant_guard::CrossTenantReads> {
+    use crate::security::firewall::tenant_guard::CrossTenantReads;
+    let mode = config.tenant_guard.cross_tenant_reads;
+    (!config.enabled && !config.tenant_guard.arg_keys.is_empty() && mode != CrossTenantReads::Off)
+        .then_some(mode)
+}
+
+/// Say at startup that the read verdict still runs with the firewall off: at
+/// WARN under `block`, where answers can be withheld, at INFO under `observe`.
+#[cfg(feature = "firewall")]
+fn announce_read_verdict(config: &crate::security::firewall::FirewallConfig) {
+    use crate::security::firewall::tenant_guard::CrossTenantReads;
+    const STOP: &str = "Set cross_tenant_reads: off to stop it. \
+                        Tenant attribution in audit records also keeps running.";
+    match read_verdict_without_firewall(config) {
+        Some(CrossTenantReads::Block) => warn!(
+            "Security firewall is off; the cross-tenant read verdict \
+             (tenant_guard.cross_tenant_reads: block) still runs on every transport \
+             and answers may be withheld. {STOP}"
+        ),
+        Some(CrossTenantReads::Observe) => info!(
+            "Security firewall is off; the cross-tenant read verdict \
+             (tenant_guard.cross_tenant_reads: observe) still runs on every transport \
+             and only flags. {STOP}"
+        ),
+        Some(CrossTenantReads::Off) | None => {}
+    }
+}
+
 impl Gateway {
     /// A firewall with its own transition tracker, sharing `meta_mcp`'s relay
     /// detector (COLLUDE.1). Both transports build theirs here, so each leaves
@@ -486,6 +521,7 @@ impl Gateway {
         // (see `AppState`); each keeps its own `TransitionTracker`.
         #[cfg(feature = "firewall")]
         {
+            announce_read_verdict(&self.config.security.firewall);
             let fw = self.response_firewall(&meta_mcp);
             Arc::get_mut(&mut meta_mcp)
                 .expect("no other Arc references at this point")
