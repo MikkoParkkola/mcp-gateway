@@ -87,31 +87,31 @@ impl VerifiedIdentity {
     /// The OIDC `sub` claim (opaque user id).
     #[must_use]
     pub fn subject(&self) -> &str {
-        ""
+        &self.subject
     }
 
     /// The email address from the token claims.
     #[must_use]
     pub fn email(&self) -> &str {
-        ""
+        &self.email
     }
 
     /// The display name, when the token carried one.
     #[must_use]
     pub fn name(&self) -> Option<&str> {
-        None
+        self.name.as_deref()
     }
 
     /// Group memberships, from custom claims.
     #[must_use]
     pub fn groups(&self) -> &[String] {
-        &[]
+        &self.groups
     }
 
     /// The issuer URL.
     #[must_use]
     pub fn issuer(&self) -> &str {
-        ""
+        &self.issuer
     }
 }
 
