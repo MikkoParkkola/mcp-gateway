@@ -739,12 +739,17 @@ fn expected_value(change: &Change) -> Option<Value> {
 
 /// Proof 1: `edited` parses to `original` with exactly `changes` applied,
 /// each secret slot holding its own placeholder, and holds every anchor and
-/// alias the original does. Equal values alone are not enough: an alias
-/// replaced by its value compares equal and detaches the shared value. The
-/// editor never writes an anchor or an alias, so an unchanged count proves
-/// none was dropped.
+/// alias the original does when it sets any value. Equal values alone are
+/// not enough: an alias replaced by its value compares equal and detaches
+/// the shared value. The editor never writes an anchor or an alias, so an
+/// unchanged count proves none was dropped. An edit that only removes keys
+/// may take the anchors and aliases inside them (a revoked key's element):
+/// an anchor still used elsewhere fails the reparse below.
 fn meaning_holds(original: &str, changes: &[(FieldPath, Change)], edited: &str) -> bool {
-    if crate::yaml::anchors_and_aliases(original) != crate::yaml::anchors_and_aliases(edited) {
+    let sets_a_value = changes.iter().any(|(_, change)| *change != Change::Remove);
+    if sets_a_value
+        && crate::yaml::anchors_and_aliases(original) != crate::yaml::anchors_and_aliases(edited)
+    {
         return false;
     }
     let Ok(doc) = crate::yaml::from_str::<Value>(original) else {
