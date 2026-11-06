@@ -61,6 +61,16 @@ impl Stream {
     /// caller's assert then says what was missing), and then any more within
     /// `QUIET`, where an extra that must not arrive would show.
     async fn drain_until(&mut self, enough: impl Fn(&[String]) -> bool) -> Vec<String> {
+        let mut out = self.arrive(enough).await;
+        // timing: absence
+        out.extend(self.drain_for_absence(QUIET).await);
+        out
+    }
+
+    /// Payloads until `enough` holds for them, or `HANG_BOUND` passes or the
+    /// stream ends (the caller's assert then says what was missing), with no
+    /// window after: for a row that proves absence by order, not by waiting.
+    async fn arrive(&mut self, enough: impl Fn(&[String]) -> bool) -> Vec<String> {
         let deadline = tokio::time::Instant::now() + HANG_BOUND;
         let mut out = self.take_events();
         while !enough(&out) {
@@ -72,8 +82,6 @@ impl Stream {
                 _ => return out,
             }
         }
-        // timing: absence
-        out.extend(self.drain_for_absence(QUIET).await);
         out
     }
 
@@ -537,26 +545,34 @@ async fn listen_request_params_are_a_read() {
     }
 }
 
-/// The standalone `tenant_read` records in `log_dir` saying `blocked`.
-fn blocked_reads(log_dir: &tempfile::TempDir) -> usize {
-    log_lines(log_dir)
+/// The standalone `tenant_read` records in `log_dir`, and how many of them
+/// say `blocked`.
+fn tenant_reads(log_dir: &tempfile::TempDir) -> (usize, usize) {
+    let records: Vec<Value> = log_lines(log_dir)
         .iter()
         .filter_map(|line| serde_json::from_str::<Value>(line).ok())
-        .filter(|r| {
-            record_field(r, "event") == Some("tenant_read")
-                && record_field(r, "cross_tenant_read") == Some("blocked")
-        })
-        .count()
+        .filter(|r| record_field(r, "event") == Some("tenant_read"))
+        .collect();
+    let blocked = records
+        .iter()
+        .filter(|r| record_field(r, "cross_tenant_read") == Some("blocked"))
+        .count();
+    (records.len(), blocked)
+}
+
+/// Whether one event carries every marker in `all`.
+fn one_event_with(events: &[String], all: &[&str]) -> bool {
+    events.iter().any(|e| all.iter().all(|m| e.contains(m)))
 }
 
 /// Firewall off, `block`: after an A read, a stream item naming B and a
 /// webhook event naming B are withheld from the GET stream, each with a
 /// standalone `tenant_read` record saying `blocked`; with the mode `off`
-/// (the control) both arrive and no verdict is recorded. No quiet window:
-/// the block waits for its two records, then proves the B frames absent by
-/// an A frame broadcast after them arriving with no B before it (one
-/// subscriber's frames keep their order); the control's zero is read after
-/// the rejection audit's barrier.
+/// (the control) each arrives as its own event and no `tenant_read` record
+/// is written. No quiet window: the block waits for its two records, then
+/// proves the B frames absent by an A frame broadcast after them arriving,
+/// with no B before it (one subscriber's frames keep their order); the
+/// control's zero is read after the rejection audit's barrier.
 #[tokio::test]
 async fn stream_items_are_judged_with_the_firewall_off() {
     let who = caller();
@@ -572,28 +588,28 @@ async fn stream_items_are_judged_with_the_firewall_off() {
         post_webhook(&hooks, &json!({ "kind": "row-78", "customer_id": B })).await;
 
         if mode == CrossTenantReads::Off {
-            let got = stream
-                .drain_until(|e| mentions(e, B) && mentions(e, "row-78"))
-                .await;
-            assert!(
-                mentions(&got, B) && mentions(&got, "row-78"),
-                "control: off delivers both B frames: {got:?}"
-            );
+            // The notification is the event naming its uri and B; the
+            // webhook event is the one naming its kind.
+            let both = |e: &[String]| {
+                one_event_with(e, &["rows://latest", B]) && one_event_with(e, &["row-78"])
+            };
+            let got = stream.arrive(both).await;
+            assert!(both(&got), "control: off delivers both B frames: {got:?}");
             state
                 .meta_mcp
                 .rejection_audit()
                 .settled(crate::gateway::outbound::REJECTION_AUDIT_PERMITS as u32)
                 .await;
             assert_eq!(
-                blocked_reads(&log_dir),
+                tenant_reads(&log_dir).0,
                 0,
-                "control: off records no verdict"
+                "control: off writes no tenant_read record"
             );
             continue;
         }
 
         let recorded = crate::test_wait::wait_until(HANG_BOUND, || {
-            let n = blocked_reads(&log_dir);
+            let n = tenant_reads(&log_dir).1;
             async move {
                 if n == 2 {
                     std::ops::ControlFlow::Break(n)
@@ -609,7 +625,11 @@ async fn stream_items_are_judged_with_the_firewall_off() {
             "a standalone tenant_read record for each withheld B frame"
         );
         state.multiplexer.broadcast(names(A));
-        let got = stream.drain_until(|e| mentions(e, A)).await;
+        let got = stream.arrive(|e| mentions(e, A)).await;
+        assert!(
+            mentions(&got, A),
+            "premise: the later A frame arrives, so the order proves absence: {got:?}"
+        );
         assert!(
             !mentions(&got, B) && !mentions(&got, "row-78"),
             "a B frame reached an A reader ahead of the later A frame: {got:?}"

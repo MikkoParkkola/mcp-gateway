@@ -201,7 +201,8 @@ async fn stdio_judges_with_the_firewall_off() {
 }
 
 /// Attribution keeps running with the firewall off: a call whose answer
-/// names A writes its invocation record with A's hashed tenant.
+/// names A writes its invocation record with A's hashed tenant. The request
+/// names another tenant, so A can come only from the answer's attribution.
 #[tokio::test]
 async fn the_invocation_record_names_tenants_with_the_firewall_off() {
     let log_dir = tempfile::tempdir().expect("log dir");
@@ -209,8 +210,10 @@ async fn the_invocation_record_names_tenants_with_the_firewall_off() {
     let meta = judged_meta_answering(Switch::Off, CrossTenantReads::Off, &log_dir, answer).await;
     let reads = meta.stdio_reads();
     assert!(
-        read(&meta, &reads, 1, A).await.delivers_result(),
-        "premise: the A answer is delivered"
+        read(&meta, &reads, 1, "cust-request")
+            .await
+            .delivers_result(),
+        "premise: the answer naming A is delivered"
     );
     let hashed = crate::security::hash_argument(&json!(A));
     let records: Vec<Value> = std::fs::read_to_string(log_dir.path().join("audit.jsonl"))
@@ -220,9 +223,10 @@ async fn the_invocation_record_names_tenants_with_the_firewall_off() {
         .filter(|r| r.get("tool").is_some())
         .collect();
     assert!(
-        records
-            .iter()
-            .any(|r| r.get("tenants") == Some(&json!([hashed]))),
-        "an invocation record carries A's hashed tenant: {records:#?}"
+        records.iter().any(|r| r
+            .get("tenants")
+            .and_then(Value::as_array)
+            .is_some_and(|t| t.contains(&json!(hashed)))),
+        "an invocation record carries A's hashed tenant, read from the answer: {records:#?}"
     );
 }
