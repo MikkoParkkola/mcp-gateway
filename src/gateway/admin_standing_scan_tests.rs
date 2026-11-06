@@ -522,6 +522,8 @@ struct Aliases {
     named: std::collections::BTreeMap<String, Vec<Vec<String>>>,
     globs: Vec<Vec<String>>,
     fns: std::collections::BTreeSet<String>,
+    /// Set when [`Aliases::readings`] stopped at its cap: the file fails named.
+    capped: std::cell::Cell<bool>,
 }
 
 impl Aliases {
@@ -574,7 +576,11 @@ impl Aliases {
             }
         }
         let mut next = 0;
-        while next < out.len() && out.len() < CAP {
+        while next < out.len() {
+            if out.len() >= CAP {
+                self.capped.set(true);
+                break;
+            }
             let current = out[next].clone();
             next += 1;
             let Some((first, rest)) = current.split_first() else {
@@ -903,26 +909,26 @@ fn walk(finder: &mut Finder<'_>, trees: &[Tok]) {
                     finder.add(".admin");
                 }
                 // A callable counts called or taken as a value, as in parsed
-                // syntax ([`path_keys`]).
-                let mut any = false;
+                // syntax ([`path_keys`]): a bare name not called is a local
+                // unless the file defines a function by it.
+                let callable = called || qualified || finder.aliases.fns.contains(name);
+                let mut keys: Vec<&'static str> = Vec::new();
                 for (key, shape) in SHAPES {
                     let hit = match shape {
                         Shape::Path(tail) => tail_matches(tail),
-                        // A bare name not called is a local, as in parsed syntax.
-                        Shape::Call(tail) => (called || qualified) && tail_matches(tail),
+                        Shape::Call(tail) => callable && tail_matches(tail),
                         Shape::QualifiedCall(last) => qualified && *last == name.as_str(),
                         Shape::NullaryMethod(m) => {
                             ((after_dot && empty_call) || qualified) && *m == name.as_str()
                         }
                     };
                     if hit {
-                        finder.add(key);
-                        any = true;
+                        keys.push(key);
                     }
                 }
-                // Not monitored as written: resolve it, with the segment
-                // before it, through the file's imports.
-                if !any && !after_dot {
+                // Also what it names through the file's imports, with the
+                // segment before it; each key once per occurrence.
+                if !after_dot {
                     let path: Vec<String> = before
                         .map(str::to_owned)
                         .into_iter()
@@ -930,10 +936,13 @@ fn walk(finder: &mut Finder<'_>, trees: &[Tok]) {
                         .collect();
                     let readings = finder.aliases.readings(&path);
                     if readings.len() > 1 {
-                        for key in path_keys(&readings, false) {
-                            finder.add(key);
-                        }
+                        keys.extend(path_keys(&readings, false));
                     }
+                }
+                keys.sort_unstable();
+                keys.dedup();
+                for key in keys {
+                    finder.add(key);
                 }
             }
             Tok::Punct(_) | Tok::Other => {}
@@ -947,6 +956,9 @@ const UNPARSED: &str = "<does not parse>";
 /// The key a file is found under when one local name is bound to two
 /// different paths and one of them is monitored.
 const CONFLICT: &str = "<conflicting import>";
+/// The key a file is found under when its imports are too many to resolve
+/// within the cap: a reader could hide behind them, so it fails named.
+const CAPPED: &str = "<import expansion capped>";
 
 /// Whether any binding of one local name to two different paths reaches a
 /// monitored name: an unrelated pair (a `cfg(unix)` and `cfg(windows)` import
@@ -989,6 +1001,9 @@ fn found_in(
         syn::visit::Visit::visit_file(&mut finder, &file);
         for (key, n) in finder.counts {
             found.insert((key, name.clone()), n);
+        }
+        if aliases.capped.get() {
+            found.insert((CAPPED, name.clone()), 1);
         }
     }
     found
@@ -1307,6 +1322,57 @@ fn the_scan_finds_callable_readers_taken_as_values() {
         found(&defined, "resolve_role("),
         1,
         "a function the file defines, taken as a value"
+    );
+}
+
+/// The same forms are found in a macro no parser takes as in parsed syntax:
+/// a file-defined callable taken as a bare value, and a name that matches one
+/// key as written and another through an import (each key once). A file whose
+/// imports are too many to resolve fails named, never silently.
+#[test]
+fn the_token_walk_matches_parsed_syntax_and_a_capped_expansion_fails_named() {
+    let defined = vec![(
+        "src/new.rs".to_owned(),
+        "fn resolve_role() {}\nfn fixture() { check!(s => resolve_role); }".to_owned(),
+    )];
+    assert_eq!(
+        found(&defined, "resolve_role("),
+        1,
+        "a file-defined callable in a token walk"
+    );
+    let both = vec![(
+        "src/new.rs".to_owned(),
+        "use crate::gateway::router::authorization::CallerStanding::of_client as is_admin;\n\
+         fn fixture() { check!(s => is_admin(c)); }"
+            .to_owned(),
+    )];
+    assert_eq!(found(&both, "is_admin("), 1, "the name as written");
+    assert_eq!(
+        found(&both, "CallerStanding::of_client("),
+        1,
+        "and what it imports"
+    );
+    let globs: String = (0..70).map(|i| format!("use crate::m{i}::*;\n")).collect();
+    let crowded = vec![(
+        "src/new.rs".to_owned(),
+        format!(
+            "{globs}use crate::gateway::authz::admin_standing as standing;\n\
+             fn fixture() {{ let _ = standing(true, &[]); }}"
+        ),
+    )];
+    assert_eq!(
+        found(&crowded, "<import expansion capped>"),
+        1,
+        "named, not silent"
+    );
+    let cycle = vec![(
+        "src/new.rs".to_owned(),
+        "use b as a;\nuse a as b;\nfn fixture() { let _ = a(1); check!(s => b(2)); }".to_owned(),
+    )];
+    let all = found_in(&cycle);
+    assert!(
+        all.keys().all(|(_, file)| file != "src/new.rs"),
+        "a cycle of renames ends, reads nothing and is not capped: {all:?}"
     );
 }
 
