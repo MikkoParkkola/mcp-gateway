@@ -122,7 +122,7 @@ fn matches_rule(criteria: &PolicyMatchConfig, identity: &VerifiedIdentity) -> bo
     }
 
     if let Some(ref domain) = criteria.domain
-        && !email_domain(&identity.email()).is_some_and(|d| d.eq_ignore_ascii_case(domain))
+        && !email_domain(identity.email()).is_some_and(|d| d.eq_ignore_ascii_case(domain))
     {
         return false;
     }

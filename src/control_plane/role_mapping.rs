@@ -135,7 +135,7 @@ impl ControlPlaneRoleRule {
             // `email_domain` is `None` for a missing email or one without
             // exactly one `@`, so neither can satisfy a domain rule.
             if domain.is_empty()
-                || !email_domain(&identity.email()).is_some_and(|d| d.eq_ignore_ascii_case(domain))
+                || !email_domain(identity.email()).is_some_and(|d| d.eq_ignore_ascii_case(domain))
             {
                 return false;
             }

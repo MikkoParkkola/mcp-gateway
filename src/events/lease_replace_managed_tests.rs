@@ -60,7 +60,7 @@ impl ListenerMint for Grants {
         _: &str,
         identity: &VerifiedIdentity,
     ) -> Result<Option<String>, FenceRead> {
-        Ok(Some(self.binding(&identity.subject())))
+        Ok(Some(self.binding(identity.subject())))
     }
 }
 

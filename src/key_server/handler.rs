@@ -384,7 +384,7 @@ async fn token_cap_refusal(
 ) -> Option<axum::response::Response> {
     let active_count = ks
         .store
-        .count_for_subject(&identity.issuer(), &identity.subject())
+        .count_for_subject(identity.issuer(), identity.subject())
         .await;
     if active_count < ks.config.max_tokens_per_identity as usize {
         return None;
