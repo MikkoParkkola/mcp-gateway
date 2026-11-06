@@ -99,6 +99,7 @@ impl<'t> Escapes<'t> {
                 return (start < at).then_some((start, end));
             }
             let Some(found) = self.text[self.at..self.end].find('\\') else {
+                lookups::note(self.end - self.at);
                 // None left: later positions must not rescan the literal.
                 self.at = self.end;
                 return None;
@@ -106,9 +107,37 @@ impl<'t> Escapes<'t> {
             let from = self.at + found;
             let (_, used) = json_literal::escape_at(&self.text[from..]);
             let to = (from + used.max(2)).min(self.end);
+            lookups::note(to - self.at);
             self.current = Some((from, to));
             self.at = to;
         }
+    }
+}
+
+/// The literal bytes [`Escapes`] reads on this thread, counted under test
+/// only, as the writer's bytes are: a cost row compares counts, which no load
+/// on the machine moves.
+pub(super) mod lookups {
+    #[cfg(test)]
+    thread_local! {
+        static BYTES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    }
+
+    /// Count `bytes` read.
+    #[inline]
+    pub(super) fn note(bytes: usize) {
+        #[cfg(test)]
+        BYTES.with(|n| n.set(n.get() + bytes));
+        #[cfg(not(test))]
+        let _ = bytes;
+    }
+
+    /// The bytes `run` makes the escape lookups read on this thread.
+    #[cfg(test)]
+    pub(in crate::security::firewall::redactor) fn counted(run: impl FnOnce()) -> usize {
+        let before = BYTES.with(std::cell::Cell::get);
+        run();
+        BYTES.with(std::cell::Cell::get) - before
     }
 }
 

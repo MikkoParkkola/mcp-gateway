@@ -130,6 +130,7 @@ impl ReloadContext {
             overlay: evaluated.overlay,
             secret_refs: evaluated.secret_refs,
             inputs: evaluated.inputs,
+            configured: evaluated.configured,
         })
         .map_err(ReplaceError::ReloadRefused)
     }

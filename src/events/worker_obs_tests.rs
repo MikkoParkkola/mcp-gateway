@@ -65,7 +65,7 @@ fn queued_observed(hub: &EventsHub, services: &Services, port: u16, event: &str)
             .expect("observes")
             .expect("per-user");
         sub.obs_basis = Some(basis);
-        sub.observed_identity = Some(person());
+        sub.observed_identity = Some(crate::events::records::StoredIdentity::from(&person()));
     });
     let row = hub.store.subscriptions().pop().expect("row");
     let observed = hub.observed_now(&row, &config, None).expect("observable");
@@ -325,10 +325,9 @@ async fn held_callback() -> (u16, Arc<tokio::sync::Notify>, Arc<tokio::sync::Not
 
 /// The queued record for `event_id` in the outbox under `dir`, if any.
 fn queued_record(dir: &std::path::Path, event_id: &str) -> Option<serde_json::Value> {
-    std::fs::read_dir(dir.join("outbox"))
-        .ok()?
-        .flatten()
-        .filter_map(|e| serde_json::from_slice(&std::fs::read(e.path()).ok()?).ok())
+    crate::events::records::committed_records(&dir.join("outbox"))
+        .iter()
+        .filter_map(|p| serde_json::from_slice(&std::fs::read(p).ok()?).ok())
         .find(|record: &serde_json::Value| record["event_id"] == event_id)
 }
 

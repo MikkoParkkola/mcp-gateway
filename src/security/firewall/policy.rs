@@ -187,6 +187,24 @@ impl CollusionView {
     pub(crate) const fn action(&self) -> CollusionAction {
         self.action
     }
+
+    /// The view's `sources`, `non_egress` and `allowed_flows` as the pattern
+    /// strings it compiled, for the Policies screen to show what is enforced.
+    /// A copy; the view itself is never changed through it.
+    #[cfg(feature = "webui")]
+    pub(crate) fn lists(&self) -> (Vec<String>, Vec<String>, Vec<(String, String)>) {
+        let strings = |globs: &[glob::Pattern]| -> Vec<String> {
+            globs.iter().map(|g| g.as_str().to_owned()).collect()
+        };
+        (
+            strings(&self.sources),
+            strings(&self.non_egress),
+            self.flows
+                .iter()
+                .map(|(source, egress)| (source.as_str().to_owned(), egress.as_str().to_owned()))
+                .collect(),
+        )
+    }
 }
 
 impl std::fmt::Debug for CollusionView {

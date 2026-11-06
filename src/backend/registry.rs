@@ -12,6 +12,9 @@ use tracing::warn;
 use super::Backend;
 use crate::runtime::{RuntimeDenyReason, RuntimeLicenseTier, RuntimeProviderKind};
 
+#[path = "registry_secret_record.rs"]
+mod secret_record;
+
 /// Coarse lifecycle state of a backend, distinct from its health.
 ///
 /// A backend stopped ON PURPOSE is neither healthy nor failed. Without a third
@@ -231,6 +234,13 @@ pub struct BackendRegistry {
     needles: DashMap<String, Arc<crate::security::needles::NeedleSet>>,
     /// How long a value stays redacted after its last send.
     redaction_grace: std::time::Duration,
+    /// Each backend name's configured `headers:`/`env:` credentials, from the
+    /// load being applied (at startup, or by the reload in progress): what a
+    /// backend registering under that name is seeded with. The pins belong to
+    /// the instance: a later change to this map moves none of them.
+    configured: parking_lot::RwLock<Arc<crate::config::configured_secrets::ConfiguredByBackend>>,
+    /// Set with each load's record, taken by the patch that applies it.
+    record_armed: std::sync::atomic::AtomicBool,
     /// Shared with every backend registered here, and through them with each
     /// stdio tree they hand over: set first by [`Self::stop_all_by`].
     stop_deadline: Arc<crate::transport::StopDeadline>,
@@ -253,6 +263,8 @@ impl BackendRegistry {
             secret_resolver: None,
             needles: DashMap::new(),
             redaction_grace: std::time::Duration::from_secs(24 * 60 * 60),
+            configured: parking_lot::RwLock::default(),
+            record_armed: std::sync::atomic::AtomicBool::new(false),
             stop_deadline: Arc::default(),
         }
     }
@@ -348,7 +360,12 @@ impl BackendRegistry {
             }),
         );
         backend.stamp_needles(needles);
-        backend.seed_needles();
+        let configured = Arc::clone(&*self.configured.read());
+        backend.seed_needles(
+            configured
+                .get(&backend.name)
+                .unwrap_or(&crate::config::configured_secrets::ConfiguredSecrets::default()),
+        );
         // Only reads the flag, but `.write()`: the insert and bump must exclude `with_membership` readers.
         let stopping = self.stopping.write();
         if *stopping {
@@ -390,6 +407,9 @@ impl BackendRegistry {
         self.membership
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         drop(stopping);
+        // Registered now: the values the replaced instance held and this one
+        // lacks start their grace (outside the guard: it may warn).
+        inserted.settle_superseded();
         // Before the insert, so no transition escapes; again after it, so an
         // observer attached meanwhile reaches it here or in the walk.
         if let Some(observer) = self.breaker_observer.get() {
@@ -629,6 +649,19 @@ impl BackendRegistry {
         if let Some((_, gone)) = &removed {
             // The drain finds the name unregistered: the backend shows nothing.
             gone.nudge_tools(super::tools_nudge::NudgeKind::Changed);
+            // Its configured values count their grace from the removal: an
+            // echo still in flight from it is removed until then.
+            // The set is taken out first: no map guard is held while it logs.
+            let set = self
+                .needles
+                .get(name)
+                .map(|entry| Arc::clone(entry.value()));
+            if let Some(set) = set {
+                set.pin_configured(
+                    name,
+                    &crate::config::configured_secrets::ConfiguredSecrets::default(),
+                );
+            }
         }
         removed.is_some()
     }
@@ -710,74 +743,9 @@ mod stop;
 pub(in crate::backend) use stop::seam as stop_seam;
 
 #[cfg(test)]
-mod tests {
-    use std::time::Duration;
+#[path = "registry_stored_scrub_tests.rs"]
+mod stored_scrub_tests;
 
-    use super::*;
-    use crate::config::{BackendConfig, TransportConfig};
-
-    fn stdio_backend(name: &str) -> Arc<Backend> {
-        let cfg = BackendConfig {
-            transport: TransportConfig::Stdio {
-                command: "/nonexistent-mcp-binary".to_string(),
-                cwd: None,
-                protocol_version: None,
-            },
-            ..BackendConfig::default()
-        };
-        Arc::new(Backend::new(
-            name,
-            cfg,
-            &crate::config::FailsafeConfig::default(),
-            Duration::from_secs(60),
-        ))
-    }
-
-    // A backend registered after shutdown has taken its snapshot would never be
-    // stopped, and its process would outlive the gateway. Config reload can
-    // genuinely race shutdown, so the registry refuses late registrations
-    // rather than accepting one it cannot honour.
-    #[tokio::test]
-    async fn a_backend_registered_after_shutdown_is_refused() {
-        let registry = BackendRegistry::new();
-        assert!(
-            registry.register(stdio_backend("before")),
-            "registration before shutdown must be accepted"
-        );
-
-        registry.stop_all().await;
-
-        assert!(
-            !registry.register(stdio_backend("after")),
-            "the registry accepted a backend after shutdown; nothing will ever \
-             stop it"
-        );
-        assert!(
-            registry.get("after").is_none(),
-            "a backend refused during shutdown must not be in the registry"
-        );
-    }
-
-    // A refused registration must not disturb an entry someone else registered
-    // successfully under the same name.
-    #[tokio::test]
-    async fn a_refused_registration_does_not_evict_an_existing_one() {
-        let registry = BackendRegistry::new();
-        let original = stdio_backend("shared-name");
-        assert!(registry.register(Arc::clone(&original)));
-
-        registry.stop_all().await;
-
-        assert!(
-            !registry.register(stdio_backend("shared-name")),
-            "a registration during shutdown must be refused"
-        );
-        let still_there = registry
-            .get("shared-name")
-            .expect("the refused registration evicted an entry it did not create");
-        assert!(
-            Arc::ptr_eq(&still_there, &original),
-            "the entry under this name is not the one that was registered"
-        );
-    }
-}
+#[cfg(test)]
+#[path = "registry_tests.rs"]
+mod tests;
