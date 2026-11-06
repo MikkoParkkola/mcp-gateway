@@ -167,3 +167,46 @@ async fn an_absorbed_refusal_then_a_backend_failure_keeps_no_trace_or_code() {
     assert_eq!(facts.ended_on(), None);
     assert_eq!(facts.withheld_code(), None);
 }
+
+/// A refused step's trace and code never outlive a plan that succeeds.
+#[tokio::test]
+async fn a_plan_that_succeeds_after_a_refused_step_keeps_no_trace_or_code() {
+    let facts = plan_cell(async {
+        let _ = refused_step_noted("refused-trace", -32003).await;
+        composite_ended(CompositeEnd::Succeeded);
+    })
+    .await;
+    assert!(!facts.refused(), "{facts:?}");
+    assert_eq!(facts.ended_on(), None);
+    assert_eq!(facts.withheld_code(), None);
+}
+
+/// A refusal carried past, then a second refused step the plan fails on:
+/// the second step's trace and code are kept, never the first's.
+#[tokio::test]
+async fn a_plan_ending_on_a_later_refused_step_keeps_that_steps_trace_and_code() {
+    let facts = plan_cell(async {
+        let _ = refused_step_noted("first-trace", -32602).await;
+        step_absorbed();
+        let ended = refused_step_noted("second-trace", -32003).await;
+        composite_ended(CompositeEnd::of_outcome(&ended));
+    })
+    .await;
+    assert!(facts.refused(), "{facts:?}");
+    assert_eq!(facts.ended_on().as_deref(), Some("second-trace"));
+    assert_eq!(facts.withheld_code(), Some(-32003));
+}
+
+/// A traced refused step, then a refusal before the next step runs: the plan
+/// ends refused on the later refusal, which has no step trace.
+#[tokio::test]
+async fn a_refusal_before_a_step_leaves_no_ended_on_trace() {
+    let facts = plan_cell(async {
+        let _ = refused_step_noted("refused-trace", -32003).await;
+        refused_before_step();
+        composite_ended(CompositeEnd::Failed);
+    })
+    .await;
+    assert!(facts.refused(), "{facts:?}");
+    assert_eq!(facts.ended_on(), None);
+}
