@@ -339,6 +339,8 @@ pub mod test_helpers {
         /// # Panics
         ///
         /// When any of them was written, removed or created since.
+        // Kani's assert! ignores its message arguments, so `what` is unused there.
+        #[cfg_attr(kani, allow(unused_variables))]
         pub fn assert_unchanged(&self, config: &std::path::Path, what: &str) {
             assert!(
                 Self::snapshot(config) == *self,
@@ -352,6 +354,8 @@ pub mod test_helpers {
         /// # Panics
         ///
         /// When gateway.yaml, its journal or its staged original exists.
+        // Kani's assert! ignores its message arguments, so `what` is unused there.
+        #[cfg_attr(kani, allow(unused_variables))]
         pub fn assert_absent(config: &std::path::Path, what: &str) {
             use crate::config_persistence::journal;
             // Existence, not a read: an unreadable file is still left behind.
