@@ -333,3 +333,132 @@ async fn p3_direct_routing_profile_preflight() {
         ),
     );
 }
+
+/// `alpha` as a per-user backend: the propagating fixture's config (a
+/// required propagation to `aud-alpha`, stateless sessions, over HTTP), so it
+/// keeps per-user catalogues (`pool.rs:375-377`), with `allowed`.
+fn per_user_alpha(allowed: Option<Vec<String>>) -> crate::config::BackendConfig {
+    use crate::identity_propagation::{
+        IdentityPropagationConfig, PropagationStrategyKind, SessionMode,
+    };
+    crate::config::BackendConfig {
+        transport: crate::config::TransportConfig::Http {
+            http_url: "https://alpha.internal/mcp".to_string(),
+            streamable_http: Some(true),
+            protocol_version: None,
+        },
+        identity_propagation: Some(IdentityPropagationConfig {
+            strategy: PropagationStrategyKind::SignedAssertion,
+            audience: "aud-alpha".to_string(),
+            required: true,
+            session_mode: SessionMode::Stateless,
+            token_exchange_endpoint: None,
+            token_exchange_scope: None,
+        }),
+        allowed_tools: allowed,
+        ..crate::config::BackendConfig::default()
+    }
+}
+
+/// On a per-user backend, a withheld name is answered as an absent one at
+/// once (`key_check.rs:84-86`): `absent_name`'s `METHOD_NOT_FOUND` (-32601,
+/// `absent.rs:9-11`) as a JSON-RPC error on a 200 (`key_check.rs:24-27`).
+const PER_USER_ABSENT: (StatusCode, Form, i64) = (StatusCode::OK, Form::RpcError, -32601);
+
+/// T2b: T2 on a per-user backend (found while coding: the per-user and the
+/// shared catalogue answer a withheld name at different sites). No denial
+/// code is noted, so the record reads the answer: `error` with its code
+/// (`direct_audit.rs:94-96`).
+#[tokio::test]
+async fn t2b_direct_allowed_tools_per_user() {
+    let dir = Arc::new(tempfile::tempdir().expect("a log directory"));
+    let fx = table(&dir).await;
+    let calls = super::direct_guards_fixture::replace_backend_configured(
+        &fx,
+        "alpha",
+        per_user_alpha(Some(vec!["write".to_string()])),
+    );
+    assert!(
+        fx.state
+            .backends
+            .get("alpha")
+            .expect("alpha")
+            .keeps_per_user_catalogues(),
+        "premise: alpha keeps per-user catalogues"
+    );
+    let before = records(&dir).len();
+    let answer = post_direct(&fx, "alpha", "k-std", "read", json!({}), None, None).await;
+    let (status, form, code) = PER_USER_ABSENT;
+    let withheld = Refusal {
+        status,
+        form,
+        outcome: "error",
+        code: Some(code),
+    };
+    let decision = refused(&fx, &dir, answer, (before, 0), withheld);
+    assert_eq!(
+        calls.load(std::sync::atomic::Ordering::SeqCst),
+        0,
+        "alpha was sent the call"
+    );
+    assert_row(
+        &decision,
+        &refusal(
+            "t2b_direct_allowed_tools_per_user",
+            "allowed_tools",
+            "kind-only site: noted with no rule id",
+        ),
+    );
+}
+
+/// P3b: P3 on a per-user backend (found while coding, with T2b). The
+/// preflight notes the profile refusal's -32600 (`backend_handlers.rs:162-167`),
+/// so the record is `denied` with it (`direct_audit.rs:353-358`), whatever the
+/// per-user answer is.
+#[tokio::test]
+async fn p3b_direct_routing_profile_preflight_per_user() {
+    use crate::routing_profile::{ProfileRegistry, RoutingProfileConfig};
+    let dir = Arc::new(tempfile::tempdir().expect("a log directory"));
+    let log = logger(&dir, AuditFailurePolicy::FailClosed);
+    let meta_log = Arc::clone(&log);
+    let profiles = std::collections::HashMap::from([(
+        "restricted".to_string(),
+        RoutingProfileConfig {
+            deny_tools: Some(vec!["read".to_string()]),
+            ..RoutingProfileConfig::default()
+        },
+    )]);
+    let fx = fixture_logged(Answer::Ok, log, |mut meta| {
+        meta.enable_transparency_log(meta_log);
+        meta.with_profile_registry(ProfileRegistry::from_config(&profiles, "restricted"))
+    })
+    .await;
+    let calls = super::direct_guards_fixture::replace_backend_configured(
+        &fx,
+        "alpha",
+        per_user_alpha(None),
+    );
+    let before = records(&dir).len();
+    let answer = post_direct(&fx, "alpha", "k-std", "read", json!({}), None, None).await;
+    let (status, form, _) = PER_USER_ABSENT;
+    let withheld = Refusal {
+        status,
+        form,
+        outcome: "denied",
+        code: Some(-32600),
+    };
+    let decision = refused(&fx, &dir, answer, (before, 0), withheld);
+    assert_eq!(
+        calls.load(std::sync::atomic::Ordering::SeqCst),
+        0,
+        "alpha was sent the call"
+    );
+    assert_row(
+        &decision,
+        &refusal(
+            "p3b_direct_routing_profile_preflight_per_user",
+            "routing_profile",
+            "kind-only site: noted with no rule id",
+        ),
+    );
+}
