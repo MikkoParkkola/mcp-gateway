@@ -512,3 +512,16 @@ impl Gateway {
         })
     }
 }
+
+#[cfg(test)]
+impl Gateway {
+    /// The mTLS policy the production builder compiles from this gateway's
+    /// config, with the rule key its ids are computed under, for a row that
+    /// installs that policy on a router.
+    pub(crate) async fn built_mtls_policy_for_test(
+        &self,
+    ) -> Result<(Arc<MtlsPolicy>, crate::security::rule_id::RuleKey)> {
+        let built = self.build_meta_mcp().await?;
+        Ok((built.mtls_policy, built.record_key.rule_id_key()))
+    }
+}

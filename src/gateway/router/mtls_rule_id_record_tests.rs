@@ -23,14 +23,19 @@ fn rule_key(fx: &Logged) -> RuleKey {
 /// The fixture with `config` as its mTLS policy, keyed under the gateway's
 /// rule key.
 async fn with_policy(config: MtlsConfig) -> Logged {
-    let mut logged = fixture(super::Answer::Ok, None).await;
+    let logged = fixture(super::Answer::Ok, None).await;
     let key = rule_key(&logged);
+    let policy = crate::mtls::MtlsPolicy::from_config_keyed(&config, &key);
+    installed(logged, std::sync::Arc::new(policy))
+}
+
+/// `logged` with `policy` as its mTLS policy.
+fn installed(mut logged: Logged, policy: std::sync::Arc<crate::mtls::MtlsPolicy>) -> Logged {
     // The router holds the state; drop it to install the policy.
     logged.fx.router = axum::Router::new();
     std::sync::Arc::get_mut(&mut logged.fx.state)
         .expect("sole owner during setup")
-        .mtls_policy =
-        std::sync::Arc::new(crate::mtls::MtlsPolicy::from_config_keyed(&config, &key));
+        .mtls_policy = policy;
     logged.fx.router = super::super::create_router(std::sync::Arc::clone(&logged.fx.state));
     logged
 }
@@ -249,5 +254,36 @@ async fn hidden_backend(fx: &Logged, cn: Option<&str>) {
     assert!(
         !answer.contains("read"),
         "the answer names a tool: {answer}"
+    );
+}
+
+/// The policy as the production builder compiles it from config, under that
+/// gateway's own record key: a refusal names rule B by the id the gateway's
+/// rule key gives it, so an unkeyed production build is seen.
+#[tokio::test(flavor = "current_thread")]
+async fn a_production_built_mtls_policy_records_its_rule_id() {
+    let dir = tempfile::tempdir().expect("a temp dir");
+    let mut config = crate::config::Config::default();
+    config.mtls = enabled(deny_write_rules());
+    config.tasks.store_dir = dir.path().join("tasks").to_string_lossy().into_owned();
+    let gateway = crate::gateway::Gateway::new(config)
+        .await
+        .expect("valid config");
+    let (policy, key) = Box::pin(gateway.built_mtls_policy_for_test())
+        .await
+        .expect("the production builder runs");
+    let fx = installed(fixture(super::Answer::Ok, None).await, policy);
+    let expected = mtls_id(&key, &deny_write_rules()[1]);
+    let got = call_cert(&fx, Route::MetaInvoke, "write", Some("agent-1")).await;
+    assert!(
+        got.refused && got.kind == "mtls",
+        "premise, refused by mTLS: {got:?}"
+    );
+    assert_eq!(
+        got.rule,
+        json!(expected.as_str()),
+        "expected rule_id {}, got {}",
+        expected.as_str(),
+        got.rule
     );
 }
