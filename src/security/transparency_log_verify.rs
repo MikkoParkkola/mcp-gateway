@@ -366,6 +366,9 @@ impl<'a> Stream<'a> {
             Ok(()) => self.finish(files, hw, mode, pin),
             failed => failed,
         };
+        // Read apart from the verdict, and reported even when the chain check
+        // failed: a failing log (its mark survived and names the lost
+        // records) still names the log it replaced.
         if let Some((_, oldest)) = files.first()
             && let Some(warning) = super::identity::predecessor_warning(oldest)?
         {

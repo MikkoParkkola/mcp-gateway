@@ -310,15 +310,17 @@ pub(super) fn recover(
     if minted || unfinished {
         #[cfg(test)]
         super::kill::point(super::kill::At::BeforeIdentified);
-        chain_onto(&mut state, config, identity::identified_fields(&id))?;
+        // The marker first: a crash before the identified record keeps it,
+        // and the unfinished-genesis repair then adds the identified record.
         if minted
             && gone
             && let Some(fields) = identity::predecessor_fields(held, hw.as_ref())
         {
+            chain_onto(&mut state, config, fields)?;
             #[cfg(test)]
             super::kill::point(super::kill::At::BetweenIdentityRecords);
-            chain_onto(&mut state, config, fields)?;
         }
+        chain_onto(&mut state, config, identity::identified_fields(&id))?;
         write_mark(
             path,
             config,

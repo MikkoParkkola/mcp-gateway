@@ -18,7 +18,9 @@ use super::segments::{self, HighWater, Segment};
 /// written before the id existed), and records the mint of one.
 pub(crate) const EV_IDENTIFIED: &str = "audit_log_identified";
 
-/// Follows the identified record of a new genesis whose predecessor is gone,
+/// Precedes the identified record of a new genesis whose predecessor is gone
+/// (written first, so a crash before the identified record keeps it and the
+/// unfinished-genesis repair adds that record),
 /// naming what evidence of it survived: `previous_log_id` when a live logger
 /// held the old id, `previous_high_water` (`counter`, `entry_hash`) when the
 /// old `.hwm` survived. It does not cover a deletion that also removed `.hwm`
@@ -30,8 +32,8 @@ pub(crate) const EV_PREDECESSOR_MISSING: &str = "audit_log_predecessor_missing";
 pub(crate) const RESERVED_EVENTS: [&str; 2] = [EV_IDENTIFIED, EV_PREDECESSOR_MISSING];
 
 /// How many records from the start of the oldest file can hold the marker:
-/// open, mark-missing, identified, then the marker.
-const MARKER_HEAD: usize = 4;
+/// open, mark-missing, then the marker.
+const MARKER_HEAD: usize = 3;
 
 /// An audit log's identity. Opaque: compare, display, never parse.
 #[derive(Debug, Clone, PartialEq, Eq)]
