@@ -5,8 +5,10 @@
 //! where it is delivered (sealed errors at the outlets, the rest per site),
 //! so a new framing site or a new refusal must be looked at, not slipped in.
 //!
-//! Two baselines, compared exactly (a count that moves up or down, or a key
-//! that appears or vanishes, fails):
+//! Two baselines, each a base table plus `<name>.d/<n>.tsv` fragments read
+//! through [`pin_table`], compared exactly as multisets (a count that moves
+//! up or down, a key that appears or vanishes, or a key listed twice in any
+//! files, fails):
 //! - `delivery_framing_inventory.tsv`: the generic error builders and
 //!   seal-erasing conversions, by (file, fn, needle, count). Inventoried,
 //!   not classified.
@@ -16,8 +18,8 @@
 //!   answer, and an `Error::Forbidden`, `GatewayRefused` or
 //!   `ResponseFirewallRefused` built. Classified per site.
 //!
-//! Regenerating either is a reviewed diff, never a silent refresh: run this
-//! test, copy the printed table, and put the diff in front of a reviewer.
+//! A change adds its rows in its own fragment, so two changes never edit one
+//! file. Changing either table is a reviewed diff, never a silent refresh.
 
 use std::path::Path;
 
@@ -227,19 +229,15 @@ fn table_of(rows: &std::collections::BTreeMap<String, usize>) -> Vec<String> {
     rows.iter().map(|(key, n)| format!("{key}\t{n}")).collect()
 }
 
-const REGENERATE: &str = "regenerate: cargo test --lib delivery_framing -- --nocapture, copy the \
-                          printed table into the .tsv, and have the diff reviewed";
+const REGENERATE: &str = "add the listed rows in a fragment of your own (<name>.d/<n>.tsv), \
+                          remove the listed ones, and have the diff reviewed";
 
 /// The rows of `table` cut to their first `columns` columns (the key and its
 /// count), each with the file holding it.
 fn keyed_rows(table: &Table, columns: usize) -> Vec<(&Path, String)> {
-    // RED STUB: reads only the base `<name>.tsv`, as before fragments.
     table
         .rows()
         .iter()
-        .filter(|(file, _)| {
-            file.extension().is_some_and(|e| e == "tsv") && !file.to_string_lossy().contains(".d/")
-        })
         .map(|(file, line)| {
             let key = line
                 .split('\t')
