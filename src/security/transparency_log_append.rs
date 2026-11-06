@@ -8,7 +8,7 @@ use std::path::Path;
 
 use serde_json::{Map, Value};
 
-use super::identity::LogId;
+use super::identity::{self, LogId};
 use super::rotation::{
     EV_EXPIRED, EV_SEALED, FileId, MAX_RECORD_BYTES, OversizedRecord, file_id, housekeeping,
     now_secs, open_after_seal, path_id, record_head, recover, seal_of, write_mark,
@@ -541,7 +541,7 @@ impl TransparencyLogger {
             Some(&hw),
             now,
             inner.seg.hwm_missing_at,
-            &inner.log_id,
+            &identity::open_fields(&inner.log_id, None),
         )?;
         inner.file = r.file;
         inner.counter = r.counter;

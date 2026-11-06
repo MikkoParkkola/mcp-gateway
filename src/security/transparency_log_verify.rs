@@ -315,6 +315,9 @@ struct Stream<'a> {
     pin_counter: Option<u64>,
     at_pin: Option<String>,
     boundary: Option<(u64, String)>,
+    /// The oldest file's first record passed the per-entry checks, so the
+    /// predecessor evidence it may carry is authenticated.
+    head_checked: bool,
 }
 
 type Verdict = Result<(), (Option<u64>, String)>;
@@ -350,6 +353,7 @@ impl<'a> Stream<'a> {
             pin_counter: None,
             at_pin: None,
             boundary: None,
+            head_checked: false,
         }
     }
 
@@ -370,7 +374,7 @@ impl<'a> Stream<'a> {
         // failed: a failing log (its mark survived and names the lost
         // records) still names the log it replaced.
         if let Some((_, oldest)) = files.first()
-            && let Some(warning) = super::identity::predecessor_warning(oldest)?
+            && let Some(warning) = super::identity::predecessor_warning(oldest, self.head_checked)?
         {
             self.result.warnings.push(warning);
         }
@@ -437,6 +441,7 @@ impl<'a> Stream<'a> {
                 if let Err(e) = self.check_entry(&entry, counter, ln)? {
                     return Ok(Err(e));
                 }
+                self.head_checked |= index == 0 && ln == 0;
                 match field_str(&entry, "event") {
                     Some(EV_SEALED) => {
                         let next = field_u64(&entry, "next_segment_seq")

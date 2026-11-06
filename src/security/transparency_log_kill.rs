@@ -15,9 +15,6 @@ pub(crate) enum At {
     /// Recovery wrote the genesis open record (and its first mark), and not
     /// yet the identified record that names its id.
     BeforeIdentified,
-    /// Recovery wrote one of a new genesis's two identity records (the
-    /// predecessor marker and the identified record) and not the other.
-    BetweenIdentityRecords,
 }
 
 /// The armed boundary and the marker file written on reaching it. Global,

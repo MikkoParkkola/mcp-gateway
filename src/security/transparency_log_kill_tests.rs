@@ -65,7 +65,6 @@ fn child() {
     let at = match at.as_str() {
         "LoggerBuilt" => At::LoggerBuilt,
         "BeforeIdentified" => At::BeforeIdentified,
-        "BetweenIdentityRecords" => At::BetweenIdentityRecords,
         other => panic!("unknown boundary {other}"),
     };
     let dir = PathBuf::from(dir);
