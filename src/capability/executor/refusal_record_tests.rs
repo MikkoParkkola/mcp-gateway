@@ -119,12 +119,13 @@ async fn a_private_destination_records_refused_for_each_protocol() {
 /// error, not a refusal: it is answered as before and records nothing
 /// refused.
 #[tokio::test]
-async fn a_hostless_url_records_no_refusal() {
+async fn a_malformed_url_records_no_refusal() {
     let mut fails = Vec::new();
     for (target, says) in [
         ("file:///tmp/rpc", "has no host"),
         ("rpc-path-only", "not absolute"),
         ("http://[::1/rpc", "Invalid URL"),
+        ("foo:///rpc", "has no host"),
     ] {
         for service in ["rest", "graphql", "jsonrpc"] {
             let (error, effect) = Box::pin(call(service, target, false)).await;
@@ -143,15 +144,33 @@ async fn a_hostless_url_records_no_refusal() {
     assert!(fails.is_empty(), "{fails:#?}");
 }
 
-/// The same malformed URLs on a call that carries a credential: the TLS check
-/// refuses them first (REST, the token endpoint) with its cleartext message,
-/// which is still a configuration error and records nothing refused.
+/// The cleartext check's refusal, which a credential-bearing REST call and a
+/// token refresh answer for any URL it does not pass.
+const CLEARTEXT: &str = "refusing to send a capability credential in cleartext to a host off \
+                         this machine; use https:// (http:// is allowed only on a loopback host)";
+
+/// The same malformed URLs on a call that carries a credential, plus a
+/// non-special scheme with an empty authority (`foo:///rpc`). The TLS check
+/// refuses them first on REST and the token endpoint with its cleartext
+/// message; GraphQL and JSON-RPC reach the destination check first. Each is a
+/// configuration error: the answer is exactly that check's message, and the
+/// record says nothing was refused.
 #[tokio::test]
 async fn a_malformed_url_with_a_credential_records_no_refusal() {
     let mut fails = Vec::new();
-    for target in ["file:///tmp/rpc", "rpc-path-only", "http://[::1/rpc"] {
-        for service in ["rest", "graphql", "jsonrpc"] {
+    for (target, says) in [
+        ("file:///tmp/rpc", "has no host"),
+        ("rpc-path-only", "not absolute"),
+        ("http://[::1/rpc", "Invalid URL"),
+        ("foo:///rpc", "has no host"),
+    ] {
+        for (service, expected) in [("rest", CLEARTEXT), ("graphql", says), ("jsonrpc", says)] {
             let (error, effect) = Box::pin(call(service, target, true)).await;
+            if !error.contains(expected) {
+                fails.push(format!(
+                    "{service} {target}: error is not {expected:?}: {error}"
+                ));
+            }
             if effect == Some(Value::from("refused")) {
                 fails.push(format!("{service} {target}: {error}: recorded refused"));
             }
@@ -166,6 +185,11 @@ async fn a_malformed_url_with_a_credential_records_no_refusal() {
             &CapabilityExecutionContext::default(),
         ))
         .await;
+        if !error.contains(CLEARTEXT) {
+            fails.push(format!(
+                "token endpoint {target}: error is not the cleartext refusal: {error}"
+            ));
+        }
         if effect == Some(Value::from("refused")) {
             fails.push(format!(
                 "token endpoint {target}: {error}: recorded refused"
