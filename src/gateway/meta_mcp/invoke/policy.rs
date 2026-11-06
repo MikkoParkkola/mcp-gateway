@@ -393,13 +393,18 @@ impl MetaMcp {
         }
         let args = serde_json::json!({"server": server, "tool": tool, "arguments": arguments});
         let trace_id = trace::generate();
+        // Called inside the pending step's cell: this record is the step's.
+        crate::gateway::delivery_facts::note_step_trace(&trace_id);
         let recorded_trace = trace_id.clone();
         let recorded = trace::with_trace_id(trace_id, async move {
             if absence == Some(crate::gateway::meta_mcp::scoped_backends::Absence::OutOfScope) {
+                let denial = -32003;
+                // The step cell names the memo's code, which no fold carries.
+                crate::gateway::delivery_facts::note_gate_code(denial);
                 crate::gateway::meta_mcp::visible::memo::note_denial_code(
                     server,
                     tool,
-                    -32003,
+                    denial,
                     Some((
                         crate::security::decision_record::DecisionKind::BackendScope,
                         None,
