@@ -171,6 +171,83 @@ fn normal(path: &Path) -> PathBuf {
     out
 }
 
+/// Each module file under `src/`, with every declaration of it: the
+/// declaring file and whether that declaration's own attribute lines carry a
+/// `cfg` implying `test` (comments are not attributes).
+type Declarations = HashMap<PathBuf, Vec<(PathBuf, bool)>>;
+
+/// Resolve every `mod <name>;` in `files` to its module file, as rustc does:
+/// a `#[path]` relative to the declaring file's folder, else `<name>.rs` or
+/// `<name>/mod.rs` in the declaring module's folder.
+fn declarations(files: &[PathBuf]) -> Declarations {
+    let known: std::collections::HashSet<&PathBuf> = files.iter().collect();
+    let mut declared = Declarations::new();
+    for file in files {
+        let text = std::fs::read_to_string(file).expect("read source");
+        let lines: Vec<&str> = text.lines().collect();
+        let dir = file.parent().expect("a file has a folder");
+        for (at, line) in lines.iter().enumerate() {
+            let Some(name) = declared_module(line) else {
+                continue;
+            };
+            let attributes: Vec<&str> = lines[..at]
+                .iter()
+                .rev()
+                .map(|above| above.trim())
+                .take_while(|above| above.starts_with("#[") || above.starts_with("//"))
+                .filter(|above| above.starts_with("#["))
+                .collect();
+            let gated = attributes.iter().any(|a| {
+                a.strip_prefix("#[cfg(")
+                    .and_then(|rest| rest.strip_suffix(")]"))
+                    .is_some_and(implies_test)
+            });
+            let path = attributes.iter().find_map(|a| {
+                a.strip_prefix("#[path")
+                    .and_then(|rest| rest.split('"').nth(1))
+            });
+            let targets = if let Some(path) = path {
+                vec![normal(&dir.join(path))]
+            } else {
+                let stem = file.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+                let base = if matches!(stem, "mod" | "lib" | "main") {
+                    dir.to_path_buf()
+                } else {
+                    dir.join(stem)
+                };
+                vec![
+                    normal(&base.join(format!("{name}.rs"))),
+                    normal(&base.join(name).join("mod.rs")),
+                ]
+            };
+            for target in targets.into_iter().filter(|t| known.contains(t)) {
+                declared
+                    .entry(target)
+                    .or_default()
+                    .push((file.clone(), gated));
+            }
+        }
+    }
+    declared
+}
+
+/// Whether `file` is compiled only for tests: every declaration of it is
+/// gated, or sits in a file that is. A file nothing declares is not.
+fn test_only(file: &Path, declared: &Declarations, seen: &mut Vec<PathBuf>) -> bool {
+    let Some(by) = declared.get(file) else {
+        return false;
+    };
+    if seen.iter().any(|s| s == file) {
+        return false;
+    }
+    seen.push(file.to_path_buf());
+    let only = by
+        .iter()
+        .all(|(parent, gated)| *gated || test_only(parent, declared, seen));
+    seen.pop();
+    only
+}
+
 /// The scan skips `*_tests/` folders by name, so each must be compiled only
 /// for tests. Every `mod <name>;` under `src/` is resolved to its file, as
 /// rustc does (a `#[path]` relative to the declaring file's folder, else
@@ -204,76 +281,8 @@ fn every_skipped_test_folder_is_compiled_only_for_tests() {
     let (mut files, mut folders) = (Vec::new(), Vec::new());
     walk(Path::new(SRC), &mut files, &mut folders);
     assert!(!folders.is_empty(), "premise: the tree has *_tests folders");
-    let known: std::collections::HashSet<&PathBuf> = files.iter().collect();
 
-    // Module file -> each declaration of it: (declaring file, gated).
-    let mut declared: HashMap<PathBuf, Vec<(PathBuf, bool)>> = HashMap::new();
-    for file in &files {
-        let text = std::fs::read_to_string(file).expect("read source");
-        let lines: Vec<&str> = text.lines().collect();
-        let dir = file.parent().expect("a file has a folder");
-        for (at, line) in lines.iter().enumerate() {
-            let Some(name) = declared_module(line) else {
-                continue;
-            };
-            let attributes: Vec<&str> = lines[..at]
-                .iter()
-                .rev()
-                .map(|above| above.trim())
-                .take_while(|above| above.starts_with("#[") || above.starts_with("//"))
-                .filter(|above| above.starts_with("#["))
-                .collect();
-            let gated = attributes.iter().any(|a| {
-                a.strip_prefix("#[cfg(")
-                    .and_then(|rest| rest.strip_suffix(")]"))
-                    .is_some_and(implies_test)
-            });
-            let path = attributes.iter().find_map(|a| {
-                a.strip_prefix("#[path")
-                    .and_then(|rest| rest.split('"').nth(1))
-            });
-            let targets: Vec<PathBuf> = match path {
-                Some(path) => vec![normal(&dir.join(path))],
-                None => {
-                    let stem = file.file_stem().and_then(|s| s.to_str()).unwrap_or("");
-                    let base = if matches!(stem, "mod" | "lib" | "main") {
-                        dir.to_path_buf()
-                    } else {
-                        dir.join(stem)
-                    };
-                    vec![
-                        normal(&base.join(format!("{name}.rs"))),
-                        normal(&base.join(name).join("mod.rs")),
-                    ]
-                }
-            };
-            for target in targets.into_iter().filter(|t| known.contains(t)) {
-                declared
-                    .entry(target)
-                    .or_default()
-                    .push((file.clone(), gated));
-            }
-        }
-    }
-
-    fn test_only(
-        file: &Path,
-        declared: &HashMap<PathBuf, Vec<(PathBuf, bool)>>,
-        seen: &mut Vec<PathBuf>,
-    ) -> bool {
-        let Some(declarations) = declared.get(file) else {
-            return false;
-        };
-        if seen.iter().any(|s| s == file) {
-            return false;
-        }
-        seen.push(file.to_path_buf());
-        let only = declarations
-            .iter()
-            .all(|(by, gated)| *gated || test_only(by, declared, seen));
-        seen.pop();
-        only
-    }
+    let declared = declarations(&files);
     // The folder a module file's own child modules live in.
     let owned = |module: &Path| -> PathBuf {
         if module.file_name().is_some_and(|n| n == "mod.rs") {

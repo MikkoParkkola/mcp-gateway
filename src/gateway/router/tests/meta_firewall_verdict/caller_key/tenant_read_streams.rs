@@ -598,7 +598,7 @@ async fn stream_items_are_judged_with_the_firewall_off() {
             state
                 .meta_mcp
                 .rejection_audit()
-                .settled(crate::gateway::outbound::REJECTION_AUDIT_PERMITS as u32)
+                .settled(crate::gateway::outbound::REJECTION_AUDIT_PERMITS)
                 .await;
             assert_eq!(
                 tenant_reads(&log_dir).0,
