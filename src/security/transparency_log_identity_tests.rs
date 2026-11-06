@@ -183,3 +183,72 @@ fn a_log_replaced_under_a_live_logger_is_adopted_with_its_id() {
     let raised = l.subscribers.raised();
     assert!(raised.contains(&"log_id"), "raised: {raised:?}");
 }
+
+/// Cut a fresh log back to its genesis open record, as a crash after that
+/// record and before the identified record leaves it: `marked` keeps a mark
+/// at the open record (the crash after the first mark), else none.
+fn unfinish_genesis(path: &Path, marked: bool) {
+    let first = lines(path).remove(0);
+    std::fs::write(path, first.to_string() + "\n").unwrap();
+    std::fs::remove_file(sibling(path, "hwm")).unwrap();
+    if marked {
+        let mark = HighWater {
+            counter: 1,
+            entry_hash: first["entry_hash"].as_str().unwrap().to_string(),
+            segment_seq: 0,
+        };
+        write_hwm(path, &encode_hwm(&mark, b"", "test").unwrap(), true).unwrap();
+    }
+}
+
+#[test]
+fn an_unfinished_genesis_gets_its_one_identified_record() {
+    for marked in [true, false] {
+        // GIVEN: a genesis open record carrying an id, and no identified record
+        let dir = tempfile::tempdir().unwrap();
+        let path = log_path(&dir);
+        let id = TransparencyLogger::open(cfg(&path, 12, false))
+            .unwrap()
+            .log_id();
+        unfinish_genesis(&path, marked);
+        assert!(identified(&path).is_empty(), "the fixture has no id record");
+        assert_eq!(lines(&path)[0]["log_id"].as_str(), Some(id.as_str()));
+
+        // WHEN: it is reopened twice
+        for _ in 0..2 {
+            let again = TransparencyLogger::open(cfg(&path, 12, false)).unwrap();
+            // THEN: the open record's id, every time
+            assert_eq!(again.log_id(), id, "marked: {marked}");
+        }
+
+        // THEN: exactly one identified record, naming that id, and verify passes
+        let found = identified(&path);
+        assert_eq!(found.len(), 1, "marked: {marked}: {found:?}");
+        assert_eq!(found[0]["log_id"].as_str(), Some(id.as_str()));
+        let r = verify(&path, false);
+        assert!(r.ok, "marked: {marked}: {:?}", r.error_message);
+    }
+}
+
+#[test]
+fn a_log_whose_identified_record_expired_gets_no_second_one() {
+    // GIVEN: a log rotated until retention expired the segment that held its
+    // identified record, so open records carry the id and no record names it
+    let dir = tempfile::tempdir().unwrap();
+    let path = log_path(&dir);
+    let l = TransparencyLogger::open(cfg(&path, 12, false)).unwrap();
+    let id = l.log_id();
+    rotate_n(&l, &path, 2);
+    drop(l);
+    let trimmed = TransparencyLogger::open(cfg(&path, 1, false)).unwrap();
+    append(&trimmed, 0);
+    drop(trimmed);
+    assert!(identified(&path).is_empty(), "retention took the id record");
+
+    // WHEN: it is reopened
+    let again = TransparencyLogger::open(cfg(&path, 1, false)).unwrap();
+
+    // THEN: the same id, and still no identified record
+    assert_eq!(again.log_id(), id);
+    assert!(identified(&path).is_empty(), "no second identified record");
+}
