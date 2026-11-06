@@ -109,3 +109,61 @@ async fn a_refused_step_alone_marks_nothing() {
     .await;
     assert!(fields.get("response_effect").is_none(), "{fields:?}");
 }
+
+/// A step the gateway refused with `code` after its record was written under
+/// `trace`.
+async fn refused_step_noted(trace: &str, code: i32) -> crate::Result<()> {
+    step(async {
+        note_step_trace(trace);
+        gateway_folded(code);
+        raise(ResponseEffect::Refused);
+        Err(crate::Error::json_rpc(-32603, "plan step refused"))
+    })
+    .await
+}
+
+/// The plan cell's facts after `run`, as a task worker's dispatch cell reads them.
+async fn plan_cell<F: std::future::Future<Output = ()>>(run: F) -> DeliveryFacts {
+    scope(async move {
+        unvouched();
+        run.await;
+        snapshot().expect("inside a cell")
+    })
+    .await
+}
+
+/// A plan that ends Failed on a refused step keeps that step's record trace
+/// and moves the refusing gate's code into the plan cell.
+#[tokio::test]
+async fn a_plan_ending_on_a_refused_step_keeps_its_trace_and_gate_code() {
+    let facts = plan_cell(async {
+        let _ = served_step().await;
+        let ended = refused_step_noted("step-trace", -32003).await;
+        composite_ended(CompositeEnd::of_outcome(&ended));
+    })
+    .await;
+    assert!(facts.refused(), "{facts:?}");
+    assert_eq!(facts.ended_on().as_deref(), Some("step-trace"));
+    assert_eq!(facts.withheld_code(), Some(-32003));
+}
+
+/// A refusal carried past, then an ordinary failure that ends the plan:
+/// neither the refused step's trace and code nor the failing step's trace
+/// survive the plan's end.
+#[tokio::test]
+async fn an_absorbed_refusal_then_a_backend_failure_keeps_no_trace_or_code() {
+    let facts = plan_cell(async {
+        let _ = refused_step_noted("refused-trace", -32003).await;
+        step_absorbed();
+        let ended = step(async {
+            note_step_trace("failed-trace");
+            Err::<(), _>(crate::Error::Internal("backend down".into()))
+        })
+        .await;
+        composite_ended(CompositeEnd::of_outcome(&ended));
+    })
+    .await;
+    assert!(!facts.refused(), "{facts:?}");
+    assert_eq!(facts.ended_on(), None);
+    assert_eq!(facts.withheld_code(), None);
+}
