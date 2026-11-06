@@ -64,22 +64,22 @@ fn clean() -> Value {
     json!({"content": [{"type": "text", "text": DELIVERED}], "isError": false})
 }
 
-/// The task completed and its result carries the delivered text.
-fn assert_delivered(settled: &Value) {
+/// The task completed and the step result at `step` (a JSON pointer into
+/// the plan's result: a chain's `/results/N/result`, a playbook's
+/// `/output/NAME`) carries the delivered text in its content items.
+fn assert_delivered(settled: &Value, step: &str) {
     assert_eq!(status_of(settled), "completed", "{settled}");
     let result = settled
         .pointer("/result/result")
-        .unwrap_or_else(|| panic!("a completed task carries its result: {settled}"));
+        .and_then(|plan| plan.pointer(step))
+        .unwrap_or_else(|| panic!("a completed task carries step {step}: {settled}"));
     let texts: Vec<&str> = result["content"]
         .as_array()
         .into_iter()
         .flatten()
         .filter_map(|item| item["text"].as_str())
         .collect();
-    assert!(
-        texts.iter().any(|text| text.contains(DELIVERED)),
-        "the delivered text is in the result's content: {settled}"
-    );
+    assert_eq!(texts, [DELIVERED], "step {step} delivered: {settled}");
 }
 
 /// A task-augmented `gateway_execute` chain over `tools`.
@@ -283,7 +283,7 @@ async fn a_playbook_that_continues_past_a_refusal_writes_no_refused_record() {
     register_playbook(&fx.state, "continue", &[json!({}), json!({})]);
     let (task, settled, entries) = fx.run("key-a", playbook_task("key-a")).await;
     assert_eq!(mock.calls(), 2, "premise: the second step ran");
-    assert_delivered(&settled);
+    assert_delivered(&settled, "/output/second");
     assert!(
         settlements(&entries, &task)
             .iter()
@@ -302,7 +302,7 @@ async fn a_composite_that_succeeds_writes_no_settlement_record() {
         .run("key-a", chain_task("key-a", &[mock_tool(), mock_tool()]))
         .await;
     assert_eq!(mock.calls(), 2, "premise: both steps ran");
-    assert_delivered(&settled);
+    assert_delivered(&settled, "/results/1/result");
     assert!(settlements(&entries, &task).is_empty(), "{entries:#?}");
 }
 
