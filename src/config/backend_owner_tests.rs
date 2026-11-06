@@ -17,7 +17,8 @@ fn load(extra: &str) -> anyhow::Result<Config> {
 fn load_text(text: &str) -> anyhow::Result<Config> {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("gateway.yaml");
-    std::fs::write(&path, text).expect("write config");
+    // Owner-only, as the loader requires of a file that can hold credentials.
+    crate::gateway::test_helpers::write_owner_only(&path, text).expect("write config");
     Config::load(Some(&path)).map_err(anyhow::Error::from)
 }
 
@@ -102,7 +103,7 @@ fn o4_a_control_character_anywhere_is_refused() {
 /// O8: a backend without an owner serialises with no `owner` key.
 #[test]
 fn o8_no_owner_serialises_no_key() {
-    let value = crate::yaml::to_value(&BackendConfig::default()).expect("serialises");
+    let value = crate::yaml::to_value(BackendConfig::default()).expect("serialises");
     let mapping = value.as_mapping().expect("a mapping");
     assert!(
         mapping.keys().all(|k| k.as_str() != Some("owner")),

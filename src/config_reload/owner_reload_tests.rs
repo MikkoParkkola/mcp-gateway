@@ -101,13 +101,13 @@ async fn o6_an_owner_only_reload_publishes_and_keeps_the_backend() {
     }
 }
 
-/// O6b: an owner change together with another field still replaces the
-/// backend.
+/// O6b: an owner change together with another field (a timeout off the
+/// 30 s default) still replaces the backend.
 #[tokio::test]
 async fn o6b_an_owner_with_another_change_replaces_the_backend() {
     let gw = Gateway::reloaded_to(&file(&svc(""))).await;
     let first = gw.backend("svc");
-    gw.reload(&file(&svc("    owner: \"Team A\"\n    timeout: 30s\n")))
+    gw.reload(&file(&svc("    owner: \"Team A\"\n    timeout: 45s\n")))
         .await;
     assert!(
         !Arc::ptr_eq(&first, &gw.backend("svc")),
@@ -129,7 +129,7 @@ async fn o6d_a_disabled_backends_owner_waits_for_the_next_publish() {
     assert_eq!(gw.published_owner("off").as_deref(), Some("Old"));
     gw.reload(&file(&format!(
         "{}{}",
-        svc("    timeout: 30s\n"),
+        svc("    timeout: 45s\n"),
         off("New")
     )))
     .await;
