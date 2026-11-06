@@ -479,12 +479,12 @@ impl SignedAssertionStrategy {
         let now = Self::now_secs()?;
         let exp = now + self.ttl_secs;
         let claims = AssertionClaims {
-            sub: identity.subject.clone(),
-            email: identity.email.clone(),
+            sub: identity.subject().to_owned(),
+            email: identity.email().to_owned(),
             iss: Self::ISSUER.to_string(),
             aud: audience.to_string(),
-            tenant: identity.issuer.clone(),
-            groups: identity.groups.clone(),
+            tenant: identity.issuer().to_owned(),
+            groups: identity.groups().to_vec(),
             iat: now,
             nbf: now,
             exp,
