@@ -123,3 +123,44 @@ async fn a_settle_record_reaches_only_readers_of_its_settle_kind() {
     assert!(got.is_ok(), "{got:?}");
     assert_eq!(*told.lock().unwrap(), [SETTLE_SAVE]);
 }
+
+#[test]
+fn no_plain_append_may_write_a_settle_kind() {
+    for entry in ["append_event", "append_event_synced", "attributed"] {
+        // GIVEN: a log, and a plain-kind append through the same entry
+        // before and after
+        let dir = tempfile::tempdir().unwrap();
+        let (path, l) = opened(&dir);
+        let append = |kind: &str| {
+            let mut fields = Map::new();
+            fields.insert("kind".into(), kind.into());
+            let envelope = AuditEnvelope::gateway();
+            match entry {
+                "append_event" => l.append_event(fields, &envelope).map(drop),
+                "append_event_synced" => l.append_event_synced(fields, &envelope).map(drop),
+                _ => l.log_invocation_attributed(
+                    CorrelationKey {
+                        id: "t",
+                        source: CorrelationSource::TraceId,
+                    },
+                    &envelope,
+                    InvocationTarget::meta("alpha", "read"),
+                    "sha256:req",
+                    Some("sha256:resp"),
+                    fields,
+                    None,
+                ),
+            }
+        };
+        assert!(append("save").is_ok(), "{entry}");
+        let before = on_disk(&path);
+
+        // WHEN: the record names a settle kind
+        let refused = append(SETTLE_SAVE);
+
+        // THEN: refused, nothing appended; the next plain append lands
+        assert!(refused.is_err(), "{entry}");
+        assert!(on_disk(&path) == before, "{entry}");
+        assert!(append("save").is_ok(), "{entry}");
+    }
+}
