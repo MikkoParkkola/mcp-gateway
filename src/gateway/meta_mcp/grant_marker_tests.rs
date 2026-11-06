@@ -9,7 +9,10 @@ use std::sync::Arc;
 use serde_json::{Value, json};
 
 use super::grant_audit::{in_delivery_scope, with_grant_slot};
-use super::grant_audit_fixture::{CAPS, Endpoint, decisions, entries, grant, invocations};
+use super::grant_audit_fixture::{
+    CAPS, Endpoint, PERSONAL, decisions, entries, grant, invocations,
+};
+use super::visible::Withholding;
 use super::grant_decision_audit_tests::{api_key, call, context, gateway, invoke_args, only};
 use crate::security::audit::AuditFailurePolicy;
 
@@ -131,4 +134,62 @@ async fn a_refusal_whose_invocation_append_failed_is_an_unrecorded_decision() {
         let marker = &record["invocation_recorded"];
         assert_eq!(marker, &json!(false), "{policy:?}: {record}");
     }
+}
+
+/// Wait, bounded, until the log holds `count` decision records.
+async fn wait_for_decisions(dir: &Arc<tempfile::TempDir>, count: usize) -> Vec<Value> {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        let found = decisions(dir);
+        if found.len() >= count || std::time::Instant::now() >= deadline {
+            return found;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+}
+
+#[tokio::test]
+async fn a_withheld_note_outside_any_slot_is_written_at_once_unrecorded() {
+    let (endpoint, dir) = (
+        Endpoint::start(false).await,
+        Arc::new(tempfile::tempdir().unwrap()),
+    );
+    let meta = gateway(&endpoint, vec![], Some(&dir), AuditFailurePolicy::BestEffort);
+    let who = api_key("alice");
+    let _unslotted = super::grant_audit::allow_unslotted_check_for_test();
+
+    meta.record_withheld(CAPS, PERSONAL, Withholding::Refused, &context(&who), None)
+        .await;
+
+    let held = wait_for_decisions(&dir, 1).await;
+    assert_eq!(held.len(), 1, "{held:#?}");
+    assert_eq!(held[0]["invocation_recorded"], json!(false), "{held:#?}");
+    assert!(invocations(&dir).is_empty(), "no slot means no invocation record");
+}
+
+/// The writer of a slotted withheld note is parked at its start (the S1
+/// seam): the slot still returns, so no caller path awaits that write.
+#[tokio::test]
+async fn a_blocked_withheld_writer_never_holds_the_slots_answer() {
+    let (endpoint, dir) = (
+        Endpoint::start(false).await,
+        Arc::new(tempfile::tempdir().unwrap()),
+    );
+    let meta = gateway(&endpoint, vec![], Some(&dir), AuditFailurePolicy::FailClosed);
+    let who = api_key("alice");
+    let caller = context(&who);
+    let hold = super::grant_audit::seams::hold_next_write_for_test();
+
+    let slot = with_grant_slot(meta.transparency_logger.as_ref(), async {
+        meta.record_withheld(CAPS, PERSONAL, Withholding::Refused, &caller, None)
+            .await;
+    });
+    let answered = tokio::time::timeout(std::time::Duration::from_secs(5), slot).await;
+
+    let (_, verdict, _) = answered.expect("the slot waited for its withheld note's writer");
+    verdict.expect("a withheld note never changes the answer");
+    hold.held().await;
+    hold.release();
+    let held = wait_for_decisions(&dir, 1).await;
+    assert_eq!(held.len(), 1, "written once, after the release: {held:#?}");
 }
