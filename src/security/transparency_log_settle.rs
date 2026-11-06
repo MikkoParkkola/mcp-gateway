@@ -145,7 +145,7 @@ impl TransparencyLogger {
             .lock()
             .map_err(|_| Unsettled::Refused(io::Error::other("transparency log mutex poisoned")))?;
         self.refresh(&mut inner, true).map_err(Unsettled::Refused)?;
-        if inner.log_id != *binding {
+        if self.presented_id(&inner.log_id) != *binding {
             return Err(Unsettled::OtherLog);
         }
         #[cfg(test)]
@@ -163,6 +163,22 @@ impl TransparencyLogger {
             id: inner.log_id.clone(),
             counter: inner.counter,
         })
+    }
+}
+
+impl TransparencyLogger {
+    /// The id settle checks the binding against: the one the refresh left.
+    #[cfg(not(test))]
+    #[allow(clippy::unused_self)]
+    fn presented_id(&self, held: &LogId) -> LogId {
+        held.clone()
+    }
+
+    /// As in production, unless the `Bind(OtherLog)` seam presents another.
+    #[cfg(test)]
+    fn presented_id(&self, held: &LogId) -> LogId {
+        let presented = self.hooks.presented_id.lock().unwrap().clone();
+        presented.unwrap_or_else(|| held.clone())
     }
 }
 
@@ -210,8 +226,9 @@ impl TransparencyLogger {
         Ok(())
     }
 
-    /// The V.1 `Bind(OtherLog)` seam: the logger presents `id` as its own.
+    /// The V.1 `Bind(OtherLog)` seam: settle sees `id` as the logger's own,
+    /// after its refresh (which would otherwise restore the id on disk).
     pub(crate) fn present_log_id_for_test(&self, id: LogId) {
-        self.inner.lock().unwrap().log_id = id;
+        *self.hooks.presented_id.lock().unwrap() = Some(id);
     }
 }
