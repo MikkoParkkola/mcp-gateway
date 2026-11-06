@@ -168,6 +168,18 @@ impl Aliases {
                 continue;
             };
             if used.contains(first) {
+                // Expanding a name twice on one chain is skipped silently only
+                // for a plain self-import (`use guard::guard;`, every binding
+                // starting with the name itself). Anything else (a cycle of
+                // renames, one name bound in two scopes) might hide a reader,
+                // so the file fails named.
+                let self_import = self
+                    .named
+                    .get(first)
+                    .is_some_and(|fulls| fulls.iter().all(|full| full.first() == Some(first)));
+                if !self_import {
+                    self.capped.set(true);
+                }
                 continue;
             }
             for full in self.named.get(first).into_iter().flatten() {

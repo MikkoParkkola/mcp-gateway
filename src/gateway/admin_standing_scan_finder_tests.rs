@@ -339,10 +339,22 @@ fn the_token_walk_matches_parsed_syntax_and_a_capped_expansion_fails_named() {
         "src/new.rs".to_owned(),
         "use b as a;\nuse a as b;\nfn fixture() { let _ = a(1); check!(s => b(2)); }".to_owned(),
     )];
-    let all = found_in(&cycle);
-    assert!(
-        all.keys().all(|(_, file)| file != "src/new.rs"),
-        "a cycle of renames ends, reads nothing and is not capped: {all:?}"
+    assert_eq!(
+        found(&cycle, "<import expansion capped>"),
+        1,
+        "a cycle of renames ends, failing named"
+    );
+    let two_scopes = vec![(
+        "src/new.rs".to_owned(),
+        "mod one { use A::Admin as A; }\n\
+         mod two { use crate::gateway::router::authorization::CallerStanding as A; }\n\
+         fn fixture() { let _ = A; }"
+            .to_owned(),
+    )];
+    assert_eq!(
+        found(&two_scopes, "<import expansion capped>"),
+        1,
+        "a name bound in two scopes that would need expanding twice fails named, not silently"
     );
     let same_name = vec![(
         "src/new.rs".to_owned(),
