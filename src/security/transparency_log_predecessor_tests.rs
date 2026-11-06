@@ -197,3 +197,33 @@ fn a_continuing_log_whose_active_file_vanished_names_no_predecessor() {
         );
     }
 }
+
+#[test]
+fn the_predecessor_warning_is_verified_only_for_the_checked_record() {
+    // GIVEN: a genesis open record naming a lost predecessor, which verify
+    // authenticates (no mark survived, so the chain is whole)
+    let dir = tempfile::tempdir().unwrap();
+    let path = log_path(&dir);
+    let l = TransparencyLogger::open(cfg(&path, 12, false)).unwrap();
+    append(&l, 0);
+    std::fs::remove_file(&path).unwrap();
+    std::fs::remove_file(sibling(&path, "hwm")).unwrap();
+    append(&l, 1);
+    let head = lines(&path).remove(0);
+    let checked = head["entry_hash"].as_str().unwrap();
+    assert!(head.get(PREDECESSOR).is_some(), "{head}");
+
+    // WHEN: the warning is read for the checked record, for another one (the
+    // bytes changed between the two reads), and for none
+    let warn = |c| identity::predecessor_warning(&path, c).unwrap().unwrap();
+    let (same, other, none) = (
+        warn(Some(checked)),
+        warn(Some("sha256:another")),
+        warn(None),
+    );
+
+    // THEN: only the checked record's warning reads as verified
+    assert!(!same.contains("unverified"), "{same}");
+    assert!(other.contains("unverified"), "{other}");
+    assert!(none.contains("unverified"), "{none}");
+}
