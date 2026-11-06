@@ -122,32 +122,65 @@ fn the_read_history_is_reached_from_the_judge_alone() {
     );
 }
 
-/// The sink sees the history reached through a macro's arguments and through
-/// a path call, not only through a plain method call.
+/// What the walk does with an expression (scan.rs `visit_expr`): the sink
+/// sees it, then every expression inside it.
+struct Mirror<'a>(&'a mut Access, Place);
+
+impl<'ast> syn::visit::Visit<'ast> for Mirror<'_> {
+    fn visit_expr(&mut self, expr: &'ast syn::Expr) {
+        self.0.expr(&self.1, expr);
+        syn::visit::visit_expr(self, expr);
+    }
+}
+
+/// The sink sees the history however a reader is spelled: a method or path
+/// call, raw or not, a path taken as a value or called in parentheses, a
+/// turbofish, inside a macro's arguments or not. Each fixture counts exactly
+/// once; a field named `reads`, a longer name and a one-segment call count
+/// nothing.
 #[test]
 fn macro_wrapped_and_path_calls_are_seen() {
+    for (source, readers, reservers) in [
+        ("assert!(firewall.reads().len() > 0)", 1, 0),
+        ("Firewall::reads(&firewall)", 1, 0),
+        ("ReadHistory::reserve(&history, key)", 0, 1),
+        ("debug_assert!(history.reserve(key).is_ok())", 0, 1),
+        ("firewall.r#reads()", 1, 0),
+        ("Firewall::r#reads(&f)", 1, 0),
+        ("{ let read = Firewall::reads; read(f) }", 1, 0),
+        ("(Firewall::reads)(f)", 1, 0),
+        ("<Firewall>::reads(&f)", 1, 0),
+        ("history.r#reserve(k)", 0, 1),
+        ("ReadHistory::r#reserve(&h, k)", 0, 1),
+        ("m!(f.r#reads())", 1, 0),
+        ("m!((Firewall::reads)(f))", 1, 0),
+        ("m!({ let r = Firewall::reads; })", 1, 0),
+        ("m!(f.reads::<>())", 1, 0),
+        ("m!(h.reserve::<>(k))", 0, 1),
+        ("m!(self.reads)", 0, 0),
+        ("Firewall::reads_all(&f)", 0, 0),
+        ("reads(f)", 0, 0),
+    ] {
+        let expr: syn::Expr = syn::parse_str(source).expect("an expression");
+        let mut access = Access::default();
+        let at = Place {
+            file: "src/elsewhere.rs".to_owned(),
+            func: None,
+        };
+        syn::visit::Visit::visit_expr(&mut Mirror(&mut access, at), &expr);
+        assert_eq!(
+            (access.readers.len(), access.reservers.len()),
+            (readers, reservers),
+            "{source}"
+        );
+    }
+    let stmt: syn::Stmt =
+        syn::parse_str("println!(\"{}\", firewall.reads().len());").expect("a statement");
+    let mut access = Access::default();
     let at = Place {
         file: "src/elsewhere.rs".to_owned(),
         func: None,
     };
-    let mut access = Access::default();
-    for source in [
-        "assert!(firewall.reads().len() > 0)",
-        "Firewall::reads(&firewall)",
-        "ReadHistory::reserve(&history, key)",
-        "debug_assert!(history.reserve(key).is_ok())",
-    ] {
-        let expr: syn::Expr = syn::parse_str(source).expect("an expression");
-        access.expr(&at, &expr);
-    }
-    let stmt: syn::Stmt =
-        syn::parse_str("println!(\"{}\", firewall.reads().len());").expect("a statement");
     access.stmt(&at, &stmt);
-    assert_eq!(access.readers.len(), 3, "readers: {:?}", access.readers);
-    assert_eq!(
-        access.reservers.len(),
-        2,
-        "reservers: {:?}",
-        access.reservers
-    );
+    assert_eq!(access.readers.len(), 1, "a statement macro is seen");
 }
