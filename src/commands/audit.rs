@@ -6,6 +6,7 @@
 use std::process::ExitCode;
 
 use mcp_gateway::cli::AuditCommand;
+use mcp_gateway::cli_support::shown;
 use mcp_gateway::config::Config;
 
 /// Resolve the audit log path: use the provided `--path` flag, or fall back to
@@ -140,27 +141,13 @@ fn run_audit_verify(
 }
 
 /// Every verify warning, on stderr: the one place they are rendered, on the
-/// passing and the failing path alike, each through [`shown`].
+/// passing and the failing path alike. Warnings carry text read from the log,
+/// so each goes through [`shown`], which escapes controls, bidi and other
+/// format characters.
 fn print_warnings(warnings: &[String]) {
     for warning in warnings {
         eprintln!("warning: {}", shown(warning));
     }
-}
-
-/// `text` for the terminal: verify output carries text read from the log,
-/// so each control character (C0, C1 and DEL; a CR or LF inside a value too)
-/// is written visibly as its `\u{..}` escape and cannot move the cursor,
-/// recolour or rewrite a line. Printable text is unchanged.
-fn shown(text: &str) -> String {
-    text.chars()
-        .map(|c| {
-            if c.is_control() {
-                c.escape_unicode().to_string()
-            } else {
-                c.to_string()
-            }
-        })
-        .collect()
 }
 
 /// Dispatch an `audit` subcommand (transparency log chain verification / session query).
