@@ -45,8 +45,14 @@ fn enabled(policies: Vec<PolicyRuleConfig>) -> MtlsConfig {
 
 /// `tool` on `alpha` as `k-std` through `route`, presenting a certificate
 /// with common name `cn` when one is given. Asserts the call left exactly one
-/// new decision record.
-async fn call_cert(fx: &Logged, route: Route, tool: &str, cn: Option<&str>) -> Outcome {
+/// new decision record; returns the answer, that record and the backend
+/// calls made.
+async fn send_cert(
+    fx: &Logged,
+    route: Route,
+    tool: &str,
+    cn: Option<&str>,
+) -> (Value, Value, usize) {
     let (uri, params) = match route {
         Route::Direct => ("/mcp/alpha", json!({"name": tool, "arguments": {}})),
         Route::MetaInvoke | Route::MetaRetry => (
@@ -92,11 +98,17 @@ async fn call_cert(fx: &Logged, route: Route, tool: &str, cn: Option<&str>) -> O
             &rows[recorded..]
         );
     };
+    (body, row.clone(), fx.calls.load(Ordering::SeqCst) - before)
+}
+
+/// [`send_cert`], as the call's outcome and its record's deciding check.
+async fn call_cert(fx: &Logged, route: Route, tool: &str, cn: Option<&str>) -> Outcome {
+    let (body, row, calls) = send_cert(fx, route, tool, cn).await;
     let decided = (
         row["decision"]["kind"].clone(),
         row["decision"]["rule_id"].clone(),
     );
-    outcome(&body, fx.calls.load(Ordering::SeqCst) - before, decided)
+    outcome(&body, calls, decided)
 }
 
 /// `write` as `agent-1` is refused by rule B, which the record names.
@@ -193,4 +205,33 @@ async fn a_disabled_mtls_policy_notes_nothing() {
             "{route:?}: {got:?}"
         );
     }
+}
+
+/// The direct route hides a backend the policy refuses by name: a caller
+/// with no certificate is refused every tool on `alpha`
+/// (`caller_hiding.rs:151-159`, `refused_by_name` through
+/// `mtls_policy.refuses_backend`), so the answer is the missing backend's,
+/// recorded as `not_found` with no rule. Neither the answer nor the record
+/// names a tool of the backend or says that certificate policy refused.
+#[tokio::test(flavor = "current_thread")]
+async fn a_direct_call_with_no_certificate_answers_backend_not_found() {
+    let fx = with_policy(enabled(deny_write_rules())).await;
+    let (body, row, calls) = send_cert(&fx, Route::Direct, "read", None).await;
+    assert_eq!(calls, 0, "{body}");
+    assert_eq!(
+        body.pointer("/error/message"),
+        Some(&json!("Backend not found: alpha")),
+        "{body}"
+    );
+    assert_eq!(row["decision"]["kind"], json!("not_found"), "{row}");
+    assert!(row["decision"].get("rule_id").is_none(), "{row}");
+    let (answer, record) = (body.to_string(), row.to_string());
+    for word in ["write", "mtls", "certificate"] {
+        assert!(!answer.contains(word), "the answer says {word}: {answer}");
+        assert!(!record.contains(word), "the record says {word}: {record}");
+    }
+    assert!(
+        !answer.contains("read"),
+        "the answer names a tool: {answer}"
+    );
 }
