@@ -644,6 +644,7 @@ mod tests {
         };
         let config = || Error::Config("URL has no host".to_string());
         let refused = Some(serde_json::Value::from("refused"));
+        let delivered = Some(serde_json::Value::from("delivered"));
         let cases = [
             (
                 "destination, SSRF refusal",
@@ -679,10 +680,13 @@ mod tests {
         let mut fails = Vec::new();
         for (case, error, test, expect) in cases {
             let effect = recorded_effect(error, test).await;
+            // A fresh cell is vouched with effect Delivered (the Default of
+            // DeliveryFacts), and record_fields writes a vouched cell's effect
+            // in every case, so nothing refused reads "delivered", not absent.
             let ok = if expect {
                 effect == refused
             } else {
-                effect.is_none()
+                effect == delivered
             };
             if !ok {
                 fails.push(format!("{case}: response_effect {effect:?}"));
