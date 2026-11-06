@@ -70,4 +70,7 @@ async fn stdio_admission_refusal_writes_one_record() {
     let records = decisions(&dir);
     assert_eq!(records.len(), 1, "{records:#?}");
     assert_eq!(records[0]["outcome"], json!("denied"), "{:#?}", records[0]);
+    // Refused at admission: no invocation record, so Activity lists it.
+    assert_eq!(records[0]["invocation_recorded"], json!(false), "{:#?}", records[0]);
+    assert_eq!(records[0]["server"], json!(CAPS), "{:#?}", records[0]);
 }
