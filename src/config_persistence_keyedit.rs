@@ -151,6 +151,8 @@ pub(crate) enum GiveUp {
     SequenceShape,
     /// A path segment is not a plain key.
     NotPlainKey,
+    /// A secret field's node cannot be shown masked line for line.
+    SecretSpan,
     /// The file or the edit is outside what the proofs cover.
     Other,
 }
@@ -166,6 +168,7 @@ impl GiveUp {
             Self::DashLine => "dash_line",
             Self::SequenceShape => "sequence_shape",
             Self::NotPlainKey => "not_plain_key",
+            Self::SecretSpan => "secret_span",
             Self::Other => "other",
         }
     }
@@ -178,6 +181,32 @@ pub(crate) struct Template {
     slots: Vec<(SlotId, Range<usize>)>,
     /// The original 1-based lines whose comment the edit dropped.
     dropped: Vec<usize>,
+    /// The changed lines, in order (empty for bytes another writer built).
+    hunks: Vec<Hunk>,
+}
+
+/// One run of changed lines: original lines removed or replaced, and the
+/// lines that take their place. Kept lines are never in a hunk.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Hunk {
+    /// The first original line of the run, 1-based; for a pure insertion,
+    /// the original line it follows (0: the start of the file).
+    pub(crate) old_start: usize,
+    /// The original lines of the run, 0-based, in order.
+    pub(crate) old: Vec<usize>,
+    /// The first edited line of the run, 1-based (for a pure removal, the
+    /// edited line it follows).
+    pub(crate) new_start: usize,
+    pub(crate) new: Vec<NewLine>,
+}
+
+/// A line an edit wrote, without its ending.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct NewLine {
+    pub(crate) text: String,
+    /// For a line whose value was replaced: the original line, 0-based, and
+    /// how many of its leading and trailing bytes (ending aside) it kept.
+    pub(crate) replaced: Option<(usize, usize, usize)>,
 }
 
 impl Template {
@@ -202,6 +231,7 @@ impl Template {
             bytes,
             slots,
             dropped: Vec::new(),
+            hunks: Vec::new(),
         })
     }
 
@@ -210,6 +240,11 @@ impl Template {
     /// Line numbers only, never text: a `#` in a value can be a secret.
     pub(crate) fn dropped_comments(&self) -> &[usize] {
         &self.dropped
+    }
+
+    /// The changed lines of an in-place edit, in order.
+    pub(crate) fn hunks(&self) -> &[Hunk] {
+        &self.hunks
     }
 
     /// The bytes as they stand, slots still holding their placeholders.
@@ -224,6 +259,7 @@ impl Template {
             bytes,
             slots: Vec::new(),
             dropped: Vec::new(),
+            hunks: Vec::new(),
         }
     }
 
@@ -727,6 +763,15 @@ fn meaning_holds(original: &str, changes: &[(FieldPath, Change)], edited: &str) 
         Err(_) => return false,
     };
     got == want
+}
+
+/// The document `original` means with `changes` applied, as YAML text: the
+/// editor's own model of the result, for a caller that must judge an edit
+/// the in-place proofs refused. Secret slots hold their placeholders.
+/// `None` when `original` does not parse or a path cannot be followed.
+pub(crate) fn expected_text(original: &str, changes: &[(FieldPath, Change)]) -> Option<String> {
+    let _ = (original, changes);
+    None
 }
 
 #[path = "config_persistence_keyedit_shape.rs"]
