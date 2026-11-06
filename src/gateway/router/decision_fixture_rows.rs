@@ -601,3 +601,91 @@ async fn a3_grant_match() {
         "control: the upstream was hit without the grant"
     );
 }
+
+/// An enabled mTLS policy whose one rule matches certificate CN `cn` and
+/// allows `alpha`'s `read`; first match wins, and no match denies
+/// (`access_control/mod.rs:99-112`).
+fn mtls_policy_for(cn: &str) -> Arc<crate::mtls::MtlsPolicy> {
+    use crate::mtls::config::{CertMatchConfig, MtlsConfig, PolicyRuleConfig, ToolScopeConfig};
+    Arc::new(crate::mtls::MtlsPolicy::from_config(&MtlsConfig {
+        enabled: true,
+        policies: vec![PolicyRuleConfig {
+            match_criteria: CertMatchConfig {
+                cn: Some(cn.to_string()),
+                ..CertMatchConfig::default()
+            },
+            allow: ToolScopeConfig {
+                backends: vec!["alpha".to_string()],
+                tools: vec!["read".to_string()],
+            },
+            ..PolicyRuleConfig::default()
+        }],
+        ..MtlsConfig::default()
+    }))
+}
+
+/// A2: an mTLS rule allows the caller's certificate (CN `agent-a`, the
+/// owner certificate `direct_effect_tests::call` presents) on `alpha`'s
+/// `read`, on the direct route. Recorded `default_allow` today (flipped by
+/// MIK-9205). Control: the same enabled, non-empty policy, its rule matching
+/// another CN, refuses the call: no rule matches, so the policy denies.
+#[tokio::test]
+async fn a2_mtls_rule_allow() {
+    use super::direct_effect_tests::call;
+    use super::direct_guards_fixture::with_mtls_policy;
+    let dir = Arc::new(tempfile::tempdir().expect("a log directory"));
+    let fx = with_mtls_policy(mtls_policy_for("agent-a"), Box::pin(table(&dir))).await;
+    let alpha = fx.state.backends.get("alpha").expect("alpha");
+    let read: crate::protocol::Tool = serde_json::from_value(json!({
+        "name": "read",
+        "inputSchema": {"type": "object"},
+        "annotations": {"readOnlyHint": true},
+    }))
+    .expect("a tool");
+    alpha.declare_slot_effects_for_test(None, vec![read]);
+    let before = (
+        records(&dir).len(),
+        super::direct_continuation_tests::dispatched(&fx),
+    );
+    let body = call(&fx, "/mcp/alpha", "read", json!({})).await;
+    assert!(
+        body.get("result").is_some() && body["result"]["isError"] != true,
+        "premise: delivered: {body}"
+    );
+    assert_eq!(
+        super::direct_continuation_tests::dispatched(&fx),
+        before.1 + 1,
+        "premise: the backend was sent the call once"
+    );
+    let mut all = records(&dir);
+    let new = all.split_off(before.0);
+    let [record] = new.as_slice() else {
+        panic!("premise: one new invocation record: {new:?}");
+    };
+    assert_eq!(record["outcome"], "ok", "{record}");
+    // flipped by MIK-9205
+    let row = DecisionRow {
+        name: "a2_mtls_rule_allow",
+        kind: "default_allow",
+        rule_id: RuleId::Absent("flipped by MIK-9205"),
+        grant_id: None,
+        findings: Findings::NotRun,
+        effect: Some(("read_only", "tool_annotation")),
+        decided: "fresh",
+    };
+    assert_row(&record["decision"], &row);
+
+    let dir = Arc::new(tempfile::tempdir().expect("a log directory"));
+    let fx = with_mtls_policy(mtls_policy_for("agent-b"), Box::pin(table(&dir))).await;
+    let sent = super::direct_continuation_tests::dispatched(&fx);
+    let body = call(&fx, "/mcp/alpha", "read", json!({})).await;
+    assert!(
+        body.get("error").is_some() || body["result"]["isError"] == true,
+        "control: a rule for another CN did not refuse: {body}"
+    );
+    assert_eq!(
+        super::direct_continuation_tests::dispatched(&fx),
+        sent,
+        "control: the backend was sent the call"
+    );
+}
