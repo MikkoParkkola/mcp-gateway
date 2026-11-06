@@ -29,10 +29,16 @@ pub(crate) const EV_IDENTIFIED: &str = "audit_log_identified";
 /// (a pinned high-water mark) detects it.
 pub(crate) const PREDECESSOR_MISSING: &str = "predecessor_missing";
 
-/// Events only the logger writes; a caller naming one is refused. Open
-/// records, and so their `predecessor_missing` field, are reserved with
-/// every `audit_segment_*` event.
-pub(crate) const RESERVED_EVENTS: [&str; 1] = [EV_IDENTIFIED];
+/// Retired: once a separate record carrying a lost predecessor's evidence,
+/// which now lives in the open record's `predecessor_missing` field. The
+/// name stays reserved so no caller can forge a record that once meant
+/// tamper evidence.
+const EV_PREDECESSOR_RETIRED: &str = "audit_log_predecessor_missing";
+
+/// Events only the logger writes (or, once retired, no one); a caller naming
+/// one is refused. Open records, and so their `predecessor_missing` field,
+/// are reserved with every `audit_segment_*` event.
+pub(crate) const RESERVED_EVENTS: [&str; 2] = [EV_IDENTIFIED, EV_PREDECESSOR_RETIRED];
 
 /// An audit log's identity. Opaque: compare, display, never parse.
 #[derive(Debug, Clone, PartialEq, Eq)]
