@@ -53,6 +53,21 @@ CI_ONLY: dict[tuple[str, tuple[str, ...]], str] = {
     ("scripts/release/check_scope_acceptance.py", ("--publish-check",)): "release: publish-time form",
     ("scripts/release/check_tag_manifest.py", ()): "release: needs a tag in GITHUB_REF_NAME",
     ("scripts/release/critical_function_coverage.py", ("$@",)): "artifact: reads a cargo llvm-cov profile",
+    # Two invocations, not a duplicate: coverage-probe.yml bundles each part
+    # ($PART) and, in a job of its own, the SDK journey (sdk).
+    ("scripts/ci/coverage_shard_bundle.sh", ("$PART",)): "artifact: packs a part's coverage profiles and instrumented binaries",
+    ("scripts/ci/coverage_shard_bundle.sh", ("sdk",)): "artifact: packs the SDK part's coverage profiles and instrumented binaries",
+    ("scripts/ci/coverage_shard_merge.sh", ("${expected[@]}",)): "artifact: unpacks the parts' coverage bundles into target/",
+    ("scripts/ci/coverage_shards.py", ("canary", "linux.lcov")): "artifact: reads the merged coverage report",
+    ("scripts/ci/coverage_shards.py", ("check", "$COVERAGE_PARTS", "metadata.json")): "cargo: reads cargo metadata output",
+    ("scripts/ci/coverage_shards.py", ("objects", "$log", "shards/cov-shard-*/manifest.txt")): "artifact: reads the coverage parts' manifests and report log",
+    ("scripts/ci/coverage_shards.py", ("plan", "$COVERAGE_PARTS")): "ci-env: writes the part plan to GITHUB_OUTPUT",
+    ("scripts/ci/coverage_shards.py", ("run", "$COVERAGE_PARTS", "$PART"),
+     ('python3 scripts/ci/coverage_shards.py run "$COVERAGE_PARTS" "$PART" 2>&1', "tee run.log")): (
+        "cargo: runs an instrumented cargo test part"),
+    ("scripts/ci/coverage_shards.py", ("run", "$COVERAGE_PARTS", "sdk"),
+     ('python3 scripts/ci/coverage_shards.py run "$COVERAGE_PARTS" sdk 2>&1', "tee run.log")): (
+        "cargo: runs the instrumented SDK journey"),
     ("scripts/release/critical_path_coverage.py", ("art/coverage-linux/cov.json",)): "artifact: reads a CI coverage artifact",
     ("scripts/dev/test_run_prepush_ci_checks.py", ()): (
         "budget: tests the runner itself; 22.5 s would put the CI-checks stage at about 114 s of its "
