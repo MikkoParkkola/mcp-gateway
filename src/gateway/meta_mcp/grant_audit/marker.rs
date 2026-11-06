@@ -30,7 +30,7 @@ pub(super) fn current_retry() -> Option<RetryCell> {
 /// Run `check` as a delivery re-check: the call it is about already has its
 /// invocation record, from the original request, so the decisions it notes
 /// say so.
-pub(crate) fn in_delivery_scope<T>(check: impl FnOnce() -> T) -> T {
+pub(in crate::gateway::meta_mcp) fn in_delivery_scope<T>(check: impl FnOnce() -> T) -> T {
     DELIVERY.sync_scope((), check)
 }
 

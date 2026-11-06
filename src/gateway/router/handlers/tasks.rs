@@ -363,15 +363,15 @@ async fn recover_from_upstream(
             &target.arguments,
             crate::gateway::meta_mcp::upstream::recovery_attestation(params),
         );
-        // A recovery read delivers a call that already has the invocation
-        // record of its original request: a refusal here is a refused
-        // delivery, not a call without a record.
-        crate::gateway::meta_mcp::grant_audit::in_delivery_scope(|| {
-            state
-                .meta_mcp
-                .check_invocation_policy(&policy_args, caller.session_id, policy_caller)
-                .is_ok()
-        })
+        // No identity grant can refuse a recovery read: `grant_evaluation`
+        // applies only to the capability backend, and a capability task never
+        // holds an upstream handle (the capability route in
+        // `invoke/dispatch.rs` returns before the handle capture). A test row
+        // pins that premise; revisit this read if it goes red.
+        state
+            .meta_mcp
+            .check_invocation_policy(&policy_args, caller.session_id, policy_caller)
+            .is_ok()
     });
     if !authorized {
         tracing::info!(

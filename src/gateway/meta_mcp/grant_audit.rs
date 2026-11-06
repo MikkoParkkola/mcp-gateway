@@ -39,7 +39,7 @@ use crate::{Error, Result};
 mod marker;
 mod withheld;
 pub(super) use withheld::{WITHHELD_RECORD_FAILED, note_withheld_best_effort};
-pub(crate) use marker::in_delivery_scope;
+pub(super) use marker::in_delivery_scope;
 pub(super) use marker::{RecordedSet, RetryCell, note_retry_trace, with_retry_trace};
 mod repeat;
 pub(crate) use repeat::DecisionDedupe;
