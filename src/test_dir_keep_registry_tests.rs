@@ -88,6 +88,16 @@ fn external_kept_dirs_parse_and_match() {
     let alias = links.path().join("alias-of-b");
     std::os::unix::fs::symlink(b.path(), &alias).expect("a symlink");
     assert!(is_external_in(&external, &alias.join("audit.jsonl")));
+    // The parent may name its dir through an alias too: the entry is
+    // normalised as well, so a raw entry comparison misses it.
+    let c = tempfile::tempdir().expect("a third temp dir");
+    let alias_of_c = links.path().join("alias-of-c");
+    std::os::unix::fs::symlink(c.path(), &alias_of_c).expect("a symlink");
+    let through_alias = parse_external(&std::env::join_paths([&alias_of_c]).expect("joinable"));
+    assert!(
+        is_external_in(&through_alias, &c.path().join("audit.jsonl")),
+        "an entry named through an alias still keeps its dir"
+    );
     let sibling = PathBuf::from(format!("{}x", a.path().display())).join("audit.jsonl");
     assert!(
         !is_external_in(&external, &sibling),
