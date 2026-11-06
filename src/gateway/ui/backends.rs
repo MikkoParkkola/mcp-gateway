@@ -514,12 +514,12 @@ async fn update_backend(
     }
 }
 
+/// An update's tool-selection change: `(before, after)` when it changed it.
+type Selection = Option<(Option<Vec<String>>, Option<Vec<String>>)>;
+
 /// The answer to a committed update: its reload, each stored secret's field
 /// and reference, and the tool selection's change when it had one.
-fn updated_answer(
-    updated: &str,
-    written: write::Written<Option<(Option<Vec<String>>, Option<Vec<String>>)>>,
-) -> axum::response::Response {
+fn updated_answer(updated: &str, written: write::Written<Selection>) -> axum::response::Response {
     let write::Written {
         value: selection,
         reload,

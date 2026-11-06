@@ -57,7 +57,7 @@ async fn the_writer_refusals_answer_fixed_text() {
 
 /// T6e and the store's other refusals: each answers fixed text naming no
 /// store detail. A vault lock another save held past the deadline is the
-/// store's `Refused(Failed(..))` (secret_store/save.rs `take_lock`): a 503
+/// store's `Refused(Failed(..))` (`secret_store/save.rs` `take_lock`): a 503
 /// that says nothing was written. A timed-out create is a 503 that says its
 /// entry may land later; an unavailable store and an over-limit value 422.
 #[tokio::test]
