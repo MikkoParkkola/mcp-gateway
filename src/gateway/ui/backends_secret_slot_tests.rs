@@ -528,7 +528,7 @@ async fn t9_a_registry_header_token_is_stored_as_the_whole_header_value() {
 
 /// T10: the round trip: the reference gateway.yaml now holds resolves, through
 /// the loader's own `file:` reader, to exactly the value given (the files store
-/// writes one trailing newline and the reader drops one: files.rs, secret_ref.rs).
+/// writes one trailing newline and the reader drops one: `files.rs`, `secret_ref.rs`).
 #[tokio::test]
 async fn t10_the_stored_reference_resolves_to_the_value_given() {
     let panel = Panel::new().await;
