@@ -531,3 +531,57 @@ async fn an_alert_without_an_alerts_key_shows_the_whole_new_list() {
         "--- a/gateway.yaml\n+++ b/gateway.yaml\n@@ -1,0 +2,4 @@\n+cost_governance:\n+  alerts:\n+    - at_percent: 50\n+      action: \"log\"\n"
     );
 }
+
+/// D14 (written after the code, disclosed): the verifier itself, on crafted
+/// hunks. A line of the file outside the edited node, a flow line holding a
+/// sibling, or a replaced line whose kept bytes are not the key part is
+/// refused; an admitted line shows a trailing comment only as a marker.
+#[test]
+fn the_verifier_refuses_a_foreign_original_line() {
+    use crate::config_persistence::keyedit::{Change, FieldPath, Hunk, NewLine};
+    let env = FieldPath(vec![key("environment")]);
+    let changes = [(env.clone(), Change::Set(s("prod")))];
+    let old = |lines: Vec<usize>| Hunk {
+        old_start: lines[0] + 1,
+        old: lines,
+        new_start: 1,
+        new: vec![],
+    };
+    // A foreign key line in a hunk: refused, as a secret when one is edited.
+    let file = "environment: \"dev\"\nauth:\n  bearer_token: \"foreign-1\"\n";
+    let foreign = [old(vec![2])];
+    assert_eq!(
+        super::show::diff(file, &changes, &[], &foreign),
+        Err(GiveUp::Other)
+    );
+    let token = FieldPath(vec![key("auth"), key("bearer_token")]);
+    assert_eq!(
+        super::show::diff(file, &changes, &[token], &foreign),
+        Err(GiveUp::SecretSpan)
+    );
+    // A flow line: its sibling is not the edited node's.
+    let flow = "auth: {enabled: false, bearer_token: \"flow-2\"}\n";
+    let on = [(
+        FieldPath(vec![key("auth"), key("enabled")]),
+        Change::Set(Scalar::Bool(true)),
+    )];
+    assert!(super::show::diff(flow, &on, &[], &[old(vec![0])]).is_err());
+    // A replaced line must keep exactly the key part before its new value.
+    let shifted = [Hunk {
+        old_start: 1,
+        old: vec![0],
+        new_start: 1,
+        new: vec![NewLine {
+            text: "environment: \"prod\"".into(),
+            replaced: Some((0, 2, 0)),
+        }],
+    }];
+    assert!(super::show::diff(file, &changes, &[], &shifted).is_err());
+    // An admitted line: the comment is a marker, never its text.
+    let commented = "environment: \"dev\"  # comment-3\n";
+    let shown = super::show::diff(commented, &changes, &[], &[old(vec![0])]).expect("admitted");
+    assert_eq!(
+        shown.hunks[0].old,
+        vec!["environment: \"dev\"  # <comment>".to_owned()]
+    );
+}
