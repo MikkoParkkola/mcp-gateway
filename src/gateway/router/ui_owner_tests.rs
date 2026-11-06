@@ -94,7 +94,8 @@ async fn o7_the_admin_config_shows_the_published_owner() {
     let (state, _dir) = test_router_app_state_with_auth(&auth()).await;
     let _ = state.backends.register(http_backend_at("svc", URL));
     publish_owner(&state, None);
-    let (_, body) = get(&state, crate::gateway::routes::UI_CONFIG, Some(ADMIN)).await;
+    let (status, body) = get(&state, crate::gateway::routes::UI_CONFIG, Some(ADMIN)).await;
+    assert_eq!(status, 200, "{body}");
     assert_eq!(server(&body, "svc")["owner"], Value::Null, "{body}");
     assert!(
         server(&body, "svc").get("owner").is_some(),
@@ -108,8 +109,14 @@ async fn o7_the_admin_config_shows_the_published_owner() {
         (None, Value::Null),
     ] {
         publish_owner(&state, written);
-        let (_, body) = get(&state, crate::gateway::routes::UI_CONFIG, Some(ADMIN)).await;
-        assert_eq!(server(&body, "svc")["owner"], shown, "{written:?}: {body}");
+        let (status, body) = get(&state, crate::gateway::routes::UI_CONFIG, Some(ADMIN)).await;
+        assert_eq!(status, 200, "{written:?}: {body}");
+        // Present even when `null`: a missing key also reads as `null`.
+        assert_eq!(
+            server(&body, "svc").get("owner"),
+            Some(&shown),
+            "{written:?}: {body}"
+        );
     }
 }
 
@@ -119,7 +126,8 @@ async fn o7_the_admin_config_shows_the_published_owner() {
 async fn o7b_a_backend_missing_from_the_generation_has_no_owner() {
     let (state, _dir) = test_router_app_state_with_auth(&auth()).await;
     let _ = state.backends.register(http_backend_at("ghost", URL));
-    let (_, body) = get(&state, crate::gateway::routes::UI_CONFIG, Some(ADMIN)).await;
+    let (status, body) = get(&state, crate::gateway::routes::UI_CONFIG, Some(ADMIN)).await;
+    assert_eq!(status, 200, "{body}");
     assert_eq!(
         server(&body, "ghost").get("owner"),
         Some(&Value::Null),
@@ -127,27 +135,39 @@ async fn o7b_a_backend_missing_from_the_generation_has_no_owner() {
     );
 }
 
-/// O9: `/ui/api/status`, open to every caller, never carries an owner: not
-/// for an admin, a member key or an anonymous caller.
+/// O9: `/ui/api/status`, open to every caller, never carries an owner. An
+/// unscoped admin gets the full view, with the server listed and no
+/// `owner` in its row; a member key and an anonymous caller get the
+/// counts-only view, which names no server at all. Each answer is a 200 from
+/// the handler, so the absence is the projection's, not a refusal's.
 #[tokio::test]
 async fn o9_status_never_carries_the_owner() {
     let (state, _dir) = test_router_app_state_with_auth(&auth()).await;
     let _ = state.backends.register(http_backend_at("svc", URL));
     publish_owner(&state, Some("owner-marker-7f3e"));
-    for bearer in [Some(ADMIN), Some(MEMBER), None] {
+
+    let (status, body) = get(&state, crate::gateway::routes::UI_STATUS, Some(ADMIN)).await;
+    assert_eq!(status, 200, "admin: {body}");
+    let servers = body["servers"]
+        .as_array()
+        .expect("the admin's full view lists servers");
+    assert!(servers.iter().any(|s| s["name"] == "svc"), "admin: {body}");
+    for s in servers {
+        assert!(s.get("owner").is_none(), "admin: {s}");
+    }
+    assert!(
+        !body.to_string().contains("owner-marker-7f3e"),
+        "admin: {body}"
+    );
+
+    for bearer in [Some(MEMBER), None] {
         let (status, body) = get(&state, crate::gateway::routes::UI_STATUS, bearer).await;
-        // The handler answered, with the server listed: the absence below is
-        // the projection's, not a refusal's.
         assert_eq!(status, 200, "{bearer:?}: {body}");
         assert!(
-            body["servers"]
-                .as_array()
-                .is_some_and(|s| s.iter().any(|s| s["name"] == "svc")),
-            "{bearer:?}: {body}"
+            body.get("servers").is_none(),
+            "{bearer:?}: counts only: {body}"
         );
-        for s in body["servers"].as_array().into_iter().flatten() {
-            assert!(s.get("owner").is_none(), "{bearer:?}: {s}");
-        }
+        assert_eq!(body["server_count"], json!(1), "{bearer:?}: {body}");
         assert!(
             !body.to_string().contains("owner-marker-7f3e"),
             "{bearer:?}: {body}"
