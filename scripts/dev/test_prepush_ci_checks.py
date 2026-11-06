@@ -76,6 +76,7 @@ CI_ONLY: dict[tuple[str, tuple[str, ...]], str] = {
     ('scripts/ci/check-recursion-margin.sh', ()): "cargo: builds and measures the gateway's stack use",
     ('scripts/ci/mingw-debs.sh', ('download', '$HOME/mingw-debs')): 'network: fetches or installs MinGW packages with apt-get',
     ('scripts/ci/mingw-debs.sh', ('install', '$HOME/mingw-debs')): 'network: fetches or installs MinGW packages with apt-get',
+    ('scripts/ci/mingw-debs.sh', ('install-local', '$HOME/mingw-debs')): 'network: fetches or installs MinGW packages with apt-get',
     ('scripts/ci/packaged-tests.sh', ('build',)): 'cargo: builds and runs the packaged test suite',
     ('scripts/ci/packaged-tests.sh', ('run',)): 'cargo: builds and runs the packaged test suite',
     ('scripts/ci/smoke-full-image.sh', ('${REGISTRY}/mikkoparkkola/mcp-gateway:scan-full',)): 'artifact: runs the built container image (docker, cosign)',

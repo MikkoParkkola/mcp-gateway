@@ -121,6 +121,7 @@ jobs:
           key: ${{ steps.mingw-key.outputs.key }}
           restore-keys: ${{ steps.mingw-key.outputs.prefix }}
       - name: Install the mingw C toolchain
+        id: mingw-install
         if: matrix.target == 'x86_64-pc-windows-gnu'
         env:
           CACHE_HIT: ${{ steps.mingw-cache.outputs.cache-hit }}
@@ -131,13 +132,15 @@ jobs:
             scripts/ci/mingw-debs.sh install "$HOME/mingw-debs"
             exit 0
           fi
-          # Another image's set: logged with what it installed, so a version
-          # drift shows in the log; one that does not install falls back to
-          # the mirror from an empty directory.
+          # Another image's set: installed through apt with downloads off, so
+          # a set that does not fit this image is refused before anything is
+          # unpacked. Logged with what it installed, so a version drift shows
+          # in the log; one refused falls back to the mirror from an empty
+          # directory.
           if [ -n "$MATCHED" ]; then
             echo "::warning::mingw deb cache: no set for this runner image; using $MATCHED"
             set +e
-            scripts/ci/mingw-debs.sh install "$HOME/mingw-debs"
+            scripts/ci/mingw-debs.sh install-local "$HOME/mingw-debs"
             installed=$?
             set -e
             if [ "$installed" -eq 0 ]; then
@@ -151,10 +154,13 @@ jobs:
           fi
           scripts/ci/mingw-debs.sh download "$HOME/mingw-debs"
           scripts/ci/mingw-debs.sh install "$HOME/mingw-debs"
-      # After the install, so only a set that installed is cached. A hit saves
-      # nothing; a lost race with another run on the same image only warns.
+          echo "downloaded=true" >> "$GITHUB_OUTPUT"
+      # After the install, so only a set that installed is cached, and only a
+      # set fetched for this image: another image's set saved under this
+      # image's key would pin its older packages here. A lost race with
+      # another run on the same image only warns.
       - name: Save the mingw packages
-        if: matrix.target == 'x86_64-pc-windows-gnu' && steps.mingw-cache.outputs.cache-hit != 'true'
+        if: matrix.target == 'x86_64-pc-windows-gnu' && steps.mingw-install.outputs.downloaded == 'true'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/mingw-debs

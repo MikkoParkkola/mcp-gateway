@@ -33,9 +33,12 @@ STUBS = {
         '#!/usr/bin/env bash\n'
         'echo "apt-get $*" >> "$STUB_DIR/calls"\n'
         'for a in "$@"; do case "$a" in Dir::Cache::Archives=*) d=${a#Dir::Cache::Archives=} ;; esac; done\n'
-        'case " $* " in *" --download-only "*) touch "$d/gcc-mingw-w64-x86-64_1.0_amd64.deb" ;; esac\n'
+        'case " $* " in *" --download-only "*) [ -z "${STUB_APT_FAIL:-}" ] || exit 100; touch "$d/gcc-mingw-w64-x86-64_1.0_amd64.deb" ;; esac\n'
+        'case " $* " in *" --no-download "*) [ -z "${STUB_NODL_FAIL:-}" ] || exit 100 ;; esac\n'
         'exit 0\n'
     ),
+    "dpkg-deb": '#!/usr/bin/env bash\nexit 0\n',
+    "x86_64-w64-mingw32-gcc": '#!/usr/bin/env bash\necho "x86_64-w64-mingw32-gcc 13"\n',
 }
 
 
@@ -85,26 +88,72 @@ def a_download_that_finishes_takes_one_bounded_attempt():
 
 @row
 def a_timed_out_attempt_is_retried_once():
-    rc, out, calls, debs = run(["download", "<OUT>"], STUB_TIMEOUTS="1")
+    # Each attempt is two bounded calls (index refresh, then download): call 2 is attempt 1's download.
+    rc, out, calls, debs = run(["download", "<OUT>"], STUB_TIMEOUTS="2")
     assert rc == 0, out
     assert calls.count("timeout 600") == 2, calls
-    assert "mingw download attempt 1 did not finish within 600s" in out, out
+    assert "mingw attempt 1: the download (600s) did not finish in time" in out, out
     assert debs == ["gcc-mingw-w64-x86-64_1.0_amd64.deb"], debs
 
 
 @row
 def two_timed_out_attempts_fail_with_a_clear_error():
-    rc, out, calls, debs = run(["download", "<OUT>"], STUB_TIMEOUTS="1 2")
+    rc, out, calls, debs = run(["download", "<OUT>"], STUB_TIMEOUTS="2 4")
     assert rc == 1, (rc, out)
     assert calls.count("timeout 600") == 2, calls
-    assert "::error::mingw packages: the Ubuntu mirror did not deliver them in 2 attempts of 600s" in out, out
+    assert "::error::mingw packages: the Ubuntu mirror did not deliver them in 2 attempts" in out, out
     assert debs == [], debs
 
 
 @row
 def the_bound_is_configurable():
-    rc, out, calls, _ = run(["download", "<OUT>"], MINGW_DOWNLOAD_SECONDS="5", STUB_TIMEOUTS="1 2")
-    assert rc == 1 and calls.count("timeout 5") == 2, (rc, calls)
+    rc, out, calls, _ = run(["download", "<OUT>"], MINGW_DOWNLOAD_SECONDS="5", MINGW_UPDATE_SECONDS="3", STUB_TIMEOUTS="2 4")
+    assert rc == 1 and calls.count("timeout 5") == 2 and calls.count("timeout 3") == 2, (rc, calls)
+
+
+@row
+def a_stalled_index_refresh_is_bounded_and_named():
+    rc, out, calls, _ = run(["download", "<OUT>"], STUB_TIMEOUTS="1 3")
+    assert rc == 1, (rc, out)
+    assert "mingw attempt 1: the index refresh (180s) did not finish in time" in out, out
+    assert "--download-only" not in calls, calls
+
+
+# Review 2026-11-06: the index refresh is bounded too; an apt error is not reported as a time-out; the
+# fallback set installs through apt with downloads off, so a set that needs anything else fails before
+# unpacking and leaves no half-installed state behind for the mirror install.
+@row
+def the_index_refresh_is_bounded_too():
+    rc, out, calls, _ = run(["download", "<OUT>"])
+    assert rc == 0, out
+    lines = calls.splitlines()
+    i = next(k for k, l in enumerate(lines) if l.startswith("apt-get") and " update" in l)
+    assert i > 0 and lines[i - 1].startswith("timeout "), calls
+
+
+@row
+def an_apt_error_is_named_as_such_not_as_a_timeout():
+    rc, out, _, _ = run(["download", "<OUT>"], STUB_APT_FAIL="1")
+    assert rc == 1, (rc, out)
+    assert "apt-get exited 100 during the download" in out and "did not finish in time" not in out, out
+
+
+@row
+def the_fallback_set_installs_through_apt_with_downloads_off():
+    with tempfile.TemporaryDirectory() as t:
+        pathlib.Path(t, "a.deb").touch()
+        rc, out, calls, _ = run(["install-local", t])
+    assert rc == 0, out
+    assert "--no-download" in calls and "install" in calls, calls
+
+
+@row
+def a_fallback_set_that_needs_a_download_fails_cleanly():
+    with tempfile.TemporaryDirectory() as t:
+        pathlib.Path(t, "a.deb").touch()
+        rc, out, calls, _ = run(["install-local", t], STUB_NODL_FAIL="1")
+    assert rc != 0, (rc, out)
+    assert "dpkg -i" not in calls, calls
 
 
 def main():
