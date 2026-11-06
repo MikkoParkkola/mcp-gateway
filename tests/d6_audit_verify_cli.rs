@@ -293,7 +293,9 @@ fn audit_verify_prints_a_verified_predecessor_warning_on_a_passing_log() {
     let log = dir.path().join("transparency.jsonl");
     let l = open_log(&log);
     append_two(&l);
-    let old = l.log_id().as_str().to_string();
+    let head = std::fs::read_to_string(&log).unwrap();
+    let head: serde_json::Value = serde_json::from_str(head.lines().next().unwrap()).unwrap();
+    let old = head["log_id"].as_str().unwrap().to_string();
     std::fs::remove_file(&log).unwrap();
     std::fs::remove_file(dir.path().join("transparency.jsonl.hwm")).unwrap();
     append_two(&l);
