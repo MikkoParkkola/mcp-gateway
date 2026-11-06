@@ -132,7 +132,13 @@ fn diff(found: &Found, listed: &str) -> Vec<String> {
         if class_of(file, kind) != Some(class) {
             wrong.push(format!("class must be {:?}: {line}", class_of(file, kind)));
         }
-        want.insert((file.to_owned(), func.to_owned(), kind.to_owned()), count);
+        // A repeat would overwrite the earlier row and hide it.
+        if want
+            .insert((file.to_owned(), func.to_owned(), kind.to_owned()), count)
+            .is_some()
+        {
+            wrong.push(format!("listed twice: {line}"));
+        }
     }
     for (key, count) in found {
         let (file, func, kind) = key;

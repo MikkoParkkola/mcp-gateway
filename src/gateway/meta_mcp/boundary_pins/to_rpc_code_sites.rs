@@ -123,7 +123,10 @@ fn listed(text: &str) -> (Reads, Vec<String>) {
         match line.split('\t').collect::<Vec<_>>()[..] {
             [file, func, reads, reason] if !reason.trim().is_empty() => match reads.parse() {
                 Ok(n) => {
-                    rows.insert((file.to_owned(), func.to_owned()), n);
+                    // A repeat would overwrite the earlier row and hide it.
+                    if rows.insert((file.to_owned(), func.to_owned()), n).is_some() {
+                        bad.push(format!("listed twice: {line}"));
+                    }
                 }
                 Err(_) => bad.push(line.to_owned()),
             },

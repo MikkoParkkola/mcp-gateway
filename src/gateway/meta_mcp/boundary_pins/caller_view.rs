@@ -52,7 +52,7 @@ fn production_files(root: &std::path::Path) -> Vec<String> {
 /// needs file, calls, class and reason, and a known class.
 fn listed(text: &str) -> (BTreeMap<String, (usize, String)>, Vec<String>) {
     let mut rows = BTreeMap::new();
-    let bad = Vec::new();
+    let mut bad = Vec::new();
     for l in text
         .lines()
         .filter(|l| !l.starts_with('#') && !l.trim().is_empty())
@@ -64,10 +64,16 @@ fn listed(text: &str) -> (BTreeMap<String, (usize, String)>, Vec<String>) {
                 && !cols[3].trim().is_empty(),
             "row needs a known class and a reason: {l}"
         );
-        rows.insert(
-            cols[0].to_owned(),
-            (cols[1].parse().expect("calls"), cols[2].to_owned()),
-        );
+        // A repeat would overwrite the earlier row and hide it.
+        if rows
+            .insert(
+                cols[0].to_owned(),
+                (cols[1].parse().expect("calls"), cols[2].to_owned()),
+            )
+            .is_some()
+        {
+            bad.push(format!("listed twice: {l}"));
+        }
     }
     (rows, bad)
 }

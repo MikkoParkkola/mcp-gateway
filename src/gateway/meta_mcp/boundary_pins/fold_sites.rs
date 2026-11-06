@@ -282,10 +282,17 @@ fn listed(text: &str) -> (IsErrorRows, CallRows, Vec<String>) {
             continue;
         };
         let owned = |i: usize| cols[i].to_owned();
-        if cols[0] == "is_error" {
-            is_error.insert((owned(1), owned(2)), (n, owned(4)));
+        // A repeat within one table would overwrite the earlier row and hide
+        // it; an is_error row and a call row are separate facts.
+        let repeated = if cols[0] == "is_error" {
+            is_error
+                .insert((owned(1), owned(2)), (n, owned(4)))
+                .is_some()
         } else {
-            calls.insert((owned(0), owned(1), owned(2)), n);
+            calls.insert((owned(0), owned(1), owned(2)), n).is_some()
+        };
+        if repeated {
+            bad.push(format!("listed twice: {line}"));
         }
     }
     (is_error, calls, bad)
