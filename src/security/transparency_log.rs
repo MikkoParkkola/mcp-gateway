@@ -82,6 +82,8 @@ mod append;
 mod bounded;
 #[path = "transparency_log_hwm_scan.rs"]
 mod hwm_scan;
+#[path = "transparency_log_identity.rs"]
+pub(crate) mod identity;
 #[path = "transparency_log_rotation.rs"]
 pub(crate) mod rotation;
 /// Test seam for the write-fault injector, for tests outside this module.
@@ -164,6 +166,8 @@ pub struct TransparencyLogger {
     path: PathBuf,
     /// The writer lease on `<path>.lock`, held for the logger's lifetime.
     lease: crate::fs_lock::ExclusiveFileLock,
+    /// The log's identity, stable across reopens and rotations.
+    log_id: identity::LogId,
     /// The record key a `caller_key` field is keyed with at append (MIK-8697
     /// §16.12): every `tenant_read` writer funnels through this logger.
     record_key: Option<std::sync::Arc<crate::gateway::record_principal::RecordPrincipalKey>>,
@@ -306,6 +310,7 @@ impl TransparencyLogger {
             config,
             path,
             lease,
+            log_id: identity::LogId::mint(),
             // Production installs the resolved key through with_record_key
             // (build_meta_mcp); a logger opened in test code starts keyed.
             #[cfg(not(test))]
@@ -345,6 +350,13 @@ impl TransparencyLogger {
     pub(crate) fn append_attempts_for_test(&self) -> usize {
         self.append_attempts
             .load(std::sync::atomic::Ordering::Acquire)
+    }
+
+    /// The log's identity: reused from the log's own records on open, minted
+    /// (and recorded once) only when it has none.
+    #[must_use]
+    pub(crate) fn log_id(&self) -> &identity::LogId {
+        &self.log_id
     }
 
     /// Path the log writes to, with any leading `~/` expanded. Lets callers
@@ -659,6 +671,9 @@ mod hwm_contradiction_tests;
 #[cfg(test)]
 #[path = "transparency_log_hwm_missing_tests.rs"]
 mod hwm_missing_tests;
+#[cfg(test)]
+#[path = "transparency_log_identity_tests.rs"]
+mod identity_tests;
 #[cfg(test)]
 #[path = "transparency_log_keep_dir_tests.rs"]
 mod keep_dir_tests;
