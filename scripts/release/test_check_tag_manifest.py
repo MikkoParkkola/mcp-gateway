@@ -702,23 +702,28 @@ HANDOFF_RETENTION_DAYS = 90
 # reason. A coverage part's bundle feeds only its run's grade job: an expired
 # one costs re-running the whole run, never a lost publish, and it holds the
 # part's instrumented binaries and profiles (0.07-3.5 GB per part per PR run).
-SHORT_HANDOFFS = {
-    ("coverage-probe.yml", "cov-shard-sdk"): "a rerun rebuilds them; multi-GB bundles per PR run",
-    ("coverage-probe.yml", "cov-shard-${{ matrix.part }}"): "a rerun rebuilds them; multi-GB bundles per PR run",
-    ("coverage-shard-trial.yml", "cov-shard-sdk"): "a rerun rebuilds them; multi-GB bundles per PR run",
-    ("coverage-shard-trial.yml", "cov-shard-${{ matrix.shard }}"): "a rerun rebuilds them; multi-GB bundles per PR run",
+# A re-run of the grade job alone after they expire fails (the merge refuses a
+# missing bundle); re-running all jobs rebuilds them.
+COVERAGE_BUNDLE = ("7", "rerunning all jobs rebuilds them; multi-GB bundles per PR run")
+SHORT_HANDOFFS = {  # (workflow, artifact name) -> (retention-days, reason)
+    ("coverage-probe.yml", "cov-shard-sdk"): COVERAGE_BUNDLE,
+    ("coverage-probe.yml", "cov-shard-${{ matrix.part }}"): COVERAGE_BUNDLE,
+    ("coverage-shard-trial.yml", "cov-shard-sdk"): COVERAGE_BUNDLE,
+    ("coverage-shard-trial.yml", "cov-shard-${{ matrix.shard }}"): COVERAGE_BUNDLE,
 }
 
 
 def wrong_handoffs(handoffs) -> list[str]:
     """Each (workflow, step, artifact name, retention-days) handoff not kept
-    for HANDOFF_RETENTION_DAYS, unless SHORT_HANDOFFS names exactly it; a
-    short one must still write its days out."""
+    for HANDOFF_RETENTION_DAYS, unless SHORT_HANDOFFS names exactly it and
+    its days are exactly the exemption's."""
+    def allowed(workflow, name):
+        short = SHORT_HANDOFFS.get((workflow, name))
+        return [str(HANDOFF_RETENTION_DAYS)] if short is None else [short[0]]
     return [
         f"{workflow}: {step} ({name}) retention-days {days or 'unset'}"
         for workflow, step, name, days in handoffs
-        if days != [str(HANDOFF_RETENTION_DAYS)]
-        and not ((workflow, name) in SHORT_HANDOFFS and days)
+        if days != allowed(workflow, name)
     ]
 
 # The oldest cosign the workflows may install. v2.6.5 fixes GHSA-fx35-mq7g-6g98
@@ -2838,6 +2843,8 @@ class WorkflowWiring(unittest.TestCase):
 
         # Every exemption still names a handoff the scan sees, so a renamed
         # artifact cannot leave a stale entry that a new one could match.
+        # An exempt one put back to the full window fails as wrong days, so
+        # a dead entry cannot stay in the table either.
         seen = {(h[0], h[2]) for h in handoffs}
         self.assertEqual(sorted(set(SHORT_HANDOFFS) - seen), [], "stale SHORT_HANDOFFS entries")
 
@@ -2849,8 +2856,10 @@ class WorkflowWiring(unittest.TestCase):
         cases = [
             (("release.yml", step, "dist", ["7"]), True),
             (("release.yml", step, "dist", ["90"]), False),
-            (("coverage-probe.yml", step, "cov-shard-sdk", ["7"]), False),
-            (("coverage-probe.yml", step, "cov-shard-sdk", []), True),
+            *[((w, step, n, ["7"]), False) for w, n in SHORT_HANDOFFS],
+            *[((w, step, n, []), True) for w, n in SHORT_HANDOFFS],
+            *[((w, step, n, ["90"]), True) for w, n in SHORT_HANDOFFS],
+            (("coverage-probe.yml", step, "cov-shard-sdk", ["3"]), True),
             (("coverage-probe.yml", step, "coverage-linux", ["7"]), True),
             (("coverage-probe.yml", step, "cov-shard-other", ["7"]), True),
             (("ci.yml", step, "cov-shard-sdk", ["7"]), True),
