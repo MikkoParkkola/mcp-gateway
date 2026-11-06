@@ -310,29 +310,50 @@ fn every_refusal_site_is_classified() {
 /// A real row held only by a fragment (`<name>.d/<n>.tsv`) still counts, so
 /// a change adds its rows in a file of its own and two changes never edit
 /// one file.
-#[test]
-fn a_pinned_row_held_only_in_a_fragment_counts() {
-    let (base, moved) = without_first_row(&live_base("delivery_framing_inventory"));
-    let (_root, table) = scratch_table("delivery_framing_inventory", &base, &[("0.tsv", &moved)]);
-    framing_check(&table).unwrap_or_else(|m| panic!("{m}"));
-    let (base, moved) = without_first_row(&live_base("delivery_refusals"));
-    let (_root, table) = scratch_table("delivery_refusals", &base, &[("0.tsv", &moved)]);
-    refusals_check(&table).unwrap_or_else(|m| panic!("{m}"));
+fn fragment_only_row_counts(name: &str, check: fn(&Table) -> Result<(), String>) {
+    let (base, moved) = without_first_row(&live_base(name));
+    let (_root, table) = scratch_table(name, &base, &[("0.tsv", &moved)]);
+    check(&table).unwrap_or_else(|m| panic!("{name}: {m}"));
 }
 
 /// A key listed in the base and again in a fragment fails, naming the
 /// fragment: two copies of one site are never merged into one.
+fn key_in_base_and_fragment_fails(name: &str, check: fn(&Table) -> Result<(), String>) {
+    let (_, first) = without_first_row(&live_base(name));
+    let (_root, table) = scratch_table(name, &live_base(name), &[("0.tsv", &first)]);
+    let err = check(&table).expect_err("a key listed twice fails");
+    assert!(err.contains("0.tsv"), "{name}: {err}");
+}
+
 #[test]
-fn a_key_in_the_base_and_a_fragment_fails() {
-    for name in ["delivery_framing_inventory", "delivery_refusals"] {
-        let (_, first) = without_first_row(&live_base(name));
-        let (_root, table) = scratch_table(name, &live_base(name), &[("0.tsv", &first)]);
-        let check = if name == "delivery_refusals" {
-            refusals_check
-        } else {
-            framing_check
-        };
-        let err = check(&table).expect_err("a key listed twice fails");
-        assert!(err.contains("0.tsv"), "{name}: {err}");
-    }
+fn a_framing_row_held_only_in_a_fragment_counts() {
+    fragment_only_row_counts("delivery_framing_inventory", framing_check);
+}
+
+#[test]
+fn a_refusal_row_held_only_in_a_fragment_counts() {
+    fragment_only_row_counts("delivery_refusals", refusals_check);
+}
+
+#[test]
+fn a_framing_key_in_the_base_and_a_fragment_fails() {
+    key_in_base_and_fragment_fails("delivery_framing_inventory", framing_check);
+}
+
+#[test]
+fn a_refusal_key_in_the_base_and_a_fragment_fails() {
+    key_in_base_and_fragment_fails("delivery_refusals", refusals_check);
+}
+
+/// The class check reads fragments too: a fragment row whose key matches a
+/// real site but whose class is not one of [`CLASSES`] fails.
+#[test]
+fn a_fragment_row_with_no_class_fails() {
+    let (base, moved) = without_first_row(&live_base("delivery_refusals"));
+    let mut cols: Vec<&str> = moved.trim_end().split('\t').collect();
+    cols[4] = "unclassified";
+    let row = format!("{}\n", cols.join("\t"));
+    let (_root, table) = scratch_table("delivery_refusals", &base, &[("0.tsv", &row)]);
+    let err = refusals_check(&table).expect_err("a fragment row with no class fails");
+    assert!(err.contains("unclassified refusal site"), "{err}");
 }
