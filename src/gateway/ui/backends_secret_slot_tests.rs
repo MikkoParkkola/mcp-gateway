@@ -33,12 +33,19 @@ struct Panel {
     state: Arc<AppState>,
 }
 
+/// Whether the fixture's reloads accept the new bytes.
+#[derive(Clone, Copy)]
+enum Reloads {
+    Accept,
+    Refuse,
+}
+
 impl Panel {
     async fn new() -> Self {
-        Self::with(START).await
+        Self::with(START, Reloads::Accept).await
     }
 
-    async fn with(text: &str) -> Self {
+    async fn with(text: &str, reloads: Reloads) -> Self {
         let dir = Arc::new(tempfile::tempdir().expect("dir"));
         let path = dir.path().join("gateway.yaml");
         write_owner_only(&path, text).expect("write config");
@@ -52,16 +59,18 @@ impl Panel {
             .expect("state is unique")
             .config_path = Some(path.clone());
         let running = Config::load(Some(&path)).expect("config loads");
-        let ctx = Arc::new(
-            ReloadContext::new(
-                path,
-                Arc::new(LiveConfig::new(running)),
-                Arc::clone(&state.backends),
-                FailsafeConfig::default(),
-                Duration::from_secs(60),
-            )
-            .expect("the registry pairs with the config"),
-        );
+        let ctx = ReloadContext::new(
+            path,
+            Arc::new(LiveConfig::new(running)),
+            Arc::clone(&state.backends),
+            FailsafeConfig::default(),
+            Duration::from_secs(60),
+        )
+        .expect("the registry pairs with the config");
+        let ctx = Arc::new(match reloads {
+            Reloads::Accept => ctx,
+            Reloads::Refuse => ctx.refusing_reloads_for_test(),
+        });
         state.meta_mcp.set_reload_context(ctx);
         Self {
             dir,
@@ -97,7 +106,7 @@ impl Panel {
     }
 
     async fn add(&self, body: Value) -> (StatusCode, Value) {
-        self.add_into(body, None).await
+        self.add_seamed(body, None).await
     }
 
     async fn add_into(
@@ -105,12 +114,24 @@ impl Panel {
         body: Value,
         store: Option<Arc<dyn SecretStore + Send + Sync>>,
     ) -> (StatusCode, Value) {
+        let seam = BackendStoreForTest {
+            store,
+            after_precheck: None,
+        };
+        self.add_seamed(body, Some(seam)).await
+    }
+
+    async fn add_seamed(
+        &self,
+        body: Value,
+        seam: Option<BackendStoreForTest>,
+    ) -> (StatusCode, Value) {
         let req: AddBackendRequest = serde_json::from_value(body).expect("add body");
         let guard = Self::guard(routes::UI_BACKENDS, &axum::http::Method::POST);
         read(
             add_backend(
                 State(Arc::clone(&self.state)),
-                store.map(|s| axum::Extension(BackendStoreForTest(s))),
+                seam.map(axum::Extension),
                 guard,
                 Json(req),
             )
@@ -121,12 +142,21 @@ impl Panel {
     }
 
     async fn update(&self, name: &str, body: Value) -> (StatusCode, Value) {
+        self.update_seamed(name, body, None).await
+    }
+
+    async fn update_seamed(
+        &self,
+        name: &str,
+        body: Value,
+        seam: Option<BackendStoreForTest>,
+    ) -> (StatusCode, Value) {
         let req: UpdateBackendRequest = serde_json::from_value(body).expect("update body");
         let guard = Self::guard(routes::UI_BACKEND, &axum::http::Method::PATCH);
         read(
             update_backend(
                 State(Arc::clone(&self.state)),
-                None,
+                seam.map(axum::Extension),
                 guard,
                 AxumPath(name.to_owned()),
                 Json(req),
@@ -175,6 +205,21 @@ struct Limited {
     inner: FilesStore,
     limit: usize,
     time_out: bool,
+    /// The create (counting from 1) that fails, if any.
+    fail_create: Option<usize>,
+    creates: std::sync::atomic::AtomicUsize,
+}
+
+impl Limited {
+    fn new(dir: &std::path::Path) -> Self {
+        Self {
+            inner: FilesStore::new(dir),
+            limit: 4096,
+            time_out: false,
+            fail_create: None,
+            creates: std::sync::atomic::AtomicUsize::new(0),
+        }
+    }
 }
 
 impl SecretStore for Limited {
@@ -193,6 +238,13 @@ impl SecretStore for Limited {
     fn create(&self, name: &str, value: &[u8]) -> Result<String, StoreError> {
         if self.time_out {
             return Err(StoreError::TimedOut);
+        }
+        let n = self
+            .creates
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+            + 1;
+        if self.fail_create == Some(n) {
+            return Err(StoreError::Failed("the second create fails".to_owned()));
         }
         self.inner.create(name, value)
     }
@@ -334,9 +386,8 @@ async fn t6b_a_timed_out_create_writes_nothing() {
     let panel = Panel::new().await;
     let before = panel.text();
     let store = Arc::new(Limited {
-        inner: FilesStore::new(panel.dir.path()),
-        limit: 4096,
         time_out: true,
+        ..Limited::new(panel.dir.path())
     });
     let (status, body) = panel.add_into(literal_add("b"), Some(store)).await;
     assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{body}");
@@ -351,9 +402,8 @@ async fn t6d_a_value_over_the_store_limit_is_refused_by_field() {
     let panel = Panel::new().await;
     let before = panel.text();
     let store = Arc::new(Limited {
-        inner: FilesStore::new(panel.dir.path()),
         limit: 4,
-        time_out: false,
+        ..Limited::new(panel.dir.path())
     });
     let (status, body) = panel.add_into(literal_add("b"), Some(store)).await;
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
@@ -434,4 +484,111 @@ fn t13_the_shared_rule_refuses_the_same_values_for_the_cli() {
     let env = std::collections::HashMap::from([("K".to_owned(), "plain".to_owned())]);
     let resolved = resolve_backend("b", Some("npx tool"), None, None, env).expect("resolves");
     add_backend(&mut config, "b", resolved).expect("a plain literal passes the rule");
+}
+
+/// T15: the add preview refuses what the add would refuse, with the same
+/// answer, before anything is described or run.
+#[tokio::test]
+async fn t15_the_preview_refuses_what_the_add_refuses() {
+    let panel = Panel::new().await;
+    let body = json!({"name": "b", "url": "http://127.0.0.1:9/mcp", "env": {"A": "sk-${X}"}});
+    let request = serde_json::from_value(body.clone()).expect("preview body");
+    let guard = Panel::guard(routes::UI_PREVIEWS, &axum::http::Method::POST);
+    let (status, answer) = read(
+        crate::gateway::ui::preview::preview_backend(
+            State(Arc::clone(&panel.state)),
+            axum::Extension(panel.state.live_config.generation()),
+            guard,
+            Json(request),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{answer}");
+    let (_, added) = panel.add(body).await;
+    assert_eq!(
+        answer, added,
+        "the preview and the add answered differently"
+    );
+    assert_eq!(
+        answer["refusals"],
+        json!([{"reason": "literal_in_template", "field": "env.A"}])
+    );
+}
+
+/// T12: two literals where the second create fails: nothing is written and
+/// the first entry is removed again (the store's all-or-nothing save).
+#[tokio::test]
+async fn t12_a_failure_after_the_first_entry_leaves_no_entry_and_no_change() {
+    let panel = Panel::new().await;
+    let before = panel.text();
+    let store = Arc::new(Limited {
+        fail_create: Some(2),
+        ..Limited::new(panel.dir.path())
+    });
+    let body = json!({"name": "b", "url": "http://127.0.0.1:9/mcp", "env": {"FIRST": TOKEN, "SECOND": "another-literal"}});
+    let (status, answer) = panel.add_into(body, Some(store)).await;
+    assert!(status.is_server_error(), "{status}: {answer}");
+    no_value(&answer, TOKEN);
+    assert_eq!(panel.text(), before, "a failed save wrote");
+    assert!(
+        panel.entries().is_empty(),
+        "the first entry stayed: {:?}",
+        panel.entries()
+    );
+}
+
+/// T7: a reload that refuses the new bytes: the route answers a failure,
+/// gateway.yaml is put back as it was, and the save's entry is removed.
+#[tokio::test]
+async fn t7_a_refused_reload_puts_gateway_yaml_back_and_leaves_no_entry() {
+    let panel = Panel::with(START, Reloads::Refuse).await;
+    let before = panel.text();
+    let (status, body) = panel.add(literal_add("b")).await;
+    assert!(status.is_server_error(), "{status}: {body}");
+    no_value(&body, TOKEN);
+    assert_eq!(panel.text(), before, "the refused bytes stayed on disk");
+    assert!(
+        panel.entries().is_empty(),
+        "a refused save left {:?}",
+        panel.entries()
+    );
+}
+
+/// T4r: another writer adds the backend (or removes it) between the route's
+/// pre-check and the locked write: the locked edit refuses it (409 / 404),
+/// no entry is left, and the other writer's change is kept.
+#[tokio::test]
+async fn t4r_a_change_between_the_pre_check_and_the_write_refuses_and_stores_nothing() {
+    let panel = Panel::new().await;
+    let config = panel.path();
+    let raced = format!("{START}  b:\n    http_url: \"http://127.0.0.1:9/mcp\"\n");
+    let other = raced.clone();
+    let seam = BackendStoreForTest {
+        store: None,
+        after_precheck: Some(Arc::new(move || {
+            write_owner_only(&config, &other).expect("race");
+        })),
+    };
+    let (status, body) = panel.add_seamed(literal_add("b"), Some(seam)).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert_eq!(panel.text(), raced, "the other writer's change was lost");
+    assert!(panel.entries().is_empty(), "{:?}", panel.entries());
+
+    let panel = Panel::new().await;
+    let config = panel.path();
+    let removed = "secrets:\n  store: files\nbackends: {}\n".to_owned();
+    let other = removed.clone();
+    let seam = BackendStoreForTest {
+        store: None,
+        after_precheck: Some(Arc::new(move || {
+            write_owner_only(&config, &other).expect("race");
+        })),
+    };
+    let (status, body) = panel
+        .update_seamed("a", json!({"env": {"NEW": TOKEN}}), Some(seam))
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+    assert_eq!(panel.text(), removed);
+    assert!(panel.entries().is_empty(), "{:?}", panel.entries());
 }

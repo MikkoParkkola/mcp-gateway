@@ -203,7 +203,7 @@ async fn add_backend(
         &resolved.backend.env,
         &resolved.backend.headers,
         #[cfg(test)]
-        store_for_test.map(|axum::Extension(slotting::BackendStoreForTest(store))| store),
+        store_for_test.map(|axum::Extension(seam)| seam),
     )
     .await
     {
@@ -431,7 +431,7 @@ async fn update_backend(
         &name,
         env.as_ref(),
         #[cfg(test)]
-        store_for_test.map(|axum::Extension(slotting::BackendStoreForTest(store))| store),
+        store_for_test.map(|axum::Extension(seam)| seam),
     )
     .await
     {

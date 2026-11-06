@@ -17,12 +17,19 @@ use super::write::{STORE_UNAVAILABLE, Slotted};
 use crate::config::Config;
 use crate::gateway::ui::backend_ops::{ValueClass, classify, literal_refusals};
 use crate::wiped_bytes::WipedBytes;
-
-/// Test-only: the store a backend write saves into instead of the configured
-/// one, as a request extension. Absent from every non-test build.
 #[cfg(test)]
-#[derive(Clone)]
-pub(super) struct BackendStoreForTest(pub(super) Store);
+use std::sync::Arc;
+
+/// Test-only, as a request extension: the store a backend write saves into
+/// instead of the configured one, and a hook run between the pre-check and
+/// the locked write (where another writer can change gateway.yaml). Absent
+/// from every non-test build.
+#[cfg(test)]
+#[derive(Clone, Default)]
+pub(super) struct BackendStoreForTest {
+    pub(super) store: Option<Store>,
+    pub(super) after_precheck: Option<Arc<dyn Fn() + Send + Sync>>,
+}
 
 /// One literal a write stores: its map, key and value (wiped on drop).
 pub(super) struct Literal {
@@ -203,7 +210,7 @@ pub(super) async fn before_store(
     expect: Expect,
     env: &std::collections::HashMap<String, String>,
     headers: &std::collections::HashMap<String, String>,
-    #[cfg(test)] store_for_test: Option<Store>,
+    #[cfg(test)] seam: Option<BackendStoreForTest>,
 ) -> Result<Option<Slotted>, Box<Response>> {
     let reasons = refusals(env, headers);
     let found = literals(env.iter(), headers.iter());
@@ -211,6 +218,10 @@ pub(super) async fn before_store(
         return Ok(None);
     }
     let config = read_expecting(path, name, expect).await?;
+    #[cfg(test)]
+    if let Some(hook) = seam.as_ref().and_then(|s| s.after_precheck.clone()) {
+        hook();
+    }
     if !reasons.is_empty() {
         return Err(Box::new(secret_slots::refused_values(&reasons)));
     }
@@ -220,7 +231,7 @@ pub(super) async fn before_store(
         name,
         found,
         #[cfg(test)]
-        store_for_test,
+        seam.and_then(|s| s.store),
     )
     .await
 }
@@ -231,7 +242,7 @@ pub(super) async fn for_update(
     state: &crate::gateway::router::AppState,
     name: &str,
     env: Option<&std::collections::HashMap<String, String>>,
-    #[cfg(test)] store_for_test: Option<Store>,
+    #[cfg(test)] seam: Option<BackendStoreForTest>,
 ) -> Result<Option<Slotted>, Box<Response>> {
     let Some(values) = env else {
         return Ok(None);
@@ -248,7 +259,7 @@ pub(super) async fn for_update(
         values,
         &std::collections::HashMap::new(),
         #[cfg(test)]
-        store_for_test,
+        seam,
     )
     .await
 }

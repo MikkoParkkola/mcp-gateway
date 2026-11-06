@@ -251,6 +251,21 @@ impl ReloadContext {
         self
     }
 
+    /// Test-only: a context whose every reload after a write refuses the new
+    /// bytes, so a route's answer to a refused reload can be driven end to end.
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn refusing_reloads_for_test(self) -> Self {
+        fn refused(
+            _: &std::path::Path,
+            _: &Arc<LiveConfig>,
+            _: &LiveEnv,
+        ) -> std::result::Result<EvaluatedReload, String> {
+            Err("the reload refused the new bytes (test)".to_owned())
+        }
+        self.with_load(refused)
+    }
+
     /// Replace how the load thread starts, so a test can refuse it.
     #[cfg(test)]
     #[must_use]
