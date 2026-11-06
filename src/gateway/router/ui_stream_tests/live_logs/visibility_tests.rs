@@ -95,8 +95,12 @@ async fn sc_a_reordered_scoped_key_keeps_its_stream_and_a_narrowed_one_ends_it()
         .find(|k| k.name == SCOPED_ADMIN)
         .expect("the reload publishes the scoped key");
     assert_eq!(key.backends, vec!["b", "a", "a"], "premise: the list is reordered");
+    // Still open after four recheck periods: `ended_within` cannot say this,
+    // as it reads on until the stream ends and only then checks the time.
     assert!(
-        !s.ended_within(Duration::from_secs(4)).await,
+        tokio::time::timeout(Duration::from_secs(4), s.ended())
+            .await
+            .is_err(),
         "a reordered list with a repeat is the same set: the stream stays"
     );
     call(&inv, "a", 1);
