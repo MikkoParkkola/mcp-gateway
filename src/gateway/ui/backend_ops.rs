@@ -237,7 +237,11 @@ pub(crate) fn literal_refusals(
     let headers = backend.headers.iter().map(|(k, v)| ("headers", k, v));
     let mut refused: Vec<_> = env
         .chain(headers)
-        .filter_map(|(map, key, value)| classify(value).err().map(|code| (code, format!("{map}.{key}"))))
+        .filter_map(|(map, key, value)| {
+            classify(value)
+                .err()
+                .map(|code| (code, format!("{map}.{key}")))
+        })
         .collect();
     refused.sort_by(|a, b| a.1.cmp(&b.1));
     refused

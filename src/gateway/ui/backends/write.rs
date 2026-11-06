@@ -11,16 +11,16 @@ use axum::response::IntoResponse;
 use super::super::errors::{
     config_path_unavailable, config_refusal, flat_error, no_config_file, structured_error,
 };
-use crate::config::Config;
 use super::super::secret_slots;
+use crate::config::Config;
 use crate::config_persistence::keyedit::{SlotId, Template};
-use crate::secret_store::{SaveError, StoreError};
 use crate::config_persistence::{NOT_IN_PLACE, edit_text, not_in_place};
 use crate::config_reload::{
     BackendOp, ConfigWriteError, Expected, IntentKind, NO_AUDIT_LOG, ReloadOutcome, Replace,
     ReplaceError, Replaced,
 };
 use crate::gateway::router::AppState;
+use crate::secret_store::{SaveError, StoreError};
 
 /// A route edit's own answer, carried out of the writer's boxed compute.
 type Decided<T> = Arc<parking_lot::Mutex<Option<Result<T, (StatusCode, String)>>>>;
@@ -32,8 +32,7 @@ const ROUTE_ANSWERED: &str = "the backend route answered the edit itself";
 const SLOT_MISSING: &str = "a secret slot names a value the edit did not leave";
 
 /// The answer when the configured store cannot take values on this host.
-pub(super) const STORE_UNAVAILABLE: &str =
-    "secrets.store cannot take these values; set secrets.store, or give each value as a secret reference";
+pub(super) const STORE_UNAVAILABLE: &str = "secrets.store cannot take these values; set secrets.store, or give each value as a secret reference";
 
 /// The values a write stores instead of writing them: each `(header?, key)`
 /// on the edited backend becomes a slot the writer fills with its store

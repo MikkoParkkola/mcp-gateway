@@ -5,13 +5,14 @@
 //! store and its secret step. Every refusal here answers before any store is
 //! touched, so a refused save probes no keychain and leaves no entry.
 
-use axum::Json;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use serde_json::json;
 
 use super::super::errors::flat_error;
-use super::super::secret_slots::{self, Store, Unopened};
+#[cfg(test)]
+use super::super::secret_slots::Store;
+use super::super::secret_slots::{self, Unopened};
 use super::write::{STORE_UNAVAILABLE, Slotted};
 use crate::config::Config;
 use crate::gateway::ui::backend_ops::{ValueClass, classify, literal_refusals};
@@ -33,7 +34,11 @@ pub(super) struct Literal {
 impl Literal {
     /// `env.KEY` or `headers.KEY`.
     fn field(&self) -> String {
-        format!("{}.{}", if self.header { "headers" } else { "env" }, self.key)
+        format!(
+            "{}.{}",
+            if self.header { "headers" } else { "env" },
+            self.key
+        )
     }
 }
 
@@ -92,13 +97,18 @@ pub(super) async fn read_expecting(
         tokio::task::spawn_blocking(move || Config::load_literal_with_text(&path)).await
     };
     let Ok(Ok((config, _))) = read else {
-        return Err(Box::new(super::super::errors::config_refusal().into_response()));
+        return Err(Box::new(
+            super::super::errors::config_refusal().into_response(),
+        ));
     };
     match (expect, config.backends.contains_key(name)) {
         (Expect::Absent, true) => {
             return Err(Box::new(
-                flat_error(StatusCode::CONFLICT, format!("Backend '{name}' already exists"))
-                    .into_response(),
+                flat_error(
+                    StatusCode::CONFLICT,
+                    format!("Backend '{name}' already exists"),
+                )
+                .into_response(),
             ));
         }
         (Expect::Present, false) => {
@@ -125,10 +135,13 @@ pub(super) async fn prepare(
     if literals.is_empty() {
         return Ok(None);
     }
-    let dir = path.parent().unwrap_or_else(|| std::path::Path::new(".")).to_path_buf();
+    let dir = path
+        .parent()
+        .unwrap_or_else(|| std::path::Path::new("."))
+        .to_path_buf();
     let (store, vault) = secret_slots::open_store(config.secrets.store, dir)
         .await
-        .map_err(unopened)?;
+        .map_err(|why| Box::new(unopened(why)))?;
     #[cfg(test)]
     let store = store_for_test.unwrap_or(store);
     let limit = store.limit();
@@ -142,13 +155,14 @@ pub(super) async fn prepare(
     }
     let slots = literals.iter().map(|l| (l.header, l.key.clone())).collect();
     let values = literals.into_iter().map(|l| (l.field(), l.value)).collect();
-    let step = secret_slots::secret_step(name, values, store, vault).map_err(unopened)?;
+    let step = secret_slots::secret_step(name, values, store, vault)
+        .map_err(|why| Box::new(unopened(why)))?;
     Ok(Some(Slotted { slots, step }))
 }
 
 /// A store that could not be opened, answered with fixed text only.
-fn unopened(why: Unopened) -> Box<Response> {
-    Box::new(match why {
+fn unopened(why: Unopened) -> Response {
+    match why {
         Unopened::Unavailable => {
             flat_error(StatusCode::UNPROCESSABLE_ENTITY, STORE_UNAVAILABLE).into_response()
         }
@@ -162,7 +176,7 @@ fn unopened(why: Unopened) -> Box<Response> {
             "the secret store did not answer; nothing was written; retry",
         )
         .into_response(),
-    })
+    }
 }
 
 /// The answer's `secrets_stored`: each stored field (`env.KEY`) and the
@@ -205,6 +219,34 @@ pub(super) async fn before_store(
         &config,
         name,
         found,
+        #[cfg(test)]
+        store_for_test,
+    )
+    .await
+}
+
+/// An update's step before the store: only the env values the request sets
+/// are judged and stored; values already in gateway.yaml are carried as they are.
+pub(super) async fn for_update(
+    state: &crate::gateway::router::AppState,
+    name: &str,
+    env: Option<&std::collections::HashMap<String, String>>,
+    #[cfg(test)] store_for_test: Option<Store>,
+) -> Result<Option<Slotted>, Box<Response>> {
+    let Some(values) = env else {
+        return Ok(None);
+    };
+    let Some(config_file) = state.config_path.as_deref() else {
+        return Err(Box::new(
+            super::super::errors::config_path_unavailable().into_response(),
+        ));
+    };
+    before_store(
+        config_file,
+        name,
+        Expect::Present,
+        values,
+        &std::collections::HashMap::new(),
         #[cfg(test)]
         store_for_test,
     )

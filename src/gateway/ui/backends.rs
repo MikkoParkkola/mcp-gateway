@@ -426,27 +426,17 @@ async fn update_backend(
 
     // Only the values this request sets are judged and stored; values already
     // in gateway.yaml are carried as they are.
-    let slotted = match &env {
-        None => None,
-        Some(patch) => {
-            let Some(path) = state.config_path.clone() else {
-                return config_path_unavailable().into_response();
-            };
-            match slotting::before_store(
-                &path,
-                &name,
-                slotting::Expect::Present,
-                patch,
-                &std::collections::HashMap::new(),
-                #[cfg(test)]
-                store_for_test.map(|axum::Extension(slotting::BackendStoreForTest(store))| store),
-            )
-            .await
-            {
-                Ok(slotted) => slotted,
-                Err(answer) => return *answer,
-            }
-        }
+    let slotted = match slotting::for_update(
+        &state,
+        &name,
+        env.as_ref(),
+        #[cfg(test)]
+        store_for_test.map(|axum::Extension(slotting::BackendStoreForTest(store))| store),
+    )
+    .await
+    {
+        Ok(slotted) => slotted,
+        Err(answer) => return *answer,
     };
 
     // Everything from here reads the config and writes it back, so it all runs
@@ -455,58 +445,64 @@ async fn update_backend(
     let updated = name.clone();
     let ticket = WriteTicket::new(&state);
     let in_lock = ticket.clone();
-    let mutation = write_backend(&state, BackendOp::Update, &updated, slotted, move |config| {
-        if !config.backends.contains_key(&name) {
-            return Err((StatusCode::NOT_FOUND, format!("Backend '{name}' not found")));
-        }
-
-        let transport = requested_transport(command, url);
-
-        let env = env.map(|env_patch| {
-            let mut merged = config
-                .backends
-                .get(&name)
-                .expect("checked above")
-                .env
-                .clone();
-            merged.extend(env_patch);
-            merged
-        });
-
-        let stop_when_idle_for = stop_when_idle_for_secs.map(|secs| {
-            if secs == 0 {
-                None // explicit clear: never stop
-            } else {
-                Some(std::time::Duration::from_secs(secs))
+    let mutation = write_backend(
+        &state,
+        BackendOp::Update,
+        &updated,
+        slotted,
+        move |config| {
+            if !config.backends.contains_key(&name) {
+                return Err((StatusCode::NOT_FOUND, format!("Backend '{name}' not found")));
             }
-        });
 
-        update_backend_config(
-            config,
-            &name,
-            BackendUpdate {
-                description,
-                env,
-                enabled,
-                transport,
-                stop_when_idle_for,
-            },
-        )
-        .inspect(|()| in_lock.note(RefusalKind::Edit, &name, config))
-        .map(|()| {
-            let backend = config.backends.get_mut(&name)?;
-            let after = allowed_tools?;
-            let before = std::mem::replace(&mut backend.allowed_tools, after.clone());
-            (before != after).then_some((before, after))
-        })
-        .map_err(|message| {
-            // Surface the refusal verbatim. An operator setting "stop when idle" on a
-            // backend the gateway does not start needs to be told why, not silently
-            // ignored - being silently ignored is what this whole change corrects.
-            let code = in_lock.refused_edit(&name, &message, update_refusal_status(&message));
-            (code, message)
-        })
-    })
+            let transport = requested_transport(command, url);
+
+            let env = env.map(|env_patch| {
+                let mut merged = config
+                    .backends
+                    .get(&name)
+                    .expect("checked above")
+                    .env
+                    .clone();
+                merged.extend(env_patch);
+                merged
+            });
+
+            let stop_when_idle_for = stop_when_idle_for_secs.map(|secs| {
+                if secs == 0 {
+                    None // explicit clear: never stop
+                } else {
+                    Some(std::time::Duration::from_secs(secs))
+                }
+            });
+
+            update_backend_config(
+                config,
+                &name,
+                BackendUpdate {
+                    description,
+                    env,
+                    enabled,
+                    transport,
+                    stop_when_idle_for,
+                },
+            )
+            .inspect(|()| in_lock.note(RefusalKind::Edit, &name, config))
+            .map(|()| {
+                let backend = config.backends.get_mut(&name)?;
+                let after = allowed_tools?;
+                let before = std::mem::replace(&mut backend.allowed_tools, after.clone());
+                (before != after).then_some((before, after))
+            })
+            .map_err(|message| {
+                // Surface the refusal verbatim. An operator setting "stop when idle" on a
+                // backend the gateway does not start needs to be told why, not silently
+                // ignored - being silently ignored is what this whole change corrects.
+                let code = in_lock.refused_edit(&name, &message, update_refusal_status(&message));
+                (code, message)
+            })
+        },
+    )
     .await;
 
     let write::Written {
@@ -608,6 +604,10 @@ pub(super) use crate::config::backend_add::validate_backend_name;
 #[cfg(test)]
 #[path = "backends_audit_tests.rs"]
 mod audit_tests;
+
+#[cfg(test)]
+#[path = "backends_secret_slot_tests.rs"]
+mod secret_slot_tests;
 
 #[cfg(test)]
 mod tests {

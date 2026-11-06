@@ -24,20 +24,22 @@ use super::super::errors::{
     config_path_unavailable, config_refusal, flat_error, no_config_file, structured_error,
 };
 use super::super::guard::Guard;
+use super::super::secret_slots::{self, Store, Unopened};
 use super::{Gateway, name_refusal, read_gateway};
 use crate::config::SecretStoreChoice;
 use crate::config_persistence::keyedit::{SlotId, Template};
 use crate::config_persistence::{NOT_IN_PLACE, edit_text};
 use crate::config_reload::{
-    Expected, FileRevision, IntentKind, NO_AUDIT_LOG, Replace, ReplaceError,
-    ReplaceOutcome, Replaced, SecretStep,
+    Expected, FileRevision, IntentKind, NO_AUDIT_LOG, Replace, ReplaceError, ReplaceOutcome,
+    Replaced, SecretStep,
 };
 use crate::discovery::DiscoveredServer;
 use crate::discovery::adopt::{AdoptRefusal, Adoption, Literal, adoption, refusals};
 use crate::discovery::listing::{DiscoveryCache, ScanTimedOut};
 use crate::gateway::router::AppState;
-use super::super::secret_slots::{self, Store, Unopened};
-use crate::secret_store::{Chosen, SaveError, StoreError, Vault};
+#[cfg(test)]
+use crate::secret_store::Chosen;
+use crate::secret_store::{SaveError, StoreError, Vault};
 
 /// Test-only: the store an adopt saves into instead of the configured one,
 /// as a request extension (the pattern of the injected `DiscoveryCache`).
@@ -216,17 +218,19 @@ pub(super) fn compute(
 /// The store the configured choice resolves to, or the answer when none can
 /// take the values: 422 when the choice cannot be met on this host, 500
 /// otherwise. The store's own message is never returned.
+/// Kept for adopt's own rows, which pin its answer to each choice.
+#[cfg(test)]
 pub(super) fn chosen(choice: Result<Chosen, StoreError>) -> Result<Store, Box<Response>> {
-    secret_slots::chosen(choice).map_err(unopened)
+    secret_slots::chosen(choice).map_err(|why| Box::new(unopened(why)))
 }
 
 /// Adopt's answer to a store that could not be opened: fixed text only.
-fn unopened(why: Unopened) -> Box<Response> {
-    Box::new(match why {
+fn unopened(why: Unopened) -> Response {
+    match why {
         Unopened::Unavailable => fixed(StatusCode::UNPROCESSABLE_ENTITY, STORE_UNAVAILABLE),
         Unopened::Failed => fixed(StatusCode::INTERNAL_SERVER_ERROR, FAILED),
         Unopened::TimedOut => store_timed_out(),
-    })
+    }
 }
 
 /// The store choice and the vault beside gateway.yaml (the shared opener:
@@ -235,7 +239,9 @@ async fn open_store(
     configured: SecretStoreChoice,
     dir: std::path::PathBuf,
 ) -> Result<(Store, Result<Vault, StoreError>), Box<Response>> {
-    secret_slots::open_store(configured, dir).await.map_err(unopened)
+    secret_slots::open_store(configured, dir)
+        .await
+        .map_err(|why| Box::new(unopened(why)))
 }
 
 /// The answer when the store choice or the vault did not answer within the
@@ -272,7 +278,7 @@ pub(super) fn secret_step(
         .into_iter()
         .map(|literal| (literal.field(), literal.value))
         .collect();
-    secret_slots::secret_step(name, values, store, vault).map_err(unopened)
+    secret_slots::secret_step(name, values, store, vault).map_err(|why| Box::new(unopened(why)))
 }
 
 /// The find a fresh scan resolved, or the answer when it did not: changed

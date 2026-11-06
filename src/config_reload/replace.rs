@@ -391,6 +391,42 @@ fn settle_now(pending: PendingSecrets, how: Settle) {
     }
 }
 
+/// Each secret's field, in the step's order.
+#[cfg_attr(
+    not(any(test, feature = "webui")),
+    expect(
+        dead_code,
+        reason = "first callers: the web UI settings save and discovery adopt"
+    )
+)]
+fn step_fields(step: Option<&SecretStep>) -> Vec<String> {
+    step.map(|step| step.values.iter().map(|v| v.field.clone()).collect())
+        .unwrap_or_default()
+}
+
+/// `outcome` with the references this write filled, by field, read before the
+/// entries are settled (a kept entry's reference is what the file holds).
+#[cfg_attr(
+    not(any(test, feature = "webui")),
+    expect(
+        dead_code,
+        reason = "first callers: the web UI settings save and discovery adopt"
+    )
+)]
+fn with_references(
+    mut outcome: ReplaceOutcome,
+    fields: Vec<String>,
+    entries: &Entries,
+) -> ReplaceOutcome {
+    if let Some(pending) = &entries.pending {
+        outcome.secrets = fields
+            .into_iter()
+            .zip(pending.refs().iter().cloned())
+            .collect();
+    }
+    outcome
+}
+
 #[cfg_attr(
     not(any(test, feature = "webui")),
     expect(
@@ -488,10 +524,7 @@ impl ReloadContext {
         // secrets, before any entry exists: a refusal creates nothing.
         let template = (replace.compute)(&current).map_err(ReplaceError::Refused)?;
         let step = replace.secrets.filter(|step| !step.values.is_empty());
-        let fields: Vec<String> = step
-            .as_ref()
-            .map(|step| step.values.iter().map(|v| v.field.clone()).collect())
-            .unwrap_or_default();
+        let fields = step_fields(step.as_ref());
         same_fields(&template, step.as_ref())?;
         fits_when_filled(&template)?;
         self.validate_template(&target, &template, step.as_ref())
@@ -535,14 +568,7 @@ impl ReloadContext {
             }
             Err(refused) => Err(refused),
         };
-        // The references this write filled, by field, read before the
-        // entries are settled (a kept entry's reference is what the file holds).
-        let result = result.map(|mut outcome| {
-            if let Some(pending) = &entries.pending {
-                outcome.secrets = fields.into_iter().zip(pending.refs().iter().cloned()).collect();
-            }
-            outcome
-        });
+        let result = result.map(|outcome| with_references(outcome, fields, &entries));
         // The config locks go before any store call: a discard's keychain
         // deletes must not hold up the next writer. A death in between is
         // the `Entries` guard's.
