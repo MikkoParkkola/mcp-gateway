@@ -2,12 +2,12 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! The best-effort write of a withheld surfaced call's own grant decision.
 
-/// The one warning a failed best-effort withheld record logs (MIK-8340 A5
-/// item 9); the upgrade note tells operators to alert on it.
+/// The one warning a failed best-effort withheld record logs (the withheld surfaced
+/// call's record); the upgrade note tells operators to alert on it.
 pub(in crate::gateway::meta_mcp) const WITHHELD_RECORD_FAILED: &str = "The audit record of a withheld surfaced call could not be written; \
      the call is answered as a name that matches no tool";
 
-/// The `FailClosed` exception of MIK-8340 A5 item 9, for the withheld surfaced
+/// The `FailClosed` exception for the withheld surfaced
 /// call's own grant record ONLY: run `noting`, then move the decisions it
 /// noted out of the slot's fail-closed notes into its best-effort list and
 /// return at once. The slot opener writes that list after the wrapped work
