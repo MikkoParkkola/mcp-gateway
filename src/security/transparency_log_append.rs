@@ -299,15 +299,20 @@ impl TransparencyLogger {
     /// writer rotated, finish a half-done rotation, or continue the counter
     /// past a deleted active file (2.8, 2.13).
     fn rebuild(&self, inner: &mut Inner, path: &Path, g: &ExclusiveFileLock) -> io::Result<()> {
-        let (r, _) = recover(path, &self.config, g, self.now())?;
+        let (r, log_id) = recover(path, &self.config, g, self.now())?;
         // A finding this writer already holds is never forgotten (#2294).
         let known = inner.seg.hwm_missing_at;
         // A tail that is not this writer's last record: the log it extends
         // was replaced, restored, forked or emptied, or recovery wrote its
         // own records over a cut. Positions in it no longer hold.
-        if r.counter != inner.counter || r.last_entry_hash != inner.last_entry_hash {
+        // Another log in its place (another id) is raised as an identity
+        // change, once, in place of the moved tail it also is.
+        if log_id != inner.log_id {
+            self.subscribers.raise_generation("log_id");
+        } else if r.counter != inner.counter || r.last_entry_hash != inner.last_entry_hash {
             self.subscribers.raise_generation("tail");
         }
+        inner.log_id = log_id;
         inner.file = r.file;
         inner.counter = r.counter;
         inner.last_entry_hash = r.last_entry_hash;
@@ -518,7 +523,7 @@ impl TransparencyLogger {
             Some(&hw),
             now,
             inner.seg.hwm_missing_at,
-            &self.log_id,
+            &inner.log_id,
         )?;
         inner.file = r.file;
         inner.counter = r.counter;

@@ -73,7 +73,7 @@ fn log_id_upgrade() {
 
     // WHEN: 4.0 opens it, it is reopened, and it rotates
     let l = TransparencyLogger::open(cfg(&path, 12, false)).unwrap();
-    let id = l.log_id().clone();
+    let id = l.log_id();
     let upgraded = std::fs::read(sibling(&path, "hwm")).unwrap();
     // `.hwm` first, before any record or verify check: same fixed length as
     // the beta layout, and the id nowhere in it.
@@ -87,7 +87,7 @@ fn log_id_upgrade() {
     let found = identified(&path);
     assert_eq!(found.len(), 1, "minted once: {found:?}");
     assert_eq!(found[0]["log_id"].as_str(), Some(id.as_str()));
-    assert_eq!(l.log_id(), &id, "the id survives a reopen");
+    assert_eq!(l.log_id(), id, "the id survives a reopen");
     let opened = lines(&path);
     assert_eq!(event(&opened[0]), Some(rotation::EV_OPENED));
     assert_eq!(opened[0]["log_id"].as_str(), Some(id.as_str()), "rotation");
@@ -105,14 +105,14 @@ fn crash_S2() {
     let dir = tempfile::tempdir().unwrap();
     let path = log_path(&dir);
     let built = TransparencyLogger::open(cfg(&path, 12, false)).unwrap();
-    let id = built.log_id().clone();
+    let id = built.log_id();
     drop(built);
 
     // WHEN: the log is reopened twice
     for _ in 0..2 {
         let again = TransparencyLogger::open(cfg(&path, 12, false)).unwrap();
         // THEN: the same id, and still one identified record
-        assert_eq!(again.log_id(), &id);
+        assert_eq!(again.log_id(), id);
         drop(again);
     }
     let found = identified(&path);
@@ -127,7 +127,7 @@ fn a_caller_cannot_append_an_audit_log_identified_record() {
     let dir = tempfile::tempdir().unwrap();
     let path = log_path(&dir);
     let l = TransparencyLogger::open(cfg(&path, 12, false)).unwrap();
-    let id = l.log_id().clone();
+    let id = l.log_id();
     let before = all_records(&path).len();
 
     // WHEN: a caller tries to name another id
@@ -141,7 +141,7 @@ fn a_caller_cannot_append_an_audit_log_identified_record() {
     assert_eq!(all_records(&path).len(), before);
     drop(l);
     let again = TransparencyLogger::open(cfg(&path, 12, false)).unwrap();
-    assert_eq!(again.log_id(), &id);
+    assert_eq!(again.log_id(), id);
 }
 
 /// Replace `dst` with a copy of `src` through a rename, so `dst` is a new

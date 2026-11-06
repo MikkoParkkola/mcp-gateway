@@ -146,6 +146,10 @@ struct Inner {
     last_entry_hash: String,
     /// Which segment `file` is, and the inode it was opened on (D6).
     seg: rotation::SegState,
+    /// The identity of the log `file` extends. Under the same lock as the
+    /// tail, so a rebuild that finds another log adopts its id before any
+    /// record (a rotation's open record included) is written.
+    log_id: identity::LogId,
 }
 
 // ── TransparencyLogger ────────────────────────────────────────────────────────
@@ -166,8 +170,6 @@ pub struct TransparencyLogger {
     path: PathBuf,
     /// The writer lease on `<path>.lock`, held for the logger's lifetime.
     lease: crate::fs_lock::ExclusiveFileLock,
-    /// The log's identity, stable across reopens and rotations.
-    log_id: identity::LogId,
     /// The record key a `caller_key` field is keyed with at append (MIK-8697
     /// §16.12): every `tenant_read` writer funnels through this logger.
     record_key: Option<std::sync::Arc<crate::gateway::record_principal::RecordPrincipalKey>>,
@@ -306,11 +308,11 @@ impl TransparencyLogger {
                 counter: recovered.counter,
                 last_entry_hash: recovered.last_entry_hash,
                 seg: recovered.seg,
+                log_id,
             }),
             config,
             path,
             lease,
-            log_id,
             // Production installs the resolved key through with_record_key
             // (build_meta_mcp); a logger opened in test code starts keyed.
             #[cfg(not(test))]
@@ -359,8 +361,13 @@ impl TransparencyLogger {
         not(test),
         expect(dead_code, reason = "read by the settle step, which binds to it")
     )]
-    pub(crate) fn log_id(&self) -> &identity::LogId {
-        &self.log_id
+    pub(crate) fn log_id(&self) -> identity::LogId {
+        // A poisoned lock still holds the last id a rebuild adopted.
+        let inner = self
+            .inner
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        inner.log_id.clone()
     }
 
     /// Path the log writes to, with any leading `~/` expanded. Lets callers
