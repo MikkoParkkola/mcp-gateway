@@ -16,7 +16,11 @@ const DORMANT: &str = "{match: \"*\", action: warn, except: [{}]}";
 fn config_file(rules: &[&str]) -> (tempfile::TempDir, PathBuf) {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("gateway.yaml");
-    let rules: String = rules.iter().map(|r| format!("      - {r}\n")).collect();
+    let rules = rules
+        .iter()
+        .map(|r| format!("      - {r}\n"))
+        .collect::<Vec<_>>()
+        .concat();
     let text = format!(
         "server:\n  port: 39990\nsecurity:\n  firewall:\n    enabled: false\n    rules:\n{rules}"
     );
