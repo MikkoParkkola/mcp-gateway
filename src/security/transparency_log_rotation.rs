@@ -246,8 +246,10 @@ pub(super) fn recover(
     let unfinished = !minted && identity::unfinished_genesis(path, &sealed)?;
     let id = existing.unwrap_or_else(LogId::mint);
     // A genesis that replaces a lost log names what survived of it in the
-    // same synced open record that sets the new id.
-    let evidence = gone
+    // same synced open record that sets the new id. Only a new id: `gone`
+    // implies `minted` today (with nothing on disk no id resolves), and the
+    // check keeps a continuing log free of evidence if either test changes.
+    let evidence = (minted && gone)
         .then(|| identity::predecessor_evidence(held, hw.as_ref()))
         .flatten();
     let opened = identity::open_fields(&id, evidence);
