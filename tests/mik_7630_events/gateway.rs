@@ -83,7 +83,9 @@ pub fn config(root: &Path, events: &Value) -> Value {
             key("alice", ALICE, &["hooks"]),
             key("bob", BOB, &["other"]),
             key("carol", CAROL, &["hooks"]),
-            admin_key("admin", ADMIN, &["admin-only"]),
+            // Every backend: the dead-letter admin routes and operator events
+            // are gateway-wide, so a backend-scoped admin key is refused them.
+            admin_key("admin", ADMIN, &["*"]),
         ]},
         "capabilities": {"enabled": true, "name": "hooks",
             "directories": [caps.to_string_lossy()]},

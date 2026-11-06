@@ -424,7 +424,7 @@ async fn gateway_reload_capabilities_needs_an_admin_key() {
         .load_from_directory(dir.path().to_str().expect("the tempdir path is utf-8"))
         .await
         .expect("the fixture directory loads");
-    let (state, _store) = test_router_app_state_with_auth(&scoped_auth_config(true)).await;
+    let (state, _store) = test_router_app_state_with_auth(&full_admin_auth_config()).await;
     state.meta_mcp.set_capabilities(Arc::clone(&backend));
     std::fs::write(dir.path().join("a.yaml"), cap_yaml("v2-much-longer")).expect("write v2");
     let router = create_router(state);

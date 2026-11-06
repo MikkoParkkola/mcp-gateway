@@ -57,7 +57,8 @@ pub(super) fn admission_principal() -> String {
     .stable_actor_id()
 }
 
-/// A second registered backend that no key in [`two_principal_auth`] may reach.
+/// A second registered backend that neither non-admin key in
+/// [`two_principal_auth`] may reach (the admin key holds every backend).
 /// Used by the rows that need a refusal which is real rather than arranged.
 pub(super) const FORBIDDEN_BACKEND: &str = "vault";
 
@@ -87,8 +88,13 @@ pub(super) fn two_principal_auth() -> AuthConfig {
         name: name.to_string(),
         rate_limit: 0,
         // Named rather than empty: an empty list is "every backend", and the
-        // refusal rows need a backend this credential provably cannot reach.
-        backends: vec![BACKEND.to_string()],
+        // refusal rows need a backend these credentials provably cannot reach.
+        // The admin holds every backend: the admin meta-tools are gateway-wide.
+        backends: if admin {
+            vec!["*".to_string()]
+        } else {
+            vec![BACKEND.to_string()]
+        },
         allowed_tools: None,
         denied_tools: None,
         admin,

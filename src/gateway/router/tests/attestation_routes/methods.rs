@@ -428,7 +428,8 @@ async fn direct_route_enforce_set_level_needs_only_an_authentic_token() {
             expires_at: None,
             name: "ops".to_string(),
             rate_limit: 0,
-            backends: vec!["demo".to_string()],
+            // logging/setLevel is gateway-wide: an admin over every backend.
+            backends: vec!["*".to_string()],
             allowed_tools: None,
             denied_tools: None,
             admin: true,

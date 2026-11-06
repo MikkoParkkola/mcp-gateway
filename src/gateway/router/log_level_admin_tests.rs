@@ -77,8 +77,20 @@ async fn set_level_as(admin: bool, uri: &str) -> (StatusCode, Value, bool) {
     send_as(admin, uri, "logging/setLevel").await
 }
 
-/// [`set_level_as`] with the method name spelled as given.
+/// [`set_level_as`] with the method name spelled as given. An admin key holds
+/// every backend (a gateway-wide admin); a non-admin key holds only `shared`.
 async fn send_as(admin: bool, uri: &str, method: &str) -> (StatusCode, Value, bool) {
+    let backends: &[&str] = if admin { &["*"] } else { &["shared"] };
+    send_with(admin, backends, uri, method).await
+}
+
+/// [`send_as`] with the key's backend list given.
+async fn send_with(
+    admin: bool,
+    backends: &[&str],
+    uri: &str,
+    method: &str,
+) -> (StatusCode, Value, bool) {
     let auth = AuthConfig {
         enabled: true,
         api_keys: vec![ApiKeyConfig {
@@ -87,7 +99,7 @@ async fn send_as(admin: bool, uri: &str, method: &str) -> (StatusCode, Value, bo
             expires_at: None,
             name: KEY.to_string(),
             rate_limit: 0,
-            backends: vec!["shared".to_string()],
+            backends: backends.iter().map(|b| (*b).to_string()).collect(),
             allowed_tools: None,
             denied_tools: None,
             admin,
@@ -158,6 +170,19 @@ async fn an_admin_key_still_sets_the_level_on_shared_backends() {
         forwarded,
         "an admin's level never reached the shared backend"
     );
+}
+
+/// A backend's level is shared by every user of it, so setting it is a
+/// gateway-wide admin power: an admin key scoped to `shared` is refused on
+/// both routes, as a non-admin key is.
+#[tokio::test]
+async fn a_backend_scoped_admin_key_cannot_set_a_shared_level() {
+    for uri in [META, DIRECT] {
+        let (status, body, forwarded) = send_with(true, &["shared"], uri, "logging/setLevel").await;
+        assert_eq!(body["error"]["code"], -32600, "{uri}: {body}");
+        assert_eq!(status, StatusCode::FORBIDDEN, "{uri}: {body}");
+        assert!(!forwarded, "{uri}: a scoped admin set a shared level");
+    }
 }
 
 /// The direct route forwards to one backend, but that backend's level is
