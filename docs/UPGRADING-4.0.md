@@ -25,7 +25,7 @@ upgrading a running deployment.
 | 2 | A malformed `env_files` line fails startup | Fix the line the error names |
 | 3 | Protocol `2024-10-07` is no longer advertised | None for conforming clients — see below |
 | 4 | Rate-limited responses no longer trip the breaker | None — this removes a failure mode |
-| 5 | One license across the repository | Commercial users need a commercial license |
+| 5 | One license across the repository | Commercial use outside the [free permissions](../COMMERCIAL.md#free-use-and-optional-support) needs a commercial license |
 | 6 | Caching requires an identifiable protocol revision | Send the version header, or `initialize` the session |
 | 7 | An OAuth backend must be on TLS or loopback | Put TLS in front of it, or move it to `127.0.0.1` — no opt-out |
 | 8 | A credential-bearing backend on plain `http://` is refused at load | Use TLS, or set `allow_cleartext_credentials: true` on that backend |
@@ -93,7 +93,8 @@ therefore still exempt. Narrowing that needs a rate-limit co-signal and is not i
 in this repository is now under the **PolyForm Noncommercial License 1.0.0**
 ([ADR-013](adr/ADR-013-single-noncommercial-license.md), [LICENSES.md](../LICENSES.md)).
 
-Noncommercial use is unaffected. Commercial use requires a commercial license — see
+Permitted noncommercial and nonprofit use remains free. Commercial use outside
+those free permissions requires a commercial license — see
 [COMMERCIAL.md](../COMMERCIAL.md). If you adopted the gateway under the previous MIT core, this
 is the change to route past whoever approves your licensing, not a runtime concern.
 

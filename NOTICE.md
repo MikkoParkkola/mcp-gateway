@@ -50,8 +50,9 @@ labeled MIT.
 From **4.0.0** onward there is no MIT core. Every first-party file in the
 repository carries
 `// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0`, including the files
-that were MIT in the 3.x line. Commercial use of any of it requires a
-commercial license — see [`COMMERCIAL.md`](COMMERCIAL.md).
+that were MIT in the 3.x line. Commercial use outside the free noncommercial
+and nonprofit permissions requires a commercial license — see
+[`COMMERCIAL.md`](COMMERCIAL.md).
 
 `LICENSE-MIT` remains in the tree because it is the license text those earlier
 grants refer to. It does not license anything in the current tree.

@@ -21,7 +21,7 @@ MCP Gateway is a single Rust binary that sits between an AI client and all of it
 
 ![demo](demo.gif)
 
-Personal and noncommercial use is free, including running the full gateway. Running it commercially needs a [commercial license](#license).
+Permitted noncommercial and nonprofit use is free, including running the full gateway. Commercial use outside these free permissions needs a [commercial license](#license).
 
 ## The problem this removes
 
@@ -397,7 +397,7 @@ This table compares public, user-facing behavior, not internal roadmap scoring. 
 | Imports and bridges | Native MCP backends plus REST capability YAML and protocol-import planning | Docker-packaged MCP server catalog | MCP server aggregation | Strong bridge story for OpenAPI, SSE, WebSocket, and stdio compatibility |
 | Ranking and routing | Safety-aware ranking, explanations, cost/latency/trust/health signals | Catalog/profile selection, not an MCP tool ranker | Gateway-level routing to configured servers | Transport routing, not semantic tool ranking |
 | Deployment | Local, team gateway, Docker Compose, systemd, launchd, a security-hardened Helm chart (non-root, seccomp, read-only rootfs), and experimental (v1alpha1) Kubernetes CRDs | Docker Desktop, Docker CLI, Docker Hub/catalog workflow | Local or shared self-hosted gateway | Local or remote bridge process beside the target MCP server |
-| Licensing | PolyForm Noncommercial 1.0.0 throughout; commercial use requires a license | Docker product and repository licensing apply | See project repository license | See each bridge repository license |
+| Licensing | PolyForm Noncommercial 1.0.0 throughout; free nonprofit permission; [commercial terms](COMMERCIAL.md) for other commercial use | Docker product and repository licensing apply | See project repository license | See each bridge repository license |
 
 ### vs Anthropic MCP tunnels
 
@@ -577,8 +577,8 @@ second license and no allowlist.
 
 What this means:
 
-- **Personal and noncommercial use is free**, including running the whole gateway.
-- **Running the gateway commercially requires a commercial license.** This covers
+- **Permitted noncommercial and nonprofit use is free**, including running the whole gateway. See the [free-use permissions](COMMERCIAL.md#free-use-and-optional-support).
+- **Commercial use outside those free permissions requires a commercial license.** This covers
   the whole project — dispatch, transport, backend management, identity,
   security, governance — including the generic building blocks that earlier 3.x
   releases shipped under MIT headers. See [COMMERCIAL.md](COMMERCIAL.md).

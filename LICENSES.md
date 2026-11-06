@@ -38,10 +38,13 @@ explicit if third-party material is ever added.
 
 ## What that means in practice
 
-- **Noncommercial and personal use** of the whole project (including running the
-  gateway) is free under PolyForm-Noncommercial.
+- **Permitted noncommercial and nonprofit use** of the whole project (including
+  running the gateway) is free. PolyForm-Noncommercial and the additional
+  nonprofit permission in [`COMMERCIAL.md`](COMMERCIAL.md#free-use-and-optional-support)
+  define those free uses.
 - **Commercial use** — using the gateway inside a business, in a paid product, or
-  as part of a commercial service — requires a **commercial license**. This
+  as part of a commercial service — requires a **commercial license** unless
+  it is covered by those free permissions. This
   covers the whole repository, including the generic building blocks (`protocol`,
   `semantic_search`, `transform`, `projection`, `validator`, `skills`,
   `capability/schema_validator`, `capability/hash`, `error.rs`, and the
