@@ -21,7 +21,7 @@ use std::collections::BTreeMap;
 
 use super::fragments::{Table, shown};
 use super::packaged::crate_root;
-use super::scan::{Place, Sink, walk};
+use super::scan::{Place, Sink, expr_attrs, item_attrs, test_only, walk};
 
 const ROOTS: [&str; 3] = ["src/lib.rs", "src/main.rs", "src/bin/provenance-eval.rs"];
 
@@ -35,8 +35,264 @@ pub(super) struct Scan {
     pub(super) refused: Vec<String>,
 }
 
+/// Each identity type with the constructors that create one.
+const TYPES: [(&str, &[&str]); 3] = [
+    ("VerifiedIdentity", &["checked"]),
+    ("GrantSubject", &["new"]),
+    ("CertIdentity", &["from_der", "parse"]),
+];
+
+/// The modules that define the types: their fields are visible here only.
+const LEAVES: [&str; 3] = [
+    "src/key_server/oidc/verified.rs",
+    "src/identity_grants/subject.rs",
+    "src/mtls/identity/cert.rs",
+];
+
+/// The only macros allowed in a defining module or an impl of one of the
+/// types: none of them can reach a field through an expansion written
+/// elsewhere.
+const MACROS: [&str; 15] = [
+    "format",
+    "write",
+    "writeln",
+    "vec",
+    "debug_assert",
+    "assert",
+    "assert_eq",
+    "matches",
+    "concat",
+    "stringify",
+    "debug",
+    "info",
+    "warn",
+    "error",
+    "trace",
+];
+
+fn is_type(name: &str) -> bool {
+    TYPES.iter().any(|(t, _)| *t == name)
+}
+
 /// Scan one production file, `file` relative to the crate root.
-pub(super) fn scan_file(_file: &str, _parsed: &syn::File, _scan: &mut Scan) {}
+pub(super) fn scan_file(file: &str, parsed: &syn::File, scan: &mut Scan) {
+    let mut visitor = Visitor {
+        file,
+        leaf: LEAVES.contains(&file),
+        owner: Vec::new(),
+        impl_ty: None,
+        scan,
+    };
+    for item in &parsed.items {
+        visitor.item(item);
+    }
+}
+
+struct Visitor<'a> {
+    file: &'a str,
+    leaf: bool,
+    owner: Vec<String>,
+    impl_ty: Option<String>,
+    scan: &'a mut Scan,
+}
+
+impl Visitor<'_> {
+    fn owner(&self) -> String {
+        if self.owner.is_empty() {
+            "<module>".to_owned()
+        } else {
+            self.owner.join("::")
+        }
+    }
+
+    fn count(&mut self, kind: &str) {
+        let key = (self.file.to_owned(), self.owner(), kind.to_owned());
+        let n = self
+            .scan
+            .rows
+            .get(&key)
+            .map_or(0, |v| v.parse::<usize>().unwrap_or(0));
+        self.scan.rows.insert(key, (n + 1).to_string());
+    }
+
+    fn refuse(&mut self, what: &str) {
+        let at = format!("{}: {what} in `{}`", self.file, self.owner());
+        self.scan.refused.push(at);
+    }
+
+    fn fingerprint(&mut self, owner: String, node: &impl quote::ToTokens) {
+        let key = (self.file.to_owned(), owner, "item".to_owned());
+        self.scan.rows.insert(key, fingerprint(node));
+    }
+
+    /// The identity type a path's first segment names: the type itself, or
+    /// `Self` inside an impl of one.
+    fn named_type(&self, segment: &syn::PathSegment) -> Option<String> {
+        let name = segment.ident.to_string();
+        if is_type(&name) {
+            return Some(name);
+        }
+        (name == "Self")
+            .then(|| self.impl_ty.clone())
+            .flatten()
+            .filter(|t| is_type(t))
+    }
+
+    fn item(&mut self, item: &syn::Item) {
+        if test_only(item_attrs(item)) {
+            return;
+        }
+        use syn::Item as I;
+        match item {
+            I::Mod(m) => {
+                if self.leaf {
+                    self.refuse(&format!("child module `{}` of a defining module", m.ident));
+                }
+                if let Some((_, items)) = &m.content {
+                    self.owner.push(m.ident.to_string());
+                    items.iter().for_each(|i| self.item(i));
+                    self.owner.pop();
+                }
+                return;
+            }
+            I::Use(u) => self.use_tree(&u.tree),
+            I::Type(t) => {
+                if last_ident(&t.ty).is_some_and(|n| is_type(&n)) {
+                    self.refuse(&format!("type alias `{}` of an identity type", t.ident));
+                }
+            }
+            I::Impl(block) => return self.impl_block(block),
+            _ => {}
+        }
+        let name = item_name(item);
+        if self.leaf && !matches!(item, I::Use(_)) {
+            self.fingerprint(name.clone(), item);
+        }
+        self.owner.push(name);
+        syn::visit::visit_item(self, item);
+        self.owner.pop();
+    }
+
+    fn impl_block(&mut self, block: &syn::ItemImpl) {
+        let saved = self
+            .impl_ty
+            .replace(last_ident(&block.self_ty).unwrap_or_default());
+        let ty = self.impl_ty.clone().unwrap_or_default();
+        for inner in &block.items {
+            let (attrs, name) = match inner {
+                syn::ImplItem::Const(i) => (&i.attrs, i.ident.to_string()),
+                syn::ImplItem::Fn(i) => (&i.attrs, i.sig.ident.to_string()),
+                syn::ImplItem::Type(i) => (&i.attrs, i.ident.to_string()),
+                syn::ImplItem::Macro(i) => (&i.attrs, format!("{}!", path_text(&i.mac.path))),
+                _ => continue,
+            };
+            if test_only(attrs) || test_only(&block.attrs) {
+                continue;
+            }
+            let owner = format!("{ty}::{name}");
+            if self.leaf {
+                self.fingerprint(owner.clone(), inner);
+            }
+            self.owner.push(owner);
+            syn::visit::visit_impl_item(self, inner);
+            self.owner.pop();
+        }
+        self.impl_ty = saved;
+    }
+
+    fn use_tree(&mut self, tree: &syn::UseTree) {
+        match tree {
+            syn::UseTree::Path(p) => self.use_tree(&p.tree),
+            syn::UseTree::Group(g) => g.items.iter().for_each(|t| self.use_tree(t)),
+            syn::UseTree::Rename(r) if is_type(&r.ident.to_string()) => {
+                self.refuse(&format!("`{}` imported as `{}`", r.ident, r.rename));
+            }
+            _ => {}
+        }
+    }
+}
+
+impl<'ast> syn::visit::Visit<'ast> for Visitor<'_> {
+    fn visit_item(&mut self, item: &'ast syn::Item) {
+        self.item(item);
+    }
+
+    fn visit_stmt(&mut self, stmt: &'ast syn::Stmt) {
+        let attrs: &[syn::Attribute] = match stmt {
+            syn::Stmt::Local(l) => &l.attrs,
+            syn::Stmt::Macro(m) => &m.attrs,
+            syn::Stmt::Expr(e, _) => expr_attrs(e),
+            syn::Stmt::Item(_) => &[],
+        };
+        if !test_only(attrs) {
+            syn::visit::visit_stmt(self, stmt);
+        }
+    }
+
+    fn visit_expr(&mut self, expr: &'ast syn::Expr) {
+        if !test_only(expr_attrs(expr)) {
+            syn::visit::visit_expr(self, expr);
+        }
+    }
+
+    fn visit_expr_path(&mut self, path: &'ast syn::ExprPath) {
+        if let Some(q) = &path.qself {
+            let named = last_ident(&q.ty).is_some_and(|n| {
+                is_type(&n) || (n == "Self" && self.impl_ty.as_deref().is_some_and(is_type))
+            });
+            if named {
+                self.refuse("a qualified path to an identity type");
+            }
+        }
+        let segs: Vec<&syn::PathSegment> = path.path.segments.iter().collect();
+        if let [.., ty, ctor] = segs[..]
+            && path.qself.is_none()
+            && let Some(ty) = self.named_type(ty)
+        {
+            let ctor = ctor.ident.to_string();
+            let listed = TYPES
+                .iter()
+                .any(|(t, ctors)| *t == ty && ctors.contains(&ctor.as_str()));
+            if listed {
+                self.count(&ctor);
+            }
+        }
+        syn::visit::visit_expr_path(self, path);
+    }
+
+    fn visit_expr_struct(&mut self, lit: &'ast syn::ExprStruct) {
+        if lit
+            .path
+            .segments
+            .last()
+            .and_then(|s| self.named_type(s))
+            .is_some()
+        {
+            self.count("literal");
+        }
+        syn::visit::visit_expr_struct(self, lit);
+    }
+
+    fn visit_macro(&mut self, mac: &'ast syn::Macro) {
+        let near_fields = self.leaf || self.impl_ty.as_deref().is_some_and(is_type);
+        let name = mac
+            .path
+            .segments
+            .last()
+            .map(|s| s.ident.to_string())
+            .unwrap_or_default();
+        if near_fields && !MACROS.contains(&name.as_str()) {
+            self.refuse(&format!(
+                "macro `{}!` near identity fields",
+                path_text(&mac.path)
+            ));
+        }
+        let in_impl = self.impl_ty.as_deref().is_some_and(is_type);
+        if names_identity(mac, in_impl) {
+            self.count("macro");
+        }
+    }
+}
 
 /// Hands each production file the shared walk reaches to [`scan_file`].
 struct Files(Scan);
@@ -52,6 +308,126 @@ pub(super) fn crate_scan() -> Scan {
     let mut files = Files(Scan::default());
     walk(crate_root(), &ROOTS, &mut files).expect("the walk reads every module");
     files.0
+}
+
+/// The last identifier of a type written as a path (`a::B<C>` -> `B`).
+fn last_ident(ty: &syn::Type) -> Option<String> {
+    match ty {
+        syn::Type::Path(p) => p.path.segments.last().map(|s| s.ident.to_string()),
+        syn::Type::Group(g) => last_ident(&g.elem),
+        syn::Type::Paren(p) => last_ident(&p.elem),
+        _ => None,
+    }
+}
+
+fn path_text(path: &syn::Path) -> String {
+    path.segments
+        .iter()
+        .map(|s| s.ident.to_string())
+        .collect::<Vec<_>>()
+        .join("::")
+}
+
+/// The owner name an item gives the code inside it.
+fn item_name(item: &syn::Item) -> String {
+    use syn::Item as I;
+    match item {
+        I::Const(i) => i.ident.to_string(),
+        I::Enum(i) => i.ident.to_string(),
+        I::ExternCrate(i) => i.ident.to_string(),
+        I::Fn(i) => i.sig.ident.to_string(),
+        I::Macro(i) => i.ident.as_ref().map_or_else(
+            || format!("{}!", path_text(&i.mac.path)),
+            ToString::to_string,
+        ),
+        I::Static(i) => i.ident.to_string(),
+        I::Struct(i) => i.ident.to_string(),
+        I::Trait(i) => i.ident.to_string(),
+        I::TraitAlias(i) => i.ident.to_string(),
+        I::Type(i) => i.ident.to_string(),
+        I::Union(i) => i.ident.to_string(),
+        _ => "<item>".to_owned(),
+    }
+}
+
+/// Whether a macro's tokens name an identity type, or `Self` inside an impl
+/// of one. Tokens inside groups are searched too.
+fn names_identity(mac: &syn::Macro, in_impl: bool) -> bool {
+    let buffer = syn::buffer::TokenBuffer::new2(mac.tokens.clone());
+    let mut stack = vec![buffer.begin()];
+    while let Some(mut cursor) = stack.pop() {
+        while !cursor.eof() {
+            if let Some((ident, next)) = cursor.ident() {
+                let name = ident.to_string();
+                if is_type(&name) || (in_impl && name == "Self") {
+                    return true;
+                }
+                cursor = next;
+            } else if let Some((inside, _, _, next)) = cursor.any_group() {
+                stack.push(inside);
+                cursor = next;
+            } else if let Some((_, next)) = cursor.token_tree() {
+                cursor = next;
+            } else {
+                break;
+            }
+        }
+    }
+    false
+}
+
+/// A hash of a node's tokens: identifiers, punctuation and literal text
+/// verbatim, groups by delimiter, doc attributes left out. Whitespace and
+/// comments are not tokens, so rustfmt and a doc edit leave it unchanged.
+fn fingerprint(node: &impl quote::ToTokens) -> String {
+    let buffer = syn::buffer::TokenBuffer::new2(node.to_token_stream());
+    let mut text = String::new();
+    encode(buffer.begin(), &mut text);
+    let digest = <sha2::Sha256 as sha2::Digest>::digest(text.as_bytes());
+    hex::encode(digest)[..16].to_owned()
+}
+
+fn encode(mut cursor: syn::buffer::Cursor<'_>, out: &mut String) {
+    while !cursor.eof() {
+        if let Some(next) = doc_attribute(cursor) {
+            cursor = next;
+        } else if let Some((ident, next)) = cursor.ident() {
+            out.push_str(&format!("i{ident} "));
+            cursor = next;
+        } else if let Some((punct, next)) = cursor.punct() {
+            out.push_str(&format!("p{}{:?} ", punct.as_char(), punct.spacing()));
+            cursor = next;
+        } else if let Some((lit, next)) = cursor.literal() {
+            out.push_str(&format!("l{lit} "));
+            cursor = next;
+        } else if let Some((life, next)) = cursor.lifetime() {
+            out.push_str(&format!("'{} ", life.ident));
+            cursor = next;
+        } else if let Some((inside, delim, _, next)) = cursor.any_group() {
+            out.push_str(&format!("({delim:?} "));
+            encode(inside, out);
+            out.push_str(") ");
+            cursor = next;
+        } else {
+            break;
+        }
+    }
+}
+
+/// The cursor after a `#[doc ..]` or `#![doc ..]` attribute at `cursor`.
+fn doc_attribute(cursor: syn::buffer::Cursor<'_>) -> Option<syn::buffer::Cursor<'_>> {
+    let (hash, mut next) = cursor.punct()?;
+    if hash.as_char() != '#' {
+        return None;
+    }
+    if let Some((bang, after)) = next.punct()
+        && bang.as_char() == '!'
+    {
+        next = after;
+    }
+    let (inside, _, _, after) = next.any_group()?;
+    let (ident, _) = inside.ident()?;
+    (ident == "doc").then_some(after)
 }
 
 /// (file, owner, kind) -> (value, the table file listing it).

@@ -1952,6 +1952,7 @@ dependencies = [
  "pretty_assertions",
  "process-wrap",
  "quick-xml",
+ "quote",
  "rand 0.10.3",
  "rcgen",
  "regex",
