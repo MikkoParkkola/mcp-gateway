@@ -50,9 +50,10 @@ impl FirstList {
         TICKET.scope(ticket, task)
     }
 
-    /// The session stopped reading (EOF, a signal, stdout gone): a first list
-    /// still waiting answers now with what it has, so the drain is not held
-    /// for a client that is leaving.
+    /// The session stopped reading (EOF, a signal, stdout gone): a first list's
+    /// wait for the surfaced fills ends now, so the drain is not held for it.
+    /// The caller's own-view warm beside it keeps its own deadline, as before
+    /// this wait existed.
     pub(super) fn end(&self) {
         self.ending.cancel();
     }

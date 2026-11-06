@@ -144,10 +144,12 @@ async fn r15_a_tool_the_profile_excludes_is_not_waited_for() {
     serve.send(&modern(1, "server/discover")).await;
     serve.reply(1, &mut Vec::new()).await;
     serve.send(&modern(2, "tools/list")).await;
-    let answer = answer_within(&mut serve, 2, AT_ONCE, &mut Vec::new()).await;
+    let answer = answer_within(&mut serve, 2, AT_ONCE, &mut Vec::new())
+        .await
+        .expect("a first list waited for a tool its profile excludes");
     assert!(
-        answer.is_some(),
-        "a first list waited for a tool its profile excludes"
+        holds(&answer, "gateway_list_servers") && !holds(&answer, TOOL),
+        "{answer}"
     );
     serve.close().await;
 }
@@ -171,6 +173,36 @@ async fn r16_a_batched_first_list_does_not_wait() {
             .iter()
             .any(|answer| answer["id"] == json!(2) && answer["result"]["tools"].is_array()),
         "{frame}"
+    );
+    // The batch left the wait armed: the session's first single list waits.
+    serve.send(&modern(3, "tools/list")).await;
+    assert!(
+        answer_within(&mut serve, 3, AT_ONCE, &mut Vec::new())
+            .await
+            .is_none(),
+        "a batched list used up the first-list wait"
+    );
+    serve.close().await;
+}
+
+/// R17: a surfaced tool this caller's tool policy denies is never shown, so
+/// its cold backend is not waited for (the listing predicate's branch of the
+/// filter; R15 is the routing profile's).
+#[tokio::test]
+async fn r17_a_tool_the_policy_denies_is_not_waited_for() {
+    let held = held_backend(&[TOOL]).await;
+    let extra = format!("security:\n  tool_policy:\n    enabled: true\n    deny: [\"{TOOL}\"]\n");
+    let mut serve = start(&entry("held", &held, None), &[("held", TOOL)], &extra).await;
+    asked(&held, 1).await;
+    serve.send(&modern(1, "server/discover")).await;
+    serve.reply(1, &mut Vec::new()).await;
+    serve.send(&modern(2, "tools/list")).await;
+    let answer = answer_within(&mut serve, 2, AT_ONCE, &mut Vec::new())
+        .await
+        .expect("a first list waited for a tool its policy denies");
+    assert!(
+        holds(&answer, "gateway_list_servers") && !holds(&answer, TOOL),
+        "{answer}"
     );
     serve.close().await;
 }

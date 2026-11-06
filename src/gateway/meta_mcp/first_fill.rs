@@ -43,7 +43,13 @@ impl MetaMcp {
         let mut cold: Vec<Arc<Backend>> = Vec::new();
         for surfaced in &self.surfaced_state().tools {
             if profile.check(&surfaced.server, &surfaced.tool).is_err()
-                || !self.shows_shared_name(&surfaced.server, &surfaced.tool, scope, session_id)
+                || !self.listing_names(
+                    &surfaced.server,
+                    &surfaced.tool,
+                    scope,
+                    session_id,
+                    super::listing_view::ColdRule::SharedView,
+                )
             {
                 continue;
             }

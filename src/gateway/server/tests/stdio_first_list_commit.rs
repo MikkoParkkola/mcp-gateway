@@ -45,3 +45,24 @@ async fn r14_a_queued_first_answer_has_committed_the_flag() {
         "the answer was queued while the first-list flag was still unset"
     );
 }
+
+/// R14b: a send outside any ticket (a batch, a direct dispatch) still queues
+/// its answer, and commits nothing.
+#[tokio::test]
+async fn r14b_a_send_outside_a_ticket_queues_and_commits_nothing() {
+    let dispatches = StdioDispatches::default();
+    let (writer, mut stdout) = mpsc::channel::<OutboundFrame>(4);
+    let cancelled = dispatches.cancelled();
+    let id: RequestId = serde_json::from_value(json!(5)).expect("a request id");
+    tokio::spawn(async move {
+        let permit = writer.reserve().await.expect("the writer is open");
+        cancelled.send_unless_cancelled(
+            Some(&id),
+            permit,
+            OutboundFrame::gateway_stdio(json!({"jsonrpc": "2.0", "id": 5, "result": {}})),
+        );
+    })
+    .await
+    .expect("the send ran outside a ticket");
+    assert!(stdout.recv().await.is_some(), "the answer was not queued");
+}
