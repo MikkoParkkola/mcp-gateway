@@ -414,3 +414,42 @@ async fn t5_policy_allowed_tools_from_the_memo() {
         &refusal("t5_policy_allowed_tools_from_the_memo", "allowed_tools"),
     );
 }
+
+/// N3: a chain step that resumes on a backend the registry no longer holds
+/// (`policy.rs:414`, in `record_absent_step`, which `chain_exec.rs:227`
+/// calls). The step is recorded without dispatch: its notes name `not_found`
+/// (`policy.rs:412-416`).
+#[tokio::test]
+async fn n3_chain_step_not_found() {
+    let dir = tempfile::tempdir().expect("a log directory");
+    let (meta, sent) = table_meta(&dir, BackendConfig::default());
+    let who = api_key_caller();
+    let caller = context(&AllowAll, &who);
+    let error = meta
+        .record_absent_step(("nowhere", "read", &json!({})), None, &caller, None)
+        .await;
+    // The step answers the plain miss (`policy.rs:421-424`).
+    assert!(
+        matches!(error, crate::Error::BackendNotFound(ref name) if name == "nowhere"),
+        "{error:?}"
+    );
+    assert_eq!(
+        sent.load(Ordering::SeqCst),
+        0,
+        "a backend was sent the call"
+    );
+    let all = records(&dir);
+    let [record] = all.as_slice() else {
+        panic!("premise: one invocation record: {all:?}");
+    };
+    // With no absence given, no denial code is noted, so the record reads
+    // the miss itself: `Error::BackendNotFound` is `invalid` with its -32001
+    // (`audit.rs:82-86`).
+    assert_eq!(record["outcome"], "invalid", "{record}");
+    assert_eq!(record["error_code"], json!(-32001), "{record}");
+    let row = DecisionRow {
+        rule_id: RuleId::Absent("the target matches nothing"),
+        ..refusal("n3_chain_step_not_found", "not_found")
+    };
+    assert_row(&record["decision"], &row);
+}
