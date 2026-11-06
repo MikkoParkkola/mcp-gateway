@@ -181,7 +181,7 @@ fn a_caller_cannot_append_an_audit_log_identified_record() {
 
 /// Replace `dst` with a copy of `src` through a rename, so `dst` is a new
 /// file (a new inode) as another writer's swap would leave it.
-fn swap_in(src: &Path, dst: &Path) {
+pub(super) fn swap_in(src: &Path, dst: &Path) {
     let tmp = dst.with_extension("swap");
     std::fs::copy(src, &tmp).unwrap();
     std::fs::rename(&tmp, dst).unwrap();
