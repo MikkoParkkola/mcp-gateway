@@ -93,13 +93,15 @@ pub(super) fn resolve(path: &Path, sealed: &[Segment]) -> io::Result<Option<LogI
 }
 
 /// Whether the active file is a genesis left unfinished: the log's first
-/// segment (nothing sealed), whose open record carries an id that the next
-/// record does not name. A crash between the genesis open record (and its
-/// first mark) and the identified record leaves exactly this, because the
-/// fresh-log path writes the identified record second; so the first two
-/// lines decide it, cheaply, on every recovery. A beta log's open record has
-/// no id (it mints instead), and a log whose identified record retention
-/// expired has sealed segments, so neither is repaired.
+/// segment (nothing sealed), whose open record carries an id that no record
+/// in it names. A crash between the genesis open record (and its first mark)
+/// and the identified record leaves this, and so does a torn identified
+/// record, whose drop recovery records in its place: so the whole file is
+/// searched, not the second line, and the search stops at the first
+/// identified record (normally line 2). With nothing sealed the active file
+/// is the whole log, so retention cannot have expired the record. A beta
+/// log's open record has no id (it mints instead), and a log whose identified
+/// record retention expired has sealed segments, so neither is repaired.
 ///
 /// # Errors
 ///
@@ -108,20 +110,27 @@ pub(super) fn unfinished_genesis(path: &Path, sealed: &[Segment]) -> io::Result<
     if !sealed.is_empty() {
         return Ok(false);
     }
-    let mut head: Vec<Option<Value>> = Vec::with_capacity(2);
+    // The first record, parsed or not, then whether any later one names the id.
+    let (mut first, mut named): (Option<Option<Value>>, bool) = (None, false);
     each_line(path, |line| {
-        if !line.trim().is_empty() {
-            head.push(serde_json::from_str(line.trim()).ok());
+        let line = line.trim();
+        if line.is_empty() {
+            return true;
         }
-        head.len() < 2
+        let v = serde_json::from_str::<Value>(line).ok();
+        if first.is_none() {
+            first = Some(v);
+            return true;
+        }
+        named = v.is_some_and(|v| is_event(&v, EV_IDENTIFIED));
+        !named
     })?;
-    let parsed = |i: usize| head.get(i).and_then(Option::as_ref);
-    let genesis_with_id = parsed(0).is_some_and(|v| {
-        is_event(v, EV_OPENED)
+    let genesis_with_id = first.flatten().is_some_and(|v| {
+        is_event(&v, EV_OPENED)
             && v.get("segment_seq").and_then(Value::as_u64) == Some(0)
-            && id_of(v).is_some()
+            && id_of(&v).is_some()
     });
-    Ok(genesis_with_id && !parsed(1).is_some_and(|v| is_event(v, EV_IDENTIFIED)))
+    Ok(genesis_with_id && !named)
 }
 
 /// The marker's fields, or `None` when nothing of the old log survived.
