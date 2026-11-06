@@ -29,19 +29,14 @@ pub(super) fn identified(path: &Path) -> Vec<Value> {
         .collect()
 }
 
-/// Rewrite a one-segment 4.0 log as a beta one: no `log_id` on the open
-/// record, no identified record, re-chained, and `.hwm` re-minted at the new
-/// tail with the same fixed layout.
-pub(super) fn beta_shape(path: &Path) {
+/// Rewrite a one-segment log as `records` (their `entry_hash` dropped),
+/// re-chained, with `.hwm` re-minted at the new tail in the same fixed
+/// layout.
+fn rechain(path: &Path, records: impl IntoIterator<Item = serde_json::Map<String, Value>>) {
     let c = cfg(path, 12, false);
     let (mut prev, mut counter, mut body) = ("genesis".to_string(), 0_u64, String::new());
-    for v in lines(path)
-        .iter()
-        .filter(|v| event(v) != Some(EV_IDENTIFIED))
-    {
-        let mut fields = v.as_object().unwrap().clone();
+    for mut fields in records {
         fields.remove("entry_hash");
-        fields.remove("log_id");
         counter += 1;
         let (line, hash) = chain_line(&c, fields, counter, &prev).unwrap();
         body += &(line + "\n");
@@ -56,6 +51,55 @@ pub(super) fn beta_shape(path: &Path) {
     // Remove first: an in-place rewrite would keep any longer tail.
     std::fs::remove_file(sibling(path, "hwm")).unwrap();
     write_hwm(path, &encode_hwm(&mark, b"", "test").unwrap(), true).unwrap();
+}
+
+/// Rewrite a one-segment 4.0 log as a beta one: no `log_id` on the open
+/// record, no identified record.
+pub(super) fn beta_shape(path: &Path) {
+    let beta = lines(path)
+        .into_iter()
+        .filter(|v| event(v) != Some(EV_IDENTIFIED))
+        .map(|v| {
+            let mut fields = v.as_object().unwrap().clone();
+            fields.remove("log_id");
+            fields
+        });
+    rechain(path, beta.collect::<Vec<_>>());
+}
+
+#[test]
+fn a_log_with_the_former_separate_predecessor_record_verifies_unchanged() {
+    // GIVEN: a log in the shape the separate predecessor record left: an
+    // open record without the evidence field, then that record
+    let dir = tempfile::tempdir().unwrap();
+    let path = log_path(&dir);
+    let l = TransparencyLogger::open(cfg(&path, 12, false)).unwrap();
+    let id = l.log_id();
+    append(&l, 0);
+    drop(l);
+    let mut records: Vec<_> = lines(&path)
+        .into_iter()
+        .map(|v| v.as_object().unwrap().clone())
+        .collect();
+    let old = serde_json::json!({
+        "event": "audit_log_predecessor_missing",
+        "previous_log_id": "an-older-log",
+    });
+    records.insert(1, old.as_object().unwrap().clone());
+    rechain(&path, records);
+    assert!(lines(&path)[0].get("predecessor_missing").is_none());
+
+    // WHEN: it is verified, then reopened
+    let r = verify(&path, false);
+    let again = TransparencyLogger::open(cfg(&path, 12, false)).unwrap();
+
+    // THEN: it verifies with no warning, and keeps its id and one identified
+    // record
+    assert!(r.ok, "{:?}", r.error_message);
+    assert!(r.warnings.is_empty(), "{:?}", r.warnings);
+    assert_eq!(again.log_id(), id);
+    assert_eq!(identified(&path).len(), 1);
+    assert!(verify(&path, false).ok);
 }
 
 #[test]
