@@ -100,7 +100,7 @@ fn a_keyed_grant_store_keeps_ids_in_step_through_upsert_and_revoke() {
     store.upsert(replaced.clone());
     let (got, want) = ids(&store, &key, &[&replaced, &g2]);
     assert_eq!(got, want, "replaced g1: expected {want:?}, got {got:?}");
-    let at = chrono::Utc::now();
+    let at = chrono::DateTime::from_timestamp(1_800_000_000, 0).expect("a valid instant");
     assert!(store.revoke("g1", at), "premise: g1 is held");
     let mut revoked = replaced;
     revoked.revoked_at = Some(at);

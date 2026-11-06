@@ -36,7 +36,7 @@ impl LocalIdentityGrantStore {
     }
 
     /// The keyed id of grant `grant_id`, when this store is keyed.
-    #[allow(dead_code)] // red-first skeleton
+    #[allow(dead_code, clippy::unused_self)] // red-first skeleton
     #[must_use]
     pub(crate) fn rule_id(&self, _grant_id: &str) -> Option<&crate::security::rule_id::RuleId> {
         // red-first skeleton

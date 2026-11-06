@@ -510,7 +510,10 @@ impl MetaMcp {
     /// `policy_epoch_tests`, whose cells publish an empty store into an empty
     /// one and require the epoch to move: to them the publish IS the event.
     pub fn set_identity_grants(&self, grants: LocalIdentityGrantStore) {
-        let key = self.record_key.as_deref().map(|k| k.rule_id_key());
+        let key = self
+            .record_key
+            .as_deref()
+            .map(crate::gateway::record_principal::RecordPrincipalKey::rule_id_key);
         publish_identity_grants(
             &self.identity_grants,
             &self.policy_epoch,
