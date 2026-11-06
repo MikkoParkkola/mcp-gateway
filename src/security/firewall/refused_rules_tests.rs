@@ -5,7 +5,8 @@
 
 use super::{RuleKeys, first_refusal};
 use crate::config::Config;
-use crate::security::firewall::{FirewallRule, refused_shape};
+use crate::security::firewall::FirewallRule;
+use crate::security::firewall::verdict::refused_shape;
 
 fn rule(yaml: &str) -> FirewallRule {
     crate::yaml::from_str(yaml).expect("the rule parses")

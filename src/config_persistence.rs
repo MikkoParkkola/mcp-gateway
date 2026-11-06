@@ -609,3 +609,7 @@ mod tests;
 #[cfg(test)]
 #[path = "config_persistence_edit_tests.rs"]
 mod edit_tests;
+
+#[cfg(all(test, feature = "firewall"))]
+#[path = "config_persistence_refused_tests.rs"]
+mod refused_tests;
