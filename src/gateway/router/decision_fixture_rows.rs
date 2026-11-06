@@ -335,10 +335,31 @@ async fn p3_direct_routing_profile_preflight() {
     );
 }
 
-/// `alpha` as a per-user backend: the propagating fixture's config (a
-/// required propagation to `aud-alpha`, stateless sessions, over HTTP), so it
-/// keeps per-user catalogues (`pool.rs:375-377`), with `allowed`.
-fn per_user_alpha(allowed: Option<Vec<String>>) -> crate::config::BackendConfig {
+/// Whether `alpha`'s identity propagation is required. Both keep per-user
+/// catalogues (a session mode is set, `pool.rs:375-377`); they differ for
+/// `k-std`, whose API key carries no verified identity and so no principal
+/// (`propagation.rs:276-285`).
+#[derive(Clone, Copy)]
+enum Propagation {
+    /// `k-std` lacks a principal on a backend that requires one
+    /// (`listing_view.rs:112-120`), so the gate answers its withheld name
+    /// with its own absent answer (`direct_gate.rs:95-109`), not the one
+    /// `key_check` built.
+    Required,
+    /// Nothing is lacked, so the gate returns the answer `key_check` built
+    /// for the withheld name (`direct_gate.rs:71-84`, `key_check.rs:84-86`,
+    /// built at `key_check.rs:24-27`), and the route sends it
+    /// (`backend_handlers.rs:576`).
+    Optional,
+}
+
+/// `alpha` as a per-user backend: the propagating fixture's config
+/// (propagation to `aud-alpha`, stateless sessions, over HTTP), so it keeps
+/// per-user catalogues (`pool.rs:375-377`), with `allowed`.
+fn per_user_alpha(
+    allowed: Option<Vec<String>>,
+    propagation: Propagation,
+) -> crate::config::BackendConfig {
     use crate::identity_propagation::{
         IdentityPropagationConfig, PropagationStrategyKind, SessionMode,
     };
@@ -351,7 +372,7 @@ fn per_user_alpha(allowed: Option<Vec<String>>) -> crate::config::BackendConfig 
         identity_propagation: Some(IdentityPropagationConfig {
             strategy: PropagationStrategyKind::SignedAssertion,
             audience: "aud-alpha".to_string(),
-            required: true,
+            required: matches!(propagation, Propagation::Required),
             session_mode: SessionMode::Stateless,
             token_exchange_endpoint: None,
             token_exchange_scope: None,
@@ -361,23 +382,39 @@ fn per_user_alpha(allowed: Option<Vec<String>>) -> crate::config::BackendConfig 
     }
 }
 
-/// On a per-user backend, a withheld name is answered as an absent one at
-/// once (`key_check.rs:84-86`): `absent_name`'s `METHOD_NOT_FOUND` (-32601,
-/// `absent.rs:9-11`) as a JSON-RPC error on a 200 (`key_check.rs:24-27`).
+/// On a per-user backend, a withheld name is answered as an absent one:
+/// `absent_name`'s `METHOD_NOT_FOUND` (-32601, `absent.rs:9-11`) as a
+/// JSON-RPC error on a 200, from either site [`Propagation`] names
+/// (`direct_gate.rs:100-108`, `key_check.rs:24-27`).
 const PER_USER_ABSENT: (StatusCode, Form, i64) = (StatusCode::OK, Form::RpcError, -32601);
 
 /// T2b: T2 on a per-user backend (found while coding: the per-user and the
-/// shared catalogue answer a withheld name at different sites). No denial
-/// code is noted, so the record reads the answer: `error` with its code
-/// (`direct_audit.rs:94-96`).
+/// shared catalogue answer a withheld name at different sites), with
+/// propagation required: answered at `direct_gate.rs:95-109`.
 #[tokio::test]
 async fn t2b_direct_allowed_tools_per_user() {
+    allowed_tools_per_user("t2b_direct_allowed_tools_per_user", Propagation::Required).await;
+}
+
+/// T2c: T2b with propagation optional: answered from `key_check.rs:84-86`.
+#[tokio::test]
+async fn t2c_direct_allowed_tools_per_user_optional() {
+    allowed_tools_per_user(
+        "t2c_direct_allowed_tools_per_user_optional",
+        Propagation::Optional,
+    )
+    .await;
+}
+
+/// T2b and T2c. No denial code is noted, so the record reads the answer:
+/// `error` with its code (`direct_audit.rs:94-96`), whichever site built it.
+async fn allowed_tools_per_user(row: &'static str, propagation: Propagation) {
     let dir = Arc::new(tempfile::tempdir().expect("a log directory"));
     let fx = table(&dir).await;
     let calls = super::direct_guards_fixture::replace_backend_configured(
         &fx,
         "alpha",
-        per_user_alpha(Some(vec!["write".to_string()])),
+        per_user_alpha(Some(vec!["write".to_string()]), propagation),
     );
     assert!(
         fx.state
@@ -413,19 +450,38 @@ async fn t2b_direct_allowed_tools_per_user() {
     assert_row(
         &decision,
         &refusal(
-            "t2b_direct_allowed_tools_per_user",
+            row,
             "allowed_tools",
             "kind-only site: noted with no rule id",
         ),
     );
 }
 
-/// P3b: P3 on a per-user backend (found while coding, with T2b). The
-/// preflight notes the profile refusal's -32600 (`backend_handlers.rs:162-167`),
-/// so the record is `denied` with it (`direct_audit.rs:353-358`), whatever the
-/// per-user answer is.
+/// P3b: P3 on a per-user backend (found while coding, with T2b), with
+/// propagation required: answered at `direct_gate.rs:95-109`.
 #[tokio::test]
 async fn p3b_direct_routing_profile_preflight_per_user() {
+    routing_profile_per_user(
+        "p3b_direct_routing_profile_preflight_per_user",
+        Propagation::Required,
+    )
+    .await;
+}
+
+/// P3c: P3b with propagation optional: answered from `key_check.rs:84-86`.
+#[tokio::test]
+async fn p3c_direct_routing_profile_preflight_per_user_optional() {
+    routing_profile_per_user(
+        "p3c_direct_routing_profile_preflight_per_user_optional",
+        Propagation::Optional,
+    )
+    .await;
+}
+
+/// P3b and P3c. The preflight notes the profile refusal's -32600
+/// (`backend_handlers.rs:162-167`), so the record is `denied` with it
+/// (`direct_audit.rs:353-358`), whichever site built the answer.
+async fn routing_profile_per_user(row: &'static str, propagation: Propagation) {
     use crate::routing_profile::{ProfileRegistry, RoutingProfileConfig};
     let dir = Arc::new(tempfile::tempdir().expect("a log directory"));
     let log = logger(&dir, AuditFailurePolicy::FailClosed);
@@ -445,7 +501,7 @@ async fn p3b_direct_routing_profile_preflight_per_user() {
     let calls = super::direct_guards_fixture::replace_backend_configured(
         &fx,
         "alpha",
-        per_user_alpha(None),
+        per_user_alpha(None, propagation),
     );
     let before = records(&dir).len();
     let answer = post_direct(&fx, "alpha", "k-std", "read", json!({}), None, None).await;
@@ -473,7 +529,7 @@ async fn p3b_direct_routing_profile_preflight_per_user() {
     assert_row(
         &decision,
         &refusal(
-            "p3b_direct_routing_profile_preflight_per_user",
+            row,
             "routing_profile",
             "kind-only site: noted with no rule id",
         ),

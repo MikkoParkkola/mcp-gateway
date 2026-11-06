@@ -56,7 +56,7 @@ impl crate::transport::Transport for Counted {
 /// One table gateway: backend `alpha` under `config`, logging to `dir`, and
 /// the count of calls `alpha` was sent.
 pub(super) fn table_meta(
-    dir: &tempfile::TempDir,
+    dir: &Arc<tempfile::TempDir>,
     config: BackendConfig,
 ) -> (MetaMcp, Arc<AtomicUsize>) {
     let sent = Arc::new(AtomicUsize::new(0));
@@ -80,6 +80,8 @@ pub(super) fn table_meta(
         ..TransparencyLogConfig::default()
     }))
     .expect("open log");
+    // The log keeps its directory alive (the keep-scan guard).
+    logger.keep_test_dir(Arc::clone(dir));
     let mut meta = MetaMcp::new(registry);
     meta.enable_transparency_log(Arc::new(logger));
     (meta, sent)
@@ -166,7 +168,7 @@ const fn refusal(name: &'static str, kind: &'static str) -> DecisionRow {
 /// from `Withholding::Unselected` (confirmed by a probe of that site).
 #[tokio::test]
 async fn t1_meta_allowed_tools() {
-    let dir = tempfile::tempdir().expect("a log directory");
+    let dir = std::sync::Arc::new(tempfile::tempdir().expect("a log directory"));
     let config = BackendConfig {
         allowed_tools: Some(vec!["write".to_string()]),
         ..BackendConfig::default()
@@ -195,7 +197,7 @@ async fn t1_meta_allowed_tools() {
 /// C1: a disabled capability (`dispatch_guards.rs:319`, in `admit_target`).
 #[tokio::test]
 async fn c1_meta_capability_disabled() {
-    let dir = tempfile::tempdir().expect("a log directory");
+    let dir = std::sync::Arc::new(tempfile::tempdir().expect("a log directory"));
     let (meta, sent) = table_meta(&dir, BackendConfig::default());
     let budget = crate::kill_switch::CapabilityErrorBudgetConfig::default();
     for _ in 0..20 {
@@ -243,7 +245,7 @@ fn without_read(meta: MetaMcp) -> MetaMcp {
 /// `may_invoke_explained`, `gate.rs:666`; confirmed by the site probe).
 #[tokio::test]
 async fn p2_meta_routing_profile_in_scope() {
-    let dir = tempfile::tempdir().expect("a log directory");
+    let dir = std::sync::Arc::new(tempfile::tempdir().expect("a log directory"));
     let (meta, sent) = table_meta(&dir, BackendConfig::default());
     let meta = without_read(meta);
     // The gate notes the profile refusal's own code, `Error::Protocol`'s
@@ -271,7 +273,7 @@ async fn p2_meta_routing_profile_in_scope() {
 /// (`denial.rs:21`; confirmed by the site probe).
 #[tokio::test]
 async fn n2_meta_not_found_at_dispatch() {
-    let dir = tempfile::tempdir().expect("a log directory");
+    let dir = std::sync::Arc::new(tempfile::tempdir().expect("a log directory"));
     let (meta, sent) = table_meta(&dir, BackendConfig::default());
     // The miss is answered as an `isError` result with a recovery hint
     // (`errors.rs:54-66`); its record is `denied` with the miss's -32001
@@ -305,7 +307,7 @@ async fn n2_meta_not_found_at_dispatch() {
 async fn p4_admission_routing_profile() {
     use crate::gateway::meta_mcp::invoke::audit::with_dispatch_scope;
     use crate::gateway::meta_mcp::invoke::dispatch_guards::BackendCall;
-    let dir = tempfile::tempdir().expect("a log directory");
+    let dir = std::sync::Arc::new(tempfile::tempdir().expect("a log directory"));
     let (meta, sent) = table_meta(&dir, BackendConfig::default());
     let meta = without_read(meta);
     let call = BackendCall {
@@ -351,7 +353,7 @@ async fn p4_admission_routing_profile() {
 #[tokio::test]
 async fn t4_policy_allowed_tools() {
     use crate::gateway::meta_mcp::invoke::audit::with_dispatch_scope;
-    let dir = tempfile::tempdir().expect("a log directory");
+    let dir = std::sync::Arc::new(tempfile::tempdir().expect("a log directory"));
     let config = BackendConfig {
         allowed_tools: Some(vec!["write".to_string()]),
         ..BackendConfig::default()
@@ -394,7 +396,7 @@ async fn t5_policy_allowed_tools_from_the_memo() {
     use crate::gateway::meta_mcp::invoke::audit::with_dispatch_scope;
     use crate::gateway::meta_mcp::visible::memo::record_visibility;
     use crate::gateway::meta_mcp::visible::{Visibility, Withholding};
-    let dir = tempfile::tempdir().expect("a log directory");
+    let dir = std::sync::Arc::new(tempfile::tempdir().expect("a log directory"));
     let (meta, sent) = table_meta(&dir, BackendConfig::default());
     let who = api_key_caller();
     let args = json!({"server": "alpha", "tool": "read", "arguments": {}});
@@ -433,7 +435,7 @@ async fn t5_policy_allowed_tools_from_the_memo() {
 /// (`policy.rs:416-420`).
 #[tokio::test]
 async fn n3_chain_step_not_found() {
-    let dir = tempfile::tempdir().expect("a log directory");
+    let dir = std::sync::Arc::new(tempfile::tempdir().expect("a log directory"));
     let (meta, sent) = table_meta(&dir, BackendConfig::default());
     let who = api_key_caller();
     let caller = context(&AllowAll, &who);
