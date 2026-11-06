@@ -164,7 +164,7 @@ impl crate::identity_propagation::IdentityPropagation for FixedBinding {
             headers: vec![("Authorization".to_string(), "Bearer minted".to_string())],
             expires_at: i64::MAX,
             cache_binding: BINDING.to_string(),
-            subject_key: identity.subject.clone(),
+            subject_key: identity.subject().to_owned(),
             audience: backend.audience.clone(),
             scopes: Vec::new(),
         })
