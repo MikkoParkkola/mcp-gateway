@@ -3,17 +3,20 @@
 # SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 """Compare a sharded coverage grade with single-job grades of the same commit.
 
-The sharded pipeline may replace the single job only when, on the same commit:
+The sharded pipeline may replace the single job only when, on the same commit
+(SHARD.7, lead ruling 2026-11-06; three single runs already disagree on race
+lines, and a split's risk is losing coverage, not gaining it):
 
-- the per-function grade tables (critical_function_coverage.py output) are
-  identical, the sharded one against every single-job one;
 - the executed tests are identical: each (binary, test, outcome) row of the
   parts' tests.tsv files (coverage_shards.py writes them from libtest's own
   listing, reconciled with the run), as a multiset, against each single job's;
-- every line is in band: covered by the sharded run when every single run
-  covers it, and not covered when no single run does. Two single runs differ
-  on lines that timing decides (a branch reached once or twice), so a line
-  covered by some single runs and not others may go either way.
+- every line covered by all three single runs is covered by the sharded run,
+  and every report holds the same lines. A line lost that only some singles
+  covered, or gained that none did, is a NOTE with its hits per run;
+- the per-function grade tables (critical_function_coverage.py output) list
+  the same functions, once each, with the same totals and line ranges. A
+  count below or above the singles' range is a NOTE naming the lines and how
+  many singles covered each.
 
   compare_coverage.py --table SHARDED_TABLE --table-single T1 [T2 ...]
                       --tests SHARDED_TSV [...] --tests-single S1 [...]
@@ -21,8 +24,10 @@ The sharded pipeline may replace the single job only when, on the same commit:
   compare_coverage.py --self-test
 
 Each `--tests-single` is one single job's tests.tsv files, comma-separated
-(its SDK part and its main part); the sharded run's files are read together. Exit 0 when everything holds, 1 with every
-difference listed.
+(its SDK part and its main part); the sharded run's files are read together.
+Exit 0 when everything holds (NOTE lines printed), 1 with every difference
+listed (DIFF lines), 2 when the inputs are not three single runs or cannot be
+read.
 """
 from __future__ import annotations
 
@@ -66,17 +71,43 @@ def lines(path: str) -> dict[tuple[str, int], int]:
     return hits
 
 
+def functions(path: str) -> tuple[dict[str, tuple[int | None, str, str, set[int]]], list[str]]:
+    """Each graded function row of a grade table: name -> (covered or None
+    when not measured here, total, line range, missed lines), and the names
+    listed more than once. Lines without tab-separated fields are the
+    grader's commentary, not rows."""
+    rows: dict[str, tuple[int | None, str, str, set[int]]] = {}
+    twice = []
+    with open(path, encoding="utf-8") as f:
+        for line in f:
+            fields = line.rstrip("\n").split("\t")
+            if len(fields) < 4:
+                continue
+            name, count = fields[3], fields[2]
+            covered, total = (int(count.split("/")[0]), count.split("/")[1]) if "/" in count else (None, count)
+            span = fields[4] if len(fields) > 4 else ""
+            listed = fields[5].removeprefix("missed=[").removesuffix("]") if len(fields) > 5 else ""
+            missed = {int(n) for n in listed.split(",") if n.strip()}
+            if name in rows:
+                twice.append(name)
+            rows[name] = (covered, total, span, missed)
+    return rows, twice
+
+
+def covered_by(line: int, singles: list[set[int]]) -> int:
+    """How many single runs covered `line`, given each run's missed lines."""
+    return sum(line not in missed for missed in singles)
+
+
 def compare(table: str, singles_tables: list[str], ran_tsv: list[str], single_tsv: list[str],
             lcov: str, single_lcovs: list[str], notes: list[str] | None = None) -> list[str]:
-    problems = []
-    sharded = open(table, encoding="utf-8").read().splitlines()
-    for other in singles_tables:
-        theirs = open(other, encoding="utf-8").read().splitlines()
-        if sharded != theirs:
-            diff = [f"  sharded: {a!r} / single: {b!r}"
-                    for a, b in zip(sharded, theirs) if a != b][:5]
-            problems.append(f"per-function table differs from {other} "
-                            f"({len(sharded)} vs {len(theirs)} lines)\n" + "\n".join(diff))
+    """Every FAIL, in rule order; NOTEs go to `notes`. SHARD.7 (lead ruling
+    2026-11-06): a split's risk is losing coverage, and three single runs of
+    one commit already disagree on race lines, so a loss fails only when
+    every single run covered the line; the rest is reported."""
+    problems: list[str] = []
+    notes = [] if notes is None else notes
+    # (1) Tests: the same rows, as a multiset, as each single run.
     ran = tests(ran_tsv)
     for other in single_tsv:
         # One single job's tests.tsv files, comma-separated (its SDK part and its main part).
@@ -86,17 +117,69 @@ def compare(table: str, singles_tables: list[str], ran_tsv: list[str], single_ts
             missing = sorted((theirs - ran).elements())[:5]
             problems.append(f"executed tests differ from {other}: {sum(ran.values())} vs "
                             f"{sum(theirs.values())}; only sharded {extra}; only single {missing}")
+    # (2) Lines: a line every single covered must stay covered.
     got = lines(lcov)
     runs = [lines(p) for p in single_lcovs]
     keys = set(got).union(*runs)
+
+    def vector(k: tuple[str, int]) -> str:
+        """The line's hits in each single run, then in the sharded run."""
+        return "/".join(str(r.get(k, 0)) for r in runs) + f" | {got.get(k, 0)}"
+
     below = sorted(k for k in keys if all(r.get(k, 0) > 0 for r in runs) and got.get(k, 0) == 0)
-    above = sorted(k for k in keys if all(r.get(k, 0) == 0 for r in runs) and got.get(k, 0) > 0)
     if below:
         problems.append(f"{len(below)} lines covered by every single run but not sharded: {below[:10]}")
-    if above:
-        problems.append(f"{len(above)} lines covered by no single run but sharded: {above[:10]}")
+    lost = collections.Counter()
+    gained = collections.Counter()
+    for k in sorted(keys):
+        n = sum(r.get(k, 0) > 0 for r in runs)
+        if got.get(k, 0) == 0 and 0 < n < len(runs):
+            lost[k[0]] += 1
+            notes.append(f"{k[0]}:{k[1]} lost by split, covered by {n}/{len(runs)} singles (hits {vector(k)})")
+        elif got.get(k, 0) > 0 and n == 0:
+            gained[k[0]] += 1
+            notes.append(f"{k[0]}:{k[1]} gained by split, covered by no single (hits {vector(k)})")
     if any(set(r) != set(got) for r in runs):
         problems.append("the reports do not hold the same lines (a file or function missing)")
+    # (3) Per-function: the tables must describe the same functions; counts
+    # outside the singles' range are reported with the lines behind them.
+    mine, twice = functions(table)
+    if twice:
+        problems.append(f"duplicate function rows in {table}: {twice[:5]}")
+    theirs_all = []
+    for path in singles_tables:
+        rows, dup = functions(path)
+        if dup:
+            problems.append(f"duplicate function rows in {path}: {dup[:5]}")
+        theirs_all.append(rows)
+    for other, theirs in zip(singles_tables, theirs_all):
+        if set(mine) != set(theirs):
+            problems.append(f"function set differs from {other}: only sharded "
+                            f"{sorted(set(mine) - set(theirs))[:5]}; only single {sorted(set(theirs) - set(mine))[:5]}")
+        for name in sorted(set(mine) & set(theirs)):
+            if mine[name][1:3] != theirs[name][1:3]:
+                problems.append(f"{name}: total or line range differs from {other}: "
+                                f"{mine[name][1:3]} vs {theirs[name][1:3]}")
+    for name in sorted(set(mine).intersection(*theirs_all)):
+        counts = [t[name][0] for t in theirs_all]
+        covered, missed = mine[name][0], mine[name][3]
+        if covered is None or None in counts:
+            continue
+        singles_missed = [t[name][3] for t in theirs_all]
+        shown = "/".join(map(str, counts))
+        if covered < min(counts):
+            detail = ", ".join(f"{line} ({covered_by(line, singles_missed)}/{len(counts)})"
+                               for line in sorted(missed) if covered_by(line, singles_missed))
+            notes.append(f"{name}: {covered} covered, below the singles' {shown}; missed by split: {detail}")
+        elif covered > max(counts):
+            detail = ", ".join(f"{line} ({covered_by(line, singles_missed)}/{len(counts)})"
+                               for line in sorted(set().union(*singles_missed) - missed))
+            notes.append(f"{name}: {covered} covered, above the singles' {shown}; gained: {detail}")
+    if lost or gained:
+        files = sorted(set(lost) | set(gained), key=lambda f: -(lost[f] + gained[f]))
+        notes.append(f"summary: {sum(lost.values())} lines lost by split and covered by some singles, "
+                     f"{sum(gained.values())} gained; by file: "
+                     + ", ".join(f"{f} -{lost[f]}/+{gained[f]}" for f in files[:10]))
     return problems
 
 
@@ -112,7 +195,7 @@ def self_test() -> int:
         return f"SF:/home/runner/work/x/x/src/a.rs\n{body}end_of_record\n"
 
     with tempfile.TemporaryDirectory() as d:
-        table = write(d, "t", "ok\t100%\tfoo\n")
+        table = write(d, "t", "ok\t100%\t1/1\tfoo\n")
         log = write(d, "l", "lib\ta::b\tok\nlib\ta::c\tignored\nt\tx\tok\n")
         # Line 1 is covered by every single run, line 2 by none, line 3 by some.
         singles = [write(d, f"c{i}", lcov({1: 2, 2: 0, 3: h})) for i, h in enumerate((1, 0, 1))]
@@ -121,12 +204,11 @@ def self_test() -> int:
             assert compare(table, [table], [log], [log], good, singles) == [], "in band"
         assert any("not sharded" in p for p in compare(
             table, [table], [log], [log], write(d, "b", lcov({1: 0, 2: 0, 3: 1})), singles))
-        assert any("no single run" in p for p in compare(
-            table, [table], [log], [log], write(d, "a", lcov({1: 1, 2: 1, 3: 1})), singles))
+        # A line no single run covers is a note since SHARD.7 (shard7_rows).
         assert any("same lines" in p for p in compare(
             table, [table], [log], [log], write(d, "m", lcov({1: 1, 3: 1})), singles))
-        other_table = write(d, "t2", "FAIL\t90%\tfoo\n")
-        assert any("per-function table" in p for p in compare(
+        other_table = write(d, "t2", "FAIL\t50%\t1/2\tfoo\n")
+        assert any("total or line range" in p for p in compare(
             table, [other_table], [log], [log], singles[0], singles))
         # A test that ran in one pipeline and not the other, with another outcome,
         # or under another binary.
@@ -155,6 +237,9 @@ def self_test() -> int:
         one_tests = ["--table-single", table, table, table, "--tests-single", log,
                      "--lcov-single", *singles]
         assert main(["x", *args, *one_tests]) == 2, "one tests file"
+        # An unreadable input is no comparison: exit 2, never a pass.
+        gone = ["--table", table, "--tests", log, "--lcov", os.path.join(d, "missing.lcov")]
+        assert main(["x", *gone, *three]) == 2, "missing lcov"
     failed = shard7_rows()
     if failed:
         print(f"compare_coverage self-test: FAILED {failed}")
@@ -278,7 +363,16 @@ def main(argv: list[str]) -> int:
         print(f"compare_coverage: need {SINGLES} single runs each of --table-single, "
               f"--tests-single and --lcov-single, got {counts}")
         return 2
-    problems = compare(a.table, a.table_single, a.tests, a.tests_single, a.lcov, a.lcov_single)
+    notes: list[str] = []
+    try:
+        problems = compare(a.table, a.table_single, a.tests, a.tests_single, a.lcov,
+                           a.lcov_single, notes)
+    except (OSError, ValueError, UnicodeDecodeError) as e:
+        # An unreadable or malformed input is no comparison, never a pass.
+        print(f"compare_coverage: cannot read the inputs: {e}")
+        return 2
+    for note in notes:
+        print(f"NOTE {note}")
     for problem in problems:
         print(f"DIFF {problem}")
     print(f"compare_coverage: {'PASS' if not problems else 'FAIL'} "
