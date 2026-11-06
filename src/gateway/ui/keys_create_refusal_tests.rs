@@ -9,9 +9,6 @@
 use axum::http::StatusCode;
 use serde_json::{Value, json};
 
-use std::sync::Arc;
-
-use super::keys_create::BeforeLock;
 use super::keys_create_fixture_tests::{
     Call, Fixture, KNOWN, ROOT, Sent, Setup, item, root_item, spec, yaml_of,
 };
@@ -343,43 +340,41 @@ fn p6b_the_expiry_checked_is_the_expiry_written() {
 
 /// P6 under the lock: an expiry still ahead when the route checks, but past
 /// when the writer holds the lock, is refused. The test holds the config lock
-/// until the route says it is about to ask for it, then moves the clock and
-/// lets go, so only a clock read made under the lock sees the later time.
+/// until the writer itself is waiting on it (the lock's own waiter count, a
+/// signal only the writer's wait raises), then moves the clock and lets go, so
+/// only a clock read made under the lock sees the later time.
 #[test]
 fn p6_the_clock_is_read_again_under_the_lock() {
-    use std::sync::atomic::{AtomicBool, Ordering};
+    use crate::config_persistence::lock::{lock_config, lock_path, waiters_for_test};
+    use std::time::{Duration, Instant};
     let _clock = crate::clock::test_clock::at_secs(NOW);
     let fx = Fixture::new(Setup::default());
     let mut body = fx.body("late");
     body["expires_at"] = json!(at(NOW + 60));
-    let reached = Arc::new(tokio::sync::Notify::new());
-    let fired = Arc::new(AtomicBool::new(false));
-    let (ping, flag) = (Arc::clone(&reached), Arc::clone(&fired));
-    let mut call = Call::new(&body);
-    call.before_lock = Some(BeforeLock(Arc::new(move || {
-        flag.store(true, Ordering::SeqCst);
-        ping.notify_one();
-    })));
+    let lock = lock_path(&crate::identity_grants::journal::resolved(&fx.path()));
     let before = fx.bytes();
-    let later = std::cell::RefCell::new(None);
-    let sent = fx.post_driven(call, |send| async {
-        let held = crate::config_persistence::lock::lock_config(
-            &fx.path(),
-            std::time::Instant::now() + std::time::Duration::from_secs(30),
-        )
-        .await
-        .expect("the test holds the lock");
+    let (later, waited) = (std::cell::RefCell::new(None), std::cell::Cell::new(false));
+    let sent = fx.post_driven(Call::new(&body), |send| async {
+        let held = lock_config(&fx.path(), Instant::now() + Duration::from_secs(30))
+            .await
+            .expect("the test holds the lock");
         let advance = async {
             // A hang guard only: it never decides pass or fail in a normal run.
-            tokio::time::timeout(std::time::Duration::from_secs(60), reached.notified())
+            let wait = async {
+                while waiters_for_test(&lock) == 0 {
+                    tokio::time::sleep(Duration::from_millis(5)).await;
+                }
+            };
+            tokio::time::timeout(Duration::from_secs(60), wait)
                 .await
-                .expect("the route never reached the lock; a hung row is not a red");
+                .expect("the writer never waited on the lock; a hung row is not a red");
+            waited.set(true);
             *later.borrow_mut() = Some(crate::clock::test_clock::at_secs(NOW + 120));
             drop(held);
         };
         tokio::join!(send, advance).0
     });
-    assert!(fired.load(Ordering::SeqCst), "the route never signalled");
+    assert!(waited.get(), "premise: the writer's lock wait never began");
     let status = StatusCode::UNPROCESSABLE_ENTITY;
     let expected = invalid_field("expires_at");
     assert_refusal(
