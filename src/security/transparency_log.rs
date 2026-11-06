@@ -89,6 +89,8 @@ pub(crate) mod identity;
 mod kill;
 #[path = "transparency_log_rotation.rs"]
 pub(crate) mod rotation;
+#[path = "transparency_log_settle.rs"]
+pub(crate) mod settle;
 /// Test seam for the write-fault injector, for tests outside this module.
 #[cfg(test)]
 pub(crate) mod rotation_fault {

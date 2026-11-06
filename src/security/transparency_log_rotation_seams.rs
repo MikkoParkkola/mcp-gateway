@@ -106,6 +106,8 @@ pub(crate) struct TestHooks {
     /// The test that opened this logger, named on a late write.
     pub(crate) created_by: crate::test_late_write::Creator,
     pub(crate) fault: std::sync::Mutex<Option<WriteFault>>,
+    /// A one-shot settle refusal (V.1 `FailSettle`).
+    pub(crate) settle_fault: std::sync::Mutex<Option<super::super::settle::FailSettle>>,
     pub(crate) fault_fired: std::sync::atomic::AtomicUsize,
     pub(crate) clock_offset: std::sync::atomic::AtomicI64,
     /// F20: the next write blocks on this gate (a stalled filesystem).
