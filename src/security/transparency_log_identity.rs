@@ -93,16 +93,16 @@ pub(super) fn resolve(path: &Path, sealed: &[Segment]) -> io::Result<Option<LogI
     Ok(None)
 }
 
-/// Whether the active file is a genesis left unfinished: the log's first
-/// segment (nothing sealed), whose open record carries an id that no record
-/// in it names. A crash between the genesis open record (and its first mark)
-/// and the identified record leaves this, and so does a torn identified
-/// record, whose drop recovery records in its place: so the whole file is
-/// searched, not the second line, and the search stops at the first
-/// identified record (normally line 2). With nothing sealed the active file
-/// is the whole log, so retention cannot have expired the record. A beta
-/// log's open record has no id (it mints instead), and a log whose identified
-/// record retention expired has sealed segments, so neither is repaired.
+/// Whether the active file is a genesis left unfinished: nothing is sealed,
+/// line 1 is an open record carrying an id and linking to no sealed segment
+/// (a genesis, at segment 0 or continuing a surviving `.hwm`'s segment), and
+/// no identified record in the file names that id. A crash between the
+/// genesis open record and the identified record leaves this, and so does a
+/// torn identified record, whose drop recovery records in its place: so the
+/// whole file is searched. A beta log's open record has no id (it mints
+/// instead). A rotation's open record links to the segment it follows, so a
+/// log whose identified record expired with its segment is never repaired,
+/// even once the disk-full path has expired every sealed segment.
 ///
 /// # Errors
 ///
@@ -111,27 +111,24 @@ pub(super) fn unfinished_genesis(path: &Path, sealed: &[Segment]) -> io::Result<
     if !sealed.is_empty() {
         return Ok(false);
     }
-    // The first record, parsed or not, then whether any later one names the id.
-    let (mut first, mut named): (Option<Option<Value>>, bool) = (None, false);
+    // The genesis's id once line 1 shows one, then whether a record names it.
+    let (mut first, mut genesis, mut named) = (true, None::<LogId>, false);
     each_line(path, |line| {
         let line = line.trim();
         if line.is_empty() {
             return true;
         }
         let v = serde_json::from_str::<Value>(line).ok();
-        if first.is_none() {
-            first = Some(v);
-            return true;
+        if std::mem::take(&mut first) {
+            genesis = v
+                .filter(|v| is_event(v, EV_OPENED) && v.get("prev_segment_seq").is_none())
+                .and_then(|v| id_of(&v));
+            return genesis.is_some();
         }
-        named = v.is_some_and(|v| is_event(&v, EV_IDENTIFIED));
+        named = v.is_some_and(|v| is_event(&v, EV_IDENTIFIED) && id_of(&v) == genesis);
         !named
     })?;
-    let genesis_with_id = first.flatten().is_some_and(|v| {
-        is_event(&v, EV_OPENED)
-            && v.get("segment_seq").and_then(Value::as_u64) == Some(0)
-            && id_of(&v).is_some()
-    });
-    Ok(genesis_with_id && !named)
+    Ok(genesis.is_some() && !named)
 }
 
 /// The identity fields of an open record: its `log_id`, and the evidence of
