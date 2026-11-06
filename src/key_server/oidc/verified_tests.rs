@@ -135,5 +135,10 @@ fn the_test_constructor_is_crate_only_and_test_only() {
             found.push((name, gated, crate_only));
         }
     }
-    assert_eq!(found, NAMES.map(|n| (n.to_owned(), true, true)));
+    // Sorted, so the row does not pin source order; a second definition
+    // of any name still fails on the count.
+    found.sort();
+    let mut expected = NAMES.map(|n| (n.to_owned(), true, true)).to_vec();
+    expected.sort();
+    assert_eq!(found, expected);
 }
