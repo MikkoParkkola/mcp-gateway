@@ -101,3 +101,95 @@ async fn a_settle_task_queued_past_the_bound_is_unconfirmed_and_lands_once() {
     records_reach(&path, "w-1", 1).await;
     assert_eq!(records_of(&path, "w-1").len(), 1);
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_stalled_write_is_unconfirmed_and_its_retry_is_delivered_twice() {
+    // GIVEN: readers of `settle.save` and of plain `save`, and the next write
+    // stalled past the bound
+    let dir = tempfile::tempdir().unwrap();
+    let (path, l) = opened(&dir);
+    let told: Arc<std::sync::Mutex<Vec<(String, Map<String, Value>)>>> = Arc::default();
+    for kind in ["save", "settle.save"] {
+        let sink = Arc::clone(&told);
+        l.subscribe(
+            kind,
+            Arc::new(move |f: &Map<String, Value>, _: &str, _: u64| {
+                let kind = f
+                    .get("kind")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_string();
+                sink.lock().unwrap().push((kind, f.clone()));
+            }),
+        );
+    }
+    let stall = l.stall_next_write_for_test(LIMIT);
+
+    // WHEN: it is settled, the write released and landed, then retried
+    let got = settle_once(&l, "w-1").await;
+    stall.release();
+    records_reach(&path, "w-1", 1).await;
+    let retried = settle_once(&l, "w-1").await;
+
+    // THEN: Unconfirmed, then Appended; two records for the token, and the
+    // `settle.save` reader told twice with equal role, token and payload
+    assert!(matches!(got, Err(Unsettled::Unconfirmed(_))), "{got:?}");
+    assert!(retried.is_ok(), "{retried:?}");
+    assert_eq!(records_of(&path, "w-1").len(), 2);
+    let told = told.lock().unwrap();
+    assert_eq!(told.len(), 2, "plain `save` is told nothing");
+    let equal = |f: &Map<String, Value>| {
+        let keys = payload()
+            .keys()
+            .cloned()
+            .chain(["event".into(), "token".into()]);
+        keys.map(|k| f.get(&k).cloned()).collect::<Vec<_>>()
+    };
+    assert!(told.iter().all(|(kind, _)| kind == "settle.save"));
+    assert_eq!(equal(&told[0].1), equal(&told[1].1));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_failed_or_partial_write_or_sync_is_unconfirmed() {
+    for fault in ["sync", "partial", "panic"] {
+        // GIVEN: a sync that fails, a write cut short, or a task that panics
+        let dir = tempfile::tempdir().unwrap();
+        let (path, l) = opened(&dir);
+        assert!(settle_once(&l, "w-0").await.is_ok());
+        match fault {
+            "sync" => l.arm_write_fault(Some(WriteFault::SyncError)),
+            "partial" => l.arm_write_fault(Some(WriteFault::FullForever)),
+            _ => l.arm_settle_fault(FailSettle::PanicInTask),
+        }
+
+        // WHEN: it is settled
+        let got = settle_once(&l, "w-1").await;
+
+        // THEN: Unconfirmed: the write was dispatched, its landing unproven
+        assert!(
+            matches!(got, Err(Unsettled::Unconfirmed(_))),
+            "{fault}: {got:?}"
+        );
+        l.arm_write_fault(None);
+        assert!(records_of(&path, "w-1").len() <= 1, "{fault}");
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_refresh_failure_is_refused_and_counted_like_a_failed_append() {
+    // GIVEN: the active file replaced by one recovery cannot read
+    let dir = tempfile::tempdir().unwrap();
+    let (path, l) = opened(&dir);
+    assert!(settle_once(&l, "w-0").await.is_ok());
+    let failures = l.append_failures();
+    let swapped = path.with_extension("swap");
+    std::fs::write(&swapped, "not a record\n").unwrap();
+    std::fs::rename(&swapped, &path).unwrap();
+
+    // WHEN: it is settled
+    let got = settle_once(&l, "w-1").await;
+
+    // THEN: Refused before any byte, and the log's health counts it
+    assert!(matches!(got, Err(Unsettled::Refused(_))), "{got:?}");
+    assert_eq!(l.append_failures(), failures + 1);
+}
