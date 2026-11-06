@@ -153,7 +153,7 @@ fn isolated_loopback_context_bypasses_only_loopback_ip_literals() {
     assert!(!url_targets_loopback_ip("http://localhost:39400/fixture"));
 }
 
-/// MIK-6751: capability-side ADR-008 INV-2 parity tests.
+/// Capability-side ADR-008 INV-2 parity tests.
 ///
 /// `google_calendar_capability` names Google Calendar as the concrete
 /// motivating example from the gap report (`oauth:google`, no
