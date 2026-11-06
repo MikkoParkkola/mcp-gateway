@@ -732,6 +732,9 @@ mod grant_marker_tests;
 /// A retry-routed withheld call's decision marker.
 #[cfg(test)]
 mod grant_retry_marker_tests;
+/// A chain resume step refused before it dispatches.
+#[cfg(test)]
+mod grant_chain_resume_tests;
 #[cfg(test)]
 mod grant_replay_dedupe_tests;
 #[cfg(test)]
