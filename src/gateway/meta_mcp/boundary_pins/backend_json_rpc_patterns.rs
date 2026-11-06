@@ -241,29 +241,7 @@ fn backend_only(pat: &syn::Pat) -> bool {
 
 /// `matches!(expr, pat)`'s pattern.
 fn matches_pattern(mac: &syn::Macro) -> Option<syn::Pat> {
-    if mac
-        .path
-        .segments
-        .last()
-        .is_none_or(|s| s.ident != "matches")
-    {
-        return None;
-    }
-    let parser = |input: syn::parse::ParseStream| {
-        input.parse::<syn::Expr>()?;
-        input.parse::<syn::Token![,]>()?;
-        let pat = syn::Pat::parse_multi_with_leading_vert(input)?;
-        // The guard, if any: skipped, the pattern is what is pinned.
-        input.step(|cursor| {
-            let mut rest = *cursor;
-            while let Some((_, next)) = rest.token_tree() {
-                rest = next;
-            }
-            Ok(((), rest))
-        })?;
-        Ok(pat)
-    };
-    mac.parse_body_with(parser).ok()
+    crate::gateway::syn_scan_support::matches_parts(mac).map(|(_, pat, _)| pat)
 }
 
 /// (file, function, anchor) -> uncarried `JsonRpc` patterns of that shape.

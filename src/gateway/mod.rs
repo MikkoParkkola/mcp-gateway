@@ -65,6 +65,8 @@ pub mod oauth;
 mod admin_standing_scan_tests;
 #[cfg(test)]
 pub(crate) mod chain_test_support;
+#[cfg(test)]
+pub(crate) mod syn_scan_support;
 // Every egress matrix it feeds is `firewall`-gated.
 #[cfg(all(test, feature = "firewall"))]
 pub(crate) mod egress_fixture;
