@@ -165,24 +165,43 @@ pub(super) fn predecessor_evidence(
 /// Verify's warning for a log whose oldest file opens with a record naming a
 /// lost predecessor. Read apart from the chain checks, so a log that also
 /// fails them (its mark survived and names the lost records) still reports
-/// it; `verified` says whether those checks authenticated the record, and
-/// the text says "unverified" when they stopped first.
+/// it. `checked` is the `entry_hash` of the record the chain checks
+/// authenticated as that file's first, if they got that far; the text says
+/// "unverified" otherwise.
 ///
 /// # Errors
 ///
 /// The file cannot be read.
-pub(super) fn predecessor_warning(path: &Path, verified: bool) -> io::Result<Option<String>> {
+pub(super) fn predecessor_warning(
+    path: &Path,
+    checked: Option<&str>,
+) -> io::Result<Option<String>> {
     let head = match segments::read_first_line(path) {
         Ok(line) => line.and_then(|l| serde_json::from_str::<Value>(&l).ok()),
         Err(e) if e.kind() == io::ErrorKind::NotFound => None,
         Err(e) => return Err(e),
     };
     let Some(evidence) = head
+        .as_ref()
         .filter(|v| is_event(v, EV_OPENED))
-        .and_then(|mut v| v.get_mut(PREDECESSOR_MISSING).map(Value::take))
+        .and_then(|v| v.get(PREDECESSOR_MISSING))
     else {
         return Ok(None);
     };
+    let how = if checked.is_some() {
+        ""
+    } else {
+        " (unverified: the chain check did not authenticate this record)"
+    };
+    Ok(Some(format!(
+        "{} starts a new log after its predecessor went missing{how}: {}",
+        path.display(),
+        evidence_text(evidence)
+    )))
+}
+
+/// The evidence a `predecessor_missing` field names, as text.
+fn evidence_text(evidence: &Value) -> String {
     let mut named = Vec::new();
     if let Some(id) = evidence.get("previous_log_id").and_then(Value::as_str) {
         named.push(format!("previous log_id {id}"));
@@ -194,16 +213,7 @@ pub(super) fn predecessor_warning(path: &Path, verified: bool) -> io::Result<Opt
             "previous high-water mark at counter {counter} ({hash})"
         ));
     }
-    let how = if verified {
-        ""
-    } else {
-        " (unverified: the chain check stopped before this record)"
-    };
-    Ok(Some(format!(
-        "{} starts a new log after its predecessor went missing{how}: {}",
-        path.display(),
-        named.join(", ")
-    )))
+    named.join(", ")
 }
 
 /// The fields of the record that names a fresh id.
