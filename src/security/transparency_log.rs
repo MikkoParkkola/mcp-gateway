@@ -523,7 +523,8 @@ impl TransparencyLogger {
         // become the log's newest identity.
         if let Some(event) = fields.get("event").and_then(serde_json::Value::as_str)
             && (event.starts_with(rotation::SEGMENT_EVENT_PREFIX)
-                || identity::RESERVED_EVENTS.contains(&event))
+                || identity::RESERVED_EVENTS.contains(&event)
+                || settle::RESERVED_EVENTS.contains(&event))
         {
             return Err(io::Error::other(format!(
                 "transparency log: event '{event}' is written only by the logger"
