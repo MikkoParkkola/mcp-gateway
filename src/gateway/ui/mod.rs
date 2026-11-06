@@ -541,8 +541,19 @@ async fn config(
         .iter()
         .map(|b| {
             let s = b.status();
+            // Read from the request's generation, not the backend instance:
+            // an owner-only reload replaces no backend (display only), and a
+            // backend a concurrent reload registered may not be in this
+            // generation yet (then `null`). Admin only, by ruling: never on
+            // the open `/ui/api/status`.
+            let owner = generation
+                .config()
+                .backends
+                .get(&s.name)
+                .and_then(crate::config::BackendConfig::owner);
             json!({
                 "name": s.name,
+                "owner": owner,
                 "transport": s.transport,
                 "running": s.running,
                 // As written, so a pattern that matches no current tool shows.

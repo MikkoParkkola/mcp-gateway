@@ -90,6 +90,7 @@ fn known_backend_keys_match_struct() {
         // unset still shows up in `serialized`.
         let backend = BackendConfig {
             description: "d".into(),
+            owner: Some("o".into()),
             enabled: true,
             transport,
             stop_when_idle_for: Some(Duration::from_secs(1)),

@@ -591,6 +591,8 @@ mod live_collusion_tests;
 mod live_keys_reload_tests;
 #[cfg(test)]
 mod live_sections_tests;
+#[cfg(test)]
+mod owner_reload_tests;
 
 mod apply;
 pub use apply::apply_patch;

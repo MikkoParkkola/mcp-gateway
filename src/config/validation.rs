@@ -140,6 +140,7 @@ impl Config {
         self.validate_backend_runtime_profiles()?;
         self.validate_stop_when_idle_ownership()?;
         self.validate_max_frame_bytes()?;
+        self.validate_backend_owners()?;
         self.webhooks.validate()?;
         self.control_plane.role_mapping.validate()?;
         self.validate_identity_propagation()?;
