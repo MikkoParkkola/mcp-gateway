@@ -36,6 +36,12 @@ fn on_disk(path: &Path) -> (Vec<u8>, Vec<u8>) {
     (read(path), read(&sibling(path, "hwm")))
 }
 
+/// Settle an outcome for `token` that must land.
+fn settled(l: &TransparencyLogger, token: &str) {
+    let got = l.settle(&l.log_id(), token, Role::Outcome, payload());
+    assert!(got.is_ok(), "{token}: {got:?}");
+}
+
 fn records_of(path: &Path, token: &str) -> Vec<Value> {
     lines(path)
         .into_iter()
@@ -85,14 +91,17 @@ fn settle_bound_to_another_log_appends_nothing() {
             binding = l.log_id();
             l.present_log_id_for_test(LogId::mint());
         }
+        settled(&l, "w-0");
         let before = on_disk(&path);
 
-        // WHEN: it is settled
+        // WHEN: it is settled, between two settles bound to the logger's id
         let got = l.settle(&binding, "w-1", Role::Outcome, payload());
 
-        // THEN: OtherLog, and the log and its mark are byte-for-byte as before
+        // THEN: OtherLog, and the log and its mark are byte-for-byte as before;
+        // the settles around it land
         assert!(matches!(got, Err(Unsettled::OtherLog)), "{got:?}");
         assert!(on_disk(&path) == before, "presented: {presented}");
+        settled(&l, "w-2");
     }
 }
 
@@ -131,7 +140,7 @@ fn a_refused_settle_appends_nothing() {
         let dir = tempfile::tempdir().unwrap();
         let path = log_path(&dir);
         let l = TransparencyLogger::open(cfg(&path, 12, false)).unwrap();
-        append(&l, 0);
+        settled(&l, "w-0");
         let mut given = payload();
         match refusal {
             "sync" => l.arm_write_fault(Some(WriteFault::SyncError)),
@@ -149,6 +158,8 @@ fn a_refused_settle_appends_nothing() {
             "{refusal}: {got:?}"
         );
         assert!(on_disk(&path) == before, "{refusal}");
+        // The refusal was that call's only: the next settle lands.
+        settled(&l, "w-2");
     }
 }
 
@@ -189,6 +200,10 @@ fn settle_events_name_their_role_and_callers_cannot_write_them() {
         let refused = l.append_event(forged, &AuditEnvelope::gateway());
         assert!(refused.is_err(), "{name}");
         assert!(on_disk(&path) == before, "{name}");
+        // A neighbouring caller event is still accepted.
+        let mut plain = Map::new();
+        plain.insert("event".into(), "config_write_note".into());
+        assert!(l.append_event(plain, &AuditEnvelope::gateway()).is_ok());
     }
 }
 
