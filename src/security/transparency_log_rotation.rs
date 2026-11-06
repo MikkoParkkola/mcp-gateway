@@ -220,9 +220,13 @@ pub(super) fn recover(
     config: &TransparencyLogConfig,
     _guard: &ExclusiveFileLock,
     now: Option<u64>,
+    held: Option<&LogId>,
 ) -> io::Result<(Recovered, LogId)> {
     let secret = config.shared_secret.as_bytes();
     let sealed = segments::list_segments(path)?;
+    // Nothing sealed and no active record: a genesis follows. With a writer
+    // that held an id, or a mark that survived, the log it follows is gone.
+    let gone = sealed.is_empty() && !std::fs::metadata(path).is_ok_and(|m| m.len() > 0);
     let hw = segments::read_hwm(path, secret, &config.key_id);
     let dropped = if std::fs::metadata(path).is_ok_and(|m| m.len() > 0) {
         repair_torn_tail(path, config, sealed.last(), hw.as_ref())?
@@ -306,7 +310,13 @@ pub(super) fn recover(
     if minted || unfinished {
         #[cfg(test)]
         super::kill::point(super::kill::At::BeforeIdentified);
-        record_identity(&mut state, config, &id)?;
+        chain_onto(&mut state, config, identity::identified_fields(&id))?;
+        if minted
+            && gone
+            && let Some(fields) = identity::predecessor_fields(held, hw.as_ref())
+        {
+            chain_onto(&mut state, config, fields)?;
+        }
         write_mark(
             path,
             config,
@@ -342,16 +352,16 @@ pub(super) fn write_mark(
     segments::write_hwm(path, &bytes, sync)
 }
 
-/// Chain the one record that names a freshly minted id onto the tail.
-fn record_identity(
+/// Chain one of recovery's own records (the identity records) onto the tail.
+fn chain_onto(
     state: &mut Recovered,
     config: &TransparencyLogConfig,
-    id: &LogId,
+    fields: Map<String, Value>,
 ) -> io::Result<()> {
     state.last_entry_hash = write_synced(
         &mut state.file,
         config,
-        identity::identified_fields(id),
+        fields,
         state.counter + 1,
         &state.last_entry_hash,
     )?;

@@ -304,7 +304,8 @@ impl TransparencyLogger {
         // retention and recovery below runs under it, and a second writer of
         // this path is refused.
         let lease = lease::acquire(&path, wait)?;
-        let (recovered, log_id) = rotation::recover(&path, &config, &lease, rotation::now_secs(0))?;
+        let (recovered, log_id) =
+            rotation::recover(&path, &config, &lease, rotation::now_secs(0), None)?;
         Ok(Self {
             inner: Mutex::new(Inner {
                 file: recovered.file,
@@ -522,7 +523,7 @@ impl TransparencyLogger {
         let segment = rotation::RESERVED_SEGMENT_FIELDS;
         if let Some(event) = fields.get("event").and_then(serde_json::Value::as_str)
             && (event.starts_with(rotation::SEGMENT_EVENT_PREFIX)
-                || event == identity::EV_IDENTIFIED)
+                || identity::RESERVED_EVENTS.contains(&event))
         {
             return Err(io::Error::other(format!(
                 "transparency log: event '{event}' is written only by the logger"
@@ -691,17 +692,14 @@ mod hwm_missing_tests;
 #[path = "transparency_log_identity_tests.rs"]
 mod identity_tests;
 #[cfg(test)]
-#[path = "transparency_log_kill_tests.rs"]
-mod kill_tests;
-#[cfg(test)]
-#[path = "transparency_log_predecessor_tests.rs"]
-mod predecessor_tests;
-#[cfg(test)]
 #[path = "transparency_log_keep_dir_tests.rs"]
 mod keep_dir_tests;
 #[cfg(test)]
 #[path = "transparency_log_keep_scan_tests.rs"]
 mod keep_scan_tests;
+#[cfg(test)]
+#[path = "transparency_log_kill_tests.rs"]
+mod kill_tests;
 #[cfg(test)]
 #[path = "transparency_log_lease_tests.rs"]
 mod lease_tests;
@@ -711,6 +709,9 @@ mod lossy_tests;
 #[cfg(test)]
 #[path = "transparency_log_overflow_tests.rs"]
 mod overflow_tests;
+#[cfg(test)]
+#[path = "transparency_log_predecessor_tests.rs"]
+mod predecessor_tests;
 #[cfg(test)]
 #[path = "transparency_log_reader_tests.rs"]
 mod reader_tests;

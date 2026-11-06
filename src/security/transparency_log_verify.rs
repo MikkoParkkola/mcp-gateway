@@ -366,6 +366,11 @@ impl<'a> Stream<'a> {
             Ok(()) => self.finish(files, hw, mode, pin),
             failed => failed,
         };
+        if let Some((_, oldest)) = files.first()
+            && let Some(warning) = super::identity::predecessor_warning(oldest)?
+        {
+            self.result.warnings.push(warning);
+        }
         match verdict {
             Ok(()) => self.result.ok = true,
             Err((at, msg)) => {

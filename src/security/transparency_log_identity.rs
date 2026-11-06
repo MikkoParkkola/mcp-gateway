@@ -12,11 +12,26 @@ use std::path::Path;
 use serde_json::Value;
 
 use super::rotation::{EV_OPENED, MAX_RECORD_BYTES};
-use super::segments::{self, Segment};
+use super::segments::{self, HighWater, Segment};
 
 /// Names a log that has no segment open record to carry its id (a log
 /// written before the id existed), and records the mint of one.
 pub(crate) const EV_IDENTIFIED: &str = "audit_log_identified";
+
+/// Follows the identified record of a new genesis whose predecessor is gone,
+/// naming what evidence of it survived: `previous_log_id` when a live logger
+/// held the old id, `previous_high_water` (`counter`, `entry_hash`) when the
+/// old `.hwm` survived. It does not cover a deletion that also removed `.hwm`
+/// with no live logger: nothing then names the old log, and no marker is
+/// written without evidence.
+pub(crate) const EV_PREDECESSOR_MISSING: &str = "audit_log_predecessor_missing";
+
+/// Events only the logger writes; a caller naming one is refused.
+pub(crate) const RESERVED_EVENTS: [&str; 2] = [EV_IDENTIFIED, EV_PREDECESSOR_MISSING];
+
+/// How many records from the start of the oldest file can hold the marker:
+/// open, mark-missing, identified, then the marker.
+const MARKER_HEAD: usize = 4;
 
 /// An audit log's identity. Opaque: compare, display, never parse.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -107,6 +122,60 @@ pub(super) fn unfinished_genesis(path: &Path, sealed: &[Segment]) -> io::Result<
             && id_of(v).is_some()
     });
     Ok(genesis_with_id && !parsed(1).is_some_and(|v| is_event(v, EV_IDENTIFIED)))
+}
+
+/// The marker's fields, or `None` when nothing of the old log survived.
+pub(super) fn predecessor_fields(
+    held: Option<&LogId>,
+    mark: Option<&HighWater>,
+) -> Option<serde_json::Map<String, Value>> {
+    let mut extra: Vec<(&str, Value)> = Vec::new();
+    if let Some(id) = held {
+        extra.push(("previous_log_id", id.as_str().into()));
+    }
+    if let Some(h) = mark {
+        let hw = serde_json::json!({ "counter": h.counter, "entry_hash": h.entry_hash });
+        extra.push(("previous_high_water", hw));
+    }
+    (!extra.is_empty()).then(|| super::rotation::housekeeping(EV_PREDECESSOR_MISSING, &extra))
+}
+
+/// Verify's warning for a log whose oldest file starts with the marker. Read
+/// apart from the chain checks, so a log that also fails them (its mark
+/// survived and names the lost records) still reports it.
+///
+/// # Errors
+///
+/// The file cannot be read.
+pub(super) fn predecessor_warning(path: &Path) -> io::Result<Option<String>> {
+    let (mut seen, mut found) = (0, None);
+    each_line(path, |line| {
+        if line.trim().is_empty() {
+            return true;
+        }
+        seen += 1;
+        let v = serde_json::from_str::<Value>(line.trim()).ok();
+        found = v.filter(|v| is_event(v, EV_PREDECESSOR_MISSING));
+        found.is_none() && seen < MARKER_HEAD
+    })?;
+    Ok(found.map(|v| {
+        let mut named = Vec::new();
+        if let Some(id) = v.get("previous_log_id").and_then(Value::as_str) {
+            named.push(format!("previous log_id {id}"));
+        }
+        if let Some(hw) = v.get("previous_high_water") {
+            let counter = hw.get("counter").and_then(Value::as_u64).unwrap_or(0);
+            let hash = hw.get("entry_hash").and_then(Value::as_str).unwrap_or("");
+            named.push(format!(
+                "previous high-water mark at counter {counter} ({hash})"
+            ));
+        }
+        format!(
+            "{} starts a new log after its predecessor went missing: {}",
+            path.display(),
+            named.join(", ")
+        )
+    }))
 }
 
 /// The fields of the record that names a fresh id.

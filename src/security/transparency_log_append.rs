@@ -8,6 +8,7 @@ use std::path::Path;
 
 use serde_json::{Map, Value};
 
+use super::identity::LogId;
 use super::rotation::{
     EV_EXPIRED, EV_SEALED, FileId, MAX_RECORD_BYTES, OversizedRecord, file_id, housekeeping,
     now_secs, open_after_seal, path_id, record_head, recover, seal_of, write_mark,
@@ -124,16 +125,35 @@ impl Subscribers {
         }
     }
 
-    /// `check` names what found the rewrite, for the operator.
-    fn raise_generation(&self, check: &'static str) {
-        let now = self
-            .generation
-            .fetch_add(1, std::sync::atomic::Ordering::AcqRel)
-            + 1;
+    /// Raise the generation for `check`; the new generation.
+    fn bump(&self, check: &'static str) -> u64 {
         #[cfg(test)]
         if let Ok(mut raised) = self.raised.lock() {
             raised.push(check);
         }
+        #[cfg(not(test))]
+        let _ = check;
+        self.generation
+            .fetch_add(1, std::sync::atomic::Ordering::AcqRel)
+            + 1
+    }
+
+    /// A rebuild found another log, by id, where this writer's log was. Both
+    /// ids are named: a silent identity change would hide a replaced log.
+    fn raise_identity_change(&self, previous: &LogId, new: &LogId) {
+        let now = self.bump("log_id");
+        tracing::warn!(
+            check = "log_id",
+            generation = now,
+            previous_log_id = %previous,
+            log_id = %new,
+            "audit log: the log this writer extends was replaced by another log"
+        );
+    }
+
+    /// `check` names what found the rewrite, for the operator.
+    fn raise_generation(&self, check: &'static str) {
+        let now = self.bump(check);
         tracing::warn!(
             check,
             generation = now,
@@ -299,7 +319,7 @@ impl TransparencyLogger {
     /// writer rotated, finish a half-done rotation, or continue the counter
     /// past a deleted active file (2.8, 2.13).
     fn rebuild(&self, inner: &mut Inner, path: &Path, g: &ExclusiveFileLock) -> io::Result<()> {
-        let (r, log_id) = recover(path, &self.config, g, self.now())?;
+        let (r, log_id) = recover(path, &self.config, g, self.now(), Some(&inner.log_id))?;
         // A finding this writer already holds is never forgotten (#2294).
         let known = inner.seg.hwm_missing_at;
         // A tail that is not this writer's last record: the log it extends
@@ -308,7 +328,8 @@ impl TransparencyLogger {
         // Another log in its place (another id) is raised as an identity
         // change, once, in place of the moved tail it also is.
         if log_id != inner.log_id {
-            self.subscribers.raise_generation("log_id");
+            self.subscribers
+                .raise_identity_change(&inner.log_id, &log_id);
         } else if r.counter != inner.counter || r.last_entry_hash != inner.last_entry_hash {
             self.subscribers.raise_generation("tail");
         }
