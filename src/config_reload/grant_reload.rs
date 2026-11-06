@@ -33,6 +33,8 @@ pub struct IdentityGrantSink {
     pub(super) auditor: Option<Arc<GrantAuditor>>,
     /// Throttles an unchanged grants read error: retries re-read the file.
     read_errors: parking_lot::Mutex<env_poll::WarnLimiter>,
+    /// The key each published store is keyed under; `None` leaves it unkeyed.
+    rule_key: Option<crate::security::rule_id::RuleKey>,
 }
 
 impl IdentityGrantSink {
@@ -50,7 +52,15 @@ impl IdentityGrantSink {
             lock: tokio::sync::Mutex::new(()),
             auditor: None,
             read_errors: parking_lot::Mutex::new(env_poll::WarnLimiter::default()),
+            rule_key: None,
         }
+    }
+
+    /// Key every store this sink publishes under `key`.
+    #[must_use]
+    pub(crate) fn with_rule_key(mut self, key: Option<crate::security::rule_id::RuleKey>) -> Self {
+        self.rule_key = key;
+        self
     }
 
     /// Record every reload's grant changes through `auditor` (MIK-7570.AUDIT.4).
@@ -191,8 +201,12 @@ impl ReloadContext {
 
         let subjects = changed_grant_subjects(&outgoing, &incoming_rows);
         let delta = grant_delta::grant_delta(&outgoing, &incoming_rows);
-        // red-first skeleton: the sink does not carry the key yet.
-        crate::gateway::publish_identity_grants(&sink.store, &sink.epoch, incoming, None);
+        crate::gateway::publish_identity_grants(
+            &sink.store,
+            &sink.epoch,
+            incoming,
+            sink.rule_key.as_ref(),
+        );
         self.live_config.set_grants(Some(&bytes));
         drop(bytes);
 
