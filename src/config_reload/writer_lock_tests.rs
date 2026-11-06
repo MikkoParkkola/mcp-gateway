@@ -314,7 +314,8 @@ async fn a_writer_waits_for_a_whole_config_reload_to_publish() {
     a_contender_waits_out_the_reload(&path, &lock, pause, a).await;
 }
 
-/// MIK-8120 (`MIK-WRITE-CANCEL.1`): the web UI's write is dropped after it
+/// MIK-8120 (`MIK-WRITE-CANCEL.1`): the web UI's write (the byte writer)
+/// is dropped after it
 /// wrote `gateway.yaml` and before its reload published (the client went
 /// away, and the listener cancels a disconnected request's handler). The
 /// reload must still publish: the running gateway ends up on the file's
@@ -325,9 +326,20 @@ async fn a_dropped_write_still_publishes_its_reload() {
     let (_dir, path, _lock) = config();
     let ctx = gateway(&path);
     let pause = super::reload_pause::arm(&path);
-    let (a_ctx, a_path) = (Arc::clone(&ctx), path.clone());
+    let a_ctx = Arc::clone(&ctx);
+    let add_b_bytes = super::reload_context::replace::Replace {
+        expected: super::reload_context::replace::Expected::Any,
+        compute: Box::new(|bytes: &[u8]| {
+            let text = std::str::from_utf8(bytes).map_err(|e| e.to_string())?;
+            crate::config_persistence::edit_text(text, |c| add_b(c).map_err(|_| "add b"))
+                .map(|t| crate::config_persistence::keyedit::Template::plain(t.into_bytes()))
+                .map_err(str::to_owned)
+        }),
+        replaced: super::reload_context::replace::Replaced::Discard,
+        secrets: None,
+    };
     let a = tokio::spawn(async move {
-        mutate_config_and_reload_detached(a_path, Some(a_ctx), CommentLoss::Refuse, add_b)
+        super::reload_context::replace::replace_detached(a_ctx, add_b_bytes, Duration::from_secs(5))
             .await
             .is_ok()
     });
