@@ -396,3 +396,74 @@ async fn a_fifth_read_waits_until_one_of_four_finishes() {
         h.await.unwrap();
     }
 }
+
+/// Fail-fast for the shared-permit flake: another runtime holds every read
+/// permit for a short real-time while; a paused-clock runtime waiting for a
+/// read inside a 20 s bound must not have its clock jumped past the bound.
+#[test]
+fn a_paused_wait_for_a_read_permit_is_not_timed_out_by_another_runtimes_hold() {
+    use axum::response::IntoResponse;
+    use std::sync::mpsc;
+    let (held_tx, held_rx) = mpsc::channel::<()>();
+    let holder = std::thread::spawn(move || {
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        rt.block_on(async move {
+            let started = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let mut held = Vec::new();
+            for _ in 0..super::MAX_CONCURRENT_READS {
+                let started = std::sync::Arc::clone(&started);
+                held.push(tokio::spawn(super::blocking(move || {
+                    started.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    std::thread::sleep(std::time::Duration::from_millis(300));
+                    StatusCode::OK.into_response()
+                })));
+            }
+            while started.load(std::sync::atomic::Ordering::SeqCst) < super::MAX_CONCURRENT_READS {
+                tokio::task::yield_now().await;
+            }
+            held_tx.send(()).unwrap();
+            for h in held {
+                h.await.unwrap();
+            }
+        });
+    });
+    held_rx.recv().unwrap();
+    let rt = tokio::runtime::Builder::new_current_thread().enable_all().start_paused(true).build().unwrap();
+    let waited = rt.block_on(async {
+        tokio::time::timeout(
+            std::time::Duration::from_secs(20),
+            super::blocking(|| StatusCode::OK.into_response()),
+        )
+        .await
+    });
+    holder.join().unwrap();
+    assert!(waited.is_ok(), "the paused clock jumped past its 20 s bound while another runtime held the permits");
+}
+
+/// A read whose caller stops waiting keeps its permit until the read itself
+/// finishes, so cancelled requests cannot run more reads than the limit.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_cancelled_read_keeps_its_permit_until_the_read_ends() {
+    use axum::response::IntoResponse;
+    use std::sync::mpsc;
+    let before = super::READS.available_permits();
+    let (entered_tx, entered_rx) = mpsc::channel::<()>();
+    let (release_tx, release_rx) = mpsc::channel::<()>();
+    let (done_tx, done_rx) = mpsc::channel::<()>();
+    let caller = tokio::spawn(super::blocking(move || {
+        entered_tx.send(()).unwrap();
+        let _ = release_rx.recv();
+        let _ = done_tx.send(());
+        StatusCode::OK.into_response()
+    }));
+    tokio::task::spawn_blocking(move || entered_rx.recv().unwrap()).await.unwrap();
+    caller.abort();
+    let _ = caller.await;
+    assert_eq!(
+        super::READS.available_permits(),
+        before - 1,
+        "the cancelled caller's read is still running, so its permit stays taken"
+    );
+    release_tx.send(()).unwrap();
+    tokio::task::spawn_blocking(move || done_rx.recv().unwrap()).await.unwrap();
+}
