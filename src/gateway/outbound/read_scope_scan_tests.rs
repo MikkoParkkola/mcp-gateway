@@ -225,8 +225,10 @@ impl<'ast> syn::visit::Visit<'ast> for Inside {
     fn visit_macro(&mut self, _: &'ast syn::Macro) {
         self.macros += 1;
     }
-    fn visit_item(&mut self, _: &'ast syn::Item) {
+    fn visit_item(&mut self, item: &'ast syn::Item) {
         self.items += 1;
+        // Into it too: a macro in a nested item is still a macro.
+        syn::visit::visit_item(self, item);
     }
 }
 
@@ -296,6 +298,7 @@ fn entries(file: &syn::File, found: &mut Entries) {
                 syn::visit::Visit::visit_item_const(&mut inside, c);
                 (!doc_only(&c.attrs)
                     || inside.macros > 0
+                    || inside.items > 0
                     || !matches!(*c.expr, syn::Expr::Lit(_) | syn::Expr::Path(_))
                     || (!matches!(c.vis, syn::Visibility::Inherited)
                         && !plain_value(&c.ty, &found.taken)))
@@ -527,6 +530,7 @@ fn the_gate_check_refuses_each_ungated_shape() {
         pub(crate) const SNEAK: usize = unchecked;
         fn helper(_: ty!()) {}
         const WIDE: [u8; len!()] = BYTES;
+        const NESTED: [u8; { const N: usize = len!(); N }] = BYTES;
     ",
     )
     .expect("the fixture parses");
@@ -538,9 +542,32 @@ fn the_gate_check_refuses_each_ungated_shape() {
     found.unsupported.sort();
     assert_eq!(
         found.unsupported,
-        ["a macro in helper", "const SNEAK", "const WIDE"],
+        [
+            "a macro in helper",
+            "const NESTED",
+            "const SNEAK",
+            "const WIDE"
+        ],
         "a primitive name the file imports is not plain; a macro outside a body is still a macro"
     );
+    for (source, want) in [
+        (
+            "use crate::elsewhere::Other as str; pub(crate) const S: &str = T;",
+            "const S",
+        ),
+        (
+            "use crate::elsewhere::*; pub(crate) const G: u8 = ONE;",
+            "const G",
+        ),
+    ] {
+        let file = syn::parse_file(source).expect("the fixture parses");
+        let mut found = Entries {
+            taken: taken_names(&file.items),
+            ..Entries::default()
+        };
+        entries(&file, &mut found);
+        assert_eq!(found.unsupported, [want], "{source}");
+    }
 }
 
 /// Whether `expr` is the plain path `segs`, every segment unrawed.
@@ -799,6 +826,26 @@ fn the_judges_check_refuses_each_other_shape() {
             "guard_type",
             "guard: Option<&Guard>",
             "guard: Option<&Custom>",
+        ),
+        (
+            "guard_owned",
+            "guard: Option<&Guard>",
+            "guard: Option<Guard>",
+        ),
+        (
+            "guard_mut",
+            "guard: Option<&Guard>",
+            "guard: Option<&mut Guard>",
+        ),
+        (
+            "guard_lifetime",
+            "guard: Option<&Guard>",
+            "guard: Option<&'static Guard>",
+        ),
+        (
+            "guard_path",
+            "guard: Option<&Guard>",
+            "guard: std::option::Option<&Guard>",
         ),
     ] {
         assert_eq!(
