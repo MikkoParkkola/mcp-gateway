@@ -67,7 +67,7 @@ async fn agent_auth_without_identity_admits_no_backend() {
     }
     let scope = crate::gateway::meta_mcp::InvokeScope {
         authorizer: &authorizer,
-        is_admin: false,
+        admin: crate::gateway::authz::AdminStanding::None,
         api_key_name: None,
         grant_key: None,
         agent_id: None,

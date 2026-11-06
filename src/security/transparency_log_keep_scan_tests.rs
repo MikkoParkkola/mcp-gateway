@@ -59,7 +59,6 @@ const PENDING: &[&str] = &[
     "src/gateway/router/collusion_direct_tests/meta.rs",
     "src/gateway/router/collusion_direct_tests/verdict.rs",
     "src/gateway/router/direct_anonymous_continuation_tests.rs",
-    "src/gateway/router/direct_effect_absent_tests.rs",
     "src/gateway/router/direct_guards_fixture_quota.rs",
     "src/gateway/router/direct_lent_arms_tests.rs",
     "src/gateway/router/direct_list_scope_tests.rs",

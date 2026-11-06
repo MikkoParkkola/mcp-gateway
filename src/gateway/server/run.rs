@@ -484,6 +484,10 @@ impl Gateway {
             transparency_log,
             governance_log,
             dashboard_bootstrap,
+            // One ProcessFacts, so one Activity read pool, per Gateway::run: its
+            // slots bound every read this gateway runs. A second listener shares
+            // this state (or this ProcessFacts); building another would double the
+            // bound. An embedder that calls run twice gets two pools.
             process: Arc::new(ProcessFacts::new(started, counters.upgrade.clone())),
         });
         // The live stream's two feeds, attached once per process.

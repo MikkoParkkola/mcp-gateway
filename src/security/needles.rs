@@ -19,8 +19,14 @@ use serde_json::Value;
 use crate::protocol::{JsonRpcMessage, JsonRpcResponse};
 use crate::security::secret_redaction::Compiled;
 
-/// The most values one backend name may hold inside their grace. Past it
-/// every frame from that backend is refused rather than a value dropped.
+#[path = "needles_configured.rs"]
+mod configured;
+pub(crate) use configured::{holds, scrub_stored, scrub_stored_text, scrub_stored_value};
+
+/// The most sent values one backend name may hold inside their grace. Past
+/// it every frame from that backend is refused rather than a value dropped.
+/// Its configured values come on top, at most
+/// [`MAX_CONFIGURED`](crate::config::configured_secrets::MAX_CONFIGURED) of them.
 pub(crate) const MAX_NEEDLES: usize = 1024;
 
 /// What the refusal says when the set is full.
@@ -62,6 +68,18 @@ struct Held {
     /// [`percent_forms`]): what a backend quoting it inside a URL sends back.
     encoded: Vec<String>,
     last_sent: tokio::time::Instant,
+    lifetime: Lifetime,
+}
+
+/// How long a held value stays in the set.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Lifetime {
+    /// Until `grace` after its last send: a value a call injected.
+    Grace,
+    /// For as long as the backend's config holds it: a `headers:` or `env:`
+    /// credential is on every request or in the child's environment, so it
+    /// has no last send to count from.
+    Configured,
 }
 
 /// One backend name's injected values. Never printed: `Debug` names the count.
@@ -69,6 +87,9 @@ pub(crate) struct NeedleSet {
     values: RwLock<Vec<Held>>,
     grace: Duration,
     overflowed: AtomicBool,
+    /// When the last sent value refused at the bound leaves its grace: held
+    /// nowhere, it keeps the set refusing until then, room or not.
+    refuse_until: parking_lot::Mutex<Option<tokio::time::Instant>>,
     /// Rules already warned about a short value (ECHO.6), by name.
     short_warned: parking_lot::Mutex<std::collections::HashSet<String>>,
     /// Bumped whenever `values` gains or loses a value.
@@ -109,6 +130,7 @@ impl NeedleSet {
             values: RwLock::new(Vec::new()),
             grace,
             overflowed: AtomicBool::new(false),
+            refuse_until: parking_lot::Mutex::new(None),
             short_warned: parking_lot::Mutex::default(),
             version: std::sync::atomic::AtomicU64::new(0),
             compiled: RwLock::new(None),
@@ -116,7 +138,8 @@ impl NeedleSet {
     }
 
     fn retired(&self, held: &Held, now: tokio::time::Instant) -> bool {
-        now.saturating_duration_since(held.last_sent) > self.grace
+        held.lifetime == Lifetime::Grace
+            && now.saturating_duration_since(held.last_sent) > self.grace
     }
 
     /// Adds `value`, or renews its last send (empty values are never
@@ -140,39 +163,77 @@ impl NeedleSet {
             }
             return;
         }
+        let overflowed = self.admit(&mut values, value, Lifetime::Grace, now);
+        drop(values);
+        if overflowed {
+            self.warn_overflowed(backend);
+        }
+    }
+
+    /// Pushes a value not yet held, after [`Self::settle`]. A configured
+    /// value is always taken: the bound caps the values a backend's sends
+    /// rotate through, and configured ones are few and capped at load. Past
+    /// the bound a sent value is refused and the set fails closed, keeping
+    /// every value it holds. Whether this refusal is the first since the set
+    /// last had room: the caller warns once its guard is dropped, never
+    /// while holding it.
+    #[must_use]
+    fn admit(
+        &self,
+        values: &mut Vec<Held>,
+        value: &str,
+        lifetime: Lifetime,
+        now: tokio::time::Instant,
+    ) -> bool {
+        self.settle(values, now);
+        if lifetime == Lifetime::Grace && sent_count(values) >= MAX_NEEDLES {
+            *self.refuse_until.lock() = Some(now + self.grace);
+            return !self.overflowed.swap(true, Ordering::SeqCst);
+        }
+        values.push(Held {
+            value: value.to_owned(),
+            encoded: percent_forms(value),
+            last_sent: now,
+            lifetime,
+        });
+        self.version.fetch_add(1, Ordering::SeqCst);
+        false
+    }
+
+    /// Drops retired values and lifts the refusal once the sent values have
+    /// room again and the last refused value's grace has passed (as
+    /// [`Self::retired`] counts it). Whether the set still refuses.
+    fn settle(&self, values: &mut Vec<Held>, now: tokio::time::Instant) -> bool {
         let before = values.len();
         values.retain(|held| !self.retired(held, now));
         if values.len() != before {
             self.version.fetch_add(1, Ordering::SeqCst);
         }
-        if values.len() >= MAX_NEEDLES {
-            let first = !self.overflowed.swap(true, Ordering::SeqCst);
-            // Logged once the set's write guard is released.
-            drop(values);
-            if first {
-                tracing::warn!(
-                    backend,
-                    bound = MAX_NEEDLES,
-                    grace_secs = self.grace.as_secs(),
-                    "secret values rotating faster than the redaction grace allows; this \
-                     backend's answers are withheld"
-                );
-            }
-            return;
+        let mut refuse_until = self.refuse_until.lock();
+        if refuse_until.is_some_and(|until| now > until) {
+            *refuse_until = None;
         }
-        // Room again after retirement: answers flow once more.
-        self.overflowed.store(false, Ordering::SeqCst);
-        values.push(Held {
-            value: value.to_owned(),
-            encoded: percent_forms(value),
-            last_sent: now,
-        });
-        self.version.fetch_add(1, Ordering::SeqCst);
+        if sent_count(values) < MAX_NEEDLES && refuse_until.is_none() {
+            self.overflowed.store(false, Ordering::SeqCst);
+        }
+        self.overflowed.load(Ordering::SeqCst)
     }
 
-    /// Warns once per rule when a value it sent is shorter than
-    /// [`SHORT_VALUE_BYTES`]; names the backend and the rule, never the value.
-    /// Called on a send only, so loading or seeding never warns.
+    /// The one warning a set that has just filled up gives.
+    fn warn_overflowed(&self, backend: &str) {
+        tracing::warn!(
+            backend,
+            bound = MAX_NEEDLES,
+            grace_secs = self.grace.as_secs(),
+            "secret values rotating faster than the redaction grace allows; this backend's \
+             answers are withheld"
+        );
+    }
+
+    /// Warns once per rule (or configured field) when its value is shorter
+    /// than [`SHORT_VALUE_BYTES`]; names the backend and the rule, never the
+    /// value. Called on a send, and for a configured value when it is pinned;
+    /// a `secrets:` rule is never warned about at load.
     pub(crate) fn warn_if_short(&self, backend: &str, rule: &str, value: &str) {
         if value.len() < SHORT_VALUE_BYTES && self.short_warned.lock().insert(rule.to_owned()) {
             tracing::warn!(
@@ -186,8 +247,14 @@ impl NeedleSet {
     }
 
     /// Whether the set refused a value: every frame is then withheld.
+    /// A set past its bound is settled first, so one that no send reaches
+    /// any more (a removed backend's) recovers once its values retire.
     pub(crate) fn overflowed(&self) -> bool {
-        self.overflowed.load(Ordering::SeqCst)
+        if !self.overflowed.load(Ordering::SeqCst) {
+            return false;
+        }
+        let mut values = self.values.write();
+        self.settle(&mut values, tokio::time::Instant::now())
     }
 
     /// The values still inside their grace. A retired value is not removed
@@ -211,7 +278,11 @@ impl NeedleSet {
             .flat_map(|held| std::iter::once(&held.value).chain(&held.encoded))
             .cloned()
             .collect();
-        let valid_until = live.iter().map(|held| held.last_sent + self.grace).min();
+        let valid_until = live
+            .iter()
+            .filter(|held| held.lifetime == Lifetime::Grace)
+            .map(|held| held.last_sent + self.grace)
+            .min();
         drop(values);
         let compiled = std::sync::Arc::new(Compiled::new(&secrets));
         // Stored only if no insert or retirement moved the version while this
@@ -233,6 +304,14 @@ impl NeedleSet {
 /// encoding (space as `%20`, every byte but `A-Za-z0-9-._~` escaped), each
 /// with uppercase and with lowercase hex. Mixed-case hex within one value,
 /// double encoding and base64 are not matched (register row 318).
+/// The values counted against [`MAX_NEEDLES`]: every one but the configured.
+fn sent_count(values: &[Held]) -> usize {
+    values
+        .iter()
+        .filter(|held| held.lifetime != Lifetime::Configured)
+        .count()
+}
+
 fn percent_forms(value: &str) -> Vec<String> {
     const HEX_UPPER: &[u8; 16] = b"0123456789ABCDEF";
     let form: String = url::form_urlencoded::byte_serialize(value.as_bytes()).collect();
@@ -629,6 +708,9 @@ fn refusal_message(needles: &NeedleSet) -> &'static str {
 /// The fixed refusal's text for an answer that held an injected value.
 const ECHO_REFUSAL: &str = "the backend's answer contained a credential the gateway injected";
 
+#[cfg(test)]
+#[path = "needles_configured_tests.rs"]
+mod configured_tests;
 #[cfg(test)]
 #[path = "needles_tests.rs"]
 mod tests;

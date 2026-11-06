@@ -201,13 +201,20 @@ impl ProtocolExecutor for GraphqlExecutor<'_> {
                 "GraphQL endpoint URL not configured".to_string(),
             ));
         }
-        validate_url_not_ssrf(&graphql_config.endpoint)?;
-        crate::security::ssrf::refuse_loopback_name(&graphql_config.endpoint)?;
+        validate_url_not_ssrf(&graphql_config.endpoint).inspect_err(|e| {
+            // A malformed URL is a configuration error, not a refusal.
+            if crate::security::ssrf::is_ssrf_refusal(e) {
+                crate::gateway::delivery_facts::refused_while_vouched();
+            }
+        })?;
+        crate::security::ssrf::refuse_loopback_name(&graphql_config.endpoint)
+            .inspect_err(|_| crate::gateway::delivery_facts::refused_while_vouched())?;
         crate::capability::require_tls_for_auth(
             &graphql_config.endpoint,
             &ctx.capability.auth,
             graphql_config.headers.values().map(String::as_str),
-        )?;
+        )
+        .inspect_err(|_| crate::gateway::delivery_facts::refused_while_vouched())?;
 
         // Build the { query, variables } body
         let body = Self::build_body(graphql_config, &params)?;
@@ -518,3 +525,6 @@ mod tests {
 #[cfg(test)]
 #[path = "cleartext_tests.rs"]
 mod cleartext_tests;
+#[cfg(test)]
+#[path = "refusal_record_tests.rs"]
+mod refusal_record_tests;

@@ -299,7 +299,7 @@ fn intent(state: &Arc<AppState>, key: &str, arguments: &Value) -> TaskIntent {
             crate::gateway::record_principal::RecordPrincipal::none(),
             crate::gateway::meta_mcp::Authentication::Anonymous,
             crate::security::audit::CredentialKind::None,
-            false,
+            crate::gateway::authz::AdminStanding::None,
             Declared::NONE,
             None,
             None,

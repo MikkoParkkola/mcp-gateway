@@ -56,6 +56,33 @@ pub(in crate::gateway) enum Unscoped {
 pub(in crate::gateway) struct Registry(Arc<BackendRegistry>);
 
 impl Registry {
+    /// Scrubs a stored answer on its way out against every value set the
+    /// registry retains; reads no backend, so it needs no scope.
+    pub(in crate::gateway) fn scrub_stored(
+        &self,
+        response: &mut crate::protocol::JsonRpcResponse,
+    ) -> crate::security::needles::Scrubbed {
+        self.0.scrub_stored(response)
+    }
+
+    /// [`Self::scrub_stored`] for a stored tool result held as a bare value;
+    /// an `Err` is the refusal to deliver instead.
+    pub(in crate::gateway) fn scrub_stored_value(
+        &self,
+        value: &mut serde_json::Value,
+    ) -> crate::Result<crate::security::needles::Scrubbed> {
+        self.0.scrub_stored_value(value)
+    }
+
+    /// [`Self::scrub_stored`] for a stored error's message text; an `Err` is
+    /// the refusal to deliver instead.
+    pub(in crate::gateway) fn scrub_stored_text(
+        &self,
+        text: &mut String,
+    ) -> crate::Result<crate::security::needles::Scrubbed> {
+        self.0.scrub_stored_text(text)
+    }
+
     pub(in crate::gateway) fn new(inner: Arc<BackendRegistry>) -> Self {
         Self(inner)
     }

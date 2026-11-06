@@ -1,0 +1,1 @@
+src/gateway/router/authorization.rs	of	1	critical	a	CallerStanding::of	Decides a caller's administrative standing from its admin standing: only a gateway-wide admin holds the admin meta-tools, so a backend-scoped admin is listed and called as a standard caller

@@ -579,3 +579,41 @@ fn a_rotated_key_keeps_its_standing_under_its_explicit_principal() {
             .is_none()
     );
 }
+
+/// Operator events are gateway-wide: an admin key scoped to some backends
+/// holds no standing for them, an admin key with `*` or no backends does.
+#[tokio::test]
+async fn a_backend_scoped_admin_key_holds_no_operator_standing() {
+    let on = |name: &str, secret: &str, backends: &[&str]| ApiKeyConfig {
+        backends: backends.iter().map(|b| (*b).to_owned()).collect(),
+        ..key(name, secret, true)
+    };
+    let dir = tempfile::tempdir().expect("dir");
+    let (hub, _live) = hub(
+        dir.path(),
+        vec![
+            on("all", "s-all", &["*"]),
+            on("none", "s-none", &[]),
+            on("alpha", "s-alpha", &["alpha"]),
+        ],
+    );
+    let source = source(&hub);
+    let none = json!({});
+    let mut wrong = Vec::new();
+    for (who, secret, want) in [
+        ("admin key, *", "s-all", true),
+        ("admin key, []", "s-none", true),
+        ("admin key, [alpha]", "s-alpha", false),
+    ] {
+        for name in [HEALTH_CHANGED, KILL_SWITCH_CHANGED] {
+            let got = source
+                .authorize(&principal(secret), name, &none)
+                .await
+                .is_ok();
+            if got != want {
+                wrong.push(format!("{who} {name}: admitted {got}, want {want}"));
+            }
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}

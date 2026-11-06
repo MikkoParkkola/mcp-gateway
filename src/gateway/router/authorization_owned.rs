@@ -63,20 +63,37 @@ impl OwnedRouterAuthorizer {
     /// K15: this captured caller as `keys` now holds it, for queued or
     /// continued work about to dispatch. An API-key caller is rebuilt from its
     /// key's current entry, so a narrowed scope applies; `Err` when the key
-    /// is gone, expired, re-issued (another digest) or no longer admin as it
-    /// was at admission, or `at` is `None` (a wall clock that cannot be
-    /// read cannot date the key: fail closed). `Ok(None)`: not an API-key
-    /// caller, nothing to redo.
+    /// is gone, expired, re-issued (another digest) or below the admin
+    /// standing it had at admission, or `at` is `None` (a wall clock that
+    /// cannot be read cannot date the key: fail closed).
+    ///
+    /// A key-server or OIDC caller holds admin by `mapping`, not by a key
+    /// entry: its standing is recomputed from its verified `identity` under
+    /// the current mapping, and any step down ends the work.
+    /// `Ok(None)`: nothing to redo, the captured caller stands.
     pub(crate) fn rejudged(
         &self,
         keys: &crate::gateway::auth::ResolvedAuthConfig,
+        identity: Option<&crate::key_server::oidc::VerifiedIdentity>,
+        mapping: &crate::control_plane::role_mapping::ControlPlaneRoleMappingConfig,
         at: Option<chrono::DateTime<chrono::Utc>>,
     ) -> Result<Option<Self>, KeyGone> {
         let Some(client) = &self.client else {
             return Ok(None);
         };
         let Some(name) = client.api_key_identity() else {
-            return Ok(None);
+            let Some(identity) = identity else {
+                return Ok(None);
+            };
+            let fresh = crate::gateway::authz::admin_standing(
+                mapping.grants_admin(identity),
+                &client.backends,
+            );
+            return if fresh < client.admin_standing() {
+                Err(KeyGone)
+            } else {
+                Ok(None)
+            };
         };
         // The same credential, not only the same name and principal: a key
         // re-issued under an explicit principal keeps both, and its old
@@ -88,7 +105,9 @@ impl OwnedRouterAuthorizer {
             .and_then(|at| {
                 keys.client_for_key_at(name, client.principal.storage_form(), binding, at)
             })
-            .filter(|fresh| fresh.admin || !client.admin)
+            // Standing only ever falls on a running task: any step down
+            // Gateway > InScope > None ends it.
+            .filter(|fresh| fresh.admin_standing() >= client.admin_standing())
             .ok_or(KeyGone)?;
         Ok(Some(Self {
             client: Some(fresh),

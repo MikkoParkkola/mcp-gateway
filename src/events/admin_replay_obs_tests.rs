@@ -92,7 +92,7 @@ fn grant(f: &Fixture, shared: bool) -> String {
             .expect("observes")
             .expect("per-user");
         row.obs_basis = Some(basis);
-        row.observed_identity = Some(person());
+        row.observed_identity = Some(crate::events::records::StoredIdentity::from(&person()));
     }
     f.hub
         .store

@@ -35,10 +35,16 @@ def evaluate(expr: str, ctx: dict) -> bool:
     def lookup(path: str):
         cur = ctx
         for part in path.split("."):
-            cur = cur.get(part) if isinstance(cur, dict) else None
+            if part == "*":
+                # An object filter: every element of a list (or value of an object).
+                cur = list(cur.values()) if isinstance(cur, dict) else cur if isinstance(cur, list) else []
+            elif isinstance(cur, list):
+                cur = [item.get(part) for item in cur if isinstance(item, dict)]
+            else:
+                cur = cur.get(part) if isinstance(cur, dict) else None
         return cur
 
-    tokens = re.findall(r"startsWith|contains|\(|\)|,|&&|\|\||==|!=|!|'[^']*'|[A-Za-z_][\w.\-]*", expr)
+    tokens = re.findall(r"startsWith|contains|\(|\)|,|&&|\|\||==|!=|!|'[^']*'|[A-Za-z_][\w.\-*]*", expr)
     status = ctx.get("_status", {})
     pos = 0
 
@@ -71,6 +77,10 @@ def evaluate(expr: str, ctx: dict) -> bool:
             assert take() == ","
             b = disj()
             assert take() == ")"
+            # GitHub: an array holds the item when one element equals it,
+            # strings compared case-insensitively; a string holds a substring.
+            if isinstance(a, list):
+                return any(str(x).lower() == str(b).lower() for x in a)
             return str(b).lower() in str(a or "").lower()
         if t in ("cancelled", "always", "success", "failure") and peek() == "(":
             take()

@@ -545,6 +545,18 @@ impl EventsHub {
             })
             .await;
         if removed == Some(true) {
+            // Only on an actual removal, so a kept row or one a concurrent
+            // run already removed is not announced.
+            if refused
+                .observed_identity
+                .as_ref()
+                .is_some_and(|stored| stored.verified().is_none())
+            {
+                tracing::warn!(
+                    subscription = %self.handle(&refused.id).unwrap_or_default(),
+                    "events: stored observed identity names nobody; the row is revoked"
+                );
+            }
             tracing::info!("events: subscription revoked, access no longer granted");
             self.reconcile_stops().await;
         }

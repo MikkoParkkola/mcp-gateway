@@ -130,7 +130,10 @@ async fn meta_mcp_dispatch(
     };
     let invoke_scope = InvokeScope {
         authorizer: &router_authorizer,
-        is_admin: client.as_ref().is_some_and(|c| c.admin),
+        admin: client.as_ref().map_or(
+            crate::gateway::authz::AdminStanding::None,
+            crate::gateway::auth::AuthenticatedClient::admin_standing,
+        ),
         api_key_name: client.as_ref().map(|c| c.name.as_str()),
         grant_key: client
             .as_ref()
@@ -231,7 +234,10 @@ async fn meta_mcp_dispatch(
                     agent_declared: None,
                     grant_subject: grant_subject.clone(),
                     verified_identity: verified_identity.as_ref(),
-                    is_admin: client.as_ref().is_some_and(|client| client.admin),
+                    admin: client.as_ref().map_or(
+                        crate::gateway::authz::AdminStanding::None,
+                        crate::gateway::auth::AuthenticatedClient::admin_standing,
+                    ),
                     input_capabilities: declared_capabilities,
                     session_id: Some(session_id.as_str()),
                 };
@@ -582,7 +588,10 @@ async fn meta_mcp_dispatch(
                 agent_declared: agent_identity.declared_agent_label(),
                 grant_subject: grant_subject.clone(),
                 verified_identity: verified_identity.as_ref(),
-                is_admin: client.as_ref().is_some_and(|client| client.admin),
+                admin: client.as_ref().map_or(
+                    crate::gateway::authz::AdminStanding::None,
+                    crate::gateway::auth::AuthenticatedClient::admin_standing,
+                ),
                 input_capabilities: declared_capabilities,
                 session_id: Some(session_id.as_str()),
             };
