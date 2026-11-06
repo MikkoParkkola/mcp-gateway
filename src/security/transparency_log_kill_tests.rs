@@ -63,6 +63,7 @@ fn child() {
     let at = match at.as_str() {
         "LoggerBuilt" => At::LoggerBuilt,
         "BeforeIdentified" => At::BeforeIdentified,
+        "BetweenIdentityRecords" => At::BetweenIdentityRecords,
         other => panic!("unknown boundary {other}"),
     };
     let dir = PathBuf::from(dir);
@@ -148,14 +149,14 @@ fn a_restart_after_the_active_file_was_deleted_names_the_surviving_mark() {
     // WHEN: a new process opens it (killed once its logger is built)
     killed_at(At::LoggerBuilt, dir.path());
 
-    // THEN: right after the identified record, the marker names the mark
+    // THEN: right before the identified record, the marker names the mark
     // that survived, and no previous id (the mark holds none)
     let head = lines(&path);
     let at = head
         .iter()
         .position(|v| event(v) == Some("audit_log_predecessor_missing"))
         .unwrap_or_else(|| panic!("no predecessor marker: {head:?}"));
-    assert_eq!(event(&head[at - 1]), Some(identity::EV_IDENTIFIED));
+    assert_eq!(event(&head[at + 1]), Some(identity::EV_IDENTIFIED));
     let marker = &head[at];
     assert!(marker.get("previous_log_id").is_none(), "{marker}");
     let hw = &marker["previous_high_water"];
@@ -199,4 +200,51 @@ fn a_kill_before_the_upgrade_records_its_id_is_finished_on_reopen() {
     let found = identified(&path);
     assert_eq!(found.len(), 1, "{found:?}");
     assert_eq!(found[0]["log_id"].as_str(), Some(id.as_str()));
+}
+
+#[test]
+fn a_kill_between_the_identity_records_keeps_the_marker() {
+    // GIVEN: a log with records, its writer gone, its active file deleted
+    // and its mark kept; a new process killed between the new genesis's two
+    // identity records
+    let dir = tempfile::tempdir().unwrap();
+    let path = kill_log(dir.path());
+    let first = TransparencyLogger::open(cfg(&path, 12, false)).unwrap();
+    append(&first, 0);
+    drop(first);
+    let mark = read_hwm(&path, b"", "test").unwrap();
+    std::fs::remove_file(&path).unwrap();
+    killed_at(At::BetweenIdentityRecords, dir.path());
+
+    // WHEN: the log is reopened twice
+    let id = TransparencyLogger::open(cfg(&path, 12, false))
+        .expect("the lease went with the child")
+        .log_id();
+    let again = TransparencyLogger::open(cfg(&path, 12, false)).unwrap();
+    assert_eq!(again.log_id(), id, "the id holds across reopens");
+
+    // THEN: exactly one marker, naming the surviving mark, then exactly one
+    // identified record naming the open record's id
+    let head = lines(&path);
+    let markers: Vec<usize> = (0..head.len())
+        .filter(|&i| event(&head[i]) == Some("audit_log_predecessor_missing"))
+        .collect();
+    assert_eq!(markers.len(), 1, "one marker: {head:?}");
+    let at = markers[0];
+    assert_eq!(
+        head[at]["previous_high_water"]["counter"].as_u64(),
+        Some(mark.counter)
+    );
+    assert_eq!(identified(&path).len(), 1, "one identified: {head:?}");
+    assert_eq!(event(&head[at + 1]), Some(identity::EV_IDENTIFIED));
+    assert_eq!(head[at + 1]["log_id"].as_str(), Some(id.as_str()));
+
+    // THEN: verify still reports the marker
+    let r = verify(&path, false);
+    let named = format!("counter {}", mark.counter);
+    assert!(
+        r.warnings.iter().any(|w| w.contains(&named)),
+        "{:?}",
+        r.warnings
+    );
 }

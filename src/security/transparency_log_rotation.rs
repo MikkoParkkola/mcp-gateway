@@ -315,6 +315,8 @@ pub(super) fn recover(
             && gone
             && let Some(fields) = identity::predecessor_fields(held, hw.as_ref())
         {
+            #[cfg(test)]
+            super::kill::point(super::kill::At::BetweenIdentityRecords);
             chain_onto(&mut state, config, fields)?;
         }
         write_mark(

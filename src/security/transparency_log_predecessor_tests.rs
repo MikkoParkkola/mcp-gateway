@@ -37,7 +37,7 @@ fn a_log_deleted_under_a_live_logger_names_its_predecessor() {
         let ((), warned) = capture_warnings(|| append(&l, 1));
 
         // THEN: the new genesis, as the mark-missing path leaves it, then the
-        // identified record and the marker naming the old id
+        // marker naming the old id and the identified record
         let head = lines(&path);
         let at = if keep_hwm {
             assert_eq!(
@@ -45,25 +45,25 @@ fn a_log_deleted_under_a_live_logger_names_its_predecessor() {
                 [
                     rotation::EV_OPENED,
                     rotation::EV_HWM_MISSING,
-                    identity::EV_IDENTIFIED,
                     PREDECESSOR,
+                    identity::EV_IDENTIFIED,
                     ""
                 ],
                 "{head:?}"
             );
             assert_eq!(head[0]["counter"].as_u64(), Some(mark.counter + 1));
             assert_eq!(head[0][rotation::HWM_MISSING_AT].as_u64(), Some(1));
-            3
+            2
         } else {
             let want = [
                 rotation::EV_OPENED,
-                identity::EV_IDENTIFIED,
                 PREDECESSOR,
+                identity::EV_IDENTIFIED,
                 "",
             ];
             assert_eq!(events(&head), want, "{head:?}");
             assert_eq!(head[0]["counter"].as_u64(), Some(1));
-            2
+            1
         };
         let marker = &head[at];
         assert_eq!(marker["previous_log_id"].as_str(), Some(old.as_str()));
@@ -78,7 +78,7 @@ fn a_log_deleted_under_a_live_logger_names_its_predecessor() {
         // THEN: the logger holds the new id, raised as an identity change
         let new = l.log_id();
         assert_ne!(new, old, "keep_hwm: {keep_hwm}");
-        assert_eq!(head[at - 1]["log_id"].as_str(), Some(new.as_str()));
+        assert_eq!(head[at + 1]["log_id"].as_str(), Some(new.as_str()));
         let raised = l.subscribers.raised();
         assert!(raised.contains(&"log_id"), "{raised:?}");
         assert!(!raised.contains(&"tail"), "{raised:?}");
