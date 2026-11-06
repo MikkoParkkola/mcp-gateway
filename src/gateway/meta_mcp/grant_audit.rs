@@ -50,6 +50,9 @@ const DECISION_KIND: &str = "identity_grant_decision";
 /// `sealed` once the answer's delivery record has flushed it ([`seal`]).
 struct Slot {
     notes: Mutex<Vec<GrantNote>>,
+    /// Withheld-call notes: written after the slot's work returns, on their
+    /// own task, warning only. Never part of the fail-closed flush.
+    best_effort: Mutex<Vec<GrantNote>>,
     answer_id: std::sync::OnceLock<RequestId>,
     logger: Arc<TransparencyLogger>,
     sealed: std::sync::atomic::AtomicBool,
@@ -290,25 +293,39 @@ struct SlotGuard {
 impl Drop for SlotGuard {
     fn drop(&mut self) {
         let pending = std::mem::take(&mut *self.slot.notes.lock().expect("grant slot lock"));
-        if !pending.is_empty() {
-            spawn_write(&self.logger, pending);
+        let best_effort =
+            std::mem::take(&mut *self.slot.best_effort.lock().expect("grant slot lock"));
+        if !pending.is_empty() || !best_effort.is_empty() {
+            spawn_write(&self.logger, pending, best_effort);
         }
     }
 }
 
-/// Write `notes` on a spawned task, bounded; never on the caller's thread.
-fn spawn_write(logger: &Arc<TransparencyLogger>, notes: Vec<GrantNote>) {
+/// Write `notes`, then `best_effort` notes, on one spawned task, bounded;
+/// never on the caller's thread. A failed best-effort write only warns.
+fn spawn_write(
+    logger: &Arc<TransparencyLogger>,
+    notes: Vec<GrantNote>,
+    best_effort: Vec<GrantNote>,
+) {
     let Ok(handle) = tokio::runtime::Handle::try_current() else {
         tracing::error!(
-            count = notes.len(),
+            count = notes.len() + best_effort.len(),
             "grant decision records lost: no runtime to write them"
         );
         return;
     };
     let logger = Arc::clone(logger);
     handle.spawn(async move {
-        if let Err(error) = write_records(&logger, &notes).await {
+        if !notes.is_empty()
+            && let Err(error) = write_records(&logger, &notes).await
+        {
             tracing::error!(%error, "grant decision records could not be written");
+        }
+        if !best_effort.is_empty()
+            && let Err(error) = write_records(&logger, &best_effort).await
+        {
+            tracing::warn!(%error, "{WITHHELD_RECORD_FAILED}");
         }
     });
 }
@@ -402,6 +419,7 @@ pub(super) async fn with_grant_slot<F: Future>(
     let guard = SlotGuard {
         slot: Arc::new(Slot {
             notes: Mutex::default(),
+            best_effort: Mutex::default(),
             answer_id: std::sync::OnceLock::new(),
             logger: Arc::clone(logger),
             sealed: std::sync::atomic::AtomicBool::new(false),
@@ -414,12 +432,22 @@ pub(super) async fn with_grant_slot<F: Future>(
     let output = GRANT_SLOT.scope(Arc::clone(&guard.slot), future).await;
     let notes = std::mem::take(&mut *guard.slot.notes.lock().expect("grant slot lock"));
     let answer_id = guard.slot.answer_id.get().cloned();
+    let best_effort =
+        std::mem::take(&mut *guard.slot.best_effort.lock().expect("grant slot lock"));
     // A slot that collected no decision has nothing to write, so no flush
     // task: every `/mcp` request opens a slot, and most decide nothing.
-    if notes.is_empty() {
-        return (output, Ok(()), answer_id);
+    let written = if notes.is_empty() {
+        Ok(())
+    } else {
+        write_owned(logger, notes).await
+    };
+    // After the awaited flush, so this task never takes the append permit
+    // ahead of it; behind the call's own invocation append, which ran inside
+    // the wrapped work.
+    if !best_effort.is_empty() {
+        spawn_write(logger, Vec::new(), best_effort);
     }
-    (output, write_owned(logger, notes).await, answer_id)
+    (output, written, answer_id)
 }
 
 /// Write `notes` and wait for the append. The batch is owned by its own
@@ -466,43 +494,33 @@ pub(super) const WITHHELD_RECORD_FAILED: &str = "The audit record of a withheld 
      the call is answered as a name that matches no tool";
 
 /// The `FailClosed` exception of MIK-8340 A5 item 9, for the withheld surfaced
-/// call's own grant record ONLY: run `noting`, then write the decisions it
-/// noted into the open slot at once and on their own task. Their write never
-/// becomes the request's verdict (under `FailClosed` the slot's end-of-request
-/// write would answer -32005 and reveal the name exists); a failed write logs
-/// [`WITHHELD_RECORD_FAILED`] from the writing task itself, so a caller
-/// cancelled while it waits cannot drop the warning. Every note added before
+/// call's own grant record ONLY: run `noting`, then move the decisions it
+/// noted out of the slot's fail-closed notes into its best-effort list and
+/// return at once. The slot opener writes that list after the wrapped work
+/// returns (so after the call's own invocation append), on its own task; a
+/// failed write logs [`WITHHELD_RECORD_FAILED`] and never becomes the
+/// request's verdict (under `FailClosed` it would answer -32005 and reveal the
+/// name exists). No caller waits for the write. Every note added before
 /// `noting` stays in the slot and fails closed as before. Outside a slot
-/// `noting` runs alone. Any other use is a new exception and needs its own
-/// design decision.
-pub(super) async fn note_withheld_best_effort<T>(server: &str, noting: impl FnOnce() -> T) -> T {
+/// `noting` runs alone and its note is written at once. Any other use is a
+/// new exception and needs its own design decision.
+pub(super) async fn note_withheld_best_effort<T>(_server: &str, noting: impl FnOnce() -> T) -> T {
     let before = GRANT_SLOT
         .try_with(|slot| slot.notes.lock().expect("grant slot lock").len())
         .ok();
     let output = noting();
-    let taken = before.and_then(|before| {
-        GRANT_SLOT
-            .try_with(|slot| {
-                let mut held = slot.notes.lock().expect("grant slot lock");
-                let at = before.min(held.len());
-                (Arc::clone(&slot.logger), held.split_off(at))
-            })
-            .ok()
+    let _ = before.map(|before| {
+        GRANT_SLOT.try_with(|slot| {
+            let mut held = slot.notes.lock().expect("grant slot lock");
+            let at = before.min(held.len());
+            let taken = held.split_off(at);
+            drop(held);
+            slot.best_effort
+                .lock()
+                .expect("grant slot lock")
+                .extend(taken);
+        })
     });
-    let Some((logger, notes)) = taken.filter(|(_, notes)| !notes.is_empty()) else {
-        return output;
-    };
-    let owned_server = server.to_owned();
-    // Owned by its own task, as `write_owned` is: a cancelled caller cannot
-    // drop records that were never submitted, nor the warning of their failure.
-    let writer = tokio::spawn(async move {
-        if let Err(error) = write_records(&logger, &notes).await {
-            tracing::warn!(server = %owned_server, %error, "{WITHHELD_RECORD_FAILED}");
-        }
-    });
-    if let Err(join) = writer.await {
-        tracing::warn!(server, error = %join, "{WITHHELD_RECORD_FAILED}");
-    }
     output
 }
 
@@ -550,7 +568,7 @@ pub(super) fn note_grant_decision(
         tool,
         "identity grant check outside a grant-decision slot; refused"
     );
-    spawn_write(logger, vec![note]);
+    spawn_write(logger, vec![note], Vec::new());
     Err(Error::AuditUnavailable)
 }
 
