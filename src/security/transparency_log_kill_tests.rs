@@ -236,8 +236,12 @@ fn a_kill_between_the_identity_records_keeps_the_marker() {
         Some(mark.counter)
     );
     assert_eq!(identified(&path).len(), 1, "one identified: {head:?}");
-    assert_eq!(event(&head[at + 1]), Some(identity::EV_IDENTIFIED));
-    assert_eq!(head[at + 1]["log_id"].as_str(), Some(id.as_str()));
+    // The reopen finds `.hwm` still at the lost log's counter, so the
+    // mark-missing path records that again before the repair's identified
+    // record.
+    assert_eq!(event(&head[at + 1]), Some(rotation::EV_HWM_MISSING));
+    assert_eq!(event(&head[at + 2]), Some(identity::EV_IDENTIFIED));
+    assert_eq!(head[at + 2]["log_id"].as_str(), Some(id.as_str()));
 
     // THEN: verify still reports the marker
     let r = verify(&path, false);
