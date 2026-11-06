@@ -562,9 +562,11 @@ pub(crate) fn validate_personal_capability_identity(
 mod tests {
     use super::*;
 
-    /// A URL names a host only when its host is present and not empty. url
-    /// 2.5.8 (see the comment on the `foo:///rpc` case after the first run)
-    /// decides what an empty authority on a non-special scheme parses to.
+    /// A URL names a host only when its host is present. A pin: url 2.5.8
+    /// parses `foo:///rpc` (a non-special scheme with an empty authority) with
+    /// no host (`host()` is `None`), so `host().is_some()` already treats an
+    /// empty authority as no host. A url release that returned an empty
+    /// domain there would turn this row red.
     #[test]
     fn only_a_named_host_counts_as_one() {
         for (url, named) in [
