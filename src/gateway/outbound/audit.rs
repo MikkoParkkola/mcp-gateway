@@ -187,6 +187,18 @@ impl RejectionAudit {
         true
     }
 
+    /// A barrier: returns once every audit task handed out so far has
+    /// finished, by taking back all `permits` this auditor was built with.
+    #[cfg(test)]
+    pub(crate) async fn settled(&self, permits: usize) {
+        let permits = u32::try_from(permits).expect("an auditor's permits fit in u32");
+        let _all = self
+            .permits
+            .acquire_many(permits)
+            .await
+            .expect("the audit semaphore is never closed");
+    }
+
     /// Rejections whose audit was refused for want of a permit.
     #[cfg(test)]
     pub(crate) fn saturated(&self) -> u64 {
