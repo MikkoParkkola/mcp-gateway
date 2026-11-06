@@ -25,6 +25,50 @@ use serde::Serialize;
 ///     serde_json::to_string(identity).expect("an identity")
 /// }
 /// ```
+///
+/// Nor can code outside this module build one without the checked
+/// constructor, by a struct literal:
+///
+/// ```compile_fail,E0451
+/// fn mint() -> mcp_gateway::key_server::oidc::VerifiedIdentity {
+///     mcp_gateway::key_server::oidc::VerifiedIdentity {
+///         subject: String::new(),
+///         email: String::new(),
+///         name: None,
+///         groups: Vec::new(),
+///         issuer: String::new(),
+///     }
+/// }
+/// ```
+///
+/// or by copying another identity with one field changed:
+///
+/// ```compile_fail,E0451
+/// use mcp_gateway::key_server::oidc::VerifiedIdentity;
+///
+/// fn relabel(other: VerifiedIdentity) -> VerifiedIdentity {
+///     VerifiedIdentity {
+///         subject: String::new(),
+///         ..other
+///     }
+/// }
+/// ```
+///
+/// Its fields are read through the accessors only:
+///
+/// ```compile_fail,E0616
+/// fn subject(identity: &mcp_gateway::key_server::oidc::VerifiedIdentity) -> &str {
+///     &identity.subject
+/// }
+/// ```
+///
+/// and never changed after it was built:
+///
+/// ```compile_fail,E0616
+/// fn rename(identity: &mut mcp_gateway::key_server::oidc::VerifiedIdentity) {
+///     identity.subject = String::new();
+/// }
+/// ```
 #[derive(Debug, Clone, Serialize)]
 pub struct VerifiedIdentity {
     /// OIDC `sub` claim (opaque user ID).
