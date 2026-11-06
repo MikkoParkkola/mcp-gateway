@@ -9,8 +9,8 @@ use std::path::{Path, PathBuf};
 
 use super::AUDIT_LOG;
 use super::{
-    contains, expect_unkept, is_external_in, kept_tempdir, norm, outside_temp, parse_external,
-    registered_paths, report_unkept,
+    contains, expect_unkept, is_external_in, kept_tempdir, norm, parse_external, registered_paths,
+    report_unkept, temp_root_for_test,
 };
 
 fn canon(path: &Path) -> PathBuf {
@@ -23,15 +23,21 @@ fn canon(path: &Path) -> PathBuf {
 #[cfg(unix)]
 #[test]
 fn the_reporter_names_only_paths_under_the_temp_dir() {
-    let dir = tempfile::tempdir().expect("a temp dir");
-    let inside = dir.path().join("audit.jsonl");
-    // The alias lives outside the temp dir, so only its canonical form is
-    // under it: a raw-path comparison misses it.
-    let links = outside_temp();
-    let alias = links.path().join("alias");
-    std::os::unix::fs::symlink(dir.path(), &alias).expect("a symlink");
+    // A temp root of this row's own: `root` stands for the temp dir and
+    // `elsewhere`, its sibling, for everything outside it.
+    let world = tempfile::tempdir().expect("a dir for this row");
+    let (root, elsewhere) = (world.path().join("root"), world.path().join("elsewhere"));
+    let dir = root.join("dir");
+    std::fs::create_dir_all(&dir).expect("the root's dir");
+    std::fs::create_dir_all(&elsewhere).expect("the outside dir");
+    let _root = temp_root_for_test(&root);
+    let inside = dir.join("audit.jsonl");
+    // The alias lives outside the root, so only its canonical form is under
+    // it: a raw-path comparison misses it.
+    let alias = elsewhere.join("alias");
+    std::os::unix::fs::symlink(&dir, &alias).expect("a symlink");
     let through_alias = alias.join("audit.jsonl");
-    let outside = PathBuf::from("/nonexistent-root/a/b/audit.jsonl");
+    let outside = elsewhere.join("plain").join("audit.jsonl");
     let unkept = expect_unkept();
     report_unkept(AUDIT_LOG, &inside);
     report_unkept(AUDIT_LOG, &through_alias);
@@ -118,5 +124,18 @@ fn a_dropped_kept_dir_leaves_no_entry() {
     assert!(
         !registered_paths().contains(&mine),
         "the dropped dir's entry survived the next registration"
+    );
+}
+
+/// R19. `norm` makes a relative path absolute, and resolves a `..` that
+/// follows a component that does not exist yet.
+/// Mutants: `norm` without `absolute`; `..` kept as a component.
+#[test]
+fn norm_anchors_relative_paths_and_resolves_dot_dot() {
+    let cwd = canon(&std::env::current_dir().expect("a working dir"));
+    assert_eq!(norm(Path::new("audit.jsonl")), cwd.join("audit.jsonl"));
+    assert_eq!(
+        norm(Path::new("missing-dir-for-norm/../audit.jsonl")),
+        cwd.join("audit.jsonl")
     );
 }

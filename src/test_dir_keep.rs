@@ -59,19 +59,15 @@ impl TestDirKeep {
 // temp dir is reported. The registry holds only `Weak`s, so it never keeps a
 // dir alive by itself.
 
-/// A short-lived dir outside the process temp dir, in the crate root, for
-/// rows that need a path a raw comparison would not place under it.
-pub(crate) fn outside_temp() -> tempfile::TempDir {
-    tempfile::Builder::new()
-        .prefix("kept-dir-alias-")
-        .tempdir_in(env!("CARGO_MANIFEST_DIR"))
-        .expect("a dir outside the temp dir")
+/// Each registered dir in normal form and as its absolute path as written,
+/// and a `Weak` of it: the registry never keeps a dir alive by itself.
+/// Advisory state, so a panic while it is held does not poison every later
+/// test's lookup.
+struct Entry {
+    normal: std::path::PathBuf,
+    written: std::path::PathBuf,
+    dir: Weak<tempfile::TempDir>,
 }
-
-/// Each registered dir in normal form, and a `Weak` of it: the registry
-/// never keeps a dir alive by itself. Advisory state, so a panic while it is
-/// held does not poison every later test's lookup.
-type Entry = (std::path::PathBuf, Weak<tempfile::TempDir>);
 static KEPT_DIRS: Mutex<Vec<Entry>> = Mutex::new(Vec::new());
 
 fn registry() -> MutexGuard<'static, Vec<Entry>> {
@@ -81,9 +77,14 @@ fn registry() -> MutexGuard<'static, Vec<Entry>> {
 fn register(dir: tempfile::TempDir) -> Arc<tempfile::TempDir> {
     let dir = Arc::new(dir);
     let normal = norm(dir.path());
+    let written = std::path::absolute(dir.path()).unwrap_or_else(|_| dir.path().to_path_buf());
     let mut entries = registry();
-    entries.retain(|(_, weak)| weak.strong_count() > 0);
-    entries.push((normal, Arc::downgrade(&dir)));
+    entries.retain(|entry| entry.dir.strong_count() > 0);
+    entries.push(Entry {
+        normal,
+        written,
+        dir: Arc::downgrade(&dir),
+    });
     dir
 }
 
@@ -97,38 +98,49 @@ pub(crate) fn kept_tempdir_in(parent: &Path) -> Arc<tempfile::TempDir> {
     register(tempfile::tempdir_in(parent).expect("a temp dir"))
 }
 
-/// Every live registered dir that contains `path`: a log keeps them all, so
-/// dropping a parent dir cannot remove a child dir it lives in.
+/// Every live registered dir that contains `path`, in normal form or as
+/// written: a log keeps them all. Dropping a parent dir then cannot remove a
+/// child dir the log lives in, and a dir holding a symlink the path goes
+/// through cannot remove the link while the log still uses it.
 pub(crate) fn kept_dirs_for(path: &Path) -> Vec<Arc<tempfile::TempDir>> {
-    let path = norm(path);
+    let normal = norm(path);
+    let written = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
     registry()
         .iter()
-        .filter(|(dir, _)| contains(dir, &path))
-        .filter_map(|(_, weak)| weak.upgrade())
+        .filter(|entry| contains(&entry.normal, &normal) || contains(&entry.written, &written))
+        .filter_map(|entry| entry.dir.upgrade())
         .collect()
 }
 
-/// `path` with its deepest existing ancestor canonicalised and the rest
-/// re-appended: the one form every comparison here uses (`/tmp` and
-/// `/private/tmp` are one dir on macOS). With no ancestor that
-/// canonicalises, `path` itself.
+/// `path` made absolute, its deepest existing ancestor canonicalised, and the
+/// rest re-appended: the one form every comparison here uses (`/tmp` and
+/// `/private/tmp` are one dir on macOS). A `..` in the part that does not
+/// exist yet is resolved lexically against what came before it. With no
+/// ancestor that canonicalises, `path` itself.
 pub(crate) fn norm(path: &Path) -> std::path::PathBuf {
-    let mut base = path.to_path_buf();
-    let mut rest = Vec::new();
+    let Ok(mut base) = std::path::absolute(path) else {
+        return path.to_path_buf();
+    };
+    let mut rest: Vec<std::ffi::OsString> = Vec::new();
     loop {
         if let Ok(canonical) = std::fs::canonicalize(&base) {
-            return rest
-                .iter()
-                .rev()
-                .fold(canonical, |acc, name| acc.join(name));
+            return rest.iter().rev().fold(canonical, |mut acc, name| {
+                if name == ".." {
+                    acc.pop();
+                } else {
+                    acc.push(name);
+                }
+                acc
+            });
         }
-        match (base.file_name(), base.parent()) {
-            (Some(name), Some(parent)) => {
-                rest.push(name.to_owned());
-                base = parent.to_path_buf();
-            }
-            _ => return path.to_path_buf(),
+        let Some(last) = base.components().next_back() else {
+            return path.to_path_buf();
+        };
+        let name = last.as_os_str().to_owned();
+        if !base.pop() {
+            return path.to_path_buf();
         }
+        rest.push(name);
     }
 }
 
@@ -138,11 +150,36 @@ pub(crate) fn contains(dir: &Path, path: &Path) -> bool {
     path.starts_with(dir)
 }
 
-/// Whether `path` lies under the process temp dir.
+/// Whether `path` lies under the process temp dir, or under this thread's
+/// [`temp_root_for_test`] root while one is set.
 pub(crate) fn under_temp_root(path: &Path) -> bool {
     static ROOT: OnceLock<std::path::PathBuf> = OnceLock::new();
+    if let Some(root) = TEMP_ROOT.with(|root| root.borrow().clone()) {
+        return contains(&root, &norm(path));
+    }
     let root = ROOT.get_or_init(|| norm(&std::env::temp_dir()));
     contains(root, &norm(path))
+}
+
+/// While held, this thread judges "under the temp dir" against `root`
+/// instead of the process temp dir: a row gets a real "outside" dir as a
+/// sibling of `root`, inside a temp dir it owns, without writing anywhere
+/// else. Thread-bound, like the state it sets.
+pub(crate) struct TempRoot(
+    Option<std::path::PathBuf>,
+    std::marker::PhantomData<*const ()>,
+);
+
+pub(crate) fn temp_root_for_test(root: &Path) -> TempRoot {
+    let outer = TEMP_ROOT.with(|slot| slot.replace(Some(norm(root))));
+    TempRoot(outer, std::marker::PhantomData)
+}
+
+impl Drop for TempRoot {
+    fn drop(&mut self) {
+        let outer = self.0.take();
+        TEMP_ROOT.with(|slot| *slot.borrow_mut() = outer);
+    }
 }
 
 /// The dirs a parent test process keeps for a child it spawned, in
@@ -181,6 +218,9 @@ std::thread_local! {
     /// The open `expect_unkept` scope on this thread, if any.
     static EXPECTED: std::cell::RefCell<Option<Vec<Unkept>>> =
         const { std::cell::RefCell::new(None) };
+    /// This thread's override of the temp root (`temp_root_for_test`).
+    static TEMP_ROOT: std::cell::RefCell<Option<std::path::PathBuf>> =
+        const { std::cell::RefCell::new(None) };
     /// A row's checkpoint inside the next open (`before_first_fs_call`).
     static CHECKPOINT: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
         const { std::cell::RefCell::new(None) };
@@ -211,11 +251,14 @@ pub(crate) fn report_unkept(kind: &'static str, path: &Path) {
 
 /// While held, an unkept open on this thread is recorded here instead of
 /// reported, for a row that opens one on purpose.
-pub(crate) struct ExpectUnkept(Option<Vec<Unkept>>);
+pub(crate) struct ExpectUnkept(Option<Vec<Unkept>>, std::marker::PhantomData<*const ()>);
 
 /// Start recording this thread's unkept opens until the guard drops.
 pub(crate) fn expect_unkept() -> ExpectUnkept {
-    ExpectUnkept(EXPECTED.with(|expected| expected.replace(Some(Vec::new()))))
+    ExpectUnkept(
+        EXPECTED.with(|expected| expected.replace(Some(Vec::new()))),
+        std::marker::PhantomData,
+    )
 }
 
 impl ExpectUnkept {
@@ -239,11 +282,15 @@ impl Drop for ExpectUnkept {
 
 /// The normalised paths of the registry's entries, live or not yet pruned.
 pub(crate) fn registered_paths() -> Vec<std::path::PathBuf> {
-    registry().iter().map(|(dir, _)| dir.clone()).collect()
+    registry()
+        .iter()
+        .map(|entry| entry.normal.clone())
+        .collect()
 }
 
 /// A row's checkpoint: `f` runs once, on this thread, inside the next log
-/// open after its kept-dir lookup and before any filesystem call.
+/// open after its kept-dir lookup and before the open's first filesystem
+/// write (the lookup itself only reads, to canonicalise).
 pub(crate) fn before_first_fs_call(f: impl FnOnce() + 'static) {
     CHECKPOINT.with(|slot| *slot.borrow_mut() = Some(Box::new(f)));
 }

@@ -12,7 +12,7 @@ use std::time::Duration;
 use super::keep_dir_tests::note;
 use super::{TransparencyLogConfig, TransparencyLogger};
 use crate::test_dir_keep::{
-    AUDIT_LOG, Unkept, expect_unkept, kept_tempdir, kept_tempdir_in, outside_temp,
+    AUDIT_LOG, Unkept, expect_unkept, kept_tempdir, kept_tempdir_in, temp_root_for_test,
 };
 
 fn config(path: &str) -> Arc<TransparencyLogConfig> {
@@ -125,6 +125,15 @@ fn a_nested_kept_dir_keeps_both() {
     assert!(!outer_root.exists(), "the outer dir outlived the log");
 }
 
+/// R10's child row, by the path libtest names it with (this module's path
+/// without the crate name), so a module rename cannot orphan it.
+fn child_test_name() -> String {
+    let module = module_path!()
+        .split_once("::")
+        .map_or(module_path!(), |(_, rest)| rest);
+    format!("{module}::kept_dir_child_process")
+}
+
 /// Env var that turns this test binary into R10's child.
 const KEPT_CHILD: &str = "MCP_TLOG_KEPT_DIR_CHILD";
 
@@ -155,11 +164,7 @@ fn a_child_process_honours_its_parents_kept_dirs() {
         let mut child =
             std::process::Command::new(std::env::current_exe().expect("this test binary"));
         child
-            .args([
-                "--exact",
-                "security::transparency_log::kept_dir_tests::kept_dir_child_process",
-                "--test-threads=1",
-            ])
+            .args(["--exact", &child_test_name(), "--test-threads=1"])
             .env(KEPT_CHILD, &path)
             .env_remove("MCP_GATEWAY_TEST_KEPT_DIRS");
         if let Some(kept) = kept {
@@ -221,7 +226,8 @@ fn a_refused_open_releases_what_it_took() {
 fn a_log_opened_through_an_alias_keeps_the_real_dir() {
     let dir = kept_tempdir();
     let root = dir.path().to_owned();
-    let links = outside_temp();
+    // Any dir the kept one does not contain: a raw-path lookup misses it.
+    let links = tempfile::tempdir().expect("a dir for the alias");
     let alias = links.path().join("alias");
     std::os::unix::fs::symlink(&root, &alias).expect("a symlink");
     let log = open(&alias.join("audit.jsonl"));
@@ -240,9 +246,12 @@ fn a_log_opened_through_an_alias_keeps_the_real_dir() {
 /// Mutant: the outside-temp filter removed from the open path.
 #[test]
 fn a_real_log_outside_the_temp_dir_records_nothing() {
-    let dir = outside_temp();
+    let world = tempfile::tempdir().expect("a dir for this row");
+    let (root, elsewhere) = (world.path().join("root"), world.path().join("elsewhere"));
+    std::fs::create_dir_all(&root).expect("the root");
+    let _root = temp_root_for_test(&root);
     let unkept = expect_unkept();
-    let log = open(&dir.path().join("audit.jsonl"));
+    let log = open(&elsewhere.join("audit.jsonl"));
     assert_eq!(unkept.recorded(), Vec::<Unkept>::new());
     drop(log);
 }
@@ -271,4 +280,30 @@ fn a_worker_open_is_attributed_to_its_spawning_test() {
         .join()
         .expect("the worker does not panic");
     assert_eq!(recorded, vec![(AUDIT_LOG, path, parent)]);
+}
+
+/// R18. A log reached through a symlink that lives in kept dir A and points
+/// into kept dir B keeps both: dropping A's test share must not remove the
+/// link the log's path goes through.
+/// Mutant: the lookup matching normal forms only.
+#[cfg(unix)]
+#[test]
+fn a_log_through_a_link_in_one_kept_dir_keeps_both_dirs() {
+    let a = kept_tempdir();
+    let b = kept_tempdir();
+    let (a_root, b_root) = (a.path().to_owned(), b.path().to_owned());
+    let link = a_root.join("into-b");
+    std::os::unix::fs::symlink(&b_root, &link).expect("a symlink");
+    let log = open(&link.join("audit.jsonl"));
+    drop(a);
+    drop(b);
+    assert!(link.exists(), "the link in A went with A's test share");
+    note(&log);
+    assert!(
+        b_root.join("audit.jsonl").is_file(),
+        "the late append landed"
+    );
+    drop(log);
+    assert!(!a_root.exists(), "A outlived the log");
+    assert!(!b_root.exists(), "B outlived the log");
 }
