@@ -49,7 +49,7 @@ use guard::guard;
 #[cfg(test)]
 pub(crate) use guard::guard_work;
 pub(crate) use mapping::Mapping;
-pub(crate) use nodes::{Node, Shape, Step, block_nodes, scalars_with_lines};
+pub(crate) use nodes::{Node, Shape, Step, anchors_and_aliases, block_nodes, scalars_with_lines};
 pub(crate) use number::Number;
 pub(crate) use spans::{ValueSpan, mapping_values};
 pub(crate) use tagged::{Tag, TaggedValue};
