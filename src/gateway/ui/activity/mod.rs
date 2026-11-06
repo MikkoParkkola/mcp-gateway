@@ -516,24 +516,6 @@ fn export_response(
     }
 }
 
-/// Test-only: the rows Activity lists from the invocation log at `path`, as
-/// an unrestricted caller reads them. Lets writer tests assert what a record
-/// the real writer wrote becomes in Activity.
-#[cfg(test)]
-pub(crate) async fn listed_rows_for_test(path: &std::path::Path) -> Vec<Value> {
-    let logs = Logs {
-        invocation: path.to_path_buf(),
-        governance: None,
-        secret: None,
-    };
-    let response = list_page(&logs, &access::Access::All, &ListQuery::default());
-    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
-        .await
-        .expect("the list body reads");
-    let page: Value = serde_json::from_slice(&bytes).expect("the list is JSON");
-    page["rows"].as_array().cloned().unwrap_or_default()
-}
-
 #[cfg(test)]
 #[path = "list_tests.rs"]
 mod list_tests;

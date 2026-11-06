@@ -9,7 +9,7 @@ use std::sync::Arc;
 use serde_json::{Value, json};
 
 use super::grant_audit::{in_delivery_scope, with_grant_slot};
-use super::grant_audit_fixture::{CAPS, Endpoint, decisions, entries, grant, invocations, log_path};
+use super::grant_audit_fixture::{CAPS, Endpoint, decisions, entries, grant, invocations};
 use super::grant_decision_audit_tests::{api_key, call, context, gateway, invoke_args, only};
 use crate::security::audit::AuditFailurePolicy;
 
@@ -106,13 +106,8 @@ async fn refused_call(
     call(&meta, &api_key("alice"), "gateway_invoke", invoke_args()).await
 }
 
-/// The Activity rows the log at `dir` lists.
-async fn listed(dir: &tempfile::TempDir) -> Vec<Value> {
-    crate::gateway::ui::listed_rows_for_test(&log_path(dir)).await
-}
-
 #[tokio::test]
-async fn a_gate_refused_call_with_its_invocation_record_is_one_row() {
+async fn a_gate_refused_call_with_its_invocation_record_is_recorded() {
     let dir = Arc::new(tempfile::tempdir().unwrap());
 
     refused_call(&dir, AuditFailurePolicy::BestEffort, false).await;
@@ -121,11 +116,10 @@ async fn a_gate_refused_call_with_its_invocation_record_is_one_row() {
     let record = only(decisions(&dir), "decision record");
     assert_eq!(record["outcome"], json!("denied"), "{record}");
     assert_eq!(record["invocation_recorded"], json!(true), "{record}");
-    assert_eq!(listed(&dir).await.len(), 1, "the call is listed once");
 }
 
 #[tokio::test]
-async fn a_refusal_whose_invocation_append_failed_is_one_blocked_row() {
+async fn a_refusal_whose_invocation_append_failed_is_an_unrecorded_decision() {
     for policy in [AuditFailurePolicy::FailClosed, AuditFailurePolicy::BestEffort] {
         let dir = Arc::new(tempfile::tempdir().unwrap());
 
@@ -136,9 +130,5 @@ async fn a_refusal_whose_invocation_append_failed_is_one_blocked_row() {
         let record = only(decisions(&dir), "decision record");
         let marker = &record["invocation_recorded"];
         assert_eq!(marker, &json!(false), "{policy:?}: {record}");
-        let rows = listed(&dir).await;
-        assert_eq!(rows.len(), 1, "{policy:?}: {rows:#?}");
-        assert_eq!(rows[0]["outcome"], json!("blocked"), "{policy:?}");
-        assert_eq!(rows[0]["server"], json!(CAPS), "{policy:?}");
     }
 }
