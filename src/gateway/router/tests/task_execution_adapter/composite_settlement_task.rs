@@ -70,7 +70,16 @@ fn assert_delivered(settled: &Value) {
     let result = settled
         .pointer("/result/result")
         .unwrap_or_else(|| panic!("a completed task carries its result: {settled}"));
-    assert!(result.to_string().contains(DELIVERED), "{settled}");
+    let texts: Vec<&str> = result["content"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|item| item["text"].as_str())
+        .collect();
+    assert!(
+        texts.iter().any(|text| text.contains(DELIVERED)),
+        "the delivered text is in the result's content: {settled}"
+    );
 }
 
 /// A task-augmented `gateway_execute` chain over `tools`.

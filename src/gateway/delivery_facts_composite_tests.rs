@@ -168,6 +168,20 @@ async fn an_absorbed_refusal_then_a_backend_failure_keeps_no_trace_or_code() {
     assert_eq!(facts.withheld_code(), None);
 }
 
+/// A refused step's trace reaches the plan cell's `ended_on` only through
+/// `composite_ended`: before the plan ends it is not published.
+#[tokio::test]
+async fn a_refused_steps_trace_is_published_only_by_the_plans_end() {
+    let facts = plan_cell(async {
+        let ended = refused_step_noted("step-trace", -32003).await;
+        let before = snapshot().expect("inside a cell");
+        assert_eq!(before.ended_on(), None, "{before:?}");
+        composite_ended(CompositeEnd::of_outcome(&ended));
+    })
+    .await;
+    assert_eq!(facts.ended_on().as_deref(), Some("step-trace"));
+}
+
 /// A refused step's trace and code never outlive a plan that succeeds.
 #[tokio::test]
 async fn a_plan_that_succeeds_after_a_refused_step_keeps_no_trace_or_code() {
