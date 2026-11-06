@@ -8,7 +8,7 @@
 use std::sync::Arc;
 
 use axum::body::to_bytes;
-use serde_json::Value;
+use serde_json::{Value, json};
 use tower::ServiceExt;
 
 use super::create_router;
@@ -40,6 +40,12 @@ fn auth() -> AuthConfig {
     AuthConfig {
         enabled: true,
         api_keys: vec![key(ADMIN, true), key(MEMBER, false)],
+        // The status route open, as deployments that publish it run it, so
+        // the anonymous case reaches the handler.
+        public_paths: vec![
+            "/health".to_string(),
+            crate::gateway::routes::UI_STATUS.to_string(),
+        ],
         ..Default::default()
     }
 }
@@ -58,7 +64,7 @@ fn publish_owner(state: &Arc<AppState>, owner: Option<&str>) {
     state.live_config.set(config);
 }
 
-async fn get(state: &Arc<AppState>, path: &str, bearer: Option<&str>) -> Value {
+async fn get(state: &Arc<AppState>, path: &str, bearer: Option<&str>) -> (u16, Value) {
     let mut request = axum::http::Request::builder().method("GET").uri(path);
     if let Some(key) = bearer {
         request = request.header("authorization", format!("Bearer {key}"));
@@ -68,8 +74,9 @@ async fn get(state: &Arc<AppState>, path: &str, bearer: Option<&str>) -> Value {
         .oneshot(request)
         .await
         .unwrap();
+    let status = response.status().as_u16();
     let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-    serde_json::from_slice(&body).unwrap_or(Value::Null)
+    (status, serde_json::from_slice(&body).unwrap_or(Value::Null))
 }
 
 fn server<'a>(body: &'a Value, name: &str) -> &'a Value {
@@ -87,16 +94,22 @@ async fn o7_the_admin_config_shows_the_published_owner() {
     let (state, _dir) = test_router_app_state_with_auth(&auth()).await;
     let _ = state.backends.register(http_backend_at("svc", URL));
     publish_owner(&state, None);
-    let body = get(&state, crate::gateway::routes::UI_CONFIG, Some(ADMIN)).await;
+    let (_, body) = get(&state, crate::gateway::routes::UI_CONFIG, Some(ADMIN)).await;
     assert_eq!(server(&body, "svc")["owner"], Value::Null, "{body}");
     assert!(
         server(&body, "svc").get("owner").is_some(),
         "the key is present: {body}"
     );
-    for owner in ["Team A", "Team B"] {
-        publish_owner(&state, Some(owner));
-        let body = get(&state, crate::gateway::routes::UI_CONFIG, Some(ADMIN)).await;
-        assert_eq!(server(&body, "svc")["owner"], owner, "{body}");
+    for (written, shown) in [
+        (Some("Team A"), json!("Team A")),
+        (Some("Team B"), json!("Team B")),
+        (Some("  Team C  "), json!("Team C")),
+        (Some("   "), Value::Null),
+        (None, Value::Null),
+    ] {
+        publish_owner(&state, written);
+        let (_, body) = get(&state, crate::gateway::routes::UI_CONFIG, Some(ADMIN)).await;
+        assert_eq!(server(&body, "svc")["owner"], shown, "{written:?}: {body}");
     }
 }
 
@@ -106,7 +119,7 @@ async fn o7_the_admin_config_shows_the_published_owner() {
 async fn o7b_a_backend_missing_from_the_generation_has_no_owner() {
     let (state, _dir) = test_router_app_state_with_auth(&auth()).await;
     let _ = state.backends.register(http_backend_at("ghost", URL));
-    let body = get(&state, crate::gateway::routes::UI_CONFIG, Some(ADMIN)).await;
+    let (_, body) = get(&state, crate::gateway::routes::UI_CONFIG, Some(ADMIN)).await;
     assert_eq!(
         server(&body, "ghost").get("owner"),
         Some(&Value::Null),
@@ -122,7 +135,16 @@ async fn o9_status_never_carries_the_owner() {
     let _ = state.backends.register(http_backend_at("svc", URL));
     publish_owner(&state, Some("owner-marker-7f3e"));
     for bearer in [Some(ADMIN), Some(MEMBER), None] {
-        let body = get(&state, crate::gateway::routes::UI_STATUS, bearer).await;
+        let (status, body) = get(&state, crate::gateway::routes::UI_STATUS, bearer).await;
+        // The handler answered, with the server listed: the absence below is
+        // the projection's, not a refusal's.
+        assert_eq!(status, 200, "{bearer:?}: {body}");
+        assert!(
+            body["servers"]
+                .as_array()
+                .is_some_and(|s| s.iter().any(|s| s["name"] == "svc")),
+            "{bearer:?}: {body}"
+        );
         for s in body["servers"].as_array().into_iter().flatten() {
             assert!(s.get("owner").is_none(), "{bearer:?}: {s}");
         }
