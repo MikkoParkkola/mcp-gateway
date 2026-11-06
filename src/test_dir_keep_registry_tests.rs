@@ -6,10 +6,11 @@
 
 use std::path::{Path, PathBuf};
 
-use super::AUDIT_LOG;
+use super::{contains, kept_tempdir, norm, registered_paths};
+// Only the symlink rows use these, and they are unix-only.
+#[cfg(unix)]
 use super::{
-    contains, expect_unkept, is_external_in, kept_tempdir, norm, parse_external, registered_paths,
-    report_unkept, temp_root_for_test,
+    AUDIT_LOG, expect_unkept, is_external_in, parse_external, report_unkept, temp_root_for_test,
 };
 
 fn canon(path: &Path) -> PathBuf {
