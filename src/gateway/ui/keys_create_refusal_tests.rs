@@ -456,6 +456,8 @@ fn a4_a_failed_intent_append_or_fsync_refuses_the_write() {
     for fault in [WriteFault::WriteError, WriteFault::SyncError] {
         let fx = Fixture::new(Setup::default());
         let log = fx.state.transparency_log.clone().expect("an audit log");
+        let target = crate::identity_grants::journal::resolved(&fx.path());
+        crate::config_reload::write_order::take(&target);
         log.arm_write_fault(Some(fault));
         // The append itself failed: its line may or may not be on disk.
         let status = StatusCode::SERVICE_UNAVAILABLE;
@@ -471,6 +473,10 @@ fn a4_a_failed_intent_append_or_fsync_refuses_the_write() {
             1,
             "{fault:?} never reached the intent"
         );
+        // The writer records "intent" only after the append returned: a
+        // failed append or fsync leaves no such step, and no commit follows.
+        let steps = crate::config_reload::write_order::take(&target);
+        assert!(steps.is_empty(), "{fault:?}: the writer went on: {steps:?}");
     }
 }
 
