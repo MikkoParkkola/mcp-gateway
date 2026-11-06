@@ -37,7 +37,8 @@ fn p2_a_malformed_body_gets_fixed_text_that_does_not_echo() {
     let rev = fx.revision();
     let bodies = [
         json!({"name": CANARY, "backends": ["*"], "revision": rev, CANARY: 1}),
-        json!({"backends": ["*"], "revision": rev, "x": CANARY}),
+        // Only the name is missing: no unknown field to refuse first.
+        json!({"backends": [CANARY], "revision": rev}),
         json!({"name": CANARY, "backends": ["*"]}),
         json!({"name": CANARY, "backends": CANARY, "revision": rev}),
         json!({"name": CANARY, "backends": ["*"], "revision": rev, "rate_limit": CANARY}),
