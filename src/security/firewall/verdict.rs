@@ -100,7 +100,9 @@ impl FirewallVerdict {
 /// `match` glob that does not parse ([`glob_problem`]), or a scope the load
 /// refuses ([`scope_problem`]). Such a rule compiles to block its finding
 /// types on every call (below), and the Policies screen reads it as
-/// compiled. One definition: the load's refusals are these same checks.
+/// compiled. The load refuses these and more (key references, folder
+/// rules; `refused_rules::first_refusal`), which compile as written. The
+/// index only names the rule in a message, which is dropped here.
 pub(crate) fn refused_shape(rule: &FirewallRule) -> bool {
     glob_problem(0, rule).is_err() || scope_problem(0, rule).is_err()
 }

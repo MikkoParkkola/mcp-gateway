@@ -54,9 +54,10 @@ impl<'a> RuleKeys<'a> {
     }
 
     /// What a reload of `candidate` offers while `running` runs: keys reload
-    /// live, but whether authentication is on is the running process's.
+    /// live (the first one too, when only a bearer token ran), but whether
+    /// authentication is on is the running process's.
     fn running(running: &Config, candidate: &'a Config) -> Self {
-        if keyed(running) {
+        if running.auth.enabled {
             Self::of(candidate)
         } else {
             Self::AuthOff
@@ -113,7 +114,7 @@ pub(crate) fn key_problem(
 /// The remedy a refusal names when the firewall runs.
 const FIX_OR_RESTART_OFF: &str =
     "; fix or remove the rule, or set security.firewall.enabled: false and restart the gateway";
-/// The remedy when the running process has no API-key callers yet.
+/// The remedy when the running process has authentication off.
 const KEYS_NEED_RESTART: &str =
     "; remove the keyed reference, or restart the gateway so auth.enabled takes effect";
 

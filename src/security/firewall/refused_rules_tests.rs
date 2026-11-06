@@ -120,6 +120,16 @@ fn two_problems_report_the_first_and_compile_by_the_scope() {
         !refused_shape(&folder),
         "a folder or key problem compiles as written"
     );
+    // A folder problem alone reaches the folder check, last in the order.
+    let roots_only = rule("{match: \"*\", action: block, allowed_roots: [\"/srv\"]}");
+    assert_eq!(
+        first_refusal(0, &roots_only, &keys).as_deref(),
+        Some("security.firewall.rules[0].path_args is required with allowed_roots")
+    );
+    assert!(
+        !refused_shape(&roots_only),
+        "a folder problem compiles as written"
+    );
 }
 
 /// A load with the firewall off takes a refused rule and warns once, naming
