@@ -1,0 +1,304 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+//! Fixture rows for the identity-source pin: each way to create, alias or
+//! change an identity in production code is either a counted row or refused.
+
+use super::fragments::{live_base, pin_table, scratch_table, without_first_row};
+use super::identity_sources::{Scan, crate_scan, differences, scan_file};
+
+const LEAF: &str = "src/identity_grants/subject.rs";
+const OTHER: &str = "src/a.rs";
+
+fn scanned(file: &str, source: &str) -> Scan {
+    let mut scan = Scan::default();
+    scan_file(
+        file,
+        &syn::parse_file(source).expect("fixture parses"),
+        &mut scan,
+    );
+    scan
+}
+
+fn value(scan: &Scan, owner: &str, kind: &str) -> Option<String> {
+    scan.rows
+        .iter()
+        .find(|((_, o, k), _)| o == owner && k == kind)
+        .map(|(_, v)| v.clone())
+}
+
+fn count(source: &str, owner: &str, kind: &str) -> Option<String> {
+    value(&scanned(OTHER, source), owner, kind)
+}
+
+fn refused(file: &str, source: &str) -> Vec<String> {
+    scanned(file, source).refused
+}
+
+#[test]
+fn one_direct_call_counts_one() {
+    let n = count(
+        "fn f() { let _ = GrantSubject::new(a, b, None); }",
+        "f",
+        "new",
+    );
+    assert_eq!(n.as_deref(), Some("1"));
+}
+
+#[test]
+fn a_second_call_in_one_function_counts_two() {
+    let source = "fn f() { GrantSubject::new(a, b, None); GrantSubject::new(c, d, None); }";
+    assert_eq!(count(source, "f", "new").as_deref(), Some("2"));
+}
+
+#[test]
+fn a_call_through_self_in_the_types_impl_is_counted() {
+    let source = "impl GrantSubject { fn g() -> Self { Self::new(a, b, None).unwrap() } }";
+    assert_eq!(
+        count(source, "GrantSubject::g", "new").as_deref(),
+        Some("1")
+    );
+}
+
+#[test]
+fn a_constructor_passed_as_a_value_is_counted() {
+    let source =
+        "fn f(x: Option<(String, String)>) { x.map(|(a, b)| a).and_then(GrantSubject::new); }";
+    assert_eq!(count(source, "f", "new").as_deref(), Some("1"));
+}
+
+#[test]
+fn a_test_only_call_is_not_counted() {
+    let source = "#[cfg(test)] fn f() { GrantSubject::new(a, b, None); }";
+    assert!(scanned(OTHER, source).rows.is_empty());
+}
+
+#[test]
+fn each_constructor_of_each_type_is_counted() {
+    let source = "fn f() { VerifiedIdentity::checked(a, b, c, None, v); CertIdentity::from_der(d); CertIdentity::parse(d); }";
+    for kind in ["checked", "from_der", "parse"] {
+        assert_eq!(count(source, "f", kind).as_deref(), Some("1"), "{kind}");
+    }
+}
+
+#[test]
+fn self_parse_inside_the_cert_impl_is_counted() {
+    let source = "impl CertIdentity { fn h(d: &[u8]) { Self::parse(d); } }";
+    assert_eq!(
+        count(source, "CertIdentity::h", "parse").as_deref(),
+        Some("1")
+    );
+}
+
+#[test]
+fn a_struct_literal_in_any_module_is_counted() {
+    let source = "fn mint() -> VerifiedIdentity { VerifiedIdentity { subject: s, email: e, name: None, groups: g, issuer: i } }";
+    assert_eq!(count(source, "mint", "literal").as_deref(), Some("1"));
+    let own =
+        "impl GrantSubject { fn x() -> Self { Self { authority: a, subject: s, label: None } } }";
+    assert_eq!(
+        count(own, "GrantSubject::x", "literal").as_deref(),
+        Some("1")
+    );
+}
+
+#[test]
+fn a_renamed_import_or_type_alias_is_refused() {
+    assert_eq!(
+        refused(OTHER, "use crate::identity_grants::GrantSubject as G;").len(),
+        1
+    );
+    assert_eq!(
+        refused(OTHER, "type G = crate::identity_grants::GrantSubject;").len(),
+        1
+    );
+}
+
+#[test]
+fn a_constructor_in_a_static_initializer_is_counted_under_its_name() {
+    let source = "static S: LazyLock<GrantSubject> = LazyLock::new(|| GrantSubject::new(a, b, None).unwrap());";
+    assert_eq!(count(source, "S", "new").as_deref(), Some("1"));
+}
+
+#[test]
+fn a_qualified_constructor_path_is_refused_called_or_as_a_value() {
+    assert_eq!(
+        refused(OTHER, "fn f() { <GrantSubject>::new(a, b, None); }").len(),
+        1
+    );
+    assert_eq!(
+        refused(
+            OTHER,
+            "fn f(x: Option<u8>) { x.map(<CertIdentity>::parse); }"
+        )
+        .len(),
+        1
+    );
+}
+
+#[test]
+fn a_macro_naming_an_identity_type_is_a_row() {
+    let source = "fn f() { let _ = vec![GrantSubject::new(a, b, None)]; }";
+    assert_eq!(count(source, "f", "macro").as_deref(), Some("1"));
+    let in_impl = "impl GrantSubject { fn f() { let _ = vec![Self::new(a, b, None)]; } }";
+    assert_eq!(
+        count(in_impl, "GrantSubject::f", "macro").as_deref(),
+        Some("1")
+    );
+}
+
+fn fingerprint(source: &str, owner: &str) -> String {
+    value(&scanned(LEAF, source), owner, "item").expect("a fingerprint row")
+}
+
+#[test]
+fn every_production_item_in_a_leaf_module_has_a_fingerprint() {
+    let scan = scanned(
+        LEAF,
+        "pub struct GrantSubject { authority: String }\nimpl GrantSubject { pub fn authority(&self) -> &str { &self.authority } }",
+    );
+    for owner in ["GrantSubject", "GrantSubject::authority"] {
+        assert!(
+            value(&scan, owner, "item").is_some(),
+            "{owner}: {:?}",
+            scan.rows
+        );
+    }
+}
+
+#[test]
+fn an_edited_item_changes_its_fingerprint() {
+    let before = fingerprint(
+        "impl GrantSubject { pub fn label(&self) -> Option<&str> { self.label.as_deref() } }",
+        "GrantSubject::label",
+    );
+    let after = fingerprint(
+        "impl GrantSubject { pub fn label(&mut self) -> Option<&str> { self.label.take(); None } }",
+        "GrantSubject::label",
+    );
+    assert_ne!(before, after);
+}
+
+#[test]
+fn a_test_only_item_in_a_leaf_module_has_no_row() {
+    let scan = scanned(
+        LEAF,
+        "#[cfg(test)] impl GrantSubject { pub(crate) fn for_test() {} }",
+    );
+    assert!(scan.rows.is_empty(), "{:?}", scan.rows);
+}
+
+#[test]
+fn whitespace_and_doc_comments_do_not_change_a_fingerprint() {
+    let tight = fingerprint(
+        "impl GrantSubject { pub fn a(&self) -> &str { &self.authority } }",
+        "GrantSubject::a",
+    );
+    let loose = fingerprint(
+        "impl GrantSubject {\n    /// The authority.\n    pub fn a( &self ) -> &str {\n        &self.authority\n    }\n}",
+        "GrantSubject::a",
+    );
+    assert_eq!(tight, loose);
+}
+
+#[test]
+fn a_change_inside_a_string_literal_changes_a_fingerprint() {
+    let a = fingerprint(r#"const ADMIN: &str = "admin";"#, "ADMIN");
+    let b = fingerprint(r#"const ADMIN: &str = "admin ";"#, "ADMIN");
+    assert_ne!(a, b);
+}
+
+#[test]
+fn a_child_module_or_include_in_a_leaf_module_is_refused() {
+    assert_eq!(refused(LEAF, "mod extra;").len(), 1);
+    assert_eq!(refused(LEAF, "mod extra { }").len(), 1);
+    assert_eq!(refused(LEAF, r#"include!("extra.rs");"#).len(), 1);
+    assert!(refused(LEAF, "#[cfg(test)] mod tests;").is_empty());
+}
+
+#[test]
+fn a_crate_macro_near_identity_fields_is_refused() {
+    assert_eq!(
+        refused(LEAF, "fn f(x: &mut GrantSubject) { alter!(x); }").len(),
+        1
+    );
+    assert_eq!(
+        refused(OTHER, "impl GrantSubject { fn f(&self) { alter!(self); } }").len(),
+        1
+    );
+    assert_eq!(
+        refused(
+            LEAF,
+            "macro_rules! alter { ($x:expr) => { $x.subject.clear() }; }"
+        )
+        .len(),
+        1
+    );
+}
+
+#[test]
+fn a_listed_std_macro_near_identity_fields_is_allowed() {
+    let source = r#"impl GrantSubject { fn f(&self) -> String { format!("{}", self.subject) } }"#;
+    assert!(refused(LEAF, source).is_empty());
+    assert!(refused(OTHER, "fn f() { alter!(1); }").is_empty());
+}
+
+/// Every identity source in production code is a reviewed row; a new one, a
+/// changed count or fingerprint, a stale row or a refused form fails and
+/// prints what to add, fix or remove.
+#[test]
+fn every_identity_source_is_a_reviewed_row() {
+    let wrong = differences(&crate_scan(), &pin_table("identity_sources"));
+    assert!(
+        wrong.is_empty(),
+        "identity sources differ from identity_sources.tsv ({}):\n{}",
+        wrong.len(),
+        wrong.join("\n")
+    );
+}
+
+/// A real row held only by a fragment still counts.
+#[test]
+fn a_required_row_can_live_in_a_fragment() {
+    let (base, moved) = without_first_row(&live_base("identity_sources"));
+    let (_root, table) = scratch_table("identity_sources", &base, &[("0.tsv", &moved)]);
+    let wrong = differences(&crate_scan(), &table);
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+/// A stale row in a fragment fails, naming the fragment.
+#[test]
+fn a_stale_fragment_row_fails_naming_it() {
+    let stale = "src/nowhere.rs\tf\tnew\t1\tnone\n";
+    let (_root, table) = scratch_table(
+        "identity_sources",
+        &live_base("identity_sources"),
+        &[("0.tsv", stale)],
+    );
+    let wrong = differences(&crate_scan(), &table);
+    assert!(
+        wrong
+            .iter()
+            .any(|l| l.contains("stale") && l.contains("0.tsv")),
+        "{}",
+        wrong.join("\n")
+    );
+}
+
+/// A key held by the base and by a fragment fails, naming both files.
+#[test]
+fn a_key_repeated_across_files_fails_naming_both() {
+    let (_, moved) = without_first_row(&live_base("identity_sources"));
+    let (_root, table) = scratch_table(
+        "identity_sources",
+        &live_base("identity_sources"),
+        &[("0.tsv", &moved)],
+    );
+    let wrong = differences(&crate_scan(), &table);
+    assert!(
+        wrong
+            .iter()
+            .any(|l| l.contains("identity_sources.tsv") && l.contains("0.tsv")),
+        "{}",
+        wrong.join("\n")
+    );
+}
