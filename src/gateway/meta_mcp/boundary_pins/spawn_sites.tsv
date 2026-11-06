@@ -23,7 +23,6 @@ src/config_reload/replace_audit.rs	recover_held	spawn-blocking	1	outside-calls	r
 src/config_reload/replace_validate.rs	validate_template	spawn-blocking	1	outside-calls	loads a config template for the web UI settings save; the refusal returns to the UI handler at join, not a tool call
 src/config_reload/watch_chain.rs	spawn_rewatch_task	spawn	1	outside-calls	config include-chain rewatch loop on file events and a retry timer
 src/config_reload/watcher.rs	spawn_reload_task	spawn	1	outside-calls	config file watcher loop that debounces and triggers reloads
-src/config_reload/write.rs	mutate_config_and_reload_detached	spawn	1	outside-calls	web UI backend add/edit/remove config mutation plus reload; errors return to the UI handler, not a tool call
 src/events/fanout.rs	reconcile_until_done	spawn-blocking	1	no-refusal-inside	reconciles event subscriptions against the capability catalogue, retrying on failure
 src/events/lease.rs	install	spawn	1	no-refusal-inside	timer that zeroizes a held events callback authorization when it expires
 src/events/rpc.rs	blocking	spawn-blocking	1	no-refusal-inside	events store read/commit on the blocking pool; io error returned as RpcError::internal
