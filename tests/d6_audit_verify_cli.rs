@@ -317,3 +317,25 @@ fn audit_verify_prints_a_verified_predecessor_warning_on_a_passing_log() {
     );
     assert!(!warned.contains("unverified"), "{warned}");
 }
+
+#[test]
+fn audit_verify_tells_literal_escape_text_from_a_real_bidi_character() {
+    // GIVEN: a failing log whose predecessor id spells `\u{202e}` out, then
+    // carries a real U+202E
+    let dir = tempfile::tempdir().unwrap();
+    let log = dir.path().join("transparency.jsonl");
+    log_with_deleted_active(&log);
+    edit_record(&log, 0, |v| {
+        let id = r"lit\u{202e}|real".to_string() + "\u{202e}";
+        v["predecessor_missing"]["previous_log_id"] = id.into();
+    });
+
+    // WHEN: it is verified as a process
+    let (ok, text) = verify(dir.path(), &log, false);
+
+    // THEN: the spelled-out text prints with its backslash doubled, the real
+    // character as one escape, so the two never read alike
+    assert!(!ok, "{text}");
+    assert!(!text.contains('\u{202e}'), "{text:?}");
+    assert!(text.contains(r"lit\\u{202e}|real\u{202e}"), "{text}");
+}

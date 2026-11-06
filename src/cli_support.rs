@@ -480,3 +480,7 @@ pub fn describe_skipped(outcomes: &[Outcome]) -> String {
 #[cfg(test)]
 #[path = "cli_support_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "cli_support_shown_tests.rs"]
+mod shown_tests;
