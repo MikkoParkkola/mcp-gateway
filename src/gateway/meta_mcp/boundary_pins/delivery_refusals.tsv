@@ -365,7 +365,7 @@ src/secret_injection.rs	inject_rules	refusal	3	not-a-decision	a secret rule the 
 src/security/decision_record.rs	decision	refusal	1	not-delivered	reads the noted refusing check for the audit record
 src/security/decision_record.rs	has_refusal	refusal	1	not-delivered	predicate over the noted refusing check
 src/security/decision_record.rs	refusal_pair	refusal	1	not-delivered	reads the noted refusing check and its rule for the audit record
-src/security/firewall/refused_rules.rs	refuse_authored	first_refusal	1	feeds	the refusal refuse_authored returns to a config write
+src/security/firewall/refused_rules.rs	refuse_authored	first_refusal	1	no-record	a config write's refusal (render, replace); no call delivers it
 src/security/firewall/refused_rules.rs	warn_refused_rules	first_refusal	1	not-delivered	a load warning; nothing is refused
 src/security/http_diagnostics.rs	oauth_request_error	ssrf_refusal	1	recorded	an OAuth destination refusal reached through the refresh flight: each interactive caller records it at its join; the non-interactive token step records none
 src/security/http_diagnostics.rs	safe_request_error	ssrf_refusal	1	feeds	the SSRF refusal a capability call raises at send_with_retry
