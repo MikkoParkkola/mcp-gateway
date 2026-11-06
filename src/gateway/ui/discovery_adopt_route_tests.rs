@@ -154,6 +154,7 @@ impl Route {
         let response = adopt_discovery(
             axum::extract::State(Arc::clone(&self.state)),
             Some(Extension(Arc::clone(&self.cache))),
+            None,
             Guard::for_route(
                 crate::gateway::routes::UI_DISCOVERY_ADOPT,
                 &axum::http::Method::POST,
@@ -439,9 +440,16 @@ async fn without_a_config_file_nothing_is_adopted() {
     let route = Route::new(EMPTY, vec![stdio("tool", "npx tool", &[])]).await;
     let (id, revision) = route.listed("tool").await;
     std::fs::remove_file(route.config()).expect("remove");
+    let files = crate::gateway::test_helpers::ConfigFiles::snapshot(&route.config());
     let (status, body) = route.adopt(true, &id, &revision).await;
     assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    files.assert_unchanged(&route.config(), "the adopt with no gateway.yaml");
     assert_eq!(body["error"], "no_config_file", "{body}");
+    assert_eq!(
+        body["message"],
+        "no gateway.yaml exists yet; create one with `mcp-gateway init --profile local` (see QUICKSTART), then retry",
+        "{body}"
+    );
 }
 
 /// W25: on a gateway with an audit log, an adopt appends its own paired
@@ -741,3 +749,6 @@ async fn a_backend_written_by_hand_closes_its_decision() {
     })
     .await;
 }
+
+#[path = "discovery_adopt_deleted_tests.rs"]
+mod deleted;

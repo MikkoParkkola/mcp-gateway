@@ -282,14 +282,33 @@ async fn gh462_successful_mutations_preserve_literal_secret_references() {
         );
         let ctx = context(&path, resolved.config)
             .with_env(Arc::new(LiveEnv::new(resolved.overlay, resolved.env_paths)));
+        let files = mcp_gateway::gateway::test_helpers::ConfigFiles::snapshot(&path);
         let result = mutate_config_and_reload(&path, with_context.then_some(&ctx), |c| {
             c.backends.get_mut("sentinel").unwrap().description = "gh462 admin edit".into();
             Ok::<_, ()>(())
         })
         .await;
-        assert!(matches!(result, Ok(ConfigMutation::Applied((), _))));
         assert_references(&path);
         let saved = Config::load_literal(Some(&path)).unwrap();
+        if with_context {
+            // Auth is on, so a live gateway's older write path refuses before
+            // any lock: it records no intent. The file stays as it was.
+            assert_eq!(
+                result.as_ref().err(),
+                Some(&ConfigWriteError::Failed(
+                    "an audited gateway writes its config only through the audited writer"
+                        .to_owned()
+                )),
+                "the context write was not refused by the audit guard"
+            );
+            files.assert_unchanged(&path, "the refused context write");
+            assert_eq!(
+                saved.backends["sentinel"].description, "original operator backend",
+                "refused, yet written"
+            );
+            continue;
+        }
+        assert!(matches!(result, Ok(ConfigMutation::Applied((), _))));
         assert_eq!(
             saved.server.port, 39462,
             "admin persisted an environment override"
