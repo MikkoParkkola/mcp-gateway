@@ -126,6 +126,34 @@ fn a_grant_rule_id_hashes_the_whole_row() {
     );
 }
 
+/// Computed once from `RuleId::of` on Spark and pasted: a row with every
+/// optional field set, so a change to how any of them serialises is seen.
+const GOLDEN_FULL_ID: &str = "PASTE";
+
+#[test]
+fn a_grant_rule_id_hashes_every_optional_field() {
+    let key = RuleKey::from_derived([7; 32]);
+    let at = |secs| chrono::DateTime::from_timestamp(secs, 0).expect("a valid instant");
+    let mut full = row("g-full", "every field");
+    full.owner = Some(GrantSubject::for_test("api_key", "owner", None));
+    full.tool = Some("read_day".to_string());
+    full.expires_at = Some(at(1_900_000_000));
+    full.revoked_at = Some(at(1_800_000_000));
+    full.provenance = "local-operator".to_string();
+    assert_eq!(
+        grant_id_of(&key, &full).as_str(),
+        GOLDEN_FULL_ID,
+        "the row's id"
+    );
+    let store = keyed(std::slice::from_ref(&full), &key);
+    let got = store.rule_id("g-full");
+    assert_eq!(
+        got.map(RuleId::as_str),
+        Some(GOLDEN_FULL_ID),
+        "expected rule_id {GOLDEN_FULL_ID}, got {got:?}"
+    );
+}
+
 #[test]
 fn keying_a_grant_store_leaves_grant_digest_unchanged() {
     let rows = [row("g1", "r"), row("g2", "r")];
