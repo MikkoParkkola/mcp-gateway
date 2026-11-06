@@ -143,3 +143,43 @@ fn a_caller_cannot_append_an_audit_log_identified_record() {
     let again = TransparencyLogger::open(cfg(&path, 12, false)).unwrap();
     assert_eq!(again.log_id(), &id);
 }
+
+/// Replace `dst` with a copy of `src` through a rename, so `dst` is a new
+/// file (a new inode) as another writer's swap would leave it.
+fn swap_in(src: &Path, dst: &Path) {
+    let tmp = dst.with_extension("swap");
+    std::fs::copy(src, &tmp).unwrap();
+    std::fs::rename(&tmp, dst).unwrap();
+}
+
+#[test]
+fn a_log_replaced_under_a_live_logger_is_adopted_with_its_id() {
+    // GIVEN: a live logger on one log, and a second log with its own id
+    let dir = tempfile::tempdir().unwrap();
+    let path = log_path(&dir);
+    let l = TransparencyLogger::open(cfg(&path, 12, false)).unwrap();
+    append(&l, 0);
+    let other = tempfile::tempdir().unwrap();
+    let theirs = log_path(&other);
+    let replacement = TransparencyLogger::open(cfg(&theirs, 12, false)).unwrap();
+    append(&replacement, 0);
+    let their_id = replacement.log_id().as_str().to_string();
+    drop(replacement);
+    assert_ne!(l.log_id().as_str(), their_id, "two logs, two ids");
+
+    // WHEN: the second log replaces the first underneath it, whole (active
+    // file and mark), and the live logger writes and then rotates
+    swap_in(&theirs, &path);
+    swap_in(&sibling(&theirs, "hwm"), &sibling(&path, "hwm"));
+    append(&l, 1);
+    rotate_n(&l, &path, 1);
+
+    // THEN: the new segment carries the replacement's id, the logger holds
+    // it, and the change was raised as an identity change
+    let opened = lines(&path);
+    assert_eq!(event(&opened[0]), Some(rotation::EV_OPENED));
+    assert_eq!(opened[0]["log_id"].as_str(), Some(their_id.as_str()));
+    assert_eq!(l.log_id().as_str(), their_id, "the logger adopted the id");
+    let raised = l.subscribers.raised();
+    assert!(raised.contains(&"log_id"), "raised: {raised:?}");
+}

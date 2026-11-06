@@ -70,6 +70,10 @@ pub(crate) struct Subscribers {
     /// The active file this writer last wrote, by identity, and its length
     /// after that write: the same file found shorter was cut in place.
     last_end: std::sync::Mutex<Option<(FileId, u64)>>,
+    /// Every check that raised the generation, in order: rows tell an
+    /// identity change from a moved tail.
+    #[cfg(test)]
+    raised: std::sync::Mutex<Vec<&'static str>>,
 }
 
 impl Subscribers {
@@ -126,11 +130,21 @@ impl Subscribers {
             .generation
             .fetch_add(1, std::sync::atomic::Ordering::AcqRel)
             + 1;
+        #[cfg(test)]
+        if let Ok(mut raised) = self.raised.lock() {
+            raised.push(check);
+        }
         tracing::warn!(
             check,
             generation = now,
             "audit log: the log this writer extends was rewritten"
         );
+    }
+
+    /// The checks that raised the generation so far.
+    #[cfg(test)]
+    pub(super) fn raised(&self) -> Vec<&'static str> {
+        self.raised.lock().map(|r| r.clone()).unwrap_or_default()
     }
 
     /// Take the active file's current end as this writer's baseline: when a
