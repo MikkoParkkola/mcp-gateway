@@ -97,6 +97,7 @@ pub(in crate::gateway::meta_mcp) mod publish_gate;
 pub(crate) use dispatch_names::is_composite_meta_tool;
 mod effects;
 mod events_hook;
+mod first_fill;
 pub(crate) mod grant_audit;
 mod interim_promotion;
 #[cfg(test)]

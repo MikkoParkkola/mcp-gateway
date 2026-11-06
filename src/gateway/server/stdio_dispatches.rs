@@ -44,6 +44,11 @@ impl Cancelled {
         let mut marks = self.0.lock();
         let task = tokio::task::try_id();
         if !task.is_some_and(|task| marks.cancelled.contains(&task)) {
+            // A first list's flag commits before its answer can be
+            // read, under the lock its cancel takes, so a later list never
+            // reads it unset once the answer is out, and a cancelled one never
+            // commits it.
+            super::first_list_wait::answer_queued();
             // MIK-8176: every single answer enters the writer queue here, so
             // its holds are attached here, however it was built. The writer
             // hands them off as it takes the frame; a cancelled answer is

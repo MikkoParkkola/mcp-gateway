@@ -12,8 +12,30 @@ use crate::config_reload::write::MutateError;
 use crate::config_reload::{ConfigMutation, ConfigWriteError, RELOAD_LOCK_WAIT, ReloadOutcome};
 
 use super::ReloadContext;
+use super::replace::{AuditPosture, GatewayAuth};
+
+/// Why the older write paths refuse on an audited gateway.
+const AUDITED_ONLY: &str = "an audited gateway writes its config only through the audited writer";
 
 impl ReloadContext {
+    /// The older write paths append no intent, and their config lock
+    /// recovers a crashed write unaudited, so a gateway whose posture
+    /// requires an audit refuses them before any lock.
+    fn refuse_when_audited(&self) -> std::result::Result<(), ConfigWriteError> {
+        // Read once, with no re-check under the lock: the posture is fixed for
+        // this context's lifetime. `auth.enabled` is restart-only, so the
+        // running config never changes it, and the audit log is attached once,
+        // when the reporting is built.
+        let posture = AuditPosture::of(
+            self.reporting.audit_log.clone(),
+            GatewayAuth::of(self.live_config.running().auth.enabled),
+        );
+        if posture.requires_audit() {
+            return Err(ConfigWriteError::Failed(AUDITED_ONLY.to_owned()));
+        }
+        Ok(())
+    }
+
     /// Write `config` to `path`, then reload, with both steps under one lock.
     ///
     /// Waits [`RELOAD_LOCK_WAIT`] for the reload lock. See
@@ -59,6 +81,7 @@ impl ReloadContext {
     ) -> std::result::Result<ReloadOutcome, ConfigWriteError> {
         // One deadline for both locks: the in-process reload lock, then the
         // cross-process config lock, both held through the reload.
+        self.refuse_when_audited()?;
         let deadline = Instant::now() + wait;
         let _reload_guard = self.lock_reload_within(wait).await?;
         // Written and reloaded through the target the lock resolved: one file,
@@ -142,6 +165,7 @@ impl ReloadContext {
     where
         F: FnOnce(&mut Config) -> std::result::Result<T, E>,
     {
+        self.refuse_when_audited()?;
         let deadline = Instant::now() + wait;
         let _reload_guard = self.lock_reload_within(wait).await?;
         // The config lock is held from the load through the reload, so another

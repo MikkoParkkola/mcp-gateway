@@ -315,25 +315,6 @@ async fn an_all_renamed_journal_keeps_the_new_bytes() {
     assert_eq!(names(dir.path()), [".gateway.yaml.lock", "gateway.yaml"]);
 }
 
-/// T9: a `staged` journal whose original is gone cannot be acted on: the
-/// lock is refused with the manual step, and no file changes.
-#[tokio::test]
-async fn a_journal_without_its_original_refuses_the_lock() {
-    let (_dir, path, _ctx) = setup();
-    crashed_after_rename(&path, NEXT);
-    std::fs::remove_file(crate::config_persistence::journal::original_path(&path)).expect("rm");
-
-    match lock_now(&path).await {
-        Err(crate::config_persistence::lock::NotLocked::Failed(message)) => {
-            assert!(message.contains("copy the staged original"), "{message}");
-        }
-        Err(other) => panic!("expected a refusal, got {other:?}"),
-        Ok(_) => panic!("an unusable journal must refuse the lock"),
-    }
-    assert_eq!(read(&path), NEXT);
-    assert!(crate::config_persistence::journal::exists(&path));
-}
-
 /// T6g: a stranded candidate that does not even parse never blocks an
 /// ordinary edit: `mutate_locked` skips its preflight while a journal is
 /// pending, the lock restores the original and a reload follows, and the
@@ -748,3 +729,6 @@ async fn an_unchanged_replace_reloads_what_it_locked_when_the_link_moves() {
     let loaded = repointed_mid_reload(dir.path(), &link, replace, true).await;
     only_the_locked_target(&loaded, &real);
 }
+
+#[path = "replace_recovery_step_tests.rs"]
+mod recovery_step;

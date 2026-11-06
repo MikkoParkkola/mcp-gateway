@@ -53,6 +53,7 @@ use super::{
     validate_capability_url_for_context, validate_personal_capability_identity,
 };
 use crate::cache::ResponseCache;
+use crate::capability::execution_context::{RefusalTest, record_refusal};
 use crate::gateway::gateway_writes::WriteRecord;
 use crate::oauth::{TokenInfo, TokenStorage};
 use crate::secrets::SecretResolver;
@@ -469,18 +470,10 @@ impl CapabilityExecutor {
 
         let url = self.build_url(config, params)?;
         // Each refusal here is the call's answer: its record says so.
-        super::require_tls_for_rest(&url, &capability.auth, config).inspect_err(|_| {
-            // A malformed URL is a configuration error, not a refusal.
-            if crate::capability::execution_context::names_a_host(&url) {
-                crate::gateway::delivery_facts::refused_while_vouched();
-            }
-        })?;
-        validate_capability_url_for_context(&url, context).inspect_err(|e| {
-            // A malformed URL is a configuration error, not a refusal.
-            if crate::security::ssrf::is_ssrf_refusal(e) {
-                crate::gateway::delivery_facts::refused_while_vouched();
-            }
-        })?;
+        super::require_tls_for_rest(&url, &capability.auth, config)
+            .inspect_err(|e| record_refusal(e, RefusalTest::Cleartext(&url)))?;
+        validate_capability_url_for_context(&url, context)
+            .inspect_err(|e| record_refusal(e, RefusalTest::Destination))?;
         tracing::debug!(url = %url, method = %config.method, "Executing REST request");
 
         let method = config.method.parse::<Method>().map_err(|e| {

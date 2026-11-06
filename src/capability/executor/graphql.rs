@@ -14,6 +14,7 @@ use super::CapabilityExecutor;
 use super::params::status_error;
 use super::rest::{ExecutionContext, ProtocolExecutor};
 use crate::capability::definition::ProtocolConfig;
+use crate::capability::execution_context::{RefusalTest, record_refusal};
 use crate::capability::validate_personal_capability_identity;
 use crate::security::validate_url_not_ssrf;
 use crate::{Error, Result};
@@ -201,12 +202,8 @@ impl ProtocolExecutor for GraphqlExecutor<'_> {
                 "GraphQL endpoint URL not configured".to_string(),
             ));
         }
-        validate_url_not_ssrf(&graphql_config.endpoint).inspect_err(|e| {
-            // A malformed URL is a configuration error, not a refusal.
-            if crate::security::ssrf::is_ssrf_refusal(e) {
-                crate::gateway::delivery_facts::refused_while_vouched();
-            }
-        })?;
+        validate_url_not_ssrf(&graphql_config.endpoint)
+            .inspect_err(|e| record_refusal(e, RefusalTest::Destination))?;
         crate::security::ssrf::refuse_loopback_name(&graphql_config.endpoint)
             .inspect_err(|_| crate::gateway::delivery_facts::refused_while_vouched())?;
         crate::capability::require_tls_for_auth(
