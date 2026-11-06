@@ -550,7 +550,8 @@ impl Gateway {
     }
 }
 
-#[cfg(test)]
+// The same gate as its only caller's module (router/mod.rs: policy_barrier_tests).
+#[cfg(all(test, feature = "firewall"))]
 impl Gateway {
     /// The mTLS policy the production builder compiles from this gateway's
     /// config, with the rule key its ids are computed under, for a row that
