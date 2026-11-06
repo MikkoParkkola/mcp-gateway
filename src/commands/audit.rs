@@ -113,9 +113,7 @@ fn run_audit_verify(
                  segments, {} expired by retention, no tampering detected.",
                 result.entries_checked, result.segments_checked, result.segments_expired
             );
-            for warning in &result.warnings {
-                eprintln!("warning: {warning}");
-            }
+            print_warnings(&result.warnings);
             ExitCode::SUCCESS
         }
         Ok(result) => {
@@ -126,6 +124,8 @@ fn run_audit_verify(
                 .error_message
                 .unwrap_or_else(|| "unknown error".to_string());
             eprintln!("✗ Chain verification FAILED at counter {at}: {msg}");
+            // A failing log can still name what it replaced: never drop that.
+            print_warnings(&result.warnings);
             if !signed && result.signed_entry_seen {
                 eprintln!(
                     "note: the log has signed entries but no shared secret is configured; their HMAC was not checked."
@@ -133,6 +133,14 @@ fn run_audit_verify(
             }
             ExitCode::FAILURE
         }
+    }
+}
+
+/// Every verify warning, on stderr: the one place they are rendered, on the
+/// passing and the failing path alike.
+fn print_warnings(warnings: &[String]) {
+    for warning in warnings {
+        eprintln!("warning: {warning}");
     }
 }
 
