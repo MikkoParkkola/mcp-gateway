@@ -73,14 +73,11 @@ async fn a_keyless_occurrence_skips_rows_observed_per_user() {
         },
     )
     .await;
-    let records: Vec<String> = std::fs::read_dir(dir.path().join("outbox"))
-        .map(|entries| {
-            entries
-                .flatten()
-                .map(|e| std::fs::read_to_string(e.path()).expect("read"))
-                .collect()
-        })
-        .unwrap_or_default();
+    let records: Vec<String> =
+        crate::events::records::committed_records(&dir.path().join("outbox"))
+            .iter()
+            .map(|p| std::fs::read_to_string(p).expect("read"))
+            .collect();
     assert_eq!(records.len(), 1, "only the shared row: {records:?}");
     assert!(records[0].contains("sub_bob"), "{}", records[0]);
 }

@@ -82,7 +82,7 @@ impl super::MetaMcp {
             if self.code_mode_enabled || caller.surface_request == SurfaceRequest::CodeMode {
                 MetaSurface::CodeMode
             } else if self.meta_tool_exposure.is_exposed(REVIVE)
-                && CallerStanding::of_admin_flag(caller.is_admin).permits(REVIVE)
+                && CallerStanding::of(caller.admin).permits(REVIVE)
             {
                 MetaSurface::Standard(Revive::Offered)
             } else {

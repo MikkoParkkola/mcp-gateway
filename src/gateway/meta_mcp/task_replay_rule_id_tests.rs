@@ -49,7 +49,7 @@ fn scope<'a>(
 ) -> crate::gateway::meta_mcp::InvokeScope<'a> {
     crate::gateway::meta_mcp::InvokeScope {
         authorizer,
-        is_admin: false,
+        admin: crate::gateway::authz::AdminStanding::None,
         api_key_name: None,
         grant_key: None,
         agent_id: None,

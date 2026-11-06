@@ -468,7 +468,7 @@ fn admin_ctx(
     authorizer: &(dyn crate::gateway::authz::ToolAuthorizer + Sync),
 ) -> crate::gateway::meta_mcp::MetaMcpCallerContext<'_> {
     crate::gateway::meta_mcp::MetaMcpCallerContext {
-        is_admin: true,
+        admin: crate::gateway::authz::AdminStanding::Gateway,
         ..ctx(authorizer)
     }
 }

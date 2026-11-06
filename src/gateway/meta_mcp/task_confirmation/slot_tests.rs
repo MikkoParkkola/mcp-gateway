@@ -248,7 +248,7 @@ async fn ask(fx: &Fixture, retry: &RetryFields, declared: Declared) -> TaskConfi
 fn open_scope() -> crate::gateway::meta_mcp::InvokeScope<'static> {
     crate::gateway::meta_mcp::InvokeScope {
         authorizer: &crate::gateway::authz::AllowAll,
-        is_admin: true,
+        admin: crate::gateway::authz::AdminStanding::Gateway,
         api_key_name: None,
         grant_key: None,
         agent_id: None,

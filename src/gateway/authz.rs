@@ -244,6 +244,41 @@ impl<'a> BackendGrant<'a> {
     }
 }
 
+/// How far a caller's admin flag reaches. Declared lowest first,
+/// so the derived order is the rank: a step down is `fresh < captured`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum AdminStanding {
+    /// Not an admin.
+    None,
+    /// An admin scoped to some backends: admin breadth inside the scope
+    /// (Activity, admin-only capabilities on its backends), never past it.
+    InScope,
+    /// An admin whose scope is every backend (`*`, or an admin key with no
+    /// backends): the gateway-wide admin powers.
+    Gateway,
+}
+
+impl AdminStanding {
+    /// Whether this standing holds the gateway-wide admin powers.
+    #[must_use]
+    pub(crate) const fn is_gateway(self) -> bool {
+        matches!(self, Self::Gateway)
+    }
+}
+
+/// The one rule from an admin flag and a backend list to a standing, on the
+/// web UI's reading of the list ([`BackendGrant::for_ui_list`]), so an admin
+/// key with no backends stays a gateway-wide admin.
+pub(crate) fn admin_standing(admin: bool, backends: &[String]) -> AdminStanding {
+    if !admin {
+        AdminStanding::None
+    } else if BackendGrant::for_ui_list(true, backends) == BackendGrant::Unscoped {
+        AdminStanding::Gateway
+    } else {
+        AdminStanding::InScope
+    }
+}
+
 /// Which transport the caller arrived on.
 ///
 /// Reported by the authorizer rather than carried beside it: a field set next
@@ -699,3 +734,6 @@ impl ToolAuthorizer for ToolPolicyAuthorizer<'_> {
 #[cfg(test)]
 #[path = "authz_rule_id_tests.rs"]
 mod rule_id_tests;
+#[cfg(test)]
+#[path = "authz_standing_tests.rs"]
+mod standing_tests;
