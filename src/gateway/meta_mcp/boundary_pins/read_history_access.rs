@@ -12,6 +12,18 @@
 //! (`ReadHistory` or `tenant_reads::`) outside the judge and the history's
 //! own module. The positive control requires the judge's own `.reads()`
 //! call, so the scan cannot pass by seeing nothing.
+//!
+//! Threat model. The scan catches a second path to the history written in
+//! ordinary production code, or in a `macro_rules!` whose body names the
+//! call: every macro that splices a metavariable after `.` or `::`, or calls
+//! one, is refused unless listed in `SPLICES` with its body's fingerprint.
+//! A macro that assembles the call from token fragments
+//! (`$f $dot $name $args`) or stores a path argument and calls it later
+//! (`let f = $m; f($v)`) is out of model: the call exists only after
+//! expansion, which a syntax scan of the source cannot see. The compiler can:
+//! closing that is a type-level restriction on who may call
+//! `Firewall::reads`, tracked separately. This scan stays as the second line
+//! of defence.
 
 use super::packaged::crate_root;
 use super::scan::{Place, Sink, walk};
@@ -136,7 +148,8 @@ fn call_splices(mac: &syn::Macro) -> Vec<String> {
         let mut end = (i + 1).min(bytes.len());
         let op = |at: usize| at < bytes.len() && matches!(bytes[at], b'*' | b'+' | b'?');
         if !op(end) && end < bytes.len() {
-            end += 1;
+            // A separator: one whole character, which may be several bytes.
+            end += text[end..].chars().next().map_or(1, char::len_utf8);
         }
         if op(end) {
             end += 1;
@@ -336,6 +349,7 @@ fn a_macro_that_splices_a_call_is_reported() {
         ("($v:ident) => { Kind::$v }", &["::$v"]),
         ("($f:expr) => { $f.len() }", &[]),
         ("($f:expr) => { $crate::helpers::run($f) }", &[]),
+        ("($($x:ident)é*) => { $($x)é*() }", &["$($x)é*"]),
     ] {
         let item: syn::Item =
             syn::parse_str(&format!("macro_rules! m {{ {source}; }}")).expect("a macro_rules item");
@@ -344,6 +358,31 @@ fn a_macro_that_splices_a_call_is_reported() {
         };
         assert_eq!(call_splices(&mac.mac), want, "{source}");
     }
+}
+
+/// A listed macro is pinned to its body: changing the receiver of its call,
+/// or anything else in it, changes the fingerprint, so the inventory fails.
+#[test]
+fn a_changed_macro_body_changes_its_fingerprint() {
+    let print = |body: &str| {
+        let item: syn::Item =
+            syn::parse_str(&format!("macro_rules! delta {{ {body}; }}")).expect("an item");
+        let syn::Item::Macro(mac) = item else {
+            unreachable!("parsed as a macro");
+        };
+        body_fingerprint(&mac.mac)
+    };
+    let real = print("($try:ident, $n:expr) => { ::chrono::TimeDelta::$try($n) }");
+    assert_eq!(
+        real,
+        print("($try:ident,$n:expr)=>{::chrono::TimeDelta::$try($n)}"),
+        "spacing is not part of the body"
+    );
+    assert_ne!(
+        real,
+        print("($try:ident, $n:expr) => { ::other::Firewall::$try($n) }"),
+        "another receiver is another body"
+    );
 }
 
 /// What the walk does with an expression (scan.rs `visit_expr`): the sink
