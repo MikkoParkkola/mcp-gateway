@@ -248,6 +248,14 @@ impl TransparencyLogger {
 
 #[cfg(test)]
 impl TransparencyLogger {
+    /// Take the one append permit, as an append in progress holds it.
+    pub(crate) async fn hold_append_permit_for_test(&self) -> tokio::sync::OwnedSemaphorePermit {
+        Arc::clone(&self.bound.permit)
+            .acquire_owned()
+            .await
+            .expect("permit open")
+    }
+
     /// Test seam for callers outside this module: bound every append at
     /// `limit`, and block the next write until the returned barrier is
     /// released or dropped (a write stuck in the kernel).
