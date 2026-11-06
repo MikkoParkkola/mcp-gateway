@@ -85,3 +85,165 @@ fn a_reload_turning_auth_on_cannot_add_a_keyed_rule_while_auth_is_off() {
         "the running rules stay"
     );
 }
+
+const KEY_K: &str = "auth:\n  enabled: true\n  api_keys:\n    - name: k\n      key_sha256: \"sha256:0000000000000000000000000000000000000000000000000000000000000000\"\n";
+
+/// A started gateway from `startup`: its file, live config and env.
+fn started(
+    startup: &str,
+) -> (
+    tempfile::TempDir,
+    std::path::PathBuf,
+    Arc<LiveConfig>,
+    LiveEnv,
+) {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("gateway.yaml");
+    write_owner_only(&path, startup).expect("write config");
+    let started = Config::load_evaluated(Some(&path)).expect("startup loads");
+    let live = Arc::new(LiveConfig::new(started.config.clone()));
+    let env = LiveEnv::new(started.overlay, started.env_paths);
+    (dir, path, live, env)
+}
+
+/// An earlier reload published `auth.enabled: true` with a key; the process
+/// still runs without API-key authentication, so a later reload adding a
+/// rule scoped to that key is refused: the check reads what runs, not what
+/// was published.
+#[test]
+fn a_published_auth_switch_does_not_let_a_keyed_rule_in_before_a_restart() {
+    let (_dir, path, live, env) = started(&firewall(true, VALID));
+    write_owner_only(&path, format!("{KEY_K}{}", firewall(true, VALID))).expect("write");
+    let first = load_config_patch(&path, &live, &env).expect("a reload turning auth on is taken");
+    live.set(first.config);
+    assert!(
+        live.get().auth.enabled,
+        "the published config says auth is on"
+    );
+    write_owner_only(
+        &path,
+        format!(
+            "{KEY_K}{}",
+            firewall(
+                true,
+                "{match: \"*\", scan: [credentials], action: block, keys: [k]}"
+            )
+        ),
+    )
+    .expect("write");
+    let refused = load_config_patch(&path, &live, &env)
+        .map(|_| ())
+        .expect_err("still refused before a restart");
+    assert!(
+        refused.contains("security.firewall.rules[0].keys[0]"),
+        "{refused}"
+    );
+    assert!(
+        refused.contains("restart the gateway so auth.enabled"),
+        "{refused}"
+    );
+}
+
+/// An exception's `key` is a key reference too: with API-key authentication
+/// running, one naming no configured key is refused, naming the exception.
+#[test]
+fn an_exception_naming_no_configured_key_is_refused_while_the_firewall_runs() {
+    let startup = format!("{KEY_K}{}", firewall(true, VALID));
+    let reload = format!(
+        "{KEY_K}{}",
+        firewall(
+            false,
+            "{match: \"*\", scan: [credentials], action: block, except: [{key: nobody}]}"
+        )
+    );
+    let (outcome, _live) = reload_after(&startup, &reload);
+    let refused = outcome.expect_err("refused while the firewall runs");
+    assert!(
+        refused.contains("security.firewall.rules[0].except[0].key names no configured API key"),
+        "{refused}"
+    );
+    assert!(
+        refused.contains("security.firewall.enabled: false"),
+        "{refused}"
+    );
+}
+
+/// PUBSHAPE.5 guard: with the firewall off, a reload or a start that turns
+/// it on with a refused rule present is refused by the load, naming the rule.
+#[test]
+fn turning_the_firewall_on_with_a_refused_rule_is_refused() {
+    let dormant = "{match: \"*\", scan: [credentials], action: warn, except: [{}]}";
+    let (outcome, _live) = reload_after(&firewall(false, dormant), &firewall(true, dormant));
+    let refused = outcome.expect_err("a reload switching it on is refused");
+    assert!(
+        refused.contains("security.firewall.rules[0].except[0] sets no field"),
+        "{refused}"
+    );
+    let (_dir, path, _live, _env) = started(&firewall(false, VALID));
+    write_owner_only(&path, firewall(true, dormant)).expect("write");
+    let start = Config::load(Some(&path)).expect_err("a start with it on is refused");
+    assert!(
+        format!("{start:#}").contains("security.firewall.rules[0].except[0] sets no field"),
+        "{start:#}"
+    );
+}
+
+/// A file edited by hand to hold a refused rule while the firewall runs: a
+/// UI write and a whole-config write that carry it are refused before
+/// writing, since the reload after them would refuse it; the file stays.
+#[tokio::test]
+async fn a_write_carrying_a_refused_rule_is_refused_while_the_firewall_runs() {
+    let (_dir, path, live, _env) = started(&firewall(true, VALID));
+    let ctx = super::ReloadContext::new(
+        path.clone(),
+        Arc::clone(&live),
+        Arc::new(crate::backend::BackendRegistry::new()),
+        crate::config::FailsafeConfig::default(),
+        std::time::Duration::from_secs(60),
+    )
+    .expect("the registry pairs with the config");
+    write_owner_only(
+        &path,
+        firewall(
+            false,
+            "{match: \"*\", scan: [credentials], action: warn, except: [{}]}",
+        ),
+    )
+    .expect("hand edit");
+    let before = std::fs::read(&path).expect("read");
+
+    let mutated = ctx
+        .mutate_and_reload_outcome(&path, |config: &mut Config| {
+            config.server.port = 39993;
+            Ok::<(), ()>(())
+        })
+        .await;
+    let Err(refused) = mutated else {
+        panic!("the UI write is refused");
+    };
+    assert!(
+        refused.to_string().contains("except[0] sets no field"),
+        "{refused}"
+    );
+    assert_eq!(
+        std::fs::read(&path).expect("read"),
+        before,
+        "the UI write wrote nothing"
+    );
+
+    let mut whole = Config::load_literal_with_text(&path).expect("loads").0;
+    whole.server.port = 39994;
+    let refused = ctx
+        .write_and_reload_outcome(&path, &whole)
+        .await
+        .expect_err("the whole-config write is refused");
+    assert!(
+        refused.to_string().contains("except[0] sets no field"),
+        "{refused}"
+    );
+    assert_eq!(
+        std::fs::read(&path).expect("read"),
+        before,
+        "the whole write wrote nothing"
+    );
+}
