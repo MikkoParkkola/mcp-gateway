@@ -22,6 +22,7 @@
 //! records before the answer leaves, failing closed under `FailClosed`.
 
 use crate::error::rpc_codes::INTERNAL_ERROR;
+use std::collections::HashSet;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
@@ -52,6 +53,9 @@ struct Slot {
     answer_id: std::sync::OnceLock<RequestId>,
     logger: Arc<TransparencyLogger>,
     sealed: std::sync::atomic::AtomicBool,
+    /// Trace ids whose invocation record landed, read by each decision's own
+    /// append (see [`RecordedSet`]).
+    recorded: RecordedSet,
 }
 
 tokio::task_local! {
@@ -60,6 +64,9 @@ tokio::task_local! {
     /// Set while a finished task's stored delivery is re-checked: the
     /// suppression store and the task-and-caller half of the repeat key.
     static REPEAT_SCOPE: (Arc<DecisionDedupe>, String);
+    /// Set while a delivery is re-checked: its call already has the
+    /// invocation record of the original request.
+    static DELIVERY: ();
 }
 
 /// How long a re-check record waits for the repeat check and its append
@@ -78,11 +85,50 @@ pub(super) fn in_repeat_scope<T>(
 }
 
 /// Run `check` as a delivery re-check: the call it is about already has its
-/// invocation record, so the decisions it notes say so.
-// Stub: no scope yet, so the marker cannot see it.
-#[allow(dead_code)]
+/// invocation record, from the original request, so the decisions it notes
+/// say so.
+#[allow(dead_code)] // wired to its production sites in the next commits
 pub(super) fn in_delivery_scope<T>(check: impl FnOnce() -> T) -> T {
-    check()
+    DELIVERY.sync_scope((), check)
+}
+
+/// The trace ids whose invocation record landed in the log, shared by the
+/// notes of one slot. An invocation writer adds its id inside its own append
+/// op, after the write returned `Ok`; appends are serialized, so a decision
+/// appended later sees every earlier append's real outcome.
+#[derive(Clone, Default)]
+pub(super) struct RecordedSet(Arc<Mutex<HashSet<String>>>);
+
+impl RecordedSet {
+    pub(super) fn add(&self, trace_id: &str) {
+        self.0
+            .lock()
+            .expect("recorded set lock")
+            .insert(trace_id.to_owned());
+    }
+
+    fn contains(&self, trace_id: &str) -> bool {
+        self.0.lock().expect("recorded set lock").contains(trace_id)
+    }
+}
+
+impl std::fmt::Debug for RecordedSet {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("RecordedSet")
+    }
+}
+
+impl PartialEq for RecordedSet {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+impl Eq for RecordedSet {}
+
+/// The open slot's recorded set, for an invocation writer to add to.
+pub(super) fn open_slot_recorded() -> Option<RecordedSet> {
+    GRANT_SLOT.try_with(|slot| slot.recorded.clone()).ok()
 }
 
 /// A re-check note's suppression key and decision fingerprint.
@@ -127,6 +173,10 @@ pub(super) struct GrantNote {
     pub(super) subject: Option<String>,
     /// Set on a finished task's re-check: how a repeat is recognised.
     pub(super) repeat: Option<RepeatMark>,
+    /// Whether [`DELIVERY`] was set when the note was taken.
+    pub(super) delivery: bool,
+    /// The open slot's recorded set; empty for a note taken outside a slot.
+    pub(super) recorded: RecordedSet,
 }
 
 impl GrantNote {
@@ -135,6 +185,7 @@ impl GrantNote {
     fn project(server: &str, tool: &str, event: &IdentityGrantAuditEvent) -> Self {
         let mut fields = Map::new();
         fields.insert("kind".into(), DECISION_KIND.into());
+        fields.insert("server".into(), server.into());
         fields.insert("timestamp".into(), event.timestamp.to_rfc3339().into());
         fields.insert(
             "reason".into(),
@@ -168,7 +219,20 @@ impl GrantNote {
             fields,
             subject: event.subject.as_ref().map(|s| s.subject().to_owned()),
             repeat: None,
+            delivery: DELIVERY.try_with(|()| ()).is_ok(),
+            recorded: open_slot_recorded().unwrap_or_default(),
         }
+    }
+
+    /// Whether the call this note is about has an invocation record of its
+    /// own, as the log holds it now: a delivery re-check's call has the
+    /// original request's, any other call has one once its trace id landed.
+    fn invocation_recorded(&self) -> bool {
+        self.delivery
+            || self
+                .trace_id
+                .as_deref()
+                .is_some_and(|trace| self.recorded.contains(trace))
     }
 
     /// Every recorded field but the timestamp, and the outcome.
@@ -281,7 +345,8 @@ async fn write_records(
         {
             continue;
         }
-        let (fields, envelope) = (note.fields.clone(), note.envelope());
+        let (mut fields, envelope) = (note.fields.clone(), note.envelope());
+        let judge = note.clone();
         // Only a re-check shares its wait with the append; any other record
         // keeps the log's own bounds unchanged.
         let cap = note
@@ -295,6 +360,10 @@ async fn write_records(
         }
         let written = logger
             .append_bounded_within(cap, move |log| {
+                // Read here, in the append op: appends are serialized, so every
+                // earlier invocation append has finished and recorded itself.
+                let recorded = judge.invocation_recorded();
+                fields.insert("invocation_recorded".into(), recorded.into());
                 log.append_event(fields, &envelope).map(|_| ())
             })
             .await;
@@ -336,6 +405,7 @@ pub(super) async fn with_grant_slot<F: Future>(
             answer_id: std::sync::OnceLock::new(),
             logger: Arc::clone(logger),
             sealed: std::sync::atomic::AtomicBool::new(false),
+            recorded: RecordedSet::default(),
         }),
         logger: Arc::clone(logger),
     };

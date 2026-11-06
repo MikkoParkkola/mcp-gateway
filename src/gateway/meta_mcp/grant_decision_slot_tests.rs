@@ -29,6 +29,8 @@ fn note(server: &str, tool: &str, trace: Option<&str>, allowed: bool) -> GrantNo
         fields: serde_json::Map::new(),
         subject: None,
         repeat: None,
+        delivery: false,
+        recorded: super::grant_audit::RecordedSet::default(),
     }
 }
 
