@@ -142,3 +142,22 @@ fn a_caller_cannot_append_an_open_record_naming_a_predecessor() {
     assert!(refused.is_err(), "open records are the logger's alone");
     assert_eq!(lines(&path).len(), before);
 }
+
+#[test]
+fn a_caller_cannot_append_the_retired_predecessor_event() {
+    // GIVEN: a log
+    let dir = tempfile::tempdir().unwrap();
+    let path = log_path(&dir);
+    let l = TransparencyLogger::open(cfg(&path, 12, false)).unwrap();
+    let before = lines(&path).len();
+
+    // WHEN: a caller names the retired event
+    let mut forged = serde_json::Map::new();
+    forged.insert("event".into(), "audit_log_predecessor_missing".into());
+    forged.insert("previous_log_id".into(), "forged".into());
+    let refused = l.append_event(forged, &AuditEnvelope::gateway());
+
+    // THEN: refused, nothing appended
+    assert!(refused.is_err(), "the retired name stays the logger's");
+    assert_eq!(lines(&path).len(), before);
+}
