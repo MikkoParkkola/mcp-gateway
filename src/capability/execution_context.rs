@@ -562,6 +562,52 @@ pub(crate) fn validate_personal_capability_identity(
 mod tests {
     use super::*;
 
+    /// A URL names a host only when its host is present and not empty. url
+    /// 2.5.8 (see the comment on the `foo:///rpc` case after the first run)
+    /// decides what an empty authority on a non-special scheme parses to.
+    #[test]
+    fn only_a_named_host_counts_as_one() {
+        for (url, named) in [
+            ("foo:///rpc", false),
+            ("foo://api.invalid/rpc", true),
+            ("file:///tmp/rpc", false),
+            ("http://api.invalid", true),
+            ("rpc-path-only", false),
+            ("http://[::1/rpc", false),
+        ] {
+            assert_eq!(names_a_host(url), named, "{url}");
+        }
+    }
+
+    /// No hostless token endpoint passes the cleartext check, so the
+    /// destination guard after it never sees one. `https:///x` is not
+    /// hostless: a special scheme skips the empty authority, so it names
+    /// host `x`.
+    #[test]
+    fn the_cleartext_check_refuses_every_hostless_endpoint() {
+        for url in [
+            "https:///",
+            "http:///",
+            "file:///x",
+            "foo:///x",
+            "rpc-path-only",
+            "http://[::1/x",
+        ] {
+            assert!(
+                require_tls_for_credentials(url).is_err(),
+                "{url} passed the cleartext check"
+            );
+        }
+        assert_eq!(
+            url::Url::parse("https:///x")
+                .ok()
+                .as_ref()
+                .and_then(url::Url::host_str),
+            Some("x"),
+            "premise: https:///x names host x"
+        );
+    }
+
     #[test]
     fn default_context_keeps_loopback_blocked() {
         assert!(
