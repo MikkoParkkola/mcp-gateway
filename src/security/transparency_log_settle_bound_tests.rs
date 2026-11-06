@@ -57,6 +57,14 @@ async fn until(what: &str, ready: impl Fn() -> bool) {
     }
 }
 
+/// Move the paused clock to a deadline, and require `call` to answer there,
+/// with the clock held: a call still waiting on a later timer never answers
+/// here, since the clock moves only when this row moves it.
+async fn answers_at(call: &Pending, what: &str) {
+    tokio::time::advance(TICK).await;
+    until(what, || call.is_finished()).await;
+}
+
 /// Move the paused clock by `by`, and say whether `call` has answered.
 async fn advance(call: &Pending, by: Duration) -> bool {
     tokio::time::advance(by).await;
@@ -85,7 +93,7 @@ async fn a_settle_that_cannot_take_the_permit_is_refused_at_the_bound_with_no_ta
         !advance(&call, LIMIT - TICK).await,
         "gave up before the bound"
     );
-    advance(&call, TICK).await;
+    answers_at(&call, "an answer at the bound").await;
     let got = call.await.unwrap();
 
     // THEN: Refused as a timeout, no task ever ran, nothing appended
@@ -116,6 +124,7 @@ async fn a_settle_with_the_permit_closed_or_the_log_stalled_is_refused_at_once()
             l.close_append_permit_for_test();
         }
         let (before, started) = (on_disk(&path), tasks(&l));
+        let waits = l.permit_waits_for_test();
 
         // WHEN: it is settled
         let got = settle_once(&l, "w-1").await;
@@ -127,6 +136,10 @@ async fn a_settle_with_the_permit_closed_or_the_log_stalled_is_refused_at_once()
         );
         assert_eq!(tasks(&l), started, "{refusal}");
         assert_eq!(on_disk(&path), before, "{refusal}");
+        if refusal == "stalled" {
+            // Refused at once: it never queued for the permit.
+            assert_eq!(l.permit_waits_for_test(), waits, "{refusal}");
+        }
         if let Some((stall, l)) = stall {
             l.release_and_drain(stall).await;
         }
@@ -148,7 +161,7 @@ async fn a_settle_task_held_past_the_bound_is_unconfirmed_and_lands_once() {
         !advance(&call, LIMIT - TICK).await,
         "gave up before the bound"
     );
-    advance(&call, TICK).await;
+    answers_at(&call, "an answer at the bound").await;
     let got = call.await.unwrap();
 
     // THEN: Unconfirmed (the task exists and may run); once let go and
@@ -164,6 +177,7 @@ async fn a_settle_answers_within_twice_the_bound() {
     let dir = tempfile::tempdir().unwrap();
     let (_, l) = opened(&dir);
     let stall = l.stall_next_write_for_test(LIMIT);
+    *l.bound.limit.lock().unwrap() = LIMIT;
     let held = l.hold_append_permit_for_test().await;
     let waits = l.permit_waits_for_test();
     let call = spawn_settle(&l, "w-1");
@@ -180,7 +194,7 @@ async fn a_settle_answers_within_twice_the_bound() {
         !advance(&call, LIMIT - TICK).await,
         "gave up before the bound"
     );
-    advance(&call, TICK).await;
+    answers_at(&call, "an answer at the bound").await;
     let got = call.await.unwrap();
     assert!(matches!(got, Err(Unsettled::Unconfirmed(_))), "{got:?}");
     l.release_and_drain(stall).await;
