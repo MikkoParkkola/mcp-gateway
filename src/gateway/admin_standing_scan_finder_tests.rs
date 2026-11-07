@@ -367,6 +367,19 @@ fn the_token_walk_matches_parsed_syntax_and_a_capped_expansion_fails_named() {
     );
 }
 
+/// A variant matched by its qualified path is a read, in a match arm, a
+/// `let .. else` and an `if let`, as surely as in an expression.
+#[test]
+fn the_scan_finds_a_qualified_variant_in_a_pattern() {
+    for body in [
+        "match s { CallerStanding::Admin => {} _ => {} }",
+        "let CallerStanding::Admin = s else { return; };",
+        "if let CallerStanding::Admin = s {}",
+    ] {
+        assert_eq!(found(&file_of(body), "CallerStanding::Admin"), 1, "{body}");
+    }
+}
+
 // Guard rows: green on the text finder too, they pin the new finder's handling.
 
 /// An unrelated import under a monitored name does not hide a real call.
