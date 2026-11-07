@@ -80,7 +80,7 @@ impl Health {
             Some(shutdown),
             move || {
                 if let Ok(now) = crate::clock::unix_secs() {
-                    let memory = crate::gateway::health_metrics::process::resident_memory_bytes();
+                    let memory = crate::gateway::health_metrics::memory::resident_memory_bytes();
                     history.sample(memory, sessions() as u64, now);
                     history.tick(now);
                 }

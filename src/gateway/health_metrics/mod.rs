@@ -5,6 +5,7 @@
 
 pub(crate) mod clock;
 pub(crate) mod layers;
+pub(crate) mod memory;
 #[cfg(feature = "metrics")]
 pub(crate) mod process;
 

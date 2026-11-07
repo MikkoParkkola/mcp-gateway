@@ -50,52 +50,16 @@ pub(crate) fn register() {
 /// would keep the last good value after a failed read; text appended per
 /// scrape shows nothing instead.
 pub(crate) fn resident_memory_exposition() -> String {
-    resident_memory_bytes().map_or_else(String::new, exposition_of)
-}
-
-/// The process's resident memory in bytes, or `None` when it cannot be read
-/// or the system is not Linux. The one reader behind `/metrics`, the health
-/// history's sampler and the Gateway Status tile.
-pub(crate) fn resident_memory_bytes() -> Option<u64> {
-    #[cfg(target_os = "linux")]
-    {
-        bytes_from(
-            std::path::Path::new("/proc/self/statm"),
-            rustix::param::page_size() as u64,
-        )
-    }
-    #[cfg(not(target_os = "linux"))]
-    {
-        None
-    }
+    super::memory::resident_memory_bytes().map_or_else(String::new, exposition_of)
 }
 
 /// [`resident_memory_exposition`] reading `statm` at `path`, pages of `page` bytes.
 #[cfg(test)]
 pub(super) fn exposition_from(path: &std::path::Path, page: u64) -> String {
-    bytes_from(path, page).map_or_else(String::new, exposition_of)
-}
-
-/// The resident bytes `statm` at `path` reports, pages of `page` bytes.
-#[cfg(any(target_os = "linux", test))]
-pub(super) fn bytes_from(path: &std::path::Path, page: u64) -> Option<u64> {
-    std::fs::read_to_string(path)
-        .ok()
-        .and_then(|text| resident_bytes(&text, page))
+    super::memory::bytes_from(path, page).map_or_else(String::new, exposition_of)
 }
 
 /// The exposition text for `bytes` of resident memory.
 fn exposition_of(bytes: u64) -> String {
     format!("# HELP {RESIDENT} {RESIDENT_HELP}\n# TYPE {RESIDENT} gauge\n{RESIDENT} {bytes}\n")
-}
-
-/// The second field of a `statm` line (resident pages) times the page size.
-#[cfg(any(target_os = "linux", test))]
-pub(super) fn resident_bytes(statm: &str, page: u64) -> Option<u64> {
-    statm
-        .split_whitespace()
-        .nth(1)?
-        .parse::<u64>()
-        .ok()?
-        .checked_mul(page)
 }
