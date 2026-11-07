@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! The seam where settlement makes a retained answer replayable, so a row
 //! can check what is already in place at that moment (the answer's replay
 //! snapshot must be).
