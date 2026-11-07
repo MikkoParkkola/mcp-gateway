@@ -184,12 +184,16 @@ where
         // writes into a stored answer is still noted for its replay.
         return gateway_writes::scope(delivery).await.into_response();
     }
-    let ((mut response, answered), staged) = meta
-        .collecting_staged(RELAY_DELIVERS.scope(std::cell::Cell::new(false), async {
+    // Boxed: the collector's state (the staged receipts and their replay
+    // handles) would otherwise widen every HTTP call's boxed future, with
+    // relay detection off too, where this branch never runs.
+    let ((mut response, answered), staged) = Box::pin(meta.collecting_staged(
+        RELAY_DELIVERS.scope(std::cell::Cell::new(false), async {
             let response = delivery.await.into_response();
             (response, RELAY_DELIVERS.with(std::cell::Cell::get))
-        }))
-        .await;
+        }),
+    ))
+    .await;
     response
         .extensions_mut()
         .insert(DeferredReceipts::new(staged, answered, meta.live_config()));
