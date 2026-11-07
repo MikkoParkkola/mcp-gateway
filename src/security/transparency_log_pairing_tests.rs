@@ -643,3 +643,75 @@ fn each_role_fails_on_each_field_missing_or_mistyped() {
     ]);
     assert_paired(&ok, "well-formed roles");
 }
+
+#[tokio::test]
+async fn settle_refuses_a_payload_that_breaks_its_roles_fields() {
+    use super::settle::{FieldFault, FieldProblem, IntentKind, InvalidPayload, Role, Unsettled};
+    use super::settle_tests::on_disk;
+    use FieldProblem::{Forbidden, Missing, Mistyped};
+    let dir = tempfile::tempdir().unwrap();
+    let path = log_path(&dir);
+    let l = std::sync::Arc::new(TransparencyLogger::open(cfg(&path, 12, false)).unwrap());
+    let own = l.log_id();
+    let save = Role::Intent(IntentKind::Save);
+    let fault = |field: &'static str, problem| InvalidPayload::Field(FieldFault { field, problem });
+    let by = json!({"token": "", "intent_counter": 1});
+    let cases = [
+        (
+            "outcome no counter",
+            "w-1",
+            Role::Outcome,
+            json!({}),
+            fault("intent_counter", Missing),
+        ),
+        (
+            "intent counter",
+            "w-1",
+            save,
+            json!({"intent_counter": 3}),
+            fault("intent_counter", Forbidden),
+        ),
+        (
+            "recovery no settles",
+            "r-1",
+            Role::RecoveryIntent,
+            json!({}),
+            fault("settles", Missing),
+        ),
+        (
+            "settled_by empty token",
+            "w-1",
+            Role::Outcome,
+            json!({"intent_counter": 3, "settled_by": by}),
+            fault("settled_by.token", Mistyped),
+        ),
+        ("empty token", "", save, json!({}), fault("token", Mistyped)),
+        (
+            "deferred counter text",
+            "w-1",
+            Role::Deferred,
+            json!({"intent_counter": "3"}),
+            fault("intent_counter", Mistyped),
+        ),
+    ];
+    for (what, token, role, extra, want) in cases {
+        let before = on_disk(&path);
+        let got = l.settle(&own, token, role, payload(&extra)).await;
+        assert!(
+            matches!(&got, Err(Unsettled::Invalid(f)) if *f == want),
+            "{what}: {got:?}"
+        );
+        assert!(on_disk(&path) == before, "{what}: appended");
+    }
+    // Controls: the same roles, well formed, settle.
+    let controls = [
+        (save, "w-1", json!({})),
+        (Role::RecoveryIntent, "r-1", json!({"settles": "w-1"})),
+        (Role::Deferred, "w-1", json!({"intent_counter": 3})),
+        (Role::Outcome, "w-1", json!({"intent_counter": 3})),
+    ];
+    for (role, token, extra) in controls {
+        let got = l.settle(&own, token, role, payload(&extra)).await;
+        assert!(got.is_ok(), "{role:?}: {got:?}");
+    }
+}
