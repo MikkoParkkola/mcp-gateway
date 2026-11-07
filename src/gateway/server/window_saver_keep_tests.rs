@@ -42,10 +42,21 @@ fn plant_marker(root: &Path) -> PathBuf {
     marker
 }
 
+/// Valid counts for `total` HTTP requests, built the way a gateway builds
+/// them (a sink refuses counters that do not add up).
 fn counts(total: u64) -> SegmentCounts {
-    let mut counts = SegmentCounts::empty();
-    counts.snapshot.total = total;
-    counts
+    let mut registry = crate::protocol_revision_telemetry::Registry::new();
+    for _ in 0..total {
+        registry.observe_request(
+            Some("2025-11-25"),
+            "codex",
+            crate::protocol_revision_telemetry::Transport::Http,
+        );
+    }
+    SegmentCounts {
+        snapshot: registry.snapshot(),
+        ..SegmentCounts::empty()
+    }
 }
 
 fn unopened() -> Sink {

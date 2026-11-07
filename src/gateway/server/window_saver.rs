@@ -403,8 +403,8 @@ fn open_detached(
 /// Looked up on the thread instead, a late open would find the test's dir
 /// already gone and recreate it.
 #[cfg(test)]
-fn kept_at_spawn(_data_dir: &std::path::Path) -> Kept {
-    Vec::new()
+fn kept_at_spawn(data_dir: &std::path::Path) -> Kept {
+    crate::test_dir_keep::kept_dirs_for(data_dir)
 }
 
 /// Nothing to keep in a release build.

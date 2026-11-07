@@ -57,6 +57,10 @@ pub(crate) struct HttpSegmentSink {
     identity: WriterIdentity,
     #[cfg(test)]
     created_by: crate::test_late_write::Creator,
+    /// The temp dirs this sink keeps; declared last so the window's files
+    /// close before the dirs can go.
+    #[cfg(test)]
+    _kept_dirs: Vec<std::sync::Arc<tempfile::TempDir>>,
 }
 
 /// The temp dirs a detached open was asked to keep, taken when its thread was
@@ -65,7 +69,7 @@ pub(crate) struct HttpSegmentSink {
 pub(crate) type Kept = Vec<std::sync::Arc<tempfile::TempDir>>;
 /// The temp dirs a detached open was asked to keep: none in a release build.
 #[cfg(not(test))]
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone, Copy)]
 pub(crate) struct Kept;
 
 impl HttpSegmentSink {
@@ -86,7 +90,20 @@ impl HttpSegmentSink {
         now: u64,
         kept: Kept,
     ) -> io::Result<Self> {
-        let _ = kept;
+        #[cfg(test)]
+        let kept_dirs = {
+            let mut dirs = crate::test_dir_keep::kept_dirs_for(data_dir);
+            dirs.extend(kept);
+            dirs
+        };
+        #[cfg(test)]
+        if kept_dirs.is_empty() {
+            crate::test_dir_keep::report_unkept(crate::test_dir_keep::TELEMETRY_WINDOW, data_dir);
+        }
+        #[cfg(test)]
+        crate::test_dir_keep::run_before_first_fs_call();
+        #[cfg(not(test))]
+        let Kept = kept;
         let (window_path, lock_path) = window_paths(data_dir);
         let directory = data_dir.join(DURABLE_TELEMETRY_DIR);
         // A missing data directory here means the open is about to rebuild a
@@ -127,6 +144,8 @@ impl HttpSegmentSink {
             identity,
             #[cfg(test)]
             created_by,
+            #[cfg(test)]
+            _kept_dirs: kept_dirs,
         })
     }
 
