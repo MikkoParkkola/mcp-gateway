@@ -17,6 +17,9 @@ fn config(dir: &std::path::Path) -> Config {
     config.server.host = "127.0.0.1".to_string();
     config.server.port = 0;
     config.tasks.store_dir = dir.join("tasks").to_string_lossy().into_owned();
+    // Each test's own audit log: the default one in the home directory takes
+    // a one-process lease, so two of these starts at once refuse each other.
+    config.security.transparency_log.path = dir.join("audit.jsonl").to_string_lossy().into_owned();
     config.auth = AuthConfig {
         enabled: true,
         bearer_token: Some(TOKEN.to_string()),
