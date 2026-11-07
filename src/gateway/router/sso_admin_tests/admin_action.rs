@@ -101,12 +101,13 @@ impl Audited {
     }
 
     fn entries(&self) -> Vec<Value> {
-        self.raw()
-            .lines()
-            .map(|line| serde_json::from_str::<Value>(line).expect("a JSON entry"))
-            // Skip the log's genesis housekeeping record (#2275).
-            .filter(|e| e["event"] != "audit_segment_opened")
-            .collect()
+        crate::security::transparency_log::without_log_identified(
+            self.raw()
+                .lines()
+                .map(|line| serde_json::from_str::<Value>(line).expect("a JSON entry"))
+                // Skip the log's genesis housekeeping record (#2275).
+                .filter(|e| e["event"] != "audit_segment_opened"),
+        )
     }
 
     fn admin_actions(&self) -> Vec<Value> {
