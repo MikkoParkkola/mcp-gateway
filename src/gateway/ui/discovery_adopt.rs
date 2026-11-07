@@ -137,18 +137,14 @@ pub(super) fn answer(name: &str, written: Result<ReplaceOutcome, ReplaceError>) 
             Json(json!({"error": "not_in_place", "message": NOT_IN_PLACE})),
         )
             .into_response(),
-        // The gateway's own posture, fixed text: the operator can act on it.
-        Err(ReplaceError::NoAuditLog) => (
+        // The gateway's own posture, or the audit log refusing the intent:
+        // fixed text the operator can act on.
+        Err(ReplaceError::NoAuditLog | ReplaceError::AuditRefused(_)) => (
             StatusCode::SERVICE_UNAVAILABLE,
             Json(json!({"error": "audit_log_required", "message": NO_AUDIT_LOG})),
         )
             .into_response(),
         Err(ReplaceError::Refused(_)) => failed("refused"),
-        Err(ReplaceError::AuditRefused(_)) => (
-            StatusCode::SERVICE_UNAVAILABLE,
-            Json(json!({"error": "audit_log_required", "message": NO_AUDIT_LOG})),
-        )
-            .into_response(),
         Err(ReplaceError::Secrets(SaveError::Refused(StoreError::Unavailable(_)))) => {
             fixed(StatusCode::UNPROCESSABLE_ENTITY, STORE_UNAVAILABLE)
         }
