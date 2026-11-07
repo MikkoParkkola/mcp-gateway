@@ -41,6 +41,16 @@ pub(super) fn start(
         tracing::info!(
             "health history: a run it did not record happened; that time is shown as unaccounted"
         );
+    } else if started.set_aside {
+        tracing::warn!("health.json did not decode; set aside, the health history starts again");
+    } else if let Some(restart) = started.restart {
+        tracing::info!(
+            down_secs = restart.started_at.saturating_sub(restart.stopped_at),
+            source = ?restart.downtime_source,
+            "health history: restart recorded"
+        );
+    } else if started.fresh {
+        tracing::info!("health history: first start, nothing to restore");
     }
     let history = Arc::new(history);
     file::save(&history, &path, now);

@@ -51,6 +51,8 @@ pub(crate) struct Restart {
 }
 
 /// The 95th percentile of added latency over a span.
+// Read by the Gateway Status route (the next change); built for tests now.
+#[cfg(test)]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) enum P95 {
     /// The upper bound of the bucket holding the 95th percentile, in ms.
@@ -83,6 +85,7 @@ pub(crate) struct Block {
 }
 
 /// Uptime over a span of blocks.
+#[cfg(test)]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct Uptime {
     pub(crate) running_seconds: u64,
@@ -130,6 +133,9 @@ struct Inner {
 pub(crate) struct HealthHistory(Mutex<Inner>);
 
 pub(crate) mod file;
+// The readers serve the Gateway Status route (the next change); built for
+// tests until then.
+#[cfg(test)]
 mod read;
 mod write;
 

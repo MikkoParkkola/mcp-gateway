@@ -3,7 +3,15 @@
 //! Writing the history: a start that accounts for the gap before it, the
 //! recorders, the running-time tick, the clean stop and the save.
 
-use super::*;
+use std::collections::VecDeque;
+
+use parking_lot::Mutex;
+
+use super::{
+    BLOCK, BLOCKS_KEPT, Block, DowntimeSource, HALF, HALVES_KEPT, Half, HealthHistory, Inner,
+    LATENCY_SLOTS, MAX_GAPS, MAX_RESTARTS, Restart, Started,
+};
+use crate::gateway::health_metrics::ErrorKind;
 
 /// The latency slot a sample of `secs` falls in: the first bound it does not
 /// exceed, or the overflow slot.
@@ -248,6 +256,11 @@ impl HealthHistory {
 
     pub(crate) fn tick(&self, now: u64) {
         self.0.lock().tick(now);
+    }
+
+    /// Mark whether this run's history is saved; the saver sets it.
+    pub(crate) fn set_incomplete(&self, incomplete: bool) {
+        self.0.lock().incomplete = incomplete;
     }
 
     /// A clean stop at `now`; the shutdown save follows.

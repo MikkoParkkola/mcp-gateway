@@ -244,6 +244,16 @@ fn h10_a_missing_or_corrupt_file_starts_clean() {
     assert_eq!(h.errors(T0 - HALF, T0), None);
 }
 
+/// Every string anywhere in `v`.
+fn strings(v: &serde_json::Value, out: &mut Vec<String>) {
+    match v {
+        serde_json::Value::String(s) => out.push(s.clone()),
+        serde_json::Value::Array(a) => a.iter().for_each(|x| strings(x, out)),
+        serde_json::Value::Object(o) => o.values().for_each(|x| strings(x, out)),
+        _ => {}
+    }
+}
+
 /// H11: the saved file holds only numbers, the fixed restart fields and the
 /// two downtime kinds: no string a caller could have chosen.
 #[test]
@@ -254,14 +264,6 @@ fn h11_the_saved_file_holds_only_numbers_and_fixed_words() {
     h.sample(Some(1), 1, T0 + 3);
     h.stop(T0 + 10);
     let value: serde_json::Value = serde_json::from_slice(&h.encode(T0 + 10)).expect("json");
-    fn strings(v: &serde_json::Value, out: &mut Vec<String>) {
-        match v {
-            serde_json::Value::String(s) => out.push(s.clone()),
-            serde_json::Value::Array(a) => a.iter().for_each(|x| strings(x, out)),
-            serde_json::Value::Object(o) => o.values().for_each(|x| strings(x, out)),
-            _ => {}
-        }
-    }
     let mut found = Vec::new();
     strings(&value, &mut found);
     assert!(

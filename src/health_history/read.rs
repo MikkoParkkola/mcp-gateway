@@ -3,7 +3,8 @@
 //! Reading the history: the tiles' spans, the half-hours, the strip's blocks
 //! and restarts, and uptime as running over covered time.
 
-use super::*;
+use super::{BLOCK, Block, Half, HealthHistory, LATENCY_SLOTS, P95, Restart, Uptime};
+use crate::gateway::health_metrics::ErrorKind;
 
 /// The upper bound of latency slot `i` in ms, to the microsecond.
 fn bound_ms(i: usize) -> f64 {
@@ -114,11 +115,6 @@ impl HealthHistory {
             percent: (covered > 0).then(|| running as f64 / covered as f64 * 100.0),
             coverage_complete: !gap && from >= inner.observed_since,
         }
-    }
-
-    /// Mark whether this run's history is saved; the saver sets it.
-    pub(crate) fn set_incomplete(&self, incomplete: bool) {
-        self.0.lock().incomplete = incomplete;
     }
 
     /// This run's history could not be saved yet.
