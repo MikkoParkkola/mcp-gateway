@@ -649,20 +649,6 @@ impl ReloadContext {
         order::record(target, "commit");
         self.commit(target, current, &new, replaced, entries).await
     }
-
-    /// `Err(NoConfigFile)` when the file read under this lock is gone now.
-    /// Read from the disk, never from the lock's snapshot: a recovery since
-    /// the lock was taken may have restored it. A link that no longer names
-    /// the locked target, or points at a missing one, is `Failed`, never a
-    /// missing config.
-    fn still_there(locked: &Locked, config: &std::path::Path) -> Result<(), ReplaceError> {
-        match locked.absent(config) {
-            Ok(true) => Err(ReplaceError::NoConfigFile),
-            Ok(false) => Ok(()),
-            Err(why) => Err(ReplaceError::Failed(why)),
-        }
-    }
-
     /// Stage, journal, write, reload; then keep the new bytes or put the
     /// original back.
     async fn commit(
