@@ -452,10 +452,15 @@ mod tests {
         );
     }
 
+    /// CLIADD.1/.4 (A1): a credential-named `-e` literal goes to the secret
+    /// store; gateway.yaml holds only its reference. The files store is
+    /// pinned so no test reaches an OS keychain.
     #[tokio::test]
     async fn add_custom_command_backend() {
-        // GIVEN: a temp config
+        // GIVEN: a temp config whose secrets go to owner-only files
         let (_dir, path) = temp_config();
+        mcp_gateway::gateway::test_helpers::write_owner_only(&path, "secrets:\n  store: files\n")
+            .expect("write");
 
         // WHEN: adding with an explicit --command
         let code = run_add_command(
@@ -474,10 +479,13 @@ mod tests {
         let config = Config::load(Some(&path)).unwrap();
         let backend = config.backends.get("my-server").unwrap();
         assert_eq!(backend.description, "My custom server");
-        assert_eq!(
-            backend.env.get("API_KEY").map(String::as_str),
-            Some("secret123")
-        );
+        let written = backend.env.get("API_KEY").expect("API_KEY");
+        assert!(written.starts_with("file:"), "{written}");
+        let text = std::fs::read_to_string(&path).expect("read");
+        assert!(!text.contains("secret123"), "{text}");
+        // A files-store reference names the owner-only file holding the value.
+        let stored = std::fs::read_to_string(written.trim_start_matches("file:")).expect("entry");
+        assert_eq!(stored.trim_end(), "secret123");
     }
 
     #[tokio::test]
