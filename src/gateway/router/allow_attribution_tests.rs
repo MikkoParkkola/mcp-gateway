@@ -13,6 +13,9 @@ use super::{Answer, Logged, Outcome, Route, call_as, fixture, invocations};
 use crate::config::Config;
 use crate::mtls::access_control::rule_id_tests::{mtls_id, rule};
 
+#[path = "allow_attribution_firewall_tests.rs"]
+mod firewall;
+
 /// The fixture's live config with `edit` applied.
 fn edited(fx: &Logged, edit: impl FnOnce(&mut Config)) -> Config {
     let mut config = (*fx.state.live_config.get()).clone();
