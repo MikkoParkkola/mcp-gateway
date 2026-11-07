@@ -67,9 +67,7 @@ fn writer_outcomes() -> Vec<(
             "not_in_place",
         ),
         (
-            Err(ReplaceError::Refused(
-                "auth is on but no audit log is configured; config writes are refused".to_owned(),
-            )),
+            Err(ReplaceError::NoAuditLog),
             StatusCode::SERVICE_UNAVAILABLE,
             "audit_log_required",
         ),

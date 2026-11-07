@@ -67,3 +67,14 @@ async fn the_audit_log_answer_follows_the_type_not_the_words() {
         "{look_alike:?}"
     );
 }
+
+/// SAVE.6: the typed refusal answers 503 `audit_log_required` with its text.
+#[tokio::test]
+async fn the_no_audit_log_refusal_answers_503_audit_log_required() {
+    let (status, text) = message(&ReplaceError::NoAuditLog).await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{text}");
+    assert!(
+        text.contains("audit_log_required") && text.contains(NO_AUDIT_LOG),
+        "{text}"
+    );
+}

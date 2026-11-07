@@ -140,7 +140,7 @@ pub(super) fn answer(name: &str, written: Result<ReplaceOutcome, ReplaceError>) 
         )
             .into_response(),
         // The gateway's own posture, fixed text: the operator can act on it.
-        Err(ReplaceError::Refused(why)) if why == NO_AUDIT_LOG => (
+        Err(ReplaceError::NoAuditLog) => (
             StatusCode::SERVICE_UNAVAILABLE,
             Json(json!({"error": "audit_log_required", "message": NO_AUDIT_LOG})),
         )
