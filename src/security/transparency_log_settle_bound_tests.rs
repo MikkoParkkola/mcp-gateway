@@ -21,6 +21,10 @@ use super::*;
 /// The F20 bound the timing rows set: a paused clock makes its size free.
 const LIMIT: Duration = Duration::from_secs(5);
 const TICK: Duration = Duration::from_millis(1);
+/// One tick before a bound: the last moment a call must still be waiting.
+const JUST_BEFORE: Duration = LIMIT
+    .checked_sub(TICK)
+    .expect("the bound is longer than a tick");
 
 fn opened(dir: &tempfile::TempDir) -> (std::path::PathBuf, Arc<TransparencyLogger>) {
     let path = log_path(dir);
@@ -105,7 +109,7 @@ async fn a_settle_that_cannot_take_the_permit_is_refused_at_the_bound_with_no_ta
     let call = spawn_settle(&l, "w-1");
     until("the permit wait", || l.permit_waits_for_test() > waits).await;
     assert!(
-        !advance(&call, LIMIT - TICK).await,
+        !advance(&call, JUST_BEFORE).await,
         "gave up before the bound"
     );
     answers_at(&call, "an answer at the bound").await;
@@ -177,7 +181,7 @@ async fn a_settle_task_held_past_the_bound_is_unconfirmed_and_lands_once() {
     let call = spawn_settle(&l, "w-1");
     until("the task start", || gate.is_entered()).await;
     assert!(
-        !advance(&call, LIMIT - TICK).await,
+        !advance(&call, JUST_BEFORE).await,
         "gave up before the bound"
     );
     answers_at(&call, "an answer at the bound").await;
@@ -201,7 +205,7 @@ async fn a_settle_answers_within_twice_the_bound() {
     let waits = l.permit_waits_for_test();
     let call = spawn_settle(&l, "w-1");
     until("the permit wait", || l.permit_waits_for_test() > waits).await;
-    assert!(!advance(&call, LIMIT - TICK).await);
+    assert!(!advance(&call, JUST_BEFORE).await);
 
     // WHEN: the permit frees just inside its bound, and the write stalls
     drop(held);
@@ -210,7 +214,7 @@ async fn a_settle_answers_within_twice_the_bound() {
     // THEN: still waiting one tick before the write bound, and Unconfirmed
     // at it: under twice the bound in all
     assert!(
-        !advance(&call, LIMIT - TICK).await,
+        !advance(&call, JUST_BEFORE).await,
         "gave up before the bound"
     );
     answers_at(&call, "an answer at the bound").await;
