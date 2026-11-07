@@ -39,113 +39,116 @@ fn found_in(files: &[(&str, &str)]) -> Vec<String> {
         .collect()
 }
 
+/// G2 cases: a source line and the finding it must produce when raw.
+const ARGUMENT_FORMS: [(&str, &str); 27] = [
+    (
+        "fn f(e: E) { println!(\"{}\", e.name); }",
+        "f println! e.name",
+    ),
+    (
+        "fn f(e: E) { println!(\"{n}\", n = e.name); }",
+        "f println! e.name",
+    ),
+    (
+        "fn f(e: E) { let name = e.name; println!(\"{name}\"); }",
+        "f println! {name}",
+    ),
+    (
+        "fn f(e: E) { tracing::warn!(server = %e.name, \"skipped\"); }",
+        "f warn! e.name",
+    ),
+    (
+        "fn f(e: E) { tracing::warn!(\"skipped {}\", e.name); }",
+        "f warn! e.name",
+    ),
+    (
+        "fn f(e: E) { wrap!(println!(\"{}\", e.name)); }",
+        "f println! e.name",
+    ),
+    (
+        "fn f(e: E) { wrap!(println!(\"{}\", e.name)); }",
+        "f macro wrap!",
+    ),
+    (
+        "fn f(e: E) { tokio::select! { _ = w() => println!(\"{}\", e.name) } }",
+        "f select! <body not parsed>",
+    ),
+    (
+        "fn f(e: E) { let v = vec![format!(\"{}\", e.name)]; }",
+        "f format! e.name",
+    ),
+    (
+        "macro_rules! out { ($e:expr) => { println!(\"{}\", $e) } }",
+        " item macro macro_rules",
+    ),
+    (
+        "fn f(e: E) { assert!(ok(), \"{}\", e.name); }",
+        "f assert! e.name",
+    ),
+    (
+        "fn f(e: E) { assert_eq!(e.name, \"x\"); }",
+        "f assert_eq! e.name",
+    ),
+    ("fn f(e: E) { dbg!(e.name); }", "f dbg! e.name"),
+    (
+        "fn f(e: E) { out.write_all(e.name.as_bytes()); }",
+        "f write_all() e.name.as_bytes()",
+    ),
+    (
+        "fn f(e: E) { std::io::Write::write_all(&mut out, e.name.as_bytes()); }",
+        "f write_all() e.name.as_bytes()",
+    ),
+    (
+        "fn f(e: E) { s.push_str(&e.name); }",
+        "f push_str() &e.name",
+    ),
+    ("fn f(e: E) { s += &e.name; }", "f += &e.name"),
+    (
+        "fn shown(s: &str) -> &str { s }\nfn f(e: E) { println!(\"{}\", shown(&e.name)); }",
+        "f println! shown(..)",
+    ),
+    (
+        "use tracing::warn as w;\nfn f(e: E) { w!(\"{}\", e.name); }",
+        "f warn! e.name",
+    ),
+    (
+        "use crate::cli_support::shown;\nfn shown_path(p: &Path) -> String { let s = shown(&p.to_string_lossy()); s.to_string() }\nfn f(p: &Path) { tracing::debug!(\"{}\", shown_path(p)); }",
+        "f debug! shown_path(..)",
+    ),
+    (
+        "fn f(e: E) { println!(concat!(\"{\", \"name}\")); }",
+        "f println! <format not a literal>",
+    ),
+    (
+        "fn f(e: E) { tokio::select! { _ = w() => println!(\"{}\", e.name) } }",
+        "f println! e.name",
+    ),
+    (
+        "fn f(e: E) { s.r#push_str(&e.name); }",
+        "f push_str() &e.name",
+    ),
+    (
+        "fn f(value: &Shown, e: E) { let value = e.name; println!(\"{value}\"); }",
+        "f println! {value}",
+    ),
+    (
+        "fn f(value: &Shown, e: E) { let g = |value: &str| println!(\"{}\", value); g(&e.name); }",
+        "f println! value",
+    ),
+    (
+        "fn f(value: &Shown, e: E) { tokio::select! { _ = w() => { let value = &e.name; println!(\"{value}\"); } } }",
+        "f println! {value}",
+    ),
+    (
+        "fn scan_failed(e: &E) -> Shown { shown(&e.to_string()) }\nmod inner { fn g(e: E) { warn!(\"{}\", scan_failed(&e.name)); } fn scan_failed(s: &str) -> String { s.to_owned() } }",
+        "g warn! scan_failed(..)",
+    ),
+];
+
 /// G2: every argument form is reported when raw.
 #[test]
 fn the_output_scan_finds_each_argument_form() {
-    let cases = [
-        (
-            "fn f(e: E) { println!(\"{}\", e.name); }",
-            "f println! e.name",
-        ),
-        (
-            "fn f(e: E) { println!(\"{n}\", n = e.name); }",
-            "f println! e.name",
-        ),
-        (
-            "fn f(e: E) { let name = e.name; println!(\"{name}\"); }",
-            "f println! {name}",
-        ),
-        (
-            "fn f(e: E) { tracing::warn!(server = %e.name, \"skipped\"); }",
-            "f warn! e.name",
-        ),
-        (
-            "fn f(e: E) { tracing::warn!(\"skipped {}\", e.name); }",
-            "f warn! e.name",
-        ),
-        (
-            "fn f(e: E) { wrap!(println!(\"{}\", e.name)); }",
-            "f println! e.name",
-        ),
-        (
-            "fn f(e: E) { wrap!(println!(\"{}\", e.name)); }",
-            "f macro wrap!",
-        ),
-        (
-            "fn f(e: E) { tokio::select! { _ = w() => println!(\"{}\", e.name) } }",
-            "f select! <body not parsed>",
-        ),
-        (
-            "fn f(e: E) { let v = vec![format!(\"{}\", e.name)]; }",
-            "f format! e.name",
-        ),
-        (
-            "macro_rules! out { ($e:expr) => { println!(\"{}\", $e) } }",
-            " item macro macro_rules",
-        ),
-        (
-            "fn f(e: E) { assert!(ok(), \"{}\", e.name); }",
-            "f assert! e.name",
-        ),
-        (
-            "fn f(e: E) { assert_eq!(e.name, \"x\"); }",
-            "f assert_eq! e.name",
-        ),
-        ("fn f(e: E) { dbg!(e.name); }", "f dbg! e.name"),
-        (
-            "fn f(e: E) { out.write_all(e.name.as_bytes()); }",
-            "f write_all() e.name.as_bytes()",
-        ),
-        (
-            "fn f(e: E) { std::io::Write::write_all(&mut out, e.name.as_bytes()); }",
-            "f write_all() e.name.as_bytes()",
-        ),
-        (
-            "fn f(e: E) { s.push_str(&e.name); }",
-            "f push_str() &e.name",
-        ),
-        ("fn f(e: E) { s += &e.name; }", "f += &e.name"),
-        (
-            "fn shown(s: &str) -> &str { s }\nfn f(e: E) { println!(\"{}\", shown(&e.name)); }",
-            "f println! shown(..)",
-        ),
-        (
-            "use tracing::warn as w;\nfn f(e: E) { w!(\"{}\", e.name); }",
-            "f warn! e.name",
-        ),
-        (
-            "use crate::cli_support::shown;\nfn shown_path(p: &Path) -> String { let s = shown(&p.to_string_lossy()); s.to_string() }\nfn f(p: &Path) { tracing::debug!(\"{}\", shown_path(p)); }",
-            "f debug! shown_path(..)",
-        ),
-        (
-            "fn f(e: E) { println!(concat!(\"{\", \"name}\")); }",
-            "f println! <format not a literal>",
-        ),
-        (
-            "fn f(e: E) { tokio::select! { _ = w() => println!(\"{}\", e.name) } }",
-            "f println! e.name",
-        ),
-        (
-            "fn f(e: E) { s.r#push_str(&e.name); }",
-            "f push_str() &e.name",
-        ),
-        (
-            "fn f(value: &Shown, e: E) { let value = e.name; println!(\"{value}\"); }",
-            "f println! {value}",
-        ),
-        (
-            "fn f(value: &Shown, e: E) { let g = |value: &str| println!(\"{}\", value); g(&e.name); }",
-            "f println! value",
-        ),
-        (
-            "fn f(value: &Shown, e: E) { tokio::select! { _ = w() => { let value = &e.name; println!(\"{value}\"); } } }",
-            "f println! {value}",
-        ),
-        (
-            "fn scan_failed(e: &E) -> Shown { shown(&e.to_string()) }\nmod inner { fn g(e: E) { warn!(\"{}\", scan_failed(&e.name)); } fn scan_failed(s: &str) -> String { s.to_owned() } }",
-            "g warn! scan_failed(..)",
-        ),
-    ];
+    let cases = ARGUMENT_FORMS;
     // Every case runs, and each one missed is named: one failing form
     // cannot hide another.
     let missed: Vec<String> = cases
