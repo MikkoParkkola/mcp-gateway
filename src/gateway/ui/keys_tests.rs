@@ -364,12 +364,15 @@ fn t8_no_credential_identifier_leaves_the_route() {
     let parsed: Value = serde_json::from_str(&body).expect("json");
     assert_eq!(parsed["keys"].as_array().map(Vec::len), Some(3), "{body}");
     let logged = serde_json::to_string(&logs).expect("logs serialise");
+    // Both texts are JSON, where a Windows path's backslashes are escaped:
+    // each needle is searched raw and in its JSON-escaped spelling.
     for needle in &forbidden {
-        assert!(!body.contains(needle.as_str()), "the body carries {needle}");
-        assert!(
-            !logged.contains(needle.as_str()),
-            "a log record carries {needle}"
-        );
+        let escaped = serde_json::to_string(needle).expect("a string serialises");
+        let escaped = escaped.trim_matches('"');
+        for spelling in [needle.as_str(), escaped] {
+            assert!(!body.contains(spelling), "the body carries {needle}");
+            assert!(!logged.contains(spelling), "a log record carries {needle}");
+        }
     }
 }
 

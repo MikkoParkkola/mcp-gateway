@@ -394,9 +394,14 @@ fn p7_keyedit_refusals_are_not_written_with_hand_steps() {
             ..Setup::default()
         });
         let answer = refused(&fx, &fx.body("hand"), StatusCode::CONFLICT, "not_written");
-        let text = answer.to_string();
-        assert!(text.contains("mcp-gateway hash-key"), "{text}");
-        assert!(text.contains(&fx.path().display().to_string()), "{text}");
+        // The decoded message, not the JSON text: there a Windows path's
+        // backslashes are escaped and never match `display()`.
+        let message = answer["message"].as_str().expect("a message");
+        assert!(message.contains("mcp-gateway hash-key"), "{answer}");
+        assert!(
+            message.contains(&fx.path().display().to_string()),
+            "{answer}"
+        );
     }
     let _ = ROOT;
 }
