@@ -87,7 +87,7 @@ impl Creator {
 }
 
 /// Best effort: attribution must never fail the write it describes.
-fn report(line: &str) {
+pub(crate) fn report(line: &str) {
     let _ = std::io::stderr().lock().write_all(line.as_bytes());
 }
 

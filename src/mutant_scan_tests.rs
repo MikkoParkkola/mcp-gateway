@@ -58,8 +58,16 @@ fn s5_a_call_inside_a_test_module_is_a_site() {
 #[test]
 fn s6_spaced_and_path_calls_are_sites() {
     assert_eq!(
-        ids("fn f() { mutant ! (\"F\", 1, 2); crate::mutant!(\"G\", 1, 2); }"),
-        vec![Some("F".to_owned()), Some("G".to_owned())]
+        ids(concat!(
+            "fn f() { mutant ! (\"F\", 1, 2); crate::mutant!(\"G\", 1, 2); ",
+            "mutant!{\"K\", 1, 2}; mutant![\"L\", 1, 2]; }"
+        )),
+        vec![
+            Some("F".to_owned()),
+            Some("G".to_owned()),
+            Some("K".to_owned()),
+            Some("L".to_owned())
+        ]
     );
 }
 
@@ -83,16 +91,28 @@ fn s8_the_macro_definition_is_not_a_site() {
 #[test]
 fn s9_the_walk_reaches_every_source_root() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    // The unpacked published crate (the post-merge packaged suite) ships no
+    // nested crates and no git metadata; the same test as
+    // boundary_pins::packaged::packaged_crate_at.
+    if root.join("Cargo.toml.orig").exists() && !root.join(".git").exists() {
+        eprintln!("skipped: the packaged crate is not the repository");
+        return;
+    }
     let files = tracked_rs_files(root).expect("git ls-files");
-    for prefix in [
-        "src/",
-        "tests/",
-        "benches/",
-        "examples/",
-        "crates/gateway-core/",
-    ] {
+    let mut prefixes: Vec<String> = ["src/", "tests/", "benches/", "examples/"]
+        .map(str::to_owned)
+        .to_vec();
+    // Every nested crate on disk, so a new one is covered without an edit.
+    for entry in std::fs::read_dir(root.join("crates")).expect("read the nested crates") {
+        let entry = entry.expect("nested crate entry");
+        if entry.path().is_dir() {
+            prefixes.push(format!("crates/{}/", entry.file_name().to_string_lossy()));
+        }
+    }
+    assert!(prefixes.len() > 4, "no nested crate under crates");
+    for prefix in prefixes {
         assert!(
-            files.iter().any(|f| f.starts_with(prefix)),
+            files.iter().any(|f| f.starts_with(&prefix)),
             "no tracked .rs file under {prefix}: the walk is not reading the repository"
         );
     }
@@ -134,7 +154,7 @@ fn s11_planted_calls_in_every_root_are_found() {
         "benches/x.rs",
         "examples/x.rs",
         "build.rs",
-        "crates/gateway-core/src/x.rs",
+        "crates/nested/src/x.rs",
     ];
     for path in planted {
         let full = dir.path().join(path);
@@ -214,13 +234,14 @@ fn s13_a_tree_without_git_is_walked_on_disk() {
     for (path, text) in [
         ("src/a.rs", "fn f() { mutant!(\"Q\", 1, 2); }\n"),
         (
-            "crates/gateway-core/src/b.rs",
+            "crates/nested/src/b.rs",
             "fn g() { vec![mutant!(\"R\", 1, 2)]; }\n",
         ),
         (
             "target/debug/build/c.rs",
             "fn h() { mutant!(\"S\", 1, 2); }\n",
         ),
+        ("src/target/d.rs", "fn i() { mutant!(\"T\", 1, 2); }\n"),
     ] {
         let full = dir.path().join(path);
         std::fs::create_dir_all(full.parent().expect("parent")).expect("mkdir");
@@ -233,13 +254,44 @@ fn s13_a_tree_without_git_is_walked_on_disk() {
     assert_eq!(
         got,
         vec![
-            (
-                "crates/gateway-core/src/b.rs".to_owned(),
-                Some("R".to_owned())
-            ),
+            ("crates/nested/src/b.rs".to_owned(), Some("R".to_owned())),
             ("src/a.rs".to_owned(), Some("Q".to_owned())),
+            ("src/target/d.rs".to_owned(), Some("T".to_owned())),
         ]
     );
+}
+
+/// S14: a raw identifier names the same macro, so `r#mutant!` is a site and
+/// `macro_rules! r#mutant` a definition.
+#[test]
+fn s14_raw_identifiers_are_found() {
+    assert_eq!(ids("fn f() { r#mutant!(\"V\", 1, 2); }"), one("V"));
+    assert_eq!(
+        super::definitions("macro_rules! r#mutant { () => {} }").expect("tokenizes"),
+        vec![1]
+    );
+}
+
+/// S15: an ID is read only when its spelling is its value: a plain or raw
+/// string with no escapes. An escaped one has no ID, so the runner refuses
+/// the site instead of guessing.
+#[test]
+fn s15_only_plain_string_ids_are_read() {
+    assert_eq!(ids("fn f() { mutant!(r\"W\", 1, 2); }"), one("W"));
+    assert_eq!(ids("fn f() { mutant!(r#\"X\"#, 1, 2); }"), one("X"));
+    assert_eq!(ids("fn f() { mutant!(\"\\u{41}\", 1, 2); }"), vec![None]);
+    assert_eq!(ids("fn f() { mutant!(ID, 1, 2); }"), vec![None]);
+}
+
+/// S16: a file that does not tokenize fails the scan, named, rather than
+/// being skipped.
+#[test]
+fn s16_a_file_that_does_not_tokenize_fails_the_scan() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::create_dir_all(dir.path().join("src")).expect("mkdir");
+    std::fs::write(dir.path().join("src/bad.rs"), "fn f( {\n").expect("write fixture");
+    let err = super::repo_sites(dir.path()).expect_err("an unbalanced file refuses");
+    assert!(err.contains("src/bad.rs"), "{err}");
 }
 
 /// The runner's site list (SCH.6): with `MCP_GATEWAY_MUTANT_LIST` set it

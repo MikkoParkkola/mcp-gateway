@@ -21,10 +21,9 @@ use axum::routing::{get, post};
 use serde_json::json;
 
 use super::backends::validate_backend_name;
+use super::config_file::{Gateway, load_gateway, read_gateway};
 use super::errors::flat_error;
 use super::guard::Guard;
-use crate::config::Config;
-use crate::config_reload::FileRevision;
 use crate::discovery::listing::{DiscoveryCache, ListedFind, Listing, Refusal};
 use crate::discovery::shadow::ShadowRiskSeverity;
 use crate::gateway::router::AppState;
@@ -63,47 +62,6 @@ fn discovery_unavailable() -> Response {
         "discovery is not available",
     )
     .into_response()
-}
-
-/// What gateway.yaml says, read once for one request.
-enum Gateway {
-    /// No config file: nothing can be adopted, the list is still served.
-    None,
-    /// The file's revision and the backend names and capabilities name in it.
-    File {
-        revision: FileRevision,
-        config: Box<Config>,
-    },
-}
-
-/// One read: the config and the exact text it was loaded from, so the
-/// revision and the managed set always describe the same bytes. A missing
-/// file is no config; any other failure is logged with its cause (never the
-/// file's contents) and answered without one.
-fn read_gateway(path: Option<&Path>) -> Result<Gateway, &'static str> {
-    load_gateway(path).map_err(|error| {
-        if let Some(path) = path {
-            tracing::warn!(%error, path = %path.display(), "discovery: gateway.yaml could not be loaded");
-        }
-        "gateway.yaml could not be loaded"
-    })
-}
-
-/// [`read_gateway`] without the log line.
-fn load_gateway(path: Option<&Path>) -> Result<Gateway, crate::Error> {
-    let Some(path) = path else {
-        return Ok(Gateway::None);
-    };
-    if let Err(e) = std::fs::symlink_metadata(path)
-        && e.kind() == std::io::ErrorKind::NotFound
-    {
-        return Ok(Gateway::None);
-    }
-    let (config, text) = Config::load_literal_with_text(path)?;
-    Ok(Gateway::File {
-        revision: FileRevision::of(text.as_bytes()),
-        config: Box::new(config),
-    })
 }
 
 /// Why `find` cannot be adopted under this gateway.yaml, beyond the adopt
@@ -187,19 +145,21 @@ async fn list_discovery(
         return discovery_unavailable();
     };
     let path = state.config_path.clone();
-    let gateway = match tokio::task::spawn_blocking(move || read_gateway(path.as_deref())).await {
-        Ok(Ok(gateway)) => gateway,
-        Ok(Err(message)) => {
-            return flat_error(StatusCode::SERVICE_UNAVAILABLE, message).into_response();
-        }
-        Err(_) => {
-            return flat_error(
-                StatusCode::SERVICE_UNAVAILABLE,
-                "gateway.yaml could not be loaded",
-            )
-            .into_response();
-        }
-    };
+    let gateway =
+        match tokio::task::spawn_blocking(move || read_gateway("discovery", path.as_deref())).await
+        {
+            Ok(Ok(gateway)) => gateway,
+            Ok(Err(message)) => {
+                return flat_error(StatusCode::SERVICE_UNAVAILABLE, message).into_response();
+            }
+            Err(_) => {
+                return flat_error(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "gateway.yaml could not be loaded",
+                )
+                .into_response();
+            }
+        };
     let Ok((listing, outdated)) = cache.listing().await else {
         return flat_error(StatusCode::SERVICE_UNAVAILABLE, "discovery scan timed out")
             .into_response();

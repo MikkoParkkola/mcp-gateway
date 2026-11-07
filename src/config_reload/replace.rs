@@ -178,6 +178,8 @@ pub(crate) enum ReplaceError {
     /// The compute refused, or produced bytes that are not UTF-8 text. Bytes
     /// the loader rejects are `ReloadRefused`, after the rollback.
     Refused(String),
+    /// The audit log refused an intent (the operation's or its recovery's); nothing written.
+    AuditRefused(String),
     /// gateway.yaml no longer resolves to the file this gateway started on.
     Unsupported(String),
     /// Staging the original or the journal failed; nothing was replaced.
@@ -230,6 +232,10 @@ async fn spawn_locked(
             )))
         })
 }
+
+#[cfg(test)]
+#[path = "replace_order.rs"]
+pub(crate) mod order;
 
 #[path = "replace_audit.rs"]
 mod audit;
@@ -295,6 +301,7 @@ pub(crate) fn settle_for(result: &Result<ReplaceOutcome, ReplaceError>) -> Settl
         ReplaceError::Busy
         | ReplaceError::Stale { .. }
         | ReplaceError::Refused(_)
+        | ReplaceError::AuditRefused(_)
         | ReplaceError::Stage(_)
         | ReplaceError::Secrets(_)
         | ReplaceError::NoConfigFile
@@ -543,18 +550,21 @@ impl ReloadContext {
         // config does not: recorded as an outside change, since no loaded
         // revision is kept to tell (over-reports, never under-reports).
         let unchanged = step.is_none() && template.bytes() == current.as_slice();
-        if let Audit::Required { sink, kind } = &mut audit {
+        if let Audit::Required { sink, kind, writer } = &mut audit {
             let intent = Intent {
                 kind: kind.clone(),
                 base: FileRevision::of(&current),
                 outside_change: unchanged,
                 recovery_intent_id,
+                writer: writer.clone(),
             };
             sink.append(&intent).map_err(|e| {
-                ReplaceError::Refused(format!(
+                ReplaceError::AuditRefused(format!(
                     "the audit log refused this change's record; nothing was written: {e}"
                 ))
             })?;
+            #[cfg(test)]
+            order::record(&target, "intent");
         }
         let result = match step {
             None => Ok(template.bytes().to_vec()),
@@ -630,6 +640,8 @@ impl ReloadContext {
                 secrets: Vec::new(),
             });
         }
+        #[cfg(test)]
+        order::record(target, "commit");
         self.commit(target, current, &new, replaced, entries).await
     }
 
