@@ -17,13 +17,18 @@ env:
 
 jobs:
   linux-part:
-    name: runmem part ${{ matrix.part }}
+    name: runmem part ${{ matrix.part }} swap=${{ matrix.swap }}
     runs-on: ubuntu-latest
     timeout-minutes: 180
     strategy:
       fail-fast: false
       matrix:
-        part: [lib-a, lib-b]
+        part: [lib-a, lib-b, int-a, int-b]
+        swap: ["8G", "none"]
+        # The SDK journey's build peak (its tests need the pinned SDK and Redis, absent here).
+        include:
+          - part: sdk
+            swap: "none"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
@@ -36,6 +41,20 @@ jobs:
       - name: Runner before the part
         run: |
           nproc; free -m; df -h / "$GITHUB_WORKSPACE"; swapon --show || true
+      # The candidate fix: 8 GB more swap. It fails loudly: total swap must reach 10 GB,
+      # so a swapon that silently does nothing cannot pass for a fix.
+      - name: Add swap
+        if: matrix.swap != 'none'
+        run: |
+          set -euo pipefail
+          sudo fallocate -l "${{ matrix.swap }}" /swapfile-cov
+          sudo chmod 600 /swapfile-cov
+          sudo mkswap /swapfile-cov
+          sudo swapon /swapfile-cov
+          swapon --show
+          free -m
+          total_mb="$(free -m | awk '/Swap:/{print $2}')"
+          [ "$total_mb" -ge 10240 ] || { echo "::error::total swap ${total_mb} MB is under 10 GB"; exit 1; }
       - name: Run the part, measured
         env:
           PART: ${{ matrix.part }}
