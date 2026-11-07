@@ -275,8 +275,9 @@ fn spawn_write(
         if !best_effort.is_empty() {
             #[cfg(test)]
             seams::at_best_effort_start().await;
+            let server = best_effort.first().map(|note| note.server.clone());
             if let Err(error) = write_records(&logger, &best_effort).await {
-                tracing::warn!(%error, "{WITHHELD_RECORD_FAILED}");
+                tracing::warn!(server = server.as_deref(), %error, "{WITHHELD_RECORD_FAILED}");
             }
         }
     });
@@ -384,8 +385,6 @@ pub(super) async fn with_grant_slot<F: Future>(
     let output = GRANT_SLOT.scope(Arc::clone(&guard.slot), future).await;
     let notes = std::mem::take(&mut *guard.slot.notes.lock().expect("grant slot lock"));
     let answer_id = guard.slot.answer_id.get().cloned();
-    // invariant: nothing panics while holding the slot lock, so it is never poisoned.
-    let best_effort = std::mem::take(&mut *guard.slot.best_effort.lock().expect("grant slot lock"));
     // A slot that collected no decision has nothing to write, so no flush
     // task: every `/mcp` request opens a slot, and most decide nothing.
     let written = if notes.is_empty() {
@@ -393,9 +392,12 @@ pub(super) async fn with_grant_slot<F: Future>(
     } else {
         write_owned(logger, notes).await
     };
-    // After the awaited flush, so this task never takes the append permit
-    // ahead of it; behind the call's own invocation append, which ran inside
-    // the wrapped work.
+    // Taken only after the awaited flush: a caller cancelled during it leaves
+    // the list in the slot, and the guard's drop writes it. After the flush,
+    // so this task never takes the append permit ahead of it; behind the
+    // call's own invocation append, which ran inside the wrapped work.
+    // invariant: nothing panics while holding the slot lock, so it is never poisoned.
+    let best_effort = std::mem::take(&mut *guard.slot.best_effort.lock().expect("grant slot lock"));
     if !best_effort.is_empty() {
         spawn_write(logger, Vec::new(), best_effort);
     }
