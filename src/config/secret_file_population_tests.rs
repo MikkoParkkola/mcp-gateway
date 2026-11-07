@@ -493,7 +493,11 @@ fn raw_io_under_a_compound_test_gate_counts_only_when_it_builds_outside_tests() 
             "fn product() {{}}\n\n#[cfg({gate})]\nmod tests {{\n    fn fixture() -> String {{\n        std::fs::read_to_string(\"x\").unwrap()\n    }}\n}}\n"
         )
     };
-    for gate in ["all(test, unix)", "all(unix, test)", "all(test, feature = \"firewall\")"] {
+    for gate in [
+        "all(test, unix)",
+        "all(unix, test)",
+        "all(test, feature = \"firewall\")",
+    ] {
         assert!(!has_raw_io(&gated(gate)), "{gate}: counted");
     }
     for gate in ["any(test, unix)", "not(test)", "reads_token_probe"] {

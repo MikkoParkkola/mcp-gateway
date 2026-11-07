@@ -62,7 +62,12 @@ fn scan_tt_three_valued_cfg_truth_table() {
 /// empty `all()`.
 #[test]
 fn scan_tt_operands_that_do_not_parse_are_unknown() {
-    for predicate in ["any(test +)", "all(test +)", "any(test,, unix)", "all(unix, test +)"] {
+    for predicate in [
+        "any(test +)",
+        "all(test +)",
+        "any(test,, unix)",
+        "all(unix, test +)",
+    ] {
         assert_eq!(cfg(predicate), Cfg::Unknown, "cfg({predicate})");
     }
 }

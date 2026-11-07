@@ -129,14 +129,20 @@ fn shared_cfg_cases_follow_the_rust_column() {
     let table = include_str!("../scripts/dev/cfg-reader-cases.tsv");
     let mut rows = 0;
     let mut wrong = Vec::new();
-    for line in table.lines().filter(|l| !l.is_empty() && !l.starts_with('#')) {
+    for line in table
+        .lines()
+        .filter(|l| !l.is_empty() && !l.starts_with('#'))
+    {
         let cells: Vec<&str> = line.split('\t').collect();
         let [expr, _python, rust] = cells[..] else {
             panic!("bad row: {line:?}");
         };
         let source = format!("#[cfg({expr})]\nfn probe() {{}}\nfn product() {{}}\n");
         let out = production_text(&source);
-        assert!(out.contains("fn product()"), "{expr}: the next item is lost");
+        assert!(
+            out.contains("fn product()"),
+            "{expr}: the next item is lost"
+        );
         let blanked = !out.contains("probe");
         if blanked != (rust == "yes") {
             wrong.push(format!("{expr}: blanked {blanked}, table says {rust}"));
@@ -156,7 +162,10 @@ fn an_inner_cfg_counts_only_in_the_leading_run_of_its_scope() {
         "//! docs\n// note\n#![doc = \"x\"]\n#![cfg(all(test, unix))]\nfn probe() {}\n",
     ];
     for source in blanked {
-        assert!(!production_text(source).contains("probe"), "kept: {source:?}");
+        assert!(
+            !production_text(source).contains("probe"),
+            "kept: {source:?}"
+        );
     }
     let module = "mod t {\n    #![cfg(test)]\n    fn probe() {}\n}\nfn product() {}\n";
     let out = production_text(module);
@@ -168,7 +177,10 @@ fn an_inner_cfg_counts_only_in_the_leading_run_of_its_scope() {
         "fn f() {}\n#![cfg(test)]\nfn product() {}\n",
     ];
     for source in kept {
-        assert!(production_text(source).contains("fn product()"), "lost: {source:?}");
+        assert!(
+            production_text(source).contains("fn product()"),
+            "lost: {source:?}"
+        );
     }
 }
 
@@ -364,16 +376,24 @@ fn test_only(attrs: &[syn::Attribute]) -> bool {
                     };
                 }
                 let all = l.path.is_ident("all");
-                let can_true = if all { ops.iter().all(|o| o.0) } else { ops.iter().any(|o| o.0) };
-                let can_false = if all { ops.iter().any(|o| o.1) } else { ops.iter().all(|o| o.1) };
+                let can_true = if all {
+                    ops.iter().all(|o| o.0)
+                } else {
+                    ops.iter().any(|o| o.0)
+                };
+                let can_false = if all {
+                    ops.iter().any(|o| o.1)
+                } else {
+                    ops.iter().all(|o| o.1)
+                };
                 (can_true, can_false)
             }
             _ => (true, true),
         }
     }
-    attrs.iter().any(|a| {
-        a.path().is_ident("cfg") && a.parse_args::<syn::Meta>().is_ok_and(|m| !can(&m).0)
-    })
+    attrs
+        .iter()
+        .any(|a| a.path().is_ident("cfg") && a.parse_args::<syn::Meta>().is_ok_and(|m| !can(&m).0))
 }
 
 fn item_attrs(item: &syn::Item) -> &[syn::Attribute] {
