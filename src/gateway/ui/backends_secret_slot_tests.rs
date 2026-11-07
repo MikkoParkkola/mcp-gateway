@@ -689,3 +689,135 @@ async fn t4r_a_change_between_the_pre_check_and_the_write_refuses_and_stores_not
     assert_eq!(panel.text(), removed);
     assert!(panel.entries().is_empty(), "{:?}", panel.entries());
 }
+
+/// The values the redactor would hold for backend `name` once gateway.yaml
+/// loads: the loader's own record of configured credentials (the step that
+/// runs before every load overwrites references), kept where the redactor's
+/// own rule holds them.
+fn held_needles(panel: &Panel, name: &str) -> Vec<String> {
+    let (mut config, _) =
+        Config::load_literal_with_text(&panel.path()).expect("gateway.yaml loads");
+    let mut unresolved = Vec::new();
+    let mut configured = crate::config::configured_secrets::ConfiguredByBackend::new();
+    crate::config::secret_ref::evaluate_backends(
+        &mut config.backends,
+        &crate::config::EnvOverlay::none(),
+        &mut unresolved,
+        &mut configured,
+    );
+    assert!(unresolved.is_empty(), "{unresolved:?}");
+    configured
+        .get(name)
+        .map(|secrets| {
+            secrets
+                .iter()
+                .filter(|s| crate::security::needles::holds(s))
+                .map(|s| s.value.clone())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// T16 (regression): an ordinary setting typed into the panel is written as
+/// text and is never a credential the redactor holds, on add and on update;
+/// a credential-named value beside it is still stored and held (the control
+/// that shows the oracle sees stored values).
+#[tokio::test]
+async fn t16_plain_settings_are_written_as_text_and_never_redacted() {
+    let panel = Panel::new().await;
+    let (status, body) = panel
+        .add(json!({"name": "b", "url": "http://127.0.0.1:9/mcp",
+            "env": {"DEBUG": "1", "LOG_LEVEL": "debug", "API_KEY": TOKEN}}))
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    let env = panel.written("b").env;
+    assert_eq!(env.get("DEBUG").map(String::as_str), Some("1"), "{env:?}");
+    assert_eq!(env.get("LOG_LEVEL").map(String::as_str), Some("debug"));
+    let fields: Vec<&str> = body["secrets_stored"]
+        .as_array()
+        .expect("secrets_stored")
+        .iter()
+        .filter_map(|s| s["field"].as_str())
+        .collect();
+    assert_eq!(fields, ["env.API_KEY"], "{body}");
+    let held = held_needles(&panel, "b");
+    assert!(held.iter().any(|v| v == TOKEN), "the control: {held:?}");
+    for plain in ["1", "debug"] {
+        assert!(!held.iter().any(|v| v == plain), "{plain} held: {held:?}");
+    }
+
+    let (status, body) = panel
+        .update("a", json!({"env": {"DEBUG": "1", "LOG_LEVEL": "debug"}}))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let env = panel.written("a").env;
+    assert_eq!(env.get("DEBUG").map(String::as_str), Some("1"), "{env:?}");
+    assert_eq!(env.get("LOG_LEVEL").map(String::as_str), Some("debug"));
+    assert!(held_needles(&panel, "a").is_empty());
+}
+
+/// T17: values under credential-like names are stored, each by field, and
+/// none of them reaches gateway.yaml.
+#[tokio::test]
+async fn t17_credential_named_values_are_stored() {
+    let panel = Panel::new().await;
+    let values = [
+        ("API_KEY", "sk-cred-a-41c9"),
+        ("X_AUTH_TOKEN", "sk-cred-b-52da"),
+        ("DB_PASSWORD", "sk-cred-c-63eb"),
+    ];
+    let env: serde_json::Map<String, Value> = values
+        .iter()
+        .map(|(k, v)| ((*k).to_owned(), json!(v)))
+        .collect();
+    let (status, body) = panel
+        .add(json!({"name": "b", "url": "http://127.0.0.1:9/mcp", "env": env}))
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    let fields: Vec<&str> = body["secrets_stored"]
+        .as_array()
+        .expect("secrets_stored")
+        .iter()
+        .filter_map(|s| s["field"].as_str())
+        .collect();
+    assert_eq!(
+        fields,
+        ["env.API_KEY", "env.DB_PASSWORD", "env.X_AUTH_TOKEN"],
+        "{body}"
+    );
+    assert_eq!(panel.entries().len(), 3, "{:?}", panel.entries());
+    let text = panel.text();
+    for (_, value) in values {
+        assert!(
+            !text.contains(value),
+            "{value} reached gateway.yaml:\n{text}"
+        );
+        no_value(&body, value);
+    }
+}
+
+/// T18: an ordinary setting the panel saved never damages a tool result: a
+/// JSON number `1` and the word `debug` come through the redactor's own match
+/// unchanged, while the stored credential beside them is still redacted.
+#[tokio::test]
+async fn t18_a_json_number_in_a_tool_result_survives() {
+    let panel = Panel::new().await;
+    let (status, body) = panel
+        .add(json!({"name": "b", "url": "http://127.0.0.1:9/mcp",
+            "env": {"DEBUG": "1", "LOG_LEVEL": "debug", "API_KEY": TOKEN}}))
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    let compiled = crate::security::secret_redaction::Compiled::new(&held_needles(&panel, "b"));
+    let mut result = json!({"count": 1, "items": [1, 2], "level": "debug", "note": "debug 1"});
+    let before = result.clone();
+    assert!(
+        !crate::security::secret_redaction::redact_value_with(&mut result, &compiled),
+        "{result}"
+    );
+    assert_eq!(result, before);
+    let mut leak = json!({"echo": TOKEN});
+    assert!(crate::security::secret_redaction::redact_value_with(
+        &mut leak, &compiled
+    ));
+    assert!(!leak.to_string().contains(TOKEN), "{leak}");
+}
