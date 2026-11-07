@@ -105,16 +105,29 @@ async fn h10b_an_undecodable_history_is_moved_aside_not_overwritten() {
     assert!(saved["clean_stop"].is_u64(), "{saved}");
 }
 
-/// H17: a data dir that cannot be created (its parent is a file) leaves both
-/// writes failing, and the gateway still starts and serves.
+/// H17: neither health.json nor counters.json can be written (the data dir,
+/// set up by a first start, is read-only), and the gateway still starts and
+/// serves. A data dir that cannot be created at all is not this row: the
+/// record key in it is required, and its absence refuses the start.
+#[cfg(unix)]
 #[tokio::test]
 async fn h17_unwritable_history_never_stops_the_start() {
+    use std::os::unix::fs::PermissionsExt;
     let dir = tempfile::tempdir().expect("tempdir");
-    let blocker = dir.path().join("not-a-dir");
-    std::fs::write(&blocker, b"a file").expect("blocker");
-    let data = blocker.join("data");
-    Box::pin(run_once(dir.path(), &data, |_| {
-        assert!(!data.join("health.json").exists());
-    }))
-    .await;
+    let data = dir.path().join("data");
+    Box::pin(run_once(dir.path(), &data, |_| {})).await;
+    for name in ["health.json", "counters.json"] {
+        std::fs::remove_file(data.join(name)).expect("saved by the first start");
+    }
+    let mode = |m| std::fs::set_permissions(&data, std::fs::Permissions::from_mode(m));
+    mode(0o555).expect("read-only");
+    let probe = std::fs::write(data.join("probe"), b"x");
+    Box::pin(run_once(dir.path(), &data, |_| {})).await;
+    mode(0o755).expect("writable again");
+    assert!(
+        probe.is_err(),
+        "the data dir must refuse writes for this row"
+    );
+    assert!(!data.join("health.json").exists());
+    assert!(!data.join("counters.json").exists());
 }
