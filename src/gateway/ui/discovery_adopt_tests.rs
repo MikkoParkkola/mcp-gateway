@@ -403,14 +403,20 @@ fn escaped_keys_each_take_their_own_reference() {
     }
 }
 
-/// SAVE.6: the audit-log answer follows the refusal's type. Any other
-/// refusal answers its own code, even one carrying the same words.
+/// SAVE.6: the audit-log answer follows the refusal's type. A refusal
+/// carrying the same words answers exactly as any other refusal.
 #[test]
 fn the_audit_log_answer_follows_the_type_not_the_words() {
-    let (status, json) = futures::executor::block_on(body_of(answer(
-        "tool",
-        Err(ReplaceError::Refused(NO_AUDIT_LOG.to_owned())),
-    )));
-    assert_ne!(status, StatusCode::SERVICE_UNAVAILABLE, "{json}");
-    assert_ne!(json["error"], "audit_log_required", "{json}");
+    let answered = |why: &str| {
+        futures::executor::block_on(body_of(answer(
+            "tool",
+            Err(ReplaceError::Refused(why.to_owned())),
+        )))
+    };
+    let look_alike = answered(NO_AUDIT_LOG);
+    assert_eq!(look_alike, answered(CANARY), "{look_alike:?}");
+    assert_ne!(
+        look_alike.1["error"], "audit_log_required",
+        "{look_alike:?}"
+    );
 }
