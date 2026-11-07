@@ -29,6 +29,8 @@ mod checks;
 #[path = "transparency_log_pairing.rs"]
 mod pairing;
 use super::{MAX_AUDIT_READ_BYTES, TransparencyLogConfig, bounded_read_to_string};
+#[cfg(test)]
+pub(super) use pairing::PROBES;
 pub use session::show_session_entries;
 
 /// Result of a chain-integrity verification pass.

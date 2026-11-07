@@ -850,3 +850,56 @@ fn repeats_differing_only_in_time_fields_collapse() {
     assert_eq!(count(&r.warnings, "(token w-1)"), 0, "{:?}", r.warnings);
     assert_eq!(count(&r.warnings, "interrupted"), 1, "{:?}", r.warnings);
 }
+
+#[test]
+fn a_mismatched_record_warning_names_its_file_by_position_not_path() {
+    // GIVEN: a log holding one mismatched record
+    let dir = tempfile::tempdir().unwrap();
+    let path = log_with(&dir, vec![rec("config_write_note", "w-2", &json!({}))]);
+
+    // WHEN: it is verified
+    let r = verified(&path);
+
+    // THEN: one warning, naming the file by its position, never its path
+    let warned: Vec<&String> = r
+        .warnings
+        .iter()
+        .filter(|w| w.contains("not a settle record"))
+        .collect();
+    assert_eq!(warned.len(), 1, "{:?}", r.warnings);
+    let shown_dir = dir.path().display().to_string();
+    assert!(!warned[0].contains(&shown_dir), "{}", warned[0]);
+    assert!(!warned[0].contains("transparency.jsonl"), "{}", warned[0]);
+    assert!(warned[0].contains("in file 1 ("), "{}", warned[0]);
+}
+
+/// The lookups one dependent costs (step 3 section 4): its own
+/// `intent_counter`, and its `settled_by` when it has one.
+const LOOKUPS_PER_DEPENDENT: usize = 2;
+
+#[test]
+fn intent_lookups_grow_with_the_records_not_their_square() {
+    // GIVEN: a thousand tokens, each an intent and the outcome naming it
+    const TOKENS: u64 = 1_000;
+    let mut records = Vec::new();
+    for i in 0..TOKENS {
+        let token = format!("w-{i}");
+        records.push(rec(INTENT, &token, &json!({})));
+        records.push(dep(OUTCOME, &token, 3 + 2 * i));
+    }
+    let n = records.len();
+
+    // WHEN: the log is verified, counting the lookup's work
+    super::verify::PROBES.with(|p| p.set(0));
+    let r = verify_records(records);
+    let probes = super::verify::PROBES.with(std::cell::Cell::get);
+
+    // THEN: every outcome paired after at least one lookup each, and the
+    // work stays within a fixed number of lookups per record
+    assert_paired(&r, "a thousand tokens");
+    assert!(probes >= n / 2, "the counter saw no lookups: {probes}");
+    assert!(
+        probes <= LOOKUPS_PER_DEPENDENT * n,
+        "{probes} lookups for {n} records"
+    );
+}

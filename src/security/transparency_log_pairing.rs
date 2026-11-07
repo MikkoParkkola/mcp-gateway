@@ -204,6 +204,8 @@ impl Pairing {
     /// Whether `token` has an intent (writer or recovery) at counter `n`.
     fn is_intent(&self, token: &str, n: u64) -> bool {
         self.groups.iter().any(|((t, role), (_, counters))| {
+            #[cfg(test)]
+            probe();
             t == token
                 && matches!(role, Role::Intent(_) | Role::RecoveryIntent)
                 && counters.contains(&n)
@@ -235,4 +237,17 @@ impl Pairing {
             })
             .collect()
     }
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Work the intent lookup did on this thread: the rows count it rather
+    /// than time it, since a timing bound flakes on a loaded runner.
+    pub(crate) static PROBES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Count one unit of intent-lookup work.
+#[cfg(test)]
+fn probe() {
+    PROBES.with(|p| p.set(p.get() + 1));
 }
