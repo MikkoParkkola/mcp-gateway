@@ -161,6 +161,54 @@ async fn a_bearer_duplicating_an_api_key_is_refused_before_any_store_entry() {
     );
 }
 
+/// SAVE.5: a key whose previous digest cannot be read is refused by the
+/// shared-credential check before any entry, never left out of the
+/// comparison, and the refusal names the key, not the bearer or a digest.
+#[tokio::test]
+async fn a_bearer_against_a_key_whose_digest_cannot_be_read_is_refused_before_entry() {
+    let dir = tempfile::tempdir().expect("dir");
+    let path = dir.path().join("gateway.yaml");
+    let base = with_key("");
+    write_owner_only(&path, &base).expect("write config");
+    let ctx = context(&path);
+    let store = Counting::new(dir.path());
+    let unreadable = with_key("").replace(
+        "      key_sha256:",
+        "      previous_key_sha256: \"env:ZQ_SAVE5_UNSET_PREVIOUS_DIGEST\"\n      previous_expires_at: \"2099-01-01T00:00:00Z\"\n      key_sha256:",
+    );
+    let text = unreadable.replace("backends:\n", "  bearer_token: {slot}\nbackends:\n");
+
+    let refused = replace_detached(
+        ctx,
+        save(
+            dir.path(),
+            Arc::clone(&store),
+            &["auth", "bearer_token"],
+            &text,
+            CRED,
+        ),
+        WAIT,
+    )
+    .await
+    .expect_err("a key that cannot be compared refuses the bearer");
+
+    assert_eq!(read(&path), base);
+    assert_eq!(store.creates(), 0, "SAVE.5: an entry was created");
+    let ReplaceError::Refused(message) = &refused else {
+        panic!("SAVE.5: not the shared-credential refusal: {refused:?}");
+    };
+    assert!(
+        message.contains("'ci'"),
+        "SAVE.5: the key is not named: {message}"
+    );
+    let digest = crate::hashing::sha256_hex(CRED);
+    let bearer = String::from_utf8_lossy(CRED);
+    assert!(
+        !message.contains(&digest) && !message.contains(bearer.as_ref()),
+        "SAVE.5: the refusal quotes a credential: {message}"
+    );
+}
+
 /// W5, control: the collision is judged on the config the save makes, not
 /// the running one. Removing key `ci` in the same save frees its credential
 /// for the bearer.

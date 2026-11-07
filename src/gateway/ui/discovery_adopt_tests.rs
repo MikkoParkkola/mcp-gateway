@@ -402,3 +402,15 @@ fn escaped_keys_each_take_their_own_reference() {
         assert_eq!(&config.backends["tool"].env[*key], reference, "{key}");
     }
 }
+
+/// SAVE.6: the audit-log answer follows the refusal's type. Any other
+/// refusal answers its own code, even one carrying the same words.
+#[test]
+fn the_audit_log_answer_follows_the_type_not_the_words() {
+    let (status, json) = futures::executor::block_on(body_of(answer(
+        "tool",
+        Err(ReplaceError::Refused(NO_AUDIT_LOG.to_owned())),
+    )));
+    assert_ne!(status, StatusCode::SERVICE_UNAVAILABLE, "{json}");
+    assert_ne!(json["error"], "audit_log_required", "{json}");
+}

@@ -54,3 +54,12 @@ async fn the_writer_refusals_answer_fixed_text() {
         "the guard's text leaked: {text}"
     );
 }
+
+/// SAVE.6: the audit-log answer follows the refusal's type. Any other
+/// refusal answers its own code, even one carrying the same words.
+#[tokio::test]
+async fn the_audit_log_answer_follows_the_type_not_the_words() {
+    let (status, text) = message(&ReplaceError::Refused(NO_AUDIT_LOG.to_owned())).await;
+    assert_ne!(status, StatusCode::SERVICE_UNAVAILABLE, "{text}");
+    assert!(!text.contains("audit_log_required"), "{text}");
+}
