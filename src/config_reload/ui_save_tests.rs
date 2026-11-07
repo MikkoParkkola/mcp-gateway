@@ -4,7 +4,6 @@
 //! secret store, the owner field, and nothing lost.
 
 use std::collections::BTreeSet;
-use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -19,7 +18,7 @@ use crate::gateway::test_helpers::write_owner_only;
 use crate::secret_store::{FilesStore, SecretStore, StoreError, StoreKind, Vault, unused_entries};
 use crate::wiped_bytes::WipedBytes;
 
-const BASE: &str = "# operator's note\nenvironment: dev # where\nbackends:\n  a:\n    http_url: \"http://127.0.0.1:9/mcp\" # first\n";
+const BASE: &str = "# operator's note\nenvironment: \"dev\" # where\nbackends:\n  a:\n    http_url: \"http://127.0.0.1:9/mcp\" # first\n";
 const TOKEN: &[u8] = b"zq-ui-save-bearer-one";
 
 /// The files store, counting creates; `fail` refuses every create.
@@ -320,7 +319,7 @@ async fn an_empty_owner_removes_the_key_through_the_save() {
         .await
         .expect("SAVE.3: the owner saves");
     assert!(
-        read(&gw.path).contains("owner: team-a"),
+        read(&gw.path).contains("owner: \"team-a\""),
         "{}",
         read(&gw.path)
     );
@@ -329,6 +328,14 @@ async fn an_empty_owner_removes_the_key_through_the_save() {
         .await
         .expect("SAVE.3: the empty owner saves");
     assert_eq!(read(&gw.path), BASE, "SAVE.3: the owner key is not removed");
+
+    // An explicit removal of an absent owner changes nothing.
+    let remove = vec![(field("backends.owner"), on_a.clone(), SaveValue::Remove)];
+    let saved = gw
+        .save_as(off(), gw.base(), remove)
+        .await
+        .expect("SAVE.3: removal saves");
+    assert!(!saved.changed, "{saved:?}");
 }
 
 /// A save of the value already there writes nothing and reports the base.
@@ -342,6 +349,7 @@ async fn a_save_of_the_current_value_reports_the_base_unchanged() {
         .expect("saves");
     assert!(!saved.changed, "{saved:?}");
     assert_eq!(saved.revision, base);
+    assert!(!saved.reload.restart_required, "{saved:?}");
     assert_eq!(read(&gw.path), BASE);
 }
 
@@ -373,7 +381,7 @@ async fn a_save_keeps_every_comment_and_untouched_line() {
             .expect("SAVE.8: the edit is proven in place");
         assert_eq!(
             read(&gw.path),
-            text.replace("environment: dev", "environment: prod"),
+            text.replace("environment: \"dev\"", "environment: \"prod\""),
             "SAVE.8: more than the edited value changed"
         );
     }
@@ -383,7 +391,7 @@ async fn a_save_keeps_every_comment_and_untouched_line() {
 /// answers with the preview's patch; nothing is written, no entry made.
 #[tokio::test]
 async fn an_anchored_key_returns_the_validated_patch_and_writes_nothing() {
-    let anchored = BASE.replace("environment: dev", "environment: &env dev");
+    let anchored = BASE.replace("environment: \"dev\"", "environment: &env \"dev\"");
     let gw = gw(&anchored);
     let refused = gw
         .save(

@@ -148,13 +148,6 @@ pub(crate) struct ReplaceOutcome {
     /// The kept copy, for [`Replaced::KeepBeside`].
     pub(crate) kept_beside: Option<PathBuf>,
     /// The reload that accepted it.
-    #[cfg_attr(
-        all(test, not(feature = "webui")),
-        expect(
-            dead_code,
-            reason = "first callers: the web UI settings save and the configuration-history restore"
-        )
-    )]
     pub(crate) reload: ReloadOutcome,
 }
 
