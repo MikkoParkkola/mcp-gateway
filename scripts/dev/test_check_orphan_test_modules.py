@@ -169,6 +169,47 @@ class TestOnlyFiles(unittest.TestCase):
         )
         self.assertEqual(found, ["src/a.rs"])
 
+    # MIK-9387.TCFG.1: an inner cfg counts only in the leading attribute run of
+    # its own file or inline module; anywhere else (a macro's tokens, after an
+    # item) it marks nothing, so production code is never skipped through it.
+    def test_an_inner_cfg_in_a_macro_call_does_not_mark_the_file(self):
+        found = self.only_test_files(
+            {
+                "src/lib.rs": "mod a;\n",
+                "src/a.rs": "ignore!(#![cfg(test)]);\npub fn production() {}\nmod child;\n",
+                "src/a/child.rs": "",
+            }
+        )
+        self.assertEqual(found, [])
+
+    def test_an_inner_cfg_in_a_macro_call_does_not_mark_an_inline_module(self):
+        for body in (
+            "mod outer { ignore!(#![cfg(test)]); mod child; }\n",
+            "mod outer { ignore![#![cfg(test)]]; mod child; }\n",
+            "mod outer { ignore!{ #![cfg(test)] } mod child; }\n",
+            "mod outer { fn f() {} #![cfg(test)] mod child; }\n",
+        ):
+            with self.subTest(body=body):
+                found = self.only_test_files({"src/lib.rs": body, "src/outer/child.rs": ""})
+                self.assertEqual(found, [])
+
+    def test_an_inner_cfg_leading_its_module_still_counts(self):
+        found = self.only_test_files(
+            {"src/lib.rs": "mod t {\n    #![cfg(test)]\n    mod child;\n}\n", "src/t/child.rs": ""}
+        )
+        self.assertEqual(found, ["src/t/child.rs"])
+
+    def test_a_leading_inner_cfg_after_docs_and_comments_still_counts(self):
+        found = self.only_test_files(
+            {
+                "src/lib.rs": "mod a;\n",
+                "src/a.rs": '//! docs\n// note\n#![doc = "x"]\n#![cfg(test)]\nmod child;\n',
+                "src/a/child.rs": "",
+            }
+        )
+        self.assertEqual(found, ["src/a.rs", "src/a/child.rs"])
+
+
 class CfgIsTest(unittest.TestCase):
     """A predicate is test-only when it is false whenever `test` is."""
 
@@ -197,6 +238,10 @@ class CfgIsTest(unittest.TestCase):
             "all(unix, any(test, windows))",
             "all(test, unix",
             "all()",
+            # MIK-9387.TCFG.1: a comma inside a quoted value separates no operand.
+            'all(feature = "a,test,b")',
+            'all(feature = r"a,test")',
+            'all(unix, feature = "x,test")',
         ):
             with self.subTest(expr=expr):
                 self.assertFalse(self.judge(expr))
