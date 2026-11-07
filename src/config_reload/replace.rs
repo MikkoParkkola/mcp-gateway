@@ -253,6 +253,7 @@ mod validate;
 #[path = "ui_diff.rs"]
 pub(crate) mod ui_diff;
 /// The settings save (U8): the writer's caller for a UI edit.
+#[cfg(any(test, feature = "webui"))]
 #[path = "ui_save.rs"]
 pub(crate) mod ui_save;
 use slots::{fill_secrets, fits_when_filled, same_fields};

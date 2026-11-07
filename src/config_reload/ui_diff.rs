@@ -202,16 +202,7 @@ pub(crate) async fn ui_diff(
     let edit = crate::config_reload::ui_fields::checked(edit)?;
     let (target, text) = read(ctx)?;
     let revision = FileRevision::of(text.as_bytes());
-    let doc = match crate::yaml::from_str::<Value>(&text) {
-        Ok(Value::Null) => Value::Mapping(crate::yaml::Mapping::new()),
-        Ok(doc) => doc,
-        Err(e) => {
-            return Err(UiRefused::Invalid(format!(
-                "gateway.yaml does not parse: {e}"
-            )));
-        }
-    };
-    let changes = resolve(&edit, &doc)?;
+    let changes = changes_for(&edit, &text)?;
     let secrets: Vec<FieldPath> = edit
         .fields
         .iter()
@@ -259,6 +250,25 @@ pub(crate) async fn ui_diff(
         }
     };
     Ok(UiPreview { revision, shown })
+}
+
+/// The editor's changes for a checked `edit` on `text`, the bytes being
+/// edited (an empty file is the empty root). The save computes on the
+/// locked bytes through this, so preview and save resolve alike.
+pub(super) fn changes_for(
+    edit: &PreviewEdit,
+    text: &str,
+) -> Result<Vec<(FieldPath, Change)>, UiRefused> {
+    let doc = match crate::yaml::from_str::<Value>(text) {
+        Ok(Value::Null) => Value::Mapping(crate::yaml::Mapping::new()),
+        Ok(doc) => doc,
+        Err(e) => {
+            return Err(UiRefused::Invalid(format!(
+                "gateway.yaml does not parse: {e}"
+            )));
+        }
+    };
+    resolve(edit, &doc)
 }
 
 /// Each entry as the editor's change at its path, the path's parameters
