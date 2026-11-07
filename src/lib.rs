@@ -100,6 +100,9 @@ mod log_writer;
 pub mod metrics;
 #[doc(hidden)]
 pub mod mtls;
+mod mutant;
+#[cfg(test)]
+mod mutant_scan;
 #[doc(hidden)]
 pub mod oauth;
 mod observer;
