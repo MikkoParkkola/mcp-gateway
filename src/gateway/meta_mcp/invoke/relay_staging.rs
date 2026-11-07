@@ -100,7 +100,7 @@ impl StagedReceipts {
             receipts: Vec::new(),
             capture: None,
             calls: Vec::new(),
-            held: replay::Held::default(),
+            held: replay::Held::new(),
         }
     }
 
@@ -304,6 +304,35 @@ pub(crate) mod unpublished_allow {
 }
 
 impl MetaMcp {
+    /// `staged`'s commit for the frame that carries it, run when a sink
+    /// writes that frame (`OutboundFrame::committing_on_write`), under the
+    /// generation current at that write. A frame that delivers no result
+    /// commits nothing now (its handles release); one dropped unwritten
+    /// drops the commit, which records nothing and releases its handles.
+    pub(crate) fn commit_on_write(
+        &self,
+        staged: StagedReceipts,
+        delivered: bool,
+    ) -> Option<crate::gateway::input_bridge::DeliveryCommit> {
+        if !delivered {
+            self.commit_staged(staged, false);
+            return None;
+        }
+        // Checked here, not in the closure: a sink may run the commit
+        // where nothing logs.
+        let Some(live) = self.live_config() else {
+            unpublished("staged commit");
+            return None;
+        };
+        Some(crate::gateway::input_bridge::DeliveryCommit::new(
+            move || {
+                // Read when the frame is written, not when it was queued.
+                let generation = live.generation();
+                staged.commit(true, &generation);
+            },
+        ))
+    }
+
     /// Commit `staged` under the generation current at delivery. Before
     /// startup publishes a live config nothing is judged, so nothing records.
     #[cfg_attr(not(feature = "firewall"), allow(clippy::unused_self))]

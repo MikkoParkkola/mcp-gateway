@@ -77,6 +77,16 @@ pub(crate) struct Held {
 }
 
 impl Held {
+    /// No handles.
+    pub(super) const fn new() -> Self {
+        Self {
+            #[cfg(feature = "firewall")]
+            captured: None,
+            #[cfg(feature = "firewall")]
+            replayed: Vec::new(),
+        }
+    }
+
     /// Settle every handle at the delivery's write under `generation`;
     /// dropped instead (released) when the write delivered no result.
     #[cfg(feature = "firewall")]
