@@ -137,6 +137,14 @@ fn the_output_scan_finds_each_argument_form() {
             "fn f(value: &Shown, e: E) { let g = |value: &str| println!(\"{}\", value); g(&e.name); }",
             "f println! value",
         ),
+        (
+            "fn f(value: &Shown, e: E) { tokio::select! { _ = w() => { let value = &e.name; println!(\"{value}\"); } } }",
+            "f println! {value}",
+        ),
+        (
+            "fn scan_failed(e: &E) -> Shown { shown(&e.to_string()) }\nmod inner { fn g(e: E) { warn!(\"{}\", scan_failed(&e.name)); } fn scan_failed(s: &str) -> String { s.to_owned() } }",
+            "g warn! scan_failed(..)",
+        ),
     ];
     // Every case runs, and each one missed is named: one failing form
     // cannot hide another.
