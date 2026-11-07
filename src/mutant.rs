@@ -64,6 +64,53 @@ mod normal_build {
         assert_eq!(original, 3);
     }
 
+    /// SCH.2: the mutated tokens are dropped unchecked. The crate has exactly
+    /// one normal-build definition of `mutant!`, with one rule whose
+    /// expansion is `$original` alone, so the mutated tokens never reach the
+    /// compiler. Read from the source: the macro is crate-private, so no
+    /// doctest can name it.
+    #[test]
+    fn a_normal_build_drops_the_mutated_tokens() {
+        use proc_macro2::{Delimiter, TokenTree};
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/lib.rs");
+        let file = syn::parse_file(&std::fs::read_to_string(path).expect("read src/lib.rs"))
+            .expect("parse src/lib.rs");
+        let normal: Vec<&syn::ItemMacro> = file
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                syn::Item::Macro(m) if m.ident.as_ref().is_some_and(|i| i == "mutant") => Some(m),
+                _ => None,
+            })
+            .filter(|m| {
+                m.attrs.iter().any(|a| {
+                    matches!(&a.meta, syn::Meta::List(l)
+                        if l.path.is_ident("cfg")
+                            && l.tokens.to_string().replace(' ', "") == "not(mutants)")
+                })
+            })
+            .collect();
+        assert_eq!(
+            normal.len(),
+            1,
+            "one #[cfg(not(mutants))] definition of mutant!"
+        );
+        let groups: Vec<proc_macro2::Group> = normal[0]
+            .mac
+            .tokens
+            .clone()
+            .into_iter()
+            .filter_map(|t| match t {
+                TokenTree::Group(g) => Some(g),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(groups.len(), 2, "one rule: a pattern and an expansion");
+        assert_eq!(groups[1].delimiter(), Delimiter::Brace);
+        let expansion = groups[1].stream().to_string().replace(' ', "");
+        assert_eq!(expansion, "$original", "the normal-build expansion");
+    }
+
     /// SCH.2: a normal build reads no switch: with the switch set to this
     /// site's ID, a fresh process still takes the original.
     #[test]
