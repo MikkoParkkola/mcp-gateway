@@ -5,7 +5,7 @@
 //! `assess`, outside async code. The compiler keeps every other module from
 //! building a token; this keeps the judge itself from handing one out.
 
-use super::{cfg_test_only, doc_only, plain};
+use super::{cfg_test_only, doc_only, path_is, plain};
 
 /// Whether `s` is the one admitted token type:
 /// `pub(crate) struct ReadsToken(std::cell::Cell<()>);` with doc comments only.
@@ -108,10 +108,6 @@ fn is_token_arg(expr: &syn::Expr) -> bool {
     };
     let syn::Expr::Call(token) = &*r.expr else {
         return false;
-    };
-    let path_is = |e: &syn::Expr, want: &[&str]| {
-        matches!(e, syn::Expr::Path(p) if p.qself.is_none()
-            && p.path.segments.iter().map(|s| plain(&s.ident)).eq(want.iter().map(|s| (*s).to_owned())))
     };
     r.mutability.is_none()
         && path_is(&token.func, &["ReadsToken"])
