@@ -134,6 +134,7 @@ Generated from the tables at the end; each row there carries the reason and migr
 | `(global)` | 13 |  | `mcp-gateway --protocol-revision-window` |  |  |
 | `accounts` | 13 |  |  |  |  |
 | `add` | 11 |  |  |  | `mcp-gateway add --config`; `mcp-gateway add -c` |
+| `api` | 11 |  |  |  |  |
 | `audit` | 17 |  |  |  |  |
 | `cap` | 73 |  |  |  |  |
 | `dashboard-link` | 8 |  |  |  |  |
@@ -856,6 +857,17 @@ Every lib item becomes INTERNAL. crates.io lists no reverse dependencies for `mc
 | `mcp-gateway add --url` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:401 |
 | `mcp-gateway add <NAME>` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:401 |
 | `mcp-gateway add <TRAILING_COMMAND>` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:401 |
+| `mcp-gateway api` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:364 |
+| `mcp-gateway api --help` | KEEP | clap-generated: prints this command's usage | - | src/cli/mod.rs:364 |
+| `mcp-gateway api -h` | KEEP | short alias of `--help` | - | src/cli/mod.rs:364 |
+| `mcp-gateway api --ca-cert` | KEEP | user-facing command or flag for setup, operation or capability authoring (env MCP_GATEWAY_CA_CERT) | - | src/cli/dashboard_link.rs:32 |
+| `mcp-gateway api --client-cert` | KEEP | user-facing command or flag for setup, operation or capability authoring (env MCP_GATEWAY_CLIENT_CERT) | - | src/cli/dashboard_link.rs:24 |
+| `mcp-gateway api --client-key` | KEEP | user-facing command or flag for setup, operation or capability authoring (env MCP_GATEWAY_CLIENT_KEY) | - | src/cli/dashboard_link.rs:27 |
+| `mcp-gateway api --data` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/api.rs:36 |
+| `mcp-gateway api --url` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/api.rs:39 |
+| `mcp-gateway api -u` | KEEP | short alias of `--url` | - | src/cli/api.rs:39 |
+| `mcp-gateway api <METHOD>` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/api.rs:29 |
+| `mcp-gateway api <PATH>` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/api.rs:33 |
 | `mcp-gateway audit` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:587 |
 | `mcp-gateway audit --help` | KEEP | clap-generated: prints this command's usage | - | src/cli/mod.rs:587 |
 | `mcp-gateway audit -h` | KEEP | short alias of `--help` | - | src/cli/mod.rs:587 |
