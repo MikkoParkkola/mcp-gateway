@@ -35,10 +35,12 @@ async fn run_once(tasks: &std::path::Path, data: &std::path::Path, at_bound: imp
     let bound = gateway.bound_port_for_test();
     let trigger = gateway.shutdown_trigger_for_test();
     let server = tokio::spawn(async move { Box::pin(gateway.run()).await });
-    let port = tokio::time::timeout(Duration::from_secs(60), bound)
+    let Ok(port) = tokio::time::timeout(Duration::from_secs(60), bound)
         .await
         .expect("binds within a minute")
-        .expect("reports its port");
+    else {
+        panic!("the start ended before it bound: {:?}", server.await);
+    };
     at_bound(port);
     let response = reqwest::Client::new()
         .get(format!("http://127.0.0.1:{port}/ui/api/gateway"))
