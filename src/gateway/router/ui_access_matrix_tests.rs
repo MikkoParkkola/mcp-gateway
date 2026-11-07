@@ -176,7 +176,10 @@ struct Fixture {
     state: Arc<AppState>,
     /// The receipt id of the record naming [`OTHER_DEV`].
     other_receipt: String,
-    _dirs: (crate::gateway::router::tests::FixtureDir, std::sync::Arc<tempfile::TempDir>),
+    _dirs: (
+        crate::gateway::router::tests::FixtureDir,
+        std::sync::Arc<tempfile::TempDir>,
+    ),
 }
 
 async fn fixture(kind: Gateway, store: bool) -> Fixture {

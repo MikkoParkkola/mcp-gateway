@@ -33,7 +33,10 @@ struct Fixture {
     log: Arc<TransparencyLogger>,
     ctx: Arc<ReloadContext>,
     path: PathBuf,
-    _dirs: (std::sync::Arc<tempfile::TempDir>, crate::gateway::router::tests::FixtureDir),
+    _dirs: (
+        std::sync::Arc<tempfile::TempDir>,
+        crate::gateway::router::tests::FixtureDir,
+    ),
 }
 
 fn admin_auth() -> AuthConfig {

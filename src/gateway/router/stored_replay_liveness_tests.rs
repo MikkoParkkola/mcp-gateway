@@ -85,7 +85,7 @@ async fn fixture_bound(surfaced: bool, audited: bool, binding: &Binding) -> Fx {
     let state_mut = Arc::get_mut(&mut state).expect("state is unique");
     state_mut.backends = gateway.backends();
     let mut meta = gateway.take_meta();
-    let audit = audited.then(|| crate::test_dir_keep::kept_tempdir());
+    let audit = audited.then(crate::test_dir_keep::kept_tempdir);
     if let Some(dir) = &audit {
         let log = Arc::new(
             crate::security::TransparencyLogger::open(Arc::new(
