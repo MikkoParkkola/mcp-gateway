@@ -42,7 +42,7 @@ jobs:
         if: matrix.case == 'noop-swapon-threshold-0'
       - name: Expected outcome
         env:
-          OUTCOME: ${{ steps.action.outcome }}${{ steps.action_t0.outcome }}
+          OUTCOME: ${{ steps.action.outcome == 'skipped' && steps.action_t0.outcome || steps.action.outcome }}
           CASE: ${{ matrix.case }}
         run: |
           echo "case=$CASE outcome=$OUTCOME"
