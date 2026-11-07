@@ -509,8 +509,7 @@ fn refuse_oversized_expires_in(endpoint: &str, expires_in: Option<u64>) -> Resul
 /// Generate PKCE code verifier and challenge
 fn generate_pkce() -> (String, String) {
     // Generate 32 random bytes for verifier
-    let verifier_bytes: [u8; 32] = rand::rng().random();
-    let verifier = URL_SAFE_NO_PAD.encode(verifier_bytes);
+    let verifier = crate::random_secret::random_secret("");
 
     // SHA256 hash for challenge
     let mut hasher = Sha256::new();

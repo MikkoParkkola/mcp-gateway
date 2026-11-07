@@ -19,6 +19,7 @@ const EDITOR: &str = "tests/webui_management_tests/capability_editor.rs";
 const CAPABILITIES: &str = "tests/webui_management_tests/capabilities.rs";
 const UI_TOOL_CALL: &str = "src/gateway/router/ui_tool_call_tests.rs";
 const ADOPT_ROUTE: &str = "tests/discovery_adopt_route.rs";
+const KEY_CREATE: &str = "src/gateway/ui/keys_create_tests.rs";
 const DECISIONS_ROUTE: &str = "src/gateway/ui/decisions_tests.rs";
 const SIGN_IN: &str = "src/gateway/ui/backends/signin_tests.rs";
 const DISCOVERY_WIRING: &str = "src/gateway/ui/discovery_wiring_tests.rs";
@@ -101,6 +102,14 @@ const SERVED_BY: &[(&str, Method, &[Citation])] = &[
         &[(
             ADOPT_ROUTE,
             "an_adopted_find_is_a_disabled_backend_with_its_secret_in_the_store",
+        )],
+    ),
+    (
+        "/ui/api/keys",
+        Method::POST,
+        &[(
+            KEY_CREATE,
+            "p1_a_full_body_writes_the_entry_and_answers_the_secret_once",
         )],
     ),
     (
