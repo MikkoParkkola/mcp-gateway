@@ -1,0 +1,58 @@
+# Judges each pull request with the public-repo hygiene checker of the branch it targets, in a
+# workflow the pull request cannot change: pull_request_target runs this file from the default
+# branch. The pull request's commits are fetched as data and checked out in a separate directory.
+# Nothing from them is run, sourced or built: the checker and the patterns it sources come from
+# the base checkout, and git reads attributes from the base (GIT_ATTR_SOURCE), so a pull request
+# cannot weaken the check or hide lines from it.
+name: Public repo hygiene (base checker)
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, ready_for_review, edited]
+    branches: [main, docs/ranking-1-release-line]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: hygiene-base-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  hygiene-base:
+    name: Public repo hygiene (base checker)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      # The trusted base commit, not the default branch tip: a pull request into the release line
+      # is judged by the release line's checker.
+      - name: Check out the base commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Judge the pull request's tree with the base's checker
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          # Replace refs, global and system config, hooks and attribute files never apply.
+          export GIT_NO_REPLACE_OBJECTS=1 GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_ATTR_NOSYSTEM=1
+          export GIT_CONFIG_PARAMETERS="'core.hookspath=/dev/null' 'core.attributesfile=/dev/null'"
+          gv=$(git version | awk '{print $3}')
+          case "$gv" in 2.4[1-9]*|2.[5-9][0-9]*|2.[1-9][0-9][0-9]*|[3-9].*|[1-9][0-9]*.*) ;;
+            *) echo "git $gv cannot read attributes from the base (needs 2.41+)"; exit 1 ;; esac
+          ia="$(git rev-parse --git-common-dir)/info/attributes"
+          if [ -s "$ia" ]; then echo "$ia is not empty and would outrank the base attributes"; exit 1; fi
+          # The pull request's commits, as data, from the base repository's pull ref (forks too).
+          git fetch --no-tags --quiet origin "+refs/pull/${PR_NUMBER}/head:refs/hygiene/pr-head"
+          if [ "$(git rev-parse refs/hygiene/pr-head)" != "$HEAD_SHA" ]; then
+            echo "the pull request moved since this event; a newer run judges it"; exit 1
+          fi
+          export GIT_ATTR_SOURCE="$BASE_SHA"
+          git worktree add --quiet --detach "$RUNNER_TEMP/pr" "$HEAD_SHA"
+          cd "$RUNNER_TEMP/pr"
+          bash "$GITHUB_WORKSPACE/scripts/dev/check-public-repo-hygiene.sh" --base "$BASE_SHA"
