@@ -359,6 +359,22 @@ fn an_unparseable_surviving_config_refuses_the_recovery() {
     );
 }
 
+/// STARTREC.3: the surviving config is refused as the normal load refuses
+/// it: one naming a reserved writer slot is not recovered to, so the start
+/// refuses before its journal is touched.
+#[test]
+fn a_surviving_config_naming_a_reserved_slot_refuses_the_recovery() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = dir.path().join("gateway.yaml");
+    let original = format!("{ORIGINAL}    description: \"env:MCPGW_PENDING_SLOT_X\"\n");
+    let journal = crashed_write_as(&config, &original, CANDIDATE, "staged");
+
+    let message = refused_start(&config);
+
+    nothing_recovered(&config, &journal, CANDIDATE);
+    assert!(message.contains("MCPGW_PENDING_SLOT_X"), "{message}");
+}
+
 /// A log under a regular file cannot open: with auth on or off, a configured
 /// log that cannot record the recovery refuses it.
 #[test]

@@ -58,6 +58,13 @@ impl ConfigFile {
     pub(crate) fn read(path: PathBuf) -> Result<Self> {
         let text =
             super::secret_file::read_secret_file(&path, super::secret_file::SecretFile::Config)?;
+        Self::of_text(path, text)
+    }
+
+    /// `text` as the file at `path`, refused as [`Self::read`] refuses a file
+    /// naming a reserved writer slot: the one check every loaded text passes,
+    /// read from disk or supplied.
+    fn of_text(path: PathBuf, text: String) -> Result<Self> {
         if let Some((name, line)) = reserved_slot_reference(&text) {
             return Err(crate::Error::Config(format!(
                 "Refusing to load {}: line {line} references {name}; names starting \
@@ -99,10 +106,7 @@ impl super::Config {
     /// bytes supplied: startup's look at the config a pending journal's
     /// recovery would leave, before that recovery writes it.
     pub(crate) fn load_evaluated_text(path: &Path, text: &str) -> Result<super::Evaluated> {
-        let file = ConfigFile {
-            path: path.to_path_buf(),
-            text: text.to_owned(),
-        };
+        let file = ConfigFile::of_text(path.to_path_buf(), text.to_owned())?;
         Self::evaluate(
             Some(&file),
             &super::SystemHome,
