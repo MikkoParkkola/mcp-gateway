@@ -300,6 +300,34 @@ async fn a_replayed_public_scope_is_private_on_the_wire() {
     }
 }
 
+/// A replay of a stored answer whose backend claimed `"public"` is served
+/// from the store, not dispatched again, and neither the first answer nor the
+/// replay carries a `cacheScope`; the replay's content is the first's.
+#[tokio::test]
+async fn a_public_scope_replay_does_not_dispatch_again() {
+    for backend in BACKENDS {
+        let fx = fixture(Answer::PublicScope, |_| {}).await;
+        let first = keyed(&fx, backend, (true, 1), "replayed").await;
+        let replay = keyed(&fx, backend, (true, 2), "replayed").await;
+        assert_eq!(
+            fx.calls.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "{backend}: the replay must not dispatch"
+        );
+        for body in [&first, &replay] {
+            assert!(body.get("error").is_none(), "{backend}: {body}");
+            assert!(
+                body["result"].get("cacheScope").is_none(),
+                "{backend}: {body}"
+            );
+        }
+        assert_eq!(
+            replay["result"]["content"], first["result"]["content"],
+            "{backend}"
+        );
+    }
+}
+
 /// Signing covers what is sent: the MAC recomputed over the delivered,
 /// shaped body (signature removed) matches the one delivered.
 #[tokio::test]
