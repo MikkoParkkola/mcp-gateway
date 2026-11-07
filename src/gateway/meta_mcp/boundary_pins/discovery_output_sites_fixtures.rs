@@ -22,6 +22,23 @@ fn found(source: &str) -> Vec<String> {
         .collect()
 }
 
+/// The same, over several files of the scratch crate's discovery module.
+fn found_in(files: &[(&str, &str)]) -> Vec<String> {
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::create_dir_all(dir.path().join("src/discovery")).expect("dirs");
+    std::fs::write(dir.path().join("src/lib.rs"), "mod discovery;\n").expect("lib");
+    for (path, source) in files {
+        std::fs::write(dir.path().join(path), source).expect("module");
+    }
+    let mut sites = Sites::default();
+    walk(dir.path(), &["src/lib.rs"], &mut sites).expect("the walk reads the fixture");
+    sites
+        .counts
+        .keys()
+        .map(|(file, func, site, arg)| format!("{file} {func} {site} {arg}"))
+        .collect()
+}
+
 fn reports(source: &str, want: &str) {
     let got = found(source);
     assert!(
@@ -112,6 +129,22 @@ fn the_output_scan_finds_each_argument_form() {
             "fn f(e: E) { println!(concat!(\"{\", \"name}\")); }",
             "f println! <format not a literal>",
         ),
+        (
+            "fn f(e: E) { tokio::select! { _ = w() => println!(\"{}\", e.name) } }",
+            "f println! e.name",
+        ),
+        (
+            "fn f(e: E) { s.r#push_str(&e.name); }",
+            "f push_str() &e.name",
+        ),
+        (
+            "fn f(value: &Shown, e: E) { let value = e.name; println!(\"{value}\"); }",
+            "f println! {value}",
+        ),
+        (
+            "fn f(value: &Shown, e: E) { let g = |value: &str| println!(\"{}\", value); g(&e.name); }",
+            "f println! value",
+        ),
     ];
     for (source, want) in cases {
         reports(source, want);
@@ -124,7 +157,7 @@ fn shown_literals_and_test_code_pass() {
     let clean = [
         "use crate::cli_support::shown;\nfn f(e: E) { println!(\"{} {}\", shown(&e.name), 3); println!(\"plain\"); }",
         "fn f(e: E) { println!(\"{}\", crate::cli_support::shown(&e.name)); }",
-        "use mcp_gateway::cli_support::{Shown, shown};\nfn f(e: E) { s.push_str(&shown(&e.name)); }",
+        "use mcp_gateway::cli_support::{Shown, shown};\nfn f(e: E) { s.push_str(&shown(&e.name).to_string()); }",
         "#[cfg(test)]\nfn t(e: E) { println!(\"{}\", e.name); }",
         "use crate::cli_support::shown;\nfn shown_path(p: &Path) -> Shown { shown(&p.to_string_lossy()) }\nfn f(p: &Path) { tracing::debug!(\"{}\", shown_path(p)); }",
         "fn field(out: &mut String, label: &str, value: &Shown) { s.push_str(\"x\"); println!(\"{value}\"); }",
@@ -145,4 +178,24 @@ fn an_unparseable_scoped_file_fails_the_scan() {
     assert!(walk(dir.path(), &["src/lib.rs"], &mut Sites::default()).is_err());
     std::fs::write(dir.path().join("src/discovery/mod.rs"), "mod missing;\n").expect("module");
     assert!(walk(dir.path(), &["src/lib.rs"], &mut Sites::default()).is_err());
+}
+
+/// An escape helper passes only where it resolves: a raw function of the same
+/// name in another file is still reported.
+#[test]
+fn a_helper_passes_only_in_its_own_module() {
+    let got = found_in(&[
+        (
+            "src/discovery/mod.rs",
+            "mod other;\nuse crate::cli_support::shown;\nfn scan_failed(e: &E) -> Shown { shown(&e.to_string()) }\nfn f(e: E) { warn!(\"{}\", scan_failed(&e)); }",
+        ),
+        (
+            "src/discovery/other.rs",
+            "fn scan_failed(s: &str) -> String { s.to_owned() }\nfn g(e: E) { warn!(\"{}\", scan_failed(&e.name)); }",
+        ),
+    ]);
+    assert_eq!(
+        got,
+        vec!["src/discovery/other.rs g warn! scan_failed(..)".to_owned()],
+    );
 }
