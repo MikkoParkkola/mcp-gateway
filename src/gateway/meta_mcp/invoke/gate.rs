@@ -10,7 +10,6 @@
 //! construction. A name the caller may see and the catalogue lists passes on
 //! untouched.
 
-use crate::error::rpc_codes::INVALID_REQUEST;
 use serde_json::{Value, json};
 
 use super::{GuardedValue, MetaMcp};
