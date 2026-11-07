@@ -1,10 +1,10 @@
 name: Feature combinations
 
-# Heavy job, run once per merge instead of on every pull request: a push to the
-# release line or main, and on a tag. A red run here blocks the next merge.
-# A merge train (a pull request into the release line from a `train/` branch)
-# also runs it, called from ci.yml's `feature-combos-train`, so a
-# feature-gating break is caught before the train lands.
+# Heavy job, run once per merge: a push to the release line or main, and on a
+# tag. A red run here blocks the next merge. Every pull request into the
+# release line that is not docs-only (lane or merge train) also runs it, called
+# from ci.yml's `feature-combos-pr`, so a feature-gating break fails the pull
+# request that made it.
 on:
   push:
     branches: [main, docs/ranking-1-release-line]

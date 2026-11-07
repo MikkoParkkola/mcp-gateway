@@ -56,6 +56,8 @@ pub mod control_plane;
 #[doc(hidden)]
 pub mod cost_accounting;
 mod counters;
+#[cfg(coverage)]
+mod coverage_canary;
 mod debug_trust_roots;
 mod random_secret;
 #[cfg(test)]

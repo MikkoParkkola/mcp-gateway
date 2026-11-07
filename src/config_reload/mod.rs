@@ -599,6 +599,9 @@ pub use apply::apply_patch;
 
 mod diff;
 mod generation;
+/// The settings the web UI may change (U8).
+#[path = "ui_fields.rs"]
+pub(crate) mod ui_fields;
 pub use generation::Generation;
 #[cfg(all(test, feature = "webui"))]
 pub(crate) use generation::refuse_hook;
