@@ -356,3 +356,47 @@ async fn a_slow_call_writes_its_decision_once_after_its_invocation_record() {
     assert_eq!(held[0]["invocation_recorded"], json!(true), "{held:#?}");
     assert_eq!(invocations(&dir).len(), 1, "the call's own record");
 }
+
+/// A caller cancelled while the slot's awaited flush is held: the withheld
+/// note waits in the slot's best-effort list, and the guard still writes it,
+/// once, behind the flush that the cancelled caller left running.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_caller_cancelled_during_the_flush_still_gets_its_withheld_note_written() {
+    let (endpoint, dir) = (
+        Endpoint::start(false).await,
+        Arc::new(tempfile::tempdir().unwrap()),
+    );
+    let rows = vec![grant("g1", ALICE, ALICE)];
+    let meta = Arc::new(gateway(
+        &endpoint,
+        rows,
+        Some(&dir),
+        AuditFailurePolicy::BestEffort,
+    ));
+    let hold = super::grant_audit::seams::hold_next_write_for_test();
+    let running = tokio::spawn({
+        let meta = Arc::clone(&meta);
+        async move {
+            let who = api_key("alice");
+            let caller = context(&who);
+            with_grant_slot(meta.transparency_logger.as_ref(), async {
+                // A fail-closed note for the flush to hold, then a withheld one.
+                let scope = caller.scope();
+                let first = meta.identity_grant_rule(CAPS, PERSONAL, scope, Emit::Audit);
+                assert!(first.is_ok(), "premise: alice holds the grant");
+                meta.record_withheld(CAPS, PERSONAL, Withholding::Refused, &caller, None)
+                    .await;
+            })
+            .await
+        }
+    });
+    let parked = tokio::time::timeout(std::time::Duration::from_secs(10), hold.held()).await;
+    assert!(parked.is_ok(), "premise: the flush is held");
+
+    running.abort();
+    let _ = running.await;
+    hold.release();
+
+    let both = wait_for_decisions(&dir, 2).await;
+    assert_eq!(both.len(), 2, "the flush and the withheld note: {both:#?}");
+}
