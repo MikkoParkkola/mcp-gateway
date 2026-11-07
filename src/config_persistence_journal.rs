@@ -462,6 +462,54 @@ pub(crate) mod fault {
         FailJournalRemove,
         /// Recovery of a `staged` journal stops until released.
         Pause(Arc<Pause>),
+        /// A commit fails before its rename.
+        FailWrite,
+        /// The directory sync of the given A call fails once.
+        FailDirSync(SyncKey),
+        /// A row's action on the target at a point inside an A call.
+        Hook(HookAt, Arc<dyn Fn(&Path) + Send + Sync>),
+        /// Several of the above armed together on one target.
+        All(Vec<Fault>),
+    }
+
+    /// Which A call's directory sync a `FailDirSync` fails.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub(crate) enum SyncKey {
+        Commit(crate::config_persistence::commit::Action),
+        Verify,
+    }
+
+    /// Where a `Hook` runs inside an A call.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub(crate) enum HookAt {
+        /// Just before the read-back opens the target.
+        BeforeReadBack,
+        /// Just before the configured path is checked again (step 5).
+        BeforeRecheck,
+    }
+
+    /// Real directory syncs per target, so a row proves A synced.
+    static SYNCED: Mutex<Option<HashMap<PathBuf, usize>>> = Mutex::new(None);
+
+    /// Count one real directory sync for `target`.
+    pub(crate) fn note_synced(target: &Path) {
+        let mut synced = SYNCED
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        *synced
+            .get_or_insert_with(HashMap::new)
+            .entry(target.to_path_buf())
+            .or_default() += 1;
+    }
+
+    /// The real directory syncs counted for `target`.
+    pub(crate) fn synced(target: &Path) -> usize {
+        SYNCED
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .as_ref()
+            .and_then(|m| m.get(target).copied())
+            .unwrap_or(0)
     }
 
     /// A gate recovery waits at: the test sees it entered, then releases it.
@@ -512,7 +560,7 @@ pub(crate) mod fault {
     /// fault was reached and not merely armed.
     static FIRED: Mutex<Option<HashMap<PathBuf, usize>>> = Mutex::new(None);
 
-    pub(super) fn note_fired(target: &Path) {
+    pub(crate) fn note_fired(target: &Path) {
         let mut fired = FIRED
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -523,10 +571,6 @@ pub(crate) mod fault {
     }
 
     /// The times the fault set for `config` has fired since it was set.
-    #[cfg_attr(
-        not(feature = "webui"),
-        expect(dead_code, reason = "read by the web UI's create-key rows")
-    )]
     pub(crate) fn fired(config: &Path) -> usize {
         let key = crate::identity_grants::journal::resolved(config);
         let fired = FIRED
@@ -577,7 +621,7 @@ pub(crate) mod fault {
         }
     }
 
-    pub(super) fn get(target: &Path) -> Option<Fault> {
+    pub(crate) fn get(target: &Path) -> Option<Fault> {
         FAULTS
             .lock()
             .expect("faults")

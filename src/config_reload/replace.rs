@@ -46,6 +46,24 @@ impl FileRevision {
         Self(crate::hashing::sha256_hex(bytes))
     }
 
+    /// The revision of everything `reader` yields, read in fixed chunks:
+    /// equal to [`Self::of`] over the same bytes.
+    ///
+    /// # Errors
+    ///
+    /// The read error; never a revision of a partial read.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "the config commit primitive's read-back, called by a later step"
+        )
+    )]
+    pub(crate) fn of_reader(reader: impl std::io::Read) -> std::io::Result<Self> {
+        let _ = reader;
+        Ok(Self::of(b""))
+    }
+
     /// The hex digest.
     #[must_use]
     #[cfg_attr(

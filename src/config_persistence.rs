@@ -99,6 +99,14 @@ pub use atomic::{FileMode, Symlink, copy_keeping_access, write_atomic};
 
 #[path = "config_persistence_scratch.rs"]
 mod scratch;
+
+// Primitive A: commit the config's bytes and prove them durable.
+#[path = "config_persistence_commit.rs"]
+pub(crate) mod commit;
+
+#[cfg(test)]
+#[path = "config_persistence_commit_tests.rs"]
+mod commit_tests;
 pub use scratch::write_text_atomic;
 use scratch::{
     SCRATCH_ATTEMPTS, ScratchClaimError, claim_scratch, next_scratch_seed, rename_with_retry,
