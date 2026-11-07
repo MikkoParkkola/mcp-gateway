@@ -60,7 +60,7 @@ const FORBIDDEN_SITES: &[(&str, usize)] = &[
     ),
     // The call-level policy, judged before dispatch.
     (
-        "gateway::meta_mcp::invoke::gate::as_undefined::MetaMcp::check_call_level_policy",
+        "gateway::meta_mcp::invoke::gate_as_undefined::MetaMcp::check_call_level_policy",
         1,
     ),
     // The invocation policy, before dispatch.
