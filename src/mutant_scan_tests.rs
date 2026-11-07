@@ -254,10 +254,7 @@ fn s13_a_tree_without_git_is_walked_on_disk() {
     assert_eq!(
         got,
         vec![
-            (
-                "crates/nested/src/b.rs".to_owned(),
-                Some("R".to_owned())
-            ),
+            ("crates/nested/src/b.rs".to_owned(), Some("R".to_owned())),
             ("src/a.rs".to_owned(), Some("Q".to_owned())),
             ("src/target/d.rs".to_owned(), Some("T".to_owned())),
         ]
