@@ -225,7 +225,16 @@ async fn s1w_the_stdout_writer_records_when_stdout_takes_the_frame() {
     let (tx, rx) = tokio::sync::mpsc::channel(4);
     let writer = tokio::spawn(Gateway::run_stdout_writer(sink, rx));
     tx.send(frame).await.expect("the writer takes the queue");
-    tokio::task::yield_now().await;
+    // Wait until the writer took the frame off its queue (the queue is
+    // empty again); a frame larger than the 64-byte pipe then blocks in
+    // its write until the client reads.
+    tokio::time::timeout(Duration::from_secs(30), async {
+        while tx.capacity() < tx.max_capacity() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the writer takes the frame within 30 s");
     publish(&meta, CollusionAction::Block);
     assert!(
         !http_relay_refused(&firewall, &note),

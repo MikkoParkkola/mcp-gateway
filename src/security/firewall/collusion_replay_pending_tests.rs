@@ -58,7 +58,9 @@ fn pend(store: &Arc<ReplayReceipts>, k: &StoredKey, now: Instant, ttl: Duration)
 
 /// A replay acquiring `k`'s pending entry; the row asserts a handle.
 fn replay(store: &Arc<ReplayReceipts>, k: &StoredKey, now: Instant) -> ReplayHandle {
-    let acquired = store.acquire(k, now).and_then(|acquired| acquired.handle);
+    let acquired = store
+        .acquire(k, now)
+        .and_then(|acquired| acquired.into_parts().1);
     assert!(
         acquired.is_some(),
         "a replay of a pending entry holds a handle"
@@ -520,12 +522,34 @@ fn p1b_every_short_sequence_matches_the_model() {
         let mut now = Instant::now();
         let mut handles: Vec<Option<ReplayHandle>> = Vec::new();
         for &op in trace.iter() {
+            let marker = model.next;
             model.apply(op);
             match op {
-                Op::Insert => handles.push(Some(pend(&store, &k, now, Duration::from_secs(10)))),
+                // Each capture carries its own marker, so a replay can be
+                // checked to return the snapshot its handle belongs to.
+                Op::Insert => {
+                    let handle = store.insert_pending(
+                        k.clone(),
+                        vec![receipt(1, 8)],
+                        Vec::new(),
+                        format!("v{marker}"),
+                        now,
+                        Duration::from_secs(10),
+                    );
+                    assert!(handle.is_some(), "a pending capture returns its handle");
+                    handles.push(handle);
+                }
                 Op::Acquire => {
-                    if let Some(h) = store.acquire(&k, now).and_then(|acquired| acquired.handle) {
-                        handles.push(Some(h));
+                    if let Some((entry, handle)) = store.acquire(&k, now).map(|a| a.into_parts()) {
+                        let want = model.entry.map(|(seq, _)| format!("v{seq}"));
+                        assert_eq!(
+                            Some(entry.answer_digest.clone()),
+                            want,
+                            "the replay returns the live entry's snapshot after {trace:?}"
+                        );
+                        if let Some(h) = handle {
+                            handles.push(Some(h));
+                        }
                     }
                 }
                 Op::On(n) => {
@@ -580,12 +604,13 @@ fn r25_a_handle_is_refused_for_another_entry() {
     let _hb = pend(&store, &b, now, hour());
     let from_a = store.acquire(&a, now).expect("a is stored");
     let from_b = store.acquire(&b, now).expect("b is stored");
+    let ((a_entry, a_handle), (_, b_handle)) = (from_a.into_parts(), from_b.into_parts());
     assert!(
-        Acquired::pair(std::sync::Arc::clone(&from_a.entry), from_b.handle).is_none(),
+        Acquired::pair(std::sync::Arc::clone(&a_entry), b_handle).is_none(),
         "b's handle is refused for a's snapshot"
     );
     assert!(
-        Acquired::pair(from_a.entry, from_a.handle).is_some(),
+        Acquired::pair(a_entry, a_handle).is_some(),
         "control: a's own pair is accepted"
     );
 }

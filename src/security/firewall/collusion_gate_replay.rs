@@ -147,8 +147,11 @@ impl Firewall {
         &self,
         key: &StoredKey,
     ) -> Option<(Vec<ReplayedDigest>, ReplayCalls, Option<ReplayHandle>)> {
-        let super::super::collusion::replay::Acquired { entry, handle } =
-            self.relay.replay.acquire(key, self.relay.now())?;
+        let (entry, handle) = self
+            .relay
+            .replay
+            .acquire(key, self.relay.now())?
+            .into_parts();
         let digests = replayed(&entry);
         Some((digests, entry.calls.clone(), handle))
     }

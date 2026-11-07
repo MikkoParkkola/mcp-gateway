@@ -591,8 +591,8 @@ pub(in super::super) enum TestLife {
 /// not belong to the snapshot. A delivery therefore settles exactly the
 /// entry whose receipts it staged.
 pub(crate) struct Acquired {
-    pub(in super::super) entry: Arc<ReplayEntry>,
-    pub(crate) handle: Option<ReplayHandle>,
+    entry: Arc<ReplayEntry>,
+    handle: Option<ReplayHandle>,
 }
 
 impl std::fmt::Debug for Acquired {
@@ -616,5 +616,10 @@ impl Acquired {
             return None;
         }
         Some(Self { entry, handle })
+    }
+
+    /// The snapshot and its handle, taken apart for the delivery.
+    pub(in super::super) fn into_parts(self) -> (Arc<ReplayEntry>, Option<ReplayHandle>) {
+        (self.entry, self.handle)
     }
 }
