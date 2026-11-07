@@ -15,7 +15,7 @@ use std::process::ExitCode;
 use super::config_write::CommentLoss;
 #[cfg(feature = "config-export")]
 use mcp_gateway::cli::{ConnectionMode, ExportTarget};
-use mcp_gateway::cli_support::shown;
+use mcp_gateway::cli_support::{shown, store_backend_literals};
 #[cfg(test)]
 use mcp_gateway::gateway::test_helpers::write_config_fixture;
 use mcp_gateway::security::sanitize::redact_url_for_diagnostics;
@@ -310,11 +310,27 @@ fn import_servers(
         }
     }
     let mut added = 0;
-    super::config_write::write(output, mode, |config| {
+    let mut store_step = None;
+    let written = super::config_write::write(output, mode, |config| {
+        let before: std::collections::HashSet<String> = config.backends.keys().cloned().collect();
         added = merge_servers_into_config(config, selected)?;
+        // The imported servers' literals the shared rule stores go to the
+        // secret store in one save, inside this hold; a value shaped like a
+        // reference stays a reference (ADR-028 B3, checked by the merge).
+        let names: Vec<String> = config
+            .backends
+            .keys()
+            .filter(|name| !before.contains(*name))
+            .cloned()
+            .collect();
+        let names: Vec<&str> = names.iter().map(String::as_str).collect();
+        store_step = Some(store_backend_literals(output, config, &names, &[])?);
         Ok(())
-    })
-    .map_err(|e| {
+    });
+    if let Some((adoption, _)) = store_step {
+        adoption.settle(&written);
+    }
+    written.map_err(|e| {
         // The message can name a client's server and keys: escaped once,
         // here, where it is printed.
         eprintln!("Error: {}", shown(&e));
