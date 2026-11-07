@@ -60,8 +60,7 @@ impl FileRevision {
         )
     )]
     pub(crate) fn of_reader(reader: impl std::io::Read) -> std::io::Result<Self> {
-        let _ = reader;
-        Ok(Self::of(b""))
+        crate::hashing::sha256_hex_reader(reader).map(Self)
     }
 
     /// The hex digest.

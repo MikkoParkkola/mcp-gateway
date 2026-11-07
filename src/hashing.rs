@@ -58,9 +58,21 @@ pub(crate) fn sha256_hex_chunks<'a>(chunks: impl IntoIterator<Item = &'a [u8]>) 
         reason = "the config commit primitive's read-back, called by a later step"
     )
 )]
-pub(crate) fn sha256_hex_reader(reader: impl std::io::Read) -> std::io::Result<String> {
-    let _ = reader;
-    Ok(sha256_hex(b""))
+pub(crate) fn sha256_hex_reader(mut reader: impl std::io::Read) -> std::io::Result<String> {
+    let mut hasher = Sha256::new();
+    let mut buf = vec![0u8; 64 * 1024];
+    loop {
+        let n = match reader.read(&mut buf) {
+            Ok(0) => break,
+            Ok(n) => n,
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(e) => return Err(e),
+        };
+        #[cfg(test)]
+        CHUNKS.with(|c| c.set(c.get() + 1));
+        hasher.update(&buf[..n]);
+    }
+    Ok(hex::encode(hasher.finalize()))
 }
 
 #[cfg(test)]
