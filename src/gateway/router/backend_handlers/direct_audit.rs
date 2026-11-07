@@ -307,25 +307,11 @@ async fn audited_call_judged(
     // they follow the judge, the audit write and the delivery record (which
     // carries the read verdict), as each can still replace the answer.
     let delivers = frame.delivers_result();
-    #[cfg_attr(not(feature = "firewall"), allow(unused_mut))]
-    let mut response = crate::gateway::outbound::to_http(frame, status, "");
-    // The receipts ride on the response and record when the server takes
-    // its body's first chunk, under the generation current then, as the
-    // meta route's do (`emit_http`).
-    #[cfg(feature = "firewall")]
-    if state.firewall.is_some() {
-        let staged =
-            crate::gateway::meta_mcp::invoke::relay::take_staged_now(state.firewall.clone());
-        response.extensions_mut().insert(
-            crate::gateway::meta_mcp::invoke::relay::DeferredReceipts::new(
-                staged,
-                delivers,
-                Some(std::sync::Arc::clone(&state.live_config)),
-            ),
-        );
-    }
-    #[cfg(not(feature = "firewall"))]
-    let _ = delivers;
+    let response = with_deferred_receipts(
+        &state,
+        crate::gateway::outbound::to_http(frame, status, ""),
+        delivers,
+    );
     crate::gateway::outbound::judged_reply(response, state.transparency_log.as_ref()).await
 }
 
@@ -488,4 +474,31 @@ mod tests {
             assert_eq!(direct_outcome(status, &body), expected, "{status} {body}");
         }
     }
+}
+
+/// `response` carrying what this call staged, recorded when the server
+/// takes its body's first chunk under the generation current then, as the
+/// meta route's answers are (`emit_http`). `delivers`: the answer as written
+/// delivers a result.
+fn with_deferred_receipts(
+    state: &AppState,
+    #[cfg_attr(not(feature = "firewall"), allow(unused_mut))]
+    mut response: axum::response::Response,
+    delivers: bool,
+) -> axum::response::Response {
+    #[cfg(feature = "firewall")]
+    if state.firewall.is_some() {
+        let staged =
+            crate::gateway::meta_mcp::invoke::relay::take_staged_now(state.firewall.clone());
+        response.extensions_mut().insert(
+            crate::gateway::meta_mcp::invoke::relay::DeferredReceipts::new(
+                staged,
+                delivers,
+                Some(std::sync::Arc::clone(&state.live_config)),
+            ),
+        );
+    }
+    #[cfg(not(feature = "firewall"))]
+    let _ = (state, delivers);
+    response
 }

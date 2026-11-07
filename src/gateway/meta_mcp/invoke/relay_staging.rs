@@ -316,7 +316,7 @@ impl MetaMcp {
             && let Some(generation) = self.current_generation()
         {
             let _ = RELAY_RECEIPTS.try_with(|receipts| {
-                replay::capture_pending_now(fw, &receipts.borrow(), &generation)
+                replay::capture_pending_now(fw, &receipts.borrow(), &generation);
             });
         }
         #[cfg(not(feature = "firewall"))]
