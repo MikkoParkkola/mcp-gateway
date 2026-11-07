@@ -527,8 +527,9 @@ mod tests {
         .await;
         assert_eq!(code, ExitCode::SUCCESS);
 
-        // THEN: the backend has correct fields
-        let config = Config::load(Some(&path)).unwrap();
+        // THEN: the backend has correct fields, as written (a load would
+        // resolve the reference back to the value)
+        let config = Config::load_literal(Some(&path)).unwrap();
         let backend = config.backends.get("my-server").unwrap();
         assert_eq!(backend.description, "My custom server");
         let written = backend.env.get("API_KEY").expect("API_KEY");

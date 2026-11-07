@@ -155,7 +155,12 @@ fn a5_settle_follows_the_write() {
         let (adoption, _) =
             store_backend_with(&mut config, &["tool"], &[], || Ok(opened(dir.path())))
                 .expect("stores");
-        assert_eq!(entries(dir.path()), 1, "the entry exists before the write");
+        // The entry exists before the write: its reference reads back the value
+        // (counting entries would wait on the vault lock the pending save holds).
+        assert_eq!(
+            read_reference(&config.backends["tool"].env["API_KEY"]),
+            "sk-live-0123456789"
+        );
         adoption.settle(&saved);
 
         assert_eq!(entries(dir.path()), kept, "{saved:?}");

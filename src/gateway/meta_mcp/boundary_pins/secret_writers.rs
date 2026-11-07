@@ -118,11 +118,16 @@ impl<'ast> Visit<'ast> for Body {
         if WRITER_METHODS.contains(&method.as_str()) {
             self.count(format!("persist:{method}"));
         }
-        if ["insert", "entry", "extend"].contains(&method.as_str())
-            && let syn::Expr::Field(field) = call.receiver.as_ref()
-            && let syn::Member::Named(name) = &field.member
-            && name == "backends"
-        {
+        // A field named `backends` (`config.backends`), or a binding of that
+        // name (a map built up and then put into a config).
+        let on_backends = match call.receiver.as_ref() {
+            syn::Expr::Field(field) => {
+                matches!(&field.member, syn::Member::Named(name) if name == "backends")
+            }
+            syn::Expr::Path(path) => path.path.is_ident("backends"),
+            _ => false,
+        };
+        if ["insert", "entry", "extend"].contains(&method.as_str()) && on_backends {
             self.count(format!("backends.{method}"));
         }
         syn::visit::visit_expr_method_call(self, call);
@@ -295,7 +300,8 @@ fn w1_the_walk_finds_the_known_writers() {
 }
 
 /// W1r: a new writer fails, whatever its layout: a call split over lines, a
-/// helper that writes, and a backends map reached through a binding.
+/// helper that writes, a backends map reached through a binding, and a
+/// local map named `backends`.
 #[test]
 fn w1r_a_new_writer_is_listed_to_add() {
     let body: syn::Block = syn::parse_quote!({
@@ -305,17 +311,19 @@ fn w1r_a_new_writer_is_listed_to_add() {
             Ok(())
         })?;
         super::config_write::write(path, mode, |c| add_backend(c, n, r))?;
+        let mut backends = BTreeMap::new();
+        backends.insert(name, backend);
     });
     let mut sites = Sites::default();
     sites.function("src/new.rs", "plant", &body);
     let wrong = differences(&sites.counts, &pin_table("secret_writers")).join("\n");
-    for kind in [
-        "persist:edit_config",
-        "persist:config_write",
-        "backends.insert",
+    for (kind, n) in [
+        ("persist:edit_config", 1),
+        ("persist:config_write", 1),
+        ("backends.insert", 2),
     ] {
         assert!(
-            wrong.contains(&format!("src/new.rs\tplant\t{kind}\t1\t<class>")),
+            wrong.contains(&format!("src/new.rs\tplant\t{kind}\t{n}\t<class>")),
             "{kind}: {wrong}"
         );
     }
