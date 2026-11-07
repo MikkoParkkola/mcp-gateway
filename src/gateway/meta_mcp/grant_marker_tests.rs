@@ -379,16 +379,14 @@ async fn a_caller_cancelled_during_the_flush_still_gets_its_withheld_note_writte
     let running = tokio::spawn({
         let meta = Arc::clone(&meta);
         async move {
-            let who = api_key("alice");
-            // The authorizer refuses, so the withheld call notes a decision.
-            let mut caller = context(&who);
-            caller.authorizer = &DENY;
+            let (alice, bob) = (api_key("alice"), api_key("bob"));
+            let (owner, other) = (context(&alice), context(&bob));
             with_grant_slot(meta.transparency_logger.as_ref(), async {
-                // A fail-closed note for the flush to hold, then a withheld one.
-                let scope = caller.scope();
-                let first = meta.identity_grant_rule(CAPS, PERSONAL, scope, Emit::Audit);
+                // A fail-closed note for the flush to hold (alice, allowed), then
+                // a withheld one (bob, who is not the owner: denied).
+                let first = meta.identity_grant_rule(CAPS, PERSONAL, owner.scope(), Emit::Audit);
                 assert!(first.is_ok(), "premise: alice holds the grant");
-                meta.record_withheld(CAPS, PERSONAL, Withholding::Refused, &caller, None)
+                meta.record_withheld(CAPS, PERSONAL, Withholding::Refused, &other, None)
                     .await;
             })
             .await
@@ -402,5 +400,11 @@ async fn a_caller_cancelled_during_the_flush_still_gets_its_withheld_note_writte
     hold.release();
 
     let both = wait_for_decisions(&dir, 2).await;
-    assert_eq!(both.len(), 2, "the flush and the withheld note: {both:#?}");
+    let mut outcomes: Vec<&str> = both
+        .iter()
+        .map(|d| d["outcome"].as_str().unwrap_or_default())
+        .collect();
+    outcomes.sort_unstable();
+    // The flush's allowed decision and the withheld call's denied one, once each.
+    assert_eq!(outcomes, ["denied", "ok"], "{both:#?}");
 }

@@ -243,3 +243,71 @@ async fn a_playbook_step_refused_by_a_grant_is_one_activity_row() {
     let rows = activity(&rig, "").await;
     assert_eq!(rows.len(), 1, "one call, one row: {rows:#?}");
 }
+
+/// The same playbook as the step row above, built once.
+fn stepped_playbook(steps: usize) -> crate::playbook::PlaybookEngine {
+    let mut engine = crate::playbook::PlaybookEngine::new();
+    let step = format!("  - name: read\n    server: {CAPS}\n    tool: {PERSONAL}\n");
+    engine.register(
+        crate::yaml::from_str(&format!(
+            "name: stepped\ndescription: personal steps\non_error: abort\nsteps:\n{}",
+            step.repeat(steps)
+        ))
+        .expect("the playbook parses"),
+    );
+    engine
+}
+
+/// Two steps on one (server, tool): the route stage ends the request at the
+/// first refused step (`route_stage.rs`, the `index >= request_targets`
+/// return), so one request writes one refusal record, one decision and one
+/// row, never one record covering a second refusal.
+#[tokio::test]
+async fn two_refused_steps_on_one_target_end_the_request_at_the_first() {
+    let endpoint = Endpoint::start(false).await;
+    let rig = rig(&endpoint, AuditFailurePolicy::BestEffort, false, false).await;
+    rig.state.meta_mcp.set_playbook_engine(stepped_playbook(2));
+
+    let answer = mcp_call(&rig, "gateway_run_playbook", &json!({ "name": "stepped" })).await;
+
+    assert!(
+        answer.get("error").is_some() || answer.pointer("/result/isError") == Some(&json!(true)),
+        "premise: the steps are refused: {answer}"
+    );
+    let held = wait_for_decisions(&rig.dir, 1).await;
+    assert_eq!(held.len(), 1, "one refusal, one decision: {held:#?}");
+    assert_eq!(
+        invocations(&rig.dir).len(),
+        1,
+        "one refusal record: {answer}"
+    );
+    assert_eq!(activity(&rig, "").await.len(), 1, "one row");
+}
+
+/// A route-stage refusal whose invocation append fails marks nothing: its
+/// decision stays unrecorded, and Activity lists the one blocked row.
+#[tokio::test]
+async fn a_failed_refusal_append_leaves_its_decision_unrecorded_and_listed() {
+    let endpoint = Endpoint::start(false).await;
+    let rig = rig(&endpoint, AuditFailurePolicy::BestEffort, false, false).await;
+    rig.state.meta_mcp.set_playbook_engine(stepped_playbook(1));
+    let log = rig.state.transparency_log.as_ref().expect("the rig logs");
+    // The refusal's invocation record is the first of route `meta`.
+    log.fail_next_append_of_kind_for_test("meta");
+
+    let answer = mcp_call(&rig, "gateway_run_playbook", &json!({ "name": "stepped" })).await;
+
+    assert!(
+        answer.get("error").is_some() || answer.pointer("/result/isError") == Some(&json!(true)),
+        "premise: the step is refused: {answer}"
+    );
+    let held = wait_for_decisions(&rig.dir, 1).await;
+    assert_eq!(held[0]["invocation_recorded"], json!(false), "{held:#?}");
+    assert!(
+        invocations(&rig.dir).is_empty(),
+        "the append failed: {answer}"
+    );
+    let rows = activity(&rig, "").await;
+    assert_eq!(rows.len(), 1, "{rows:#?}");
+    assert_eq!(rows[0]["outcome"], json!("blocked"), "{rows:#?}");
+}
