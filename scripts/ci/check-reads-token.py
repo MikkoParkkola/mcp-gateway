@@ -205,6 +205,13 @@ def self_test() -> int:
         "the build succeeded": (good, False, 1),
         "an error in another file": (good + [_err("E0425", "x", 9, "src/lib.rs")], True, 1),
         "a probe without its error": (good[1:], True, 1),
+        # The probe's own error is missing; another file's error with the right
+        # code, text and line number must not stand in for it.
+        "the probe's error only in another file": (
+            [_err("E0423", "cannot initialize `ReadsToken`: private fields", 3, "src/lib.rs"), good[1]],
+            True,
+            2,
+        ),
         "a wrong code": ([_err("E0061", "ReadsToken args", 3), good[1]], True, 1),
         "the right code naming a module": (
             [_err("E0423", "module `judge` is private", 3), good[1]],
