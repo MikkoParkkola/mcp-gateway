@@ -20,6 +20,7 @@ use super::watcher;
 use crate::config_reload::Generation;
 use crate::gateway::auth::live::{HeldCredential, current_caller};
 use crate::gateway::auth::{AuthState, AuthenticatedClient};
+use crate::gateway::authz::BackendGrant;
 use crate::gateway::router::AppState;
 use crate::gateway::ui::activity::access::{self, Access};
 use crate::gateway::ui::activity::forward::StreamKind;
@@ -51,6 +52,10 @@ pub(super) struct Conn {
     /// it differs.
     pub(super) access: Option<Access>,
     pub(super) admin: bool,
+    /// The backends the caller's UI grant reaches, sorted and deduplicated;
+    /// `None` when the grant is unscoped. Every entitlement check derives it
+    /// again and ends the stream when it differs.
+    pub(super) scope: Option<Vec<String>>,
     /// The caller's `auth` member of the status payload, fixed at connect.
     pub(super) facts: Value,
     pub(super) tx: Tx,
@@ -65,8 +70,7 @@ pub(super) enum End {
     CredentialChanged,
     ValidationTimeout,
     Lifetime,
-    /// A log source closed or failed, or a reset's replay reset again: the
-    /// client reconnects with its id.
+    /// A log source closed or failed: the client reconnects with its id.
     LogEnded,
 }
 
@@ -149,12 +153,41 @@ impl Conn {
         {
             std::future::pending::<()>().await;
         }
+        #[cfg(test)]
+        {
+            let delay = self
+                .state
+                .dashboard_bootstrap
+                .stream_hub()
+                .validation_delay();
+            if !delay.is_zero() {
+                tokio::time::sleep(delay).await;
+            }
+        }
         let Some(caller) = current_caller(&self.auth, self.held.as_ref()).await else {
             return false;
         };
         let access = activity_access(&caller.client, caller.identity.as_ref(), &caller.generation);
         super::kinds_for(&caller.client, access.as_ref(), &self.state) == self.kinds
             && access == self.access
+            && ui_scope(&caller.client) == self.scope
+    }
+}
+
+/// The caller's UI scope, the grant the status route counts by: `None` when
+/// it is unscoped (an admin with an empty list is a UI-wide admin), else the
+/// backends it reaches, sorted and deduplicated so a reordered or repeated
+/// list in the config is no change. An empty list reaches nothing.
+pub(super) fn ui_scope(client: &AuthenticatedClient) -> Option<Vec<String>> {
+    match BackendGrant::for_ui(Some(client)) {
+        BackendGrant::Unscoped => None,
+        BackendGrant::Empty => Some(Vec::new()),
+        BackendGrant::Scoped(backends) => {
+            let mut backends = backends.to_vec();
+            backends.sort();
+            backends.dedup();
+            Some(backends)
+        }
     }
 }
 
@@ -271,6 +304,9 @@ async fn write(
             }
         }
     }
+    // A page can move the delivered position with no row to carry it (a
+    // replay that showed this viewer nothing): later frames' ids follow it.
+    sent.set_cursor(delivered(logs));
     Ok(())
 }
 
@@ -303,7 +339,7 @@ async fn drive(
     let mut recheck = interval_at(start + RECHECK, RECHECK);
     recheck.set_missed_tick_behavior(MissedTickBehavior::Delay);
     let first = first_snapshot(conn, rx, &mut recheck, deadline).await?;
-    let hello = json!({"kinds": conn.kinds, "head": sent.head(&first, conn.admin)});
+    let hello = json!({"kinds": conn.kinds, "head": sent.head(&first, conn)});
     conn.send(hello_frame(&hello)).await?;
     sent.deliver(conn, &first).await?;
     let mut keep = interval_at(Instant::now() + KEEP_ALIVE, KEEP_ALIVE);
@@ -324,9 +360,6 @@ async fn drive(
         } else {
             Phase::Live
         };
-        if phase == Phase::Live {
-            served = Upkeeps::default();
-        }
         let may = servable(served, phase);
         let [activity, config] = &mut logs;
         let pass = tokio::select! {
@@ -335,11 +368,16 @@ async fn drive(
             () = tokio::time::sleep_until(deadline) => return Ok(End::Lifetime),
             _ = recheck.tick(), if may.recheck => {
                 if let Err(end) = conn.upkeep().await { return Ok(end); }
+                // The next check is a period after this one ends, not after
+                // it began: a check slower than the period would otherwise be
+                // due again at once and win every pass of the biased race.
+                recheck.reset();
                 served.recheck = true;
                 Pass::Upkept
             }
             _ = keep.tick(), if may.keep => {
                 conn.send(Bytes::from_static(b": keep-alive\n\n")).await?;
+                keep.reset();
                 served.keep = true;
                 Pass::Upkept
             }
@@ -348,18 +386,34 @@ async fn drive(
                 let snap = rx.borrow_and_update().clone();
                 sent.deliver(conn, &snap).await?;
                 served.snapshot = true;
-                Pass::Upkept
+                Pass::Snapshot
             }
             () = std::future::ready(()), if scan.is_some() => Pass::Page,
             (i, out) = live_either(activity, config), if scan.is_none() => Pass::Live(i, out),
+            // After the live receives: reached only when no live row is ready.
+            () = std::future::ready(()), if phase == Phase::Live && served.snapshot => Pass::LiveTurn,
         };
+        // A snapshot leaves the live logs owed one look: only a live row, or
+        // a look that found none, pays it. A check due meanwhile would
+        // otherwise lift the cap and let the next snapshot win again.
+        if phase == Phase::Live && matches!(pass, Pass::Live(..) | Pass::LiveTurn) {
+            served = Upkeeps::default();
+        }
         if let (Pass::Page, Some(i)) = (&pass, scan) {
             served = Upkeeps::default();
+            #[cfg(test)]
+            conn.state
+                .dashboard_bootstrap
+                .stream_hub()
+                .page_gate()
+                .await;
             conn.require_entitled().await?;
             let step = match logs[i].as_mut() {
                 Some(m) => m.step().await,
                 None => None,
             };
+            #[cfg(test)]
+            conn.state.dashboard_bootstrap.stream_hub().page_read();
             let Some(outs) = step else {
                 return Ok(End::LogEnded);
             };
@@ -371,7 +425,7 @@ async fn drive(
             Pass::Live(i, Some(outs)) => write(conn, &mut sent, &mut logs, i, outs).await?,
             // Served what was due; the next pass serves the next due one, or
             // the page.
-            Pass::Upkept | Pass::Page => {}
+            Pass::Upkept | Pass::Snapshot | Pass::LiveTurn | Pass::Page => {}
         }
     }
 }
@@ -402,13 +456,18 @@ impl Upkeeps {
 }
 
 /// Which upkeeps the next pass may serve, given those `served` since the
-/// last page. Following the live logs, every one. During a catch-up, each at
-/// most once between pages: an upkeep that falls due again while it is
-/// served (a recheck slower than its period, a snapshot faster than the
+/// last page. Following the live logs, every one, except that a snapshot
+/// leaves the live logs owed one look first: nothing is servable until a
+/// live row is sent or a look finds none, so a snapshot changing faster than
+/// it is sent cannot hold ready rows back, and on an idle stream the debt
+/// lasts one pass. During a catch-up,
+/// each at most once between pages: an upkeep that falls due again while it
+/// is served (a recheck slower than its period, a snapshot faster than the
 /// reader) cannot hold the next page back, which follows once nothing
 /// servable is due.
 fn servable(served: Upkeeps, phase: Phase) -> Upkeeps {
     match phase {
+        Phase::Live if served.snapshot => Upkeeps::default(),
         Phase::Live => Upkeeps::ALL,
         Phase::CatchUp => Upkeeps {
             recheck: !served.recheck,
@@ -420,8 +479,12 @@ fn servable(served: Upkeeps, phase: Phase) -> Upkeeps {
 
 /// What one pass of the connection's race did.
 enum Pass {
-    /// Served one due upkeep: a check, a keep-alive or a snapshot.
+    /// Served one due upkeep: a check or a keep-alive.
     Upkept,
+    /// Sent one snapshot.
+    Snapshot,
+    /// Looked at the live logs after a snapshot and found no row ready.
+    LiveTurn,
     /// Nothing was due and a scan is pending: read its next page.
     Page,
     /// A live announcement from this log, or `None` when it closed.

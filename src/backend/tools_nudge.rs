@@ -313,9 +313,10 @@ impl super::Backend {
         entry.tools_cache.replace(tools, || ());
     }
 
-    /// Set the effect sets of the slot `binding` selects (admitted already)
-    /// as an accepted fill of `tools` would derive them, and nothing else: so
-    /// a row can give two slots of one backend two different declarations.
+    /// Set the effect sets and the held list of the slot `binding` selects
+    /// (admitted already) as an accepted fill of `tools` would, so a row can
+    /// give two slots of one backend two different declarations, and a call
+    /// on the slot finds its list fresh instead of listing it again.
     #[cfg(test)]
     pub(crate) fn declare_slot_effects_for_test(
         &self,
@@ -336,6 +337,7 @@ impl super::Backend {
         *entry.hint_declared.write() = prepared.hint_declared;
         *entry.write_declared.write() = prepared.write_declared;
         *entry.effect_listed.write() = prepared.listed;
+        entry.tools_cache.replace(tools, || ());
     }
 
     /// Have the next drain store `tools` into the shared slot right after it

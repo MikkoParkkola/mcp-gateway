@@ -131,7 +131,9 @@ async fn recorded(state: Arc<AppState>, request: Request, next: Next) -> Respons
     let subject = request
         .extensions()
         .get::<VerifiedIdentity>()
-        .and_then(|id| GrantSubject::new(id.issuer.clone(), id.subject.clone(), None).ok());
+        .and_then(|id| {
+            GrantSubject::new(id.issuer().to_owned(), id.subject().to_owned(), None).ok()
+        });
 
     // The handler and its record run on a task of their own: a client that
     // disconnects drops only this wait, so a write that commits after it left
@@ -212,8 +214,9 @@ pub(super) fn caller_who(
     client: Option<&AuthenticatedClient>,
     identity: Option<&VerifiedIdentity>,
 ) -> AuditWho {
-    let subject =
-        identity.and_then(|id| GrantSubject::new(id.issuer.clone(), id.subject.clone(), None).ok());
+    let subject = identity.and_then(|id| {
+        GrantSubject::new(id.issuer().to_owned(), id.subject().to_owned(), None).ok()
+    });
     let generation = state.live_config.generation();
     AuditWho::from_request(client, subject.as_ref(), generation.auth().record_key())
 }

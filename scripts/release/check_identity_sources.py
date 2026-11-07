@@ -38,7 +38,7 @@ NEW_IS_CHECKED = "new is the checked constructor (names_someone)"
 
 # (file, enclosing fn, construct) -> why it may build an identity directly.
 ALLOWED = {
-    ("src/key_server/oidc_identity.rs", "checked", "VerifiedIdentity {"): "the checked constructor",
+    ("src/key_server/oidc/verified.rs", "checked", "VerifiedIdentity {"): "the checked constructor",
     ("src/identity_grants/subject.rs", "new", "GrantSubject {"): "the one literal, in the checked constructor",
     ("src/mtls/identity/cert.rs", "parse", "CertIdentity {"): "the production parser; `from_der` refuses what it builds when it names no one",
     ("src/decisions/mod.rs", "access_key", "GrantSubject::new("): NEW_IS_CHECKED,

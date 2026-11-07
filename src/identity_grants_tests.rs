@@ -574,12 +574,8 @@ fn caller_identity_constructors_refuse_an_identity_that_names_no_one() {
     assert!(id("https://idp.example", "").is_none());
     let named = id("https://idp.example", "alice").unwrap();
     assert_eq!(
-        (
-            named.issuer.as_str(),
-            named.subject.as_str(),
-            named.email.as_str()
-        ),
+        (named.issuer(), named.subject(), named.email()),
         ("https://idp.example", "alice", "a@corp.invalid")
     );
-    assert_eq!(named.groups, vec!["g".to_owned()]);
+    assert_eq!(named.groups(), vec!["g".to_owned()]);
 }

@@ -103,6 +103,23 @@ fn parse_boot(text: &str) -> Result<u64, IdError> {
     u64::from_str_radix(text, 16).map_err(|_| IdError)
 }
 
+/// A log's half after a reset, before its replay has delivered a row: the
+/// replay from the oldest kept record is still owed. Counter 0 names no
+/// record (a log's counters start at 1), so it cannot be a real position,
+/// and it renders and parses as any other part does: a reconnect that
+/// carries it resumes the replay instead of starting at the log's head.
+pub(super) fn replay_pending() -> Mark {
+    Mark {
+        counter: 0,
+        hash16: "0".repeat(16),
+    }
+}
+
+/// Whether `mark` is [`replay_pending`]'s marker.
+pub(super) fn is_replay_pending(mark: &Mark) -> bool {
+    mark.counter == 0
+}
+
 fn parse_log(text: &str) -> Result<Mark, IdError> {
     let (n, hash) = text.split_once('-').ok_or(IdError)?;
     if !is_hash(hash) {

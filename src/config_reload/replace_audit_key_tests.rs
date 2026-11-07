@@ -109,7 +109,7 @@ fn every_other_kind_keeps_naming_the_gateway() {
     ] {
         let dir = Arc::new(tempfile::tempdir().expect("tempdir"));
         let (log, posture) = posture(&dir);
-        append(posture.audit(kind).expect("an audited posture"));
+        append(posture.audit(kind.clone()).expect("an audited posture"));
         let record = only_record(&log);
         assert_eq!(record["who"], gateway, "{kind:?}: {record}");
         assert!(record.get("subject").is_none(), "{kind:?}: {record}");

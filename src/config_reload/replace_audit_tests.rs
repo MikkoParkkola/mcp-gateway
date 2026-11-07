@@ -46,7 +46,7 @@ impl Recorder {
             .lock()
             .expect("lock")
             .iter()
-            .map(|s| s.intent.kind)
+            .map(|s| s.intent.kind.clone())
             .collect()
     }
 }
@@ -131,7 +131,7 @@ async fn an_owed_reload_runs_after_its_recovery_intent() {
     .expect("the write goes ahead");
 
     let seen = recorder.seen.lock().expect("lock");
-    let kinds: Vec<_> = seen.iter().map(|s| s.intent.kind).collect();
+    let kinds: Vec<_> = seen.iter().map(|s| s.intent.kind.clone()).collect();
     assert_eq!(kinds, [IntentKind::Recovery, IntentKind::Save]);
     assert!(seen[0].journal_pending, "recovery ran before its intent");
     assert_eq!(seen[0].file, NEXT, "recovery ran before its intent");
@@ -208,7 +208,7 @@ async fn a_reload_appends_its_recovery_intent_first() {
     ctx.reload_outcome().await.expect("the reload goes ahead");
 
     let seen = recorder.seen.lock().expect("lock");
-    let kinds: Vec<_> = seen.iter().map(|s| s.intent.kind).collect();
+    let kinds: Vec<_> = seen.iter().map(|s| s.intent.kind.clone()).collect();
     assert_eq!(kinds, [IntentKind::Recovery]);
     assert!(
         seen[0].journal_pending,
@@ -560,16 +560,47 @@ async fn a_save_the_loader_refuses_records_no_intent() {
     );
 }
 
-/// A save whose bytes are already the file's writes nothing, so it records
-/// no intent.
+/// A save whose bytes are already the file's still reloads, so an audited
+/// one appends its intent first, marked as an outside change (the running
+/// config may be behind the disk), and a refused append stops that reload.
 #[tokio::test]
-async fn an_unchanged_save_records_no_intent() {
+async fn an_unchanged_save_appends_its_intent_before_its_reload() {
     let (_dir, path, ctx) = setup();
-    let recorder = Recorder::new(&path, false);
+    write_owner_only(&path, NEXT).expect("a hand edit adds b");
+    let unchanged = || to(Expected::Any, NEXT, Replaced::Discard);
 
+    let files = crate::gateway::test_helpers::ConfigFiles::snapshot(&path);
+    let refusing = Recorder::new(&path, true);
+    let refused = replace_audited(
+        Arc::clone(&ctx),
+        unchanged(),
+        Audit::Required {
+            sink: Box::new(refusing.clone()),
+            kind: IntentKind::Save,
+            writer: None,
+        },
+        WAIT,
+    )
+    .await;
+    assert!(
+        matches!(refused, Err(ReplaceError::AuditRefused(_))),
+        "{refused:?}"
+    );
+    assert!(
+        !running_has_b(&ctx),
+        "a refused intent let the unchanged save reload the hand edit"
+    );
+    assert_eq!(
+        read(&path),
+        NEXT,
+        "a refused unchanged save changed the file"
+    );
+    files.assert_unchanged(&path, "a refused unchanged save");
+
+    let recorder = Recorder::new(&path, false);
     let outcome = replace_audited(
         Arc::clone(&ctx),
-        to(Expected::Any, START, Replaced::Discard),
+        unchanged(),
         Audit::Required {
             sink: Box::new(recorder.clone()),
             kind: IntentKind::Save,
@@ -579,13 +610,17 @@ async fn an_unchanged_save_records_no_intent() {
     )
     .await
     .expect("an unchanged save goes ahead");
-
     assert_eq!(outcome.revision, None, "the unchanged save wrote");
+    let seen = recorder.seen.lock().expect("lock");
     assert_eq!(
-        recorder.kinds(),
-        [],
-        "an unchanged save left an operation intent"
+        seen.iter()
+            .map(|s| (s.intent.kind.clone(), s.intent.outside_change))
+            .collect::<Vec<_>>(),
+        [(IntentKind::Save, true)],
+        "an unchanged save's intent"
     );
+    assert!(running_has_b(&ctx), "the unchanged save did not reload");
+    assert_eq!(read(&path), NEXT, "the unchanged save changed the file");
 }
 
 /// A gateway.yaml other accounts can write is refused at the writer's read,
@@ -659,3 +694,6 @@ async fn a_pending_recovery_on_a_config_others_can_write_is_refused_before_its_i
         "the journal was settled"
     );
 }
+
+#[path = "replace_old_path_tests.rs"]
+mod old_path;

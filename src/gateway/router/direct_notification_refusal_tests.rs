@@ -41,7 +41,7 @@ impl crate::identity_propagation::IdentityPropagation for PerIdentityMint {
         crate::identity_propagation::PropagatedCredential,
         crate::identity_propagation::PropagationError,
     > {
-        let subject_key = identity.subject.clone();
+        let subject_key = identity.subject().to_owned();
         Ok(crate::identity_propagation::PropagatedCredential {
             expiry_synthetic: false,
             headers: vec![(

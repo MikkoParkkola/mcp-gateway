@@ -248,6 +248,8 @@ impl Gateway {
         // Whether this session began with `initialize`: only such a client
         // is told of changes (a modern one was told `listChanged: false`).
         let mut legacy_handshake = false;
+        // Whether a first list's answer was queued (`first_list_wait`).
+        let first_list = super::first_list_wait::FirstList::default();
 
         // Use a fixed session ID for stdio sessions (single client, long-lived)
         let session_id = STDIO_SESSION_ID;
@@ -529,6 +531,7 @@ impl Gateway {
                 let params = reads.judges().then(|| request.get("params").cloned());
                 let cancelled = cancelled.clone();
                 let answers = request_id.clone();
+                let first_list = first_list.clone();
                 #[cfg(test)]
                 let gate = initialize_gate.clone().filter(|_| !spawned);
                 #[cfg(test)]
@@ -536,7 +539,7 @@ impl Gateway {
                 // MIK-8176: this request's slots are owned by its task, from
                 // dispatch through the writer queue.
                 // One delivery's facts: dispatch, judge and record.
-                Box::pin(crate::gateway::delivery_facts::scope(
+                Box::pin(first_list.scope(crate::gateway::delivery_facts::scope(
                     crate::gateway::meta_mcp::sealed_hold::scoped(async move {
                         #[cfg(test)]
                         hold.pause().await;
@@ -599,7 +602,7 @@ impl Gateway {
                             cancelled.send_unless_cancelled(answers.as_ref(), permit, response);
                         }
                     }),
-                ))
+                )))
             };
             if spawned {
                 let slot = slot.expect("a spawned request holds the slot it was admitted on");
@@ -652,6 +655,8 @@ impl Gateway {
         // The read loop is over: the session is ending, so nothing more is
         // announced, though accepted requests still drain (MIK-8278).
         announcer.stop();
+        // A first list still waiting answers now (`first_list_wait`).
+        first_list.end();
         // `writer.is_closed()` as well as the flag: stdout can die during the
         // wait for a line that never comes, and the loop then leaves by the EOF
         // arm. Reporting that as an ordinary EOF would hand the operator the

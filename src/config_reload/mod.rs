@@ -591,6 +591,8 @@ mod live_collusion_tests;
 mod live_keys_reload_tests;
 #[cfg(test)]
 mod live_sections_tests;
+#[cfg(test)]
+mod owner_reload_tests;
 
 mod apply;
 pub use apply::apply_patch;
@@ -657,8 +659,8 @@ pub(crate) use reload_context::SurfacedHook;
 pub(crate) use reload_context::replace::order as write_order;
 #[cfg(feature = "webui")]
 pub(crate) use reload_context::replace::{
-    AuditPosture, Expected, FileRevision, GatewayAuth, IntentKind, NO_AUDIT_LOG, Replace,
-    ReplaceError, ReplaceOutcome, Replaced, SecretStep, replace_audited,
+    AuditPosture, BackendOp, Expected, FileRevision, GatewayAuth, IntentKind, NO_AUDIT_LOG,
+    Replace, ReplaceError, ReplaceOutcome, Replaced, SecretStep, replace_audited,
 };
 #[cfg(test)]
 use reload_context::{
@@ -674,9 +676,6 @@ pub use write::{write_config_and_reload, write_config_and_reload_outcome};
 // The writer-lock tests call the refusing writer directly.
 #[cfg(test)]
 use write::mutate_config_and_reload_with;
-// Only the web UI writes in refusing mode.
-#[cfg(feature = "webui")]
-pub(crate) use write::{MutateError, mutate_config_and_reload_detached};
 
 mod env_poll;
 // Linux and macOS (MIK-8181), as the real-watcher rows (see `watch_chain_tests.rs`).
@@ -740,6 +739,8 @@ mod grant_reload_trigger_tests;
 /// that changes which of them are secret.
 #[cfg(test)]
 mod configured_secrets_reload_tests;
+#[cfg(all(test, feature = "firewall"))]
+mod firewall_shape_reload_tests;
 #[cfg(test)]
 mod grant_audit_crash_tests;
 #[cfg(test)]

@@ -179,8 +179,8 @@ fn stable_actor_id_is_collision_safe() {
     };
     // Naive format collides: "oidc:https://idp/a:b:c" for both.
     assert_eq!(
-        format!("oidc:{}:{}", a.issuer, a.subject),
-        format!("oidc:{}:{}", b.issuer, b.subject),
+        format!("oidc:{}:{}", a.issuer(), a.subject()),
+        format!("oidc:{}:{}", b.issuer(), b.subject()),
         "precondition: the naive format collides for these inputs"
     );
     // Length-prefixed form keeps them distinct.

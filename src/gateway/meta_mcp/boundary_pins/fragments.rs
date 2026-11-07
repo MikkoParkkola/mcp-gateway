@@ -3,10 +3,9 @@
 //! The pin tables, read at test time from `boundary_pins/<name>.tsv` plus any
 //! `<name>.d/<digits>[-<digits>].tsv` fragments beside it.
 //!
-//! The pin tests for `allows`, `scoped_backends_classes`, `creation_sites` and
-//! `presend_exits` read through [`pin_table`]; `delivery_framing.rs` still
-//! embeds its two tables until it moves to this loader, so a fragment beside
-//! them is not read yet. A new row goes in the change's own fragment, so two
+//! The pin tests for `allows`, `scoped_backends_classes`, `creation_sites`,
+//! `presend_exits`, `delivery_framing_inventory` and `delivery_refusals` read
+//! through [`pin_table`]. A new row goes in the change's own fragment, so two
 //! changes adding rows never edit the same file. The tables live under
 //! `src/**`, which `Cargo.toml` `include` ships, so the packaged suite reads
 //! them the same way.

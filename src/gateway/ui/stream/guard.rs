@@ -89,6 +89,9 @@ struct Shared {
     /// Test seam: credential validation never answers while set.
     #[cfg(test)]
     hang_validation: std::sync::atomic::AtomicBool,
+    /// Test seam: credential validation takes this many milliseconds.
+    #[cfg(test)]
+    slow_validation_ms: std::sync::atomic::AtomicU64,
     /// Test seam: the watcher handover probe.
     #[cfg(test)]
     probe: super::probe::PublishProbe,
@@ -96,6 +99,32 @@ struct Shared {
     /// checks outside the reservation wait do not count. Test builds only.
     #[cfg(test)]
     awaiting_room: std::sync::atomic::AtomicUsize,
+    /// Test seam: the gate a catch-up page waits at, and the pages read.
+    #[cfg(test)]
+    page_gate: PageGate,
+}
+
+/// Test seam: while armed, a connection's catch-up page waits here for a
+/// permit before its entitlement check, so a row can act between two pages
+/// with no frame in flight. Counts the arrivals at the gate and the pages read.
+#[cfg(test)]
+struct PageGate {
+    armed: std::sync::atomic::AtomicBool,
+    permits: tokio::sync::Semaphore,
+    arrived: std::sync::atomic::AtomicUsize,
+    read: std::sync::atomic::AtomicUsize,
+}
+
+#[cfg(test)]
+impl Default for PageGate {
+    fn default() -> Self {
+        Self {
+            armed: std::sync::atomic::AtomicBool::new(false),
+            permits: tokio::sync::Semaphore::new(0),
+            arrived: std::sync::atomic::AtomicUsize::new(0),
+            read: std::sync::atomic::AtomicUsize::new(0),
+        }
+    }
 }
 
 /// Caps, the watcher's lifetime and its published state.
@@ -154,9 +183,13 @@ impl StreamHub {
                 #[cfg(test)]
                 hang_validation: std::sync::atomic::AtomicBool::new(false),
                 #[cfg(test)]
+                slow_validation_ms: std::sync::atomic::AtomicU64::new(0),
+                #[cfg(test)]
                 probe: super::probe::PublishProbe::default(),
                 #[cfg(test)]
                 awaiting_room: std::sync::atomic::AtomicUsize::new(0),
+                #[cfg(test)]
+                page_gate: PageGate::default(),
             }),
         }
     }
@@ -214,6 +247,72 @@ impl StreamHub {
     pub(crate) fn hang_validation_for_test(&self, on: bool) {
         use std::sync::atomic::Ordering::SeqCst;
         self.shared.hang_validation.store(on, SeqCst);
+    }
+
+    /// Make every credential validation take `ms` milliseconds before it
+    /// answers, as a slow key server would; 0 is no delay.
+    #[cfg(test)]
+    pub(crate) fn slow_validation_for_test(&self, ms: u64) {
+        use std::sync::atomic::Ordering::SeqCst;
+        self.shared.slow_validation_ms.store(ms, SeqCst);
+    }
+
+    #[cfg(test)]
+    pub(super) fn validation_delay(&self) -> std::time::Duration {
+        std::time::Duration::from_millis(
+            self.shared
+                .slow_validation_ms
+                .load(std::sync::atomic::Ordering::SeqCst),
+        )
+    }
+
+    /// Make every catch-up page wait at the page gate until released.
+    #[cfg(test)]
+    pub(crate) fn arm_page_gate_for_test(&self) {
+        use std::sync::atomic::Ordering::SeqCst;
+        self.shared.page_gate.armed.store(true, SeqCst);
+    }
+
+    /// Let `pages` more catch-up pages past the gate.
+    #[cfg(test)]
+    pub(crate) fn release_pages_for_test(&self, pages: usize) {
+        self.shared.page_gate.permits.add_permits(pages);
+    }
+
+    /// Arrivals at the page gate so far, the one waiting now included.
+    #[cfg(test)]
+    pub(crate) fn pages_at_gate_for_test(&self) -> usize {
+        use std::sync::atomic::Ordering::SeqCst;
+        self.shared.page_gate.arrived.load(SeqCst)
+    }
+
+    /// Catch-up pages read so far.
+    #[cfg(test)]
+    pub(crate) fn pages_read_for_test(&self) -> usize {
+        use std::sync::atomic::Ordering::SeqCst;
+        self.shared.page_gate.read.load(SeqCst)
+    }
+
+    /// Before a catch-up page: wait at the gate while it is armed.
+    #[cfg(test)]
+    pub(super) async fn page_gate(&self) {
+        use std::sync::atomic::Ordering::SeqCst;
+        let gate = &self.shared.page_gate;
+        if gate.armed.load(SeqCst) {
+            gate.arrived.fetch_add(1, SeqCst);
+            if let Ok(permit) = gate.permits.acquire().await {
+                permit.forget();
+            }
+        }
+    }
+
+    /// After a catch-up page: count it.
+    #[cfg(test)]
+    pub(super) fn page_read(&self) {
+        self.shared
+            .page_gate
+            .read
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     }
 
     /// Sends waiting for room in their channel right now.

@@ -439,4 +439,7 @@ mod caller_key_record_tests;
 #[path = "coverage_tests.rs"]
 mod coverage_tests;
 #[cfg(all(test, feature = "firewall"))]
+#[path = "read_scope_scan_tests.rs"]
+mod read_scope_scan_tests;
+#[cfg(all(test, feature = "firewall"))]
 mod tests;

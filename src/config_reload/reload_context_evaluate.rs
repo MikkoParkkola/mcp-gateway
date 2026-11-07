@@ -38,6 +38,11 @@ pub(in crate::config_reload) fn load_config_patch(
     // against a half-read env file is refused instead of published.
     let evaluated = Config::load_with_overlay(Some(config_path), env.env_paths())
         .map_err(|e| format!("Failed to parse config: {e}"))?;
+    // `enabled` and `auth.enabled` apply on a restart, the rules at once: a
+    // rule the running firewall's load would refuse must not join it.
+    #[cfg(feature = "firewall")]
+    crate::security::firewall::refuse_while_running(live_config.running(), &evaluated.config)
+        .map_err(|e| format!("Failed to validate config: {e}"))?;
     let patch = compute_diff(&old_config, &evaluated.config);
 
     Ok(EvaluatedReload {
