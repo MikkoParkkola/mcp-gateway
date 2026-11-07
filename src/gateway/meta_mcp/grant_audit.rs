@@ -181,7 +181,6 @@ impl GrantNote {
                 .trace_id
                 .as_deref()
                 .is_some_and(|trace| self.recorded.contains(trace))
-            || (self.trace_id.is_none() && self.recorded.contains_target(&self.server, &self.tool))
             || self
                 .retry
                 .as_ref()

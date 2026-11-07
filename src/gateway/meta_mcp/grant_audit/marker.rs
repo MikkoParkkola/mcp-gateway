@@ -22,23 +22,14 @@ pub(super) fn delivery_scoped() -> bool {
     DELIVERY.try_with(|()| ()).is_ok()
 }
 
-/// A target's entry in a [`RecordedSet`]; a NUL cannot start a trace id.
-fn target_key(server: &str, tool: &str) -> String {
-    format!("\0{server}\0{tool}")
-}
-
 /// For a writer of a route-stage refusal's invocation record: a hook to run,
 /// on the blocking worker and only after the append returned `Ok`, that marks
-/// the call's trace id and its target as recorded in the open slot.
-pub(crate) fn invocation_landing(server: &str, tool: Option<&str>) -> Box<dyn FnOnce(&str) + Send> {
+/// the call's trace id as recorded in the open slot.
+pub(crate) fn invocation_landing() -> Box<dyn FnOnce(&str) + Send> {
     let recorded = open_slot_recorded();
-    let (server, tool) = (server.to_owned(), tool.map(str::to_owned));
     Box::new(move |trace_id| {
         if let Some(recorded) = recorded {
             recorded.add(trace_id);
-            if let Some(tool) = tool {
-                recorded.add_target(&server, &tool);
-            }
         }
     })
 }
@@ -69,17 +60,6 @@ impl RecordedSet {
             .lock()
             .expect("recorded set lock")
             .insert(trace_id.to_owned());
-    }
-
-    /// Record that an invocation record landed for `(server, tool)` in this
-    /// slot, for the untraced notes of the same refusal (a route-stage refusal
-    /// writes its invocation record under a trace its decision note never saw).
-    fn add_target(&self, server: &str, tool: &str) {
-        self.add(&target_key(server, tool));
-    }
-
-    pub(super) fn contains_target(&self, server: &str, tool: &str) -> bool {
-        self.contains(&target_key(server, tool))
     }
 
     pub(super) fn contains(&self, trace_id: &str) -> bool {
