@@ -1015,3 +1015,157 @@ fn records_after_the_first_failure_are_still_paired() {
     assert_field_fails(&r, 4, "field intent_counter missing", "malformed");
     assert_eq!(count(&r.warnings, "(token w-1)"), 0, "{:?}", r.warnings);
 }
+
+/// Every writer intent's event, by kind.
+const WRITER_INTENTS: [&str; 4] = [
+    "config_save_intent",
+    "config_adopt_intent",
+    "config_restore_intent",
+    "config_backend_intent",
+];
+
+#[test]
+fn every_intent_kind_recovery_and_stopped_fail_on_two_different_records() {
+    const RULE: &str = "two different records for one token and role";
+    let tagged = |event: &str, extra: &Value, why: &str| {
+        with_field(rec(event, "w-1", extra), "reason", Some(json!(why)))
+    };
+    // (case, the leading records, the role's extra fields, its counter)
+    let intent = rec(INTENT, "w-1", &json!({}));
+    let mut cases: Vec<_> = WRITER_INTENTS
+        .iter()
+        .map(|kind| (*kind, vec![], json!({}), 4_u64))
+        .collect();
+    cases.push((RECOVERY, vec![], json!({"settles": "w-0"}), 4));
+    cases.push((STOPPED, vec![intent], json!({"intent_counter": 3}), 5));
+    for (event, lead, extra, at) in cases {
+        let close = |mut v: Vec<Map<String, Value>>| {
+            if event == STOPPED {
+                v.push(dep(OUTCOME, "w-1", 3));
+            }
+            v
+        };
+        let differing = [
+            lead.clone(),
+            vec![tagged(event, &extra, "a"), tagged(event, &extra, "b")],
+        ];
+        assert_fails(&verify_records(close(differing.concat())), at, RULE, "w-1");
+        let equal = [
+            lead,
+            vec![tagged(event, &extra, "a"), tagged(event, &extra, "a")],
+        ];
+        let r = verify_records(close(equal.concat()));
+        assert!(r.ok, "{event} equal repeats: {:?}", r.error_message);
+    }
+}
+
+#[test]
+fn settled_by_pairs_with_any_equal_recovery_repeat_but_not_a_counter_between() {
+    // GIVEN: w-1's intent (3), r-1's recovery intent (4), a plain record
+    // (5), and r-1's recovery intent again, equal (6)
+    let recovery = || rec(RECOVERY, "r-1", &json!({"settles": "w-1"}));
+    let head = || {
+        vec![
+            rec(INTENT, "w-1", &json!({})),
+            recovery(),
+            plain(&json!({"event": "config_write_note"})),
+            recovery(),
+        ]
+    };
+    // settled_by naming the second repeat pairs.
+    let second = verify_records([head(), vec![settled("w-1", 3, "r-1", 6)]].concat());
+    assert_paired(&second, "the second repeat");
+    // settled_by naming the counter between the repeats fails.
+    let between = verify_records([head(), vec![settled("w-1", 3, "r-1", 5)]].concat());
+    assert_fails(&between, 7, "settled_by names no intent", "w-1");
+}
+
+#[test]
+fn every_role_fails_on_each_of_its_fields_missing_or_mistyped() {
+    use FieldEdit::{Drop, Set};
+    // (event, its well-formed extra fields, whether it is an intent)
+    let mut roles: Vec<(&str, Value, bool)> = WRITER_INTENTS
+        .iter()
+        .map(|k| (*k, json!({}), true))
+        .collect();
+    roles.push((RECOVERY, json!({"settles": "w-0"}), true));
+    roles.push((OUTCOME, json!({"intent_counter": 3}), false));
+    roles.push((ABANDONED, json!({"intent_counter": 3}), false));
+    roles.push((DEFERRED, json!({"intent_counter": 3}), false));
+    roles.push((STOPPED, json!({"intent_counter": 3}), false));
+    for (event, extra, intent_role) in roles {
+        let mut edits = vec![
+            ("token", Drop, "field token missing"),
+            ("token", Set(json!(7)), "field token mistyped"),
+            ("token", Set(json!("")), "field token mistyped"),
+        ];
+        if intent_role {
+            edits.push((
+                "intent_counter",
+                Set(json!(3)),
+                "field intent_counter forbidden",
+            ));
+        } else {
+            edits.push((
+                "intent_counter",
+                Set(json!("3")),
+                "field intent_counter mistyped",
+            ));
+            edits.push((
+                "intent_counter",
+                Set(json!(-1)),
+                "field intent_counter mistyped",
+            ));
+            if event != ABANDONED {
+                edits.push(("intent_counter", Drop, "field intent_counter missing"));
+            }
+        }
+        if event == RECOVERY {
+            edits.push(("settles", Drop, "field settles missing"));
+            edits.push(("settles", Set(json!(7)), "field settles mistyped"));
+            edits.push(("settles", Set(json!("")), "field settles mistyped"));
+        }
+        if event == OUTCOME {
+            for (by, rule) in [
+                (json!(5), "field settled_by mistyped"),
+                (
+                    json!({"intent_counter": 1}),
+                    "field settled_by.token missing",
+                ),
+                (
+                    json!({"token": 5, "intent_counter": 1}),
+                    "field settled_by.token mistyped",
+                ),
+                (
+                    json!({"token": "r-1"}),
+                    "field settled_by.intent_counter missing",
+                ),
+                (
+                    json!({"token": "r-1", "intent_counter": "1"}),
+                    "field settled_by.intent_counter mistyped",
+                ),
+            ] {
+                edits.push(("settled_by", Set(by), rule));
+            }
+        }
+        for (field, edit, rule) in edits {
+            let what = format!("{event} {field} {rule}");
+            let bad = match edit {
+                Drop => with_field(rec(event, "w-1", &extra), field, None),
+                Set(v) => with_field(rec(event, "w-1", &extra), field, Some(v)),
+            };
+            let (records, at) = if intent_role {
+                (vec![bad], 3)
+            } else {
+                (vec![rec(INTENT, "w-1", &json!({})), bad], 4)
+            };
+            assert_field_fails(&verify_records(records), at, rule, &what);
+        }
+    }
+}
+
+/// How the field sweep breaks a field.
+enum FieldEdit {
+    Drop,
+    Set(Value),
+}
