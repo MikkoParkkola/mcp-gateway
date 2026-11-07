@@ -26,7 +26,7 @@ struct Fx {
     /// The served Meta-MCP: its plan executor entries (MIK-8406).
     meta: Arc<crate::gateway::meta_mcp::MetaMcp>,
     _store: crate::gateway::router::tests::FixtureDir,
-    audit: Option<tempfile::TempDir>,
+    audit: Option<std::sync::Arc<tempfile::TempDir>>,
     /// Last: it owns the Meta-MCP's audit log, which must outlive every
     /// field above that holds the logger.
     gateway: DirectAccountGateway,
@@ -85,7 +85,7 @@ async fn fixture_bound(surfaced: bool, audited: bool, binding: &Binding) -> Fx {
     let state_mut = Arc::get_mut(&mut state).expect("state is unique");
     state_mut.backends = gateway.backends();
     let mut meta = gateway.take_meta();
-    let audit = audited.then(|| tempfile::tempdir().expect("an audit dir"));
+    let audit = audited.then(|| crate::test_dir_keep::kept_tempdir());
     if let Some(dir) = &audit {
         let log = Arc::new(
             crate::security::TransparencyLogger::open(Arc::new(

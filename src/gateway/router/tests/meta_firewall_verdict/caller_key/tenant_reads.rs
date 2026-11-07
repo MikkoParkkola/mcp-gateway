@@ -164,7 +164,7 @@ impl Transport for NotifyingBackend {
 async fn logged_router() -> (
     axum::Router,
     crate::gateway::router::tests::FixtureDir,
-    tempfile::TempDir,
+    std::sync::Arc<tempfile::TempDir>,
 ) {
     logged_router_in(CrossTenantReads::Observe).await
 }
@@ -175,10 +175,10 @@ async fn logged_router_in(
 ) -> (
     axum::Router,
     crate::gateway::router::tests::FixtureDir,
-    tempfile::TempDir,
+    std::sync::Arc<tempfile::TempDir>,
 ) {
     let (state, store) = split_state(mode, 3600).await;
-    let log_dir = tempfile::tempdir().expect("a log directory");
+    let log_dir = crate::test_dir_keep::kept_tempdir();
     let log = Arc::new(
         TransparencyLogger::open(Arc::new(TransparencyLogConfig {
             enabled: true,

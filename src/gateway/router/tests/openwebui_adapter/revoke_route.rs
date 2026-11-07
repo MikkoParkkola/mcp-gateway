@@ -99,7 +99,7 @@ struct Gateway {
     router: axum::Router,
     fixture: RevokeFixture,
     state: Arc<crate::gateway::router::AppState>,
-    dir: tempfile::TempDir,
+    dir: std::sync::Arc<tempfile::TempDir>,
 }
 
 async fn gateway(
@@ -114,7 +114,7 @@ async fn gateway_with(
     seeds: &[(AccountKey, crate::personal_accounts::GrantRecord, Seed)],
     endpoint: RevocationEndpoint,
 ) -> Gateway {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let env = dir.path().join("adapter.env");
     crate::gateway::test_helpers::write_owner_only(
         &env,
