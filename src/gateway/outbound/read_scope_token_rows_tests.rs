@@ -145,7 +145,8 @@ fn the_token_check_refuses_each_other_shape() {
         (
             "a glob over the token",
             format!("{BASE}\nuse self::ReadsToken::*;"),
-            "an alias of ReadsToken",
+            // A glob may also bring in a `Firewall`, so it is refused on both counts.
+            "Firewall bound other than by its import + an alias of ReadsToken",
         ),
         (
             "a raw-spelled alias",
@@ -254,8 +255,10 @@ fn the_token_check_refuses_each_other_shape() {
     for (label, source, want) in &cases {
         assert_ne!(source, BASE, "{label}: the edit matched nothing");
         let got = findings(source);
-        if got != [*want] {
-            wrong.push(format!("{label}: got {got:?}, want [{want:?}]"));
+        // A fixture with more than one finding lists them sorted, joined by " + ".
+        let want: Vec<&str> = want.split(" + ").collect();
+        if got != want {
+            wrong.push(format!("{label}: got {got:?}, want {want:?}"));
         }
     }
     assert!(wrong.is_empty(), "{}", wrong.join("\n"));
