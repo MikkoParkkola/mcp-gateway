@@ -153,13 +153,14 @@ impl Inner {
     fn restart(&mut self, counters: Restores, now: u64) -> Started {
         let expected = self.counters_seen + 1;
         // counters.json counts every restore (this one included). Any other
-        // count means a run this history did not record: one more, or a reset
-        // by a binary that rewrote counters.json without the count. An
-        // unreadable count is treated the same: the gap is never claimed as
-        // known downtime.
-        // RED STUB: a restarted count is read as a counted one.
-        let (Restores::Counted(count) | Restores::Restarted(count)) = counters;
-        let missed_run = count != expected;
+        // count, or a count that started again, means a run this history did
+        // not record: the gap is never claimed as known downtime.
+        let (missed_run, count) = match counters {
+            Restores::Counted(count) => (count != expected, count),
+            // The count started again: whatever it says, a run went
+            // unrecorded (an older binary wrote counters.json).
+            Restores::Restarted(count) => (true, count),
+        };
         let clean_stop = self.clean_stop.take();
         let mut restart = None;
         if missed_run {
