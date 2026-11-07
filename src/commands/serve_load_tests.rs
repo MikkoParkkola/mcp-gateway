@@ -257,7 +257,7 @@ fn refused_start(config: &Path) -> String {
 /// STARTREC.1: a staged journal is recovered to the original, so its intent
 /// goes to the original's audit log, never the candidate's, and names the
 /// bytes on disk before the recovery. The log is free again afterwards and
-/// its chain still opens.
+/// its chain still opens for the next start.
 #[test]
 fn a_start_records_the_recovery_in_the_surviving_configs_log_first() {
     let dir = tempfile::tempdir().unwrap();
@@ -284,14 +284,16 @@ fn a_start_records_the_recovery_in_the_surviving_configs_log_first() {
     assert!(!log_b.exists(), "nothing in the candidate's log");
     assert_eq!(std::fs::read_to_string(&config).unwrap(), original);
     assert!(!journal.exists());
-    mcp_gateway::security::TransparencyLogger::open(std::sync::Arc::new(
-        mcp_gateway::security::transparency_log::TransparencyLogConfig {
-            enabled: true,
-            path: log_a.display().to_string(),
-            ..Default::default()
-        },
-    ))
-    .expect("the startup logger let its lease go and left a chain that opens");
+
+    // A second crashed write recovered by a second start reopens the same
+    // log: the first start let its lease go and left a chain that opens.
+    crashed_write_as(&config, &original, &candidate, "staged");
+    super::load_for_serve(Some(&config)).expect("the log opens again");
+    assert_eq!(
+        recovery_intents(&log_a).len(),
+        2,
+        "both recoveries recorded"
+    );
 }
 
 /// STARTREC.1: an `all_renamed` journal keeps the new bytes, so its intent
