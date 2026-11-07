@@ -415,3 +415,35 @@ fn h9e_a_backward_clock_counts_no_second_twice() {
     assert_eq!(running, 900, "running counted once");
     assert_eq!(down, 0, "no downtime over counted seconds");
 }
+
+/// H5b (code review r1): a run that ends exactly on a half-hour boundary
+/// observes the half-hours before it, never the one it did not reach.
+#[test]
+fn h5b_a_tick_on_a_boundary_observes_only_the_half_hours_it_ran_in() {
+    let h = fresh(T0);
+    h.tick(T0 + HALF);
+    assert!(h.half(T0).is_some(), "the half-hour it ran in");
+    assert!(
+        h.half(T0 + HALF).is_none(),
+        "the next half-hour was not reached"
+    );
+    assert_eq!(h.errors(T0 + HALF, T0 + 2 * HALF), None);
+}
+
+/// H9d (code review r1): a gap dropped by the cap still marks its span
+/// unaccounted: thirty-three missed runs keep 32 gaps, and an uptime span
+/// covering only the dropped one is not complete.
+#[test]
+fn h9d_a_dropped_gap_still_makes_coverage_incomplete() {
+    let mut bytes = life(None, 1, T0, T0 + 10, false);
+    let mut at = T0 + 100;
+    for count in 2..=34 {
+        let (h, started) = HealthHistory::start(Some(&bytes), Restores::Restarted(count), at);
+        assert!(started.missed_run);
+        bytes = h.encode(at + 10).expect("encodes");
+        at += 100;
+    }
+    let (h, _) = HealthHistory::start(Some(&bytes), Restores::Counted(35), at);
+    // The first gap, [T0+10, T0+100), is the one the cap dropped.
+    assert!(!h.uptime(T0, T0 + 100).coverage_complete);
+}
