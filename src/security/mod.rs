@@ -18,6 +18,17 @@ pub mod agent_identity;
 pub mod audit;
 pub(crate) mod audit_rotation_config;
 pub mod caller_identity;
+/// Credential names by member or key name: the firewall's redactor and the
+/// web UI's secret slots both judge names by it.
+#[cfg(any(feature = "firewall", feature = "webui"))]
+#[cfg_attr(
+    not(feature = "firewall"),
+    expect(
+        dead_code,
+        reason = "the web UI uses only the name rule; value matching is the firewall's"
+    )
+)]
+pub(crate) mod credential_names;
 pub mod data_flow;
 pub(crate) mod decision_record;
 pub(crate) mod dump_guard;
