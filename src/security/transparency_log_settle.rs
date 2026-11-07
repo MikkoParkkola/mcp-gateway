@@ -85,6 +85,7 @@ pub(crate) enum Reason {
 /// intent was delivered at. The one wire form, frozen with the payload.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(crate) struct SettledBy {
+    // ci-allow-secret-debug: a write token is an opaque id naming one config-write attempt in the journal and the log, written to the log itself; it grants nothing.
     pub(crate) token: String,
     pub(crate) intent_counter: u64,
 }
