@@ -424,6 +424,282 @@ def write_outputs(out: Path, platform: str, meta: dict, results: list[dict]) -> 
             f.write("\n".join(md) + "\n")
 
 
+# ---------------------------------------------------------------------------
+# Schemata mode: every mutant of a batch in ONE `--cfg mutants` build.
+#
+# A batch carries `.mutants/schemata.tsv` instead of a patch manifest. The
+# source wraps each mutated expression in `mutant!("ID", mutated, original)`
+# (src/mutant.rs); one all-targets build with `--cfg mutants` carries them
+# all, and each test process switches on at most one through
+# MCP_GATEWAY_MUTANT. Each expected row runs by exact name, alone.
+#
+# Spec:   #features <cargo features>          (optional, once)
+#         #mutant <ID> [multi=<n>]            (one per mutant)
+#         <executable>\t<exact test name>\t<file:line>   (its rows)
+#
+# The verdicts are stricter than patch mode's: a row only counts as killed if
+# it FAILED and panicked at the file:line its spec names, and anything
+# unclear is ERROR, never VOID. The table, checked in order:
+#   baseline failed, or the build failed    -> run refused (exit 1)
+#   output unparseable, a row missing or reported twice, a timeout, an abort
+#   or signal, a panic elsewhere             -> ERROR
+#   every row ran and one PASSED             -> SURVIVED
+#   every row FAILED at its spec location    -> KILLED
+# Exit 0 only when the baseline passed and every spec mutant has exactly one
+# verdict and it is KILLED; refusals before any run exit 2.
+# ---------------------------------------------------------------------------
+
+SCHEMATA_SPEC = "schemata.tsv"
+MUTANT_ENV = "MCP_GATEWAY_MUTANT"
+# Exists only in a `--cfg mutants` build: the proof the cfg took (V1).
+CFG_PROBE = "mutant::mutants_build::only_the_named_site_switches_on"
+MUTANT_HEAD_RE = re.compile(r"^#mutant\s+([A-Za-z0-9._-]+)(?:\s+multi=([1-9][0-9]*))?\s*$")
+LOCATION_RE = re.compile(r"^[^\s:]+\.rs:[1-9][0-9]*$")
+SITE_LINE_RE = re.compile(r"^MUTANT-SITE (\S+) (\S+):(\d+)$")
+TEST_LINE_RE = re.compile(r"^test (.+?) \.\.\. (ok|FAILED|ignored)$")
+PANIC_RE = re.compile(r"^thread '([^']+)'(?: \(\d+\))? panicked at ([^:\s]+):(\d+):\d+:")
+
+
+class BaselineRefused(Exception):
+    """The all-off baseline did not pass every expected row: no verdicts (exit 1)."""
+
+
+@dataclass
+class SpecRow:
+    executable: str
+    test: str
+    location: str
+
+
+@dataclass
+class SpecMutant:
+    id: str
+    multi: int
+    rows: list[SpecRow]
+
+
+def parse_spec(text: str) -> tuple[str | None, dict[str, SpecMutant]]:
+    """The features line and the mutants, in order. Any malformed line refuses."""
+    features: str | None = None
+    mutants: dict[str, SpecMutant] = {}
+    current: SpecMutant | None = None
+    for n, raw in enumerate(text.splitlines(), start=1):
+        line = raw.rstrip()
+        if not line.strip():
+            continue
+        if line.startswith("#features"):
+            if features is not None or mutants:
+                raise Abort(f"spec line {n}: #features must come once, first")
+            features = line[len("#features"):].strip()
+            continue
+        if line.startswith("#mutant"):
+            m = MUTANT_HEAD_RE.match(line)
+            if not m:
+                raise Abort(f"spec line {n}: want `#mutant <ID> [multi=<n>]`")
+            if m.group(1) in mutants:
+                raise Abort(f"spec line {n}: mutant {m.group(1)} declared twice")
+            current = SpecMutant(m.group(1), int(m.group(2) or 1), [])
+            mutants[current.id] = current
+            continue
+        if line.startswith("#"):
+            continue
+        if current is None:
+            raise Abort(f"spec line {n}: a row before any #mutant header")
+        parts = line.split("\t")
+        if len(parts) != 3 or not all(p.strip() for p in parts):
+            raise Abort(f"spec line {n}: want executable, exact test name, file:line")
+        exe, test, loc = (p.strip() for p in parts)
+        if not LOCATION_RE.match(loc):
+            raise Abort(f"spec line {n}: location {loc!r} is not file.rs:line")
+        current.rows.append(SpecRow(exe, test, loc))
+    if not mutants:
+        raise Abort("the spec names no mutants")
+    empty = [m.id for m in mutants.values() if not m.rows]
+    if empty:
+        raise Abort(f"mutants with no expected rows: {', '.join(empty)}")
+    return features, mutants
+
+
+def parse_sites(listing: str) -> list[tuple[str, str]]:
+    """(id, path:line) per site from the library's site-listing test; refuses an
+    incomplete listing (no completion marker)."""
+    if "MUTANT-SITES-DONE" not in listing:
+        raise Abort("the site listing did not complete")
+    sites = []
+    for line in listing.splitlines():
+        m = SITE_LINE_RE.match(line.strip())
+        if m:
+            sites.append((m.group(1), f"{m.group(2)}:{m.group(3)}"))
+    return sites
+
+
+def reconcile(mutants: dict[str, SpecMutant], sites: list[tuple[str, str]]) -> None:
+    """The spec's IDs must equal the source's site IDs, each with its count."""
+    counts: dict[str, int] = {}
+    for sid, _ in sites:
+        counts[sid] = counts.get(sid, 0) + 1
+    unknown = sorted(set(mutants) - set(counts))
+    missing = sorted(set(counts) - set(mutants))
+    if unknown:
+        raise Abort(f"spec IDs no site carries: {', '.join(unknown)}")
+    if missing:
+        raise Abort(f"site IDs the spec does not name: {', '.join(missing)}")
+    wrong = [f"{i} ({counts[i]} sites, spec says {m.multi})" for i, m in mutants.items() if counts[i] != m.multi]
+    if wrong:
+        raise Abort(f"site counts differ from the spec: {'; '.join(wrong)}")
+
+
+def check_public_text(text: str, patterns: list[re.Pattern]) -> None:
+    """The spec rides on a public branch: no private content in it (U5)."""
+    for p in patterns:
+        m = p.search(text)
+        if m:
+            raise Abort(f"the spec carries private content ({m.group(0).strip()!r}); keep ids and names out")
+
+
+def classify_row(outcome: Outcome, test: str, location: str) -> str:
+    """PASSED, FAILED_AT_SPEC, or ERROR:<why> for one exact-name row run."""
+    if outcome.timed_out:
+        return "ERROR:timeout"
+    reports = [m.group(2) for line in outcome.output.splitlines()
+               if (m := TEST_LINE_RE.match(line.strip())) and m.group(1) == test]
+    if outcome.exit is None or outcome.exit < 0 or outcome.exit in (134, 137):
+        return "ERROR:abort or signal"
+    if not any(SUMMARY_RE.match(line.strip()) for line in outcome.output.splitlines()):
+        return "ERROR:no result line"
+    if not reports:
+        return "ERROR:row did not run"
+    if len(reports) > 1:
+        return "ERROR:row reported twice"
+    if reports[0] == "ok":
+        return "PASSED"
+    if reports[0] != "FAILED":
+        return f"ERROR:row {reports[0]}"
+    panics = [f"{m.group(2)}:{m.group(3)}" for line in outcome.output.splitlines()
+              if (m := PANIC_RE.match(line.strip())) and m.group(1) == test]
+    if location in panics:
+        return "FAILED_AT_SPEC"
+    return f"ERROR:panicked at {', '.join(panics) or 'no location'}, spec {location}"
+
+
+def mutant_verdict(row_results: list[str]) -> str:
+    """The verdict table, in order: ERROR, then SURVIVED, then KILLED."""
+    if any(r.startswith("ERROR") for r in row_results):
+        return "ERROR"
+    if any(r == "PASSED" for r in row_results):
+        return "SURVIVED"
+    return "KILLED"
+
+
+def check_baseline(row_results: dict[str, str]) -> None:
+    """Every expected row must pass with no mutant on, or the batch is refused."""
+    bad = [f"{name}: {r}" for name, r in row_results.items() if r != "PASSED"]
+    if bad:
+        raise BaselineRefused("the baseline did not pass: " + "; ".join(bad))
+
+
+def schemata_exit(mutants: dict[str, SpecMutant], verdicts: list[tuple[str, str]]) -> int:
+    """Exit 0 only when every spec mutant has exactly one verdict and it is KILLED."""
+    seen: dict[str, int] = {}
+    for mid, _ in verdicts:
+        seen[mid] = seen.get(mid, 0) + 1
+    if set(seen) != set(mutants) or any(c != 1 for c in seen.values()):
+        return 1
+    return 0 if all(v == "KILLED" for _, v in verdicts) else 1
+
+
+def schemata_self_test() -> tuple[int, list[str]]:
+    """(cases run, failures) for the schemata mode's decisions (R1-R27)."""
+    def out(test: str, status: str, panic: str | None = None, extra: str = "") -> str:
+        lines = ["running 1 test", f"test {test} ... {status}", ""]
+        if status == "FAILED":
+            lines += ["failures:", "", f"---- {test} stdout ----"]
+            if panic:
+                lines.append(f"thread '{test}' (1234) panicked at {panic}:5:")
+            lines += ["assertion `left == right` failed", ""]
+        p, f = (1, 0) if status == "ok" else (0, 1)
+        res = "ok" if status == "ok" else "FAILED"
+        lines.append(f"test result: {res}. {p} passed; {f} failed; 0 ignored; 0 measured; 9 filtered out")
+        return "\n".join(lines) + "\n" + extra
+
+    t, loc = "m::t1", "src/x.rs:9"
+    spec_ok = f"#mutant A\nlib\t{t}\t{loc}\n#mutant B multi=2\nlib\tm::t2\tsrc/y.rs:4\nlib\tm::t3\tsrc/y.rs:7\n"
+    sites_ok = [("A", "src/x.rs:3"), ("B", "src/y.rs:1"), ("B", "src/y.rs:2")]
+    failures: list[str] = []
+    n = 0
+
+    def refuses(name: str, fn) -> None:
+        nonlocal n
+        n += 1
+        try:
+            fn()
+        except Abort:
+            return
+        failures.append(f"{name}: not refused")
+
+    def expect(name: str, got, want) -> None:
+        nonlocal n
+        n += 1
+        if got != want:
+            failures.append(f"{name}: expected {want!r}, got {got!r}")
+
+    refuses("R1 empty spec", lambda: parse_spec("\n#features x\n"))
+    refuses("R2 a mutant with no rows", lambda: parse_spec("#mutant A\n#mutant B\nlib\tt\tsrc/x.rs:1\n"))
+    _, ms = parse_spec(spec_ok)
+    refuses("R3 a spec ID no site carries", lambda: reconcile({**ms, "Z": SpecMutant("Z", 1, [])}, sites_ok))
+    refuses("R4 a site ID the spec omits", lambda: reconcile(ms, sites_ok + [("C", "src/z.rs:1")]))
+    refuses("R5 a mutant declared twice", lambda: parse_spec("#mutant A\nlib\tt\tsrc/x.rs:1\n#mutant A\nlib\tt\tsrc/x.rs:1\n"))
+    refuses("R6 two sites, no multi", lambda: reconcile(ms, sites_ok + [("A", "src/q.rs:8")]))
+    refuses("R7 multi=2 with three sites", lambda: reconcile(ms, sites_ok + [("B", "src/y.rs:3")]))
+    refuses("R8 a nested duplicate site", lambda: reconcile(ms, sites_ok + [("A", "src/m.rs:2")]))
+    refuses("a row with a bad location", lambda: parse_spec("#mutant A\nlib\tt\tx.rs\n"))
+    refuses("a row before any header", lambda: parse_spec("lib\tt\tsrc/x.rs:1\n#mutant A\n"))
+    refuses("an incomplete site listing", lambda: parse_sites("MUTANT-SITE A src/x.rs:3\n"))
+    expect("reconciled spec", reconcile(ms, sites_ok), None)
+    expect("site listing parsed", parse_sites("noise\nMUTANT-SITE A src/x.rs:3\nMUTANT-SITES-DONE\n"),
+           [("A", "src/x.rs:3")])
+    n += 1
+    try:
+        check_baseline({t: classify_row(Outcome(101, out(t, "FAILED", "src/x.rs:9"), False), t, loc)})
+        failures.append("R10/R24 a failing baseline row was accepted")
+    except BaselineRefused:
+        pass
+    for name, outcome in [("R25 baseline timeout", Outcome(None, "", True)),
+                          ("R26 baseline ran no test", Outcome(0, "running 0 tests\n\ntest result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 9 filtered out\n", False)),
+                          ("R27 baseline row twice", Outcome(0, out(t, "ok") + out(t, "ok"), False))]:
+        n += 1
+        try:
+            check_baseline({t: classify_row(outcome, t, loc)})
+            failures.append(f"{name}: accepted")
+        except BaselineRefused:
+            pass
+    expect("baseline passes", check_baseline({t: classify_row(Outcome(0, out(t, "ok"), False), t, loc)}), None)
+    killed = classify_row(Outcome(101, out(t, "FAILED", "src/x.rs:9"), False), t, loc)
+    expect("R11 failed at the spec location", killed, "FAILED_AT_SPEC")
+    expect("R11 KILLED", mutant_verdict([killed]), "KILLED")
+    expect("R12 one row passed", mutant_verdict([killed, classify_row(Outcome(0, out(t, "ok"), False), t, loc)]), "SURVIVED")
+    expect("R13 panicked elsewhere", mutant_verdict([classify_row(Outcome(101, out(t, "FAILED", "src/x.rs:10"), False), t, loc)]), "ERROR")
+    expect("R14 the row did not run", classify_row(Outcome(0, out("m::other", "ok"), False), t, loc), "ERROR:row did not run")
+    expect("R15 the row reported twice", classify_row(Outcome(101, out(t, "FAILED", "src/x.rs:9") * 2, False), t, loc), "ERROR:row reported twice")
+    expect("R16 aborted, exit 134", mutant_verdict([classify_row(Outcome(134, f"running 1 test\ntest {t} ... ", False), t, loc)]), "ERROR")
+    expect("R16 no result line", classify_row(Outcome(101, f"running 1 test\ntest {t} ... FAILED\n", False), t, loc), "ERROR:no result line")
+    expect("R17 timeout is never KILLED", mutant_verdict([classify_row(Outcome(124, out(t, "FAILED", "src/x.rs:9"), True), t, loc)]), "ERROR")
+    expect("R18 all killed exits 0", schemata_exit(ms, [("A", "KILLED"), ("B", "KILLED")]), 0)
+    expect("R18 a missing verdict exits 1", schemata_exit(ms, [("A", "KILLED")]), 1)
+    expect("R18 a duplicated verdict exits 1", schemata_exit(ms, [("A", "KILLED"), ("A", "KILLED"), ("B", "KILLED")]), 1)
+    expect("R18 an extra verdict exits 1", schemata_exit(ms, [("A", "KILLED"), ("B", "KILLED"), ("C", "KILLED")]), 1)
+    expect("R12 a survivor exits 1", schemata_exit(ms, [("A", "KILLED"), ("B", "SURVIVED")]), 1)
+    b2 = classify_row(Outcome(101, out("m::t2", "FAILED", "src/y.rs:4"), False), "m::t2", "src/y.rs:4")
+    b3 = classify_row(Outcome(101, out("m::t3", "FAILED", "src/y.rs:7"), False), "m::t3", "src/y.rs:7")
+    b3ok = classify_row(Outcome(0, out("m::t3", "ok"), False), "m::t3", "src/y.rs:7")
+    expect("R19 multi=2, both sites' rows fail", mutant_verdict([b2, b3]), "KILLED")
+    expect("R19 multi=2, one site's rows pass", mutant_verdict([b2, b3ok]), "SURVIVED")
+    priv = [re.compile(r"(^|[^A-Za-z0-9])MIK-[0-9]+")]
+    refuses("R22 a ticket id in the spec", lambda: check_public_text("#mutant A\n# see MI" "K-1234\n", priv))
+    expect("R22 a clean spec", check_public_text(spec_ok, priv), None)
+    return n, failures
+
+
 def self_test() -> int:
     ok = "running 3 tests\ntest a ... ok\n\ntest result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 9 filtered out\n"
     empty = "running 0 tests\n\ntest result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 12 filtered out\n"
@@ -502,8 +778,12 @@ def self_test() -> int:
     for err in fetch_check():
         print(f"self-test: release-line fetch: {err}", file=sys.stderr)
         rc = 1
+    schemata_cases, schemata_failures = schemata_self_test()
+    for failure in schemata_failures:
+        print(f"self-test: schemata: {failure}", file=sys.stderr)
+        rc = 1
     if rc == 0:
-        total = len(cases) + 2 + len(bad) + len(refs_ok) + len(refs_bad) + FETCH_CASES
+        total = len(cases) + 2 + len(bad) + len(refs_ok) + len(refs_bad) + FETCH_CASES + schemata_cases
         print(f"self-test: {total} classifier, manifest, ref and release-line fetch cases as expected")
     return rc
 
