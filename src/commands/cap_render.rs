@@ -38,7 +38,10 @@ fn command_field(out: &mut impl Write, label: &str, command: &str) {
 /// discovery output guard judges.
 pub(super) fn render_shadow_report(out: &mut impl Write, report: &ShadowScanReport) {
     if report.assets.is_empty() {
-        let _ = writeln!(out, "✅ No shadow servers found — all discovered MCP servers are registered.");
+        let _ = writeln!(
+            out,
+            "✅ No shadow servers found — all discovered MCP servers are registered."
+        );
         let _ = writeln!(out, "Passive scan only; no discovered tools were invoked.");
         return;
     }

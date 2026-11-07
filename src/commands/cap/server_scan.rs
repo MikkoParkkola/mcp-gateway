@@ -79,7 +79,10 @@ pub(super) async fn cap_discover(
                     }
                 }
             } else {
-                let _ = writeln!(say, "\n💡 To add these servers to your gateway config, run:");
+                let _ = writeln!(
+                    say,
+                    "\n💡 To add these servers to your gateway config, run:"
+                );
                 let _ = writeln!(say, "   mcp-gateway cap discover --write-config");
             }
             ExitCode::SUCCESS

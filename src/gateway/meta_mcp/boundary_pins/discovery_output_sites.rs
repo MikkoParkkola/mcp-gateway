@@ -485,7 +485,8 @@ fn macros_in(mut cursor: syn::buffer::Cursor<'_>, out: &mut Vec<syn::Macro>) {
             && after.any_group().is_some()
             && let (Some((bang_tree, _)), Some((group, rest))) =
                 (next.token_tree(), after.token_tree())
-            && let Ok(mac) = syn::parse2::<syn::Macro>([tree, bang_tree, group].into_iter().collect())
+            && let Ok(mac) =
+                syn::parse2::<syn::Macro>([tree, bang_tree, group].into_iter().collect())
         {
             out.push(mac);
             cursor = rest;

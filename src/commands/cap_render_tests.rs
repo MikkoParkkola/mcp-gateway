@@ -13,7 +13,9 @@ use mcp_gateway::discovery::shadow::ShadowScanReport;
 use mcp_gateway::discovery::{DiscoveredServer, DiscoverySource, ServerMetadata};
 use mcp_gateway::security::summarize_stdio_command;
 
-use super::{render_server_entry as write_server_entry, render_shadow_report as write_shadow_report};
+use super::{
+    render_server_entry as write_server_entry, render_shadow_report as write_shadow_report,
+};
 
 /// What the listing writes for `server`.
 fn render_server_entry(server: &DiscoveredServer) -> String {
