@@ -128,7 +128,7 @@ impl KeyServer {
         let Some(temp) = self.store.get(token).await else {
             return KeyServerLookup::Absent;
         };
-        if !crate::identity_grants::names_someone(&temp.identity.issuer, &temp.identity.subject) {
+        if !crate::identity_grants::names_someone(temp.identity.issuer(), temp.identity.subject()) {
             return KeyServerLookup::Nameless;
         }
 

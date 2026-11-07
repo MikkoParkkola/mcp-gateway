@@ -39,8 +39,8 @@ impl IdentityPropagation for FixedMint {
             headers: self.headers.clone(),
             expires_at: self.expires_at,
             expiry_synthetic: false,
-            cache_binding: format!("{}@{}", identity.subject, backend.audience),
-            subject_key: identity.subject.clone(),
+            cache_binding: format!("{}@{}", identity.subject(), backend.audience),
+            subject_key: identity.subject().to_owned(),
             audience: backend.audience.clone(),
             scopes: Vec::new(),
         })

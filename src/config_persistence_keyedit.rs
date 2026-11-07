@@ -97,6 +97,10 @@ impl FiniteF64 {
     pub(crate) fn new(value: f64) -> Option<Self> {
         value.is_finite().then_some(Self(value))
     }
+
+    pub(crate) fn get(self) -> f64 {
+        self.0
+    }
 }
 
 // No NaN is ever held, so equality is total.
@@ -151,6 +155,8 @@ pub(crate) enum GiveUp {
     SequenceShape,
     /// A path segment is not a plain key.
     NotPlainKey,
+    /// A secret field's node cannot be shown masked line for line.
+    SecretSpan,
     /// The file or the edit is outside what the proofs cover.
     Other,
 }
@@ -166,6 +172,7 @@ impl GiveUp {
             Self::DashLine => "dash_line",
             Self::SequenceShape => "sequence_shape",
             Self::NotPlainKey => "not_plain_key",
+            Self::SecretSpan => "secret_span",
             Self::Other => "other",
         }
     }
@@ -178,6 +185,8 @@ pub(crate) struct Template {
     slots: Vec<(SlotId, Range<usize>)>,
     /// The original 1-based lines whose comment the edit dropped.
     dropped: Vec<usize>,
+    /// The changed lines, in order (empty for bytes another writer built).
+    hunks: Vec<Hunk>,
 }
 
 impl Template {
@@ -202,6 +211,7 @@ impl Template {
             bytes,
             slots,
             dropped: Vec::new(),
+            hunks: Vec::new(),
         })
     }
 
@@ -210,6 +220,11 @@ impl Template {
     /// Line numbers only, never text: a `#` in a value can be a secret.
     pub(crate) fn dropped_comments(&self) -> &[usize] {
         &self.dropped
+    }
+
+    /// The changed lines of an in-place edit, in order.
+    pub(crate) fn hunks(&self) -> &[Hunk] {
+        &self.hunks
     }
 
     /// The bytes as they stand, slots still holding their placeholders.
@@ -224,6 +239,7 @@ impl Template {
             bytes,
             slots: Vec::new(),
             dropped: Vec::new(),
+            hunks: Vec::new(),
         }
     }
 
@@ -394,6 +410,7 @@ pub(crate) fn edit_in_place(
     slots.sort_by_key(|(_, range)| range.start);
     let mut template = Template::checked(edited.into_bytes(), slots)?;
     template.dropped = dropped;
+    template.hunks = lines.hunks(original);
     Ok(template)
 }
 
@@ -496,6 +513,17 @@ fn deleted_as_planned(
 }
 
 /// The value text `change` writes; `None` for a removal.
+/// The YAML text the editor writes for `change`'s value (a secret as its
+/// slot placeholder); `None` for a removal.
+pub(crate) fn value_text(change: &Change) -> Option<String> {
+    rendered(change)
+}
+
+/// The quoted placeholder text a secret slot holds in a template.
+pub(crate) fn slot_text(id: &SlotId) -> String {
+    quoted_placeholder(id)
+}
+
 fn rendered(change: &Change) -> Option<String> {
     Some(match change {
         Change::Set(Scalar::Str(s)) => crate::yaml::double_quoted(s),
@@ -710,10 +738,20 @@ fn expected_value(change: &Change) -> Option<Value> {
 }
 
 /// Proof 1: `edited` parses to `original` with exactly `changes` applied,
-/// each secret slot holding its own placeholder. Value equality only: the
-/// parser refuses anchors, aliases and tags on any node an edit touches
-/// before this runs.
+/// each secret slot holding its own placeholder, and holds every anchor and
+/// alias the original does when it sets any value. Equal values alone are
+/// not enough: an alias replaced by its value compares equal and detaches
+/// the shared value. The editor never writes an anchor or an alias, so an
+/// unchanged count proves none was dropped. An edit that only removes keys
+/// may take the anchors and aliases inside them (a revoked key's element):
+/// an anchor still used elsewhere fails the reparse below.
 fn meaning_holds(original: &str, changes: &[(FieldPath, Change)], edited: &str) -> bool {
+    let sets_a_value = changes.iter().any(|(_, change)| *change != Change::Remove);
+    if sets_a_value
+        && crate::yaml::anchors_and_aliases(original) != crate::yaml::anchors_and_aliases(edited)
+    {
+        return false;
+    }
     let Ok(doc) = crate::yaml::from_str::<Value>(original) else {
         return false;
     };
@@ -729,8 +767,26 @@ fn meaning_holds(original: &str, changes: &[(FieldPath, Change)], edited: &str) 
     got == want
 }
 
+/// The document `original` means with `changes` applied, as YAML text: the
+/// editor's own model of the result, for a caller that must judge an edit
+/// the in-place proofs refused. Secret slots hold their placeholders.
+/// `None` when `original` does not parse or a path cannot be followed.
+pub(crate) fn expected_text(original: &str, changes: &[(FieldPath, Change)]) -> Option<String> {
+    let doc = match crate::yaml::from_str::<Value>(original).ok()? {
+        Value::Null if shape::no_content(original) => Value::Mapping(crate::yaml::Mapping::new()),
+        doc => doc,
+    };
+    crate::yaml::to_string(&shape::expected(&doc, changes)?).ok()
+}
+
 #[path = "config_persistence_keyedit_shape.rs"]
 mod shape;
+pub(crate) use shape::Hunk;
+#[cfg(test)]
+pub(crate) use shape::NewLine;
+/// Whether a node's path from the parser is `path`: the one comparison the
+/// editor and the preview's verifier share.
+pub(crate) use shape::same as is_node_at;
 
 #[path = "config_persistence_keyedit_revoke.rs"]
 mod revoke;
