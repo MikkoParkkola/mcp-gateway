@@ -380,7 +380,9 @@ async fn a_caller_cancelled_during_the_flush_still_gets_its_withheld_note_writte
         let meta = Arc::clone(&meta);
         async move {
             let who = api_key("alice");
-            let caller = context(&who);
+            // The authorizer refuses, so the withheld call notes a decision.
+            let mut caller = context(&who);
+            caller.authorizer = &DENY;
             with_grant_slot(meta.transparency_logger.as_ref(), async {
                 // A fail-closed note for the flush to hold, then a withheld one.
                 let scope = caller.scope();
