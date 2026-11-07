@@ -855,6 +855,7 @@ fn t19_the_credential_name_rule_name_by_name() {
         "PRIVATE_KEY",
         "SIGNING_KEY",
         "GOOGLE_CREDENTIALS",
+        "SECRET_KEY_BASE",
         "SESSION_KEY",
         "COOKIE_KEY",
         "AUTH_KEY",
@@ -894,4 +895,56 @@ fn t19_the_credential_name_rule_name_by_name() {
         .copied()
         .collect();
     assert!(wrong.is_empty(), "judged wrongly: {wrong:?}");
+}
+
+/// T20: a credential-named value too short to redact safely is written as
+/// typed, through the panel: a boolean under a name ending in `TOKEN`
+/// (`HF_HUB_DISABLE_IMPLICIT_TOKEN=1`), `AUTHORIZATION=none`, and a 7-byte
+/// `API_KEY`; the redactor holds none of them. An 8-byte `API_KEY` is stored.
+#[tokio::test]
+async fn t20_a_credential_named_value_too_short_to_redact_stays_text() {
+    let panel = Panel::new().await;
+    let (status, body) = panel
+        .add(
+            json!({"name": "b", "url": "http://127.0.0.1:9/mcp", "env": {
+                "HF_HUB_DISABLE_IMPLICIT_TOKEN": "1",
+                "AUTHORIZATION": "none",
+                "API_KEY": "1234567"
+            }}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    assert_eq!(body["secrets_stored"], json!([]), "{body}");
+    let env = panel.written("b").env;
+    assert_eq!(
+        env.get("HF_HUB_DISABLE_IMPLICIT_TOKEN").map(String::as_str),
+        Some("1")
+    );
+    assert_eq!(env.get("AUTHORIZATION").map(String::as_str), Some("none"));
+    assert_eq!(env.get("API_KEY").map(String::as_str), Some("1234567"));
+    assert!(held_needles(&panel, "b").is_empty());
+    assert!(panel.entries().is_empty(), "{:?}", panel.entries());
+
+    let (status, body) = panel
+        .add(json!({"name": "c", "url": "http://127.0.0.1:9/mcp", "env": {"API_KEY": "12345678"}}))
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    assert_eq!(body["secrets_stored"][0]["field"], "env.API_KEY", "{body}");
+    assert_ne!(
+        panel.written("c").env.get("API_KEY").map(String::as_str),
+        Some("12345678")
+    );
+}
+
+/// T21: the store's length bound is the redactor's own: one byte under it
+/// stays text, at it the value is stored.
+#[test]
+fn t21_the_store_bound_is_the_redactors_short_value_bound() {
+    use crate::gateway::ui::secret_slots::stores_env_value;
+    let bound = crate::security::needles::SHORT_VALUE_BYTES;
+    let under: String = "0123456789abcdef".chars().take(bound - 1).collect();
+    let at: String = "0123456789abcdef".chars().take(bound).collect();
+    assert!(!stores_env_value("API_KEY", &under));
+    assert!(stores_env_value("API_KEY", &at));
+    assert!(!stores_env_value("LOG_LEVEL", &at));
 }

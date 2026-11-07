@@ -368,7 +368,7 @@ pub(super) async fn adopt_discovery(
         reasons.sort_by(|a, b| a.1.cmp(&b.1));
         return not_adoptable(&reasons);
     }
-    let adoption = adoption(&server, secret_slots::names_a_credential);
+    let adoption = adoption(&server, secret_slots::stores_env_value);
     let dir = path
         .parent()
         .unwrap_or_else(|| std::path::Path::new("."))

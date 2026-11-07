@@ -260,10 +260,7 @@ fn the_compute_refuses_a_managed_name_and_a_short_reference_list() {
 
 /// Adopt's split of a find, as the route makes it.
 fn adopted(server: &crate::discovery::DiscoveredServer) -> crate::discovery::adopt::Adoption {
-    crate::discovery::adopt::adoption(
-        server,
-        super::super::super::secret_slots::names_a_credential,
-    )
+    crate::discovery::adopt::adoption(server, super::super::super::secret_slots::stores_env_value)
 }
 
 /// A find carrying ordinary settings and credentials side by side, as a
@@ -283,9 +280,9 @@ fn find_with_settings() -> crate::discovery::DiscoveredServer {
     server.env = [
         ("DEBUG", "1"),
         ("LOG_LEVEL", "debug"),
-        ("API_KEY", "zq-a"),
-        ("X_AUTH_TOKEN", "zq-b"),
-        ("DB_PASSWORD", "zq-c"),
+        ("API_KEY", "zq-adopt-a1"),
+        ("X_AUTH_TOKEN", "zq-adopt-b2"),
+        ("DB_PASSWORD", "zq-adopt-c3"),
         ("SESSION_TIMEOUT", "30"),
         ("CONFIG_PATH", "file:/example"),
     ]
@@ -346,7 +343,7 @@ fn adoption_takes_out_literals_in_a_fixed_order() {
         crate::discovery::ServerMetadata::default(),
     );
     server.env = [
-        ("Z_KEY", "zq-z"),
+        ("Z_API_KEY", "zq-adopt-z9"),
         ("A_KEY", "file:/looks/like/a/reference"),
         ("TEMPLATE", "${TOKEN}"),
         ("EMPTY", ""),
@@ -366,7 +363,10 @@ fn adoption_takes_out_literals_in_a_fixed_order() {
         .iter()
         .map(crate::discovery::adopt::Literal::field)
         .collect();
-    assert_eq!(fields, ["env.A_KEY", "env.Z_KEY", "headers.Authorization"]);
+    assert_eq!(
+        fields,
+        ["env.A_KEY", "env.Z_API_KEY", "headers.Authorization"]
+    );
     assert_eq!(
         adopted.literals[0].value.as_bytes(),
         b"file:/looks/like/a/reference"

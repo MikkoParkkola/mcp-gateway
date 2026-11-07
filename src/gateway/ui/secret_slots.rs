@@ -62,10 +62,21 @@ pub(super) fn names_a_credential(key: &str) -> bool {
         return true;
     }
     match words(key).as_slice() {
+        // Rails' `SECRET_KEY_BASE`.
+        [.., a, b, c] if a == "secret" && b == "key" && c == "base" => true,
         [.., last] if ENV_CREDENTIAL_ENDINGS.contains(&last.as_str()) => true,
         [.., before, last] => last == "key" && ENV_KEY_QUALIFIERS.contains(&before.as_str()),
         _ => false,
     }
+}
+
+/// Whether env value `value` under key `key` goes to the store: its key
+/// [`names_a_credential`] and it is at least the redactor's short-value bound
+/// long. A stored value is redacted wherever it appears, at any length, so a
+/// shorter one (`1`, `true`, `none`, as in `HF_HUB_DISABLE_IMPLICIT_TOKEN=1`)
+/// would blank ordinary text: it is written as typed, as in 3.x.
+pub(super) fn stores_env_value(key: &str, value: &str) -> bool {
+    value.len() >= crate::security::needles::SHORT_VALUE_BYTES && names_a_credential(key)
 }
 
 /// The secret slot of backend `name`'s `key`, under `headers` or `env`. Its

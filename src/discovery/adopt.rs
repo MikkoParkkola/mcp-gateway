@@ -194,7 +194,7 @@ impl Literal {
 
 /// `server` as an adopted backend. A template and an empty value stay as
 /// written; every other header value, and every other env value whose key
-/// `names_a_credential` (the web UI's shared rule) or that reads as a secret
+/// `stores_env_value` (the web UI's shared rule) or that reads as a secret
 /// reference, is a literal and leaves the backend, env before headers, each
 /// sorted by key, so the order is the same on every run. Any other env value
 /// (an ordinary setting such as `DEBUG=1`) stays as written. Call it only for
@@ -202,7 +202,7 @@ impl Literal {
 #[cfg(feature = "webui")]
 pub(crate) fn adoption(
     server: &DiscoveredServer,
-    names_a_credential: fn(&str) -> bool,
+    stores_env_value: fn(&str, &str) -> bool,
 ) -> Adoption {
     let mut backend = server.to_backend_config();
     backend.enabled = false;
@@ -216,7 +216,7 @@ pub(crate) fn adoption(
                 // read it as a reference instead.
                 !value.is_empty()
                     && !value.contains("${")
-                    && (header || names_a_credential(key) || is_reference(value))
+                    && (header || stores_env_value(key, value) || is_reference(value))
             })
             .map(|(key, _)| key.clone())
             .collect();

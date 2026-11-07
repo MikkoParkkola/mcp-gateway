@@ -64,8 +64,8 @@ pub(super) fn refusals(
 
 /// The values to store among `env` (and `headers`, when given), sorted by
 /// field so every run stores them in one order: each value
-/// [`classify`] stores, from every header and from each env key that
-/// [`secret_slots::names_a_credential`]. Every other value is written as typed.
+/// [`classify`] stores, from every header and each env value that
+/// [`secret_slots::stores_env_value`]. Every other value is written as typed.
 /// Call after [`refuse_values`].
 pub(super) fn literals<'a>(
     env: impl Iterator<Item = (&'a String, &'a String)>,
@@ -76,7 +76,7 @@ pub(super) fn literals<'a>(
         .chain(headers.map(|kv| (true, kv)))
         .filter(|(header, (key, value))| {
             classify(value) == Ok(ValueClass::Stored)
-                && (*header || secret_slots::names_a_credential(key))
+                && (*header || secret_slots::stores_env_value(key, value))
         })
         .map(|(header, (key, value))| Literal {
             header,
