@@ -949,10 +949,10 @@ def schemata_driver_self_test() -> tuple[int, list[str]]:
                    builds[0]["rustflags"] if builds else None, "--cap-lints=warn --cfg mutants")
             expect("D1 the build has its own target dir",
                    "target/mutants-cfg" in (builds[0]["cargo"] if builds else []), True)
-            runs = [c for c in calls if c.get("args", [None])[0] == "--exact" and c["args"][1] == "m::t1"]
+            runs = [c for c in calls if "m::t1" in c.get("args", [])]
             expect("D3 the baseline runs with no mutant on", [c["mutant"] for c in runs], [None, "A"])
-            expect("D2 each row runs alone by exact name",
-                   all(c["args"] == ["--exact", "m::t1", "--test-threads=1"] for c in runs), True)
+            expect("D2 each row runs alone by exact name", [c["args"] for c in runs],
+                   [["--exact", "m::t1", "--test-threads=1"]] * 2)
             sibling = {**killed, "rows": {"A m::t10": {"status": "FAILED", "panic": "src/x.rs:9"}}}
             rc, calls = run(sibling)
             expect("D2b a substring sibling's failure does not kill the mutant", rc, 1)
