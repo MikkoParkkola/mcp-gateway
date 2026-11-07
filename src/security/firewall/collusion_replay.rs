@@ -148,6 +148,47 @@ impl Inner {
         Some(held)
     }
 
+    /// Take out every entry expired at `now`, whatever its age order.
+    fn sweep(&mut self, now: Instant) {
+        let expired: Vec<StoredKey> = self
+            .by_key
+            .iter()
+            .filter(|(_, held)| now >= held.entry.expires)
+            .map(|(key, _)| key.clone())
+            .collect();
+        for key in &expired {
+            self.take(key);
+        }
+    }
+
+    /// The pending entry under `key` taken at `seq`, if it is still that
+    /// one; a replaced, evicted, expired or kept entry gives `None`.
+    fn pending_at(&mut self, key: &StoredKey, seq: u64) -> Option<&mut Held> {
+        self.by_key
+            .get_mut(key)
+            .filter(|held| held.seq == seq && matches!(held.life, Life::Pending { .. }))
+    }
+
+    /// One outstanding delivery of `key`'s pending entry `seq` ended, under
+    /// `off` when it was written under an effective `off`. Once none is
+    /// outstanding, an entry delivered under `off` goes.
+    fn end_delivery(&mut self, key: &StoredKey, seq: u64, off: bool) {
+        let Some(held) = self.pending_at(key, seq) else {
+            return;
+        };
+        if let Life::Pending {
+            outstanding,
+            delivered_off,
+        } = &mut held.life
+        {
+            *outstanding = outstanding.saturating_sub(1);
+            *delivered_off |= off;
+            if *outstanding == 0 && *delivered_off {
+                self.take(key);
+            }
+        }
+    }
+
     /// Take the oldest entry out, if any.
     fn take_oldest(&mut self) -> Option<()> {
         let (_, key) = self.order.pop_first()?;
@@ -208,6 +249,24 @@ impl ReplayReceipts {
         now: Instant,
         retention: Duration,
     ) {
+        self.insert_with(
+            key,
+            (receipts, calls, answer_digest),
+            (now, retention),
+            Life::Kept,
+        );
+    }
+
+    /// [`Self::insert`] with the entry's starting `life`, returning its
+    /// sequence; `None` when it was not stored (`too_large`). Expired
+    /// entries are swept first (activity-driven, as the detector sweeps).
+    fn insert_with(
+        &self,
+        key: StoredKey,
+        (receipts, calls, answer_digest): (Vec<ReplayReceipt>, ReplayCalls, String),
+        (now, retention): (Instant, Duration),
+        life: Life,
+    ) -> Option<u64> {
         let mut bytes = receipts
             .iter()
             .map(ReplayReceipt::bytes)
@@ -223,8 +282,10 @@ impl ReplayReceipts {
         // is dropped: no counter increment runs with the lock held.
         let mut evicted_now = 0_u64;
         let too_large = bytes > self.entry_cap || bytes > self.total_cap;
+        let mut stored = None;
         {
             let mut inner = self.inner.lock();
+            inner.sweep(now);
             // Overwrite or refusal, the previous entry under the key goes first.
             inner.take(&key);
             if !too_large {
@@ -235,6 +296,7 @@ impl ReplayReceipts {
                     evicted_now = evicted_now.saturating_add(1);
                 }
                 let seq = inner.next;
+                stored = Some(seq);
                 inner.next = inner.next.saturating_add(1);
                 inner.bytes = inner.bytes.saturating_add(bytes);
                 inner.order.insert(seq, key.clone());
@@ -249,7 +311,7 @@ impl ReplayReceipts {
                         }),
                         seq,
                         bytes,
-                        life: Life::Kept,
+                        life,
                     },
                 );
             }
@@ -261,6 +323,7 @@ impl ReplayReceipts {
             self.evicted.fetch_add(evicted_now, Ordering::Relaxed);
             telemetry_metrics::counter!(REPLAY_EVICTED_METRIC).increment(evicted_now);
         }
+        stored
     }
 
     /// Drop `key`'s entry: a non-plan commit under the key, or its stored
@@ -320,7 +383,8 @@ pub(crate) enum CaptureMode {
 /// unsettled, it releases. A handle whose entry was replaced, evicted or
 /// expired acts on nothing.
 pub(crate) struct ReplayHandle {
-    store: std::sync::Weak<ReplayReceipts>,
+    /// `None` once settled or discarded, so `Drop` releases nothing.
+    store: Option<std::sync::Weak<ReplayReceipts>>,
     key: StoredKey,
     seq: u64,
 }
@@ -333,9 +397,17 @@ impl std::fmt::Debug for ReplayHandle {
     }
 }
 
+impl ReplayHandle {
+    /// The key and sequence, consuming the handle without releasing it.
+    fn into_parts(mut self) -> (StoredKey, u64) {
+        self.store = None;
+        (self.key.clone(), self.seq)
+    }
+}
+
 impl Drop for ReplayHandle {
     fn drop(&mut self) {
-        if let Some(store) = self.store.upgrade() {
+        if let Some(store) = self.store.take().and_then(|weak| weak.upgrade()) {
             store.release_seq(&self.key, self.seq);
         }
     }
@@ -354,41 +426,78 @@ impl ReplayReceipts {
         now: Instant,
         retention: Duration,
     ) -> Option<ReplayHandle> {
-        // Typed stub (MIK-9267 red skeleton): stored kept, no handle.
-        self.insert(key, receipts, calls, answer_digest, now, retention);
-        None
+        let seq = self.insert_with(
+            key.clone(),
+            (receipts, calls, answer_digest),
+            (now, retention),
+            Life::Pending {
+                outstanding: 1,
+                delivered_off: false,
+            },
+        )?;
+        Some(self.handle(key, seq))
     }
 
     /// [`Self::lookup`] for a replay that will deliver the entry: a pending
-    /// entry gains one outstanding delivery, whose handle is returned.
+    /// entry gains one outstanding delivery, whose handle is returned; a
+    /// kept entry needs none.
     pub(in super::super) fn acquire(
         self: &Arc<Self>,
         key: &StoredKey,
         now: Instant,
     ) -> Option<(Arc<ReplayEntry>, Option<ReplayHandle>)> {
-        // Typed stub: no handle.
-        self.lookup(key, now).map(|entry| (entry, None))
+        let entry = self.lookup(key, now)?;
+        let seq = {
+            let mut inner = self.inner.lock();
+            inner.sweep(now);
+            let held = inner.by_key.get_mut(key)?;
+            match &mut held.life {
+                Life::Kept => None,
+                Life::Pending { outstanding, .. } => {
+                    *outstanding = outstanding.saturating_add(1);
+                    Some(held.seq)
+                }
+            }
+        };
+        Some((entry, seq.map(|seq| self.handle(key.clone(), seq))))
     }
 
     /// `handle`'s delivery was written; `off` when the write-time action
-    /// is an effective `off`.
+    /// is an effective `off`. A write not under `off` keeps the entry;
+    /// one under `off` ends that delivery, and once none is outstanding an
+    /// entry still pending goes (nothing delivered while off is held).
     pub(in super::super) fn settle(&self, handle: ReplayHandle, off: bool) {
-        // Typed stub: nothing settles.
-        let _ = off;
-        drop(handle);
+        let (key, seq) = handle.into_parts();
+        let mut inner = self.inner.lock();
+        if off {
+            inner.end_delivery(&key, seq, true);
+        } else if let Some(held) = inner.pending_at(&key, seq) {
+            held.life = Life::Kept;
+        }
     }
 
     /// `handle`'s answer was not retained (E1): its pending entry goes.
+    /// A kept entry, or a newer capture under the key, is untouched.
     pub(in super::super) fn discard(&self, handle: ReplayHandle) {
-        // Typed stub: nothing is discarded.
-        drop(handle);
+        let (key, seq) = handle.into_parts();
+        let mut inner = self.inner.lock();
+        if inner.pending_at(&key, seq).is_some() {
+            inner.take(&key);
+        }
     }
 
     /// One outstanding delivery of the entry `seq` under `key` ended
     /// unwritten.
     fn release_seq(&self, key: &StoredKey, seq: u64) {
-        // Typed stub: nothing is released.
-        let _ = (key, seq);
+        self.inner.lock().end_delivery(key, seq, false);
+    }
+
+    fn handle(self: &Arc<Self>, key: StoredKey, seq: u64) -> ReplayHandle {
+        ReplayHandle {
+            store: Some(Arc::downgrade(self)),
+            key,
+            seq,
+        }
     }
 
     /// The lifecycle of `key`'s entry: `None` absent; `Some(None)` kept;
