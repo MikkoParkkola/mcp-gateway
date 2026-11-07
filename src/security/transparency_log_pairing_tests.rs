@@ -1169,3 +1169,47 @@ enum FieldEdit {
     Drop,
     Set(Value),
 }
+
+#[test]
+fn mismatched_records_warn_once_per_rotated_file_by_position() {
+    // GIVEN: two mismatched records in the first file, none in the second,
+    // one in the third, written through the live logger
+    let dir = tempfile::tempdir().unwrap();
+    let path = log_path(&dir);
+    let l = TransparencyLogger::open(cfg(&path, 12, false)).unwrap();
+    let raw = |v: Value| {
+        l.append_core(plain(&v), &AuditEnvelope::gateway(), false)
+            .unwrap();
+    };
+    raw(json!({"event": OUTCOME, "token": "w-1", "intent_counter": 3}));
+    raw(json!({"event": "config_write_note", "kind": "settle.save", "token": "w-2"}));
+    super::rotation_tests::rotate_n(&l, &path, 2);
+    raw(json!({"event": "config_write_note", "kind": "settle.save", "token": "w-3"}));
+    drop(l);
+
+    // WHEN: it is verified
+    let r = verified(&path);
+
+    // THEN: one warning per file holding one, by position, never a path
+    assert!(r.ok, "{:?}", r.error_message);
+    let warned: Vec<&String> = r
+        .warnings
+        .iter()
+        .filter(|w| w.contains("not a settle record"))
+        .collect();
+    assert_eq!(warned.len(), 2, "{:?}", r.warnings);
+    assert!(
+        warned
+            .iter()
+            .any(|w| w.contains("in file 1 (2 in this file)")),
+        "{warned:?}"
+    );
+    assert!(
+        warned
+            .iter()
+            .any(|w| w.contains("in file 3 (1 in this file)")),
+        "{warned:?}"
+    );
+    let shown_dir = dir.path().display().to_string();
+    assert!(warned.iter().all(|w| !w.contains(&shown_dir)), "{warned:?}");
+}

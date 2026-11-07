@@ -140,3 +140,70 @@ fn warnings_and_unverified_warnings_print_no_payload_value_and_escape_the_token(
     assert!(text.contains("interrupted"), "{text}");
     assert_escaped_once(&text, "unverified warning");
 }
+
+/// A log rotated until its first segments expired (one segment kept),
+/// then `records` chained onto the active file.
+fn rotated_log(path: &Path, records: Vec<Value>) {
+    use mcp_gateway::security::transparency_log::RotationConfig;
+    let l = TransparencyLogger::open(Arc::new(TransparencyLogConfig {
+        enabled: true,
+        path: path.to_string_lossy().into_owned(),
+        key_id: "cli".into(),
+        rotation: RotationConfig {
+            max_segment_bytes: 4096,
+            retain_segments: 1,
+            ..RotationConfig::default()
+        },
+        ..TransparencyLogConfig::default()
+    }))
+    .unwrap();
+    for i in 0..400 {
+        l.log_invocation("s", "c", "srv", &format!("t{i}"), "a", "b")
+            .unwrap();
+    }
+    drop(l);
+    let text = std::fs::read_to_string(path).unwrap();
+    let mut all: Vec<Value> = text
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+    for mut v in records {
+        let last = all.last().unwrap();
+        v["counter"] = (last["counter"].as_u64().unwrap() + 1).into();
+        v["prev_entry_hash"] = last["entry_hash"].clone();
+        v["entry_hash"] = recompute_entry_hash(&v).unwrap().into();
+        all.push(v);
+    }
+    let mut body = String::new();
+    for v in &all {
+        writeln!(body, "{v}").unwrap();
+    }
+    std::fs::write(path, body).unwrap();
+}
+
+#[test]
+fn an_expired_intent_note_prints_as_info_with_the_token_escaped() {
+    // GIVEN: an outcome naming counter 1, which retention deleted, under a
+    // token holding a control character
+    let dir = tempfile::tempdir().unwrap();
+    let log = dir.path().join("transparency.jsonl");
+    let token = "w\u{7}1";
+    rotated_log(
+        &log,
+        vec![settle(
+            "config_write_outcome",
+            token,
+            &json!({"intent_counter": 1}),
+        )],
+    );
+
+    // WHEN: it is verified through the CLI
+    let (ok, text) = verify(dir.path(), &log);
+
+    // THEN: it passes, with an info line naming the token escaped once
+    assert!(ok, "{text}");
+    assert!(text.contains("info: intent expired"), "{text}");
+    assert!(text.contains("(token w\\u{7}1)"), "{text}");
+    assert!(!text.contains(token), "raw control character: {text}");
+    assert!(!text.contains(PLANTED), "payload value printed: {text}");
+}
