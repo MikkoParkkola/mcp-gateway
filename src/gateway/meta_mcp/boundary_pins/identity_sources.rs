@@ -135,6 +135,16 @@ impl Visitor<'_> {
         self.shadowed.push(format!("{}: {what}", self.file));
     }
 
+    fn mentions_identity(&self, ty: &syn::Type) -> bool {
+        let mut found = false;
+        let mut mentions = Mentions {
+            in_identity_impl: self.impl_ty.as_deref().is_some_and(is_type),
+            found: &mut found,
+        };
+        syn::visit::Visit::visit_type(&mut mentions, ty);
+        found
+    }
+
     fn refuse(&mut self, what: &str) {
         let at = format!("{}: {what} in `{}`", self.file, self.owner());
         self.scan.refused.push(at);
@@ -174,8 +184,18 @@ impl Visitor<'_> {
             }
             I::Use(u) => self.use_tree(&[], &u.tree),
             I::Type(t) => {
-                if last_ident(&t.ty).is_some_and(|n| is_type(&n)) {
-                    self.refuse(&format!("type alias `{}` of an identity type", t.ident));
+                if self.mentions_identity(&t.ty) {
+                    self.refuse(&format!("type alias `{}` names an identity type", t.ident));
+                }
+            }
+            I::ExternCrate(e) => {
+                if let Some((_, alias)) = &e.rename
+                    && MACRO_ROOTS.contains(&name(alias).as_str())
+                {
+                    self.shadow(&format!(
+                        "crate `{}` renamed to the trusted root `{alias}`",
+                        e.ident
+                    ));
                 }
             }
             I::Impl(block) => return self.impl_block(block),
@@ -240,6 +260,12 @@ impl Visitor<'_> {
                 }
             }
             syn::UseTree::Rename(r) => {
+                if MACRO_ROOTS.contains(&name(&r.rename).as_str()) {
+                    self.shadow(&format!(
+                        "`{}` renamed to the trusted root `{}`",
+                        r.ident, r.rename
+                    ));
+                }
                 if is_type(&name(&r.ident)) {
                     self.refuse(&format!("`{}` imported as `{}`", r.ident, r.rename));
                 }
@@ -262,7 +288,9 @@ impl Visitor<'_> {
                     ));
                 }
             }
-            syn::UseTree::Glob(_) => {}
+            syn::UseTree::Glob(_) => {
+                self.shadow(&format!("glob import from `{}`", prefix.join("::")));
+            }
         }
     }
 }
@@ -273,7 +301,7 @@ impl<'ast> syn::visit::Visit<'ast> for Visitor<'_> {
     }
 
     fn visit_impl_item_type(&mut self, item: &'ast syn::ImplItemType) {
-        if last_ident(&item.ty).is_some_and(|n| is_type(&n)) {
+        if self.mentions_identity(&item.ty) {
             self.refuse(&format!(
                 "associated type `{}` aliases an identity type",
                 item.ident
@@ -284,7 +312,7 @@ impl<'ast> syn::visit::Visit<'ast> for Visitor<'_> {
 
     fn visit_trait_item_type(&mut self, item: &'ast syn::TraitItemType) {
         if let Some((_, ty)) = &item.default
-            && last_ident(ty).is_some_and(|n| is_type(&n))
+            && self.mentions_identity(ty)
         {
             self.refuse(&format!(
                 "associated type `{}` aliases an identity type",
@@ -358,10 +386,17 @@ impl<'ast> syn::visit::Visit<'ast> for Visitor<'_> {
             .last()
             .map(|s| name(&s.ident))
             .unwrap_or_default();
-        if name == "include" {
+        let segments: Vec<String> = mac.path.segments.iter().map(|s| name(&s.ident)).collect();
+        let trusted = MACROS.contains(&name.as_str())
+            && match segments.as_slice() {
+                [_] => true,
+                [root, _] => MACRO_ROOTS.contains(&root.as_str()),
+                _ => false,
+            };
+        if name == "include" || calls_include(mac) {
             // Refused for what it is; not also as an unlisted macro.
             self.refuse("`include!` reads in code the walk does not see");
-        } else if near_fields && !MACROS.contains(&name.as_str()) {
+        } else if near_fields && !trusted {
             self.refuse(&format!(
                 "macro `{}!` near identity fields",
                 path_text(&mac.path)
@@ -439,6 +474,49 @@ fn item_name(item: &syn::Item) -> String {
         I::Union(i) => name(&i.ident),
         _ => "<item>".to_owned(),
     }
+}
+
+/// Whether `ty` names an identity type anywhere in it (a generic argument,
+/// a qualified path), or `Self` inside an impl of one.
+struct Mentions<'a> {
+    in_identity_impl: bool,
+    found: &'a mut bool,
+}
+
+impl<'ast> syn::visit::Visit<'ast> for Mentions<'_> {
+    fn visit_path_segment(&mut self, segment: &'ast syn::PathSegment) {
+        let n = name(&segment.ident);
+        if is_type(&n) || (self.in_identity_impl && n == "Self") {
+            *self.found = true;
+        }
+        syn::visit::visit_path_segment(self, segment);
+    }
+}
+
+/// Whether a macro's tokens hold an `include!` call, at any depth.
+fn calls_include(mac: &syn::Macro) -> bool {
+    let buffer = syn::buffer::TokenBuffer::new2(mac.tokens.clone());
+    let mut stack = vec![buffer.begin()];
+    while let Some(mut cursor) = stack.pop() {
+        while !cursor.eof() {
+            if let Some((ident, next)) = cursor.ident() {
+                if name(&ident) == "include"
+                    && next.punct().is_some_and(|(p, _)| p.as_char() == '!')
+                {
+                    return true;
+                }
+                cursor = next;
+            } else if let Some((inside, _, _, next)) = cursor.any_group() {
+                stack.push(inside);
+                cursor = next;
+            } else if let Some((_, next)) = cursor.token_tree() {
+                cursor = next;
+            } else {
+                break;
+            }
+        }
+    }
+    false
 }
 
 /// Whether a macro's tokens name an identity type, or `Self` inside an impl
