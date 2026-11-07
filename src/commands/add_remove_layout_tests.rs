@@ -18,7 +18,16 @@ fn file_with(text: &str) -> (TempDir, std::path::PathBuf) {
 }
 
 async fn add(name: &str, path: &Path, mode: CommentLoss) -> ExitCode {
-    run_add_command(name, Some("echo hi"), None, None, &[], path, mode).await
+    run_add_command(
+        name,
+        Some("echo hi"),
+        None,
+        None,
+        super::AddValues::default(),
+        path,
+        mode,
+    )
+    .await
 }
 
 /// K1: `add` without `--force` into a comment-free flow-style file it cannot
