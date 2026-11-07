@@ -70,7 +70,6 @@ impl<'a> RouteStage<'a> {
             // name withheld from this caller is not a target: the meta
             // layer answers it as a name that matches no tool.
             let checked = target.as_target();
-            let mut step_trace: Option<String> = None;
             // A requested target the caller cannot see takes the missing name's
             // path; a step's target keeps the strict authorize.
             let routed = if index < self.request_targets {
@@ -114,33 +113,28 @@ impl<'a> RouteStage<'a> {
                 }
             } else {
                 // A step's check runs under a trace of its own, so its decision
-                // note is traced and the refusal's invocation record (written
-                // under the same trace) is the one record of this call.
+                // note is traced and the refusal's invocation record (answered
+                // under the same trace) is the one record of this call. A step's
+                // target is operator-defined: any refusal of it is neutral (A3).
                 let trace = crate::gateway::trace::generate();
-                step_trace = Some(trace.clone());
-                crate::gateway::trace::TRACE_ID.sync_scope(trace, || {
-                    state.meta_mcp.authorize_route_target(
-                        invoke_scope,
-                        (checked.server, checked.tool),
-                        checked.arguments,
-                    )
-                })
-            };
-            // A step's target is operator-defined: any refusal of it is neutral (A3).
-            if index >= self.request_targets && routed.is_err() {
-                return Err(Box::new(Err(refused
-                    .with_trace(step_trace)
-                    .answer(
-                        state,
-                        target.as_target(),
-                        self.id.clone(),
-                        STEP_NOT_PERMITTED_CODE,
-                        STEP_NOT_PERMITTED.to_string(),
-                        StatusCode::from_u16(STEP_NOT_PERMITTED_STATUS)
-                            .unwrap_or(StatusCode::FORBIDDEN),
+                let routed = authorize_step(state, invoke_scope, &checked, trace.clone());
+                if routed.is_err() {
+                    return Err(Box::new(Err(crate::gateway::trace::with_trace_id(
+                        trace,
+                        refused.answer(
+                            state,
+                            target.as_target(),
+                            self.id.clone(),
+                            STEP_NOT_PERMITTED_CODE,
+                            STEP_NOT_PERMITTED.to_string(),
+                            StatusCode::from_u16(STEP_NOT_PERMITTED_STATUS)
+                                .unwrap_or(StatusCode::FORBIDDEN),
+                        ),
                     )
                     .await)));
-            }
+                }
+                routed
+            };
             match routed {
                 Ok(()) => {}
                 Err(crate::Error::Forbidden {
@@ -152,7 +146,6 @@ impl<'a> RouteStage<'a> {
                     // the route's own answer (its HTTP status included).
                     let status = StatusCode::from_u16(status).unwrap_or(StatusCode::FORBIDDEN);
                     return Err(Box::new(Err(refused
-                        .with_trace(step_trace)
                         .answer(
                             state,
                             target.as_target(),
@@ -382,4 +375,21 @@ pub(super) fn caller_context<'a>(
         // alerts judge the call from admission to settlement.
         generation: Some(&intake.generation),
     }
+}
+
+/// Authorize one step's target under `trace`, so the decision note a grant
+/// refusal writes carries the id its answer's record is written under.
+fn authorize_step(
+    state: &AppState,
+    scope: InvokeScope<'_>,
+    checked: &crate::gateway::authz::ToolTarget<'_>,
+    trace: String,
+) -> crate::Result<()> {
+    crate::gateway::trace::TRACE_ID.sync_scope(trace, || {
+        state.meta_mcp.authorize_route_target(
+            scope,
+            (checked.server, checked.tool),
+            checked.arguments,
+        )
+    })
 }
