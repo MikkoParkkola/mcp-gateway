@@ -26,6 +26,7 @@ pub(super) struct Findings {
 #[derive(Debug)]
 struct Dependent {
     counter: u64,
+    // ci-allow-secret-debug: a write-attempt id the gateway mints; findings print it (escaped) by design.
     token: String,
     role: Role,
     intent_counter: Option<u64>,
