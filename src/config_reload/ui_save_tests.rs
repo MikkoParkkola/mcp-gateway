@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! The settings save (MIK-9233 SAVE.1, SAVE.2, SAVE.3, SAVE.8).
+//! The settings save: stale revisions, all or nothing across the file and the
+//! secret store, the owner field, and nothing lost.
 
 use std::collections::BTreeSet;
 use std::path::Path;
