@@ -333,12 +333,14 @@ git_lit() { git -c core.quotePath=false "$@"; }
 # as success, as grep means it.
 scan_failures="$(mktemp)"
 trap 'rm -f "$scan_failures"' EXIT
+# A failure that cannot even be recorded stops the check at once (scan() signals this shell).
+trap 'printf "FAIL: a scan failed and its failure could not be recorded; the check cannot pass\n" >&2; exit 2' USR1
 scan() {
   local name="$1" rc=0
   shift
   "$@" || rc=$?
   if (( rc != 0 )) && ! [[ "$name" == grep:* && "$rc" -eq 1 ]]; then
-    printf '%s (exit %d)\n' "$name" "$rc" >>"$scan_failures"
+    printf '%s (exit %d)\n' "$name" "$rc" >>"$scan_failures" || kill -USR1 "$$"
   fi
   return 0
 }
@@ -565,6 +567,10 @@ for entry in ${debt_entries[@]+"${debt_entries[@]}"}; do
   fi
 done
 
+if [[ ! -f "$scan_failures" ]]; then
+  printf 'FAIL: the scan-failure record is gone; the check cannot pass\n' >&2
+  exit 2
+fi
 if [[ -s "$scan_failures" ]]; then
   while IFS= read -r failed; do
     printf 'FAIL: scan failed: %s; the check could not read the tree, so it cannot pass\n' "$failed" >&2
