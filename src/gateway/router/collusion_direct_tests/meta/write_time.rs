@@ -17,13 +17,22 @@ fn publish(fx: &Fixture, action: CollusionAction) {
     fx.state.live_config.set(config);
 }
 
-/// POST `body` to `uri` as bearer `who`; the response with its body unread.
-async fn unread(fx: &Fixture, uri: &str, who: &str, body: &Value) -> axum::response::Response {
+/// What a client that takes either framing accepts.
+const EITHER: &str = "application/json, text/event-stream";
+
+/// POST `body` to `uri` as bearer `who`, accepting `accept`; the response
+/// with its body unread.
+async fn unread(
+    fx: &Fixture,
+    (uri, accept): (&str, &str),
+    who: &str,
+    body: &Value,
+) -> axum::response::Response {
     let request = axum::http::Request::builder()
         .method("POST")
         .uri(uri)
         .header("content-type", "application/json")
-        .header("accept", "application/json, text/event-stream")
+        .header("accept", accept)
         .header("mcp-protocol-version", "2026-07-28")
         .header("mcp-method", "tools/call")
         .header(
@@ -39,17 +48,29 @@ async fn unread(fx: &Fixture, uri: &str, who: &str, body: &Value) -> axum::respo
         .unwrap()
 }
 
-/// A meta `gateway_invoke` of `alpha:read`, its body unread.
-async fn meta_read_unread(fx: &Fixture, who: &str) -> axum::response::Response {
+/// A meta `gateway_invoke` of `alpha:read` accepting `accept`, its body
+/// unread.
+async fn meta_read_accepting(fx: &Fixture, who: &str, accept: &str) -> axum::response::Response {
     let body = json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
                       "params": {"name": "gateway_invoke", "arguments": invoke("read", &json!({})),
                                  "_meta": meta_of(&json!({}))}});
-    unread(fx, "/mcp", who, &body).await
+    unread(fx, ("/mcp", accept), who, &body).await
+}
+
+/// [`meta_read_accepting`] either framing.
+async fn meta_read_unread(fx: &Fixture, who: &str) -> axum::response::Response {
+    meta_read_accepting(fx, who, EITHER).await
 }
 
 /// A direct `/mcp/alpha` call of `read`, its body unread.
 async fn direct_read_unread(fx: &Fixture, who: &str) -> axum::response::Response {
-    unread(fx, "/mcp/alpha", who, &call("read", &json!({}), None, None)).await
+    unread(
+        fx,
+        ("/mcp/alpha", EITHER),
+        who,
+        &call("read", &json!({}), None, None),
+    )
+    .await
 }
 
 /// Read the body as the server would; it must deliver the orchard text.
@@ -91,13 +112,14 @@ async fn h2_a_meta_body_dropped_unread_records_nothing() {
     assert_meta_sent(&fx, &meta_send(&fx, Some("b"), PROSE).await, 1);
 }
 
-/// h3: an answer that carries receipts keeps its exact length and JSON
-/// content type, so it does not turn into a chunked stream.
+/// h3: a JSON answer (the client accepts only JSON) that carries receipts
+/// keeps its exact length and JSON content type, so it does not turn into
+/// a chunked stream.
 /// Mutant killed: m4 (the length dropped).
 #[tokio::test]
 async fn h3_an_answer_with_receipts_keeps_its_length_and_type() {
     let fx = live_fixture(CollusionAction::Block).await;
-    let response = meta_read_unread(&fx, "a").await;
+    let response = meta_read_accepting(&fx, "a", "application/json").await;
     let length = response
         .headers()
         .get(axum::http::header::CONTENT_LENGTH)

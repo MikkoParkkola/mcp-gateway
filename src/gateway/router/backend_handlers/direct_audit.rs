@@ -440,6 +440,33 @@ pub(super) async fn record(
     }
 }
 
+/// `response` carrying what this call staged, recorded when the server
+/// takes its body's first chunk under the generation current then, as the
+/// meta route's answers are (`emit_http`). `delivers`: the answer as written
+/// delivers a result.
+fn with_deferred_receipts(
+    state: &AppState,
+    #[cfg_attr(not(feature = "firewall"), allow(unused_mut))]
+    mut response: axum::response::Response,
+    delivers: bool,
+) -> axum::response::Response {
+    #[cfg(feature = "firewall")]
+    if state.firewall.is_some() {
+        let staged =
+            crate::gateway::meta_mcp::invoke::relay::take_staged_now(state.firewall.clone());
+        response.extensions_mut().insert(
+            crate::gateway::meta_mcp::invoke::relay::DeferredReceipts::new(
+                staged,
+                delivers,
+                Some(std::sync::Arc::clone(&state.live_config)),
+            ),
+        );
+    }
+    #[cfg(not(feature = "firewall"))]
+    let _ = (state, delivers);
+    response
+}
+
 #[cfg(test)]
 mod tests {
     use serde_json::json;
@@ -474,31 +501,4 @@ mod tests {
             assert_eq!(direct_outcome(status, &body), expected, "{status} {body}");
         }
     }
-}
-
-/// `response` carrying what this call staged, recorded when the server
-/// takes its body's first chunk under the generation current then, as the
-/// meta route's answers are (`emit_http`). `delivers`: the answer as written
-/// delivers a result.
-fn with_deferred_receipts(
-    state: &AppState,
-    #[cfg_attr(not(feature = "firewall"), allow(unused_mut))]
-    mut response: axum::response::Response,
-    delivers: bool,
-) -> axum::response::Response {
-    #[cfg(feature = "firewall")]
-    if state.firewall.is_some() {
-        let staged =
-            crate::gateway::meta_mcp::invoke::relay::take_staged_now(state.firewall.clone());
-        response.extensions_mut().insert(
-            crate::gateway::meta_mcp::invoke::relay::DeferredReceipts::new(
-                staged,
-                delivers,
-                Some(std::sync::Arc::clone(&state.live_config)),
-            ),
-        );
-    }
-    #[cfg(not(feature = "firewall"))]
-    let _ = (state, delivers);
-    response
 }
