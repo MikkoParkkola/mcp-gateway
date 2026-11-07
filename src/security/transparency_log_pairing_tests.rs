@@ -287,7 +287,7 @@ async fn two_equal_settles_of_one_intent_collapse() {
     let all = lines(&path);
     let at = |c: u64| all.iter().find(|v| v["counter"] == c).unwrap().clone();
     let (a, b) = (at(first.counter), at(second.counter));
-    for field in ["prev_entry_hash", "entry_hash", "trace_id", "timestamp"] {
+    for field in ["prev_entry_hash", "entry_hash", "trace_id"] {
         assert_ne!(a[field], b[field], "{field}");
     }
 
@@ -360,7 +360,16 @@ async fn expired_log(path: &Path) -> (std::sync::Arc<TransparencyLogger>, u64, u
     let own = l.log_id();
     let old = l.settle(&own, "w-old", save, payload(&json!({})));
     let old = old.await.unwrap().counter;
-    super::rotation_tests::rotate_n(&l, path, 3);
+    let mut i = 0;
+    while super::segments::list_segments(path)
+        .unwrap()
+        .first()
+        .is_none_or(|s| s.seq < 2)
+    {
+        super::rotation_tests::append(&l, i);
+        i += 1;
+        assert!(i < 3_000, "no expiry happened");
+    }
     drop(l);
     let mut big = (*cfg(path, 1, false)).clone();
     big.rotation.max_segment_bytes = 1 << 20;
@@ -794,4 +803,26 @@ fn under_a_failed_chain_pairing_findings_are_unverified_warnings() {
     }
     // Control: untampered, the same records fail on pairing.
     assert_fails(&verify_records(records()), 4, STOPPED_RULE, "w-1");
+}
+
+#[test]
+fn repeats_differing_only_in_time_fields_collapse() {
+    // GIVEN: one intent written twice, differing only in `timestamp` and
+    // `clock_invalid`, an outcome naming the second, and (the bracket)
+    // another token's intent alone
+    let r = verify_records(vec![
+        rec(INTENT, "w-1", &json!({"timestamp": "2026-11-07T00:00:00Z"})),
+        rec(
+            INTENT,
+            "w-1",
+            &json!({"timestamp": "2026-11-07T00:00:01Z", "clock_invalid": true}),
+        ),
+        dep(OUTCOME, "w-1", 4),
+        rec(INTENT, "w-2", &json!({})),
+    ]);
+
+    // THEN: w-1 pairs with no warning; w-2 alone is interrupted
+    assert_paired(&r, "time fields only");
+    assert_eq!(count(&r.warnings, "(token w-1)"), 0, "{:?}", r.warnings);
+    assert_eq!(count(&r.warnings, "interrupted"), 1, "{:?}", r.warnings);
 }
