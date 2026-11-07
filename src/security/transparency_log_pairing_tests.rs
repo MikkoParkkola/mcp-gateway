@@ -334,7 +334,7 @@ fn settled_by_resolves_against_the_recovery_attempts_intents() {
     assert_fails(&none, 5, RULE, "w-1");
 }
 
-fn payload(v: &Value) -> Map<String, Value> {
+pub(super) fn payload(v: &Value) -> Map<String, Value> {
     let mut m = json!({"kind": "settle.save"});
     m.as_object_mut()
         .unwrap()
@@ -659,7 +659,7 @@ fn records_after_the_first_failure_are_still_paired() {
 }
 
 /// Every writer intent's event, by kind.
-const WRITER_INTENTS: [&str; 4] = [
+pub(super) const WRITER_INTENTS: [&str; 4] = [
     "config_save_intent",
     "config_adopt_intent",
     "config_restore_intent",
