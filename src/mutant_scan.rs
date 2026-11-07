@@ -91,6 +91,54 @@ pub(crate) fn tracked_rs_files(root: &std::path::Path) -> Result<Vec<String>, St
 /// The file list could not be read, or a file could not be read or
 /// tokenized: the scan fails rather than skip what it cannot see.
 pub(crate) fn repo_sites(root: &std::path::Path) -> Result<Vec<(String, Site)>, String> {
+    scan_repo(root, sites)
+}
+
+/// The 1-based line of every `macro_rules! mutant` definition in `text`, at
+/// any depth: a definition nested in a module or another macro would shadow
+/// the crate's own.
+///
+/// # Errors
+///
+/// As [`sites`].
+pub(crate) fn definitions(text: &str) -> Result<Vec<usize>, String> {
+    fn walk_defs(stream: TokenStream, found: &mut Vec<usize>) {
+        let tokens: Vec<TokenTree> = stream.into_iter().collect();
+        for (i, token) in tokens.iter().enumerate() {
+            match token {
+                TokenTree::Ident(ident) if ident == "macro_rules" => {
+                    let bang = matches!(tokens.get(i + 1), Some(TokenTree::Punct(p)) if p.as_char() == '!');
+                    if let (true, Some(TokenTree::Ident(name))) = (bang, tokens.get(i + 2))
+                        && name == "mutant"
+                    {
+                        found.push(name.span().start().line);
+                    }
+                }
+                TokenTree::Group(group) => walk_defs(group.stream(), found),
+                _ => {}
+            }
+        }
+    }
+    let stream: TokenStream = text.parse().map_err(|e| format!("{e}"))?;
+    let mut found = Vec::new();
+    walk_defs(stream, &mut found);
+    Ok(found)
+}
+
+/// Every `macro_rules! mutant` definition in the repository at `root`.
+///
+/// # Errors
+///
+/// As [`repo_sites`].
+pub(crate) fn repo_definitions(root: &std::path::Path) -> Result<Vec<(String, usize)>, String> {
+    scan_repo(root, definitions)
+}
+
+/// `per_file` over every tracked `.rs` file, with its path.
+fn scan_repo<T>(
+    root: &std::path::Path,
+    per_file: fn(&str) -> Result<Vec<T>, String>,
+) -> Result<Vec<(String, T)>, String> {
     let mut found = Vec::new();
     for path in tracked_rs_files(root)? {
         let text = match std::fs::read_to_string(root.join(&path)) {
@@ -101,8 +149,8 @@ pub(crate) fn repo_sites(root: &std::path::Path) -> Result<Vec<(String, Site)>, 
             }
             Err(e) => return Err(format!("{path}: {e}")),
         };
-        for site in sites(&text).map_err(|e| format!("{path}: {e}"))? {
-            found.push((path.clone(), site));
+        for item in per_file(&text).map_err(|e| format!("{path}: {e}"))? {
+            found.push((path.clone(), item));
         }
     }
     Ok(found)

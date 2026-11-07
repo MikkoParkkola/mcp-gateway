@@ -159,6 +159,53 @@ fn s11_planted_calls_in_every_root_are_found() {
     );
 }
 
+/// S12: a definition of `mutant!` is found at any depth, so a nested one that
+/// would shadow the crate's own cannot hide.
+#[test]
+fn s12_a_definition_is_found_at_any_depth() {
+    let defs = |text: &str| super::definitions(text).expect("fixture tokenizes");
+    assert_eq!(defs("macro_rules! mutant { () => {} }"), vec![1]);
+    assert_eq!(
+        defs("mod inner {\n    macro_rules! mutant { () => {} }\n}"),
+        vec![2]
+    );
+    assert_eq!(
+        defs("#[cfg(any())]\nmacro_rules! mutant { () => {} }"),
+        vec![2]
+    );
+    assert_eq!(
+        defs("macro_rules! other { () => { mutant!(\"X\", 1, 2) } }"),
+        Vec::<usize>::new()
+    );
+    assert_eq!(defs("// macro_rules! mutant { }"), Vec::<usize>::new());
+}
+
+/// S12: in the live repository the only definitions are the two in
+/// src/lib.rs (one per cfg; `a_normal_build_drops_the_mutated_tokens` checks
+/// their bodies).
+#[test]
+fn s12_no_definition_outside_the_crate_root() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let found = super::repo_definitions(root).expect("scan the repository");
+    let outside: Vec<String> = found
+        .iter()
+        .filter(|(path, _)| path != "src/lib.rs")
+        .map(|(path, line)| format!("{path}:{line}"))
+        .collect();
+    assert!(
+        outside.is_empty(),
+        "mutant! defined outside src/lib.rs: {outside:?}"
+    );
+    assert_eq!(
+        found
+            .iter()
+            .filter(|(path, _)| path == "src/lib.rs")
+            .count(),
+        2,
+        "two definitions in src/lib.rs"
+    );
+}
+
 /// The runner's site list (SCH.6): with `MCP_GATEWAY_MUTANT_LIST` set it
 /// prints one `MUTANT-SITE <id> <path>:<line>` line per site outside
 /// src/mutant.rs, from the same scanner as the rows above; otherwise it only
