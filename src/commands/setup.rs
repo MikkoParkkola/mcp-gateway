@@ -498,6 +498,37 @@ mod tests {
         assert_eq!(names, ["a", "tavily", "x"]);
     }
 
+    /// CLIADD.5 (S1, S2): the import stores a credential-named literal in
+    /// the secret store and writes its reference; an ordinary setting
+    /// (`DEBUG=1`) is written as given. The files store is pinned.
+    #[test]
+    fn s1_setup_import_stores_a_credential_literal() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("gateway.yaml");
+        mcp_gateway::gateway::test_helpers::write_owner_only(&path, "secrets:\n  store: files\n")
+            .expect("write");
+        let mut server = make_stdio_server("tool", DiscoverySource::ClaudeDesktop);
+        server.env = [
+            ("API_KEY".to_string(), "sk-live-0123456789".to_string()),
+            ("DEBUG".to_string(), "1".to_string()),
+        ]
+        .into_iter()
+        .collect();
+
+        let added = import_servers(&path, CommentLoss::Refuse, &[&server]).expect("imported");
+
+        assert_eq!(added, 1);
+        let text = std::fs::read_to_string(&path).expect("read");
+        assert!(!text.contains("sk-live-0123456789"), "{text}");
+        let config = Config::load_literal(Some(&path)).expect("loads");
+        let env = &config.backends["tool"].env;
+        assert_eq!(env["DEBUG"], "1");
+        let written = &env["API_KEY"];
+        assert!(written.starts_with("file:"), "{written}");
+        let stored = std::fs::read_to_string(written.trim_start_matches("file:")).expect("entry");
+        assert_eq!(stored.trim_end(), "sk-live-0123456789");
+    }
+
     #[test]
     fn b3j_merge_refuses_a_server_whose_secret_reference_does_not_resolve() {
         let mut config = Config::default();
