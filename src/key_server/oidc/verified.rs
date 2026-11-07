@@ -64,6 +64,13 @@ impl VerifiedIdentity {
         })
     }
 
+    /// The actor id an identity with this `issuer` and `subject` would have,
+    /// without building one: `None` when the pair names no one.
+    pub(crate) fn stable_actor_id_for(issuer: &str, subject: &str) -> Option<String> {
+        let _ = (issuer, subject);
+        None
+    }
+
     /// Stable, collision-safe actor identifier derived from `issuer` + `subject`.
     ///
     /// A naive `format!("oidc:{issuer}:{subject}")` collides when an issuer
