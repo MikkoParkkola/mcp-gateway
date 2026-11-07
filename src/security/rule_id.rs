@@ -22,6 +22,13 @@ impl RuleKey {
     }
 }
 
+/// Never the key bytes: a holder's `Debug` may reach a log line.
+impl std::fmt::Debug for RuleKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("RuleKey(..)")
+    }
+}
+
 /// One rule's id, as recorded.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct RuleId(String);
