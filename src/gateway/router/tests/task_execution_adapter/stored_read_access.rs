@@ -668,14 +668,16 @@ async fn t16_a_grant_withdrawn_after_the_task_ran_answers_as_the_live_call() {
     );
 }
 
-/// A repeated task-augmented call whose grant was withdrawn is refused at sync
-/// admission, before the stored task is read: a refusal of the new request,
-/// which has no invocation record of its own, so its decision says unrecorded
-/// and Activity lists it. The original call keeps its one invocation record.
-/// A repeat counts as a delivery (marker true) only when it reaches
-/// `in_repeat_scope`, which a repeat refused at admission never does.
+/// A repeated task-augmented call whose grant was withdrawn is refused at the
+/// route stage (the grant check in `invoke/chokepoint.rs`, re-run with
+/// `Emit::Audit` to write the refusal), before sync admission and before the
+/// stored task is read: a refusal of the new request, which has no invocation
+/// record of its own, so its decision says unrecorded and Activity lists it.
+/// The original call keeps its one invocation record. A repeat counts as a
+/// delivery (marker true) only when it reaches `in_repeat_scope`, which a
+/// repeat refused at the route stage never does.
 #[tokio::test]
-async fn a_repeat_refused_at_admission_is_one_unrecorded_decision() {
+async fn a_repeat_refused_at_the_route_stage_is_one_unrecorded_decision() {
     use crate::gateway::meta_mcp::grant_audit_fixture::{decisions, grants, invocations};
     use crate::security::audit::AuditFailurePolicy;
     let row =
