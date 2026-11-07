@@ -150,7 +150,10 @@ async fn a5_tool_policy_default_rule() {
     // flipped by allow attribution
     assert_row(
         &decision,
-        &allowed("a5_tool_policy_default_rule", "flipped by allow attribution"),
+        &allowed(
+            "a5_tool_policy_default_rule",
+            "flipped by allow attribution",
+        ),
     );
     let default_deny = policy(&ToolPolicyConfig {
         default_action: PolicyAction::Deny,
