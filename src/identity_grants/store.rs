@@ -27,6 +27,48 @@ impl LocalIdentityGrantStore {
         store
     }
 
+    /// This store keyed under `key`: every row gets the id
+    /// `RuleId::of("grant", key, row)`, which hashes the whole row, so any
+    /// edit (a reason or an expiry too) gives the row a new id. The key is
+    /// kept even for an empty store.
+    ///
+    /// The table has no production reader yet: naming the allowing grant in
+    /// the decision record is the allow-path work that reads it. Recomputing
+    /// a row's id in [`Self::upsert`] and [`Self::revoke`] is load-bearing,
+    /// so the table never names a row as it was before an edit.
+    #[must_use]
+    pub(crate) fn with_rule_ids(mut self, key: &crate::security::rule_id::RuleKey) -> Self {
+        self.ids = self
+            .grants
+            .iter()
+            .map(|(grant_id, grant)| (grant_id.clone(), grant_rule_id(key, grant)))
+            .collect();
+        self.key = Some(key.clone());
+        self
+    }
+
+    /// The keyed id of grant `grant_id`; `None` for an unkeyed store or a
+    /// grant the store does not hold.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "no production reader until the allow path names its grant"
+        )
+    )]
+    #[must_use]
+    pub(crate) fn rule_id(&self, grant_id: &str) -> Option<&crate::security::rule_id::RuleId> {
+        self.ids.get(grant_id)
+    }
+
+    /// Recompute `grant_id`'s id from its current row, when the store is keyed.
+    fn rekey(&mut self, grant_id: &str) {
+        if let (Some(key), Some(grant)) = (&self.key, self.grants.get(grant_id)) {
+            self.ids
+                .insert(grant_id.to_string(), grant_rule_id(key, grant));
+        }
+    }
+
     /// Number of grant rows in the store.
     #[must_use]
     pub fn len(&self) -> usize {
@@ -46,7 +88,9 @@ impl LocalIdentityGrantStore {
 
     /// Insert or replace a grant.
     pub fn upsert(&mut self, grant: IdentityGrant) {
-        self.grants.insert(grant.grant_id.clone(), grant);
+        let grant_id = grant.grant_id.clone();
+        self.grants.insert(grant_id.clone(), grant);
+        self.rekey(&grant_id);
     }
 
     /// Revoke an existing grant. Returns true when a grant was found.
@@ -55,6 +99,7 @@ impl LocalIdentityGrantStore {
             return false;
         };
         grant.revoked_at = Some(revoked_at);
+        self.rekey(grant_id);
         true
     }
 
@@ -341,4 +386,14 @@ fn build_lease_proposal(
         reason: request.reason.clone(),
         provenance: "identity_grant.recommendation".to_string(),
     }
+}
+
+/// A grant row's keyed id: the HMAC of its serde form under `key`.
+fn grant_rule_id(
+    key: &crate::security::rule_id::RuleKey,
+    grant: &IdentityGrant,
+) -> crate::security::rule_id::RuleId {
+    // invariant: a derived Serialize of strings, enums and dates cannot fail.
+    let bytes = serde_json::to_vec(grant).expect("a grant row serialises");
+    crate::security::rule_id::RuleId::of("grant", key, &bytes)
 }

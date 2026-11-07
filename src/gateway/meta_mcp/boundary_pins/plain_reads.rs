@@ -87,43 +87,6 @@ fn is_fs(path: &[String]) -> bool {
     matches!(path, [krate, fs] if fs == "fs" && matches!(krate.as_str(), "std" | "tokio" | "async_std"))
 }
 
-/// Each name `tree` binds: (the full path, the local name), or `None` for a
-/// glob over the path.
-fn bindings(
-    tree: &syn::UseTree,
-    prefix: &mut Vec<String>,
-    out: &mut Vec<(Vec<String>, Option<String>)>,
-) {
-    match tree {
-        syn::UseTree::Path(path) => {
-            prefix.push(path.ident.to_string());
-            bindings(&path.tree, prefix, out);
-            prefix.pop();
-        }
-        syn::UseTree::Name(name) if name.ident == "self" => {
-            out.push((prefix.clone(), prefix.last().cloned()));
-        }
-        syn::UseTree::Name(name) => {
-            let mut full = prefix.clone();
-            full.push(name.ident.to_string());
-            out.push((full, Some(name.ident.to_string())));
-        }
-        syn::UseTree::Rename(rename) => {
-            let mut full = prefix.clone();
-            if rename.ident != "self" {
-                full.push(rename.ident.to_string());
-            }
-            out.push((full, Some(rename.rename.to_string())));
-        }
-        syn::UseTree::Glob(_) => out.push((prefix.clone(), None)),
-        syn::UseTree::Group(group) => {
-            for tree in &group.items {
-                bindings(tree, prefix, out);
-            }
-        }
-    }
-}
-
 fn func_of(at: &Place) -> String {
     at.func.clone().unwrap_or_else(|| "<module>".to_owned())
 }
@@ -134,7 +97,7 @@ impl Sink for Found {
             return;
         };
         let mut found = Vec::new();
-        bindings(&item.tree, &mut Vec::new(), &mut found);
+        crate::gateway::syn_scan_support::bindings(&item.tree, &mut Vec::new(), &mut found);
         for (full, local) in found {
             match local {
                 None => self.globs.push((at.file.clone(), full)),

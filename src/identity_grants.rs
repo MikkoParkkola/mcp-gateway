@@ -638,6 +638,13 @@ pub struct IdentityGrantAuditEvent {
 #[derive(Debug, Default, Clone)]
 pub struct LocalIdentityGrantStore {
     grants: BTreeMap<String, IdentityGrant>,
+    /// Each row's keyed id, by grant id; filled only when `key` is set.
+    /// Beside the row, never on it, so `grant_digest` is unchanged.
+    ids: BTreeMap<String, crate::security::rule_id::RuleId>,
+    /// The key this store's ids are computed under, kept even while the store
+    /// is empty, so a later upsert knows to key its row. Its `Debug` shows no
+    /// key bytes.
+    key: Option<crate::security::rule_id::RuleKey>,
 }
 
 #[cfg(test)]
@@ -650,3 +657,6 @@ mod tests;
 #[cfg(test)]
 #[path = "identity_grants_agent_key_tests.rs"]
 mod agent_key_tests;
+
+#[cfg(test)]
+mod rule_id_tests;

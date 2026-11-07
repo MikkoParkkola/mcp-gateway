@@ -35,9 +35,7 @@ use super::{Finding, FindingLocation, ScanType};
 use crate::security::Severity;
 use crate::truncate::{Budget, Suffix, truncate};
 
-#[path = "credential_names.rs"]
-mod credential_names;
-use credential_names::Family;
+use crate::security::credential_names::{self, Family};
 
 /// The largest JSON-in-text leaf walked on its collected literals (MIK-8745);
 /// a larger one takes the streaming walk in `redactor_large.rs` (MIK-8774).

@@ -28,7 +28,7 @@ use super::guard::Guard;
 use super::refusals::WriteTicket;
 use super::{
     backend_ops::{
-        BackendUpdate, UNRESOLVED_SECRETS, add_backend as add_backend_config,
+        BackendUpdate, LITERAL_IN_VALUE, UNRESOLVED_SECRETS, add_backend as add_backend_config,
         remove_backend as remove_backend_config, resolve_backend,
         update_backend as update_backend_config,
     },
@@ -47,6 +47,7 @@ pub use requests::{AddBackendRequest, UpdateBackendRequest};
 mod signin;
 pub(in crate::gateway::ui) use signin::with_time;
 mod signin_flow;
+mod slotting;
 mod write;
 use write::write_backend;
 
@@ -155,6 +156,7 @@ pub fn backends_router() -> Router<Arc<AppState>> {
 /// Returns 201 on success, 409 on duplicate, 422 on unresolvable transport.
 async fn add_backend(
     State(state): State<Arc<AppState>>,
+    #[cfg(test)] store_for_test: Option<axum::Extension<slotting::BackendStoreForTest>>,
     guard: Guard,
     Json(req): Json<AddBackendRequest>,
 ) -> impl IntoResponse {
@@ -188,6 +190,27 @@ async fn add_backend(
         }
     };
 
+    // The shared value rule: a refused value is answered by field and code,
+    // and each literal goes to the secret store (gateway.yaml holds its
+    // reference), all before any store is opened for a refused save.
+    let Some(path) = state.config_path.clone() else {
+        return config_path_unavailable().into_response();
+    };
+    let slotted = match slotting::before_store(
+        &path,
+        &req.name,
+        slotting::Expect::Absent,
+        &resolved.backend.env,
+        &resolved.backend.headers,
+        #[cfg(test)]
+        store_for_test.map(|axum::Extension(seam)| seam),
+    )
+    .await
+    {
+        Ok(slotted) => slotted,
+        Err(answer) => return *answer,
+    };
+
     // Load, check for duplicates, persist and reload - all inside one lock, so
     // a second request cannot build its change on the pre-edit config.
     let name = req.name.clone();
@@ -195,7 +218,7 @@ async fn add_backend(
     let selected = allowed_tools.clone();
     let ticket = WriteTicket::new(&state);
     let in_lock = ticket.clone();
-    let mutation = write_backend(&state, BackendOp::Add, &req.name, move |config| {
+    let mutation = write_backend(&state, BackendOp::Add, &req.name, slotted, move |config| {
         add_backend_config(config, &name, resolved)
             .inspect(|_| in_lock.note(RefusalKind::Add, &name, config))
             .map(|notes| {
@@ -211,7 +234,11 @@ async fn add_backend(
     })
     .await;
 
-    let ((notes, enabled), reload) = match mutation {
+    let write::Written {
+        value: (notes, enabled),
+        reload,
+        secrets,
+    } = match mutation {
         Ok(added) => {
             ticket.committed(&req.name);
             added
@@ -230,6 +257,7 @@ async fn add_backend(
             "reload": reload,
             "notes": notes,
             "enabled": enabled,
+            "secrets_stored": slotting::stored(&req.name, &secrets),
         })),
     )
         .into_response();
@@ -263,7 +291,7 @@ async fn remove_backend(
     let removed = name.clone();
     let ticket = WriteTicket::new(&state);
     let in_lock = ticket.clone();
-    let mutation = write_backend(&state, BackendOp::Remove, &name, move |config| {
+    let mutation = write_backend(&state, BackendOp::Remove, &name, None, move |config| {
         remove_backend_config(config, &removed).map_err(|_| {
             (
                 StatusCode::NOT_FOUND,
@@ -280,9 +308,9 @@ async fn remove_backend(
     .await;
 
     let gone = match mutation {
-        Ok((gone, _)) => {
+        Ok(written) => {
             ticket.committed(&name);
-            gone
+            written.value
         }
         Err(answer) => return *answer,
     };
@@ -362,6 +390,7 @@ fn requested_transport(command: Option<String>, url: Option<String>) -> Option<T
 
 async fn update_backend(
     State(state): State<Arc<AppState>>,
+    #[cfg(test)] store_for_test: Option<axum::Extension<slotting::BackendStoreForTest>>,
     guard: Guard,
     AxumPath(name): AxumPath<String>,
     Json(req): Json<UpdateBackendRequest>,
@@ -395,78 +424,116 @@ async fn update_backend(
         .into_response();
     }
 
+    // Only the values this request sets are judged and stored; values already
+    // in gateway.yaml are carried as they are.
+    let slotted = match slotting::for_update(
+        &state,
+        &name,
+        env.as_ref(),
+        #[cfg(test)]
+        store_for_test.map(|axum::Extension(seam)| seam),
+    )
+    .await
+    {
+        Ok(slotted) => slotted,
+        Err(answer) => return *answer,
+    };
+
     // Everything from here reads the config and writes it back, so it all runs
     // inside one lock. Splitting the read from the write is what lets one edit
     // overwrite another.
     let updated = name.clone();
     let ticket = WriteTicket::new(&state);
     let in_lock = ticket.clone();
-    let mutation = write_backend(&state, BackendOp::Update, &updated, move |config| {
-        if !config.backends.contains_key(&name) {
-            return Err((StatusCode::NOT_FOUND, format!("Backend '{name}' not found")));
-        }
-
-        let transport = requested_transport(command, url);
-
-        let env = env.map(|env_patch| {
-            let mut merged = config
-                .backends
-                .get(&name)
-                .expect("checked above")
-                .env
-                .clone();
-            merged.extend(env_patch);
-            merged
-        });
-
-        let stop_when_idle_for = stop_when_idle_for_secs.map(|secs| {
-            if secs == 0 {
-                None // explicit clear: never stop
-            } else {
-                Some(std::time::Duration::from_secs(secs))
+    let mutation = write_backend(
+        &state,
+        BackendOp::Update,
+        &updated,
+        slotted,
+        move |config| {
+            if !config.backends.contains_key(&name) {
+                return Err((StatusCode::NOT_FOUND, format!("Backend '{name}' not found")));
             }
-        });
 
-        update_backend_config(
-            config,
-            &name,
-            BackendUpdate {
-                description,
-                env,
-                enabled,
-                transport,
-                stop_when_idle_for,
-            },
-        )
-        .inspect(|()| in_lock.note(RefusalKind::Edit, &name, config))
-        .map(|()| {
-            let backend = config.backends.get_mut(&name)?;
-            let after = allowed_tools?;
-            let before = std::mem::replace(&mut backend.allowed_tools, after.clone());
-            (before != after).then_some((before, after))
-        })
-        .map_err(|message| {
-            // Surface the refusal verbatim. An operator setting "stop when idle" on a
-            // backend the gateway does not start needs to be told why, not silently
-            // ignored - being silently ignored is what this whole change corrects.
-            let code = in_lock.refused_edit(&name, &message, update_refusal_status(&message));
-            (code, message)
-        })
-    })
+            let transport = requested_transport(command, url);
+
+            let env = env.map(|env_patch| {
+                let mut merged = config
+                    .backends
+                    .get(&name)
+                    .expect("checked above")
+                    .env
+                    .clone();
+                merged.extend(env_patch);
+                merged
+            });
+
+            let stop_when_idle_for = stop_when_idle_for_secs.map(|secs| {
+                if secs == 0 {
+                    None // explicit clear: never stop
+                } else {
+                    Some(std::time::Duration::from_secs(secs))
+                }
+            });
+
+            update_backend_config(
+                config,
+                &name,
+                BackendUpdate {
+                    description,
+                    env,
+                    enabled,
+                    transport,
+                    stop_when_idle_for,
+                },
+            )
+            .inspect(|()| in_lock.note(RefusalKind::Edit, &name, config))
+            .map(|()| {
+                let backend = config.backends.get_mut(&name)?;
+                let after = allowed_tools?;
+                let before = std::mem::replace(&mut backend.allowed_tools, after.clone());
+                (before != after).then_some((before, after))
+            })
+            .map_err(|message| {
+                // Surface the refusal verbatim. An operator setting "stop when idle" on a
+                // backend the gateway does not start needs to be told why, not silently
+                // ignored - being silently ignored is what this whole change corrects.
+                let code = in_lock.refused_edit(&name, &message, update_refusal_status(&message));
+                (code, message)
+            })
+        },
+    )
     .await;
 
-    let (selection, reload) = match mutation {
-        Ok(updated_with) => {
+    match mutation {
+        Ok(written) => {
             ticket.committed(&updated);
-            updated_with
+            updated_answer(&updated, written)
         }
-        Err(answer) => return *answer,
-    };
+        Err(answer) => *answer,
+    }
+}
 
-    let mut response =
-        Json(json!({"status": "updated", "name": updated, "reload": reload})).into_response();
+/// An update's tool-selection change: `(before, after)` when it changed it.
+type Selection = Option<(Option<Vec<String>>, Option<Vec<String>>)>;
+
+/// The answer to a committed update: its reload, each stored secret's field
+/// and reference, and the tool selection's change when it had one.
+fn updated_answer(updated: &str, written: write::Written<Selection>) -> axum::response::Response {
+    let write::Written {
+        value: selection,
+        reload,
+        secrets,
+    } = written;
+    let mut response = Json(json!({
+        "status": "updated",
+        "name": updated,
+        "reload": reload,
+        "secrets_stored": slotting::stored(updated, &secrets),
+    }))
+    .into_response();
     if let Some((before, after)) = selection {
-        attach_selection(&mut response, &updated, before.as_deref(), after.as_deref());
+        attach_selection(&mut response, updated, before.as_deref(), after.as_deref());
     }
     response
 }
@@ -474,7 +541,7 @@ async fn update_backend(
 /// An add that `add_backend` refused: 422 for a secret reference that does
 /// not resolve (ADR-028), otherwise the duplicate's 409.
 fn add_refusal(name: &str, message: String) -> (StatusCode, String) {
-    if message.contains(UNRESOLVED_SECRETS) {
+    if message.contains(UNRESOLVED_SECRETS) || message.contains(LITERAL_IN_VALUE) {
         (StatusCode::UNPROCESSABLE_ENTITY, message)
     } else {
         (
@@ -545,6 +612,10 @@ pub(super) use crate::config::backend_add::validate_backend_name;
 #[cfg(test)]
 #[path = "backends_audit_tests.rs"]
 mod audit_tests;
+
+#[cfg(test)]
+#[path = "backends_secret_slot_tests.rs"]
+mod secret_slot_tests;
 
 #[cfg(test)]
 mod tests {

@@ -405,6 +405,13 @@ probe = "none"
 reason = "needs a backend that echoes a credential from its own configuration, or a stored answer kept before a value counted as secret; the caller leg can do neither. Exercised by secret_echo_config_tests (one row per carrier), secret_marked_later_tests, cache_marked_later_tests, registry stored_scrub_tests and the configured needles rows, with their mutants"
 
 [[control]]
+id = "credential-name-rule"
+description = "a key or member name is judged a credential by its last words (password, token, an api or private key, a client secret, ...; pagination names such as next_page_token excluded): the firewall's redactor uses it to redact credential-named JSON members, and the web UI's backend panel and discovery adopt use it, with a length bound, to decide which env values go to the secret store instead of gateway.yaml"
+source = "src/security/credential_names.rs"
+probe = "none"
+reason = "the panel and adopt decisions are admin-route writes to gateway.yaml and the secret store, and the redactor half needs a backend response carrying a credential-named member; the caller leg can observe neither. Exercised by the firewall's member and family rows (redactor_member_tests, redactor_family_tests), the panel rows T16-T22 (backends_secret_slot_tests: names judged one by one, ordinary settings never stored or redacted, the length bound) and adopt's split rows (discovery_adopt_tests), with their mutants"
+
+[[control]]
 id = "egress-scan-memo"
 description = "the response-inspection and context-integrity verdict memo returns only a text's own classification"
 source = "src/security/text_memo.rs"

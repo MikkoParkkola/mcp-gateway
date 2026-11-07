@@ -7,7 +7,7 @@
 
 /// A family of credential-named JSON members.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum Family {
+pub(crate) enum Family {
     /// The generic API-key rule's own names (MIK-8756).
     Generic,
     PrivateKey,
@@ -17,6 +17,7 @@ pub(super) enum Family {
     Token,
 }
 
+#[cfg(feature = "firewall")]
 impl Family {
     /// The finding description for a member of this family.
     pub(super) fn description(self) -> &'static str {
@@ -34,7 +35,7 @@ impl Family {
 /// `key` split into lowercase words: at every non-alphanumeric character, at
 /// a lowercase or digit followed by an uppercase letter, and before the last
 /// capital of an acronym run that a lowercase letter follows (`HTTPSToken`).
-fn words(key: &str) -> Vec<String> {
+pub(crate) fn words(key: &str) -> Vec<String> {
     let chars: Vec<char> = key.chars().collect();
     let mut out: Vec<String> = Vec::new();
     let mut cur = String::new();
@@ -142,7 +143,7 @@ const GLUED: &[(Family, &str)] = &[
 
 /// The family a key names, if any (families 2-6 and family 1's new forms;
 /// the caller keeps MIK-8756's own family-1 regex first).
-pub(super) fn family_of(key: &str) -> Option<Family> {
+pub(crate) fn family_of(key: &str) -> Option<Family> {
     let w = words(key);
     if is_pagination(&w) {
         return None;
@@ -169,6 +170,7 @@ pub(super) fn family_of(key: &str) -> Option<Family> {
 }
 
 /// A whole-value placeholder: `${…}`, `{{…}}` or `%(…)s`.
+#[cfg(feature = "firewall")]
 fn placeholder(v: &str) -> bool {
     (v.starts_with("${") && v.ends_with('}') && v[2..v.len() - 1].find('}').is_none())
         || (v.starts_with("{{") && v.ends_with("}}") && v.len() >= 4)
@@ -176,16 +178,19 @@ fn placeholder(v: &str) -> bool {
 }
 
 /// A mask: only `*`, or only `•`.
+#[cfg(feature = "firewall")]
 fn mask(v: &str) -> bool {
     !v.is_empty() && (v.chars().all(|c| c == '*') || v.chars().all(|c| c == '•'))
 }
 
+#[cfg(feature = "firewall")]
 const PLACEHOLDER_WORDS: &[&str] = &[
     "none", "null", "nil", "n/a", "unset", "empty", "redacted", "hidden", "masked",
 ];
 
 /// Characters an opaque token may hold (Salesforce `!`, percent-encoding,
 /// Telegram's `:` and `ghp_`-style `_` included).
+#[cfg(feature = "firewall")]
 fn token_class(v: &str) -> bool {
     v.chars().count() >= 16
         && v.chars()
@@ -194,6 +199,7 @@ fn token_class(v: &str) -> bool {
 
 /// Whether `value`, already known to sit under a key of `family`, is a
 /// credential of that family. `marker` is the redaction marker, never one.
+#[cfg(feature = "firewall")]
 pub(super) fn value_matches(family: Family, value: &str, marker: &str) -> bool {
     let v = value.trim();
     if v == marker || placeholder(v) || mask(v) {
@@ -228,6 +234,7 @@ pub(super) fn value_matches(family: Family, value: &str, marker: &str) -> bool {
 
 /// A Stripe PaymentIntent/SetupIntent client secret, designed for the browser
 /// (lead ruling 2026-10-23): `^(pi|seti)_[A-Za-z0-9]+_secret_[A-Za-z0-9]+$`.
+#[cfg(feature = "firewall")]
 fn stripe_intent_secret(v: &str) -> bool {
     let Some(rest) = v.strip_prefix("pi_").or_else(|| v.strip_prefix("seti_")) else {
         return false;

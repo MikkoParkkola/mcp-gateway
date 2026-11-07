@@ -80,15 +80,16 @@ src/gateway/ui/activity/mod.rs	blocking	spawn-blocking	1	no-refusal-inside	web U
 src/gateway/ui/activity/mod.rs	stream_read	spawn-blocking	1	outside-calls	reads the web UI activity stream from the audit log
 src/gateway/ui/admin_audit.rs	recorded	spawn	1	no-refusal-inside	runs an admin UI handler and writes its admin audit record; no tool call's delivery runs inside
 src/gateway/ui/backends/signin_flow.rs	start	spawn	1	outside-calls	runs a web UI backend sign-in; it serves the sign-in page, not a tool call
+src/gateway/ui/backends/slotting.rs	read_expecting	spawn-blocking	1	no-refusal-inside	reads gateway.yaml off the async workers before a backend write stores a secret; a read failure returns as the config refusal
 src/gateway/ui/decisions.rs	replay_until_ready	spawn-blocking	1	outside-calls	replays the decision log into the web UI's decision source at start-up
 src/gateway/ui/decisions.rs	start_discovery	spawn	1	outside-calls	keeps the web UI's client-file discovery cache current in the background
 src/gateway/ui/decisions.rs	start_with	spawn	3	outside-calls	the web UI decision source's background readers and hand-off queue
 src/gateway/ui/decisions.rs	start_with	spawn-blocking	1	outside-calls	the web UI decision source's blocking log reader
 src/gateway/ui/discovery.rs	list_discovery	spawn-blocking	1	no-refusal-inside	reads gateway.yaml off the async workers for the discovery list; a read failure returns as a 503
 src/gateway/ui/discovery_adopt.rs	adopt_discovery	spawn-blocking	1	no-refusal-inside	reads gateway.yaml off the async workers before an adopt; a read failure returns as a 503
-src/gateway/ui/discovery_adopt.rs	open_store	spawn-blocking	1	no-refusal-inside	opens the secret store choice and the vault off the async workers; a keychain that does not answer in time is a 503
 src/gateway/ui/mod.rs	config	spawn-blocking	1	no-refusal-inside	web UI config page reads the literal config file for secret references
 src/gateway/ui/preview.rs	preview_backend	spawn	1	outside-calls	web UI backend preview: starts and describes a backend in its own task; not a tool call
+src/gateway/ui/secret_slots.rs	open_store	spawn-blocking	1	no-refusal-inside	opens the secret store choice and the vault off the async workers for adopt and the backend routes; a keychain that does not answer in time is a 503
 src/gateway/ui/stream/mod.rs	stream	spawn	1	outside-calls	feeds the web UI's server-sent event stream
 src/gateway/ui/stream/watcher.rs	spawn	spawn	1	outside-calls	watches for changes to publish on the web UI stream
 src/gateway/ui/tool_call.rs	spawn_call	spawn	1	own-cell	runs a web UI tool call detached through the /mcp handler, which opens the call's own delivery cell and records its refusal

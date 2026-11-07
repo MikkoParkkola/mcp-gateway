@@ -158,7 +158,7 @@ impl Audited {
         .expect("add body");
         let guard = Self::guard(routes::UI_BACKENDS, &axum::http::Method::POST);
         read(
-            add_backend(State(Arc::clone(&self.state)), guard, Json(req))
+            add_backend(State(Arc::clone(&self.state)), None, guard, Json(req))
                 .await
                 .into_response(),
         )
@@ -190,6 +190,7 @@ impl Audited {
         read(
             update_backend(
                 State(Arc::clone(&self.state)),
+                None,
                 guard,
                 AxumPath(name.to_owned()),
                 Json(req),

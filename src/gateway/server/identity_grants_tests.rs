@@ -692,3 +692,6 @@ async fn an_unreadable_grants_file_loads_no_grants_or_refuses_start() {
 #[cfg(test)]
 #[path = "identity_grants_clock_tests.rs"]
 mod clock;
+
+#[path = "identity_grants_rule_id_tests.rs"]
+mod rule_ids;
