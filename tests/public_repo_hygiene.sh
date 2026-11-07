@@ -526,6 +526,45 @@ printf 'docs/h.md\tprivate-name\t08\n' >"$repo/scripts/dev/public-hygiene-debt.t
 git -C "$repo" add .gitignore scripts/dev docs/h.md
 assert_fail_contains "$repo" "no plain decimal hit count"
 
+# A scan whose git command fails is a failed check, never a clean one: a process substitution
+# drops its command's exit status, so the checker records each failure and exits 2. A stub git
+# fails one subcommand (exit 128), optionally after printing partial output.
+real_git="$(command -v git)"
+stub_dir="$tmp_root/gitstub"
+mkdir -p "$stub_dir"
+cat >"$stub_dir/git" <<EOF
+#!/usr/bin/env bash
+case " \$* " in
+  *" \$FAIL_SUB "*) [[ -n "\${PARTIAL:-}" ]] && printf 'docs/x.md:1:partial\n'; exit 128 ;;
+esac
+exec "$real_git" "\$@"
+EOF
+chmod +x "$stub_dir/git"
+assert_scan_fails() {
+  local repo="$1" sub="$2" partial="$3" base="$4" rc=0 output="$tmp_root/scan.out"
+  (cd "$repo" && PATH="$stub_dir:$PATH" FAIL_SUB="$sub" PARTIAL="$partial" \
+    scripts/dev/check-public-repo-hygiene.sh ${base:+--base "$base"} >"$output" 2>&1) || rc=$?
+  if [[ "$rc" -ne 2 ]] || ! grep -F -q "scan failed" "$output"; then
+    cat "$output" >&2
+    echo "expected exit 2 with 'scan failed' when git $sub fails (partial=$partial), got $rc" >&2
+    exit 1
+  fi
+}
+repo="$(make_repo scan-fails)"
+mkdir -p "$repo/docs"
+printf 'clean\n' >"$repo/docs/a.md"
+git -C "$repo" add .gitignore scripts/dev docs/a.md
+git -C "$repo" commit -q -m base
+base_commit="$(git -C "$repo" rev-parse HEAD)"
+printf 'more\n' >>"$repo/docs/a.md"
+git -C "$repo" commit -q -am change
+assert_pass "$repo"
+assert_scan_fails "$repo" grep "" ""
+assert_scan_fails "$repo" grep 1 ""
+assert_scan_fails "$repo" ls-files "" ""
+assert_scan_fails "$repo" diff "" "$base_commit"
+assert_scan_fails "$repo" diff 1 "$base_commit"
+
 # The whole check runs on every push, so its time on this tree is shown here,
 # where a slow regression is visible. Informational: the verdict on the real
 # tree is the CI step's job, not this fixture suite's.
