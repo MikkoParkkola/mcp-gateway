@@ -46,7 +46,7 @@ src/gateway/meta_mcp/invoke/gate.rs	backstop	refused_while_vouched	1
 src/gateway/meta_mcp/invoke/gate.rs	gate_lens	via withheld_for	1
 src/gateway/meta_mcp/invoke/gate.rs	named_gate_answer	via withheld_for	1
 src/gateway/meta_mcp/invoke/gate.rs	per_user_withheld_answer	via withheld_for	1
-src/gateway/meta_mcp/invoke/gate.rs	withheld_as_undefined	withheld	1
+src/gateway/meta_mcp/invoke/gate_as_undefined.rs	withheld_as_undefined	withheld	1
 src/gateway/meta_mcp/invoke/gate.rs	withheld_for	withheld	1
 src/gateway/meta_mcp/invoke/gateway_writes.rs	insert_noted	via note	1
 src/gateway/meta_mcp/invoke/gateway_writes.rs	note	raise	1
