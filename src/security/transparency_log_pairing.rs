@@ -5,10 +5,8 @@
 //! already verified. Findings name a token, a role, a rule and counters,
 //! never a payload value; tokens stay raw here, and the CLI escapes them.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
-use std::path::Path;
-
 use serde_json::{Map, Value};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use super::super::settle::{self, FieldProblem, KIND_PREFIX, Role};
 
@@ -48,8 +46,12 @@ pub(super) struct Pairing {
     outcomes: BTreeSet<String>,
     failure: Option<(u64, String)>,
     legacy: usize,
-    /// Files holding a mismatched record: the first counter and the count.
-    mismatched: BTreeMap<String, (u64, usize)>,
+    /// Intent counters by token (writer and recovery intents alike): one
+    /// lookup answers whether a token has an intent at a counter.
+    intents: HashMap<String, BTreeSet<u64>>,
+    /// Files holding a mismatched record, by position in the stream
+    /// (oldest first, from 1): the first counter and the count.
+    mismatched: BTreeMap<usize, (u64, usize)>,
 }
 
 /// A failure message: the rule, the counter and the token.
@@ -61,8 +63,9 @@ fn failed(rule: &str, counter: u64, token: &str) -> (u64, String) {
 }
 
 impl Pairing {
-    /// Take one verified record at `counter`, read from `file`.
-    pub(super) fn observe(&mut self, entry: &Value, counter: u64, file: &Path) {
+    /// Take one verified record at `counter`, read from the stream's
+    /// `file`-th file (oldest first, from 0).
+    pub(super) fn observe(&mut self, entry: &Value, counter: u64, file: usize) {
         let Some(fields) = entry.as_object() else {
             return;
         };
@@ -75,10 +78,7 @@ impl Pairing {
             (Some(role), true) => self.settle_record(role, fields, counter),
             (Some(Role::Intent(_) | Role::RecoveryIntent), false) => self.legacy += 1,
             (Some(_), false) | (None, true) => {
-                let seen = self
-                    .mismatched
-                    .entry(file.display().to_string())
-                    .or_insert((counter, 0));
+                let seen = self.mismatched.entry(file + 1).or_insert((counter, 0));
                 seen.1 += 1;
             }
             (None, false) => {}
@@ -117,6 +117,10 @@ impl Pairing {
             return;
         }
         counters.insert(counter);
+        if matches!(role, Role::Intent(_) | Role::RecoveryIntent) {
+            let at = self.intents.entry(token.to_string()).or_default();
+            at.insert(counter);
+        }
         if role == Role::Outcome {
             self.outcomes.insert(token.to_string());
         }
@@ -157,7 +161,7 @@ impl Pairing {
         let mut warnings = self.unsettled_intents();
         for (file, (at, n)) in &self.mismatched {
             warnings.push(format!(
-                "{file}: not a settle record at counter {at} ({n} in this file)"
+                "not a settle record at counter {at} in file {file} ({n} in this file)"
             ));
         }
         Findings {
@@ -203,13 +207,9 @@ impl Pairing {
 
     /// Whether `token` has an intent (writer or recovery) at counter `n`.
     fn is_intent(&self, token: &str, n: u64) -> bool {
-        self.groups.iter().any(|((t, role), (_, counters))| {
-            #[cfg(test)]
-            probe();
-            t == token
-                && matches!(role, Role::Intent(_) | Role::RecoveryIntent)
-                && counters.contains(&n)
-        })
+        #[cfg(test)]
+        probe();
+        self.intents.get(token).is_some_and(|at| at.contains(&n))
     }
 
     /// Rule 3: an intent with no terminal record warns, "left to recovery"
