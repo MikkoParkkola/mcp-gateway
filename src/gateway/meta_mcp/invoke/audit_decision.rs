@@ -70,6 +70,16 @@ pub(crate) fn note_declared_effect(
     note_decision(|noted| noted.note_effect(effect, source));
 }
 
+/// Note the check that allowed this call, rank-merged with any allow noted
+/// before it. Meant to write the open dispatch notes, else the open signing
+/// sink, else nothing: never the route scope or the request memo.
+///
+/// A stub for now: it notes nothing, so every allowed call still records
+/// `default_allow`.
+pub(crate) fn note_allowed_by(allow: crate::security::decision_record::Allow) {
+    drop(allow);
+}
+
 fn note_decision(f: impl FnOnce(&mut crate::security::decision_record::Noted)) {
     if super::NOTES.try_with(|_| ()).is_ok() {
         super::note(|notes| f(&mut notes.decision));
