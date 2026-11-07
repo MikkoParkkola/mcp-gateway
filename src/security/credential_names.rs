@@ -34,7 +34,7 @@ impl Family {
 /// `key` split into lowercase words: at every non-alphanumeric character, at
 /// a lowercase or digit followed by an uppercase letter, and before the last
 /// capital of an acronym run that a lowercase letter follows (`HTTPSToken`).
-fn words(key: &str) -> Vec<String> {
+pub(crate) fn words(key: &str) -> Vec<String> {
     let chars: Vec<char> = key.chars().collect();
     let mut out: Vec<String> = Vec::new();
     let mut cur = String::new();
@@ -142,7 +142,7 @@ const GLUED: &[(Family, &str)] = &[
 
 /// The family a key names, if any (families 2-6 and family 1's new forms;
 /// the caller keeps MIK-8756's own family-1 regex first).
-pub(super) fn family_of(key: &str) -> Option<Family> {
+pub(crate) fn family_of(key: &str) -> Option<Family> {
     let w = words(key);
     if is_pagination(&w) {
         return None;

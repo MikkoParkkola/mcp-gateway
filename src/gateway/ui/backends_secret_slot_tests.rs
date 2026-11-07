@@ -827,9 +827,10 @@ async fn t18_a_json_number_in_a_tool_result_survives() {
     assert!(!leak.to_string().contains(TOKEN), "{leak}");
 }
 
-/// T19: the credential-name rule, name by name: strong parts anywhere, `KEY`
-/// only after its qualifiers, any letter case, `_`, `-` and camel-case
-/// boundaries; ordinary settings (the weak parts the rule leaves out) and near
+/// T19: the credential-name rule, name by name: only a key's last words count
+/// (`TOKEN_LIMIT`, `API_KEY_TIMEOUT` and `next_page_token` are settings), in
+/// any letter case, split at `_`, `-` and camel case, non-ASCII names
+/// included; ordinary settings (the weak words the rule leaves out) and near
 /// misses (`TOKENIZER`, `PATH`, `PATTERN`, `SPATIAL_INDEX`, `KEYBOARD_LAYOUT`:
 /// a part must equal a listed word, never contain it) are not credentials.
 #[test]
@@ -851,10 +852,14 @@ fn t19_the_credential_name_rule_name_by_name() {
         "SENTRY_DSN",
         "API-SECRET",
         "CLIENT_SECRET",
-        "AWS_ACCESS_KEY_ID",
         "PRIVATE_KEY",
         "SIGNING_KEY",
         "GOOGLE_CREDENTIALS",
+        "SESSION_KEY",
+        "COOKIE_KEY",
+        "AUTH_KEY",
+        "STRIPE_SECRET",
+        "naïve_token",
     ];
     let kept = [
         "DEBUG",
@@ -874,6 +879,13 @@ fn t19_the_credential_name_rule_name_by_name() {
         "PATH_PREFIX",
         "KEYBOARD_LAYOUT",
         "PASS_THROUGH",
+        "TOKEN_LIMIT",
+        "PASSWORD_MIN_LENGTH",
+        "API_KEY_TIMEOUT",
+        "CREDENTIALS_ENABLED",
+        "next_page_token",
+        "AWS_ACCESS_KEY_ID",
+        "café_mode",
     ];
     let wrong: Vec<&str> = stored
         .iter()

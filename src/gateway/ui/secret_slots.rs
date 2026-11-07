@@ -29,70 +29,43 @@ pub(super) enum Unopened {
     TimedOut,
 }
 
-/// Parts of an env key that mark its value as a credential wherever they
-/// appear. A stored value becomes a whole-value reference, which the redactor
-/// holds at any length, so storing an ordinary setting (`DEBUG=1`) would scrub
-/// every `1` from tool results: a part that also names ordinary settings
-/// (`AUTH_TYPE`, `SESSION_TIMEOUT`, `COOKIE_SECURE`, `PRIVATE_MODE`,
-/// `SORT_KEY`) is left out.
-const CREDENTIAL_PARTS: [&str; 10] = [
-    "TOKEN",
-    "SECRET",
-    "PASSWORD",
-    "PASSWD",
-    "PASSPHRASE",
-    "CREDENTIAL",
-    "CREDENTIALS",
-    "APIKEY",
-    "PAT",
-    "DSN",
+/// Words an env key may end with, beyond the firewall's own credential names,
+/// that mark its value as a credential (`GITHUB_PAT`, `SENTRY_DSN`,
+/// `GOOGLE_CREDENTIALS`, `STRIPE_SECRET`, `APIKEY`). Only the last word
+/// counts: a stored value becomes a whole-value reference, which the redactor
+/// holds at any length, so a setting such as `TOKEN_LIMIT=1` stored would scrub
+/// every `1` from tool results.
+const ENV_CREDENTIAL_ENDINGS: [&str; 6] = [
+    "pat",
+    "dsn",
+    "credential",
+    "credentials",
+    "secret",
+    "apikey",
 ];
 
-/// Parts that mark a credential only directly before `KEY` (`API_KEY`,
-/// `PRIVATE_KEY`); `KEY` alone names ordinary settings too (`SORT_KEY`).
-const KEY_QUALIFIERS: [&str; 6] = [
-    "API",
-    "ACCESS",
-    "PRIVATE",
-    "SECRET",
-    "SIGNING",
-    "ENCRYPTION",
-];
+/// Words that, directly before a final `key`, mark an env credential beyond
+/// the firewall's own pairs (`SESSION_KEY`, `AUTH_KEY`, `ENCRYPTION_KEY`).
+const ENV_KEY_QUALIFIERS: [&str; 5] = ["session", "cookie", "auth", "access", "encryption"];
 
-/// The parts of env key `key`, split at `_` and `-` and where a lower-case
-/// letter or digit meets an upper-case one (`authToken` is `auth`, `Token`).
-fn key_parts(key: &str) -> Vec<&str> {
-    let mut parts = Vec::new();
-    for word in key.split(['_', '-']) {
-        let mut start = 0;
-        let bytes = word.as_bytes();
-        for i in 1..bytes.len() {
-            if bytes[i].is_ascii_uppercase() && !bytes[i - 1].is_ascii_uppercase() {
-                parts.push(&word[start..i]);
-                start = i;
-            }
-        }
-        parts.push(&word[start..]);
-    }
-    parts.retain(|p| !p.is_empty());
-    parts
-}
-
-/// Whether env key `key` names a credential: one of its parts (see
-/// [`key_parts`]), in any letter case, is a [`CREDENTIAL_PARTS`] entry, or a
-/// [`KEY_QUALIFIERS`] entry directly followed by `KEY` (`DB_PASSWORD`,
-/// `x_auth_token`, `githubPat`, `OPENAI_API_KEY`). Headers are not judged:
-/// every header value is stored. The panel and discovery adopt both store by
-/// this rule.
+/// Whether env key `key` names a credential, judged by its last words only:
+/// the firewall's credential-name rule
+/// ([`crate::security::credential_names::family_of`], which already leaves
+/// out pagination names such as `next_page_token`), or a final word in
+/// [`ENV_CREDENTIAL_ENDINGS`], or a final `key` after an
+/// [`ENV_KEY_QUALIFIERS`] word. Words are the firewall's own split (`_`, `-`,
+/// camel case). Headers are not judged: every header value is stored. The
+/// panel and discovery adopt both store by this rule.
 pub(super) fn names_a_credential(key: &str) -> bool {
-    let parts = key_parts(key);
-    let is = |part: &str, word: &str| part.eq_ignore_ascii_case(word);
-    parts
-        .iter()
-        .any(|part| CREDENTIAL_PARTS.iter().any(|word| is(part, word)))
-        || parts
-            .windows(2)
-            .any(|pair| is(pair[1], "KEY") && KEY_QUALIFIERS.iter().any(|word| is(pair[0], word)))
+    use crate::security::credential_names::{family_of, words};
+    if family_of(key).is_some() {
+        return true;
+    }
+    match words(key).as_slice() {
+        [.., last] if ENV_CREDENTIAL_ENDINGS.contains(&last.as_str()) => true,
+        [.., before, last] => last == "key" && ENV_KEY_QUALIFIERS.contains(&before.as_str()),
+        _ => false,
+    }
 }
 
 /// The secret slot of backend `name`'s `key`, under `headers` or `env`. Its
