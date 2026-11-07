@@ -852,6 +852,22 @@ if args[:1] == ["--list"]:
         print("mutant::mutants_build::only_the_named_site_switches_on: test")
     print("m::t1: test")
     sys.exit(0)
+if "--exact" not in args:
+    # libtest without --exact: the name is a substring filter, so the sibling
+    # m::t10 runs beside m::t1.
+    flt = next(a for a in args if not a.startswith("-"))
+    names = [n for n in ("m::t1", "m::t10") if flt in n]
+    mutant = os.environ.get("MCP_GATEWAY_MUTANT") or "base"
+    print(f"running {len(names)} tests")
+    failed = 0
+    for name in names:
+        row = table["rows"].get(mutant + " " + name, {"status": "ok"})
+        print(f"test {name} ... {row['status']}")
+        if row["status"] == "FAILED":
+            failed += 1
+            print(f"thread '{name}' (7) panicked at {row['panic']}:5:")
+    print(f"test result: {'FAILED' if failed else 'ok'}. {len(names) - failed} passed; {failed} failed; 0 ignored; 0 measured; 3 filtered out")
+    sys.exit(101 if failed else 0)
 test = args[args.index("--exact") + 1]
 if test == "mutant_scan::tests::list_mutant_sites":
     for site in table["sites"]:
@@ -937,6 +953,11 @@ def schemata_driver_self_test() -> tuple[int, list[str]]:
             expect("D3 the baseline runs with no mutant on", [c["mutant"] for c in runs], [None, "A"])
             expect("D2 each row runs alone by exact name",
                    all(c["args"] == ["--exact", "m::t1", "--test-threads=1"] for c in runs), True)
+            sibling = {**killed, "rows": {"A m::t10": {"status": "FAILED", "panic": "src/x.rs:9"}}}
+            rc, calls = run(sibling)
+            expect("D2b a substring sibling's failure does not kill the mutant", rc, 1)
+            sib_runs = [c for c in calls if c.get("mutant") == "A" and "--exact" in c.get("args", [])]
+            expect("D2b the mutant's row ran by exact name", [c["args"][1] for c in sib_runs], ["m::t1"])
             rc, calls = run({**killed, "rows": {"base m::t1": {"status": "FAILED", "panic": "src/x.rs:9"}}})
             expect("D7 a failed baseline refuses (exit 1)", rc, "refused")
             expect("D7 no mutant runs after a failed baseline",
