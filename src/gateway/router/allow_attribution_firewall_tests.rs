@@ -7,10 +7,11 @@
 
 use serde_json::{Value, json};
 
-use super::super::rule_ids::firewall_id;
-use super::super::{Answer, Logged, Route, fixture, injected, injected_answer};
+use super::super::rule_ids::{firewall_id, tool_policy_id};
+use super::super::{Answer, Logged, Route, fixture, injected, injected_answer, invocations};
 use super::{delivered, edited, on};
 use crate::config::Config;
+use crate::gateway::router::direct_guards_fixture::send;
 use crate::security::firewall::{FirewallAction, FirewallRule, ScanType};
 
 /// The shell injection (High, blocks by default) beside a SQL injection
@@ -136,4 +137,54 @@ async fn answers_only_softener_names_nothing() {
         "premise, delivered: {got:?}"
     );
     assert_eq!((got.kind, got.rule), (json!("default_allow"), Value::Null));
+}
+
+/// R20 (ATTR.1). Two `gateway_execute` chain steps on `read` with different
+/// arguments: the allow entry admits the first, and the second also carries a
+/// shell injection a firewall rule softens. Each step's record names its own
+/// decider, so neither inherits the other's. Kills M11 (notes kept in a
+/// request-wide cell).
+#[tokio::test(flavor = "current_thread")]
+async fn chain_steps_own_allow() {
+    let fx = fixture(Answer::Ok, Some(FirewallAction::Warn)).await;
+    let softener = read_rule(&fx, FirewallAction::Allow, &[ScanType::ShellInjection]);
+    let config = edited(&fx, |c| {
+        c.security.firewall.rules = vec![softener.clone()];
+        c.security.tool_policy.enabled = true;
+        c.security.tool_policy.allow = vec!["alpha:read".to_owned()];
+    });
+    fx.state.live_config.set(config);
+    let (recorded, sent) = (
+        invocations(&fx).await.len(),
+        fx.calls.load(std::sync::atomic::Ordering::SeqCst),
+    );
+    let params = json!({"name": "gateway_execute", "arguments": {"chain": [
+        {"tool": "alpha:read", "arguments": {"cmd": "x"}},
+        {"tool": "alpha:read", "arguments": injected()},
+    ]}});
+    let (_, body) = send(&fx, "/mcp", "k-std", "tools/call", params, None).await;
+    assert_eq!(
+        fx.calls.load(std::sync::atomic::Ordering::SeqCst) - sent,
+        2,
+        "premise: both steps reached the backend: {body}"
+    );
+    let rows = invocations(&fx).await;
+    let decided: Vec<(Value, Value)> = rows[recorded..]
+        .iter()
+        .map(|r| {
+            (
+                r["decision"]["kind"].clone(),
+                r["decision"]["rule_id"].clone(),
+            )
+        })
+        .collect();
+    let entry = tool_policy_id(&fx, "allow", "alpha:read");
+    assert_eq!(
+        decided,
+        vec![
+            (json!("tool_policy"), json!(entry.as_str())),
+            by(&fx, &softener),
+        ],
+        "one record per step, each naming its own decider: {body}"
+    );
 }

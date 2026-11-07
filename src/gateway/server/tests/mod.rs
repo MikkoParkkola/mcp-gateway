@@ -75,6 +75,8 @@ mod stdio_response_firewall;
 mod stdio_initialize_order;
 #[cfg(feature = "firewall")]
 mod stdio_tenant_reads;
+#[cfg(feature = "firewall")]
+mod stdio_allow_attribution;
 /// MIK-8392.STORED.1 T2: stdio tasks/get judges the caller's current view.
 mod stored_read_stdio;
 /// MIK-8044.SURF.2: a gateway.yaml `protocol_version` reaches the HTTP transport.
