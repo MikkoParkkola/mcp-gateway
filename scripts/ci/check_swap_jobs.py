@@ -51,7 +51,12 @@ COPIED_SWAP = re.compile(r"\b(swapon|mkswap)\b")
 
 # The add-swap step may be conditional only in these ways: the coverage parts
 # run it on every library part and on no integration part.
-ALLOWED_CONDITIONS = {"startsWith(matrix.part, 'lib-')"}
+ALLOWED_CONDITIONS = {
+    "startsWith(matrix.part, 'lib-')",
+    # A step shared with a self-hosted twin job (mutants.yml keeps its hosted
+    # and trusted Linux jobs identical): it runs on every hosted run.
+    "runner.environment == 'github-hosted'",
+}
 
 # Jobs that go through a wrapper above but compile no library test binary,
 # with the measurement that puts them out of scope.
@@ -168,6 +173,7 @@ def self_test() -> int:
         ("the mutant harness plan step does not compile", job({"run": 'python3 "$RUNNER_TEMP/run_mutants.py" plan'}), False, 0),
         ("the repo's mutant runner path", job({"run": "python3 scripts/ci/mutants/run_mutants.py run --platform linux"}), True, 1),
         ("coverage parts gated to every lib part", job({**swap, "if": "startsWith(matrix.part, 'lib-')"}, {"run": "python3 scripts/ci/coverage_shards.py run 4 \"$PART\""}), True, 0),
+        ("hosted-only swap shared with a self-hosted twin", job({**swap, "if": "runner.environment == 'github-hosted'"}, {"run": "cargo test --all-features"}), True, 0),
         ("coverage parts gated to one lib part", job({**swap, "if": "matrix.part == 'lib-a'"}, {"run": "python3 scripts/ci/coverage_shards.py run 4 \"$PART\""}), True, 1),
         ("macOS is out of scope", job({"run": "cargo test --all-features"}, runs_on="macos-15"), False, 0),
     ]
