@@ -1,11 +1,9 @@
 # file	function	site	argument	count	class	reason
-src/cli_support.rs	describe_skipped	format!	reasons.iter().map().collect().join()	1	rendered	each part is format!("{code} ({})", shown(field)) in this function, judged by this guard
-src/cli_support.rs	describe_skipped	format!	{code}	1	gateway-owned	a refusal code the gateway names (AdoptRefusal), never client text
-src/commands/cap/server_scan.rs	cap_discover	eprintln!	{text}	1	rendered	say(text): every caller passes a literal or a format! in cap_discover, each judged by this guard
-src/commands/cap/server_scan.rs	cap_discover	format!	path.display()	2	gateway-owned	the gateway config path the operator chose (--config or the default), not a client file
-src/commands/cap/server_scan.rs	cap_discover	format!	{skipped}	1	gateway-owned	a count
-src/commands/cap/server_scan.rs	cap_discover	format!	{written}	1	gateway-owned	a count
-src/commands/cap/server_scan.rs	cap_discover	println!	{text}	1	rendered	say(text): every caller passes a literal or a format! in cap_discover, each judged by this guard
+src/cli_support.rs	describe_skipped	write!	{code}	1	gateway-owned	a refusal code the gateway names (AdoptRefusal), never client text
+src/commands/cap/server_scan.rs	cap_discover	writeln!	path.display()	2	gateway-owned	the gateway config path the operator chose (--config or the default), not a client file
+src/commands/cap/server_scan.rs	cap_discover	writeln!	{DISCOVER_EMPTY}	1	gateway-owned	the gateway's own fixed message (const DISCOVER_EMPTY)
+src/commands/cap/server_scan.rs	cap_discover	writeln!	{skipped}	1	gateway-owned	a count
+src/commands/cap/server_scan.rs	cap_discover	writeln!	{written}	1	gateway-owned	a count
 src/commands/cap/server_scan.rs	cap_discover_shadow	eprintln!	compare_config_path.display()	1	gateway-owned	the gateway config path the operator chose, not a client file
 src/commands/cap/server_scan.rs	cap_discover_shadow	eprintln!	path.display()	2	gateway-owned	the gateway config path the operator chose, not a client file
 src/commands/cap/server_scan.rs	cap_discover_shadow	eprintln!	{adopted}	1	gateway-owned	a count
@@ -18,8 +16,6 @@ src/commands/cap/server_scan.rs	failure_line	format!	{what}	1	internal	inside th
 src/commands/cap/server_scan.rs	print_discovered_servers	println!	crate::yaml::to_string(..).unwrap_or_default()	1	structured	--format yaml: the document for a parser, client names unchanged by design (#4510 row json_and_yaml_carry_a_hostile_name_unchanged)
 src/commands/cap/server_scan.rs	print_discovered_servers	println!	serde_json::to_string_pretty(..).unwrap_or_default()	1	structured	--format json: serde_json escapes control characters; client names unchanged by design (#4510 row json_and_yaml_carry_a_hostile_name_unchanged)
 src/commands/cap/server_scan.rs	print_discovered_servers	println!	servers.len()	1	gateway-owned	a count
-src/commands/cap/server_scan.rs	print_server_entry	print!	render_server_entry(..)	1	rendered	cap_render.rs render_server_entry, whose every argument this guard judges
-src/commands/cap/server_scan.rs	print_shadow_report	print!	render_shadow_report(..)	1	rendered	cap_render.rs render_shadow_report, whose every argument this guard judges
 src/commands/cap_render.rs	command_field	writeln!	{label}	1	gateway-owned	every caller passes a string literal (cap_render.rs command_field calls)
 src/commands/cap_render.rs	field	writeln!	{label}	1	gateway-owned	every caller passes a string literal (cap_render.rs field calls)
 src/commands/cap_render.rs	render_server_entry	writeln!	server.source	1	gateway-owned	DiscoverySource: the gateway's own name for where it looked
@@ -50,7 +46,6 @@ src/discovery/client_entry.rs	client_argv	push()	format!	2	internal	argv for the
 src/discovery/client_entry.rs	gateway_value	format!	&c[..]	1	internal	a value rewritten for gateway.yaml; never printed
 src/discovery/client_entry.rs	parse	format!	{source}	1	gateway-owned	DiscoverySource Debug: the gateway's own name
 src/discovery/client_entry.rs	parse	macro	json!	1	macro-reviewed	serde_json::json! builds the entry digest's input array; its values hash, never print
-src/discovery/client_entry.rs	parse	push()	<literal>.to_string()	3	gateway-owned	a fixed string
 src/discovery/client_entry.rs	record_dropped_keys	push()	key.clone()	3	internal	a dropped key name into the server record, printed only through shown (cap_render.rs field or describe_skipped); the web UI returns it as JSON
 src/discovery/client_entry.rs	string_map	format!	{key}	4	gateway-owned	the map name the gateway passes (env or headers)
 src/discovery/client_entry.rs	string_map	format!	{k}	4	internal	an uncarried field name into the server record, printed only through shown (cap_render.rs field or describe_skipped); the web UI returns it as JSON
@@ -101,7 +96,6 @@ src/discovery/shadow/build.rs	from_cached_and_found	push()	ShadowAsset::from_ser
 src/discovery/shadow/build.rs	from_cached_and_found	push()	asset.with_gateway_config()	1	internal	assets and names into the report's lists and sets
 src/discovery/shadow/build.rs	from_discovered	format!	{why}	1	gateway-owned	a fixed reason the match above picks
 src/discovery/shadow/build.rs	from_discovered	warn!	e	1	error-display	reading the gateway's own record key file: the path is the gateway's data dir, not client text
-src/discovery/shadow/build.rs	mark_duplicate_ports	push()	<literal>.to_string()	1	gateway-owned	a fixed string
 src/discovery/shadow/build.rs	remediation_hints	push()	command.clone()	2	internal	a remediation command into the asset; printed only through command_field (shown or withheld)
 src/discovery/shadow/helpers.rs	build_action_groups	push()	asset.id.clone()	1	internal	an asset id into a group's list; printed only through shown
 src/discovery/shadow/helpers.rs	classify_data_risk	format!	server.description	1	internal	a text to search for risk words; never printed
@@ -123,7 +117,6 @@ src/discovery/shadow/helpers.rs	has_personal_access_reference	push_str()	&comman
 src/discovery/shadow/helpers.rs	has_stale_binary_reference	format!	server.description	1	internal	a text to search for risk words; never printed
 src/discovery/shadow/helpers.rs	has_stale_binary_reference	format!	server.name	1	internal	a text to search for risk words; never printed
 src/discovery/shadow/helpers.rs	has_stale_binary_reference	push_str()	&command.to_ascii_lowercase()	1	internal	a text to search for risk words; never printed
-src/discovery/shadow/helpers.rs	risk_reasons	push()	<literal>.to_string()	18	gateway-owned	a fixed reason
 src/discovery/shadow/helpers.rs	risk_reasons	push()	code	1	gateway-owned	a fixed reason code
 src/discovery/shadow/helpers.rs	shell_word	format!	value.replace()	1	internal	a shell-quoted word for a command line; printed through command_field
 src/discovery/shadow/helpers.rs	slug	push()	ch	1	internal	slug characters for an id
