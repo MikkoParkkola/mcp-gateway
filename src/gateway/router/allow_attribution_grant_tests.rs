@@ -43,6 +43,19 @@ pub(super) fn owner_grant(grant_id: &str) -> IdentityGrant {
 /// The firewalled fixture serving the owner's personal [`PROBE`] under
 /// [`CAPS`], with `rows` as grants keyed under the gateway's rule key.
 pub(super) async fn owned(rows: Vec<IdentityGrant>) -> Owned {
+    owned_with(rows, Signing::Off).await
+}
+
+/// Whether the gateway signs: armed, a `gateway_invoke` carrying a nonce
+/// has its policy checked at signing and its dispatch only stamped.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum Signing {
+    Off,
+    On,
+}
+
+/// [`owned`], with message signing per `signing`.
+pub(super) async fn owned_with(rows: Vec<IdentityGrant>, signing: Signing) -> Owned {
     let hits = Arc::new(AtomicUsize::new(0));
     let counter = Arc::clone(&hits);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
@@ -77,13 +90,47 @@ pub(super) async fn owned(rows: Vec<IdentityGrant>) -> Owned {
     caps.load_from_directory(caps_dir.path().to_str().expect("a utf-8 path"))
         .await
         .expect("the capability loads");
-    let fx = fixture(Answer::Ok, Some(FirewallAction::Warn)).await;
+    let fx = match signing {
+        Signing::Off => fixture(Answer::Ok, Some(FirewallAction::Warn)).await,
+        Signing::On => signed_fixture().await,
+    };
     fx.state.meta_mcp.set_capabilities(caps);
     let key = super::super::mtls_rule_ids::rule_key(&fx);
     fx.state.meta_mcp.set_identity_grants(
         crate::identity_grants::LocalIdentityGrantStore::from_grants(rows).with_rule_ids(&key),
     );
     Owned { fx, hits }
+}
+
+/// [`fixture`] with message signing armed on the meta layer, nonces optional.
+async fn signed_fixture() -> Logged {
+    let (dir, log) = crate::gateway::router::route_matrix_driver_tests::response::temp_log(None);
+    let meta_log = Arc::clone(&log);
+    let fx = crate::gateway::router::direct_guards_fixture::fixture_firewalled_logged(
+        Answer::Ok,
+        Some(FirewallAction::Warn),
+        Arc::clone(&log),
+        |mut meta| {
+            meta.enable_transparency_log(meta_log);
+            meta.enable_message_signing(
+                crate::security::message_signing::MessageSigner::new(
+                    crate::gateway::router::direct_guards_fixture::SIGNING_KEY
+                        .as_bytes()
+                        .to_vec(),
+                    None,
+                    "attribution".into(),
+                ),
+                std::time::Duration::from_secs(300),
+                false,
+            );
+            meta
+        },
+    )
+    .await;
+    fx.state
+        .meta_mcp
+        .set_live_config(Arc::clone(&fx.state.live_config));
+    Logged { fx, log, _dir: dir }
 }
 
 /// The keyed id the published store holds for `grant_id`, asserted present.
@@ -278,4 +325,92 @@ async fn a_capability_without_root_rules_names_its_grant() {
     assert!(to_warn.allowed_roots.is_none(), "premise: no root rule");
     let got = delivered_under(&o, vec![to_warn], injected()).await;
     assert_eq!(got, as_grant(&expected, "g-m"));
+}
+
+/// The owner's signed call with `nonce` and empty arguments, asserted
+/// delivered with one more upstream hit: the new record's named triple.
+async fn signed_call(o: &Owned, nonce: &str) -> (Value, Value, Value) {
+    let before = (
+        invocations(&o.fx).await.len(),
+        o.hits.load(Ordering::SeqCst),
+    );
+    let answer = invoke(&o.fx, json!({}), Some(nonce)).await;
+    assert!(
+        answer.get("error").is_none(),
+        "premise, delivered: {answer}"
+    );
+    assert_eq!(
+        o.hits.load(Ordering::SeqCst),
+        before.1 + 1,
+        "premise: the upstream was hit once: {answer}"
+    );
+    named_last(&o.fx, before.0).await
+}
+
+/// R19 (ATTR.1). A signed `gateway_invoke` whose dispatch only stamps the
+/// prepared target: the record names the grant from the signing-time check,
+/// in exactly one new record. Kills M12 (the allow not kept at signing).
+#[tokio::test(flavor = "current_thread")]
+async fn signed_prepared_carries_allow() {
+    let o = owned_with(vec![owner_grant("g-m")], Signing::On).await;
+    let expected = held_id(&o, "g-m");
+    let got = signed_call(&o, "attribution-nonce-1").await;
+    assert_eq!(got, as_grant(&expected, "g-m"));
+}
+
+/// R22 (ATTR.1). Signed call 1 by grant g-m; a reload then swaps g-m for
+/// g-n (the capability needs a grant, so the swap keeps one). Call 2 to the
+/// same target names g-n, never call 1's g-m. Kills M11 (a request-wide
+/// cell) and M13 (the allow outliving its invocation).
+#[tokio::test(flavor = "current_thread")]
+async fn no_inheritance_after_reload() {
+    let o = owned_with(vec![owner_grant("g-m")], Signing::On).await;
+    let first = held_id(&o, "g-m");
+    assert_eq!(
+        signed_call(&o, "attribution-nonce-a").await,
+        as_grant(&first, "g-m"),
+        "call 1"
+    );
+    let key = super::super::mtls_rule_ids::rule_key(&o.fx);
+    o.fx.state.meta_mcp.set_identity_grants(
+        crate::identity_grants::LocalIdentityGrantStore::from_grants(vec![owner_grant("g-n")])
+            .with_rule_ids(&key),
+    );
+    let second = held_id(&o, "g-n");
+    assert_ne!(first, second, "premise: distinct ids");
+    assert_eq!(
+        signed_call(&o, "attribution-nonce-b").await,
+        as_grant(&second, "g-n"),
+        "call 2"
+    );
+}
+
+/// Signed-call refusal (ATTR.1). The owner holds the grant, but a firewall
+/// rule blocks the call's arguments: the refusal wins, the record names the
+/// firewall rule and no grant, and the upstream is not hit. A pin today;
+/// it fails if a signing-time allow ever displaces a refusal.
+#[tokio::test(flavor = "current_thread")]
+async fn a_signed_call_refused_later_names_the_refusal() {
+    let o = owned_with(vec![owner_grant("g-m")], Signing::On).await;
+    held_id(&o, "g-m");
+    let block = probe_rule(&o, FirewallAction::Block, &[ScanType::ShellInjection]);
+    let mut config = (*o.fx.state.live_config.get()).clone();
+    config.security.firewall.rules = vec![block.clone()];
+    o.fx.state.live_config.set(config);
+    let seen = invocations(&o.fx).await.len();
+    let answer = invoke(&o.fx, injected(), Some("attribution-nonce-r")).await;
+    assert!(
+        answer.get("error").is_some() || answer.pointer("/result/isError") == Some(&json!(true)),
+        "premise, refused: {answer}"
+    );
+    assert_eq!(o.hits.load(Ordering::SeqCst), 0, "the upstream was hit");
+    let got = named_last(&o.fx, seen).await;
+    assert_eq!(
+        got,
+        (
+            json!("firewall"),
+            json!(firewall_id(&o.fx, &block).as_str()),
+            Value::Null
+        )
+    );
 }
