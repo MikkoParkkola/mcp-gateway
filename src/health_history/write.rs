@@ -270,11 +270,12 @@ impl HealthHistory {
         inner.clean_stop = Some(now);
     }
 
-    /// The bytes to save at `now`.
-    pub(crate) fn encode(&self, now: u64) -> Vec<u8> {
+    /// The bytes to save at `now`; `None` if they cannot be encoded, so a
+    /// failed encoding never replaces a good file with an empty one.
+    pub(crate) fn encode(&self, now: u64) -> Option<Vec<u8>> {
         let mut inner = self.0.lock();
         inner.tick(now);
         inner.saved_at = now;
-        serde_json::to_vec(&*inner).unwrap_or_default()
+        serde_json::to_vec(&*inner).ok()
     }
 }

@@ -112,7 +112,7 @@ fn h6_save_and_restore_keep_everything() {
     h.sample(Some(500), 4, T0 + 3);
     h.tick(T0 + 100);
     h.stop(T0 + 100);
-    let bytes = h.encode(T0 + 100);
+    let bytes = h.encode(T0 + 100).expect("encodes");
     let (back, started) = HealthHistory::start(Some(&bytes), Restores::Counted(1), T0 + 160);
     assert!(!started.fresh);
     assert_eq!(back.p95(T0, T0 + HALF), P95::Ms(5.0));
@@ -132,7 +132,7 @@ fn life(previous: Option<&[u8]>, counters: u64, start: u64, end: u64, clean: boo
     if clean {
         h.stop(end);
     }
-    h.encode(end)
+    h.encode(end).expect("encodes")
 }
 
 /// H7: a clean stop then a start: one restart, measured, its downtime the
@@ -263,7 +263,8 @@ fn h11_the_saved_file_holds_only_numbers_and_fixed_words() {
     h.record_error(ErrorKind::Auth, T0 + 2);
     h.sample(Some(1), 1, T0 + 3);
     h.stop(T0 + 10);
-    let value: serde_json::Value = serde_json::from_slice(&h.encode(T0 + 10)).expect("json");
+    let value: serde_json::Value =
+        serde_json::from_slice(&h.encode(T0 + 10).expect("encodes")).expect("json");
     let mut found = Vec::new();
     strings(&value, &mut found);
     assert!(
@@ -342,7 +343,7 @@ fn h21b_a_restarted_count_is_a_missed_run() {
     let first = life(None, 1, T0, T0 + 600, true);
     let (h, started) = HealthHistory::start(Some(&first), Restores::Restarted(2), T0 + 1_000);
     assert!(started.missed_run && started.restart.is_none());
-    let saved = h.encode(T0 + 1_100);
+    let saved = h.encode(T0 + 1_100).expect("encodes");
     let (_, next) = HealthHistory::start(Some(&saved), Restores::Counted(3), T0 + 1_200);
     assert!(
         !next.missed_run,
@@ -366,4 +367,34 @@ fn h8c_a_failed_save_marks_the_run_incomplete_until_one_succeeds() {
     assert!(h.incomplete());
     assert!(file::save(&h, &dir.path().join("health.json"), T0 + 2));
     assert!(!h.incomplete());
+}
+
+/// H6b (code review r1): a save snapshots only after the save in progress
+/// has renamed its file, so the periodic and the shutdown save cannot cross
+/// and the later one always writes the newer history. The clean stop is
+/// made while the second save waits; it must be in the file.
+#[test]
+fn h6b_a_save_waits_for_the_one_in_progress() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("health.json");
+    let h = std::sync::Arc::new(fresh(T0));
+    let held = file::hold_saves();
+    let (queued, started) = std::sync::mpsc::channel();
+    let saver = {
+        let (h, path) = (std::sync::Arc::clone(&h), path.clone());
+        std::thread::spawn(move || {
+            queued.send(()).expect("send");
+            file::save(&h, &path, T0 + 100)
+        })
+    };
+    started.recv().expect("the save started");
+    // Time for a save that does not wait to take its snapshot and write.
+    std::thread::sleep(std::time::Duration::from_millis(200));
+    assert!(!path.exists(), "a save wrote while another held the lock");
+    h.stop(T0 + 90);
+    drop(held);
+    assert!(saver.join().expect("joined"), "the save succeeded");
+    let saved: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&path).expect("saved")).expect("json");
+    assert_eq!(saved["clean_stop"], T0 + 90, "{saved}");
 }

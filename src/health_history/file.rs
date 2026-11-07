@@ -14,6 +14,17 @@ use crate::gateway::health_metrics::ErrorKind;
 /// The history this process records into, set once at startup.
 static INSTALLED: OnceLock<Arc<HealthHistory>> = OnceLock::new();
 
+/// Held from a save's snapshot through its rename, so two saves (the
+/// periodic one and the shutdown one) cannot cross: the later save always
+/// writes the newer snapshot.
+static SAVES: parking_lot::Mutex<()> = parking_lot::Mutex::new(());
+
+/// Holds every save back while the guard lives (a test seam for the order).
+#[cfg(test)]
+pub(crate) fn hold_saves() -> parking_lot::MutexGuard<'static, ()> {
+    SAVES.lock()
+}
+
 /// Make `history` the one the request path records into. A second call (a
 /// second gateway in one test process) keeps the first.
 pub(crate) fn install(history: Arc<HealthHistory>) {
@@ -51,7 +62,14 @@ pub(crate) fn read(path: &Path) -> Option<Vec<u8>> {
 /// the old one. Returns whether the rename completed; a failure marks the
 /// run's history incomplete until a later save succeeds.
 pub(crate) fn save(history: &HealthHistory, path: &Path, now: u64) -> bool {
-    let bytes = history.encode(now);
+    let _one_at_a_time = SAVES.lock();
+    let Some(bytes) = history.encode(now) else {
+        warn!(
+            "Failed to encode the health history; this run's history is incomplete until a save succeeds"
+        );
+        history.set_incomplete(true);
+        return false;
+    };
     if let Some(parent) = path.parent()
         && let Err(e) = std::fs::create_dir_all(parent)
     {
