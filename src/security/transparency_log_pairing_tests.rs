@@ -4,6 +4,7 @@
 //! design-9318-step3-final.md section 7): each row brackets its claim with a
 //! case that needs a finding, so a verifier that pairs nothing fails it.
 
+use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
 use serde_json::{Map, Value, json};
@@ -510,12 +511,25 @@ fn with_field(
     record
 }
 
-#[test]
-fn each_role_fails_on_each_field_missing_or_mistyped() {
+/// (case, a role's well-formed record, field, edit, the rule it breaks)
+type FieldCase = (
+    &'static str,
+    Map<String, Value>,
+    &'static str,
+    Option<Value>,
+    &'static str,
+);
+
+/// Every role's fields, each missing or mistyped (step 3 section 2).
+#[expect(
+    clippy::too_many_lines,
+    reason = "one table of every role's field cases reads as one"
+)]
+fn field_cases() -> Vec<FieldCase> {
     let intent = || rec(INTENT, "w-1", &json!({}));
     let by = |v: Value| json!({"intent_counter": 3, "settled_by": v});
     // (case, the role's well-formed record, field, edit, rule)
-    let cases: Vec<(&str, Map<String, Value>, &str, Option<Value>, &str)> = vec![
+    vec![
         (
             "intent no token",
             intent(),
@@ -625,7 +639,15 @@ fn each_role_fails_on_each_field_missing_or_mistyped() {
             Some(json!(-1)),
             "field intent_counter mistyped",
         ),
-    ];
+    ]
+}
+
+#[test]
+fn each_role_fails_on_each_field_missing_or_mistyped() {
+    let intent = || rec(INTENT, "w-1", &json!({}));
+    let by = |v: Value| json!({"intent_counter": 3, "settled_by": v});
+    // (case, the role's well-formed record, field, edit, rule)
+    let cases = field_cases();
     for (what, record, field, edit, rule) in cases {
         let intent_role = record["event"] == INTENT || record["event"] == RECOVERY;
         let bad = with_field(record, field, edit);
@@ -764,7 +786,10 @@ fn tamper(path: &Path, counter: u64) {
     let mut all = lines(path);
     let at = all.iter().position(|v| v["counter"] == counter).unwrap();
     all[at]["note"] = "edited".into();
-    let body: String = all.iter().map(|v| format!("{v}\n")).collect();
+    let mut body = String::new();
+    for v in &all {
+        writeln!(body, "{v}").unwrap();
+    }
     std::fs::write(path, body).unwrap();
 }
 

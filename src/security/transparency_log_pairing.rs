@@ -96,8 +96,8 @@ impl Pairing {
                 FieldProblem::Mistyped => "mistyped",
                 FieldProblem::Forbidden => "forbidden",
             };
-            let rule = format!("field {} {problem} for {}", f.field, role.event());
-            self.failure = Some(failed(&rule, counter, token));
+            let why = format!("field {} {problem} for {}", f.field, role.event());
+            self.failure = Some(failed(&why, counter, token));
             return;
         }
         let view = Value::Object(settle::caller_view(fields));
@@ -112,8 +112,8 @@ impl Pairing {
             .entry((token.to_string(), slot))
             .or_insert_with(|| (digest.clone(), BTreeSet::new()));
         if *kept != digest {
-            let rule = "two different records for one token and role";
-            self.failure = Some(failed(rule, counter, token));
+            let why = "two different records for one token and role";
+            self.failure = Some(failed(why, counter, token));
             return;
         }
         counters.insert(counter);

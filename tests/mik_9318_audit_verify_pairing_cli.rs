@@ -7,6 +7,7 @@
 #[path = "common/gateway_bin.rs"]
 mod gateway_bin;
 
+use std::fmt::Write as _;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -53,7 +54,10 @@ fn write_log(path: &Path, records: Vec<Value>, tamper: bool) {
     if tamper {
         all.last_mut().unwrap()["note"] = "edited".into();
     }
-    let body: String = all.iter().map(|v| format!("{v}\n")).collect();
+    let mut body = String::new();
+    for v in &all {
+        writeln!(body, "{v}").unwrap();
+    }
     std::fs::write(path, body).unwrap();
 }
 
