@@ -206,6 +206,11 @@ pub struct TransparencyLogger {
     /// and lease close first.
     #[cfg(test)]
     test_dir: crate::test_dir_keep::TestDirKeep,
+    /// Test-only: every registered temp dir containing this log, taken at
+    /// open before any file is touched (`crate::test_dir_keep`). Declared
+    /// last, so the log's files and lease close before these shares drop.
+    #[cfg(test)]
+    _kept_dirs: Vec<Arc<tempfile::TempDir>>,
 }
 
 /// Which rung of the correlation chain supplied an invocation entry's
@@ -284,6 +289,16 @@ impl TransparencyLogger {
         home: Option<&Path>,
     ) -> io::Result<Self> {
         let path = resolved_path(&config.path, home.map(Path::to_path_buf));
+        // Before any filesystem call: hold every registered temp dir that
+        // contains the log, so none can be removed while it opens or writes.
+        #[cfg(test)]
+        let kept_dirs = crate::test_dir_keep::kept_dirs_for(&path);
+        #[cfg(test)]
+        if kept_dirs.is_empty() {
+            crate::test_dir_keep::report_unkept(crate::test_dir_keep::AUDIT_LOG, &path);
+        }
+        #[cfg(test)]
+        crate::test_dir_keep::run_before_first_fs_call();
         if home.is_none() && crate::home_dir::tilde_rest(&config.path).is_some() {
             let abs = std::path::absolute(&path).unwrap_or_else(|_| path.clone());
             tracing::warn!(
@@ -343,6 +358,8 @@ impl TransparencyLogger {
             subscribers: append::Subscribers::default(),
             #[cfg(test)]
             test_dir: crate::test_dir_keep::TestDirKeep::default(),
+            #[cfg(test)]
+            _kept_dirs: kept_dirs,
         })
     }
 
@@ -717,6 +734,9 @@ mod keep_dir_tests;
 #[cfg(test)]
 #[path = "transparency_log_keep_scan_tests.rs"]
 mod keep_scan_tests;
+#[cfg(test)]
+#[path = "transparency_log_kept_dir_tests.rs"]
+mod kept_dir_tests;
 #[cfg(test)]
 #[path = "transparency_log_kill_tests.rs"]
 mod kill_tests;
