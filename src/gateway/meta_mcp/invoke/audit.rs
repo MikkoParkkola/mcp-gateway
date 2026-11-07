@@ -293,6 +293,21 @@ pub(crate) fn in_dispatch_scope_for_test() -> bool {
     NOTES.try_with(|_| ()).is_ok()
 }
 
+/// Note `allow` into this call's notes directly, as another check of the
+/// same invocation would have, for a row that preloads an attribution.
+#[cfg(test)]
+pub(crate) fn preload_allow_for_test(allow: crate::security::decision_record::Allow) {
+    note(|notes| notes.decision.allowed(allow));
+}
+
+impl DispatchNotes {
+    /// What this call's gates noted about its decision, for a row to compare.
+    #[cfg(test)]
+    pub(crate) const fn decision_for_test(&self) -> &crate::security::decision_record::Noted {
+        &self.decision
+    }
+}
+
 /// Run one invocation, returning its output and what its gates noted.
 pub(crate) async fn with_dispatch_scope<F: std::future::Future>(
     future: F,

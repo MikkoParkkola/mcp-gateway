@@ -15,14 +15,14 @@ use crate::mtls::access_control::rule_id_tests::{deny_write_rules, mtls_id, read
 use crate::mtls::config::PolicyRuleConfig;
 use crate::security::rule_id::RuleKey;
 
-fn rule_key(fx: &Logged) -> RuleKey {
+pub(super) fn rule_key(fx: &Logged) -> RuleKey {
     let generation = fx.state.live_config.generation();
     generation.auth().record_key().rule_id_key()
 }
 
 /// The fixture with `config` as its mTLS policy, keyed under the gateway's
 /// rule key.
-async fn with_policy(config: MtlsConfig) -> Logged {
+pub(super) async fn with_policy(config: MtlsConfig) -> Logged {
     let logged = fixture(super::Answer::Ok, None).await;
     let key = rule_key(&logged);
     let policy = crate::mtls::MtlsPolicy::from_config_keyed(&config, &key);
@@ -40,7 +40,7 @@ fn installed(mut logged: Logged, policy: std::sync::Arc<crate::mtls::MtlsPolicy>
     logged
 }
 
-fn enabled(policies: Vec<PolicyRuleConfig>) -> MtlsConfig {
+pub(super) fn enabled(policies: Vec<PolicyRuleConfig>) -> MtlsConfig {
     MtlsConfig {
         enabled: true,
         policies,
@@ -52,7 +52,7 @@ fn enabled(policies: Vec<PolicyRuleConfig>) -> MtlsConfig {
 /// with common name `cn` when one is given. Asserts the call left exactly one
 /// new decision record; returns the answer, that record and the backend
 /// calls made.
-async fn send_cert(
+pub(super) async fn send_cert(
     fx: &Logged,
     route: Route,
     tool: &str,
@@ -110,7 +110,7 @@ async fn send_cert(
 }
 
 /// [`send_cert`], as the call's outcome and its record's deciding check.
-async fn call_cert(fx: &Logged, route: Route, tool: &str, cn: Option<&str>) -> Outcome {
+pub(super) async fn call_cert(fx: &Logged, route: Route, tool: &str, cn: Option<&str>) -> Outcome {
     let (body, row, calls) = send_cert(fx, route, tool, cn).await;
     let decided = (
         row["decision"]["kind"].clone(),

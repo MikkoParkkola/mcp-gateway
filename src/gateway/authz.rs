@@ -399,7 +399,10 @@ impl<'a> Decision<'a> {
 
     /// This decision, naming the check that allowed it; a lower rank already
     /// held is kept.
-    #[expect(dead_code, reason = "the checks attach their allows once wired")]
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "the checks attach their allows once wired")
+    )]
     #[must_use]
     pub(crate) fn allowing(
         mut self,
@@ -773,6 +776,10 @@ impl ToolAuthorizer for ToolPolicyAuthorizer<'_> {
 #[cfg(test)]
 #[path = "authz_rule_id_tests.rs"]
 mod rule_id_tests;
+
+#[cfg(test)]
+#[path = "authz_allow_emit_tests.rs"]
+mod allow_emit_tests;
 #[cfg(test)]
 #[path = "authz_standing_tests.rs"]
 mod standing_tests;

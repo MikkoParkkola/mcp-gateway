@@ -17,7 +17,7 @@ use crate::security::firewall::{FirewallAction, FirewallRule};
 use crate::security::rule_id::RuleId;
 
 /// The id `fx` records for `rule`: its serde bytes under the running key.
-fn firewall_id(fx: &Fx, rule: &FirewallRule) -> RuleId {
+pub(super) fn firewall_id(fx: &Fx, rule: &FirewallRule) -> RuleId {
     let key = fx
         .state
         .live_config
