@@ -197,29 +197,9 @@ impl SyncLease {
     }
 }
 
-/// The seam where settlement makes a retained answer replayable, so a row
-/// can check what is already in place at that moment (the answer's replay
-/// snapshot must be).
 #[cfg(all(test, feature = "firewall"))]
-pub(crate) mod publish_hook {
-    use crate::security::firewall::collusion_live_rig::Hook;
-
-    thread_local! {
-        static HOOK: Hook = Hook::default();
-    }
-
-    pub(crate) fn arm(action: impl FnOnce() + 'static) {
-        HOOK.with(|h| h.arm(action));
-    }
-
-    pub(super) fn run() {
-        HOOK.with(Hook::run);
-    }
-
-    pub(crate) fn reached() -> u32 {
-        HOOK.with(Hook::reached)
-    }
-}
+#[path = "admission_publish_hook.rs"]
+pub(crate) mod publish_hook;
 
 // MIK-8154 L0: the operation the last keyed admission on this thread keyed,
 // so a row can compare what two routes admit for one target.
