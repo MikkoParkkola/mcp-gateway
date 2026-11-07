@@ -472,6 +472,7 @@ fn a_recognisable_secret_appears_in_no_trace_file_or_record() {
             let audited = || Audit::Required {
                 sink: Box::new(FileSink(record.clone())),
                 kind: IntentKind::Save,
+                writer: None,
             };
             let mut seen = loud_refusals(dir.path(), audited).await;
             let path = kept.path().join("gateway.yaml");

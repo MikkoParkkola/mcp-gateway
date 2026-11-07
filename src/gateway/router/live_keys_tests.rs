@@ -348,6 +348,112 @@ async fn k5_a_rotation_written_by_reload_honours_its_grace() {
     );
 }
 
+const OPS_PRINCIPAL: &str = "0a1b2c3d4e5f";
+const OPS_WINDOW: u32 = 5;
+/// When the rotated key's previous digest stops working, in seconds after
+/// the epoch.
+const GRACE_ENDS: u64 = 1_900_000_000;
+
+/// The `ops` key holding `secret`, under an explicit principal and a window
+/// of `OPS_WINDOW` calls a minute.
+fn ops_key(secret: &str) -> ApiKeyConfig {
+    ApiKeyConfig {
+        name: "ops".to_owned(),
+        principal: Some(OPS_PRINCIPAL.to_owned()),
+        rate_limit: OPS_WINDOW,
+        ..key(secret, None)
+    }
+}
+
+/// The file that rotates `ops` from `KEPT` to `ROTATED`, the old digest kept
+/// until `GRACE_ENDS`, as an operator writes it.
+fn ops_rotation_text() -> String {
+    let ends = chrono::DateTime::from_timestamp(i64::try_from(GRACE_ENDS).expect("fits"), 0)
+        .expect("an instant")
+        .to_rfc3339();
+    let digest = |secret: &str| crate::config::api_key_digest_spec(secret.as_bytes());
+    format!(
+        "auth:\n  enabled: true\n  api_keys:\n    - name: ops\n      key_sha256: \"{}\"\n      \
+         previous_key_sha256: \"{}\"\n      previous_expires_at: \"{ends}\"\n      \
+         principal: \"{OPS_PRINCIPAL}\"\n      rate_limit: {OPS_WINDOW}\n      backends: [\"*\"]\n",
+        digest(ROTATED),
+        digest(KEPT),
+    )
+}
+
+/// What the live table makes of `secret`: the caller's principal, then its
+/// quota principal's limit key and store key.
+fn ops_identity(state: &Arc<super::AppState>, secret: &str) -> [String; 3] {
+    let generation = state.live_config.generation();
+    let client = generation
+        .auth()
+        .validate_token(secret)
+        .expect("the secret authenticates");
+    let quota = client.quota_principal.expect("an API key has a quota");
+    [
+        client.principal.storage_form().to_owned(),
+        quota.limit_store_key().to_owned(),
+        quota.as_store_key().to_owned(),
+    ]
+}
+
+/// Spend one call of `secret`'s window on the live table; false when refused.
+fn spend_one(state: &Arc<super::AppState>, secret: &str) -> bool {
+    let generation = state.live_config.generation();
+    let auth = generation.auth();
+    let client = auth
+        .validate_token(secret)
+        .expect("the secret authenticates");
+    auth.check_authenticated_client_rate_limit(&client)
+}
+
+/// Whether `got` is a call the key table let through.
+fn accepted(got: StatusCode) -> bool {
+    got != StatusCode::UNAUTHORIZED && !got.is_server_error()
+}
+
+/// K2: what K5 leaves unproven is the identity across a rotation. A key with
+/// an explicit `principal` that a reload rotates (new digest, the old one kept
+/// as `previous_key_sha256` with `previous_expires_at`) is accepted on both
+/// digests while the injected clock reads before the previous expiry, with no
+/// second reload, and on the new one only once it reads the expiry. The
+/// principal, the quota's limit key and the spent part of the window carry
+/// across; the digest-bound store key is the one thing that changes.
+#[tokio::test]
+async fn k2_an_explicit_principal_rotation_by_reload_keeps_identity_and_window() {
+    let _clock = crate::clock::test_clock::at_secs(GRACE_ENDS - 1);
+    let (state, _store) = test_router_app_state_with_auth(&auth(vec![ops_key(KEPT)])).await;
+    let dir = tempfile::tempdir().expect("tempdir");
+    let before = ops_identity(&state, KEPT);
+    assert_eq!(before[0], OPS_PRINCIPAL, "premise: the explicit principal");
+    assert!(
+        spend_one(&state, KEPT) && spend_one(&state, KEPT),
+        "premise"
+    );
+
+    reload_text(&state, dir.path(), ops_rotation_text()).await;
+
+    for (secret, what) in [(ROTATED, "the new digest"), (KEPT, "the old digest")] {
+        let got = status(&state, "/mcp", secret).await;
+        assert!(accepted(got), "{what} before the grace ends: {got}");
+    }
+    let after = ops_identity(&state, ROTATED);
+    assert_eq!(after[0], before[0], "the principal moved");
+    assert_eq!(after[1], before[1], "the limit key moved");
+    assert_ne!(after[2], before[2], "the store key follows the digest");
+
+    let _ended = crate::clock::test_clock::at_secs(GRACE_ENDS);
+    assert_eq!(status(&state, "/mcp", KEPT).await, StatusCode::UNAUTHORIZED);
+    let got = status(&state, "/mcp", ROTATED).await;
+    assert!(accepted(got), "the new digest after the grace ends: {got}");
+    // Two spent before the reload, three calls since: the window is full only
+    // if the reload kept the first two.
+    assert!(
+        !spend_one(&state, ROTATED),
+        "the reload gave a fresh window"
+    );
+}
+
 /// `keys` under `security.posture: hardened`, the posture the `kind` row's
 /// gateway runs with (a reload that changed it would be refused), with the
 /// signing secret hardened requires.
