@@ -127,7 +127,11 @@ async fn h17_unwritable_history_never_stops_the_start() {
     let mode = |m| std::fs::set_permissions(&data, std::fs::Permissions::from_mode(m));
     mode(0o555).expect("read-only");
     let probe = std::fs::write(data.join("probe"), b"x");
-    Box::pin(run_once(dir.path(), &data, |_| {})).await;
+    // Its own audit log: the first start's lease on the shared one can still
+    // be held when this start begins.
+    let second = dir.path().join("second");
+    std::fs::create_dir_all(&second).expect("second dir");
+    Box::pin(run_once(&second, &data, |_| {})).await;
     mode(0o755).expect("writable again");
     assert!(
         probe.is_err(),
