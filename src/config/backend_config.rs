@@ -14,6 +14,11 @@ use super::{
 pub struct BackendConfig {
     /// Human-readable description.
     pub description: String,
+    /// Who owns this server, as free text (a team or a person), shown in the
+    /// server page's Details. Stored as written; read through
+    /// [`Self::owner`], which trims it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner: Option<String>,
     /// Whether backend is enabled.
     pub enabled: bool,
     /// Transport type.
@@ -116,6 +121,7 @@ impl Default for BackendConfig {
     fn default() -> Self {
         Self {
             description: String::new(),
+            owner: None,
             enabled: true,
             transport: TransportConfig::default(),
             stop_when_idle_for: None,
@@ -336,5 +342,47 @@ impl TransportConfig {
     #[must_use]
     pub fn carries_identity_headers(&self) -> bool {
         !matches!(self, Self::Stdio { .. } | Self::WebSocket { .. })
+    }
+}
+
+/// Longest owner, in characters once trimmed.
+const MAX_OWNER_CHARS: usize = 200;
+
+impl BackendConfig {
+    /// The server's owner, trimmed; `None` when absent or blank.
+    #[must_use]
+    pub fn owner(&self) -> Option<&str> {
+        self.owner
+            .as_deref()
+            .map(str::trim)
+            .filter(|o| !o.is_empty())
+    }
+}
+
+impl super::Config {
+    /// Every backend's `owner`, enabled or not: no control character
+    /// anywhere in the value as written (a newline or tab that trimming would
+    /// drop is refused too), and at most 200 characters once trimmed.
+    ///
+    /// # Errors
+    ///
+    /// A validation error naming `backends.<name>.owner`.
+    pub(super) fn validate_backend_owners(&self) -> crate::Result<()> {
+        for (name, backend) in &self.backends {
+            let Some(owner) = backend.owner.as_deref() else {
+                continue;
+            };
+            if owner.chars().any(char::is_control) {
+                return Err(crate::Error::ConfigValidation(format!(
+                    "backends.{name}.owner must not contain a control character"
+                )));
+            }
+            if owner.trim().chars().count() > MAX_OWNER_CHARS {
+                return Err(crate::Error::ConfigValidation(format!(
+                    "backends.{name}.owner must be at most {MAX_OWNER_CHARS} characters"
+                )));
+            }
+        }
+        Ok(())
     }
 }

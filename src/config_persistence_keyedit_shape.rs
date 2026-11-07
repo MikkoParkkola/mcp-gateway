@@ -115,6 +115,85 @@ pub(super) enum Origin {
     Inserted,
 }
 
+/// One run of changed lines: original lines removed or replaced, and the
+/// lines that take their place. Kept lines are never in a hunk.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Hunk {
+    /// The first original line of the run, 1-based; for a pure insertion,
+    /// the original line it follows (0: the start of the file).
+    pub(crate) old_start: usize,
+    /// The original lines of the run, 0-based, in order.
+    pub(crate) old: Vec<usize>,
+    /// The first edited line of the run, 1-based (for a pure removal, the
+    /// edited line it follows).
+    pub(crate) new_start: usize,
+    pub(crate) new: Vec<NewLine>,
+}
+
+/// A line an edit wrote, without its ending.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct NewLine {
+    pub(crate) text: String,
+    /// For a line whose value was replaced: the original line, 0-based, and
+    /// how many of its leading and trailing bytes (ending aside) it kept.
+    pub(crate) replaced: Option<(usize, usize, usize)>,
+}
+
+/// A hunk being built: where it starts, and its lines so far.
+#[derive(Default)]
+struct Run {
+    old: Vec<usize>,
+    new: Vec<NewLine>,
+    /// For a run with no original line: the original line it follows.
+    after_old: Option<usize>,
+    /// For a run with no new line: the edited line it follows.
+    after_new: Option<usize>,
+}
+
+impl Run {
+    fn removed(&mut self, lines: std::ops::Range<usize>, next: usize) {
+        if !lines.is_empty() {
+            self.after_old.get_or_insert(next);
+        }
+        self.old.extend(lines);
+    }
+
+    fn wrote(
+        &mut self,
+        text: &str,
+        replaced: Option<(usize, usize, usize)>,
+        written: usize,
+        next: usize,
+    ) {
+        self.after_new.get_or_insert(written);
+        self.after_old.get_or_insert(next);
+        self.new.push(NewLine {
+            text: text.to_owned(),
+            replaced,
+        });
+    }
+
+    fn flush(&mut self, out: &mut Vec<Hunk>, written: usize) {
+        let run = std::mem::take(self);
+        if run.old.is_empty() && run.new.is_empty() {
+            return;
+        }
+        out.push(Hunk {
+            old_start: run
+                .old
+                .first()
+                .map_or(run.after_old.unwrap_or(0), |first| first + 1),
+            new_start: if run.new.is_empty() {
+                written
+            } else {
+                run.after_new.unwrap_or(written) + 1
+            },
+            old: run.old,
+            new: run.new,
+        });
+    }
+}
+
 /// The text being edited, line by line, each line with its ending and its
 /// origin.
 pub(super) struct Lines {
@@ -245,6 +324,43 @@ impl Lines {
         }
     }
 
+    /// The changed lines against `original`: each maximal run of original
+    /// lines removed or replaced, with the lines written in their place.
+    /// Kept lines end a run and are never in one.
+    pub(super) fn hunks(&self, original: &str) -> Vec<Hunk> {
+        let total = original.split_inclusive('\n').count();
+        let mut out = Vec::new();
+        let mut run = Run::default();
+        // The next original line not yet accounted for, and the edited lines
+        // written so far.
+        let (mut next, mut written) = (0usize, 0usize);
+        for (text, origin) in &self.lines {
+            let text = split_ending(text).0;
+            match *origin {
+                Origin::Kept(i) => {
+                    run.removed(next..i, next);
+                    run.flush(&mut out, written);
+                    next = i + 1;
+                }
+                Origin::Replaced {
+                    line,
+                    before,
+                    after,
+                } => {
+                    run.removed(next..line, next);
+                    run.old.push(line);
+                    run.wrote(text, Some((line, before, after)), written, next);
+                    next = line + 1;
+                }
+                Origin::Inserted => run.wrote(text, None, written, next),
+            }
+            written += 1;
+        }
+        run.removed(next..total, next);
+        run.flush(&mut out, written);
+        out
+    }
+
     /// The original lines still in the text, kept or with a value replaced.
     pub(super) fn surviving(&self) -> std::collections::BTreeSet<usize> {
         self.lines
@@ -335,7 +451,7 @@ pub(super) fn nodes(text: &str) -> Result<Vec<Node>, ComputeRefusal> {
         .map_err(|_| unprovable("the parser gives no node positions for this file"))
 }
 
-fn same(steps: &[Step], path: &[Segment]) -> bool {
+pub(crate) fn same(steps: &[Step], path: &[Segment]) -> bool {
     steps.len() == path.len()
         && steps
             .iter()

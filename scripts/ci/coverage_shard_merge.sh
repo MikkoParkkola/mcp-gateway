@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+# SPDX-FileCopyrightText: 2026 Mikko Parkkola
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+# Unpacks every coverage shard's bundle into target/llvm-cov-target for one
+# `cargo llvm-cov report`. Fails when an expected shard's bundle is missing, or when two
+# shards built one binary with different coverage sections: report would read one of them,
+# and the other's counters would no longer match it. Bytes outside those sections may
+# differ between builds (a constant generated at build time) without changing the mapping.
+# Usage: coverage_shard_merge.sh <shard>...
+set -euo pipefail
+t=target/llvm-cov-target
+mkdir -p "$t"
+# Every part must have been built by this job's own compiler: profiles and mappings from
+# two compilers do not merge into one meaning.
+want=$(rustc -Vv | sed -n 's/^release: /rustc_release /p; s/^commit-hash: /rustc_commit /p' | sort)
+declare -A seen
+for shard in "$@"; do
+  b="shards/cov-shard-$shard"
+  [ -f "$b/files.tar" ] && [ -f "$b/manifest.txt" ] || {
+    echo "::error::shard $shard: bundle missing"; exit 1; }
+  got=$(grep -E '^rustc_(release|commit) ' "$b/manifest.txt" | sort || true)
+  [ "$got" = "$want" ] || {
+    echo "::error::shard $shard: built by '$(echo $got)', this job runs '$(echo $want)'"; exit 1; }
+  while read -r sum path; do
+    if [ -n "${seen[$path]:-}" ] && [ "${seen[$path]}" != "$sum" ]; then
+      echo "::error::$path: coverage sections differ between shards (${seen[$path]} vs $sum)"; exit 1
+    fi
+    seen[$path]=$sum
+  done < <(grep -E '^(cov|file):[0-9a-f]{64}  ' "$b/manifest.txt")
+  tar -C "$t" -xf "$b/files.tar"
+  mv "$t"/profraw/*.profraw "$t"/
+  rmdir "$t/profraw"
+  head -6 "$b/manifest.txt" | tr '\n' ' ' | sed 's/^/::notice::/'; echo
+done
+echo "::notice::profiles $(ls "$t"/*.profraw | wc -l), executables ${#seen[@]}"
+# Every executable every manifest lists is on disk, with its digest, after unpacking.
+manifests=()
+for shard in "$@"; do manifests+=("shards/cov-shard-$shard/manifest.txt"); done
+python3 "$(dirname "$0")/coverage_shards.py" on-disk "$t" "${manifests[@]}"

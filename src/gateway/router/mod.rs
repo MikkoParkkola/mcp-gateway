@@ -265,9 +265,9 @@ mod delivery_effect_tests;
 /// A delivery record joins its invocation by trace, on both routes.
 #[cfg(all(test, feature = "firewall"))]
 mod delivery_trace_join_tests;
-/// The direct route records no declared effect yet (pinned absence).
+/// The direct route's reach and its declared effect.
 #[cfg(test)]
-mod direct_effect_absent_tests;
+mod direct_effect_tests;
 /// A late refusal keeps its own code, and its run keeps the key.
 #[cfg(all(test, feature = "firewall"))]
 mod late_refusal_lease_tests;
@@ -361,6 +361,8 @@ mod stored_replay_liveness_tests;
 /// A UI write's admin record outlives a client cancel with its handler.
 #[cfg(all(test, feature = "webui"))]
 mod ui_audit_cancel_tests;
+#[cfg(all(test, feature = "webui"))]
+mod ui_owner_tests;
 #[cfg(test)]
 mod webhook_mount_tests;
 /// MIK-8340: a withheld surfaced name answers as an absent one.
@@ -394,12 +396,19 @@ mod r2_input_keys_tests;
 mod replay_policy_tests;
 #[cfg(test)]
 mod resource_prompt_scope_tests;
+/// A credential a backend's `env:` or `headers:` gave it is kept out of
+/// the client's answer when the backend echoes it.
+#[cfg(test)]
+mod secret_echo_config_tests;
 /// An echoed injected secret is kept out of the idempotency cache, task
 /// answers and the task store.
 #[cfg(all(test, feature = "firewall"))]
 mod secret_echo_stored_tests;
 #[cfg(test)]
 mod secret_echo_tests;
+/// Answers kept before a value was marked secret are redacted when served.
+#[cfg(all(test, feature = "firewall"))]
+mod secret_marked_later_tests;
 #[cfg(test)]
 mod session_fp_once_tests;
 /// MIK-7736: under standard, a gateway_invoke nonce is judged after policy.

@@ -289,6 +289,50 @@ pub(crate) fn require_tls_for_credentials(url: &str) -> Result<()> {
     ))
 }
 
+/// Whether [`require_tls_for_credentials`] refusing `url` is a policy refusal:
+/// the URL names a host the credential would reach in cleartext. A value that
+/// does not parse, or names no host, is refused with the same message but is
+/// a configuration error, so its record says nothing was refused.
+pub(crate) fn names_a_host(url: &str) -> bool {
+    url::Url::parse(url).is_ok_and(|u| u.host().is_some())
+}
+
+/// What decides whether a check's error on a capability call path is a
+/// policy refusal, which the call's record says, rather than a configuration
+/// error such as a malformed or hostless URL, which it does not.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum RefusalTest<'a> {
+    /// A destination check: only an SSRF refusal is one.
+    Destination,
+    /// The cleartext-credential check of the URL: a refusal only when the URL
+    /// names a host the credential would reach ([`names_a_host`]). The error
+    /// itself is not inspected: use it only for an error of
+    /// [`require_tls_for_credentials`] (or a check built on it) for this same
+    /// URL, whose only failure for a URL naming a host is the cleartext refusal.
+    Cleartext(&'a str),
+}
+
+/// Record `refused` on the open delivery when `error` is a policy refusal
+/// under `test`; a configuration error records no refusal (the record still
+/// reads `delivered`). The one guard for every capability executor site
+/// whose check can also fail on a malformed URL.
+///
+/// Recording at the first refused provider is right only because a declared
+/// `providers.fallback` is never executed (CAP-011,
+/// `capability::validator::checks`). If fallback is ever wired, a refused
+/// primary followed by a delivered fallback would leave the record saying
+/// refused (the effect only rises), so that work must revisit where a
+/// capability call's refusal is recorded.
+pub(crate) fn record_refusal(error: &Error, test: RefusalTest<'_>) {
+    let refused = match test {
+        RefusalTest::Destination => crate::security::ssrf::is_ssrf_refusal(error),
+        RefusalTest::Cleartext(url) => names_a_host(url),
+    };
+    if refused {
+        crate::gateway::delivery_facts::refused_while_vouched();
+    }
+}
+
 /// [`require_tls_for_credentials`] when the request carries a credential:
 /// `auth` injects one (as a header, an account header, or the `auth.param`
 /// query parameter), or one of `templates` fills in a gateway secret
@@ -551,151 +595,5 @@ pub(crate) fn validate_personal_capability_identity(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn default_context_keeps_loopback_blocked() {
-        assert!(
-            validate_capability_url_for_context(
-                "http://127.0.0.1:39400/fixture",
-                &CapabilityExecutionContext::default()
-            )
-            .is_err()
-        );
-    }
-
-    #[test]
-    fn isolated_loopback_context_bypasses_only_loopback_ip_literals() {
-        let context = CapabilityExecutionContext::default().with_isolated_loopback_egress();
-
-        assert!(
-            validate_capability_url_for_context("http://127.0.0.1:39400/fixture", &context).is_ok()
-        );
-        assert!(validate_capability_url_for_context("http://10.0.0.1/fixture", &context).is_err());
-        assert!(!url_targets_loopback_ip("http://localhost:39400/fixture"));
-    }
-
-    /// MIK-6751: capability-side ADR-008 INV-2 parity tests.
-    ///
-    /// `google_calendar_capability` names Google Calendar as the concrete
-    /// motivating example from the gap report (`oauth:google`, no
-    /// `shared_account`, `exposure` left at the `Shared` default) — the exact
-    /// shape that let any caller ride a shared gateway-held OAuth login.
-    fn google_calendar_capability(
-        shared_account: bool,
-        exposure_personal: bool,
-    ) -> CapabilityDefinition {
-        let exposure_yaml = if exposure_personal {
-            "metadata:\n  exposure: personal\n  identity_owner:\n    authority: cloudflare_access\n    subject: owner-1\n"
-        } else {
-            ""
-        };
-        let shared_yaml = if shared_account {
-            "  shared_account: true\n"
-        } else {
-            ""
-        };
-        crate::capability::parse_capability(&format!(
-            "name: google_calendar_list_events\n\
-             description: List events on a Google Calendar\n\
-             auth:\n\
-             \x20 required: true\n\
-             \x20 type: bearer\n\
-             \x20 key: oauth:google\n\
-             {shared_yaml}\
-             {exposure_yaml}\
-             providers:\n\
-             \x20 primary:\n\
-             \x20   service: rest\n\
-             \x20   config:\n\
-             \x20     base_url: https://www.googleapis.com\n\
-             \x20     path: /calendar/v3/calendars/primary/events\n\
-             \x20     method: GET\n"
-        ))
-        .expect("fixture capability must parse")
-    }
-
-    #[test]
-    fn oauth_isolation_refuses_shared_gateway_oauth_on_multi_user_gateway_with_no_per_user_cred() {
-        let cap = google_calendar_capability(false, false);
-        let err = validate_oauth_isolation(&cap, &CapabilityExecutionContext::default(), true)
-            .expect_err(
-                "shared oauth:<provider> credential on a multi-user gateway must be refused",
-            );
-        assert!(err.to_string().contains("not isolated per user"), "{err}");
-    }
-
-    #[test]
-    fn oauth_isolation_allows_shared_oauth_on_single_user_gateway() {
-        let cap = google_calendar_capability(false, false);
-        assert!(
-            validate_oauth_isolation(&cap, &CapabilityExecutionContext::default(), false).is_ok(),
-            "single-user gateways have no cross-user caller to leak credentials to"
-        );
-    }
-
-    #[test]
-    fn oauth_isolation_allows_operator_blessed_shared_account() {
-        let cap = google_calendar_capability(true, false);
-        assert!(
-            validate_oauth_isolation(&cap, &CapabilityExecutionContext::default(), true).is_ok(),
-            "auth.shared_account = true is the explicit opt-in for a genuinely shared login"
-        );
-    }
-
-    #[test]
-    fn oauth_isolation_allows_personal_capability_with_matching_caller_identity() {
-        let cap = google_calendar_capability(false, true);
-        let context = CapabilityExecutionContext::with_caller_identity(GrantSubject::for_test(
-            "cloudflare_access",
-            "owner-1",
-            None,
-        ));
-        assert!(
-            validate_oauth_isolation(&cap, &context, true).is_ok(),
-            "a resolved caller identity on a personal capability proves per-user isolation \
-             (validate_personal_capability_identity already checked owner match upstream)"
-        );
-    }
-
-    #[test]
-    fn personal_owner_check_ignores_the_display_label() {
-        // The capability file labels its owner for humans; the caller's label
-        // is whatever its transport supplied. Only (authority, subject) is
-        // identity, so the two labels differing must not refuse the owner.
-        let cap = google_calendar_capability(false, true);
-        let context = CapabilityExecutionContext::with_caller_identity(GrantSubject::for_test(
-            "cloudflare_access",
-            "owner-1",
-            Some("owner@example.com".to_string()),
-        ));
-        validate_personal_capability_identity(&cap, &context)
-            .expect("the owner is the owner whatever either side calls them");
-    }
-
-    #[test]
-    fn oauth_isolation_ignores_non_oauth_credentials() {
-        let cap = crate::capability::parse_capability(
-            "name: env_backed_capability\n\
-             description: Uses a plain env-var credential, not a shared OAuth login\n\
-             auth:\n\
-             \x20 required: true\n\
-             \x20 type: bearer\n\
-             \x20 key: env:SOME_API_KEY\n\
-             providers:\n\
-             \x20 primary:\n\
-             \x20   service: rest\n\
-             \x20   config:\n\
-             \x20     base_url: https://example.invalid\n\
-             \x20     path: /widgets\n\
-             \x20     method: GET\n",
-        )
-        .expect("fixture capability must parse");
-        assert!(
-            validate_oauth_isolation(&cap, &CapabilityExecutionContext::default(), true).is_ok(),
-            "guard is scoped to oauth:<provider> keys; non-OAuth credentials are per-capability \
-             secrets already, not a shared gateway-held login"
-        );
-    }
-}
+#[path = "execution_context_tests.rs"]
+mod tests;

@@ -40,6 +40,21 @@ pub(crate) struct SettledTask<'a> {
     pub id: &'a str,
 }
 
+/// What a composite task's settlement record joins by, written as
+/// `joined_by` on composite records only; a single-target record keeps its
+/// dispatch-trace join and has no such member.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum SettlementJoin {
+    /// `trace_id` is the record trace of the step the plan ended on: the
+    /// record of the check that refused.
+    StepTrace,
+    /// `trace_id` is the task id: the plan ended with no usable trace from
+    /// the step it ended on. Usually no step ran; when a later step's
+    /// arguments were refused, the earlier steps' records still exist.
+    TaskId,
+}
+
 /// What one call's gates saw, handed out of [`with_dispatch_scope`] as an
 /// owned value: the scope ends before the invocation record is written.
 #[derive(Debug, Default)]
@@ -284,6 +299,11 @@ pub(crate) async fn with_dispatch_scope<F: std::future::Future>(
 }
 
 impl DispatchNotes {
+    /// [`note_not_found`] for notes built outside a dispatch scope.
+    pub(super) fn mark_not_found(&mut self) {
+        self.not_found = true;
+    }
+
     /// MIN.2: whether a backend answered this call.
     pub(crate) const fn responded(&self) -> bool {
         self.responded

@@ -6,7 +6,9 @@
 
 use serde_json::{Value, json};
 
-use crate::security::firewall::{FirewallAction, FirewallRule, OUTPUT_ONLY, ScanType};
+use crate::security::firewall::{
+    FirewallAction, FirewallRule, OUTPUT_ONLY, RuleKeys, ScanType, first_refusal, refused_shape,
+};
 
 /// Every scan type, in `ScanType` order. The match below fails to compile
 /// when a type is added, so this list cannot fall behind.
@@ -45,16 +47,53 @@ fn every_type_is_listed(t: ScanType) {
     }
 }
 
+/// How the screen treats a scan type: whether it offers it (ADR-029's six)
+/// and whether a rule decides it. Exhaustive, so a new type fails to compile
+/// until it is classified for both.
+const fn class(t: ScanType) -> (bool, bool) {
+    match t {
+        ScanType::Credentials
+        | ScanType::PromptInjection
+        | ScanType::ShellInjection
+        | ScanType::PathTraversal
+        | ScanType::SqlInjection
+        | ScanType::MemoryPoisoning => (true, true),
+        // Their ordinary findings pass through the rules (ADR-029 F1b).
+        ScanType::SequenceAnomaly | ScanType::CrossTenantReach => (false, true),
+        // No scanner produces `pii`; both budget outcomes force a block past
+        // the rules; the relay gate alone decides a relay; the folder check
+        // alone produces the two output-only types, which no rule lists.
+        ScanType::Pii
+        | ScanType::BudgetExceeded
+        | ScanType::CollusionRelay
+        | ScanType::PathOutsideRoot
+        | ScanType::RootRefused => (false, false),
+    }
+}
+
 /// The scan types a rule's `scan` may list: every type but the loader's
 /// output-only ones.
-pub(super) fn offered() -> Vec<ScanType> {
+fn rule_listable() -> Vec<ScanType> {
     ALL.into_iter()
         .filter(|t| !OUTPUT_ONLY.contains(t))
         .collect()
 }
 
+/// The scan types the Policies screen offers, in `ScanType` order.
+pub(super) fn offered() -> Vec<ScanType> {
+    ALL.into_iter().filter(|t| class(*t).0).collect()
+}
+
+/// The scan types a rule decides, in `ScanType` order.
+fn decided() -> Vec<ScanType> {
+    rule_listable()
+        .into_iter()
+        .filter(|t| class(*t).1)
+        .collect()
+}
+
 /// A scan type's config spelling.
-fn name(t: ScanType) -> String {
+pub(super) fn name(t: ScanType) -> String {
     serde_json::to_value(t)
         .ok()
         .and_then(|v| v.as_str().map(str::to_owned))
@@ -82,16 +121,22 @@ pub(super) const BACKEND_EXPANDED: [&str; 4] = [
     "aggregate_answer",
 ];
 
-/// The types `rule` decides: its `scan`, or every offered type when empty.
+/// The types `rule` decides: those of its `scan` a rule decides, or every
+/// such type when `scan` is empty; none for a root rule.
 /// A root rule decides only its own findings, never a content finding.
-fn decides(rule: &FirewallRule) -> Vec<ScanType> {
+pub(super) fn decides(rule: &FirewallRule) -> Vec<ScanType> {
     if is_root(rule) {
         return Vec::new();
     }
+    let decided = decided();
     let mut types: Vec<ScanType> = if rule.scan.is_empty() {
-        offered()
+        decided
     } else {
-        rule.scan.clone()
+        rule.scan
+            .iter()
+            .copied()
+            .filter(|t| decided.contains(t))
+            .collect()
     };
     types.sort_by_key(|t| ALL.iter().position(|a| a == t));
     types.dedup();
@@ -102,9 +147,11 @@ fn is_root(rule: &FirewallRule) -> bool {
     rule.allowed_roots.is_some() || rule.path_args.is_some()
 }
 
-/// Every finding rule, in order.
-pub(super) fn finding_rules(rules: &[FirewallRule]) -> Value {
+/// Every finding rule, in order. `keys` are the API keys the config offers,
+/// against which a rule's key references are judged.
+pub(super) fn finding_rules(rules: &[FirewallRule], keys: &RuleKeys<'_>) -> Value {
     let offered = offered();
+    let compiled: Vec<FirewallRule> = rules.iter().map(as_compiled).collect();
     let out: Vec<Value> = rules
         .iter()
         .enumerate()
@@ -127,8 +174,9 @@ pub(super) fn finding_rules(rules: &[FirewallRule]) -> Value {
                 "root": is_root(rule),
                 "editable": reasons.is_empty(),
                 "read_only_reasons": reasons,
-                "shadowed": shadowed(rules, i),
+                "shadowed": shadowed(&compiled, i),
                 "scope_differs": scope_differs(rule),
+                "refused": refused(i, rule, keys),
             })
         })
         .collect();
@@ -178,10 +226,48 @@ fn read_only_reasons(rule: &FirewallRule, offered: &[ScanType]) -> Vec<&'static 
     out
 }
 
-/// The earlier rules that shadow rule `i`, per type: an earlier rule with
-/// `match: "*"` or the identical match, deciding the type, with no
-/// `servers`, `keys` or `except` (present but empty counts as present).
-fn shadowed(rules: &[FirewallRule], i: usize) -> Vec<Value> {
+/// Whether the firewall-on load refuses rule `i`: `null`, or the load's
+/// message and how the rule compiles meanwhile (`block_all` for a glob or
+/// scope problem, as `as_compiled` shows; `as_written` for a key or folder
+/// problem).
+fn refused(i: usize, rule: &FirewallRule, keys: &RuleKeys<'_>) -> Value {
+    first_refusal(i, rule, keys).map_or(Value::Null, |message| {
+        let compiles_to = if refused_shape(rule) {
+            "block_all"
+        } else {
+            "as_written"
+        };
+        json!({ "message": message, "compiles_to": compiles_to })
+    })
+}
+
+/// `rule` as a check reads it: a shape the load refuses compiles to an
+/// unscoped `*` rule that blocks its scan types on every call
+/// (`verdict.rs` `compile_rule`), keeping its folder check, which
+/// `FirewallPolicy::compile` takes from the rule as written (so a refused
+/// root rule still takes no part in content resolution); any other rule as
+/// written.
+pub(super) fn as_compiled(rule: &FirewallRule) -> FirewallRule {
+    if !refused_shape(rule) {
+        return rule.clone();
+    }
+    FirewallRule {
+        tool_match: "*".to_owned(),
+        action: FirewallAction::Block,
+        reason: rule.reason.clone(),
+        scan: rule.scan.clone(),
+        servers: None,
+        keys: None,
+        except: None,
+        allowed_roots: rule.allowed_roots.clone(),
+        path_args: rule.path_args.clone(),
+    }
+}
+
+/// The earlier rules that shadow rule `i` of `rules` (read as compiled), per
+/// type: an earlier rule with `match: "*"` or the identical match, deciding
+/// the type, with no `servers`, `keys` or `except`.
+pub(super) fn shadowed(rules: &[FirewallRule], i: usize) -> Vec<Value> {
     let later = &rules[i];
     decides(later)
         .into_iter()

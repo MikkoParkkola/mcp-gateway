@@ -28,18 +28,80 @@ pub(super) async fn read_policies(State(state): State<Arc<AppState>>, guard: Gua
     if let Err(refused) = guard.admit() {
         return refused.into_response();
     }
-    // One generation for every section: a reload between two reads cannot
-    // mix them.
-    let generation = state.live_config.generation();
-    Json(read_model(generation.config())).into_response()
+    Json(read_model(&Sources::of(&state.live_config))).into_response()
 }
 
-/// The read model for `config`.
-pub(super) fn read_model(config: &Config) -> Value {
-    json!({
+/// What the read model reads: one published generation (the file's values,
+/// and the live fields the gateway applies through it) and the config the
+/// process runs (the restart-only fields it enforces). Each is taken once,
+/// so a reload between two reads cannot mix them.
+pub(super) struct Sources<'a> {
+    pub(super) generation: Arc<crate::config_reload::Generation>,
+    #[cfg_attr(
+        not(feature = "firewall"),
+        expect(
+            dead_code,
+            reason = "only the firewall sections read restart-only fields"
+        )
+    )]
+    pub(super) running: &'a Config,
+}
+
+impl<'a> Sources<'a> {
+    pub(super) fn of(live: &'a crate::config_reload::LiveConfig) -> Self {
+        Self {
+            generation: live.generation(),
+            running: live.running(),
+        }
+    }
+}
+
+/// The read model for `sources`.
+pub(super) fn read_model(sources: &Sources<'_>) -> Value {
+    let config = sources.generation.config();
+    let mut model = json!({
         "tool_policy": tool_policy(&config.security.tool_policy),
         "finding_rules": finding_rules(config),
-    })
+        "tool_limits": tool_limits(),
+    });
+    for (section, value) in firewall_sections(sources) {
+        model[section] = value;
+    }
+    model
+}
+
+/// The scan types, guards, credentials and relay sections: `null` in a
+/// build without the firewall, as `finding_rules`.
+#[cfg(feature = "firewall")]
+fn firewall_sections(sources: &Sources<'_>) -> [(&'static str, Value); 4] {
+    super::policies_part2::sections(sources)
+}
+
+#[cfg(not(feature = "firewall"))]
+fn firewall_sections(_sources: &Sources<'_>) -> [(&'static str, Value); 4] {
+    [
+        ("scan_types", Value::Null),
+        ("guards", Value::Null),
+        ("credentials", Value::Null),
+        ("relay", Value::Null),
+    ]
+}
+
+/// The four configured tool limits, in ADR-029's display order ("Tool
+/// limits"; on HTTP the key's backend scope runs before the global policy and
+/// its tool scope after), each with where it is edited. A list, not a
+/// judgement: finding rules are not among them.
+fn tool_limits() -> Value {
+    json!([
+        { "limit": "global", "setting": "security.tool_policy", "edited_on": "policies_screen" },
+        {
+            "limit": "key",
+            "setting": "auth.api_keys[].allowed_tools, auth.api_keys[].denied_tools and the key's backend scope",
+            "edited_on": "keys_screen"
+        },
+        { "limit": "certificate", "setting": "mtls policy", "edited_on": "gateway_yaml" },
+        { "limit": "agent", "setting": "OAuth agent scopes", "edited_on": "gateway_yaml" },
+    ])
 }
 
 /// The firewall's finding rules. A build without the firewall answers
@@ -47,7 +109,10 @@ pub(super) fn read_model(config: &Config) -> Value {
 /// read as "the firewall is built and no rule is configured".
 #[cfg(feature = "firewall")]
 fn finding_rules(config: &Config) -> Value {
-    super::policies_rules::finding_rules(&config.security.firewall.rules)
+    super::policies_rules::finding_rules(
+        &config.security.firewall.rules,
+        &crate::security::firewall::RuleKeys::of(config),
+    )
 }
 
 #[cfg(not(feature = "firewall"))]

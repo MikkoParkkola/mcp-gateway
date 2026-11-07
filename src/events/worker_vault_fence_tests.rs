@@ -100,7 +100,7 @@ impl ListenerMint for Fence {
         self.pending.pause().await;
         match *self.refuse.lock().expect("fence") {
             Some(refused) => Err(refused),
-            None => Ok(Some(self.current(&identity.subject))),
+            None => Ok(Some(self.current(identity.subject()))),
         }
     }
 }
@@ -138,7 +138,9 @@ fn queued_aged(
                     crate::identity_propagation::PropagationStrategyKind::Vault
                 );
             });
-        sub.observed_identity = Some(person(subject));
+        sub.observed_identity = Some(crate::events::records::StoredIdentity::from(&person(
+            subject,
+        )));
         record.subscription_id = sub.id.clone();
         record.backend = "managed".into();
         age(record);

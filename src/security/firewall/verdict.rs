@@ -96,32 +96,71 @@ impl FirewallVerdict {
 
 // ─── Rule helpers ─────────────────────────────────────────────────────────────
 
+/// Whether `rule` has a shape the load refuses that compiles fail-closed: a
+/// `match` glob that does not parse ([`glob_problem`]), or a scope the load
+/// refuses ([`scope_problem`]). Such a rule compiles to block its finding
+/// types on every call (below), and the Policies screen reads it as
+/// compiled. The load refuses these and more (key references, folder
+/// rules; `refused_rules::first_refusal`), which compile as written. The
+/// index only names the rule in a message, which is dropped here.
+pub(crate) fn refused_shape(rule: &FirewallRule) -> bool {
+    glob_problem(0, rule).is_err() || scope_problem(0, rule).is_err()
+}
+
+/// Rule `i`'s `match` glob must parse: one that does not would fail open at
+/// runtime. The message names the rule's path, not its text.
+pub(crate) fn glob_problem(i: usize, rule: &FirewallRule) -> Result<(), String> {
+    if glob::Pattern::new(&rule.tool_match).is_err() {
+        return Err(format!(
+            "security.firewall.rules[{i}].match is not a valid glob"
+        ));
+    }
+    Ok(())
+}
+
+/// The scope keys of rule `i` (`servers`, `keys`, `except`): an absent key
+/// means unscoped, so an empty list is refused rather than read as "nothing";
+/// every glob must parse; an exception must set a field. Paths, never values.
+pub(crate) fn scope_problem(i: usize, rule: &FirewallRule) -> Result<(), String> {
+    let path = format!("security.firewall.rules[{i}]");
+    let invalid = |glob: &str| glob::Pattern::new(glob).is_err();
+    for (key, empty) in [
+        ("servers", rule.servers.as_ref().is_some_and(Vec::is_empty)),
+        ("keys", rule.keys.as_ref().is_some_and(Vec::is_empty)),
+        ("except", rule.except.as_ref().is_some_and(Vec::is_empty)),
+    ] {
+        if empty {
+            return Err(format!(
+                "{path}.{key} must not be empty; leave it out to apply to all"
+            ));
+        }
+    }
+    if let Some(j) = rule.servers.iter().flatten().position(|g| invalid(g)) {
+        return Err(format!("{path}.servers[{j}] is not a valid glob"));
+    }
+    for (j, entry) in rule.except.iter().flatten().enumerate() {
+        if entry.server.is_none() && entry.tool.is_none() && entry.key.is_none() {
+            return Err(format!("{path}.except[{j}] sets no field"));
+        }
+        for (field, glob) in [("server", &entry.server), ("tool", &entry.tool)] {
+            if glob.as_deref().is_some_and(invalid) {
+                return Err(format!("{path}.except[{j}].{field} is not a valid glob"));
+            }
+        }
+    }
+    Ok(())
+}
+
 pub(super) fn compile_rule(rule: &FirewallRule) -> CompiledRule {
     // The guarantee is the load: `FirewallConfig::validate` refuses an invalid
-    // glob while the firewall is on. Should one get here anyway (an embedder
-    // that skips the load), the rule is a refused shape, below.
+    // glob or scope while the firewall is on. A shape that got here anyway (an
+    // embedder that skips the load, or a file published with the firewall
+    // off) fails closed: the rule blocks its finding types on every call.
+    // Covering no call would not do: a later `allow` rule would then decide,
+    // and neither would keeping a `warn` or `allow` rule's action.
     let pattern = glob::Pattern::new(&rule.tool_match).ok();
     let globs = |list: &[String]| list.iter().map(|g| glob::Pattern::new(g).ok()).collect();
-    // The scopes are refused at load too: an empty `servers`, `keys` or
-    // `except` list, a glob that does not parse (`match` or a scope's), or an
-    // exception setting no field. A shape that got here anyway fails closed: the rule
-    // blocks its finding types on every call. Covering no call would not do:
-    // a later `allow` rule would then decide, and neither would keeping a
-    // `warn` or `allow` rule's action.
-    let unparsed = |glob: Option<&String>| glob.is_some_and(|g| glob::Pattern::new(g).is_err());
-    let refused_shape = pattern.is_none()
-        || rule
-            .servers
-            .as_ref()
-            .is_some_and(|l| l.is_empty() || l.iter().any(|g| unparsed(Some(g))))
-        || rule.keys.as_ref().is_some_and(Vec::is_empty)
-        || rule.except.as_ref().is_some_and(Vec::is_empty)
-        || rule.except.iter().flatten().any(|entry| {
-            (entry.server.is_none() && entry.tool.is_none() && entry.key.is_none())
-                || unparsed(entry.server.as_ref())
-                || unparsed(entry.tool.as_ref())
-        });
-    if refused_shape {
+    if refused_shape(rule) {
         return CompiledRule {
             pattern: glob::Pattern::new("*").ok(),
             action: FirewallAction::Block,

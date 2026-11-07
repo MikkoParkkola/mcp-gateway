@@ -39,7 +39,7 @@ CI_ONLY: dict[tuple[str, tuple[str, ...]], str] = {
     ("scripts/ci/job_time_watch.py", ("macos-shards",)): "ci-env: reads this run's jobs from the Actions API (GITHUB_RUN_ID, actions: read)",
     ("scripts/ci/check_needs.py", ("test-shards",)): "ci-env: reads NEEDS from ${{ toJSON(needs) }}",
     ("scripts/ci/check_needs.py", ("windows-shards", "windows-clippy")): "ci-env: reads NEEDS from ${{ toJSON(needs) }}",
-    ("scripts/ci/check_needs.py", ("${skippable[@]}", "scope", "windows-shards", "windows-clippy", "windows-check", "release-script-tests", "task-sdk-recovery", "gws-dry-run", "linux-keychain", "kani", "upgrade-rehearsal")): "ci-env: reads NEEDS from ${{ toJSON(needs) }} (heavy-gate)",
+    ("scripts/ci/check_needs.py", ("${skippable[@]}", "scope", "windows-shards", "windows-clippy", "windows-check", "release-script-tests", "task-sdk-recovery", "gws-dry-run", "linux-keychain", "kani", "upgrade-rehearsal", "feature-combos-pr")): "ci-env: reads NEEDS from ${{ toJSON(needs) }} (heavy-gate)",
     ("scripts/ci/shard_tests.py", ("run", "linux", "${{matrix.shard}}")): "cargo: runs cargo test shards",
     ("scripts/ci/shard_tests.py", ("run", "macos", "${{matrix.shard}}")): "cargo: runs cargo test shards",
     ("scripts/dev/check-registry-packages.py", ()): "network: live npm/PyPI/HTTP lookups",
@@ -53,12 +53,69 @@ CI_ONLY: dict[tuple[str, tuple[str, ...]], str] = {
     ("scripts/release/check_scope_acceptance.py", ("--publish-check",)): "release: publish-time form",
     ("scripts/release/check_tag_manifest.py", ()): "release: needs a tag in GITHUB_REF_NAME",
     ("scripts/release/critical_function_coverage.py", ("$@",)): "artifact: reads a cargo llvm-cov profile",
+    # Two invocations, not a duplicate: coverage-probe.yml bundles each part
+    # ($PART) and, in a job of its own, the SDK journey (sdk).
+    ("scripts/ci/coverage_shard_bundle.sh", ("$PART",)): "artifact: packs a part's coverage profiles and instrumented binaries",
+    ("scripts/ci/coverage_shard_bundle.sh", ("sdk",)): "artifact: packs the SDK part's coverage profiles and instrumented binaries",
+    ("scripts/ci/coverage_shard_merge.sh", ("${expected[@]}",)): "artifact: unpacks the parts' coverage bundles into target/",
+    ("scripts/ci/coverage_shards.py", ("canary", "linux.lcov")): "artifact: reads the merged coverage report",
+    ("scripts/ci/coverage_shards.py", ("check", "$COVERAGE_PARTS", "metadata.json")): "cargo: reads cargo metadata output",
+    ("scripts/ci/coverage_shards.py", ("objects", "$log", "shards/cov-shard-*/manifest.txt")): "artifact: reads the coverage parts' manifests and report log",
+    ("scripts/ci/coverage_shards.py", ("plan", "$COVERAGE_PARTS")): "ci-env: writes the part plan to GITHUB_OUTPUT",
+    ("scripts/ci/coverage_shards.py", ("run", "$COVERAGE_PARTS", "$PART"),
+     ('python3 scripts/ci/coverage_shards.py run "$COVERAGE_PARTS" "$PART" 2>&1', "tee run.log")): (
+        "cargo: runs an instrumented cargo test part"),
+    ("scripts/ci/coverage_shards.py", ("run", "$COVERAGE_PARTS", "sdk"),
+     ('python3 scripts/ci/coverage_shards.py run "$COVERAGE_PARTS" sdk 2>&1', "tee run.log")): (
+        "cargo: runs the instrumented SDK journey"),
     ("scripts/release/critical_path_coverage.py", ("art/coverage-linux/cov.json",)): "artifact: reads a CI coverage artifact",
     ("scripts/dev/test_run_prepush_ci_checks.py", ()): (
         "budget: tests the runner itself; 22.5 s would put the CI-checks stage at about 114 s of its "
         "120 s budget on every push; CI runs it on every PR"
     ),
     ("scripts/release/test_workflow_wiring_mutations.py", ()): "budget: 329 s alone, over the 120 s budget",
+    # Shell-script steps: CI-only ones, each with the reason it cannot run before a push.
+    ("scripts/ci/check-license-headers.sh", ()): (
+        "budget: 36 s alone would push the CI-checks stage past its 120 s budget; the pre-push kit's "
+        "cheap stage runs it on Spark, and CI on every PR"
+    ),
+    ("deploy/kubernetes/enterprise-alpha/scripts/kind-rollback-smoke.sh", ()): (
+        "ci-env: needs the kind cluster the workflow's kind-action step creates"
+    ),
+    ("tests/public_repo_hygiene.sh", ()): (
+        "budget: 16 s, over the 10 s cap for one replayed entry; it tests the hygiene checker itself, "
+        "which pre-push already runs on the change, and CI runs this suite on every PR"
+    ),
+    ('scripts/ci/changed-scope.sh', ('$MERGE_SHA', '$PR_NUMBER', '<HEAD>')): "ci-env: classifies this PR's changes from the event's merge SHA and PR number",
+    ('scripts/ci/check-cap-validate-pins.sh', ('target/debug/mcp-gateway',)): 'binary: runs a built target/debug/mcp-gateway',
+    ('scripts/ci/check-recursion-margin.sh', ()): "cargo: builds and measures the gateway's stack use",
+    ('scripts/ci/mingw-debs.sh', ('download', '$HOME/mingw-debs')): 'network: fetches or installs MinGW packages with apt-get',
+    ('scripts/ci/mingw-debs.sh', ('install', '$HOME/mingw-debs')): 'network: fetches or installs MinGW packages with apt-get',
+    ('scripts/ci/mingw-debs.sh', ('install-local', '$HOME/mingw-debs')): 'network: fetches or installs MinGW packages with apt-get',
+    ('scripts/ci/packaged-tests.sh', ('build',)): 'cargo: builds and runs the packaged test suite',
+    ('scripts/ci/packaged-tests.sh', ('run',)): 'cargo: builds and runs the packaged test suite',
+    ('scripts/ci/smoke-full-image.sh', ('${REGISTRY}/mikkoparkkola/mcp-gateway:scan-full',)): 'artifact: runs the built container image (docker, cosign)',
+    ('scripts/ci/smoke-full-image.sh', ('ghcr.io/mikkoparkkola/mcp-gateway@${DIGEST}',)): 'artifact: runs the built container image (docker, cosign)',
+    ('scripts/ci/smoke-image.sh', ('${REGISTRY}/mikkoparkkola/mcp-gateway:scan',)): 'artifact: runs the built container image (docker, cosign)',
+    ('scripts/ci/smoke-image.sh', ('ghcr.io/mikkoparkkola/mcp-gateway@${DIGEST}',)): 'artifact: runs the built container image (docker, cosign)',
+    ('scripts/ci/verify-artifact-licenses.sh', ()): 'cargo: reads the dependency graph with cargo',
+    ('scripts/dev/check-pr-body-hygiene.sh', ()): 'ci-env: reads the pull request body from the event (PR_BODY, gh)',
+    ('scripts/dev/check-public-repo-hygiene.sh', ('--base', 'origin/$BASE_REF')): "ci-env: base is the PR's base ref; pre-push runs the same check from its merge base (step public repo hygiene)",
+    ('scripts/dev/check_clock_lint.sh', ('--self-test',)): 'cargo: runs clippy on a planted scratch tree',
+    ('scripts/dev/docker-smoke.sh', ()): 'artifact: builds and runs the gateway in docker',
+    ('scripts/dev/helm-airgap-smoke.sh', ()): 'artifact: needs docker, kind, helm and cosign',
+    ('scripts/dev/helm-chart-smoke.sh', ()): 'artifact: installs the chart into a kind cluster',
+    ('scripts/dev/helm-kind-lifecycle.sh', ()): 'artifact: installs the chart into a kind cluster',
+    ('scripts/dev/helm-kind-real-image.sh', ('${REGISTRY}/mikkoparkkola/mcp-gateway:scan',)): 'artifact: runs the built image in a kind cluster',
+    ('scripts/dev/helm-supply-chain-smoke.sh', ()): 'artifact: needs docker, helm and cosign',
+    ('scripts/dev/service-template-smoke.sh', ()): 'cargo: builds and runs target/debug/mcp-gateway in docker',
+    ('scripts/dev/usability-smoke.sh', ()): 'cargo: builds and runs target/debug/mcp-gateway',
+    ('scripts/release/grep_no_test_hook.sh', ('image-mcp-gateway',)): 'artifact: inspects the built image or release binary',
+    ('scripts/release/grep_no_test_hook.sh', ('target/release/mcp-gateway',)): 'artifact: inspects the built image or release binary',
+    ('scripts/release/nfr_upgrade_1_rehearsal.sh', ()): 'binary: runs a built target/debug/mcp-gateway (upgrade rehearsal)',
+    ('scripts/release/sign-release-assets.sh', ('release', '$version', '$NAME')): 'release: signs release assets',
+    ('scripts/release/verify-release-assets.sh', ('published', '$VERSION', '$NAME')): 'release: verifies published release assets',
+    ('scripts/test-task-sdk-recovery.sh', ()): 'cargo: builds and runs the task SDK recovery test under docker',
 }
 
 
@@ -123,17 +180,43 @@ def _steps(root, path, seen):
         yield workflow.name, step
 
 
-def _scan(root):
+# Lines that name a .sh in a non-canonical form and stay so, each CI-only with a reason
+# (workflow file, the line with its whitespace collapsed). Every other such line fails closed.
+CI_ONLY_LINES: dict[tuple[str, str], str] = {
+    ("ci.yml", 'if scripts/release/verify-release-assets.sh tampered "$VERSION" "$NAME"; then'):
+        "release: the tag release job's tampered-copy check, against a draft release",
+    ("ci.yml", 'TAG_COMMIT="$GITHUB_SHA" SIGNER_IDENTITY="$IDENTITY" SIGNER_ISSUER="$SIGNER_ISSUER" '
+               'CHART_NOTES="$RUNNER_TEMP/chart-notes.md" scripts/release/publish_pinned_chart.sh "$image" "$repo" '
+               '| tee "$RUNNER_TEMP/publish.log"'):
+        "release: publishes and signs the chart in the tag release job",
+    ("docker.yml", 'if [ "$(bash scripts/ci/changed-scope.sh "$MERGE_SHA" "$PR_NUMBER" "$HEAD_SHA")" = docs_only=true ]; then'):
+        "ci-env: classifies a pull request into main from the event's merge SHA and PR number",
+    # A grep pattern over the changed paths: it names .sh files, it runs none.
+    ("docker.yml", r"""if grep -Eq '^(Dockerfile|\.dockerignore|\.trivyignore|Cargo\.toml|Cargo\.lock|\.github/workflows/docker\.yml|\.github/osv-scanner\.toml|docker/|scripts/ci/smoke-[^/]*\.sh|scripts/dev/helm-kind-real-image\.sh|deploy/|README\.md|docs/QUICKSTART\.md|docs/DEPLOYMENT\.md|scripts/dev/(docker-smoke\.sh|smoke_fixture_server\.py|smoke-fixture-capability\.sh|assert_capability_response\.py))' <<<"$files"; then"""):
+        "ci-env: matches this pull request's changed paths against the image's inputs",
+    ("feature-combos.yml", 'echo "key=$(scripts/ci/mingw-debs.sh key)" >> "$GITHUB_OUTPUT"'):
+        "network: names the apt package cache for the Windows cross toolchain",
+    ("feature-combos.yml", 'echo "prefix=$(scripts/ci/mingw-debs.sh prefix)" >> "$GITHUB_OUTPUT"'):
+        "network: names the apt package cache for the Windows cross toolchain",
+}
+
+
+def _scan(root, ci_only_lines=None):
     """(form -> [workflows], form -> automatic CI_ONLY reason, problems)."""
+    # Keys compared with whitespace collapsed, as the walker compares the workflow's lines.
+    lines_table = {(wf, " ".join(line.split())): reason
+                   for (wf, line), reason in (CI_ONLY_LINES if ci_only_lines is None else ci_only_lines).items()}
     forms, auto, found = {}, {}, []
-    seen = set()
+    seen, listed_seen = set(), set()
     for workflow in pr_workflows(root):
         for name, step in _steps(root, workflow, seen):
             run = step.get("run") if isinstance(step, dict) else None
             if not run:
                 continue
+            listed = frozenset(line for wf, line in lines_table if wf == name)
+            listed_seen |= {(name, " ".join(l.split())) for l in run.replace("\\\n", " ").splitlines()}
             try:
-                executed = workflow_shell.executions(run)
+                executed = workflow_shell.executions(run, ci_only_lines=listed)
             except workflow_shell.UnsupportedSyntax as err:
                 found.append(f"unsupported execution syntax in {name} step {step.get('name', '?')!r}: {err}")
                 continue
@@ -149,6 +232,11 @@ def _scan(root):
                         auto[form] = "windows: runs under a non-POSIX shell step"
                     elif ex.auto_class:
                         auto[form] = ex.auto_class
+    for key, reason in sorted(lines_table.items()):
+        if key not in listed_seen:
+            found.append(f"stale CI_ONLY line (no PR workflow has it): {key[0]}: {key[1]}")
+        if reason.split(":")[0].strip() not in CI_ONLY_CLASSES:
+            found.append(f"CI_ONLY line reason names no class from {CI_ONLY_CLASSES}: {key[1]}: {reason!r}")
     return forms, auto, found
 
 
@@ -179,15 +267,18 @@ def buckets(root: pathlib.Path, *, ci_only=None):
     table = CI_ONLY if ci_only is None else ci_only
     run = _forms_of((root / RUN_LIST).read_text()) if (root / RUN_LIST).exists() else set()
     pre_push = root / "scripts/dev/pre-push.sh"
-    already = {_form(e.script, e) for e in workflow_shell.executions(pre_push.read_text())} if pre_push.exists() else set()
-    return run, already, {**table, **_scan(root)[1]}
+    # pre-push.sh is read only to credit forms it already runs: a line it writes some other way earns nothing.
+    already = ({_form(e.script, e) for e in workflow_shell.executions(pre_push.read_text(), workflow_shell.ShellLines.SKIP)}
+               if pre_push.exists() else set())
+    return run, already, {**table, **_scan(root, ci_only_lines=None if ci_only is None else {})[1]}
 
 
 def problems(root: pathlib.Path, *, ci_only=None) -> list[str]:
     """Every drift problem, each naming its form and, when scanned, its workflows."""
     table = CI_ONLY if ci_only is None else ci_only
-    forms, auto, found = _scan(root)
-    run, already, ci = buckets(root, ci_only=table)
+    # A fixture passing its own CI_ONLY table lists no lines either; the real repo uses both tables.
+    forms, auto, found = _scan(root, ci_only_lines=None if ci_only is None else {})
+    run, already, ci = buckets(root, ci_only=ci_only)
     for form, workflows in sorted(forms.items()):
         label = _label(form) + f" ({', '.join(sorted(set(workflows)))})"
         homes = [b for b, members in (("RUN", run), ("ALREADY", already), ("CI_ONLY", ci)) if form in members]
@@ -658,6 +749,107 @@ class Rows(unittest.TestCase):
                 with self.assertRaises(workflow_shell.UnsupportedSyntax) as caught:
                     workflow_shell.executions(run)
                 self.assertIn("scripts/x.py", str(caught.exception))
+
+    # D30 (MIK-9315.SHSTEP.1): a shell-script CI step is an execution like a python one, so an
+    # unlisted one is named. Three shapes: through bash, run directly, and a tests/ suite.
+    def test_d30_an_unlisted_shell_script_step_is_named_with_its_workflow(self):
+        for run, script in (
+            ("bash scripts/ci/x.sh", "scripts/ci/x.sh"),
+            ("scripts/ci/x.sh --self-test", "scripts/ci/x.sh"),
+            ("tests/y.sh", "tests/y.sh"),
+        ):
+            with self.subTest(run):
+                self.t.workflow("ci.yml", pr_job(run))
+                found = problems(self.t.root, ci_only={})
+                self.assertTrue(any(script in p and "ci.yml" in p for p in found), found)
+
+    # D31: a listed shell-script step is in its bucket and raises nothing.
+    def test_d31_a_listed_shell_script_step_is_accepted(self):
+        self.t.workflow("ci.yml", pr_job("bash scripts/ci/x.sh --self-test"))
+        self.t.run_list("bash scripts/ci/x.sh --self-test\t5\tclosed")
+        self.assertEqual(problems(self.t.root, ci_only={}), [])
+
+    # D32: the canonical run forms. The form is the script and its own arguments (bound
+    # variables translated); `bash`, a leading ./ and trailing redirections are not part of it.
+    def test_d32_the_canonical_run_forms(self):
+        for run in ("bash scripts/ci/x.sh a b", "./scripts/ci/x.sh a b", "scripts/ci/x.sh a b",
+                    "scripts/ci/x.sh a b > out.txt 2>&1"):
+            with self.subTest(run):
+                (ex,) = workflow_shell.executions(run)
+                self.assertEqual((ex.script, ex.args), ("scripts/ci/x.sh", ("a", "b")))
+        for run, script in (("x.sh", "x.sh"), ("deploy/k8s/scripts/smoke.sh", "deploy/k8s/scripts/smoke.sh")):
+            with self.subTest(run):
+                self.assertEqual([e.script for e in workflow_shell.executions(run)], [script])
+        # A quoted ">" is an argument, not a redirection.
+        (ex,) = workflow_shell.executions('bash scripts/ci/x.sh ">" --strict')
+        self.assertEqual(ex.args, (">", "--strict"))
+        (ex,) = workflow_shell.executions('base="$BASE_SHA"\nscripts/ci/x.sh "$base..HEAD"')
+        self.assertEqual(ex.args, ("<BASE_TIP>..HEAD",))
+
+    # D33: the canonical syntax checks run nothing: one `bash -n <path>.sh`, or the loop form.
+    def test_d33_the_canonical_syntax_checks_run_nothing(self):
+        self.assertEqual(workflow_shell.executions("bash -n scripts/ci/x.sh"), [])
+        self.assertEqual(workflow_shell.executions('for f in scripts/ci/x.sh tests/y.sh; do bash -n "$f"; done'), [])
+
+    # D34 (lead ruling 2026-11-05): any other line naming a .sh fails closed, whatever it would
+    # run; the walker never parses a script out of arbitrary shell.
+    def test_d34_every_other_line_naming_a_sh_fails_closed(self):
+        for line in (
+            "bash scripts/ci/x.sh | tee f", "a && scripts/ci/x.sh", "scripts/ci/x.sh || true", "scripts/ci/x.sh; echo",
+            "scripts/ci/x.sh &", 'echo "$(scripts/ci/x.sh key)"', "echo `scripts/ci/x.sh`", "if scripts/ci/x.sh; then",
+            "FOO=1 scripts/ci/x.sh", "env FOO=1 scripts/ci/x.sh", "time -p bash scripts/ci/x.sh",
+            "command bash scripts/ci/x.sh", "bash -c 'scripts/ci/x.sh'", "bash -eo pipefail scripts/ci/x.sh",
+            "bash -n scripts/ci/x.sh scripts/ci/y.sh", "sh scripts/ci/x.sh", "sh -n scripts/ci/x.sh",
+            "bash $GITHUB_WORKSPACE/scripts/ci/x.sh", '"$DIR/x.sh"', "bash scripts/ci/check-*.sh",
+            "bash scripts/ci/check-[ab].sh", "bash ../x.sh", 'echo "see scripts/ci/x.sh"',
+            'for f in scripts/ci/x.sh; do bash "$f"; done', "for f in scripts/ci/x.sh scripts/ci/y.sh; do",
+            'for f in scripts/*.sh; do bash -n "$f"; done', "bash -n +n scripts/ci/x.sh",
+            'echo "scripts/ci/x.sh --strict" | bash', "scripts/ci/x.sh < <(scripts/ci/y.sh)",
+            "bash scripts/ci/x.sh > >(scripts/ci/y.sh)",
+            "bash <<EOF\nscripts/ci/x.sh\nEOF", "bash <<'EOF'\nscripts/ci/x.sh --check\nEOF",
+            "cat <<EOF\n$(bash scripts/ci/x.sh)\nEOF", 'bash scripts/ci/x.s"h"', "bash scripts/ci/x.s\\h",
+            "scripts/ci/x.s'h' --check", 'a; scripts/ci/x.s"h"', "scripts/ci/x.$'sh'", 'bash scripts/ci/x.$"sh"',
+            "scripts/ci/x.s\"h' --check",
+        ):
+            with self.subTest(line), self.assertRaises(workflow_shell.UnsupportedSyntax):
+                workflow_shell.executions(line)
+
+    # D35: a line listed CI-only (exact text, whitespace collapsed) yields nothing; unlisted it fails
+    # closed; a listed line no workflow has any more is reported stale; its reason needs a class.
+    def test_d35_a_listed_ci_only_line(self):
+        line = 'echo "key=$(scripts/ci/x.sh key)" >> "$GITHUB_OUTPUT"'
+        self.assertEqual(workflow_shell.executions(line, ci_only_lines=frozenset({line})), [])
+        self.t.workflow("ci.yml", pr_job(line))
+        self.assertTrue(any("unsupported execution syntax" in p for p in problems(self.t.root, ci_only={})))
+        listed = {("ci.yml", line): "network: names a cache key", ("ci.yml", "scripts/ci/gone.sh | tee x"): "release: gone",
+                  ("ci.yml", line.replace("key)", "key2)")): "no class here"}
+        found = _scan(self.t.root, ci_only_lines=listed)[2]
+        self.assertFalse(any("unsupported" in p for p in found), found)
+        self.assertTrue(any("stale CI_ONLY line" in p and "gone.sh" in p for p in found), found)
+        self.assertTrue(any("names no class" in p for p in found), found)
+
+    # D36: pre-push.sh is read only to credit forms it already runs (SKIP): a line it writes some
+    # other way earns nothing and raises nothing.
+    def test_d36_pre_push_lines_are_read_leniently(self):
+        block = 'GATE_PY="$(scripts/dev/gate-env-python.sh)"\nbash scripts/dev/x.sh "$base"'
+        found = workflow_shell.executions(block, workflow_shell.ShellLines.SKIP)
+        self.assertEqual([e.script for e in found], ["scripts/dev/x.sh"])
+        with self.assertRaises(workflow_shell.UnsupportedSyntax):
+            workflow_shell.executions(block)
+
+    # D37: a shell run does not cover a Python command the walker could not read.
+    def test_d37_a_shell_run_does_not_cover_a_missed_python_command(self):
+        block = "python3 scripts/ci/x.py\ncommand python3 scripts/ci/x.py --strict\nbash scripts/ci/y.sh"
+        with self.assertRaises(workflow_shell.UnsupportedSyntax):
+            workflow_shell.executions(block)
+
+    # D38: a literal glob operand runs only its first match; inline -c code is not an operand.
+    def test_d38_a_literal_python_glob_operand_fails_closed(self):
+        with self.assertRaises(workflow_shell.UnsupportedSyntax):
+            workflow_shell.executions("python3 scripts/ci/check_*.py")
+        self.assertEqual(workflow_shell.executions("python3 -c 'print(2*3)'"), [])
+        found = workflow_shell.executions("for f in scripts/ci/check_*.py; do\npython3 $f\ndone")
+        self.assertEqual([e.script for e in found], ["scripts/ci/check_*.py"])
 
     # D29 (lead ruling 2026-10-23): the guard's exceptions are closed lists.
     def test_d29_the_guards_exception_lists_are_closed(self):

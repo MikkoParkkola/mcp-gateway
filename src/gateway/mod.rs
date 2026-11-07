@@ -62,6 +62,8 @@ pub mod oauth;
 // else, so no caller outside the gateway can install it without the standard
 // auth layer that must run first.
 #[cfg(test)]
+mod admin_standing_scan_tests;
+#[cfg(test)]
 pub(crate) mod chain_test_support;
 // Every egress matrix it feeds is `firewall`-gated.
 #[cfg(all(test, feature = "firewall"))]
@@ -303,6 +305,73 @@ pub mod test_helpers {
                 std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
             }
             Ok(())
+        }
+    }
+    /// gateway.yaml, its journal and its staged original as they are on
+    /// disk: each file's bytes, or `None` where it is absent or unreadable.
+    /// A refusal must leave all three exactly as it found them, so every
+    /// refusal test snapshots them before the refused call and checks after.
+    ///
+    /// For tests in `tests/` and the crate's own tests only; not public API.
+    /// Read-only: it snapshots and asserts, and never writes.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub struct ConfigFiles {
+        config: Option<Vec<u8>>,
+        journal: Option<Vec<u8>>,
+        original: Option<Vec<u8>>,
+    }
+
+    impl ConfigFiles {
+        /// The three files belonging to the gateway.yaml at `config`, now.
+        #[must_use]
+        pub fn snapshot(config: &std::path::Path) -> Self {
+            use crate::config_persistence::journal;
+            let read = |path: &std::path::Path| std::fs::read(path).ok();
+            Self {
+                config: read(config),
+                journal: read(&journal::journal_path(config)),
+                original: read(&journal::original_path(config)),
+            }
+        }
+
+        /// That the three files are as this snapshot found them.
+        ///
+        /// # Panics
+        ///
+        /// When any of them was written, removed or created since.
+        // Kani's assert! ignores its message arguments, so `what` is unused there.
+        #[cfg_attr(kani, allow(unused_variables))]
+        pub fn assert_unchanged(&self, config: &std::path::Path, what: &str) {
+            assert!(
+                Self::snapshot(config) == *self,
+                "{what}: gateway.yaml, its journal or its staged original changed"
+            );
+        }
+
+        /// That none of the three exists: for a refusal whose premise
+        /// deletes gateway.yaml mid-call, so there is no "before" to keep.
+        ///
+        /// # Panics
+        ///
+        /// When gateway.yaml, its journal or its staged original exists.
+        // Kani's assert! ignores its message arguments, so `what` is unused there.
+        #[cfg_attr(kani, allow(unused_variables))]
+        pub fn assert_absent(config: &std::path::Path, what: &str) {
+            use crate::config_persistence::journal;
+            // Existence, not a read: an unreadable file is still left behind.
+            let present = |path: &std::path::Path| std::fs::symlink_metadata(path).is_ok();
+            let left = [
+                ("gateway.yaml", present(config)),
+                ("its journal", present(&journal::journal_path(config))),
+                (
+                    "its staged original",
+                    present(&journal::original_path(config)),
+                ),
+            ];
+            assert!(
+                left.iter().all(|(_, here)| !here),
+                "{what}: left behind: {left:?}"
+            );
         }
     }
 }

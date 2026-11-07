@@ -4,11 +4,11 @@ src/capability/backend_listing.rs	announce_listing_change	statement	Lifecycle	nu
 src/capability/backend_listing.rs	finish_initial_scan	statement	Lifecycle	nudge_catalogue_scannedx1
 src/clock.rs	-	module	the one place the wall clock is read	
 src/config_reload/grant_reload.rs	reload_identity_grants	statement	Lifecycle	allx1
-src/config_reload/mod.rs	apply_patch	statement	Lifecycle	getx1
-src/config_reload/mod.rs	apply_patch	statement	Lifecycle	getx1
-src/config_reload/mod.rs	apply_patch	statement	Lifecycle	registerx1
-src/config_reload/mod.rs	apply_patch	statement	Lifecycle	registerx1
-src/config_reload/mod.rs	apply_patch	statement	Lifecycle	removex1
+src/config_reload/apply.rs	apply_patch	statement	Lifecycle	getx1
+src/config_reload/apply.rs	apply_patch	statement	Lifecycle	getx1
+src/config_reload/apply.rs	apply_patch	statement	Lifecycle	registerx1
+src/config_reload/apply.rs	apply_patch	statement	Lifecycle	registerx1
+src/config_reload/apply.rs	apply_patch	statement	Lifecycle	removex1
 src/config_reload/refusals.rs	startup_refusals	statement	Admin	allx1
 src/config_reload/reload_context.rs	new	statement	Lifecycle	enforce_destinationsx1
 src/config_reload/reload_context.rs	reload_outcome	statement	Lifecycle	lock_reloadx1

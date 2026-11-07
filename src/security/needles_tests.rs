@@ -16,7 +16,7 @@ use crate::protocol::{JsonRpcMessage, JsonRpcResponse, RequestId};
 const GRACE: Duration = Duration::from_secs(3_600);
 
 /// Log lines written while `run` runs, as text (thread-scoped subscriber).
-fn logs(run: impl FnOnce()) -> String {
+pub(super) fn logs(run: impl FnOnce()) -> String {
     #[derive(Clone, Default)]
     struct Sink(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
     impl std::io::Write for Sink {
@@ -43,7 +43,7 @@ fn logs(run: impl FnOnce()) -> String {
 const T0: u64 = 1_800_000_000;
 
 /// The text `needles` leaves of an answer whose result is `text`.
-fn scrubbed(needles: &NeedleSet, text: &str) -> (Scrubbed, String) {
+pub(super) fn scrubbed(needles: &NeedleSet, text: &str) -> (Scrubbed, String) {
     let mut message = JsonRpcMessage::Response(JsonRpcResponse::success(
         RequestId::Number(1),
         json!({"text": text}),
@@ -588,5 +588,86 @@ fn the_renewal_clock_is_read_under_the_lock() {
     assert!(
         !clock_read_under_the_lock(&planted),
         "a clock read before the lock passed"
+    );
+}
+
+/// A sent value refused at a full set is held nowhere, so the set keeps
+/// refusing until that value's own grace has passed, even after the older
+/// values retire and make room; it lifts then with no further send.
+#[tokio::test(start_paused = true)]
+async fn a_refused_sent_value_keeps_the_set_refusing_until_its_grace_passes() {
+    let needles = NeedleSet::with_grace(GRACE);
+    for step in 0..super::MAX_NEEDLES {
+        needles.insert("b", &format!("fill-token-{step:05}"));
+    }
+    tokio::time::advance(Duration::from_secs(10)).await;
+    needles.insert("b", "refused-token-x");
+    assert!(needles.overflowed(), "premise: the value was refused");
+    // The filled values are past their grace; X is exactly at the end of
+    // its own, so still live.
+    tokio::time::advance(GRACE).await;
+    // X is held nowhere, so it can only be refused: the set must still be
+    // refusing. (A refusal replaces the whole answer at its caller.)
+    let (outcome, text) = scrubbed(&needles, "echo refused-token-x");
+    assert_eq!(
+        outcome,
+        Scrubbed::Refuse,
+        "the refused value was served once older values retired: {text}"
+    );
+    tokio::time::advance(Duration::from_secs(1)).await;
+    assert!(
+        !needles.overflowed(),
+        "the refusal outlived the refused value's grace"
+    );
+}
+
+/// Once a refused value's grace has passed, answers are served again on
+/// the scrub path alone, with nothing else lifting the refusal first: an
+/// ordinary answer passes, and the refused value, past its grace like any
+/// retired value, is no longer withheld.
+#[tokio::test(start_paused = true)]
+async fn answers_flow_again_once_the_refused_values_grace_has_passed() {
+    let needles = NeedleSet::with_grace(GRACE);
+    for step in 0..super::MAX_NEEDLES {
+        needles.insert("b", &format!("fill-token-{step:05}"));
+    }
+    tokio::time::advance(Duration::from_secs(10)).await;
+    needles.insert("b", "refused-token-x");
+    assert!(needles.overflowed(), "premise: the value was refused");
+    tokio::time::advance(GRACE + Duration::from_secs(1)).await;
+    for answer in ["an ordinary answer", "echo refused-token-x"] {
+        let (outcome, text) = scrubbed(&needles, answer);
+        assert_eq!(
+            outcome,
+            Scrubbed::Clean,
+            "still refused after the refused value's grace: {text}"
+        );
+    }
+}
+
+/// A later refused value extends the refusal to its own grace: the deadline
+/// moves on with each refusal and never stays at the first one's.
+#[tokio::test(start_paused = true)]
+async fn a_later_refused_value_extends_the_refusal_to_its_grace() {
+    let needles = NeedleSet::with_grace(GRACE);
+    for step in 0..super::MAX_NEEDLES {
+        needles.insert("b", &format!("fill-token-{step:05}"));
+    }
+    tokio::time::advance(Duration::from_secs(10)).await;
+    needles.insert("b", "refused-token-x");
+    tokio::time::advance(Duration::from_secs(10)).await;
+    needles.insert("b", "refused-token-y");
+    // X's grace has passed, Y's ends now: the set still refuses.
+    tokio::time::advance(GRACE).await;
+    let (outcome, text) = scrubbed(&needles, "echo refused-token-y");
+    assert_eq!(
+        outcome,
+        Scrubbed::Refuse,
+        "the refusal lifted at the first refused value's deadline: {text}"
+    );
+    tokio::time::advance(Duration::from_secs(1)).await;
+    assert!(
+        !needles.overflowed(),
+        "the refusal outlived the last refused value's grace"
     );
 }

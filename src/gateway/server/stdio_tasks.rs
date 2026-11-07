@@ -303,7 +303,7 @@ impl StdioTasks {
             crate::gateway::meta_mcp::Authentication::Authenticated,
             crate::security::audit::CredentialKind::LocalTransport,
             // As every stdio call: the client spawned this process.
-            true,
+            crate::gateway::authz::AdminStanding::Gateway,
             input_capabilities,
             Some(session_id.to_owned()),
             protocol_revision.map(str::to_owned),

@@ -214,6 +214,7 @@ async fn yield_until(mut done: impl FnMut() -> bool) -> bool {
     done()
 }
 
+mod admin_scope;
 mod auth;
 mod backpressure;
 mod frames;
@@ -222,3 +223,4 @@ mod handover;
 mod identity;
 mod live_logs;
 mod load;
+mod scope;

@@ -17,6 +17,8 @@ python3 scripts/ci/check_advisory_exceptions.py	0	closed
 python3 scripts/ci/check_advisory_exceptions.py --self-test	0	closed
 python3 scripts/ci/check_needs.py --self-test	0	closed
 python3 scripts/ci/check_per_call_stages.py	0	closed
+python3 scripts/ci/compare_coverage.py --self-test	0	closed
+python3 scripts/ci/coverage_shards.py --self-test	0	closed
 python3 scripts/ci/job_time_watch.py --self-test	0	closed
 python3 scripts/ci/mutants/run_mutants.py --self-test	2	closed
 python3 scripts/ci/shard_tests.py --self-test	0	closed
@@ -26,6 +28,8 @@ python3 scripts/ci/test_docs_only_gating.py	1	closed
 python3 scripts/ci/test_feature_shards.py	0	closed
 python3 scripts/ci/test_heavy_train_gating.py	1	closed
 python3 scripts/ci/test_os_shards.py	1	closed
+python3 scripts/ci/test_os_label_routing.py	1	closed
+python3 scripts/ci/test_mingw_debs.py	1	closed
 python3 scripts/ci/test_release_features.py	0	closed
 python3 scripts/ci/test_throwaway_routing.py	1	closed
 python3 scripts/dev/check-event-source-scope.py <BASE_TIP>	1	closed
@@ -98,3 +102,12 @@ python3 scripts/release/upgrading_fragments.py check	1	closed
 python3 scripts/release/upgrading_fragments.py check --base <BASE_TIP> --head <HEAD>	1	closed
 "$GATE_PY" scripts/dev/test_cfg_items.py	1	closed
 python3 scripts/dev/test_gate_env_python.py	1	closed
+scripts/ci/changed-scope.sh --self-test	0	closed
+scripts/ci/check-capability-pin-counts.sh	1	closed
+scripts/ci/check-hosted-runners.sh	0	closed
+scripts/ci/check-hosted-runners.sh --self-test	0	closed
+scripts/ci/trusted-runner/job-started.sh --self-test	1	closed
+scripts/dev/check-commit-message-hygiene.sh <BASE_TIP>..HEAD	0	closed
+scripts/dev/check-public-repo-hygiene.sh	0	closed
+tests/artifact_licenses.sh	3	closed
+tests/commit_message_hygiene.sh	8	closed

@@ -65,6 +65,14 @@ pub(crate) mod keyedit;
 mod splice;
 #[cfg(feature = "webui")]
 pub(crate) use splice::{NOT_IN_PLACE, edit_text};
+
+/// Why [`edit_text`] could not edit `text` (at `path`) in place, as the
+/// web UI's backend routes answer it: the comment lines a rewrite would
+/// drop, by line number, never their text.
+#[cfg(feature = "webui")]
+pub(crate) fn not_in_place(path: &Path, text: &str) -> String {
+    splice::not_in_place(path, text)
+}
 #[path = "config_persistence_url.rs"]
 mod url_spelling;
 
@@ -449,13 +457,19 @@ fn edit_locked<T>(
         return Ok(false);
     };
     // Fail closed (GH462): bytes that do not parse are never written.
-    Config::from_file_text(&text).map_err(|e| {
+    let parsed = Config::from_file_text(&text).map_err(|e| {
         format!(
             "Not saved: the new {} does not parse as a config: {e}",
             path.display()
         )
     })?;
     write_yaml_at(&locked.target, &text)?;
+    // A text writer carries the file through (`init`, `upgrade`): a rule the
+    // firewall-on load refuses stays as it was, and warns.
+    #[cfg(feature = "firewall")]
+    crate::security::firewall::warn_refused_rules(&parsed);
+    #[cfg(not(feature = "firewall"))]
+    let _ = parsed;
     Ok(true)
 }
 
@@ -534,6 +548,11 @@ fn render(
     config
         .validate_with_env(&config.env_overlay())
         .map_err(|e| format!("Failed to validate config: {e}"))?;
+    // A rule the firewall-on load refuses is written only as carried over
+    // unchanged, whatever `enabled` says: the rules apply on a reload.
+    #[cfg(feature = "firewall")]
+    crate::security::firewall::refuse_authored(before, config)
+        .map_err(|e| format!("Failed to validate config: {e}"))?;
     if let (Some(before), Some(text)) = (before, text) {
         let value = |c: &Config| serde_json::to_value(c).ok();
         if mode == CommentLoss::Refuse && value(before) == value(config) {
@@ -598,3 +617,7 @@ mod tests;
 #[cfg(test)]
 #[path = "config_persistence_edit_tests.rs"]
 mod edit_tests;
+
+#[cfg(all(test, feature = "firewall"))]
+#[path = "config_persistence_refused_tests.rs"]
+mod refused_tests;

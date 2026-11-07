@@ -44,7 +44,7 @@ impl Grants {
 #[async_trait::async_trait]
 impl ListenerMint for Grants {
     async fn mint(&self, _: &str, identity: &VerifiedIdentity) -> crate::Result<ListenerGrant> {
-        let subject = identity.subject.as_str();
+        let subject = identity.subject();
         Ok(ListenerGrant {
             headers: vec![(
                 "authorization".to_owned(),
@@ -60,7 +60,7 @@ impl ListenerMint for Grants {
         _: &str,
         identity: &VerifiedIdentity,
     ) -> Result<Option<String>, FenceRead> {
-        Ok(Some(self.binding(&identity.subject)))
+        Ok(Some(self.binding(identity.subject())))
     }
 }
 
@@ -141,12 +141,11 @@ fn managed_yaml(url: &str) -> String {
 
 /// The event id, subscription and lease stamp of every record in `f`'s outbox.
 fn queued(f: &Fixture) -> Vec<(String, String, Option<String>)> {
-    let entries = std::fs::read_dir(f.dir.path().join("outbox")).expect("outbox");
-    entries
-        .flatten()
-        .map(|e| {
+    crate::events::records::committed_records(&f.dir.path().join("outbox"))
+        .iter()
+        .map(|p| {
             let record: serde_json::Value =
-                serde_json::from_slice(&std::fs::read(e.path()).expect("read")).expect("record");
+                serde_json::from_slice(&std::fs::read(p).expect("read")).expect("record");
             let text = |v: &serde_json::Value| v.as_str().unwrap_or_default().to_owned();
             (
                 text(&record["event_id"]),

@@ -80,14 +80,14 @@ impl PolicyEngine {
         for rule in &self.rules {
             if matches_rule(&rule.match_criteria, identity) {
                 debug!(
-                    email = %identity.email,
-                    issuer = %identity.issuer,
+                    email = %identity.email(),
+                    issuer = %identity.issuer(),
                     "Policy rule matched"
                 );
                 return apply_intersection(&rule.scopes, requested);
             }
         }
-        debug!(email = %identity.email, "No policy rule matched");
+        debug!(email = %identity.email(), "No policy rule matched");
         Err(ScopeRefusal::Denied)
     }
 }
@@ -117,24 +117,24 @@ pub struct RequestedScopes {
 /// Evaluate whether an identity matches the rule's match criteria.
 fn matches_rule(criteria: &PolicyMatchConfig, identity: &VerifiedIdentity) -> bool {
     // The issuer always applies; every other present criterion must match.
-    if identity.issuer != criteria.issuer {
+    if identity.issuer() != criteria.issuer {
         return false;
     }
 
     if let Some(ref domain) = criteria.domain
-        && !email_domain(&identity.email).is_some_and(|d| d.eq_ignore_ascii_case(domain))
+        && !email_domain(identity.email()).is_some_and(|d| d.eq_ignore_ascii_case(domain))
     {
         return false;
     }
 
     if let Some(ref email) = criteria.email
-        && (identity.email.is_empty() || !identity.email.eq_ignore_ascii_case(email))
+        && (identity.email().is_empty() || !identity.email().eq_ignore_ascii_case(email))
     {
         return false;
     }
 
     if let Some(ref group) = criteria.group
-        && !identity.groups.iter().any(|g| g == group)
+        && !identity.groups().iter().any(|g| g == group)
     {
         return false;
     }

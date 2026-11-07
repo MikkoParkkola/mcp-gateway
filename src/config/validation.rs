@@ -25,38 +25,10 @@ impl Config {
         if !firewall.enabled {
             return Ok(());
         }
-        let keyed = self.auth.enabled && !self.auth.api_keys.is_empty();
-        let known = |name: &str| self.auth.api_keys.iter().any(|key| key.name == name);
+        let keys = crate::security::firewall::RuleKeys::of(self);
         for (i, rule) in firewall.rules.iter().enumerate() {
-            let path = format!("security.firewall.rules[{i}]");
-            let names = rule
-                .keys
-                .iter()
-                .flatten()
-                .enumerate()
-                .map(|(j, k)| (format!("{path}.keys[{j}]"), k));
-            let excepted = rule
-                .except
-                .iter()
-                .flatten()
-                .enumerate()
-                .filter_map(|(j, e)| {
-                    e.key
-                        .as_ref()
-                        .map(|k| (format!("{path}.except[{j}].key"), k))
-                });
-            for (at, name) in names.chain(excepted) {
-                if !keyed {
-                    return Err(Error::ConfigValidation(format!(
-                        "{at} needs API-key authentication (auth.enabled with auth.api_keys)"
-                    )));
-                }
-                if !known(name) {
-                    return Err(Error::ConfigValidation(format!(
-                        "{at} names no configured API key"
-                    )));
-                }
-            }
+            crate::security::firewall::key_problem(i, rule, &keys)
+                .map_err(Error::ConfigValidation)?;
         }
         Ok(())
     }
@@ -140,6 +112,7 @@ impl Config {
         self.validate_backend_runtime_profiles()?;
         self.validate_stop_when_idle_ownership()?;
         self.validate_max_frame_bytes()?;
+        self.validate_backend_owners()?;
         self.webhooks.validate()?;
         self.control_plane.role_mapping.validate()?;
         self.validate_identity_propagation()?;
@@ -150,6 +123,8 @@ impl Config {
         self.validate_firewall_rule_keys()?;
         #[cfg(feature = "firewall")]
         crate::security::firewall::warn_folder_rules_at_load(self);
+        #[cfg(feature = "firewall")]
+        crate::security::firewall::warn_refused_at_load(self);
         self.auth.validate_distinct_principals(overlay)?;
         self.security.validate_sections(self.auth.enabled)?;
         self.security.message_signing.resolve_with_env(overlay)?;

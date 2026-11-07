@@ -19,22 +19,27 @@ src/backend/pool.rs	refuse_shared_start	Error::Forbidden{}	1	recorded	a delivere
 src/backend/pool_eviction.rs	arm_refusal_eviction	on_definitive_refusal	1	not-delivered	registers the slot's eviction on a definitive refusal
 src/backend/secret_send.rs	prepare_secrets	refuse_secret_target	1	not-a-decision	a secret rule the send cannot apply: a configuration failure, not a decision about the caller
 src/backend/secret_send.rs	refuse_secret_target	refusal	3	not-a-decision	a secret rule the send cannot apply: a configuration failure, not a decision about the caller
-src/capability/backend.rs	call_tool_with_context	refuse_unless_read_only	1	pending:capability-refusals	a capability refused inside a read-only call; fixed by the capability-refusals follow-up
+src/capability/backend.rs	call_tool_with_context	refuse_unless_read_only	1	recorded	a capability refused inside a read-only call: the call site raises refused while the cell vouches
 src/capability/discovery/chain.rs	probe_single	record_ssrf_refusal	1	no-record	capability discovery probing, not a call
 src/capability/discovery/mod.rs	discover	ssrf_refusal	1	no-record	capability discovery, not a call
-src/capability/execution_context.rs	validate_capability_url_for_context	refuse_loopback_name	1	pending:capability-refusals	a capability URL naming loopback; fixed by the capability-refusals follow-up
-src/capability/executor/cli.rs	execute_cli	refuse_egress	1	pending:capability-refusals	a CLI capability naming a network destination; fixed by the capability-refusals follow-up
+src/capability/execution_context.rs	validate_capability_url_for_context	refuse_loopback_name	1	recorded	a capability URL naming loopback: each caller raises refused while vouched (the REST request in executor/mod.rs, the token endpoint in credentials.rs)
+src/capability/execution_context.rs	record_refusal	is_ssrf_refusal	1	not-delivered	predicate: the one guard for the capability executor's checks that can also fail on a malformed URL (REST, the token endpoint and its refresh flight before the config wrap hides the refusal, GraphQL, JSON-RPC). A refusal of a URL naming a host, cleartext or destination, records refused; a malformed URL records no refusal (the record reads delivered). The raise is emitted once inside this helper, and the scanner attributes it to each caller's record_refusal row (classed recorded)
+src/capability/executor/cli.rs	execute_cli	refuse_egress	1	recorded	a CLI capability naming a network destination: the call site raises refused while vouched
 src/capability/executor/cli_argv.rs	build_cli_invocation	refuse_nul	1	not-a-decision	a NUL byte in an argument: a malformed request
 src/capability/executor/cli_argv.rs	push_each	refuse_nul	1	not-a-decision	a NUL byte in an argument: a malformed request
 src/capability/executor/cli_argv.rs	render_element	refuse_nul	1	not-a-decision	a NUL byte in an argument: a malformed request
 src/capability/executor/cli_argv.rs	render_stdin	refuse_nul	1	not-a-decision	a NUL byte in an argument: a malformed request
-src/capability/executor/client.rs	build	refuse_hop	2	recorded	refuse_hop raises while the cell vouches
-src/capability/executor/client.rs	build	refuse_loopback_name	1	pending:capability-refusals	a capability URL naming loopback; fixed by the capability-refusals follow-up
+src/capability/executor/client.rs	configured	refuse_hop	2	recorded	refuse_hop raises while the cell vouches
+src/capability/executor/client.rs	configured	refuse_loopback_name	1	feeds	a redirect hop naming loopback: refuse_hop delivers it and raises refused while vouched
 src/capability/executor/client.rs	send_with_retry	note_redirect_refusal	2	recorded	a cleartext downgrade the redirect policy refused (RedirectRefused): the send raises refused while vouched, on both send paths; the caller still receives the transport error
-src/capability/executor/client.rs	send_with_retry	ssrf_refusal	2	pending:capability-refusals	a capability HTTP call the SSRF guard refuses; fixed by the capability-refusals follow-up
-src/capability/executor/graphql.rs	execute	refuse_loopback_name	1	pending:capability-refusals	a capability URL naming loopback; fixed by the capability-refusals follow-up
-src/capability/executor/jsonrpc.rs	execute	refuse_loopback_name	1	pending:capability-refusals	a capability URL naming loopback; fixed by the capability-refusals follow-up
-src/capability/executor/mcp.rs	execute_mcp	refuse_egress	1	pending:capability-refusals	an MCP capability naming a network destination; fixed by the capability-refusals follow-up
+src/capability/executor/client.rs	send_with_retry	ssrf_refusal	2	recorded	a capability HTTP call the SSRF guard refuses: both send paths raise refused while vouched
+src/capability/executor/credentials.rs	refresh_provider_token	record_refusal	3	recorded	the token endpoint's cleartext and destination checks, and the refresh flight's destination refusal before the config wrap: each raises refused while vouched through record_refusal, a malformed endpoint records no refusal (the record reads delivered)
+src/capability/executor/graphql.rs	execute	record_refusal	1	recorded	the GraphQL endpoint's destination check: a destination refusal raises refused while vouched through record_refusal, a malformed URL records no refusal (the record reads delivered)
+src/capability/executor/graphql.rs	execute	refuse_loopback_name	1	recorded	a GraphQL endpoint naming loopback: the call site raises refused while vouched
+src/capability/executor/jsonrpc.rs	execute	record_refusal	1	recorded	the JSON-RPC endpoint's destination check: a destination refusal raises refused while vouched through record_refusal, a malformed URL records no refusal (the record reads delivered)
+src/capability/executor/jsonrpc.rs	execute	refuse_loopback_name	1	recorded	a JSON-RPC endpoint naming loopback: the call site raises refused while vouched
+src/capability/executor/mcp.rs	execute_mcp	refuse_egress	1	recorded	an MCP capability naming a network destination: the call site raises refused while vouched
+src/capability/executor/mod.rs	execute_provider_with_context	record_refusal	2	recorded	the REST URL's cleartext and destination checks: each refusal raises refused while vouched through record_refusal, a malformed URL records no refusal (the record reads delivered)
 src/capability/loader.rs	load_capability_file	refuse_unloadable	1	no-record	capability load
 src/capability/openapi/convert.rs	fetch_error_message	ssrf_refusal	1	no-record	OpenAPI import (admin UI), not a call
 src/commands/config_write.rs	rewrite_url_aliases_in	refuse_unreadable	2	no-record	a CLI config rewrite
@@ -52,6 +57,7 @@ src/config/secret_ref.rs	is_template_syntax	refuse_stray	2	not-delivered	predica
 src/config/secret_rules.rs	check	refusal	1	no-record	config load
 src/config/strict_keys.rs	refuse_unrecognised_keys	refusal	1	no-record	config load
 src/config/strict_keys.rs	refuse_unrecognised_keys	removed_refusal	1	no-record	config load
+src/config_persistence.rs	render	refuse_authored	1	no-record	a config write that adds or changes a firewall rule the load refuses, refused before writing
 src/config_persistence_atomic_windows.rs	prepare_from	source_refusal	1	no-record	a config write
 src/config_persistence_keyedit.rs	edit_in_place	refusal	1	no-record	a config write: an API key revocation the in-place editor cannot prove, answered with hand instructions by the admin UI
 src/config_persistence_keyedit_shape.rs	place	attach_refusal	1	no-record	a config write
@@ -64,19 +70,26 @@ src/config_reload/reload_context.rs	reload_transaction	refuse_before_apply	1	fee
 src/config_reload/reload_context.rs	reload_transaction	reload_refusal	1	feeds	a reload refusal gateway_reload_config answers; reload_config raises only for the posture refusal
 src/config_reload/reload_context.rs	reload_transaction	restart_only_refusal	1	feeds	a reload refusal gateway_reload_config answers; reload_config raises only for the posture refusal
 src/config_reload/reload_context.rs	with_pending_restart	next_start_refusal	1	not-delivered	restart advice inside a reload answer
+src/config_reload/reload_context_evaluate.rs	load_config_patch	refuse_while_running	1	feeds	a reload refusal gateway_reload_config answers (a refused firewall rule while the firewall runs); not a posture refusal
 src/config_reload/reload_context_refusals.rs	refuse_before_apply	refuse_capability_name_clash	1	no-record	config reload
 src/config_reload/reload_context_refusals.rs	refuse_before_apply	reload_binding_refusal	1	feeds	a reload refusal gateway_reload_config answers; not a posture refusal, so recorded as no policy decision
 src/config_reload/reload_context_refusals.rs	refuse_before_apply	reload_posture_refusal	1	feeds	the posture refusal reload_config raises refused for
+src/config_reload/reload_context_write.rs	mutate_locked	refuse_when_audited	1	no-record	config write: the older mutate path on an audited gateway, refused before any lock
+src/config_reload/reload_context_write.rs	mutate_locked	refuse_while_running	1	no-record	a config write refused before writing while the firewall runs
+src/config_reload/reload_context_write.rs	write_and_reload_outcome_within	refuse_when_audited	1	no-record	config write: the older whole-file write on an audited gateway, refused before any lock
+src/config_reload/reload_context_write.rs	write_and_reload_outcome_within	refuse_while_running	1	no-record	a config write refused before writing while the firewall runs
 src/config_reload/replace_validate.rs	refuse_candidate	refuse_before_apply	1	no-record	config write: the reload's own checks on the new bytes, before any secret entry; the reload runs them again
 src/config_reload/replace_validate.rs	refuse_candidate	reload_refusal	1	no-record	config write: the reload's own checks on the new bytes, before any secret entry; the reload runs them again
 src/config_reload/replace_validate.rs	refuse_candidate	restart_only_refusal	1	no-record	config write: the reload's own checks on the new bytes, before any secret entry; the reload runs them again
 src/config_reload/replace_validate.rs	refuse_shared_credentials	refuse_shared_digests	1	no-record	config write: a new bearer that is an API key's credential, before any secret entry
+src/config_reload/replace_validate.rs	validate_template	refuse_authored	1	no-record	a config replace, refused before any entry
 src/config_reload/replace_validate.rs	validate_template	refuse_candidate	1	no-record	config write: the reload's own checks on the new bytes, before any secret entry; the reload runs them again
 src/config_reload/replace_validate.rs	validate_template	refuse_shared_credentials	1	no-record	config write: a new bearer that is an API key's credential, before any secret entry
+src/config_reload/replace_validate.rs	validate_template	refuse_while_running	1	no-record	a config replace, refused before any entry
 src/error_origin.rs	http_is_backend_refusal	is_deterministic_refusal	1	not-delivered	predicate
 src/error_origin.rs	origin	http_is_backend_refusal	1	not-delivered	predicate: names who refused, for the error-count metric
-src/error_origin.rs	to_rpc_code	http_is_backend_refusal	1	not-delivered	predicate: picks the JSON-RPC code for a backend's HTTP refusal
 src/error_origin.rs	origin	is_echo_refusal	1	not-delivered	predicate: counts the scrub's retryable refusal as the gateway's, for the error-count metric
+src/error_origin.rs	to_rpc_code	http_is_backend_refusal	1	not-delivered	predicate: picks the JSON-RPC code for a backend's HTTP refusal
 src/events/rpc_held.rs	cap_refusal_for	cap_refusal	1	no-record	an events subscription cap, not a call delivery
 src/events/worker.rs	retry_unsent	retry_after_refusal	1	no-record	event delivery
 src/events/worker.rs	unsent_later	retry_after_refusal	1	no-record	event delivery
@@ -301,6 +314,7 @@ src/gateway/ui/backends/signin.rs	confirm_sign_in	refuse_body	1	no-record	admin 
 src/gateway/ui/backends/signin.rs	confirm_sign_in	refuse_host	1	no-record	admin UI sign-in: refuses the request before any login starts, no call delivery
 src/gateway/ui/backends/signin.rs	start_sign_in	refuse_body	1	no-record	admin UI sign-in: refuses the request before any login starts, no call delivery
 src/gateway/ui/backends/signin.rs	start_sign_in	refuse_host	1	no-record	admin UI sign-in: refuses the request before any login starts, no call delivery
+src/gateway/ui/backends/write.rs	refused_write	config_refusal	1	no-record	admin UI backend routes: the config writer's guarded read refused gateway.yaml, fixed text, no call delivery
 src/gateway/ui/discovery.rs	adopt_eligible	name_refusal	1	no-record	admin UI decision set: whether a find opens an adopt item, no call delivery
 src/gateway/ui/discovery.rs	body	name_refusal	1	no-record	admin UI discovery listing: drops managed finds from the radar count, no call delivery
 src/gateway/ui/discovery.rs	listed	name_refusal	1	no-record	admin UI discovery listing: labels a find's adopt refusals, no call delivery
@@ -310,6 +324,7 @@ src/gateway/ui/discovery_adopt.rs	answer	config_refusal	1	no-record	admin UI dis
 src/gateway/ui/events.rs	replay_one	refusal	1	no-record	accounts, SSE, start-up or admin UI: no call delivery
 src/gateway/ui/import.rs	fetch_error_message	ssrf_refusal	1	no-record	accounts, SSE, start-up or admin UI: no call delivery
 src/gateway/ui/overview.rs	kpi_and_servers	startup_refusal	1	no-record	the Overview's Needs-you list: a start-up denial shown to the admin, no call delivery
+src/gateway/ui/policies_rules.rs	refused	first_refusal	1	not-delivered	the Policies read model's flag on a rule; nothing is refused
 src/gateway/ui/preview.rs	preview_backend	refusal	1	no-record	accounts, SSE, start-up or admin UI: no call delivery
 src/gateway/ui/tool_call.rs	admit	refusal	2	no-record	admin UI tool route, before any dispatch (message signing on, call slots busy); its admin_action record carries the disposition, no call delivery exists
 src/gateway/ui/tool_call.rs	call	refusal	2	no-record	admin UI tool route: a non-JSON body before dispatch, or the outward wording of a dispatched failure the inner gateway_invoke dispatch already recorded
@@ -323,12 +338,12 @@ src/identity_propagation/account_strategies_resolve.rs	revalidate	transient_mint
 src/identity_propagation/account_strategies_view.rs	audit_transient_refusal	audit_refusal	1	not-delivered	audit row
 src/identity_propagation/account_strategies_view.rs	transient_mint_refusal	audit_transient_refusal	1	not-delivered	audit row
 src/key_server/handler.rs	exchange_token	token_cap_refusal	1	no-record	the key server's token endpoint
-src/oauth/client/destination.rs	check_destination	cleartext_refusal	1	no-record	the interactive OAuth login and discovery flows, not a tool call
+src/oauth/client/destination.rs	check_destination	cleartext_refusal	1	recorded	in a tool call's lazy start, recorded at the join (transport/http/startup.rs connect_as, interactive callers only); the login and discovery flows outside a call have no call record
 src/oauth/client/destination.rs	client_for	cleartext_refusal	1	no-record	the interactive OAuth login and registration flows, not a tool call
-src/oauth/client/destination.rs	finish	refuse_hop	2	pending:capability-refusals	a redirect hop in the detached token refresh, which has no cell; fixed by the capability-refusals follow-up
-src/oauth/client/destination.rs	hop	cleartext_refusal	1	pending:capability-refusals	an OAuth redirect hop refused for cleartext; fixed by the capability-refusals follow-up
-src/oauth/client/destination.rs	hop	literal_refusal	1	pending:capability-refusals	an OAuth redirect hop refused for a literal address; fixed by the capability-refusals follow-up
-src/oauth/client/destination.rs	refresh_client_for	cleartext_refusal	1	pending:capability-refusals	a token refresh inside a tool call refused for a cleartext endpoint; fixed by the capability-refusals follow-up
+src/oauth/client/destination.rs	finish	refuse_hop	2	recorded	a redirect hop in the detached token refresh, which has no cell: the caller records it at the join (transport detach_token_step, capability credentials, lazy start)
+src/oauth/client/destination.rs	hop	cleartext_refusal	1	recorded	an OAuth redirect hop refused for cleartext: recorded at the caller's join, as finish
+src/oauth/client/destination.rs	hop	literal_refusal	1	recorded	an OAuth redirect hop refused for a literal address: recorded at the caller's join, as finish
+src/oauth/client/destination.rs	refresh_client_for	cleartext_refusal	1	recorded	a token refresh inside a tool call refused for a cleartext endpoint: recorded at the caller's join
 src/oauth/client/discovery.rs	fetch_resource_metadata	is_ssrf_refusal	1	not-delivered	predicate
 src/oauth/client/grants.rs	token_from_answer	refuse_oversized_expires_in	1	not-a-decision	a malformed token answer from the identity provider
 src/oauth/client/refresh_flight.rs	send	is_ssrf_refusal	1	not-delivered	predicate
@@ -354,11 +369,14 @@ src/secret_injection.rs	inject_rules	refusal	3	not-a-decision	a secret rule the 
 src/security/decision_record.rs	decision	refusal	1	not-delivered	reads the noted refusing check for the audit record
 src/security/decision_record.rs	has_refusal	refusal	1	not-delivered	predicate over the noted refusing check
 src/security/decision_record.rs	refusal_pair	refusal	1	not-delivered	reads the noted refusing check and its rule for the audit record
-src/security/http_diagnostics.rs	oauth_request_error	ssrf_refusal	1	pending:capability-refusals	an OAuth destination refusal, reached in a call by a token refresh (refresh_flight); fixed by the capability-refusals follow-up
+src/security/firewall/refused_rules.rs	refuse_authored	first_refusal	1	no-record	a config write's refusal (render, replace); no call delivers it
+src/security/firewall/refused_rules.rs	warn_refused_rules	first_refusal	1	not-delivered	a load warning; nothing is refused
+src/security/http_diagnostics.rs	oauth_request_error	ssrf_refusal	1	recorded	an OAuth destination refusal reached through the refresh flight: each interactive caller records it at its join; the non-interactive token step records none
 src/security/http_diagnostics.rs	safe_request_error	ssrf_refusal	1	feeds	the SSRF refusal a capability call raises at send_with_retry
 src/security/http_diagnostics.rs	safe_request_error_for	ssrf_refusal	1	feeds	the SSRF refusal a capability call raises at send_with_retry
 src/security/http_diagnostics.rs	status_refusal	is_deterministic_refusal	1	not-delivered	predicate
 src/security/needles.rs	scrubbed_answer	refusal	2	feeds	a backend answer that holds a value the gateway injected is replaced; the call records it refused where it is delivered (delivery_facts::echo_refusal_delivered, read with the cell's echo_refusal_built)
+src/security/needles_configured.rs	scrub_stored_text	refusal	2	feeds	a stored error's message that holds a current value at a full set, or whose redaction by one set forms another set's value, is replaced on the way out; the call records it refused (delivery_facts::echo_refusal_built)
 src/security/ssrf/destination.rs	check_literal	literal_refusal	1	feeds	the SSRF literal-address refusal its callers deliver
 src/security/ssrf/redirect.rs	ssrf_redirect_policy	refuse_hop	1	recorded	refuse_hop raises while the cell vouches
 src/transport/http/budget.rs	charge	response_refusal	1	no-record	the start-once preview only (budget.rs: only the preview attaches a budget)
@@ -367,7 +385,9 @@ src/transport/http/requests.rs	lent_for	counted_refusal	1	recorded	a refused per
 src/transport/http/requests.rs	read_answer_unscrubbed	is_deterministic_refusal	1	not-delivered	predicate
 src/transport/http/requests.rs	read_answer_unscrubbed	peer_refusal	1	not-a-decision	the backend's own refusal status
 src/transport/http/requests.rs	read_answer_unscrubbed	status_refusal	1	not-a-decision	the backend's own refusal status
+src/transport/http/requests_detach_token.rs	detach_token_step	is_ssrf_refusal	1	not-delivered	predicate: a destination refusal from the detached token step is recorded at the join, in the caller's task
 src/transport/http/sse_channel.rs	over_budget	response_refusal	1	no-record	the start-once preview only
+src/transport/http/startup.rs	connect_as	is_ssrf_refusal	1	not-delivered	predicate: a lazy start's OAuth destination refusal is recorded at the join, for an interactive caller only
 src/transport/lender.rs	counted_refusal	count_refusal	1	not-delivered	the metric count
 src/transport/lender.rs	lent_for	counted_refusal	4	recorded	a refused per-user send's Forbidden, recorded by the outlet where a call delivers it
 src/transport/lender.rs	send_refused	Error::Forbidden{}	1	feeds	built by counted_refusal, which every refused per-user send returns

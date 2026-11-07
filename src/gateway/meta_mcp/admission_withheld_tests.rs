@@ -259,7 +259,7 @@ fn a_keyed_chain_on_a_killed_backend_answers_a_withheld_step_as_a_missing_one() 
 /// of the first hidden step it was served, never one it was not (review B).
 #[test]
 fn a_stored_result_without_a_step_list_keeps_the_refusal() {
-    use super::stored::{dispatched_steps, refusal_to_meet};
+    use super::stored::{refusal_to_meet, stored_steps};
     let step = |tool: &str| ("beta".to_string(), tool.to_string());
     let withheld = || {
         vec![
@@ -276,16 +276,12 @@ fn a_stored_result_without_a_step_list_keeps_the_refusal() {
         super::stored::stored_response(&older).is_some(),
         "an older record still decodes"
     );
-    assert_eq!(
-        dispatched_steps(&older),
-        None,
-        "an older record has no list"
-    );
+    assert_eq!(stored_steps(&older).0, None, "an older record has no list");
     let refused = |served: Option<&[(String, String)]>| {
         refusal_to_meet(served, withheld()).map(|error| error.to_string())
     };
     assert_eq!(
-        refused(dispatched_steps(&older).as_deref()),
+        refused(stored_steps(&older).0.as_deref()),
         Some(crate::Error::json_rpc(-32003, "other").to_string()),
         "an older record keeps the first refusal"
     );

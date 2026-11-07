@@ -140,25 +140,29 @@ fn admit(
     Ok((access, logs))
 }
 
-/// The most Activity reads (list, receipt, export) running at once. Each is
-/// bounded by its own budget; this bounds how many budgets run together, so
-/// callers cannot multiply them into the disk and the blocking pool.
-const MAX_CONCURRENT_READS: usize = 4;
-
-static READS: std::sync::LazyLock<tokio::sync::Semaphore> =
-    std::sync::LazyLock::new(|| tokio::sync::Semaphore::new(MAX_CONCURRENT_READS));
-
-/// Run a blocking read off the async runtime, one of at most
-/// [`MAX_CONCURRENT_READS`]; a read beyond that waits its turn.
-async fn blocking(read: impl FnOnce() -> Response + Send + 'static) -> Response {
-    let Ok(_permit) = READS.acquire().await else {
+/// Run a blocking read off the async runtime, holding one of `reads`' slots
+/// (the state's [`ProcessFacts::activity_reads`]); a read beyond the limit waits
+/// its turn. The slot moves into the blocking closure, so it is held until the
+/// read itself finishes, even when the caller stops waiting.
+///
+/// [`ProcessFacts::activity_reads`]: crate::gateway::router::ProcessFacts::activity_reads
+async fn blocking(
+    reads: &Arc<tokio::sync::Semaphore>,
+    read: impl FnOnce() -> Response + Send + 'static,
+) -> Response {
+    let Ok(permit) = Arc::clone(reads).acquire_owned().await else {
         return flat_error(
             StatusCode::INTERNAL_SERVER_ERROR,
             "the activity read failed",
         )
         .into_response();
     };
-    tokio::task::spawn_blocking(read).await.unwrap_or_else(|_| {
+    tokio::task::spawn_blocking(move || {
+        let _held = permit;
+        read()
+    })
+    .await
+    .unwrap_or_else(|_| {
         flat_error(
             StatusCode::INTERNAL_SERVER_ERROR,
             "the activity read failed",
@@ -185,8 +189,8 @@ pub(in crate::gateway::ui) async fn stream_read<T: Send + 'static>(
         bytes: PAGE_SCAN_BYTES,
         secret: verification_secret(&state.live_config),
     };
-    let permit = READS
-        .acquire()
+    let permit = Arc::clone(state.process.activity_reads())
+        .acquire_owned()
         .await
         .map_err(|_| std::io::Error::other("the activity read gate is closed"))?;
     tokio::task::spawn_blocking(move || {
@@ -204,7 +208,12 @@ async fn list(
     Query(query): Query<ListQuery>,
 ) -> Response {
     match admit(&state, &generation, &guard) {
-        Ok((access, logs)) => blocking(move || list_page(&logs, &access, &query)).await,
+        Ok((access, logs)) => {
+            blocking(state.process.activity_reads(), move || {
+                list_page(&logs, &access, &query)
+            })
+            .await
+        }
         Err(r) => *r,
     }
 }
@@ -234,6 +243,7 @@ async fn receipt_route(
         },
     };
     blocking(
+        state.process.activity_reads(),
         move || match receipt::receipt(&log, &id, &access, logs.secret.as_deref()) {
             Ok(Some(body)) => Json(body).into_response(),
             Ok(None) => not_kept(),
@@ -399,7 +409,10 @@ async fn export_route(
         Err(r) => return *r,
     };
     let signer = state.meta_mcp.public_provenance_signer();
-    blocking(move || export_response(&logs, &access, &query, signer.as_deref())).await
+    blocking(state.process.activity_reads(), move || {
+        export_response(&logs, &access, &query, signer.as_deref())
+    })
+    .await
 }
 
 /// One export. NDJSON is signed with the provenance key and refused without
@@ -506,6 +519,9 @@ fn export_response(
 #[cfg(test)]
 #[path = "list_tests.rs"]
 mod list_tests;
+#[cfg(test)]
+#[path = "refusal_tests.rs"]
+mod refusal_tests;
 #[cfg(test)]
 #[path = "scope_tests.rs"]
 mod scope_tests;

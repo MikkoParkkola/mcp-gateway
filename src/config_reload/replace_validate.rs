@@ -114,14 +114,38 @@ impl ReloadContext {
             ReplaceError::Refused("the new gateway.yaml is not UTF-8 text".to_string())
         })?;
         let (file, env_paths) = (target.to_path_buf(), self.env.env_paths().clone());
-        let evaluated = tokio::task::spawn_blocking(move || {
-            Config::load_pending(&file, &text, &env_paths, pending)
+        // The bytes being replaced, as the writer reads them: a firewall rule
+        // is carried from them, which a hand edit since the last reload may
+        // have changed; bytes that do not load carry nothing.
+        let (evaluated, replaced) = tokio::task::spawn_blocking(move || {
+            let replaced = Config::load_literal_with_text(&file).ok().map(|(c, _)| c);
+            (
+                Config::load_pending(&file, &text, &env_paths, pending),
+                replaced,
+            )
         })
         .await
-        .map_err(|e| ReplaceError::Failed(format!("the config check task failed: {e}")))?
-        .map_err(|e| ReplaceError::ReloadRefused(format!("Failed to parse config: {e}")))?;
+        .map_err(|e| ReplaceError::Failed(format!("the config check task failed: {e}")))?;
+        let evaluated = evaluated
+            .map_err(|e| ReplaceError::ReloadRefused(format!("Failed to parse config: {e}")))?;
         if let Some(step) = step {
             refuse_shared_credentials(step, &evaluated.config, &evaluated.overlay)?;
+        }
+        #[cfg(not(feature = "firewall"))]
+        let _ = replaced;
+        // A replacement writes every rule: one the firewall-on load refuses
+        // goes in only as carried over unchanged, and none while it runs.
+        #[cfg(feature = "firewall")]
+        {
+            let refused =
+                |e: String| ReplaceError::ReloadRefused(format!("Failed to validate config: {e}"));
+            crate::security::firewall::refuse_while_running(
+                self.live_config.running(),
+                &evaluated.config,
+            )
+            .map_err(refused)?;
+            crate::security::firewall::refuse_authored(replaced.as_ref(), &evaluated.config)
+                .map_err(refused)?;
         }
         let patch = crate::config_reload::compute_diff(&self.live_config.get(), &evaluated.config);
         self.refuse_candidate(EvaluatedReload {
@@ -130,6 +154,7 @@ impl ReloadContext {
             overlay: evaluated.overlay,
             secret_refs: evaluated.secret_refs,
             inputs: evaluated.inputs,
+            configured: evaluated.configured,
         })
         .map_err(ReplaceError::ReloadRefused)
     }

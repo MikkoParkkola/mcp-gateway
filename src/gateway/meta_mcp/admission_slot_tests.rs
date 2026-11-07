@@ -83,7 +83,7 @@ impl crate::gateway::meta_mcp::MetaMcp {
         self.execution_admission
             .completed_bytes_for_test()
             .iter()
-            .map(|bytes| super::stored::stored_effect_slot(bytes))
+            .map(|bytes| super::stored::stored_steps(bytes).2)
             .collect()
     }
 }

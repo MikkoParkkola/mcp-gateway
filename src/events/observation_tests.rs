@@ -135,8 +135,13 @@ fn an_oidc_bearer_row_observes_as_its_own_binding() {
     .expect("an old row still loads");
     assert!(row.observed_as().is_none());
     assert!(row.obs_basis.is_none());
-    row.observed_identity = Some(person("stored"));
-    assert_eq!(row.observed_as().map(|i| i.subject), Some("stored".into()));
+    row.observed_identity = Some(crate::events::records::StoredIdentity::from(&person(
+        "stored",
+    )));
+    assert_eq!(
+        row.observed_as().map(|i| i.subject().to_owned()),
+        Some("stored".into())
+    );
     row.binding = Some(LiveBinding::OidcBearer {
         issuer: "https://idp".into(),
         subject: "bearer".into(),
@@ -146,7 +151,7 @@ fn an_oidc_bearer_row_observes_as_its_own_binding() {
         provider_sha256: None,
     });
     assert_eq!(
-        row.observed_as().map(|i| i.subject),
+        row.observed_as().map(|i| i.subject().to_owned()),
         Some("bearer".into()),
         "the bearer's own fields win"
     );
@@ -181,7 +186,9 @@ fn observed_row(
         .expect("observes")
         .expect("per-user");
     r.obs_basis = Some(observed);
-    r.observed_identity = Some(person(subject));
+    r.observed_identity = Some(crate::events::records::StoredIdentity::from(&person(
+        subject,
+    )));
     r
 }
 

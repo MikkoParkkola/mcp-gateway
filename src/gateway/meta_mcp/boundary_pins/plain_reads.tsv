@@ -71,6 +71,7 @@ src/gateway/meta_mcp/sealed_hold.rs	reopens	.open	1	not-a-file	opens a sealed co
 src/gateway/meta_mcp/search/chain_exec.rs	execute_chain	.open	1	not-a-file	opens a sealed continuation token with the keyring; no file is opened
 src/gateway/meta_mcp/search/chain_exec.rs	resume_fingerprint	.open	1	not-a-file	opens a sealed continuation token with the keyring; no file is opened
 src/gateway/meta_mcp/task_confirmation.rs	redeem	.open	1	not-a-file	opens a sealed continuation token with the keyring; no file is opened
+src/gateway/mod.rs	snapshot	fs::read	1	read-only	test_helpers::ConfigFiles (tests only, doc-hidden): reads gateway.yaml, its journal and its staged original to compare a refusal's before and after; writes nothing
 src/gateway/server/control_plane_store.rs	probe_writable	.open	1	write-only	writability probe: creates and removes its own marker; reads nothing
 src/gateway/task_service/execution/input_round.rs	round_deadline	.open	1	not-a-file	opens a sealed continuation token with the keyring; no file is opened
 src/gateway/task_service/store_unix.rs	open_new_private	.open	1	write-only	creates an owner-only task record; reads nothing
