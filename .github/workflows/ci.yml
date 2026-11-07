@@ -527,6 +527,14 @@ jobs:
           cargo clippy --release --lib --bins --no-default-features -- -D warnings
       - name: The registry lint still bites (MIK-8387)
         run: scripts/dev/check_registry_lint.sh --self-test
+      # Only the judge can build the read token that Firewall::reads and
+      # ReadHistory::reserve take. The probe build must fail with exactly the
+      # pinned error in each forgery and nowhere else, so a widened token, a
+      # loosened signature or a leaked test constructor turns the job red.
+      - name: Only the judge can build a read token
+        run: |
+          python3 scripts/ci/check-reads-token.py --self-test
+          python3 scripts/ci/check-reads-token.py
       # The command preview's test seams must never compile into a build
       # without debug assertions. This build must fail, and on the guard's
       # own message, so deleting or breaking the guard turns the job red.
