@@ -790,6 +790,10 @@ impl super::MetaMcp {
 mod test_seams;
 
 #[cfg(test)]
+#[path = "signing_prepared_allow_tests.rs"]
+mod prepared_allow_tests;
+
+#[cfg(test)]
 #[path = "signing_delivery_tests.rs"]
 mod delivery_tests;
 
