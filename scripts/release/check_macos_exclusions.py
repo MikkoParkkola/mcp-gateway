@@ -73,8 +73,7 @@ ATTR = re.compile(r"#!?\[(cfg|cfg_attr)\(")
 TOKEN = re.compile(r'\s*(?:(\w+)|("(?:[^"\\]|\\.)*")|([(),=]))')
 TEST_ATTR = re.compile(r"#\[(tokio::)?test\b")
 ITEM = re.compile(r"^(?:pub(?:\([^)]*\))?\s+)?(?:async\s+)?(fn|mod)\s+(\w+)")
-TEST_CFG = re.compile(r"#\[cfg\((?:all\()?test\b")
-TEST_FILE = re.compile(r"(^|/)tests?(/|\.rs$)|_tests?\.rs$|_tests/")
+TEST_FILE =re.compile(r"(^|/)tests?(/|\.rs$)|_tests?\.rs$|_tests/")
 
 
 def tokens(text: str) -> list[str] | None:
