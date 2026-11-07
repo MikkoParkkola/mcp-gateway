@@ -275,7 +275,7 @@ fn a_value_the_store_cannot_keep_skips_its_server_only() {
         adoption.outcomes[0],
         Outcome::Skipped {
             name: "big".to_string(),
-            reasons: vec![("value_too_large", "env.B".to_string())],
+            reasons: vec![("value_too_large", "env.B_TOKEN".to_string())],
             skip: Skip::Refused,
         }
     );
