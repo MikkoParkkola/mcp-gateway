@@ -223,3 +223,34 @@ async fn two_equal_settles_of_one_intent_collapse() {
     assert_eq!(count(&r.warnings, "(token w-1)"), 0, "{:?}", r.warnings);
     assert_eq!(count(&r.warnings, "interrupted"), 1, "{:?}", r.warnings);
 }
+
+pub(super) const RECOVERY: &str = "config_recovery_intent";
+
+/// An outcome of `token` naming its intent at `at`, settled by the
+/// recovery attempt `by` whose intent is at `by_at`.
+pub(super) fn settled(token: &str, at: u64, by: &str, by_at: u64) -> Map<String, Value> {
+    let by = json!({"token": by, "intent_counter": by_at});
+    rec(OUTCOME, token, &json!({"intent_counter": at, "settled_by": by}))
+}
+
+#[test]
+fn settled_by_resolves_against_the_recovery_attempts_intents() {
+    const RULE: &str = "settled_by names no intent";
+    // GIVEN: w-1's intent (3) and the recovery attempt r-1's intent (4)
+    let head = || {
+        vec![
+            rec(INTENT, "w-1", &json!({})),
+            rec(RECOVERY, "r-1", &json!({"settles": "w-1"})),
+        ]
+    };
+    // settled_by naming r-1's intent pairs, though its token is not w-1's.
+    let ok = verify_records([head(), vec![settled("w-1", 3, "r-1", 4)]].concat());
+    assert_paired(&ok, "settled by r-1's intent");
+    // settled_by naming w-1's own intent under r-1's token fails: it is not
+    // an intent of r-1.
+    let own = verify_records([head(), vec![settled("w-1", 3, "r-1", 3)]].concat());
+    assert_fails(&own, 5, RULE, "w-1");
+    // settled_by naming a counter that holds no intent of r-1 fails.
+    let none = verify_records([head(), vec![settled("w-1", 3, "r-1", 2)]].concat());
+    assert_fails(&none, 5, RULE, "w-1");
+}
