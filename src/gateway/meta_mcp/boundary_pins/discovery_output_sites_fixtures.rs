@@ -39,14 +39,6 @@ fn found_in(files: &[(&str, &str)]) -> Vec<String> {
         .collect()
 }
 
-fn reports(source: &str, want: &str) {
-    let got = found(source);
-    assert!(
-        got.iter().any(|g| g == want),
-        "{want:?} not in {got:?}\n{source}"
-    );
-}
-
 /// G2: every argument form is reported when raw.
 #[test]
 fn the_output_scan_finds_each_argument_form() {
@@ -146,9 +138,17 @@ fn the_output_scan_finds_each_argument_form() {
             "f println! value",
         ),
     ];
-    for (source, want) in cases {
-        reports(source, want);
-    }
+    // Every case runs, and each one missed is named: one failing form
+    // cannot hide another.
+    let missed: Vec<String> = cases
+        .iter()
+        .filter_map(|(source, want)| {
+            let got = found(source);
+            (!got.iter().any(|g| g == want))
+                .then(|| format!("MISSED {want:?} in {got:?}\n  {source}"))
+        })
+        .collect();
+    assert!(missed.is_empty(), "{}", missed.join("\n"));
 }
 
 /// G2: the shared escape, literals and test-only code pass.
