@@ -18,8 +18,8 @@ pub(crate) const ADDED_LATENCY: &str = "mcp_gateway_added_latency_seconds";
 /// The counter of errors clients received, by kind.
 pub(crate) const ERRORS: &str = "mcp_gateway_errors_total";
 
-#[cfg(feature = "metrics")]
-/// Upper bounds of `ADDED_LATENCY`'s buckets, in seconds.
+/// Upper bounds of `ADDED_LATENCY`'s buckets, in seconds; the health
+/// history keeps its latency in the same buckets.
 pub(crate) const LATENCY_BUCKETS: [f64; 11] = [
     0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5,
 ];

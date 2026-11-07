@@ -59,6 +59,7 @@ mod counters;
 #[cfg(coverage)]
 mod coverage_canary;
 mod debug_trust_roots;
+mod health_history;
 // The decision set serves only the web UI's routes and stream.
 #[cfg(feature = "webui")]
 mod decisions;
