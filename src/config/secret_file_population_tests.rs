@@ -483,6 +483,24 @@ mod tests {
     assert!(!has_raw_io(source));
 }
 
+/// MIK-9387.TCFG.3a: a test module gated on `all(test, ..)` is test code too,
+/// so its raw I/O does not count (the #4706 shape); `any(test, ..)` also
+/// builds outside tests, so raw I/O under it still counts.
+#[test]
+fn raw_io_under_a_compound_test_gate_counts_only_when_it_builds_outside_tests() {
+    let gated = |gate: &str| {
+        format!(
+            "fn product() {{}}\n\n#[cfg({gate})]\nmod tests {{\n    fn fixture() -> String {{\n        std::fs::read_to_string(\"x\").unwrap()\n    }}\n}}\n"
+        )
+    };
+    for gate in ["all(test, unix)", "all(unix, test)", "all(test, feature = \"firewall\")"] {
+        assert!(!has_raw_io(&gated(gate)), "{gate}: counted");
+    }
+    for gate in ["any(test, unix)", "not(test)", "reads_token_probe"] {
+        assert!(has_raw_io(&gated(gate)), "{gate}: not counted");
+    }
+}
+
 #[test]
 fn fs_read_population() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));

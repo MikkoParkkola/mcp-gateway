@@ -122,6 +122,65 @@ fn each_test_item_shape_is_blanked_by_its_own_extent() {
     }
 }
 
+/// MIK-9387.TCFG.1: every predicate in the shared case table, the Rust column.
+/// An item is blanked exactly when its cfg is false whenever `test` is.
+#[test]
+fn shared_cfg_cases_follow_the_rust_column() {
+    let table = include_str!("../scripts/dev/cfg-reader-cases.tsv");
+    let mut rows = 0;
+    let mut wrong = Vec::new();
+    for line in table.lines().filter(|l| !l.is_empty() && !l.starts_with('#')) {
+        let cells: Vec<&str> = line.split('\t').collect();
+        let [expr, _python, rust] = cells[..] else {
+            panic!("bad row: {line:?}");
+        };
+        let source = format!("#[cfg({expr})]\nfn probe() {{}}\nfn product() {{}}\n");
+        let out = production_text(&source);
+        assert!(out.contains("fn product()"), "{expr}: the next item is lost");
+        let blanked = !out.contains("probe");
+        if blanked != (rust == "yes") {
+            wrong.push(format!("{expr}: blanked {blanked}, table says {rust}"));
+        }
+        rows += 1;
+    }
+    assert!(rows > 20, "only {rows} rows");
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+/// MIK-9387.TCFG.1: an inner cfg counts in the leading attribute run of its own
+/// file or inline module, and nowhere else.
+#[test]
+fn an_inner_cfg_counts_only_in_the_leading_run_of_its_scope() {
+    let blanked: &[&str] = &[
+        "#![cfg(test)]\nfn probe() {}\n",
+        "//! docs\n// note\n#![doc = \"x\"]\n#![cfg(all(test, unix))]\nfn probe() {}\n",
+    ];
+    for source in blanked {
+        assert!(!production_text(source).contains("probe"), "kept: {source:?}");
+    }
+    let module = "mod t {\n    #![cfg(test)]\n    fn probe() {}\n}\nfn product() {}\n";
+    let out = production_text(module);
+    assert!(!out.contains("probe"), "{out:?}");
+    assert!(out.contains("fn product()"), "{out:?}");
+    let kept: &[&str] = &[
+        "ignore!(#![cfg(test)]);\nfn product() {}\n",
+        "mod outer { fn f() {} #![cfg(test)] fn product() {} }\n",
+        "fn f() {}\n#![cfg(test)]\nfn product() {}\n",
+    ];
+    for source in kept {
+        assert!(production_text(source).contains("fn product()"), "lost: {source:?}");
+    }
+}
+
+/// A predicate that does not parse keeps its item (the scan sees more).
+#[test]
+fn an_unparseable_predicate_keeps_its_item() {
+    for gate in ["any(test +)", "all(test, +)", "any(test,, unix)"] {
+        let source = format!("#[cfg({gate})]\nfn product() {{}}\n");
+        assert!(production_text(&source).contains("fn product()"), "{gate}");
+    }
+}
+
 /// An item whose block never closes stays (a scan sees more, never less),
 /// and an earlier, well-formed test item is still blanked.
 #[test]
