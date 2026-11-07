@@ -481,6 +481,18 @@ fn include_is_refused_in_any_production_file() {
 #[test]
 fn a_macro_named_like_a_listed_one_is_refused() {
     assert_eq!(refused(OTHER, "macro_rules! format { () => {} }").len(), 1);
-    assert_eq!(refused(OTHER, "use other::thing as matches;").len(), 1);
     assert!(refused(OTHER, "macro_rules! own_helper { () => {} }").is_empty());
+    // An import under a listed name is refused where it can reach identity
+    // fields: in a defining file, or a file with an impl of an identity type.
+    let near = "use other::thing as matches;\nimpl GrantSubject { fn f(&self) {} }";
+    assert_eq!(refused(OTHER, near).len(), 1);
+    assert_eq!(refused(LEAF, "use super::debug;").len(), 1);
+    assert!(
+        refused(
+            OTHER,
+            "use crate::gateway::trace;\nuse super::{warn, debug};"
+        )
+        .is_empty()
+    );
+    assert!(refused(LEAF, "use tracing::{debug, warn};").is_empty());
 }

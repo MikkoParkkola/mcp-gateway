@@ -52,6 +52,9 @@ const LEAVES: [&str; 3] = [
 /// The only macros allowed in a defining module or an impl of one of the
 /// types: none of them can reach a field through an expansion written
 /// elsewhere.
+/// The crates a listed macro name may be imported from.
+const MACRO_ROOTS: [&str; 4] = ["std", "core", "alloc", "tracing"];
+
 const MACROS: [&str; 15] = [
     "format",
     "write",
@@ -76,9 +79,12 @@ fn is_type(name: &str) -> bool {
 
 /// Scan one production file, `file` relative to the crate root.
 pub(super) fn scan_file(file: &str, parsed: &syn::File, scan: &mut Scan) {
+    let leaf = LEAVES.contains(&file);
     let mut visitor = Visitor {
         file,
-        leaf: LEAVES.contains(&file),
+        leaf,
+        near_fields: leaf,
+        shadowed: Vec::new(),
         owner: Vec::new(),
         impl_ty: None,
         scan,
@@ -86,11 +92,19 @@ pub(super) fn scan_file(file: &str, parsed: &syn::File, scan: &mut Scan) {
     for item in &parsed.items {
         visitor.item(item);
     }
+    // A shadowed macro name matters only where it can reach identity fields.
+    if visitor.near_fields {
+        let shadowed = std::mem::take(&mut visitor.shadowed);
+        visitor.scan.refused.extend(shadowed);
+    }
 }
 
 struct Visitor<'a> {
     file: &'a str,
     leaf: bool,
+    /// The file defines an identity type or holds an impl of one.
+    near_fields: bool,
+    shadowed: Vec<String>,
     owner: Vec<String>,
     impl_ty: Option<String>,
     scan: &'a mut Scan,
@@ -115,6 +129,12 @@ impl Visitor<'_> {
         self.scan.rows.insert(key, (n + 1).to_string());
     }
 
+    /// A listed macro name brought in from outside std or tracing: refused
+    /// only if this file is near identity fields (see [`scan_file`]).
+    fn shadow(&mut self, what: String) {
+        self.shadowed.push(format!("{}: {what}", self.file));
+    }
+
     fn refuse(&mut self, what: &str) {
         let at = format!("{}: {what} in `{}`", self.file, self.owner());
         self.scan.refused.push(at);
@@ -123,7 +143,7 @@ impl Visitor<'_> {
     /// The identity type a path's first segment names: the type itself, or
     /// `Self` inside an impl of one.
     fn named_type(&self, segment: &syn::PathSegment) -> Option<String> {
-        let name = segment.ident.to_string();
+        let name = name(&segment.ident);
         if is_type(&name) {
             return Some(name);
         }
@@ -144,7 +164,7 @@ impl Visitor<'_> {
                     self.refuse(&format!("child module `{}` of a defining module", m.ident));
                 }
                 if let Some((_, items)) = &m.content {
-                    self.owner.push(m.ident.to_string());
+                    self.owner.push(name(&m.ident));
                     for inner in items {
                         self.item(inner);
                     }
@@ -152,13 +172,22 @@ impl Visitor<'_> {
                 }
                 return;
             }
-            I::Use(u) => self.use_tree(&u.tree),
+            I::Use(u) => self.use_tree(&[], &u.tree),
             I::Type(t) => {
                 if last_ident(&t.ty).is_some_and(|n| is_type(&n)) {
                     self.refuse(&format!("type alias `{}` of an identity type", t.ident));
                 }
             }
             I::Impl(block) => return self.impl_block(block),
+            I::Macro(m) => {
+                if let Some(ident) = &m.ident
+                    && MACROS.contains(&name(ident).as_str())
+                {
+                    self.refuse(&format!(
+                        "macro `{ident}` defined under a listed macro name"
+                    ));
+                }
+            }
             _ => {}
         }
         let name = item_name(item);
@@ -172,12 +201,15 @@ impl Visitor<'_> {
         let saved = self
             .impl_ty
             .replace(last_ident(&block.self_ty).unwrap_or_default());
+        if self.impl_ty.as_deref().is_some_and(is_type) && !test_only(&block.attrs) {
+            self.near_fields = true;
+        }
         let ty = self.impl_ty.clone().unwrap_or_default();
         for inner in &block.items {
             let (attrs, name) = match inner {
-                syn::ImplItem::Const(i) => (&i.attrs, i.ident.to_string()),
-                syn::ImplItem::Fn(i) => (&i.attrs, i.sig.ident.to_string()),
-                syn::ImplItem::Type(i) => (&i.attrs, i.ident.to_string()),
+                syn::ImplItem::Const(i) => (&i.attrs, name(&i.ident)),
+                syn::ImplItem::Fn(i) => (&i.attrs, name(&i.sig.ident)),
+                syn::ImplItem::Type(i) => (&i.attrs, name(&i.ident)),
                 syn::ImplItem::Macro(i) => (&i.attrs, format!("{}!", path_text(&i.mac.path))),
                 _ => continue,
             };
@@ -193,14 +225,44 @@ impl Visitor<'_> {
         self.impl_ty = saved;
     }
 
-    fn use_tree(&mut self, tree: &syn::UseTree) {
+    /// `prefix` is the path the tree is imported from, its first segment
+    /// telling a std or tracing macro from a crate one.
+    fn use_tree(&mut self, prefix: &[String], tree: &syn::UseTree) {
         match tree {
-            syn::UseTree::Path(p) => self.use_tree(&p.tree),
-            syn::UseTree::Group(g) => g.items.iter().for_each(|t| self.use_tree(t)),
-            syn::UseTree::Rename(r) if is_type(&r.ident.to_string()) => {
-                self.refuse(&format!("`{}` imported as `{}`", r.ident, r.rename));
+            syn::UseTree::Path(p) => {
+                let mut deeper = prefix.to_vec();
+                deeper.push(name(&p.ident));
+                self.use_tree(&deeper, &p.tree);
             }
-            _ => {}
+            syn::UseTree::Group(g) => {
+                for inner in &g.items {
+                    self.use_tree(prefix, inner);
+                }
+            }
+            syn::UseTree::Rename(r) => {
+                if is_type(&name(&r.ident)) {
+                    self.refuse(&format!("`{}` imported as `{}`", r.ident, r.rename));
+                }
+                if MACROS.contains(&name(&r.rename).as_str()) {
+                    self.refuse(&format!(
+                        "`{}` imported under the listed macro name `{}`",
+                        r.ident, r.rename
+                    ));
+                }
+            }
+            syn::UseTree::Name(n) => {
+                let from_std = prefix
+                    .first()
+                    .is_some_and(|root| MACRO_ROOTS.contains(&root.as_str()));
+                if MACROS.contains(&name(&n.ident).as_str()) && !from_std {
+                    self.refuse(&format!(
+                        "listed macro name `{}` imported from `{}`",
+                        n.ident,
+                        prefix.join("::")
+                    ));
+                }
+            }
+            syn::UseTree::Glob(_) => {}
         }
     }
 }
@@ -208,6 +270,28 @@ impl Visitor<'_> {
 impl<'ast> syn::visit::Visit<'ast> for Visitor<'_> {
     fn visit_item(&mut self, item: &'ast syn::Item) {
         self.item(item);
+    }
+
+    fn visit_impl_item_type(&mut self, item: &'ast syn::ImplItemType) {
+        if last_ident(&item.ty).is_some_and(|n| is_type(&n)) {
+            self.refuse(&format!(
+                "associated type `{}` aliases an identity type",
+                item.ident
+            ));
+        }
+        syn::visit::visit_impl_item_type(self, item);
+    }
+
+    fn visit_trait_item_type(&mut self, item: &'ast syn::TraitItemType) {
+        if let Some((_, ty)) = &item.default
+            && last_ident(ty).is_some_and(|n| is_type(&n))
+        {
+            self.refuse(&format!(
+                "associated type `{}` aliases an identity type",
+                item.ident
+            ));
+        }
+        syn::visit::visit_trait_item_type(self, item);
     }
 
     fn visit_stmt(&mut self, stmt: &'ast syn::Stmt) {
@@ -242,7 +326,7 @@ impl<'ast> syn::visit::Visit<'ast> for Visitor<'_> {
             && path.qself.is_none()
             && let Some(ty) = self.named_type(ty)
         {
-            let ctor = ctor.ident.to_string();
+            let ctor = name(&ctor.ident);
             let listed = TYPES
                 .iter()
                 .any(|(t, ctors)| *t == ty && ctors.contains(&ctor.as_str()));
@@ -272,8 +356,11 @@ impl<'ast> syn::visit::Visit<'ast> for Visitor<'_> {
             .path
             .segments
             .last()
-            .map(|s| s.ident.to_string())
+            .map(|s| name(&s.ident))
             .unwrap_or_default();
+        if name == "include" {
+            self.refuse("`include!` reads in code the walk does not see");
+        }
         if near_fields && !MACROS.contains(&name.as_str()) {
             self.refuse(&format!(
                 "macro `{}!` near identity fields",
@@ -309,10 +396,15 @@ pub(super) fn crate_scan() -> Scan {
     files.0
 }
 
+/// An identifier's name with any raw prefix removed: `r#checked` is `checked`.
+fn name(ident: &syn::Ident) -> String {
+    syn::ext::IdentExt::unraw(ident).to_string()
+}
+
 /// The last identifier of a type written as a path (`a::B<C>` -> `B`).
 fn last_ident(ty: &syn::Type) -> Option<String> {
     match ty {
-        syn::Type::Path(p) => p.path.segments.last().map(|s| s.ident.to_string()),
+        syn::Type::Path(p) => p.path.segments.last().map(|s| name(&s.ident)),
         syn::Type::Group(g) => last_ident(&g.elem),
         syn::Type::Paren(p) => last_ident(&p.elem),
         _ => None,
@@ -322,7 +414,7 @@ fn last_ident(ty: &syn::Type) -> Option<String> {
 fn path_text(path: &syn::Path) -> String {
     path.segments
         .iter()
-        .map(|s| s.ident.to_string())
+        .map(|s| name(&s.ident))
         .collect::<Vec<_>>()
         .join("::")
 }
@@ -331,20 +423,20 @@ fn path_text(path: &syn::Path) -> String {
 fn item_name(item: &syn::Item) -> String {
     use syn::Item as I;
     match item {
-        I::Const(i) => i.ident.to_string(),
-        I::Enum(i) => i.ident.to_string(),
-        I::ExternCrate(i) => i.ident.to_string(),
-        I::Fn(i) => i.sig.ident.to_string(),
+        I::Const(i) => name(&i.ident),
+        I::Enum(i) => name(&i.ident),
+        I::ExternCrate(i) => name(&i.ident),
+        I::Fn(i) => name(&i.sig.ident),
         I::Macro(i) => i.ident.as_ref().map_or_else(
             || format!("{}!", path_text(&i.mac.path)),
             ToString::to_string,
         ),
-        I::Static(i) => i.ident.to_string(),
-        I::Struct(i) => i.ident.to_string(),
-        I::Trait(i) => i.ident.to_string(),
-        I::TraitAlias(i) => i.ident.to_string(),
-        I::Type(i) => i.ident.to_string(),
-        I::Union(i) => i.ident.to_string(),
+        I::Static(i) => name(&i.ident),
+        I::Struct(i) => name(&i.ident),
+        I::Trait(i) => name(&i.ident),
+        I::TraitAlias(i) => name(&i.ident),
+        I::Type(i) => name(&i.ident),
+        I::Union(i) => name(&i.ident),
         _ => "<item>".to_owned(),
     }
 }
@@ -357,7 +449,7 @@ fn names_identity(mac: &syn::Macro, in_impl: bool) -> bool {
     while let Some(mut cursor) = stack.pop() {
         while !cursor.eof() {
             if let Some((ident, next)) = cursor.ident() {
-                let name = ident.to_string();
+                let name = name(&ident);
                 if is_type(&name) || (in_impl && name == "Self") {
                     return true;
                 }
