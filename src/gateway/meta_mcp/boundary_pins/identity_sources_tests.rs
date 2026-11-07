@@ -496,3 +496,53 @@ fn a_macro_named_like_a_listed_one_is_refused() {
     );
     assert!(refused(LEAF, "use tracing::{debug, warn};").is_empty());
 }
+
+/// Near identity fields a listed macro is spelled only bare, or under a
+/// trusted root: any other path to a macro is refused.
+#[test]
+fn a_listed_macro_is_trusted_only_bare_or_under_a_trusted_root() {
+    for spelling in ["evil::format!(\"x\")", "crate::helpers::matches!(self, _)"] {
+        let source = format!("impl GrantSubject {{ fn f(&self) {{ let _ = {spelling}; }} }}");
+        assert_eq!(refused(OTHER, &source).len(), 1, "{spelling}");
+    }
+    for spelling in [
+        "format!(\"x\")",
+        "std::format!(\"x\")",
+        "tracing::debug!(\"x\")",
+    ] {
+        let source = format!("impl GrantSubject {{ fn f(&self) {{ let _ = {spelling}; }} }}");
+        assert!(refused(OTHER, &source).is_empty(), "{spelling}");
+    }
+}
+
+/// Near identity fields, an import that can bring in a shadowing macro
+/// unseen is refused: a glob, or a crate renamed to a trusted root.
+#[test]
+fn a_glob_or_a_root_rename_near_identity_fields_is_refused() {
+    assert_eq!(refused(LEAF, "use evil::*;").len(), 1);
+    assert_eq!(refused(LEAF, "use evil as std;").len(), 1);
+    assert_eq!(refused(LEAF, "extern crate evil as tracing;").len(), 1);
+    assert!(refused(OTHER, "use evil::*;\nuse evil as std;").is_empty());
+}
+
+/// `include!` inside another macro's arguments is still refused.
+#[test]
+fn include_inside_a_macro_is_refused() {
+    assert_eq!(
+        refused(OTHER, r#"fn f() { let _ = vec![include!("forge.rs")]; }"#).len(),
+        1
+    );
+}
+
+/// An alias whose type names an identity type anywhere is refused, `Self`
+/// in an identity impl included.
+#[test]
+fn an_alias_naming_an_identity_type_anywhere_is_refused() {
+    assert_eq!(
+        refused(OTHER, "impl Tr for GrantSubject { type T = Self; }").len(),
+        1
+    );
+    assert_eq!(refused(OTHER, "type G = <GrantSubject as Tr>::T;").len(), 1);
+    assert_eq!(refused(OTHER, "type V = Vec<VerifiedIdentity>;").len(), 1);
+    assert!(refused(OTHER, "impl Tr for Other { type T = Self; }").is_empty());
+}
