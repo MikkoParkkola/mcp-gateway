@@ -220,6 +220,7 @@ fn the_recovery_and_config_reads_have_their_known_callers() {
         [
             "config/secret_file.rs",
             "config_persistence.rs",
+            "config_persistence_journal.rs",
             "config_reload/replace.rs",
             "config_reload/replace_audit.rs",
             // The settings preview reads gateway.yaml as the writer does,

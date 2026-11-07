@@ -233,6 +233,7 @@ async fn spawn_locked(
 
 #[path = "replace_audit.rs"]
 mod audit;
+pub(crate) use audit::startup_recovery_intent;
 pub(crate) use audit::{Audit, Intent, IntentSink};
 pub(crate) use audit::{AuditPosture, GatewayAuth};
 #[cfg(feature = "webui")]
