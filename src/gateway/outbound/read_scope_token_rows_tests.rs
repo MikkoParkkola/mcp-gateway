@@ -54,10 +54,17 @@ fn the_token_check_refuses_each_other_shape() {
     let decl = "pub(crate) struct ReadsToken(std::cell::Cell<()>);";
     let assess = "fn assess(firewall: &Firewall, key: Option<&str>) {";
     let cases: Vec<(&str, String, &str)> = vec![
-        ("a second struct", format!("{BASE}\nstruct Other;"), "struct Other"),
+        (
+            "a second struct",
+            format!("{BASE}\nstruct Other;"),
+            "struct Other",
+        ),
         (
             "a visible field",
-            BASE.replace(decl, "pub(crate) struct ReadsToken(pub(crate) std::cell::Cell<()>);"),
+            BASE.replace(
+                decl,
+                "pub(crate) struct ReadsToken(pub(crate) std::cell::Cell<()>);",
+            ),
             "struct ReadsToken",
         ),
         (
@@ -91,15 +98,15 @@ fn the_token_check_refuses_each_other_shape() {
         ),
         (
             "a bound token",
-            BASE.replace(assess, &format!("{assess}\n        let t = ReadsToken(Cell::new(()));")),
+            BASE.replace(
+                assess,
+                &format!("{assess}\n        let t = ReadsToken(Cell::new(()));"),
+            ),
             "a token outside the read chain in assess",
         ),
         (
             "a second chain",
-            BASE.replace(
-                assess,
-                &format!("{assess}\n        let again = {chain};"),
-            ),
+            BASE.replace(assess, &format!("{assess}\n        let again = {chain};")),
             "more than one read chain",
         ),
         (
@@ -117,7 +124,10 @@ fn the_token_check_refuses_each_other_shape() {
         ),
         (
             "a let shadowing firewall",
-            BASE.replace(assess, &format!("{assess}\n        let firewall = Foreign;")),
+            BASE.replace(
+                assess,
+                &format!("{assess}\n        let firewall = Foreign;"),
+            ),
             "a binding shadows firewall in assess",
         ),
         (

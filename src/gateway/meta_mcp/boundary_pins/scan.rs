@@ -21,6 +21,9 @@ pub(super) enum Cfg {
 pub(super) fn eval(meta: &syn::Meta) -> Cfg {
     match meta {
         syn::Meta::Path(path) if path.is_ident("test") => Cfg::False,
+        // Set only by the read token's must-fail probe build
+        // (scripts/ci/check-reads-token.py), never by a product build.
+        syn::Meta::Path(path) if path.is_ident("reads_token_probe") => Cfg::False,
         syn::Meta::List(list) => {
             let args: Vec<syn::Meta> = list
                 .parse_args_with(
