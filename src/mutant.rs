@@ -14,8 +14,19 @@
 //! (its self-tests); the scan in `mutant_scan` refuses one anywhere else, so
 //! no mutant site reaches the release line.
 
-/// Runs one test of this binary in a fresh process with `envs` set (and the
-/// switch removed unless named) and returns its stdout. The child test runs
+/// Whether mutant `id` is the one switched on for this process, from
+/// `MCP_GATEWAY_MUTANT`, read once.
+#[cfg(mutants)]
+pub(crate) fn on(id: &'static str) -> bool {
+    static SWITCH: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+    SWITCH
+        .get_or_init(|| std::env::var("MCP_GATEWAY_MUTANT").ok())
+        .as_deref()
+        == Some(id)
+}
+
+/// Runs one test of this binary in a fresh process, with the switch set to
+/// `switch` or removed, and returns its stdout. The child test runs
 /// only when `MCP_GATEWAY_MUTANT_CHILD` is set, and prints a marker after its
 /// assertions, so a child that never reached them cannot pass for one that did.
 #[cfg(test)]
