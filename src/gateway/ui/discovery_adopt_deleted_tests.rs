@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use super::*;
 use crate::gateway::test_helpers::ConfigFiles;
-use crate::secret_store::{FilesStore, StoreKind};
+use crate::secret_store::{FilesStore, SecretStore, StoreKind};
 
 /// A files store that counts creates and deletes, and on its first create
 /// deletes `config`.

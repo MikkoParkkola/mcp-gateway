@@ -178,8 +178,9 @@ fn audit_backed_by_verifiable_transparency_log() {
         "governance chain must verify: {:?}",
         result.error_message
     );
-    // Plus the genesis housekeeping record (#2275).
-    assert_eq!(result.entries_checked, 3);
+    // Plus the genesis housekeeping record (#2275) and the log's
+    // `audit_log_identified` record.
+    assert_eq!(result.entries_checked, 4);
 }
 
 // MIK-6685.STORE.6 — collection files are 0600.
@@ -371,8 +372,9 @@ fn cross_process_audit_append_stays_verifiable() {
         "chain must not fork across processes: {:?}",
         result.error_message
     );
-    // Plus the genesis housekeeping record (#2275).
-    assert_eq!(result.entries_checked, 4);
+    // Plus the genesis housekeeping record (#2275) and the log's
+    // `audit_log_identified` record.
+    assert_eq!(result.entries_checked, 5);
 }
 
 // MIK-6685.STORE.6 — a malformed control-plane audit line fails closed

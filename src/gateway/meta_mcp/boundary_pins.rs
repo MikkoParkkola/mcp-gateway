@@ -12,6 +12,7 @@ mod ci_wiring;
 mod creation_sites;
 mod delivery_framing;
 mod discarded_sends;
+mod discovery_output_sites;
 mod echo_rows_real_transports;
 mod fold_sites;
 mod fragments;
