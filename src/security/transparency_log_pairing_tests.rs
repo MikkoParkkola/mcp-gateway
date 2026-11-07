@@ -715,3 +715,82 @@ async fn settle_refuses_a_payload_that_breaks_its_roles_fields() {
         assert!(got.is_ok(), "{role:?}: {got:?}");
     }
 }
+
+/// A record with no settle prefix: today's writer, or a mismatch.
+fn plain(v: &Value) -> Map<String, Value> {
+    v.as_object().unwrap().clone()
+}
+
+#[test]
+fn legacy_intents_are_counted_once_and_mismatched_records_warn_once() {
+    // GIVEN: two legacy intents (no prefix), a settle intent, and two
+    // mismatched records: a reserved event without the prefix naming the
+    // intent, and the prefix on an event settle never writes
+    let r = verify_records(vec![
+        plain(&json!({"event": INTENT, "token": "old-1"})),
+        plain(&json!({"event": RECOVERY, "token": "old-2"})),
+        rec(INTENT, "w-1", &json!({})),
+        plain(&json!({"event": OUTCOME, "token": "w-1", "intent_counter": 5})),
+        rec("config_write_note", "w-2", &json!({})),
+    ]);
+    // THEN: one info line counts the legacy intents; one warning names the
+    // mismatch; the mismatched outcome pairs nothing, so w-1 is interrupted
+    assert!(r.ok, "{:?}", r.error_message);
+    let legacy = "config intents written before outcome records existed; not paired";
+    assert_eq!(count(&r.notes, legacy), 1, "{:?}", r.notes);
+    assert_eq!(count(&r.notes, &format!("2 {legacy}")), 1, "{:?}", r.notes);
+    assert_eq!(
+        count(&r.warnings, "not a settle record"),
+        1,
+        "{:?}",
+        r.warnings
+    );
+    assert_eq!(count(&r.warnings, "interrupted"), 1, "{:?}", r.warnings);
+    assert_eq!(count(&r.warnings, "old-"), 0, "{:?}", r.warnings);
+}
+
+/// Edit the record at `counter` in place: its hash no longer matches.
+fn tamper(path: &Path, counter: u64) {
+    let mut all = lines(path);
+    let at = all.iter().position(|v| v["counter"] == counter).unwrap();
+    all[at]["note"] = "edited".into();
+    let body: String = all.iter().map(|v| format!("{v}\n")).collect();
+    std::fs::write(path, body).unwrap();
+}
+
+#[test]
+fn under_a_failed_chain_pairing_findings_are_unverified_warnings() {
+    const STOPPED_RULE: &str = "delivery stopped with no outcome";
+    let records = || {
+        vec![
+            rec(INTENT, "w-1", &json!({})),
+            dep(STOPPED, "w-1", 3),
+            plain(&json!({"event": "config_write_note"})),
+        ]
+    };
+    // A streaming failure: the record at 5 edited after the pairing failure.
+    let dir = tempfile::tempdir().unwrap();
+    let streaming = log_with(&dir, records());
+    tamper(&streaming, 5);
+    // A tail-only failure: the chain intact, `.hwm` gone.
+    let dir2 = tempfile::tempdir().unwrap();
+    let tail = log_with(&dir2, records());
+    std::fs::remove_file(super::segments::sibling(&tail, "hwm")).unwrap();
+    for (what, path) in [("streaming", streaming), ("tail", tail)] {
+        let r = verified(&path);
+        // THEN: the chain verdict stands, and pairing only warns
+        assert!(!r.ok, "{what}: passed");
+        assert_eq!(r.failed_check, FailedCheck::Chain, "{what}");
+        let msg = r.error_message.clone().unwrap_or_default();
+        assert!(!msg.contains(STOPPED_RULE), "{what}: {msg}");
+        let unverified = format!("unverified: {STOPPED_RULE}");
+        assert_eq!(
+            count(&r.warnings, &unverified),
+            1,
+            "{what}: {:?}",
+            r.warnings
+        );
+    }
+    // Control: untampered, the same records fail on pairing.
+    assert_fails(&verify_records(records()), 4, STOPPED_RULE, "w-1");
+}
