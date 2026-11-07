@@ -134,3 +134,59 @@ async fn an_unauthenticated_callers_repeated_spend_stays_bounded() {
         "every call was counted"
     );
 }
+
+/// Another session's report, every session, every key and the
+/// gateway-wide total are gateway-wide admin views. An admin scoped to some
+/// backends reads none of them; a gateway-wide admin reads each, with the
+/// real figures, so refusing everyone fails here too.
+#[tokio::test]
+async fn an_in_scope_admin_reads_neither_another_session_nor_the_total() {
+    use crate::gateway::authz::AdminStanding;
+    let meta = gateway();
+    let spender = caller("subject:spender");
+    // GIVEN: one call spent on another caller's session
+    spend(&meta, &spender, Some("s-other"), "read").await;
+    for (admin, served) in [
+        (AdminStanding::InScope, false),
+        (AdminStanding::Gateway, true),
+    ] {
+        let who = MetaMcpCallerContext {
+            admin,
+            ..caller("subject:admin")
+        };
+        // WHEN: it asks for each admin view, then for its own report
+        for args in [
+            json!({"session_id": "s-other"}),
+            json!({"include_all_sessions": true}),
+            json!({"include_all_keys": true}),
+        ] {
+            let got = meta.get_cost_report(&args, Some("s-mine"), &who).await;
+            // THEN: each view follows the gateway-wide standing alone
+            assert_eq!(got.is_ok(), served, "{admin:?} {args}: {got:?}");
+        }
+        let own = meta
+            .get_cost_report(&json!({}), Some("s-mine"), &who)
+            .await
+            .expect("its own report");
+        let total = own["aggregate"]["total_calls"].as_u64();
+        assert_eq!(total, served.then_some(1), "{admin:?} total: {own}");
+    }
+    // AND: the gateway admin's view of the other session is that session's spend
+    let gateway_admin = MetaMcpCallerContext {
+        admin: AdminStanding::Gateway,
+        ..caller("subject:admin")
+    };
+    let named = meta
+        .get_cost_report(
+            &json!({"session_id": "s-other"}),
+            Some("s-mine"),
+            &gateway_admin,
+        )
+        .await
+        .expect("the gateway admin's view of another session");
+    assert_eq!(
+        tools(&named, "session"),
+        vec![("alpha:read".to_string(), 1)],
+        "{named}"
+    );
+}

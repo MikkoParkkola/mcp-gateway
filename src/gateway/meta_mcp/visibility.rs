@@ -633,11 +633,7 @@ impl InvokeScope<'static> {
     pub fn unscoped(standing: crate::gateway::router::CallerStanding) -> Self {
         Self {
             authorizer: &Operator,
-            admin: if standing == crate::gateway::router::CallerStanding::Admin {
-                crate::gateway::authz::AdminStanding::Gateway
-            } else {
-                crate::gateway::authz::AdminStanding::None
-            },
+            admin: standing.admin_standing(),
             api_key_name: None,
             grant_key: None,
             agent_id: None,
@@ -678,11 +674,7 @@ impl InvokeScope<'static> {
     pub(crate) fn allow_all(standing: crate::gateway::router::CallerStanding) -> Self {
         Self {
             authorizer: &crate::gateway::authz::AllowAll,
-            admin: if standing == crate::gateway::router::CallerStanding::Admin {
-                crate::gateway::authz::AdminStanding::Gateway
-            } else {
-                crate::gateway::authz::AdminStanding::None
-            },
+            admin: standing.admin_standing(),
             api_key_name: None,
             grant_key: None,
             agent_id: None,
