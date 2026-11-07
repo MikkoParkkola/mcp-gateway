@@ -230,6 +230,59 @@ pub fn adopt_literals(
     })
 }
 
+/// Moves each literal of backend `name` in `config` that the shared rule
+/// stores to the secret store and puts its reference in place: a
+/// credential-named env value and any header value, at least the redactor's
+/// short-value bound long ([`crate::config::secret_values`]), never a
+/// reference, a template, or a field (`env.KEY`, `headers.NAME`) listed in
+/// `keep_as_text`. Runs inside the CLI writer's edit, under its lock, after
+/// the backend is in `config`; settle the [`Adoption`] with the write's
+/// result. Also returns each stored field with its reference, in field
+/// order, never a value. No store is opened when nothing is stored.
+///
+/// # Errors
+///
+/// A message ready to print, after removing any entry this call created: the
+/// store could not be opened or refused, or a value is larger than it keeps.
+pub fn store_backend_literals(
+    destination: &std::path::Path,
+    config: &mut crate::config::Config,
+    name: &str,
+    keep_as_text: &[String],
+) -> Result<(Adoption, Vec<(String, String)>), String> {
+    let dir = destination
+        .parent()
+        .unwrap_or_else(|| std::path::Path::new("."));
+    let choice = config.secrets.store;
+    store_backend_with(config, name, keep_as_text, || {
+        let refused = |e: crate::secret_store::StoreError| store_refused(choice, &e);
+        let chosen = crate::secret_store::choose_store(choice, dir).map_err(refused)?;
+        let vault = crate::secret_store::Vault::for_config_dir(dir).map_err(refused)?;
+        Ok((vault, chosen.store))
+    })
+}
+
+/// [`store_backend_literals`] over a store that `open` provides, once, and
+/// only when there is a value to store.
+pub(crate) fn store_backend_with(
+    config: &mut crate::config::Config,
+    name: &str,
+    keep_as_text: &[String],
+    open: impl FnOnce() -> Result<Opened, String>,
+) -> Result<(Adoption, Vec<(String, String)>), String> {
+    // RED STUB: rows first.
+    let _ = (config, keep_as_text, open);
+    Ok((
+        Adoption {
+            outcomes: vec![Outcome::Adopted {
+                name: name.to_owned(),
+            }],
+            secrets: None,
+        },
+        Vec::new(),
+    ))
+}
+
 type Opened = (
     crate::secret_store::Vault,
     std::sync::Arc<dyn crate::secret_store::SecretStore + Send + Sync>,
@@ -495,3 +548,7 @@ mod tests;
 #[cfg(test)]
 #[path = "cli_support_shown_tests.rs"]
 mod shown_tests;
+
+#[cfg(test)]
+#[path = "cli_support_store_tests.rs"]
+mod store_tests;
