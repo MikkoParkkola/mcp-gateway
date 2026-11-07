@@ -59,6 +59,10 @@ mod counters;
 #[cfg(coverage)]
 mod coverage_canary;
 mod debug_trust_roots;
+mod random_secret;
+#[cfg(test)]
+#[path = "random_secret_tests.rs"]
+mod random_secret_tests;
 // The decision set serves only the web UI's routes and stream.
 #[cfg(feature = "webui")]
 mod decisions;

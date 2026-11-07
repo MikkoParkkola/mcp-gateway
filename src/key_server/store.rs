@@ -20,7 +20,6 @@ use std::time::Duration;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use dashmap::DashMap;
-use rand::RngExt;
 use serde::{Deserialize, Serialize};
 use tracing::debug;
 
@@ -172,14 +171,7 @@ impl InMemoryTokenStore {
     /// scanners (e.g., `truffleHog`, GitHub secret scanning).
     #[must_use]
     pub fn generate_bearer() -> String {
-        let random_bytes: [u8; 32] = rand::rng().random();
-        format!(
-            "mcpgw_{}",
-            base64::Engine::encode(
-                &base64::engine::general_purpose::URL_SAFE_NO_PAD,
-                random_bytes,
-            )
-        )
+        crate::random_secret::random_secret("mcpgw_")
     }
 
     /// Generate a UUID v4 JTI.
