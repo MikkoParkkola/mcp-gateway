@@ -108,8 +108,9 @@ struct Cached {
 }
 
 /// A value shorter than this matches ordinary text too often: redacting it
-/// can blank unrelated words, so its rule is named once (ECHO.6).
-const SHORT_VALUE_BYTES: usize = 8;
+/// can blank unrelated words, so its rule is named once (ECHO.6). The web
+/// UI's secret slots store no value shorter than this, for the same reason.
+pub(crate) const SHORT_VALUE_BYTES: usize = 8;
 
 impl Default for NeedleSet {
     fn default() -> Self {
