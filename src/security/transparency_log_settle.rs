@@ -169,8 +169,40 @@ pub(crate) enum FieldProblem {
 /// Check `fields` (a whole record, or a payload with `event` and `token`
 /// set) against `role`'s row of step 3 §2. Settle and verify both call it.
 pub(crate) fn role_fields(role: Role, fields: &Map<String, Value>) -> Result<(), FieldFault> {
-    let _ = (role, fields);
-    Ok(())
+    use FieldProblem::{Forbidden, Missing, Mistyped};
+    let fault = |field: &'static str, problem| Err(FieldFault { field, problem });
+    text_field(fields, "token", "token")?;
+    match (role, fields.get("intent_counter")) {
+        (Role::Intent(_) | Role::RecoveryIntent, Some(_)) => fault("intent_counter", Forbidden)?,
+        (Role::Outcome | Role::Deferred | Role::DeliveryStopped, None) => {
+            fault("intent_counter", Missing)?;
+        }
+        (_, Some(v)) if v.as_u64().is_none() => fault("intent_counter", Mistyped)?,
+        _ => {}
+    }
+    match (role, fields.get("settled_by")) {
+        (Role::RecoveryIntent, _) => text_field(fields, "settles", "settles"),
+        (Role::Outcome, Some(Value::Object(by))) => {
+            text_field(by, "token", "settled_by.token")?;
+            match by.get("intent_counter") {
+                None => fault("settled_by.intent_counter", Missing),
+                Some(v) if v.as_u64().is_none() => fault("settled_by.intent_counter", Mistyped),
+                Some(_) => Ok(()),
+            }
+        }
+        (Role::Outcome, Some(_)) => fault("settled_by", Mistyped),
+        _ => Ok(()),
+    }
+}
+
+/// `map[key]` must be a non-empty string; a fault names it `field`.
+fn text_field(map: &Map<String, Value>, key: &str, field: &'static str) -> Result<(), FieldFault> {
+    let problem = match map.get(key) {
+        None => FieldProblem::Missing,
+        Some(Value::String(s)) if !s.is_empty() => return Ok(()),
+        Some(_) => FieldProblem::Mistyped,
+    };
+    Err(FieldFault { field, problem })
 }
 
 /// The caller's part of a record: every chain, envelope and segment field,
