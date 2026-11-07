@@ -53,6 +53,10 @@ module = "src/security/rule_id.rs"
 reason = "the keyed id a decision record names a configured rule by (derived key, id form); it names rules, it refuses no request"
 
 [[coverage.not_a_control]]
+module = "src/security/decision_fixture_table.rs"
+reason = "the decision fixture table's row shape, compiled in test builds only (#[cfg(test)] in security/mod.rs); it asserts recorded decisions and refuses no request"
+
+[[coverage.not_a_control]]
 module = "src/security/decision_record.rs"
 reason = "the decision object a record carries (which check decided, config revision); it records a verdict, it refuses no request"
 
@@ -91,6 +95,10 @@ reason = "the write half of the transparency-log control (rotation trigger, rese
 [[coverage.not_a_control]]
 module = "src/security/severity.rs"
 reason = "the severity type shared by the firewall, response inspection and context integrity; each scanner maps it to an action in its own module, so it refuses nothing itself"
+
+[[coverage.not_a_control]]
+module = "src/security/transparency_log_kill.rs"
+reason = "compiled only under cfg(test): named crash boundaries where a child-process test row aborts the logger; it never ships and refuses no request"
 
 [[coverage.not_a_control]]
 module = "src/security/transparency_log_attributed.rs"
@@ -401,6 +409,13 @@ probe = "none"
 reason = "needs a backend that echoes a credential from its own configuration, or a stored answer kept before a value counted as secret; the caller leg can do neither. Exercised by secret_echo_config_tests (one row per carrier), secret_marked_later_tests, cache_marked_later_tests, registry stored_scrub_tests and the configured needles rows, with their mutants"
 
 [[control]]
+id = "credential-name-rule"
+description = "a key or member name is judged a credential by its last words (password, token, an api or private key, a client secret, ...; pagination names such as next_page_token excluded): the firewall's redactor uses it to redact credential-named JSON members, and the web UI's backend panel and discovery adopt use it, with a length bound, to decide which env values go to the secret store instead of gateway.yaml"
+source = "src/security/credential_names.rs"
+probe = "none"
+reason = "the panel and adopt decisions are admin-route writes to gateway.yaml and the secret store, and the redactor half needs a backend response carrying a credential-named member; the caller leg can observe neither. Exercised by the firewall's member and family rows (redactor_member_tests, redactor_family_tests), the panel rows T16-T22 (backends_secret_slot_tests: names judged one by one, ordinary settings never stored or redacted, the length bound) and adopt's split rows (discovery_adopt_tests), with their mutants"
+
+[[control]]
 id = "egress-scan-memo"
 description = "the response-inspection and context-integrity verdict memo returns only a text's own classification"
 source = "src/security/text_memo.rs"
@@ -469,6 +484,20 @@ description = "every hot-path audit append runs off the request threads under a 
 source = "src/security/transparency_log_bounded.rs"
 probe = "none"
 reason = "fires only when the audit volume stops answering; a live probe cannot stall the disk of the install it probes"
+
+[[control]]
+id = "audit-settle-fail-closed"
+description = "settle appends a journaled config-write record only into the log its journal is bound to, synced, under the F20 permit: it never reports Appended without a confirmed sync; a permit it cannot take is Refused with no task, and past the bound a dispatched write is Unconfirmed; it refuses another log (OtherLog) and a payload outside the settle. kind namespace or naming a reserved field (Invalid); plain appends refuse a settle. kind. Covered by the settle rows (settle_tests: bound log, OtherLog, refusals by class), the bound rows (settle_bound_tests: permit, closed and stalled refusal, held task, 2x bound, faults, refresh failure) and the kind rows (settle_kind_tests)"
+source = "src/security/transparency_log_settle.rs"
+probe = "none"
+reason = "unreachable from the wire until the config writer moves onto settle; no request reaches it to probe"
+
+[[control]]
+id = "audit-log-identity"
+description = "the audit log keeps one id across reopens and rotations, and a genesis that replaces a lost log names what survived of it (the old id, the surviving high-water mark) in the same synced open record that sets the new id; audit verify reports that evidence, unverified unless the chain check authenticated the record. Covered by the identity, predecessor and kill rows (identity_tests, predecessor_tests, kill_tests)"
+source = "src/security/transparency_log_identity.rs"
+probe = "none"
+reason = "fires only when the audit log is replaced or lost on disk; a live probe cannot delete the log of the install it probes"
 
 [[control]]
 id = "audit-log-verify"
