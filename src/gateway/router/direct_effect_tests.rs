@@ -59,7 +59,7 @@ pub(super) fn owner_cert() -> crate::mtls::CertIdentity {
 
 /// A `tools/call` of `name` to `uri` as [`KEY`] presenting the owner's
 /// certificate: the JSON answer.
-async fn call(fx: &Fx, uri: &str, name: &str, arguments: Value) -> Value {
+pub(super) async fn call(fx: &Fx, uri: &str, name: &str, arguments: Value) -> Value {
     let body = json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {
         "name": name, "arguments": arguments,
         "_meta": {"io.modelcontextprotocol/protocolVersion": "2026-07-28",
@@ -83,15 +83,13 @@ async fn call(fx: &Fx, uri: &str, name: &str, arguments: Value) -> Value {
     serde_json::from_slice(&bytes).unwrap_or(Value::Null)
 }
 
-/// GUARD (probe): the certificate's owner holds an execute grant on its
-/// personal capability, and the meta route reaches it (the control: the
-/// upstream is hit once and its answer served). The same identity naming
-/// the capability on the direct route reaches nothing: the upstream is not
-/// hit again, nothing is served, and the direct route's records name no
-/// grant and record no declared effect.
+/// The capability provider [`CAPS`] serving [`PROBE`], owned by mTLS
+/// subject [`OWNER`] and granted to it when `with_grant`: the gateway, the
+/// upstream's hit count, and the log directory both routes record into.
 #[cfg(feature = "firewall")]
-#[tokio::test]
-async fn probe_direct_reaches_the_capability_backend() {
+pub(super) async fn owned_capability(
+    with_grant: bool,
+) -> (Fx, Arc<AtomicUsize>, Arc<tempfile::TempDir>) {
     let hits = Arc::new(AtomicUsize::new(0));
     let counter = Arc::clone(&hits);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
@@ -127,21 +125,22 @@ async fn probe_direct_reaches_the_capability_backend() {
         .await
         .expect("the capability loads");
     let subject = crate::identity_grants::GrantSubject::for_test("mtls", OWNER, None);
-    let grants = crate::identity_grants::LocalIdentityGrantStore::from_grants(vec![
-        crate::identity_grants::IdentityGrant {
-            grant_id: "g-direct-probe".to_owned(),
-            subject: subject.clone(),
-            agent: crate::identity_grants::GrantAgent::Any,
-            capability: PROBE.to_owned(),
-            tool: None,
-            scope: crate::identity_grants::GrantScope::Execute,
-            owner: Some(subject),
-            expires_at: None,
-            revoked_at: None,
-            provenance: "test".to_owned(),
-            reason: "direct-route probe".to_owned(),
-        },
-    ]);
+    let grant = crate::identity_grants::IdentityGrant {
+        grant_id: "g-direct-probe".to_owned(),
+        subject: subject.clone(),
+        agent: crate::identity_grants::GrantAgent::Any,
+        capability: PROBE.to_owned(),
+        tool: None,
+        scope: crate::identity_grants::GrantScope::Execute,
+        owner: Some(subject),
+        expires_at: None,
+        revoked_at: None,
+        provenance: "test".to_owned(),
+        reason: "direct-route probe".to_owned(),
+    };
+    let grants = crate::identity_grants::LocalIdentityGrantStore::from_grants(
+        with_grant.then_some(grant).into_iter().collect::<Vec<_>>(),
+    );
     let log_dir = Arc::new(tempfile::tempdir().expect("a log directory"));
     let log = logger(&log_dir, AuditFailurePolicy::FailClosed);
     let fx = fixture_logged(Answer::Ok, Arc::clone(&log), |mut meta| {
@@ -151,6 +150,19 @@ async fn probe_direct_reaches_the_capability_backend() {
         meta
     })
     .await;
+    (fx, hits, log_dir)
+}
+
+/// GUARD (probe): the certificate's owner holds an execute grant on its
+/// personal capability, and the meta route reaches it (the control: the
+/// upstream is hit once and its answer served). The same identity naming
+/// the capability on the direct route reaches nothing: the upstream is not
+/// hit again, nothing is served, and the direct route's records name no
+/// grant and record no declared effect.
+#[cfg(feature = "firewall")]
+#[tokio::test]
+async fn probe_direct_reaches_the_capability_backend() {
+    let (fx, hits, log_dir) = owned_capability(true).await;
 
     let control = call(
         &fx,

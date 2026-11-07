@@ -225,6 +225,24 @@ pub(crate) async fn fixture_built_on(
     with_transport(transport, Box::pin(fixture_inner(Answer::Ok, false, build))).await
 }
 
+thread_local! {
+    /// The mTLS policy a fixture's router state enforces, when set.
+    static STATE_MTLS: std::cell::RefCell<Option<Arc<crate::mtls::MtlsPolicy>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Builds `fixture` (any of this module's fixtures) with `policy` as the
+/// router state's mTLS policy.
+pub(crate) async fn with_mtls_policy(
+    policy: Arc<crate::mtls::MtlsPolicy>,
+    fixture: std::pin::Pin<Box<impl std::future::Future<Output = Fx>>>,
+) -> Fx {
+    STATE_MTLS.with(|p| *p.borrow_mut() = Some(policy));
+    let fx = fixture.await;
+    STATE_MTLS.with(|p| *p.borrow_mut() = None);
+    fx
+}
+
 /// Builds `fixture` (any of this module's fixtures) over `transport`. Boxed,
 /// so the caller's future holds a pointer, not the fixture's whole state.
 pub(crate) async fn with_transport(
@@ -453,6 +471,9 @@ async fn fixture_inner(
     let route_log = propagating_route_log(state_mut);
     if let Some(log) = STATE_LOG.with(|l| l.borrow().clone()) {
         state_mut.transparency_log = Some(log);
+    }
+    if let Some(policy) = STATE_MTLS.with(|p| p.borrow().clone()) {
+        state_mut.mtls_policy = policy;
     }
     for (name, passthrough) in [("alpha", false), ("alpha-pt", true)] {
         let backend = Arc::new(Backend::new(
