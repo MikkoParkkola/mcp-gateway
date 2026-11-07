@@ -183,6 +183,10 @@ jobs:
         run: scripts/ci/trusted-runner/job-started.sh --self-test
       - name: Validate the mutant batch classifier
         run: python3 scripts/ci/mutants/run_mutants.py --self-test
+      - name: Every library-test job adds swap first
+        run: |
+          python3 scripts/ci/check_swap_jobs.py --self-test
+          python3 scripts/ci/check_swap_jobs.py
       - name: Validate throwaway and mutant-row routing (hosted until the trusted runner is ready)
         run: |
           python3 -c 'import yaml' 2>/dev/null || python3 -m pip install --user --quiet 'pyyaml==6.0.2'
@@ -882,6 +886,7 @@ jobs:
         shard: [lib-a, lib-b, int-a, int-b]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/add-swap
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       # Each skip names the job that runs the test in full, and its ticket:
@@ -963,6 +968,7 @@ jobs:
       # but which that job skips here. Without this, a throwaway meant to show
       # a workflow-wiring or release-script test going red passes on cargo
       # alone. Every suite runs and all failures are reported; seconds, no cargo.
+      - uses: ./.github/actions/add-swap
       - name: Install PyYAML 6.0.2 (the cosign floor parses workflows)
         run: python3 -c 'import sys, yaml; sys.exit(yaml.__version__ != "6.0.2")' 2>/dev/null || python3 -m pip install --user --quiet 'pyyaml==6.0.2'
       - name: Release tooling Python suites
@@ -1050,6 +1056,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - uses: ./.github/actions/add-swap
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - name: Install the pinned gws
@@ -1078,6 +1085,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - uses: ./.github/actions/add-swap
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - name: Install gnome-keyring, secret-tool and gdbus
@@ -1268,6 +1276,7 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/add-swap
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - name: Build the tests from the packaged crate
