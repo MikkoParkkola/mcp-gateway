@@ -45,6 +45,13 @@ fn findings(source: &str) -> Vec<String> {
 #[test]
 fn the_real_token_shape_is_accepted() {
     assert_eq!(findings(BASE), Vec::<String>::new());
+    // A grouped import of the real firewall type is the same binding.
+    let grouped = BASE.replace(
+        "use crate::security::firewall::Firewall;",
+        "use crate::security::firewall::{Firewall, FirewallConfig};",
+    );
+    assert_ne!(grouped, BASE, "the edit matched nothing");
+    assert_eq!(findings(&grouped), Vec::<String>::new());
 }
 
 /// Every fixture is BASE with one edit; each reports exactly its finding.
@@ -133,6 +140,16 @@ fn the_token_check_refuses_each_other_shape() {
         (
             "a self-rename through a group",
             format!("{BASE}\nuse self::ReadsToken::{{self as Capability}};"),
+            "an alias of ReadsToken",
+        ),
+        (
+            "a glob over the token",
+            format!("{BASE}\nuse self::ReadsToken::*;"),
+            "an alias of ReadsToken",
+        ),
+        (
+            "a raw-spelled alias",
+            format!("{BASE}\nuse self::r#ReadsToken as Capability;"),
             "an alias of ReadsToken",
         ),
         (
