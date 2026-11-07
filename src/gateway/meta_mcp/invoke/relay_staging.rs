@@ -222,6 +222,11 @@ impl DeferredReceipts {
         }
     }
 
+    /// Whether the answer delivers a result, so its commit can record.
+    pub(crate) fn delivers(&self) -> bool {
+        self.eligible
+    }
+
     /// Record what was staged when the answer went out as built, under the
     /// generation current now, captured once before anything records.
     pub(crate) fn commit(&self, written: bool) {

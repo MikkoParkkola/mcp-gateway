@@ -71,10 +71,12 @@ pub(crate) async fn emit_http_checked(
     let Some(receipts) = receipts else {
         return (response, written);
     };
-    // A failed read record replaced the answer: nothing was delivered.
-    if !written {
+    // A failed read record replaced the answer: nothing was delivered. An
+    // answer that delivers no result records nothing whenever it commits, so
+    // it commits now and goes out unwrapped (a refusal pays no stream).
+    if !written || !receipts.delivers() {
         receipts.commit(false);
-        return (response, false);
+        return (response, written);
     }
     (commit_at_first_chunk(response, receipts), true)
 }

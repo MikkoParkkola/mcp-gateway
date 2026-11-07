@@ -481,6 +481,7 @@ src/gateway/meta_mcp/invoke/relay_staging.rs	capture_pending	-	on-path, untimed:
 src/gateway/meta_mcp/invoke/relay_staging.rs	capture_pending_now	http_invoke_tiny	called for every meta HTTP answer before settlement; with no firewall it returns at its first check
 src/gateway/meta_mcp/invoke/relay_staging.rs	commit_on_write	stdio_invoke_tiny	builds the write-time commit of every judged stdio answer (or commits a non-result at once)
 src/gateway/meta_mcp/invoke/relay_staging.rs	take_staged_now	-	direct-route receipt hand-off only, with a firewall configured
+src/gateway/meta_mcp/invoke/relay_staging.rs	delivers	-	on-path, untimed: read only when an HTTP answer carries deferred receipts, which needs relay detection active
 src/gateway/meta_mcp/invoke/relay_catalogue.rs	as_caller	-	prompts/get and resources/read only, not the tools/call path
 src/gateway/meta_mcp/invoke/relay_catalogue.rs	catalogue_refusal	-	prompts/get and resources/read only, not the tools/call path
 src/gateway/meta_mcp/invoke/relay_catalogue.rs	forward_catalogue	-	prompts/get and resources/read only, not the tools/call path
