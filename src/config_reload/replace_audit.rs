@@ -206,7 +206,7 @@ pub(crate) async fn replace_audited(
 /// pending. A refused intent recovers nothing; the next holder tries again.
 /// It does not wait, so a recovery sink lent to it is never held across an
 /// await. Shared by the running gateway and startup
-/// ([`crate::config_persistence::recover_before_start`]); the sink is a
+/// ([`crate::config_reload::recover_before_start`]); the sink is a
 /// parameter so where intents go can change underneath both.
 pub(crate) fn recovery_intent(
     sink: &mut dyn IntentSink,

@@ -128,12 +128,15 @@ use scratch::{create_scratch_exclusive, is_transient, scratch_candidate};
 /// writer past the wait, or beside a file this account cannot lock (fix it
 /// from the side that can write). The message says what to do; the gateway
 /// must not start on either version.
-pub fn recover_before_start(config: &Path) -> Result<(), String> {
+pub(crate) fn recover_before_start(
+    config: &Path,
+    record: &dyn Fn(&lock::Locked, &Config) -> Result<(), String>,
+) -> Result<(), String> {
     if !lock::journal_pending(config) {
         return Ok(());
     }
     match lock::lock_config_blocking_deferred(config, Instant::now() + CLI_LOCK_WAIT, |_| {}) {
-        Ok(locked) => recover_audited(&locked),
+        Ok(locked) => recover_recorded(&locked, record),
         Err(lock::NotLocked::Busy) => Err(format!(
             "{} has a pending write and another writer holds its lock; start again when it finishes",
             config.display()
@@ -150,9 +153,12 @@ pub fn recover_before_start(config: &Path) -> Result<(), String> {
     }
 }
 
-/// [`recover_before_start`] under the lock: the intent into the surviving
-/// config's audit log, then the recovery.
-fn recover_audited(locked: &lock::Locked) -> Result<(), String> {
+/// [`recover_before_start`] under the lock: `record` given the config the
+/// recovery leaves, then the recovery.
+fn recover_recorded(
+    locked: &lock::Locked,
+    record: &dyn Fn(&lock::Locked, &Config) -> Result<(), String>,
+) -> Result<(), String> {
     let message = |e: journal::NotRecovered| match e {
         journal::NotRecovered::Refused(why) | journal::NotRecovered::Failed(why) => why,
     };
@@ -165,8 +171,7 @@ fn recover_audited(locked: &lock::Locked) -> Result<(), String> {
                     unrecorded(locked, &format!("the config it leaves does not load: {e}"))
                 })?
                 .config;
-            crate::config_reload::startup_recovery_intent(locked, &config)
-                .map_err(|why| unrecorded(locked, &why))?;
+            record(locked, &config).map_err(|why| unrecorded(locked, &why))?;
         }
     }
     journal::recover(&locked.target).map(drop).map_err(message)
