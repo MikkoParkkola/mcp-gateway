@@ -10,6 +10,7 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
+#[cfg(feature = "webui")]
 use serde_json::{Map, Value};
 
 use super::rotation::WriteFault;
@@ -237,6 +238,7 @@ async fn a_settle_answers_within_twice_the_bound() {
 }
 
 /// What a reader was told: the record's kind and its fields.
+#[cfg(feature = "webui")]
 type Told = Arc<std::sync::Mutex<Vec<(String, Map<String, Value>)>>>;
 
 #[cfg(feature = "webui")]

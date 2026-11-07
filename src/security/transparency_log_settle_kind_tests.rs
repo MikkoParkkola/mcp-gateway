@@ -9,7 +9,9 @@ use std::sync::Arc;
 use serde_json::{Map, Value, json};
 
 use super::rotation_tests::{cfg, log_path};
-use super::settle::{IntentKind, InvalidPayload, Role, Unsettled};
+#[cfg(feature = "webui")]
+use super::settle::IntentKind;
+use super::settle::{InvalidPayload, Role, Unsettled};
 use super::settle_tests::{on_disk, payload, records_of};
 use super::*;
 use crate::security::audit::InvocationTarget;
