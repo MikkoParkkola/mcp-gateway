@@ -3,6 +3,7 @@
 //! `cap discover`: finding MCP servers on this machine, the shadow scan, and
 //! printing what either found. Moved from `cap.rs` for the file-size ceiling.
 
+use std::io::Write as _;
 use std::process::ExitCode;
 
 use mcp_gateway::discovery::{
@@ -42,33 +43,35 @@ pub(super) async fn cap_discover(
 
             // In json/yaml mode stdout carries only the document; every other
             // line goes to stderr so the output parses as one value (#1909).
-            let say = |text: &str| {
-                if structured_output {
-                    eprintln!("{text}");
-                } else {
-                    println!("{text}");
-                }
+            // A writer, not a closure taking text: each line below is its
+            // own output site for the discovery output guard.
+            let mut say: Box<dyn std::io::Write> = if structured_output {
+                Box::new(std::io::stderr())
+            } else {
+                Box::new(std::io::stdout())
             };
             if servers.is_empty() {
                 if structured_output {
                     print_discovered_servers(&servers, &format);
                 }
-                say(DISCOVER_EMPTY);
+                let _ = writeln!(say, "{DISCOVER_EMPTY}");
                 return ExitCode::SUCCESS;
             }
             print_discovered_servers(&servers, &format);
             if write_config {
-                say("\n📝 Writing discovered servers to config...");
+                let _ = writeln!(say, "\n📝 Writing discovered servers to config...");
                 match crate::write_discovered_to_config(&servers, config_path.as_deref(), mode) {
                     Ok((path, written, skipped)) => {
-                        say(&format!(
+                        let _ = writeln!(
+                            say,
                             "✅ Wrote {written} server(s) to {}; skipped {skipped}",
                             path.display()
-                        ));
-                        say(&format!(
+                        );
+                        let _ = writeln!(
+                            say,
                             "\nTo use discovered servers, start gateway with: mcp-gateway -c {}",
                             path.display()
-                        ));
+                        );
                     }
                     Err(e) => {
                         eprintln!("{}", failure_line("Failed to write config", &e));
@@ -76,8 +79,8 @@ pub(super) async fn cap_discover(
                     }
                 }
             } else {
-                say("\n💡 To add these servers to your gateway config, run:");
-                say("   mcp-gateway cap discover --write-config");
+                let _ = writeln!(say, "\n💡 To add these servers to your gateway config, run:");
+                let _ = writeln!(say, "   mcp-gateway cap discover --write-config");
             }
             ExitCode::SUCCESS
         }
@@ -190,7 +193,7 @@ async fn cap_discover_shadow(
 }
 
 fn print_shadow_report(report: &ShadowScanReport) {
-    print!("{}", render_shadow_report(report));
+    render_shadow_report(&mut std::io::stdout().lock(), report);
 }
 
 const DISCOVER_EMPTY: &str = "No MCP servers found.
@@ -229,7 +232,7 @@ fn print_discovered_servers(servers: &[mcp_gateway::discovery::DiscoveredServer]
 }
 
 fn print_server_entry(server: &mcp_gateway::discovery::DiscoveredServer) {
-    print!("{}", render_server_entry(server));
+    render_server_entry(&mut std::io::stdout().lock(), server);
 }
 
 /// The terminal line for a failed step, escaped whole: an error can carry a

@@ -13,7 +13,21 @@ use mcp_gateway::discovery::shadow::ShadowScanReport;
 use mcp_gateway::discovery::{DiscoveredServer, DiscoverySource, ServerMetadata};
 use mcp_gateway::security::summarize_stdio_command;
 
-use super::{render_server_entry, render_shadow_report};
+use super::{render_server_entry as write_server_entry, render_shadow_report as write_shadow_report};
+
+/// What the listing writes for `server`.
+fn render_server_entry(server: &DiscoveredServer) -> String {
+    let mut out = Vec::new();
+    write_server_entry(&mut out, server);
+    String::from_utf8(out).expect("the listing is UTF-8")
+}
+
+/// What the shadow report writes for `report`.
+fn render_shadow_report(report: &ShadowScanReport) -> String {
+    let mut out = Vec::new();
+    write_shadow_report(&mut out, report);
+    String::from_utf8(out).expect("the report is UTF-8")
+}
 
 /// Recolours, reverses and breaks a terminal line.
 const PAYLOAD: &str = "\u{1b}[31m\u{202e}\u{2028}";

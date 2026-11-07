@@ -10,6 +10,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use syn::ext::IdentExt;
 use syn::parse::ParseStream;
 use syn::visit::Visit;
 
@@ -101,9 +102,14 @@ struct FileNames {
 pub(super) struct Sites {
     pub(super) counts: BTreeMap<Key, usize>,
     names: BTreeMap<String, FileNames>,
-    /// Escape helpers of every scoped file (`super::shown_path` is called
-    /// from a child module).
-    helpers: BTreeSet<String>,
+    /// Escape helpers, by (file, name): a bare call resolves in its own
+    /// file, `super::name` in the file that declared the caller's module.
+    helpers: BTreeSet<(String, String)>,
+    /// Each module file and the file whose `mod` item declared it.
+    parents: BTreeMap<String, String>,
+    /// The file of the last out-of-line `mod` item: the walk loads that
+    /// module next.
+    declaring: Option<String>,
 }
 
 impl Sites {
@@ -138,11 +144,23 @@ impl Sites {
                     return false;
                 };
                 let path = path_text(&func.path);
-                let last = path.rsplit("::").next().unwrap_or_default();
-                calls_shown(&path, &at.file, names) || self.helpers.contains(last)
+                calls_shown(&path, &at.file, names) || self.calls_helper(at, &path)
             }
             _ => false,
         }
+    }
+
+    /// Whether `path` resolves to an escape helper: `name` in this file, or
+    /// `super::name` in the file that declared this module.
+    fn calls_helper(&self, at: &Place, path: &str) -> bool {
+        let (file, name) = match path.strip_prefix("super::") {
+            Some(name) => match self.parents.get(&at.file) {
+                Some(parent) => (parent.clone(), name),
+                None => return false,
+            },
+            None => (at.file.clone(), path),
+        };
+        !name.contains("::") && self.helpers.contains(&(file, name.to_owned()))
     }
 
     /// Whether `name` is a parameter of this function typed `Shown`.
@@ -183,7 +201,7 @@ fn text(expr: &syn::Expr) -> String {
 fn path_text(path: &syn::Path) -> String {
     path.segments
         .iter()
-        .map(|s| s.ident.to_string())
+        .map(|s| s.ident.unraw().to_string())
         .collect::<Vec<_>>()
         .join("::")
 }
@@ -326,7 +344,7 @@ impl Sites {
             .path
             .segments
             .last()
-            .map(|s| s.ident.to_string())
+            .map(|s| s.ident.unraw().to_string())
             .unwrap_or_default();
         let name = self
             .names(&at.file)
@@ -340,8 +358,10 @@ impl Sites {
             exprs(mac)
         };
         let Some(args) = parsed else {
-            // A body the scan cannot parse: reviewed as a whole.
+            // A body the scan cannot parse: reviewed as a whole, and its
+            // tokens still searched for the output macros inside it.
             self.note(at, &site, "<body not parsed>".to_owned());
+            self.token_macros(at, mac);
             return;
         };
         if FORMAT_FIRST.contains(&n) {
@@ -382,6 +402,17 @@ impl Sites {
         }
     }
 
+    /// Judge every `name!(..)` invocation inside `mac`'s raw tokens, for a
+    /// body that does not parse as expressions (`select!`, `macro_rules!`).
+    fn token_macros(&mut self, at: &Place, mac: &syn::Macro) {
+        let buffer = syn::buffer::TokenBuffer::new2(mac.tokens.clone());
+        let mut found = Vec::new();
+        macros_in(buffer.begin(), &mut found);
+        for inner in &found {
+            self.mac(at, inner);
+        }
+    }
+
     /// A method or path call that writes: each argument is judged.
     fn write_call(
         &mut self,
@@ -412,17 +443,17 @@ impl<'ast> Visit<'ast> for Nested<'_> {
 
     fn visit_expr_method_call(&mut self, call: &'ast syn::ExprMethodCall) {
         self.sites
-            .write_call(self.at, &call.method.to_string(), &call.args);
-        if !WRITE_METHODS.contains(&call.method.to_string().as_str()) {
-            syn::visit::visit_expr_method_call(self, call);
-        } else {
+            .write_call(self.at, &call.method.unraw().to_string(), &call.args);
+        if WRITE_METHODS.contains(&call.method.unraw().to_string().as_str()) {
             self.visit_expr(&call.receiver);
+        } else {
+            syn::visit::visit_expr_method_call(self, call);
         }
     }
 
     fn visit_expr_call(&mut self, call: &'ast syn::ExprCall) {
         let last = match &*call.func {
-            syn::Expr::Path(p) => p.path.segments.last().map(|s| s.ident.to_string()),
+            syn::Expr::Path(p) => p.path.segments.last().map(|s| s.ident.unraw().to_string()),
             _ => None,
         };
         match last {
@@ -443,6 +474,27 @@ impl<'ast> Visit<'ast> for Nested<'_> {
     }
 }
 
+/// The `name!(..)` invocations in a token stream, at any depth of groups.
+fn macros_in(mut cursor: syn::buffer::Cursor<'_>, out: &mut Vec<syn::Macro>) {
+    while let Some((tree, next)) = cursor.token_tree() {
+        if let Some((inner, _, _, _)) = cursor.any_group() {
+            macros_in(inner, out);
+        } else if cursor.ident().is_some()
+            && let Some((bang, after)) = next.punct()
+            && bang.as_char() == '!'
+            && after.any_group().is_some()
+            && let (Some((bang_tree, _)), Some((group, rest))) =
+                (next.token_tree(), after.token_tree())
+            && let Ok(mac) = syn::parse2::<syn::Macro>([tree, bang_tree, group].into_iter().collect())
+        {
+            out.push(mac);
+            cursor = rest;
+            continue;
+        }
+        cursor = next;
+    }
+}
+
 /// Whether a function body is exactly one call of the shared escape: an
 /// escape helper such as `shown_path`, accepted where it is called.
 fn is_helper(block: &syn::Block) -> bool {
@@ -458,8 +510,23 @@ fn is_helper(block: &syn::Block) -> bool {
     )
 }
 
-/// The parameters of `sig` typed `Shown` (or `&Shown`).
-fn shown_params(sig: &syn::Signature, out: &mut BTreeMap<String, BTreeSet<String>>) {
+/// The parameters of `sig` typed `Shown` (or `&Shown`) that no binding in
+/// `body` shadows: a `let`, closure or pattern of the same name makes the
+/// name ambiguous, so it needs a row again.
+fn shown_params(
+    sig: &syn::Signature,
+    body: &syn::Block,
+    out: &mut BTreeMap<String, BTreeSet<String>>,
+) {
+    struct Bound(BTreeSet<String>);
+    impl<'ast> Visit<'ast> for Bound {
+        fn visit_pat_ident(&mut self, pat: &'ast syn::PatIdent) {
+            self.0.insert(pat.ident.unraw().to_string());
+            syn::visit::visit_pat_ident(self, pat);
+        }
+    }
+    let mut bound = Bound(BTreeSet::new());
+    bound.visit_block(body);
     for input in &sig.inputs {
         let syn::FnArg::Typed(arg) = input else {
             continue;
@@ -474,6 +541,7 @@ fn shown_params(sig: &syn::Signature, out: &mut BTreeMap<String, BTreeSet<String
                 .segments
                 .last()
                 .is_some_and(|s| s.ident == "Shown")
+            && !bound.0.contains(&name.ident.unraw().to_string())
         {
             out.entry(sig.ident.to_string())
                 .or_default()
@@ -484,19 +552,6 @@ fn shown_params(sig: &syn::Signature, out: &mut BTreeMap<String, BTreeSet<String
 
 /// The names a file's `use` declarations bring in that the scan relies on.
 fn file_names(file: &syn::File) -> FileNames {
-    let mut names = FileNames::default();
-    let watched = |n: &str| {
-        [
-            FORMAT_FIRST,
-            WRITE_MACROS,
-            TRACING,
-            ASSERT_COND,
-            ASSERT_PAIR,
-        ]
-        .iter()
-        .any(|set| set.contains(&n))
-            || n == "dbg"
-    };
     fn uses(tree: &syn::UseTree, prefix: &mut Vec<String>, out: &mut Vec<(String, String)>) {
         match tree {
             syn::UseTree::Path(p) => {
@@ -524,6 +579,19 @@ fn file_names(file: &syn::File) -> FileNames {
             syn::UseTree::Glob(_) => {}
         }
     }
+    let mut names = FileNames::default();
+    let watched = |n: &str| {
+        [
+            FORMAT_FIRST,
+            WRITE_MACROS,
+            TRACING,
+            ASSERT_COND,
+            ASSERT_PAIR,
+        ]
+        .iter()
+        .any(|set| set.contains(&n))
+            || n == "dbg"
+    };
     for item in &file.items {
         match item {
             syn::Item::Use(u) => {
@@ -549,12 +617,12 @@ fn file_names(file: &syn::File) -> FileNames {
                 if is_helper(&f.block) {
                     names.helpers.insert(f.sig.ident.to_string());
                 }
-                shown_params(&f.sig, &mut names.shown_params);
+                shown_params(&f.sig, &f.block, &mut names.shown_params);
             }
             syn::Item::Impl(block) => {
                 for member in &block.items {
                     if let syn::ImplItem::Fn(method) = member {
-                        shown_params(&method.sig, &mut names.shown_params);
+                        shown_params(&method.sig, &method.block, &mut names.shown_params);
                     }
                 }
             }
@@ -571,7 +639,15 @@ impl Sink for Sites {
             file: at.file.clone(),
             func: None,
         }) {
-            self.helpers.extend(names.helpers.iter().cloned());
+            self.helpers.extend(
+                names
+                    .helpers
+                    .iter()
+                    .map(|name| (at.file.clone(), name.clone())),
+            );
+        }
+        if let Some(parent) = self.declaring.take() {
+            self.parents.insert(at.file.clone(), parent);
         }
         self.names.insert(at.file.clone(), names);
     }
@@ -585,19 +661,19 @@ impl Sink for Sites {
         match expr {
             syn::Expr::Macro(m) => self.mac(at, &m.mac),
             syn::Expr::MethodCall(call) => {
-                self.write_call(at, &call.method.to_string(), &call.args)
+                self.write_call(at, &call.method.unraw().to_string(), &call.args);
             }
             syn::Expr::Call(call) => {
                 if let syn::Expr::Path(p) = &*call.func
                     && let Some(last) = p.path.segments.last()
                 {
-                    self.write_call(at, &last.ident.to_string(), &call.args);
+                    self.write_call(at, &last.ident.unraw().to_string(), &call.args);
                 }
             }
-            syn::Expr::Binary(bin) if matches!(bin.op, syn::BinOp::AddAssign(_)) => {
-                if !self.passes(at, &bin.right) {
-                    self.note(at, "+=", text(&bin.right));
-                }
+            syn::Expr::Binary(bin)
+                if matches!(bin.op, syn::BinOp::AddAssign(_)) && !self.passes(at, &bin.right) =>
+            {
+                self.note(at, "+=", text(&bin.right));
             }
             _ => {}
         }
@@ -615,19 +691,23 @@ impl Sink for Sites {
         if in_scope(at)
             && let syn::Item::Macro(m) = item
         {
-            // `macro_rules!` and any other item-position macro: reviewed.
+            // `macro_rules!` and any other item-position macro: reviewed,
+            // and its body searched for output macros.
             self.note(at, "item macro", path_text(&m.mac.path));
+            self.token_macros(at, &m.mac);
+        }
+        if let syn::Item::Mod(module) = item
+            && module.content.is_none()
+        {
+            self.declaring = Some(at.file.clone());
         }
     }
 }
 
 /// The reviewed list: file, function, site, argument, count, class, reason.
 const LISTED: &str = include_str!("discovery_output_sites.tsv");
-/// `rendered`: text a function in scope builds from pieces this guard
-/// judges itself (the renderer's output, a joined list of shown parts).
-const CLASSES: [&str; 7] = [
+const CLASSES: [&str; 6] = [
     "gateway-owned",
-    "rendered",
     "structured",
     "internal",
     "error-display",
