@@ -131,7 +131,7 @@ impl Visitor<'_> {
 
     /// A listed macro name brought in from outside std or tracing: refused
     /// only if this file is near identity fields (see [`scan_file`]).
-    fn shadow(&mut self, what: String) {
+    fn shadow(&mut self, what: &str) {
         self.shadowed.push(format!("{}: {what}", self.file));
     }
 
@@ -244,7 +244,7 @@ impl Visitor<'_> {
                     self.refuse(&format!("`{}` imported as `{}`", r.ident, r.rename));
                 }
                 if MACROS.contains(&name(&r.rename).as_str()) {
-                    self.refuse(&format!(
+                    self.shadow(&format!(
                         "`{}` imported under the listed macro name `{}`",
                         r.ident, r.rename
                     ));
@@ -255,7 +255,7 @@ impl Visitor<'_> {
                     .first()
                     .is_some_and(|root| MACRO_ROOTS.contains(&root.as_str()));
                 if MACROS.contains(&name(&n.ident).as_str()) && !from_std {
-                    self.refuse(&format!(
+                    self.shadow(&format!(
                         "listed macro name `{}` imported from `{}`",
                         n.ident,
                         prefix.join("::")
@@ -359,9 +359,9 @@ impl<'ast> syn::visit::Visit<'ast> for Visitor<'_> {
             .map(|s| name(&s.ident))
             .unwrap_or_default();
         if name == "include" {
+            // Refused for what it is; not also as an unlisted macro.
             self.refuse("`include!` reads in code the walk does not see");
-        }
-        if near_fields && !MACROS.contains(&name.as_str()) {
+        } else if near_fields && !MACROS.contains(&name.as_str()) {
             self.refuse(&format!(
                 "macro `{}!` near identity fields",
                 path_text(&mac.path)
