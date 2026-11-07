@@ -175,24 +175,34 @@ async fn h10c_a_failed_move_aside_keeps_the_original_bytes() {
 #[test]
 fn h10d_a_failed_move_aside_turns_saves_off() {
     use super::super::health_wiring::save_path;
-    let history = crate::health_history::HealthHistory::start(
-        None,
-        crate::health_history::Restores::Counted(1),
-        1_800_000_000,
-    )
-    .0;
+    let fresh = || {
+        crate::health_history::HealthHistory::start(
+            None,
+            crate::health_history::Restores::Counted(1),
+            1_800_000_000,
+        )
+        .0
+    };
     let path = std::path::PathBuf::from("health.json");
-    let refused = save_path(true, path.clone(), 1, &history, |_, _| {
+    // Each case on a fresh history; the move aside sees this path and instant.
+    let history = fresh();
+    let refused = save_path(true, path.clone(), 7, &history, |p, at| {
+        assert_eq!((p, at), (std::path::Path::new("health.json"), 7));
         Err(std::io::Error::other("refused"))
     });
     assert_eq!(refused, None);
     assert!(history.incomplete());
-    let moved = save_path(true, path.clone(), 1, &history, |p, _| {
+    let history = fresh();
+    let moved = save_path(true, path.clone(), 7, &history, |p, at| {
+        assert_eq!((p, at), (std::path::Path::new("health.json"), 7));
         Ok(p.with_extension("aside"))
     });
     assert_eq!(moved, Some(path.clone()));
+    assert!(!history.incomplete());
+    let history = fresh();
     assert_eq!(
-        save_path(false, path.clone(), 1, &history, |_, _| unreachable!()),
+        save_path(false, path.clone(), 7, &history, |_, _| unreachable!()),
         Some(path)
     );
+    assert!(!history.incomplete());
 }
