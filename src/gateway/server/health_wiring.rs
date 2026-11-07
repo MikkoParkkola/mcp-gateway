@@ -19,7 +19,8 @@ const SAMPLE_INTERVAL: std::time::Duration = std::time::Duration::from_secs(60);
 /// The history and the file it saves to.
 pub(super) struct Health {
     pub(super) history: Arc<HealthHistory>,
-    path: PathBuf,
+    /// `None` when saves are off for this run.
+    path: Option<PathBuf>,
 }
 
 /// Restore the history from `data_dir`, save it once, and start its periodic
@@ -41,8 +42,6 @@ pub(super) fn start(
         tracing::info!(
             "health history: a run it did not record happened; that time is shown as unaccounted"
         );
-    } else if started.set_aside {
-        tracing::warn!("health.json did not decode; set aside, the health history starts again");
     } else if let Some(restart) = started.restart {
         tracing::info!(
             down_secs = restart.started_at.saturating_sub(restart.stopped_at),
@@ -52,14 +51,33 @@ pub(super) fn start(
     } else if started.fresh {
         tracing::info!("health history: first start, nothing to restore");
     }
+    // An undecodable file is moved aside, as counters.json is; when that
+    // fails, this run never saves, so the old bytes are not overwritten.
+    let path = if started.set_aside {
+        match crate::counters::persist::quarantine(&path, now) {
+            Ok(aside) => {
+                tracing::warn!(aside = %aside.display(), "health.json did not decode; moved aside, the health history starts again");
+                Some(path)
+            }
+            Err(e) => {
+                tracing::error!(error = %e, "health.json did not decode and could not be moved aside; health saves are off for this run");
+                history.set_incomplete(true);
+                None
+            }
+        }
+    } else {
+        Some(path)
+    };
     let history = Arc::new(history);
-    file::save(&history, &path, now);
+    if let Some(path) = &path {
+        file::save(&history, path, now);
+    }
     file::install(Arc::clone(&history));
     let saver = spawn_periodic_save("health save", COUNTER_SAVE_INTERVAL, Some(shutdown), {
         let (history, path) = (Arc::clone(&history), path.clone());
         move || {
-            if let Ok(now) = crate::clock::unix_secs() {
-                file::save(&history, &path, now);
+            if let (Some(path), Ok(now)) = (&path, crate::clock::unix_secs()) {
+                file::save(&history, path, now);
             }
         }
     });
@@ -96,7 +114,9 @@ impl Health {
             Box::new(move || {
                 if let Ok(now) = crate::clock::unix_secs() {
                     history.stop(now);
-                    file::save(&history, &path, now);
+                    if let Some(path) = &path {
+                        file::save(&history, path, now);
+                    }
                 }
             }),
         )
