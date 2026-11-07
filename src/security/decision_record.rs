@@ -384,6 +384,10 @@ pub(crate) mod read;
 mod tests;
 
 #[cfg(test)]
+#[path = "decision_record_allow_tests.rs"]
+mod allow_tests;
+
+#[cfg(test)]
 #[path = "decision_record_read_tests.rs"]
 mod read_tests;
 
