@@ -62,8 +62,9 @@ impl ConfigFile {
     }
 
     /// `text` as the file at `path`, refused as [`Self::read`] refuses a file
-    /// naming a reserved writer slot: the one check every loaded text passes,
-    /// read from disk or supplied.
+    /// naming a reserved writer slot: the check a file read and startup's
+    /// recovery preview share. [`super::Config::load_pending`] skips it on
+    /// purpose, since its template names those slots.
     fn of_text(path: PathBuf, text: String) -> Result<Self> {
         if let Some((name, line)) = reserved_slot_reference(&text) {
             return Err(crate::Error::Config(format!(
