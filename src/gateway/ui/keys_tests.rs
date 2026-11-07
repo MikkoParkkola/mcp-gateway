@@ -241,7 +241,7 @@ fn bearer() -> crate::gateway::auth::AuthenticatedClient {
 
 /// The answer's object for `name`.
 fn entry<'a>(answer: &'a Value, name: &str) -> &'a Value {
-    answer
+    answer["keys"]
         .as_array()
         .and_then(|keys| keys.iter().find(|k| k["name"] == name))
         .unwrap_or_else(|| panic!("no {name} in {answer}"))
@@ -257,20 +257,23 @@ async fn t7_the_answer_is_the_configured_keys_in_table_order() {
         {
             "name": "zeta", "backends": ["fs"], "allowed_tools": ["read_file"],
             "denied_tools": null, "admin": true, "expires_at": "2999-01-01T00:00:00Z",
-            "rate_limit": 30, "last_used": null
+            "previous_expires_at": "2999-01-01T00:00:00Z",
+            "rate_limit": 30, "last_used": null, "live": true
         },
         {
             "name": "alpha", "backends": ["*"], "allowed_tools": null,
             "denied_tools": ["write_file"], "admin": false, "expires_at": null,
-            "rate_limit": 0, "last_used": null
+            "previous_expires_at": null,
+            "rate_limit": 0, "last_used": null, "live": true
         },
         {
             "name": "mu", "backends": ["*"], "allowed_tools": null,
             "denied_tools": null, "admin": false, "expires_at": null,
-            "rate_limit": 0, "last_used": null
+            "previous_expires_at": "2999-01-01T00:00:00Z",
+            "rate_limit": 0, "last_used": null, "live": true
         }
     ]);
-    assert_eq!(answer, expected);
+    assert_eq!(answer["keys"], expected);
 }
 
 /// T7b: the answer lists the request's pinned table, not the published one.
@@ -286,7 +289,8 @@ async fn t7b_the_answer_reads_the_pinned_table() {
     }]);
     let first = fx.as_bearer(Arc::clone(&pinned)).await;
     let names = |v: &Value| {
-        v.as_array()
+        v["keys"]
+            .as_array()
             .map(|a| a.iter().map(|k| k["name"].clone()).collect::<Vec<_>>())
             .unwrap_or_default()
     };
@@ -358,14 +362,17 @@ fn t8_no_credential_identifier_leaves_the_route() {
     let (status, body) = answer;
     assert_eq!(status, StatusCode::OK, "{body}");
     let parsed: Value = serde_json::from_str(&body).expect("json");
-    assert_eq!(parsed.as_array().map(Vec::len), Some(3), "{body}");
+    assert_eq!(parsed["keys"].as_array().map(Vec::len), Some(3), "{body}");
     let logged = serde_json::to_string(&logs).expect("logs serialise");
+    // Both texts are JSON, where a Windows path's backslashes are escaped:
+    // each needle is searched raw and in its JSON-escaped spelling.
     for needle in &forbidden {
-        assert!(!body.contains(needle.as_str()), "the body carries {needle}");
-        assert!(
-            !logged.contains(needle.as_str()),
-            "a log record carries {needle}"
-        );
+        let escaped = serde_json::to_string(needle).expect("a string serialises");
+        let escaped = escaped.trim_matches('"');
+        for spelling in [needle.as_str(), escaped] {
+            assert!(!body.contains(spelling), "the body carries {needle}");
+            assert!(!logged.contains(spelling), "a log record carries {needle}");
+        }
     }
 }
 
@@ -607,6 +614,6 @@ async fn t8b_the_read_writes_no_audit_record() {
     let fx = Fixture::new().await;
     let before = audit_lines(&fx);
     let answer = fx.as_bearer(fx.table()).await;
-    assert_eq!(answer.as_array().map(Vec::len), Some(3), "{answer}");
+    assert_eq!(answer["keys"].as_array().map(Vec::len), Some(3), "{answer}");
     assert_eq!(audit_lines(&fx), before, "the read wrote an audit record");
 }

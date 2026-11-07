@@ -1789,6 +1789,9 @@ _HOSTED_PY = (
     "    runs-on: ubuntu-latest\n    timeout-minutes: 60\n    permissions:\n      contents: read\n    steps:\n"
     "      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1\n"
     "        with:\n          persist-credentials: false\n"
+    "      # Hosted runners only: the trusted machine sizes its own memory.\n"
+    "      - if: runner.environment == 'github-hosted'\n"
+    "        uses: ./.github/actions/add-swap\n"
 )
 _TRUSTED_HEAD = "    env:\n      CARGO_BUILD_JOBS: 6\n    steps:\n"
 _HOSTED_PY_STEP = _HOSTED_PY + (
