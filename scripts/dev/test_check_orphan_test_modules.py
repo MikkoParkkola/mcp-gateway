@@ -247,6 +247,27 @@ class CfgIsTest(unittest.TestCase):
                 self.assertFalse(self.judge(expr))
 
 
+class SharedCases(unittest.TestCase):
+    """MIK-9387.TCFG.1: the Python column of the case table the Rust reader's
+    rows read too (src/test_source_text_tests.rs)."""
+
+    def test_every_case_matches_the_python_column(self):
+        judge = load_guard(Path(".")).cfg_is_test
+        rows = [
+            line.split("\t")
+            for line in (SCRIPT.parent / "cfg-reader-cases.tsv").read_text(encoding="utf-8").splitlines()
+            if line and not line.startswith("#")
+        ]
+        self.assertGreater(len(rows), 20)
+        for expr, python, rust in rows:
+            with self.subTest(expr=expr):
+                self.assertIn(python, ("yes", "no"))
+                self.assertIn(rust, ("yes", "no"))
+                # The columns may differ only where Python sees more code.
+                self.assertFalse(python == "yes" and rust == "no", "Python may not skip what Rust keeps")
+                self.assertEqual(judge(expr), python == "yes")
+
+
 class Blank(unittest.TestCase):
     def test_a_c_raw_string_with_an_inner_quote_blanks_only_itself(self):
         # MIK-8691: `cr#"…"#` read as a plain string ran to the end of the
