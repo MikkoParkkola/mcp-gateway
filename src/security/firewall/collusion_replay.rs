@@ -524,6 +524,12 @@ impl ReplayReceipts {
         }
     }
 
+    /// Entries the store holds now (tests only).
+    #[cfg(test)]
+    pub(in super::super) fn len_for_test(&self) -> usize {
+        self.inner.lock().by_key.len()
+    }
+
     /// Bytes the store holds now (tests only).
     #[cfg(test)]
     pub(in super::super) fn bytes_for_test(&self) -> usize {

@@ -169,3 +169,40 @@ async fn s4_a_batch_records_each_item_once() {
         "recorded once, at the first write"
     );
 }
+
+/// r24: a keyed chain whose delivery record fails (fail-closed audit) is
+/// replaced by the audit refusal and not retained, so no replay snapshot
+/// survives it: the pending capture is never taken for an answer that does
+/// not deliver, and settlement retains nothing to discard. A pin: an
+/// earlier capture would still be discarded when settlement retains nothing
+/// (E1), which r17 kills at the store.
+#[tokio::test]
+async fn r24_an_audit_failure_leaves_no_replay_snapshot() {
+    let (log, _dir) = failing_audit();
+    let (meta, firewall, cell) = judged_stdio(Some(log));
+    let reads = meta.stdio_reads();
+    *cell.lock() = tenant_note("t1", PROSE);
+    let request = json!({"jsonrpc": "2.0", "id": 9, "method": "tools/call",
+        "params": {"name": "gateway_execute",
+                   "arguments": {"chain": [{"tool": "alpha:read", "arguments": {}}]},
+                   "_meta": {"io.mcp-gateway/idempotency-key": "r24"}}});
+    let (value, hidden, params, staged) = staged_request(&meta, &reads, request).await;
+    let frame = Gateway::judge_and_commit(
+        &meta,
+        &reads,
+        SESSION,
+        (value, params.as_ref(), hidden.as_ref()),
+        staged,
+    )
+    .await;
+    assert!(
+        !frame.delivers_result(),
+        "base: the failed delivery record replaces the answer"
+    );
+    frame.stdio_written();
+    assert_eq!(
+        firewall.replay_entries_for_test(),
+        0,
+        "an audit-withheld answer leaves no replay snapshot"
+    );
+}

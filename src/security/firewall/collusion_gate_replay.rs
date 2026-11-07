@@ -104,6 +104,12 @@ impl Firewall {
         }
     }
 
+    /// How many replay entries the store holds (tests only).
+    #[cfg(test)]
+    pub(crate) fn replay_entries_for_test(&self) -> usize {
+        self.relay.replay.len_for_test()
+    }
+
     /// `handle`'s delivery was written under `generation`: a write not
     /// under an effective `off` keeps its entry; one under `off` ends that
     /// delivery, and the entry goes once no delivery of it is outstanding.
