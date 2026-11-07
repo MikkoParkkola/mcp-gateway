@@ -4789,8 +4789,8 @@ mounted. Derived items work out their value when unset. Removed items are refuse
 |---|---|---|---|
 | `MCP_GATEWAY_CAPABILITIES` | derived | shipped: unset reads the loaded config's `capabilities.directories`, as the gateway does; the flag and env stay hidden overrides, still honoured (tests/surf2_capability_dirs.rs (`flag_and_env_override_the_config`)); see upgrading.d/8044-4.md | env form of `-C/--capabilities`; derive from the config's `capabilities.directories` |
 | `MCP_GATEWAY_KIND_CLUSTER`, `MCP_GATEWAY_KIND_KEEP`, `MCP_GATEWAY_KIND_NAMESPACE`, `MCP_GATEWAY_ROLLOUT_TIMEOUT`, `MCP_GATEWAY_RUNTIME_DOCKER_IMAGE`, `MCP_GATEWAY_RUNTIME_DOCKER_RESTART_IMAGE`, `MCP_GATEWAY_RUNTIME_DOCKER_SMOKE` | hidden | test-only; docs say so |  |
+| `MCP_GATEWAY_MUTANT`, `MCP_GATEWAY_MUTANT_CHILD`, `MCP_GATEWAY_TEST_CLOCK`, `MCP_GATEWAY_TEST_ERA_PROBE_CAP_MS`, `MCP_GATEWAY_TEST_HOLD_CAPABILITY_SCAN`, `MCP_GATEWAY_TEST_HOME_DIR`, `MCP_GATEWAY_TEST_PAUSE_AT_PUBLISHED`, `MCP_GATEWAY_TEST_TRUST_CA` | hidden | test-only |  |
 | `MCP_GATEWAY_PROTOCOL_REVISION_WINDOW` | hidden | replaces `server.protocol_revision_window`; see upgrading.d/8783.md |  |
-| `MCP_GATEWAY_TEST_CLOCK`, `MCP_GATEWAY_TEST_ERA_PROBE_CAP_MS`, `MCP_GATEWAY_TEST_HOLD_CAPABILITY_SCAN`, `MCP_GATEWAY_TEST_HOME_DIR`, `MCP_GATEWAY_TEST_PAUSE_AT_PUBLISHED`, `MCP_GATEWAY_TEST_TRUST_CA` | hidden | test-only |  |
 ### HTTP routes
 
 | Item | Class | What 4.0 does | Why |
