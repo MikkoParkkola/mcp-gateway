@@ -401,9 +401,9 @@ fn h6b_a_save_waits_for_the_one_in_progress() {
     h.stop(T0 + 90);
     drop(held);
     assert!(saver.join().expect("joined"), "the save succeeded");
-    let saved: serde_json::Value =
+    let on_disk: serde_json::Value =
         serde_json::from_slice(&std::fs::read(&path).expect("saved")).expect("json");
-    assert_eq!(saved["clean_stop"], T0 + 90, "{saved}");
+    assert_eq!(on_disk["clean_stop"], T0 + 90, "{on_disk}");
 }
 
 /// H9e (code review r1): a clock set backward between runs never counts a
