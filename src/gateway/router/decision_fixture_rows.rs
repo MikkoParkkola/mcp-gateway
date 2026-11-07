@@ -536,8 +536,8 @@ async fn routing_profile_per_user(row: &'static str, propagation: Propagation) {
     );
 }
 
-/// A6b: nothing restricts a direct call (`k-std`, no tool policy). MIK-9205
-/// does not flip this row. The record is `default_allow` with no rule id:
+/// A6b: nothing restricts a direct call (`k-std`, no tool policy). Allow
+/// attribution does not flip this row. The record is `default_allow` with no rule id:
 /// `Checks::allowed` has no fresh-call caller (`decision_record.rs:193, 231`),
 /// so a fresh allowed call records it (`:268-272`). The effect is `alpha`'s
 /// shared slot's declaration, as the live call notes it for an unpropagated
@@ -602,7 +602,7 @@ async fn a6b_direct_no_rule() {
 }
 
 /// A3: an execute grant admits the owner's call to its personal capability
-/// on the meta route. Recorded `default_allow` today (flipped by MIK-9205,
+/// on the meta route. Recorded `default_allow` today (flipped by allow attribution,
 /// which records the grant as the allowing check), with no `grant_id`: the
 /// decision constructor sets none (`decision_record.rs:304`; flipped when the
 /// grant id is written). The effect is the capability's own definition,
@@ -649,11 +649,11 @@ async fn a3_grant_match() {
         panic!("premise: one invocation record: {new:?}");
     };
     assert_eq!(record["outcome"], "ok", "{record}");
-    // flipped by MIK-9205
+    // flipped by allow attribution
     let row = DecisionRow {
         name: "a3_grant_match",
         kind: "default_allow",
-        rule_id: RuleId::Absent("flipped by MIK-9205"),
+        rule_id: RuleId::Absent("flipped by allow attribution"),
         grant_id: None,
         findings: Findings::NotRun,
         effect: Some(("read_only", "capability_definition")),
@@ -734,7 +734,7 @@ fn mtls_policy_for(cn: &str) -> Arc<crate::mtls::MtlsPolicy> {
 /// A2: an mTLS rule allows the caller's certificate (CN `agent-a`, the
 /// owner certificate `direct_effect_tests::call` presents) on `alpha`'s
 /// `read`, on the direct route. Recorded `default_allow` today (flipped by
-/// MIK-9205). Control: the same enabled, non-empty policy, its rule matching
+/// allow attribution). Control: the same enabled, non-empty policy, its rule matching
 /// another CN, refuses the call: no rule matches, so the policy denies.
 #[tokio::test]
 async fn a2_mtls_rule_allow() {
@@ -770,11 +770,11 @@ async fn a2_mtls_rule_allow() {
         panic!("premise: one new invocation record: {new:?}");
     };
     assert_eq!(record["outcome"], "ok", "{record}");
-    // flipped by MIK-9205
+    // flipped by allow attribution
     let row = DecisionRow {
         name: "a2_mtls_rule_allow",
         kind: "default_allow",
-        rule_id: RuleId::Absent("flipped by MIK-9205"),
+        rule_id: RuleId::Absent("flipped by allow attribution"),
         grant_id: None,
         findings: Findings::NotRun,
         effect: Some(("read_only", "tool_annotation")),

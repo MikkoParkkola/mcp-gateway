@@ -7,7 +7,7 @@
 //!   (`decision_record.rs:231`) is the only writer of an allow attribution and
 //!   its only caller is the not-redecided copy (`:193`), so a fresh allowed call
 //!   records `default_allow` (`:268-272`) whichever check allowed it. Every row
-//!   but A6a is marked `flipped by MIK-9205`, which records the allowing check.
+//!   but A6a is marked `flipped by allow attribution`, which records the allowing check.
 //! - `grant_id` absent: nothing writes it (`decision_record.rs:304`).
 //! - findings `NotRun`: no production writer of `request_findings` yet.
 //! - effect (`undeclared`, `tool_annotation`): the fixture lists `read` with no
@@ -111,10 +111,10 @@ async fn a1_allow_list_pattern() {
         generation: None,
     })
     .await;
-    // flipped by MIK-9205
+    // flipped by allow attribution
     assert_row(
         &decision,
-        &allowed("a1_allow_list_pattern", "flipped by MIK-9205"),
+        &allowed("a1_allow_list_pattern", "flipped by allow attribution"),
     );
     // Only the matching entry removed: the decoy stays, and cannot admit it.
     let without = policy(&ToolPolicyConfig {
@@ -147,10 +147,10 @@ async fn a5_tool_policy_default_rule() {
         generation: None,
     })
     .await;
-    // flipped by MIK-9205
+    // flipped by allow attribution
     assert_row(
         &decision,
-        &allowed("a5_tool_policy_default_rule", "flipped by MIK-9205"),
+        &allowed("a5_tool_policy_default_rule", "flipped by allow attribution"),
     );
     let default_deny = policy(&ToolPolicyConfig {
         default_action: PolicyAction::Deny,
@@ -167,8 +167,8 @@ async fn a5_tool_policy_default_rule() {
     .await;
 }
 
-/// A6a: nothing restricts the call (no tool policy). MIK-9205 does not flip
-/// this row. Control: a deny entry for the tool refuses it.
+/// A6a: nothing restricts the call (no tool policy). Allow attribution does not
+/// flip this row. Control: a deny entry for the tool refuses it.
 #[tokio::test]
 async fn a6a_meta_no_rule() {
     let decision = delivered(&AllowAll).await;
@@ -234,7 +234,7 @@ async fn shell_call_under(
 }
 
 /// A4: a firewall Allow rule softens the shell-injection finding that would
-/// block the call. Recorded `default_allow` today (flipped by MIK-9205); the
+/// block the call. Recorded `default_allow` today (flipped by allow attribution); the
 /// firewall found and allowed a High finding, but the decision keeps no trace
 /// of it: the constructor's `request_findings: None` (`decision_record.rs:305`)
 /// is the only production line that sets the field, so findings stay `NotRun`
@@ -269,10 +269,10 @@ async fn a4_firewall_allow_rule() {
     );
     assert_eq!(sent, 1, "premise: the backend was sent the call once");
     assert_eq!(record["outcome"], "ok", "{record}");
-    // flipped by MIK-9205
+    // flipped by allow attribution
     assert_row(
         &record["decision"],
-        &allowed("a4_firewall_allow_rule", "flipped by MIK-9205"),
+        &allowed("a4_firewall_allow_rule", "flipped by allow attribution"),
     );
     // Only the matching rule removed: the decoy stays, and cannot admit it.
     let (delivered, sent, record) = shell_call_under(vec![elsewhere]).await;
