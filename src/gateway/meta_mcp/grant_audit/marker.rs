@@ -26,7 +26,7 @@ pub(super) fn delivery_scoped() -> bool {
 /// on the blocking worker and only after the append returned `Ok`, that marks
 /// the call's trace id as recorded in the open slot.
 pub(crate) fn invocation_landing() -> Box<dyn FnOnce(&str) + Send> {
-    let recorded = open_slot_recorded();
+    let recorded = super::open_slot_recorded();
     Box::new(move |trace_id| {
         if let Some(recorded) = recorded {
             recorded.add(trace_id);
