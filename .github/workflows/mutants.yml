@@ -58,11 +58,38 @@ jobs:
     if: needs.plan.outputs.has_linux == 'true' && vars.MCPGW_TRUSTED_RUNNER != 'ready'
     runs-on: ubuntu-latest
     timeout-minutes: 360
+    # One hosted mutant run at a time across every lane, the rest queued in
+    # arrival order (`queue: max` keeps up to 100 waiting instead of replacing
+    # the one pending), so mutant batches never take more than one hosted
+    # runner from merge trains. Each run records its wait (step below).
+    concurrency:
+      group: mutants-linux-hosted
+      cancel-in-progress: false
+      queue: max
+    permissions:
+      contents: read
+      actions: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 2
           persist-credentials: false
+      # How long this job waited after plan finished: its time in the
+      # concurrency queue. Read by the runner into its summary and results.
+      - name: Record the queue wait
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          done_at="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/attempts/$GITHUB_RUN_ATTEMPT/jobs" \
+            --jq '.jobs[] | select(.name == "Plan mutant batch") | .completed_at' | head -1)" || done_at=""
+          if [ -n "$done_at" ]; then
+            wait=$(( $(date -u +%s) - $(date -u -d "$done_at" +%s) ))
+          else
+            wait=unknown
+          fi
+          echo "MUTANTS_QUEUE_WAIT=$wait" >> "$GITHUB_ENV"
+          echo "queue wait: $wait s (plan finished $done_at, attempt $GITHUB_RUN_ATTEMPT)"
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
       # The runner script comes from the release line, never from the tree
       # under test: a source head that edited it could fake its own checks.
@@ -94,6 +121,22 @@ jobs:
         with:
           fetch-depth: 2
           persist-credentials: false
+      # How long this job waited after plan finished: its time in the
+      # concurrency queue. Read by the runner into its summary and results.
+      - name: Record the queue wait
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          done_at="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/attempts/$GITHUB_RUN_ATTEMPT/jobs" \
+            --jq '.jobs[] | select(.name == "Plan mutant batch") | .completed_at' | head -1)" || done_at=""
+          if [ -n "$done_at" ]; then
+            wait=$(( $(date -u +%s) - $(date -u -d "$done_at" +%s) ))
+          else
+            wait=unknown
+          fi
+          echo "MUTANTS_QUEUE_WAIT=$wait" >> "$GITHUB_ENV"
+          echo "queue wait: $wait s (plan finished $done_at, attempt $GITHUB_RUN_ATTEMPT)"
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
       # The runner script comes from the release line, never from the tree
       # under test: a source head that edited it could fake its own checks.
