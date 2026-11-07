@@ -321,3 +321,13 @@ fn h18_a_backward_clock_does_not_hide_a_missed_run() {
     let (_, started) = HealthHistory::start(Some(&saved), Some(3), T0 + 100);
     assert!(started.missed_run);
 }
+
+/// H19: a restore count lower than expected (an older binary rewrote
+/// counters.json without it) is a missed run too, never a measured restart.
+#[test]
+fn h19_a_lower_restore_count_is_a_missed_run() {
+    let first = life(None, 0, T0, T0 + 600, true);
+    let second = life(Some(&first), 1, T0 + 630, T0 + 900, true);
+    let (_, started) = HealthHistory::start(Some(&second), Some(1), T0 + 1_000);
+    assert!(started.missed_run && started.restart.is_none());
+}

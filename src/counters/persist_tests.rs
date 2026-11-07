@@ -203,3 +203,29 @@ fn t32_a_file_saved_by_another_version_marks_an_upgrade() {
         "a fresh install marks nothing"
     );
 }
+
+/// H20 (the health history's missed-run count): markers age out after 30
+/// days, the restore count never does. Five restores, then 31 days off: the
+/// Restart markers are gone, the count goes on to six.
+#[test]
+fn h20_the_restore_count_outlives_aged_markers() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut now = T0;
+    let mut restored = restore(dir.path(), now, VERSION);
+    for _ in 0..5 {
+        now += 60;
+        restored.file.save(&restored.store, VERSION, now);
+        restored = restore(dir.path(), now + 1, VERSION);
+    }
+    assert_eq!(restored.store.restores(), 5);
+    restored.file.save(&restored.store, VERSION, now + 2);
+    let later = restore(dir.path(), now + 31 * 86_400, VERSION);
+    let restarts = later
+        .store
+        .markers(0)
+        .iter()
+        .filter(|m| m.kind == MarkerKind::Restart)
+        .count();
+    assert_eq!(restarts, 1, "only this start's marker survives the 30 days");
+    assert_eq!(later.store.restores(), 6);
+}
