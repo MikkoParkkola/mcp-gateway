@@ -416,6 +416,10 @@ const OPENERS: &[(&str, &str)] = &[
         "writer: the high-water scan at open",
     ),
     (
+        "src/security/transparency_log_identity.rs",
+        "writer: the log's id scan at open, under the lease",
+    ),
+    (
         "src/security/transparency_log_anchor.rs",
         "writer: the anchor file, not a segment",
     ),
