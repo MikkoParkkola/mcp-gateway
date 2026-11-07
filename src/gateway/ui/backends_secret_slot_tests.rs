@@ -948,3 +948,22 @@ fn t21_the_store_bound_is_the_redactors_short_value_bound() {
     assert!(stores_env_value("API_KEY", &at));
     assert!(!stores_env_value("LOG_LEVEL", &at));
 }
+
+/// T22: the panel's header bound, at the step that picks what to store (a
+/// route cannot reach it: the registry splice writes `Bearer ` and a token, at
+/// least the bound already): a header one byte under the bound stays text, one
+/// at it is stored.
+#[test]
+fn t22_the_panel_stores_no_header_shorter_than_the_bound() {
+    let bound = crate::security::needles::SHORT_VALUE_BYTES;
+    let under: String = "0123456789abcdef".chars().take(bound - 1).collect();
+    let at: String = "0123456789abcdef".chars().take(bound).collect();
+    let env = std::collections::HashMap::new();
+    let headers =
+        std::collections::HashMap::from([("X-Short".to_owned(), under), ("X-Long".to_owned(), at)]);
+    let picked: Vec<(bool, String)> = super::slotting::literals(env.iter(), headers.iter())
+        .into_iter()
+        .map(|l| (l.header, l.key))
+        .collect();
+    assert_eq!(picked, [(true, "X-Long".to_owned())]);
+}
