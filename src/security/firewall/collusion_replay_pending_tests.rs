@@ -540,7 +540,10 @@ fn p1b_every_short_sequence_matches_the_model() {
                     handles.push(handle);
                 }
                 Op::Acquire => {
-                    if let Some((entry, handle)) = store.acquire(&k, now).map(|a| a.into_parts()) {
+                    if let Some((entry, handle)) = store
+                        .acquire(&k, now)
+                        .map(super::replay::Acquired::into_parts)
+                    {
                         let want = model.entry.map(|(seq, _)| format!("v{seq}"));
                         assert_eq!(
                             Some(entry.answer_digest.clone()),
