@@ -193,12 +193,14 @@ impl Literal {
 }
 
 /// `server` as an adopted backend. A template and an empty value stay as
-/// written; every other header value, and every other env value whose key
-/// `stores_env_value` (the web UI's shared rule) or that reads as a secret
-/// reference, is a literal and leaves the backend, env before headers, each
-/// sorted by key, so the order is the same on every run. Any other env value
-/// (an ordinary setting such as `DEBUG=1`) stays as written. Call it only for
-/// a find [`refusals`] accepts.
+/// written. Every other value the web UI's shared rule stores
+/// (`stores_header_value` for a header, `stores_env_value` for an env value:
+/// long enough to redact safely, and for env a credential name), and every
+/// value that reads as a secret reference whatever its length, is a literal
+/// and leaves the backend, env before headers, each sorted by key, so the
+/// order is the same on every run. Any other value (an ordinary setting such
+/// as `DEBUG=1`, a short header) stays as written. Call it only for a find
+/// [`refusals`] accepts.
 #[cfg(feature = "webui")]
 pub(crate) fn adoption(
     server: &DiscoveredServer,

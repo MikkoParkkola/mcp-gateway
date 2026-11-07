@@ -482,7 +482,7 @@ fn escaped_keys_each_take_their_own_reference() {
 /// bound leaves for the store; a reference-shaped value leaves at any length
 /// (written as text, the gateway would read it as a reference).
 #[test]
-fn adoption_stores_nothing_shorter_than_the_redactors_bound() {
+fn adoption_stores_nothing_shorter_than_the_bound_but_references() {
     let bound = crate::security::needles::SHORT_VALUE_BYTES;
     let digits = "0123456789abcdef";
     let under: String = digits.chars().take(bound - 1).collect();
