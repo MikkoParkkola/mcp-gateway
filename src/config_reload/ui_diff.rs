@@ -165,7 +165,8 @@ pub(crate) enum UiRefused {
     /// The loader or the reload would refuse the result.
     Invalid(String),
     Unsupported(String),
-    /// Save: auth is on and no audit log is configured.
+    /// Save: auth is on and no audit log is configured, or the audit log
+    /// refused this save's intent; nothing was written either way.
     NoAuditLog,
     /// Save: the edit cannot be proven in place; the change as steps.
     Unprovable(Patch),
