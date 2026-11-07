@@ -293,3 +293,7 @@ pub(crate) mod write_seam {
 #[cfg(test)]
 #[path = "durable_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "durable_keep_tests.rs"]
+mod keep_tests;

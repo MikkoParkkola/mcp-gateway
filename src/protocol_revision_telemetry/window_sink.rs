@@ -59,10 +59,34 @@ pub(crate) struct HttpSegmentSink {
     created_by: crate::test_late_write::Creator,
 }
 
+/// The temp dirs a detached open was asked to keep, taken when its thread was
+/// spawned. Test builds only carry them; a release build passes nothing.
+#[cfg(test)]
+pub(crate) type Kept = Vec<std::sync::Arc<tempfile::TempDir>>;
+/// The temp dirs a detached open was asked to keep: none in a release build.
+#[cfg(not(test))]
+#[derive(Debug, Default)]
+pub(crate) struct Kept;
+
 impl HttpSegmentSink {
     /// Append this process's segment under the lock. It never waits for a
     /// predecessor: overlap is judged later from sealed timestamps.
+    #[cfg(test)]
     pub(crate) fn open(data_dir: &Path, identity: WriterIdentity, now: u64) -> io::Result<Self> {
+        Self::open_with(data_dir, identity, now, Kept::default())
+    }
+
+    /// Append this process's segment under the lock, also keeping the dirs in
+    /// `kept`: a detached open passes the ones it captured when its thread was
+    /// spawned. It never waits for a predecessor: overlap is judged later from
+    /// sealed timestamps.
+    pub(crate) fn open_with(
+        data_dir: &Path,
+        identity: WriterIdentity,
+        now: u64,
+        kept: Kept,
+    ) -> io::Result<Self> {
+        let _ = kept;
         let (window_path, lock_path) = window_paths(data_dir);
         let directory = data_dir.join(DURABLE_TELEMETRY_DIR);
         // A missing data directory here means the open is about to rebuild a
