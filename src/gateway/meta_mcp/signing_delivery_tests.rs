@@ -358,8 +358,9 @@ fn assert_attempt(path: &std::path::Path, response: &JsonRpcResponse) -> Value {
         "actual attempt hash chain: {:?}",
         chain.error_message
     );
-    // Plus the genesis housekeeping record (#2275).
-    assert_eq!(chain.entries_checked, 2);
+    // Plus the genesis housekeeping record (#2275) and the log's
+    // `audit_log_identified` record.
+    assert_eq!(chain.entries_checked, 3);
     assert!(chain.error_at_counter.is_none());
     for forbidden in [KEY, NONCE, BODY] {
         assert!(!event.to_string().contains(forbidden));

@@ -684,7 +684,8 @@ fn firewall_delivery_attempt_preserves_existing_invocation_and_hash_chain() {
         "new attempt must extend the same chain: {}",
         verified.error_message.unwrap_or_default()
     );
-    assert_eq!(verified.entries_checked, 3); // plus the genesis record (#2275)
+    // Plus the genesis record (#2275) and the log's `audit_log_identified` record.
+    assert_eq!(verified.entries_checked, 4);
 }
 
 /// MIK-7407.RESPONSE.5; FWR-15 handle one append Err without replay or output change.
@@ -743,7 +744,8 @@ fn firewall_delivery_failed_append_preserves_output_and_consumes_one_shot_fault(
     assert_eq!(logger.append_attempts_for_test(), 3);
     let events = fixture.attempts();
     assert_eq!(events.len(), 1);
-    assert_eq!(events[0]["counter"], 2); // 1 is the genesis record (#2275)
+    // 1 is the genesis record (#2275), 2 the log's `audit_log_identified` record.
+    assert_eq!(events[0]["counter"], 3);
     assert_attempt(&events[0], &next);
     fixture.assert_counts(2);
 }
