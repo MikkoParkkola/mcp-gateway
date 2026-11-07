@@ -113,7 +113,13 @@ const ADMIN_READERS: &[(&str, &str, usize, &str)] = &[
     (
         ".admin",
         "src/gateway/meta_mcp/invoke/gate.rs",
-        2,
+        1,
+        "InScope: the admin-only capability rule, after the backend check",
+    ),
+    (
+        ".admin",
+        "src/gateway/meta_mcp/invoke/gate_as_undefined.rs",
+        1,
         "InScope: the admin-only capability rule, after the backend check",
     ),
     (
