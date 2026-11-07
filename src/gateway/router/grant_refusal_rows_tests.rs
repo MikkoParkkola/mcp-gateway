@@ -209,3 +209,37 @@ async fn a_denied_tools_surfaced_call_is_one_blocked_row() {
         assert_eq!(rows[0]["tool"], json!(PERSONAL), "{query}: {rows:#?}");
     }
 }
+
+/// A playbook step the grant denies is refused at route-stage authorization:
+/// the router writes the refusal's invocation record, and the step's decision
+/// note is the same refusal's, so the call is one Activity row, not an
+/// invocation row plus a blocked refusal row.
+#[tokio::test]
+async fn a_playbook_step_refused_by_a_grant_is_one_activity_row() {
+    let endpoint = Endpoint::start(false).await;
+    let rig = rig(&endpoint, AuditFailurePolicy::BestEffort, false, false).await;
+    let mut engine = crate::playbook::PlaybookEngine::new();
+    engine.register(
+        crate::yaml::from_str(&format!(
+            "name: stepped\ndescription: one personal step\non_error: abort\n\
+             steps:\n  - name: read\n    server: {CAPS}\n    tool: {PERSONAL}\n"
+        ))
+        .expect("the playbook parses"),
+    );
+    rig.state.meta_mcp.set_playbook_engine(engine);
+
+    let answer = mcp_call(&rig, "gateway_run_playbook", &json!({ "name": "stepped" })).await;
+
+    assert!(
+        answer.get("error").is_some() || answer.pointer("/result/isError") == Some(&json!(true)),
+        "premise: the step is refused: {answer}"
+    );
+    let _ = wait_for_decisions(&rig.dir, 1).await;
+    assert_eq!(
+        invocations(&rig.dir).len(),
+        1,
+        "the refusal's own record: {answer}"
+    );
+    let rows = activity(&rig, "").await;
+    assert_eq!(rows.len(), 1, "one call, one row: {rows:#?}");
+}
