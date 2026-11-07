@@ -33,7 +33,7 @@ struct Fixture {
     log: Arc<TransparencyLogger>,
     ctx: Arc<ReloadContext>,
     path: PathBuf,
-    _dirs: (tempfile::TempDir, crate::gateway::router::tests::FixtureDir),
+    _dirs: (std::sync::Arc<tempfile::TempDir>, crate::gateway::router::tests::FixtureDir),
 }
 
 fn admin_auth() -> AuthConfig {
@@ -60,7 +60,7 @@ fn admin_auth() -> AuthConfig {
 /// reload context, with an audit log under `policy`.
 async fn fixture(policy: AuditFailurePolicy) -> Fixture {
     let (mut state, store) = test_router_app_state_with_auth(&admin_auth()).await;
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = dir.path().join("gateway.yaml");
     write_owner_only(&path, START).expect("write config");
     let running = Config::load(Some(&path)).expect("config loads");
