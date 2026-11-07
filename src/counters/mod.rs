@@ -329,6 +329,9 @@ pub(crate) struct Inner {
     markers: VecDeque<Marker>,
     marker_cap: usize,
     sweeps: u64,
+    /// Every restore of this file, counted for good: the health history tells
+    /// a run it did not record from this count (markers age out).
+    restores: u64,
     /// The local day the last record fell on, so the hot path is one
     /// comparison and the zone is read once a day. One store counts in one
     /// zone: the host's.
@@ -348,6 +351,7 @@ impl Inner {
             markers: VecDeque::new(),
             marker_cap: markers,
             sweeps: 0,
+            restores: 0,
             today: None,
         }
     }
@@ -453,6 +457,16 @@ impl CounterStore {
     /// Record a marker at unix second `at`.
     pub(crate) fn mark(&self, kind: MarkerKind, subject: Option<&str>, at: u64) {
         self.inner.lock().mark(kind, subject, at);
+    }
+
+    /// Count one restore of this store's file.
+    pub(crate) fn note_restore(&self) {
+        self.inner.lock().restores += 1;
+    }
+
+    /// Every restore of this store's file so far, this start's included.
+    pub(crate) fn restores(&self) -> u64 {
+        self.inner.lock().restores
     }
 
     /// Record a marker now. On a clock that cannot be read, nothing: a

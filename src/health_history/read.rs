@@ -116,6 +116,11 @@ impl HealthHistory {
         }
     }
 
+    /// Mark whether this run's history is saved; the saver sets it.
+    pub(crate) fn set_incomplete(&self, incomplete: bool) {
+        self.0.lock().incomplete = incomplete;
+    }
+
     /// This run's history could not be saved yet.
     pub(crate) fn incomplete(&self) -> bool {
         self.0.lock().incomplete

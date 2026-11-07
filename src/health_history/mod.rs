@@ -129,6 +129,7 @@ struct Inner {
 /// The health history, shared by the recorders, the saver and the route.
 pub(crate) struct HealthHistory(Mutex<Inner>);
 
+pub(crate) mod file;
 mod read;
 mod write;
 

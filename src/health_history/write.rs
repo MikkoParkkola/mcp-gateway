@@ -143,9 +143,12 @@ impl Inner {
     /// Start a new run at `now` after this saved history.
     fn restart(&mut self, counters: Option<u64>, now: u64) -> Started {
         let expected = self.counters_seen + 1;
-        // An unreadable marker count is treated as a missed run: the gap is
-        // never claimed as known downtime.
-        let missed_run = counters.is_none_or(|seen| seen > expected);
+        // counters.json counts every restore (this one included). Any other
+        // count means a run this history did not record: one more, or a reset
+        // by a binary that rewrote counters.json without the count. An
+        // unreadable count is treated the same: the gap is never claimed as
+        // known downtime.
+        let missed_run = counters != Some(expected);
         let clean_stop = self.clean_stop.take();
         let mut restart = None;
         if missed_run {
@@ -190,7 +193,7 @@ impl Inner {
 
 impl HealthHistory {
     /// Start from `previous` (health.json's bytes, if any) with `counters`
-    /// (the Restart markers counters.json holds now, this start's included),
+    /// (counters.json's cumulative restore count, this start's included),
     /// at unix second `now`.
     pub(crate) fn start(
         previous: Option<&[u8]>,

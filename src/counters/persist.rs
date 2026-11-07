@@ -122,6 +122,7 @@ impl CounterFile {
                     warn!("counters.json held more than the caps allow; cut back to them");
                 }
                 store.mark(MarkerKind::Restart, None, now);
+                store.note_restore();
                 info!("Restored call counters");
                 Restored {
                     store,

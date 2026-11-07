@@ -47,6 +47,7 @@ impl ErrorKind {
 /// Count one error of `kind` that a client received.
 pub(crate) fn count_error(kind: ErrorKind) {
     telemetry_metrics::counter!(ERRORS, "kind" => kind.label()).increment(1);
+    crate::health_history::file::record_error_now(kind);
 }
 
 /// Count the answer with `status` and `marker`, if it is an error.
@@ -78,7 +79,9 @@ impl Sample {
     /// Record now; later calls and the drop record nothing.
     pub(crate) fn record(&mut self) {
         if let Some(clock) = self.0.take() {
-            telemetry_metrics::histogram!(ADDED_LATENCY).record(clock.added().as_secs_f64());
+            let secs = clock.added().as_secs_f64();
+            telemetry_metrics::histogram!(ADDED_LATENCY).record(secs);
+            crate::health_history::file::record_latency_now(secs);
         }
     }
 

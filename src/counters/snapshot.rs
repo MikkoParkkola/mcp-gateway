@@ -53,6 +53,9 @@ struct File {
     caller: DimFile<String>,
     caller_server: DimFile<(String, String)>,
     markers: Vec<Marker>,
+    /// Absent in files saved before it existed; an older binary ignores it.
+    #[serde(default)]
+    restores: u64,
 }
 
 /// Only the format version, read first so a file of another format is told
@@ -89,6 +92,7 @@ pub(super) fn encode(inner: &Inner, binary_version: &str, saved_at: u64) -> Vec<
         caller: dim_file(&inner.caller),
         caller_server: dim_file(&inner.caller_server),
         markers: inner.markers.iter().cloned().collect(),
+        restores: inner.restores,
     };
     // Plain data with string keys only: serialization cannot fail.
     serde_json::to_vec(&file).unwrap_or_default()
@@ -177,6 +181,7 @@ pub(super) fn from_bytes<Tz: TimeZone>(
     inner.tool = tool;
     inner.caller = caller;
     inner.caller_server = caller_server;
+    inner.restores = file.restores;
     let markers = file.markers.len();
     let mut subjects_cut = false;
     for marker in file.markers {
