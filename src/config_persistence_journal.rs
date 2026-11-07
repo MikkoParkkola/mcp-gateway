@@ -217,6 +217,7 @@ pub(crate) fn mark_all_renamed(target: &Path) -> std::io::Result<()> {
 pub(crate) fn finish(target: &Path) -> std::io::Result<()> {
     #[cfg(test)]
     if matches!(fault::get(target), Some(fault::Fault::FailJournalRemove)) {
+        fault::note_fired(target);
         return Err(std::io::Error::other(
             "injected: the journal cannot be removed",
         ));
@@ -564,12 +565,48 @@ pub(crate) mod fault {
 
     static FAULTS: Mutex<Option<HashMap<PathBuf, Fault>>> = Mutex::new(None);
 
+    /// How many times a fault fired for a target, so a row can prove its
+    /// fault was reached and not merely armed.
+    static FIRED: Mutex<Option<HashMap<PathBuf, usize>>> = Mutex::new(None);
+
+    pub(super) fn note_fired(target: &Path) {
+        let mut fired = FIRED
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        *fired
+            .get_or_insert_with(HashMap::new)
+            .entry(target.to_path_buf())
+            .or_default() += 1;
+    }
+
+    /// The times the fault set for `config` has fired since it was set.
+    #[cfg_attr(
+        not(feature = "webui"),
+        expect(dead_code, reason = "read by the web UI's create-key rows")
+    )]
+    pub(crate) fn fired(config: &Path) -> usize {
+        let key = crate::identity_grants::journal::resolved(config);
+        let fired = FIRED
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        fired
+            .as_ref()
+            .and_then(|m| m.get(&key))
+            .copied()
+            .unwrap_or(0)
+    }
+
     /// Set `fault` for `config` until the returned guard drops. Dropping it,
     /// on a panic too, clears the entry and releases a pause, so a failing
     /// test never leaves recovery parked or its fault visible to another.
     #[must_use]
     pub(crate) fn set(config: &Path, fault: Fault) -> Armed {
         let key = crate::identity_grants::journal::resolved(config);
+        FIRED
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get_or_insert_with(HashMap::new)
+            .remove(&key);
         FAULTS
             .lock()
             .expect("faults")

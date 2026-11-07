@@ -156,6 +156,10 @@ pub(crate) struct ReplaceOutcome {
         )
     )]
     pub(crate) reload: ReloadOutcome,
+    /// Each stored secret's field and the reference the written file holds for
+    /// it, in the secret step's order; empty without one. Read from this write
+    /// itself, never from the file afterwards (another writer may follow).
+    pub(crate) secrets: Vec<(String, String)>,
 }
 
 /// Why nothing was applied. Every kind but `RollbackFailed` and
@@ -174,6 +178,8 @@ pub(crate) enum ReplaceError {
     /// The compute refused, or produced bytes that are not UTF-8 text. Bytes
     /// the loader rejects are `ReloadRefused`, after the rollback.
     Refused(String),
+    /// The audit log refused an intent (the operation's or its recovery's); nothing written.
+    AuditRefused(String),
     /// gateway.yaml no longer resolves to the file this gateway started on.
     Unsupported(String),
     /// Staging the original or the journal failed; nothing was replaced.
@@ -226,6 +232,10 @@ async fn spawn_locked(
             )))
         })
 }
+
+#[cfg(test)]
+#[path = "replace_order.rs"]
+pub(crate) mod order;
 
 #[path = "replace_audit.rs"]
 mod audit;
@@ -292,6 +302,7 @@ pub(crate) fn settle_for(result: &Result<ReplaceOutcome, ReplaceError>) -> Settl
         ReplaceError::Busy
         | ReplaceError::Stale { .. }
         | ReplaceError::Refused(_)
+        | ReplaceError::AuditRefused(_)
         | ReplaceError::Stage(_)
         | ReplaceError::Secrets(_)
         | ReplaceError::NoConfigFile
@@ -393,6 +404,42 @@ fn settle_now(pending: PendingSecrets, how: Settle) {
     }
 }
 
+/// Each secret's field, in the step's order.
+#[cfg_attr(
+    not(any(test, feature = "webui")),
+    expect(
+        dead_code,
+        reason = "first callers: the web UI settings save and discovery adopt"
+    )
+)]
+fn step_fields(step: Option<&SecretStep>) -> Vec<String> {
+    step.map(|step| step.values.iter().map(|v| v.field.clone()).collect())
+        .unwrap_or_default()
+}
+
+/// `outcome` with the references this write filled, by field, read before the
+/// entries are settled (a kept entry's reference is what the file holds).
+#[cfg_attr(
+    not(any(test, feature = "webui")),
+    expect(
+        dead_code,
+        reason = "first callers: the web UI settings save and discovery adopt"
+    )
+)]
+fn with_references(
+    mut outcome: ReplaceOutcome,
+    fields: Vec<String>,
+    entries: &Entries,
+) -> ReplaceOutcome {
+    if let Some(pending) = &entries.pending {
+        outcome.secrets = fields
+            .into_iter()
+            .zip(pending.refs().iter().cloned())
+            .collect();
+    }
+    outcome
+}
+
 #[cfg_attr(
     not(any(test, feature = "webui")),
     expect(
@@ -490,6 +537,7 @@ impl ReloadContext {
         // secrets, before any entry exists: a refusal creates nothing.
         let template = (replace.compute)(&current).map_err(ReplaceError::Refused)?;
         let step = replace.secrets.filter(|step| !step.values.is_empty());
+        let fields = step_fields(step.as_ref());
         same_fields(&template, step.as_ref())?;
         fits_when_filled(&template)?;
         self.validate_template(&target, &template, step.as_ref())
@@ -503,18 +551,21 @@ impl ReloadContext {
         // config does not: recorded as an outside change, since no loaded
         // revision is kept to tell (over-reports, never under-reports).
         let unchanged = step.is_none() && template.bytes() == current.as_slice();
-        if let Audit::Required { sink, kind } = &mut audit {
+        if let Audit::Required { sink, kind, writer } = &mut audit {
             let intent = Intent {
                 kind: kind.clone(),
                 base: FileRevision::of(&current),
                 outside_change: unchanged,
                 recovery_intent_id,
+                writer: writer.clone(),
             };
             sink.append(&intent).map_err(|e| {
-                ReplaceError::Refused(format!(
+                ReplaceError::AuditRefused(format!(
                     "the audit log refused this change's record; nothing was written: {e}"
                 ))
             })?;
+            #[cfg(test)]
+            order::record(&target, "intent");
         }
         let result = match step {
             None => Ok(template.bytes().to_vec()),
@@ -533,6 +584,7 @@ impl ReloadContext {
             }
             Err(refused) => Err(refused),
         };
+        let result = result.map(|outcome| with_references(outcome, fields, &entries));
         // The config locks go before any store call: a discard's keychain
         // deletes must not hold up the next writer. A death in between is
         // the `Entries` guard's.
@@ -586,8 +638,11 @@ impl ReloadContext {
                 revision: None,
                 kept_beside: None,
                 reload,
+                secrets: Vec::new(),
             });
         }
+        #[cfg(test)]
+        order::record(target, "commit");
         self.commit(target, current, &new, replaced, entries).await
     }
 
@@ -687,6 +742,7 @@ impl ReloadContext {
                     revision: Some(FileRevision::of(new)),
                     kept_beside,
                     reload,
+                    secrets: Vec::new(),
                 })
             }
             Err(refusal) => {

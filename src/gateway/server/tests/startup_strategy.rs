@@ -93,8 +93,8 @@ async fn export_poll_recovers_from_a_poisoned_exporter_mutex() {
 
     assert_eq!(
         collecting.delivered().len(),
-        2,
-        "recovered poll must forward the genesis open record (#2275) and the pending entry"
+        3,
+        "recovered poll must forward the genesis open record (#2275), the log's audit_log_identified record and the pending entry"
     );
 }
 

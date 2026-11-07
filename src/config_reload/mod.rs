@@ -603,6 +603,10 @@ mod generation;
 #[path = "ui_fields.rs"]
 pub(crate) mod ui_fields;
 pub use generation::Generation;
+#[cfg(all(test, feature = "webui"))]
+pub(crate) use generation::refuse_hook;
+#[cfg(feature = "webui")]
+pub(crate) use generation::refuse_multi_user_flip;
 
 /// `config` with both request-path security flags off: what the router test
 /// fixtures set on `AppState` before the flags moved into the published
@@ -670,6 +674,8 @@ use reload_context::replace::startup_recovery_intent;
 pub fn recover_before_start(config: &std::path::Path) -> Result<(), String> {
     crate::config_persistence::recover_before_start(config, &startup_recovery_intent)
 }
+#[cfg(all(test, feature = "webui"))]
+pub(crate) use reload_context::replace::order as write_order;
 #[cfg(feature = "webui")]
 pub(crate) use reload_context::replace::{
     AuditPosture, BackendOp, Expected, FileRevision, GatewayAuth, IntentKind, NO_AUDIT_LOG,
@@ -724,6 +730,10 @@ mod writer_lock_tests;
 #[cfg(all(test, unix))]
 mod writer_symlink_tests;
 
+#[cfg(test)]
+mod flip_pin_tests;
+#[cfg(all(test, feature = "webui"))]
+mod replace_audit_key_tests;
 #[cfg(test)]
 mod replace_audit_tests;
 #[cfg(test)]

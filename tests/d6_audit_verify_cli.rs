@@ -147,3 +147,195 @@ fn audit_verify_checks_the_log_against_an_anchor() {
         );
     }
 }
+
+/// An unrotated log with two caller records, its logger dropped.
+fn small_log(path: &Path) {
+    append_two(&open_log(path));
+}
+
+/// A logger on the unrotated, unsigned log at `path`.
+fn open_log(path: &Path) -> TransparencyLogger {
+    TransparencyLogger::open(Arc::new(TransparencyLogConfig {
+        enabled: true,
+        path: path.to_string_lossy().into_owned(),
+        key_id: "cli".into(),
+        shared_secret: String::new(),
+        rotation: RotationConfig::default(),
+    }))
+    .unwrap()
+}
+
+fn append_two(l: &TransparencyLogger) {
+    for i in 0..2 {
+        l.log_invocation("s", "c", "srv", &format!("t{i}"), "a", "b")
+            .unwrap();
+    }
+}
+
+/// An unrotated log with records whose active file was deleted with its
+/// `.hwm` kept, then reopened: the new genesis names the surviving mark.
+fn log_with_deleted_active(path: &Path) {
+    small_log(path);
+    std::fs::remove_file(path).unwrap();
+    small_log(path);
+}
+
+#[test]
+fn audit_verify_prints_its_warnings_when_the_chain_fails() {
+    // GIVEN: a log whose active file was deleted with its mark kept
+    let dir = tempfile::tempdir().unwrap();
+    let log = dir.path().join("transparency.jsonl");
+    log_with_deleted_active(&log);
+
+    // WHEN: it is verified as a process
+    let (ok, text) = verify(dir.path(), &log, false);
+
+    // THEN: it fails naming the deletion, and still prints the predecessor
+    // warning, unverified
+    assert!(!ok, "{text}");
+    assert!(text.contains("the active segment was deleted"), "{text}");
+    let warned = text
+        .lines()
+        .find(|l| l.starts_with("warning:") && l.contains("predecessor went missing"));
+    assert!(warned.is_some_and(|w| w.contains("unverified")), "{text}");
+}
+
+/// Edit record `index` of `path` in place, its stored hashes left as they
+/// were, as a hand edit of the file would.
+fn edit_record(path: &Path, index: usize, edit: impl FnOnce(&mut serde_json::Value)) {
+    let text = std::fs::read_to_string(path).unwrap();
+    let mut records: Vec<serde_json::Value> = text
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+    edit(&mut records[index]);
+    let body: String = records.iter().map(|v| v.to_string() + "\n").collect();
+    std::fs::write(path, body).unwrap();
+}
+
+/// A carriage return, then an escape sequence that would erase the line.
+const HOSTILE: &str = "id\r\u{1b}[2Kforged";
+
+/// No raw control character reached the output: every one was escaped.
+fn shown_escaped(text: &str) {
+    assert!(!text.contains('\r') && !text.contains('\u{1b}'), "{text:?}");
+    assert!(text.contains(r"\u{d}\u{1b}[2Kforged"), "{text}");
+}
+
+#[test]
+fn audit_verify_escapes_a_predecessor_id_in_its_warning() {
+    // GIVEN: a failing log whose predecessor evidence names a hostile id
+    let dir = tempfile::tempdir().unwrap();
+    let log = dir.path().join("transparency.jsonl");
+    log_with_deleted_active(&log);
+    edit_record(&log, 0, |v| {
+        v["predecessor_missing"]["previous_log_id"] = HOSTILE.into();
+    });
+
+    // WHEN: it is verified as a process
+    let (ok, text) = verify(dir.path(), &log, false);
+
+    // THEN: the warning shows the id escaped, still labelled unverified
+    assert!(!ok, "{text}");
+    shown_escaped(&text);
+    let warned = text
+        .lines()
+        .find(|l| l.contains("predecessor went missing"));
+    assert!(warned.is_some_and(|w| w.contains("unverified")), "{text}");
+}
+
+#[test]
+fn audit_verify_escapes_log_text_in_its_failure_line() {
+    // GIVEN: a log one of whose records names a hostile previous hash
+    let dir = tempfile::tempdir().unwrap();
+    let log = dir.path().join("transparency.jsonl");
+    small_log(&log);
+    edit_record(&log, 1, |v| v["prev_entry_hash"] = HOSTILE.into());
+
+    // WHEN: it is verified as a process
+    let (ok, text) = verify(dir.path(), &log, false);
+
+    // THEN: the failure names it, escaped
+    assert!(!ok, "{text}");
+    shown_escaped(&text);
+}
+
+#[test]
+fn audit_verify_escapes_bidi_and_zero_width_characters() {
+    // GIVEN: a failing log whose predecessor evidence names an id carrying a
+    // right-to-left override and a zero-width space
+    let dir = tempfile::tempdir().unwrap();
+    let log = dir.path().join("transparency.jsonl");
+    log_with_deleted_active(&log);
+    edit_record(&log, 0, |v| {
+        v["predecessor_missing"]["previous_log_id"] = "id\u{202e}evil\u{200b}x".into();
+    });
+
+    // WHEN: it is verified as a process
+    let (ok, text) = verify(dir.path(), &log, false);
+
+    // THEN: both show as escapes, never raw, still labelled unverified
+    assert!(!ok, "{text}");
+    assert!(!text.contains(['\u{202e}', '\u{200b}']), "{text:?}");
+    let warned = text
+        .lines()
+        .find(|l| l.contains("predecessor went missing"));
+    let warned = warned.unwrap_or_else(|| panic!("no warning: {text}"));
+    assert!(warned.contains(r"id\u{202e}evil\u{200b}x"), "{warned}");
+    assert!(warned.contains("unverified"), "{warned}");
+}
+
+#[test]
+fn audit_verify_prints_a_verified_predecessor_warning_on_a_passing_log() {
+    // GIVEN: a live logger whose active file and mark were deleted: its next
+    // write starts a new genesis naming the id it held, and the chain is whole
+    let dir = tempfile::tempdir().unwrap();
+    let log = dir.path().join("transparency.jsonl");
+    let l = open_log(&log);
+    append_two(&l);
+    let head = std::fs::read_to_string(&log).unwrap();
+    let head: serde_json::Value = serde_json::from_str(head.lines().next().unwrap()).unwrap();
+    let old = head["log_id"].as_str().unwrap().to_string();
+    std::fs::remove_file(&log).unwrap();
+    std::fs::remove_file(dir.path().join("transparency.jsonl.hwm")).unwrap();
+    append_two(&l);
+    drop(l);
+
+    // WHEN: it is verified as a process
+    let (ok, text) = verify(dir.path(), &log, false);
+
+    // THEN: it passes and prints the predecessor warning, verified
+    assert!(ok, "{text}");
+    let warned = text
+        .lines()
+        .find(|l| l.contains("predecessor went missing"));
+    let warned = warned.unwrap_or_else(|| panic!("no warning: {text}"));
+    assert!(warned.starts_with("warning:"), "{warned}");
+    assert!(
+        warned.ends_with(&format!(": previous log_id {old}")),
+        "{warned}"
+    );
+    assert!(!warned.contains("unverified"), "{warned}");
+}
+
+#[test]
+fn audit_verify_tells_literal_escape_text_from_a_real_bidi_character() {
+    // GIVEN: a failing log whose predecessor id spells `\u{202e}` out, then
+    // carries a real U+202E
+    let dir = tempfile::tempdir().unwrap();
+    let log = dir.path().join("transparency.jsonl");
+    log_with_deleted_active(&log);
+    edit_record(&log, 0, |v| {
+        let id = r"lit\u{202e}|real".to_string() + "\u{202e}";
+        v["predecessor_missing"]["previous_log_id"] = id.into();
+    });
+
+    // WHEN: it is verified as a process
+    let (ok, text) = verify(dir.path(), &log, false);
+
+    // THEN: the spelled-out text prints with its backslash doubled, the real
+    // character as one escape, so the two never read alike
+    assert!(!ok, "{text}");
+    assert!(!text.contains('\u{202e}'), "{text:?}");
+    assert!(text.contains(r"lit\\u{202e}|real\u{202e}"), "{text}");
+}

@@ -109,8 +109,9 @@ fn an_unsigned_log_without_a_key_still_exports() {
     let out = keyless_exporter(dir.path(), &log)
         .poll(&sink)
         .expect("exports");
-    // The genesis open record, then the three invocations.
-    assert_eq!(out.forwarded, 4);
+    // The genesis open record, `audit_log_identified`, then the three
+    // invocations.
+    assert_eq!(out.forwarded, 5);
 }
 
 /// MIK-8374.EXPORTSIG.4: `audit verify`'s rule and the exporter's agree on a
@@ -158,9 +159,10 @@ fn restoring_the_key_resumes_without_loss_or_duplicates() {
     )
     .expect("reopen on the same cursor")
     .with_signing_secret(SECRET);
-    assert_eq!(keyed.poll(&sink).expect("exports").forwarded, 4);
+    // The open record, `audit_log_identified`, then the three invocations.
+    assert_eq!(keyed.poll(&sink).expect("exports").forwarded, 5);
     let counters: Vec<u64> = sink.delivered().iter().map(|e| e.counter).collect();
-    assert_eq!(counters, [1, 2, 3, 4], "every entry once, in order");
+    assert_eq!(counters, [1, 2, 3, 4, 5], "every entry once, in order");
     assert_eq!(
         keyed.poll(&sink).expect("caught up").forwarded,
         0,

@@ -4,7 +4,7 @@
 //! Every value a client config or the operator's command line can reach is
 //! escaped for the terminal through `shown`, once, here.
 
-use std::fmt::Write as _;
+use std::io::Write;
 
 use mcp_gateway::cli_support::{Shown, shown, shows_unchanged};
 use mcp_gateway::discovery::shadow::{
@@ -13,13 +13,13 @@ use mcp_gateway::discovery::shadow::{
 
 /// One `   Label: value` line. The value is client-reachable text, so it
 /// arrives escaped: a renderer cannot hand this a raw string.
-fn field(out: &mut String, label: &str, value: &Shown) {
+fn field(out: &mut impl Write, label: &str, value: &Shown) {
     let _ = writeln!(out, "   {label}: {value}");
 }
 
 /// A runnable command line, or fixed guidance in its place when escaping
 /// would change it: an altered command could break its own shell quoting.
-fn command_field(out: &mut String, label: &str, command: &str) {
+fn command_field(out: &mut impl Write, label: &str, command: &str) {
     if shows_unchanged(command) {
         field(out, label, &shown(command));
     } else {
@@ -33,13 +33,17 @@ fn command_field(out: &mut String, label: &str, command: &str) {
 
 /// The human shadow report. Every value that a client config or the
 /// operator's command line can reach goes through `shown`; the enum
-/// fields printed with `{:?}` are the gateway's own.
-pub(super) fn render_shadow_report(report: &ShadowScanReport) -> String {
-    let mut out = String::new();
+/// fields printed with `{:?}` are the gateway's own. It writes to `out`
+/// rather than returning text, so every write is an output site the
+/// discovery output guard judges.
+pub(super) fn render_shadow_report(out: &mut impl Write, report: &ShadowScanReport) {
     if report.assets.is_empty() {
-        out.push_str("✅ No shadow servers found — all discovered MCP servers are registered.\n");
-        out.push_str("Passive scan only; no discovered tools were invoked.\n");
-        return out;
+        let _ = writeln!(
+            out,
+            "✅ No shadow servers found — all discovered MCP servers are registered."
+        );
+        let _ = writeln!(out, "Passive scan only; no discovered tools were invoked.");
+        return;
     }
     if let Some(note) = &report.ids_note {
         // The gateway's own sentence; no client value reaches it.
@@ -51,24 +55,24 @@ pub(super) fn render_shadow_report(report: &ShadowScanReport) -> String {
         "⚠️  Found {} shadow (unregistered) MCP server(s). Passive scan only; no discovered tools were invoked.\n",
         report.summary.unmanaged_total
     );
-    out.push_str("Action groups:\n");
+    let _ = writeln!(out, "Action groups:");
     for group in &report.action_groups {
         let _ = writeln!(out, "  {:?}: {} asset(s)", group.action, group.count);
     }
-    out.push('\n');
+    let _ = writeln!(out);
 
     for asset in &report.assets {
         let _ = writeln!(out, "📦 {}", shown(&asset.name));
-        field(&mut out, "ID", &shown(&asset.id));
+        field(out, "ID", &shown(&asset.id));
         let _ = writeln!(out, "   Severity: {:?}", asset.severity);
         let _ = writeln!(out, "   Source: {:?}", asset.source);
         let _ = writeln!(out, "   Trust: {:?}", asset.trust_status);
-        field(&mut out, "Transport", &shown(&asset.transport.kind));
+        field(out, "Transport", &shown(&asset.transport.kind));
         if let Some(endpoint) = &asset.transport.endpoint {
-            field(&mut out, "Endpoint", &shown(endpoint));
+            field(out, "Endpoint", &shown(endpoint));
         }
         if let Some(path) = &asset.evidence.config_path {
-            field(&mut out, "Config", &shown(path));
+            field(out, "Config", &shown(path));
         }
         if let Some(pid) = asset.evidence.pid {
             let _ = writeln!(out, "   PID: {pid}");
@@ -89,34 +93,37 @@ pub(super) fn render_shadow_report(report: &ShadowScanReport) -> String {
             "   Confirmation required: {}",
             asset.remediation.confirmation_required
         );
-        command_field(&mut out, "Verify", &asset.remediation.verification_step);
+        command_field(out, "Verify", &asset.remediation.verification_step);
         if asset.remediation.action == ShadowRemediationAction::AdoptIntoGateway
             && let Some(command) = &asset.remediation.apply_command
         {
-            command_field(&mut out, "Apply after review", command);
+            command_field(out, "Apply after review", command);
         }
         if asset.trust_status == ShadowTrustStatus::Unmanaged {
-            field(&mut out, "Reason", &shown(&asset.risk_reasons.join(", ")));
+            field(out, "Reason", &shown(&asset.risk_reasons.join(", ")));
         }
-        out.push('\n');
+        let _ = writeln!(out);
     }
 
-    out.push_str(
-        "Default mode is dry-run. To adopt reviewed local unmanaged servers, rerun with:\n",
+    let _ = writeln!(
+        out,
+        "Default mode is dry-run. To adopt reviewed local unmanaged servers, rerun with:"
     );
-    out.push_str("   mcp-gateway cap discover --shadow --write-config\n");
-    out
+    let _ = writeln!(out, "   mcp-gateway cap discover --shadow --write-config");
 }
 
 /// One find of the human listing. The command and URL are summarized or
-/// redacted first, then escaped: `shown` is always the last step.
-pub(super) fn render_server_entry(server: &mcp_gateway::discovery::DiscoveredServer) -> String {
+/// redacted first, then escaped: `shown` is always the last step. Writes to
+/// `out`, like [`render_shadow_report`].
+pub(super) fn render_server_entry(
+    out: &mut impl Write,
+    server: &mcp_gateway::discovery::DiscoveredServer,
+) {
     use mcp_gateway::config::TransportConfig;
     use mcp_gateway::security::{diagnostic_url, summarize_stdio_command};
 
-    let mut out = String::new();
     let _ = writeln!(out, "📦 {}", shown(&server.name));
-    field(&mut out, "Description", &shown(&server.description));
+    field(out, "Description", &shown(&server.description));
     let _ = writeln!(out, "   Source: {:?}", server.source);
     let (kind, target, value) = match &server.transport {
         TransportConfig::Stdio { command, .. } => {
@@ -128,15 +135,14 @@ pub(super) fn render_server_entry(server: &mcp_gateway::discovery::DiscoveredSer
         TransportConfig::A2a { a2a_url, .. } => ("a2a", "URL", diagnostic_url(a2a_url)),
     };
     let _ = writeln!(out, "   Transport: {kind}");
-    field(&mut out, target, &shown(&value));
+    field(out, target, &shown(&value));
     if let Some(path) = &server.metadata.config_path {
-        field(&mut out, "Config", &shown(&path.display().to_string()));
+        field(out, "Config", &shown(&path.display().to_string()));
     }
     if let Some(pid) = server.metadata.pid {
         let _ = writeln!(out, "   PID: {pid}");
     }
-    out.push('\n');
-    out
+    let _ = writeln!(out);
 }
 
 #[cfg(test)]

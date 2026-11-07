@@ -24,24 +24,22 @@ use super::super::errors::{
     config_path_unavailable, config_refusal, flat_error, no_config_file, structured_error,
 };
 use super::super::guard::Guard;
+use super::super::secret_slots::{self, Store, Unopened};
 use super::{Gateway, name_refusal, read_gateway};
 use crate::config::SecretStoreChoice;
-use crate::config_persistence::keyedit::{Segment, SlotId, Template};
+use crate::config_persistence::keyedit::{SlotId, Template};
 use crate::config_persistence::{NOT_IN_PLACE, edit_text};
 use crate::config_reload::{
-    Expected, FileRevision, IntentKind, NO_AUDIT_LOG, RELOAD_LOCK_WAIT, Replace, ReplaceError,
-    ReplaceOutcome, Replaced, SecretStep,
+    Expected, FileRevision, IntentKind, NO_AUDIT_LOG, Replace, ReplaceError, ReplaceOutcome,
+    Replaced, SecretStep,
 };
 use crate::discovery::DiscoveredServer;
 use crate::discovery::adopt::{AdoptRefusal, Adoption, Literal, adoption, refusals};
 use crate::discovery::listing::{DiscoveryCache, ScanTimedOut};
 use crate::gateway::router::AppState;
-use crate::secret_store::{
-    Chosen, NewSecretOwned, SaveError, SecretStore, StoreError, Vault, choose_store,
-};
-
-/// A secret store the writer can save into.
-type Store = Arc<dyn SecretStore + Send + Sync>;
+#[cfg(test)]
+use crate::secret_store::Chosen;
+use crate::secret_store::{SaveError, StoreError, Vault};
 
 /// Test-only: the store an adopt saves into instead of the configured one,
 /// as a request extension (the pattern of the injected `DiscoveryCache`).
@@ -146,6 +144,11 @@ pub(super) fn answer(name: &str, written: Result<ReplaceOutcome, ReplaceError>) 
         )
             .into_response(),
         Err(ReplaceError::Refused(_)) => failed("refused"),
+        Err(ReplaceError::AuditRefused(_)) => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({"error": "audit_log_required", "message": NO_AUDIT_LOG})),
+        )
+            .into_response(),
         Err(ReplaceError::Secrets(SaveError::Refused(StoreError::Unavailable(_)))) => {
             fixed(StatusCode::UNPROCESSABLE_ENTITY, STORE_UNAVAILABLE)
         }
@@ -178,12 +181,7 @@ type Slots = Vec<(bool, String)>;
 /// The secret slot of `name`'s literal `key`: under `headers` or `env`. Its
 /// display form is the secret step's field for that literal.
 pub(super) fn adopt_slot(name: &str, header: bool, key: &str) -> SlotId {
-    let map = if header { "headers" } else { "env" };
-    SlotId(
-        ["backends", name, map, key]
-            .map(|k| Segment::Key(k.to_owned()))
-            .to_vec(),
-    )
+    secret_slots::backend_slot(name, header, key)
 }
 
 /// The writer's compute: inserts `backend` under `name`, each literal's value
@@ -225,34 +223,30 @@ pub(super) fn compute(
 /// The store the configured choice resolves to, or the answer when none can
 /// take the values: 422 when the choice cannot be met on this host, 500
 /// otherwise. The store's own message is never returned.
+/// Kept for adopt's own rows, which pin its answer to each choice.
+#[cfg(test)]
 pub(super) fn chosen(choice: Result<Chosen, StoreError>) -> Result<Store, Box<Response>> {
-    match choice {
-        Ok(chosen) => Ok(chosen.store),
-        Err(StoreError::Unavailable(_)) => Err(Box::new(fixed(
-            StatusCode::UNPROCESSABLE_ENTITY,
-            STORE_UNAVAILABLE,
-        ))),
-        Err(_) => Err(Box::new(fixed(StatusCode::INTERNAL_SERVER_ERROR, FAILED))),
+    secret_slots::chosen(choice).map_err(|why| Box::new(unopened(why)))
+}
+
+/// Adopt's answer to a store that could not be opened: fixed text only.
+fn unopened(why: Unopened) -> Response {
+    match why {
+        Unopened::Unavailable => fixed(StatusCode::UNPROCESSABLE_ENTITY, STORE_UNAVAILABLE),
+        Unopened::Failed => fixed(StatusCode::INTERNAL_SERVER_ERROR, FAILED),
+        Unopened::TimedOut => store_timed_out(),
     }
 }
 
-/// The store choice and the vault beside gateway.yaml, opened off the async
-/// workers: `auto` probes the OS keychain (Secret Service over D-Bus, the
-/// macOS keychain, Credential Manager), a blocking call that may stall on a
-/// locked or slow keychain. Bounded by the writer's own wait; a keychain that
-/// does not answer by then is a 503, and its thread finishes on its own.
+/// The store choice and the vault beside gateway.yaml (the shared opener:
+/// off the async workers, bounded by the writer's wait; a 503 past it).
 async fn open_store(
     configured: SecretStoreChoice,
     dir: std::path::PathBuf,
 ) -> Result<(Store, Result<Vault, StoreError>), Box<Response>> {
-    let open = tokio::task::spawn_blocking(move || {
-        (choose_store(configured, &dir), Vault::for_config_dir(&dir))
-    });
-    match tokio::time::timeout(RELOAD_LOCK_WAIT, open).await {
-        Ok(Ok((choice, vault))) => Ok((chosen(choice)?, vault)),
-        Ok(Err(_)) => Err(Box::new(fixed(StatusCode::INTERNAL_SERVER_ERROR, FAILED))),
-        Err(_) => Err(Box::new(store_timed_out())),
-    }
+    secret_slots::open_store(configured, dir)
+        .await
+        .map_err(|why| Box::new(unopened(why)))
 }
 
 /// The answer when the store choice or the vault did not answer within the
@@ -285,21 +279,11 @@ pub(super) fn secret_step(
     store: Store,
     vault: Result<Vault, StoreError>,
 ) -> Result<SecretStep, Box<Response>> {
-    let Ok(vault) = vault else {
-        return Err(Box::new(fixed(StatusCode::INTERNAL_SERVER_ERROR, FAILED)));
-    };
     let values = literals
         .into_iter()
-        .map(|literal| NewSecretOwned {
-            field: format!("backends.{name}.{}", literal.field()),
-            value: literal.value,
-        })
+        .map(|literal| (literal.field(), literal.value))
         .collect();
-    Ok(SecretStep {
-        vault,
-        store,
-        values,
-    })
+    secret_slots::secret_step(name, values, store, vault).map_err(|why| Box::new(unopened(why)))
 }
 
 /// The find a fresh scan resolved, or the answer when it did not: changed
@@ -353,7 +337,7 @@ pub(super) async fn adopt_discovery(
     };
     let read = {
         let path = path.clone();
-        tokio::task::spawn_blocking(move || read_gateway(Some(&path))).await
+        tokio::task::spawn_blocking(move || read_gateway("discovery", Some(&path))).await
     };
     let Ok(Ok(gateway)) = read else {
         return config_refusal().into_response();
@@ -389,7 +373,11 @@ pub(super) async fn adopt_discovery(
         reasons.sort_by(|a, b| a.1.cmp(&b.1));
         return not_adoptable(&reasons);
     }
-    let adoption = adoption(&server);
+    let adoption = adoption(
+        &server,
+        secret_slots::stores_env_value,
+        secret_slots::stores_header_value,
+    );
     let dir = path
         .parent()
         .unwrap_or_else(|| std::path::Path::new("."))
