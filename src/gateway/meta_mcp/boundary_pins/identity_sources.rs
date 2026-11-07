@@ -365,10 +365,10 @@ impl<'ast> syn::visit::Visit<'ast> for Visitor<'_> {
     }
 
     fn visit_expr_path(&mut self, path: &'ast syn::ExprPath) {
-        if let Some(q) = &path.qself {
-            if self.mentions_identity(&q.ty) {
-                self.refuse("a qualified path to an identity type");
-            }
+        if let Some(q) = &path.qself
+            && self.mentions_identity(&q.ty)
+        {
+            self.refuse("a qualified path to an identity type");
         }
         let segs: Vec<&syn::PathSegment> = path.path.segments.iter().collect();
         if let [.., ty, ctor] = segs[..]
