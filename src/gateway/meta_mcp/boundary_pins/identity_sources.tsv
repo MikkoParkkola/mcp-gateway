@@ -20,12 +20,12 @@ src/gateway/ui/admin_audit.rs	record_admin_action_as	new	1	grant subject of the 
 src/gateway/ui/admin_audit.rs	recorded	new	1	grant subject of the request's verified identity, for the admin audit record
 src/gateway/ui/events.rs	admitted	new	1	grant subject of the admitted admin caller's verified identity
 src/gateway/ui/tool_call.rs	via_label	new	1	grant subject of the request's verified identity, for the call-counter label
-src/identity_grants/subject.rs	<file>	file	7e76ffbb0620c85df68c7b428d58aeb92a597132d217f2e78db7b6389ca1d835	defining module: any edit is a reviewed change of this row
+src/identity_grants/subject.rs	<file>	file	b82e0e526510a970d8a202bae32223af079c2781b8aa3c2606df9f007ce0e335	defining module: any edit is a reviewed change of this row
 src/identity_grants/subject.rs	GrantSubject::new	literal	1	the one literal, in the checked constructor
 src/identity_grants/subject.rs	GrantSubject::try_from	new	1	deserialize goes through new (grant files and stored records)
 src/key_server/oidc.rs	OidcVerifier::verify_inner	checked	1	the OIDC verifier, after the token's signature and claims are verified
 src/key_server/oidc/verified.rs	<file>	file	8296cf1aa8046146e5094bf626ae925266695fe779a7493059d41f0d45adfa6e	defining module: any edit is a reviewed change of this row
 src/key_server/oidc/verified.rs	VerifiedIdentity::checked	literal	1	the one literal, in the checked constructor
-src/mtls/identity/cert.rs	<file>	file	9b139973f765ea59d827f9efaf0d2f42f03064b90baa659441a528a50f6216e5	defining module: any edit is a reviewed change of this row
+src/mtls/identity/cert.rs	<file>	file	a205d5bd599a0c173b876f84bd4d45ef9b18d0e62d3f092a0acfb0c2740cbd9a	defining module: any edit is a reviewed change of this row
 src/mtls/identity/cert.rs	CertIdentity::from_der	parse	1	from_der parses, then refuses a certificate that names no one
 src/mtls/identity/cert.rs	CertIdentity::parse	literal	1	the one literal, in the parser; only from_der calls it in production

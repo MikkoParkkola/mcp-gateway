@@ -272,3 +272,160 @@ fn a_key_repeated_across_files_fails_naming_both() {
         wrong.join("\n")
     );
 }
+
+/// The struct `name` in the crate file `file`.
+fn identity_struct(file: &str, name: &str) -> syn::ItemStruct {
+    let path = super::super::packaged::crate_root().join(file);
+    let source =
+        std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+    syn::parse_file(&source)
+        .expect("parses")
+        .items
+        .into_iter()
+        .find_map(|item| match item {
+            syn::Item::Struct(s) if s.ident == name => Some(s),
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("{name} in {file}"))
+}
+
+/// The two sealed types this change pins, with their public paths and fields.
+const SEALED: [(&str, &str, &str, &[&str]); 2] = [
+    (
+        "src/identity_grants/subject.rs",
+        "GrantSubject",
+        "mcp_gateway::identity_grants::GrantSubject",
+        &["authority", "subject", "label"],
+    ),
+    (
+        "src/mtls/identity/cert.rs",
+        "CertIdentity",
+        "mcp_gateway::mtls::CertIdentity",
+        &[
+            "common_name",
+            "organizational_unit",
+            "san_uris",
+            "san_dns_names",
+            "display_name",
+            "quota_principal",
+        ],
+    ),
+];
+
+/// Each sealed type has exactly its listed fields, every one private: a new
+/// field, or any `pub` form on one, fails here first.
+#[test]
+fn every_field_of_each_sealed_type_is_private() {
+    for (file, name, _, fields) in SEALED {
+        let found: Vec<(String, bool)> = identity_struct(file, name)
+            .fields
+            .iter()
+            .map(|f| {
+                let ident = f.ident.as_ref().expect("a named field").to_string();
+                (ident, matches!(f.vis, syn::Visibility::Inherited))
+            })
+            .collect();
+        let want: Vec<(String, bool)> = fields.iter().map(|f| ((*f).to_owned(), true)).collect();
+        assert_eq!(found, want, "{name}");
+    }
+}
+
+/// The type's doc tests, as (fence, code) in source order.
+fn doc_tests(item: &syn::ItemStruct) -> Vec<(String, String)> {
+    let doc: Vec<String> = item
+        .attrs
+        .iter()
+        .filter(|a| a.path().is_ident("doc"))
+        .filter_map(|a| match &a.meta {
+            syn::Meta::NameValue(nv) => match &nv.value {
+                syn::Expr::Lit(syn::ExprLit {
+                    lit: syn::Lit::Str(s),
+                    ..
+                }) => Some(s.value()),
+                _ => None,
+            },
+            _ => None,
+        })
+        .map(|line| line.strip_prefix(' ').unwrap_or(&line).to_owned())
+        .collect();
+    let mut tests = Vec::new();
+    let mut open: Option<(String, Vec<String>)> = None;
+    for line in doc {
+        match (line.strip_prefix("```"), open.take()) {
+            (Some(_), Some((fence, code))) => tests.push((fence, code.join("\n"))),
+            (Some(fence), None) => open = Some((fence.to_owned(), Vec::new())),
+            (None, Some((fence, mut code))) => {
+                code.push(line);
+                open = Some((fence, code));
+            }
+            (None, None) => {}
+        }
+    }
+    tests
+}
+
+/// Every field a code block names, by struct-literal key or field access.
+#[derive(Default)]
+struct Named(Vec<String>);
+
+impl<'ast> syn::visit::Visit<'ast> for Named {
+    fn visit_expr_struct(&mut self, lit: &'ast syn::ExprStruct) {
+        for field in &lit.fields {
+            if let syn::Member::Named(ident) = &field.member {
+                self.0.push(ident.to_string());
+            }
+        }
+        syn::visit::visit_expr_struct(self, lit);
+    }
+
+    fn visit_expr_field(&mut self, access: &'ast syn::ExprField) {
+        if let syn::Member::Named(ident) = &access.member {
+            self.0.push(ident.to_string());
+        }
+        syn::visit::visit_expr_field(self, access);
+    }
+}
+
+/// rustdoc checks a `compile_fail` block's error code only on nightly, and CI
+/// builds on stable, so each block must fail for the field's privacy and no
+/// other reason: it parses, imports the type by its real public path, and
+/// names only real fields. One literal, one functional update and one
+/// assignment per type, then a compiling twin first.
+#[test]
+fn each_compile_fail_doc_test_fails_only_on_privacy() {
+    for (file, name, path, fields) in SEALED {
+        let tests = doc_tests(&identity_struct(file, name));
+        let fences: Vec<&str> = tests.iter().map(|(f, _)| f.as_str()).collect();
+        assert_eq!(
+            fences,
+            [
+                "",
+                "compile_fail,E0451",
+                "compile_fail,E0451",
+                "compile_fail,E0616"
+            ],
+            "{name}"
+        );
+        for (fence, code) in &tests {
+            // rustdoc wraps a block in `fn main`; parse it the same way.
+            let wrapped = format!("fn main() {{\n{code}\n}}");
+            let parsed =
+                syn::parse_file(&wrapped).unwrap_or_else(|e| panic!("{name} {fence}: {e}\n{code}"));
+            assert!(
+                code.starts_with(&format!("use {path};")),
+                "{name} {fence}: {code}"
+            );
+            let mut named = Named::default();
+            syn::visit::Visit::visit_file(&mut named, &parsed);
+            if fence.starts_with("compile_fail") {
+                assert!(!named.0.is_empty(), "{name} {fence} names no field");
+            }
+            for field in &named.0 {
+                assert!(
+                    fields.contains(&field.as_str()),
+                    "{name} {fence}: `{field}` is not a field"
+                );
+            }
+        }
+    }
+}

@@ -107,3 +107,14 @@ fn the_actor_id_from_a_pair_matches_the_identitys() {
         );
     }
 }
+
+/// The formula itself, written out: length-prefixed components, lengths in
+/// bytes (`ü` is two), so a change to the shared formula fails here even
+/// though both functions would still agree with each other.
+#[test]
+fn the_actor_id_is_length_prefixed_in_bytes() {
+    assert_eq!(
+        VerifiedIdentity::stable_actor_id_for("https://idp", "\u{fc}"),
+        Some("oidc:11:https://idp:2:\u{fc}".to_owned())
+    );
+}
