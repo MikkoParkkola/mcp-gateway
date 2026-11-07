@@ -33,7 +33,7 @@ fn walk(stream: TokenStream, found: &mut Vec<Site>) {
     let tokens: Vec<TokenTree> = stream.into_iter().collect();
     for (i, token) in tokens.iter().enumerate() {
         match token {
-            TokenTree::Ident(ident) if ident == "mutant" => {
+            TokenTree::Ident(ident) if is_named(ident, "mutant") => {
                 let bang =
                     matches!(tokens.get(i + 1), Some(TokenTree::Punct(p)) if p.as_char() == '!');
                 if let (true, Some(TokenTree::Group(args))) = (bang, tokens.get(i + 2))
@@ -51,15 +51,28 @@ fn walk(stream: TokenStream, found: &mut Vec<Site>) {
     }
 }
 
-/// The value of the stream's first token when it is a plain string literal.
+/// Whether `ident` names `name`, written plainly or as a raw identifier
+/// (`r#mutant` is the same macro to the compiler).
+fn is_named(ident: &proc_macro2::Ident, name: &str) -> bool {
+    let text = ident.to_string();
+    text.strip_prefix("r#").unwrap_or(&text) == name
+}
+
+/// The ID a site names: its first token, when that is a string literal whose
+/// value is its spelling (a plain or raw string with no escapes). Anything
+/// else, an escaped or computed ID, is `None`: the runner then refuses the
+/// site rather than guess its value.
 fn first_string(stream: TokenStream) -> Option<String> {
     let Some(TokenTree::Literal(lit)) = stream.into_iter().next() else {
         return None;
     };
     let text = lit.to_string();
-    text.strip_prefix('"')
-        .and_then(|t| t.strip_suffix('"'))
-        .map(str::to_owned)
+    let raw = text.strip_prefix('r').map(|t| t.trim_matches('#'));
+    let body = raw
+        .unwrap_or(&text)
+        .strip_prefix('"')
+        .and_then(|t| t.strip_suffix('"'))?;
+    (raw.is_some() || !body.contains('\\')).then(|| body.to_owned())
 }
 
 /// Every git-tracked `.rs` file under `root`, as repository-relative paths.
@@ -110,7 +123,7 @@ fn walk_rs(
             continue;
         }
         if kind.is_dir() {
-            if entry.file_name() != "target" {
+            if dir != root || entry.file_name() != "target" {
                 walk_rs(root, &path, found)?;
             }
         } else if path.extension().is_some_and(|e| e == "rs") {
@@ -144,10 +157,10 @@ pub(crate) fn definitions(text: &str) -> Result<Vec<usize>, String> {
         let tokens: Vec<TokenTree> = stream.into_iter().collect();
         for (i, token) in tokens.iter().enumerate() {
             match token {
-                TokenTree::Ident(ident) if ident == "macro_rules" => {
+                TokenTree::Ident(ident) if is_named(ident, "macro_rules") => {
                     let bang = matches!(tokens.get(i + 1), Some(TokenTree::Punct(p)) if p.as_char() == '!');
                     if let (true, Some(TokenTree::Ident(name))) = (bang, tokens.get(i + 2))
-                        && name == "mutant"
+                        && is_named(name, "mutant")
                     {
                         found.push(name.span().start().line);
                     }
