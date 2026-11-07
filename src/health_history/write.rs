@@ -173,6 +173,9 @@ impl Inner {
                 Some(at) => (at, DowntimeSource::Measured),
                 None => (self.saved_at, DowntimeSource::Estimated),
             };
+            // Never before the last second already counted as running (a
+            // clock set backward during the last run).
+            let stopped_at = stopped_at.max(self.last_tick);
             if now < stopped_at {
                 // A clock set backward: no negative interval.
                 source = DowntimeSource::Estimated;
@@ -193,7 +196,9 @@ impl Inner {
         }
         self.counters_seen = count;
         self.started_at = now;
-        self.last_tick = now;
+        // A clock behind the last counted second accrues nothing until it
+        // passes it: no second is counted twice.
+        self.last_tick = now.max(self.last_tick);
         Started {
             fresh: false,
             set_aside: false,
@@ -267,7 +272,7 @@ impl HealthHistory {
     pub(crate) fn stop(&self, now: u64) {
         let mut inner = self.0.lock();
         inner.tick(now);
-        inner.clean_stop = Some(now);
+        inner.clean_stop = Some(inner.last_tick);
     }
 
     /// The bytes to save at `now`; `None` if they cannot be encoded, so a
@@ -275,7 +280,8 @@ impl HealthHistory {
     pub(crate) fn encode(&self, now: u64) -> Option<Vec<u8>> {
         let mut inner = self.0.lock();
         inner.tick(now);
-        inner.saved_at = now;
+        // The last second counted, which a backward clock leaves ahead of now.
+        inner.saved_at = inner.last_tick;
         serde_json::to_vec(&*inner).ok()
     }
 }
