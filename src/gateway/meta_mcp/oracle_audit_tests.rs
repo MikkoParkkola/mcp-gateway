@@ -219,6 +219,16 @@ async fn a3a_a_withheld_steps_failed_record_is_isolated() {
         answered, absent,
         "A3a: withheld {answered} vs undefined {absent}"
     );
+    // The withheld step's detached writer must have consumed its injected
+    // fault before the row is judged, or the row could pass untested.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while seams::tool_fault_pending_for_test() && std::time::Instant::now() < deadline {
+        tokio::task::yield_now().await;
+    }
+    assert!(
+        !seams::tool_fault_pending_for_test(),
+        "A3a: the injected fault was never consumed by the withheld step's write"
+    );
     assert!(
         decisions(&dir)
             .iter()

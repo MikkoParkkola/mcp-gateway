@@ -234,13 +234,22 @@ pub(crate) fn decisions(dir: &tempfile::TempDir) -> Vec<Value> {
 /// The grant decision records, once there are at least `count` of them. A
 /// withheld call's record is written after the call settles, on the slot's own
 /// task (design: "withheld notes are owned by their slot"), so a row reads it
-/// through this wait. Panics, showing what the log held, after 5 s.
+/// through this wait. Panics, showing what the log held, after 10 s.
 pub(crate) async fn wait_for_decisions(dir: &tempfile::TempDir, count: usize) -> Vec<Value> {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
     loop {
         let found = decisions(dir);
         if found.len() >= count {
-            return found;
+            // A late duplicate must not escape: after a short quiet period (well
+            // under the bound) the count must still be exactly what was asked.
+            tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+            let settled = decisions(dir);
+            assert_eq!(
+                settled.len(),
+                count,
+                "wanted exactly {count} decision records; a late one arrived: {settled:#?}"
+            );
+            return settled;
         }
         assert!(
             std::time::Instant::now() < deadline,

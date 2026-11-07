@@ -125,6 +125,12 @@ pub(crate) fn fail_append_of_tool_for_test(tool: &str) {
     FAIL_TOOL.with(|f| *f.borrow_mut() = Some(tool.to_owned()));
 }
 
+/// Whether the tool-targeted fault of [`fail_append_of_tool_for_test`] is
+/// still armed, i.e. no append has consumed it yet.
+pub(crate) fn tool_fault_pending_for_test() -> bool {
+    FAIL_TOOL.with(|f| f.borrow().is_some())
+}
+
 /// Count one grant-record append for `note`; whether a seam fails it.
 pub(super) fn fail_this_append(note: &GrantNote) -> bool {
     APPENDS.with(|a| a.set(a.get() + 1));
