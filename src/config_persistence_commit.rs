@@ -12,7 +12,10 @@
 use std::io;
 use std::path::Path;
 
+#[cfg(test)]
+use super::journal::fault::{self, Fault, HookAt};
 use super::lock::Locked;
+use super::{FileMode, Symlink, write_atomic};
 use crate::config_reload::FileRevision;
 
 /// Proof that the target holds `revision`'s bytes durably: the directory was
@@ -96,8 +99,29 @@ pub(crate) fn commit(
     action: Action,
     bytes: &[u8],
 ) -> Result<CommitToken, NotDurable> {
-    let _ = (locked, configured, action, bytes);
-    Err(NotDurable::Write(io::Error::other("not built yet")))
+    if let Some(why) = refusal(locked, configured) {
+        return Err(NotDurable::Refused(why));
+    }
+    #[cfg(test)]
+    if fault::fires(&locked.target, |f| matches!(f, Fault::FailWrite)).is_some() {
+        return Err(NotDurable::Write(io::Error::other(
+            "injected write failure",
+        )));
+    }
+    write_atomic(&locked.target, bytes, FileMode::Private, Symlink::Replace)
+        .map_err(NotDurable::Write)?;
+    // From here the rename happened: every failure leaves the new bytes.
+    super::sync_dir_for(&locked.target, Some(SyncKey::Commit(action))).map_err(NotDurable::Sync)?;
+    let revision = FileRevision::of(bytes);
+    #[cfg(test)]
+    hook(&locked.target, HookAt::BeforeReadBack);
+    read_back(&locked.target, &revision)?;
+    #[cfg(test)]
+    hook(&locked.target, HookAt::BeforeRecheck);
+    if let Some(why) = refusal(locked, configured) {
+        return Err(NotDurable::Repointed(why));
+    }
+    Ok(CommitToken { revision })
 }
 
 /// Prove the target holds `expected` without writing: sync its directory,
@@ -111,6 +135,68 @@ pub(crate) fn verify(
     configured: &Path,
     expected: &FileRevision,
 ) -> Result<CommitToken, NotDurable> {
-    let _ = (locked, configured, expected);
-    Err(NotDurable::Write(io::Error::other("not built yet")))
+    if let Some(why) = refusal(locked, configured) {
+        return Err(NotDurable::Refused(why));
+    }
+    super::sync_dir_for(&locked.target, Some(SyncKey::Verify)).map_err(NotDurable::Sync)?;
+    #[cfg(test)]
+    hook(&locked.target, HookAt::BeforeReadBack);
+    read_back(&locked.target, expected)?;
+    #[cfg(test)]
+    hook(&locked.target, HookAt::BeforeRecheck);
+    if let Some(why) = refusal(locked, configured) {
+        return Err(NotDurable::Refused(why));
+    }
+    Ok(CommitToken {
+        revision: expected.clone(),
+    })
+}
+
+/// Whether the configured path refuses a write now. `may_write` speaks in
+/// sentences; whether the path moved is asked of `still_named_by`, never read
+/// from the sentence.
+fn refusal(locked: &Locked, configured: &Path) -> Option<Refusal> {
+    let text = locked.may_write(configured).err()?;
+    Some(if locked.still_named_by(configured).is_err() {
+        Refusal::Moved
+    } else {
+        Refusal::Other(text)
+    })
+}
+
+/// Read the target back and compare its digest with `expected`. Only a
+/// regular file is hashed: a FIFO or device is opened without waiting on it
+/// and refused. A read error proves nothing, so it is `Sync`.
+fn read_back(target: &Path, expected: &FileRevision) -> Result<(), NotDurable> {
+    let mut file = match crate::open_nonblocking::open_nonblocking(target) {
+        Ok(file) => file,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => {
+            return Err(NotDurable::NotOnDisk {
+                found: Found::Missing,
+            });
+        }
+        Err(e) => return Err(NotDurable::Sync(e)),
+    };
+    if !file.metadata().map_err(NotDurable::Sync)?.is_file() {
+        return Err(NotDurable::NotOnDisk {
+            found: Found::NotAFile,
+        });
+    }
+    let found = FileRevision::of_reader(&mut file).map_err(NotDurable::Sync)?;
+    if &found == expected {
+        return Ok(());
+    }
+    Err(NotDurable::NotOnDisk {
+        found: Found::Bytes(found),
+    })
+}
+
+/// Run a row's hook armed for `target` at `at`.
+#[cfg(test)]
+fn hook(target: &Path, at: HookAt) {
+    if let Some(Fault::Hook(_, run)) =
+        fault::fires(target, |f| matches!(f, Fault::Hook(a, _) if *a == at))
+    {
+        run(target);
+    }
 }
