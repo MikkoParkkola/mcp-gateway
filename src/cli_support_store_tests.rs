@@ -137,7 +137,8 @@ fn a4b_an_unknown_keep_field_is_refused() {
     let error = store_backend_with(&mut config, &["tool"], &keep, || {
         panic!("no store is opened for a refused request")
     })
-    .expect_err("refused");
+    .err()
+    .expect("refused");
 
     assert!(error.contains("env.API_KEYY"), "{error}");
     assert_eq!(config.backends["tool"].env["API_KEY"], "sk-live-0123456789");
@@ -170,7 +171,8 @@ fn a6_an_unopenable_store_changes_nothing() {
     let error = store_backend_with(&mut config, &["tool"], &[], || {
         Err("secrets.store (keychain) refused: locked".to_string())
     })
-    .expect_err("refused");
+    .err()
+    .expect("refused");
 
     assert!(error.contains("secrets.store"), "{error}");
     assert_eq!(config.backends["tool"].env["API_KEY"], "sk-live-0123456789");
@@ -184,7 +186,8 @@ fn a7_a_missing_backend_is_an_error() {
     let error = store_backend_with(&mut config, &["ghost"], &[], || {
         panic!("no store is opened for a missing backend")
     })
-    .expect_err("refused");
+    .err()
+    .expect("refused");
 
     assert!(error.contains("ghost"), "{error}");
 }
