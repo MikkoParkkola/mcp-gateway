@@ -216,6 +216,7 @@ async fn run(cli: Cli) -> ExitCode {
             url,
             description,
             env_vars,
+            keep_as_text,
             force,
             trailing_command,
         }) => {
@@ -233,7 +234,10 @@ async fn run(cli: Cli) -> ExitCode {
                     effective_command.as_deref(),
                     url.as_deref(),
                     description.as_deref(),
-                    &env_vars,
+                    commands::AddValues {
+                        env_vars: &env_vars,
+                        keep_as_text: &keep_as_text,
+                    },
                     &config,
                     commands::config_write::comment_loss(force),
                 )
@@ -247,6 +251,7 @@ async fn run(cli: Cli) -> ExitCode {
                     url,
                     description,
                     env_vars,
+                    keep_as_text,
                     config,
                     force,
                 );

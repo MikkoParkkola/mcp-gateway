@@ -457,6 +457,11 @@ pub enum Command {
         #[arg(short = 'e', long = "env", value_name = "KEY=VALUE")]
         env_vars: Vec<String>,
 
+        /// Write this value into gateway.yaml as typed instead of storing it in
+        /// the secret store; may be repeated (an env KEY, or header:NAME)
+        #[arg(long = "keep-as-text", value_name = "KEY")]
+        keep_as_text: Vec<String>,
+
         /// Rewrite the whole file when the change cannot be made in place
         /// (comments and layout are lost); without it such a write is refused
         #[arg(long)]

@@ -14,6 +14,7 @@ use std::process::ExitCode;
 use super::config_write::CommentLoss;
 
 use mcp_gateway::{
+    cli_support::store_backend_literals,
     config::TransportConfig,
     config_persistence::load_existing_or_default,
     gateway::ui::backend_ops::{
@@ -25,6 +26,26 @@ use mcp_gateway::{
 
 // ── add ───────────────────────────────────────────────────────────────────────
 
+/// The values `add` writes: `-e KEY=VALUE` strings, and the fields to keep
+/// as typed instead of storing (`--keep-as-text`: an env key, or
+/// `header:NAME`).
+#[derive(Debug, Clone, Copy, Default)]
+pub struct AddValues<'a> {
+    /// `KEY=VALUE` env strings.
+    pub env_vars: &'a [String],
+    /// Env keys, or `header:NAME`, to write as typed.
+    pub keep_as_text: &'a [String],
+}
+
+/// The field a `--keep-as-text` value names: `header:NAME` is a header,
+/// anything else an env key.
+fn keep_field(given: &str) -> String {
+    given.strip_prefix("header:").map_or_else(
+        || format!("env.{given}"),
+        |header| format!("headers.{header}"),
+    )
+}
+
 /// Run `mcp-gateway add`.
 ///
 /// # Arguments
@@ -33,19 +54,19 @@ use mcp_gateway::{
 /// * `cmd` – explicit stdio command (overrides registry)
 /// * `url` – explicit HTTP URL (overrides registry)
 /// * `desc` – description (overrides registry)
-/// * `env_vars` – `KEY=VALUE` strings injected as environment variables
+/// * `values` – `KEY=VALUE` env strings, and the fields to keep as text
 /// * `config` – path to the gateway config file
 pub async fn run_add_command(
     name: &str,
     cmd: Option<&str>,
     url: Option<&str>,
     desc: Option<&str>,
-    env_vars: &[String],
+    values: AddValues<'_>,
     config: &Path,
     mode: CommentLoss,
 ) -> ExitCode {
     // ── Build env map ──────────────────────────────────────────────────────
-    let env = match parse_env_vars(env_vars) {
+    let env = match parse_env_vars(values.env_vars) {
         Ok(e) => e,
         Err(msg) => {
             eprintln!("Error: {msg}");
@@ -75,12 +96,24 @@ pub async fn run_add_command(
     let creating_config = !config.exists();
 
     // ── Insert backend and write, under one config lock hold ───────────────
+    // A literal the shared rule stores goes to the secret store inside the
+    // same hold; the entries are settled by the write's result.
+    let keep: Vec<String> = values.keep_as_text.iter().map(|k| keep_field(k)).collect();
     let mut notes = Vec::new();
+    let mut store_step = None;
     let written = super::config_write::write(config, mode, |gateway_config| {
         notes = add_backend(gateway_config, name, resolved)
             .map_err(|msg| format!("{msg} (in {})", config.display()))?;
+        store_step = Some(store_backend_literals(config, gateway_config, name, &keep)?);
         Ok(())
     });
+    let stored = match store_step {
+        Some((adoption, stored)) => {
+            adoption.settle(&written);
+            stored
+        }
+        None => Vec::new(),
+    };
     if let Err(e) = written {
         eprintln!("Error: {e}");
         return ExitCode::FAILURE;
@@ -95,6 +128,9 @@ pub async fn run_add_command(
         TransportConfig::A2a { .. } => "a2a",
     };
     println!("Added '{name}' ({transport_label}).");
+    for (field, reference) in &stored {
+        println!("  {field} is in the secret store; gateway.yaml holds {reference}");
+    }
     for note in &notes {
         println!("  {note}");
     }
@@ -347,7 +383,7 @@ mod tests {
                     Some("y"),
                     None,
                     None,
-                    &[],
+                    AddValues::default(),
                     &path,
                     CommentLoss::Refuse,
                 ))
@@ -429,8 +465,16 @@ mod tests {
         let (_dir, path) = temp_config();
 
         // WHEN: adding a backend by registry name
-        let code =
-            run_add_command("tavily", None, None, None, &[], &path, CommentLoss::Refuse).await;
+        let code = run_add_command(
+            "tavily",
+            None,
+            None,
+            None,
+            AddValues::default(),
+            &path,
+            CommentLoss::Refuse,
+        )
+        .await;
         assert_eq!(code, ExitCode::SUCCESS, "add should succeed");
 
         // THEN: it appears in the config
@@ -468,7 +512,10 @@ mod tests {
             Some("node /home/user/my-server.js"),
             None,
             Some("My custom server"),
-            &["API_KEY=secret123".to_string()],
+            AddValues {
+                env_vars: &["API_KEY=secret123".to_string()],
+                keep_as_text: &[],
+            },
             &path,
             CommentLoss::Refuse,
         )
@@ -488,15 +535,67 @@ mod tests {
         assert_eq!(stored.trim_end(), "secret123");
     }
 
+    /// CLIADD.2 (A4): `--keep-as-text API_KEY` writes that value as typed
+    /// and stores nothing; a misspelt field is refused and nothing is written.
+    #[tokio::test]
+    async fn keep_as_text_writes_the_value_as_typed() {
+        let (_dir, path) = temp_config();
+        mcp_gateway::gateway::test_helpers::write_owner_only(&path, "secrets:\n  store: files\n")
+            .expect("write");
+        let env = ["API_KEY=secret123".to_string()];
+        for (keep, code) in [
+            ("API_KEYY", ExitCode::FAILURE),
+            ("API_KEY", ExitCode::SUCCESS),
+        ] {
+            let got = run_add_command(
+                "my-server",
+                Some("node server.js"),
+                None,
+                None,
+                AddValues {
+                    env_vars: &env,
+                    keep_as_text: &[keep.to_string()],
+                },
+                &path,
+                CommentLoss::Refuse,
+            )
+            .await;
+            assert_eq!(got, code, "{keep}");
+        }
+        let config = Config::load(Some(&path)).expect("loads");
+        assert_eq!(config.backends["my-server"].env["API_KEY"], "secret123");
+        assert!(
+            !path.with_file_name("secrets").exists(),
+            "nothing was stored"
+        );
+    }
+
     #[tokio::test]
     async fn add_duplicate_returns_failure() {
         // GIVEN: a config that already has "tavily"
         let (_dir, path) = temp_config();
-        run_add_command("tavily", None, None, None, &[], &path, CommentLoss::Refuse).await;
+        run_add_command(
+            "tavily",
+            None,
+            None,
+            None,
+            AddValues::default(),
+            &path,
+            CommentLoss::Refuse,
+        )
+        .await;
 
         // WHEN: adding again
-        let code =
-            run_add_command("tavily", None, None, None, &[], &path, CommentLoss::Refuse).await;
+        let code = run_add_command(
+            "tavily",
+            None,
+            None,
+            None,
+            AddValues::default(),
+            &path,
+            CommentLoss::Refuse,
+        )
+        .await;
 
         // THEN: failure
         assert_eq!(code, ExitCode::FAILURE);
@@ -520,7 +619,7 @@ mod tests {
             None,
             Some("https://mcp.context7.com/mcp"),
             None,
-            &[],
+            AddValues::default(),
             &path,
             CommentLoss::Refuse,
         )
@@ -543,7 +642,16 @@ mod tests {
     #[tokio::test]
     async fn get_existing_backend_returns_success() {
         let (_dir, path) = temp_config();
-        run_add_command("tavily", None, None, None, &[], &path, CommentLoss::Refuse).await;
+        run_add_command(
+            "tavily",
+            None,
+            None,
+            None,
+            AddValues::default(),
+            &path,
+            CommentLoss::Refuse,
+        )
+        .await;
         let code = run_get_command("tavily", &path);
         assert_eq!(code, ExitCode::SUCCESS);
     }
@@ -567,7 +675,16 @@ mod tests {
     #[tokio::test]
     async fn list_json_returns_success_with_backends() {
         let (_dir, path) = temp_config();
-        run_add_command("tavily", None, None, None, &[], &path, CommentLoss::Refuse).await;
+        run_add_command(
+            "tavily",
+            None,
+            None,
+            None,
+            AddValues::default(),
+            &path,
+            CommentLoss::Refuse,
+        )
+        .await;
         let code = run_list_command(true, &path);
         assert_eq!(code, ExitCode::SUCCESS);
     }
@@ -586,7 +703,16 @@ mod tests {
     #[tokio::test]
     async fn update_existing_backend_succeeds() {
         let (_dir, path) = temp_config();
-        run_add_command("tavily", None, None, None, &[], &path, CommentLoss::Refuse).await;
+        run_add_command(
+            "tavily",
+            None,
+            None,
+            None,
+            AddValues::default(),
+            &path,
+            CommentLoss::Refuse,
+        )
+        .await;
 
         let result = run_update_backend(
             "tavily",
