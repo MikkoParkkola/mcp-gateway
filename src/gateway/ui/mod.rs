@@ -52,6 +52,7 @@ mod policies_tests;
 mod preview;
 mod preview_identity;
 mod refusals;
+mod secret_slots;
 pub(crate) mod session;
 mod shell;
 mod status;
