@@ -22,6 +22,33 @@
 // threshold.  Clippy cannot show a source location for these — allow crate-wide.
 #![allow(clippy::large_stack_arrays)]
 
+/// `mutant!("ID", mutated, original)`: a mutant site for a one-build mutation
+/// proof (`src/mutant.rs`). With `--cfg mutants`, `mutated` when the process's
+/// `MCP_GATEWAY_MUTANT` names `ID`, else `original`; without it, `original`
+/// alone, the mutated tokens dropped unchecked. Defined before every module,
+/// so a site can sit in any of them on a scratch commit; the scan in
+/// `mutant_scan` keeps every site off the release line.
+#[cfg(mutants)]
+#[allow(unused_macros)]
+macro_rules! mutant {
+    ($id:literal, $mutated:expr, $original:expr $(,)?) => {
+        if crate::mutant::on($id) {
+            $mutated
+        } else {
+            $original
+        }
+    };
+}
+
+/// See the `cfg(mutants)` definition above: a normal build takes `original`.
+#[cfg(not(mutants))]
+#[allow(unused_macros)]
+macro_rules! mutant {
+    ($id:literal, $mutated:expr, $original:expr $(,)?) => {
+        $original
+    };
+}
+
 #[cfg(feature = "a2a")]
 pub(crate) mod a2a;
 #[doc(hidden)]
@@ -100,6 +127,9 @@ mod log_writer;
 pub mod metrics;
 #[doc(hidden)]
 pub mod mtls;
+mod mutant;
+#[cfg(test)]
+mod mutant_scan;
 #[doc(hidden)]
 pub mod oauth;
 mod observer;
