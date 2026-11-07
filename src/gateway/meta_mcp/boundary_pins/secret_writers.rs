@@ -8,8 +8,10 @@
 //!
 //! Kinds: `persist:<writer>`, a call of a config writer (the locked editors,
 //! the audited replace, the reload mutation, the CLI's `config_write::write`
-//! wrapper); `backends.<method>`, an `insert`/`entry`/`extend` on a field
-//! named `backends`.
+//! wrapper); `backends.<method>`, an `insert`/`entry`/`extend` on a field or
+//! binding named `backends`; `env.<method>`, `headers.<method>`, `env=`,
+//! `headers=`, a backend value map changed in place or replaced (any struct's
+//! `env`/`headers` field: a runtime one is classed `not-written`).
 //!
 //! Classes: `layer` (a writer other rows call; what reaches it is classed
 //! at its callers), `stores` (a literal the shared rule stores goes to the secret
@@ -37,8 +39,11 @@ const ROOTS: [&str; 3] = ["src/lib.rs", "src/main.rs", "src/bin/provenance-eval.
 /// the web UI's one write wrapper: a call of one is a `persist:<name>` site.
 /// Found by the scan and cross-checked by a text search of the tree (the
 /// review packet lists both).
-const WRITERS: [&str; 11] = [
+const WRITERS: [&str; 14] = [
     "edit_config",
+    "write_config_and_reload",
+    "write_config_and_reload_outcome",
+    "mutate_config_and_reload_with",
     "edit_config_text",
     "write_config",
     "write_config_text",
@@ -130,7 +135,33 @@ impl<'ast> Visit<'ast> for Body {
         if ["insert", "entry", "extend"].contains(&method.as_str()) && on_backends {
             self.count(format!("backends.{method}"));
         }
+        // A backend value map changed in place: `<x>.env.insert(..)`.
+        if ["insert", "entry", "extend"].contains(&method.as_str())
+            && let Some(map) = value_map(call.receiver.as_ref())
+        {
+            self.count(format!("{map}.{method}"));
+        }
         syn::visit::visit_expr_method_call(self, call);
+    }
+
+    fn visit_expr_assign(&mut self, assign: &'ast syn::ExprAssign) {
+        // A backend value map replaced whole: `<x>.env = ..`.
+        if let Some(map) = value_map(assign.left.as_ref()) {
+            self.count(format!("{map}="));
+        }
+        syn::visit::visit_expr_assign(self, assign);
+    }
+}
+
+/// `env` or `headers` when `expr` is a field of that name (`<x>.env`).
+fn value_map(expr: &syn::Expr) -> Option<&'static str> {
+    let syn::Expr::Field(field) = expr else {
+        return None;
+    };
+    match &field.member {
+        syn::Member::Named(name) if name == "env" => Some("env"),
+        syn::Member::Named(name) if name == "headers" => Some("headers"),
+        _ => None,
     }
 }
 
@@ -313,6 +344,9 @@ fn w1r_a_new_writer_is_listed_to_add() {
         super::config_write::write(path, mode, |c| add_backend(c, n, r))?;
         let mut backends = BTreeMap::new();
         backends.insert(name, backend);
+        backend.env.insert(key, value);
+        backend.headers = headers;
+        crate::config_reload::write_config_and_reload(path, config).await?;
     });
     let mut sites = Sites::default();
     sites.function("src/new.rs", "plant", &body);
@@ -321,6 +355,9 @@ fn w1r_a_new_writer_is_listed_to_add() {
         ("persist:edit_config", 1),
         ("persist:config_write", 1),
         ("backends.insert", 2),
+        ("env.insert", 1),
+        ("headers=", 1),
+        ("persist:write_config_and_reload", 1),
     ] {
         assert!(
             wrong.contains(&format!("src/new.rs\tplant\t{kind}\t{n}\t<class>")),

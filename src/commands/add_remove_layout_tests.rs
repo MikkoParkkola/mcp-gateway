@@ -106,3 +106,49 @@ async fn the_gateways_own_output_takes_a_second_add_in_place() {
         );
     }
 }
+
+/// A5c (code review r1, both seats): a write refused after the store step
+/// (a flow-style file `add` cannot edit in place, no `--force`) leaves the
+/// file unchanged and no entry holding the value: the entries made for it
+/// are removed with the refused write.
+#[tokio::test]
+async fn a_refused_write_after_the_store_step_leaves_no_entry() {
+    let flow = "secrets: {store: files}\nbackends: {alpha: {command: x}}\n";
+    let (dir, path) = file_with(flow);
+    let env = ["API_KEY=sk-live-0123456789".to_string()];
+    let code = run_add_command(
+        "gamma",
+        Some("echo hi"),
+        None,
+        None,
+        super::AddValues {
+            env_vars: &env,
+            keep_as_text: &[],
+        },
+        &path,
+        CommentLoss::Refuse,
+    )
+    .await;
+    assert_eq!(code, ExitCode::FAILURE);
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), flow);
+    let mut holding = Vec::new();
+    let mut dirs = vec![dir.path().to_path_buf()];
+    while let Some(d) = dirs.pop() {
+        for entry in std::fs::read_dir(&d).unwrap().flatten() {
+            let p = entry.path();
+            if p.is_dir() {
+                dirs.push(p);
+            } else if std::fs::read(&p)
+                .unwrap_or_default()
+                .windows(18)
+                .any(|w| w == b"sk-live-0123456789")
+            {
+                holding.push(p);
+            }
+        }
+    }
+    assert!(
+        holding.is_empty(),
+        "the value outlived the refused write: {holding:?}"
+    );
+}

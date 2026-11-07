@@ -225,3 +225,39 @@ fn a8_several_backends_store_in_one_save() {
         "sk-live-9876543210"
     );
 }
+
+/// A9 (code review r1, gpt): a value the shared rule refuses (a literal
+/// default) is refused by field and code before any store opens; the config
+/// is unchanged and the value is never named.
+#[test]
+fn a9_a_refused_value_fails_before_any_store() {
+    let mut config = with_backend(&[("API_KEY", "${MISSING:-sk-live-0123456789}")], &[]);
+
+    let error = store_backend_with(&mut config, &["tool"], &[], || {
+        panic!("no store is opened for a refused value")
+    })
+    .err()
+    .expect("refused");
+
+    assert!(error.contains("literal_default (env.API_KEY)"), "{error}");
+    assert!(!error.contains("sk-live"), "{error}");
+    assert_eq!(
+        config.backends["tool"].env["API_KEY"],
+        "${MISSING:-sk-live-0123456789}"
+    );
+}
+
+/// A10 (code review r1, gpt): a backend named twice is refused before any
+/// store opens, so no entry is made twice.
+#[test]
+fn a10_a_name_given_twice_is_refused() {
+    let mut config = with_backend(&[("API_KEY", "sk-live-0123456789")], &[]);
+
+    let error = store_backend_with(&mut config, &["tool", "tool"], &[], || {
+        panic!("no store is opened for a repeated name")
+    })
+    .err()
+    .expect("refused");
+
+    assert!(error.contains("named twice"), "{error}");
+}

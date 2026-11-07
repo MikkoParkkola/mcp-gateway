@@ -545,6 +545,27 @@ mod tests {
         assert_eq!(stored.trim_end(), "sk-live-0123456789");
     }
 
+    /// CLIADD.5 (S3, code review r1): an imported value the shared rule
+    /// refuses (a literal default) fails the import; the file is unchanged.
+    #[test]
+    fn s3_setup_refuses_a_literal_default() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("gateway.yaml");
+        let before = "secrets:\n  store: files\n";
+        mcp_gateway::gateway::test_helpers::write_owner_only(&path, before).expect("write");
+        let mut server = make_stdio_server("tool", DiscoverySource::ClaudeDesktop);
+        server.env = [(
+            "API_KEY".to_string(),
+            "${MISSING:-sk-live-0123456789}".to_string(),
+        )]
+        .into_iter()
+        .collect();
+
+        assert!(import_servers(&path, CommentLoss::Refuse, &[&server]).is_err());
+
+        assert_eq!(std::fs::read_to_string(&path).expect("read"), before);
+    }
+
     #[test]
     fn b3j_merge_refuses_a_server_whose_secret_reference_does_not_resolve() {
         let mut config = Config::default();

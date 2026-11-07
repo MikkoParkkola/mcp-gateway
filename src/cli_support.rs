@@ -277,9 +277,36 @@ pub(crate) fn store_backend_with(
     let mut candidates = Vec::with_capacity(names.len());
     let mut known = std::collections::HashSet::new();
     for (outcome, name) in names.iter().enumerate() {
+        // A name given twice would store its values twice, the second set
+        // replacing the first's references and leaving those entries unused.
+        if names[..outcome].contains(name) {
+            return Err(format!(
+                "backend '{name}' is named twice; nothing was written"
+            ));
+        }
         let Some(backend) = config.backends.get(*name) else {
             return Err(format!("no backend named '{name}' to store values for"));
         };
+        // A value the shared rule refuses (a literal default, literal text
+        // beside a template) is refused here too, by field and code, before
+        // any store opens: kept, it would reach gateway.yaml as text.
+        let mut refused: Vec<String> = [(false, &backend.env), (true, &backend.headers)]
+            .into_iter()
+            .flat_map(|(header, map)| {
+                map.iter().filter_map(move |(key, value)| {
+                    crate::config::secret_values::classify(value)
+                        .err()
+                        .map(|code| format!("{code} ({})", field_of(header, key)))
+                })
+            })
+            .collect();
+        if !refused.is_empty() {
+            refused.sort();
+            return Err(format!(
+                "backend '{name}' holds values written as text that may be secrets: {}; nothing was written",
+                refused.join(", ")
+            ));
+        }
         for (header, map) in [(false, &backend.env), (true, &backend.headers)] {
             known.extend(map.keys().map(|key| field_of(header, key)));
         }
