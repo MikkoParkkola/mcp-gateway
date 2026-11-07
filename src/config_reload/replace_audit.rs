@@ -103,7 +103,9 @@ impl GatewayAuth {
     }
 }
 
-/// The refusal of a write on a gateway with auth on and no audit log.
+/// The text of [`ReplaceError::NoAuditLog`], which only the web UI routes
+/// answer with.
+#[cfg(feature = "webui")]
 pub(crate) const NO_AUDIT_LOG: &str =
     "auth is on but no audit log is configured; config writes are refused";
 
@@ -138,7 +140,7 @@ impl AuditPosture {
                 kind,
             }),
             (None, GatewayAuth::Off) => Ok(Audit::Off),
-            (None, GatewayAuth::On) => Err(ReplaceError::Refused(NO_AUDIT_LOG.to_owned())),
+            (None, GatewayAuth::On) => Err(ReplaceError::NoAuditLog),
         }
     }
 }

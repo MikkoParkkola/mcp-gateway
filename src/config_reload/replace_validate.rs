@@ -56,13 +56,22 @@ fn refuse_shared_credentials(
     let Ok(bearer) = std::str::from_utf8(bearer.value.as_bytes()) else {
         return Ok(());
     };
-    let keys: Vec<_> = (config.auth.api_keys.iter())
-        .filter_map(|key| {
-            let current = key.resolve_digest(overlay).ok()?;
-            let previous = key.resolve_previous_digest(overlay).ok()?;
-            Some((key.name.as_str(), current, previous))
-        })
-        .collect();
+    // A key that cannot be compared refuses the bearer, never drops out of
+    // the comparison. Fixed text: the resolver's error is not quoted.
+    let unreadable = |name: &str, field: &str| {
+        ReplaceError::Refused(format!(
+            "auth.api_keys['{name}'].{field} cannot be read, so the new bearer token \
+             cannot be checked against it; fix that key first"
+        ))
+    };
+    let mut keys = Vec::with_capacity(config.auth.api_keys.len());
+    for key in &config.auth.api_keys {
+        let name = key.name.as_str();
+        let current = (key.resolve_digest(overlay)).map_err(|_| unreadable(name, "key_sha256"))?;
+        let previous = (key.resolve_previous_digest(overlay))
+            .map_err(|_| unreadable(name, "previous_key_sha256"))?;
+        keys.push((name, current, previous));
+    }
     crate::gateway::auth::refuse_shared_digests(Some(bearer), keys)
         .map_err(|e| ReplaceError::Refused(e.to_string()))
 }

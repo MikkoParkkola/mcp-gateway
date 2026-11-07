@@ -69,9 +69,7 @@ fn writer_outcomes() -> Vec<(
             "not_in_place",
         ),
         (
-            Err(ReplaceError::Refused(
-                "auth is on but no audit log is configured; config writes are refused".to_owned(),
-            )),
+            Err(ReplaceError::NoAuditLog),
             StatusCode::SERVICE_UNAVAILABLE,
             "audit_log_required",
         ),
@@ -475,6 +473,24 @@ fn escaped_keys_each_take_their_own_reference() {
     for (key, reference) in keys.iter().zip(&references) {
         assert_eq!(&config.backends["tool"].env[*key], reference, "{key}");
     }
+}
+
+/// SAVE.6: the audit-log answer follows the refusal's type. A refusal
+/// carrying the same words answers exactly as any other refusal.
+#[test]
+fn the_audit_log_answer_follows_the_type_not_the_words() {
+    let answered = |why: &str| {
+        futures::executor::block_on(body_of(answer(
+            "tool",
+            Err(ReplaceError::Refused(why.to_owned())),
+        )))
+    };
+    let look_alike = answered(NO_AUDIT_LOG);
+    assert_eq!(look_alike, answered(CANARY), "{look_alike:?}");
+    assert_ne!(
+        look_alike.1["error"], "audit_log_required",
+        "{look_alike:?}"
+    );
 }
 
 /// Adopt's side of the length bound: a credential-named env value or a header
