@@ -11,7 +11,8 @@
 //! wrapper); `backends.<method>`, an `insert`/`entry`/`extend` on a field
 //! named `backends`.
 //!
-//! Classes: `stores` (a literal the shared rule stores goes to the secret
+//! Classes: `layer` (a writer other rows call; what reaches it is classed
+//! at its callers), `stores` (a literal the shared rule stores goes to the secret
 //! store first, `crate::config::secret_values`), `refuses` (a literal is
 //! refused), `no-backend-values` (writes no backend env or header value it
 //! was given), `not-written` (a runtime map, never saved to a file),
@@ -32,14 +33,32 @@ use super::scan::{Place, Sink, expr_attrs, item_attrs, test_only, walk};
 
 const ROOTS: [&str; 3] = ["src/lib.rs", "src/main.rs", "src/bin/provenance-eval.rs"];
 
-/// The config writers: a call of one is a `persist:<name>` site.
-const WRITERS: [&str; 6] = [
+/// The config writers, from the public editors down to the atomic write, and
+/// the web UI's one write wrapper: a call of one is a `persist:<name>` site.
+/// Found by the scan and cross-checked by a text search of the tree (the
+/// review packet lists both).
+const WRITERS: [&str; 11] = [
     "edit_config",
     "edit_config_text",
     "write_config",
     "write_config_text",
+    "write_config_with",
+    "write_spliced",
+    "write_yaml_at",
     "replace_audited",
+    "replace_detached",
+    "write_audited",
     "mutate_config_and_reload",
+];
+
+/// The gateway's config-mutation methods (`ReloadContext`): a method call of
+/// one is a `persist:<name>` site.
+const WRITER_METHODS: [&str; 5] = [
+    "write_and_reload_outcome",
+    "write_and_reload_outcome_within",
+    "mutate_and_reload_outcome",
+    "mutate_and_reload_outcome_within",
+    "mutate_locked",
 ];
 
 /// (file, function, kind) -> calls.
@@ -96,6 +115,9 @@ impl<'ast> Visit<'ast> for Body {
 
     fn visit_expr_method_call(&mut self, call: &'ast syn::ExprMethodCall) {
         let method = call.method.to_string();
+        if WRITER_METHODS.contains(&method.as_str()) {
+            self.count(format!("persist:{method}"));
+        }
         if ["insert", "entry", "extend"].contains(&method.as_str())
             && let syn::Expr::Field(field) = call.receiver.as_ref()
             && let syn::Member::Named(name) = &field.member
@@ -155,7 +177,8 @@ impl Sink for Sites {
     }
 }
 
-const CLASSES: [&str; 5] = [
+const CLASSES: [&str; 6] = [
+    "layer",
     "stores",
     "refuses",
     "no-backend-values",
