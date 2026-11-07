@@ -227,7 +227,10 @@ impl<'ast> syn::visit::Visit<'ast> for Inside {
     }
     fn visit_item(&mut self, item: &'ast syn::Item) {
         self.items += 1;
-        // Into it too: a macro in a nested item is still a macro.
+        // Into it too: a macro in a nested item is still a macro. Today every
+        // item holding an item is refused anyway (see the const arm in
+        // `entries`), so this only picks the reason; it guards the verdict
+        // if that rule is relaxed.
         syn::visit::visit_item(self, item);
     }
 }
@@ -296,6 +299,10 @@ fn entries(file: &syn::File, found: &mut Entries) {
             syn::Item::Const(c) => {
                 let mut inside = Inside::default();
                 syn::visit::Visit::visit_item_const(&mut inside, c);
+                // A const holding any item is refused outright. While this
+                // rule stands, the recursion into nested items in `Inside`
+                // only changes the reason a shape is refused, never whether:
+                // relax it and that recursion becomes load-bearing again.
                 (!doc_only(&c.attrs)
                     || inside.macros > 0
                     || inside.items > 0
