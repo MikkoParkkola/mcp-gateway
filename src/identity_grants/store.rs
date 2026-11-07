@@ -106,10 +106,7 @@ impl LocalIdentityGrantStore {
     /// [`Self::evaluate`], with the matched grant's keyed id read under the
     /// same borrow as the match, so a reload cannot pair one row's match
     /// with another row's id. A stub for now: it never names the id.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "the grant settle reads it once wired")
-    )]
+    #[expect(dead_code, reason = "the grant settle reads it once wired")]
     #[must_use]
     pub(crate) fn evaluate_explained(
         &self,

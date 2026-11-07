@@ -35,12 +35,12 @@ fn provenance(
     Firewall::allow_provenance(&policy, target, &findings, roots)
 }
 
-fn softened(rule: &FirewallRule) -> Option<Allow> {
-    Some(Allow::by(AllowRank::FirewallSoftenedBlock, Some(id(rule))))
+fn softened(rule: &FirewallRule) -> Allow {
+    Allow::by(AllowRank::FirewallSoftenedBlock, Some(id(rule)))
 }
 
-fn let_through(rule: &FirewallRule) -> Option<Allow> {
-    Some(Allow::by(AllowRank::FirewallAllow, Some(id(rule))))
+fn let_through(rule: &FirewallRule) -> Allow {
+    Allow::by(AllowRank::FirewallAllow, Some(id(rule)))
 }
 
 /// R5 (ATTR.2). A suppressed High beside an independent Medium: enforcement
@@ -55,7 +55,10 @@ fn a_softener_beside_an_independent_warn_is_named() {
         FirewallAction::Warn,
         "premise: the call warns"
     );
-    assert_eq!(provenance(&rules, &[SHELL, SQL], &[]), softened(&softener));
+    assert_eq!(
+        provenance(&rules, &[SHELL, SQL], &[]),
+        Some(softened(&softener))
+    );
 }
 
 /// R6 (ATTR.2). A warn-to-allow rule listed before a block-to-allow rule:
@@ -65,7 +68,10 @@ fn a_softener_listed_second_still_wins() {
     let warn_to_allow = rule("t", &[ScanType::SqlInjection], FirewallAction::Allow);
     let softener = rule("t", &[ScanType::ShellInjection], FirewallAction::Allow);
     let rules = [warn_to_allow, softener.clone()];
-    assert_eq!(provenance(&rules, &[SQL, SHELL], &[]), softened(&softener));
+    assert_eq!(
+        provenance(&rules, &[SQL, SHELL], &[]),
+        Some(softened(&softener))
+    );
 }
 
 /// R9 (ATTR.2). A block-to-warn rule alone is named at the last rank, not
@@ -75,7 +81,7 @@ fn a_block_to_warn_rule_is_named_at_the_last_rank() {
     let to_warn = rule("t", &[ScanType::ShellInjection], FirewallAction::Warn);
     assert_eq!(
         provenance(std::slice::from_ref(&to_warn), &[SHELL], &[]),
-        let_through(&to_warn)
+        Some(let_through(&to_warn))
     );
 }
 
@@ -87,7 +93,7 @@ fn the_matched_rule_is_named_not_the_first() {
     let matched = rule("t", &[ScanType::ShellInjection], FirewallAction::Allow);
     let after = rule("t", &[ScanType::Credentials], FirewallAction::Allow);
     let rules = [before, matched.clone(), after];
-    assert_eq!(provenance(&rules, &[SHELL], &[]), softened(&matched));
+    assert_eq!(provenance(&rules, &[SHELL], &[]), Some(softened(&matched)));
 }
 
 /// A clean call and a severity-only allow name nothing. A pin.
@@ -127,7 +133,10 @@ fn a_root_block_to_allow_is_a_softener() {
     let warn_to_allow = rule("t", &[ScanType::SqlInjection], FirewallAction::Allow);
     let rules = [warn_to_allow, softener.clone()];
     let roots = [root(&softener, FirewallAction::Allow)];
-    assert_eq!(provenance(&rules, &[SQL], &roots), softened(&softener));
+    assert_eq!(
+        provenance(&rules, &[SQL], &roots),
+        Some(softened(&softener))
+    );
 }
 
 /// R15 (ATTR.2). A root finding softened to warn is named at the last rank.
@@ -138,7 +147,7 @@ fn a_root_block_to_warn_is_named_at_the_last_rank() {
     let roots = [root(&to_warn, FirewallAction::Warn)];
     assert_eq!(
         provenance(std::slice::from_ref(&to_warn), &[], &roots),
-        let_through(&to_warn)
+        Some(let_through(&to_warn))
     );
 }
 

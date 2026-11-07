@@ -730,7 +730,10 @@ impl Firewall {
     /// ranked from the rule that decides them, root findings (`roots`) from
     /// the action and rule they arrive decided with. A stub for now: it
     /// names no rule.
-    #[expect(dead_code, reason = "the send rescan notes it once wired")]
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "the send rescan notes it once wired")
+    )]
     fn allow_provenance(
         policy: &FirewallPolicy,
         target: RuleTarget<'_>,
