@@ -1950,6 +1950,7 @@ dependencies = [
  "parking_lot 0.13.0",
  "pin-project-lite",
  "pretty_assertions",
+ "proc-macro2",
  "process-wrap",
  "quick-xml",
  "rand 0.10.3",
