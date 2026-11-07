@@ -102,6 +102,9 @@ pub(in super::super) struct ReplayEntry {
     /// was noted at capture, which never matches and always filters.
     pub(in super::super) answer_digest: String,
     pub(in super::super) expires: Instant,
+    /// The insertion sequence it was stored under: a [`ReplayHandle`]
+    /// belongs to it only when their sequences match.
+    seq: u64,
 }
 
 /// An entry as stored, with its insertion sequence (its eviction age) and
@@ -305,6 +308,7 @@ impl ReplayReceipts {
                     key,
                     Held {
                         entry: Arc::new(ReplayEntry {
+                            seq,
                             receipts,
                             calls,
                             answer_digest,
@@ -456,7 +460,7 @@ impl ReplayReceipts {
         self: &Arc<Self>,
         key: &StoredKey,
         now: Instant,
-    ) -> Option<(Arc<ReplayEntry>, Option<ReplayHandle>)> {
+    ) -> Option<Acquired> {
         // The miss reason is decided under the lock and counted after it
         // is dropped, as `lookup` does.
         let (found, skipped) = {
@@ -484,7 +488,8 @@ impl ReplayReceipts {
             count_replay_skipped(reason);
         }
         let (entry, seq) = found?;
-        Some((entry, seq.map(|seq| self.handle(key.clone(), seq))))
+        let handle = seq.map(|seq| self.handle(key.clone(), seq));
+        Acquired::pair(entry, handle)
     }
 
     /// `handle`'s delivery was written; `off` when the write-time action
@@ -578,4 +583,38 @@ pub(in super::super) enum TestLife {
         outstanding: u32,
         delivered_off: bool,
     },
+}
+
+/// A replay's snapshot and its handle, as one value: the only way a handle
+/// on an existing entry is handed out ([`ReplayReceipts::acquire`]), and
+/// built only through [`Acquired::pair`], which refuses a handle that does
+/// not belong to the snapshot. A delivery therefore settles exactly the
+/// entry whose receipts it staged.
+pub(crate) struct Acquired {
+    pub(in super::super) entry: Arc<ReplayEntry>,
+    pub(crate) handle: Option<ReplayHandle>,
+}
+
+impl std::fmt::Debug for Acquired {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Acquired")
+            .field("seq", &self.entry.seq)
+            .field("handle", &self.handle)
+            .finish_non_exhaustive()
+    }
+}
+
+impl Acquired {
+    /// `entry` with `handle`, or `None` when the handle was taken against
+    /// another entry (another insertion sequence). A kept entry has no
+    /// handle.
+    pub(in super::super) fn pair(
+        entry: Arc<ReplayEntry>,
+        handle: Option<ReplayHandle>,
+    ) -> Option<Self> {
+        if handle.as_ref().is_some_and(|h| h.seq != entry.seq) {
+            return None;
+        }
+        Some(Self { entry, handle })
+    }
 }

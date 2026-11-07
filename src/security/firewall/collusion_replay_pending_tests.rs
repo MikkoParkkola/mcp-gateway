@@ -58,7 +58,7 @@ fn pend(store: &Arc<ReplayReceipts>, k: &StoredKey, now: Instant, ttl: Duration)
 
 /// A replay acquiring `k`'s pending entry; the row asserts a handle.
 fn replay(store: &Arc<ReplayReceipts>, k: &StoredKey, now: Instant) -> ReplayHandle {
-    let acquired = store.acquire(k, now).and_then(|(_, handle)| handle);
+    let acquired = store.acquire(k, now).and_then(|acquired| acquired.handle);
     assert!(
         acquired.is_some(),
         "a replay of a pending entry holds a handle"
@@ -524,7 +524,7 @@ fn p1b_every_short_sequence_matches_the_model() {
             match op {
                 Op::Insert => handles.push(Some(pend(&store, &k, now, Duration::from_secs(10)))),
                 Op::Acquire => {
-                    if let Some(h) = store.acquire(&k, now).and_then(|(_, h)| h) {
+                    if let Some(h) = store.acquire(&k, now).and_then(|acquired| acquired.handle) {
                         handles.push(Some(h));
                     }
                 }
@@ -563,4 +563,29 @@ fn p1b_every_short_sequence_matches_the_model() {
         }
     }
     walk(&mut Vec::new(), 4);
+}
+
+/// r25: a handle cannot be paired with a snapshot it was not taken
+/// against: `Acquired::pair` refuses an entry and a handle from different
+/// insertion sequences, and accepts its own pair.
+/// Mutant killed: the pairing check removed (a delivery could settle an
+/// entry other than the one whose receipts it staged).
+#[test]
+fn r25_a_handle_is_refused_for_another_entry() {
+    use super::replay::Acquired;
+    let store = Arc::new(ReplayReceipts::new());
+    let now = Instant::now();
+    let (a, b) = (key("a"), key("b"));
+    let _ha = pend(&store, &a, now, hour());
+    let _hb = pend(&store, &b, now, hour());
+    let from_a = store.acquire(&a, now).expect("a is stored");
+    let from_b = store.acquire(&b, now).expect("b is stored");
+    assert!(
+        Acquired::pair(std::sync::Arc::clone(&from_a.entry), from_b.handle).is_none(),
+        "b's handle is refused for a's snapshot"
+    );
+    assert!(
+        Acquired::pair(from_a.entry, from_a.handle).is_some(),
+        "control: a's own pair is accepted"
+    );
 }
