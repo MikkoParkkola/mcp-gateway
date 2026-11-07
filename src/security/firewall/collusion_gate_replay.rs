@@ -10,7 +10,7 @@ use std::time::Duration;
 
 use serde_json::Value;
 
-use super::super::collusion::replay::{StoredKey, count_replay_skipped};
+use super::super::collusion::replay::{CaptureMode, ReplayHandle, StoredKey, count_replay_skipped};
 use super::{Delivered, DeliveryDigest, Firewall, delivery_parts};
 use crate::security::ReplayCalls;
 
@@ -49,6 +49,16 @@ impl Firewall {
     /// overwrite would take it. With relay detection off nothing is stored
     /// and nothing is removed, so a commit with no candidates at all goes
     /// through [`Self::remove_replay`] instead.
+    ///
+    /// `mode` says when the capture is made. [`CaptureMode::AtDelivery`]
+    /// (the task path) captures an answer already delivered: under an
+    /// effective `off` nothing is stored, and otherwise the entry is kept.
+    /// [`CaptureMode::Pending`] (a synchronous answer, at judge) captures
+    /// before anything is delivered, whatever the action: the entry is
+    /// pending and the returned handle is settled at the delivery's write
+    /// ([`Self::settle_replay`]), which keeps it or, under `off`, lets it go
+    /// (ADR-029, pending-snapshot rule).
+    #[allow(clippy::too_many_arguments, reason = "one stored entry's parts")]
     pub(crate) fn store_replay(
         &self,
         key: StoredKey,
@@ -57,13 +67,17 @@ impl Firewall {
         answer_digest: &str,
         retention: Duration,
         generation: &crate::config_reload::Generation,
-    ) {
+        mode: CaptureMode,
+    ) -> Option<ReplayHandle> {
+        if self.relay_detector().is_none() {
+            return None;
+        }
         // Nothing delivered under an effective `off` is held, a snapshot
-        // included.
-        if self.relay_detector().is_none()
-            || generation.collusion_view().action() == super::CollusionAction::Off
+        // included; a pending capture has delivered nothing yet.
+        if mode == CaptureMode::AtDelivery
+            && generation.collusion_view().action() == super::CollusionAction::Off
         {
-            return;
+            return None;
         }
         let mut snapshots = Vec::with_capacity(receipts.len());
         for (digest, label, server, tool) in receipts {
@@ -75,16 +89,38 @@ impl Firewall {
         }
         if snapshots.is_empty() {
             self.relay.replay.remove(&key);
-            return;
+            return None;
         }
-        self.relay.replay.insert(
-            key,
-            snapshots,
-            calls,
-            answer_digest.to_owned(),
-            self.relay.now(),
-            retention,
-        );
+        let (digest, now) = (answer_digest.to_owned(), self.relay.now());
+        match mode {
+            CaptureMode::AtDelivery => {
+                self.relay
+                    .replay
+                    .insert(key, snapshots, calls, digest, now, retention);
+                None
+            }
+            CaptureMode::Pending => self
+                .relay
+                .replay
+                .insert_pending(key, snapshots, calls, digest, now, retention),
+        }
+    }
+
+    /// `handle`'s delivery was written under `generation`: a write not
+    /// under an effective `off` keeps its entry; one under `off` ends that
+    /// delivery, and the entry goes once no delivery of it is outstanding.
+    pub(crate) fn settle_replay(
+        &self,
+        handle: ReplayHandle,
+        generation: &crate::config_reload::Generation,
+    ) {
+        let off = generation.collusion_view().action() == super::CollusionAction::Off;
+        self.relay.replay.settle(handle, off);
+    }
+
+    /// `handle`'s answer was not retained (E1): its pending entry goes.
+    pub(crate) fn discard_replay(&self, handle: ReplayHandle) {
+        self.relay.replay.discard(handle);
     }
 
     /// Drop the entry under `key`: a non-plan commit under a retained sync
@@ -101,19 +137,20 @@ impl Firewall {
         key: &StoredKey,
     ) -> Option<(Vec<ReplayedDigest>, ReplayCalls)> {
         let entry = self.relay.replay.lookup(key, self.relay.now())?;
-        let digests = entry
-            .receipts
-            .iter()
-            .map(|receipt| ReplayedDigest {
-                digest: DeliveryDigest::of_replay_receipt(receipt),
-                label: receipt.label,
-                server: receipt.server.clone(),
-                tool: receipt.tool.clone(),
-                seam_sources: receipt.seam_sources.clone(),
-                answer_digest: entry.answer_digest.clone(),
-            })
-            .collect();
+        let digests = replayed(&entry);
         Some((digests, entry.calls.clone()))
+    }
+
+    /// [`Self::replay_digests`] for a replay that will deliver the entry:
+    /// a pending entry is held for that delivery, whose handle is settled
+    /// at its write (or released if it is never written).
+    pub(crate) fn replay_digests_for_delivery(
+        &self,
+        key: &StoredKey,
+    ) -> Option<(Vec<ReplayedDigest>, ReplayCalls, Option<ReplayHandle>)> {
+        let (entry, handle) = self.relay.replay.acquire(key, self.relay.now())?;
+        let digests = replayed(&entry);
+        Some((digests, entry.calls.clone(), handle))
     }
 
     /// Count one seam receipt dropped because its entry has a nested
@@ -179,4 +216,20 @@ impl Firewall {
             })
             .collect()
     }
+}
+
+/// Fresh digests for every snapshot of `entry` (F2).
+fn replayed(entry: &super::super::collusion::replay::ReplayEntry) -> Vec<ReplayedDigest> {
+    entry
+        .receipts
+        .iter()
+        .map(|receipt| ReplayedDigest {
+            digest: DeliveryDigest::of_replay_receipt(receipt),
+            label: receipt.label,
+            server: receipt.server.clone(),
+            tool: receipt.tool.clone(),
+            seam_sources: receipt.seam_sources.clone(),
+            answer_digest: entry.answer_digest.clone(),
+        })
+        .collect()
 }

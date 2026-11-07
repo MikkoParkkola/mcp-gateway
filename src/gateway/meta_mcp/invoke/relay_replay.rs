@@ -58,6 +58,64 @@ tokio::task_local! {
     /// receipt on (F4). One stored entry stages into one delivery, as
     /// the lookup key beside it already assumes.
     static STORED_ANSWER: RefCell<Option<String>>;
+    /// The pending replay entries this delivery holds: its own capture's
+    /// (taken at judge) and each replayed entry's, settled at its write.
+    static HELD: RefCell<Held>;
+}
+
+/// A delivery's handles on pending replay entries (ADR-029,
+/// pending-snapshot rule).
+#[derive(Debug, Default)]
+pub(crate) struct Held {
+    /// Its own capture's handle, discarded when admission does not retain
+    /// the answer (E1).
+    #[cfg(feature = "firewall")]
+    pub(super) captured: Option<crate::security::firewall::ReplayHandle>,
+    /// One per replayed entry it delivers.
+    #[cfg(feature = "firewall")]
+    pub(super) replayed: Vec<crate::security::firewall::ReplayHandle>,
+}
+
+impl Held {
+    /// Settle every handle at the delivery's write under `generation`;
+    /// dropped instead (released) when the write delivered no result.
+    #[cfg(feature = "firewall")]
+    pub(super) fn settle(
+        self,
+        fw: &crate::security::firewall::Firewall,
+        delivered: bool,
+        generation: &crate::config_reload::Generation,
+    ) {
+        if !delivered {
+            return;
+        }
+        for handle in self.captured.into_iter().chain(self.replayed) {
+            fw.settle_replay(handle, generation);
+        }
+    }
+
+    /// Admission did not retain the answer (E1): its own capture goes.
+    pub(super) fn discard_captured(&mut self) {
+        #[cfg(feature = "firewall")]
+        if let Some(handle) = self.captured.take() {
+            handle.discard();
+        }
+    }
+}
+
+/// Hold `handle` for this delivery's write.
+#[cfg(feature = "firewall")]
+fn hold_replay_handle(handle: Option<crate::security::firewall::ReplayHandle>) {
+    if let Some(handle) = handle {
+        let _ = HELD.try_with(|held| held.borrow_mut().replayed.push(handle));
+    }
+}
+
+/// Take this delivery's held handles, for a collector that hands its
+/// staged receipts to a later commit.
+pub(super) fn take_held() -> Held {
+    HELD.try_with(|held| std::mem::take(&mut *held.borrow_mut()))
+        .unwrap_or_default()
 }
 
 /// The calls one delivery dispatched, `(label, server, tool)` each (H2).
@@ -82,7 +140,10 @@ pub(super) fn scope<F: Future>(delivery: F) -> impl Future<Output = F::Output> {
                 RefCell::new(Vec::new()),
                 CAPTURE_ANSWER.scope(
                     RefCell::new(None),
-                    STORED_ANSWER.scope(RefCell::new(None), delivery),
+                    STORED_ANSWER.scope(
+                        RefCell::new(None),
+                        HELD.scope(RefCell::new(Held::default()), delivery),
+                    ),
                 ),
             ),
         ),
@@ -235,9 +296,45 @@ pub(crate) fn note_task_capture(id: String, revision: u64, ttl_ms: Option<u64>) 
     let _ = (id, revision, ttl_ms);
 }
 
-/// This delivery's answer was not retained: nothing is captured for it.
+/// This delivery's answer was not retained: nothing is captured for it,
+/// and a capture already taken pending goes (E1).
 pub(crate) fn cancel_replay_capture() {
     let _ = super::REPLAY_CAPTURE.try_with(|slot| *slot.borrow_mut() = None);
+    let _ = HELD.try_with(|held| held.borrow_mut().discard_captured());
+}
+
+/// Whether `capture` is a retained synchronous answer's (captured pending
+/// at judge), not a task's (captured where it is stored).
+#[cfg(feature = "firewall")]
+pub(super) fn is_sync_capture(capture: Option<&Capture>) -> bool {
+    matches!(
+        capture,
+        Some(Capture {
+            key: CaptureKey::Sync { .. },
+            ..
+        })
+    )
+}
+
+/// Capture this delivery's retained synchronous answer now, pending,
+/// before admission publishes it for replay, so a retry that finds the
+/// stored answer finds its snapshot too. `receipts` are its final
+/// receipts. A task capture is left for its own commit point.
+#[cfg(feature = "firewall")]
+pub(super) fn capture_pending_now(
+    fw: &crate::security::firewall::Firewall,
+    receipts: &[Receipt],
+    generation: &crate::config_reload::Generation,
+) {
+    let is_sync = super::REPLAY_CAPTURE
+        .try_with(|slot| is_sync_capture(slot.borrow().as_ref()))
+        .unwrap_or(false);
+    if !is_sync {
+        return;
+    }
+    let (capture, calls) = take_capture();
+    let handle = capture_commit(fw, capture, receipts, calls, generation);
+    let _ = HELD.try_with(|held| held.borrow_mut().captured = handle);
 }
 
 /// Take this delivery's capture and calls, for a collector that hands
@@ -274,14 +371,20 @@ pub(super) fn capture_commit(
     receipts: &[Receipt],
     calls: ReplayCallList,
     generation: &crate::config_reload::Generation,
-) {
+) -> Option<crate::security::firewall::ReplayHandle> {
     let Some(Capture {
         key,
         retention,
         answer_digest,
     }) = capture
     else {
-        return;
+        return None;
+    };
+    // A retained synchronous answer is captured pending, before it is
+    // delivered; a task's result where it is stored, as it always was.
+    let mode = match key {
+        CaptureKey::Sync { .. } => crate::security::firewall::CaptureMode::Pending,
+        CaptureKey::Task { .. } => crate::security::firewall::CaptureMode::AtDelivery,
     };
     let sources: Vec<crate::security::firewall::ReplaySource<'_>> = receipts
         .iter()
@@ -294,9 +397,18 @@ pub(super) fn capture_commit(
     // with relay detection off, which would keep the prior entry (F1).
     if sources.is_empty() {
         fw.remove_replay(&key);
+        None
     } else {
         let answer_digest = answer_digest.as_deref().unwrap_or("");
-        fw.store_replay(key, &sources, calls, answer_digest, retention, generation);
+        fw.store_replay(
+            key,
+            &sources,
+            calls,
+            answer_digest,
+            retention,
+            generation,
+            mode,
+        )
     }
 }
 
@@ -318,9 +430,10 @@ pub(super) fn stage_plan_replay(meta: &MetaMcp, who: RelayKey<'_>) {
         let Some(key @ CaptureKey::Sync { .. }) = key else {
             return;
         };
-        let Some((digests, calls)) = fw.replay_digests(&key) else {
+        let Some((digests, calls, handle)) = fw.replay_digests_for_delivery(&key) else {
             return;
         };
+        hold_replay_handle(handle);
         stage_entries(fw, who, digests, &calls, None);
     }
     #[cfg(not(feature = "firewall"))]

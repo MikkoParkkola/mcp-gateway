@@ -572,6 +572,7 @@ fn d25_a_still_staged_step_yields_no_snapshot_and_no_entry() {
         "",
         hour(),
         &fw.paired_generation_for_test(),
+        crate::security::firewall::CaptureMode::AtDelivery,
     );
     assert!(
         fw.replay_digests(&task_key("task-d25", 1)).is_none(),
@@ -598,6 +599,7 @@ fn a_ttl_less_tasks_entry_expires_after_24h_on_the_relay_clock_not_before() {
         "",
         Duration::from_secs(crate::idempotency::admission::RETENTION_SECS),
         &fw.paired_generation_for_test(),
+        crate::security::firewall::CaptureMode::AtDelivery,
     );
     assert!(
         fw.replay_digests(&task_key("task-24h", 3)).is_some(),

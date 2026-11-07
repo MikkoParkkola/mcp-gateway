@@ -398,6 +398,14 @@ impl std::fmt::Debug for ReplayHandle {
 }
 
 impl ReplayHandle {
+    /// Its answer was not retained (E1): its pending entry goes. A kept
+    /// entry, or a newer capture under the key, is untouched.
+    pub(crate) fn discard(self) {
+        if let Some(store) = self.store.as_ref().and_then(std::sync::Weak::upgrade) {
+            store.discard(self);
+        }
+    }
+
     /// The key and sequence, consuming the handle without releasing it.
     fn into_parts(mut self) -> (StoredKey, u64) {
         self.store = None;
