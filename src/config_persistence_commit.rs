@@ -218,13 +218,7 @@ fn read_back(target: &Path, expected: &FileRevision) -> Result<(), NotDurable> {
     }
     // A directory sync makes the name durable, not the data: flush the file
     // too, so a match read from the page cache proves bytes on disk.
-    #[cfg(test)]
-    if fault::fires(target, |f| matches!(f, Fault::FailFileSync)).is_some() {
-        return Err(NotDurable::Sync(io::Error::other(
-            "injected file-sync failure",
-        )));
-    }
-    flush(&file).map_err(NotDurable::Sync)?;
+    flush(&file, target).map_err(NotDurable::Sync)?;
     let found = FileRevision::of_reader(&mut file).map_err(NotDurable::Sync)?;
     if &found == expected {
         return Ok(());
@@ -255,7 +249,13 @@ fn open_target(target: &Path) -> io::Result<std::fs::File> {
 }
 
 /// Flush the same file whose bytes are then hashed.
-fn flush(file: &std::fs::File) -> io::Result<()> {
+fn flush(file: &std::fs::File, target: &Path) -> io::Result<()> {
+    #[cfg(test)]
+    if fault::fires(target, |f| matches!(f, Fault::FailFileSync)).is_some() {
+        return Err(io::Error::other("injected file-sync failure"));
+    }
+    #[cfg(not(test))]
+    let _ = target;
     file.sync_all()
 }
 
@@ -266,5 +266,37 @@ fn hook(target: &Path, at: HookAt) {
         fault::fires(target, |f| matches!(f, Fault::Hook(a, _) if *a == at))
     {
         run(target);
+    }
+}
+
+/// The Windows read-back handle denies write and delete sharing: while it is
+/// held nothing can change or replace the file; once dropped, both work.
+#[cfg(all(test, windows))]
+mod windows_share_tests {
+    #[test]
+    fn the_read_back_handle_blocks_writes_and_replacement_while_held() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let target = dir.path().join("gateway.yaml");
+        let other = dir.path().join("other.yaml");
+        std::fs::write(&target, b"a").expect("seed");
+        std::fs::write(&other, b"b").expect("seed");
+        let held = super::open_target(&target).expect("open");
+        assert!(
+            std::fs::OpenOptions::new()
+                .write(true)
+                .open(&target)
+                .is_err(),
+            "write while held"
+        );
+        assert!(
+            std::fs::rename(&other, &target).is_err(),
+            "replace while held"
+        );
+        drop(held);
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&target)
+            .expect("write after drop");
+        std::fs::rename(&other, &target).expect("replace after drop");
     }
 }
