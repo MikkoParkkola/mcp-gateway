@@ -87,6 +87,8 @@ pub(crate) struct StagedReceipts {
     capture: Option<replay::Capture>,
     /// The calls the delivery dispatched, with their labels (H2).
     calls: replay::ReplayCallList,
+    /// Its handles on pending replay entries, settled at the write.
+    held: replay::Held,
 }
 
 impl StagedReceipts {
@@ -98,12 +100,37 @@ impl StagedReceipts {
             receipts: Vec::new(),
             capture: None,
             calls: Vec::new(),
+            held: replay::Held::new(),
         }
     }
 
     /// The delivery's answer was not retained: capture nothing for it.
     pub(crate) fn drop_replay_capture(&mut self) {
         self.capture = None;
+        // E1: a capture already taken pending goes too.
+        self.held.discard_captured();
+    }
+
+    /// Capture the retained synchronous answer now, pending, before
+    /// admission publishes it for replay (the stdio route, whose receipts
+    /// were handed out of their collector). A task capture is left for
+    /// its commit point. Before startup publishes a generation nothing is
+    /// judged, so nothing is captured.
+    #[cfg_attr(not(feature = "firewall"), allow(clippy::unused_self))]
+    pub(crate) fn capture_pending(
+        &mut self,
+        generation: Option<&crate::config_reload::Generation>,
+    ) {
+        #[cfg(feature = "firewall")]
+        if let (Some(fw), Some(generation)) = (self.fw.clone(), generation)
+            && replay::is_sync_capture(self.capture.as_ref())
+        {
+            let calls = std::mem::take(&mut self.calls);
+            self.held.captured =
+                replay::capture_commit(&fw, self.capture.take(), &self.receipts, calls, generation);
+        }
+        #[cfg(not(feature = "firewall"))]
+        let _ = generation;
     }
 
     /// Record what was staged when the answer that was written `delivered` a
@@ -116,14 +143,24 @@ impl StagedReceipts {
         #[cfg(all(test, feature = "firewall"))]
         commit_capture_hook::run();
         #[cfg(feature = "firewall")]
-        if delivered && let Some(fw) = self.fw.as_deref() {
-            // Snapshot before recording, exactly what
-            // `record_digest` gets below.
-            replay::capture_commit(fw, self.capture, &self.receipts, self.calls, generation);
-            for r in self.receipts.into_iter().filter(|r| !r.pending_retain) {
-                let caller = crate::security::firewall::RelayCaller::new(&r.key, r.keyed);
-                fw.record_digest(caller, &r.server, &r.tool, &r.digest, generation);
+        if let Some(fw) = self.fw.as_deref() {
+            let mut held = self.held;
+            if delivered {
+                // Snapshot before recording, exactly what
+                // `record_digest` gets below. A synchronous capture not
+                // yet taken pending is taken here and settled with it.
+                if let Some(handle) =
+                    replay::capture_commit(fw, self.capture, &self.receipts, self.calls, generation)
+                {
+                    held.replayed.push(handle);
+                }
+                for r in self.receipts.into_iter().filter(|r| !r.pending_retain) {
+                    let caller = crate::security::firewall::RelayCaller::new(&r.key, r.keyed);
+                    fw.record_digest(caller, &r.server, &r.tool, &r.digest, generation);
+                }
             }
+            // Settled at this write, or released when it delivered nothing.
+            held.settle(fw, delivered, generation);
         }
         #[cfg(not(feature = "firewall"))]
         let _ = (delivered, generation);
@@ -267,6 +304,54 @@ pub(crate) mod unpublished_allow {
 }
 
 impl MetaMcp {
+    /// Capture this delivery's retained synchronous answer now, pending,
+    /// from inside its collector (the HTTP route), when `response` delivers
+    /// a result; before admission publishes it for replay.
+    #[cfg_attr(not(feature = "firewall"), allow(clippy::unused_self))]
+    pub(crate) fn capture_pending_now(&self, response: &crate::protocol::JsonRpcResponse) {
+        #[cfg(feature = "firewall")]
+        if response.error.is_none()
+            && !response.wire_meta.delivery_refusal
+            && let Some(fw) = self.firewall.as_deref()
+            && let Some(generation) = self.current_generation()
+        {
+            let _ = RELAY_RECEIPTS.try_with(|receipts| {
+                replay::capture_pending_now(fw, &receipts.borrow(), &generation);
+            });
+        }
+        #[cfg(not(feature = "firewall"))]
+        let _ = response;
+    }
+
+    /// `staged`'s commit for the frame that carries it, run when a sink
+    /// writes that frame (`OutboundFrame::committing_on_write`), under the
+    /// generation current at that write. A frame that delivers no result
+    /// commits nothing now (its handles release); one dropped unwritten
+    /// drops the commit, which records nothing and releases its handles.
+    pub(crate) fn commit_on_write(
+        &self,
+        staged: StagedReceipts,
+        delivered: bool,
+    ) -> Option<crate::gateway::input_bridge::DeliveryCommit> {
+        if !delivered {
+            self.commit_staged(staged, false);
+            return None;
+        }
+        // Checked here, not in the closure: a sink may run the commit
+        // where nothing logs.
+        let Some(live) = self.live_config() else {
+            unpublished("staged commit");
+            return None;
+        };
+        Some(crate::gateway::input_bridge::DeliveryCommit::new(
+            move || {
+                // Read when the frame is written, not when it was queued.
+                let generation = live.generation();
+                staged.commit(true, &generation);
+            },
+        ))
+    }
+
     /// Commit `staged` under the generation current at delivery. Before
     /// startup publishes a live config nothing is judged, so nothing records.
     #[cfg_attr(not(feature = "firewall"), allow(clippy::unused_self))]
@@ -288,26 +373,41 @@ impl MetaMcp {
         &self,
         delivery: F,
     ) -> (F::Output, StagedReceipts) {
-        let (output, receipts, capture, calls) = RELAY_RECEIPTS
+        let (output, staged) = RELAY_RECEIPTS
             .scope(
                 RefCell::new(Vec::new()),
                 replay::scope(async {
                     let writes = gateway_writes::scope(seams::scope(delivery));
                     let output = RELAY_STAGED.scope(Staging::default(), writes).await;
-                    let staged = RELAY_RECEIPTS.with(|r| std::mem::take(&mut *r.borrow_mut()));
-                    let (capture, calls) = replay::take_capture();
-                    (output, staged, capture, calls)
+                    #[cfg(feature = "firewall")]
+                    let staged = take_staged_now(self.firewall.clone());
+                    #[cfg(not(feature = "firewall"))]
+                    let staged = take_staged_now();
+                    (output, staged)
                 }),
             )
             .await;
-        let staged = StagedReceipts {
-            #[cfg(feature = "firewall")]
-            fw: self.firewall.clone(),
-            receipts,
-            capture,
-            calls,
-        };
         (output, staged)
+    }
+}
+
+/// Everything this collector staged so far, taken out for a commit that
+/// runs later, under `fw` (the receipts, the capture and its calls, and the
+/// handles held): the one construction every deferred commit uses.
+pub(crate) fn take_staged_now(
+    #[cfg(feature = "firewall")] fw: Option<std::sync::Arc<crate::security::firewall::Firewall>>,
+) -> StagedReceipts {
+    let receipts = RELAY_RECEIPTS
+        .try_with(|receipts| std::mem::take(&mut *receipts.borrow_mut()))
+        .unwrap_or_default();
+    let (capture, calls) = replay::take_capture();
+    StagedReceipts {
+        #[cfg(feature = "firewall")]
+        fw,
+        receipts,
+        capture,
+        calls,
+        held: replay::take_held(),
     }
 }
 
@@ -356,16 +456,19 @@ pub(crate) fn commit_with(
         .try_with(|receipts| std::mem::take(&mut *receipts.borrow_mut()))
         .unwrap_or_default();
     let (capture, calls) = replay::take_capture();
-    if !delivered {
-        return;
+    let mut held = replay::take_held();
+    if delivered {
+        // Snapshot before recording, exactly what
+        // `record_digest` gets below.
+        if let Some(handle) = replay::capture_commit(fw, capture, &receipts, calls, generation) {
+            held.replayed.push(handle);
+        }
+        for r in receipts.into_iter().filter(|r| !r.pending_retain) {
+            let caller = crate::security::firewall::RelayCaller::new(&r.key, r.keyed);
+            fw.record_digest(caller, &r.server, &r.tool, &r.digest, generation);
+        }
     }
-    // Snapshot before recording, exactly what
-    // `record_digest` gets below.
-    replay::capture_commit(fw, capture, &receipts, calls, generation);
-    for r in receipts.into_iter().filter(|r| !r.pending_retain) {
-        let caller = crate::security::firewall::RelayCaller::new(&r.key, r.keyed);
-        fw.record_digest(caller, &r.server, &r.tool, &r.digest, generation);
-    }
+    held.settle(fw, delivered, generation);
 }
 
 /// Drop every staged receipt: what was staged was never delivered (a
