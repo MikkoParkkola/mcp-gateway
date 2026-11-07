@@ -88,12 +88,9 @@ pub async fn run_api_command(
     port_override: Option<u16>,
     host_override: Option<&str>,
 ) -> ExitCode {
-    let token = match read_token(|name| std::env::var(name).ok()) {
-        Ok(token) => token,
-        Err(_) => {
-            eprintln!("api: {NO_CREDENTIAL}");
-            return ExitCode::from(ApiExit::Credential.code());
-        }
+    let Ok(token) = read_token(|name| std::env::var(name).ok()) else {
+        eprintln!("api: {NO_CREDENTIAL}");
+        return ExitCode::from(ApiExit::Credential.code());
     };
     let outcome = match dashboard_link_base(
         args.url.clone(),
@@ -186,7 +183,7 @@ where
     })
     .await
     {
-        Ok(response) => render_response(response, &token),
+        Ok(response) => render_response(&response, &token),
         Err(message) => ApiOutcome::error(ApiExit::Transport, &message),
     }
     .redact_stderr(&token)
@@ -275,7 +272,7 @@ fn redact_bytes(bytes: &[u8], token: &str) -> Vec<u8> {
     safe
 }
 
-fn render_response(response: AdminResponse, token: &str) -> ApiOutcome {
+fn render_response(response: &AdminResponse, token: &str) -> ApiOutcome {
     let status = response.status;
     let mut json = serde_json::from_slice::<serde_json::Value>(&response.body).ok();
     let mut stdout = Vec::new();
