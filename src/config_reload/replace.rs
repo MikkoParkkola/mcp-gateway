@@ -244,6 +244,11 @@ mod slots;
 
 #[path = "replace_validate.rs"]
 mod validate;
+
+/// The settings preview (U8): a child of the writer, so it validates as the
+/// writer does.
+#[path = "ui_diff.rs"]
+pub(crate) mod ui_diff;
 use slots::{fill_secrets, fits_when_filled, same_fields};
 
 /// What happens to a replacement's new store entries.

@@ -223,6 +223,9 @@ fn the_recovery_and_config_reads_have_their_known_callers() {
             "config_persistence_journal.rs",
             "config_reload/replace.rs",
             "config_reload/replace_audit.rs",
+            // The settings preview reads gateway.yaml as the writer does,
+            // without its lock; it writes nothing.
+            "config_reload/ui_diff.rs",
         ]
     );
 }
