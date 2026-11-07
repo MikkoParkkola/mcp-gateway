@@ -178,8 +178,7 @@ pub(crate) enum ReplaceError {
     /// The compute refused, or produced bytes that are not UTF-8 text. Bytes
     /// the loader rejects are `ReloadRefused`, after the rollback.
     Refused(String),
-    /// The audit log refused to record the operation's (or its recovery's)
-    /// intent; nothing was written. Raised only where an intent is appended.
+    /// The audit log refused an intent (the operation's or its recovery's); nothing written.
     AuditRefused(String),
     /// gateway.yaml no longer resolves to the file this gateway started on.
     Unsupported(String),
@@ -234,9 +233,6 @@ async fn spawn_locked(
         })
 }
 
-/// Test-only record of the writer's steps, keyed by the resolved target, so a
-/// row can prove the order of two of them. Written from the writer's own task
-/// and blocking threads, hence a global.
 #[cfg(test)]
 #[path = "replace_order.rs"]
 pub(crate) mod order;

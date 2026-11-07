@@ -1,6 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! The byte writer's test-only step record, keyed by target.
+//! Test-only record of the writer's steps, keyed by the resolved target, so a
+//! row can prove the order of two of them. Written from the writer's own task
+//! and blocking threads, hence a global.
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
