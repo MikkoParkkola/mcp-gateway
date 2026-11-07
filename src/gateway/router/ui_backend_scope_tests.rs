@@ -79,7 +79,10 @@ fn key_on(key: &str, admin: bool, backends: &[&str]) -> ApiKeyConfig {
 struct Scoped {
     state: Arc<AppState>,
     beta_receipt: String,
-    _dirs: (crate::gateway::router::tests::FixtureDir, std::sync::Arc<tempfile::TempDir>),
+    _dirs: (
+        crate::gateway::router::tests::FixtureDir,
+        std::sync::Arc<tempfile::TempDir>,
+    ),
 }
 
 /// A gateway with backends `alpha` and `beta`, the matrix's role rules and a
