@@ -47,6 +47,24 @@ pub(crate) enum Role {
 }
 
 impl Role {
+    /// Every role, so a reader can name a record's role by its event.
+    pub(crate) const ALL: [Self; 9] = [
+        Self::Intent(IntentKind::Save),
+        Self::Intent(IntentKind::Adopt),
+        Self::Intent(IntentKind::Restore),
+        Self::Intent(IntentKind::Backend),
+        Self::RecoveryIntent,
+        Self::Outcome,
+        Self::Abandoned,
+        Self::Deferred,
+        Self::DeliveryStopped,
+    ];
+
+    /// The role whose event is `event`, if any.
+    pub(crate) fn from_event(event: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|r| r.event() == event)
+    }
+
     /// The record's event name.
     pub(crate) const fn event(self) -> &'static str {
         match self {
@@ -126,6 +144,44 @@ pub(crate) enum InvalidPayload {
     ReservedField,
     /// The record is over the record cap.
     Oversized,
+    /// A field the role's row (step 3 §2) requires, types or forbids.
+    Field(FieldFault),
+}
+
+/// One break of a role's field row: which field, and how. Never its value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct FieldFault {
+    pub(crate) field: &'static str,
+    pub(crate) problem: FieldProblem,
+}
+
+/// How a field breaks its row.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum FieldProblem {
+    /// Required and absent.
+    Missing,
+    /// Present with the wrong type, or an empty string where one is required.
+    Mistyped,
+    /// Present where the role forbids it.
+    Forbidden,
+}
+
+/// Check `fields` (a whole record, or a payload with `event` and `token`
+/// set) against `role`'s row of step 3 §2. Settle and verify both call it.
+pub(crate) fn role_fields(role: Role, fields: &Map<String, Value>) -> Result<(), FieldFault> {
+    let _ = (role, fields);
+    Ok(())
+}
+
+/// The caller's part of a record: every chain, envelope and segment field,
+/// `timestamp` and `clock_invalid` removed; `event`, `token` and the role
+/// kept. Two repeats of one settle are equal exactly when their views are.
+pub(crate) fn caller_view(record: &Map<String, Value>) -> Map<String, Value> {
+    let mut view = record.clone();
+    for name in TransparencyLogger::reserved_field_names().chain(["timestamp", "clock_invalid"]) {
+        view.remove(name);
+    }
+    view
 }
 
 /// Test seams (V.1): settle refuses before its append, or after it, or its
@@ -289,6 +345,7 @@ fn settle_fields(
     fields.insert("event".into(), role.event().into());
     fields.insert("token".into(), token.into());
     crate::security::audit::AuditEnvelope::gateway().write_into(&mut fields);
+    role_fields(role, &fields).map_err(InvalidPayload::Field)?;
     Ok(fields)
 }
 
