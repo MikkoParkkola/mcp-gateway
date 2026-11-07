@@ -415,11 +415,15 @@ fn each_compile_fail_doc_test_fails_only_on_privacy() {
                 code.starts_with(&format!("use {path};")),
                 "{name} {fence}: {code}"
             );
+            // A compiling twin proves itself by compiling, and may use other
+            // types' fields (a certificate's parameters); only a failing
+            // block must fail for one of this type's fields.
+            if !fence.starts_with("compile_fail") {
+                continue;
+            }
             let mut named = Named::default();
             syn::visit::Visit::visit_file(&mut named, &parsed);
-            if fence.starts_with("compile_fail") {
-                assert!(!named.0.is_empty(), "{name} {fence} names no field");
-            }
+            assert!(!named.0.is_empty(), "{name} {fence} names no field");
             for field in &named.0 {
                 assert!(
                     fields.contains(&field.as_str()),
