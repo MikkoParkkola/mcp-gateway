@@ -134,3 +134,42 @@ async fn an_unauthenticated_callers_repeated_spend_stays_bounded() {
         "every call was counted"
     );
 }
+
+/// MIK-9311 H7: another session's report and the gateway-wide total are
+/// gateway-wide admin views. An admin scoped to some backends reads neither;
+/// a gateway-wide admin reads both, so refusing everyone fails here too.
+#[tokio::test]
+async fn an_in_scope_admin_reads_neither_another_session_nor_the_total() {
+    use crate::gateway::authz::AdminStanding;
+    let meta = gateway();
+    let spender = caller("subject:spender");
+    // GIVEN: spend on another caller's session
+    spend(&meta, &spender, Some("s-other"), "read").await;
+    let other = json!({"session_id": "s-other"});
+    for (admin, served) in [
+        (AdminStanding::InScope, false),
+        (AdminStanding::Gateway, true),
+    ] {
+        let who = MetaMcpCallerContext {
+            admin,
+            ..caller("subject:admin")
+        };
+        // WHEN: it asks for that session, then for its own report
+        let named = meta.get_cost_report(&other, Some("s-mine"), &who).await;
+        let own = meta
+            .get_cost_report(&json!({}), Some("s-mine"), &who)
+            .await
+            .expect("its own report");
+        // THEN: both views follow the gateway-wide standing alone
+        assert_eq!(
+            named.is_ok(),
+            served,
+            "{admin:?} on another session: {named:?}"
+        );
+        assert_eq!(
+            !own["aggregate"].is_null(),
+            served,
+            "{admin:?} total: {own}"
+        );
+    }
+}
