@@ -170,6 +170,24 @@ pub(crate) fn block_nodes(text: &str) -> Result<Vec<Node>, Error> {
     Ok(out)
 }
 
+/// How many anchors and aliases `text` holds: a writer that never writes
+/// either proves it dropped none by finding the count unchanged. A quoted
+/// `"*x"` is a string, not an alias. `None` when the text does not parse.
+pub(crate) fn anchors_and_aliases(text: &str) -> Option<usize> {
+    let mut count = 0;
+    for item in Parser::new_from_str(text) {
+        let (event, _) = item.ok()?;
+        count += match event {
+            Event::Alias(_) => 1,
+            Event::Scalar(_, _, anchor, _)
+            | Event::MappingStart(_, anchor, _)
+            | Event::SequenceStart(_, anchor, _) => usize::from(anchor != 0),
+            _ => 0,
+        };
+    }
+    Some(count)
+}
+
 /// Add a node under the innermost open collection (or as the root), and
 /// stretch every open ancestor's end over it.
 fn push(
