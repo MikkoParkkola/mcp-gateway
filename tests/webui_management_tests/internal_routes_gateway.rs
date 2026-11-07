@@ -23,6 +23,15 @@ pub(super) const ROWS: &[Row] = &[
         Payload::None,
         [401, 403, 403, 200],
     ),
+    // src/gateway/ui/keys_create.rs (create_key; admin-only, and `{}` names no
+    // key, so the admin's answer is the fixed invalid_body refusal)
+    row(
+        "/ui/api/keys",
+        Method::POST,
+        "/ui/api/keys",
+        Payload::Json("{}"),
+        [401, 403, 403, 422],
+    ),
     // src/gateway/ui/tool_call.rs (call; admin-only, and an empty body is
     // refused before anything runs)
     row(

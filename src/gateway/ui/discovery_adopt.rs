@@ -146,6 +146,11 @@ pub(super) fn answer(name: &str, written: Result<ReplaceOutcome, ReplaceError>) 
         )
             .into_response(),
         Err(ReplaceError::Refused(_)) => failed("refused"),
+        Err(ReplaceError::AuditRefused(_)) => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({"error": "audit_log_required", "message": NO_AUDIT_LOG})),
+        )
+            .into_response(),
         Err(ReplaceError::Secrets(SaveError::Refused(StoreError::Unavailable(_)))) => {
             fixed(StatusCode::UNPROCESSABLE_ENTITY, STORE_UNAVAILABLE)
         }
@@ -353,7 +358,7 @@ pub(super) async fn adopt_discovery(
     };
     let read = {
         let path = path.clone();
-        tokio::task::spawn_blocking(move || read_gateway(Some(&path))).await
+        tokio::task::spawn_blocking(move || read_gateway("discovery", Some(&path))).await
     };
     let Ok(Ok(gateway)) = read else {
         return config_refusal().into_response();
