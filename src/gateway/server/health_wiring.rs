@@ -37,7 +37,7 @@ pub(super) fn start(
     let path = data_dir.join("health.json");
     let previous = file::read(&path);
     let (history, started) =
-        HealthHistory::start(previous.as_deref(), Some(counters.store.restores()), now);
+        HealthHistory::start(previous.as_deref(), counters.store.restores(), now);
     if started.missed_run {
         tracing::info!(
             "health history: a run it did not record happened; that time is shown as unaccounted"

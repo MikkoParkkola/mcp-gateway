@@ -332,6 +332,9 @@ pub(crate) struct Inner {
     /// Every restore of this file, counted for good: the health history tells
     /// a run it did not record from this count (markers age out).
     restores: u64,
+    /// The file this store came from lacked the count, so it started again
+    /// at this start.
+    restores_restarted: bool,
     /// The local day the last record fell on, so the hot path is one
     /// comparison and the zone is read once a day. One store counts in one
     /// zone: the host's.
@@ -352,6 +355,7 @@ impl Inner {
             marker_cap: markers,
             sweeps: 0,
             restores: 0,
+            restores_restarted: false,
             today: None,
         }
     }
@@ -464,9 +468,15 @@ impl CounterStore {
         self.inner.lock().restores += 1;
     }
 
-    /// Every restore of this store's file so far, this start's included.
-    pub(crate) fn restores(&self) -> u64 {
-        self.inner.lock().restores
+    /// Every restore of this store's file so far, this start's included,
+    /// and whether the count started again at this start.
+    pub(crate) fn restores(&self) -> crate::health_history::Restores {
+        let inner = self.inner.lock();
+        if inner.restores_restarted {
+            crate::health_history::Restores::Restarted(inner.restores)
+        } else {
+            crate::health_history::Restores::Counted(inner.restores)
+        }
     }
 
     /// Record a marker now. On a clock that cannot be read, nothing: a

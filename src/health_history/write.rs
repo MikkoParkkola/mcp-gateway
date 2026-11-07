@@ -9,7 +9,7 @@ use parking_lot::Mutex;
 
 use super::{
     BLOCK, BLOCKS_KEPT, Block, DowntimeSource, HALF, HALVES_KEPT, Half, HealthHistory, Inner,
-    LATENCY_SLOTS, MAX_GAPS, MAX_RESTARTS, Restart, Started,
+    LATENCY_SLOTS, MAX_GAPS, MAX_RESTARTS, Restart, Restores, Started,
 };
 use crate::gateway::health_metrics::ErrorKind;
 
@@ -23,11 +23,12 @@ fn slot(secs: f64) -> usize {
 }
 
 impl Inner {
-    fn fresh(now: u64, counters: Option<u64>) -> Self {
+    fn fresh(now: u64, counters: Restores) -> Self {
+        let (Restores::Counted(counters) | Restores::Restarted(counters)) = counters;
         Self {
             v: 1,
             observed_since: now,
-            counters_seen: counters.unwrap_or(0),
+            counters_seen: counters,
             started_at: now,
             last_tick: now,
             saved_at: now,
@@ -149,14 +150,16 @@ impl Inner {
     }
 
     /// Start a new run at `now` after this saved history.
-    fn restart(&mut self, counters: Option<u64>, now: u64) -> Started {
+    fn restart(&mut self, counters: Restores, now: u64) -> Started {
         let expected = self.counters_seen + 1;
         // counters.json counts every restore (this one included). Any other
         // count means a run this history did not record: one more, or a reset
         // by a binary that rewrote counters.json without the count. An
         // unreadable count is treated the same: the gap is never claimed as
         // known downtime.
-        let missed_run = counters != Some(expected);
+        // RED STUB: a restarted count is read as a counted one.
+        let (Restores::Counted(count) | Restores::Restarted(count)) = counters;
+        let missed_run = count != expected;
         let clean_stop = self.clean_stop.take();
         let mut restart = None;
         if missed_run {
@@ -187,7 +190,7 @@ impl Inner {
             self.push_restart(entry);
             restart = Some(entry);
         }
-        self.counters_seen = counters.unwrap_or(expected);
+        self.counters_seen = count;
         self.started_at = now;
         self.last_tick = now;
         Started {
@@ -203,11 +206,7 @@ impl HealthHistory {
     /// Start from `previous` (health.json's bytes, if any) with `counters`
     /// (counters.json's cumulative restore count, this start's included),
     /// at unix second `now`.
-    pub(crate) fn start(
-        previous: Option<&[u8]>,
-        counters: Option<u64>,
-        now: u64,
-    ) -> (Self, Started) {
+    pub(crate) fn start(previous: Option<&[u8]>, counters: Restores, now: u64) -> (Self, Started) {
         let none = Started {
             fresh: true,
             set_aside: false,

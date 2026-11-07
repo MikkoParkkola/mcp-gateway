@@ -11,7 +11,7 @@ use crate::gateway::health_metrics::ErrorKind;
 const T0: u64 = 1_800 * 1_000_000;
 
 fn fresh(now: u64) -> HealthHistory {
-    HealthHistory::start(None, Some(0), now).0
+    HealthHistory::start(None, Restores::Counted(0), now).0
 }
 
 /// H1: a known set of added latencies in one half-hour gives the p95 bucket's
@@ -113,7 +113,7 @@ fn h6_save_and_restore_keep_everything() {
     h.tick(T0 + 100);
     h.stop(T0 + 100);
     let bytes = h.encode(T0 + 100);
-    let (back, started) = HealthHistory::start(Some(&bytes), Some(1), T0 + 160);
+    let (back, started) = HealthHistory::start(Some(&bytes), Restores::Counted(1), T0 + 160);
     assert!(!started.fresh);
     assert_eq!(back.p95(T0, T0 + HALF), P95::Ms(5.0));
     assert_eq!(back.errors(T0, T0 + HALF), Some(1));
@@ -127,7 +127,7 @@ fn h6_save_and_restore_keep_everything() {
 /// Run one gateway life: start from `previous` at `start`, run until `end`,
 /// and return the saved bytes; a clean stop writes the shutdown save.
 fn life(previous: Option<&[u8]>, counters: u64, start: u64, end: u64, clean: bool) -> Vec<u8> {
-    let (h, _) = HealthHistory::start(previous, Some(counters), start);
+    let (h, _) = HealthHistory::start(previous, Restores::Counted(counters), start);
     h.tick(end);
     if clean {
         h.stop(end);
@@ -140,7 +140,7 @@ fn life(previous: Option<&[u8]>, counters: u64, start: u64, end: u64, clean: boo
 #[test]
 fn h7_a_clean_stop_then_a_start_is_measured() {
     let saved = life(None, 0, T0, T0 + 600, true);
-    let (h, started) = HealthHistory::start(Some(&saved), Some(1), T0 + 630);
+    let (h, started) = HealthHistory::start(Some(&saved), Restores::Counted(1), T0 + 630);
     let restart = started.restart.expect("a restart");
     assert_eq!(restart.downtime_source, DowntimeSource::Measured);
     assert_eq!(
@@ -155,7 +155,7 @@ fn h7_a_clean_stop_then_a_start_is_measured() {
 #[test]
 fn h8_a_kill_then_a_start_is_estimated_from_the_last_save() {
     let saved = life(None, 0, T0, T0 + 300, false);
-    let (_, started) = HealthHistory::start(Some(&saved), Some(1), T0 + 500);
+    let (_, started) = HealthHistory::start(Some(&saved), Restores::Counted(1), T0 + 500);
     let restart = started.restart.expect("a restart");
     assert_eq!(restart.downtime_source, DowntimeSource::Estimated);
     assert_eq!(restart.stopped_at, T0 + 300);
@@ -167,7 +167,7 @@ fn h8_a_kill_then_a_start_is_estimated_from_the_last_save() {
 fn h8b_a_clean_stop_is_consumed_once() {
     let first = life(None, 0, T0, T0 + 600, true);
     let second = life(Some(&first), 1, T0 + 630, T0 + 900, false);
-    let (_, started) = HealthHistory::start(Some(&second), Some(2), T0 + 1_000);
+    let (_, started) = HealthHistory::start(Some(&second), Restores::Counted(2), T0 + 1_000);
     let restart = started.restart.expect("a restart");
     assert_eq!(restart.downtime_source, DowntimeSource::Estimated);
     assert_eq!(restart.stopped_at, T0 + 900);
@@ -185,7 +185,7 @@ fn h9_restart_details_are_capped_and_rollups_count_everything() {
         saved = life(Some(&saved), n, at + 1, at + 2, true);
         at += 2;
     }
-    let (h, _) = HealthHistory::start(Some(&saved), Some(10_001), at + 1);
+    let (h, _) = HealthHistory::start(Some(&saved), Restores::Counted(10_001), at + 1);
     let (details, truncated) = h.restarts(T0, T0 + 2 * BLOCK);
     assert!(
         details.len() <= MAX_RESTARTS && truncated,
@@ -209,7 +209,7 @@ fn h9_restart_details_are_capped_and_rollups_count_everything() {
 fn h9b_downtime_across_a_block_boundary_splits() {
     let edge = T0 + BLOCK - (T0 % BLOCK);
     let saved = life(None, 0, edge - 600, edge - 100, true);
-    let (h, _) = HealthHistory::start(Some(&saved), Some(1), edge + 50);
+    let (h, _) = HealthHistory::start(Some(&saved), Restores::Counted(1), edge + 50);
     let blocks = h.blocks();
     let before = blocks
         .iter()
@@ -227,7 +227,7 @@ fn h9b_downtime_across_a_block_boundary_splits() {
 #[test]
 fn h9c_a_clock_set_backward_counts_no_negative_downtime() {
     let saved = life(None, 0, T0, T0 + 600, true);
-    let (h, started) = HealthHistory::start(Some(&saved), Some(1), T0 + 100);
+    let (h, started) = HealthHistory::start(Some(&saved), Restores::Counted(1), T0 + 100);
     let restart = started.restart.expect("a restart");
     assert_eq!(restart.downtime_source, DowntimeSource::Estimated);
     assert_eq!(h.uptime(T0, T0 + BLOCK).down_seconds, 0);
@@ -237,9 +237,9 @@ fn h9c_a_clock_set_backward_counts_no_negative_downtime() {
 /// set aside and the history starts again from now, also without a restart.
 #[test]
 fn h10_a_missing_or_corrupt_file_starts_clean() {
-    let (_, started) = HealthHistory::start(None, Some(5), T0);
+    let (_, started) = HealthHistory::start(None, Restores::Counted(5), T0);
     assert!(started.fresh && started.restart.is_none());
-    let (h, started) = HealthHistory::start(Some(b"{not json"), Some(5), T0);
+    let (h, started) = HealthHistory::start(Some(b"{not json"), Restores::Counted(5), T0);
     assert!(started.set_aside && started.restart.is_none());
     assert_eq!(h.errors(T0 - HALF, T0), None);
 }
@@ -277,7 +277,7 @@ fn h11_the_saved_file_holds_only_numbers_and_fixed_words() {
 #[test]
 fn h13_percent_is_running_over_covered() {
     let saved = life(None, 0, T0, T0 + 900, true);
-    let (h, _) = HealthHistory::start(Some(&saved), Some(1), T0 + 1_000);
+    let (h, _) = HealthHistory::start(Some(&saved), Restores::Counted(1), T0 + 1_000);
     h.tick(T0 + 1_900);
     let up = h.uptime(T0, T0 + 1_900);
     assert_eq!((up.running_seconds, up.down_seconds), (1_800, 100));
@@ -297,7 +297,7 @@ fn h13_percent_is_running_over_covered() {
 fn h14_a_missed_run_is_unaccounted_not_downtime() {
     let saved = life(None, 0, T0, T0 + 600, true);
     // Two markers since: this start's own, and one health.json never saw.
-    let (h, started) = HealthHistory::start(Some(&saved), Some(2), T0 + 5_000);
+    let (h, started) = HealthHistory::start(Some(&saved), Restores::Counted(2), T0 + 5_000);
     assert!(started.missed_run && started.restart.is_none());
     let up = h.uptime(T0, T0 + 5_000);
     assert_eq!(up.down_seconds, 0);
@@ -309,7 +309,7 @@ fn h14_a_missed_run_is_unaccounted_not_downtime() {
 #[test]
 fn h16_restart_details_follow_the_interval() {
     let saved = life(None, 0, T0, T0 + 600, true);
-    let (h, _) = HealthHistory::start(Some(&saved), Some(1), T0 + 700);
+    let (h, _) = HealthHistory::start(Some(&saved), Restores::Counted(1), T0 + 700);
     h.tick(T0 + 2 * BLOCK);
     assert!(h.restarts(T0 + BLOCK, T0 + 2 * BLOCK).0.is_empty());
     assert_eq!(h.restarts(T0, T0 + BLOCK).0.len(), 1);
@@ -320,7 +320,7 @@ fn h16_restart_details_follow_the_interval() {
 #[test]
 fn h18_a_backward_clock_does_not_hide_a_missed_run() {
     let saved = life(None, 0, T0 + 10_000, T0 + 10_600, true);
-    let (_, started) = HealthHistory::start(Some(&saved), Some(3), T0 + 100);
+    let (_, started) = HealthHistory::start(Some(&saved), Restores::Counted(3), T0 + 100);
     assert!(started.missed_run);
 }
 
@@ -330,8 +330,24 @@ fn h18_a_backward_clock_does_not_hide_a_missed_run() {
 fn h19_a_lower_restore_count_is_a_missed_run() {
     let first = life(None, 0, T0, T0 + 600, true);
     let second = life(Some(&first), 1, T0 + 630, T0 + 900, true);
-    let (_, started) = HealthHistory::start(Some(&second), Some(1), T0 + 1_000);
+    let (_, started) = HealthHistory::start(Some(&second), Restores::Counted(1), T0 + 1_000);
     assert!(started.missed_run && started.restart.is_none());
+}
+
+/// H21b: a restarted count is a missed run even when it lines up with the
+/// history's own count (seen 1, restarted at 2 = seen + 1); the next start
+/// is in step again.
+#[test]
+fn h21b_a_restarted_count_is_a_missed_run() {
+    let first = life(None, 1, T0, T0 + 600, true);
+    let (h, started) = HealthHistory::start(Some(&first), Restores::Restarted(2), T0 + 1_000);
+    assert!(started.missed_run && started.restart.is_none());
+    let saved = h.encode(T0 + 1_100);
+    let (_, next) = HealthHistory::start(Some(&saved), Restores::Counted(3), T0 + 1_200);
+    assert!(
+        !next.missed_run,
+        "the count is in step again after the reset"
+    );
 }
 
 /// H8c: a save that cannot be written marks this run's history incomplete;

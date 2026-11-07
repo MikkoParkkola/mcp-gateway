@@ -94,6 +94,17 @@ pub(crate) struct Uptime {
     pub(crate) coverage_complete: bool,
 }
 
+/// counters.json's count of restores (this start's included), as the
+/// health history reads it to tell a run it did not record.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Restores {
+    /// Counted without a break since the file had the count.
+    Counted(u64),
+    /// The count started again this start: the file was last written by a
+    /// binary that does not keep it, so a run went unrecorded.
+    Restarted(u64),
+}
+
 /// What a start found.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Started {
