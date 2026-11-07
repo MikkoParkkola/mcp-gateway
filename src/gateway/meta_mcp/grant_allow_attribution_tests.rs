@@ -266,22 +266,37 @@ async fn the_send_recheck_of_a_granted_capability_notes_nothing() {
     assert_eq!(after, alone);
 }
 
-/// R27 control (ATTR.1). The same grant check audited, inside the same
-/// scope, does note the grant over the preload, so the silent rows can fail.
+/// R27 control (ATTR.1). The same grant check audited, inside a grant
+/// decision slot as a dispatch opens one, does note the grant over the
+/// preload, so the silent rows can fail.
 #[tokio::test]
 async fn an_audited_grant_check_notes_its_grant() {
     let g = granted(vec![grant("g-m", ALICE, ALICE)]).await;
     let who = api_key("alice");
     let caller = context(&who);
-    // The check runs bare here, outside the grant-decision slot a dispatch
-    // opens; only that slot bookkeeping is waived.
-    let _unslotted = super::super::grant_audit::allow_unslotted_check_for_test();
-    let (after, alone) = notes_around(|| {
-        let checked = g
-            .meta
-            .identity_grant_rule(CAPS, PERSONAL, caller.scope(), Emit::Audit);
-        assert!(checked.is_ok(), "premise: the grant admits alice");
-    })
+    let weaker = || {
+        Allow::by(
+            AllowRank::FirewallAllow,
+            Some(RuleId::of("firewall", &key(), b"another check")),
+        )
+    };
+    let ((), alone) = with_dispatch_scope(async { preload_allow_for_test(weaker()) }).await;
+    let ((checked, written, _), after) = with_dispatch_scope(with_visibility_memo(
+        super::super::grant_audit::with_grant_slot(g.meta.transparency_logger.as_ref(), async {
+            preload_allow_for_test(weaker());
+            g.meta
+                .identity_grant_rule(CAPS, PERSONAL, caller.scope(), Emit::Audit)
+        }),
+    ))
     .await;
-    assert_ne!(after, alone, "the audited grant was not noted");
+    assert!(
+        checked.is_ok(),
+        "premise: the grant admits alice: {checked:?}"
+    );
+    assert!(written.is_ok(), "premise: the slot's notes were written");
+    assert_ne!(
+        after.decision_for_test(),
+        alone.decision_for_test(),
+        "the audited grant was not noted"
+    );
 }
