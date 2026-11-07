@@ -91,16 +91,28 @@ fn s8_the_macro_definition_is_not_a_site() {
 #[test]
 fn s9_the_walk_reaches_every_source_root() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    // The unpacked published crate (the post-merge packaged suite) ships no
+    // nested crates and no git metadata; the same test as
+    // boundary_pins::packaged::packaged_crate_at.
+    if root.join("Cargo.toml.orig").exists() && !root.join(".git").exists() {
+        eprintln!("skipped: the packaged crate is not the repository");
+        return;
+    }
     let files = tracked_rs_files(root).expect("git ls-files");
-    for prefix in [
-        "src/",
-        "tests/",
-        "benches/",
-        "examples/",
-        "crates/gateway-core/",
-    ] {
+    let mut prefixes: Vec<String> = ["src/", "tests/", "benches/", "examples/"]
+        .map(str::to_owned)
+        .to_vec();
+    // Every nested crate on disk, so a new one is covered without an edit.
+    for entry in std::fs::read_dir(root.join("crates")).expect("read the nested crates") {
+        let entry = entry.expect("nested crate entry");
+        if entry.path().is_dir() {
+            prefixes.push(format!("crates/{}/", entry.file_name().to_string_lossy()));
+        }
+    }
+    assert!(prefixes.len() > 4, "no nested crate under crates");
+    for prefix in prefixes {
         assert!(
-            files.iter().any(|f| f.starts_with(prefix)),
+            files.iter().any(|f| f.starts_with(&prefix)),
             "no tracked .rs file under {prefix}: the walk is not reading the repository"
         );
     }
@@ -142,7 +154,7 @@ fn s11_planted_calls_in_every_root_are_found() {
         "benches/x.rs",
         "examples/x.rs",
         "build.rs",
-        "crates/gateway-core/src/x.rs",
+        "crates/nested/src/x.rs",
     ];
     for path in planted {
         let full = dir.path().join(path);
@@ -222,7 +234,7 @@ fn s13_a_tree_without_git_is_walked_on_disk() {
     for (path, text) in [
         ("src/a.rs", "fn f() { mutant!(\"Q\", 1, 2); }\n"),
         (
-            "crates/gateway-core/src/b.rs",
+            "crates/nested/src/b.rs",
             "fn g() { vec![mutant!(\"R\", 1, 2)]; }\n",
         ),
         (
@@ -243,7 +255,7 @@ fn s13_a_tree_without_git_is_walked_on_disk() {
         got,
         vec![
             (
-                "crates/gateway-core/src/b.rs".to_owned(),
+                "crates/nested/src/b.rs".to_owned(),
                 Some("R".to_owned())
             ),
             ("src/a.rs".to_owned(), Some("Q".to_owned())),
