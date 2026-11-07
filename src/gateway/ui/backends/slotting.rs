@@ -62,8 +62,11 @@ pub(super) fn refusals(
     literal_refusals(&probe)
 }
 
-/// The literals among `env` (and `headers`, when given), sorted by field so
-/// every run stores them in one order. Call after [`refuse_values`].
+/// The values to store among `env` (and `headers`, when given), sorted by
+/// field so every run stores them in one order: each value
+/// [`classify`] stores, from every header and from each env key that
+/// [`secret_slots::names_a_credential`]. Every other value is written as typed.
+/// Call after [`refuse_values`].
 pub(super) fn literals<'a>(
     env: impl Iterator<Item = (&'a String, &'a String)>,
     headers: impl Iterator<Item = (&'a String, &'a String)>,
@@ -71,7 +74,10 @@ pub(super) fn literals<'a>(
     let mut found: Vec<Literal> = env
         .map(|kv| (false, kv))
         .chain(headers.map(|kv| (true, kv)))
-        .filter(|(_, (_, value))| classify(value) == Ok(ValueClass::Stored))
+        .filter(|(header, (key, value))| {
+            classify(value) == Ok(ValueClass::Stored)
+                && (*header || secret_slots::names_a_credential(key))
+        })
         .map(|(header, (key, value))| Literal {
             header,
             key: key.clone(),

@@ -90,10 +90,7 @@ async fn an_edit_keeps_crlf_line_endings() {
 #[tokio::test]
 async fn an_env_edit_appends_inside_the_block() {
     let (router, path, _keep) = served(SVC).await;
-    // A reference to a variable every runner sets (the save refuses one that
-    // does not resolve), which the panel keeps as typed (a literal goes to the
-    // secret store and only its reference reaches the file).
-    let (status, body) = patch(&router, "svc", json!({"env": {"B": "env:PATH"}})).await;
+    let (status, body) = patch(&router, "svc", json!({"env": {"B": "2"}})).await;
     assert_eq!(status, StatusCode::OK, "{body}");
     let after = read(&path);
     kept_in_order(SVC, &after);
@@ -106,19 +103,19 @@ async fn an_env_edit_appends_inside_the_block() {
     let config = Config::load_literal(Some(&path)).expect("loads");
     assert_eq!(
         config.backends["svc"].env.get("B").map(String::as_str),
-        Some("env:PATH")
+        Some("2")
     );
 }
 
-/// A plain value typed into the panel's edit goes to the secret store:
-/// gateway.yaml holds only the store's reference, the same one the answer
-/// lists under `secrets_stored`, and neither carries the value. Before 4.0.0
-/// the value was written into the file as typed.
+/// A credential typed into the panel's edit (a value under a credential-like
+/// key name) goes to the secret store: gateway.yaml holds only the store's
+/// reference, the same one the answer lists under `secrets_stored`, and
+/// neither carries the value. Before 4.0.0 the value was written as typed.
 #[tokio::test]
-async fn a_plain_env_value_edited_in_the_panel_is_stored_not_written() {
+async fn a_credential_edited_in_the_panel_is_stored_not_written() {
     const VALUE: &str = "panel-typed-7c1e";
     let (router, path, _keep) = served(SVC).await;
-    let (status, body) = patch(&router, "svc", json!({"env": {"B": VALUE}})).await;
+    let (status, body) = patch(&router, "svc", json!({"env": {"B_TOKEN": VALUE}})).await;
     assert_eq!(status, StatusCode::OK, "{body}");
     assert!(!body.to_string().contains(VALUE), "{body}");
     let after = read(&path);
@@ -128,8 +125,12 @@ async fn a_plain_env_value_edited_in_the_panel_is_stored_not_written() {
     );
     kept_in_order(SVC, &after);
     let config = Config::load_literal(Some(&path)).expect("loads");
-    let written = config.backends["svc"].env.get("B").cloned().expect("B");
-    assert_eq!(body["secrets_stored"][0]["field"], "env.B", "{body}");
+    let written = config.backends["svc"]
+        .env
+        .get("B_TOKEN")
+        .cloned()
+        .expect("B_TOKEN");
+    assert_eq!(body["secrets_stored"][0]["field"], "env.B_TOKEN", "{body}");
     assert_eq!(
         body["secrets_stored"][0]["reference"],
         written.as_str(),

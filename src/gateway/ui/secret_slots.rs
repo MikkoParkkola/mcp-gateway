@@ -29,6 +29,38 @@ pub(super) enum Unopened {
     TimedOut,
 }
 
+/// The `_`-separated parts of an env key that mark its value as a credential.
+/// A stored value becomes a whole-value reference, which the redactor holds
+/// at any length, so storing an ordinary setting (`DEBUG=1`) would scrub
+/// every `1` from tool results: only these names are stored.
+const CREDENTIAL_SEGMENTS: [&str; 13] = [
+    "KEY",
+    "APIKEY",
+    "TOKEN",
+    "SECRET",
+    "PASSWORD",
+    "PASSWD",
+    "PASS",
+    "AUTH",
+    "CREDENTIAL",
+    "CREDENTIALS",
+    "PRIVATE",
+    "SESSION",
+    "COOKIE",
+];
+
+/// Whether env key `key` names a credential: one of its `_`-separated parts,
+/// in any letter case, is a [`CREDENTIAL_SEGMENTS`] entry (`DB_PASSWORD`,
+/// `x_auth_token`). Headers are not judged: every header value is stored. The
+/// panel and discovery adopt both store by this rule.
+pub(super) fn names_a_credential(key: &str) -> bool {
+    key.split('_').any(|part| {
+        CREDENTIAL_SEGMENTS
+            .iter()
+            .any(|segment| part.eq_ignore_ascii_case(segment))
+    })
+}
+
 /// The secret slot of backend `name`'s `key`, under `headers` or `env`. Its
 /// display form is the secret step's field for that value.
 pub(super) fn backend_slot(name: &str, header: bool, key: &str) -> SlotId {

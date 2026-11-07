@@ -363,7 +363,7 @@ async fn t3b_a_literal_beside_a_template_is_refused_by_field_before_the_store() 
     let before = panel.text();
     // With a plain literal beside them, so a refusal checked after the store step
     // would touch the store.
-    let env = json!({"A": "sk-${X}", "B": "${X:-literal-default}", "C": TOKEN});
+    let env = json!({"A": "sk-${X}", "B": "${X:-literal-default}", "C_TOKEN": TOKEN});
     let expected = json!([
         {"reason": "literal_in_template", "field": "env.A"},
         {"reason": "literal_default", "field": "env.B"},
@@ -421,7 +421,7 @@ async fn t4_a_duplicate_or_missing_backend_answers_first_and_touches_no_store() 
     assert_eq!(status, StatusCode::CONFLICT, "{body}");
     no_value(&body, TOKEN);
     let (status, body) = panel
-        .update_seamed("missing", json!({"env": {"K": TOKEN}}), Some(seam()))
+        .update_seamed("missing", json!({"env": {"K_TOKEN": TOKEN}}), Some(seam()))
         .await;
     assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
     no_value(&body, TOKEN);
@@ -444,7 +444,9 @@ async fn t4_a_duplicate_or_missing_backend_answers_first_and_touches_no_store() 
 #[tokio::test]
 async fn t5_an_update_stores_only_the_key_it_sets_and_carries_the_rest() {
     let panel = Panel::new().await;
-    let (status, body) = panel.update("a", json!({"env": {"NEW": TOKEN}})).await;
+    let (status, body) = panel
+        .update("a", json!({"env": {"NEW_TOKEN": TOKEN}}))
+        .await;
     assert_eq!(status, StatusCode::OK, "{body}");
     no_value(&body, TOKEN);
     let text = panel.text();
@@ -454,7 +456,10 @@ async fn t5_an_update_stores_only_the_key_it_sets_and_carries_the_rest() {
         "a carried value changed:\n{text}"
     );
     assert_eq!(panel.entries().len(), 1, "{:?}", panel.entries());
-    assert_eq!(body["secrets_stored"][0]["field"], "env.NEW", "{body}");
+    assert_eq!(
+        body["secrets_stored"][0]["field"], "env.NEW_TOKEN",
+        "{body}"
+    );
 }
 
 /// T6b: a store whose create times out: 503, the file unchanged.
@@ -622,7 +627,7 @@ async fn t12_a_failure_after_the_first_entry_leaves_no_entry_and_no_change() {
         fail_create: Some(2),
         ..Limited::new(panel.dir.path())
     });
-    let body = json!({"name": "b", "url": "http://127.0.0.1:9/mcp", "env": {"FIRST": TOKEN, "SECOND": "another-literal"}});
+    let body = json!({"name": "b", "url": "http://127.0.0.1:9/mcp", "env": {"FIRST_TOKEN": TOKEN, "SECOND_TOKEN": "another-literal"}});
     let (status, answer) = panel.add_into(body, Some(store)).await;
     assert!(status.is_server_error(), "{status}: {answer}");
     no_value(&answer, TOKEN);
@@ -683,7 +688,7 @@ async fn t4r_a_change_between_the_pre_check_and_the_write_refuses_and_stores_not
         })),
     };
     let (status, body) = panel
-        .update_seamed("a", json!({"env": {"NEW": TOKEN}}), Some(seam))
+        .update_seamed("a", json!({"env": {"NEW_TOKEN": TOKEN}}), Some(seam))
         .await;
     assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
     assert_eq!(panel.text(), removed);

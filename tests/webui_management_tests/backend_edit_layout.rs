@@ -324,21 +324,15 @@ async fn every_patchable_field_edits_the_gateways_own_output_in_place() {
         (
             "env, merged into a map",
             "s",
-            // A reference to a variable every runner sets (the save refuses one
-            // that does not resolve), which the panel keeps as typed: a literal would go
-            // to the secret store and the file would hold a store reference.
-            json!({"env": {"B": "env:PATH"}}),
+            json!({"env": {"B": "2"}}),
             |b| {
                 b.env.get("A").map(String::as_str) == Some("1")
-                    && b.env.get("B").map(String::as_str) == Some("env:PATH")
+                    && b.env.get("B").map(String::as_str) == Some("2")
             },
         ),
-        (
-            "env, a first map",
-            "h",
-            json!({"env": {"B": "env:PATH"}}),
-            |b| b.env.get("B").map(String::as_str) == Some("env:PATH"),
-        ),
+        ("env, a first map", "h", json!({"env": {"B": "2"}}), |b| {
+            b.env.get("B").map(String::as_str) == Some("2")
+        }),
         ("enabled", "s", json!({"enabled": false}), |b| !b.enabled),
         (
             "idle stop, changed",

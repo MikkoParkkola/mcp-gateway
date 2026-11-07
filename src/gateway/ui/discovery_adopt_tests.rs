@@ -260,7 +260,10 @@ fn the_compute_refuses_a_managed_name_and_a_short_reference_list() {
 
 /// Adopt's split of a find, as the route makes it.
 fn adopted(server: &crate::discovery::DiscoveredServer) -> crate::discovery::adopt::Adoption {
-    crate::discovery::adopt::adoption(server)
+    crate::discovery::adopt::adoption(
+        server,
+        super::super::super::secret_slots::names_a_credential,
+    )
 }
 
 /// A find carrying ordinary settings and credentials side by side, as a

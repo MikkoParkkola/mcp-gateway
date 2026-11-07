@@ -193,18 +193,25 @@ impl Literal {
 }
 
 /// `server` as an adopted backend. A template and an empty value stay as
-/// written; every other value is a literal and leaves the backend, env
-/// before headers, each sorted by key, so the order is the same on every
-/// run. Call it only for a find [`refusals`] accepts.
+/// written; every other header value, and every other env value whose key
+/// `names_a_credential` (the web UI's shared rule), is a literal and leaves
+/// the backend, env before headers, each sorted by key, so the order is the
+/// same on every run. Any other env value (an ordinary setting such as
+/// `DEBUG=1`) stays as written. Call it only for a find [`refusals`] accepts.
 #[cfg(feature = "webui")]
-pub(crate) fn adoption(server: &DiscoveredServer) -> Adoption {
+pub(crate) fn adoption(
+    server: &DiscoveredServer,
+    names_a_credential: fn(&str) -> bool,
+) -> Adoption {
     let mut backend = server.to_backend_config();
     backend.enabled = false;
     let mut literals = Vec::new();
     for (header, map) in [(false, &mut backend.env), (true, &mut backend.headers)] {
         let mut keys: Vec<String> = map
             .iter()
-            .filter(|(_, value)| !value.is_empty() && !value.contains("${"))
+            .filter(|(key, value)| {
+                !value.is_empty() && !value.contains("${") && (header || names_a_credential(key))
+            })
             .map(|(key, _)| key.clone())
             .collect();
         keys.sort();
