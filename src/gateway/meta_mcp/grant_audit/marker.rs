@@ -25,13 +25,21 @@ pub(super) fn delivery_scoped() -> bool {
 /// For a writer of a route-stage refusal's invocation record: a hook to run,
 /// on the blocking worker and only after the append returned `Ok`, that marks
 /// the call's trace id as recorded in the open slot.
-pub(crate) fn invocation_landing() -> Box<dyn FnOnce(&str) + Send> {
-    let recorded = super::open_slot_recorded();
-    Box::new(move |trace_id| {
-        if let Some(recorded) = recorded {
+pub(crate) fn invocation_landing() -> Landing {
+    Landing(super::open_slot_recorded())
+}
+
+/// The open slot's recorded set, held by a refusal writer until its append
+/// returns; holding it allocates nothing.
+pub(crate) struct Landing(Option<RecordedSet>);
+
+impl Landing {
+    /// Mark `trace_id` as recorded. Call only after the append returned `Ok`.
+    pub(crate) fn land(self, trace_id: &str) {
+        if let Some(recorded) = self.0 {
             recorded.add(trace_id);
         }
-    })
+    }
 }
 
 /// The retry cell of the enclosing [`with_retry_trace`], if any.

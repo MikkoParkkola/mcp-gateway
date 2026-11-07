@@ -360,7 +360,9 @@ async fn a_slow_call_writes_its_decision_once_after_its_invocation_record() {
 /// A caller cancelled while the slot's awaited flush is held: the withheld
 /// note waits in the slot's best-effort list, and the guard still writes it,
 /// once, behind the flush that the cancelled caller left running.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+// Current-thread: the hold seam is a thread-local, seen only by tasks on the
+// test's own thread.
+#[tokio::test]
 async fn a_caller_cancelled_during_the_flush_still_gets_its_withheld_note_written() {
     let (endpoint, dir) = (
         Endpoint::start(false).await,

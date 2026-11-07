@@ -352,7 +352,7 @@ impl<'a> Refused<'a> {
                     Some(decision.as_ref()),
                 );
                 if appended.is_ok() {
-                    landed(&trace_id);
+                    landed.land(&trace_id);
                 }
                 appended
             })
