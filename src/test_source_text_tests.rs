@@ -231,7 +231,11 @@ fn no_production_identifier_is_blanked_anywhere_in_the_tree() {
         let file = syn::parse_file(&text)
             .unwrap_or_else(|e| panic!("{} does not parse: {e}", path.display()));
         let mut parsed = ProductionIdents::default();
-        syn::visit::Visit::visit_file(&mut parsed, &file);
+        // A file whose leading inner cfg holds only under test has no
+        // production names at all.
+        if !test_only(&file.attrs) {
+            syn::visit::Visit::visit_file(&mut parsed, &file);
+        }
         let code = sanitize(&out);
         let kept = words(&code);
         for (ident, want) in parsed.counts {
@@ -338,12 +342,37 @@ fn doc_attribute_end(cursor: syn::buffer::Cursor) -> Option<syn::buffer::Cursor>
     is_doc.then_some(after)
 }
 
-/// An outer `#[cfg(test)]`, exactly the mark the helper looks for.
+/// A `cfg` attribute, outer or inner, that cannot hold outside tests. Kept
+/// independent of `test_source_text::eval` on purpose: it tracks whether a
+/// predicate can be true and whether it can be false with `test` false, and
+/// an operand list that does not parse can be either.
 fn test_only(attrs: &[syn::Attribute]) -> bool {
+    fn can(meta: &syn::Meta) -> (bool, bool) {
+        match meta {
+            syn::Meta::Path(p) if p.is_ident("test") => (false, true),
+            syn::Meta::List(l) if ["all", "any", "not"].iter().any(|k| l.path.is_ident(k)) => {
+                let Ok(ops) = l.parse_args_with(
+                    syn::punctuated::Punctuated::<syn::Meta, syn::Token![,]>::parse_terminated,
+                ) else {
+                    return (true, true);
+                };
+                let ops: Vec<(bool, bool)> = ops.iter().map(can).collect();
+                if l.path.is_ident("not") {
+                    return match ops[..] {
+                        [(t, f)] => (f, t),
+                        _ => (true, true),
+                    };
+                }
+                let all = l.path.is_ident("all");
+                let can_true = if all { ops.iter().all(|o| o.0) } else { ops.iter().any(|o| o.0) };
+                let can_false = if all { ops.iter().any(|o| o.1) } else { ops.iter().all(|o| o.1) };
+                (can_true, can_false)
+            }
+            _ => (true, true),
+        }
+    }
     attrs.iter().any(|a| {
-        matches!(a.style, syn::AttrStyle::Outer)
-            && a.path().is_ident("cfg")
-            && matches!(&a.meta, syn::Meta::List(l) if l.tokens.to_string() == "test")
+        a.path().is_ident("cfg") && a.parse_args::<syn::Meta>().is_ok_and(|m| !can(&m).0)
     })
 }
 
