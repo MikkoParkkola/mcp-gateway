@@ -243,7 +243,7 @@ pub(crate) mod order;
 
 #[path = "replace_audit.rs"]
 mod audit;
-pub(crate) use audit::{Audit, Intent, IntentSink};
+pub(crate) use audit::{Audit, Intent, IntentSink, startup_recovery_intent};
 pub(crate) use audit::{AuditPosture, GatewayAuth};
 #[cfg(feature = "webui")]
 pub(crate) use audit::{BackendOp, NO_AUDIT_LOG};
