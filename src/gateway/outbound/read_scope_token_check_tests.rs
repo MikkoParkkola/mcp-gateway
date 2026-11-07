@@ -64,32 +64,18 @@ fn production(file: &syn::File) -> impl Iterator<Item = &syn::Item> {
 /// as its full path, a glob as `*`, any other item named `Firewall` as
 /// `item`. The only accepted list is the real import.
 fn firewall_bindings(file: &syn::File) -> Vec<String> {
-    fn walk(tree: &syn::UseTree, prefix: &mut Vec<String>, out: &mut Vec<String>) {
-        match tree {
-            syn::UseTree::Path(p) => {
-                prefix.push(plain(&p.ident));
-                walk(&p.tree, prefix, out);
-                prefix.pop();
-            }
-            syn::UseTree::Name(n) if plain(&n.ident) == "Firewall" => {
-                out.push([prefix.join("::"), "Firewall".to_owned()].join("::"));
-            }
-            syn::UseTree::Rename(r) if plain(&r.rename) == "Firewall" => {
-                out.push([prefix.join("::"), plain(&r.ident)].join("::"));
-            }
-            syn::UseTree::Glob(_) => out.push("*".to_owned()),
-            syn::UseTree::Group(g) => {
-                for t in &g.items {
-                    walk(t, prefix, out);
-                }
-            }
-            _ => {}
-        }
-    }
     let mut out = Vec::new();
     for item in production(file) {
         match item {
-            syn::Item::Use(u) => walk(&u.tree, &mut Vec::new(), &mut out),
+            syn::Item::Use(u) => {
+                for (path, local) in use_bindings(&u.tree) {
+                    match local {
+                        Some(name) if name == "Firewall" => out.push(path.join("::")),
+                        Some(_) => {}
+                        None => out.push("*".to_owned()),
+                    }
+                }
+            }
             syn::Item::Struct(s) if plain(&s.ident) == "Firewall" => out.push("item".to_owned()),
             syn::Item::Enum(e) if plain(&e.ident) == "Firewall" => out.push("item".to_owned()),
             syn::Item::Type(t) if plain(&t.ident) == "Firewall" => out.push("item".to_owned()),
@@ -177,15 +163,28 @@ impl<'ast> syn::visit::Visit<'ast> for Uses {
     }
 }
 
-/// Whether a `use` tree names `ReadsToken`, as a leaf or as a renamed one.
+/// The bindings a `use` tree makes, raw identifiers unrawed, through the
+/// shared `syn_scan_support::bindings` walk.
+fn use_bindings(tree: &syn::UseTree) -> Vec<(Vec<String>, Option<String>)> {
+    let unraw = |s: &str| s.strip_prefix("r#").unwrap_or(s).to_owned();
+    let mut out = Vec::new();
+    crate::gateway::syn_scan_support::bindings(tree, &mut Vec::new(), &mut out);
+    out.into_iter()
+        .map(|(path, local)| {
+            (
+                path.iter().map(|s| unraw(s)).collect(),
+                local.map(|l| unraw(&l)),
+            )
+        })
+        .collect()
+}
+
+/// Whether a `use` tree brings `ReadsToken` in under any name, a glob over it
+/// included: `use self::ReadsToken::{self as X}` names it mid-path.
 fn use_names_token(tree: &syn::UseTree) -> bool {
-    match tree {
-        syn::UseTree::Path(p) => use_names_token(&p.tree),
-        syn::UseTree::Name(n) => plain(&n.ident) == "ReadsToken",
-        syn::UseTree::Rename(r) => plain(&r.ident) == "ReadsToken",
-        syn::UseTree::Group(g) => g.items.iter().any(use_names_token),
-        syn::UseTree::Glob(_) => false,
-    }
+    use_bindings(tree)
+        .iter()
+        .any(|(path, _)| path.last().is_some_and(|l| l == "ReadsToken"))
 }
 
 /// Whether `assess`'s parameter `name` is typed `&Firewall`.

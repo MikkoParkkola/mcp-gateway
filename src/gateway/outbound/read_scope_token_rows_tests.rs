@@ -131,6 +131,34 @@ fn the_token_check_refuses_each_other_shape() {
             "an alias of ReadsToken",
         ),
         (
+            "a self-rename through a group",
+            format!("{BASE}\nuse self::ReadsToken::{{self as Capability}};"),
+            "an alias of ReadsToken",
+        ),
+        (
+            "an alias inside a fn",
+            format!(
+                "{BASE}\nfn helper() -> usize {{\n\
+                 use self::ReadsToken as Capability;\n\
+                 0\n}}"
+            ),
+            "an item inside helper",
+        ),
+        (
+            "an alias inside an inline module",
+            format!("{BASE}\nmod hidden {{\n    use super::ReadsToken as Capability;\n}}"),
+            "mod hidden",
+        ),
+        (
+            "a macro that builds a token",
+            format!(
+                "{BASE}\nfn helper() -> usize {{\n\
+                 make!();\n\
+                 0\n}}"
+            ),
+            "a macro in helper",
+        ),
+        (
             "a const holding the constructor",
             format!("{BASE}\nconst MAKE: fn(Cell<()>) -> ReadsToken = ReadsToken;"),
             "a token outside the read chain outside a fn",
