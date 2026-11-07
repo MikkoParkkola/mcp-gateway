@@ -47,9 +47,10 @@ pub(crate) const PAGE: usize = merge::PAGE;
 pub(crate) const KEEP_ALIVE: std::time::Duration = conn::KEEP_ALIVE;
 use self::id::StreamId;
 use super::activity::access::Access;
+use super::auth_facts;
 use super::errors::{auth_required, flat_error};
-use super::{auth_facts, is_admin};
 use crate::gateway::auth::AuthenticatedClient;
+use crate::gateway::auth::is_gateway_admin;
 use crate::gateway::auth::live::{HeldCredential, current_caller, held_credential};
 use crate::gateway::router::AppState;
 use crate::gateway::routes;
@@ -72,7 +73,7 @@ pub(super) fn kinds_for(
     state: &AppState,
 ) -> Vec<&'static str> {
     let mut kinds = vec!["status"];
-    if is_admin(Some(client)) {
+    if is_gateway_admin(Some(client)) {
         kinds.push("reload");
     }
     if access.is_some() && state.transparency_log.is_some() {
@@ -144,7 +145,7 @@ async fn stream(
         facts: auth_facts(&state, Some(&client)),
         kinds: kinds_for(&client, access.as_ref(), &state),
         access,
-        admin: is_admin(Some(&client)),
+        admin: is_gateway_admin(Some(&client)),
         scope: conn::ui_scope(&client),
         state: Arc::clone(&state),
         auth,
