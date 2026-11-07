@@ -92,18 +92,6 @@ KNOWN_LEFTOVERS: list[tuple[str, str, int, str]] = [
      "(transparency_log::bounded_tests, identity_propagation::audit_fail_closed, "
      "signing_allocation_tests::withheld_parity_stdio, hardened_signing_e2e, "
      "mik_7272_task_1_acs)"),
-    (_TMP,
-     r"\.mcp-gateway/protocol-revision-telemetry/(\.window\.lock|window\.json)"
-     r"|\.mcp-gateway/record-principal\.key|tasks/stdio/store\.lease|inner\.yaml"
-     r"|\.gateway\.yaml\.lock|\.mcp-gateway/transparency/transparency\.jsonl(\.hwm|\.lock)?"
-     r"|gateway-control-plane/audit\.jsonl(\.hwm|\.lock)?"
-     r"|\.mcp-gateway/tasks/task-[0-9a-f-]{36}\.json|serve\.log", 3,
-     "the home of a gateway an integration test spawned, written after the "
-     "test's temp dir is gone: its telemetry window, record key and stdio "
-     "lease, or its config lock, transparency log and control-plane audit, "
-     "or a full home with its task record and serve log (CI job 125219817324); "
-     "the tests' wait for that gateway removes it; up to three in one int-a "
-     "run (CI job 125058531711)"),
 ]
 # Written out, not derived from the list above: an entry added there and not
 # here, or a count raised past its ceiling, fails the self-test, so the list
@@ -111,12 +99,6 @@ KNOWN_LEFTOVERS: list[tuple[str, str, int, str]] = [
 # matches none of these.
 LEFTOVER_CEILING: dict[tuple[str, str], int] = {
     (r"\.tmp[A-Za-z0-9]{6}", r"audit\.jsonl\.hwm"): 3,
-    (r"\.tmp[A-Za-z0-9]{6}",
-     r"\.mcp-gateway/protocol-revision-telemetry/(\.window\.lock|window\.json)"
-     r"|\.mcp-gateway/record-principal\.key|tasks/stdio/store\.lease|inner\.yaml"
-     r"|\.gateway\.yaml\.lock|\.mcp-gateway/transparency/transparency\.jsonl(\.hwm|\.lock)?"
-     r"|gateway-control-plane/audit\.jsonl(\.hwm|\.lock)?"
-     r"|\.mcp-gateway/tasks/task-[0-9a-f-]{36}\.json|serve\.log"): 3,
 }
 
 HEADER = re.compile(r"^\s*(Running|Doc-tests) ")
@@ -440,7 +422,7 @@ def self_test() -> int:
     for files in stores:
         assert unexpected({".tmpAb12Cd": files}) == [".tmpAb12Cd"], files
     # Each known source is tolerated up to its own count.
-    for files, most in ((hwm, 3), (home, 3), (control, 3), (full, 3)):
+    for files, most in ((hwm, 3),):
         names = [f".tmpAb12C{i}" for i in range(most + 1)]
         assert unexpected({n: files for n in names}) == [names[-1]], (files, most)
     # A plain temp folder is tolerated only for what a known source writes: a
@@ -476,7 +458,19 @@ def self_test() -> int:
     assert fake_home != fake, "the planted home must replace the planted file"
     os.environ["PLANT_LEAK"] = "1"
     try:
-        assert run_steps("linux", "lib-a", fake_home) == [], "a known source turned red"
+        home_run = run_steps("linux", "lib-a", fake_home)
+    finally:
+        del os.environ["PLANT_LEAK"]
+    assert home_run == ["left in TMPDIR: .tmpHoMe12 (tasks/stdio/store.lease 0B)"], home_run
+    fake_known = (*fake[:2], fake[2].replace(
+        "open(os.path.join(os.environ['TMPDIR'], '.tmpAbC123.hwm'), 'w').close()",
+        "d = os.path.join(os.environ['TMPDIR'], '.tmpKnoWn1')\n"
+        "    os.makedirs(d)\n"
+        "    open(os.path.join(d, 'audit.jsonl.hwm'), 'w').close()"))
+    assert fake_known != fake, "the planted known source must replace the planted file"
+    os.environ["PLANT_LEAK"] = "1"
+    try:
+        assert run_steps("linux", "lib-a", fake_known) == [], "a known source turned red"
     finally:
         del os.environ["PLANT_LEAK"]
     # The same on real folders: files_in feeds the match, and a link to a
@@ -489,11 +483,11 @@ def self_test() -> int:
                 open(path, "w").close()
             return name
         found = {name: files_in(os.path.join(root, name)) for name in (
-            plant(".tmpHome01", home), plant(".tmpHome02", [*home, ".mcp-gateway/other.db"]),
+            plant(".tmpHome01", hwm), plant(".tmpHome02", [*home, ".mcp-gateway/other.db"]),
             plant(".tmpLink01", hwm))}
         os.symlink(root, os.path.join(root, ".tmpLink01", "elsewhere"))
         found[".tmpLink01"] = files_in(os.path.join(root, ".tmpLink01"))
-        assert found[".tmpHome01"] == sorted(home), found
+        assert found[".tmpHome01"] == hwm, found
         assert found[".tmpLink01"] == ["audit.jsonl.hwm", "elsewhere"], found
         assert unexpected(found) == [".tmpHome02", ".tmpLink01"], found
     per_binary_rows()
@@ -533,8 +527,8 @@ def per_binary_rows() -> None:
             with open(stub, "w") as f:
                 f.write('#!/bin/sh\ncase " $PLANT " in *" leak "*) mkdir -p "$TMPDIR/.tmpXyZ789/tasks"; '
                         ': > "$TMPDIR/.tmpXyZ789/tasks/task-x.json" ;; esac\n'
-                        'case " $PLANT " in *" home "*) mkdir -p "$TMPDIR/.tmpHoMe12/tasks/stdio"; '
-                        ': > "$TMPDIR/.tmpHoMe12/tasks/stdio/store.lease" ;; esac\n')
+                        'case " $PLANT " in *" home "*) mkdir -p "$TMPDIR/.tmpHoMe12"; '
+                        ': > "$TMPDIR/.tmpHoMe12/audit.jsonl.hwm" ;; esac\n')
             os.chmod(stub, 0o755)
             stubs.append(stub)
         fake_cargo = (sys.executable, "-c", (
@@ -562,8 +556,7 @@ def per_binary_rows() -> None:
         assert run("home") == [], run("home")
         assert run("") == [], "clean binaries leave only their empty folders"
     # The allowance is shared across binaries: four known leftovers in four binaries fail on the fourth.
-    home = [".mcp-gateway/protocol-revision-telemetry/window.json", "tasks/stdio/store.lease"]
-    four = {f"bin{i}/.tmpAb12C{i}": home for i in range(4)}
+    four = {f"bin{i}/.tmpAb12C{i}": ["audit.jsonl.hwm"] for i in range(4)}
     assert unexpected(four) == ["bin3/.tmpAb12C3"], unexpected(four)
     # An unexpected empty folder at the top of TMPDIR still fails, as before.
     assert unexpected({"stray": []}) == ["stray"]
