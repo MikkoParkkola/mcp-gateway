@@ -14,8 +14,6 @@ use std::collections::VecDeque;
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 
-use crate::gateway::health_metrics::ErrorKind;
-
 /// One half-hour bucket, in seconds.
 pub(crate) const HALF: u64 = 1_800;
 /// One uptime-strip block, in seconds.
