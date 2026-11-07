@@ -125,7 +125,7 @@ fn run_audit_verify(
                 .error_message
                 .clone()
                 .unwrap_or_else(|| "unknown error".to_string());
-            match result.failed_check {
+            match result.failed_check() {
                 // The message names the rule, the counter and the token.
                 FailedCheck::Pairing => {
                     eprintln!("✗ Pairing verification FAILED: {}", shown(&msg));
@@ -157,7 +157,7 @@ fn print_findings(result: &mcp_gateway::security::transparency_log::VerifyResult
     for warning in &result.warnings {
         eprintln!("warning: {}", shown(warning));
     }
-    for note in &result.notes {
+    for note in result.notes() {
         eprintln!("info: {}", shown(note));
     }
 }

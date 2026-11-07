@@ -60,9 +60,24 @@ pub struct VerifyResult {
     pub signed_entry_seen: bool,
     /// Which check decided a failed verdict: the chain, or settle pairing
     /// once the chain passed. Meaningless while `ok`.
-    pub failed_check: FailedCheck,
+    pub(crate) failed_check: FailedCheck,
     /// Information lines (expired or legacy intents): never a failure.
-    pub notes: Vec<String>,
+    pub(crate) notes: Vec<String>,
+}
+
+impl VerifyResult {
+    /// Which check decided a failed verdict: the chain, or settle pairing
+    /// once the chain passed. Meaningless while [`Self::ok`] holds.
+    #[must_use]
+    pub fn failed_check(&self) -> FailedCheck {
+        self.failed_check
+    }
+
+    /// Information lines (expired or legacy intents): never a failure.
+    #[must_use]
+    pub fn notes(&self) -> &[String] {
+        &self.notes
+    }
 }
 
 /// The check that failed a verification.
