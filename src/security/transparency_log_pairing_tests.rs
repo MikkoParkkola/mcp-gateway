@@ -143,3 +143,83 @@ fn an_intent_pairs_with_a_terminal_record_and_warns_without_one() {
     assert!(alone.ok, "{:?}", alone.error_message);
     assert_eq!(count(&alone.warnings, "interrupted"), 1, "{:?}", alone.warnings);
 }
+
+#[test]
+fn a_token_and_role_with_two_different_records_fails() {
+    const RULE: &str = "two different records for one token and role";
+    let intent = || rec(INTENT, "w-1", &json!({}));
+    let with = |event: &str, why: &str| {
+        let mut r = dep(event, "w-1", 3);
+        r.insert("reason".into(), why.into());
+        r
+    };
+    let tagged = |why: &str| rec(INTENT, "w-1", &json!({"reason": why}));
+    // (case, records with a differing repeat, the deciding counter)
+    let cases = [
+        ("intent", vec![tagged("a"), tagged("b")], 4),
+        ("deferred", vec![intent(), with(DEFERRED, "a"), with(DEFERRED, "b"), dep(OUTCOME, "w-1", 3)], 5),
+        ("outcome", vec![intent(), with(OUTCOME, "a"), with(OUTCOME, "b")], 5),
+        ("abandoned", vec![intent(), with(ABANDONED, "a"), with(ABANDONED, "b")], 5),
+        ("outcome vs abandoned", vec![intent(), with(OUTCOME, "a"), with(ABANDONED, "a")], 5),
+    ];
+    for (what, records, at) in cases {
+        let r = verify_records(records);
+        assert!(!r.ok, "{what}: passed");
+        assert_fails(&r, at, RULE, "w-1");
+    }
+    // Controls: the same shapes with equal repeats pair.
+    let controls = [
+        ("intent", vec![tagged("a"), tagged("a"), dep(OUTCOME, "w-1", 3)]),
+        ("deferred", vec![intent(), with(DEFERRED, "a"), with(DEFERRED, "a"), dep(OUTCOME, "w-1", 3)]),
+        ("outcome", vec![intent(), with(OUTCOME, "a"), with(OUTCOME, "a")]),
+        ("abandoned", vec![intent(), with(ABANDONED, "a"), with(ABANDONED, "a")]),
+    ];
+    for (what, records) in controls {
+        assert_paired(&verify_records(records), what);
+    }
+}
+
+#[test]
+fn delivery_stopped_without_an_outcome_fails() {
+    const STOPPED: &str = "config_write_delivery_stopped";
+    let intent = || rec(INTENT, "w-1", &json!({}));
+    let r = verify_records(vec![intent(), dep(STOPPED, "w-1", 3)]);
+    assert_fails(&r, 4, "delivery stopped with no outcome", "w-1");
+    // Control: with its outcome it pairs.
+    let paired = verify_records(vec![intent(), dep(STOPPED, "w-1", 3), dep(OUTCOME, "w-1", 3)]);
+    assert_paired(&paired, "stopped then outcome");
+}
+
+#[tokio::test]
+async fn two_equal_settles_of_one_intent_collapse() {
+    use super::settle::{IntentKind, Role};
+    let dir = tempfile::tempdir().unwrap();
+    let path = log_path(&dir);
+    let l = std::sync::Arc::new(TransparencyLogger::open(cfg(&path, 12, false)).unwrap());
+    let own = l.log_id();
+    let intent = || json!({"kind": "settle.save"}).as_object().unwrap().clone();
+    let save = Role::Intent(IntentKind::Save);
+    // GIVEN: one intent settled twice, equal, an outcome naming the second,
+    // and (the bracket) another token's intent alone
+    let first = l.settle(&own, "w-1", save, intent()).await.unwrap();
+    let second = l.settle(&own, "w-1", save, intent()).await.unwrap();
+    let outcome = json!({"kind": "settle.save", "intent_counter": second.counter});
+    let outcome = outcome.as_object().unwrap().clone();
+    l.settle(&own, "w-1", Role::Outcome, outcome).await.unwrap();
+    l.settle(&own, "w-2", save, intent()).await.unwrap();
+    drop(l);
+
+    // The premise: the two records differ outside the caller's view.
+    let all = lines(&path);
+    let at = |c: u64| all.iter().find(|v| v["counter"] == c).unwrap().clone();
+    let (a, b) = (at(first.counter), at(second.counter));
+    for field in ["prev_entry_hash", "entry_hash", "trace_id", "timestamp"] {
+        assert_ne!(a[field], b[field], "{field}");
+    }
+
+    // THEN: w-1 pairs with no warning; w-2 is interrupted
+    let r = verified(&path);
+    assert_paired(&r, "two settles");
+    assert_eq!(count(&r.warnings, "(token w-1)"), 0, "{:?}", r.warnings);
+    assert_eq!(count(&r.warnings, "interrupted"), 1, "{:?}", r.warnings);
+}
