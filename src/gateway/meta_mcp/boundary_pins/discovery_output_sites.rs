@@ -623,8 +623,11 @@ impl Sink for Sites {
 
 /// The reviewed list: file, function, site, argument, count, class, reason.
 const LISTED: &str = include_str!("discovery_output_sites.tsv");
-const CLASSES: [&str; 6] = [
+/// `rendered`: text a function in scope builds from pieces this guard
+/// judges itself (the renderer's output, a joined list of shown parts).
+const CLASSES: [&str; 7] = [
     "gateway-owned",
+    "rendered",
     "structured",
     "internal",
     "error-display",

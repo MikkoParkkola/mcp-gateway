@@ -263,7 +263,7 @@ impl AutoDiscovery {
     #[cfg(any(test, feature = "webui"))]
     pub(crate) async fn discover_non_client(&self) -> Vec<DiscoveredServer> {
         let mut servers = self.config_scanner.scan_environment().unwrap_or_else(|e| {
-            tracing::warn!("Environment scan failed: {e}");
+            tracing::warn!("{}", scan_failed("Environment", &e));
             Vec::new()
         });
         match self.process_scanner.scan().await {

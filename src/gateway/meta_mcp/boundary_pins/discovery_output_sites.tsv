@@ -1,1 +1,134 @@
 # file	function	site	argument	count	class	reason
+src/cli_support.rs	describe_skipped	format!	reasons.iter().map().collect().join()	1	rendered	each part is format!("{code} ({})", shown(field)) in this function, judged by this guard
+src/cli_support.rs	describe_skipped	format!	{code}	1	gateway-owned	a refusal code the gateway names (AdoptRefusal), never client text
+src/commands/cap/server_scan.rs	cap_discover	eprintln!	{text}	1	rendered	say(text): every caller passes a literal or a format! in cap_discover, each judged by this guard
+src/commands/cap/server_scan.rs	cap_discover	format!	path.display()	2	gateway-owned	the gateway config path the operator chose (--config or the default), not a client file
+src/commands/cap/server_scan.rs	cap_discover	format!	{skipped}	1	gateway-owned	a count
+src/commands/cap/server_scan.rs	cap_discover	format!	{written}	1	gateway-owned	a count
+src/commands/cap/server_scan.rs	cap_discover	println!	{text}	1	rendered	say(text): every caller passes a literal or a format! in cap_discover, each judged by this guard
+src/commands/cap/server_scan.rs	cap_discover_shadow	eprintln!	compare_config_path.display()	1	gateway-owned	the gateway config path the operator chose, not a client file
+src/commands/cap/server_scan.rs	cap_discover_shadow	eprintln!	path.display()	2	gateway-owned	the gateway config path the operator chose, not a client file
+src/commands/cap/server_scan.rs	cap_discover_shadow	eprintln!	{adopted}	1	gateway-owned	a count
+src/commands/cap/server_scan.rs	cap_discover_shadow	eprintln!	{refused}	1	gateway-owned	a count
+src/commands/cap/server_scan.rs	cap_discover_shadow	eprintln!	{skipped}	1	gateway-owned	a count
+src/commands/cap/server_scan.rs	cap_discover_shadow	println!	crate::yaml::to_string(..).unwrap_or_default()	1	structured	--format yaml: the document for a parser, client names unchanged by design (#4510 row json_and_yaml_carry_a_hostile_name_unchanged)
+src/commands/cap/server_scan.rs	cap_discover_shadow	println!	serde_json::to_string_pretty(..).unwrap_or_default()	1	structured	--format json: serde_json escapes control characters; client names unchanged by design (#4510 row json_and_yaml_carry_a_hostile_name_unchanged)
+src/commands/cap/server_scan.rs	failure_line	format!	{error}	1	internal	inside the shown call that escapes the whole line
+src/commands/cap/server_scan.rs	failure_line	format!	{what}	1	internal	inside the shown call that escapes the whole line; every caller passes a literal
+src/commands/cap/server_scan.rs	print_discovered_servers	println!	crate::yaml::to_string(..).unwrap_or_default()	1	structured	--format yaml: the document for a parser, client names unchanged by design (#4510 row json_and_yaml_carry_a_hostile_name_unchanged)
+src/commands/cap/server_scan.rs	print_discovered_servers	println!	serde_json::to_string_pretty(..).unwrap_or_default()	1	structured	--format json: serde_json escapes control characters; client names unchanged by design (#4510 row json_and_yaml_carry_a_hostile_name_unchanged)
+src/commands/cap/server_scan.rs	print_discovered_servers	println!	servers.len()	1	gateway-owned	a count
+src/commands/cap/server_scan.rs	print_server_entry	print!	render_server_entry(..)	1	rendered	cap_render.rs render_server_entry, whose every argument this guard judges
+src/commands/cap/server_scan.rs	print_shadow_report	print!	render_shadow_report(..)	1	rendered	cap_render.rs render_shadow_report, whose every argument this guard judges
+src/commands/cap_render.rs	command_field	writeln!	{label}	1	gateway-owned	every caller passes a string literal (cap_render.rs command_field calls)
+src/commands/cap_render.rs	field	writeln!	{label}	1	gateway-owned	every caller passes a string literal (cap_render.rs field calls)
+src/commands/cap_render.rs	render_server_entry	writeln!	server.source	1	gateway-owned	DiscoverySource: the gateway's own name for where it looked
+src/commands/cap_render.rs	render_server_entry	writeln!	{kind}	1	gateway-owned	a transport word the match above picks (stdio, http, websocket, a2a)
+src/commands/cap_render.rs	render_server_entry	writeln!	{pid}	1	gateway-owned	a process id number
+src/commands/cap_render.rs	render_shadow_report	writeln!	asset.auth_exposure	1	gateway-owned	an auth-exposure enum
+src/commands/cap_render.rs	render_shadow_report	writeln!	asset.data_risk	1	gateway-owned	a data-risk enum
+src/commands/cap_render.rs	render_shadow_report	writeln!	asset.remediation.action	1	gateway-owned	a remediation action enum
+src/commands/cap_render.rs	render_shadow_report	writeln!	asset.remediation.confidence	1	gateway-owned	a confidence enum
+src/commands/cap_render.rs	render_shadow_report	writeln!	asset.remediation.confirmation_required	1	gateway-owned	a bool
+src/commands/cap_render.rs	render_shadow_report	writeln!	asset.severity	1	gateway-owned	a severity enum
+src/commands/cap_render.rs	render_shadow_report	writeln!	asset.source	1	gateway-owned	DiscoverySource enum
+src/commands/cap_render.rs	render_shadow_report	writeln!	asset.trust_status	1	gateway-owned	a trust-status enum
+src/commands/cap_render.rs	render_shadow_report	writeln!	group.action	1	gateway-owned	a remediation action enum
+src/commands/cap_render.rs	render_shadow_report	writeln!	group.count	1	gateway-owned	a count
+src/commands/cap_render.rs	render_shadow_report	writeln!	report.summary.unmanaged_total	1	gateway-owned	a count
+src/commands/cap_render.rs	render_shadow_report	writeln!	{note}	1	gateway-owned	report.ids_note: the gateway's own sentence (comment at the site)
+src/commands/cap_render.rs	render_shadow_report	writeln!	{pid}	1	gateway-owned	a process id number
+src/discovery/adopt.rs	adoption	push()	<expression>	1	internal	a literal into the adoption's list; values go to the secret store, never a terminal
+src/discovery/adopt.rs	field	format!	<if>	1	gateway-owned	env or headers, chosen by the if
+src/discovery/adopt.rs	field	format!	self.key	1	internal	a literal's field name, printed only through shown (cap_render.rs field or describe_skipped); the web UI returns it as JSON
+src/discovery/adopt.rs	refusals	format!	{key}	8	internal	a refusal's field, printed only through shown (cap_render.rs field or describe_skipped); the web UI returns it as JSON
+src/discovery/adopt.rs	refusals	format!	{map}	8	gateway-owned	the map name, env or headers, from the chain above
+src/discovery/adopt.rs	refusals	push()	<expression>	8	internal	a refusal (code, field) into the returned list, printed only through shown (cap_render.rs field or describe_skipped); the web UI returns it as JSON
+src/discovery/client_entry.rs	client_argv	format!	{i}	4	gateway-owned	an index number
+src/discovery/client_entry.rs	client_argv	push()	arg.to_string()	1	internal	argv for the backend record; printed only through shown (cap_render.rs command_field)
+src/discovery/client_entry.rs	client_argv	push()	format!	2	internal	argv for the backend record; printed only through shown (cap_render.rs command_field)
+src/discovery/client_entry.rs	gateway_value	format!	&c[..]	1	internal	a value rewritten for gateway.yaml; never printed
+src/discovery/client_entry.rs	parse	format!	{source}	1	gateway-owned	DiscoverySource Debug: the gateway's own name
+src/discovery/client_entry.rs	parse	macro	json!	1	macro-reviewed	serde_json::json! builds the entry digest's input array; its values hash, never print
+src/discovery/client_entry.rs	parse	push()	<literal>.to_string()	3	gateway-owned	a fixed string
+src/discovery/client_entry.rs	record_dropped_keys	push()	key.clone()	3	internal	a dropped key name into the server record, printed only through shown (cap_render.rs field or describe_skipped); the web UI returns it as JSON
+src/discovery/client_entry.rs	string_map	format!	{key}	4	gateway-owned	the map name the gateway passes (env or headers)
+src/discovery/client_entry.rs	string_map	format!	{k}	4	internal	an uncarried field name into the server record, printed only through shown (cap_render.rs field or describe_skipped); the web UI returns it as JSON
+src/discovery/client_entry.rs	string_map	push()	format!	2	internal	an uncarried field name into the server record, printed only through shown (cap_render.rs field or describe_skipped); the web UI returns it as JSON
+src/discovery/client_entry.rs	string_map	warn!	{key}	2	gateway-owned	the map name the gateway passes (env or headers)
+src/discovery/client_entry.rs	string_map	warn!	{source}	2	gateway-owned	DiscoverySource Debug: the gateway's own name
+src/discovery/config_scanner.rs	parse_claude_config	format!	{e}	2	internal	a parse error into an anyhow error; logged only through scan_failed (shown)
+src/discovery/config_scanner.rs	parse_claude_config	push()	server	1	internal	a found server into the scan result
+src/discovery/config_scanner.rs	parse_continue_config	format!	{e}	2	internal	a parse error into an anyhow error; logged only through scan_failed (shown)
+src/discovery/config_scanner.rs	parse_continue_config	push()	server	2	internal	a found server into the scan result
+src/discovery/config_scanner.rs	parse_vscode_config	format!	{e}	2	internal	a parse error into an anyhow error; logged only through scan_failed (shown)
+src/discovery/config_scanner.rs	parse_vscode_config	push()	server	1	internal	a found server into the scan result
+src/discovery/config_scanner.rs	parse_zed_config	format!	{e}	2	internal	a parse error into an anyhow error; logged only through scan_failed (shown)
+src/discovery/config_scanner.rs	parse_zed_config	push()	server	1	internal	a found server into the scan result
+src/discovery/config_scanner.rs	scan_environment	extend()	env.get().effective_vars()	1	internal	the environment into a scan-local map
+src/discovery/config_scanner.rs	scan_environment	format!	{key}	2	internal	an environment variable name into a found server's record; printed only through shown (cap_render.rs)
+src/discovery/config_scanner.rs	scan_environment	push()	DiscoveredServer::new(..)	1	internal	a found server into the scan result
+src/discovery/config_scanner.rs	scan_mcp_config_dir	format!	{e}	2	internal	a parse error into an anyhow error; logged only through scan_failed (shown)
+src/discovery/config_scanner_client_scan.rs	candidates	extend()	generic.into_iter().map()	1	internal	candidate paths into a list
+src/discovery/config_scanner_client_scan.rs	scan_candidates	push()	<expression>	1	internal	a found server into the scan result
+src/discovery/config_scanner_client_scan.rs	stamp_line	format!	meta.len()	1	internal	a fingerprint line, hashed by fingerprint(); never printed
+src/discovery/config_scanner_client_scan.rs	stamp_line	format!	path.display()	3	internal	a fingerprint line, hashed by fingerprint(); never printed
+src/discovery/config_scanner_client_scan.rs	stamp_line	format!	{inode}	1	internal	a fingerprint line, hashed by fingerprint(); never printed
+src/discovery/config_scanner_client_scan.rs	stamp_line	format!	{modified}	1	internal	a fingerprint line, hashed by fingerprint(); never printed
+src/discovery/jsonc.rs	drop_trailing_commas	push()	c	4	internal	the JSONC stripper copying characters into its output text, which the JSON parser reads
+src/discovery/jsonc.rs	drop_trailing_commas	push()	next	1	internal	the JSONC stripper copying characters into its output text, which the JSON parser reads
+src/discovery/jsonc.rs	strip_jsonc	push()	<expression>	1	internal	the JSONC stripper copying characters into its output text, which the JSON parser reads
+src/discovery/jsonc.rs	strip_jsonc	push()	c	2	internal	the JSONC stripper copying characters into its output text, which the JSON parser reads
+src/discovery/mod.rs	scan_failed	format!	{error}	1	internal	inside the shown call that escapes the whole line
+src/discovery/mod.rs	scan_failed	format!	{what}	1	internal	inside the shown call that escapes the whole line; every caller passes a literal
+src/discovery/mod.rs	unique_by_name	insert()	server.borrow().name.clone()	1	internal	a name into a dedup set
+src/discovery/process_scanner.rs	parse_ps_output	debug!	pattern.server_name	2	gateway-owned	the name in the gateway's own built-in pattern table
+src/discovery/process_scanner.rs	parse_ps_output	debug!	pid	1	gateway-owned	a process id number
+src/discovery/process_scanner.rs	parse_ps_output	format!	pattern.description	2	gateway-owned	the gateway's own built-in pattern table
+src/discovery/process_scanner.rs	parse_ps_output	format!	{port}	1	gateway-owned	a port number
+src/discovery/process_scanner.rs	parse_ps_output	push()	DiscoveredServer::new(..)	1	internal	a found server into the scan result
+src/discovery/process_scanner.rs	scan	insert()	s.name.clone()	1	internal	a name into a dedup set
+src/discovery/process_scanner.rs	scan_linux	format!	{e}	1	error-display	an OS error from running ps or wmic: no client text
+src/discovery/process_scanner.rs	scan_macos	format!	{e}	1	error-display	an OS error from running ps or wmic: no client text
+src/discovery/process_scanner.rs	scan_windows	format!	output.status	1	gateway-owned	a process exit status
+src/discovery/process_scanner.rs	scan_windows	format!	{e}	1	error-display	an OS error from running ps or wmic: no client text
+src/discovery/shadow.rs	from_asset	format!	asset.id	1	internal	a doctor finding's id; the doctor prints details only through shown (doctor/human.rs)
+src/discovery/shadow.rs	from_asset	format!	asset.name	1	internal	a doctor finding's detail; printed only through shown (doctor/human.rs)
+src/discovery/shadow.rs	from_asset	format!	asset.transport.kind	1	internal	a doctor finding's detail; printed only through shown (doctor/human.rs)
+src/discovery/shadow/build.rs	from_cached_and_found	insert()	asset.name.clone()	1	internal	assets and names into the report's lists and sets
+src/discovery/shadow/build.rs	from_cached_and_found	insert()	server.name.clone()	1	internal	assets and names into the report's lists and sets
+src/discovery/shadow/build.rs	from_cached_and_found	push()	ShadowAsset::from_server(..)	1	internal	assets and names into the report's lists and sets
+src/discovery/shadow/build.rs	from_cached_and_found	push()	asset.with_gateway_config()	1	internal	assets and names into the report's lists and sets
+src/discovery/shadow/build.rs	from_discovered	format!	{why}	1	gateway-owned	a fixed reason the match above picks
+src/discovery/shadow/build.rs	from_discovered	warn!	e	1	error-display	reading the gateway's own record key file: the path is the gateway's data dir, not client text
+src/discovery/shadow/build.rs	mark_duplicate_ports	push()	<literal>.to_string()	1	gateway-owned	a fixed string
+src/discovery/shadow/build.rs	remediation_hints	push()	command.clone()	2	internal	a remediation command into the asset; printed only through command_field (shown or withheld)
+src/discovery/shadow/helpers.rs	build_action_groups	push()	asset.id.clone()	1	internal	an asset id into a group's list; printed only through shown
+src/discovery/shadow/helpers.rs	classify_data_risk	format!	server.description	1	internal	a text to search for risk words; never printed
+src/discovery/shadow/helpers.rs	classify_data_risk	format!	server.name	1	internal	a text to search for risk words; never printed
+src/discovery/shadow/helpers.rs	classify_data_risk	push_str()	&command.to_ascii_lowercase()	1	internal	a text to search for risk words; never printed
+src/discovery/shadow/helpers.rs	ensure_unique_ids	format!	{base}	1	internal	an asset id built from an id and a count; printed only through shown
+src/discovery/shadow/helpers.rs	ensure_unique_ids	format!	{count}	1	internal	an asset id built from an id and a count; printed only through shown
+src/discovery/shadow/helpers.rs	evidence_refs	format!	asset.source	2	internal	evidence references for the JSON report and the doctor; printed only through shown
+src/discovery/shadow/helpers.rs	evidence_refs	format!	{config_path}	2	internal	evidence references for the JSON report and the doctor; printed only through shown
+src/discovery/shadow/helpers.rs	evidence_refs	format!	{endpoint}	2	internal	evidence references for the JSON report and the doctor; printed only through shown
+src/discovery/shadow/helpers.rs	evidence_refs	format!	{executable}	2	internal	evidence references for the JSON report and the doctor; printed only through shown
+src/discovery/shadow/helpers.rs	evidence_refs	format!	{pid}	2	internal	evidence references for the JSON report and the doctor; printed only through shown
+src/discovery/shadow/helpers.rs	evidence_refs	format!	{port}	2	internal	evidence references for the JSON report and the doctor; printed only through shown
+src/discovery/shadow/helpers.rs	evidence_refs	push()	format!	6	internal	evidence references for the JSON report and the doctor; printed only through shown
+src/discovery/shadow/helpers.rs	format_shadow_command	push_str()	&shell_word(..)	1	internal	a command line built for printing through command_field (shown or withheld)
+src/discovery/shadow/helpers.rs	has_personal_access_reference	format!	server.description	1	internal	a text to search for risk words; never printed
+src/discovery/shadow/helpers.rs	has_personal_access_reference	format!	server.name	1	internal	a text to search for risk words; never printed
+src/discovery/shadow/helpers.rs	has_personal_access_reference	push_str()	&command.to_ascii_lowercase()	1	internal	a text to search for risk words; never printed
+src/discovery/shadow/helpers.rs	has_stale_binary_reference	format!	server.description	1	internal	a text to search for risk words; never printed
+src/discovery/shadow/helpers.rs	has_stale_binary_reference	format!	server.name	1	internal	a text to search for risk words; never printed
+src/discovery/shadow/helpers.rs	has_stale_binary_reference	push_str()	&command.to_ascii_lowercase()	1	internal	a text to search for risk words; never printed
+src/discovery/shadow/helpers.rs	risk_reasons	push()	<literal>.to_string()	18	gateway-owned	a fixed reason
+src/discovery/shadow/helpers.rs	risk_reasons	push()	code	1	gateway-owned	a fixed reason code
+src/discovery/shadow/helpers.rs	shell_word	format!	value.replace()	1	internal	a shell-quoted word for a command line; printed through command_field
+src/discovery/shadow/helpers.rs	slug	push()	ch	1	internal	slug characters for an id
+src/discovery/shadow/helpers.rs	stable_shadow_id	format!	crate::gateway::record_principal::shadow_endpoint_id(..)	2	internal	a stable asset id built from its parts; printed only through shown
+src/discovery/shadow/helpers.rs	stable_shadow_id	format!	server.source	1	internal	a stable asset id built from its parts; printed only through shown
+src/discovery/shadow/helpers.rs	stable_shadow_id	format!	{port}	2	internal	a stable asset id built from its parts; printed only through shown
+src/discovery/shadow/helpers.rs	stable_shadow_id	push()	format!	2	internal	a stable asset id built from its parts; printed only through shown
+src/discovery/shadow/helpers.rs	stable_shadow_id	push()	slug(..)	1	internal	a stable asset id built from its parts; printed only through shown
