@@ -602,16 +602,20 @@ async fn a6b_direct_no_rule() {
 }
 
 /// A3: an execute grant admits the owner's call to its personal capability
-/// on the meta route. Recorded `default_allow` today (flipped by allow attribution,
-/// which records the grant as the allowing check), with no `grant_id`: the
-/// decision constructor sets none (`decision_record.rs:304`; flipped when the
-/// grant id is written). The effect is the capability's own definition,
+/// on the meta route. Records the grant as the allowing check, its keyed id
+/// and the operator's `grant_id` (flipped by allow attribution). The effect is the capability's own definition,
 /// `read_only: true` (`pre_dispatch.rs:77-86`). Control: without the grant,
 /// the same call is refused and the upstream is not hit.
 #[tokio::test]
 async fn a3_grant_match() {
     use super::direct_effect_tests::{CAPS, PROBE, call, owned_capability};
     let (fx, hits, dir) = owned_capability(true).await;
+    // The keyed id the published grant store holds for the matched grant.
+    let held = {
+        let (live, _) = fx.state.meta_mcp.identity_grant_sink();
+        let id = live.read().rule_id("g-direct-probe").cloned();
+        id.expect("premise: the store holds an id for g-direct-probe")
+    };
     let before = records(&dir).len();
     let answer = call(
         &fx,
@@ -652,9 +656,9 @@ async fn a3_grant_match() {
     // flipped by allow attribution
     let row = DecisionRow {
         name: "a3_grant_match",
-        kind: "default_allow",
-        rule_id: RuleId::Absent("flipped by allow attribution"),
-        grant_id: None,
+        kind: "grant",
+        rule_id: RuleId::named(held.as_str()),
+        grant_id: Some("g-direct-probe"),
         findings: Findings::NotRun,
         effect: Some(("read_only", "capability_definition")),
         decided: "fresh",
@@ -697,9 +701,18 @@ async fn a3_grant_match() {
 /// An enabled mTLS policy: a rule for CN `nobody`, then one that matches
 /// certificate CN `cn` and allows `alpha`'s `read`; first match wins, and no match denies
 /// (`access_control/mod.rs:99-112`).
+/// Keyed under the unit-test record key, which the table's gateway keys
+/// with (asserted where the id is read), so the matched rule has an id.
 fn mtls_policy_for(cn: &str) -> Arc<crate::mtls::MtlsPolicy> {
+    Arc::new(crate::mtls::MtlsPolicy::from_config_keyed(
+        &mtls_config_for(cn),
+        &crate::gateway::record_principal::test_record_key().rule_id_key(),
+    ))
+}
+
+fn mtls_config_for(cn: &str) -> crate::mtls::MtlsConfig {
     use crate::mtls::config::{CertMatchConfig, MtlsConfig, PolicyRuleConfig, ToolScopeConfig};
-    Arc::new(crate::mtls::MtlsPolicy::from_config(&MtlsConfig {
+    MtlsConfig {
         enabled: true,
         policies: vec![
             // A non-matching rule first, so a first-rule mutant is told apart
@@ -728,13 +741,13 @@ fn mtls_policy_for(cn: &str) -> Arc<crate::mtls::MtlsPolicy> {
             },
         ],
         ..MtlsConfig::default()
-    }))
+    }
 }
 
 /// A2: an mTLS rule allows the caller's certificate (CN `agent-a`, the
 /// owner certificate `direct_effect_tests::call` presents) on `alpha`'s
-/// `read`, on the direct route. Recorded `default_allow` today (flipped by
-/// allow attribution). Control: the same enabled, non-empty policy, its rule matching
+/// `read`, on the direct route. Records the matched rule, the second one
+/// (flipped by allow attribution). Control: the same enabled, non-empty policy, its rule matching
 /// another CN, refuses the call: no rule matches, so the policy denies.
 #[tokio::test]
 async fn a2_mtls_rule_allow() {
@@ -750,6 +763,23 @@ async fn a2_mtls_rule_allow() {
     }))
     .expect("a tool");
     alpha.declare_slot_effects_for_test(None, vec![read]);
+    let rule = &mtls_config_for("agent-a").policies[1];
+    let matched = crate::mtls::access_control::rule_id_tests::mtls_id(
+        &crate::gateway::record_principal::test_record_key().rule_id_key(),
+        rule,
+    );
+    let gateway_key = fx
+        .state
+        .live_config
+        .generation()
+        .auth()
+        .record_key()
+        .rule_id_key();
+    assert_eq!(
+        crate::mtls::access_control::rule_id_tests::mtls_id(&gateway_key, rule),
+        matched,
+        "premise: the table's gateway keys rules with the unit-test record key"
+    );
     let before = (
         records(&dir).len(),
         super::direct_continuation_tests::dispatched(&fx),
@@ -773,8 +803,8 @@ async fn a2_mtls_rule_allow() {
     // flipped by allow attribution
     let row = DecisionRow {
         name: "a2_mtls_rule_allow",
-        kind: "default_allow",
-        rule_id: RuleId::Absent("flipped by allow attribution"),
+        kind: "mtls",
+        rule_id: RuleId::named(matched.as_str()),
         grant_id: None,
         findings: Findings::NotRun,
         effect: Some(("read_only", "tool_annotation")),
