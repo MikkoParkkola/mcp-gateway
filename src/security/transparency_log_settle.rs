@@ -21,7 +21,7 @@ use super::bounded::Dispatch;
 use super::identity::LogId;
 
 /// The kind of config write an intent names.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum IntentKind {
     Save,
     Adopt,
@@ -30,7 +30,7 @@ pub(crate) enum IntentKind {
 }
 
 /// The role a settled record plays; it names the record's event.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum Role {
     /// The writer's intent, by kind.
     Intent(IntentKind),

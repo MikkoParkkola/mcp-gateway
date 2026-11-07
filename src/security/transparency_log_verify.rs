@@ -500,7 +500,7 @@ impl<'a> Stream<'a> {
                     self.head_checked = Some(entry.clone());
                     self.oldest_counter = Some(counter);
                 }
-                self.pairing.observe(&entry, counter);
+                self.pairing.observe(&entry, counter, file);
                 match field_str(&entry, "event") {
                     Some(EV_SEALED) => {
                         let next = field_u64(&entry, "next_segment_seq")
