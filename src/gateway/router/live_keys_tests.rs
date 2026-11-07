@@ -408,11 +408,10 @@ fn spend_one(state: &Arc<super::AppState>, secret: &str) -> bool {
 }
 
 /// Whether `got` is a call the key table let through and the window served:
-/// a 429 is a refusal, never an admission.
+/// only a 2xx. A 429 or any other refusal (400, 403, 404) is never an
+/// admission, so a precondition cannot pass on the wrong refusal.
 fn accepted(got: StatusCode) -> bool {
-    got != StatusCode::UNAUTHORIZED
-        && got != StatusCode::TOO_MANY_REQUESTS
-        && !got.is_server_error()
+    got.is_success()
 }
 
 /// `accepted` admits only a served call. A ping is answered
