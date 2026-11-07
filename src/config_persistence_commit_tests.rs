@@ -8,8 +8,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use super::commit::{Action, CommitToken, Found, NotDurable, Refusal, commit, verify};
-use super::journal::fault::{self, Fault, HookAt, SyncKey};
+use super::commit::{Action, CommitToken, Found, NotDurable, Refusal, SyncKey, commit, verify};
+use super::journal::fault::{self, Fault, HookAt};
 use super::lock::Locked;
 use super::{FileMode, Symlink, write_atomic};
 use crate::config_reload::FileRevision;

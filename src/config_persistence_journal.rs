@@ -21,6 +21,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use super::atomic::{FileMode, Symlink, write_atomic};
+use super::sync_dir_of;
 use crate::config::UnreadConfig;
 use crate::identity_grants::journal::resolved;
 
@@ -430,23 +431,6 @@ fn remove_if_present(path: &Path) -> std::io::Result<()> {
     }
 }
 
-/// Flush `path`'s directory, so a create, rename or remove in it is durable;
-/// on Windows through the shared helper that opens the directory for it.
-fn sync_dir_of(path: &Path) -> std::io::Result<()> {
-    let dir = path
-        .parent()
-        .filter(|d| !d.as_os_str().is_empty())
-        .unwrap_or_else(|| Path::new("."));
-    #[cfg(windows)]
-    {
-        crate::private_fs::sync_dir(dir)
-    }
-    #[cfg(not(windows))]
-    {
-        std::fs::File::open(dir)?.sync_all()
-    }
-}
-
 /// Test-only faults, keyed by the resolved target so parallel tests never see
 /// each other's. A global rather than a thread-local: recovery runs on a
 /// blocking-pool thread, not the test's.
@@ -465,18 +449,11 @@ pub(crate) mod fault {
         /// A commit fails before its rename.
         FailWrite,
         /// The directory sync of the given A call fails once.
-        FailDirSync(SyncKey),
+        FailDirSync(crate::config_persistence::commit::SyncKey),
         /// A row's action on the target at a point inside an A call.
         Hook(HookAt, Arc<dyn Fn(&Path) + Send + Sync>),
         /// Several of the above armed together on one target.
         All(Vec<Fault>),
-    }
-
-    /// Which A call's directory sync a `FailDirSync` fails.
-    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-    pub(crate) enum SyncKey {
-        Commit(crate::config_persistence::commit::Action),
-        Verify,
     }
 
     /// Where a `Hook` runs inside an A call.
@@ -627,5 +604,22 @@ pub(crate) mod fault {
             .expect("faults")
             .as_ref()
             .and_then(|map| map.get(target).cloned())
+    }
+
+    /// The armed fault for `target` that `want` picks, looking inside
+    /// [`Fault::All`]; a pick counts as fired.
+    pub(crate) fn fires(target: &Path, want: impl Fn(&Fault) -> bool) -> Option<Fault> {
+        fn find(f: &Fault, want: &dyn Fn(&Fault) -> bool) -> Option<Fault> {
+            match f {
+                Fault::All(all) => all.iter().find_map(|f| find(f, want)),
+                f if want(f) => Some(f.clone()),
+                _ => None,
+            }
+        }
+        let picked = get(target).and_then(|f| find(&f, &want));
+        if picked.is_some() {
+            note_fired(target);
+        }
+        picked
     }
 }

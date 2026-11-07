@@ -100,6 +100,42 @@ pub use atomic::{FileMode, Symlink, copy_keeping_access, write_atomic};
 #[path = "config_persistence_scratch.rs"]
 mod scratch;
 
+/// Flush `path`'s directory, so a create, rename or remove in it is durable;
+/// on Windows through the shared helper that opens the directory for it.
+fn sync_dir_of(path: &Path) -> std::io::Result<()> {
+    sync_dir_for(path, None)
+}
+
+/// [`sync_dir_of`] for one A call: `key` names the call, so a test seam can
+/// fail that call's sync alone. Every real sync is counted under test, so a
+/// row can prove A synced.
+fn sync_dir_for(path: &Path, key: Option<commit::SyncKey>) -> std::io::Result<()> {
+    #[cfg(test)]
+    {
+        use journal::fault::{Fault, fires};
+        if let Some(key) = key
+            && fires(path, |f| matches!(f, Fault::FailDirSync(k) if *k == key)).is_some()
+        {
+            return Err(std::io::Error::other("injected dir-sync failure"));
+        }
+        journal::fault::note_synced(path);
+    }
+    #[cfg(not(test))]
+    let _ = key;
+    let dir = path
+        .parent()
+        .filter(|d| !d.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    #[cfg(windows)]
+    {
+        crate::private_fs::sync_dir(dir)
+    }
+    #[cfg(not(windows))]
+    {
+        std::fs::File::open(dir)?.sync_all()
+    }
+}
+
 // Primitive A: commit the config's bytes and prove them durable.
 #[path = "config_persistence_commit.rs"]
 pub(crate) mod commit;

@@ -39,6 +39,16 @@ pub(crate) enum Action {
     Restore,
 }
 
+/// Which A call a directory sync belongs to, so a test seam can fail one
+/// call's sync and not another's.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SyncKey {
+    /// A commit's sync after its rename.
+    Commit(Action),
+    /// A verify's sync.
+    Verify,
+}
+
 /// What the read-back found at the target.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum Found {
