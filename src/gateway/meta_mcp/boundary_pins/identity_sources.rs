@@ -135,6 +135,27 @@ impl Visitor<'_> {
         self.shadowed.push(format!("{}: {what}", self.file));
     }
 
+    /// Whether an alias of `ty` reaches an identity type's associated
+    /// functions: `ty` is a path ending in one (or `Self` in an impl of one),
+    /// or a projection `<Q as Tr>::T` whose `Q` names one anywhere. A tuple
+    /// or reference that only holds one has no constructor to reach.
+    fn aliases_identity(&self, ty: &syn::Type) -> bool {
+        match ty {
+            syn::Type::Path(p) => {
+                p.qself
+                    .as_ref()
+                    .is_some_and(|q| self.mentions_identity(&q.ty))
+                    || p.path.segments.last().is_some_and(|s| {
+                        let n = name(&s.ident);
+                        is_type(&n) || (n == "Self" && self.impl_ty.as_deref().is_some_and(is_type))
+                    })
+            }
+            syn::Type::Group(g) => self.aliases_identity(&g.elem),
+            syn::Type::Paren(p) => self.aliases_identity(&p.elem),
+            _ => false,
+        }
+    }
+
     fn mentions_identity(&self, ty: &syn::Type) -> bool {
         let mut found = false;
         let mut mentions = Mentions {
@@ -184,8 +205,11 @@ impl Visitor<'_> {
             }
             I::Use(u) => self.use_tree(&[], &u.tree),
             I::Type(t) => {
-                if self.mentions_identity(&t.ty) {
-                    self.refuse(&format!("type alias `{}` names an identity type", t.ident));
+                if self.aliases_identity(&t.ty) {
+                    self.refuse(&format!(
+                        "type alias `{}` reaches an identity type",
+                        t.ident
+                    ));
                 }
             }
             I::ExternCrate(e) => {
@@ -301,7 +325,7 @@ impl<'ast> syn::visit::Visit<'ast> for Visitor<'_> {
     }
 
     fn visit_impl_item_type(&mut self, item: &'ast syn::ImplItemType) {
-        if self.mentions_identity(&item.ty) {
+        if self.aliases_identity(&item.ty) {
             self.refuse(&format!(
                 "associated type `{}` aliases an identity type",
                 item.ident
@@ -312,7 +336,7 @@ impl<'ast> syn::visit::Visit<'ast> for Visitor<'_> {
 
     fn visit_trait_item_type(&mut self, item: &'ast syn::TraitItemType) {
         if let Some((_, ty)) = &item.default
-            && self.mentions_identity(ty)
+            && self.aliases_identity(ty)
         {
             self.refuse(&format!(
                 "associated type `{}` aliases an identity type",
@@ -342,10 +366,7 @@ impl<'ast> syn::visit::Visit<'ast> for Visitor<'_> {
 
     fn visit_expr_path(&mut self, path: &'ast syn::ExprPath) {
         if let Some(q) = &path.qself {
-            let named = last_ident(&q.ty).is_some_and(|n| {
-                is_type(&n) || (n == "Self" && self.impl_ty.as_deref().is_some_and(is_type))
-            });
-            if named {
+            if self.mentions_identity(&q.ty) {
                 self.refuse("a qualified path to an identity type");
             }
         }

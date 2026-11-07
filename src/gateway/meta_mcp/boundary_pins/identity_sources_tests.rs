@@ -121,6 +121,9 @@ fn a_constructor_in_a_static_initializer_is_counted_under_its_name() {
 
 #[test]
 fn a_qualified_constructor_path_is_refused_called_or_as_a_value() {
+    // A projection whose `as` part only holds the type still reaches it.
+    let projected = "fn f() { <Vec<GrantSubject> as IntoIterator>::Item::new(a, b, None); }";
+    assert_eq!(refused(OTHER, projected).len(), 1);
     assert_eq!(
         refused(OTHER, "fn f() { <GrantSubject>::new(a, b, None); }").len(),
         1
@@ -543,6 +546,9 @@ fn an_alias_naming_an_identity_type_anywhere_is_refused() {
         1
     );
     assert_eq!(refused(OTHER, "type G = <GrantSubject as Tr>::T;").len(), 1);
-    assert_eq!(refused(OTHER, "type V = Vec<VerifiedIdentity>;").len(), 1);
+    // Holding one is not reaching one: a tuple or a Vec of identities has no
+    // constructor of theirs to call (the router's caller tuples are aliases).
+    assert!(refused(OTHER, "type V = Vec<VerifiedIdentity>;").is_empty());
+    assert!(refused(OTHER, "type C<'a> = (Option<&'a GrantSubject>, u8);").is_empty());
     assert!(refused(OTHER, "impl Tr for Other { type T = Self; }").is_empty());
 }
