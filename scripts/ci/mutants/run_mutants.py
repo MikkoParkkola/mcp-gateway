@@ -953,12 +953,15 @@ def schemata_driver_self_test() -> tuple[int, list[str]]:
             TEST_LIMIT = 2
             rc, _ = run({**killed, "rows": {"A m::t1": {"status": "hang"}}})
             expect("D9 a hung row is ERROR and exits 1", rc, 1)
-            pid = int((d / "child.pid").read_text())
-            try:
-                os.kill(pid, 0)
-                alive = True
-            except ProcessLookupError:
-                alive = False
+            pid_file = d / "child.pid"
+            expect("D9 the hung row started its child", pid_file.is_file(), True)
+            alive = None
+            if pid_file.is_file():
+                try:
+                    os.kill(int(pid_file.read_text()), 0)
+                    alive = True
+                except ProcessLookupError:
+                    alive = False
             expect("D9 the hung row's child process is killed too", alive, False)
         finally:
             TEST_LIMIT = saved_limit
