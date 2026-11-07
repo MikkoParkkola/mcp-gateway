@@ -750,3 +750,6 @@ async fn stdio_replay_leaves_the_cost_suggestion_out_of_the_receipt() {
         "control: the backend's text is receipted"
     );
 }
+
+#[path = "collusion_stdio_write.rs"]
+mod write_rows;

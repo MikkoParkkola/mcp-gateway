@@ -246,3 +246,7 @@ fn held_body(frame: OutboundFrame) -> axum::response::Response {
     response.extensions_mut().insert(HeldAnswerId(id));
     response
 }
+
+#[cfg(all(test, feature = "firewall"))]
+#[path = "http_commit_tests.rs"]
+mod commit_tests;
