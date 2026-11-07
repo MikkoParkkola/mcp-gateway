@@ -531,9 +531,7 @@ impl DashboardBootstrap {
 
 /// 32 random bytes, base64url: a bootstrap value or a session handle.
 fn random_value() -> String {
-    use rand::RngExt;
-    let bytes: [u8; 32] = rand::rng().random();
-    base64::Engine::encode(&base64::engine::general_purpose::URL_SAFE_NO_PAD, bytes)
+    crate::random_secret::random_secret("")
 }
 
 /// How long a dashboard session may live, read from the live config.

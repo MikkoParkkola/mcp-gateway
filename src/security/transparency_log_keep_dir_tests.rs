@@ -25,7 +25,7 @@ fn kept_log() -> (Arc<TransparencyLogger>, std::path::PathBuf) {
     (log, root)
 }
 
-fn note(log: &TransparencyLogger) {
+pub(super) fn note(log: &TransparencyLogger) {
     let fields: serde_json::Map<String, serde_json::Value> =
         [("kind".to_owned(), serde_json::Value::from("keep_dir_probe"))]
             .into_iter()

@@ -240,21 +240,10 @@ fn build_init_config(with_examples: bool, profile: InitProfile, starter: &str) -
         } else {
             format!("\n{starter}")
         },
-        admin_token = generate_admin_token(),
-    )
-}
-
-/// A fresh admin credential for a new install.
-///
-/// Generated rather than asked for: a setup step the operator must perform is a
-/// step most will skip, and the gateway would then have no admin path at all.
-/// The prefix makes it recognisable in a log or a paste.
-fn generate_admin_token() -> String {
-    use rand::RngExt;
-    let bytes: [u8; 32] = rand::rng().random();
-    format!(
-        "mcpgw_{}",
-        base64::Engine::encode(&base64::engine::general_purpose::URL_SAFE_NO_PAD, bytes)
+        // Generated rather than asked for: a setup step the operator must
+        // perform is a step most will skip, and the gateway would then have no
+        // admin path at all. The prefix makes it recognisable in a log or a paste.
+        admin_token = crate::random_secret::random_secret("mcpgw_"),
     )
 }
 
@@ -577,7 +566,7 @@ mod winacl_test_support;
 
 #[cfg(test)]
 mod admin_credential_tests {
-    use super::{InitProfile, build_init_config, generate_admin_token};
+    use super::{InitProfile, build_init_config};
 
     /// The starter capabilities are embedded at build time, so a CRLF checkout
     /// would ship CRLF bytes in that target's binary. `capabilities/.gitattributes` keeps
@@ -647,26 +636,6 @@ mod admin_credential_tests {
             config.contains("single_user: true"),
             "a laptop install is one principal; say so rather than making the \
              operator discover the flag"
-        );
-    }
-
-    #[test]
-    fn each_install_gets_its_own_credential() {
-        assert_ne!(
-            generate_admin_token(),
-            generate_admin_token(),
-            "a shared credential across installs is no credential"
-        );
-    }
-
-    #[test]
-    fn the_credential_is_not_guessable() {
-        let token = generate_admin_token();
-        assert!(token.starts_with("mcpgw_"));
-        // 32 random bytes, base64url without padding.
-        assert!(
-            token.len() >= 6 + 42,
-            "too short to be 32 random bytes: {token}"
         );
     }
 

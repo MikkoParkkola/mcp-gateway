@@ -256,12 +256,12 @@ src/gateway/meta_mcp/invoke/errors.rs	of	http_invoke_tiny	classifies every accou
 src/gateway/meta_mcp/invoke/errors.rs	of_error	-	on-path, untimed: failed dispatches only; the timed rows succeed
 src/gateway/meta_mcp/invoke/errors.rs	of_value	http_invoke_tiny	classifies every answered dispatch (BudgetOutcome::of_value)
 src/gateway/meta_mcp/invoke/gate.rs	absent_answer	-	on-path, untimed: an absent or out-of-scope name only; the timed tool is listed on its backend
-src/gateway/meta_mcp/invoke/gate.rs	as_undefined_capability	-	on-path, untimed: signed or stored-replay policy refusals only; the timed rows succeed
+src/gateway/meta_mcp/invoke/gate_as_undefined.rs	as_undefined_capability	-	on-path, untimed: signed or stored-replay policy refusals only; the timed rows succeed
 src/gateway/meta_mcp/invoke/gate.rs	backstop	-	on-path, untimed: invocation-policy refusals only; the timed rows succeed
-src/gateway/meta_mcp/invoke/gate.rs	capability_rule_refusal	-	on-path, untimed: capability-backend targets only; the timed target is a backend tool
-src/gateway/meta_mcp/invoke/gate.rs	check_call_level_policy	-	on-path, untimed: signing-enabled gateway_invoke only; the harness does not configure signing
-src/gateway/meta_mcp/invoke/gate.rs	check_visible_policy	-	on-path, untimed: signing-enabled gateway_invoke and task replay only; the harness configures neither
-src/gateway/meta_mcp/invoke/gate.rs	check_visible_policy_explained	-	on-path, untimed: check_visible_policy is it plus the note; signing-enabled gateway_invoke and task replay only
+src/gateway/meta_mcp/invoke/gate_as_undefined.rs	capability_rule_refusal	-	on-path, untimed: capability-backend targets only; the timed target is a backend tool
+src/gateway/meta_mcp/invoke/gate_as_undefined.rs	check_call_level_policy	-	on-path, untimed: signing-enabled gateway_invoke only; the harness does not configure signing
+src/gateway/meta_mcp/invoke/gate_as_undefined.rs	check_visible_policy	-	on-path, untimed: signing-enabled gateway_invoke and task replay only; the harness configures neither
+src/gateway/meta_mcp/invoke/gate_as_undefined.rs	check_visible_policy_explained	-	on-path, untimed: check_visible_policy is it plus the note; signing-enabled gateway_invoke and task replay only
 src/gateway/meta_mcp/invoke/gate.rs	gate_answer	http_invoke_tiny	on the HTTP gateway_invoke path (the MIK-8361 gate)
 src/gateway/meta_mcp/invoke/gate.rs	gate_lens	http_invoke_tiny	inside named_gate_answer on the HTTP gateway_invoke path; the timed tool is not withheld, so it returns the catalogue lens
 src/gateway/meta_mcp/invoke/gate.rs	gated	http_invoke_tiny	on the HTTP gateway_invoke path (the MIK-8361 gate)
@@ -270,13 +270,13 @@ src/gateway/meta_mcp/invoke/gate.rs	invisible_at_route	http_invoke_tiny	on the H
 src/gateway/meta_mcp/invoke/gate.rs	invisible_call	http_invoke_tiny	on the HTTP gateway_invoke path (the route stage's whole-call gate)
 src/gateway/meta_mcp/invoke/gate.rs	named_gate_answer	http_invoke_tiny	on the HTTP gateway_invoke path (the MIK-8361 gate)
 src/gateway/meta_mcp/invoke/gate.rs	per_user_withheld_answer	-	on-path, untimed: a backend that keeps a catalogue per caller only; the timed rows dispatch to a shared-catalogue backend
-src/gateway/meta_mcp/invoke/gate.rs	profile_refusal	-	direct /mcp/{backend} route only, not the meta tools/call path
-src/gateway/meta_mcp/invoke/gate.rs	profile_refusal_as_undefined	-	on-path, untimed: admission refusals only (session profile, kill switch, capability cooldown); the timed rows succeed
-src/gateway/meta_mcp/invoke/gate.rs	profile_withheld_capability	http_invoke_tiny	on the HTTP gateway_invoke path (the route authorize's profile lookup; it refuses only a capability the profile excludes)
+src/gateway/meta_mcp/invoke/gate_as_undefined.rs	profile_refusal	-	direct /mcp/{backend} route only, not the meta tools/call path
+src/gateway/meta_mcp/invoke/gate_as_undefined.rs	profile_refusal_as_undefined	-	on-path, untimed: admission refusals only (session profile, kill switch, capability cooldown); the timed rows succeed
+src/gateway/meta_mcp/invoke/gate_as_undefined.rs	profile_withheld_capability	http_invoke_tiny	on the HTTP gateway_invoke path (the route authorize's profile lookup; it refuses only a capability the profile excludes)
 src/gateway/meta_mcp/invoke/gate.rs	shared_verdict	http_invoke_tiny	on the HTTP gateway_invoke path (the shared catalogue verdict)
 src/gateway/meta_mcp/invoke/gate.rs	withheld_gate	http_invoke_tiny	on the HTTP gateway_invoke path (the MIK-8361 gate)
 src/gateway/meta_mcp/invoke/gate.rs	withheld_invoke_target	-	on-path, untimed: signing-enabled gateway_invoke only; the harness does not configure signing
-src/gateway/meta_mcp/invoke/gate.rs	withheld_as_undefined	-	on-path, untimed: a withheld name only (session profile, invocation policy); the timed rows withhold nothing
+src/gateway/meta_mcp/invoke/gate_as_undefined.rs	withheld_as_undefined	-	on-path, untimed: a withheld name only (session profile, invocation policy); the timed rows withhold nothing
 src/gateway/meta_mcp/invoke/gate.rs	withheld_for	-	on-path, untimed: a withheld name only; the timed rows withhold nothing
 src/gateway/meta_mcp/invoke/gate/fill_marks.rs	fill_marks	http_invoke_tiny	on the HTTP gateway_invoke path (the gate's fill marks)
 src/gateway/meta_mcp/invoke/gate/fill_marks.rs	filled_since	http_invoke_tiny	on the HTTP gateway_invoke path (the gate's fill check)

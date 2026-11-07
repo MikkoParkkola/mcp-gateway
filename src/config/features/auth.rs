@@ -288,15 +288,7 @@ impl AuthConfig {
     ) -> Result<Option<String>> {
         self.bearer_token.as_ref().map_or(Ok(None), |token| {
             if token == "auto" {
-                use rand::RngExt;
-                let random_bytes: [u8; 32] = rand::rng().random();
-                Ok(Some(format!(
-                    "mcp_{}",
-                    base64::Engine::encode(
-                        &base64::engine::general_purpose::URL_SAFE_NO_PAD,
-                        random_bytes
-                    )
-                )))
+                Ok(Some(crate::random_secret::random_secret("mcp_")))
             } else {
                 crate::config::secret_ref::SecretRef::parse(token)
                     .resolve("auth.bearer_token", overlay)
