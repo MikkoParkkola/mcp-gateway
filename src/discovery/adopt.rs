@@ -203,6 +203,7 @@ impl Literal {
 pub(crate) fn adoption(
     server: &DiscoveredServer,
     stores_env_value: fn(&str, &str) -> bool,
+    stores_header_value: fn(&str) -> bool,
 ) -> Adoption {
     let mut backend = server.to_backend_config();
     backend.enabled = false;
@@ -216,7 +217,11 @@ pub(crate) fn adoption(
                 // read it as a reference instead.
                 !value.is_empty()
                     && !value.contains("${")
-                    && (header || stores_env_value(key, value) || is_reference(value))
+                    && (if header {
+                        stores_header_value(value)
+                    } else {
+                        stores_env_value(key, value)
+                    } || is_reference(value))
             })
             .map(|(key, _)| key.clone())
             .collect();

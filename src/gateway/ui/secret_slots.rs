@@ -76,7 +76,14 @@ pub(super) fn names_a_credential(key: &str) -> bool {
 /// shorter one (`1`, `true`, `none`, as in `HF_HUB_DISABLE_IMPLICIT_TOKEN=1`)
 /// would blank ordinary text: it is written as typed, as in 3.x.
 pub(super) fn stores_env_value(key: &str, value: &str) -> bool {
-    value.len() >= crate::security::needles::SHORT_VALUE_BYTES && names_a_credential(key)
+    stores_header_value(value) && names_a_credential(key)
+}
+
+/// Whether a header value goes to the store: any header that is at least
+/// the redactor's short-value bound long. A shorter one (`Authorization: none`)
+/// is written as typed, for the reason [`stores_env_value`] gives.
+pub(super) fn stores_header_value(value: &str) -> bool {
+    value.len() >= crate::security::needles::SHORT_VALUE_BYTES
 }
 
 /// The secret slot of backend `name`'s `key`, under `headers` or `env`. Its

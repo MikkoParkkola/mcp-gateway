@@ -260,7 +260,8 @@ fn the_compute_refuses_a_managed_name_and_a_short_reference_list() {
 
 /// Adopt's split of a find, as the route makes it.
 fn adopted(server: &crate::discovery::DiscoveredServer) -> crate::discovery::adopt::Adoption {
-    crate::discovery::adopt::adoption(server, super::super::super::secret_slots::stores_env_value)
+    use super::super::super::secret_slots::{stores_env_value, stores_header_value};
+    crate::discovery::adopt::adoption(server, stores_env_value, stores_header_value)
 }
 
 /// A find carrying ordinary settings and credentials side by side, as a
@@ -474,4 +475,38 @@ fn escaped_keys_each_take_their_own_reference() {
     for (key, reference) in keys.iter().zip(&references) {
         assert_eq!(&config.backends["tool"].env[*key], reference, "{key}");
     }
+}
+
+/// Adopt's side of the length bound: a credential-named env value or a header
+/// shorter than the redactor's short-value bound stays as written, one at the
+/// bound leaves for the store; a reference-shaped value leaves at any length
+/// (written as text, the gateway would read it as a reference).
+#[test]
+fn adoption_stores_nothing_shorter_than_the_redactors_bound() {
+    let bound = crate::security::needles::SHORT_VALUE_BYTES;
+    let digits = "0123456789abcdef";
+    let under: String = digits.chars().take(bound - 1).collect();
+    let at: String = digits.chars().take(bound).collect();
+    let mut server = find_with_settings();
+    server.env = [
+        ("API_KEY", under.as_str()),
+        ("DB_PASSWORD", at.as_str()),
+        ("CONFIG", "file:/x"),
+    ]
+    .into_iter()
+    .map(|(k, v)| (k.to_owned(), v.to_owned()))
+    .collect();
+    server.headers = [("X-Short", under.as_str()), ("X-Long", at.as_str())]
+        .into_iter()
+        .map(|(k, v)| (k.to_owned(), v.to_owned()))
+        .collect();
+    let adopted = adopted(&server);
+    let fields: Vec<String> = adopted
+        .literals
+        .iter()
+        .map(crate::discovery::adopt::Literal::field)
+        .collect();
+    assert_eq!(fields, ["env.CONFIG", "env.DB_PASSWORD", "headers.X-Long"]);
+    assert_eq!(adopted.backend.env.get("API_KEY"), Some(&under));
+    assert_eq!(adopted.backend.headers.get("X-Short"), Some(&under));
 }
