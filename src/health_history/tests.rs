@@ -398,3 +398,20 @@ fn h6b_a_save_waits_for_the_one_in_progress() {
         serde_json::from_slice(&std::fs::read(&path).expect("saved")).expect("json");
     assert_eq!(saved["clean_stop"], T0 + 90, "{saved}");
 }
+
+/// H9e (code review r1): a clock set backward between runs never counts a
+/// second twice. The first run covers [T0, T0+600) and stops cleanly; the
+/// next start reads T0+300; running to T0+900 adds only [T0+600, T0+900).
+#[test]
+fn h9e_a_backward_clock_counts_no_second_twice() {
+    let first = life(None, 1, T0, T0 + 600, true);
+    let (h, _) = HealthHistory::start(Some(&first), Restores::Counted(2), T0 + 300);
+    h.tick(T0 + 900);
+    let saved = h.encode(T0 + 900).expect("encodes");
+    let (h, _) = HealthHistory::start(Some(&saved), Restores::Counted(3), T0 + 900);
+    let (running, down): (u64, u64) = h.blocks().iter().fold((0, 0), |(r, d), b| {
+        (r + b.running_seconds, d + b.down_seconds)
+    });
+    assert_eq!(running, 900, "running counted once");
+    assert_eq!(down, 0, "no downtime over counted seconds");
+}
