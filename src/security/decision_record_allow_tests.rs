@@ -145,3 +145,16 @@ fn a_refusal_wins_over_any_allow() {
         )
     );
 }
+
+/// R30 (ATTR.1). A cache hit is not decided again: whatever its admission
+/// noted, a grant included, its record names `not_redecided` with no rule
+/// or grant id. A pin today.
+#[test]
+fn a_cache_hit_names_no_check_and_no_grant() {
+    let mut noted = Noted::default();
+    noted.allowed(grant());
+    let got = noted
+        .as_not_redecided()
+        .decision(Decided::CacheHitNotRedecided, Refused::No, None);
+    assert_eq!(named(&got), (DecisionKind::NotRedecided, None, None));
+}

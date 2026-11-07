@@ -286,6 +286,13 @@ pub(crate) fn note_cached_failure(failure: &Value) {
     }
 }
 
+/// Whether a call's dispatch scope is open here, for a test hook that must
+/// act only inside it.
+#[cfg(test)]
+pub(crate) fn in_dispatch_scope_for_test() -> bool {
+    NOTES.try_with(|_| ()).is_ok()
+}
+
 /// Run one invocation, returning its output and what its gates noted.
 pub(crate) async fn with_dispatch_scope<F: std::future::Future>(
     future: F,
