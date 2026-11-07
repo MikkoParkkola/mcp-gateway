@@ -101,7 +101,7 @@ fn a_tail_ahead_of_the_mark_is_checked_against_the_record_at_the_mark() {
             let path = log_path(&dir);
             let secret = if signed { SECRET.as_bytes() } else { b"" };
             let l = TransparencyLogger::open(cfg(&path, 12, signed)).unwrap();
-            (0..5).for_each(|i| append(&l, i));
+            (0..4).for_each(|i| append(&l, i));
             drop(l);
             let record = lines(&path)[3].clone();
             let mark = HighWater {
@@ -544,7 +544,7 @@ fn mark_restart_finds(
     let path = log_path(&dir);
     let secret = if signed { SECRET.as_bytes() } else { b"" };
     let l = TransparencyLogger::open(cfg(&path, 12, signed)).unwrap();
-    (0..5).for_each(|i| append(&l, i));
+    (0..4).for_each(|i| append(&l, i));
     drop(l);
     let mut records = lines(&path);
     let at = at.unwrap_or(records.len() - 1);

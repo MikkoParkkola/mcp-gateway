@@ -93,6 +93,10 @@ module = "src/security/severity.rs"
 reason = "the severity type shared by the firewall, response inspection and context integrity; each scanner maps it to an action in its own module, so it refuses nothing itself"
 
 [[coverage.not_a_control]]
+module = "src/security/transparency_log_kill.rs"
+reason = "compiled only under cfg(test): named crash boundaries where a child-process test row aborts the logger; it never ships and refuses no request"
+
+[[coverage.not_a_control]]
 module = "src/security/transparency_log_attributed.rs"
 reason = "the invocation-record writer of the transparency-log control, with MIK-7116.MIN.1 tenant attribution fields; it adds fields to a record and refuses no call; the control row names transparency_log.rs"
 
@@ -476,6 +480,20 @@ description = "every hot-path audit append runs off the request threads under a 
 source = "src/security/transparency_log_bounded.rs"
 probe = "none"
 reason = "fires only when the audit volume stops answering; a live probe cannot stall the disk of the install it probes"
+
+[[control]]
+id = "audit-settle-fail-closed"
+description = "settle appends a journaled config-write record only into the log its journal is bound to, synced, under the F20 permit: it never reports Appended without a confirmed sync; a permit it cannot take is Refused with no task, and past the bound a dispatched write is Unconfirmed; it refuses another log (OtherLog) and a payload outside the settle. kind namespace or naming a reserved field (Invalid); plain appends refuse a settle. kind. Covered by the settle rows (settle_tests: bound log, OtherLog, refusals by class), the bound rows (settle_bound_tests: permit, closed and stalled refusal, held task, 2x bound, faults, refresh failure) and the kind rows (settle_kind_tests)"
+source = "src/security/transparency_log_settle.rs"
+probe = "none"
+reason = "unreachable from the wire until the config writer moves onto settle; no request reaches it to probe"
+
+[[control]]
+id = "audit-log-identity"
+description = "the audit log keeps one id across reopens and rotations, and a genesis that replaces a lost log names what survived of it (the old id, the surviving high-water mark) in the same synced open record that sets the new id; audit verify reports that evidence, unverified unless the chain check authenticated the record. Covered by the identity, predecessor and kill rows (identity_tests, predecessor_tests, kill_tests)"
+source = "src/security/transparency_log_identity.rs"
+probe = "none"
+reason = "fires only when the audit log is replaced or lost on disk; a live probe cannot delete the log of the install it probes"
 
 [[control]]
 id = "audit-log-verify"
