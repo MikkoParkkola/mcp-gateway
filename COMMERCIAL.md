@@ -12,7 +12,8 @@ of v4.0.0).
   granted license cannot be revoked), but the 3.0.0–3.2.1 releases are
   deprecated and there is no MIT core from v4.0.0 onward. See `NOTICE.md`.
 
-**Running the gateway commercially requires a commercial license.** The whole
+**Commercial use outside the free permissions below or in
+`LICENSE-NONCOMMERCIAL` requires a commercial license.** The whole
 project — dispatch, transport, backend management, ranking/authorization, the
 capability registry/engine, identity, security, governance, cost, deployment,
 and the generic building blocks that were MIT in the 3.x line — is
