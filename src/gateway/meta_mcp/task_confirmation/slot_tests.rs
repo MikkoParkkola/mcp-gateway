@@ -132,8 +132,8 @@ impl crate::identity_propagation::IdentityPropagation for CountingMint {
             expiry_synthetic: false,
             headers: vec![("Authorization".to_string(), "Bearer minted".to_string())],
             expires_at: i64::MAX,
-            cache_binding: format!("{}@{}", identity.subject, backend.audience),
-            subject_key: identity.subject.clone(),
+            cache_binding: format!("{}@{}", identity.subject(), backend.audience),
+            subject_key: identity.subject().to_owned(),
             audience: backend.audience.clone(),
             scopes: Vec::new(),
         })

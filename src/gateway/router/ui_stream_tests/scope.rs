@@ -12,6 +12,7 @@ const PLAIN: &str = "u3-scoped-plain-key";
 const SADMIN: &str = "u3-scoped-admin-key";
 const EMPTY_PLAIN: &str = "u3-empty-plain-key";
 const EMPTY_ADMIN: &str = "u3-empty-admin-key";
+const GATEWAY_ADMIN: &str = "u3-gateway-admin-key";
 const SCOPE: [&str; 2] = ["alpha", "late"];
 
 fn key(secret: &str, backends: &[&str], admin: bool) -> ApiKeyConfig {
@@ -43,6 +44,7 @@ fn auth(plain: &[&str], admin: &[&str]) -> AuthConfig {
             key(SADMIN, admin, true),
             key(EMPTY_PLAIN, &[], false),
             key(EMPTY_ADMIN, &[], true),
+            key(GATEWAY_ADMIN, &["*"], true),
         ],
         public_paths: vec!["/health".to_owned()],
         ..AuthConfig::default()
@@ -293,4 +295,61 @@ async fn a_removed_backend_leaves_an_identity_callers_open_stream() {
             "{group}: the open stream dropped alpha"
         );
     }
+}
+
+/// Give the gateway-wide admin key `backends` and `admin`, as a reload of the
+/// file would, and check the reload published them.
+fn set_gateway_admin(state: &AppState, backends: &[&str], admin: bool) {
+    state.live_config.edit(|c| {
+        c.auth = auth(&SCOPE, &SCOPE);
+        let k = c
+            .auth
+            .api_keys
+            .iter_mut()
+            .find(|k| k.name == GATEWAY_ADMIN)
+            .expect("the fixture configures the key");
+        k.backends = backends.iter().map(|b| (*b).to_string()).collect();
+        k.admin = admin;
+    });
+    let published = state.live_config.get();
+    let key = published
+        .auth
+        .api_keys
+        .iter()
+        .find(|k| k.name == GATEWAY_ADMIN)
+        .expect("the reload publishes the key");
+    let want: Vec<String> = backends.iter().map(|b| (*b).to_string()).collect();
+    assert_eq!(
+        (key.backends.clone(), key.admin),
+        (want, admin),
+        "the reload set the key"
+    );
+}
+
+/// A gateway-wide admin's stream, opened with the full view, ends when a
+/// reload demotes the key: to an admin over one backend, or to no admin at
+/// all with every backend kept.
+async fn a_demotion_ends_a_gateway_admins_stream(backends: &[&str], admin: bool) {
+    let (state, _bearers, _dir) = gateway().await;
+    let mut s = open(&state, request(STREAM, Who::Bearer(GATEWAY_ADMIN), None)).await;
+    let first = s.until("status").await.json();
+    assert!(
+        first.get("servers").is_some(),
+        "opened with the full view: {first}"
+    );
+    set_gateway_admin(&state, backends, admin);
+    assert!(
+        s.ended_within(REVOKED_WITHIN).await,
+        "the demoted key's stream ended"
+    );
+}
+
+#[tokio::test]
+async fn narrowing_a_gateway_admin_to_one_backend_ends_its_stream() {
+    a_demotion_ends_a_gateway_admins_stream(&["alpha"], true).await;
+}
+
+#[tokio::test]
+async fn taking_admin_from_a_gateway_admin_ends_its_stream() {
+    a_demotion_ends_a_gateway_admins_stream(&["*"], false).await;
 }

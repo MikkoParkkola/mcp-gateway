@@ -57,6 +57,7 @@ src/config/secret_ref.rs	is_template_syntax	refuse_stray	2	not-delivered	predica
 src/config/secret_rules.rs	check	refusal	1	no-record	config load
 src/config/strict_keys.rs	refuse_unrecognised_keys	refusal	1	no-record	config load
 src/config/strict_keys.rs	refuse_unrecognised_keys	removed_refusal	1	no-record	config load
+src/config_persistence.rs	render	refuse_authored	1	no-record	a config write that adds or changes a firewall rule the load refuses, refused before writing
 src/config_persistence_atomic_windows.rs	prepare_from	source_refusal	1	no-record	a config write
 src/config_persistence_keyedit.rs	edit_in_place	refusal	1	no-record	a config write: an API key revocation the in-place editor cannot prove, answered with hand instructions by the admin UI
 src/config_persistence_keyedit_shape.rs	place	attach_refusal	1	no-record	a config write
@@ -69,17 +70,22 @@ src/config_reload/reload_context.rs	reload_transaction	refuse_before_apply	1	fee
 src/config_reload/reload_context.rs	reload_transaction	reload_refusal	1	feeds	a reload refusal gateway_reload_config answers; reload_config raises only for the posture refusal
 src/config_reload/reload_context.rs	reload_transaction	restart_only_refusal	1	feeds	a reload refusal gateway_reload_config answers; reload_config raises only for the posture refusal
 src/config_reload/reload_context.rs	with_pending_restart	next_start_refusal	1	not-delivered	restart advice inside a reload answer
+src/config_reload/reload_context_evaluate.rs	load_config_patch	refuse_while_running	1	feeds	a reload refusal gateway_reload_config answers (a refused firewall rule while the firewall runs); not a posture refusal
 src/config_reload/reload_context_refusals.rs	refuse_before_apply	refuse_capability_name_clash	1	no-record	config reload
 src/config_reload/reload_context_refusals.rs	refuse_before_apply	reload_binding_refusal	1	feeds	a reload refusal gateway_reload_config answers; not a posture refusal, so recorded as no policy decision
 src/config_reload/reload_context_refusals.rs	refuse_before_apply	reload_posture_refusal	1	feeds	the posture refusal reload_config raises refused for
 src/config_reload/reload_context_write.rs	mutate_locked	refuse_when_audited	1	no-record	config write: the older mutate path on an audited gateway, refused before any lock
+src/config_reload/reload_context_write.rs	mutate_locked	refuse_while_running	1	no-record	a config write refused before writing while the firewall runs
 src/config_reload/reload_context_write.rs	write_and_reload_outcome_within	refuse_when_audited	1	no-record	config write: the older whole-file write on an audited gateway, refused before any lock
+src/config_reload/reload_context_write.rs	write_and_reload_outcome_within	refuse_while_running	1	no-record	a config write refused before writing while the firewall runs
 src/config_reload/replace_validate.rs	refuse_candidate	refuse_before_apply	1	no-record	config write: the reload's own checks on the new bytes, before any secret entry; the reload runs them again
 src/config_reload/replace_validate.rs	refuse_candidate	reload_refusal	1	no-record	config write: the reload's own checks on the new bytes, before any secret entry; the reload runs them again
 src/config_reload/replace_validate.rs	refuse_candidate	restart_only_refusal	1	no-record	config write: the reload's own checks on the new bytes, before any secret entry; the reload runs them again
 src/config_reload/replace_validate.rs	refuse_shared_credentials	refuse_shared_digests	1	no-record	config write: a new bearer that is an API key's credential, before any secret entry
+src/config_reload/replace_validate.rs	validate_template	refuse_authored	1	no-record	a config replace, refused before any entry
 src/config_reload/replace_validate.rs	validate_template	refuse_candidate	1	no-record	config write: the reload's own checks on the new bytes, before any secret entry; the reload runs them again
 src/config_reload/replace_validate.rs	validate_template	refuse_shared_credentials	1	no-record	config write: a new bearer that is an API key's credential, before any secret entry
+src/config_reload/replace_validate.rs	validate_template	refuse_while_running	1	no-record	a config replace, refused before any entry
 src/error_origin.rs	http_is_backend_refusal	is_deterministic_refusal	1	not-delivered	predicate
 src/error_origin.rs	origin	http_is_backend_refusal	1	not-delivered	predicate: names who refused, for the error-count metric
 src/error_origin.rs	origin	is_echo_refusal	1	not-delivered	predicate: counts the scrub's retryable refusal as the gateway's, for the error-count metric
@@ -318,6 +324,7 @@ src/gateway/ui/discovery_adopt.rs	answer	config_refusal	1	no-record	admin UI dis
 src/gateway/ui/events.rs	replay_one	refusal	1	no-record	accounts, SSE, start-up or admin UI: no call delivery
 src/gateway/ui/import.rs	fetch_error_message	ssrf_refusal	1	no-record	accounts, SSE, start-up or admin UI: no call delivery
 src/gateway/ui/overview.rs	kpi_and_servers	startup_refusal	1	no-record	the Overview's Needs-you list: a start-up denial shown to the admin, no call delivery
+src/gateway/ui/policies_rules.rs	refused	first_refusal	1	not-delivered	the Policies read model's flag on a rule; nothing is refused
 src/gateway/ui/preview.rs	preview_backend	refusal	1	no-record	accounts, SSE, start-up or admin UI: no call delivery
 src/gateway/ui/tool_call.rs	admit	refusal	2	no-record	admin UI tool route, before any dispatch (message signing on, call slots busy); its admin_action record carries the disposition, no call delivery exists
 src/gateway/ui/tool_call.rs	call	refusal	2	no-record	admin UI tool route: a non-JSON body before dispatch, or the outward wording of a dispatched failure the inner gateway_invoke dispatch already recorded
@@ -362,6 +369,8 @@ src/secret_injection.rs	inject_rules	refusal	3	not-a-decision	a secret rule the 
 src/security/decision_record.rs	decision	refusal	1	not-delivered	reads the noted refusing check for the audit record
 src/security/decision_record.rs	has_refusal	refusal	1	not-delivered	predicate over the noted refusing check
 src/security/decision_record.rs	refusal_pair	refusal	1	not-delivered	reads the noted refusing check and its rule for the audit record
+src/security/firewall/refused_rules.rs	refuse_authored	first_refusal	1	no-record	a config write's refusal (render, replace); no call delivers it
+src/security/firewall/refused_rules.rs	warn_refused_rules	first_refusal	1	not-delivered	a load warning; nothing is refused
 src/security/http_diagnostics.rs	oauth_request_error	ssrf_refusal	1	recorded	an OAuth destination refusal reached through the refresh flight: each interactive caller records it at its join; the non-interactive token step records none
 src/security/http_diagnostics.rs	safe_request_error	ssrf_refusal	1	feeds	the SSRF refusal a capability call raises at send_with_retry
 src/security/http_diagnostics.rs	safe_request_error_for	ssrf_refusal	1	feeds	the SSRF refusal a capability call raises at send_with_retry

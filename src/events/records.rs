@@ -131,11 +131,11 @@ impl StoredIdentity {
 impl From<&crate::key_server::oidc::VerifiedIdentity> for StoredIdentity {
     fn from(identity: &crate::key_server::oidc::VerifiedIdentity) -> Self {
         Self {
-            subject: identity.subject.clone(),
-            email: identity.email.clone(),
-            name: identity.name.clone(),
-            groups: identity.groups.clone(),
-            issuer: identity.issuer.clone(),
+            subject: identity.subject().to_owned(),
+            email: identity.email().to_owned(),
+            name: identity.name().map(str::to_owned),
+            groups: identity.groups().to_vec(),
+            issuer: identity.issuer().to_owned(),
         }
     }
 }

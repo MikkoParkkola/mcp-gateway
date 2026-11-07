@@ -7,7 +7,7 @@
 use serde_json::{Value, json};
 
 use crate::security::firewall::{
-    FirewallAction, FirewallRule, OUTPUT_ONLY, ScanType, refused_shape,
+    FirewallAction, FirewallRule, OUTPUT_ONLY, RuleKeys, ScanType, first_refusal, refused_shape,
 };
 
 /// Every scan type, in `ScanType` order. The match below fails to compile
@@ -147,8 +147,9 @@ fn is_root(rule: &FirewallRule) -> bool {
     rule.allowed_roots.is_some() || rule.path_args.is_some()
 }
 
-/// Every finding rule, in order.
-pub(super) fn finding_rules(rules: &[FirewallRule]) -> Value {
+/// Every finding rule, in order. `keys` are the API keys the config offers,
+/// against which a rule's key references are judged.
+pub(super) fn finding_rules(rules: &[FirewallRule], keys: &RuleKeys<'_>) -> Value {
     let offered = offered();
     let compiled: Vec<FirewallRule> = rules.iter().map(as_compiled).collect();
     let out: Vec<Value> = rules
@@ -175,6 +176,7 @@ pub(super) fn finding_rules(rules: &[FirewallRule]) -> Value {
                 "read_only_reasons": reasons,
                 "shadowed": shadowed(&compiled, i),
                 "scope_differs": scope_differs(rule),
+                "refused": refused(i, rule, keys),
             })
         })
         .collect();
@@ -222,6 +224,21 @@ fn read_only_reasons(rule: &FirewallRule, offered: &[ScanType]) -> Vec<&'static 
         out.push("root");
     }
     out
+}
+
+/// Whether the firewall-on load refuses rule `i`: `null`, or the load's
+/// message and how the rule compiles meanwhile (`block_all` for a glob or
+/// scope problem, as `as_compiled` shows; `as_written` for a key or folder
+/// problem).
+fn refused(i: usize, rule: &FirewallRule, keys: &RuleKeys<'_>) -> Value {
+    first_refusal(i, rule, keys).map_or(Value::Null, |message| {
+        let compiles_to = if refused_shape(rule) {
+            "block_all"
+        } else {
+            "as_written"
+        };
+        json!({ "message": message, "compiles_to": compiles_to })
+    })
 }
 
 /// `rule` as a check reads it: a shape the load refuses compiles to an

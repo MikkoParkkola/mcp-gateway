@@ -520,6 +520,9 @@ fn export_response(
 #[path = "list_tests.rs"]
 mod list_tests;
 #[cfg(test)]
+#[path = "refusal_tests.rs"]
+mod refusal_tests;
+#[cfg(test)]
 #[path = "scope_tests.rs"]
 mod scope_tests;
 #[cfg(test)]
