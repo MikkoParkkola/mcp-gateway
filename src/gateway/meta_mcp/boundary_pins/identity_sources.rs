@@ -380,20 +380,15 @@ impl<'ast> syn::visit::Visit<'ast> for Visitor<'_> {
 
     fn visit_macro(&mut self, mac: &'ast syn::Macro) {
         let near_fields = self.leaf || self.impl_ty.as_deref().is_some_and(is_type);
-        let name = mac
-            .path
-            .segments
-            .last()
-            .map(|s| name(&s.ident))
-            .unwrap_or_default();
         let segments: Vec<String> = mac.path.segments.iter().map(|s| name(&s.ident)).collect();
-        let trusted = MACROS.contains(&name.as_str())
+        let last = segments.last().cloned().unwrap_or_default();
+        let trusted = MACROS.contains(&last.as_str())
             && match segments.as_slice() {
                 [_] => true,
                 [root, _] => MACRO_ROOTS.contains(&root.as_str()),
                 _ => false,
             };
-        if name == "include" || calls_include(mac) {
+        if last == "include" || calls_include(mac) {
             // Refused for what it is; not also as an unlisted macro.
             self.refuse("`include!` reads in code the walk does not see");
         } else if near_fields && !trusted {
