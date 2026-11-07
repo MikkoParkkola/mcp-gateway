@@ -395,11 +395,16 @@ async fn stdio_judged_out_batch_item_records_no_receipt() {
     );
 }
 
-/// A later batch item sees what an earlier one delivered: the operator reads
-/// text an HTTP caller also holds, then sends it, in one batch. Its own copy
-/// excuses it; deferring the receipt past the later item would refuse it.
+/// A later batch item is not excused by an earlier item of the same batch.
+/// A client composes every item of a JSON-RPC batch before it receives any
+/// answer, so the send cannot carry text the operator got from the read
+/// beside it: if it carries text an HTTP caller holds, the operator got that
+/// text some other way, which is the relay the gate refuses. Receipts record
+/// when the frame is written, after the whole batch ran.
+/// (Reverses the earlier pin, which let the read's receipt, recorded before
+/// anything was delivered, excuse the send.)
 #[tokio::test]
-async fn a_batch_item_sees_the_receipt_of_an_earlier_item() {
+async fn a_batch_item_is_not_excused_by_an_earlier_item_of_the_same_batch() {
     use crate::gateway::server::Gateway;
     let (meta, firewall, cell) = judged_stdio(None);
     let reads = meta.stdio_reads();
@@ -445,9 +450,9 @@ async fn a_batch_item_sees_the_receipt_of_an_earlier_item() {
         "base: the earlier read is delivered: {}",
         answers[0]
     );
-    assert!(
-        answers[1].get("error").is_none(),
-        "the operator's own earlier copy must excuse the send: {}",
+    assert_eq!(
+        answers[1]["error"]["code"], -32002,
+        "the send relays text the operator was not delivered: {}",
         answers[1]
     );
 }
