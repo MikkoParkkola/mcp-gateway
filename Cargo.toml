@@ -367,7 +367,7 @@ strip = true
 
 [lints.rust]
 unsafe_code = "deny"
-unexpected_cfgs = { level = "warn", check-cfg = ['cfg(kani)'] }
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(kani)', 'cfg(coverage)'] }
 
 [lints.clippy]
 all = { level = "warn", priority = -1 }

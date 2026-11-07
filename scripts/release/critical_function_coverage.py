@@ -119,7 +119,12 @@ TRACING_NAME = re.compile(
 #   possible tracing macro, so a line invoking one in a Critical function is
 #   unverifiable (only a level macro can match PLAIN_HEAD).
 _GAP = r"(?:\s|/\*.*?\*/|//[^\n]*\n)*"
-_USE_STATEMENT = re.compile(r"(?<!\w)use\b[^;]*;", re.S)
+# A real `use` item starts its line (after any attributes and a visibility),
+# so a doc comment, a line comment or a string literal that only mentions one
+# is not read as one; a multi-line `use` still runs to its `;`.
+_USE_STATEMENT = re.compile(
+    r"^[ \t]*(?:#\[[^\]\n]*\][ \t]*)*(?:pub(?:\([^)\n]*\))?[ \t]+)?use\b[^;]*;", re.M
+)
 _RENAMING = re.compile(r"\bas\b(?!\s*_(?!\w))")
 _MACRO_DEF = re.compile(r"(?<!\w)macro_rules" + _GAP + r"!" + _GAP + r"(?:r#)?(\w+)", re.S)
 

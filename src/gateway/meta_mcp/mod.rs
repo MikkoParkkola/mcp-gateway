@@ -630,7 +630,13 @@ pub(crate) fn publish_identity_grants(
     sink: &RwLock<LocalIdentityGrantStore>,
     epoch: &AtomicU64,
     grants: LocalIdentityGrantStore,
+    key: Option<&crate::security::rule_id::RuleKey>,
 ) {
+    // Keyed before the swap, so no reader sees the new rows without ids.
+    let grants = match key {
+        Some(key) => grants.with_rule_ids(key),
+        None => grants,
+    };
     let mut lock = sink.write();
     *lock = grants;
     let prev = epoch.fetch_add(1, Ordering::Release);

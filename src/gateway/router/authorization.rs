@@ -377,19 +377,23 @@ pub(super) fn decide_tool_target<'a>(
         return Decision::of(Err(e));
     }
 
-    if !state.mtls_policy.is_empty()
-        && state
-            .mtls_policy
-            .evaluate(cert_identity, target.server, target.tool)
-            == PolicyDecision::Deny
-    {
+    let mtls = (!state.mtls_policy.is_empty())
+        .then(|| {
+            state
+                .mtls_policy
+                .evaluate_explained(cert_identity, target.server, target.tool)
+        })
+        .filter(|(decision, _)| *decision == PolicyDecision::Deny);
+    if let Some((_, rule_id)) = mtls {
+        // A refusal no rule decided (no certificate, no rule matched) names none.
         let refusal = refused(
             DecisionKind::Mtls,
             format!(
                 "Tool '{}' on server '{}' is blocked by certificate policy",
                 target.tool, target.server
             ),
-        );
+        )
+        .with_rule(rule_id.cloned());
         return Decision::recorded(Err(refusal), move || {
             let identity_label = cert_identity.map_or("<unauthenticated>", |id| id.display_name());
             warn!(

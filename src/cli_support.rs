@@ -64,24 +64,35 @@ impl std::fmt::Display for Shown {
 #[must_use]
 pub fn shown(text: &str) -> Shown {
     let mut out = String::with_capacity(text.len());
-    for (at, c) in text.char_indices() {
+    let mut rest = text;
+    while let Some(c) = rest.chars().next() {
+        if c == '\\' {
+            // A whole backslash run at once: every backslash of a run gets
+            // the same answer, so it is found once and the run copied, in
+            // time linear in its length.
+            let after = rest.trim_start_matches('\\');
+            let unit = if escapes_next(after) { "\\\\" } else { "\\" };
+            for _ in 0..rest.len() - after.len() {
+                out.push_str(unit);
+            }
+            rest = after;
+            continue;
+        }
         if is_hidden_char(c) {
             out.extend(c.escape_unicode());
-        } else if c == '\\' && ends_in_escape(&text[at..]) {
-            out.push_str("\\\\");
         } else {
             out.push(c);
         }
+        rest = &rest[c.len_utf8()..];
     }
     Shown(out)
 }
 
-/// Whether the backslash run starting `rest` ends right before `u{` or a
-/// hidden character. Every backslash of such a run is doubled, so on screen
-/// an odd run before `u{` is always an escape `shown` wrote and an even run
-/// is literal text: no two texts print alike.
-fn ends_in_escape(rest: &str) -> bool {
-    let after = rest.trim_start_matches('\\');
+/// Whether a backslash run followed by `after` must be doubled: `after`
+/// starts with `u{` or a hidden character. Every backslash of such a run is
+/// doubled, so on screen an odd run before `u{` is always an escape `shown`
+/// wrote and an even run is literal text: no two texts print alike.
+fn escapes_next(after: &str) -> bool {
     after.starts_with("u{") || after.chars().next().is_some_and(is_hidden_char)
 }
 
@@ -459,24 +470,32 @@ fn field_of(header: bool, key: &str) -> String {
 /// terminal.
 #[must_use]
 pub fn describe_skipped(outcomes: &[Outcome]) -> String {
-    outcomes
-        .iter()
-        .filter_map(|outcome| match outcome {
-            Outcome::Skipped { name, reasons, .. } => Some(format!(
-                "\"{}\": {}",
-                shown(name),
-                reasons
-                    .iter()
-                    .map(|(code, field)| format!("{code} ({})", shown(field)))
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            )),
-            Outcome::Adopted { .. } => None,
-        })
-        .collect::<Vec<_>>()
-        .join("; ")
+    use std::fmt::Write as _;
+    // Built by writes of literals and `shown` parts only, so the discovery
+    // output guard judges every piece of the result.
+    let mut text = String::new();
+    for outcome in outcomes {
+        let Outcome::Skipped { name, reasons, .. } = outcome else {
+            continue;
+        };
+        if !text.is_empty() {
+            text.push_str("; ");
+        }
+        let _ = write!(text, "\"{}\": ", shown(name));
+        for (i, (code, field)) in reasons.iter().enumerate() {
+            if i > 0 {
+                text.push_str(", ");
+            }
+            let _ = write!(text, "{code} ({})", shown(field));
+        }
+    }
+    text
 }
 
 #[cfg(test)]
 #[path = "cli_support_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "cli_support_shown_tests.rs"]
+mod shown_tests;

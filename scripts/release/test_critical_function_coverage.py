@@ -546,12 +546,21 @@ class HeadLineCalls(unittest.TestCase):
             "use tracing::{\n    // logging\n    debug as d,\n};\n",
             "pub use ::tracing::warn as w;\n",
             "use tracing as t;\n",
+            "pub(crate) use tracing::warn as w;\n",
+            "#[cfg(test)] use tracing::debug as d;\n",
+            "#[cfg(test)]\nuse tracing::debug as d;\n",
         ]
         allowed = [
             "use tracing::{debug, info};\n",
             "use tracing::instrument::WithSubscriber as _;\n",
             "macro_rules! twice {\n    ($e:expr) => { $e + $e };\n}\n",
             "macro_rules! emit {\n    ($($t:tt)*) => { tracing::debug!($($t)*) };\n}\n",
+            # Text that only mentions a renaming use is not one: a doc
+            # comment, a line comment, a string literal.
+            "/// A renamed `use tracing::warn as w;` is still found.\nfn doc() {}\n",
+            "// use tracing::warn as w;\nfn line() {}\n",
+            "const S: &str = \"use tracing::warn as w;\\nfn f() {}\";\n",
+            "const T: &[&str] = &[\n    \"use tracing::warn as w;\",\n];\n",
         ]
         for header, expect in [(h, True) for h in refused] + [(h, False) for h in allowed]:
             with self.subTest(header=header):

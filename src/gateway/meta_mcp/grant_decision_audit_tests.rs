@@ -428,3 +428,6 @@ async fn surfaced_call_grant_denial_writes_one_record() {
     let record = only(wait_for_decisions(&dir, 1).await, "decision record");
     assert_eq!(record["outcome"], json!("denied"), "{record}");
 }
+
+#[path = "grant_decision_rule_id_tests.rs"]
+mod rule_ids;
