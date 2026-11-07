@@ -230,3 +230,52 @@ async fn warn_to_allow_loses_to_grant() {
     let got = delivered_under(&o, vec![warn_to_allow], json!({"q": "' OR 1=1"})).await;
     assert_eq!(got, as_grant(&expected, "g-m"));
 }
+
+/// R1 (ATTR.1, ATTR.2), the capability half of the ladder. A softener, a
+/// grant, an allow entry and a warn-to-allow rule all match: the softener
+/// is named. Without the softener the grant is, with its grant id. The
+/// rungs below the grant run on a registry backend (`ladder_below_grant`):
+/// without its grant this capability is refused. Kills M1.
+#[tokio::test(flavor = "current_thread")]
+async fn attribution_ladder_top() {
+    let o = owned(vec![owner_grant("g-m")]).await;
+    let expected = held_id(&o, "g-m");
+    let mut config = (*o.fx.state.live_config.get()).clone();
+    config.security.tool_policy.enabled = true;
+    config.security.tool_policy.allow = vec![format!("{CAPS}:{PROBE}")];
+    o.fx.state.live_config.set(config);
+    let softener = probe_rule(&o, FirewallAction::Allow, &[ScanType::ShellInjection]);
+    let warn_to_allow = probe_rule(&o, FirewallAction::Allow, &[ScanType::SqlInjection]);
+    let mut args = injected();
+    args["q"] = json!("' OR 1=1");
+    let all = vec![warn_to_allow.clone(), softener.clone()];
+    let got = delivered_under(&o, all, args.clone()).await;
+    assert_eq!(
+        got,
+        (
+            json!("firewall"),
+            json!(firewall_id(&o.fx, &softener).as_str()),
+            Value::Null
+        ),
+        "every rung"
+    );
+    let mut sql_only = args;
+    sql_only.as_object_mut().expect("an object").remove("cmd");
+    let got = delivered_under(&o, vec![warn_to_allow], sql_only).await;
+    assert_eq!(got, as_grant(&expected, "g-m"), "without the softener");
+}
+
+/// R14, R15 (ATTR.2), the grant variants. Grants apply only to capability
+/// backends, which the root check refuses, so a root rule never meets a
+/// grant: on a capability with no root rule a block-to-warn content rule
+/// still loses to the grant. The root softeners' ranks are pinned by the
+/// provenance unit rows and the rank merge rows.
+#[tokio::test(flavor = "current_thread")]
+async fn a_capability_without_root_rules_names_its_grant() {
+    let o = owned(vec![owner_grant("g-m")]).await;
+    let expected = held_id(&o, "g-m");
+    let to_warn = probe_rule(&o, FirewallAction::Warn, &[]);
+    assert!(to_warn.allowed_roots.is_none(), "premise: no root rule");
+    let got = delivered_under(&o, vec![to_warn], injected()).await;
+    assert_eq!(got, as_grant(&expected, "g-m"));
+}

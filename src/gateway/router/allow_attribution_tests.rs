@@ -179,3 +179,66 @@ async fn a_queued_task_names_its_allow_entry() {
         "{dispatch}"
     );
 }
+
+/// R1 (ATTR.1), the ladder below the grant on `alpha:read`: an mTLS rule
+/// over an allow entry, the entry over a warn-to-allow rule, that rule over
+/// nothing, and nothing is `default_allow`. Kills M1.
+#[tokio::test(flavor = "current_thread")]
+async fn attribution_ladder_below_grant() {
+    let rules = agent_rules();
+    let fx = with_policy(enabled(rules.clone())).await;
+    fx.state.live_config.set(edited(&fx, allow_entries));
+    let got = Box::pin(call_cert(&fx, Route::MetaInvoke, "read", Some("agent-a"))).await;
+    assert!(delivered(&got), "premise: {got:?}");
+    let mtls = mtls_id(&rule_key(&fx), &rules[1]);
+    assert_eq!((got.kind, got.rule), (json!("mtls"), json!(mtls.as_str())));
+
+    let fx = fixture(
+        Answer::Ok,
+        Some(crate::security::firewall::FirewallAction::Warn),
+    )
+    .await;
+    let base = fx.state.live_config.get().security.firewall.rules[0].clone();
+    let warn_to_allow = crate::security::firewall::FirewallRule {
+        action: crate::security::firewall::FirewallAction::Allow,
+        scan: vec![crate::security::firewall::ScanType::SqlInjection],
+        ..base
+    };
+    let sql = json!({"q": "' OR 1=1"});
+    let rung = |entry: bool, rule: bool| {
+        let warn_to_allow = warn_to_allow.clone();
+        edited(&fx, move |c| {
+            if entry {
+                allow_entries(c);
+            }
+            c.security.firewall.rules = if rule { vec![warn_to_allow] } else { vec![] };
+        })
+    };
+    let entry = tool_policy_id(&fx, "allow", "alpha:read");
+    let rule = super::rule_ids::firewall_id(&fx, &warn_to_allow);
+    let cases = [
+        (
+            "entry over rule",
+            rung(true, true),
+            json!("tool_policy"),
+            json!(entry.as_str()),
+        ),
+        (
+            "rule alone",
+            rung(false, true),
+            json!("firewall"),
+            json!(rule.as_str()),
+        ),
+        (
+            "nothing",
+            rung(false, false),
+            json!("default_allow"),
+            Value::Null,
+        ),
+    ];
+    for (case, config, kind, id) in cases {
+        let got = on(&fx, Route::MetaInvoke, sql.clone(), &config).await;
+        assert!(delivered(&got), "{case}: premise: {got:?}");
+        assert_eq!((got.kind, got.rule), (kind, id), "{case}");
+    }
+}
