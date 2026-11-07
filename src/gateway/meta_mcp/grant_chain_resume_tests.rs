@@ -13,8 +13,8 @@ use super::grant_audit::with_grant_slot;
 use super::grant_audit_fixture::{
     CAPS, Endpoint, PERSONAL, decisions, grant, grants, invocations, wait_for_decisions,
 };
-use super::visibility::after_grant_evaluation;
 use super::grant_decision_audit_tests::{api_key, context, gateway};
+use super::visibility::after_grant_evaluation;
 use crate::protocol::RequestId;
 use crate::protocol::continuation::{ContinuationPurpose, Payload, QuotaKey, now_unix_secs};
 use crate::protocol::mrtr::RetryFields;
@@ -112,7 +112,13 @@ async fn resume(meta: &super::MetaMcp, chain: Value, retry: &RetryFields) -> Val
     let mut caller = context(&who);
     caller.retry = retry;
     let response = meta
-        .handle_tools_call(RequestId::Number(2), "gateway_execute", chain, Some("d9"), caller)
+        .handle_tools_call(
+            RequestId::Number(2),
+            "gateway_execute",
+            chain,
+            Some("d9"),
+            caller,
+        )
         .await;
     serde_json::to_value(&response).expect("a response serialises")
 }
@@ -140,14 +146,23 @@ async fn a_resume_step_refused_by_the_grant_check_is_one_unrecorded_decision() {
 
     let answer = resume(&meta, chain, &retry).await;
 
-    assert!(fired.get(), "premise: the step was judged while its grant held: {answer}");
+    assert!(
+        fired.get(),
+        "premise: the step was judged while its grant held: {answer}"
+    );
     let text = answer.to_string();
-    assert!(text.contains("Identity grant denied"), "policy check, not visibility: {answer}");
+    assert!(
+        text.contains("Identity grant denied"),
+        "policy check, not visibility: {answer}"
+    );
     let held = wait_for_decisions(&dir, 1).await;
     assert_eq!(held.len(), 1, "{held:#?}");
     assert_eq!(held[0]["outcome"], json!("denied"), "{held:#?}");
     assert_eq!(held[0]["invocation_recorded"], json!(false), "{held:#?}");
-    assert!(invocations(&dir).is_empty(), "the step never dispatched: {answer}");
+    assert!(
+        invocations(&dir).is_empty(),
+        "the step never dispatched: {answer}"
+    );
     assert_eq!(refusals(&held), 1, "{held:#?}");
 }
 
@@ -177,8 +192,15 @@ async fn a_refused_resume_step_is_kept_beside_the_first_steps_traced_decision() 
 
     written.expect("the slot's records are written");
     let (first, second, fired) = answers;
-    assert!(fired.get(), "premise: the resume step was judged while granted: {second}");
-    assert_eq!(invocations(&dir).len(), 1, "only the first step dispatched: {first} {second}");
+    assert!(
+        fired.get(),
+        "premise: the resume step was judged while granted: {second}"
+    );
+    assert_eq!(
+        invocations(&dir).len(),
+        1,
+        "only the first step dispatched: {first} {second}"
+    );
     let held = decisions(&dir);
     assert_eq!(held.len(), 2, "{held:#?}");
     assert_eq!(held[0]["outcome"], json!("ok"), "{held:#?}");
