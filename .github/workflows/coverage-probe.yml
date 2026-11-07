@@ -16,7 +16,27 @@ env:
   COVERAGE_PARTS: "4"
 
 jobs:
+  # The plain library test build that the keychain, gws dry-run and packaged-crate jobs run
+  # (no coverage), measured once with the stock toolchain those jobs use.
+  lib-test-build:
+    name: runmem plain lib test build
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+      - name: Runner before the build
+        run: nproc; free -m; df -h /; swapon --show || true
+      - name: cargo test --all-features --lib --no-run, measured
+        run: |
+          set -o pipefail
+          ( while sleep 5; do
+              echo "MEMSAMPLE $(date +%T) used_mb=$(free -m | awk '/Mem:/{print $3}') avail_mb=$(free -m | awk '/Mem:/{print $7}') swap_used_mb=$(free -m | awk '/Swap:/{print $3}') disk_free_mb=$(df -m / | awk 'NR==2{print $4}') top=$(ps -eo rss=,comm= --sort=-rss | head -1 | tr -s ' ' ':')"
+            done ) &
+          /usr/bin/time -v cargo test --all-features --lib --no-run 2>&1 | tail -40
+
   linux-part:
+    if: false
     name: runmem part ${{ matrix.part }} swap=${{ matrix.swap }}
     runs-on: ubuntu-latest
     timeout-minutes: 180
