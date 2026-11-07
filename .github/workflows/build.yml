@@ -1,0 +1,42 @@
+# Canonical intarweb build workflow — the ONLY workflow a repo needs to produce
+# ghcr.io/intarweb/<repo>:latest. No logic here: everything (fork sync, PR
+# folding, fingerprint/no-op, build) lives in the shared workflow it calls.
+# This file is identical in every repo by construction — operations' build step
+# re-asserts this exact copy onto a fork's mirror main after every sync.
+#
+#   FORK:       main is synced to the upstream default branch; every open
+#               intarweb→upstream PR is folded into the built image. Rebuilds
+#               hourly when a PR is opened, a PR branch moves, or upstream
+#               moves (see schedule). A PR against the fork itself is NOT
+#               folded — upstream is the only transport.
+#   GREENFIELD: every push to the default branch builds :latest.
+# Shared logic: intarweb/operations/.github/workflows/build.yml (public repo —
+# reusable workflows resolve + unlimited Actions minutes).
+
+name: build
+
+on:
+  push:                    # any branch push — but only fires where THIS FILE
+                           # is on the branch. The mirror prunes it from main
+                           # except on main, so a branch cut after the prune
+                           # carries nothing and cannot self-fold; see the
+                           # schedule below, which is the safety net.
+  pull_request:            # PRs opened AGAINST the fork (fork-internal PRs)
+  schedule:
+    # The fold's only reliable trigger. There is no seed step (removed in F1):
+    # nothing ever writes build.yml onto a PR branch, so a push to one of those
+    # branches starts no fold — whatever other workflows upstream left on the
+    # branch may run, this one does not. GitHub also fires NO event on the fork
+    # when an intarweb->upstream PR is opened. This cadence is therefore what
+    # picks up every new or updated PR, not just a re-sync.
+    - cron: '4 * * * *'    # hourly re-sync + fold (no-op when the fingerprint is unchanged)
+  workflow_dispatch:
+
+permissions:
+  contents: write   # shared workflow re-applies this overlay on fork mirror main
+  packages: write   # GHCR push
+
+jobs:
+  publish:
+    uses: intarweb/operations/.github/workflows/build.yml@main
+    secrets: inherit
