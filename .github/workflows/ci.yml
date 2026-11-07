@@ -793,7 +793,7 @@ jobs:
         # runners serve every train (test_os_label_routing.py).
         shard: ${{ fromJSON(contains(github.event.pull_request.labels.*.name, 'os-sensitive') && !(startsWith(github.head_ref, 'train/') && github.event.pull_request.head.repo.full_name == github.repository) && '["lib"]' || '["lib","int"]') }}
     env:
-      # Two build jobs on the 3-core, 7 GB runner: the default swapped. Kept
+      # Two build jobs on the 3-core, 7 GB runner (macos-latest also lands on a 5-core, 14 GB one): the default swapped. Kept
       # on measurement (MIK-8482): the slowest shard took 25.5 min (#3944
       # run 1), against 35 min at the default in the Stage 0 probe.
       CARGO_BUILD_JOBS: 2
