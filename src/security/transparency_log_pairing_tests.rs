@@ -40,7 +40,11 @@ pub(super) fn log_with(dir: &tempfile::TempDir, records: Vec<Map<String, Value>>
         .into_iter()
         .map(|v| v.as_object().unwrap().clone())
         .collect();
-    assert_eq!(all.len(), 2, "a fresh log holds its open and identified records");
+    assert_eq!(
+        all.len(),
+        2,
+        "a fresh log holds its open and identified records"
+    );
     all.extend(records);
     rechain(&path, all);
     path
@@ -70,7 +74,12 @@ pub(super) fn assert_paired(r: &VerifyResult, what: &str) {
 pub(super) fn assert_fails(r: &VerifyResult, at: u64, rule: &str, token: &str) {
     assert!(!r.ok, "{rule}: passed");
     assert_eq!(r.failed_check, FailedCheck::Pairing, "{rule}");
-    assert_eq!(r.error_at_counter, Some(at), "{rule}: {:?}", r.error_message);
+    assert_eq!(
+        r.error_at_counter,
+        Some(at),
+        "{rule}: {:?}",
+        r.error_message
+    );
     let msg = r.error_message.as_deref().unwrap_or_default();
     assert!(msg.contains(rule), "{rule}: {msg}");
     assert!(msg.contains(&format!("(token {token})")), "{token}: {msg}");
@@ -96,7 +105,12 @@ fn equal_repeats_collapse_and_a_dependent_naming_the_second_pairs() {
 #[test]
 fn a_dependent_naming_no_intent_of_its_token_and_role_fails() {
     const RULE: &str = "names no intent of its token at that counter";
-    let note = || json!({"event": "config_write_note"}).as_object().unwrap().clone();
+    let note = || {
+        json!({"event": "config_write_note"})
+            .as_object()
+            .unwrap()
+            .clone()
+    };
     // A counter between two equal repeats (a plain record sits there).
     let between = verify_records(vec![
         rec(INTENT, "w-1", &json!({})),
@@ -128,20 +142,38 @@ fn an_intent_pairs_with_a_terminal_record_and_warns_without_one() {
     for (what, tail) in [
         ("outcome", vec![dep(OUTCOME, "w-1", 3)]),
         ("abandoned", vec![dep(ABANDONED, "w-1", 3)]),
-        ("deferred then outcome", vec![dep(DEFERRED, "w-1", 3), dep(OUTCOME, "w-1", 3)]),
+        (
+            "deferred then outcome",
+            vec![dep(DEFERRED, "w-1", 3), dep(OUTCOME, "w-1", 3)],
+        ),
     ] {
         let r = verify_records([vec![intent()], tail].concat());
         assert_paired(&r, what);
-        assert_eq!(count(&r.warnings, "(token w-1)"), 0, "{what}: {:?}", r.warnings);
+        assert_eq!(
+            count(&r.warnings, "(token w-1)"),
+            0,
+            "{what}: {:?}",
+            r.warnings
+        );
     }
     // Deferred, no terminal: left to recovery.
     let deferred = verify_records(vec![intent(), dep(DEFERRED, "w-1", 3)]);
     assert!(deferred.ok, "{:?}", deferred.error_message);
-    assert_eq!(count(&deferred.warnings, "left to recovery"), 1, "{:?}", deferred.warnings);
+    assert_eq!(
+        count(&deferred.warnings, "left to recovery"),
+        1,
+        "{:?}",
+        deferred.warnings
+    );
     // Alone: interrupted.
     let alone = verify_records(vec![intent()]);
     assert!(alone.ok, "{:?}", alone.error_message);
-    assert_eq!(count(&alone.warnings, "interrupted"), 1, "{:?}", alone.warnings);
+    assert_eq!(
+        count(&alone.warnings, "interrupted"),
+        1,
+        "{:?}",
+        alone.warnings
+    );
 }
 
 #[test]
@@ -157,10 +189,31 @@ fn a_token_and_role_with_two_different_records_fails() {
     // (case, records with a differing repeat, the deciding counter)
     let cases = [
         ("intent", vec![tagged("a"), tagged("b")], 4),
-        ("deferred", vec![intent(), with(DEFERRED, "a"), with(DEFERRED, "b"), dep(OUTCOME, "w-1", 3)], 5),
-        ("outcome", vec![intent(), with(OUTCOME, "a"), with(OUTCOME, "b")], 5),
-        ("abandoned", vec![intent(), with(ABANDONED, "a"), with(ABANDONED, "b")], 5),
-        ("outcome vs abandoned", vec![intent(), with(OUTCOME, "a"), with(ABANDONED, "a")], 5),
+        (
+            "deferred",
+            vec![
+                intent(),
+                with(DEFERRED, "a"),
+                with(DEFERRED, "b"),
+                dep(OUTCOME, "w-1", 3),
+            ],
+            5,
+        ),
+        (
+            "outcome",
+            vec![intent(), with(OUTCOME, "a"), with(OUTCOME, "b")],
+            5,
+        ),
+        (
+            "abandoned",
+            vec![intent(), with(ABANDONED, "a"), with(ABANDONED, "b")],
+            5,
+        ),
+        (
+            "outcome vs abandoned",
+            vec![intent(), with(OUTCOME, "a"), with(ABANDONED, "a")],
+            5,
+        ),
     ];
     for (what, records, at) in cases {
         let r = verify_records(records);
@@ -169,10 +222,27 @@ fn a_token_and_role_with_two_different_records_fails() {
     }
     // Controls: the same shapes with equal repeats pair.
     let controls = [
-        ("intent", vec![tagged("a"), tagged("a"), dep(OUTCOME, "w-1", 3)]),
-        ("deferred", vec![intent(), with(DEFERRED, "a"), with(DEFERRED, "a"), dep(OUTCOME, "w-1", 3)]),
-        ("outcome", vec![intent(), with(OUTCOME, "a"), with(OUTCOME, "a")]),
-        ("abandoned", vec![intent(), with(ABANDONED, "a"), with(ABANDONED, "a")]),
+        (
+            "intent",
+            vec![tagged("a"), tagged("a"), dep(OUTCOME, "w-1", 3)],
+        ),
+        (
+            "deferred",
+            vec![
+                intent(),
+                with(DEFERRED, "a"),
+                with(DEFERRED, "a"),
+                dep(OUTCOME, "w-1", 3),
+            ],
+        ),
+        (
+            "outcome",
+            vec![intent(), with(OUTCOME, "a"), with(OUTCOME, "a")],
+        ),
+        (
+            "abandoned",
+            vec![intent(), with(ABANDONED, "a"), with(ABANDONED, "a")],
+        ),
     ];
     for (what, records) in controls {
         assert_paired(&verify_records(records), what);
@@ -186,7 +256,11 @@ fn delivery_stopped_without_an_outcome_fails() {
     let r = verify_records(vec![intent(), dep(STOPPED, "w-1", 3)]);
     assert_fails(&r, 4, "delivery stopped with no outcome", "w-1");
     // Control: with its outcome it pairs.
-    let paired = verify_records(vec![intent(), dep(STOPPED, "w-1", 3), dep(OUTCOME, "w-1", 3)]);
+    let paired = verify_records(vec![
+        intent(),
+        dep(STOPPED, "w-1", 3),
+        dep(OUTCOME, "w-1", 3),
+    ]);
     assert_paired(&paired, "stopped then outcome");
 }
 
@@ -230,7 +304,11 @@ pub(super) const RECOVERY: &str = "config_recovery_intent";
 /// recovery attempt `by` whose intent is at `by_at`.
 pub(super) fn settled(token: &str, at: u64, by: &str, by_at: u64) -> Map<String, Value> {
     let by = json!({"token": by, "intent_counter": by_at});
-    rec(OUTCOME, token, &json!({"intent_counter": at, "settled_by": by}))
+    rec(
+        OUTCOME,
+        token,
+        &json!({"intent_counter": at, "settled_by": by}),
+    )
 }
 
 #[test]
@@ -253,4 +331,142 @@ fn settled_by_resolves_against_the_recovery_attempts_intents() {
     // settled_by naming a counter that holds no intent of r-1 fails.
     let none = verify_records([head(), vec![settled("w-1", 3, "r-1", 2)]].concat());
     assert_fails(&none, 5, RULE, "w-1");
+}
+
+fn payload(v: &Value) -> Map<String, Value> {
+    let mut m = json!({"kind": "settle.save"});
+    m.as_object_mut()
+        .unwrap()
+        .extend(v.as_object().unwrap().clone());
+    m.as_object().unwrap().clone()
+}
+
+/// The counter of the oldest file's first record: the retention boundary.
+fn boundary(path: &Path) -> u64 {
+    let oldest = super::segments::list_segments(path)
+        .unwrap()
+        .first()
+        .map_or_else(|| path.to_path_buf(), |s| s.path.clone());
+    lines(&oldest)[0]["counter"].as_u64().unwrap()
+}
+
+/// A log whose intent of `w-old` expired by retention (its expiry record in
+/// a newer segment), reopened so no more rotations happen: the logger, the
+/// old intent's counter and the boundary.
+async fn expired_log(path: &Path) -> (std::sync::Arc<TransparencyLogger>, u64, u64) {
+    use super::settle::{IntentKind, Role};
+    let l = std::sync::Arc::new(TransparencyLogger::open(cfg(path, 1, false)).unwrap());
+    let save = Role::Intent(IntentKind::Save);
+    let old = l.settle(&l.log_id(), "w-old", save, payload(&json!({})));
+    let old = old.await.unwrap().counter;
+    super::rotation_tests::rotate_n(&l, path, 3);
+    drop(l);
+    let mut big = (*cfg(path, 1, false)).clone();
+    big.rotation.max_segment_bytes = 1 << 20;
+    let l = std::sync::Arc::new(TransparencyLogger::open(std::sync::Arc::new(big)).unwrap());
+    let b = boundary(path);
+    assert!(old < b, "the old intent expired: {old} >= {b}");
+    let newer = super::segments::list_segments(path)
+        .unwrap()
+        .into_iter()
+        .skip(1);
+    let anchored = newer.map(|s| s.path).chain([path.to_path_buf()]).any(|f| {
+        lines(&f)
+            .iter()
+            .any(|v| v["event"] == super::rotation::EV_EXPIRED)
+    });
+    assert!(anchored, "an expiry record sits in a newer file");
+    (l, old, b)
+}
+
+/// Settle `role` of `token` with `extra`, returning its counter.
+async fn put(
+    l: &std::sync::Arc<TransparencyLogger>,
+    token: &str,
+    role: super::settle::Role,
+    extra: &Value,
+) -> u64 {
+    let got = l.settle(&l.log_id(), token, role, payload(extra)).await;
+    got.unwrap_or_else(|e| panic!("{e:?}")).counter
+}
+
+/// Verify `path` live and archive alike.
+fn both_modes(path: &Path) -> [(VerifyMode, VerifyResult); 2] {
+    [VerifyMode::Live, VerifyMode::Archive]
+        .map(|m| (m, verify_segments(path, &cfg(path, 1, false), m).unwrap()))
+}
+
+#[tokio::test]
+async fn dependents_below_at_and_above_the_boundary() {
+    use super::settle::{IntentKind, Role};
+    // Just below the boundary: an expired intent, an info line.
+    let dir = tempfile::tempdir().unwrap();
+    let path = log_path(&dir);
+    let (l, _, b) = expired_log(&path).await;
+    put(&l, "w-x", Role::Outcome, &json!({"intent_counter": b - 1})).await;
+    drop(l);
+    for (mode, r) in both_modes(&path) {
+        assert!(r.ok, "{mode:?}: {:?}", r.error_message);
+        assert_eq!(
+            count(&r.notes, "intent expired"),
+            1,
+            "{mode:?}: {:?}",
+            r.notes
+        );
+    }
+    // At the boundary: in range, no intent there, so it fails.
+    let dir = tempfile::tempdir().unwrap();
+    let path = log_path(&dir);
+    let (l, _, b) = expired_log(&path).await;
+    let at = put(&l, "w-x", Role::Outcome, &json!({"intent_counter": b})).await;
+    drop(l);
+    for (mode, r) in both_modes(&path) {
+        assert_fails(
+            &r,
+            at,
+            "names no intent of its token at that counter",
+            "w-x",
+        );
+        assert_eq!(count(&r.notes, "intent expired"), 0, "{mode:?}");
+    }
+    // Above it: an intent in range pairs, with no info line.
+    let dir = tempfile::tempdir().unwrap();
+    let path = log_path(&dir);
+    let (l, _, _) = expired_log(&path).await;
+    let i = put(&l, "w-in", Role::Intent(IntentKind::Save), &json!({})).await;
+    put(&l, "w-in", Role::Outcome, &json!({"intent_counter": i})).await;
+    drop(l);
+    for (mode, r) in both_modes(&path) {
+        assert_paired(&r, &format!("{mode:?} above"));
+        assert_eq!(count(&r.notes, "intent expired"), 0, "{mode:?}");
+    }
+}
+
+#[tokio::test]
+async fn settled_by_below_the_boundary_is_expired_not_failed() {
+    use super::settle::{IntentKind, Role};
+    let dir = tempfile::tempdir().unwrap();
+    let path = log_path(&dir);
+    let (l, old, _) = expired_log(&path).await;
+    // GIVEN: an outcome whose settled_by names w-old's expired intent
+    let i = put(&l, "w-1", Role::Intent(IntentKind::Save), &json!({})).await;
+    let by = json!({"token": "w-old", "intent_counter": old});
+    put(
+        &l,
+        "w-1",
+        Role::Outcome,
+        &json!({"intent_counter": i, "settled_by": by}),
+    )
+    .await;
+    drop(l);
+    // THEN: it pairs, and settled_by is an info line, in both modes
+    for (mode, r) in both_modes(&path) {
+        assert_paired(&r, &format!("{mode:?}"));
+        assert_eq!(
+            count(&r.notes, "settled_by names an intent expired"),
+            1,
+            "{mode:?}: {:?}",
+            r.notes
+        );
+    }
 }
