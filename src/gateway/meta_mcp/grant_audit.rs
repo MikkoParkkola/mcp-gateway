@@ -39,6 +39,7 @@ use crate::{Error, Result};
 mod marker;
 mod withheld;
 pub(super) use marker::in_delivery_scope;
+pub(crate) use marker::invocation_landing;
 pub(super) use marker::{RecordedSet, RetryCell, note_retry_trace, with_retry_trace};
 pub(super) use withheld::{WITHHELD_RECORD_FAILED, note_withheld_best_effort};
 mod repeat;
@@ -180,6 +181,7 @@ impl GrantNote {
                 .trace_id
                 .as_deref()
                 .is_some_and(|trace| self.recorded.contains(trace))
+            || (self.trace_id.is_none() && self.recorded.contains_target(&self.server, &self.tool))
             || self
                 .retry
                 .as_ref()

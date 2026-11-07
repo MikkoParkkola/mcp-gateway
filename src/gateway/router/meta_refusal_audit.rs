@@ -315,13 +315,17 @@ impl<'a> Refused<'a> {
         ));
         let session = self.session_id.to_string();
         let recorded = trace_id.clone();
+        // Taken here: the blocking append below has no task-locals. Run only
+        // after the append returned Ok, so a failed write marks nothing.
+        let landed =
+            crate::gateway::meta_mcp::grant_audit::invocation_landing(refusal.server, refusal.tool);
         // The meta writer's correlation ladder; a modern call's session is
         // `""`, so it falls to the minted trace id (MIK-7640).
         let written = log
             .append_bounded(move |log| {
                 let key =
                     CorrelationKey::ladder(otel_trace_id.as_deref(), Some(&session), &trace_id);
-                log.log_invocation_attributed(
+                let appended = log.log_invocation_attributed(
                     key,
                     &envelope,
                     InvocationTarget {
@@ -333,7 +337,11 @@ impl<'a> Refused<'a> {
                     None,
                     attribution,
                     Some(decision.as_ref()),
-                )
+                );
+                if appended.is_ok() {
+                    landed(&trace_id);
+                }
+                appended
             })
             .await;
         Some(written.map(|()| recorded).map_err(Into::into))
