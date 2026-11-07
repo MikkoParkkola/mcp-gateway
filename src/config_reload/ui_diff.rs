@@ -155,8 +155,8 @@ pub(crate) enum PreviewRefused {
     Unread(String),
 }
 
-/// Why `ui_diff` gave no preview. The save adds its own variants (PR b2).
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// Why `ui_diff` gave no preview, or `ui_save` wrote nothing.
+#[derive(Debug, Clone, PartialEq)]
 pub(crate) enum UiRefused {
     WrongKind(FieldId),
     BadValue(FieldId, String),
@@ -165,6 +165,23 @@ pub(crate) enum UiRefused {
     /// The loader or the reload would refuse the result.
     Invalid(String),
     Unsupported(String),
+    /// Save: auth is on and no audit log is configured.
+    NoAuditLog,
+    /// Save: the edit cannot be proven in place; the change as steps.
+    Unprovable(Patch),
+    /// Save: the file changed since the preview; the preview of it now.
+    Stale(Box<UiPreview>),
+    /// Save: the file changed, and its fresh preview refused.
+    StaleUnpreviewable(String),
+    /// Save: another write held the config past the wait.
+    Busy,
+    /// Save: the secret store refused; no file was written. A timed-out
+    /// create may still land an entry, listed as unused.
+    SecretsRefused {
+        timeout: bool,
+    },
+    /// Save: the write did not complete; fixed text, the detail is logged.
+    Failed(String),
 }
 
 impl From<EditRefused> for UiRefused {
