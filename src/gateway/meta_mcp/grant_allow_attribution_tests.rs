@@ -273,6 +273,9 @@ async fn an_audited_grant_check_notes_its_grant() {
     let g = granted(vec![grant("g-m", ALICE, ALICE)]).await;
     let who = api_key("alice");
     let caller = context(&who);
+    // The check runs bare here, outside the grant-decision slot a dispatch
+    // opens; only that slot bookkeeping is waived.
+    let _unslotted = super::super::grant_audit::allow_unslotted_check_for_test();
     let (after, alone) = notes_around(|| {
         let checked = g
             .meta
