@@ -470,3 +470,176 @@ async fn settled_by_below_the_boundary_is_expired_not_failed() {
         );
     }
 }
+
+const STOPPED: &str = "config_write_delivery_stopped";
+
+/// A pairing failure at `at` naming `rule` (a field rule), the chain passing.
+fn assert_field_fails(r: &VerifyResult, at: u64, rule: &str, what: &str) {
+    assert!(!r.ok, "{what}: passed");
+    assert_eq!(r.failed_check, FailedCheck::Pairing, "{what}");
+    assert_eq!(
+        r.error_at_counter,
+        Some(at),
+        "{what}: {:?}",
+        r.error_message
+    );
+    let msg = r.error_message.as_deref().unwrap_or_default();
+    assert!(msg.contains(rule), "{what}: {msg}");
+}
+
+/// `record` with `edit` applied: `None` removes the field.
+fn with_field(
+    mut record: Map<String, Value>,
+    field: &str,
+    edit: Option<Value>,
+) -> Map<String, Value> {
+    match edit {
+        Some(v) => record.insert(field.into(), v),
+        None => record.remove(field),
+    };
+    record
+}
+
+#[test]
+fn each_role_fails_on_each_field_missing_or_mistyped() {
+    let intent = || rec(INTENT, "w-1", &json!({}));
+    let by = |v: Value| json!({"intent_counter": 3, "settled_by": v});
+    // (case, the role's well-formed record, field, edit, rule)
+    let cases: Vec<(&str, Map<String, Value>, &str, Option<Value>, &str)> = vec![
+        (
+            "intent no token",
+            intent(),
+            "token",
+            None,
+            "field token missing",
+        ),
+        (
+            "intent token number",
+            intent(),
+            "token",
+            Some(json!(5)),
+            "field token mistyped",
+        ),
+        (
+            "intent token empty",
+            intent(),
+            "token",
+            Some(json!("")),
+            "field token mistyped",
+        ),
+        (
+            "intent counter",
+            intent(),
+            "intent_counter",
+            Some(json!(1)),
+            "field intent_counter forbidden",
+        ),
+        (
+            "recovery no settles",
+            rec(RECOVERY, "r-1", &json!({"settles": "w-1"})),
+            "settles",
+            None,
+            "field settles missing",
+        ),
+        (
+            "recovery settles empty",
+            rec(RECOVERY, "r-1", &json!({"settles": "w-1"})),
+            "settles",
+            Some(json!("")),
+            "field settles mistyped",
+        ),
+        (
+            "recovery counter",
+            rec(RECOVERY, "r-1", &json!({"settles": "w-1"})),
+            "intent_counter",
+            Some(json!(3)),
+            "field intent_counter forbidden",
+        ),
+        (
+            "outcome no counter",
+            dep(OUTCOME, "w-1", 3),
+            "intent_counter",
+            None,
+            "field intent_counter missing",
+        ),
+        (
+            "outcome counter text",
+            dep(OUTCOME, "w-1", 3),
+            "intent_counter",
+            Some(json!("3")),
+            "field intent_counter mistyped",
+        ),
+        (
+            "outcome settled_by number",
+            rec(OUTCOME, "w-1", &by(json!(5))),
+            "kind",
+            Some(json!("settle.save")),
+            "field settled_by mistyped",
+        ),
+        (
+            "outcome settled_by empty token",
+            rec(
+                OUTCOME,
+                "w-1",
+                &by(json!({"token": "", "intent_counter": 1})),
+            ),
+            "kind",
+            Some(json!("settle.save")),
+            "field settled_by.token mistyped",
+        ),
+        (
+            "outcome settled_by no counter",
+            rec(OUTCOME, "w-1", &by(json!({"token": "r-1"}))),
+            "kind",
+            Some(json!("settle.save")),
+            "field settled_by.intent_counter missing",
+        ),
+        (
+            "abandoned counter text",
+            dep(ABANDONED, "w-1", 3),
+            "intent_counter",
+            Some(json!("3")),
+            "field intent_counter mistyped",
+        ),
+        (
+            "deferred no counter",
+            dep(DEFERRED, "w-1", 3),
+            "intent_counter",
+            None,
+            "field intent_counter missing",
+        ),
+        (
+            "stopped counter negative",
+            dep(STOPPED, "w-1", 3),
+            "intent_counter",
+            Some(json!(-1)),
+            "field intent_counter mistyped",
+        ),
+    ];
+    for (what, record, field, edit, rule) in cases {
+        let intent_role = record["event"] == INTENT || record["event"] == RECOVERY;
+        let bad = with_field(record, field, edit);
+        let (records, at) = if intent_role {
+            (vec![bad], 3)
+        } else {
+            (vec![intent(), bad], 4)
+        };
+        assert_field_fails(&verify_records(records), at, rule, what);
+    }
+    // Controls: each role's well-formed record passes, abandoned with no
+    // intent_counter (never delivered) included.
+    let ok = verify_records(vec![
+        intent(),
+        rec(RECOVERY, "r-1", &json!({"settles": "w-1"})),
+        dep(DEFERRED, "w-1", 3),
+        dep(STOPPED, "w-1", 3),
+        rec(
+            OUTCOME,
+            "w-1",
+            &by(json!({"token": "r-1", "intent_counter": 4})),
+        ),
+        rec(INTENT, "w-2", &json!({})),
+        rec(ABANDONED, "w-2", &json!({})),
+    ]);
+    assert_paired(&ok, "well-formed roles");
+}
