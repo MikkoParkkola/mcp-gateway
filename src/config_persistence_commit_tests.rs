@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! Primitive A's rows: a token only after the directory sync and a matching
-//! read-back, in that order; every other path names whether the rename
-//! happened. Each row's red oracle is the assertion its doc names.
+//! Primitive A's rows: a token only after the directory sync, the file flush
+//! and a matching read-back, in that order; every other path names whether
+//! the rename happened. Each row's red oracle is the assertion its doc names.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -497,4 +497,25 @@ fn a_link_swapped_in_at_the_target_is_repointed() {
         matches!(got, Err(NotDurable::Repointed(Refusal::Moved))),
         "{got:?}"
     );
+}
+
+/// A20: a failed file flush is `Sync`, never a token. Red oracle: `Sync`.
+#[test]
+fn a_file_flush_failure_is_sync() {
+    let (_dir, path) = config();
+    let held = lock(&path);
+    let _armed = fault::set(&path, Fault::FailFileSync);
+    let got = commit(&held, &path, Action::Forward, NEW);
+    assert!(matches!(got, Err(NotDurable::Sync(_))), "{got:?}");
+    assert_eq!(fault::fired(&path), 1, "the seam was reached");
+    assert_eq!(std::fs::read(&path).expect("read"), NEW, "renamed");
+
+    let (_dir2, path2) = config();
+    write_atomic(&path2, NEW, FileMode::Private, Symlink::Replace).expect("seed");
+    let held2 = lock(&path2);
+    let _armed2 = fault::set(&path2, Fault::FailFileSync);
+    let got = verify(&held2, &path2, &FileRevision::of(NEW));
+    assert!(matches!(got, Err(NotDurable::Sync(_))), "{got:?}");
+    assert_eq!(fault::fired(&path2), 1, "the seam was reached");
+    assert_eq!(std::fs::read(&path2).expect("read"), NEW);
 }

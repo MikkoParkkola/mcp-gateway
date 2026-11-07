@@ -450,6 +450,8 @@ pub(crate) mod fault {
         FailWrite,
         /// The directory sync of the given A call fails, every time, while armed.
         FailDirSync(crate::config_persistence::commit::SyncKey),
+        /// The read-back's file flush fails, every time, while armed.
+        FailFileSync,
         /// A row's action on the target at a point inside an A call.
         Hook(HookAt, Arc<dyn Fn(&Path) + Send + Sync>),
         /// Several of the above armed together on one target.

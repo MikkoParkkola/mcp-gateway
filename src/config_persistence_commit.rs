@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Primitive A: replace the config with bytes and prove they are durable, or
 //! prove what is on disk without writing. A [`CommitToken`] exists only after
-//! the directory sync succeeded and a read-back of the target matched, in that
-//! order; nothing else builds one.
+//! the directory sync, the file flush and a matching read-back of the target,
+//! in that order; nothing else builds one.
 #![cfg_attr(
     not(test),
     expect(dead_code, reason = "the config writer, a later step, calls A")
@@ -51,8 +51,9 @@ impl FileRevision {
     }
 }
 
-/// Proof that the target holds `revision`'s bytes durably: the directory was
-/// synced after the rename, then the bytes read back matched.
+/// Proof that the target holds `revision`'s bytes durably: the token exists
+/// only after the directory sync, the file flush and a matching read-back,
+/// in that order.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct CommitToken {
     revision: FileRevision,
@@ -201,7 +202,7 @@ fn refusal(locked: &Locked, configured: &Path) -> Option<Refusal> {
 /// regular file is hashed: a FIFO or device is opened without waiting on it
 /// and refused. A read error proves nothing, so it is `Sync`.
 fn read_back(target: &Path, expected: &FileRevision) -> Result<(), NotDurable> {
-    let mut file = match crate::open_nonblocking::open_nonblocking(target) {
+    let mut file = match open_target(target) {
         Ok(file) => file,
         Err(e) if e.kind() == io::ErrorKind::NotFound => {
             return Err(NotDurable::NotOnDisk {
@@ -217,7 +218,13 @@ fn read_back(target: &Path, expected: &FileRevision) -> Result<(), NotDurable> {
     }
     // A directory sync makes the name durable, not the data: flush the file
     // too, so a match read from the page cache proves bytes on disk.
-    flush(&file, target).map_err(NotDurable::Sync)?;
+    #[cfg(test)]
+    if fault::fires(target, |f| matches!(f, Fault::FailFileSync)).is_some() {
+        return Err(NotDurable::Sync(io::Error::other(
+            "injected file-sync failure",
+        )));
+    }
+    flush(&file).map_err(NotDurable::Sync)?;
     let found = FileRevision::of_reader(&mut file).map_err(NotDurable::Sync)?;
     if &found == expected {
         return Ok(());
@@ -227,20 +234,29 @@ fn read_back(target: &Path, expected: &FileRevision) -> Result<(), NotDurable> {
     })
 }
 
-/// Flush the target's data. Unix flushes through the read handle; Windows
-/// needs write access to flush, so it opens a second handle that writes
-/// nothing.
+/// Open one handle for the flush and the hash, without waiting on a FIFO.
 #[cfg(unix)]
-fn flush(file: &std::fs::File, _target: &Path) -> io::Result<()> {
-    file.sync_all()
+fn open_target(target: &Path) -> io::Result<std::fs::File> {
+    crate::open_nonblocking::open_nonblocking(target)
 }
 
+/// Windows needs write access to flush. Deny write and delete sharing so
+/// the file cannot be changed or replaced between the flush and the hash.
 #[cfg(not(unix))]
-fn flush(_file: &std::fs::File, target: &Path) -> io::Result<()> {
+fn open_target(target: &Path) -> io::Result<std::fs::File> {
+    use std::os::windows::fs::OpenOptionsExt;
+    use windows_sys::Win32::Storage::FileSystem::FILE_SHARE_READ;
+
     std::fs::OpenOptions::new()
+        .read(true)
         .write(true)
-        .open(target)?
-        .sync_all()
+        .share_mode(FILE_SHARE_READ)
+        .open(target)
+}
+
+/// Flush the same file whose bytes are then hashed.
+fn flush(file: &std::fs::File) -> io::Result<()> {
+    file.sync_all()
 }
 
 /// Run a row's hook armed for `target` at `at`.
