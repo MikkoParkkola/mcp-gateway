@@ -34,23 +34,26 @@ PROBE = "src/gateway/outbound/reads_token_probe.rs"
 # Per probe, the errors it must raise: (code, fragment of the rendered text).
 # Pinned from the first observed run of the probe against the token.
 EXPECTED: dict[str, list[tuple[str, str]]] = {
-    "p1_reads": [("E0423", "ReadsToken")],
-    "p2_reserve": [("E0423", "ReadsToken")],
-    "p3a_later_reads": [("E0423", "ReadsToken")],
-    "p3b_later_reserve": [("E0423", "ReadsToken")],
-    "p4a_frag_reads": [("E0423", "ReadsToken")],
-    "p4b_frag_reserve": [("E0423", "ReadsToken")],
-    "p5_test_token": [("E0425", "test_token")],
-    "p6a_reads_unit": [("E0308", "ReadsToken")],
-    "p6b_reserve_unit": [("E0308", "ReadsToken")],
+    "p1_reads": [("E0423", "a struct named `ReadsToken`")],
+    "p2_reserve": [("E0423", "a struct named `ReadsToken`")],
+    "p3a_later_reads": [("E0423", "a struct named `ReadsToken`")],
+    "p3b_later_reserve": [("E0423", "a struct named `ReadsToken`")],
+    "p4a_frag_reads": [("E0423", "a struct named `ReadsToken`")],
+    "p4b_frag_reserve": [("E0423", "a struct named `ReadsToken`")],
+    "p5_test_token": [("E0425", "function `test_token`")],
+    "p6a_reads_unit": [("E0308", "expected `&ReadsToken`")],
+    "p6b_reserve_unit": [("E0308", "expected `&ReadsToken`")],
 }
 # P7 and P8 are trait impls, not fns: each is named by a marker comment line
 # `// probe: <name>` above it, and its errors fall on the lines that follow.
 EXPECTED_IMPLS: dict[str, list[tuple[str, str]]] = {
-    "p7_copy": [("E0204", "ReadsToken")],
+    "p7_copy": [("E0204", "does not implement `std::marker::Copy`")],
     # `Self(..)` outside the judge: the constructor is private (E0603), and so is
     # the field it reads (E0616); both name the token.
-    "p8_clone": [("E0603", "ReadsToken"), ("E0616", "ReadsToken")],
+    "p8_clone": [
+        ("E0603", "`ReadsToken` is private"),
+        ("E0616", "of struct `ReadsToken` is private"),
+    ],
 }
 
 
@@ -78,6 +81,14 @@ def call_site(span: dict) -> dict:
     return span
 
 
+def structured_text(message: dict) -> str:
+    """A diagnostic's message, its span labels and its children's messages."""
+    parts = [message.get("message", "")]
+    parts += [s.get("label") or "" for s in message.get("spans", [])]
+    parts += [c.get("message", "") for c in message.get("children", [])]
+    return "\n".join(parts)
+
+
 def judge(messages: list[dict], build_failed: bool, source: str) -> list[str]:
     """Problems with one probe build; empty when the restriction holds."""
     problems: list[str] = []
@@ -89,7 +100,10 @@ def judge(messages: list[dict], build_failed: bool, source: str) -> list[str]:
         if message.get("level") != "error":
             continue
         code = (message.get("code") or {}).get("code") or "no code"
-        rendered = message.get("rendered") or message.get("message", "")
+        # The diagnostic's own words: its message, span labels and child
+        # notes. Never the rendered text, whose source excerpt would let an
+        # unrelated error on a line naming the token pass.
+        rendered = structured_text(message)
         primary = [s for s in message.get("spans", []) if s.get("is_primary")]
         if not primary:
             problems.append(f"an error with no span: {message.get('message')}")
@@ -172,6 +186,7 @@ def _err(code: str, text: str, line: int, file: str = PROBE, expansion: dict | N
         "message": text,
         "rendered": f"error[{code}]: {text}",
         "spans": [span],
+        "children": [],
     }
 
 
@@ -209,6 +224,15 @@ def self_test() -> int:
             ],
             True,
             0,
+        ),
+        "the name only in the source excerpt": (
+            [
+                {**_err("E0423", "cannot find value `missing`", 3),
+                 "rendered": "error[E0423]: ... forged(ReadsToken(Cell::new(())))"},
+                good[1],
+            ],
+            True,
+            1,
         ),
         "a spanless error": (good + [{"level": "error", "message": "x", "spans": []}], True, 1),
     }

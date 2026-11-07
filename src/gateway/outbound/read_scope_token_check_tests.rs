@@ -181,6 +181,17 @@ impl<'ast> syn::visit::Visit<'ast> for Uses {
     }
 }
 
+/// Whether a `use` tree names `ReadsToken`, as a leaf or as a renamed one.
+fn use_names_token(tree: &syn::UseTree) -> bool {
+    match tree {
+        syn::UseTree::Path(p) => use_names_token(&p.tree),
+        syn::UseTree::Name(n) => plain(&n.ident) == "ReadsToken",
+        syn::UseTree::Rename(r) => plain(&r.ident) == "ReadsToken",
+        syn::UseTree::Group(g) => g.items.iter().any(use_names_token),
+        syn::UseTree::Glob(_) => false,
+    }
+}
+
 /// Whether `assess`'s parameter `name` is typed `&Firewall`.
 fn firewall_param(sig: &syn::Signature, name: &str) -> bool {
     sig.inputs.iter().any(|input| {
@@ -204,6 +215,22 @@ pub(crate) fn token_findings(file: &syn::File) -> Vec<String> {
     let mut chains = 0;
     for item in production(file) {
         let syn::Item::Fn(f) = item else {
+            // Outside a fn, the token may appear only as its own declaration:
+            // a `use` naming it (an alias builds tokens under another name), a
+            // const or static holding its constructor, any other mention.
+            match item {
+                syn::Item::Struct(s) if token_struct(s) => {}
+                syn::Item::Use(u) if use_names_token(&u.tree) => {
+                    out.push("an alias of ReadsToken".to_owned());
+                }
+                other => {
+                    let mut uses = Uses::default();
+                    uses.visit_item(other);
+                    if uses.mentions > 0 {
+                        out.push("a token outside the read chain outside a fn".to_owned());
+                    }
+                }
+            }
             continue;
         };
         let name = plain(&f.sig.ident);
@@ -219,6 +246,10 @@ pub(crate) fn token_findings(file: &syn::File) -> Vec<String> {
             if name != "assess" {
                 out.push(format!("a read chain outside assess in {name}"));
                 continue;
+            }
+            // A generic parameter could rename `Firewall` to any type.
+            if !f.sig.generics.params.is_empty() {
+                out.push("a generic assess".to_owned());
             }
             if !firewall_param(&f.sig, receiver) {
                 out.push("a read chain on other than a Firewall parameter in assess".to_owned());

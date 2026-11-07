@@ -121,6 +121,26 @@ fn the_token_check_refuses_each_other_shape() {
             "a read chain on other than a Firewall parameter in assess",
         ),
         (
+            "an alias building tokens",
+            format!(
+                "{BASE}\nuse self::ReadsToken as Capability;\n\
+                 pub(crate) fn give(firewall: &Firewall) -> Capability {{\n\
+                 let Some(both) = judging(firewall) else {{ return Capability(Cell::new(())); }};\n\
+                 Capability(Cell::new(()))\n}}"
+            ),
+            "an alias of ReadsToken",
+        ),
+        (
+            "a const holding the constructor",
+            format!("{BASE}\nconst MAKE: fn(Cell<()>) -> ReadsToken = ReadsToken;"),
+            "a token outside the read chain outside a fn",
+        ),
+        (
+            "a generic Firewall shadowing the import",
+            BASE.replace("fn assess(", "fn assess<Firewall: Clone>("),
+            "a generic assess",
+        ),
+        (
             "a chain outside assess",
             BASE.replace("fn assess(", "fn judged("),
             "a read chain outside assess in judged",
