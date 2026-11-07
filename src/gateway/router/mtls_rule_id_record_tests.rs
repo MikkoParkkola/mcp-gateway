@@ -30,7 +30,10 @@ pub(super) async fn with_policy(config: MtlsConfig) -> Logged {
 }
 
 /// `logged` with `policy` as its mTLS policy.
-fn installed(mut logged: Logged, policy: std::sync::Arc<crate::mtls::MtlsPolicy>) -> Logged {
+pub(super) fn installed(
+    mut logged: Logged,
+    policy: std::sync::Arc<crate::mtls::MtlsPolicy>,
+) -> Logged {
     // The router holds the state; drop it to install the policy.
     logged.fx.router = axum::Router::new();
     std::sync::Arc::get_mut(&mut logged.fx.state)

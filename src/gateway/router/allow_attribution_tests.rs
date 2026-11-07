@@ -15,6 +15,8 @@ use crate::mtls::access_control::rule_id_tests::{mtls_id, rule};
 
 #[path = "allow_attribution_firewall_tests.rs"]
 mod firewall;
+#[path = "allow_attribution_grant_tests.rs"]
+mod grants;
 
 /// The fixture's live config with `edit` applied.
 fn edited(fx: &Logged, edit: impl FnOnce(&mut Config)) -> Config {
