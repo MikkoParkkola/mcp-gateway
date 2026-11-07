@@ -110,6 +110,9 @@ pub(super) struct Sites {
     /// The file of the last out-of-line `mod` item: the walk loads that
     /// module next.
     declaring: Option<String>,
+    /// Judging a macro found in raw tokens: bindings there are invisible,
+    /// so no `Shown` parameter is trusted.
+    in_tokens: bool,
 }
 
 impl Sites {
@@ -169,9 +172,11 @@ impl Sites {
 
     /// Whether `name` is a parameter of this function typed `Shown`.
     fn shown_param(&self, at: &Place, name: &str) -> bool {
-        self.names(&at.file)
-            .and_then(|n| n.shown_params.get(at.func.as_deref().unwrap_or_default()))
-            .is_some_and(|params| params.contains(name))
+        !self.in_tokens
+            && self
+                .names(&at.file)
+                .and_then(|n| n.shown_params.get(at.func.as_deref().unwrap_or_default()))
+                .is_some_and(|params| params.contains(name))
     }
 }
 
@@ -412,9 +417,11 @@ impl Sites {
         let buffer = syn::buffer::TokenBuffer::new2(mac.tokens.clone());
         let mut found = Vec::new();
         macros_in(buffer.begin(), &mut found);
+        let outer = std::mem::replace(&mut self.in_tokens, true);
         for inner in &found {
             self.mac(at, inner);
         }
+        self.in_tokens = outer;
     }
 
     /// A method or path call that writes: each argument is judged.
@@ -584,6 +591,18 @@ fn file_names(file: &syn::File) -> FileNames {
             syn::UseTree::Glob(_) => {}
         }
     }
+    // Free functions by name, inline modules included: a helper name that
+    // another function in the file reuses is ambiguous, so not a helper.
+    struct Defined(BTreeMap<String, usize>);
+    impl<'ast> Visit<'ast> for Defined {
+        fn visit_item_fn(&mut self, f: &'ast syn::ItemFn) {
+            *self.0.entry(f.sig.ident.unraw().to_string()).or_default() += 1;
+            syn::visit::visit_item_fn(self, f);
+        }
+    }
+    let mut defined = Defined(BTreeMap::new());
+    defined.visit_file(file);
+    let defined = defined.0;
     let mut names = FileNames::default();
     let watched = |n: &str| {
         [
@@ -619,7 +638,7 @@ fn file_names(file: &syn::File) -> FileNames {
                 if f.sig.ident == "shown" {
                     names.shown_defined = true;
                 }
-                if is_helper(&f.block) {
+                if is_helper(&f.block) && defined.get(&f.sig.ident.to_string()) == Some(&1) {
                     names.helpers.insert(f.sig.ident.to_string());
                 }
                 shown_params(&f.sig, &f.block, &mut names.shown_params);
