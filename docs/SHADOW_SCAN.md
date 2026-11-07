@@ -48,7 +48,8 @@ This command sits on the free/core product boundary and generates body-method
 and protocol-version patterns; `free_core` is not a commercial-use grant. The
 gateway does not inspect traffic or publish findings to a SIEM. Scheduled SIEM
 findings export, fleet inventory, and remediation remain enterprise workflow capabilities.
-Commercial use of the runnable gateway requires a license; see
+Commercial use of the runnable gateway outside the free noncommercial and
+nonprofit permissions requires a commercial license; see
 [`COMMERCIAL.md`](../COMMERCIAL.md).
 
 ## ShadowAsset JSON schema
