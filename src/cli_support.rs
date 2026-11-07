@@ -197,8 +197,10 @@ impl Drop for Adoption {
 }
 
 /// Puts each adoptable server in `servers` into `config` as a backend, with
-/// every literal `env` and header value moved to the secret store and only
-/// its reference written. Runs inside the config writer's edit, under its
+/// each `env` and header value the shared rule stores
+/// ([`crate::config::secret_values::stores_discovered_value`]) moved to the
+/// secret store and only its reference written; any other value (`DEBUG=1`)
+/// is written as given. Runs inside the config writer's edit, under its
 /// lock; the vault lock is taken inside it, in the ratified order.
 ///
 /// A server is skipped, with its reasons, when it is named like
@@ -270,16 +272,100 @@ pub(crate) fn store_backend_with(
     keep_as_text: &[String],
     open: impl FnOnce() -> Result<Opened, String>,
 ) -> Result<(Adoption, Vec<(String, String)>), String> {
-    // RED STUB: rows first.
-    let _ = (config, keep_as_text, open);
+    use crate::config::secret_values::{
+        ValueClass, classify, stores_env_value, stores_header_value,
+    };
+    let Some(backend) = config.backends.get(name) else {
+        return Err(format!("no backend named '{name}' to store values for"));
+    };
+    // A field to keep that the backend lacks is a typo: refused, so it never
+    // silently stores what the operator asked to keep.
+    let fields = |header: bool| {
+        let map = if header {
+            &backend.headers
+        } else {
+            &backend.env
+        };
+        map.keys().map(move |key| field_of(header, key))
+    };
+    let known: std::collections::HashSet<String> = fields(false).chain(fields(true)).collect();
+    if let Some(missing) = keep_as_text.iter().find(|f| !known.contains(*f)) {
+        return Err(format!(
+            "--keep-as-text {missing}: backend '{name}' has no such field; nothing was written"
+        ));
+    }
+    let mut literals = Vec::new();
+    for (header, map) in [(false, &backend.env), (true, &backend.headers)] {
+        let mut keys: Vec<&String> = map.keys().collect();
+        keys.sort();
+        for key in keys {
+            let value = &map[key];
+            let stored = classify(value) == Ok(ValueClass::Stored)
+                && if header {
+                    stores_header_value(value)
+                } else {
+                    stores_env_value(key, value)
+                }
+                && !keep_as_text.contains(&field_of(header, key));
+            if stored {
+                literals.push((header, key.clone(), value.clone()));
+            }
+        }
+    }
+    let adopted = Outcome::Adopted {
+        name: name.to_owned(),
+    };
+    if literals.is_empty() {
+        let adoption = Adoption {
+            outcomes: vec![adopted],
+            secrets: None,
+        };
+        return Ok((adoption, Vec::new()));
+    }
+    let fields: Vec<(bool, String)> = literals
+        .iter()
+        .map(|(header, key, _)| (*header, key.clone()))
+        .collect();
+    let mut candidates = [Candidate {
+        outcome: 0,
+        name: name.to_owned(),
+        backend: backend.clone(),
+        literals,
+    }];
+    let (vault, store) = open()?;
+    if let Some((header, key, _)) = candidates[0]
+        .literals
+        .iter()
+        .find(|(_, _, value)| value.len() > store.limit())
+    {
+        return Err(format!(
+            "{} is larger than the secret store keeps; nothing was written",
+            field_of(*header, key)
+        ));
+    }
+    let pending = store_literals(config.secrets.store, vault, store, &mut candidates)?;
+    let [Candidate { backend, .. }] = candidates;
+    let stored = fields
+        .iter()
+        .map(|(header, key)| {
+            let map = if *header {
+                &backend.headers
+            } else {
+                &backend.env
+            };
+            (
+                field_of(*header, key),
+                map.get(key).cloned().unwrap_or_default(),
+            )
+        })
+        .collect();
+    config.backends.insert(name.to_owned(), backend);
     Ok((
         Adoption {
-            outcomes: vec![Outcome::Adopted {
-                name: name.to_owned(),
-            }],
-            secrets: None,
+            outcomes: vec![adopted],
+            secrets: pending,
         },
-        Vec::new(),
+        stored,
     ))
 }
 
@@ -431,7 +517,7 @@ fn classify(
         let mut literals = Vec::new();
         for (header, map) in [(false, &backend.env), (true, &backend.headers)] {
             for (key, value) in map {
-                if !value.is_empty() && !value.contains("${") {
+                if crate::config::secret_values::stores_discovered_value(header, key, value) {
                     literals.push((header, key.clone(), value.clone()));
                 }
             }

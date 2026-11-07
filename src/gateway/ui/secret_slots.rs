@@ -29,9 +29,7 @@ pub(super) enum Unopened {
     TimedOut,
 }
 
-pub(super) use crate::config::secret_values::{
-    names_a_credential, stores_env_value, stores_header_value,
-};
+pub(super) use crate::config::secret_values::{stores_env_value, stores_header_value};
 
 /// The secret slot of backend `name`'s `key`, under `headers` or `env`. Its
 /// display form is the secret step's field for that value.

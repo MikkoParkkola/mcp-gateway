@@ -98,3 +98,22 @@ pub(crate) fn stores_env_value(key: &str, value: &str) -> bool {
 pub(crate) fn stores_header_value(value: &str) -> bool {
     value.len() >= crate::security::needles::SHORT_VALUE_BYTES
 }
+
+/// Whether a value a client file gives a discovered server is stored (both
+/// discovery adopts: the web UI's and `discover --write`): a template or an
+/// empty value never is; a value the shared rule stores
+/// ([`stores_header_value`], [`stores_env_value`]) is; and so is any value
+/// that reads as a gateway secret reference (`file:/x`, `env:X`) under any
+/// name and at any length, because written as text the gateway would read it
+/// as a reference instead of the client's literal.
+pub(crate) fn stores_discovered_value(header: bool, key: &str, value: &str) -> bool {
+    if value.is_empty() || value.contains("${") {
+        return false;
+    }
+    let by_rule = if header {
+        stores_header_value(value)
+    } else {
+        stores_env_value(key, value)
+    };
+    by_rule || crate::config::is_reference(value)
+}
