@@ -1,0 +1,1 @@
+src/gateway/router/handlers/dispatch_tools_call/route_stage.rs	authorize_step	1	Runs a playbook step target through the route-stage grant check under its own trace; it decides nothing the called check does not, and a row pins that its refusal and decision share one trace
