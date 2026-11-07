@@ -117,4 +117,8 @@ fn the_actor_id_is_length_prefixed_in_bytes() {
         VerifiedIdentity::stable_actor_id_for("https://idp", "\u{fc}"),
         Some("oidc:11:https://idp:2:\u{fc}".to_owned())
     );
+    assert_eq!(
+        VerifiedIdentity::stable_actor_id_for("https://\u{fc}.test", "s"),
+        Some("oidc:15:https://\u{fc}.test:1:s".to_owned())
+    );
 }

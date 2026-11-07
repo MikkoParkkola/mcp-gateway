@@ -8,7 +8,7 @@ src/events/records.rs	StoredIdentity::verified	checked	1	stored identity read ba
 src/events/records.rs	Subscription::observed_as	checked	1	identity of a stored OIDC live binding (bound from a verified bearer); checked again on read
 src/events/services.rs	Services::binding_live	checked	1	stored OIDC live binding re-checked against the live provider fingerprint and token age before it stays live
 src/gateway/meta_mcp/invoke/budget.rs	MetaMcp::grant_subject_from_api_key	new	1	grant subject named by an authenticated API key's name (authority api_key)
-src/gateway/openwebui_adapter.rs	verify_assertion	checked	1	Open WebUI adapter assertion after its signature, audience, expiry and issued-at checks; namespaced issuer
+src/gateway/openwebui_adapter.rs	verify_assertion	checked	1	Open WebUI adapter assertion after its signature, issuer, expiry and issued-at checks (no audience check); namespaced issuer
 src/gateway/router/accounts/bridge.rs	OwuiSessionBridge::identity	checked	1	Open WebUI session principal confirmed server-side against the configured user endpoint; namespaced issuer
 src/gateway/router/identity.rs	grant_subject_from_cert_identity	new	1	grant subject of a client certificate verified by rustls
 src/gateway/router/identity.rs	grant_subject_from_oauth_agent	new	1	grant subject of a verified agent JWT: its client_id, authority agent_oauth

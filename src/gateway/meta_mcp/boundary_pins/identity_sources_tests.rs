@@ -433,3 +433,54 @@ fn each_compile_fail_doc_test_fails_only_on_privacy() {
         }
     }
 }
+
+/// A raw identifier names the same type or constructor as the plain one.
+#[test]
+fn a_raw_identifier_is_the_same_name() {
+    let source = "fn f() { VerifiedIdentity::r#checked(a, b, c, None, v); r#GrantSubject::new(a, b, None); }";
+    assert_eq!(count(source, "f", "checked").as_deref(), Some("1"));
+    assert_eq!(count(source, "f", "new").as_deref(), Some("1"));
+    assert_eq!(
+        refused(OTHER, "use crate::identity_grants::r#GrantSubject as G;").len(),
+        1
+    );
+}
+
+/// An associated type naming an identity type is an alias too, in a trait
+/// impl or as a trait's default.
+#[test]
+fn an_associated_type_alias_is_refused() {
+    assert_eq!(
+        refused(
+            OTHER,
+            "impl Tr for X { type T = crate::identity_grants::GrantSubject; }"
+        )
+        .len(),
+        1
+    );
+    assert_eq!(
+        refused(OTHER, "trait Tr { type T = VerifiedIdentity; }").len(),
+        1
+    );
+    assert!(refused(OTHER, "impl Tr for X { type T = String; }").is_empty());
+}
+
+/// Code read in by `include!` is not walked, so production code may not use it.
+#[test]
+fn include_is_refused_in_any_production_file() {
+    assert_eq!(refused(OTHER, r#"include!("forge.rs");"#).len(), 1);
+    assert_eq!(
+        refused(OTHER, r#"fn f() { include!("forge.rs"); }"#).len(),
+        1
+    );
+    assert!(refused(OTHER, r#"#[cfg(test)] mod t { include!("fixture.rs"); }"#).is_empty());
+}
+
+/// A crate macro may not take the name of a listed one, by definition or by
+/// import, or the list would admit it.
+#[test]
+fn a_macro_named_like_a_listed_one_is_refused() {
+    assert_eq!(refused(OTHER, "macro_rules! format { () => {} }").len(), 1);
+    assert_eq!(refused(OTHER, "use other::thing as matches;").len(), 1);
+    assert!(refused(OTHER, "macro_rules! own_helper { () => {} }").is_empty());
+}
