@@ -43,6 +43,7 @@ fn writer_outcomes() -> Vec<(
                 revision: Some(FileRevision::of(b"new")),
                 kept_beside: None,
                 reload: crate::config_reload::ReloadOutcome::no_changes(),
+                secrets: Vec::new(),
             }),
             StatusCode::CREATED,
             "",
@@ -52,6 +53,7 @@ fn writer_outcomes() -> Vec<(
                 revision: None,
                 kept_beside: None,
                 reload: crate::config_reload::ReloadOutcome::no_changes(),
+                secrets: Vec::new(),
             }),
             StatusCode::INTERNAL_SERVER_ERROR,
             "",
@@ -254,9 +256,78 @@ fn the_compute_refuses_a_managed_name_and_a_short_reference_list() {
     );
 }
 
-/// Every value kind across env and headers: literals (a reference-shaped
-/// one included) leave the backend in a fixed order, templates and empty
-/// values stay, and the backend is disabled.
+/// Adopt's split of a find, as the route makes it.
+fn adopted(server: &crate::discovery::DiscoveredServer) -> crate::discovery::adopt::Adoption {
+    use super::super::super::secret_slots::{stores_env_value, stores_header_value};
+    crate::discovery::adopt::adoption(server, stores_env_value, stores_header_value)
+}
+
+/// A find carrying ordinary settings and credentials side by side, as a
+/// desktop client's config would.
+fn find_with_settings() -> crate::discovery::DiscoveredServer {
+    let mut server = crate::discovery::DiscoveredServer::new(
+        "tool".to_owned(),
+        String::new(),
+        crate::discovery::DiscoverySource::ClaudeDesktop,
+        TransportConfig::Stdio {
+            command: "npx tool".to_owned(),
+            cwd: None,
+            protocol_version: None,
+        },
+        crate::discovery::ServerMetadata::default(),
+    );
+    server.env = [
+        ("DEBUG", "1"),
+        ("LOG_LEVEL", "debug"),
+        ("API_KEY", "zq-adopt-a1"),
+        ("X_AUTH_TOKEN", "zq-adopt-b2"),
+        ("DB_PASSWORD", "zq-adopt-c3"),
+        ("SESSION_TIMEOUT", "30"),
+        ("CONFIG_PATH", "file:/example"),
+    ]
+    .into_iter()
+    .map(|(k, v)| (k.to_owned(), v.to_owned()))
+    .collect();
+    server.headers = [("X-Plain", "plain-header")]
+        .into_iter()
+        .map(|(k, v)| (k.to_owned(), v.to_owned()))
+        .collect();
+    server
+}
+
+/// Adopt's side of the shared rule (regression): ordinary settings stay in
+/// the backend as text; values under credential-like names, every header, and
+/// a reference-shaped value under any name (stored as its bytes, so the
+/// gateway never reads it as a reference) leave it for the store.
+#[test]
+fn adoption_stores_credentials_and_keeps_ordinary_settings() {
+    let adopted = adopted(&find_with_settings());
+    let fields: Vec<String> = adopted
+        .literals
+        .iter()
+        .map(crate::discovery::adopt::Literal::field)
+        .collect();
+    assert_eq!(
+        fields,
+        [
+            "env.API_KEY",
+            "env.CONFIG_PATH",
+            "env.DB_PASSWORD",
+            "env.X_AUTH_TOKEN",
+            "headers.X-Plain"
+        ]
+    );
+    let env = &adopted.backend.env;
+    assert_eq!(env.get("DEBUG").map(String::as_str), Some("1"), "{env:?}");
+    assert_eq!(env.get("LOG_LEVEL").map(String::as_str), Some("debug"));
+    assert_eq!(env.get("SESSION_TIMEOUT").map(String::as_str), Some("30"));
+    assert_eq!(env.len(), 3, "{:?}", env.keys());
+    assert!(adopted.backend.headers.is_empty());
+}
+
+/// Every value kind across env and headers: credential-named literals (a
+/// reference-shaped one included) and header literals leave the backend in a
+/// fixed order, templates and empty values stay, and the backend is disabled.
 #[test]
 fn adoption_takes_out_literals_in_a_fixed_order() {
     let mut server = crate::discovery::DiscoveredServer::new(
@@ -271,7 +342,7 @@ fn adoption_takes_out_literals_in_a_fixed_order() {
         crate::discovery::ServerMetadata::default(),
     );
     server.env = [
-        ("Z_KEY", "zq-z"),
+        ("Z_API_KEY", "zq-adopt-z9"),
         ("A_KEY", "file:/looks/like/a/reference"),
         ("TEMPLATE", "${TOKEN}"),
         ("EMPTY", ""),
@@ -284,14 +355,17 @@ fn adoption_takes_out_literals_in_a_fixed_order() {
         .map(|(k, v)| (k.to_owned(), v.to_owned()))
         .collect();
 
-    let adopted = crate::discovery::adopt::adoption(&server);
+    let adopted = adopted(&server);
 
     let fields: Vec<String> = adopted
         .literals
         .iter()
         .map(crate::discovery::adopt::Literal::field)
         .collect();
-    assert_eq!(fields, ["env.A_KEY", "env.Z_KEY", "headers.Authorization"]);
+    assert_eq!(
+        fields,
+        ["env.A_KEY", "env.Z_API_KEY", "headers.Authorization"]
+    );
     assert_eq!(
         adopted.literals[0].value.as_bytes(),
         b"file:/looks/like/a/reference"
@@ -417,4 +491,38 @@ fn the_audit_log_answer_follows_the_type_not_the_words() {
         look_alike.1["error"], "audit_log_required",
         "{look_alike:?}"
     );
+}
+
+/// Adopt's side of the length bound: a credential-named env value or a header
+/// shorter than the redactor's short-value bound stays as written, one at the
+/// bound leaves for the store; a reference-shaped value leaves at any length
+/// (written as text, the gateway would read it as a reference).
+#[test]
+fn adoption_stores_nothing_shorter_than_the_bound_but_references() {
+    let bound = crate::security::needles::SHORT_VALUE_BYTES;
+    let digits = "0123456789abcdef";
+    let under: String = digits.chars().take(bound - 1).collect();
+    let at: String = digits.chars().take(bound).collect();
+    let mut server = find_with_settings();
+    server.env = [
+        ("API_KEY", under.as_str()),
+        ("DB_PASSWORD", at.as_str()),
+        ("CONFIG", "file:/x"),
+    ]
+    .into_iter()
+    .map(|(k, v)| (k.to_owned(), v.to_owned()))
+    .collect();
+    server.headers = [("X-Short", under.as_str()), ("X-Long", at.as_str())]
+        .into_iter()
+        .map(|(k, v)| (k.to_owned(), v.to_owned()))
+        .collect();
+    let adopted = adopted(&server);
+    let fields: Vec<String> = adopted
+        .literals
+        .iter()
+        .map(crate::discovery::adopt::Literal::field)
+        .collect();
+    assert_eq!(fields, ["env.CONFIG", "env.DB_PASSWORD", "headers.X-Long"]);
+    assert_eq!(adopted.backend.env.get("API_KEY"), Some(&under));
+    assert_eq!(adopted.backend.headers.get("X-Short"), Some(&under));
 }

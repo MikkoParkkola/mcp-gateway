@@ -90,7 +90,9 @@ fn v1_and_v2_entries_verify_in_one_chain() {
     append(&v2, fields(&[("event", json!("v2"))])).expect("v2 append");
     let result = verify_log(&path).expect("verify");
     assert!(result.ok, "mixed chain must verify");
-    assert_eq!(entries(&path).len(), 3);
+    // The two v1 entries, the `audit_log_identified` record the upgrade
+    // writes when it mints the log's id, then the v2 entry.
+    assert_eq!(entries(&path).len(), 4);
 }
 
 /// D1-T11. A governance mutation by an OIDC actor carries the envelope, and

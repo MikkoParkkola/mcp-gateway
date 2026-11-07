@@ -78,3 +78,48 @@ async fn the_no_audit_log_refusal_answers_503_audit_log_required() {
         "{text}"
     );
 }
+
+/// T6e and the store's other refusals: each answers fixed text naming no
+/// store detail. A vault lock another save held past the deadline is the
+/// store's `Refused(Failed(..))` (`secret_store/save.rs` `take_lock`): a 503
+/// that says nothing was written. A timed-out create is a 503 that says its
+/// entry may land later; an unavailable store and an over-limit value 422.
+#[tokio::test]
+async fn the_store_refusals_answer_fixed_text_by_kind() {
+    use crate::secret_store::{SaveError, StoreError, StoreKind};
+    let busy = "another save held the vault lock until the deadline; nothing was written";
+    let cases = [
+        (
+            SaveError::Refused(StoreError::Failed(busy.to_owned())),
+            StatusCode::SERVICE_UNAVAILABLE,
+            "nothing was written",
+        ),
+        (
+            SaveError::Store(StoreError::TimedOut),
+            StatusCode::SERVICE_UNAVAILABLE,
+            "kept and listed as unused",
+        ),
+        (
+            SaveError::Refused(StoreError::Unavailable("probe-detail".to_owned())),
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "secrets.store cannot take",
+        ),
+        (
+            SaveError::Refused(StoreError::TooLarge {
+                limit: 4,
+                store: StoreKind::Files,
+            }),
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "value_too_large",
+        ),
+    ];
+    for (error, code, says) in cases {
+        let (status, text) = message(&ReplaceError::Secrets(error)).await;
+        assert_eq!(status, code, "{text}");
+        assert!(text.contains(says), "{text}");
+        assert!(
+            !text.contains("probe-detail") && !text.contains("vault lock"),
+            "a store detail leaked: {text}"
+        );
+    }
+}

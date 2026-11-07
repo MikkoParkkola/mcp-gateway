@@ -1,0 +1,3 @@
+# file	fn	callee	count	class	note (classes: see delivery_framing.rs)
+src/gateway/ui/backend_ops.rs	add_backend	refuse_literal_beside_template	1	no-record	admin UI and CLI add: a value mixing literal text with a template is refused by field before any write, no call delivery
+src/gateway/ui/backends/slotting.rs	read_expecting	config_refusal	1	no-record	admin UI backend routes: the pre-check read of gateway.yaml was refused, fixed text, no call delivery

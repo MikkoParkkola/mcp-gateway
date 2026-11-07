@@ -114,6 +114,7 @@ src/security/transparency_log_anchor.rs	read_anchor	File::open	1	not-config	the 
 src/security/transparency_log_append.rs	cut_back	.open	1	write-only	reopens the audit log for write to cut a torn tail; reads nothing
 src/security/transparency_log_hwm_scan.rs	hwm_missing_in	File::open	1	not-config	the audit log: its segments, anchor or high-water mark; no secret
 src/security/transparency_log_hwm_scan.rs	record_at_mark	File::open	1	not-config	the audit log: its segments, anchor or high-water mark; no secret
+src/security/transparency_log_identity.rs	each_line	File::open	1	not-config	the audit log's active file (TransparencyLogConfig.path) and its sealed segments from list_segments; recover-only; yields a log id or a bool, no line text; no secret
 src/security/transparency_log_pager.rs	open_segment	File::open	1	not-config	the audit log: its segments, anchor or high-water mark; no secret
 src/security/transparency_log_rotation.rs	finish_pending_expiry	File::open	1	not-config	the audit log: its segments, anchor or high-water mark; no secret
 src/security/transparency_log_rotation.rs	open_after_seal	.open	4	write-only	opens audit log segments to write after a seal; reads nothing
