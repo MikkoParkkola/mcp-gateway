@@ -110,6 +110,24 @@ struct Held {
     entry: Arc<ReplayEntry>,
     seq: u64,
     bytes: usize,
+    /// How long the entry may stay: kept until it expires, or pending on
+    /// the deliveries still holding it (ADR-029 pending-snapshot rule).
+    life: Life,
+}
+
+/// A stored entry's lifecycle. A delivery-time capture (the task path) is
+/// [`Life::Kept`] at once; a synchronous answer's judge-time capture is
+/// [`Life::Pending`] until a write that is not under `off` keeps it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Life {
+    Kept,
+    Pending {
+        /// Deliveries holding a [`ReplayHandle`] that is neither settled
+        /// nor released.
+        outstanding: u32,
+        /// A write under an effective `off` delivered it.
+        delivered_off: bool,
+    },
 }
 
 #[derive(Default)]
@@ -231,6 +249,7 @@ impl ReplayReceipts {
                         }),
                         seq,
                         bytes,
+                        life: Life::Kept,
                     },
                 );
             }
@@ -282,5 +301,116 @@ impl ReplayReceipts {
     #[cfg(test)]
     pub(in super::super) fn evicted_for_test(&self) -> u64 {
         self.evicted.load(Ordering::Relaxed)
+    }
+}
+
+/// How a capture enters the store: [`CaptureMode::Pending`] for a
+/// synchronous answer captured at judge, before anything is delivered;
+/// [`CaptureMode::AtDelivery`] for a capture made where the answer is
+/// already delivered (the task path), stored kept as it always was.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CaptureMode {
+    Pending,
+    AtDelivery,
+}
+
+/// One delivery's hold on a pending entry: its key and the insertion
+/// sequence it was taken against, never the payload, so every byte stays
+/// under the store's caps. Settled at the delivery's write; dropped
+/// unsettled, it releases. A handle whose entry was replaced, evicted or
+/// expired acts on nothing.
+pub(crate) struct ReplayHandle {
+    store: std::sync::Weak<ReplayReceipts>,
+    key: StoredKey,
+    seq: u64,
+}
+
+impl std::fmt::Debug for ReplayHandle {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ReplayHandle")
+            .field("seq", &self.seq)
+            .finish_non_exhaustive()
+    }
+}
+
+impl Drop for ReplayHandle {
+    fn drop(&mut self) {
+        if let Some(store) = self.store.upgrade() {
+            store.release_seq(&self.key, self.seq);
+        }
+    }
+}
+
+impl ReplayReceipts {
+    /// [`Self::insert`] for a judge-time capture: stored pending with one
+    /// outstanding delivery, whose handle is returned. `None` when nothing
+    /// was stored (`too_large`).
+    pub(in super::super) fn insert_pending(
+        self: &Arc<Self>,
+        key: StoredKey,
+        receipts: Vec<ReplayReceipt>,
+        calls: ReplayCalls,
+        answer_digest: String,
+        now: Instant,
+        retention: Duration,
+    ) -> Option<ReplayHandle> {
+        // Typed stub (MIK-9267 red skeleton): stored kept, no handle.
+        self.insert(key, receipts, calls, answer_digest, now, retention);
+        None
+    }
+
+    /// [`Self::lookup`] for a replay that will deliver the entry: a pending
+    /// entry gains one outstanding delivery, whose handle is returned.
+    pub(in super::super) fn acquire(
+        self: &Arc<Self>,
+        key: &StoredKey,
+        now: Instant,
+    ) -> Option<(Arc<ReplayEntry>, Option<ReplayHandle>)> {
+        // Typed stub: no handle.
+        self.lookup(key, now).map(|entry| (entry, None))
+    }
+
+    /// `handle`'s delivery was written; `off` when the write-time action
+    /// is an effective `off`.
+    pub(in super::super) fn settle(&self, handle: ReplayHandle, off: bool) {
+        // Typed stub: nothing settles.
+        let _ = off;
+        drop(handle);
+    }
+
+    /// `handle`'s answer was not retained (E1): its pending entry goes.
+    pub(in super::super) fn discard(&self, handle: ReplayHandle) {
+        // Typed stub: nothing is discarded.
+        drop(handle);
+    }
+
+    /// One outstanding delivery of the entry `seq` under `key` ended
+    /// unwritten.
+    fn release_seq(&self, key: &StoredKey, seq: u64) {
+        // Typed stub: nothing is released.
+        let _ = (key, seq);
+    }
+
+    /// The lifecycle of `key`'s entry: `None` absent; `Some(None)` kept;
+    /// `Some(Some((outstanding, delivered_off)))` pending (tests only).
+    #[cfg(test)]
+    pub(in super::super) fn life_for_test(&self, key: &StoredKey) -> Option<Option<(u32, bool)>> {
+        self.inner
+            .lock()
+            .by_key
+            .get(key)
+            .map(|held| match held.life {
+                Life::Kept => None,
+                Life::Pending {
+                    outstanding,
+                    delivered_off,
+                } => Some((outstanding, delivered_off)),
+            })
+    }
+
+    /// Bytes the store holds now (tests only).
+    #[cfg(test)]
+    pub(in super::super) fn bytes_for_test(&self) -> usize {
+        self.inner.lock().bytes
     }
 }
