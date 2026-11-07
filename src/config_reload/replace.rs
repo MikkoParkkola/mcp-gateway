@@ -668,7 +668,7 @@ impl ReloadContext {
                 let _ = std::fs::remove_file(kept);
             }
         };
-        if let Err(e) = journal::begin(target, FileRevision::of(current).0) {
+        if let Err(e) = journal::begin(target, FileRevision::of(current).as_str().to_owned()) {
             unkeep();
             return Err(Self::roll_back(
                 target,
