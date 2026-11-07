@@ -382,14 +382,11 @@ pub(super) fn capture_commit(
     calls: ReplayCallList,
     generation: &crate::config_reload::Generation,
 ) -> Option<crate::security::firewall::ReplayHandle> {
-    let Some(Capture {
+    let Capture {
         key,
         retention,
         answer_digest,
-    }) = capture
-    else {
-        return None;
-    };
+    } = capture?;
     // A retained synchronous answer is captured pending, before it is
     // delivered; a task's result where it is stored, as it always was.
     let mode = match key {

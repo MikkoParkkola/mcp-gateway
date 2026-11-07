@@ -69,9 +69,7 @@ impl Firewall {
         generation: &crate::config_reload::Generation,
         mode: CaptureMode,
     ) -> Option<ReplayHandle> {
-        if self.relay_detector().is_none() {
-            return None;
-        }
+        self.relay_detector()?;
         // Nothing delivered under an effective `off` is held, a snapshot
         // included; a pending capture has delivered nothing yet.
         if mode == CaptureMode::AtDelivery
@@ -116,11 +114,6 @@ impl Firewall {
     ) {
         let off = generation.collusion_view().action() == super::CollusionAction::Off;
         self.relay.replay.settle(handle, off);
-    }
-
-    /// `handle`'s answer was not retained (E1): its pending entry goes.
-    pub(crate) fn discard_replay(&self, handle: ReplayHandle) {
-        self.relay.replay.discard(handle);
     }
 
     /// Drop the entry under `key`: a non-plan commit under a retained sync

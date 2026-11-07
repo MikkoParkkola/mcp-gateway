@@ -11,7 +11,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use super::super::collusion_digest::{DeliveryDigest, ReplayReceipt};
-use super::replay::{ReplayHandle, ReplayReceipts, StoredKey};
+use super::replay::{ReplayHandle, ReplayReceipts, StoredKey, TestLife};
 
 const ON: bool = false;
 const OFF: bool = true;
@@ -66,12 +66,19 @@ fn replay(store: &Arc<ReplayReceipts>, k: &StoredKey, now: Instant) -> ReplayHan
     acquired.expect("asserted above")
 }
 
-const PENDING_ONE: Option<Option<(u32, bool)>> = Some(Some((1, false)));
-const KEPT: Option<Option<(u32, bool)>> = Some(None);
-const ABSENT: Option<Option<(u32, bool)>> = None;
+const PENDING_ONE: TestLife = pending(1, false);
+const KEPT: TestLife = TestLife::Kept;
+const ABSENT: TestLife = TestLife::Absent;
+
+const fn pending(outstanding: u32, delivered_off: bool) -> TestLife {
+    TestLife::Pending {
+        outstanding,
+        delivered_off,
+    }
+}
 
 /// A pending capture starts with one outstanding delivery, not kept.
-/// Mutant killed: insert_pending stores kept (no lifecycle at all).
+/// Mutant killed: `insert_pending` stores kept (no lifecycle at all).
 #[test]
 fn a_pending_capture_holds_one_outstanding_delivery() {
     let store = Arc::new(ReplayReceipts::new());
@@ -117,11 +124,11 @@ fn r9_an_off_write_then_a_block_write_keeps_the_snapshot() {
     let k = key("a");
     let original = pend(&store, &k, now, hour());
     let retry = replay(&store, &k, now);
-    assert_eq!(store.life_for_test(&k), Some(Some((2, false))));
+    assert_eq!(store.life_for_test(&k), pending(2, false));
     store.settle(retry, OFF);
     assert_eq!(
         store.life_for_test(&k),
-        Some(Some((1, true))),
+        pending(1, true),
         "still held for the original"
     );
     store.settle(original, ON);
@@ -234,7 +241,7 @@ fn r22_all_handles_dropped_unwritten_stays_pending() {
     let k = key("a");
     let original = pend(&store, &k, now, hour());
     drop(original);
-    assert_eq!(store.life_for_test(&k), Some(Some((0, false))));
+    assert_eq!(store.life_for_test(&k), pending(0, false));
     let later = replay(&store, &k, now);
     store.settle(later, ON);
     assert_eq!(store.life_for_test(&k), KEPT, "a later replay settles it");
@@ -256,7 +263,7 @@ fn r23_a_stale_handle_is_a_no_op() {
         "the stale off-settle touched nothing"
     );
     drop(fresh);
-    assert_eq!(store.life_for_test(&k), Some(Some((0, false))));
+    assert_eq!(store.life_for_test(&k), pending(0, false));
 }
 
 /// r15 and r19: an insert sweeps every expired entry, not only its own
@@ -279,7 +286,7 @@ fn r15_r19_an_insert_sweeps_only_the_expired_entries() {
     );
     assert_eq!(
         store.life_for_test(&older),
-        Some(Some((0, false))),
+        pending(0, false),
         "the older entry is still live"
     );
 }
@@ -369,7 +376,7 @@ fn p1_every_two_delivery_order_ends_as_the_rule_says() {
                 } else if any_off {
                     ABSENT
                 } else {
-                    Some(Some((0, false)))
+                    pending(0, false)
                 };
                 assert_eq!(
                     store.life_for_test(&k),

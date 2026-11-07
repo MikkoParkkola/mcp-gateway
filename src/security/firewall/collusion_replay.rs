@@ -508,21 +508,20 @@ impl ReplayReceipts {
         }
     }
 
-    /// The lifecycle of `key`'s entry: `None` absent; `Some(None)` kept;
-    /// `Some(Some((outstanding, delivered_off)))` pending (tests only).
+    /// The lifecycle of `key`'s entry (tests only).
     #[cfg(test)]
-    pub(in super::super) fn life_for_test(&self, key: &StoredKey) -> Option<Option<(u32, bool)>> {
-        self.inner
-            .lock()
-            .by_key
-            .get(key)
-            .map(|held| match held.life {
-                Life::Kept => None,
-                Life::Pending {
-                    outstanding,
-                    delivered_off,
-                } => Some((outstanding, delivered_off)),
-            })
+    pub(in super::super) fn life_for_test(&self, key: &StoredKey) -> TestLife {
+        match self.inner.lock().by_key.get(key).map(|held| held.life) {
+            None => TestLife::Absent,
+            Some(Life::Kept) => TestLife::Kept,
+            Some(Life::Pending {
+                outstanding,
+                delivered_off,
+            }) => TestLife::Pending {
+                outstanding,
+                delivered_off,
+            },
+        }
     }
 
     /// Bytes the store holds now (tests only).
@@ -530,4 +529,16 @@ impl ReplayReceipts {
     pub(in super::super) fn bytes_for_test(&self) -> usize {
         self.inner.lock().bytes
     }
+}
+
+/// An entry's lifecycle as a row reads it.
+#[cfg(test)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(in super::super) enum TestLife {
+    Absent,
+    Kept,
+    Pending {
+        outstanding: u32,
+        delivered_off: bool,
+    },
 }

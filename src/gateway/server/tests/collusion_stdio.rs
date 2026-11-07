@@ -499,6 +499,7 @@ async fn stdio_audit_withheld_read_records_no_receipt() {
         !frame.delivers_result(),
         "base: the failed delivery record replaces the answer"
     );
+    frame.stdio_written();
     assert!(
         !http_relay_refused(&firewall, &note),
         "an audit-withheld read must record no receipt"
@@ -516,6 +517,8 @@ async fn stdio_audit_withheld_read_records_no_receipt() {
         frame.delivers_result(),
         "control: the audited read is delivered"
     );
+    // The sink writes it: that is what commits the read history.
+    frame.stdio_written();
     assert!(
         http_relay_refused(&firewall, &note),
         "control: it records a receipt"
