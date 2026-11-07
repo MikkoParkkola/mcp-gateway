@@ -298,13 +298,14 @@ fn logged_meta() -> (MetaMcp, tempfile::TempDir, std::path::PathBuf) {
 }
 
 fn assert_attempt(path: &std::path::Path, response: &JsonRpcResponse) -> Value {
-    let events: Vec<Value> = std::fs::read_to_string(path)
-        .unwrap()
-        .lines()
-        .map(|line| serde_json::from_str::<Value>(line).unwrap())
-        // Skip the log's genesis housekeeping record (#2275).
-        .filter(|e| e["event"] != "audit_segment_opened")
-        .collect();
+    let events = crate::security::transparency_log::without_log_identified(
+        std::fs::read_to_string(path)
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str::<Value>(line).unwrap())
+            // Skip the log's genesis housekeeping record (#2275).
+            .filter(|e| e["event"] != "audit_segment_opened"),
+    );
     assert_eq!(events.len(), 1, "exactly one event per delivery attempt");
     let event = events.into_iter().next().unwrap();
     assert_eq!(event["event"], "response_delivery_attempt");
@@ -357,8 +358,9 @@ fn assert_attempt(path: &std::path::Path, response: &JsonRpcResponse) -> Value {
         "actual attempt hash chain: {:?}",
         chain.error_message
     );
-    // Plus the genesis housekeeping record (#2275).
-    assert_eq!(chain.entries_checked, 2);
+    // Plus the genesis housekeeping record (#2275) and the log's
+    // `audit_log_identified` record.
+    assert_eq!(chain.entries_checked, 3);
     assert!(chain.error_at_counter.is_none());
     for forbidden in [KEY, NONCE, BODY] {
         assert!(!event.to_string().contains(forbidden));

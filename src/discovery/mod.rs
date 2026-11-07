@@ -240,7 +240,7 @@ impl AutoDiscovery {
         match self.config_scanner.scan_all().await {
             Ok(mut config_servers) => servers.append(&mut config_servers),
             Err(e) => {
-                tracing::warn!("Config scan failed: {e}");
+                tracing::warn!("{}", scan_failed("Config", &e));
             }
         }
 
@@ -249,7 +249,7 @@ impl AutoDiscovery {
         match self.process_scanner.scan().await {
             Ok(mut process_servers) => servers.append(&mut process_servers),
             Err(e) => {
-                tracing::warn!("Process scan failed: {e}");
+                tracing::warn!("{}", scan_failed("Process", &e));
             }
         }
 
@@ -263,12 +263,12 @@ impl AutoDiscovery {
     #[cfg(any(test, feature = "webui"))]
     pub(crate) async fn discover_non_client(&self) -> Vec<DiscoveredServer> {
         let mut servers = self.config_scanner.scan_environment().unwrap_or_else(|e| {
-            tracing::warn!("Environment scan failed: {e}");
+            tracing::warn!("{}", scan_failed("Environment", &e));
             Vec::new()
         });
         match self.process_scanner.scan().await {
             Ok(mut found) => servers.append(&mut found),
-            Err(e) => tracing::warn!("Process scan failed: {e}"),
+            Err(e) => tracing::warn!("{}", scan_failed("Process", &e)),
         }
         servers
     }
@@ -303,6 +303,17 @@ impl Default for AutoDiscovery {
         Self::new()
     }
 }
+
+/// The log line for a scan that failed, escaped whole: its error can carry a
+/// path or text from a client's config file. One `shown` call, so the
+/// discovery output guard accepts it where it is logged.
+fn scan_failed(what: &str, error: &impl std::fmt::Display) -> crate::cli_support::Shown {
+    crate::cli_support::shown(&format!("{what} scan failed: {error}"))
+}
+
+#[cfg(test)]
+#[path = "scan_failed_tests.rs"]
+mod scan_failed_tests;
 
 #[cfg(test)]
 #[path = "secret_flow_tests.rs"]
