@@ -53,21 +53,13 @@ pub(super) fn start(
     }
     // An undecodable file is moved aside, as counters.json is; when that
     // fails, this run never saves, so the old bytes are not overwritten.
-    let path = if started.set_aside {
-        match crate::counters::persist::quarantine(&path, now) {
-            Ok(aside) => {
-                tracing::warn!(aside = %aside.display(), "health.json did not decode; moved aside, the health history starts again");
-                Some(path)
-            }
-            Err(e) => {
-                tracing::error!(error = %e, "health.json did not decode and could not be moved aside; health saves are off for this run");
-                history.set_incomplete(true);
-                None
-            }
-        }
-    } else {
-        Some(path)
-    };
+    let path = save_path(
+        started.set_aside,
+        path,
+        now,
+        &history,
+        crate::counters::persist::quarantine,
+    );
     let history = Arc::new(history);
     if let Some(path) = &path {
         file::save(&history, path, now);
@@ -82,6 +74,32 @@ pub(super) fn start(
         }
     });
     (Health { history, path }, saver)
+}
+
+/// Where this run saves health.json: `path`, unless an undecodable file was
+/// there and could not be moved aside by `move_aside`: then nowhere, so the
+/// old bytes survive, and the run's history is marked incomplete.
+pub(super) fn save_path(
+    set_aside: bool,
+    path: PathBuf,
+    now: u64,
+    history: &HealthHistory,
+    move_aside: impl FnOnce(&Path, u64) -> std::io::Result<PathBuf>,
+) -> Option<PathBuf> {
+    if !set_aside {
+        return Some(path);
+    }
+    match move_aside(&path, now) {
+        Ok(aside) => {
+            tracing::warn!(aside = %aside.display(), "health.json did not decode; moved aside, the health history starts again");
+            Some(path)
+        }
+        Err(e) => {
+            tracing::error!(error = %e, "health.json did not decode and could not be moved aside; health saves are off for this run");
+            history.set_incomplete(true);
+            None
+        }
+    }
 }
 
 impl Health {

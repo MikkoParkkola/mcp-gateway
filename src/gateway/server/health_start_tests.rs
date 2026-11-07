@@ -168,3 +168,31 @@ async fn h10c_a_failed_move_aside_keeps_the_original_bytes() {
         b"not json"
     );
 }
+
+/// H10d (mutant failed-aside-still-saves survived H10c, whose read-only dir
+/// also fails every save): when the move aside fails, this run saves
+/// nowhere and its history is incomplete; when it succeeds, it saves.
+#[test]
+fn h10d_a_failed_move_aside_turns_saves_off() {
+    use super::super::health_wiring::save_path;
+    let history = crate::health_history::HealthHistory::start(
+        None,
+        crate::health_history::Restores::Counted(1),
+        1_800_000_000,
+    )
+    .0;
+    let path = std::path::PathBuf::from("health.json");
+    let refused = save_path(true, path.clone(), 1, &history, |_, _| {
+        Err(std::io::Error::other("refused"))
+    });
+    assert_eq!(refused, None);
+    assert!(history.incomplete());
+    let moved = save_path(true, path.clone(), 1, &history, |p, _| {
+        Ok(p.with_extension("aside"))
+    });
+    assert_eq!(moved, Some(path.clone()));
+    assert_eq!(
+        save_path(false, path.clone(), 1, &history, |_, _| unreachable!()),
+        Some(path)
+    );
+}
