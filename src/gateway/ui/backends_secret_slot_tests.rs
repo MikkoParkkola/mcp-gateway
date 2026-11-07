@@ -306,9 +306,12 @@ async fn t1_a_literal_env_value_is_stored_and_only_its_reference_written() {
     assert_eq!(stored.len(), 1, "{body}");
     assert_eq!(stored[0]["field"], "env.API_KEY", "{body}");
     let reference = stored[0]["reference"].as_str().expect("a reference");
-    assert!(
-        text.contains(reference),
-        "gateway.yaml lacks {reference}:\n{text}"
+    // Read back through the loader: the raw text escapes a Windows path's
+    // backslashes inside a quoted scalar.
+    assert_eq!(
+        panel.written("b").env.get("API_KEY").map(String::as_str),
+        Some(reference),
+        "{text}"
     );
 }
 

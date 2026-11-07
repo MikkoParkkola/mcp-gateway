@@ -253,7 +253,8 @@ impl ReloadContext {
 
     /// Test-only: a context whose every reload after a write refuses the new
     /// bytes, so a route's answer to a refused reload can be driven end to end.
-    #[cfg(test)]
+    /// Its only caller is the web UI's backend rows.
+    #[cfg(all(test, feature = "webui"))]
     #[must_use]
     pub(crate) fn refusing_reloads_for_test(self) -> Self {
         fn refused(
