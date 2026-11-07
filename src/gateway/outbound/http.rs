@@ -68,11 +68,47 @@ pub(crate) async fn emit_http_checked(
         .extensions_mut()
         .remove::<crate::gateway::meta_mcp::invoke::relay::DeferredReceipts>();
     let (response, written) = emit_pending(response, log).await;
-    // The answer went out as built, or a failed read record replaced it.
-    if let Some(receipts) = receipts {
-        receipts.commit(written);
+    let Some(receipts) = receipts else {
+        return (response, written);
+    };
+    // A failed read record replaced the answer: nothing was delivered.
+    if !written {
+        receipts.commit(false);
+        return (response, false);
     }
-    (response, written)
+    (commit_at_first_chunk(response, receipts), true)
+}
+
+/// `response` with `receipts` committed when the server takes its body's
+/// first data chunk, under the generation current then: an answer held
+/// unread, or dropped unread, has delivered nothing (as a held reservation,
+/// F3). The exact length is kept, so the answer does not turn chunked.
+fn commit_at_first_chunk(
+    response: axum::response::Response,
+    receipts: crate::gateway::meta_mcp::invoke::relay::DeferredReceipts,
+) -> axum::response::Response {
+    use axum::body::HttpBody as _;
+    use futures::StreamExt as _;
+    let length = response.body().size_hint().exact();
+    let mut response = response.map(|body| {
+        let mut pending = Some(receipts);
+        let chunks = body.into_data_stream().map(move |chunk| {
+            if chunk.is_ok()
+                && let Some(receipts) = pending.take()
+            {
+                receipts.commit(true);
+            }
+            chunk
+        });
+        axum::body::Body::from_stream(chunks)
+    });
+    if let Some(length) = length {
+        response.headers_mut().insert(
+            axum::http::header::CONTENT_LENGTH,
+            HeaderValue::from(length),
+        );
+    }
+    response
 }
 
 async fn emit_pending(
