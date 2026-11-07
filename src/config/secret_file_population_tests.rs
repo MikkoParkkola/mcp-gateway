@@ -338,6 +338,10 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
         "reads audit log segments for a missing-mark finding; no secret",
     ),
     (
+        "src/security/transparency_log_identity.rs",
+        "reads the audit log's active file and sealed segments for its id at recovery; no secret",
+    ),
+    (
         "src/security/transparency_log_pager.rs",
         "reads audit log windows to page it backward; no secret",
     ),
