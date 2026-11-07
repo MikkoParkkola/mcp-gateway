@@ -16,7 +16,7 @@ src/gateway/router/identity.rs	grant_subject_from_verified_identity	new	1	grant 
 src/gateway/router/identity.rs	trusted_proxy_identity	new	1	subject header from a peer listed in trusted_proxies, under the configured authority; any other peer is refused
 src/gateway/server/support.rs	client_identity_from_peer_chain	from_der	1	the TLS peer's leaf certificate after rustls verified the chain
 src/gateway/streaming_told.rs	ViewSubject::key	macro	1	format! naming VerifiedIdentity::stable_actor_id as a path value: reads an identity, builds none
-src/gateway/ui/admin_audit.rs	record_admin_action_as	new	1	grant subject of the request's verified identity, for the admin audit record
+src/gateway/ui/admin_audit.rs	caller_who	new	1	grant subject of the request's verified identity, naming the caller in every audit record
 src/gateway/ui/admin_audit.rs	recorded	new	1	grant subject of the request's verified identity, for the admin audit record
 src/gateway/ui/events.rs	admitted	new	1	grant subject of the admitted admin caller's verified identity
 src/gateway/ui/tool_call.rs	via_label	new	1	grant subject of the request's verified identity, for the call-counter label
