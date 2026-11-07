@@ -449,7 +449,8 @@ def self_test() -> int:
     # Every file is named, the fourth too: no "+1 more" hides the writer.
     assert planted == ["left in TMPDIR: .tmpXyZ789 (a.db 0B, b.db 0B, c.db 0B, other.db 0B)"], \
         planted
-    # And a known source's leftover, through the same step, stays green.
+    # Through the same step, a planted gateway home now turns red, and the one
+    # known source's leftover, the audit high-water mark, stays green.
     fake_home = (*fake[:2], fake[2].replace(
         "open(os.path.join(os.environ['TMPDIR'], '.tmpAbC123.hwm'), 'w').close()",
         "d = os.path.join(os.environ['TMPDIR'], '.tmpHoMe12', 'tasks', 'stdio')\n"
@@ -483,13 +484,13 @@ def self_test() -> int:
                 open(path, "w").close()
             return name
         found = {name: files_in(os.path.join(root, name)) for name in (
-            plant(".tmpHome01", hwm), plant(".tmpHome02", [*home, ".mcp-gateway/other.db"]),
+            plant(".tmpKnown1", hwm), plant(".tmpStray1", [*hwm, "other.db"]),
             plant(".tmpLink01", hwm))}
         os.symlink(root, os.path.join(root, ".tmpLink01", "elsewhere"))
         found[".tmpLink01"] = files_in(os.path.join(root, ".tmpLink01"))
-        assert found[".tmpHome01"] == hwm, found
+        assert found[".tmpKnown1"] == hwm, found
         assert found[".tmpLink01"] == ["audit.jsonl.hwm", "elsewhere"], found
-        assert unexpected(found) == [".tmpHome02", ".tmpLink01"], found
+        assert unexpected(found) == [".tmpLink01", ".tmpStray1"], found
     per_binary_rows()
     print("shard_tests self-test: ok")
     return 0
@@ -527,8 +528,8 @@ def per_binary_rows() -> None:
             with open(stub, "w") as f:
                 f.write('#!/bin/sh\ncase " $PLANT " in *" leak "*) mkdir -p "$TMPDIR/.tmpXyZ789/tasks"; '
                         ': > "$TMPDIR/.tmpXyZ789/tasks/task-x.json" ;; esac\n'
-                        'case " $PLANT " in *" home "*) mkdir -p "$TMPDIR/.tmpHoMe12"; '
-                        ': > "$TMPDIR/.tmpHoMe12/audit.jsonl.hwm" ;; esac\n')
+                        'case " $PLANT " in *" hwm "*) mkdir -p "$TMPDIR/.tmpHwmA12"; '
+                        ': > "$TMPDIR/.tmpHwmA12/audit.jsonl.hwm" ;; esac\n')
             os.chmod(stub, 0o755)
             stubs.append(stub)
         fake_cargo = (sys.executable, "-c", (
@@ -553,7 +554,7 @@ def per_binary_rows() -> None:
                        "left in TMPDIR: gh452_session_owner/.tmpXyZ789 (tasks/task-x.json 0B)"], got
         # A known leftover inside a binary's folder stays tolerated, and its count is shared across
         # binaries (two here, within the allowance of three).
-        assert run("home") == [], run("home")
+        assert run("hwm") == [], run("hwm")
         assert run("") == [], "clean binaries leave only their empty folders"
     # The allowance is shared across binaries: four known leftovers in four binaries fail on the fourth.
     four = {f"bin{i}/.tmpAb12C{i}": ["audit.jsonl.hwm"] for i in range(4)}
