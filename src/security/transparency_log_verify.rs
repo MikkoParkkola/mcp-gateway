@@ -25,6 +25,9 @@ mod session;
 // The per-record checks a verify pass runs, beside the stream that drives them.
 #[path = "transparency_log_checks.rs"]
 mod checks;
+// Settle pairing, fed from the stream with the records it verified.
+#[path = "transparency_log_pairing.rs"]
+mod pairing;
 use super::{MAX_AUDIT_READ_BYTES, TransparencyLogConfig, bounded_read_to_string};
 pub use session::show_session_entries;
 
@@ -53,6 +56,21 @@ pub struct VerifyResult {
     /// verifying without the key refuses on it, whatever another, earlier
     /// read of the log found.
     pub signed_entry_seen: bool,
+    /// Which check decided a failed verdict: the chain, or settle pairing
+    /// once the chain passed. Meaningless while `ok`.
+    pub failed_check: FailedCheck,
+    /// Information lines (expired or legacy intents): never a failure.
+    pub notes: Vec<String>,
+}
+
+/// The check that failed a verification.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum FailedCheck {
+    /// A chain, seam, expiry-anchor or tail check.
+    #[default]
+    Chain,
+    /// Settle pairing, on a chain that passed (MIK-9318 step 3).
+    Pairing,
 }
 
 /// Whether tail completeness is checked against `<path>.hwm`.
@@ -319,6 +337,12 @@ struct Stream<'a> {
     /// per-entry checks: the predecessor evidence is authenticated only on
     /// that record.
     head_checked: Option<Value>,
+    /// Settle pairing over the verified records; fresh on every pass, so a
+    /// rescan never counts a record twice.
+    pairing: pairing::Pairing,
+    /// The counter of the oldest file's first record: pairing's retention
+    /// boundary.
+    oldest_counter: Option<u64>,
 }
 
 type Verdict = Result<(), (Option<u64>, String)>;
@@ -355,6 +379,8 @@ impl<'a> Stream<'a> {
             at_pin: None,
             boundary: None,
             head_checked: None,
+            pairing: pairing::Pairing::default(),
+            oldest_counter: None,
         }
     }
 
@@ -380,14 +406,41 @@ impl<'a> Stream<'a> {
         {
             self.result.warnings.push(warning);
         }
+        let mut found = std::mem::take(&mut self.pairing).finish(self.oldest_counter);
+        let chain_ok = verdict.is_ok();
         match verdict {
-            Ok(()) => self.result.ok = true,
+            // A pairing failure decides only a chain that passed; under a
+            // failed chain it stays in `found`, an "unverified:" warning.
+            Ok(()) => match found.failure.take() {
+                Some((at, msg)) => {
+                    self.result.failed_check = FailedCheck::Pairing;
+                    self.result.error_at_counter = Some(at);
+                    self.result.error_message = Some(msg);
+                }
+                None => self.result.ok = true,
+            },
             Err((at, msg)) => {
                 self.result.error_at_counter = at;
                 self.result.error_message = Some(msg);
             }
         }
+        self.add_pairing_lines(found, chain_ok);
         Ok(self.result)
+    }
+
+    /// Pairing's warnings and notes; under a failed chain, every pairing
+    /// finding (its failure too) is an "unverified:" warning.
+    fn add_pairing_lines(&mut self, found: pairing::Findings, chain_ok: bool) {
+        if chain_ok {
+            self.result.warnings.extend(found.warnings);
+            self.result.notes.extend(found.notes);
+            return;
+        }
+        let failure = found.failure.map(|(_, msg)| msg);
+        let lines = failure.into_iter().chain(found.warnings).chain(found.notes);
+        self.result
+            .warnings
+            .extend(lines.map(|l| format!("unverified: {l}")));
     }
 
     /// Parse one line, and note a signature on it before any check can
@@ -445,7 +498,9 @@ impl<'a> Stream<'a> {
                 }
                 if index == 0 && ln == 0 {
                     self.head_checked = Some(entry.clone());
+                    self.oldest_counter = Some(counter);
                 }
+                self.pairing.observe(&entry, counter);
                 match field_str(&entry, "event") {
                     Some(EV_SEALED) => {
                         let next = field_u64(&entry, "next_segment_seq")
