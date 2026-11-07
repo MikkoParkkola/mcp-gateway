@@ -75,20 +75,36 @@ mod normal_build {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/lib.rs");
         let file = syn::parse_file(&std::fs::read_to_string(path).expect("read src/lib.rs"))
             .expect("parse src/lib.rs");
-        let normal: Vec<&syn::ItemMacro> = file
+        let defs: Vec<&syn::ItemMacro> = file
             .items
             .iter()
             .filter_map(|item| match item {
                 syn::Item::Macro(m) if m.ident.as_ref().is_some_and(|i| i == "mutant") => Some(m),
                 _ => None,
             })
-            .filter(|m| {
-                m.attrs.iter().any(|a| {
-                    matches!(&a.meta, syn::Meta::List(l)
-                        if l.path.is_ident("cfg")
-                            && l.tokens.to_string().replace(' ', "") == "not(mutants)")
+            .collect();
+        // Each definition's cfg, as written without spaces.
+        let cfg_of = |m: &syn::ItemMacro| -> Vec<String> {
+            m.attrs
+                .iter()
+                .filter_map(|a| match &a.meta {
+                    syn::Meta::List(l) if l.path.is_ident("cfg") => {
+                        Some(l.tokens.to_string().replace(' ', ""))
+                    }
+                    _ => None,
                 })
-            })
+                .collect()
+        };
+        let mut cfgs: Vec<Vec<String>> = defs.iter().map(|m| cfg_of(m)).collect();
+        cfgs.sort();
+        assert_eq!(
+            cfgs,
+            vec![vec!["mutants".to_owned()], vec!["not(mutants)".to_owned()]],
+            "exactly two definitions of mutant!, one per cfg"
+        );
+        let normal: Vec<&syn::ItemMacro> = defs
+            .into_iter()
+            .filter(|m| cfg_of(m) == ["not(mutants)"])
             .collect();
         assert_eq!(
             normal.len(),
