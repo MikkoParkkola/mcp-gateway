@@ -71,10 +71,6 @@ fn comment(lines: &[&str], i: usize) -> Option<String> {
 /// Of `text`'s 0-based `lines`, the 1-based numbers of those carrying a
 /// comment by the same parser-backed rule, sorted: what an edit that
 /// deleted exactly those lines dropped, with no text matched across.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "first caller: the web UI's key revoke")
-)]
 pub(crate) fn comment_line_numbers(
     text: &str,
     lines: &std::collections::BTreeSet<usize>,

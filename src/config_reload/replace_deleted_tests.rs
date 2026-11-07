@@ -111,6 +111,7 @@ async fn audited(
         Audit::Required {
             sink: Box::new(kinds.clone()),
             kind: IntentKind::Save { fields: Vec::new() },
+            writer: None,
         },
         WAIT,
     )

@@ -230,7 +230,10 @@ fn map_error(error: ReplaceError, halt: Option<Halt>) -> Mapped {
             UiRefused::Unsupported("the edit's secret slots do not match".to_owned())
         }
         ReplaceError::Refused(why) | ReplaceError::ReloadRefused(why) => UiRefused::Invalid(why),
-        ReplaceError::NoAuditLog => UiRefused::NoAuditLog,
+        // No log under auth, or the log refused this save's intent: either
+        // way the audit the save requires is not there, and nothing was
+        // written (the adopt route answers both alike).
+        ReplaceError::NoAuditLog | ReplaceError::AuditRefused(_) => UiRefused::NoAuditLog,
         ReplaceError::Busy => UiRefused::Busy,
         ReplaceError::Secrets(SaveError::Refused(e) | SaveError::Store(e)) => {
             UiRefused::SecretsRefused {

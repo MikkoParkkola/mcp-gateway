@@ -89,13 +89,14 @@ async fn a_pending_journal_with_a_failing_intent_changes_nothing() {
         Audit::Required {
             sink: Box::new(recorder.clone()),
             kind: IntentKind::Save { fields: Vec::new() },
+            writer: None,
         },
         WAIT,
     )
     .await;
 
     assert!(
-        matches!(result, Err(ReplaceError::Refused(_))),
+        matches!(result, Err(ReplaceError::AuditRefused(_))),
         "{result:?}"
     );
     assert_eq!(read(&path), NEXT, "the crashed bytes were recovered");
@@ -122,6 +123,7 @@ async fn an_owed_reload_runs_after_its_recovery_intent() {
         Audit::Required {
             sink: Box::new(recorder.clone()),
             kind: IntentKind::Save { fields: Vec::new() },
+            writer: None,
         },
         WAIT,
     )
@@ -161,6 +163,7 @@ async fn an_owed_reload_flag_alone_gets_a_recovery_intent() {
         Audit::Required {
             sink: Box::new(recorder.clone()),
             kind: IntentKind::Save { fields: Vec::new() },
+            writer: None,
         },
         WAIT,
     )
@@ -189,13 +192,14 @@ async fn an_intent_failure_writes_nothing() {
         Audit::Required {
             sink: Box::new(recorder.clone()),
             kind: IntentKind::Save { fields: Vec::new() },
+            writer: None,
         },
         WAIT,
     )
     .await;
 
     assert!(
-        matches!(result, Err(ReplaceError::Refused(_))),
+        matches!(result, Err(ReplaceError::AuditRefused(_))),
         "{result:?}"
     );
     assert_eq!(read(&path), START);
@@ -550,6 +554,7 @@ async fn a_save_the_loader_refuses_records_no_intent() {
         Audit::Required {
             sink: Box::new(recorder.clone()),
             kind: IntentKind::Save { fields: Vec::new() },
+            writer: None,
         },
         WAIT,
     )
@@ -584,12 +589,13 @@ async fn an_unchanged_save_appends_its_intent_before_its_reload() {
         Audit::Required {
             sink: Box::new(refusing.clone()),
             kind: IntentKind::Save { fields: Vec::new() },
+            writer: None,
         },
         WAIT,
     )
     .await;
     assert!(
-        matches!(refused, Err(ReplaceError::Refused(_))),
+        matches!(refused, Err(ReplaceError::AuditRefused(_))),
         "{refused:?}"
     );
     assert!(
@@ -610,6 +616,7 @@ async fn an_unchanged_save_appends_its_intent_before_its_reload() {
         Audit::Required {
             sink: Box::new(recorder.clone()),
             kind: IntentKind::Save { fields: Vec::new() },
+            writer: None,
         },
         WAIT,
     )
@@ -645,6 +652,7 @@ async fn a_config_others_can_write_is_refused_before_its_intent() {
         Audit::Required {
             sink: Box::new(recorder.clone()),
             kind: IntentKind::Save { fields: Vec::new() },
+            writer: None,
         },
         WAIT,
     )
@@ -679,6 +687,7 @@ async fn a_pending_recovery_on_a_config_others_can_write_is_refused_before_its_i
         Audit::Required {
             sink: Box::new(recorder.clone()),
             kind: IntentKind::Save { fields: Vec::new() },
+            writer: None,
         },
         WAIT,
     )

@@ -525,6 +525,11 @@ fn every_writer_result_maps_to_one_refusal() {
             Mapped::Refusal(UiRefused::NoAuditLog),
         ),
         (
+            ReplaceError::AuditRefused("a".into()),
+            None,
+            Mapped::Refusal(UiRefused::NoAuditLog),
+        ),
+        (
             ReplaceError::Secrets(SaveError::Refused(StoreError::Unavailable("u".into()))),
             None,
             Mapped::Refusal(UiRefused::SecretsRefused { timeout: false }),

@@ -13,6 +13,7 @@ use std::path::Path;
 use super::{ReplaceError, SecretStep};
 use crate::config::{Config, EnvOverlay, PENDING_SLOT_PREFIX, reserved_slot_reference};
 use crate::config_persistence::keyedit::{Segment, SlotId, Template};
+use crate::config_persistence::lock::Locked;
 use crate::config_reload::ReloadContext;
 use crate::config_reload::reload_context::EvaluatedReload;
 
@@ -166,5 +167,21 @@ impl ReloadContext {
             configured: evaluated.configured,
         })
         .map_err(ReplaceError::ReloadRefused)
+    }
+
+    /// `Err(NoConfigFile)` when the file read under this lock is gone now.
+    /// Read from the disk, never from the lock's snapshot: a recovery since
+    /// the lock was taken may have restored it. A link that no longer names
+    /// the locked target, or points at a missing one, is `Failed`, never a
+    /// missing config.
+    pub(super) fn still_there(
+        locked: &Locked,
+        config: &std::path::Path,
+    ) -> Result<(), ReplaceError> {
+        match locked.absent(config) {
+            Ok(true) => Err(ReplaceError::NoConfigFile),
+            Ok(false) => Ok(()),
+            Err(why) => Err(ReplaceError::Failed(why)),
+        }
     }
 }

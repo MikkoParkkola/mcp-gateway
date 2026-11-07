@@ -31,11 +31,23 @@ pub(crate) enum IntentKind {
     Adopt,
     /// A configuration-history restore.
     Restore,
+    /// A web UI API key create.
+    KeyCreate,
     /// A web UI backend route's edit of one backend, named, never a value.
     Backend {
         operation: BackendOp,
         backend: String,
     },
+}
+
+/// Who asked for a key write and which key: what a key write's intent names
+/// beside its kind, since `Replaced::Discard` keeps no original to diff.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct KeyWriter {
+    /// The authenticated request's identity.
+    pub(crate) actor: crate::security::audit::AuditWho,
+    /// The key's name, never a value.
+    pub(crate) subject: String,
 }
 
 /// Which backend route an intent is for.
@@ -73,6 +85,9 @@ pub(crate) struct Intent {
     pub(crate) outside_change: bool,
     /// The recovery intent appended first, when anything was pending.
     pub(crate) recovery_intent_id: Option<IntentId>,
+    /// For a key write, who wrote which key; `None` for every other kind,
+    /// whose records name the gateway as before.
+    pub(crate) writer: Option<KeyWriter>,
 }
 
 /// Where intents go: the audit log's synced append in production.
@@ -86,6 +101,7 @@ pub(crate) enum Audit {
     Required {
         sink: Box<dyn IntentSink>,
         kind: IntentKind,
+        writer: Option<KeyWriter>,
     },
     Off,
 }
@@ -139,10 +155,29 @@ impl AuditPosture {
             (Some(log), _) => Ok(Audit::Required {
                 sink: Box::new(LogSink(log)),
                 kind,
+                writer: None,
             }),
             (None, GatewayAuth::Off) => Ok(Audit::Off),
             (None, GatewayAuth::On) => Err(ReplaceError::NoAuditLog),
         }
+    }
+
+    /// The audit for a key write of `kind`: as [`Self::audit`], with the
+    /// intent naming `actor` and the key `subject`.
+    pub(crate) fn key_write(
+        self,
+        kind: IntentKind,
+        actor: crate::security::audit::AuditWho,
+        subject: &str,
+    ) -> Result<Audit, ReplaceError> {
+        let mut audit = self.audit(kind)?;
+        if let Audit::Required { writer, .. } = &mut audit {
+            *writer = Some(KeyWriter {
+                actor,
+                subject: subject.to_owned(),
+            });
+        }
+        Ok(audit)
     }
 }
 
@@ -157,6 +192,7 @@ impl IntentSink for LogSink {
             IntentKind::Save { .. } => "config_save_intent",
             IntentKind::Adopt => "config_adopt_intent",
             IntentKind::Restore => "config_restore_intent",
+            IntentKind::KeyCreate => "config_key_create_intent",
             IntentKind::Backend { .. } => "config_backend_intent",
         };
         let mut fields = serde_json::Map::new();
@@ -173,10 +209,19 @@ impl IntentSink for LogSink {
         if let Some(IntentId(id)) = &intent.recovery_intent_id {
             fields.insert("recovery_intent_id".into(), id.as_str().into());
         }
+        // A key write names who wrote which key; every other kind names the
+        // gateway, as it always has.
+        let envelope = match &intent.writer {
+            Some(writer) => {
+                fields.insert("subject".into(), writer.subject.as_str().into());
+                crate::security::audit::AuditEnvelope::ok(writer.actor.clone())
+            }
+            None => crate::security::audit::AuditEnvelope::gateway(),
+        };
         // ponytail: a synced append on the writer's task; spawn_blocking it
         // if a slow disk ever holds the config lock measurably longer.
         self.0
-            .append_event_synced(fields, &crate::security::audit::AuditEnvelope::gateway())
+            .append_event_synced(fields, &envelope)
             .map(IntentId)
             .map_err(|e| e.to_string())
     }
@@ -255,9 +300,10 @@ impl ReloadContext {
             base: FileRevision::of(&on_disk),
             outside_change: true,
             recovery_intent_id: None,
+            writer: None,
         };
         sink.append(&intent).map(Some).map_err(|e| {
-            ReplaceError::Refused(format!(
+            ReplaceError::AuditRefused(format!(
                 "the audit log refused the recovery's record; nothing was recovered or reloaded: {e}"
             ))
         })
