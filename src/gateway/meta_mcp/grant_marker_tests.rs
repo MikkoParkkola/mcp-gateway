@@ -244,6 +244,8 @@ async fn a_refused_stored_delivery_recheck_says_recorded() {
 /// A call cancelled while its invocation append is in the kernel: the append
 /// survives the cancellation and lands, and the guard writes the withheld
 /// note behind it, so the note says recorded and the call is one row.
+// `write_in_flight_for_test` exists only with the firewall feature.
+#[cfg(feature = "firewall")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_call_cancelled_during_its_invocation_append_is_one_recorded_decision() {
     let (endpoint, dir) = (
