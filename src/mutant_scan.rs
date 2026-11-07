@@ -68,6 +68,15 @@ fn first_string(stream: TokenStream) -> Option<String> {
 ///
 /// `git ls-files` could not run or failed.
 pub(crate) fn tracked_rs_files(root: &std::path::Path) -> Result<Vec<String>, String> {
+    // A copy of the tree with no git metadata (the remote build mirror ships
+    // the working tree without .git): every .rs file on disk instead, a
+    // superset of the tracked ones, so the scan can only find more.
+    if !root.join(".git").exists() {
+        let mut found = Vec::new();
+        walk_rs(root, root, &mut found)?;
+        found.sort();
+        return Ok(found);
+    }
     let out = std::process::Command::new("git")
         .args(["ls-files", "-z", "--", "*.rs"])
         .current_dir(root)
@@ -81,6 +90,35 @@ pub(crate) fn tracked_rs_files(root: &std::path::Path) -> Result<Vec<String>, St
         .filter(|p| !p.is_empty())
         .map(str::to_owned)
         .collect())
+}
+
+/// Every `.rs` file under `dir`, relative to `root`, skipping build output
+/// (`target`) and symbolic links.
+fn walk_rs(
+    root: &std::path::Path,
+    dir: &std::path::Path,
+    found: &mut Vec<String>,
+) -> Result<(), String> {
+    let entries = std::fs::read_dir(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    for entry in entries {
+        let entry = entry.map_err(|e| format!("{}: {e}", dir.display()))?;
+        let kind = entry
+            .file_type()
+            .map_err(|e| format!("{}: {e}", dir.display()))?;
+        let path = entry.path();
+        if kind.is_symlink() {
+            continue;
+        }
+        if kind.is_dir() {
+            if entry.file_name() != "target" {
+                walk_rs(root, &path, found)?;
+            }
+        } else if path.extension().is_some_and(|e| e == "rs") {
+            let rel = path.strip_prefix(root).map_err(|e| format!("{e}"))?;
+            found.push(rel.to_string_lossy().replace('\\', "/"));
+        }
+    }
+    Ok(())
 }
 
 /// Every `mutant!` call in the repository at `root`, with its file. A

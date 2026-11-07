@@ -206,6 +206,42 @@ fn s12_no_definition_outside_the_crate_root() {
     );
 }
 
+/// S13: a tree with no git metadata (the remote build mirror) is walked on
+/// disk, so the scan still sees every root, and skips build output.
+#[test]
+fn s13_a_tree_without_git_is_walked_on_disk() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    for (path, text) in [
+        ("src/a.rs", "fn f() { mutant!(\"Q\", 1, 2); }\n"),
+        (
+            "crates/gateway-core/src/b.rs",
+            "fn g() { vec![mutant!(\"R\", 1, 2)]; }\n",
+        ),
+        (
+            "target/debug/build/c.rs",
+            "fn h() { mutant!(\"S\", 1, 2); }\n",
+        ),
+    ] {
+        let full = dir.path().join(path);
+        std::fs::create_dir_all(full.parent().expect("parent")).expect("mkdir");
+        std::fs::write(&full, text).expect("write fixture");
+    }
+    let found = super::repo_sites(dir.path()).expect("scan the tree");
+    let mut got: Vec<(String, Option<String>)> =
+        found.into_iter().map(|(p, s)| (p, s.id)).collect();
+    got.sort();
+    assert_eq!(
+        got,
+        vec![
+            (
+                "crates/gateway-core/src/b.rs".to_owned(),
+                Some("R".to_owned())
+            ),
+            ("src/a.rs".to_owned(), Some("Q".to_owned())),
+        ]
+    );
+}
+
 /// The runner's site list (SCH.6): with `MCP_GATEWAY_MUTANT_LIST` set it
 /// prints one `MUTANT-SITE <id> <path>:<line>` line per site outside
 /// src/mutant.rs, from the same scanner as the rows above; otherwise it only
