@@ -140,3 +140,31 @@ async fn h17_unwritable_history_never_stops_the_start() {
     assert!(!data.join("health.json").exists());
     assert!(!data.join("counters.json").exists());
 }
+
+/// H10c (code review r1): when an undecodable health.json cannot be moved
+/// aside (its data dir is read-only), the run never saves over it: the
+/// original bytes are there after the shutdown save.
+#[cfg(unix)]
+#[tokio::test]
+async fn h10c_a_failed_move_aside_keeps_the_original_bytes() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().expect("tempdir");
+    let data = dir.path().join("data");
+    Box::pin(run_once(dir.path(), &data, |_| {})).await;
+    std::fs::write(data.join("health.json"), b"not json").expect("seed");
+    let mode = |m| std::fs::set_permissions(&data, std::fs::Permissions::from_mode(m));
+    mode(0o555).expect("read-only");
+    let probe = std::fs::write(data.join("probe"), b"x");
+    let second = dir.path().join("second");
+    std::fs::create_dir_all(&second).expect("second dir");
+    Box::pin(run_once(&second, &data, |_| {})).await;
+    mode(0o755).expect("writable again");
+    assert!(
+        probe.is_err(),
+        "the data dir must refuse writes for this row"
+    );
+    assert_eq!(
+        std::fs::read(data.join("health.json")).expect("still there"),
+        b"not json"
+    );
+}

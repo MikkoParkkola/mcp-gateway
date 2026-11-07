@@ -258,15 +258,22 @@ fn strings(v: &serde_json::Value, out: &mut Vec<String>) {
 /// two downtime kinds: no string a caller could have chosen.
 #[test]
 fn h11_the_saved_file_holds_only_numbers_and_fixed_words() {
-    let h = fresh(T0);
-    h.record_latency(0.003, T0 + 1);
-    h.record_error(ErrorKind::Auth, T0 + 2);
-    h.sample(Some(1), 1, T0 + 3);
-    h.stop(T0 + 10);
+    // A measured restart (clean stop) then an estimated one (no stop), so
+    // both fixed words are in the file before the check (r1: not vacuous).
+    let first = life(None, 1, T0, T0 + 600, true);
+    let second = life(Some(&first), 2, T0 + 630, T0 + 900, false);
+    let (h, _) = HealthHistory::start(Some(&second), Restores::Counted(3), T0 + 1_000);
+    h.record_latency(0.003, T0 + 1_001);
+    h.record_error(ErrorKind::Auth, T0 + 1_002);
+    h.sample(Some(1), 1, T0 + 1_003);
+    h.stop(T0 + 1_010);
     let value: serde_json::Value =
-        serde_json::from_slice(&h.encode(T0 + 10).expect("encodes")).expect("json");
+        serde_json::from_slice(&h.encode(T0 + 1_010).expect("encodes")).expect("json");
     let mut found = Vec::new();
     strings(&value, &mut found);
+    for word in ["measured", "estimated"] {
+        assert!(found.iter().any(|s| s == word), "no {word}: {found:?}");
+    }
     assert!(
         found.iter().all(|s| s == "measured" || s == "estimated"),
         "{found:?}"
