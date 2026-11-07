@@ -45,8 +45,9 @@
 //! # });
 //! ```
 
-use std::sync::Arc;
 // Only the test modules that glob-import this module still name these.
+#[cfg(test)]
+use std::sync::Arc;
 #[cfg(test)]
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
