@@ -79,8 +79,9 @@ def cfg_is_test(expr: str) -> bool:
     here; a caller that must fail closed checks the balance itself
     (MIK-8405.SPLIT.5; the one cfg judgement, shared with
     scripts/release/check_inventory_rows.py, scripts/ci/check-request-panics.py
-    and the timing-asserts gate)."""
-    expr = expr.strip()
+    and the timing-asserts gate). Literal contents are blanked first, so a
+    comma inside a quoted value separates no operand (MIK-9387.TCFG.1)."""
+    expr = blank(expr)[0].strip()
     if expr == "test":
         return True
     opener = re.match(r"(all|any)\s*\(", expr)
@@ -265,16 +266,29 @@ def _scan(source: Path, owns_dir: bool) -> tuple[set[tuple[Path, bool, bool]], b
     pending_path: str | None = None
     pending_test = False
     file_test = False
+    # Whether each scope (the file, then each open brace) is still in its
+    # leading run of inner attributes: an inner cfg counts only there. Inside
+    # a macro's tokens or after an item it marks nothing, the safe side
+    # (MIK-9387.TCFG.1).
+    leading = [True]
     pos = 0
     while m := TOKEN.search(code, pos):
+        if code[pos : m.start()].strip():
+            leading[-1] = False
         pos = m.end()
         enclosing_test = file_test or any(test for _, test in inline)
+        inner_attr = m.group("cfg") and m.group("inner") or (m.group("attr") and "!" in m.group("attr"))
+        if not inner_attr:
+            leading[-1] = False
         if m.group("quote"):
             pending_path = literals.get(m.start("quote"))
         elif m.group("cfg"):
             test = cfg_is_test(cfg_expression(code, m.end()))
+            pos = attribute_end(code, code.index("[", m.start()) + 1)
             if not m.group("inner"):
                 pending_test = pending_test or test
+            elif not leading[-1]:
+                pass
             elif inline:
                 inline[-1] = (inline[-1][0], inline[-1][1] or test)
             else:
@@ -286,6 +300,7 @@ def _scan(source: Path, owns_dir: bool) -> tuple[set[tuple[Path, bool, bool]], b
             test = pending_test or enclosing_test
             if m.group("end") == "{":
                 inline.append((m.group("name"), test))
+                leading.append(True)
             elif pending_path is not None:
                 start = base.joinpath(*nested) if nested else source.parent
                 declared.add(((start / pending_path).resolve(), True, test))
@@ -296,10 +311,12 @@ def _scan(source: Path, owns_dir: bool) -> tuple[set[tuple[Path, bool, bool]], b
             pending_path, pending_test = None, False
         elif m.group("open"):
             inline.append((None, pending_test or enclosing_test))
+            leading.append(True)
             pending_path, pending_test = None, False
         elif m.group("close"):
             if inline:
                 inline.pop()
+                leading.pop()
             pending_path, pending_test = None, False
         elif m.group("semi"):
             pending_path, pending_test = None, False
