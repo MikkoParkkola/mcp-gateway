@@ -618,10 +618,10 @@ pub(crate) use staging::commit_capture_hook;
 pub(crate) use staging::take_staged_for_test;
 pub(crate) use staging::{
     DeferredReceipts, StagedReceipts, collecting, collecting_http, discard_staged, in_plan_step,
-    plan_step, take_staged_now,
+    plan_step,
 };
 #[cfg(feature = "firewall")]
-pub(crate) use staging::{commit_with, stage_with};
+pub(crate) use staging::{commit_with, stage_with, take_staged_now};
 
 #[cfg(all(test, feature = "firewall"))]
 #[path = "relay_tests.rs"]

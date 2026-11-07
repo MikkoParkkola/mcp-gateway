@@ -187,7 +187,13 @@ async fn deliver(
     // now, before settlement publishes it for replay, so a retry that
     // finds it finds its snapshot too.
     if frame.delivers_result() {
-        staged.capture_pending(meta.current_generation().as_deref());
+        // Only firewall builds judge under a generation; without one the
+        // capture is a no-op.
+        #[cfg(feature = "firewall")]
+        let generation = meta.current_generation();
+        #[cfg(not(feature = "firewall"))]
+        let generation: Option<std::sync::Arc<crate::config_reload::Generation>> = None;
+        staged.capture_pending(generation.as_deref());
     }
     let retained = match (settle.execution, stored) {
         (Some(execution), Some(stored)) => execution.complete_delivery_read(
