@@ -331,3 +331,21 @@ fn h19_a_lower_restore_count_is_a_missed_run() {
     let (_, started) = HealthHistory::start(Some(&second), Some(1), T0 + 1_000);
     assert!(started.missed_run && started.restart.is_none());
 }
+
+/// H8c: a save that cannot be written marks this run's history incomplete;
+/// the first save that succeeds clears it.
+#[test]
+fn h8c_a_failed_save_marks_the_run_incomplete_until_one_succeeds() {
+    let h = fresh(T0);
+    let dir = tempfile::tempdir().expect("tempdir");
+    let blocker = dir.path().join("a-file");
+    std::fs::write(&blocker, b"x").expect("blocker");
+    assert!(!file::save(
+        &h,
+        &blocker.join("sub").join("health.json"),
+        T0 + 1
+    ));
+    assert!(h.incomplete());
+    assert!(file::save(&h, &dir.path().join("health.json"), T0 + 2));
+    assert!(!h.incomplete());
+}
