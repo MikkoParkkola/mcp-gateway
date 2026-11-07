@@ -99,6 +99,11 @@ pub(super) fn add_evidence(body: &mut Map<String, Value>, kind: Kind, e: &Value)
             body.insert("decision".into(), NOT_RECORDED.into());
             body.insert("reach".into(), NOT_RECORDED.into());
         }
+        // The row already carries the refusing decision (reason, scope,
+        // capability, grant id); no backend was reached.
+        Kind::Refusal => {
+            body.insert("reach".into(), NOT_RECORDED.into());
+        }
         Kind::AdminAction => {}
     }
 }

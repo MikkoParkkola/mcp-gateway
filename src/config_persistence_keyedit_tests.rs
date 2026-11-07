@@ -560,3 +560,71 @@ mod revoke;
 
 #[path = "config_persistence_keyedit_list_tests.rs"]
 mod list;
+
+/// H1: an edit's hunks follow its line origins: kept lines never
+/// appear, a replaced line is one old and one new line, adjacent changed
+/// lines are one hunk, an inserted run is one hunk; a CRLF copy gives the
+/// same hunks.
+#[test]
+fn hunks_follow_line_origins() {
+    use super::{Hunk, NewLine};
+    let lf = "a: 1\nb:\n  c: 2\nd: 3\n";
+    let changes = [
+        set_int("a", 5),
+        (path("b.c"), Change::Remove),
+        (path("e.f"), Change::Set(Scalar::Int(7))),
+    ];
+    let want = vec![
+        // Lines 1-3 change together: one hunk, as a unified diff has it.
+        Hunk {
+            old_start: 1,
+            old: vec![0, 1, 2],
+            new_start: 1,
+            new: vec![NewLine {
+                text: "a: 5".into(),
+                replaced: Some((0, 3, 0)),
+            }],
+        },
+        Hunk {
+            old_start: 4,
+            old: vec![],
+            new_start: 3,
+            new: vec![
+                NewLine {
+                    text: "e:".into(),
+                    replaced: None,
+                },
+                NewLine {
+                    text: "  f: 7".into(),
+                    replaced: None,
+                },
+            ],
+        },
+    ];
+    let got = edit_in_place(lf, &changes).expect("proven");
+    assert_eq!(got.hunks(), want.as_slice());
+    let crlf = lf.replace('\n', "\r\n");
+    assert_eq!(
+        edit_in_place(&crlf, &changes).expect("proven").hunks(),
+        want.as_slice()
+    );
+}
+
+/// S2: the meaning proof alone refuses an alias expanded
+/// to its value, though the values compare equal.
+#[test]
+fn the_meaning_check_alone_refuses_an_alias_expansion() {
+    let original = "x-a: &v 5\nlimit: *v\n";
+    let expanded = "x-a: &v 5\nlimit: 5\n";
+    assert!(!super::meaning_holds(
+        original,
+        &[set_int("limit", 5)],
+        expanded
+    ));
+    // The same value written without dropping anything is still proven.
+    assert!(super::meaning_holds(
+        "x-a: 4\nlimit: 4\n",
+        &[set_int("limit", 5)],
+        "x-a: 4\nlimit: 5\n"
+    ));
+}

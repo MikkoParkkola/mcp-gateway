@@ -32,11 +32,11 @@ impl crate::identity_propagation::IdentityPropagation for Mint {
             expiry_synthetic: false,
             headers: vec![(
                 "Authorization".to_string(),
-                format!("Bearer minted-for-{}", identity.subject),
+                format!("Bearer minted-for-{}", identity.subject()),
             )],
             expires_at: i64::MAX,
-            cache_binding: format!("{}@{}", identity.subject, backend.audience),
-            subject_key: identity.subject.clone(),
+            cache_binding: format!("{}@{}", identity.subject(), backend.audience),
+            subject_key: identity.subject().to_owned(),
             audience: backend.audience.clone(),
             scopes: Vec::new(),
         })

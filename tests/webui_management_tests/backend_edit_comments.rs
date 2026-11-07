@@ -107,6 +107,37 @@ async fn an_env_edit_appends_inside_the_block() {
     );
 }
 
+/// A credential typed into the panel's edit (a value under a credential-like
+/// key name) goes to the secret store: gateway.yaml holds only the store's
+/// reference, the same one the answer lists under `secrets_stored`, and
+/// neither carries the value. Before 4.0.0 the value was written as typed.
+#[tokio::test]
+async fn a_credential_edited_in_the_panel_is_stored_not_written() {
+    const VALUE: &str = "panel-typed-7c1e";
+    let (router, path, _keep) = served(SVC).await;
+    let (status, body) = patch(&router, "svc", json!({"env": {"B_TOKEN": VALUE}})).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(!body.to_string().contains(VALUE), "{body}");
+    let after = read(&path);
+    assert!(
+        !after.contains(VALUE),
+        "the value reached gateway.yaml:\n{after}"
+    );
+    kept_in_order(SVC, &after);
+    let config = Config::load_literal(Some(&path)).expect("loads");
+    let written = config.backends["svc"]
+        .env
+        .get("B_TOKEN")
+        .cloned()
+        .expect("B_TOKEN");
+    assert_eq!(body["secrets_stored"][0]["field"], "env.B_TOKEN", "{body}");
+    assert_eq!(
+        body["secrets_stored"][0]["reference"],
+        written.as_str(),
+        "{body}"
+    );
+}
+
 /// No-op PATCH: the value is already there, so nothing is written. The
 /// gateway still reloads: retrying a PATCH whose reload failed finds its value
 /// on disk, and skipping the reload would leave the runtime stale.

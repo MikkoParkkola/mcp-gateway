@@ -24,11 +24,10 @@ pub(super) fn identity_grant_sink_for(
         return None;
     }
     let (store, epoch) = meta_mcp.identity_grant_sink();
-    Some(Arc::new(crate::config_reload::IdentityGrantSink::new(
-        store,
-        epoch,
-        expand_home_path(&config.path),
-    )))
+    Some(Arc::new(
+        crate::config_reload::IdentityGrantSink::new(store, epoch, expand_home_path(&config.path))
+            .with_rule_key(meta_mcp.grant_rule_key()),
+    ))
 }
 
 /// What the startup audit served, for the config revision.
@@ -141,11 +140,13 @@ pub(super) async fn start_identity_grant_audit(
         return Err(Error::Config(reason.clone()));
     }
     let (live, epoch) = meta_mcp.identity_grant_sink();
+    let key = meta_mcp.grant_rule_key();
     let publish = |rows| {
         crate::gateway::publish_identity_grants(
             &live,
             &epoch,
             crate::identity_grants::LocalIdentityGrantStore::from_grants(rows),
+            key.as_ref(),
         );
     };
     match outcome {

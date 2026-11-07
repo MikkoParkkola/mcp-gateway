@@ -16,7 +16,10 @@ src/gateway/server/background.rs	spawn_health_loop	-	startup: spawns the backend
 src/gateway/server/background.rs	spawn_idle_reaper	-	startup: spawns the idle reaper once per serve
 src/gateway/server/background.rs	stop	-	background task shutdown
 src/gateway/server/build_meta.rs	build_meta_mcp	-	startup MetaMcp construction, once per serve
+src/gateway/server/build_meta.rs	built_mtls_policy_for_test	-	test-only accessor (cfg(test)): the startup-built mTLS policy, for the production-path rule-id row
 src/gateway/server/build_meta.rs	response_firewall	-	startup firewall construction, once per serve
+src/gateway/server/build_meta.rs	announce_read_verdict	-	startup notice, logged once per serve from build_meta_mcp
+src/gateway/server/build_meta.rs	read_verdict_without_firewall	-	startup notice predicate, read once per serve by announce_read_verdict
 src/gateway/server/cleartext.rs	cleartext_credential_refusal	-	startup and reload posture checks, before any listener opens
 src/gateway/server/cleartext.rs	cleartext_http_warning	-	startup and reload posture checks, before any listener opens
 src/gateway/server/cleartext.rs	declared_public_host	-	startup and reload posture checks, before any listener opens

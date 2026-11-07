@@ -62,7 +62,7 @@ fn admitted(
     } = guard;
     // Admission holds only for an authenticated client. (issuer, subject)
     // only, never the email label, as the admin audit layer names an SSO admin.
-    let subject = identity.and_then(|id| GrantSubject::new(id.issuer, id.subject, None).ok());
+    let subject = identity.and_then(|id| GrantSubject::new(id.issuer(), id.subject(), None).ok());
     let actor = client.map(|c| Actor {
         who: AuditWho::from_request(
             Some(&c),

@@ -207,6 +207,10 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
         "cfg(test) scanner for the file-creation inventory, reading the crate's own sources; its fs::write calls are quoted syntax in a scanner test, never run; no secret",
     ),
     (
+        "src/gateway/meta_mcp/boundary_pins/read_history_access.rs",
+        "cfg(test) source scanner reading the crate's own sources to find which production files name the read history; no secret",
+    ),
+    (
         "src/gateway/meta_mcp/boundary_pins/scan.rs",
         "cfg(test) source scanner reading the crate's own source for the MIK-8387 boundary pins; no secret",
     ),
@@ -332,6 +336,10 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
     (
         "src/security/transparency_log_hwm_scan.rs",
         "reads audit log segments for a missing-mark finding; no secret",
+    ),
+    (
+        "src/security/transparency_log_identity.rs",
+        "reads the audit log's active file and sealed segments for its id at recovery; no secret",
     ),
     (
         "src/security/transparency_log_pager.rs",

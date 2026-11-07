@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 # SPDX-FileCopyrightText: 2026 Mikko Parkkola
 # SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-"""The `os-sensitive` label runs the train's OS jobs on a lane pull request.
+"""The `os-sensitive` label runs the train's macOS jobs on a lane pull request.
 
-A lane pull request into the release line skips the Windows and macOS jobs; only
-the merge train runs them. With the `os-sensitive` label, the lane runs the
-train's own OS jobs (LABEL_JOBS) too, as the train would for the same change,
+A lane pull request into the release line runs the Windows jobs itself and skips
+the macOS ones; only the merge train runs macOS. With the `os-sensitive` label,
+the lane runs the train's own macOS jobs (LABEL_JOBS) too, as the train would for
+the same change,
 and routes every other job exactly as without the label. The label changes
 nothing on any other pull request: a train, a throwaway, a pull request into
 another base. GitHub compares the label case-insensitively, as an exact name.
@@ -27,7 +28,8 @@ from test_docs_only_gating import ROOT, as_train, ctx, simulate as _simulate  # 
 from test_throwaway_routing import evaluate  # noqa: E402
 from test_os_shards import LABEL, LABELLED_LEGS, MATRIX  # noqa: E402
 
-LABEL_JOBS = {"windows-shards", "windows-clippy", "windows-check", "macos-shards", "macos-check"}
+# Windows runs on every lane without the label (test_heavy_train_gating.py).
+LABEL_JOBS = {"macos-shards", "macos-check"}
 # A labelled lane runs macOS's lib shard only: about two macOS runners serve every train.
 LABELLED_MACOS = LABELLED_LEGS["macos"]
 
@@ -143,10 +145,10 @@ def evaluator_errors() -> list[str]:
 
 
 def self_test(jobs: dict) -> list[str]:
-    """Planted mistakes each fail: the label clause on a sixth heavy job, a label job
-    that ignores it, a matrix that narrows labelled trains too, and a label that
-    skips docs-only changes where the train runs them."""
-    missing = sorted({"kani", "windows-check", "windows-shards", "macos-shards"} - set(jobs))
+    """Planted mistakes each fail: the label clause on a job outside LABEL_JOBS, a
+    label job that ignores it, a matrix that narrows labelled trains too, and a
+    label that skips docs-only changes where the train runs them."""
+    missing = sorted({"feature-combos-pr", "macos-check", "macos-shards"} - set(jobs))
     if missing:
         return [f"self-test: ci.yml lacks {missing}, which the planted mistakes need"]
     errors = []
@@ -162,9 +164,9 @@ def self_test(jobs: dict) -> list[str]:
             errors.append("self-test: a matrix narrowing labelled trains was not caught")
     docs_skip = copy.deepcopy(jobs)
     alt = f"contains(github.event.pull_request.labels.*.name, '{LABEL}'))"
-    job = docs_skip["windows-shards"]
+    job = docs_skip["macos-shards"]
     if alt not in str(job["if"]):
-        errors.append("self-test: the windows-shards label alternative was not found")
+        errors.append("self-test: the macos-shards label alternative was not found")
     else:
         job["needs"] = ["scope"]
         job["if"] = str(job["if"]).replace(alt, alt[:-1] + " && needs.scope.outputs.docs_only != 'true')")
@@ -173,13 +175,15 @@ def self_test(jobs: dict) -> list[str]:
     clause = (f" || (github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line'"
               f" && contains(github.event.pull_request.labels.*.name, '{LABEL}'))")
     widened = copy.deepcopy(jobs)
-    widened["kani"]["if"] = "${{ (" + str(widened["kani"]["if"]).strip()[3:-2].strip() + ")" + clause + " }}"
-    if not any(e.startswith("lane PR:") and "kani" in e for e in routing_errors(widened)):
-        errors.append("self-test: the label clause on kani was not caught")
+    # Feature combinations skip a docs-only lane; the label must not run them there.
+    widened["feature-combos-pr"]["if"] = (
+        "${{ (" + str(widened["feature-combos-pr"]["if"]).strip()[3:-2].strip() + ")" + clause + " }}")
+    if not any(e.startswith("docs-only lane PR:") and "feature-combos-pr" in e for e in routing_errors(widened)):
+        errors.append("self-test: the label clause on feature-combos-pr was not caught")
     narrowed = copy.deepcopy(jobs)
-    narrowed["windows-check"]["if"] = str(jobs["windows-check"]["if"]).replace(f"'{LABEL}'", "'other'")
+    narrowed["macos-check"]["if"] = str(jobs["macos-check"]["if"]).replace(f"'{LABEL}'", "'other'")
     if routing_errors(narrowed) == routing_errors(jobs):
-        errors.append("self-test: windows-check ignoring the label was not caught")
+        errors.append("self-test: macos-check ignoring the label was not caught")
     return errors
 
 
@@ -190,7 +194,7 @@ def main() -> int:
     for e in errors:
         print(f"os-label: {e}", file=sys.stderr)
     if not errors:
-        print(f"os-label: {len(LABEL_JOBS)} OS jobs follow the train on a labelled lane, "
+        print(f"os-label: {len(LABEL_JOBS)} macOS jobs follow the train on a labelled lane, "
               f"{len(contexts())} contexts as expected")
     return 1 if errors else 0
 

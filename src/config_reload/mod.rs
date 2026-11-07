@@ -599,6 +599,9 @@ pub use apply::apply_patch;
 
 mod diff;
 mod generation;
+/// The settings the web UI may change (U8).
+#[path = "ui_fields.rs"]
+pub(crate) mod ui_fields;
 pub use generation::Generation;
 
 /// `config` with both request-path security flags off: what the router test
@@ -729,6 +732,8 @@ mod grant_reload_trigger_tests;
 /// that changes which of them are secret.
 #[cfg(test)]
 mod configured_secrets_reload_tests;
+#[cfg(all(test, feature = "firewall"))]
+mod firewall_shape_reload_tests;
 #[cfg(test)]
 mod grant_audit_crash_tests;
 #[cfg(test)]

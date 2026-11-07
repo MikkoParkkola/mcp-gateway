@@ -1,17 +1,17 @@
 #!/usr/bin/env python3
 # SPDX-FileCopyrightText: 2026 Mikko Parkkola
 # SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-"""Heavy jobs run on a pull request into the release line only for a merge train.
+"""The heavy jobs run on lane pull requests too, and are judged on the merge train.
 
-A lane pull request into the release line skips HEAVY; the train pull request
-(a `train/` branch in this repository) runs them, and the `heavy-gate` job
-("Heavy checks (merge train)") fails the train unless every one succeeded.
-Every other event (a pull request into another base, a push, a tag, a
-dispatch) routes each heavy job exactly as it would without the train clause.
-
-The merge train refuses a train pull request whose needed checks did not pass,
-and every lane pull request passes the gate, so the gate is needed on every
-train: a heavy job skipped or red there, or a gate skipped there, stops it.
+A lane pull request into the release line runs every HEAVY job by its docs-only
+rule (SKIPPED or KEPT in test_docs_only_gating.py), so a Windows, feature or
+release-tooling break fails the pull request that made it. No heavy job keeps a
+train-only clause. The `heavy-gate` job ("Heavy checks (merge train)") still
+fails a train (a `train/` branch in this repository) unless every heavy job
+succeeded there: a train's required checks are its pull requests' own checks plus
+this gate, and a pull request whose CI predates a job, or skipped it, would leave
+a red one unrequired on the train. On a lane the gate passes without judging; the
+lane's own checks fail it.
 """
 from __future__ import annotations
 
@@ -28,25 +28,27 @@ import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from test_docs_only_gating import (  # noqa: E402
-    HEAVY_GATE, HEAVY_TRAIN, POST_MERGE_SKIPPED, ROOT, SKIPPED, as_train, ctx, runs,
+    HEAVY_GATE, HEAVY_JUDGED, POST_MERGE_SKIPPED, RELEASE_PRS, ROOT, SKIPPED, as_train, ctx, runs,
 )
-from test_os_label_routing import LABEL_JOBS  # noqa: E402
 from test_throwaway_routing import evaluate  # noqa: E402
 
-HEAVY = HEAVY_TRAIN
-# Skipped on a docs-only change by the docs-only rule, train or not.
-DOCS_SKIPPED = HEAVY & SKIPPED
+HEAVY = HEAVY_JUDGED
+# Skipped on a docs-only change, train or not: the docs-only rule's jobs and the
+# feature combinations.
+DOCS_SKIPPED = (HEAVY & SKIPPED) | (HEAVY & RELEASE_PRS)
 GATE = HEAVY_GATE
 GATE_NAME = "Heavy checks (merge train)"
 STEP = "Every heavy job succeeded on a merge train"
+# The train-only clause these jobs carried before lanes ran them; none may carry it now.
 CLAUSE = (" && !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line'"
           " && !(startsWith(github.head_ref, 'train/')"
           " && github.event.pull_request.head.repo.full_name == github.repository))")
-# The OS jobs a lane labelled os-sensitive runs too (test_os_label_routing.py):
-# the train clause with the label as its alternative.
+# The Windows jobs' form of it, with the os-sensitive label as its alternative.
 LABEL_CLAUSE = (" && (" + CLAUSE[len(" && "):]
                 + " || (github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line'"
                 " && contains(github.event.pull_request.labels.*.name, 'os-sensitive')))")
+LANE_CONTEXTS = {"code PR", "docs-only PR", "scope failed on a PR", "train branch from a fork",
+                 "a branch merely containing train/"}
 
 
 def contexts() -> dict[str, tuple[dict, bool]]:
@@ -88,19 +90,30 @@ def with_needs(job: dict, c: dict, result: str) -> dict:
     return dict(c, needs=dict(c["needs"], **extra))
 
 
+def wanted(job: str, label: str) -> bool:
+    """Whether `job` runs in the context `label` names."""
+    if label == "same-repo throwaway PR":
+        return False
+    if job in RELEASE_PRS:
+        # Pull requests into the release line only; feature-combos.yml covers its pushes.
+        into_line = label in LANE_CONTEXTS or label in ("code train", "docs-only train", "scope failed on a train")
+        return into_line and label not in ("docs-only PR", "docs-only train")
+    if label in ("docs-only PR", "docs-only train") and job in DOCS_SKIPPED:
+        return False
+    return not (label == "release-line push" and job in POST_MERGE_SKIPPED)
+
+
 def heavy_errors(jobs: dict) -> list[str]:
-    """Each heavy job skips every lane case and runs every other code-change
-    case, except the release-line push for a job POST_MERGE_SKIPPED lists."""
+    """Each heavy job runs on a lane as on its train: no train-only clause, and
+    every case routed by `wanted`."""
     errors = [f"HEAVY names a job ci.yml lacks: {j}" for j in sorted(HEAVY - set(jobs))]
     for job in sorted(HEAVY & set(jobs)):
         cond = str(jobs[job].get("if", ""))
-        if (LABEL_CLAUSE if job in LABEL_JOBS else CLAUSE) not in cond:
-            errors.append(f"{job}: its if lacks the train clause")
-        for label, (c, lane) in contexts().items():
+        if CLAUSE in cond or LABEL_CLAUSE in cond:
+            errors.append(f"{job}: its if keeps the train-only clause")
+        for label, (c, _) in contexts().items():
             c = with_needs(jobs[job], c, "success")
-            want = not lane and not (label == "release-line push" and job in POST_MERGE_SKIPPED)
-            if label == "docs-only train" and job in DOCS_SKIPPED:
-                want = False
+            want = wanted(job, label)
             if runs(jobs[job], c) != want:
                 errors.append(f"{job}: {label} {'skips' if want else 'runs'}")
     return errors
@@ -154,7 +167,11 @@ def run_gate_step(gate: dict, c: dict, results: dict[str, str], root: Path = ROO
     holding a mutated check_needs.py)."""
     step = next(st for st in gate.get("steps", []) if st.get("name") == STEP)
     env = {k: "true" if evaluate(str(v), c) else "false" for k, v in (step.get("env") or {}).items() if k != "NEEDS"}
-    needs = {job: {"result": r, "outputs": {}} for job, r in results.items()}
+    # Only the jobs the gate declares in `needs` reach toJSON(needs) on a runner, so a job the gate
+    # forgot cannot be judged here either (a fixed list once let a gate without kani pass its rows).
+    declared = gate.get("needs") or []
+    declared = {declared} if isinstance(declared, str) else set(declared)
+    needs = {job: {"result": r, "outputs": {}} for job, r in results.items() if job in declared}
     with tempfile.NamedTemporaryFile() as summary:
         env.update(NEEDS=json.dumps(needs), GITHUB_STEP_SUMMARY=summary.name, PATH=os.environ.get("PATH", ""))
         # The shell a `run:` step gets on a Linux runner.
@@ -184,20 +201,31 @@ def gate_step_errors(jobs: dict, root: Path = ROOT) -> list[str]:
     skipped_heavy = {job: "skipped" for job in HEAVY}
     cases = {
         "lane, heavy jobs skipped": (lane, results(**{j.replace("-", "_"): "skipped" for j in HEAVY}), True),
-        "lane, a heavy job failed": (lane, results(kani="failure"), True),
+        "lane, a heavy job failed": (lane, results(**{"linux-keychain": "failure"}), True),
         "fork train branch, heavy jobs skipped": (fork, dict(results(), **skipped_heavy), True),
         "train, all succeeded": (train, results(), True),
-        "train, a heavy job failed": (train, results(kani="failure"), False),
+        "train, a heavy job failed": (train, results(**{"linux-keychain": "failure"}), False),
+        # Kani runs on lanes too, and the gate still refuses a train whose Kani failed.
+        "train, Kani failed": (train, results(kani="failure"), False),
+        "train, Kani skipped": (train, results(kani="skipped"), False),
+        "lane, Kani failed (its own check fails the lane, not this gate)": (lane, results(kani="failure"), True),
+        "docs-only train, Kani skipped": (docs_train, dict(results(), **{j: "skipped" for j in DOCS_SKIPPED}), True),
         "train, a heavy job cancelled": (train, results(windows_check="cancelled"), False),
         "train, a heavy job skipped": (train, results(linux_keychain="skipped"), False),
         "train, Windows skipped": (train, results(windows_shards="skipped"), False),
         "docs-only train, docs-only skips": (docs_train, dict(results(), **{j: "skipped" for j in DOCS_SKIPPED}), True),
         "docs-only train, Windows skipped": (docs_train, results(windows_check="skipped"), False),
-        "train, a heavy job missing from needs": (train, {j: "success" for j in every if j != "kani"}, False),
+        "train, a heavy job missing from needs": (train, {j: "success" for j in every if j != "linux-keychain"}, False),
         # Only `skipped` is a docs-only allowance: a docs-skipped job that ran
         # and failed, or was cancelled, still fails the train.
-        "docs-only train, a docs-skipped job failed": (docs_train, results(kani="failure"), False),
+        "docs-only train, a docs-skipped job failed": (docs_train, results(**{"linux-keychain": "failure"}), False),
         "docs-only train, a docs-skipped job cancelled": (docs_train, results(gws_dry_run="cancelled"), False),
+        # Feature combinations are judged like the rest: a lane PR whose CI predates them
+        # would otherwise leave a red one unrequired on the train.
+        "train, feature combinations failed": (train, results(feature_combos_pr="failure"), False),
+        "train, feature combinations skipped": (train, results(feature_combos_pr="skipped"), False),
+        "lane, feature combinations failed (its own check fails the lane)": (
+            lane, results(feature_combos_pr="failure"), True),
     }
     errors = []
     for label, (c, res, passes) in cases.items():
@@ -211,16 +239,26 @@ def main() -> int:
     jobs = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())["jobs"]
     errors = heavy_errors(jobs) + gate_errors(jobs) + gate_step_errors(jobs)
     # Each mutant is caught by the case named beside it.
-    def drop_clause(j: dict) -> None:
-        j["kani"]["if"] = str(j["kani"]["if"]).replace(CLAUSE, "")
-    def trains_skip_too(j: dict) -> None:
-        inner = CLAUSE[len(" && "):]
-        j["windows-shards"]["if"] = str(j["windows-shards"]["if"]).replace(inner, inner.replace(" && !(startsWith", " && (startsWith"))
+    def keeps_clause(job: str, clause: str):
+        def mutate(j: dict) -> None:
+            cond = str(j[job]["if"])
+            assert cond.endswith(" }}"), cond[-20:]
+            j[job]["if"] = cond[:-3] + clause + " }}"
+        return mutate
     def forks_count(j: dict) -> None:
-        j["release-script-tests"]["if"] = str(j["release-script-tests"]["if"]).replace(
-            CLAUSE, CLAUSE.replace(" && github.event.pull_request.head.repo.full_name == github.repository))", "))"))
-    def gate_forgets(j: dict) -> None:
-        j[GATE]["needs"] = sorted((HEAVY | {"scope"}) - {"linux-keychain"})
+        for st in j[GATE]["steps"]:
+            if st.get("name") == STEP:
+                st["env"]["TRAIN"] = "${{ startsWith(github.head_ref, 'train/') }}"
+    def gate_forgets(job: str):
+        def mutate(j: dict) -> None:
+            j[GATE]["needs"] = sorted((HEAVY | {"scope"}) - {job})
+        return mutate
+    def docs_allowance_drops(job: str):
+        def mutate(j: dict) -> None:
+            for st in j[GATE]["steps"]:
+                if st.get("name") == STEP:
+                    st["run"] = re.sub(r",?" + re.escape(job), "", st["run"], count=1)
+        return mutate
     def train_inverted(j: dict) -> None:
         for st in j[GATE]["steps"]:
             if st.get("name") == STEP:
@@ -229,15 +267,19 @@ def main() -> int:
         for st in j[GATE]["steps"]:
             if "env" in st and "DOCS_ONLY" in st["env"]:
                 st["env"]["DOCS_ONLY"] = "${{ true }}"
+    fc = "feature-combos-pr"
     mutants = {
         "the gate step judges lanes and passes trains": (train_inverted, f"{GATE} step: train, a heavy job failed passes (exit 0)"),
         "the gate step always allows the docs-only skips": (docs_always, f"{GATE} step: train, a heavy job skipped passes (exit 0)"),
-        "a heavy job loses its train clause": (drop_clause, "kani: its if lacks the train clause"),
-        "the clause skips trains too": (trains_skip_too, "windows-shards: code train skips"),
-        "a fork's train branch counts as a train": (
-            forks_count, "release-script-tests: train branch from a fork runs"),
+        "a Linux heavy job keeps its train-only clause": (keeps_clause("linux-keychain", CLAUSE), "linux-keychain: code PR skips"),
+        "a Windows job keeps its train-or-label clause": (keeps_clause("windows-shards", LABEL_CLAUSE), "windows-shards: code PR skips"),
+        "a fork's train branch counts as a train": (forks_count, f"{GATE} step: fork train branch, heavy jobs skipped fails (exit 1)"),
         "the gate stops waiting for a heavy job": (
-            gate_forgets, f"{GATE}: needs {sorted((HEAVY | {'scope'}) - {'linux-keychain'})}, not every heavy job plus scope"),
+            gate_forgets("linux-keychain"), f"{GATE}: needs {sorted((HEAVY | {'scope'}) - {'linux-keychain'})}, not every heavy job plus scope"),
+        "the gate stops waiting for feature combinations": (
+            gate_forgets(fc), f"{GATE}: needs {sorted((HEAVY | {'scope'}) - {fc})}, not every heavy job plus scope"),
+        "a docs-only train may not skip feature combinations": (
+            docs_allowance_drops(fc), f"{GATE} step: docs-only train, docs-only skips fails (exit 1)"),
     }
     for label, (mutate, expected) in mutants.items():
         mutated = copy.deepcopy(jobs)
