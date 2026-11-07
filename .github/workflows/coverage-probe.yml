@@ -1,4 +1,4 @@
-# Throwaway measurement, never merged: peak memory of the two library coverage parts.
+# Throwaway measurement, never merged: G2, the add-swap action fails loudly.
 name: Coverage probe
 
 on:
@@ -8,86 +8,48 @@ on:
 permissions:
   contents: read
 
-env:
-  CARGO_TERM_COLOR: never
-  RUST_MIN_STACK: "8388608"
-  COVERAGE_RUST: "1.99.1"
-  COVERAGE_LLVM_COV: "0.9.1"
-  COVERAGE_PARTS: "4"
-
 jobs:
-  # The plain library test build that the keychain, gws dry-run and packaged-crate jobs run
-  # (no coverage), measured once with the stock toolchain those jobs use.
-  lib-test-build:
-    name: runmem plain lib test build
+  g2:
+    name: G2 ${{ matrix.case }}
     runs-on: ubuntu-latest
-    timeout-minutes: 120
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
-      - name: Runner before the build
-        run: nproc; free -m; df -h /; swapon --show || true
-      - name: cargo test --all-features --lib --no-run, measured
-        run: |
-          set -o pipefail
-          ( while sleep 5; do
-              echo "MEMSAMPLE $(date +%T) used_mb=$(free -m | awk '/Mem:/{print $3}') avail_mb=$(free -m | awk '/Mem:/{print $7}') swap_used_mb=$(free -m | awk '/Swap:/{print $3}') disk_free_mb=$(df -m / | awk 'NR==2{print $4}') top=$(ps -eo rss=,comm= --sort=-rss | head -1 | tr -s ' ' ':')"
-            done ) &
-          /usr/bin/time -v cargo test --all-features --lib --no-run 2>&1 | tail -40
-
-  linux-part:
-    if: false
-    name: runmem part ${{ matrix.part }} swap=${{ matrix.swap }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 180
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
-        part: [lib-a, lib-b, int-a, int-b]
-        swap: ["8G", "none"]
-        # The SDK journey's build peak (its tests need the pinned SDK and Redis, absent here).
-        include:
-          - part: sdk
-            swap: "none"
+        case: [real-swapon, noop-swapon, noop-swapon-threshold-0]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
-        with:
-          toolchain: ${{ env.COVERAGE_RUST }}
-          components: llvm-tools-preview
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
-      - name: Install cargo-llvm-cov
-        run: cargo install cargo-llvm-cov --locked --version "$COVERAGE_LLVM_COV"
-      - name: Runner before the part
+      - name: Swap starts under the 10 GB threshold
         run: |
-          nproc; free -m; df -h / "$GITHUB_WORKSPACE"; swapon --show || true
-      # The candidate fix: 8 GB more swap. It fails loudly: total swap must reach 10 GB,
-      # so a swapon that silently does nothing cannot pass for a fix.
-      - name: Add swap
-        if: matrix.swap != 'none'
-        run: |
-          set -euo pipefail
-          sudo fallocate -l "${{ matrix.swap }}" /swapfile-cov
-          sudo chmod 600 /swapfile-cov
-          sudo mkswap /swapfile-cov
-          sudo swapon /swapfile-cov
-          swapon --show
           free -m
-          total_mb="$(free -m | awk '/Swap:/{print $2}')"
-          [ "$total_mb" -ge 10240 ] || { echo "::error::total swap ${total_mb} MB is under 10 GB"; exit 1; }
-      - name: Run the part, measured
+          total="$(free -m | awk '/^Swap:/{print $2}')"
+          [ "$total" -lt 10240 ] || { echo "::error::runner already has ${total} MB swap"; exit 1; }
+      - name: Replace swapon with a no-op that claims success
+        if: matrix.case != 'real-swapon'
+        run: |
+          real="$(command -v swapon)"
+          printf '#!/bin/sh\nexit 0\n' | sudo tee "$real" >/dev/null
+          echo "replaced $real"
+      - name: The action
+        id: action
+        continue-on-error: true
+        uses: ./.github/actions/add-swap
+        if: matrix.case != 'noop-swapon-threshold-0'
+      - name: The action with threshold 0
+        id: action_t0
+        continue-on-error: true
+        uses: ./.github/actions/add-swap-t0
+        if: matrix.case == 'noop-swapon-threshold-0'
+      - name: Expected outcome
         env:
-          PART: ${{ matrix.part }}
+          OUTCOME: ${{ steps.action.outcome }}${{ steps.action_t0.outcome }}
+          CASE: ${{ matrix.case }}
         run: |
-          set -o pipefail
-          cargo llvm-cov clean --workspace
-          # Streamed into this log every 5 s, so the numbers survive a lost runner:
-          # used and available MB, free disk MB on /, and the largest process by RSS.
-          ( while sleep 5; do
-              echo "MEMSAMPLE $(date +%T) used_mb=$(free -m | awk '/Mem:/{print $3}') avail_mb=$(free -m | awk '/Mem:/{print $7}') swap_used_mb=$(free -m | awk '/Swap:/{print $3}') disk_free_mb=$(df -m / | awk 'NR==2{print $4}') top=$(ps -eo rss=,comm= --sort=-rss | head -1 | tr -s ' ' ':')"
-            done ) &
-          /usr/bin/time -v python3 scripts/ci/coverage_shards.py run "$COVERAGE_PARTS" "$PART" 2>&1 | tee run.log
-      - name: Runner after the part
-        if: always()
-        run: |
-          free -m; df -h /; sudo dmesg 2>/dev/null | grep -iE "oom|killed process" | tail -5 || true
+          echo "case=$CASE outcome=$OUTCOME"
+          case "$CASE" in
+            real-swapon) want=success ;;
+            noop-swapon) want=failure ;;
+            noop-swapon-threshold-0) want=success ;;
+          esac
+          [ "$OUTCOME" = "$want" ] || { echo "::error::case $CASE: want $want, got $OUTCOME"; exit 1; }
+          echo "G2 $CASE: $OUTCOME as expected"
