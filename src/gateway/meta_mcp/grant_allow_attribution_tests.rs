@@ -15,12 +15,17 @@ use std::sync::Arc;
 use serde_json::{Value, json};
 
 use super::super::grant_audit_fixture::{
-    Endpoint, capability_backend_exposed, grant, grants, invocations,
+    CAPS, Endpoint, PERSONAL, capability_backend_exposed, grant, grants, invocations,
 };
-use super::{api_key, call, gateway, invoke_args, only};
+use super::{api_key, call, context, gateway, invoke_args, only};
+use crate::gateway::authz::Emit;
 use crate::gateway::meta_mcp::MetaMcp;
+use crate::gateway::meta_mcp::invoke::Outbound;
+use crate::gateway::meta_mcp::invoke::audit::{preload_allow_for_test, with_dispatch_scope};
+use crate::gateway::meta_mcp::visible::memo::with_visibility_memo;
 use crate::identity_grants::{IdentityGrant, LocalIdentityGrantStore};
 use crate::security::audit::AuditFailurePolicy;
+use crate::security::decision_record::{Allow, AllowRank, Noted};
 use crate::security::rule_id::{RuleId, RuleKey};
 
 const ALICE: (&str, &str) = ("api_key", "alice");
@@ -197,4 +202,83 @@ async fn the_grant_id_is_read_under_the_match_borrow() {
     assert_eq!(named(&first), as_grant(&old_id, "g-m"), "{first}");
     let second = granted_call(&g, 2).await;
     assert_eq!(named(&second), as_grant(&new_id, "g-m"), "{second}");
+}
+
+/// What an open dispatch scope holding a weaker allow notes once `check` has
+/// run inside it, and what it notes holding the preload alone. A grant
+/// outranks the preload, so any grant `check` noted would show.
+async fn notes_around(check: impl FnOnce()) -> (Noted, Noted) {
+    let weaker = || {
+        Allow::by(
+            AllowRank::FirewallAllow,
+            Some(RuleId::of("firewall", &key(), b"another check")),
+        )
+    };
+    let ((), alone) = with_dispatch_scope(async { preload_allow_for_test(weaker()) }).await;
+    let ((), after) = with_dispatch_scope(with_visibility_memo(async {
+        preload_allow_for_test(weaker());
+        check();
+    }))
+    .await;
+    (
+        after.decision_for_test().clone(),
+        alone.decision_for_test().clone(),
+    )
+}
+
+/// R27 (ATTR.1), the listing site. The check every catalogue listing runs per
+/// tool (`may_invoke`, its grant evaluated silently) admits alice's granted
+/// capability and notes nothing. Kills M10 at the listing.
+#[tokio::test]
+async fn a_listing_of_a_granted_capability_notes_nothing() {
+    let g = granted(vec![grant("g-m", ALICE, ALICE)]).await;
+    let who = api_key("alice");
+    let caller = context(&who);
+    let (after, alone) = notes_around(|| {
+        let listed = g.meta.may_invoke(CAPS, PERSONAL, caller.scope(), None);
+        assert!(listed.is_ok(), "premise: alice may invoke it: {listed:?}");
+    })
+    .await;
+    assert_eq!(after, alone);
+}
+
+/// R27 (ATTR.1), the send-recheck site. The chokepoint's recheck before a
+/// send (silent) passes alice's granted capability and notes nothing.
+/// Kills M10 at the send recheck.
+#[tokio::test]
+async fn the_send_recheck_of_a_granted_capability_notes_nothing() {
+    let g = granted(vec![grant("g-m", ALICE, ALICE)]).await;
+    let who = api_key("alice");
+    let caller = context(&who);
+    let (after, alone) = notes_around(|| {
+        let arguments = json!({});
+        let outbound = Outbound {
+            arguments: &arguments,
+            answers: None,
+            backend: None,
+        };
+        let permit = g
+            .meta
+            .direct_send_permit(caller.scope(), None, (CAPS, PERSONAL), &outbound);
+        assert!(permit.is_ok(), "premise: the recheck passes");
+    })
+    .await;
+    assert_eq!(after, alone);
+}
+
+/// R27 control (ATTR.1). The same grant check audited, inside the same
+/// scope, does note the grant over the preload, so the silent rows can fail.
+#[tokio::test]
+async fn an_audited_grant_check_notes_its_grant() {
+    let g = granted(vec![grant("g-m", ALICE, ALICE)]).await;
+    let who = api_key("alice");
+    let caller = context(&who);
+    let (after, alone) = notes_around(|| {
+        let checked = g
+            .meta
+            .identity_grant_rule(CAPS, PERSONAL, caller.scope(), Emit::Audit);
+        assert!(checked.is_ok(), "premise: the grant admits alice");
+    })
+    .await;
+    assert_ne!(after, alone, "the audited grant was not noted");
 }

@@ -75,10 +75,7 @@ pub(crate) struct SigningInvocationContext {
     /// The allow signing's policy check noted for `prepared_target`, taken
     /// once by the dispatch that skips its own check, so no later call or
     /// request inherits it.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "signing stores it once attribution is wired")
-    )]
+    #[cfg_attr(not(test), expect(dead_code, reason = "wired with attribution"))]
     prepared_allow: std::sync::Mutex<Option<crate::security::decision_record::Allow>>,
     /// The nonce passed admission. Only an admitted context signs, so a
     /// response is never signed over a nonce the store did not register.
@@ -297,10 +294,7 @@ impl SigningInvocationContext {
 
     /// Keep `allow` as the prepared target's signing-time allow. A stub for
     /// now: it keeps nothing.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "signing stores it once attribution is wired")
-    )]
+    #[cfg_attr(not(test), expect(dead_code, reason = "wired with attribution"))]
     #[expect(clippy::unused_self, reason = "a stub that keeps nothing yet")]
     pub(crate) fn store_prepared_allow(
         &self,
@@ -311,10 +305,7 @@ impl SigningInvocationContext {
 
     /// The prepared target's signing-time allow, taken: a second read finds
     /// nothing.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "the dispatch stamp takes it once wired")
-    )]
+    #[cfg_attr(not(test), expect(dead_code, reason = "wired with attribution"))]
     pub(crate) fn take_prepared_allow(&self) -> Option<crate::security::decision_record::Allow> {
         self.prepared_allow.lock().ok()?.take()
     }
