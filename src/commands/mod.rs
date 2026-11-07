@@ -561,6 +561,9 @@ fn read_ca_files(
     Ok((cert, key))
 }
 #[cfg(all(test, feature = "webui"))]
+#[path = "api_tests.rs"]
+mod api_tests;
+#[cfg(all(test, feature = "webui"))]
 mod dashboard_link_tls_tests;
 #[cfg(test)]
 mod tls_ca_key_tests;

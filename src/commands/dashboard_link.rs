@@ -172,8 +172,69 @@ pub(crate) async fn admin_call(
     token: &str,
     tls: &LinkTls,
 ) -> Result<serde_json::Value, String> {
-    check_target(base)?;
     let endpoint = format!("{}{path}", base.trim_end_matches('/'));
+    let response = send_admin_request(method, &endpoint, base, token, tls, None).await?;
+    let status = response.status();
+    let body: serde_json::Value = response.json().await.unwrap_or_default();
+    if !status.is_success() {
+        let reason = body["reason"]
+            .as_str()
+            .or_else(|| body["error"].as_str())
+            .unwrap_or("no reason given");
+        return Err(format!("the gateway answered {status}: {reason}"));
+    }
+    if body.is_null() {
+        return Err(format!("the gateway answered {status} with no JSON body"));
+    }
+    Ok(body)
+}
+
+/// The status and unmodified body, including an unsuccessful HTTP answer.
+pub(crate) struct AdminResponse {
+    pub(crate) status: reqwest::StatusCode,
+    pub(crate) body: Vec<u8>,
+}
+
+/// Send the exact URL the caller validated, optionally carrying a JSON body.
+///
+/// # Errors
+///
+/// A refused target, TLS setup failure, or failure to send or read the answer.
+pub(crate) async fn admin_call_url(
+    method: reqwest::Method,
+    endpoint: reqwest::Url,
+    token: &str,
+    tls: &LinkTls,
+    body: Option<&serde_json::Value>,
+) -> Result<AdminResponse, String> {
+    let response = send_admin_request(
+        method,
+        endpoint.clone(),
+        endpoint.as_str(),
+        token,
+        tls,
+        body,
+    )
+    .await?;
+    let status = response.status();
+    let body = response
+        .bytes()
+        .await
+        .map_err(|e| transport_error(endpoint.as_str(), e, tls))?
+        .to_vec();
+    Ok(AdminResponse { status, body })
+}
+
+/// Share target checks and TLS policy without changing legacy body handling.
+async fn send_admin_request(
+    method: reqwest::Method,
+    endpoint: impl reqwest::IntoUrl,
+    base: &str,
+    token: &str,
+    tls: &LinkTls,
+    body: Option<&serde_json::Value>,
+) -> Result<reqwest::Response, String> {
+    check_target(base)?;
     // Direct, never through an environment proxy: an HTTP_PROXY would carry the
     // credential off this machine even to a loopback URL. No redirects either:
     // `check_target` vetted only this URL, and a same-host, same-port hop
@@ -193,26 +254,17 @@ pub(crate) async fn admin_call(
     let client = builder
         .build()
         .map_err(|e| format!("could not build the HTTP client: {e}"))?;
-    let response = client
-        .request(method, &endpoint)
+    let mut request = client
+        .request(method, endpoint)
         .timeout(std::time::Duration::from_secs(30))
-        .bearer_auth(token)
+        .bearer_auth(token);
+    if let Some(body) = body {
+        request = request.json(body);
+    }
+    request
         .send()
         .await
-        .map_err(|e| transport_error(base, e, tls))?;
-    let status = response.status();
-    let body: serde_json::Value = response.json().await.unwrap_or_default();
-    if !status.is_success() {
-        let reason = body["reason"]
-            .as_str()
-            .or_else(|| body["error"].as_str())
-            .unwrap_or("no reason given");
-        return Err(format!("the gateway answered {status}: {reason}"));
-    }
-    if body.is_null() {
-        return Err(format!("the gateway answered {status} with no JSON body"));
-    }
-    Ok(body)
+        .map_err(|e| transport_error(base, e, tls))
 }
 
 /// `mcp-gateway events dead-letters`: the request the arguments describe.
