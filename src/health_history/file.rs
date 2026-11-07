@@ -58,39 +58,51 @@ pub(crate) fn read(path: &Path) -> Option<Vec<u8>> {
     }
 }
 
+/// Why a save did not complete.
+enum Unsaved {
+    Encode,
+    Dir(std::io::Error),
+    Write(std::io::Error),
+}
+
 /// Save `history` to `path` at `now`: a temporary file, flushed, renamed over
 /// the old one. Returns whether the rename completed; a failure marks the
-/// run's history incomplete until a later save succeeds.
+/// run's history incomplete until a later save succeeds. The snapshot through
+/// the rename runs under [`SAVES`]; the outcome is logged after it is released.
 pub(crate) fn save(history: &HealthHistory, path: &Path, now: u64) -> bool {
-    let _one_at_a_time = SAVES.lock();
-    let Some(bytes) = history.encode(now) else {
-        warn!(
-            "Failed to encode the health history; this run's history is incomplete until a save succeeds"
-        );
-        history.set_incomplete(true);
-        return false;
+    let outcome = {
+        let _one_at_a_time = SAVES.lock();
+        snapshot_and_write(history, path, now)
     };
-    if let Some(parent) = path.parent()
-        && let Err(e) = std::fs::create_dir_all(parent)
-    {
-        warn!(error = %e, "Failed to create the health history directory");
-        history.set_incomplete(true);
-        return false;
+    let Err(why) = outcome else {
+        history.set_incomplete(false);
+        return true;
+    };
+    match why {
+        Unsaved::Encode => warn!(
+            "Failed to encode the health history; this run's history is incomplete until a save succeeds"
+        ),
+        Unsaved::Dir(e) => warn!(error = %e, "Failed to create the health history directory"),
+        Unsaved::Write(e) => warn!(
+            error = %e,
+            "Failed to save the health history; this run's history is incomplete until a save succeeds"
+        ),
     }
-    match crate::config_persistence::write_atomic(
+    history.set_incomplete(true);
+    false
+}
+
+/// The snapshot and its atomic write; the caller holds [`SAVES`].
+fn snapshot_and_write(history: &HealthHistory, path: &Path, now: u64) -> Result<(), Unsaved> {
+    let bytes = history.encode(now).ok_or(Unsaved::Encode)?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(Unsaved::Dir)?;
+    }
+    crate::config_persistence::write_atomic(
         path,
         &bytes,
         crate::config_persistence::FileMode::Private,
         crate::config_persistence::Symlink::Replace,
-    ) {
-        Ok(()) => {
-            history.set_incomplete(false);
-            true
-        }
-        Err(e) => {
-            warn!(error = %e, "Failed to save the health history; this run's history is incomplete until a save succeeds");
-            history.set_incomplete(true);
-            false
-        }
-    }
+    )
+    .map_err(Unsaved::Write)
 }
