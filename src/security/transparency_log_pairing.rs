@@ -85,10 +85,10 @@ impl Pairing {
         }
     }
 
+    /// One settle record. A record that breaks a rule is skipped, and the
+    /// first such break is the failure; later records are still taken, so
+    /// an intent whose outcome follows a broken record is not warned.
     fn settle_record(&mut self, role: Role, fields: &Map<String, Value>, counter: u64) {
-        if self.failure.is_some() {
-            return;
-        }
         let token = fields.get("token").and_then(Value::as_str).unwrap_or("-");
         if let Err(f) = settle::role_fields(role, fields) {
             let problem = match f.problem {
@@ -97,7 +97,8 @@ impl Pairing {
                 FieldProblem::Forbidden => "forbidden",
             };
             let why = format!("field {} {problem} for {}", f.field, role.event());
-            self.failure = Some(failed(&why, counter, token));
+            self.failure
+                .get_or_insert_with(|| failed(&why, counter, token));
             return;
         }
         let view = Value::Object(settle::caller_view(fields));
@@ -113,7 +114,8 @@ impl Pairing {
             .or_insert_with(|| (digest.clone(), BTreeSet::new()));
         if *kept != digest {
             let why = "two different records for one token and role";
-            self.failure = Some(failed(why, counter, token));
+            self.failure
+                .get_or_insert_with(|| failed(why, counter, token));
             return;
         }
         counters.insert(counter);
@@ -207,9 +209,12 @@ impl Pairing {
 
     /// Whether `token` has an intent (writer or recovery) at counter `n`.
     fn is_intent(&self, token: &str, n: u64) -> bool {
-        #[cfg(test)]
-        probe();
-        self.intents.get(token).is_some_and(|at| at.contains(&n))
+        self.intents.get(token).is_some_and(|at| {
+            // One candidate set examined: the rows count it.
+            #[cfg(test)]
+            probe();
+            at.contains(&n)
+        })
     }
 
     /// Rule 3: an intent with no terminal record warns, "left to recovery"

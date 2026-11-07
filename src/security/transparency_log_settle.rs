@@ -180,19 +180,32 @@ pub(crate) fn role_fields(role: Role, fields: &Map<String, Value>) -> Result<(),
         (_, Some(v)) if v.as_u64().is_none() => fault("intent_counter", Mistyped)?,
         _ => {}
     }
+    // settled_by belongs to an outcome alone (II.3): any other role,
+    // recovery intents included, carrying it is refused.
     match (role, fields.get("settled_by")) {
-        (Role::RecoveryIntent, _) => text_field(fields, "settles", "settles"),
-        (Role::Outcome, Some(Value::Object(by))) => {
-            text_field(by, "token", "settled_by.token")?;
-            match by.get("intent_counter") {
-                None => fault("settled_by.intent_counter", Missing),
-                Some(v) if v.as_u64().is_none() => fault("settled_by.intent_counter", Mistyped),
-                Some(_) => Ok(()),
-            }
-        }
-        (Role::Outcome, Some(_)) => fault("settled_by", Mistyped),
-        _ => Ok(()),
+        (_, None) => {}
+        (Role::Outcome, Some(Value::Object(by))) => settled_by_fields(by)?,
+        (Role::Outcome, Some(_)) => fault("settled_by", Mistyped)?,
+        (_, Some(_)) => fault("settled_by", Forbidden)?,
     }
+    if role == Role::RecoveryIntent {
+        text_field(fields, "settles", "settles")?;
+    }
+    Ok(())
+}
+
+/// An outcome's `settled_by`: a non-empty `token` and a u64 `intent_counter`.
+fn settled_by_fields(by: &Map<String, Value>) -> Result<(), FieldFault> {
+    text_field(by, "token", "settled_by.token")?;
+    let problem = match by.get("intent_counter") {
+        None => FieldProblem::Missing,
+        Some(v) if v.as_u64().is_none() => FieldProblem::Mistyped,
+        Some(_) => return Ok(()),
+    };
+    Err(FieldFault {
+        field: "settled_by.intent_counter",
+        problem,
+    })
 }
 
 /// `map[key]` must be a non-empty string; a fault names it `field`.
