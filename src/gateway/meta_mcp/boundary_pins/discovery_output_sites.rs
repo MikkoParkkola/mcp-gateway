@@ -139,6 +139,10 @@ impl Sites {
         match expr {
             syn::Expr::Lit(_) => true,
             syn::Expr::Path(p) => self.shown_param(at, &path_text(&p.path)),
+            // `shown(..).to_string()`: the escaped text as a `String`.
+            syn::Expr::MethodCall(m) if m.method == "to_string" && m.args.is_empty() => {
+                self.passes(at, &m.receiver)
+            }
             syn::Expr::Call(call) => {
                 let syn::Expr::Path(func) = &*call.func else {
                     return false;
