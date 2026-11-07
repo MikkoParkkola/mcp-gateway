@@ -768,6 +768,10 @@ mod settle_bound_tests;
 #[path = "transparency_log_settle_kind_tests.rs"]
 mod settle_kind_tests;
 
+#[cfg(test)]
+#[path = "transparency_log_pairing_tests.rs"]
+mod pairing_tests;
+
 /// Test support: `records` without the logger's `audit_log_identified`
 /// record, which every new log writes after its open record. For a row that
 /// counts the records of its own kind; it skips that one event and nothing
