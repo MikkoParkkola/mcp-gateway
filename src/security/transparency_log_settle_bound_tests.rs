@@ -50,7 +50,19 @@ async fn settle_watched(
     token: &str,
     what: &str,
 ) -> Result<super::settle::Appended, Unsettled> {
-    tokio::time::timeout(WATCHDOG, settle_once(l, token))
+    let own = l.log_id();
+    settle_watched_as(l, &own, token, what).await
+}
+
+/// As [`settle_watched`], bound to `own` read beforehand: reading the id
+/// takes the logger's lock, which a stalled write holds.
+async fn settle_watched_as(
+    l: &Arc<TransparencyLogger>,
+    own: &super::identity::LogId,
+    token: &str,
+    what: &str,
+) -> Result<super::settle::Appended, Unsettled> {
+    tokio::time::timeout(WATCHDOG, l.settle(own, token, Role::Outcome, payload()))
         .await
         .unwrap_or_else(|_| panic!("{what} did not return within {WATCHDOG:?}"))
 }
@@ -130,6 +142,7 @@ async fn a_settle_with_the_permit_closed_or_the_log_stalled_is_refused_at_once()
         // GIVEN: the permit closed, or a write stalled past its bound
         let dir = tempfile::tempdir().unwrap();
         let (path, l) = opened(&dir);
+        let own = l.log_id();
         assert!(
             settle_watched(&l, "w-0", "the settle before the refusal")
                 .await
@@ -150,7 +163,7 @@ async fn a_settle_with_the_permit_closed_or_the_log_stalled_is_refused_at_once()
         let waits = l.permit_waits_for_test();
 
         // WHEN: it is settled
-        let got = settle_watched(&l, "w-1", "the refused settle").await;
+        let got = settle_watched_as(&l, &own, "w-1", "the refused settle").await;
 
         // THEN: Refused, no task started, nothing appended
         assert!(
