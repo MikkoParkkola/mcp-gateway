@@ -33,46 +33,9 @@ use crate::secret_store::{
 use super::ReloadContext;
 use crate::config_persistence::keyedit::Template;
 
-/// The SHA-256 of a file's bytes, lowercase hex: the revision a diff or a
-/// history view was made from. Not `config_revision`, which also covers the
-/// process environment and `file:` secrets.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct FileRevision(String);
-
-impl FileRevision {
-    /// The revision of `bytes`.
-    #[must_use]
-    pub(crate) fn of(bytes: &[u8]) -> Self {
-        Self(crate::hashing::sha256_hex(bytes))
-    }
-
-    /// The revision of everything `reader` yields, read in fixed chunks:
-    /// equal to [`Self::of`] over the same bytes.
-    ///
-    /// # Errors
-    ///
-    /// The read error; never a revision of a partial read.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "the config commit primitive's read-back, called by a later step"
-        )
-    )]
-    pub(crate) fn of_reader(reader: impl std::io::Read) -> std::io::Result<Self> {
-        crate::hashing::sha256_hex_reader(reader).map(Self)
-    }
-
-    /// The hex digest.
-    #[must_use]
-    #[cfg_attr(
-        all(not(feature = "webui"), not(test)),
-        expect(dead_code, reason = "read by the web UI's discovery route")
-    )]
-    pub(crate) fn as_str(&self) -> &str {
-        &self.0
-    }
-}
+// The revision type lives with the config commit primitive, which every
+// build compiles; the replace path names it from there.
+pub(crate) use crate::config_persistence::commit::FileRevision;
 
 /// What the file must hold for the write to go ahead.
 #[cfg_attr(

@@ -660,13 +660,10 @@ pub use reload_context::ReloadContext;
 pub(crate) use reload_context::SurfacedHook;
 #[cfg(all(test, feature = "webui"))]
 pub(crate) use reload_context::replace::order as write_order;
-// The config commit primitive (config_persistence) names a revision in every
-// build, with or without the web UI.
-pub(crate) use reload_context::replace::FileRevision;
 #[cfg(feature = "webui")]
 pub(crate) use reload_context::replace::{
-    AuditPosture, BackendOp, Expected, GatewayAuth, IntentKind, NO_AUDIT_LOG, Replace,
-    ReplaceError, ReplaceOutcome, Replaced, SecretStep, replace_audited,
+    AuditPosture, BackendOp, Expected, FileRevision, GatewayAuth, IntentKind, NO_AUDIT_LOG,
+    Replace, ReplaceError, ReplaceOutcome, Replaced, SecretStep, replace_audited,
 };
 #[cfg(test)]
 use reload_context::{

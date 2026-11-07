@@ -8,11 +8,12 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use super::commit::{Action, CommitToken, Found, NotDurable, Refusal, SyncKey, commit, verify};
+use super::commit::{
+    Action, CommitToken, FileRevision, Found, NotDurable, Refusal, SyncKey, commit, verify,
+};
 use super::journal::fault::{self, Fault, HookAt};
 use super::lock::Locked;
 use super::{FileMode, Symlink, write_atomic};
-use crate::config_reload::FileRevision;
 
 const OLD: &[u8] = b"server:\n  port: 1\n";
 const NEW: &[u8] = b"server:\n  port: 2\n";
@@ -389,8 +390,22 @@ impl std::io::Read for FailsAfter {
     }
 }
 
-/// A16: `of_reader` equals `of` at the buffer's edges and over short reads,
-/// and a failed read gives no revision. Red oracle: the equality.
+/// A reader that is interrupted once, then yields `data`.
+struct InterruptedOnce<'a>(&'a [u8], bool);
+
+impl std::io::Read for InterruptedOnce<'_> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        if !self.1 {
+            self.1 = true;
+            return Err(std::io::ErrorKind::Interrupted.into());
+        }
+        self.0.read(buf)
+    }
+}
+
+/// A16: `of_reader` equals `of` at the buffer's edges, over short reads and
+/// after an interrupted read, and a failed read gives no revision. Red
+/// oracle: the equality.
 #[test]
 fn of_reader_matches_of() {
     const K: usize = 64 * 1024;
@@ -402,6 +417,8 @@ fn of_reader_matches_of() {
     let bytes: Vec<u8> = (0..=255u8).cycle().take(K + 13).collect();
     let got = FileRevision::of_reader(Short(&bytes, 0)).expect("short reads");
     assert_eq!(got, FileRevision::of(&bytes), "short reads");
+    let got = FileRevision::of_reader(InterruptedOnce(&bytes, false)).expect("retried");
+    assert_eq!(got, FileRevision::of(&bytes), "interrupted then read");
     assert!(
         FileRevision::of_reader(FailsAfter(70 * 1024)).is_err(),
         "mid-stream error"

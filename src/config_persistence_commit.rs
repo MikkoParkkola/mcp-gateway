@@ -16,7 +16,40 @@ use std::path::Path;
 use super::journal::fault::{self, Fault, HookAt};
 use super::lock::Locked;
 use super::{FileMode, Symlink, write_atomic};
-use crate::config_reload::FileRevision;
+
+/// The SHA-256 of a file's bytes, lowercase hex: the revision a diff or a
+/// history view was made from. Not `config_revision`, which also covers the
+/// process environment and `file:` secrets.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct FileRevision(String);
+
+impl FileRevision {
+    /// The revision of `bytes`.
+    #[must_use]
+    pub(crate) fn of(bytes: &[u8]) -> Self {
+        Self(crate::hashing::sha256_hex(bytes))
+    }
+
+    /// The revision of everything `reader` yields, read in fixed chunks:
+    /// equal to [`Self::of`] over the same bytes.
+    ///
+    /// # Errors
+    ///
+    /// The read error; never a revision of a partial read.
+    pub(crate) fn of_reader(reader: impl std::io::Read) -> std::io::Result<Self> {
+        crate::hashing::sha256_hex_reader(reader).map(Self)
+    }
+
+    /// The hex digest.
+    #[must_use]
+    #[cfg_attr(
+        all(not(feature = "webui"), not(test)),
+        expect(dead_code, reason = "read by the web UI's discovery route")
+    )]
+    pub(crate) fn as_str(&self) -> &str {
+        &self.0
+    }
+}
 
 /// Proof that the target holds `revision`'s bytes durably: the directory was
 /// synced after the rename, then the bytes read back matched.
@@ -182,6 +215,9 @@ fn read_back(target: &Path, expected: &FileRevision) -> Result<(), NotDurable> {
             found: Found::NotAFile,
         });
     }
+    // A directory sync makes the name durable, not the data: flush the file
+    // too, so a match read from the page cache proves bytes on disk.
+    flush(&file, target).map_err(NotDurable::Sync)?;
     let found = FileRevision::of_reader(&mut file).map_err(NotDurable::Sync)?;
     if &found == expected {
         return Ok(());
@@ -189,6 +225,22 @@ fn read_back(target: &Path, expected: &FileRevision) -> Result<(), NotDurable> {
     Err(NotDurable::NotOnDisk {
         found: Found::Bytes(found),
     })
+}
+
+/// Flush the target's data. Unix flushes through the read handle; Windows
+/// needs write access to flush, so it opens a second handle that writes
+/// nothing.
+#[cfg(unix)]
+fn flush(file: &std::fs::File, _target: &Path) -> io::Result<()> {
+    file.sync_all()
+}
+
+#[cfg(not(unix))]
+fn flush(_file: &std::fs::File, target: &Path) -> io::Result<()> {
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(target)?
+        .sync_all()
 }
 
 /// Run a row's hook armed for `target` at `at`.

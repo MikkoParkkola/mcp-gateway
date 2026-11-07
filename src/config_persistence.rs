@@ -118,7 +118,6 @@ fn sync_dir_for(path: &Path, key: Option<commit::SyncKey>) -> std::io::Result<()
         {
             return Err(std::io::Error::other("injected dir-sync failure"));
         }
-        journal::fault::note_synced(path);
     }
     #[cfg(not(test))]
     let _ = key;
@@ -126,14 +125,16 @@ fn sync_dir_for(path: &Path, key: Option<commit::SyncKey>) -> std::io::Result<()
         .parent()
         .filter(|d| !d.as_os_str().is_empty())
         .unwrap_or_else(|| Path::new("."));
-    #[cfg(windows)]
-    {
-        crate::private_fs::sync_dir(dir)
-    }
     #[cfg(not(windows))]
-    {
-        std::fs::File::open(dir)?.sync_all()
+    let synced = std::fs::File::open(dir).and_then(|d| d.sync_all());
+    #[cfg(windows)]
+    let synced = crate::private_fs::sync_dir(dir);
+    // Counted only once it succeeded: a row's "one real sync" means done.
+    #[cfg(test)]
+    if synced.is_ok() {
+        journal::fault::note_synced(path);
     }
+    synced
 }
 
 // Primitive A: commit the config's bytes and prove them durable.

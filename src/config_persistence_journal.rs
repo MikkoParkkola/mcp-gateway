@@ -448,7 +448,7 @@ pub(crate) mod fault {
         Pause(Arc<Pause>),
         /// A commit fails before its rename.
         FailWrite,
-        /// The directory sync of the given A call fails once.
+        /// The directory sync of the given A call fails, every time, while armed.
         FailDirSync(crate::config_persistence::commit::SyncKey),
         /// A row's action on the target at a point inside an A call.
         Hook(HookAt, Arc<dyn Fn(&Path) + Send + Sync>),
