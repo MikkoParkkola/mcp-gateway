@@ -826,3 +826,57 @@ async fn t18_a_json_number_in_a_tool_result_survives() {
     ));
     assert!(!leak.to_string().contains(TOKEN), "{leak}");
 }
+
+/// T19: the credential-name rule, name by name: strong parts anywhere, `KEY`
+/// only after its qualifiers, any letter case, `_`, `-` and camel-case
+/// boundaries; ordinary settings (the weak parts the rule leaves out) and near
+/// misses (`TOKENIZER`, `PATH`) are not credentials.
+#[test]
+fn t19_the_credential_name_rule_name_by_name() {
+    use crate::gateway::ui::secret_slots::names_a_credential;
+    let stored = [
+        "API_KEY",
+        "OPENAI_API_KEY",
+        "apiKey",
+        "APIKEY",
+        "X_AUTH_TOKEN",
+        "authToken",
+        "DB_PASSWORD",
+        "db_password",
+        "DB_PASSWD",
+        "DB_PASSPHRASE",
+        "GITHUB_PAT",
+        "githubPat",
+        "SENTRY_DSN",
+        "API-SECRET",
+        "CLIENT_SECRET",
+        "AWS_ACCESS_KEY_ID",
+        "PRIVATE_KEY",
+        "SIGNING_KEY",
+        "GOOGLE_CREDENTIALS",
+    ];
+    let kept = [
+        "DEBUG",
+        "LOG_LEVEL",
+        "PORT",
+        "KEY",
+        "SORT_KEY",
+        "AUTH_TYPE",
+        "AUTH_ENABLED",
+        "SESSION_TIMEOUT",
+        "COOKIE_SECURE",
+        "PRIVATE_MODE",
+        "TOKENIZER",
+        "PATH",
+        "PATH_PREFIX",
+        "KEYBOARD_LAYOUT",
+        "PASS_THROUGH",
+    ];
+    let wrong: Vec<&str> = stored
+        .iter()
+        .filter(|k| !names_a_credential(k))
+        .chain(kept.iter().filter(|k| names_a_credential(k)))
+        .copied()
+        .collect();
+    assert!(wrong.is_empty(), "judged wrongly: {wrong:?}");
+}

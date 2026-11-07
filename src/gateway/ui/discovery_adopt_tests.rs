@@ -286,6 +286,8 @@ fn find_with_settings() -> crate::discovery::DiscoveredServer {
         ("API_KEY", "zq-a"),
         ("X_AUTH_TOKEN", "zq-b"),
         ("DB_PASSWORD", "zq-c"),
+        ("SESSION_TIMEOUT", "30"),
+        ("CONFIG_PATH", "file:/example"),
     ]
     .into_iter()
     .map(|(k, v)| (k.to_owned(), v.to_owned()))
@@ -298,8 +300,9 @@ fn find_with_settings() -> crate::discovery::DiscoveredServer {
 }
 
 /// Adopt's side of the shared rule (regression): ordinary settings stay in
-/// the backend as text; values under credential-like names, and every header,
-/// leave it for the store.
+/// the backend as text; values under credential-like names, every header, and
+/// a reference-shaped value under any name (stored as its bytes, so the
+/// gateway never reads it as a reference) leave it for the store.
 #[test]
 fn adoption_stores_credentials_and_keeps_ordinary_settings() {
     let adopted = adopted(&find_with_settings());
@@ -312,6 +315,7 @@ fn adoption_stores_credentials_and_keeps_ordinary_settings() {
         fields,
         [
             "env.API_KEY",
+            "env.CONFIG_PATH",
             "env.DB_PASSWORD",
             "env.X_AUTH_TOKEN",
             "headers.X-Plain"
@@ -320,13 +324,14 @@ fn adoption_stores_credentials_and_keeps_ordinary_settings() {
     let env = &adopted.backend.env;
     assert_eq!(env.get("DEBUG").map(String::as_str), Some("1"), "{env:?}");
     assert_eq!(env.get("LOG_LEVEL").map(String::as_str), Some("debug"));
-    assert_eq!(env.len(), 2, "{:?}", env.keys());
+    assert_eq!(env.get("SESSION_TIMEOUT").map(String::as_str), Some("30"));
+    assert_eq!(env.len(), 3, "{:?}", env.keys());
     assert!(adopted.backend.headers.is_empty());
 }
 
-/// Every value kind across env and headers: literals (a reference-shaped
-/// one included) leave the backend in a fixed order, templates and empty
-/// values stay, and the backend is disabled.
+/// Every value kind across env and headers: credential-named literals (a
+/// reference-shaped one included) and header literals leave the backend in a
+/// fixed order, templates and empty values stay, and the backend is disabled.
 #[test]
 fn adoption_takes_out_literals_in_a_fixed_order() {
     let mut server = crate::discovery::DiscoveredServer::new(

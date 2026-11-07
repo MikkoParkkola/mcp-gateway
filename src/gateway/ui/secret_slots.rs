@@ -29,36 +29,70 @@ pub(super) enum Unopened {
     TimedOut,
 }
 
-/// The `_`-separated parts of an env key that mark its value as a credential.
-/// A stored value becomes a whole-value reference, which the redactor holds
-/// at any length, so storing an ordinary setting (`DEBUG=1`) would scrub
-/// every `1` from tool results: only these names are stored.
-const CREDENTIAL_SEGMENTS: [&str; 13] = [
-    "KEY",
-    "APIKEY",
+/// Parts of an env key that mark its value as a credential wherever they
+/// appear. A stored value becomes a whole-value reference, which the redactor
+/// holds at any length, so storing an ordinary setting (`DEBUG=1`) would scrub
+/// every `1` from tool results: a part that also names ordinary settings
+/// (`AUTH_TYPE`, `SESSION_TIMEOUT`, `COOKIE_SECURE`, `PRIVATE_MODE`,
+/// `SORT_KEY`) is left out.
+const CREDENTIAL_PARTS: [&str; 10] = [
     "TOKEN",
     "SECRET",
     "PASSWORD",
     "PASSWD",
-    "PASS",
-    "AUTH",
+    "PASSPHRASE",
     "CREDENTIAL",
     "CREDENTIALS",
-    "PRIVATE",
-    "SESSION",
-    "COOKIE",
+    "APIKEY",
+    "PAT",
+    "DSN",
 ];
 
-/// Whether env key `key` names a credential: one of its `_`-separated parts,
-/// in any letter case, is a [`CREDENTIAL_SEGMENTS`] entry (`DB_PASSWORD`,
-/// `x_auth_token`). Headers are not judged: every header value is stored. The
-/// panel and discovery adopt both store by this rule.
+/// Parts that mark a credential only directly before `KEY` (`API_KEY`,
+/// `PRIVATE_KEY`); `KEY` alone names ordinary settings too (`SORT_KEY`).
+const KEY_QUALIFIERS: [&str; 6] = [
+    "API",
+    "ACCESS",
+    "PRIVATE",
+    "SECRET",
+    "SIGNING",
+    "ENCRYPTION",
+];
+
+/// The parts of env key `key`, split at `_` and `-` and where a lower-case
+/// letter or digit meets an upper-case one (`authToken` is `auth`, `Token`).
+fn key_parts(key: &str) -> Vec<&str> {
+    let mut parts = Vec::new();
+    for word in key.split(['_', '-']) {
+        let mut start = 0;
+        let bytes = word.as_bytes();
+        for i in 1..bytes.len() {
+            if bytes[i].is_ascii_uppercase() && !bytes[i - 1].is_ascii_uppercase() {
+                parts.push(&word[start..i]);
+                start = i;
+            }
+        }
+        parts.push(&word[start..]);
+    }
+    parts.retain(|p| !p.is_empty());
+    parts
+}
+
+/// Whether env key `key` names a credential: one of its parts (see
+/// [`key_parts`]), in any letter case, is a [`CREDENTIAL_PARTS`] entry, or a
+/// [`KEY_QUALIFIERS`] entry directly followed by `KEY` (`DB_PASSWORD`,
+/// `x_auth_token`, `githubPat`, `OPENAI_API_KEY`). Headers are not judged:
+/// every header value is stored. The panel and discovery adopt both store by
+/// this rule.
 pub(super) fn names_a_credential(key: &str) -> bool {
-    key.split('_').any(|part| {
-        CREDENTIAL_SEGMENTS
-            .iter()
-            .any(|segment| part.eq_ignore_ascii_case(segment))
-    })
+    let parts = key_parts(key);
+    let is = |part: &str, word: &str| part.eq_ignore_ascii_case(word);
+    parts
+        .iter()
+        .any(|part| CREDENTIAL_PARTS.iter().any(|word| is(part, word)))
+        || parts
+            .windows(2)
+            .any(|pair| is(pair[1], "KEY") && KEY_QUALIFIERS.iter().any(|word| is(pair[0], word)))
 }
 
 /// The secret slot of backend `name`'s `key`, under `headers` or `env`. Its
