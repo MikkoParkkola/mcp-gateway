@@ -403,6 +403,10 @@ impl<'ast> syn::visit::Visit<'ast> for Mirror<'_> {
 fn macro_wrapped_and_path_calls_are_seen() {
     for (source, readers, reservers) in [
         ("assert!(firewall.reads().len() > 0)", 1, 0),
+        // The token-bearing call: arguments do not hide a reader.
+        ("firewall.reads(&t)", 1, 0),
+        ("firewall.reads(&ReadsToken(Cell::new(())))", 1, 0),
+        ("m!(f.reads(&t))", 1, 0),
         ("Firewall::reads(&firewall)", 1, 0),
         ("ReadHistory::reserve(&history, key)", 0, 1),
         ("debug_assert!(history.reserve(key).is_ok())", 0, 1),

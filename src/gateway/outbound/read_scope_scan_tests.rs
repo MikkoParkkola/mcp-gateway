@@ -581,3 +581,11 @@ fn chain_check(chain: &[(&str, &str)]) -> Result<(), String> {
 /// refuse.
 #[path = "read_scope_scan_rows_tests.rs"]
 mod rows;
+
+/// RED STUB: reports nothing, so the token rows fail on behaviour, not build.
+fn token_findings(_file: &syn::File) -> Vec<String> {
+    Vec::new()
+}
+
+#[path = "read_scope_token_rows_tests.rs"]
+mod token_rows;

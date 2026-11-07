@@ -57,6 +57,21 @@ fn scan_tt_three_valued_cfg_truth_table() {
     }
 }
 
+/// The read-token probe's cfg is set only by the must-fail check build, never
+/// a product build, so code under it is not production. Any other atom keeps
+/// its third value: a feature or a similar name is not the probe.
+#[test]
+fn the_read_token_probe_cfg_is_never_a_product_build() {
+    assert_eq!(cfg("reads_token_probe"), Cfg::False);
+    assert_eq!(cfg("not(reads_token_probe)"), Cfg::True);
+    assert_eq!(
+        cfg("all(reads_token_probe, feature = \"firewall\")"),
+        Cfg::False
+    );
+    assert_eq!(cfg("reads_token_probe_twin"), Cfg::Unknown);
+    assert_eq!(cfg("feature = \"reads_token_probe\""), Cfg::Unknown);
+}
+
 /// SCAN-1..6: which items are test-only. Production is anything not
 /// definitely excluded outside tests. Mutants: SCAN-m1 (a predicate that
 /// mentions `test` counts as test-only: SCAN-3, SCAN-4), SCAN-m2 (SCAN-5),
