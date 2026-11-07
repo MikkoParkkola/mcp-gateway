@@ -265,8 +265,16 @@ fn a4_the_intent_is_durable_before_the_writer_commits() {
         &target,
         "intent",
         Arc::new(move || {
+            // The create's own intent: its event and its key, read from the
+            // record, so another key's intent cannot stand in for it.
             let log = std::fs::read_to_string(&audit).unwrap_or_default();
-            *cell.lock().expect("cell") = Some(log.contains("config_key_create_intent"));
+            let own = log
+                .lines()
+                .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+                .any(|record| {
+                    record["event"] == "config_key_create_intent" && record["subject"] == "ordered"
+                });
+            *cell.lock().expect("cell") = Some(own);
         }),
     );
     assert_eq!(
@@ -276,7 +284,11 @@ fn a4_the_intent_is_durable_before_the_writer_commits() {
     let steps = write_order::take(&target);
     assert_eq!(steps, ["intent", "commit"]);
     let on_disk = *held.lock().expect("cell");
-    assert_eq!(on_disk, Some(true), "\"intent\" came before the append");
+    assert_eq!(
+        on_disk,
+        Some(true),
+        "\"intent\" came before the append of the ordered key's intent"
+    );
 }
 
 /// P9r: a reload that refuses after the rename, and a journal that then
