@@ -90,9 +90,10 @@ async fn an_edit_keeps_crlf_line_endings() {
 #[tokio::test]
 async fn an_env_edit_appends_inside_the_block() {
     let (router, path, _keep) = served(SVC).await;
-    // A reference, which the panel keeps as typed (a literal goes to the
+    // A reference to a variable every runner sets (the save refuses one that
+    // does not resolve), which the panel keeps as typed (a literal goes to the
     // secret store and only its reference reaches the file).
-    let (status, body) = patch(&router, "svc", json!({"env": {"B": "env:B_VALUE"}})).await;
+    let (status, body) = patch(&router, "svc", json!({"env": {"B": "env:PATH"}})).await;
     assert_eq!(status, StatusCode::OK, "{body}");
     let after = read(&path);
     kept_in_order(SVC, &after);
@@ -105,7 +106,7 @@ async fn an_env_edit_appends_inside_the_block() {
     let config = Config::load_literal(Some(&path)).expect("loads");
     assert_eq!(
         config.backends["svc"].env.get("B").map(String::as_str),
-        Some("env:B_VALUE")
+        Some("env:PATH")
     );
 }
 
