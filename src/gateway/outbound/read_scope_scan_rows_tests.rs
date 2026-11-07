@@ -69,6 +69,7 @@ fn the_gate_check_refuses_each_ungated_shape() {
         struct Generated;
         const _: () = {};
         static FW2: u8 = 0;
+        type Alias = u8;
         some_macro! {}
         mod elsewhere;
         mod nested {
@@ -127,6 +128,7 @@ fn the_gate_check_refuses_each_ungated_shape() {
             "a macro in with_macro",
             "an attribute on hinted",
             "an exposed `use`",
+            "an unsupported item",
             "const UNCHECKED",
             "const _",
             "impl Judge",
@@ -287,6 +289,7 @@ fn the_judges_check_refuses_each_other_shape() {
             "guard: Option<&Guard>",
             "guard: std::option::Option<&Guard>",
         ),
+        ("off_answers_true", "        false\n", "        true\n"),
     ] {
         assert_eq!(
             REAL_JUDGES.matches(from).count(),
