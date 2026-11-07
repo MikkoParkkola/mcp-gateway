@@ -174,7 +174,7 @@ fn read_events(path: &std::path::Path) -> Vec<Value> {
     let parsed = text.lines().map(serde_json::from_str::<Value>);
     let mut events: Vec<Value> = parsed.map(Result::unwrap).collect();
     events.retain(|e| e["event"] != "audit_segment_opened"); // genesis record (#2275)
-    events
+    crate::security::transparency_log::without_log_identified(events)
 }
 
 // Independent serializer and SHA-256, not the production helpers; exact integers.

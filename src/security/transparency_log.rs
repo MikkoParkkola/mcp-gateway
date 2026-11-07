@@ -763,3 +763,19 @@ mod settle_bound_tests;
 #[cfg(test)]
 #[path = "transparency_log_settle_kind_tests.rs"]
 mod settle_kind_tests;
+
+/// Test support: `records` without the logger's `audit_log_identified`
+/// record, which every new log writes after its open record. For a row that
+/// counts the records of its own kind; it skips that one event and nothing
+/// else, so a duplicate or missing record of any other kind still shows.
+#[cfg(test)]
+pub(crate) fn without_log_identified(
+    records: impl IntoIterator<Item = serde_json::Value>,
+) -> Vec<serde_json::Value> {
+    records
+        .into_iter()
+        .filter(|r| {
+            r.get("event").and_then(serde_json::Value::as_str) != Some(identity::EV_IDENTIFIED)
+        })
+        .collect()
+}
