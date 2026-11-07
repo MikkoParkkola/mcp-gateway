@@ -33,12 +33,15 @@ fn a1_a_credential_literal_is_stored_and_named() {
     let mut config = with_backend(&[("API_KEY", "sk-live-0123456789")], &[]);
 
     let (adoption, stored) =
-        store_backend_with(&mut config, "tool", &[], || Ok(opened(dir.path()))).expect("stores");
+        store_backend_with(&mut config, &["tool"], &[], || Ok(opened(dir.path()))).expect("stores");
     adoption.settle(&Ok(()));
 
     let written = config.backends["tool"].env["API_KEY"].clone();
     assert_eq!(read_reference(&written), "sk-live-0123456789");
-    assert_eq!(stored, vec![("env.API_KEY".to_string(), written)]);
+    assert_eq!(
+        stored,
+        vec![("backends.tool.env.API_KEY".to_string(), written)]
+    );
     assert_eq!(entries(dir.path()), 1);
     let yaml = crate::yaml::to_string(&config).expect("yaml");
     assert!(!yaml.contains("sk-live-0123456789"), "{yaml}");
@@ -51,13 +54,13 @@ fn a2_a_header_is_stored_whole() {
     let mut config = with_backend(&[], &[("Authorization", "Bearer sk-header-123")]);
 
     let (adoption, stored) =
-        store_backend_with(&mut config, "tool", &[], || Ok(opened(dir.path()))).expect("stores");
+        store_backend_with(&mut config, &["tool"], &[], || Ok(opened(dir.path()))).expect("stores");
     adoption.settle(&Ok(()));
 
     let written = &config.backends["tool"].headers["Authorization"];
     assert_eq!(read_reference(written), "Bearer sk-header-123");
     assert_eq!(stored.len(), 1);
-    assert_eq!(stored[0].0, "headers.Authorization");
+    assert_eq!(stored[0].0, "backends.tool.headers.Authorization");
     assert_eq!(entries(dir.path()), 1);
 }
 
@@ -75,7 +78,7 @@ fn a3_values_the_rule_keeps_open_no_store() {
     let mut config = with_backend(&kept, &[("X-Auth", "Bearer ${T}")]);
     let opens = Cell::new(0);
 
-    let (adoption, stored) = store_backend_with(&mut config, "tool", &[], || {
+    let (adoption, stored) = store_backend_with(&mut config, &["tool"], &[], || {
         opens.set(opens.get() + 1);
         Err("no store".to_string())
     })
@@ -109,7 +112,8 @@ fn a4_keep_as_text_keeps_only_its_field() {
     ];
 
     let (adoption, stored) =
-        store_backend_with(&mut config, "tool", &keep, || Ok(opened(dir.path()))).expect("stores");
+        store_backend_with(&mut config, &["tool"], &keep, || Ok(opened(dir.path())))
+            .expect("stores");
     adoption.settle(&Ok(()));
 
     let backend = &config.backends["tool"];
@@ -120,7 +124,7 @@ fn a4_keep_as_text_keeps_only_its_field() {
         "tok-0123456789"
     );
     let fields: Vec<&str> = stored.iter().map(|(f, _)| f.as_str()).collect();
-    assert_eq!(fields, ["env.OTHER_TOKEN"]);
+    assert_eq!(fields, ["backends.tool.env.OTHER_TOKEN"]);
 }
 
 /// A4b: a keep-as-text field the backend does not have is an error, so a
@@ -130,7 +134,7 @@ fn a4b_an_unknown_keep_field_is_refused() {
     let mut config = with_backend(&[("API_KEY", "sk-live-0123456789")], &[]);
     let keep = ["env.API_KEYY".to_string()];
 
-    let error = store_backend_with(&mut config, "tool", &keep, || {
+    let error = store_backend_with(&mut config, &["tool"], &keep, || {
         panic!("no store is opened for a refused request")
     })
     .expect_err("refused");
@@ -147,8 +151,9 @@ fn a5_settle_follows_the_write() {
         let dir = tempfile::tempdir().expect("tempdir");
         let mut config = with_backend(&[("API_KEY", "sk-live-0123456789")], &[]);
 
-        let (adoption, _) = store_backend_with(&mut config, "tool", &[], || Ok(opened(dir.path())))
-            .expect("stores");
+        let (adoption, _) =
+            store_backend_with(&mut config, &["tool"], &[], || Ok(opened(dir.path())))
+                .expect("stores");
         assert_eq!(entries(dir.path()), 1, "the entry exists before the write");
         adoption.settle(&saved);
 
@@ -162,7 +167,7 @@ fn a5_settle_follows_the_write() {
 fn a6_an_unopenable_store_changes_nothing() {
     let mut config = with_backend(&[("API_KEY", "sk-live-0123456789")], &[]);
 
-    let error = store_backend_with(&mut config, "tool", &[], || {
+    let error = store_backend_with(&mut config, &["tool"], &[], || {
         Err("secrets.store (keychain) refused: locked".to_string())
     })
     .expect_err("refused");
@@ -176,10 +181,39 @@ fn a6_an_unopenable_store_changes_nothing() {
 fn a7_a_missing_backend_is_an_error() {
     let mut config = Config::default();
 
-    let error = store_backend_with(&mut config, "ghost", &[], || {
+    let error = store_backend_with(&mut config, &["ghost"], &[], || {
         panic!("no store is opened for a missing backend")
     })
     .expect_err("refused");
 
     assert!(error.contains("ghost"), "{error}");
+}
+
+/// A8 (setup's batch): two backends' literals go in one save, with one store
+/// opening, so one vault lock covers them all.
+#[test]
+fn a8_several_backends_store_in_one_save() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let mut config = with_backend(&[("API_KEY", "sk-live-0123456789")], &[]);
+    let mut second = config.backends["tool"].clone();
+    second
+        .env
+        .insert("API_KEY".to_string(), "sk-live-9876543210".to_string());
+    config.backends.insert("other".to_string(), second);
+    let opens = Cell::new(0);
+
+    let (adoption, stored) = store_backend_with(&mut config, &["tool", "other"], &[], || {
+        opens.set(opens.get() + 1);
+        Ok(opened(dir.path()))
+    })
+    .expect("stores");
+    adoption.settle(&Ok(()));
+
+    assert_eq!(opens.get(), 1);
+    assert_eq!(stored.len(), 2);
+    assert_eq!(entries(dir.path()), 2);
+    assert_eq!(
+        read_reference(&config.backends["other"].env["API_KEY"]),
+        "sk-live-9876543210"
+    );
 }

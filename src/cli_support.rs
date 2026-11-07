@@ -232,31 +232,33 @@ pub fn adopt_literals(
     })
 }
 
-/// Moves each literal of backend `name` in `config` that the shared rule
-/// stores to the secret store and puts its reference in place: a
-/// credential-named env value and any header value, at least the redactor's
-/// short-value bound long ([`crate::config::secret_values`]), never a
-/// reference, a template, or a field (`env.KEY`, `headers.NAME`) listed in
-/// `keep_as_text`. Runs inside the CLI writer's edit, under its lock, after
-/// the backend is in `config`; settle the [`Adoption`] with the write's
-/// result. Also returns each stored field with its reference, in field
+/// Moves each literal of the backends `names` in `config` that the shared
+/// rule stores to the secret store, in one save, and puts its reference in
+/// place: a credential-named env value and any header value, at least the
+/// redactor's short-value bound long ([`crate::config::secret_values`]),
+/// never a reference, a template, or a field (`env.KEY`, `headers.NAME`)
+/// listed in `keep_as_text`, which applies to every named backend. Runs
+/// inside the CLI writer's edit, under its lock, after the backends are in
+/// `config`; settle the [`Adoption`] with the write's result. Also returns
+/// each stored field (`backends.<name>.env.KEY`) with its reference, in
 /// order, never a value. No store is opened when nothing is stored.
 ///
 /// # Errors
 ///
-/// A message ready to print, after removing any entry this call created: the
-/// store could not be opened or refused, or a value is larger than it keeps.
+/// A message ready to print, after removing any entry this call created: a
+/// name `config` lacks, a `keep_as_text` field no named backend has, a store
+/// that could not be opened or refused, or a value larger than it keeps.
 pub fn store_backend_literals(
     destination: &std::path::Path,
     config: &mut crate::config::Config,
-    name: &str,
+    names: &[&str],
     keep_as_text: &[String],
 ) -> Result<(Adoption, Vec<(String, String)>), String> {
     let dir = destination
         .parent()
         .unwrap_or_else(|| std::path::Path::new("."));
     let choice = config.secrets.store;
-    store_backend_with(config, name, keep_as_text, || {
+    store_backend_with(config, names, keep_as_text, || {
         let refused = |e: crate::secret_store::StoreError| store_refused(choice, &e);
         let chosen = crate::secret_store::choose_store(choice, dir).map_err(refused)?;
         let vault = crate::secret_store::Vault::for_config_dir(dir).map_err(refused)?;
@@ -268,105 +270,120 @@ pub fn store_backend_literals(
 /// only when there is a value to store.
 pub(crate) fn store_backend_with(
     config: &mut crate::config::Config,
-    name: &str,
+    names: &[&str],
     keep_as_text: &[String],
     open: impl FnOnce() -> Result<Opened, String>,
 ) -> Result<(Adoption, Vec<(String, String)>), String> {
+    let mut candidates = Vec::with_capacity(names.len());
+    let mut known = std::collections::HashSet::new();
+    for (outcome, name) in names.iter().enumerate() {
+        let Some(backend) = config.backends.get(*name) else {
+            return Err(format!("no backend named '{name}' to store values for"));
+        };
+        for (header, map) in [(false, &backend.env), (true, &backend.headers)] {
+            known.extend(map.keys().map(|key| field_of(header, key)));
+        }
+        candidates.push(Candidate {
+            outcome,
+            name: (*name).to_owned(),
+            backend: backend.clone(),
+            literals: stored_literals(backend, keep_as_text),
+        });
+    }
+    // A field to keep that no named backend has is a typo: refused, so it
+    // never silently stores what the operator asked to keep.
+    if let Some(missing) = keep_as_text.iter().find(|f| !known.contains(*f)) {
+        return Err(format!(
+            "--keep-as-text {missing}: no such field; nothing was written"
+        ));
+    }
+    let outcomes = names
+        .iter()
+        .map(|name| Outcome::Adopted {
+            name: (*name).to_owned(),
+        })
+        .collect();
+    if candidates.iter().all(|c| c.literals.is_empty()) {
+        let adoption = Adoption {
+            outcomes,
+            secrets: None,
+        };
+        return Ok((adoption, Vec::new()));
+    }
+    let (vault, store) = open()?;
+    let over = candidates.iter().find_map(|c| {
+        c.literals
+            .iter()
+            .find(|(_, _, value)| value.len() > store.limit())
+            .map(|(header, key, _)| format!("backends.{}.{}", c.name, field_of(*header, key)))
+    });
+    if let Some(field) = over {
+        return Err(format!(
+            "{field} is larger than the secret store keeps; nothing was written"
+        ));
+    }
+    let fields: Vec<(usize, bool, String)> = candidates
+        .iter()
+        .enumerate()
+        .flat_map(|(at, c)| c.literals.iter().map(move |(h, k, _)| (at, *h, k.clone())))
+        .collect();
+    let pending = store_literals(config.secrets.store, vault, store, &mut candidates)?;
+    let stored = fields
+        .into_iter()
+        .map(|(at, header, key)| {
+            let c = &candidates[at];
+            let map = if header {
+                &c.backend.headers
+            } else {
+                &c.backend.env
+            };
+            (
+                format!("backends.{}.{}", c.name, field_of(header, &key)),
+                map.get(&key).cloned().unwrap_or_default(),
+            )
+        })
+        .collect();
+    for candidate in candidates {
+        config.backends.insert(candidate.name, candidate.backend);
+    }
+    Ok((
+        Adoption {
+            outcomes,
+            secrets: pending,
+        },
+        stored,
+    ))
+}
+
+/// The `(header?, key, value)` literals of `backend` the shared rule stores,
+/// env before headers, each sorted by key; fields in `keep_as_text` stay.
+fn stored_literals(
+    backend: &crate::config::BackendConfig,
+    keep_as_text: &[String],
+) -> Vec<(bool, String, String)> {
     use crate::config::secret_values::{
         ValueClass, classify, stores_env_value, stores_header_value,
     };
-    let Some(backend) = config.backends.get(name) else {
-        return Err(format!("no backend named '{name}' to store values for"));
-    };
-    // A field to keep that the backend lacks is a typo: refused, so it never
-    // silently stores what the operator asked to keep.
-    let fields = |header: bool| {
-        let map = if header {
-            &backend.headers
-        } else {
-            &backend.env
-        };
-        map.keys().map(move |key| field_of(header, key))
-    };
-    let known: std::collections::HashSet<String> = fields(false).chain(fields(true)).collect();
-    if let Some(missing) = keep_as_text.iter().find(|f| !known.contains(*f)) {
-        return Err(format!(
-            "--keep-as-text {missing}: backend '{name}' has no such field; nothing was written"
-        ));
-    }
     let mut literals = Vec::new();
     for (header, map) in [(false, &backend.env), (true, &backend.headers)] {
         let mut keys: Vec<&String> = map.keys().collect();
         keys.sort();
         for key in keys {
             let value = &map[key];
-            let stored = classify(value) == Ok(ValueClass::Stored)
-                && if header {
-                    stores_header_value(value)
-                } else {
-                    stores_env_value(key, value)
-                }
-                && !keep_as_text.contains(&field_of(header, key));
-            if stored {
+            let by_rule = if header {
+                stores_header_value(value)
+            } else {
+                stores_env_value(key, value)
+            };
+            if classify(value) == Ok(ValueClass::Stored)
+                && by_rule
+                && !keep_as_text.contains(&field_of(header, key))
+            {
                 literals.push((header, key.clone(), value.clone()));
             }
         }
     }
-    let adopted = Outcome::Adopted {
-        name: name.to_owned(),
-    };
-    if literals.is_empty() {
-        let adoption = Adoption {
-            outcomes: vec![adopted],
-            secrets: None,
-        };
-        return Ok((adoption, Vec::new()));
-    }
-    let fields: Vec<(bool, String)> = literals
-        .iter()
-        .map(|(header, key, _)| (*header, key.clone()))
-        .collect();
-    let mut candidates = [Candidate {
-        outcome: 0,
-        name: name.to_owned(),
-        backend: backend.clone(),
-        literals,
-    }];
-    let (vault, store) = open()?;
-    if let Some((header, key, _)) = candidates[0]
-        .literals
-        .iter()
-        .find(|(_, _, value)| value.len() > store.limit())
-    {
-        return Err(format!(
-            "{} is larger than the secret store keeps; nothing was written",
-            field_of(*header, key)
-        ));
-    }
-    let pending = store_literals(config.secrets.store, vault, store, &mut candidates)?;
-    let [Candidate { backend, .. }] = candidates;
-    let stored = fields
-        .iter()
-        .map(|(header, key)| {
-            let map = if *header {
-                &backend.headers
-            } else {
-                &backend.env
-            };
-            (
-                field_of(*header, key),
-                map.get(key).cloned().unwrap_or_default(),
-            )
-        })
-        .collect();
-    config.backends.insert(name.to_owned(), backend);
-    Ok((
-        Adoption {
-            outcomes: vec![adopted],
-            secrets: pending,
-        },
-        stored,
-    ))
+    literals
 }
 
 type Opened = (

@@ -104,7 +104,12 @@ pub async fn run_add_command(
     let written = super::config_write::write(config, mode, |gateway_config| {
         notes = add_backend(gateway_config, name, resolved)
             .map_err(|msg| format!("{msg} (in {})", config.display()))?;
-        store_step = Some(store_backend_literals(config, gateway_config, name, &keep)?);
+        store_step = Some(store_backend_literals(
+            config,
+            gateway_config,
+            &[name],
+            &keep,
+        )?);
         Ok(())
     });
     let stored = match store_step {
