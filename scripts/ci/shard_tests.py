@@ -418,6 +418,11 @@ def self_test() -> int:
             *(f".mcp-gateway/transparency/transparency.jsonl{x}" for x in ("", ".hwm", ".lock")),
             *(f"gateway-control-plane/audit.jsonl{x}" for x in ("", ".hwm", ".lock")),
             "serve.log"]
+    # A spawned gateway's home is no longer a known leftover: the HTTP harness
+    # drains its gateway before its folders go (#4576), and no int-a run since
+    # left one. Each of its three shapes now fails, even alone.
+    for files in (home, control, full):
+        assert unexpected({".tmpAb12Cd": files}) == [".tmpAb12Cd"], files
     # A leaked TempLog folder is never one of the tolerated plain temp dirs.
     assert unexpected({"audit-log-Ab12Cd": hwm, ".tmpAb12Cd": hwm}) == ["audit-log-Ab12Cd"]
     # The families whose tests now use their own temp folders are no longer
