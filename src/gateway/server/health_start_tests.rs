@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! The health history through a real start: `Gateway::run` saves health.json
 //! and counters.json before it serves, records a clean stop at shutdown, and
-//! starts and serves even when neither file can be written.
+//! starts and serves even when neither file can be written. A file that does
+//! not decode is moved aside, never overwritten.
 
 use std::time::Duration;
 
@@ -75,6 +76,32 @@ async fn h12_both_files_are_saved_before_serving_and_the_stop_is_clean() {
     let saved: serde_json::Value =
         serde_json::from_slice(&std::fs::read(data.join("health.json")).expect("saved"))
             .expect("json");
+    assert!(saved["clean_stop"].is_u64(), "{saved}");
+}
+
+/// H10b: a health.json that does not decode is moved aside with its bytes
+/// intact (as counters.json is), and the start writes a fresh one.
+#[tokio::test]
+async fn h10b_an_undecodable_history_is_moved_aside_not_overwritten() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let data = dir.path().join("data");
+    std::fs::create_dir_all(&data).expect("data dir");
+    std::fs::write(data.join("health.json"), b"not json").expect("seed");
+    Box::pin(run_once(dir.path(), &data, |_| {})).await;
+    let aside: Vec<_> = std::fs::read_dir(&data)
+        .expect("listed")
+        .filter_map(Result::ok)
+        .filter(|e| {
+            e.file_name()
+                .to_string_lossy()
+                .starts_with("health.json.unreadable-")
+        })
+        .collect();
+    assert_eq!(aside.len(), 1, "one aside file: {aside:?}");
+    assert_eq!(std::fs::read(aside[0].path()).expect("aside"), b"not json");
+    let saved: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(data.join("health.json")).expect("saved"))
+            .expect("the new file decodes");
     assert!(saved["clean_stop"].is_u64(), "{saved}");
 }
 
