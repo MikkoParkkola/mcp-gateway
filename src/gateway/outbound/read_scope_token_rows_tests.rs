@@ -48,7 +48,10 @@ fn the_real_token_shape_is_accepted() {
 }
 
 /// Every fixture is BASE with one edit; each reports exactly its finding.
+// One table holds every refused shape, so each expected finding reads against
+// the same accepted judge; splitting it would hide that.
 #[test]
+#[allow(clippy::too_many_lines)]
 fn the_token_check_refuses_each_other_shape() {
     let chain = "firewall\n                .reads(&ReadsToken(Cell::new(())))\n                .reserve(&ReadsToken(Cell::new(())), k, 1, 2, true)";
     let decl = "pub(crate) struct ReadsToken(std::cell::Cell<()>);";

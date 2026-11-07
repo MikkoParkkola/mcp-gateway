@@ -48,7 +48,9 @@ EXPECTED: dict[str, list[tuple[str, str]]] = {
 # `// probe: <name>` above it, and its errors fall on the lines that follow.
 EXPECTED_IMPLS: dict[str, list[tuple[str, str]]] = {
     "p7_copy": [("E0204", "ReadsToken")],
-    "p8_clone": [("E0423", "ReadsToken"), ("E0616", "ReadsToken")],
+    # `Self(..)` outside the judge: the constructor is private (E0603), and so is
+    # the field it reads (E0616); both name the token.
+    "p8_clone": [("E0603", "ReadsToken"), ("E0616", "ReadsToken")],
 }
 
 
