@@ -123,6 +123,7 @@ fn run_audit_verify(
                 .map_or_else(|| "?".to_string(), |n| n.to_string());
             let msg = result
                 .error_message
+                .clone()
                 .unwrap_or_else(|| "unknown error".to_string());
             match result.failed_check {
                 // The message names the rule, the counter and the token.

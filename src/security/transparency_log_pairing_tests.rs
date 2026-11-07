@@ -357,7 +357,8 @@ async fn expired_log(path: &Path) -> (std::sync::Arc<TransparencyLogger>, u64, u
     use super::settle::{IntentKind, Role};
     let l = std::sync::Arc::new(TransparencyLogger::open(cfg(path, 1, false)).unwrap());
     let save = Role::Intent(IntentKind::Save);
-    let old = l.settle(&l.log_id(), "w-old", save, payload(&json!({})));
+    let own = l.log_id();
+    let old = l.settle(&own, "w-old", save, payload(&json!({})));
     let old = old.await.unwrap().counter;
     super::rotation_tests::rotate_n(&l, path, 3);
     drop(l);

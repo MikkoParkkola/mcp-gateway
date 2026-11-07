@@ -50,7 +50,10 @@ pub(super) fn chain_file(
 
 /// Rewrite a one-segment log as `records`, re-chained, with `.hwm`
 /// re-minted at the new tail in the same fixed layout.
-pub(super) fn rechain(path: &Path, records: impl IntoIterator<Item = serde_json::Map<String, Value>>) {
+pub(super) fn rechain(
+    path: &Path,
+    records: impl IntoIterator<Item = serde_json::Map<String, Value>>,
+) {
     let (counter, entry_hash) = chain_file(path, records);
     let mark = HighWater {
         counter,

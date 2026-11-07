@@ -128,8 +128,8 @@ pub(crate) use verify::is_signed_entry;
 #[cfg(test)]
 pub(crate) use verify::verify_segments;
 pub use verify::{
-    FailedCheck, VerifyMode, VerifyResult, log_contains_signed_entry, show_session_entries, verify_log,
-    verify_log_signed,
+    FailedCheck, VerifyMode, VerifyResult, log_contains_signed_entry, show_session_entries,
+    verify_log, verify_log_signed,
 };
 
 use crate::security::audit::{AuditEnvelope, AuditWho, InvocationTarget};
