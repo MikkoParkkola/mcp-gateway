@@ -316,7 +316,9 @@ async fn t1_a_literal_env_value_is_stored_and_only_its_reference_written() {
 }
 
 /// T2/T3: an empty value, a template and a `file:` reference are written as
-/// given and store nothing; the answer's list is empty.
+/// given and store nothing; the answer's list is empty. Each sits under a
+/// credential name, so only the value rule (`classify`) keeps it out of the
+/// store, never the name rule.
 #[tokio::test]
 async fn t2_references_templates_and_empty_values_are_kept_and_store_nothing() {
     let panel = Panel::new().await;
@@ -327,7 +329,7 @@ async fn t2_references_templates_and_empty_values_are_kept_and_store_nothing() {
         .add(json!({
             "name": "b",
             "url": "http://127.0.0.1:9/mcp",
-            "env": {"EMPTY": "", "TEMPLATE": "${SOME_VAR}", "BEARER": "Bearer ${SOME_VAR}", "REF": reference},
+            "env": {"EMPTY_TOKEN": "", "TEMPLATE_TOKEN": "${SOME_VAR}", "BEARER_TOKEN": "Bearer ${SOME_VAR}", "REF_TOKEN": reference},
         }))
         .await;
     assert_eq!(status, StatusCode::CREATED, "{body}");
@@ -342,10 +344,10 @@ async fn t2_references_templates_and_empty_values_are_kept_and_store_nothing() {
     }
     let env = panel.written("b").env;
     for (key, value) in [
-        ("EMPTY", ""),
-        ("TEMPLATE", "${SOME_VAR}"),
-        ("BEARER", "Bearer ${SOME_VAR}"),
-        ("REF", reference.as_str()),
+        ("EMPTY_TOKEN", ""),
+        ("TEMPLATE_TOKEN", "${SOME_VAR}"),
+        ("BEARER_TOKEN", "Bearer ${SOME_VAR}"),
+        ("REF_TOKEN", reference.as_str()),
     ] {
         assert_eq!(
             env.get(key).map(String::as_str),
