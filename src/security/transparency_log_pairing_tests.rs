@@ -878,28 +878,140 @@ fn a_mismatched_record_warning_names_its_file_by_position_not_path() {
 const LOOKUPS_PER_DEPENDENT: usize = 2;
 
 #[test]
-fn intent_lookups_grow_with_the_records_not_their_square() {
-    // GIVEN: a thousand tokens, each an intent and the outcome naming it
+fn intent_lookups_grow_with_the_dependents_not_their_square() {
+    // GIVEN: a thousand tokens, each an intent, a recovery attempt's
+    // intent, and an outcome naming both (its own intent and settled_by)
     const TOKENS: u64 = 1_000;
     let mut records = Vec::new();
     for i in 0..TOKENS {
-        let token = format!("w-{i}");
+        let (token, by) = (format!("w-{i}"), format!("r-{i}"));
+        let at = 3 + 3 * i;
         records.push(rec(INTENT, &token, &json!({})));
-        records.push(dep(OUTCOME, &token, 3 + 2 * i));
+        records.push(rec(RECOVERY, &by, &json!({"settles": token})));
+        records.push(settled(&token, at, &by, at + 1));
     }
-    let n = records.len();
+    let dependents = usize::try_from(TOKENS).unwrap();
 
-    // WHEN: the log is verified, counting the lookup's work
+    // WHEN: the log is verified, counting candidates the lookup examined
     super::verify::PROBES.with(|p| p.set(0));
     let r = verify_records(records);
     let probes = super::verify::PROBES.with(std::cell::Cell::get);
 
-    // THEN: every outcome paired after at least one lookup each, and the
-    // work stays within a fixed number of lookups per record
+    // THEN: every outcome paired after at least one look each, and the
+    // work stays within the lookups each dependent costs
     assert_paired(&r, "a thousand tokens");
-    assert!(probes >= n / 2, "the counter saw no lookups: {probes}");
+    assert!(probes >= dependents, "the counter saw no lookups: {probes}");
     assert!(
-        probes <= LOOKUPS_PER_DEPENDENT * n,
-        "{probes} lookups for {n} records"
+        probes <= LOOKUPS_PER_DEPENDENT * dependents,
+        "{probes} candidates for {dependents} dependents"
     );
+}
+
+#[tokio::test]
+async fn settle_refuses_settled_by_on_every_role_but_outcome() {
+    use super::settle::{FieldFault, FieldProblem, IntentKind, InvalidPayload, Role, Unsettled};
+    let dir = tempfile::tempdir().unwrap();
+    let path = log_path(&dir);
+    let l = std::sync::Arc::new(TransparencyLogger::open(cfg(&path, 12, false)).unwrap());
+    let own = l.log_id();
+    let by = json!({"token": "r-1", "intent_counter": 1});
+    let want = InvalidPayload::Field(FieldFault {
+        field: "settled_by",
+        problem: FieldProblem::Forbidden,
+    });
+    let roles = [
+        (Role::Intent(IntentKind::Save), json!({"settled_by": by})),
+        (
+            Role::RecoveryIntent,
+            json!({"settles": "w-1", "settled_by": by}),
+        ),
+        (Role::Abandoned, json!({"settled_by": by})),
+        (
+            Role::Deferred,
+            json!({"intent_counter": 3, "settled_by": by}),
+        ),
+        (
+            Role::DeliveryStopped,
+            json!({"intent_counter": 3, "settled_by": by}),
+        ),
+    ];
+    for (role, extra) in roles {
+        let got = l.settle(&own, "w-1", role, payload(&extra)).await;
+        assert!(
+            matches!(&got, Err(Unsettled::Invalid(f)) if *f == want),
+            "{role:?}: {got:?}"
+        );
+    }
+    // Control: an outcome may carry it.
+    let outcome = payload(&json!({"intent_counter": 3, "settled_by": by}));
+    let got = l.settle(&own, "w-1", Role::Outcome, outcome).await;
+    assert!(got.is_ok(), "{got:?}");
+}
+
+#[test]
+fn verify_fails_settled_by_on_every_role_but_outcome() {
+    let by = json!({"token": "r-1", "intent_counter": 4});
+    let head = || {
+        vec![
+            rec(INTENT, "w-1", &json!({})),
+            rec(RECOVERY, "r-1", &json!({"settles": "w-1"})),
+        ]
+    };
+    let cases = [
+        (
+            "writer intent",
+            rec(INTENT, "w-2", &json!({"settled_by": by})),
+        ),
+        (
+            "recovery intent",
+            rec(
+                RECOVERY,
+                "r-2",
+                &json!({"settles": "w-1", "settled_by": by}),
+            ),
+        ),
+        (
+            "abandoned",
+            rec(ABANDONED, "w-1", &json!({"settled_by": by})),
+        ),
+        (
+            "deferred",
+            rec(
+                DEFERRED,
+                "w-1",
+                &json!({"intent_counter": 3, "settled_by": by}),
+            ),
+        ),
+        (
+            "stopped",
+            rec(
+                STOPPED,
+                "w-1",
+                &json!({"intent_counter": 3, "settled_by": by}),
+            ),
+        ),
+    ];
+    for (what, bad) in cases {
+        let r = verify_records([head(), vec![bad]].concat());
+        assert_field_fails(&r, 5, "field settled_by forbidden", what);
+    }
+    // Control: on an outcome it pairs.
+    let ok = verify_records([head(), vec![settled("w-1", 3, "r-1", 4)]].concat());
+    assert_paired(&ok, "outcome settled_by");
+}
+
+#[test]
+fn records_after_the_first_failure_are_still_paired() {
+    // GIVEN: a valid intent, an unrelated malformed record, then the
+    // intent's outcome
+    let malformed = with_field(dep(OUTCOME, "w-9", 3), "intent_counter", None);
+    let r = verify_records(vec![
+        rec(INTENT, "w-1", &json!({})),
+        malformed,
+        dep(OUTCOME, "w-1", 3),
+    ]);
+
+    // THEN: exactly the one failure, and no warning for the paired intent
+    assert_field_fails(&r, 4, "field intent_counter missing", "malformed");
+    assert_eq!(count(&r.warnings, "(token w-1)"), 0, "{:?}", r.warnings);
 }
