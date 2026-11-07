@@ -141,6 +141,9 @@ jobs:
         part: ${{ fromJSON(needs.linux-plan.outputs.parts) }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # The library parts only: the integration parts peak at 6.5 GB.
+      - if: startsWith(matrix.part, 'lib-')
+        uses: ./.github/actions/add-swap
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
         with:
           toolchain: ${{ env.COVERAGE_RUST }}
