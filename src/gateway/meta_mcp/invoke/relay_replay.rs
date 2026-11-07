@@ -105,6 +105,7 @@ impl Held {
     }
 
     /// Admission did not retain the answer (E1): its own capture goes.
+    #[cfg_attr(not(feature = "firewall"), allow(clippy::unused_self))]
     pub(super) fn discard_captured(&mut self) {
         #[cfg(feature = "firewall")]
         if let Some(handle) = self.captured.take() {
