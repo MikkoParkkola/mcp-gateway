@@ -56,11 +56,12 @@ mod normal_build {
         assert_eq!(mutant!("T1", 1, 2), 2);
     }
 
-    /// SCH.2: the mutated tokens are dropped unchecked, so a name that does
-    /// not exist compiles in a normal build.
+    /// SCH.2: a normal build never runs mutated code: a mutated arm that
+    /// would panic is never reached.
     #[test]
-    fn a_normal_build_drops_the_mutated_tokens() {
-        assert_eq!(mutant!("T3", undefined_name_xyz, 3), 3);
+    fn a_normal_build_never_runs_the_mutated_arm() {
+        let original: u8 = mutant!("T3", unreachable!("a normal build ran the mutated arm"), 3);
+        assert_eq!(original, 3);
     }
 
     /// SCH.2: a normal build reads no switch: with the switch set to this
