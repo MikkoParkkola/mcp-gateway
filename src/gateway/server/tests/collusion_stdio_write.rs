@@ -206,3 +206,48 @@ async fn r24_an_audit_failure_leaves_no_replay_snapshot() {
         "an audit-withheld answer leaves no replay snapshot"
     );
 }
+
+/// s1w: s1 through the real stdout writer. The frame is queued to
+/// `run_stdout_writer` over a 64-byte pipe nobody reads yet, so stdout
+/// cannot take it; `block` is published while it waits; the client then
+/// reads the line and the writer finishes. Nothing is recorded before
+/// stdout took the frame, and it is recorded after.
+/// Mutant killed: m2 (the generation read when the frame is queued).
+#[tokio::test]
+async fn s1w_the_stdout_writer_records_when_stdout_takes_the_frame() {
+    use tokio::io::AsyncBufReadExt as _;
+    let (meta, firewall, cell) = judged_stdio(None);
+    let reads = meta.stdio_reads();
+    let note = tenant_note("t1", PROSE);
+    publish(&meta, CollusionAction::Off);
+    let frame = judged_unwritten(&meta, &reads, &cell, &note).await;
+    let (sink, client) = tokio::io::duplex(64);
+    let (tx, rx) = tokio::sync::mpsc::channel(4);
+    let writer = tokio::spawn(Gateway::run_stdout_writer(sink, rx));
+    tx.send(frame).await.expect("the writer takes the queue");
+    tokio::task::yield_now().await;
+    publish(&meta, CollusionAction::Block);
+    assert!(
+        !http_relay_refused(&firewall, &note),
+        "base: nothing is recorded while stdout has not taken the frame"
+    );
+    let mut line = String::new();
+    let mut reader = tokio::io::BufReader::new(client);
+    tokio::time::timeout(Duration::from_secs(30), reader.read_line(&mut line))
+        .await
+        .expect("the frame is written within 30 s")
+        .expect("read the frame");
+    assert!(
+        line.contains("orchard ledger"),
+        "base: the answer was written"
+    );
+    drop(tx);
+    tokio::time::timeout(Duration::from_secs(30), writer)
+        .await
+        .expect("the writer ends once its queue closes")
+        .expect("the writer task");
+    assert!(
+        http_relay_refused(&firewall, &note),
+        "taken by stdout under block, the answer is recorded"
+    );
+}

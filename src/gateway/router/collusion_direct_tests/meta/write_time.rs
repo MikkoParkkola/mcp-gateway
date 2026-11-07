@@ -169,3 +169,46 @@ async fn h7c_a_direct_block_to_off_flip_before_the_read_records_nothing() {
     publish(&fx, CollusionAction::Block);
     assert_sent(&fx, &fx.send(Some("b"), PROSE).await, 1);
 }
+
+/// r12h: r12 over HTTP. When settlement makes a keyed chain's answer
+/// replayable (`complete_delivery`), its replay snapshot already exists:
+/// the handler takes the pending capture first, so a retry arriving at
+/// that moment finds it.
+/// Mutant killed: the HTTP pending capture moved after `complete_delivery`.
+#[tokio::test(flavor = "current_thread")]
+async fn r12h_the_snapshot_exists_when_an_http_answer_becomes_replayable() {
+    use crate::gateway::meta_mcp::admission::publish_hook;
+    use std::cell::Cell;
+    use std::rc::Rc;
+    let fx = live_fixture(CollusionAction::Block).await;
+    let firewall = Arc::clone(
+        fx.state
+            .firewall
+            .as_ref()
+            .expect("the fixture installs a firewall"),
+    );
+    let seen = Rc::new(Cell::new(None));
+    let at = Rc::clone(&seen);
+    let before = publish_hook::reached();
+    publish_hook::arm(move || at.set(Some(firewall.replay_entries_for_test())));
+    let chain = json!({"chain": [{"tool": "alpha:read", "arguments": {}}]});
+    let (status, body) = post(
+        &fx,
+        Some("a"),
+        "gateway_execute",
+        &chain,
+        &keyed("key-r12h"),
+    )
+    .await;
+    assert_eq!(status, 200, "base: the chain is answered: {body}");
+    assert_eq!(
+        publish_hook::reached(),
+        before + 1,
+        "premise: settlement published once"
+    );
+    assert_eq!(
+        seen.get(),
+        Some(1),
+        "the snapshot existed when the answer became replayable"
+    );
+}

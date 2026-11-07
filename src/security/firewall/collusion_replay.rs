@@ -259,7 +259,8 @@ impl ReplayReceipts {
 
     /// [`Self::insert`] with the entry's starting `life`, returning its
     /// sequence; `None` when it was not stored (`too_large`). Expired
-    /// entries are swept first (activity-driven, as the detector sweeps).
+    /// entries are swept first (activity-driven, as the detector sweeps;
+    /// a read sweeps nothing but its own key, as `lookup` does).
     fn insert_with(
         &self,
         key: StoredKey,
@@ -448,25 +449,41 @@ impl ReplayReceipts {
 
     /// [`Self::lookup`] for a replay that will deliver the entry: a pending
     /// entry gains one outstanding delivery, whose handle is returned; a
-    /// kept entry needs none.
+    /// kept entry needs none. The entry, its expiry check and the handle
+    /// are taken under one lock, so the handle always names the entry
+    /// returned, never one that replaced it in between.
     pub(in super::super) fn acquire(
         self: &Arc<Self>,
         key: &StoredKey,
         now: Instant,
     ) -> Option<(Arc<ReplayEntry>, Option<ReplayHandle>)> {
-        let entry = self.lookup(key, now)?;
-        let seq = {
+        // The miss reason is decided under the lock and counted after it
+        // is dropped, as `lookup` does.
+        let (found, skipped) = {
             let mut inner = self.inner.lock();
-            inner.sweep(now);
-            let held = inner.by_key.get_mut(key)?;
-            match &mut held.life {
-                Life::Kept => None,
-                Life::Pending { outstanding, .. } => {
-                    *outstanding = outstanding.saturating_add(1);
-                    Some(held.seq)
+            match inner.by_key.get(key).map(|held| now >= held.entry.expires) {
+                None => (None, Some("absent")),
+                Some(true) => {
+                    inner.take(key);
+                    (None, Some("expired"))
+                }
+                Some(false) => {
+                    let held = inner.by_key.get_mut(key)?;
+                    let seq = match &mut held.life {
+                        Life::Kept => None,
+                        Life::Pending { outstanding, .. } => {
+                            *outstanding = outstanding.saturating_add(1);
+                            Some(held.seq)
+                        }
+                    };
+                    (Some((Arc::clone(&held.entry), seq)), None)
                 }
             }
         };
+        if let Some(reason) = skipped {
+            count_replay_skipped(reason);
+        }
+        let (entry, seq) = found?;
         Some((entry, seq.map(|seq| self.handle(key.clone(), seq))))
     }
 
@@ -522,6 +539,20 @@ impl ReplayReceipts {
                 delivered_off,
             },
         }
+    }
+
+    /// A weak reference to `key`'s payload, to show what keeps it alive
+    /// (tests only).
+    #[cfg(test)]
+    pub(in super::super) fn entry_weak_for_test(
+        &self,
+        key: &StoredKey,
+    ) -> Option<std::sync::Weak<ReplayEntry>> {
+        self.inner
+            .lock()
+            .by_key
+            .get(key)
+            .map(|held| Arc::downgrade(&held.entry))
     }
 
     /// Entries the store holds now (tests only).

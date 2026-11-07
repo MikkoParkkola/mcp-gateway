@@ -150,9 +150,9 @@ fn r10_a_block_write_then_an_off_write_keeps_it() {
 }
 
 /// r11: an off-settle and a block-settle racing on two threads end kept,
-/// whichever lands first.
-/// Mutant killed: settle outside the store lock (a lost update leaves the
-/// entry pending or removes it).
+/// whichever lands first. A stress row: 64 races, not a controlled
+/// interleaving, so it shows both orders end kept rather than proving a
+/// particular lost update would be caught.
 #[test]
 fn r11_concurrent_off_and_block_settles_end_kept() {
     for _ in 0..64 {
@@ -255,12 +255,19 @@ fn r23_a_stale_handle_is_a_no_op() {
     let now = Instant::now();
     let k = key("a");
     let stale = pend(&store, &k, now, hour());
+    let dropped_stale = replay(&store, &k, now);
     let fresh = pend(&store, &k, now, hour());
     store.settle(stale, OFF);
     assert_eq!(
         store.life_for_test(&k),
         PENDING_ONE,
         "the stale off-settle touched nothing"
+    );
+    drop(dropped_stale);
+    assert_eq!(
+        store.life_for_test(&k),
+        PENDING_ONE,
+        "the stale drop released nothing"
     );
     drop(fresh);
     assert_eq!(store.life_for_test(&k), pending(0, false));
@@ -292,14 +299,17 @@ fn r15_r19_an_insert_sweeps_only_the_expired_entries() {
 }
 
 /// r20: pending entries stay inside the store's total cap however many
-/// handles are held, and a handle whose entry was evicted acts on nothing.
-/// Mutant killed: a handle holding the payload (bytes outside the cap) or
+/// handles are held, an evicted entry's payload is freed while its handle
+/// is still alive (a handle holds no payload), and that handle acts on
+/// nothing.
+/// Mutants killed: a handle holding the payload (bytes outside the cap);
 /// an eviction that skips pending entries.
 #[test]
 fn r20_pending_entries_stay_inside_the_total_cap() {
     let store = Arc::new(ReplayReceipts::with_budget_for_test(4 * 1024, 1024));
     let now = Instant::now();
     let mut held = Vec::new();
+    let mut first_payload = None;
     for i in 0..10_u64 {
         let k = key(&format!("op{i}"));
         let h = store.insert_pending(
@@ -311,6 +321,9 @@ fn r20_pending_entries_stay_inside_the_total_cap() {
             hour(),
         );
         assert!(h.is_some(), "each fits the entry cap");
+        if i == 0 {
+            first_payload = store.entry_weak_for_test(&k);
+        }
         held.push((k, h));
         assert!(
             store.bytes_for_test() <= 4 * 1024,
@@ -322,6 +335,14 @@ fn r20_pending_entries_stay_inside_the_total_cap() {
         store.life_for_test(&first),
         ABSENT,
         "the oldest was evicted"
+    );
+    assert!(
+        h.is_some(),
+        "base: the evicted entry's handle is still alive"
+    );
+    assert!(
+        first_payload.is_some_and(|weak| weak.upgrade().is_none()),
+        "an evicted entry's payload is freed while its handle lives"
     );
     if let Some(h) = h {
         store.settle(h, ON);
@@ -386,4 +407,160 @@ fn p1_every_two_delivery_order_ends_as_the_rule_says() {
             }
         }
     }
+}
+
+/// One step of p1b's model check.
+#[derive(Clone, Copy, Debug)]
+enum Op {
+    /// A new pending capture under the key (replacing the entry).
+    Insert,
+    /// A replay acquiring the entry.
+    Acquire,
+    /// Handle `n` written not under `off`.
+    On(usize),
+    /// Handle `n` written under `off`.
+    Off(usize),
+    /// Handle `n` dropped unwritten.
+    Drop(usize),
+    /// The clock moves past the retention.
+    Expire,
+}
+
+/// The rule as a model: the entry's sequence and lifecycle, and each
+/// handle's sequence (`None` once used).
+#[derive(Clone, Default)]
+struct Model {
+    entry: Option<(u64, TestLife)>,
+    handles: Vec<Option<u64>>,
+    next: u64,
+    expired: bool,
+}
+
+impl Model {
+    fn end(&mut self, n: usize, off: Option<bool>) {
+        let Some(seq) = self.handles.get_mut(n).and_then(Option::take) else {
+            return;
+        };
+        let Some((
+            at,
+            TestLife::Pending {
+                outstanding,
+                delivered_off,
+            },
+        )) = self.entry
+        else {
+            return;
+        };
+        if at != seq {
+            return;
+        }
+        if off == Some(false) {
+            self.entry = Some((at, KEPT));
+            return;
+        }
+        let (outstanding, delivered_off) = (outstanding - 1, delivered_off || off == Some(true));
+        self.entry = if outstanding == 0 && delivered_off {
+            None
+        } else {
+            Some((at, pending(outstanding, delivered_off)))
+        };
+    }
+
+    fn apply(&mut self, op: Op) {
+        match op {
+            Op::Insert => {
+                self.expired = false;
+                self.entry = Some((self.next, pending(1, false)));
+                self.handles.push(Some(self.next));
+                self.next += 1;
+            }
+            Op::Acquire => match self.entry {
+                Some(_) if self.expired => self.entry = None,
+                Some((
+                    at,
+                    TestLife::Pending {
+                        outstanding,
+                        delivered_off,
+                    },
+                )) => {
+                    self.entry = Some((at, pending(outstanding + 1, delivered_off)));
+                    self.handles.push(Some(at));
+                }
+                _ => {}
+            },
+            Op::On(n) => self.end(n, Some(false)),
+            Op::Off(n) => self.end(n, Some(true)),
+            Op::Drop(n) => self.end(n, None),
+            Op::Expire => self.expired = self.entry.is_some(),
+        }
+    }
+}
+
+/// p1b: every sequence of up to four steps (a new capture, a replay,
+/// writes under and not under `off`, an unwritten drop, expiry) leaves the
+/// store where the rule says, step by step: handles bound to their own
+/// entry, a replaced or expired entry untouched by old handles.
+/// Mutants killed: m7, m8, m9, m10, and an acquire that hands out a handle
+/// for an entry other than the one it returns.
+#[test]
+fn p1b_every_short_sequence_matches_the_model() {
+    fn ops(model: &Model) -> Vec<Op> {
+        let mut all = vec![Op::Insert, Op::Acquire, Op::Expire];
+        for (n, h) in model.handles.iter().enumerate() {
+            if h.is_some() {
+                all.extend([Op::On(n), Op::Off(n), Op::Drop(n)]);
+            }
+        }
+        all
+    }
+    fn walk(trace: &mut Vec<Op>, depth: usize) {
+        let mut model = Model::default();
+        let store = Arc::new(ReplayReceipts::new());
+        let k = key("a");
+        let mut now = Instant::now();
+        let mut handles: Vec<Option<ReplayHandle>> = Vec::new();
+        for &op in trace.iter() {
+            model.apply(op);
+            match op {
+                Op::Insert => handles.push(Some(pend(&store, &k, now, Duration::from_secs(10)))),
+                Op::Acquire => {
+                    if let Some(h) = store.acquire(&k, now).and_then(|(_, h)| h) {
+                        handles.push(Some(h));
+                    }
+                }
+                Op::On(n) => {
+                    if let Some(h) = handles[n].take() {
+                        store.settle(h, ON);
+                    }
+                }
+                Op::Off(n) => {
+                    if let Some(h) = handles[n].take() {
+                        store.settle(h, OFF);
+                    }
+                }
+                Op::Drop(n) => drop(handles[n].take()),
+                Op::Expire => now += Duration::from_secs(11),
+            }
+            let want = model.entry.map_or(ABSENT, |(_, life)| life);
+            assert_eq!(store.life_for_test(&k), want, "after {trace:?}");
+            assert_eq!(
+                handles.len(),
+                model.handles.len(),
+                "handles after {trace:?}"
+            );
+        }
+        if depth == 0 {
+            return;
+        }
+        let mut model = Model::default();
+        for &op in trace.iter() {
+            model.apply(op);
+        }
+        for op in ops(&model) {
+            trace.push(op);
+            walk(trace, depth - 1);
+            trace.pop();
+        }
+    }
+    walk(&mut Vec::new(), 4);
 }
