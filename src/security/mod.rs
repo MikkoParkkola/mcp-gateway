@@ -24,6 +24,9 @@ pub mod caller_identity;
 // its name classifier in every configuration.
 pub(crate) mod credential_names;
 pub mod data_flow;
+/// The decision fixture table's row shape (tests only).
+#[cfg(test)]
+pub(crate) mod decision_fixture_table;
 pub(crate) mod decision_record;
 pub(crate) mod dump_guard;
 #[cfg(feature = "firewall")]

@@ -593,3 +593,7 @@ mod prepass_tests;
 #[cfg(test)]
 #[path = "task_replay_rule_id_tests.rs"]
 mod rule_id_tests;
+
+#[cfg(test)]
+#[path = "task_replay_fixture_rows_tests.rs"]
+mod fixture_rows;

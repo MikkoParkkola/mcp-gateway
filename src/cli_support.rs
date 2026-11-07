@@ -626,22 +626,26 @@ fn field_of(header: bool, key: &str) -> String {
 /// terminal.
 #[must_use]
 pub fn describe_skipped(outcomes: &[Outcome]) -> String {
-    outcomes
-        .iter()
-        .filter_map(|outcome| match outcome {
-            Outcome::Skipped { name, reasons, .. } => Some(format!(
-                "\"{}\": {}",
-                shown(name),
-                reasons
-                    .iter()
-                    .map(|(code, field)| format!("{code} ({})", shown(field)))
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            )),
-            Outcome::Adopted { .. } => None,
-        })
-        .collect::<Vec<_>>()
-        .join("; ")
+    use std::fmt::Write as _;
+    // Built by writes of literals and `shown` parts only, so the discovery
+    // output guard judges every piece of the result.
+    let mut text = String::new();
+    for outcome in outcomes {
+        let Outcome::Skipped { name, reasons, .. } = outcome else {
+            continue;
+        };
+        if !text.is_empty() {
+            text.push_str("; ");
+        }
+        let _ = write!(text, "\"{}\": ", shown(name));
+        for (i, (code, field)) in reasons.iter().enumerate() {
+            if i > 0 {
+                text.push_str(", ");
+            }
+            let _ = write!(text, "{code} ({})", shown(field));
+        }
+    }
+    text
 }
 
 #[cfg(test)]
