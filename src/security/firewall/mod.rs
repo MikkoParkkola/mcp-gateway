@@ -723,6 +723,28 @@ impl Firewall {
             .fold((FirewallAction::Allow, None), merge_attributed)
     }
 
+    /// The firewall rule that let a finding through, for the allow record
+    /// only, kept apart from enforcement: a rule letting through a finding
+    /// whose default blocks ranks first, any other letting-through rule
+    /// last; the lowest rank wins, then the first. Content findings are
+    /// ranked from the rule that decides them, root findings (`roots`) from
+    /// the action and rule they arrive decided with. A stub for now: it
+    /// names no rule.
+    #[expect(dead_code, reason = "the send rescan notes it once wired")]
+    fn allow_provenance(
+        policy: &FirewallPolicy,
+        target: RuleTarget<'_>,
+        findings: &[Finding],
+        roots: &[(
+            Finding,
+            FirewallAction,
+            Option<crate::security::rule_id::RuleId>,
+        )],
+    ) -> Option<crate::security::decision_record::Allow> {
+        let _ = (policy, target, findings, roots);
+        None
+    }
+
     /// Resolve each finding on its own, then take the most restrictive result.
     ///
     /// A finding is decided by the first rule that applies to `target` and

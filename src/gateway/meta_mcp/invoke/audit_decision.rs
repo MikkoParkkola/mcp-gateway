@@ -80,6 +80,16 @@ pub(crate) fn note_allowed_by(allow: crate::security::decision_record::Allow) {
     drop(allow);
 }
 
+/// Run `check` with a signing sink open, returning its result and the
+/// lowest-rank allow noted inside it, for signing to keep on the prepared
+/// target. A stub for now: it opens no sink and returns no allow.
+#[expect(dead_code, reason = "signing opens the sink once attribution is wired")]
+pub(crate) fn collect_allow<R>(
+    check: impl FnOnce() -> R,
+) -> (R, Option<crate::security::decision_record::Allow>) {
+    (check(), None)
+}
+
 fn note_decision(f: impl FnOnce(&mut crate::security::decision_record::Noted)) {
     if super::NOTES.try_with(|_| ()).is_ok() {
         super::note(|notes| f(&mut notes.decision));

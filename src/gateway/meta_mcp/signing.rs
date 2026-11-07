@@ -72,6 +72,14 @@ pub(crate) struct SigningInvocationContext {
     nonce: CapturedNonce,
     request_id: Option<Value>,
     prepared_target: Option<(String, String)>,
+    /// The allow signing's policy check noted for `prepared_target`, taken
+    /// once by the dispatch that skips its own check, so no later call or
+    /// request inherits it.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "signing stores it once attribution is wired")
+    )]
+    prepared_allow: std::sync::Mutex<Option<crate::security::decision_record::Allow>>,
     /// The nonce passed admission. Only an admitted context signs, so a
     /// response is never signed over a nonce the store did not register.
     admitted: bool,
@@ -204,6 +212,7 @@ impl SigningInvocationContext {
             nonce: CapturedNonce::Missing,
             request_id: None,
             prepared_target: None,
+            prepared_allow: std::sync::Mutex::new(None),
             admitted: false,
             nonce_stamp: None,
             refund: NonceRefund::default(),
@@ -284,6 +293,30 @@ impl SigningInvocationContext {
             take_meta_nonce(request.get_mut("params"));
         }
         Ok(())
+    }
+
+    /// Keep `allow` as the prepared target's signing-time allow. A stub for
+    /// now: it keeps nothing.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "signing stores it once attribution is wired")
+    )]
+    #[expect(clippy::unused_self, reason = "a stub that keeps nothing yet")]
+    pub(crate) fn store_prepared_allow(
+        &self,
+        allow: Option<crate::security::decision_record::Allow>,
+    ) {
+        drop(allow);
+    }
+
+    /// The prepared target's signing-time allow, taken: a second read finds
+    /// nothing.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "the dispatch stamp takes it once wired")
+    )]
+    pub(crate) fn take_prepared_allow(&self) -> Option<crate::security::decision_record::Allow> {
+        self.prepared_allow.lock().ok()?.take()
     }
 
     pub(crate) fn prepared_for(&self, server: &str, tool: &str) -> bool {

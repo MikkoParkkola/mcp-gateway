@@ -157,6 +157,17 @@ pub(crate) fn tool_policy_refusal(
         })
 }
 
+/// [`tool_policy_refusal`], keeping the allow-list entry that admitted the
+/// call: `Ok(None)` when no entry did (the policy is off, or its default
+/// action allowed). A stub for now: it never names the entry.
+#[expect(dead_code, reason = "the tool-policy callers switch to it once wired")]
+pub(crate) fn tool_policy_verdict(
+    policy: &crate::security::ToolPolicy,
+    target: ToolTarget<'_>,
+) -> Result<Option<crate::security::rule_id::RuleId>, AuthorizationError> {
+    tool_policy_refusal(policy, target).map(|()| None)
+}
+
 /// The caller's backend scope: whether an API key or key-server token may
 /// reach `server` at all.
 ///
@@ -359,6 +370,9 @@ pub enum Emit {
 pub struct Decision<'a> {
     pub verdict: Result<(), AuthorizationError>,
     record: Option<Box<dyn FnOnce() + 'a>>,
+    /// The check that allowed, noted for the call's record when the
+    /// decision is emitted under [`Emit::Audit`] and the verdict allows.
+    allow: Option<crate::security::decision_record::Allow>,
 }
 
 impl<'a> Decision<'a> {
@@ -367,6 +381,7 @@ impl<'a> Decision<'a> {
         Self {
             verdict,
             record: None,
+            allow: None,
         }
     }
 
@@ -378,7 +393,23 @@ impl<'a> Decision<'a> {
         Self {
             verdict,
             record: Some(Box::new(record)),
+            allow: None,
         }
+    }
+
+    /// This decision, naming the check that allowed it; a lower rank already
+    /// held is kept.
+    #[expect(dead_code, reason = "the checks attach their allows once wired")]
+    #[must_use]
+    pub(crate) fn allowing(
+        mut self,
+        allow: Option<crate::security::decision_record::Allow>,
+    ) -> Self {
+        self.allow = match (self.allow, allow) {
+            (Some(held), Some(next)) if held.rank <= next.rank => Some(held),
+            (held, next) => next.or(held),
+        };
+        self
     }
 
     /// The verdict, writing the record first under [`Emit::Audit`].
@@ -390,6 +421,14 @@ impl<'a> Decision<'a> {
             && let Some(record) = self.record
         {
             record();
+        }
+        // Only an audited allow names its check: a listing or a silent
+        // recheck must never write into a call's notes.
+        if emit == Emit::Audit
+            && self.verdict.is_ok()
+            && let Some(allow) = self.allow
+        {
+            crate::gateway::meta_mcp::invoke::audit::note_allowed_by(allow);
         }
         self.verdict
     }
