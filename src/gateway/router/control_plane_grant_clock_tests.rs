@@ -56,6 +56,7 @@ async fn state_with_grants() -> (Arc<AppState>, crate::gateway::router::tests::F
         &live,
         &epoch,
         LocalIdentityGrantStore::from_grants(vec![expiring, revoked, grant("g-open")]),
+        None,
     );
     (state, dir)
 }
