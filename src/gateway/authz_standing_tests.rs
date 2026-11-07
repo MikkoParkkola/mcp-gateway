@@ -95,6 +95,8 @@ fn only_a_gateway_wide_admin_is_a_gateway_admin() {
         admin,
         backends: list(backends),
         authenticated: true,
+        // Empty, as no secret was presented: the predicate reads the standing only.
+        principal: crate::gateway::record_principal::InternalPrincipal::new(String::new()),
         ..crate::gateway::auth::anonymous_client()
     };
     assert!(!is_gateway_admin(None), "no client");
