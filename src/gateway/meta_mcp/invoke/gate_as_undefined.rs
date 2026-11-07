@@ -71,7 +71,7 @@ impl MetaMcp {
     /// caller may not reach answered as the undefined one is
     /// ([`Self::as_undefined_capability`]). Signing runs it for a target it
     /// does not skip (H2), and a stored read runs it so it answers what the
-    /// live call answers (MIK-8392 D-POLICY under MIK-8361).
+    /// live call answers.
     ///
     /// # Errors
     ///
@@ -155,7 +155,7 @@ impl MetaMcp {
     }
 
     /// `refusal`, unless the session's routing profile excludes a defined
-    /// capability: then the undefined capability's answer (MIK-8361), as
+    /// capability: then the undefined capability's answer, as
     /// [`Self::profile_withheld_capability`] gives it. Any other refusal (kill
     /// switch, a backend tool's profile refusal) is kept.
     pub(in crate::gateway::meta_mcp::invoke) fn profile_refusal_as_undefined(
@@ -171,7 +171,7 @@ impl MetaMcp {
     /// `ToolNotFound` for a defined capability the session's routing profile
     /// excludes, as the undefined twin is answered at the route stage before
     /// any profile is read: the profile's refusal would confirm the capability
-    /// exists (MIK-8361). It writes nothing: a profile refusal leaves no
+    /// exists. It writes nothing: a profile refusal leaves no
     /// invocation record, before this mapping and after it. `None` for any
     /// other target.
     pub(in crate::gateway::meta_mcp::invoke) fn profile_withheld_capability(
@@ -194,7 +194,7 @@ impl MetaMcp {
     /// no authorizer decision. `None` for an undefined capability, any other
     /// server, or a capability both rules admit. The gate and
     /// [`Self::check_visible_policy`] both answer such a refusal as the
-    /// undefined capability, through this one predicate (MIK-8361).
+    /// undefined capability, through this one predicate.
     pub(super) fn capability_rule_refusal(
         &self,
         (server, tool): (&str, &str),
