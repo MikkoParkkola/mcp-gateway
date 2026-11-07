@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! `audit verify` pairs settle records (MIK-9318 step 3): each intent with
+//! `audit verify` pairs settle records: each intent with
 //! its terminal record, by token and role, over the records the chain check
 //! already verified. Findings name a token, a role, a rule and counters,
 //! never a payload value; tokens stay raw here, and the CLI escapes them.

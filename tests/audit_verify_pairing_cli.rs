@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! MIK-9318 step 3, section 5 through the real CLI: a pairing failure has
+//! `audit verify` pairing through the real CLI: a pairing failure has
 //! its own headline, and no payload value, and no unescaped token, reaches
 //! a warning, an "unverified:" warning or the failure line.
 

@@ -1,7 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! `audit verify` pairs settle records (MIK-9318 step 3, design
-//! design-9318-step3-final.md section 7): each row brackets its claim with a
+//! `audit verify` pairs settle records: each row brackets its claim with a
 //! case that needs a finding, so a verifier that pairs nothing fails it.
 
 use std::fmt::Write as _;

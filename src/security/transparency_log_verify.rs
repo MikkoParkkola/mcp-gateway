@@ -69,7 +69,7 @@ pub enum FailedCheck {
     /// A chain, seam, expiry-anchor or tail check.
     #[default]
     Chain,
-    /// Settle pairing, on a chain that passed (MIK-9318 step 3).
+    /// Settle pairing, on a chain that passed.
     Pairing,
 }
 
