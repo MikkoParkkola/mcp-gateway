@@ -415,6 +415,24 @@ fn accepted(got: StatusCode) -> bool {
         && !got.is_server_error()
 }
 
+/// `accepted` admits only a served call. A ping is answered
+/// `JsonRpcResponse::success` (handlers.rs, the `"ping"` arm), a 2xx, so a
+/// 400, 403 or 404 is a refusal the "works" preconditions must not pass.
+#[test]
+fn accepted_admits_only_a_served_call() {
+    assert!(accepted(StatusCode::OK));
+    for refused in [
+        StatusCode::BAD_REQUEST,
+        StatusCode::UNAUTHORIZED,
+        StatusCode::FORBIDDEN,
+        StatusCode::NOT_FOUND,
+        StatusCode::TOO_MANY_REQUESTS,
+        StatusCode::INTERNAL_SERVER_ERROR,
+    ] {
+        assert!(!accepted(refused), "{refused} was taken as served");
+    }
+}
+
 /// K2: what K5 leaves unproven is the identity across a rotation. A key with
 /// an explicit `principal` that a reload rotates (new digest, the old one kept
 /// as `previous_key_sha256` with `previous_expires_at`) is accepted on both
