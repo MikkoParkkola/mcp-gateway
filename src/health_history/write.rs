@@ -38,6 +38,7 @@ impl Inner {
             restarts: VecDeque::new(),
             dropped_newest: None,
             gaps: VecDeque::new(),
+            gaps_dropped_to: None,
             incomplete: false,
         }
     }
@@ -131,8 +132,10 @@ impl Inner {
         }
         let from = self.last_tick;
         self.spread(from, now, false, false);
+        // The half-hours [from, now) touches: one starting at `now` was not
+        // reached.
         let mut half = from - from % HALF;
-        while half <= now {
+        while half < now {
             self.half_mut(half);
             half += HALF;
         }
@@ -166,7 +169,9 @@ impl Inner {
         if missed_run {
             self.gaps.push_back((self.saved_at, now.max(self.saved_at)));
             while self.gaps.len() > MAX_GAPS {
-                self.gaps.pop_front();
+                if let Some((_, end)) = self.gaps.pop_front() {
+                    self.gaps_dropped_to = Some(self.gaps_dropped_to.map_or(end, |e| e.max(end)));
+                }
             }
         } else {
             let (stopped_at, mut source) = match clean_stop {

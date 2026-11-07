@@ -106,7 +106,8 @@ impl HealthHistory {
             down += block.down_seconds;
         }
         let covered = running + down;
-        let gap = inner.gaps.iter().any(|&(a, b)| a < to && b > from);
+        let gap = inner.gaps.iter().any(|&(a, b)| a < to && b > from)
+            || inner.gaps_dropped_to.is_some_and(|end| end > from);
         Uptime {
             running_seconds: running,
             down_seconds: down,

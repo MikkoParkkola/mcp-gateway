@@ -134,6 +134,10 @@ struct Inner {
     /// The start of the newest restart detail dropped by the cap.
     dropped_newest: Option<u64>,
     gaps: VecDeque<(u64, u64)>,
+    /// The end of the newest gap the cap dropped: time before it may hold
+    /// an interval the gateway cannot account for.
+    #[serde(default)]
+    gaps_dropped_to: Option<u64>,
     #[serde(skip)]
     incomplete: bool,
 }
