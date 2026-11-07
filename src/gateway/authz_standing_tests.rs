@@ -57,7 +57,7 @@ fn the_standings_rank_gateway_over_in_scope_over_none() {
     assert!(AdminStanding::InScope > AdminStanding::None);
 }
 
-/// MIK-9311 ONE.2a: `CallerStanding::admin_standing` inverts `CallerStanding::of`
+/// `CallerStanding::admin_standing` inverts `CallerStanding::of`
 /// for both variants. The conversion is lossy one way only: `of` folds an
 /// in-scope admin into `Standard`, so `InScope` comes back as `None`.
 #[test]
@@ -85,7 +85,7 @@ fn caller_standing_round_trips_through_admin_standing() {
     );
 }
 
-/// MIK-9311 ONE.1: the one optional-client predicate holds only for an admin
+/// The one optional-client predicate holds only for an admin
 /// scoped to every backend; an absent client, an in-scope admin and a
 /// standard key are not gateway admins.
 #[test]

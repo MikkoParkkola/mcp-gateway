@@ -135,7 +135,7 @@ async fn an_unauthenticated_callers_repeated_spend_stays_bounded() {
     );
 }
 
-/// MIK-9311 H7: another session's report, every session, every key and the
+/// Another session's report, every session, every key and the
 /// gateway-wide total are gateway-wide admin views. An admin scoped to some
 /// backends reads none of them; a gateway-wide admin reads each, with the
 /// real figures, so refusing everyone fails here too.

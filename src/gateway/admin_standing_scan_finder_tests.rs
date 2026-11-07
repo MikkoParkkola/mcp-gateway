@@ -406,7 +406,7 @@ fn the_scan_finds_a_reader_in_a_matches_guard() {
     );
 }
 
-/// MIK-9311 G1: the optional-client predicate is a free fn sharing the
+/// The optional-client predicate is a free fn sharing the
 /// method's name, so the existing whole-segment needle counts every call and
 /// reference to it, and nothing else. A near name is a different segment.
 #[test]
