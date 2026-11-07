@@ -212,7 +212,7 @@ async fn grant_match_writes_allow_record() {
     );
 
     let invocation = only(invocations(&dir), "invocation record");
-    let record = only(decisions(&dir), "decision record");
+    let record = only(wait_for_decisions(&dir, 1).await, "decision record");
     assert_eq!(record["outcome"], json!("ok"), "{record}");
     assert_eq!(record["grant_id"], json!("g1"), "{record}");
     assert_eq!(trace_of(&record), trace_of(&invocation), "{record}");
@@ -302,7 +302,7 @@ async fn grant_decision_record_carries_no_label() {
 
         call(&meta, &who, "gateway_invoke", invoke_args()).await;
 
-        let record = only(decisions(&dir), "decision record");
+        let record = only(wait_for_decisions(&dir, 1).await, "decision record");
         assert_eq!(
             decision_subject(&record),
             (Some(authority), Some(subject)),
@@ -363,7 +363,7 @@ async fn direct_invoke_tool_writes_one_record() {
         .await
         .expect("a granted direct call succeeds");
     assert_ne!(result["isError"], json!(true), "{result}");
-    let record = only(decisions(&dir), "decision record");
+    let record = only(wait_for_decisions(&dir, 1).await, "decision record");
     assert_eq!(record["outcome"], json!("ok"), "{record}");
 }
 
@@ -425,6 +425,6 @@ async fn surfaced_call_grant_denial_writes_one_record() {
     let answer = call(&meta, &api_key("alice"), PERSONAL, json!({})).await;
     assert_eq!(error_code(&answer), Some(-32601), "{answer}");
     assert_eq!(endpoint.arrivals(), 0, "the refused call reaches nothing");
-    let record = only(decisions(&dir), "decision record");
+    let record = only(wait_for_decisions(&dir, 1).await, "decision record");
     assert_eq!(record["outcome"], json!("denied"), "{record}");
 }

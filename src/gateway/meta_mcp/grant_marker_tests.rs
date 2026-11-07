@@ -196,15 +196,15 @@ async fn a_blocked_withheld_writer_never_holds_the_slots_answer() {
     });
     let answered = tokio::time::timeout(std::time::Duration::from_secs(10), slot).await;
 
-    let (_, verdict, _) = answered.expect("the slot waited for its withheld note's writer");
+    let ((), verdict, _) = answered.expect("the slot waited for its withheld note's writer");
     verdict.expect("a withheld note never changes the answer");
     let flushed = decisions(&dir);
     assert_eq!(flushed.len(), 1, "the fail-closed note first: {flushed:#?}");
     let parked = tokio::time::timeout(std::time::Duration::from_secs(10), hold.held()).await;
     assert!(parked.is_ok(), "the withheld write never reached its hold");
     hold.release();
-    let held = wait_for_decisions(&dir, 2).await;
-    assert_eq!(held.len(), 2, "each note written once: {held:#?}");
+    let both = wait_for_decisions(&dir, 2).await;
+    assert_eq!(both.len(), 2, "each note written once: {both:#?}");
 }
 
 /// A finished task's stored delivery is re-checked inside the repeat scope
@@ -316,9 +316,9 @@ async fn an_append_that_outlives_its_caller_marks_the_decision_recorded() {
     log.release_and_drain(gate).await;
     hold.release();
 
-    let held = wait_for_decisions(&dir, 1).await;
-    assert_eq!(held.len(), 1, "{held:#?}");
-    assert_eq!(held[0]["invocation_recorded"], json!(true), "{held:#?}");
+    let landed = wait_for_decisions(&dir, 1).await;
+    assert_eq!(landed.len(), 1, "{landed:#?}");
+    assert_eq!(landed[0]["invocation_recorded"], json!(true), "{landed:#?}");
     assert_eq!(invocations(&dir).len(), 1, "the late append landed");
 }
 

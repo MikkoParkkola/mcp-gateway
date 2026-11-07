@@ -71,6 +71,7 @@ thread_local! {
     static HOLD: RefCell<Option<Arc<Hold>>> = const { RefCell::new(None) };
     static HOLD_BEST_EFFORT: RefCell<Option<Arc<Hold>>> = const { RefCell::new(None) };
     static FAIL_AT: Cell<usize> = const { Cell::new(0) };
+    static FAIL_TOOL: RefCell<Option<String>> = const { RefCell::new(None) };
     static APPENDS: Cell<usize> = const { Cell::new(0) };
     static ON_OPEN: RefCell<Vec<GrantNote>> = const { RefCell::new(Vec::new()) };
     static AFTER_SPAWN: RefCell<Vec<GrantNote>> = const { RefCell::new(Vec::new()) };
@@ -118,9 +119,25 @@ pub(crate) fn fail_append_at_for_test(n: usize) {
     FAIL_AT.with(|f| f.set(n));
 }
 
-/// Count one grant-record append; whether S4 fails it.
-pub(super) fn fail_this_append() -> bool {
+/// Fail the next grant-record append whose note is for `tool`, wherever it
+/// falls in the order of appends.
+pub(crate) fn fail_append_of_tool_for_test(tool: &str) {
+    FAIL_TOOL.with(|f| *f.borrow_mut() = Some(tool.to_owned()));
+}
+
+/// Count one grant-record append for `note`; whether a seam fails it.
+pub(super) fn fail_this_append(note: &GrantNote) -> bool {
     APPENDS.with(|a| a.set(a.get() + 1));
+    let by_tool = FAIL_TOOL.with(|f| {
+        let hit = f.borrow().as_deref() == Some(note.tool.as_str());
+        if hit {
+            *f.borrow_mut() = None;
+        }
+        hit
+    });
+    if by_tool {
+        return true;
+    }
     FAIL_AT.with(|f| match f.get() {
         0 => false,
         1 => {

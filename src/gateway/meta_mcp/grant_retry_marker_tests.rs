@@ -136,7 +136,7 @@ async fn another_calls_invocation_in_the_slot_never_marks_a_retry_note() {
     };
 
     let log = meta.transparency_logger.as_ref();
-    let (_, written, _) = super::grant_audit::with_grant_slot(log, async {
+    let ((), written, _) = super::grant_audit::with_grant_slot(log, async {
         let invoke = json!({"server": CAPS, "tool": PERSONAL, "arguments": {}});
         let granted =
             super::grant_decision_audit_tests::call(&meta, &owner, "gateway_invoke", invoke);

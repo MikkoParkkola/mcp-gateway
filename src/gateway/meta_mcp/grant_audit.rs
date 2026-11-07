@@ -323,7 +323,7 @@ async fn write_records(
             .as_ref()
             .map(|_| deadline.saturating_sub(started.elapsed()));
         #[cfg(test)]
-        if seams::fail_this_append() {
+        if seams::fail_this_append(note) {
             first_failure.get_or_insert(std::io::Error::other("injected append failure"));
             continue;
         }

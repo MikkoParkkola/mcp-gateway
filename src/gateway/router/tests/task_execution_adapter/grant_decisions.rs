@@ -263,6 +263,11 @@ async fn surfaced_call_grant_denial_writes_one_record() {
         0,
         "the refused call reaches nothing"
     );
-    let record = only(decisions(&row.dir), "decision record");
+    // Written after the call settles, on the slot's own task (design: "withheld
+    // notes are owned by their slot").
+    let record = only(
+        crate::gateway::meta_mcp::grant_audit_fixture::wait_for_decisions(&row.dir, 1).await,
+        "decision record",
+    );
     std::assert_eq!(record["outcome"], json!("denied"), "{record}");
 }
