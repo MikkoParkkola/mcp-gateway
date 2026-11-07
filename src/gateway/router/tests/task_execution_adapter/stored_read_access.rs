@@ -668,12 +668,15 @@ async fn t16_a_grant_withdrawn_after_the_task_ran_answers_as_the_live_call() {
     );
 }
 
-/// A repeated task-augmented call whose grant was withdrawn is answered from
-/// the stored task: the refusal is a refused delivery of a call that has its
-/// original invocation record, so its decision says so.
+/// A repeated task-augmented call whose grant was withdrawn is refused at sync
+/// admission, before the stored task is read: a refusal of the new request,
+/// which has no invocation record of its own, so its decision says unrecorded
+/// and Activity lists it. The original call keeps its one invocation record.
+/// A repeat counts as a delivery (marker true) only when it reaches
+/// `in_repeat_scope`, which a repeat refused at admission never does.
 #[tokio::test]
-async fn a_refused_repeated_task_call_writes_a_recorded_decision() {
-    use crate::gateway::meta_mcp::grant_audit_fixture::{decisions, grants};
+async fn a_repeat_refused_at_admission_is_one_unrecorded_decision() {
+    use crate::gateway::meta_mcp::grant_audit_fixture::{decisions, grants, invocations};
     use crate::security::audit::AuditFailurePolicy;
     let row =
         super::grant_decisions::armed(true, false, AuditFailurePolicy::BestEffort, |m| m).await;
@@ -686,6 +689,7 @@ async fn a_refused_repeated_task_call_writes_a_recorded_decision() {
     let id = task_id(&created);
     let settled = poll_until_terminal(&row.state, "key-a", &id).await;
     std::assert_eq!(status_of(&settled), "completed", "control: {settled}");
+    let recorded_before = invocations(&row.dir).len();
     row.state.meta_mcp.set_identity_grants(grants(vec![]));
     let before = decisions(&row.dir).len();
 
@@ -702,8 +706,13 @@ async fn a_refused_repeated_task_call_writes_a_recorded_decision() {
     std::assert_eq!(held[before]["outcome"], json!("denied"), "{held:#?}");
     std::assert_eq!(
         held[before]["invocation_recorded"],
-        json!(true),
-        "a repeat is a delivery: {held:#?}"
+        json!(false),
+        "a repeat refused at admission has no record of its own: {held:#?}"
+    );
+    std::assert_eq!(
+        invocations(&row.dir).len(),
+        recorded_before,
+        "the original call keeps its one invocation record"
     );
 }
 
