@@ -66,10 +66,11 @@ pub(super) struct Fixture {
 
 impl Fixture {
     pub(super) fn new(secret: Option<&'static str>) -> Self {
-        Self::rotating(secret, 0)
+        Self::rotating(secret, RotationConfig::default().max_segment_bytes)
     }
 
-    /// `max_segment_bytes` of 0 never rotates.
+    /// A log that seals its segment at `max_segment_bytes` (0 would seal before
+    /// every record).
     pub(super) fn rotating(secret: Option<&'static str>, max_segment_bytes: u64) -> Self {
         let dir = Arc::new(tempfile::tempdir().unwrap());
         let path = dir.path().join("inv.jsonl");
