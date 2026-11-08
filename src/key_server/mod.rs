@@ -32,6 +32,9 @@
 //! configuration. When disabled, no overhead is incurred.
 
 pub mod audit;
+/// The per-identity token cap holds under concurrent mints.
+#[cfg(test)]
+mod cap_race_tests;
 /// The installation key behind `email_hash`.
 pub(crate) mod email_hash;
 /// Where the `email_hash` installation key lives.
