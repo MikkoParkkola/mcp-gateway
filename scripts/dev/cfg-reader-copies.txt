@@ -5,7 +5,7 @@
 # new copy and an allowance larger than the base's (MIK-9387.TCFG.2). Move a scanner
 # to the shared reader and delete its line.
 src/clock_tests.rs	product_code	1	line scan for an exact #[cfg(test)] module; moves to production_text
-src/events/clock_entry_tests.rs	opens_module::reads_in	1	line scan for an exact #[cfg(test)] module; moves to production_text
+src/events/clock_entry_tests.rs	reads_in	1	line scan for an exact #[cfg(test)] module; moves to production_text
 src/events/listener_scan_tests.rs	is_cfg_test::test_only	1	syn walk with its own cfg(test) match; moves to test_source_text::test_only
 src/gateway/meta_mcp/tests/confirmation_binding.rs	the_identity_only_binding_is_called_only_by_the_a2a_residue	1	finds the file's trailing #[cfg(test)] module by text; moves to production_text
 src/gateway/outbound/read_scope_scan_tests.rs	cfg_test_only	1	syn walk with its own cfg(test) match; moves to test_source_text::test_only

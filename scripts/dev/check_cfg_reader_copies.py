@@ -27,6 +27,7 @@ from __future__ import annotations
 import argparse
 import ast
 import collections
+import importlib.util
 import io
 import re
 import subprocess
@@ -101,7 +102,7 @@ def py_scope(text: str):
 def rs_scope(text: str):
     """Offset -> qualified `mod`/`impl`/`fn` scope, by a brace scan over the
     text with string literals and line comments blanked."""
-    code = re.sub(r'"(?:\\.|[^"\\])*"|//[^\n]*', lambda m: " " * len(m.group(0)), text)
+    code = text  # already the lexer's mask
     spans, stack, pending = [], [], None
     for m in re.finditer(r"[{};]|" + ITEM.pattern, code):
         tok = m.group(0)
@@ -166,47 +167,34 @@ def py_code(text: str) -> str:
 
 
 # A lexer step: a raw string, a string, a char literal (kept), or a comment (blanked).
-# A literal at the cursor: a raw string, a string (an escape may consume a
-# newline), or a char literal. Literals are kept: an idiom can be one.
-RS_LITERAL = re.compile(r"""(?:br|r)(?P<h>#*)"[\s\S]*?"(?P=h)|b?"(?:\\[\s\S]|[^"\\])*"|b?'(?:\\.|[^'\\\n])'""")
+def _load_c6():
+    """The repository's one Rust lexer (scripts/release/c6_resolve.py blank):
+    comments and literals blanked, nested block comments, raw and byte strings,
+    char literals versus lifetimes; Unsupported on input it cannot read."""
+    spec = importlib.util.spec_from_file_location("c6_resolve", ROOT / "scripts/release/c6_resolve.py")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules.setdefault("c6_resolve", module)  # its dataclasses look themselves up there
+    spec.loader.exec_module(module)
+    return module
 
 
-def rs_code(text: str) -> str:
-    """`text` with `//` and `/* */` comments blanked (newlines kept), literals
-    kept. Block comments nest, as in Rust, so `/* /* */ // */` ends at the
-    outer `*/` and the code after it stays code."""
-    out, i, n = [], 0, len(text)
+_C6 = _load_c6()
 
-    def blank(chunk: str) -> str:
-        return "".join("\n" if c == "\n" else " " for c in chunk)
 
-    while i < n:
-        lit = RS_LITERAL.match(text, i) if text[i] in "\"'br" else None
-        if lit and (text[i] in "\"'" or i == 0 or not (text[i - 1].isalnum() or text[i - 1] == "_")):
-            out.append(lit.group(0))
-            i = lit.end()
-        elif text.startswith("//", i):
-            end = text.find("\n", i)
-            end = n if end < 0 else end
-            out.append(blank(text[i:end]))
-            i = end
-        elif text.startswith("/*", i):
-            depth, j = 0, i
-            while j < n:
-                if text.startswith("/*", j):
-                    depth, j = depth + 1, j + 2
-                elif text.startswith("*/", j):
-                    depth, j = depth - 1, j + 2
-                    if depth == 0:
-                        break
-                else:
-                    j += 1
-            out.append(blank(text[i:j]))
-            i = j
-        else:
-            out.append(text[i])
-            i += 1
-    return "".join(out)
+def rs_mask(text: str) -> str:
+    """`text` with Rust comments and literals blanked. Source the lexer cannot
+    read is scanned raw, so every idiom in it counts: the check fails closed."""
+    try:
+        return _C6.blank(text)
+    except _C6.Unsupported:
+        return text
+
+
+def in_code(text: str, mask: str, start: int, end: int) -> bool:
+    """Whether a match touches code. Every Rust idiom has a code token beside
+    its literal (`==`, a method call, `const`, `is_ident(`), so a match wholly
+    inside a comment or a string is prose or input, not a copy."""
+    return any(mask[k] != " " for k in range(start, end) if not text[k].isspace())
 
 
 def matches(rel: str, text: str) -> collections.Counter[Key]:
@@ -214,17 +202,19 @@ def matches(rel: str, text: str) -> collections.Counter[Key]:
     # Scopes come from the original source (blanking a sole docstring would
     # leave a body that no longer parses); idioms are matched in the code.
     scope_text = text
-    text = py_code(text) if rel.endswith(".py") else rs_code(text)
     if rel.endswith(".py"):
+        text = py_code(text)
         scope = py_scope(scope_text)
         for idiom in PY_IDIOMS:
             for m in idiom.finditer(text):
                 found[(rel, scope(text.count("\n", 0, m.start()) + 1))] += 1
     else:
-        scope = rs_scope(text)
+        mask = rs_mask(text)
+        scope = rs_scope(mask)
         for idiom in RS_IDIOMS:
             for m in idiom.finditer(text):
-                found[(rel, scope(m.start()))] += 1
+                if in_code(text, mask, m.start(), m.end()):
+                    found[(rel, scope(m.start()))] += 1
     return found
 
 
