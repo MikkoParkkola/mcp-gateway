@@ -26,6 +26,9 @@ def refuses(manifest: dict) -> bool:
 def main() -> int:
     toy = {"features": {"default": ["a"], "a": [], "b": [], "sandbox-fixtures": []}}
     assert release_features(toy) == ["a", "b"], release_features(toy)
+    # Row A15: the client product marker is not a full-product feature.
+    client = {"features": {"a": [], "client-cli": [], "sandbox-fixtures": []}}
+    assert release_features(client) == ["a"], f"client-cli reached the product list: {release_features(client)}"
     assert refuses({"features": {}}), "an empty table was accepted"
     assert refuses({"features": {"default": [], "sandbox-fixtures": []}}), "a test-only-only table was accepted"
     assert refuses({}), "a manifest without [features] was accepted"
