@@ -1,0 +1,31 @@
+# file	owner	kind	value	reason
+src/commands/identity.rs	parse_subject_spec	new	1	grant-file rule target typed by the operator on the CLI (binary crate); new refuses one that names no one
+src/commands/identity.rs	upsert_local_grant	new	1	grant-file rule written by the operator's own CLI command; new refuses one that names no one
+src/decisions/mod.rs	DecisionSet::covered	new	1	re-checks the access key of a grant decision the gateway noted, to match it against live grants; new refuses one that names no one
+src/decisions/mod.rs	access_key	new	1	re-checks the subject of a grant-audit event the gateway emitted; new refuses one that names no one
+src/decisions/mod.rs	denial_from_record	new	1	subject read back from a grant-decision record the gateway wrote; new refuses one that names no one
+src/events/records.rs	StoredIdentity::verified	checked	1	stored identity read back from the events store (written from a verified identity, file mode-checked); checked again on every read
+src/events/records.rs	Subscription::observed_as	checked	1	identity of a stored OIDC live binding (bound from a verified bearer); checked again on read
+src/events/services.rs	Services::binding_live	checked	1	stored OIDC live binding re-checked against the live provider fingerprint and token age before it stays live
+src/gateway/meta_mcp/invoke/budget.rs	MetaMcp::grant_subject_from_api_key	new	1	grant subject named by an authenticated API key's name (authority api_key)
+src/gateway/openwebui_adapter.rs	verify_assertion	checked	1	Open WebUI adapter assertion after its signature, issuer, expiry and issued-at checks (no audience check); namespaced issuer
+src/gateway/router/accounts/bridge.rs	OwuiSessionBridge::identity	checked	1	Open WebUI session principal confirmed server-side against the configured user endpoint; namespaced issuer
+src/gateway/router/identity.rs	grant_subject_from_cert_identity	new	1	grant subject of a client certificate verified by rustls
+src/gateway/router/identity.rs	grant_subject_from_oauth_agent	new	1	grant subject of a verified agent JWT: its client_id, authority agent_oauth
+src/gateway/router/identity.rs	grant_subject_from_verified_identity	new	1	grant subject of a verified OIDC identity
+src/gateway/router/identity.rs	trusted_proxy_identity	new	1	subject header from a peer listed in trusted_proxies, under the configured authority; any other peer is refused
+src/gateway/server/support.rs	client_identity_from_peer_chain	from_der	1	the TLS peer's leaf certificate after rustls verified the chain
+src/gateway/streaming_told.rs	ViewSubject::key	macro	1	format! naming VerifiedIdentity::stable_actor_id as a path value: reads an identity, builds none
+src/gateway/ui/admin_audit.rs	caller_who	new	1	grant subject of the request's verified identity, naming the caller in every audit record
+src/gateway/ui/admin_audit.rs	recorded	new	1	grant subject of the request's verified identity, for the admin audit record
+src/gateway/ui/events.rs	admitted	new	1	grant subject of the admitted admin caller's verified identity
+src/gateway/ui/tool_call.rs	via_label	new	1	grant subject of the request's verified identity, for the call-counter label
+src/identity_grants/subject.rs	<file>	file	b82e0e526510a970d8a202bae32223af079c2781b8aa3c2606df9f007ce0e335	defining module: any edit is a reviewed change of this row
+src/identity_grants/subject.rs	GrantSubject::new	literal	1	the one literal, in the checked constructor
+src/identity_grants/subject.rs	GrantSubject::try_from	new	1	deserialize goes through new (grant files and stored records)
+src/key_server/oidc.rs	OidcVerifier::verify_inner	checked	1	the OIDC verifier, after the token's signature and claims are verified
+src/key_server/oidc/verified.rs	<file>	file	e935d9cdd5ac3b9805b8be768a95b99d757c5a249d48993bd68964f03adb119a	defining module: any edit is a reviewed change of this row
+src/key_server/oidc/verified.rs	VerifiedIdentity::checked	literal	1	the one literal, in the checked constructor
+src/mtls/identity/cert.rs	<file>	file	a205d5bd599a0c173b876f84bd4d45ef9b18d0e62d3f092a0acfb0c2740cbd9a	defining module: any edit is a reviewed change of this row
+src/mtls/identity/cert.rs	CertIdentity::from_der	parse	1	from_der parses, then refuses a certificate that names no one
+src/mtls/identity/cert.rs	CertIdentity::parse	literal	1	the one literal, in the parser; only from_der calls it in production

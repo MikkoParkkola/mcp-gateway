@@ -14,6 +14,60 @@ use crate::{Error, Result};
 ///
 /// All fields are optional because not every certificate uses every field.
 /// The `display_name` is computed once for use in audit logs.
+///
+/// Built only by parsing a certificate, and read through its accessors:
+///
+/// ```
+/// use mcp_gateway::mtls::CertIdentity;
+///
+/// let mut params = rcgen::CertificateParams::new(Vec::<String>::new()).expect("params");
+/// params.distinguished_name = rcgen::DistinguishedName::new();
+/// params.distinguished_name.push(rcgen::DnType::CommonName, "agent-1");
+/// let key = rcgen::KeyPair::generate().expect("key");
+/// let der = params.self_signed(&key).expect("self-signed").der().to_vec();
+/// let identity = CertIdentity::from_der(&der).expect("parses").expect("names someone");
+/// assert_eq!(identity.common_name(), Some("agent-1"));
+/// ```
+///
+/// Code outside this module cannot build one by a struct literal:
+///
+/// ```compile_fail,E0451
+/// use mcp_gateway::mtls::CertIdentity;
+///
+/// fn mint() -> CertIdentity {
+///     CertIdentity {
+///         common_name: None,
+///         organizational_unit: None,
+///         san_uris: Vec::new(),
+///         san_dns_names: Vec::new(),
+///         display_name: String::new(),
+///         quota_principal: None,
+///     }
+/// }
+/// ```
+///
+/// or by copying another with one field changed:
+///
+/// ```compile_fail,E0451
+/// use mcp_gateway::mtls::CertIdentity;
+///
+/// fn relabel(other: CertIdentity) -> CertIdentity {
+///     CertIdentity {
+///         common_name: None,
+///         ..other
+///     }
+/// }
+/// ```
+///
+/// and cannot change one after it was built:
+///
+/// ```compile_fail,E0616
+/// use mcp_gateway::mtls::CertIdentity;
+///
+/// fn rename(identity: &mut CertIdentity) {
+///     identity.common_name = None;
+/// }
+/// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CertIdentity {
     /// Certificate Common Name (CN).
