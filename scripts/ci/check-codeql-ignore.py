@@ -74,6 +74,12 @@ def ignored(path, regex):
     return any(regex.match("/".join(parts[:n])) for n in range(1, len(parts) + 1))
 
 
+def dep_info_paths(text):
+    """The prerequisite paths of a dep-info file's first rule."""
+    first = text.splitlines()[0] if text else ""
+    return first.split(":", 1)[1].split()
+
+
 def product_sources(cargo, root):
     """Repo files rustc read for every non-test lib/bin build: sources and
     anything they embed (`include_str!`, `include_bytes!`)."""
@@ -109,8 +115,8 @@ def product_sources(cargo, root):
                     sys.exit(f"check-codeql-ignore: no dep-info {dep_info} for {artifact}")
                 artifacts += 1
                 with open(dep_info, encoding="utf-8") as handle:
-                    first = handle.readline()
-                for path in first.split(":", 1)[1].split():
+                    text = handle.read()
+                for path in dep_info_paths(text):
                     rel = os.path.relpath(path, root)
                     if not rel.startswith("..") and not rel.startswith("target"):
                         files.add(rel)
