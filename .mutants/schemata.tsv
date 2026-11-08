@@ -1,0 +1,48 @@
+head_sha	1d9c208119e951578a55d9a3bedcd863e9863606
+#mutant M1
+mcp_gateway	gateway::ui::activity::list_tests::list_rule_filter_returns_exactly_that_rules_rows	src/gateway/ui/activity/list_tests.rs:277
+mcp_gateway	gateway::ui::activity::list_tests::list_rule_filter_ands_with_server_and_pages	src/gateway/ui/activity/list_tests.rs:325
+#mutant M2
+mcp_gateway	gateway::ui::activity::list_tests::list_rule_filter_returns_exactly_that_rules_rows	src/gateway/ui/activity/list_tests.rs:277
+mcp_gateway	gateway::ui::activity::decision_export_tests::csv_export_rule_filter	src/gateway/ui/activity/decision_export_tests.rs:92
+#mutant M3
+mcp_gateway	gateway::ui::activity::decision_export_tests::ndjson_export_rule_filter_and_manifest_names_it	src/gateway/ui/activity/decision_export_tests.rs:73
+#mutant M4
+mcp_gateway	gateway::ui::activity::list_tests::list_rule_filter_returns_exactly_that_rules_rows	src/gateway/ui/activity/list_tests.rs:277
+#mutant M5
+mcp_gateway	gateway::ui::activity::list_tests::list_sparse_rule_filter_resumes_past_scan_exhausted	src/gateway/ui/activity/list_tests.rs:342
+mcp_gateway	gateway::ui::activity::decision_export_tests::export_rule_filter_stops_at_scan_cap	src/gateway/ui/activity/decision_export_tests.rs:147
+#mutant M7
+mcp_gateway	gateway::ui::activity::decision_receipt_tests::receipt_record_without_decision_reads_none	src/gateway/ui/activity/decision_receipt_tests.rs:115
+#mutant M8
+mcp_gateway	gateway::ui::activity::decision_receipt_tests::receipt_absent_rule_and_grant_read_their_lines	src/gateway/ui/activity/decision_receipt_tests.rs:122
+#mutant M9
+mcp_gateway	gateway::ui::activity::decision_receipt_tests::receipt_absent_rule_and_grant_read_their_lines	src/gateway/ui/activity/decision_receipt_tests.rs:123
+#mutant M10
+mcp_gateway	gateway::ui::activity::decision_receipt_tests::receipt_v2_empty_findings_reads_none_and_matches_the_row	src/gateway/ui/activity/decision_receipt_tests.rs:102
+mcp_gateway	gateway::ui::activity::rows::tests::row_findings_is_the_readers_line	src/gateway/ui/activity/rows_tests.rs:282
+#mutant M11
+mcp_gateway	gateway::ui::activity::decision_receipt_tests::receipt_undeclared_effect_reads_its_line	src/gateway/ui/activity/decision_receipt_tests.rs:109
+mcp_gateway	gateway::ui::activity::decision_receipt_tests::receipt_v1_record_reads_by_version_lines	src/gateway/ui/activity/decision_receipt_tests.rs:95
+#mutant M12
+mcp_gateway	gateway::ui::activity::decision_receipt_tests::receipt_decided_reads_each_variant	src/gateway/ui/activity/decision_receipt_tests.rs:86
+#mutant M13 multi=2
+mcp_gateway	gateway::ui::activity::list_tests::rule_filter_ignores_the_id_in_another_field	src/gateway/ui/activity/list_tests.rs:376
+mcp_gateway	gateway::ui::activity::list_tests::rule_filter_has_no_prefix_collision	src/gateway/ui/activity/list_tests.rs:390
+#mutant M14 multi=2
+mcp_gateway	gateway::ui::activity::list_tests::rule_filter_has_no_prefix_collision	src/gateway/ui/activity/list_tests.rs:390
+#mutant M15
+mcp_gateway	gateway::ui::activity::decision_receipt_tests::receipt_v2_record_serves_the_full_decision_projection	src/gateway/ui/activity/decision_receipt_tests.rs:52
+#mutant M16
+mcp_gateway	gateway::ui::activity::decision_receipt_tests::receipt_revisions_absent_are_never_invented	src/gateway/ui/activity/decision_receipt_tests.rs:68
+#mutant M17
+mcp_gateway	gateway::ui::activity::decision_receipt_tests::receipt_v2_record_serves_the_full_decision_projection	src/gateway/ui/activity/decision_receipt_tests.rs:52
+mcp_gateway	gateway::ui::activity::decision_receipt_tests::truncation_is_marked_both_ways	src/gateway/ui/activity/decision_receipt_tests.rs:143
+#mutant M18
+mcp_gateway	gateway::ui::activity::decision_receipt_tests::truncation_is_marked_both_ways	src/gateway/ui/activity/decision_receipt_tests.rs:137
+#mutant M19
+mcp_gateway	gateway::ui::activity::list_tests::field_split_findings_vs_answer_findings	src/gateway/ui/activity/list_tests.rs:421
+#mutant M20
+mcp_gateway	gateway::ui::activity::rows::tests::row_findings_is_the_readers_line	src/gateway/ui/activity/rows_tests.rs:289
+#mutant M21
+mcp_gateway	gateway::ui::activity::decision_receipt_tests::receipt_v2_record_serves_the_full_decision_projection	src/gateway/ui/activity/decision_receipt_tests.rs:52
