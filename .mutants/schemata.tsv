@@ -1,0 +1,109 @@
+head_sha	7acc4e321fa31a2b67e7ee94524b17176f65bce0
+#mutant counter-ignored
+mcp_gateway	capability::executor::redirect_tests::a_refused_redirect_hop_notes_a_failed_send	src/capability/executor/redirect_tests.rs:598
+mcp_gateway	capability::executor::ssrf_denial_tests::a_redirect_refused_at_dns_notes_a_failed_send	src/capability/executor/ssrf_denial_tests.rs:186
+#mutant headers-only
+mcp_gateway	capability::executor::send_latency_tests::a_stalled_body_notes_timed_out	src/capability/executor/send_latency_tests.rs:90
+mcp_gateway	capability::executor::send_latency_tests::a_refusal_with_a_stalled_body_keeps_its_status	src/capability/executor/send_latency_tests.rs:133
+mcp_gateway	capability::executor::send_latency_tests::a_refusal_with_a_truncated_body_keeps_its_status	src/capability/executor/send_latency_tests.rs:187
+#mutant refusal-body-error
+mcp_gateway	capability::executor::send_latency_tests::a_refusal_with_a_stalled_body_keeps_its_status	src/capability/executor/send_latency_tests.rs:118
+mcp_gateway	capability::executor::send_latency_tests::a_refusal_with_a_truncated_body_keeps_its_status	src/capability/executor/send_latency_tests.rs:174
+#mutant ssrf-noted
+mcp_gateway	capability::executor::ssrf_denial_tests::a_first_hop_ssrf_denial_notes_no_send_time	src/capability/executor/ssrf_denial_tests.rs:125
+#mutant redirect-discarded
+mcp_gateway	capability::executor::redirect_tests::a_refused_redirect_hop_notes_a_failed_send	src/capability/executor/redirect_tests.rs:598
+#mutant connect-discarded
+mcp_gateway	capability::executor::ssrf_denial_tests::a_redirect_refused_at_dns_notes_a_failed_send	src/capability/executor/ssrf_denial_tests.rs:186
+mcp_gateway	capability::executor::send_latency_tests::retried_http_sends_note_once	src/capability/executor/send_latency_tests.rs:270
+#mutant effect-counter-zero
+mcp_gateway	capability::executor::redirect_tests::a_redirect_to_a_name_the_pin_refuses_records_refused	src/capability/executor/redirect_tests.rs:561
+#mutant closed-dense
+mcp_gateway	counters::snapshot::latency_persist_tests::restore_keeps_closed_and_live	src/counters/latency_persist_tests.rs:51
+mcp_gateway	counters::snapshot::latency_persist_tests::size_realistic_full_cap	src/counters/latency_persist_tests.rs:196
+mcp_gateway	counters::snapshot::latency_persist_tests::size_adversarial_max_width	src/counters/latency_persist_tests.rs:181
+#mutant edge-off-by-one
+mcp_gateway	counters::latency::tests::bins_have_their_stated_edges	src/counters/latency_tests.rs:29
+mcp_gateway	counters::latency::tests::interior_p95_within_root_ratio_plus_rounding	src/counters/latency_tests.rs:156
+#mutant floor-20
+mcp_gateway	counters::latency_view::tests::overview_slowest_floor_21	src/counters/latency_view_tests.rs:156
+mcp_gateway	gateway::router::overview_sources_tests::s13_latency_names_the_slowest_beyond_the_rows	src/gateway/router/overview_sources_tests.rs:787
+#mutant live-not-saved
+mcp_gateway	counters::snapshot::latency_persist_tests::positional_encoding_shape	src/counters/latency_persist_tests.rs:120
+mcp_gateway	counters::snapshot::latency_persist_tests::restore_keeps_closed_and_live	src/counters/latency_persist_tests.rs:52
+#mutant live-over-closed
+mcp_gateway	counters::latency::tests::restore_reapplies_the_bounds	src/counters/latency_tests.rs:379
+#mutant lower-edge
+mcp_gateway	counters::latency::tests::interior_bins_report_their_midpoint	src/counters/latency_tests.rs:123
+mcp_gateway	counters::latency::tests::interior_p95_within_root_ratio_plus_rounding	src/counters/latency_tests.rs:165
+mcp_gateway	counters::latency::tests::lat4_fixed_clock_two_buckets	src/counters/latency_tests.rs:76
+mcp_gateway	counters::latency::tests::sub_10ms_p95_is_whole_ms_rounded	src/counters/latency_tests.rs:141
+#mutant merge-unsummed
+mcp_gateway	counters::latency::tests::merge_sums_per_bin	src/counters/latency_tests.rs:196
+mcp_gateway	counters::latency::tests::restore_reapplies_the_bounds	src/counters/latency_tests.rs:343
+#mutant newest-seen
+mcp_gateway	counters::latency::tests::day_sketch_closes_at_the_next_day	src/counters/latency_tests.rs:283
+mcp_gateway	counters::latency::tests::late_sample_moves_counts_not_p95	src/counters/latency_tests.rs:266
+mcp_gateway	counters::latency::tests::live_slots_are_wall_clock	src/counters/latency_tests.rs:208
+mcp_gateway	counters::latency::tests::retention_holds_96_half_hours_and_30_days	src/counters/latency_tests.rs:297
+mcp_gateway	counters::snapshot::latency_persist_tests::restore_keeps_closed_and_live	src/counters/latency_persist_tests.rs:51
+#mutant open-edges
+mcp_gateway	counters::latency::tests::open_bins_report_their_edge	src/counters/latency_tests.rs:181
+#mutant rank-ceil
+mcp_gateway	counters::latency::tests::p95_rank_agrees_with_the_failsafe_tracker	src/counters/latency_tests.rs:406
+mcp_gateway	counters::latency::tests::p95_uses_the_trackers_rank	src/counters/latency_tests.rs:47
+#mutant restore-unclean
+mcp_gateway	counters::latency::tests::restore_reapplies_the_bounds	src/counters/latency_tests.rs:343
+#mutant restore-undeduped
+mcp_gateway	counters::latency::tests::restore_reapplies_the_bounds	src/counters/latency_tests.rs:343
+#mutant walk-off-by-one
+mcp_gateway	counters::latency::tests::one_hour_merge_equals_union_sketch	src/counters/latency_tests.rs:234
+mcp_gateway	counters::latency::tests::lat4_fixed_clock_two_buckets	src/counters/latency_tests.rs:76
+mcp_gateway	counters::latency::tests::p95_bin_is_the_exact_samples_bin	src/counters/latency_tests.rs:112
+mcp_gateway	counters::latency::tests::p95_rank_agrees_with_the_failsafe_tracker	src/counters/latency_tests.rs:406
+#mutant store-off
+mcp_gateway	counters::latency::tests::closed_keeps_counts	src/counters/latency_tests.rs:249
+mcp_gateway	counters::latency::tests::lat4_fixed_clock_two_buckets	src/counters/latency_tests.rs:75
+mcp_gateway	counters::latency_view::tests::series_latency_p95_shape	src/counters/latency_view_tests.rs:52
+mcp_gateway	counters::latency_view::tests::series_latency_month_points_are_day_starts	src/counters/latency_view_tests.rs:74
+mcp_gateway	counters::latency_view::tests::series_latency_compare_prev	src/counters/latency_view_tests.rs:87
+mcp_gateway	counters::latency_view::tests::overview_names_slowest	src/counters/latency_view_tests.rs:144
+#mutant admission-ignored
+mcp_gateway	counters::latency_view::tests::previous_period_omits_what_the_overflow_may_hold	src/counters/latency_view_tests.rs:233
+#mutant always-folded
+mcp_gateway	counters::latency_view::tests::series_latency_folded	src/counters/latency_view_tests.rs:98
+#mutant no-upper-bound
+mcp_gateway	counters::latency_view::tests::overview_hour_ignores_slots_ahead_of_the_clock	src/counters/latency_view_tests.rs:256
+#mutant stale-live
+mcp_gateway	counters::latency_view::tests::overview_hour_ignores_slots_ahead_of_the_clock	src/counters/latency_view_tests.rs:256
+mcp_gateway	counters::latency_view::tests::overview_hour_reads_the_clock_not_stale_slots	src/counters/latency_view_tests.rs:174
+#mutant prev-fixed-offset
+mcp_gateway	counters::latency_view::tests::series_latency_compare_prev_follows_local_wall_time	src/counters/latency_view_tests.rs:128
+#mutant unfolded
+mcp_gateway	counters::latency_view::tests::server_cap_overflow_and_sweep	src/counters/latency_view_tests.rs:189
+mcp_gateway	counters::latency_view::tests::series_latency_folded	src/counters/latency_view_tests.rs:106
+#mutant slowest-in-rows
+mcp_gateway	gateway::router::overview_sources_tests::s13_latency_names_the_slowest_beyond_the_rows	src/gateway/router/overview_sources_tests.rs:787
+#mutant not-degraded
+mcp_gateway	gateway::router::overview_sources_tests::s8b_an_unreadable_clock_degrades_the_counter_fields	src/gateway/router/overview_sources_tests.rs:390
+#mutant no-drop-note
+mcp_gateway	backend::ops::attempt::tests::dropped_send_notes_cancelled	src/backend/ops/attempt_tests.rs:65
+#mutant ok-is-failed
+mcp_gateway	capability::executor::cli_run::tests::a_cli_run_notes_its_send_time	src/capability/executor/cli_run_tests.rs:429
+mcp_gateway	capability::executor::cli_run::tests::a_cli_call_waiting_for_its_slot_is_not_timed	src/capability/executor/cli_run_tests.rs:486
+mcp_gateway	capability::executor::mcp::principal_tests::an_mcp_capability_notes_one_send_and_its_cache_hit_none	src/capability/executor/mcp_principal_tests.rs:246
+#mutant sent-anyway
+mcp_gateway	gateway::meta_mcp::invoke::send_timer::tests::a_send_that_never_left_notes_nothing	src/gateway/meta_mcp/invoke/send_timer.rs:220
+#mutant r4-narrow
+mcp_gateway	gateway::meta_mcp::invoke::send_timer::tests::a_send_that_never_left_notes_nothing	src/gateway/meta_mcp/invoke/send_timer.rs:220
+#mutant timers-off
+mcp_gateway	capability::executor::send_latency_tests::an_answered_http_send_notes_one_sample	src/capability/executor/send_latency_tests.rs:211
+mcp_gateway	capability::executor::cli_run::tests::a_cli_run_notes_its_send_time	src/capability/executor/cli_run_tests.rs:429
+mcp_gateway	capability::executor::ssrf_denial_tests::a_redirect_refused_at_dns_notes_a_failed_send	src/capability/executor/ssrf_denial_tests.rs:186
+#mutant scope-timed
+mcp_gateway	capability::executor::cli_run::tests::a_cli_call_waiting_for_its_slot_is_not_timed	src/capability/executor/cli_run_tests.rs:480
+mcp_gateway	capability::executor::ssrf_denial_tests::a_first_hop_ssrf_denial_notes_no_send_time	src/capability/executor/ssrf_denial_tests.rs:125
+#mutant slot-wait-timed
+mcp_gateway	capability::executor::cli_run::tests::a_cli_call_waiting_for_its_slot_is_not_timed	src/capability/executor/cli_run_tests.rs:480
+mcp_gateway	capability::executor::cli_run::tests::a_cli_run_notes_its_send_time	src/capability/executor/cli_run_tests.rs:429
+mcp_gateway	capability::executor::cli_run::tests::a_cli_run_past_its_timeout_notes_timed_out	src/capability/executor/cli_run_tests.rs:448
