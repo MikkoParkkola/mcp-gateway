@@ -14,8 +14,8 @@ fn temp_config() -> (TempDir, std::path::PathBuf) {
 }
 
 /// Runs `cli` on its own thread while a gateway mutation holds the config
-/// lock and adds backend `x` to `a`, the overlap MIK-8241 checks for each
-/// CLI writer. Returns what `cli` returned and the backends left after.
+/// lock and adds backend `x` to `a`: the overlap checked for each CLI
+/// writer. Returns what `cli` returned and the backends left after.
 async fn overlap_with_gateway_add<T: Send + 'static>(
     cli: impl FnOnce(std::path::PathBuf) -> T + Send + 'static,
 ) -> (T, Vec<String>) {
@@ -51,7 +51,7 @@ async fn overlap_with_gateway_add<T: Send + 'static>(
     (out, names)
 }
 
-/// MIK-8241 MIK-CLI-OVERLAP.1: `add` overlapping a gateway's locked
+/// Overlap, add: `add` overlapping a gateway's locked
 /// mutation keeps the mutation's backend and adds its own.
 #[tokio::test]
 async fn add_racing_a_gateway_mutation_keeps_both_backends() {
@@ -75,7 +75,7 @@ async fn add_racing_a_gateway_mutation_keeps_both_backends() {
     assert_eq!(names, ["a", "x", "y"]);
 }
 
-/// MIK-8241 MIK-CLI-OVERLAP.3: `cap discover --write-config` overlapping a
+/// Overlap, discover: `cap discover --write-config` overlapping a
 /// gateway's locked mutation keeps the mutation's backend and adds the
 /// discovered one.
 #[tokio::test]
@@ -101,7 +101,7 @@ async fn discover_write_racing_a_gateway_mutation_keeps_both() {
     assert_eq!(names, ["a", "found", "x"]);
 }
 
-/// MIK-8042: `remove` overlapping a gateway's locked mutation loads the
+/// Overlap, remove: `remove` overlapping a gateway's locked mutation loads the
 /// file under the same lock it writes with, so the backend the mutation
 /// added survives the removal.
 #[tokio::test]
@@ -415,7 +415,7 @@ async fn update_existing_backend_succeeds() {
     assert_eq!(config.backends["tavily"].description, "updated desc");
 }
 
-/// `MIK-CLI-COMMENTS.SILENT.1`: an update that cannot keep the comments
+/// Comments kept or refused: an update that cannot keep the comments
 /// is refused and leaves the file as it was.
 #[test]
 fn update_that_would_drop_comments_is_refused() {
