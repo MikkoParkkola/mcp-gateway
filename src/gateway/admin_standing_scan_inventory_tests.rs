@@ -149,8 +149,8 @@ const ADMIN_READERS: &[(&str, &str, usize, &str)] = &[
     (
         "CallerStanding::of_client(",
         "src/gateway/router/authorization.rs",
-        2,
-        "the tools/call and tools/list gates",
+        1,
+        "the tools/call and tools/list gates (one standing value)",
     ),
     (
         "grants_admin(",
@@ -167,8 +167,8 @@ const ADMIN_READERS: &[(&str, &str, usize, &str)] = &[
     (
         "CallerStanding::of_client(",
         "src/gateway/router/handlers.rs",
-        2,
-        "events listing and catalogue standing",
+        1,
+        "catalogue standing for resources/read",
     ),
     (
         ".admin",
@@ -204,7 +204,7 @@ const ADMIN_READERS: &[(&str, &str, usize, &str)] = &[
         ".admin",
         "src/gateway/ui/stream/sent.rs",
         3,
-        "Gateway: set from ui::is_admin; full view only when the scope is unscoped",
+        "Gateway: set from auth::is_gateway_admin; full view only when the scope is unscoped",
     ),
     (
         "CallerStanding::Admin",
@@ -238,27 +238,27 @@ const ADMIN_READERS: &[(&str, &str, usize, &str)] = &[
     ),
     (
         "CallerStanding::Admin",
-        "src/gateway/meta_mcp/visibility.rs",
-        2,
-        "InvokeScope::unscoped: the operator's view at a given standing",
-    ),
-    (
-        "CallerStanding::Admin",
-        "src/gateway/router/authorization.rs",
-        1,
-        "CallerStanding::of: Admin only from Gateway",
-    ),
-    (
-        "CallerStanding::Admin",
-        "src/gateway/router/handlers.rs",
-        1,
-        "events listing: of_client compared with Admin",
-    ),
-    (
-        "CallerStanding::Admin",
         "src/gateway/server/mod.rs",
         1,
         "stdio: the spawning client is the operator",
+    ),
+    (
+        "is_gateway_admin",
+        "src/gateway/auth_caller.rs",
+        1,
+        "Gateway: the optional-client predicate, through the method",
+    ),
+    (
+        "is_gateway_admin",
+        "src/gateway/router/authorization.rs",
+        1,
+        "Gateway: logging/setLevel",
+    ),
+    (
+        "is_gateway_admin",
+        "src/gateway/router/handlers.rs",
+        1,
+        "Gateway: the events listing admin flag",
     ),
     (
         "is_gateway_admin",
@@ -275,14 +275,26 @@ const ADMIN_READERS: &[(&str, &str, usize, &str)] = &[
     (
         "is_gateway_admin",
         "src/gateway/ui/guard.rs",
-        2,
-        "Gateway: AdminSplit and the dashboard link mint",
+        3,
+        "Gateway: the Admin rows, AdminSplit and the dashboard link mint",
     ),
     (
         "is_gateway_admin",
         "src/gateway/ui/mod.rs",
         1,
-        "Gateway: ui::is_admin",
+        "Gateway: the auth facts admin flag",
+    ),
+    (
+        "is_gateway_admin",
+        "src/gateway/ui/status.rs",
+        1,
+        "Gateway: the full status view",
+    ),
+    (
+        "is_gateway_admin",
+        "src/gateway/ui/stream/mod.rs",
+        2,
+        "Gateway: the stream's reload kind and full view",
     ),
     (
         "admin_standing",
@@ -307,6 +319,12 @@ const ADMIN_READERS: &[(&str, &str, usize, &str)] = &[
         "src/gateway/router/authorization.rs",
         1,
         "CallerStanding::of_client",
+    ),
+    (
+        "admin_standing",
+        "src/gateway/meta_mcp/visibility.rs",
+        2,
+        "InvokeScope::unscoped and allow_all: CallerStanding::admin_standing, Admin to Gateway",
     ),
     (
         "admin_standing",
@@ -376,33 +394,39 @@ const ADMIN_READERS: &[(&str, &str, usize, &str)] = &[
     ),
     (
         "is_gateway()",
+        "src/events/operational_source.rs",
+        1,
+        "Gateway: operator event standing from the key config",
+    ),
+    (
+        "is_gateway()",
+        "src/gateway/auth_caller.rs",
+        1,
+        "Gateway: AuthenticatedClient::is_gateway_admin",
+    ),
+    (
+        "is_gateway()",
+        "src/gateway/auth_resolved.rs",
+        1,
+        "Gateway: session liveness of an admin key",
+    ),
+    (
+        "is_gateway()",
         "src/gateway/meta_mcp/call_dispatch.rs",
         3,
         "Gateway: stats and the profile tools",
     ),
     (
-        "is_admin(",
-        "src/gateway/ui/guard.rs",
-        1,
-        "Gateway: the Admin rows",
+        "is_gateway()",
+        "src/gateway/meta_mcp/invoke/admin.rs",
+        3,
+        "Gateway: the cost report's all-sessions/keys views, another session, the total",
     ),
     (
-        "is_admin(",
-        "src/gateway/ui/mod.rs",
+        "is_gateway()",
+        "src/gateway/router/authorization.rs",
         1,
-        "its definition and the auth facts",
-    ),
-    (
-        "is_admin(",
-        "src/gateway/ui/status.rs",
-        1,
-        "Gateway: the full status view",
-    ),
-    (
-        "is_admin(",
-        "src/gateway/ui/stream/mod.rs",
-        2,
-        "Gateway: the stream's reload kind and full view",
+        "Gateway: CallerStanding::of, Admin only from Gateway",
     ),
     (
         "::for_ui(",

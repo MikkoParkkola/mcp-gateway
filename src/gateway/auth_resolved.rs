@@ -272,8 +272,7 @@ impl ResolvedAuthConfig {
                 && secret_still_valid(k, &minter.digest_tag, |end| {
                     !crate::config::api_key_expired(Some(end), at)
                 })
-                && crate::gateway::authz::admin_standing(k.admin, &k.backends)
-                    == crate::gateway::authz::AdminStanding::Gateway
+                && crate::gateway::authz::admin_standing(k.admin, &k.backends).is_gateway()
                 && !crate::config::api_key_expired(k.expires_at, at)
         })
     }
