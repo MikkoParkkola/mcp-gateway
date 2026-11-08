@@ -37,6 +37,7 @@ fn row(task: Task, notes: Vec<Value>) -> CommittedTask {
         bindings: Vec::new(),
         // M2: only a bindings-recorded row is served at all.
         bindings_recorded: true,
+        replay_snapshot: None,
     }
 }
 

@@ -37,6 +37,7 @@ impl Settling<'_> {
             } else {
                 self.owned.dispatch_log().round()
             },
+            replay_snapshot: None,
         }
     }
 

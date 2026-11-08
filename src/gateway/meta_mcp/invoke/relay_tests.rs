@@ -372,6 +372,7 @@ fn stored_task(
         gateway_writes: crate::gateway::gateway_writes::WriteRecord::default(),
         bindings: Vec::new(),
         bindings_recorded: true,
+        replay_snapshot: None,
     }
 }
 

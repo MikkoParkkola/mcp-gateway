@@ -50,6 +50,7 @@ fn row(task: &Task, version: u32, upstream: Option<UpstreamRecord>) -> Record {
         model: task.snapshot(),
         gateway_writes: crate::gateway::gateway_writes::WriteRecord::default(),
         bindings: Vec::new(),
+        replay_snapshot: None,
     }
 }
 
@@ -143,6 +144,7 @@ fn a_row_serves_backend_output_by_status() {
         gateway_writes: crate::gateway::gateway_writes::WriteRecord::default(),
         bindings: Vec::new(),
         bindings_recorded: true,
+        replay_snapshot: None,
     };
     let working = Task::create("t").expect("the test clock reads after 1970");
     let mut completed = working.clone();

@@ -125,6 +125,7 @@ async fn a_frame_carries_the_task_as_it_is_at_delivery() {
         gateway_writes: crate::gateway::gateway_writes::WriteRecord::default(),
         bindings: Vec::new(),
         bindings_recorded: true,
+        replay_snapshot: None,
     };
 
     let mut expected = serde_json::to_value(stored.task.wire()).expect("the task serializes");
@@ -194,6 +195,7 @@ fn completed(text: &str) -> crate::gateway::task_service::CommittedTask {
         gateway_writes: crate::gateway::gateway_writes::WriteRecord::default(),
         bindings: Vec::new(),
         bindings_recorded: true,
+        replay_snapshot: None,
     }
 }
 

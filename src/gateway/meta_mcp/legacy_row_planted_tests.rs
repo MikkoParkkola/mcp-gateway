@@ -49,6 +49,7 @@ async fn a_pre_binding_row_with_a_planted_member_is_refused_when_served() {
         bindings: Vec::new(),
         // As every row a published pre-release wrote reads.
         bindings_recorded: false,
+        replay_snapshot: None,
     };
     let alice = api_key("alice");
     let caller = context(&alice);

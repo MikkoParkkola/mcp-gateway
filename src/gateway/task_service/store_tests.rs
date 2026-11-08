@@ -36,6 +36,8 @@ mod repaired_rows;
 mod reread;
 mod sealed;
 mod skipped;
+// The relay replay snapshot stored with a completed result.
+mod snapshot;
 mod stop_serving;
 mod support;
 mod targets;

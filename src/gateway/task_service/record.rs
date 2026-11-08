@@ -63,8 +63,19 @@ pub(super) const PENDING_CANCEL_VERSION: u32 = UPSTREAM_CANCEL_VERSION + 1;
 /// such row, so a rollback past it is unsupported (upgrade note).
 pub(super) const BINDING_VERSION: u32 = PENDING_CANCEL_VERSION + 1;
 
+/// The record version that introduced [`Record::replay_snapshot`]. Written only
+/// on a row that carries one; every other row keeps its version and its bytes.
+/// An older loader refuses such a row, so a rollback past it is unsupported
+/// (upgrade note).
+pub(super) const SNAPSHOT_VERSION: u32 = BINDING_VERSION + 1;
+
 /// The highest record version the loader accepts: the newest field's version.
-pub(super) const MAX_LOADABLE_VERSION: u32 = BINDING_VERSION;
+pub(super) const MAX_LOADABLE_VERSION: u32 = SNAPSHOT_VERSION;
+
+/// The [`Record::replay_snapshot`] a row holds in place of a snapshot that
+/// could not be kept: one over the record budget, or one the firewall would
+/// not persist. A read treats the result as untrackable, never as plain.
+pub(crate) const SNAPSHOT_UNTRACKABLE: &str = "untrackable";
 
 /// One backend call a task's result was produced by: names only, never
 /// arguments. No current invocation policy reads `ToolTarget.arguments`; a
@@ -347,6 +358,13 @@ pub(super) struct Record {
     /// none.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(super) bindings: Vec<crate::gateway::meta_mcp::admission::StepBinding>,
+    /// The relay replay snapshot of a completed plan result, written by the
+    /// same compare-and-set that stores the result: what the in-memory replay
+    /// entry would hold, built by the firewall, opaque here. A read rebuilds
+    /// the entry from it. [`SNAPSHOT_UNTRACKABLE`] in place of one that could
+    /// not be kept. Absent on older rows and on every row without one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) replay_snapshot: Option<Value>,
 }
 
 /// What a settlement records about how its outcome was produced: the plan's
@@ -359,6 +377,9 @@ pub(crate) struct Provenance {
     /// Whether the settling round of a single call was refused before its
     /// backend: its answer is then the gateway's own (`ErrorAuthor::Gateway`).
     pub(crate) pre_send: crate::gateway::meta_mcp::dispatch_log::PreSend,
+    /// The relay replay snapshot to store with a completed result
+    /// ([`Record::replay_snapshot`]); dropped by any other outcome.
+    pub(crate) replay_snapshot: Option<Value>,
 }
 
 impl From<Option<Vec<Target>>> for Provenance {
@@ -430,6 +451,7 @@ impl PreparedTask {
                 model: task.snapshot(),
                 gateway_writes: crate::gateway::gateway_writes::WriteRecord::default(),
                 bindings: Vec::new(),
+                replay_snapshot: None,
             },
             publication: Some(publication),
         }
@@ -472,6 +494,7 @@ impl PreparedTask {
                 model: task.snapshot(),
                 gateway_writes: crate::gateway::gateway_writes::WriteRecord::default(),
                 bindings: Vec::new(),
+                replay_snapshot: None,
             },
         }
     }
@@ -529,6 +552,9 @@ pub(crate) struct CommittedTask {
     /// older row the provenance cannot be established, so its backend output
     /// is not served.
     pub(crate) bindings_recorded: bool,
+    /// The relay replay snapshot stored with the result; see
+    /// `Record::replay_snapshot`.
+    pub(crate) replay_snapshot: Option<Value>,
 }
 
 impl CommittedTask {
@@ -602,6 +628,7 @@ impl CommittedTask {
             gateway_writes: record.gateway_writes.clone(),
             bindings: record.bindings.clone(),
             bindings_recorded: record.version >= BINDING_VERSION,
+            replay_snapshot: record.replay_snapshot.clone(),
         }
     }
 

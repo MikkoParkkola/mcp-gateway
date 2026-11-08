@@ -93,6 +93,7 @@ pub(super) async fn settle_followed(
                     bindings: followed.bindings.to_vec(),
                     // A followed upstream job was sent: never a pre-send refusal.
                     pre_send: crate::gateway::meta_mcp::dispatch_log::PreSend::Clear,
+                    replay_snapshot: None,
                 },
             ),
             author,
