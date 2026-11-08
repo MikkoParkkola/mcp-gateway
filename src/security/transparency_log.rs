@@ -103,6 +103,9 @@ pub(crate) mod segments;
 #[cfg(test)]
 #[path = "transparency_log_temp.rs"]
 pub(crate) mod temp;
+#[cfg(test)]
+#[path = "transparency_log_sigstart_fixture.rs"]
+pub(crate) mod sigstart_fixture;
 // Read only by the web UI's Activity view.
 #[cfg(any(test, feature = "webui"))]
 #[path = "transparency_log_signature.rs"]
