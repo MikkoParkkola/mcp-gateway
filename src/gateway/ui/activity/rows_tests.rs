@@ -7,8 +7,11 @@ use std::collections::BTreeSet;
 
 use serde_json::{Value, json};
 
-use super::{FINDINGS_NOT_RECORDED, FeedOutcome, Filter, Kind, kind_of, owned_by, row};
+use super::{FeedOutcome, Filter, Kind, kind_of, owned_by, row};
 use crate::gateway::ui::activity::reader::{Line, Which};
+use crate::security::decision_record::read::{
+    NO_FINDINGS, NOT_RECORDED_BY_VERSION, NOT_RECORDED_FOR_CALL,
+};
 
 const HASH: &str = "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
@@ -75,7 +78,7 @@ fn r1_each_kind_holds_exactly_its_allowlist() {
         set(&["credential_kind", "account", "authority", "subject"]),
         "who.principal is never shown"
     );
-    assert_eq!(r["findings"], FINDINGS_NOT_RECORDED);
+    assert_eq!(r["findings"], NOT_RECORDED_BY_VERSION);
     assert_eq!(r["id"], "7-0123456789abcdef");
 
     let config = json!({
@@ -256,4 +259,32 @@ fn developer_rows_join_on_issuer_and_subject() {
         "s"
     ));
     assert!(!owned_by(&mine, Kind::Config, "https://x", "s"));
+}
+
+/// The row's `findings` for a call carrying `decision` (or none).
+fn findings_of(decision: Option<Value>) -> Value {
+    let mut e = call("ok");
+    if let Some(d) = decision {
+        e["decision"] = d;
+    }
+    row(&line(Which::Invocation, e), None).unwrap()["findings"].clone()
+}
+
+#[test]
+fn row_findings_is_the_readers_line() {
+    let kind = |v: u8| json!({"v": v, "kind": "tool_policy", "decided": "fresh"});
+    let with_found = |found: Value| {
+        let mut d = kind(2);
+        d["request_findings"] = found;
+        d
+    };
+    let one = json!({"scan_type": "pii", "severity": "high", "location": "arguments.q"});
+    assert_eq!(findings_of(Some(with_found(json!([])))), NO_FINDINGS);
+    assert_eq!(findings_of(Some(kind(2))), NOT_RECORDED_FOR_CALL);
+    assert_eq!(
+        findings_of(Some(with_found(json!([one.clone()])))),
+        json!([one])
+    );
+    assert_eq!(findings_of(Some(kind(1))), NOT_RECORDED_BY_VERSION);
+    assert_eq!(findings_of(None), NOT_RECORDED_BY_VERSION);
 }
