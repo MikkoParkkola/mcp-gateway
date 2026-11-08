@@ -75,7 +75,6 @@ pub(crate) struct SigningInvocationContext {
     /// The allow signing's policy check noted for `prepared_target`, taken
     /// once by the dispatch that skips its own check, so no later call or
     /// request inherits it.
-    #[cfg_attr(not(test), expect(dead_code, reason = "wired with attribution"))]
     prepared_allow: std::sync::Mutex<Option<crate::security::decision_record::Allow>>,
     /// The nonce passed admission. Only an admitted context signs, so a
     /// response is never signed over a nonce the store did not register.
@@ -292,20 +291,18 @@ impl SigningInvocationContext {
         Ok(())
     }
 
-    /// Keep `allow` as the prepared target's signing-time allow. A stub for
-    /// now: it keeps nothing.
-    #[cfg_attr(not(test), expect(dead_code, reason = "wired with attribution"))]
-    #[expect(clippy::unused_self, reason = "a stub that keeps nothing yet")]
+    /// Keep `allow` as the prepared target's signing-time allow.
     pub(crate) fn store_prepared_allow(
         &self,
         allow: Option<crate::security::decision_record::Allow>,
     ) {
-        drop(allow);
+        if let Ok(mut held) = self.prepared_allow.lock() {
+            *held = allow;
+        }
     }
 
     /// The prepared target's signing-time allow, taken: a second read finds
     /// nothing.
-    #[cfg_attr(not(test), expect(dead_code, reason = "wired with attribution"))]
     pub(crate) fn take_prepared_allow(&self) -> Option<crate::security::decision_record::Allow> {
         self.prepared_allow.lock().ok()?.take()
     }
@@ -619,8 +616,15 @@ impl super::MetaMcp {
         // stdio its slot is judged only after signing.
         let skipped = context.origin == Origin::GatewayInvoke
             && self.withheld_invoke_target(arguments, session, caller);
+        // D3: the allow the policy notes here is kept for the prepared
+        // target, whose dispatch skips its own check.
+        let mut signing_allow = None;
         if context.origin == Origin::GatewayInvoke && !skipped {
-            self.check_visible_policy(arguments, session, caller)?;
+            let (checked, allow) = super::invoke::audit::collect_allow(|| {
+                self.check_visible_policy(arguments, session, caller)
+            });
+            checked?;
+            signing_allow = allow;
         } else if skipped {
             self.check_call_level_policy(arguments, caller)?;
         }
@@ -643,6 +647,7 @@ impl super::MetaMcp {
                 extract_required_str(arguments, "server")?.to_owned(),
                 extract_required_str(arguments, "tool")?.to_owned(),
             ));
+            context.store_prepared_allow(signing_allow);
         }
         context.admitted = true;
         Ok(())

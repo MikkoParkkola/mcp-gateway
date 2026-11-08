@@ -289,10 +289,13 @@ impl Noted {
         self.checks().refusal.get_or_insert((kind, rule_id));
     }
 
-    /// An explicit allow. Meant to keep the lowest rank, the earlier of two
-    /// equal ranks; this stub still keeps the first note, whatever its rank.
+    /// An explicit allow: the lowest rank is kept, and of two equal ranks the
+    /// earlier note (a later note replaces only on a strictly lower rank).
     pub(crate) fn allowed(&mut self, allow: Allow) {
-        self.checks().allow.get_or_insert(allow);
+        let held = &mut self.checks().allow;
+        if held.as_ref().is_none_or(|kept| allow.rank < kept.rank) {
+            *held = Some(allow);
+        }
     }
 
     /// What the tool declares the call could change, as this call read it.
