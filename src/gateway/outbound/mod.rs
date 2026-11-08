@@ -50,9 +50,7 @@ pub(crate) enum ReadsToken {}
 /// `scripts/ci/check-reads-token.py`.
 #[cfg(all(reads_token_probe, feature = "firewall"))]
 mod reads_token_probe;
-pub(crate) use reply::{
-    OutboundReply, gateway_reply, judged_reply, judged_reply_checked, stream_reply,
-};
+pub(crate) use reply::{OutboundReply, gateway_reply, judged_reply, stream_reply};
 pub(crate) use stdio::StdioReads;
 pub(crate) use stream::{SessionJudge, StreamJudge, StreamMark, sse_data, sse_message};
 
