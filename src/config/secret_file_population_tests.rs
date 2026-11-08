@@ -256,10 +256,6 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
         "reads through read_secret_file (R1, I1, I2); writes keys 0600 (W1) and public certs",
     ),
     (
-        "src/mutant.rs",
-        "its own cfg(all(test, ..)) self-tests read src/lib.rs and src/mutant.rs; no secret",
-    ),
-    (
         "src/mutant_scan.rs",
         "lists and reads tracked .rs source files for mutant! sites (tests and the mutants runner); no secret",
     ),
