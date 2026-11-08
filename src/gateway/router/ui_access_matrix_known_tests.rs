@@ -132,3 +132,21 @@ fn the_expectation_holds_known_answers() {
         assert_eq!(post(path, "valid+store", "AdminKey"), "409", "{path}");
     }
 }
+
+/// MIK-9242: a receipt for a call with no decision object reads the by-version
+/// line in `findings`, not the old placeholder. That text is why the six
+/// `other-receipt` 200 cells (AdminKey, AdminKeyUnmapped, Bearer, OidcAdmin,
+/// OidcAuditor, Session) carry a new digest in `ui_access_matrix.tsv`.
+#[tokio::test]
+async fn matrix_known_receipt_cells_moved_for_findings_line() {
+    let fx = fixture(Gateway::On, false).await;
+    let router = create_router(Arc::clone(&fx.state));
+    let req = ("GET", routes::UI_ACTIVITY_RECEIPT, "other-receipt");
+    let (status, body) = send(&router, request(Caller::AdminKey, req, &fx, None)).await;
+    assert_eq!(status, StatusCode::OK);
+    let receipt: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(
+        receipt["findings"],
+        crate::security::decision_record::read::NOT_RECORDED_BY_VERSION
+    );
+}
