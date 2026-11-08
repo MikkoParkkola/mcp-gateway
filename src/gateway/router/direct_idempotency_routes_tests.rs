@@ -152,7 +152,7 @@ fn register_backend(state: &Arc<AppState>, url: &str) {
 /// The `TempDir` is returned because the task store holds its directory for the
 /// life of the service: dropping it here would delete the records under a state
 /// the test is still posting to. Callers bind it for the whole test.
-async fn state_with_idempotency() -> (Arc<AppState>, tempfile::TempDir) {
+async fn state_with_idempotency() -> (Arc<AppState>, Arc<tempfile::TempDir>) {
     let config = Config::default();
     let backends = Arc::new(BackendRegistry::new());
     let multiplexer = Arc::new(NotificationMultiplexer::new(
@@ -178,7 +178,7 @@ async fn state_with_idempotency() -> (Arc<AppState>, tempfile::TempDir) {
             crate::gateway::test_helpers::auth_state(&config.auth, RECORD_KEY),
         ),
     );
-    let store_dir = tempfile::tempdir().expect("a private task-store directory");
+    let store_dir = Arc::new(tempfile::tempdir().expect("a private task-store directory"));
     let (tasks, task_executor) = open_runtime(
         &store_dir.path().join("tasks"),
         config.tasks.max_workers,
@@ -187,6 +187,9 @@ async fn state_with_idempotency() -> (Arc<AppState>, tempfile::TempDir) {
     )
     .await
     .expect("the fixture task store opens");
+    // The task worker outlives no store directory: the test's share of it
+    // keeps the directory until the worker's last write lands.
+    tasks.keep_test_dir(Arc::clone(&store_dir));
 
     let state = Arc::new(AppState {
         process: std::sync::Arc::default(),

@@ -93,7 +93,7 @@ const CALLER_B: &str = "bob";
 /// directory for as long as the service lives, so a directory dropped here
 /// would be deleted under a gateway still answering. A fresh one per call keeps
 /// the two-replica cases below two processes rather than one.
-async fn app_state() -> (Arc<AppState>, tempfile::TempDir) {
+async fn app_state() -> (Arc<AppState>, Arc<tempfile::TempDir>) {
     let config = Config::default();
     let backends = Arc::new(BackendRegistry::new());
     let multiplexer = Arc::new(NotificationMultiplexer::new(
@@ -115,7 +115,7 @@ async fn app_state() -> (Arc<AppState>, tempfile::TempDir) {
         64,
         auth_state(&config.auth, RECORD_KEY),
     ));
-    let store_dir = tempfile::tempdir().expect("a private task-store directory");
+    let store_dir = Arc::new(tempfile::tempdir().expect("a private task-store directory"));
     let (tasks, task_executor) = open_runtime(
         &store_dir.path().join("tasks"),
         config.tasks.max_workers,
@@ -124,6 +124,9 @@ async fn app_state() -> (Arc<AppState>, tempfile::TempDir) {
     )
     .await
     .expect("the fixture task store opens");
+    // The task worker outlives no store directory: the test's share of it
+    // keeps the directory until the worker's last write lands.
+    tasks.keep_test_dir(Arc::clone(&store_dir));
 
     let state = Arc::new(AppState {
         process: std::sync::Arc::default(),
@@ -238,7 +241,7 @@ async fn mint_for(
 /// Every case that needs a minted handle needs a backend to mint against, now
 /// that the handle comes from the production path rather than a hand-built
 /// payload.
-async fn state_with_fixture() -> (Arc<AppState>, Received, tempfile::TempDir) {
+async fn state_with_fixture() -> (Arc<AppState>, Received, Arc<tempfile::TempDir>) {
     let (state, store_dir) = app_state().await;
     let (url, received) = spawn_fixture_backend().await;
     register_fixture_backend(&state, &url);
