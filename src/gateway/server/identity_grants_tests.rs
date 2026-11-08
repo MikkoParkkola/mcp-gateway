@@ -106,7 +106,7 @@ impl Started {
 /// record with count 2; the served rows are the loaded ones (T13's base).
 #[tokio::test]
 async fn t3a_startup_snapshot_records_the_active_grants() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let mut expired = row("g3", "r");
     expired.expires_at = Some("2001-01-01T00:00:00Z".parse().unwrap());
     let mut revoked = row("g4", "r");
@@ -132,7 +132,7 @@ async fn t3a_startup_snapshot_records_the_active_grants() {
 /// T3b: zero grants still writes the closing record, count 0.
 #[tokio::test]
 async fn t3b_empty_grant_file_writes_a_zero_count() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     write_identity_grants_file(
         &grants_path(dir.path()),
         &IdentityGrantFile::new(Vec::new()),
@@ -153,7 +153,7 @@ async fn t3b_empty_grant_file_writes_a_zero_count() {
 /// by the next startup, before its snapshot.
 #[tokio::test]
 async fn t4c_edit_while_stopped_is_out_of_band_at_startup() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     apply_change(&grants_path(dir.path()), true, add(row("g1", "r")))
         .await
         .unwrap();
@@ -183,7 +183,7 @@ async fn t4c_edit_while_stopped_is_out_of_band_at_startup() {
 /// stdio both refuse to start, naming the governance audit log.
 #[tokio::test]
 async fn t5a_no_store_refuses_start_with_auth_and_grants() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     apply_change(&grants_path(dir.path()), true, add(row("g1", "r")))
         .await
         .unwrap();
@@ -214,7 +214,7 @@ async fn t5a_no_store_refuses_start_with_auth_and_grants() {
 /// T5b (control): auth off builds no store, no auditor and no state file.
 #[tokio::test]
 async fn t5b_auth_off_has_no_store_and_no_auditor() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     apply_change(&grants_path(dir.path()), true, add(row("g1", "r")))
         .await
         .unwrap();
@@ -234,7 +234,7 @@ async fn t5b_auth_off_has_no_store_and_no_auditor() {
 /// T9: the sink the startup helper builds carries an auditor.
 #[tokio::test]
 async fn t9_startup_sink_carries_an_auditor() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     apply_change(&grants_path(dir.path()), true, add(row("g1", "r")))
         .await
         .unwrap();
@@ -248,7 +248,7 @@ async fn t9_startup_sink_carries_an_auditor() {
 /// snapshot.
 #[tokio::test]
 async fn t6c_unwritable_plan_at_startup_serves_nothing() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     apply_change(&grants_path(dir.path()), true, add(row("g1", "r")))
         .await
         .unwrap();
@@ -269,7 +269,7 @@ async fn t6c_unwritable_plan_at_startup_serves_nothing() {
 /// served rows are the `loaded` rows.
 #[tokio::test]
 async fn t13_served_rows_equal_the_loaded_rows() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     apply_change(&grants_path(dir.path()), true, add(row("g1", "r")))
         .await
         .unwrap();
@@ -311,7 +311,7 @@ fn governance_log(dir: &Path) -> String {
 /// record is in the governance log.
 #[tokio::test]
 async fn t12_http_snapshot_precedes_the_listener() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     apply_change(&grants_path(dir.path()), true, add(row("g1", "r")))
         .await
         .unwrap();
@@ -356,7 +356,7 @@ async fn t12_http_snapshot_precedes_the_listener() {
 #[tokio::test]
 async fn t12_stdio_snapshot_precedes_the_first_response() {
     use tokio::io::{AsyncBufReadExt as _, AsyncWriteExt as _};
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     apply_change(&grants_path(dir.path()), true, add(row("g1", "r")))
         .await
         .unwrap();
@@ -393,7 +393,7 @@ async fn t3cd_failed_snapshot_append_serves_nothing() {
     use std::sync::atomic::Ordering;
     // Two grants: appends 1-2 record the adds, 3-4 the `loaded`, 5 the close.
     for fail_at in [3, 5] {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::test_dir_keep::kept_tempdir();
         for id in ["g1", "g2"] {
             apply_change(&grants_path(dir.path()), true, add(row(id, "r")))
                 .await
@@ -444,7 +444,7 @@ async fn t3cd_failed_snapshot_append_serves_nothing() {
 /// later is picked up by a reload.
 #[tokio::test]
 async fn a_tolerated_missing_grant_file_still_reloads() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let mut config = config(dir.path(), true);
     config.security.identity_grants.fail_on_error = false;
     let s = Box::pin(Started::run(config.clone())).await.unwrap();
@@ -490,7 +490,7 @@ async fn reload_with(config: &Config, sink: Option<Arc<crate::config_reload::Ide
 /// as `out_of_band` on the next reload.
 #[tokio::test]
 async fn a_direct_repair_after_a_tolerated_read_is_out_of_band() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let mut config = config(dir.path(), true);
     config.security.identity_grants.fail_on_error = false;
     let s = Box::pin(Started::run(config.clone())).await.unwrap();
@@ -514,7 +514,7 @@ async fn a_direct_repair_after_a_tolerated_read_is_out_of_band() {
 /// that breaks after the first load refuses the start.
 #[tokio::test]
 async fn fail_on_error_applies_to_the_audited_startup_read() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     apply_change(&grants_path(dir.path()), true, add(row("g1", "r")))
         .await
         .unwrap();
@@ -540,7 +540,7 @@ async fn an_unwritable_grant_directory_is_not_read_without_the_lock() {
     if rustix::process::geteuid().is_root() {
         return; // root ignores directory modes
     }
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let ro = dir.path().join("ro");
     std::fs::create_dir(&ro).unwrap();
     let grants = ro.join("grants.yaml");
@@ -579,7 +579,7 @@ async fn an_unwritable_grant_directory_is_not_read_without_the_lock() {
 /// created later is served by the next reload.
 #[tokio::test]
 async fn a_missing_grant_directory_still_reloads_later() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let grants = dir.path().join("later").join("grants.yaml");
     let mut config = config(dir.path(), true);
     config.security.identity_grants.path = grants.to_string_lossy().into_owned();
@@ -602,7 +602,7 @@ async fn a_missing_grant_directory_still_reloads_later() {
 /// baseline: a grant later written directly into the file is recorded.
 #[tokio::test]
 async fn a_first_start_with_an_unreadable_journal_keeps_a_baseline() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = grants_path(dir.path());
     write_identity_grants_file(&path, &IdentityGrantFile::new(vec![row("g1", "r")]))
         .await
@@ -664,7 +664,7 @@ async fn an_unreadable_grants_file_loads_no_grants_or_refuses_start() {
             .with_test_writer()
             .finish(),
     );
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = crate::test_dir_keep::kept_tempdir();
     let mut config = crate::config::IdentityGrantsConfig {
         enabled: true,
         path: dir

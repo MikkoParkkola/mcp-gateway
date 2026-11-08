@@ -12,7 +12,7 @@ const NOTICE: &str = "cross-tenant read verdict";
 
 /// INFO-and-above lines logged while building the Meta-MCP for `yaml`.
 fn startup_lines(yaml: &str) -> Vec<String> {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = dir.path().join("gateway.yaml");
     crate::gateway::test_helpers::write_owner_only(&path, yaml).expect("write config");
     let config = Config::load(Some(&path)).expect("the config loads");
