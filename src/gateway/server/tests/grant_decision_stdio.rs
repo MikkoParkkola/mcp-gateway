@@ -17,14 +17,13 @@ use crate::security::audit::AuditFailurePolicy;
 
 #[tokio::test]
 async fn stdio_admission_refusal_writes_one_record() {
-    let dir = tempfile::tempdir().expect("a private log directory");
+    let dir = Arc::new(tempfile::tempdir().expect("a private log directory"));
     let endpoint = Endpoint::start(false).await;
     let mut meta =
         MetaMcp::new(Arc::new(BackendRegistry::new())).with_identity_grants(grants(vec![]));
     meta.enable_transparency_log(logger(&dir, AuditFailurePolicy::BestEffort));
     meta.set_capabilities(capability_backend(endpoint.port, ("api_key", "alice")));
     let meta = Arc::new(meta);
-    let tool_policy = Arc::new(crate::security::ToolPolicy::default());
     let mtls_policy = Arc::new(crate::mtls::MtlsPolicy::from_config(
         &crate::mtls::MtlsConfig::default(),
     ));
@@ -44,7 +43,7 @@ async fn stdio_admission_refusal_writes_one_record() {
 
     let response = super::super::Gateway::dispatch_single_for_client(
         &meta,
-        &tool_policy,
+        &crate::gateway::authz::default_line(&meta),
         &mtls_policy,
         request,
         super::super::StdioClient {

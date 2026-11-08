@@ -283,6 +283,61 @@ async fn an_oauth_refresh_parse_error_drops_the_endpoint_credential() {
     assert!(!rendered.contains("fixture-refresh"));
 }
 
+/// Resolves every host to one private address.
+struct Private;
+
+impl crate::security::ssrf::HostResolver for Private {
+    fn lookup(
+        &self,
+        _host: &str,
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = crate::Result<Vec<std::net::IpAddr>>> + Send + '_>,
+    > {
+        Box::pin(async { Ok(vec![std::net::IpAddr::from([10, 0, 0, 5])]) })
+    }
+}
+
+/// A capability call whose token refresh the flight's destination pin refuses
+/// (a host name that passes the static check and resolves to a private
+/// address) records `refused` on that call's delivery.
+#[tokio::test]
+async fn a_refresh_refused_in_the_flight_records_refused_on_the_call() {
+    use crate::gateway::delivery_facts;
+    let (storage, _dir) = expired_store("t9", "REFRESH_SECRET");
+    let mut executor = CapabilityExecutor::new();
+    executor.refresh = super::super::client::RefreshClient {
+        http: reqwest::Client::builder()
+            .no_proxy()
+            .redirect(reqwest::redirect::Policy::none())
+            .dns_resolver(crate::security::ssrf::PinningResolver::new(Private))
+            .build()
+            .unwrap(),
+        destination: crate::security::ssrf::DestinationPolicy::Public,
+    };
+    let (outcome, facts) = delivery_facts::scope(async {
+        let outcome = executor
+            .refresh_provider_token(
+                "t9",
+                "https://token.example/token",
+                &storage,
+                &CapabilityExecutionContext::default(),
+            )
+            .await;
+        (outcome, delivery_facts::snapshot())
+    })
+    .await;
+    let error = outcome.expect_err("a private destination is refused");
+    // Refused inside the flight, not by the static check before it.
+    assert!(error.to_string().contains("SSRF blocked"), "{error}");
+    let mut fields = serde_json::Map::new();
+    delivery_facts::record_fields(facts.as_ref(), false, &mut fields);
+    assert_eq!(
+        fields.get("response_effect"),
+        Some(&"refused".into()),
+        "{fields:?}"
+    );
+}
+
 #[path = "rest_refresh_flight_tests.rs"]
 mod flight;
 

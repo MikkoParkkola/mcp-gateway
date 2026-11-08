@@ -37,6 +37,10 @@ pub(super) struct TestSeams {
     /// write touch the window file mid-row.
     #[cfg(test)]
     window_save_every: Option<std::time::Duration>,
+    /// The test that built this gateway (its thread's name), so a late write
+    /// by the HTTP window saver, which starts on a runtime worker, names it.
+    #[cfg(test)]
+    spawner: Option<String>,
     /// A pause at the start of this gateway's stdio dispatches, before the
     /// request is observed (MIK-8364 drain-window row). Per gateway, so no
     /// other session in the test binary stops on it.
@@ -46,6 +50,11 @@ pub(super) struct TestSeams {
     /// drain begins (MIK-8364 drain-window row).
     #[cfg(test)]
     pub(super) stdio_drain_started: std::sync::Arc<tokio::sync::Notify>,
+    /// Copied onto the capability backend as `start_capability_watcher`
+    /// builds it, before its startup scan is spawned: that scan then panics
+    /// after its first directory, so a row can prove the scan's exit guard.
+    #[cfg(test)]
+    pub(super) capability_scan_panics: std::sync::atomic::AtomicBool,
 }
 
 impl TestSeams {
@@ -67,6 +76,24 @@ impl TestSeams {
     #[cfg(test)]
     pub(super) fn telemetry_save_every(&self) -> Option<std::time::Duration> {
         self.telemetry_save_every
+    }
+
+    /// Seams for a gateway built on this thread: in a test, a late write
+    /// is attributed to this thread's (the test's) name.
+    pub(super) fn new() -> Self {
+        #[allow(unused_mut)]
+        let mut seams = Self::default();
+        #[cfg(test)]
+        {
+            seams.spawner = std::thread::current().name().map(str::to_owned);
+        }
+        seams
+    }
+
+    /// The test that built this gateway, for the window saver.
+    #[cfg(test)]
+    pub(super) fn spawner(&self) -> Option<String> {
+        self.spawner.clone()
     }
 
     /// The HTTP window saver's interval a test set, if any (MIK-7211).
@@ -134,6 +161,34 @@ pub(super) async fn shutdown_signal_or_trigger(
 }
 
 impl super::Gateway {
+    /// [`Self::build_meta_mcp`], then the Meta-MCP's startup live config
+    /// published, as `stdio_loop` builds and then publishes before its first
+    /// line: same generation, auth, policy epoch and startup revision. A
+    /// fixture that serves from the built Meta-MCP judges under that config,
+    /// never under none. Production's own order is pinned by the boundary
+    /// pin in `meta_mcp/boundary_pins/live_config.rs`, which skips tests.
+    #[cfg(test)]
+    pub(super) async fn build_meta_mcp_published(
+        &self,
+    ) -> crate::Result<super::build_meta::BuiltMetaMcp> {
+        let built = self.build_meta_mcp().await?;
+        let live_config = std::sync::Arc::new(
+            crate::config_reload::LiveConfig::from_prepared(
+                crate::config_reload::Generation::prepare_startup(
+                    self.config.clone(),
+                    std::sync::Arc::new(super::stdio_tasks::default_auth(
+                        self.env.startup(),
+                        std::sync::Arc::clone(&built.record_key),
+                    )),
+                ),
+            )
+            .with_policy_epoch(std::sync::Arc::clone(&built.meta_mcp.policy_epoch))
+            .with_startup_revision(built.meta_mcp.record_key(), self.env.take_startup_inputs()),
+        );
+        built.meta_mcp.set_live_config(live_config);
+        Ok(built)
+    }
+
     /// The pause at the start of this gateway's stdio dispatches, and the
     /// notice that its drain has begun (MIK-8364).
     #[cfg(test)]

@@ -21,6 +21,7 @@ mod cli;
 mod cli_argv;
 mod cli_run;
 mod client;
+mod construct;
 mod credentials;
 pub mod graphql;
 pub mod jsonrpc;
@@ -28,6 +29,7 @@ mod mcp;
 mod params;
 mod process;
 mod readiness;
+mod request;
 pub mod rest;
 mod save_file;
 pub(crate) use cli_argv::check_cli_templates;
@@ -43,10 +45,7 @@ use std::time::Duration;
 
 use dashmap::DashMap;
 use parking_lot::RwLock;
-use reqwest::{
-    Method,
-    header::{HeaderMap, HeaderName, HeaderValue},
-};
+use reqwest::{Client, Method};
 use serde_json::Value;
 
 use super::{
@@ -54,6 +53,7 @@ use super::{
     validate_capability_url_for_context, validate_personal_capability_identity,
 };
 use crate::cache::ResponseCache;
+use crate::capability::execution_context::{RefusalTest, record_refusal};
 use crate::gateway::gateway_writes::WriteRecord;
 use crate::oauth::{TokenInfo, TokenStorage};
 use crate::secrets::SecretResolver;
@@ -118,56 +118,6 @@ pub struct CapabilityExecutor {
 }
 
 impl CapabilityExecutor {
-    /// Create a new executor.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the HTTP client cannot be created.
-    pub fn new() -> Self {
-        let token_storage = TokenStorage::default_location().ok().map(Arc::new);
-
-        Self {
-            client: client::build(None),
-            refresh: client::build_refresh(None),
-            cache: ResponseCache::with_max_entries(CAPABILITY_CACHE_MAX_ENTRIES),
-            token_storage,
-            oauth_tokens: RwLock::new(DashMap::new()),
-            secret_resolver: Arc::new(SecretResolver::new()),
-            health: crate::failsafe::HealthTracker::new("capabilities"),
-            env: Arc::new(crate::config::LiveEnv::default()),
-            policy_epoch: None,
-            account_strategies: None,
-            process_policy: process::ProcessPolicy::default(),
-            process_slots: DashMap::new(),
-            mcp_children: Arc::default(),
-            multi_user: std::sync::atomic::AtomicBool::new(false),
-            #[cfg(test)]
-            test_loopback_egress: false,
-        }
-    }
-
-    /// A new executor whose calls go through `capabilities.egress_proxy` when
-    /// it is set, and direct and pinned otherwise (#1881). A value the load
-    /// check would refuse is ignored here, which only ever means direct.
-    // Public for the gateway server and the egress tests under tests/; not
-    // documented API.
-    #[doc(hidden)]
-    #[must_use]
-    pub fn for_config(config: &crate::config::CapabilityConfig) -> Self {
-        let mut executor = Self::new();
-        executor.process_policy = process::ProcessPolicy::from_config(config);
-        if let Ok(Some(proxy)) = config.egress_proxy_url() {
-            tracing::warn!(
-                proxy = %crate::config::CapabilityConfig::egress_proxy_for_log(&proxy),
-                "capability calls go through capabilities.egress_proxy; the proxy, not the \
-                 gateway, resolves their destinations"
-            );
-            executor.client = client::build(Some(&proxy));
-            executor.refresh = client::build_refresh(Some(&proxy));
-        }
-        executor
-    }
-
     /// Whether several callers share this gateway (set with the capability
     /// backend's flag): an MCP capability then needs an identified caller.
     pub fn set_multi_user(&self, multi_user: bool) {
@@ -184,6 +134,14 @@ impl CapabilityExecutor {
     #[must_use]
     pub fn with_policy_epoch(mut self, epoch: Arc<std::sync::atomic::AtomicU64>) -> Self {
         self.policy_epoch = Some(epoch);
+        self
+    }
+
+    /// Share the gateway's stop deadline with every MCP child backend this
+    /// executor builds, so a gateway stop also cuts their trees' exit waits.
+    #[must_use]
+    pub(crate) fn with_stop_deadline(self, deadline: Arc<crate::transport::StopDeadline>) -> Self {
+        let _ = self.mcp_children.stop_deadline.set(deadline);
         self
     }
 
@@ -278,33 +236,6 @@ impl CapabilityExecutor {
     #[must_use]
     pub fn health_metrics(&self) -> crate::failsafe::HealthMetrics {
         self.health.metrics()
-    }
-
-    /// Create an executor with a custom OAuth token storage.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the HTTP client cannot be created.
-    #[must_use]
-    pub fn with_token_storage(token_storage: Arc<TokenStorage>) -> Self {
-        Self {
-            client: client::build(None),
-            refresh: client::build_refresh(None),
-            cache: ResponseCache::with_max_entries(CAPABILITY_CACHE_MAX_ENTRIES),
-            token_storage: Some(token_storage),
-            oauth_tokens: RwLock::new(DashMap::new()),
-            secret_resolver: Arc::new(SecretResolver::new()),
-            health: crate::failsafe::HealthTracker::new("capabilities"),
-            env: Arc::new(crate::config::LiveEnv::default()),
-            policy_epoch: None,
-            account_strategies: None,
-            process_policy: process::ProcessPolicy::default(),
-            process_slots: DashMap::new(),
-            mcp_children: Arc::default(),
-            multi_user: std::sync::atomic::AtomicBool::new(false),
-            #[cfg(test)]
-            test_loopback_egress: false,
-        }
     }
 
     /// Store an OAuth token for a provider.
@@ -538,8 +469,11 @@ impl CapabilityExecutor {
         let params = effective_params.as_ref();
 
         let url = self.build_url(config, params)?;
-        super::require_tls_for_rest(&url, &capability.auth, config)?;
-        validate_capability_url_for_context(&url, context)?;
+        // Each refusal here is the call's answer: its record says so.
+        super::require_tls_for_rest(&url, &capability.auth, config)
+            .inspect_err(|e| record_refusal(e, RefusalTest::Cleartext(&url)))?;
+        validate_capability_url_for_context(&url, context)
+            .inspect_err(|e| record_refusal(e, RefusalTest::Destination))?;
         tracing::debug!(url = %url, method = %config.method, "Executing REST request");
 
         let method = config.method.parse::<Method>().map_err(|e| {
@@ -619,187 +553,6 @@ impl CapabilityExecutor {
             }
             None => Ok(body),
         }
-    }
-
-    /// Build URL with path parameter substitution.
-    #[allow(clippy::unused_self)]
-    fn build_url(&self, config: &RestConfig, params: &Value) -> Result<String> {
-        let url = if config.uses_endpoint() {
-            config.endpoint.clone()
-        } else {
-            let path = if let Some(selector) = &config.path_selector {
-                let selected = match params.get(&selector.parameter) {
-                    None | Some(Value::Null) => selector.default.as_str(),
-                    Some(Value::String(value)) => value.as_str(),
-                    Some(_) => {
-                        return Err(Error::Config(format!(
-                            "REST path selector parameter '{}' must be a string",
-                            selector.parameter
-                        )));
-                    }
-                };
-
-                let path = selector.paths.get(selected).ok_or_else(|| {
-                    Error::Config(format!(
-                        "No path is configured for REST path selector parameter '{}'",
-                        selector.parameter
-                    ))
-                })?;
-                path.replace(&format!("{{{}}}", selector.parameter), selected)
-            } else {
-                config.path.clone()
-            };
-
-            format!("{}{path}", config.base_url)
-        };
-
-        // One pass, caller parameters only: a value holding `{other}` is sent
-        // as written, and the URL never resolves a secret (MIK-7888).
-        crate::secrets::fill_placeholders(&url, |key| {
-            Ok(params.get(key).map(|value| match value {
-                Value::String(s) => s.clone(),
-                Value::Number(n) => n.to_string(),
-                Value::Bool(b) => b.to_string(),
-                _ => serde_json::to_string(value).unwrap_or_default(),
-            }))
-        })
-    }
-
-    /// Build headers with credential injection.
-    async fn build_headers(
-        &self,
-        config: &RestConfig,
-        auth: &super::AuthConfig,
-        params: &Value,
-        context: &CapabilityExecutionContext,
-    ) -> Result<HeaderMap> {
-        let mut headers = HeaderMap::new();
-
-        for (name, value_template) in &config.headers {
-            let value = self.substitute_string(value_template, params)?;
-
-            // Skip an Authorization header whose TEMPLATE names {access_token}
-            // with no access_token parameter to fill it; inject_auth handles
-            // auth from the credential key. The value is not consulted: a
-            // resolved secret may contain that text (MIK-7888).
-            if name.eq_ignore_ascii_case("authorization")
-                && value_template.contains("{access_token}")
-                && params.get("access_token").is_none()
-            {
-                continue;
-            }
-
-            if let Ok(header_name) = name.parse::<HeaderName>()
-                && let Ok(header_value) = value.parse::<HeaderValue>()
-            {
-                headers.insert(header_name, header_value);
-            }
-        }
-
-        // Skip header injection when auth.param is set (credential goes as query param).
-        if auth.required && auth.param.is_none() {
-            self.inject_auth(&mut headers, auth, context).await?;
-        }
-
-        Ok(headers)
-    }
-
-    /// Inject authentication into headers.
-    ///
-    /// # Security
-    ///
-    /// Credentials are fetched from secure storage and injected at runtime.
-    /// They are NEVER logged or stored in memory longer than necessary.
-    pub(super) async fn inject_auth(
-        &self,
-        headers: &mut HeaderMap,
-        auth: &super::AuthConfig,
-        context: &CapabilityExecutionContext,
-    ) -> Result<()> {
-        // A recognized `auth.account` is resolved through the SHARED identity
-        // resolver — the same strategy instance an MCP backend bound to that
-        // descriptor holds — and its headers go on the wire VERBATIM: the
-        // provider's own `token_type` is authority this executor must not
-        // reformat, and a strategy may mint more than one header. `Ok(None)`
-        // means either no account reference or an explicit `shared` descriptor,
-        // both of which continue on the existing static path below. Any refusal
-        // returns here and never reaches it.
-        if let Some(account_headers) = self.resolve_account_headers(auth, context).await? {
-            for (name, value) in account_headers {
-                let header_name: HeaderName = name.parse().map_err(|_| {
-                    Error::Config("Invalid account credential header name".to_string())
-                })?;
-                let header_value: HeaderValue = value
-                    .parse()
-                    .map_err(|_| Error::Config("Invalid credential format".to_string()))?;
-                headers.insert(header_name, header_value);
-            }
-            return Ok(());
-        }
-
-        let credential = self.fetch_credential(auth, context).await?;
-
-        let header_name: HeaderName = auth
-            .header
-            .as_deref()
-            .unwrap_or("Authorization")
-            .parse()
-            .map_err(|_| Error::Config("Invalid auth header name".to_string()))?;
-
-        let prefix = auth
-            .prefix
-            .as_deref()
-            .unwrap_or(match auth.auth_type.as_str() {
-                "basic" => "Basic",
-                "api_key" => "",
-                _ => "Bearer",
-            });
-
-        let header_value = if prefix.is_empty() {
-            credential
-        } else {
-            format!("{prefix} {credential}")
-        };
-
-        let header_val: HeaderValue = header_value
-            .parse()
-            .map_err(|_| Error::Config("Invalid credential format".to_string()))?;
-        headers.insert(header_name, header_val);
-
-        Ok(())
-    }
-
-    // ── Private helpers ───────────────────────────────────────────────────────
-
-    /// Collect `static_params` that are not already covered by `config.params`
-    /// or `config.param_map` templates (GET requests only).
-    #[allow(clippy::unused_self)] // method interface kept for future use
-    fn build_extra_static_params(
-        &self,
-        config: &RestConfig,
-        _params: &Value,
-    ) -> Vec<(String, String)> {
-        let covered_keys: std::collections::HashSet<&str> = config
-            .params
-            .keys()
-            .chain(config.param_map.keys())
-            .map(String::as_str)
-            .collect();
-
-        config
-            .static_params
-            .iter()
-            .filter(|(k, _)| !covered_keys.contains(k.as_str()))
-            .map(|(k, v)| {
-                let v_str = match v {
-                    Value::String(s) => s.clone(),
-                    Value::Number(n) => n.to_string(),
-                    Value::Bool(b) => b.to_string(),
-                    _ => serde_json::to_string(v).unwrap_or_default(),
-                };
-                (k.clone(), v_str)
-            })
-            .collect()
     }
 }
 

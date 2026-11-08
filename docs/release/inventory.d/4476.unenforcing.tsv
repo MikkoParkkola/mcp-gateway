@@ -1,0 +1,2 @@
+src/gateway/server/window_saver.rs	spawn	1	Starts a counted window writer thread and uncounts it if the thread cannot start; decides nothing about access
+src/gateway/server/window_saver.rs	drop	1	Uncounts a window writer when its thread ends, by return or panic; decides nothing about access

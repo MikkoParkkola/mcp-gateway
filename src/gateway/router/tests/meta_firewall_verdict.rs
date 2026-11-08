@@ -135,6 +135,8 @@ async fn firewall_app_state(
         servers: None,
         keys: None,
         except: None,
+        allowed_roots: None,
+        path_args: None,
     }])
     .await
 }
@@ -284,7 +286,6 @@ async fn state_with_firewalls_and_auth(
         proxy_manager,
         streaming_config,
         key_server: None,
-        tool_policy: Arc::new(crate::security::ToolPolicy::default()),
         mtls_policy: Arc::new(MtlsPolicy::from_config(&MtlsConfig::default())),
         trust_configured_backends: false,
         inflight: Arc::new(tokio::sync::Semaphore::new(8)),
@@ -299,11 +300,15 @@ async fn state_with_firewalls_and_auth(
         live_config: Arc::clone(&live_config),
         export_status: None,
         transparency_log: None,
+        governance_log: None,
         dashboard_bootstrap: std::sync::Arc::new(crate::gateway::auth::DashboardBootstrap::new()),
         tasks: task_service,
         task_executor,
         subscriptions,
     });
+    if let Some(firewall) = &state.firewall {
+        crate::gateway::router::firewall_publish_fixture::publish_firewall(&state, firewall);
+    }
     (state, store_dir)
 }
 
@@ -442,6 +447,8 @@ async fn meta_tools_call_blocks_when_a_later_target_refuses_after_an_allowing_fi
             servers: None,
             keys: None,
             except: None,
+            allowed_roots: None,
+            path_args: None,
         },
         FirewallRule {
             tool_match: "zeta_echo".to_string(),
@@ -451,6 +458,8 @@ async fn meta_tools_call_blocks_when_a_later_target_refuses_after_an_allowing_fi
             servers: None,
             keys: None,
             except: None,
+            allowed_roots: None,
+            path_args: None,
         },
     ])
     .await;
@@ -532,6 +541,8 @@ async fn response_artifact_folds_every_target_after_a_single_redacting_scan() {
             servers: None,
             keys: None,
             except: None,
+            allowed_roots: None,
+            path_args: None,
         },
         FirewallRule {
             tool_match: "zeta_echo".to_string(),
@@ -541,6 +552,8 @@ async fn response_artifact_folds_every_target_after_a_single_redacting_scan() {
             servers: None,
             keys: None,
             except: None,
+            allowed_roots: None,
+            path_args: None,
         },
     ])
     .await;
@@ -563,6 +576,7 @@ async fn response_artifact_folds_every_target_after_a_single_redacting_scan() {
     let before = firewall.response_inspection_counts().inspections;
     let verdict = firewall
         .check_response_artifact(
+            firewall.startup_policy(),
             &mut artifact,
             &targets,
             &ResponseCorrelation {
@@ -626,6 +640,8 @@ async fn meta_tools_call_is_inspected_once_by_the_router_instance() {
         servers: None,
         keys: None,
         except: None,
+        allowed_roots: None,
+        path_args: None,
     }])
     .await;
 
@@ -688,6 +704,8 @@ async fn meta_tools_call_refusal_survives_without_a_second_inspection() {
         servers: None,
         keys: None,
         except: None,
+        allowed_roots: None,
+        path_args: None,
     }])
     .await;
 
@@ -719,6 +737,8 @@ async fn modern_meta_tools_call_is_inspected_once_by_the_router_instance() {
         servers: None,
         keys: None,
         except: None,
+        allowed_roots: None,
+        path_args: None,
     }])
     .await;
 

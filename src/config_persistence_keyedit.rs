@@ -1,10 +1,16 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! Editing existing scalar fields of `gateway.yaml` in place, so a UI save
-//! keeps every comment and untouched byte (ADR-024). Each change rewrites the
-//! value of one key that already exists; anything this cannot prove right is
-//! `Unprovable`, and nothing is written. Creating keys and removing them come
-//! later, with their own design.
+//! Editing `gateway.yaml` in place, so a UI save keeps every comment and
+//! untouched byte (ADR-024). A change sets a field's value (inserting the key,
+//! and any missing parents, when it is absent), makes it a secret slot, or
+//! removes the key; a list may gain one new element, at its end, which also
+//! creates a missing list. One `auth.api_keys` element may be removed (the
+//! web UI's key revoke): its lines go, with the comments on them reported by
+//! original line number, and so do a list and parent it empties. Anything
+//! the meaning and bytes proofs cannot cover is `Unprovable`, and nothing is
+//! written: among those, removing any other list element, reordering list
+//! elements, removing a key that sits on its element's dash line, and
+//! deleting a line that carries a comment outside a revocation.
 //!
 //! A secret field is written as a slot: a placeholder the byte writer fills
 //! with the store reference it creates, after this edit has been proven.
@@ -91,6 +97,10 @@ impl FiniteF64 {
     pub(crate) fn new(value: f64) -> Option<Self> {
         value.is_finite().then_some(Self(value))
     }
+
+    pub(crate) fn get(self) -> f64 {
+        self.0
+    }
 }
 
 // No NaN is ever held, so equality is total.
@@ -113,6 +123,8 @@ pub(crate) enum Change {
     Secret(SlotId),
     /// The field's key is deleted.
     Remove,
+    /// The field becomes exactly these strings, written as one inline list.
+    List(Vec<String>),
 }
 
 /// Why an edit was refused. Nothing is written for any of them.
@@ -143,6 +155,8 @@ pub(crate) enum GiveUp {
     SequenceShape,
     /// A path segment is not a plain key.
     NotPlainKey,
+    /// A secret field's node cannot be shown masked line for line.
+    SecretSpan,
     /// The file or the edit is outside what the proofs cover.
     Other,
 }
@@ -158,6 +172,7 @@ impl GiveUp {
             Self::DashLine => "dash_line",
             Self::SequenceShape => "sequence_shape",
             Self::NotPlainKey => "not_plain_key",
+            Self::SecretSpan => "secret_span",
             Self::Other => "other",
         }
     }
@@ -168,6 +183,10 @@ impl GiveUp {
 pub(crate) struct Template {
     bytes: Vec<u8>,
     slots: Vec<(SlotId, Range<usize>)>,
+    /// The original 1-based lines whose comment the edit dropped.
+    dropped: Vec<usize>,
+    /// The changed lines, in order (empty for bytes another writer built).
+    hunks: Vec<Hunk>,
 }
 
 impl Template {
@@ -188,7 +207,24 @@ impl Template {
             }
             end = range.end;
         }
-        Ok(Self { bytes, slots })
+        Ok(Self {
+            bytes,
+            slots,
+            dropped: Vec::new(),
+            hunks: Vec::new(),
+        })
+    }
+
+    /// The original 1-based line numbers of the comment lines this edit
+    /// dropped, sorted: a list element's removal takes its comments with it.
+    /// Line numbers only, never text: a `#` in a value can be a secret.
+    pub(crate) fn dropped_comments(&self) -> &[usize] {
+        &self.dropped
+    }
+
+    /// The changed lines of an in-place edit, in order.
+    pub(crate) fn hunks(&self) -> &[Hunk] {
+        &self.hunks
     }
 
     /// The bytes as they stand, slots still holding their placeholders.
@@ -202,6 +238,8 @@ impl Template {
         Self {
             bytes,
             slots: Vec::new(),
+            dropped: Vec::new(),
+            hunks: Vec::new(),
         }
     }
 
@@ -263,10 +301,7 @@ impl Template {
         let text = String::from_utf8(out).map_err(|_| ComputeRefusal::SlotMismatch)?;
         let doc: Value = crate::yaml::from_str(&text).map_err(|_| ComputeRefusal::SlotMismatch)?;
         for (id, _) in &self.slots {
-            let at_path = id.0.iter().fold(&doc, |node, segment| match segment {
-                Segment::Key(key) => &node[key.as_str()],
-                Segment::Index(at) => &node[*at],
-            });
+            let at_path = list::value_at(&doc, &id.0);
             if at_path.as_str() != Some(refs[id].as_str()) {
                 return Err(ComputeRefusal::SlotMismatch);
             }
@@ -304,25 +339,54 @@ pub(crate) fn edit_in_place(
         }
     }
     let before = shape::nodes(original)?;
+    let revoked = one_revocation(changes)?;
+    if let Some(path) = revoked
+        && let Some(i) = revoke::revoked_index(path)
+        && let Some(refusal) = revoke::refusal(original, &before, i)
+    {
+        return Err(refusal);
+    }
     one_new_element(&before, changes)?;
     let mut lines = shape::Lines::new(original);
     for (path, change) in changes {
         let Some(value) = rendered(change) else {
             continue;
         };
-        match path.keys() {
-            Some(keys) => set_keyed(&mut lines, path, &keys, &value)?,
-            None => shape::place(&mut lines, &path.0, &value)?,
+        match change {
+            Change::List(items) => list::set(&mut lines, path, items, &value)?,
+            _ => write_value(&mut lines, path, &value)?,
         }
     }
     let mut removed: Vec<&[Segment]> = Vec::new();
     for (path, change) in changes {
-        if *change == Change::Remove && shape::remove_entry(&mut lines, &path.0)? {
+        if *change != Change::Remove {
+            continue;
+        }
+        let gone = if revoked == Some(path.0.as_slice()) {
+            revoke::remove_element(&mut lines, &path.0)?
+        } else {
+            shape::remove_entry(
+                &mut lines,
+                &path.0,
+                shape::CommentRule::Refuse,
+                shape::Span::Entry,
+            )?
+        };
+        if gone {
             removed.push(&path.0);
         }
     }
-    shape::drop_emptied(&mut lines, &before, &removed)?;
+    shape::drop_emptied(&mut lines, &before, &removed, revoked)?;
     let edited = lines.text();
+    let deleted = deleted_as_planned(
+        original, &before, changes, &removed, revoked, &lines, &edited,
+    )?;
+    // Only a revocation drops comments; every other deletion refused them.
+    let dropped = if revoked.is_some() {
+        deleted
+    } else {
+        Vec::new()
+    };
     if !lines.bytes_hold(original) {
         return Err(unprovable("an untouched line changed"));
     }
@@ -344,10 +408,122 @@ pub(crate) fn edit_in_place(
         }
     }
     slots.sort_by_key(|(_, range)| range.start);
-    Template::checked(edited.into_bytes(), slots)
+    let mut template = Template::checked(edited.into_bytes(), slots)?;
+    template.dropped = dropped;
+    template.hunks = lines.hunks(original);
+    Ok(template)
+}
+
+/// The one list-element removal a save may hold (S7, S8): of
+/// `auth.api_keys`, with no other change in that list. `None` when the
+/// save removes no element.
+fn one_revocation(changes: &[(FieldPath, Change)]) -> Result<Option<&[Segment]>, ComputeRefusal> {
+    let mut elements = changes
+        .iter()
+        .filter(|(p, c)| *c == Change::Remove && matches!(p.0.last(), Some(Segment::Index(_))));
+    let Some((path, _)) = elements.next() else {
+        return Ok(None);
+    };
+    if revoke::revoked_index(&path.0).is_none() {
+        return Err(give_up(
+            GiveUp::SequenceShape,
+            "only an `auth.api_keys` element may be removed",
+        ));
+    }
+    let list = &path.0[..2];
+    // Counted by occurrence: the revocation is the one change under the list.
+    let alone = elements.next().is_none()
+        && changes
+            .iter()
+            .filter(|(p, _)| p.0.starts_with(list))
+            .count()
+            == 1;
+    if !alone {
+        return Err(give_up(
+            GiveUp::SequenceShape,
+            "a removed list element must be the save's only change in its list",
+        ));
+    }
+    Ok(Some(path.0.as_slice()))
+}
+
+/// S5 and S4, for every save: the original lines the edit deleted are
+/// exactly the lines its changes may delete, planned on the original text
+/// apart from the edit (a revoked element, each removed key, each entry the
+/// cascade emptied, the item lines of each block list rewritten inline);
+/// else `Unprovable`. No deleting step's own account is trusted. Returns the
+/// deleted lines that carried a comment, 1-based.
+fn deleted_as_planned(
+    original: &str,
+    before: &[crate::yaml::Node],
+    changes: &[(FieldPath, Change)],
+    removed: &[&[Segment]],
+    revoked: Option<&[Segment]>,
+    lines: &shape::Lines,
+    edited: &str,
+) -> Result<Vec<usize>, ComputeRefusal> {
+    let after = shape::nodes(edited)?;
+    let mut allowed = std::collections::BTreeSet::new();
+    let mut take = |path: &[Segment], taken| {
+        if let Some(node) = shape::find(before, path) {
+            allowed.extend(revoke::may_delete(original, node, taken));
+        }
+    };
+    let doc: Value = crate::yaml::from_str(original)
+        .map_err(|_| unprovable("the file is not one mapping the parser accepts"))?;
+    for (path, change) in changes {
+        let Change::List(items) = change else {
+            continue;
+        };
+        let block = shape::find(before, &path.0)
+            .is_some_and(|n| n.shape == crate::yaml::Shape::Sequence && !n.flow);
+        if block && !list::holds(list::value_at(&doc, &path.0), items) {
+            take(&path.0, revoke::Taken::Under);
+        }
+    }
+    for &path in removed {
+        let taken = if Some(path) == revoked {
+            revoke::Taken::Element
+        } else {
+            revoke::Taken::Entry
+        };
+        take(path, taken);
+        // A parent the removal emptied went with it.
+        for d in 1..path.len() {
+            let parent = &path[..d];
+            if matches!(parent.last(), Some(Segment::Key(_)))
+                && shape::find(&after, parent).is_none()
+            {
+                take(parent, revoke::Taken::Entry);
+            }
+        }
+    }
+    let surviving = lines.surviving();
+    let deleted: std::collections::BTreeSet<usize> = (0..original.split_inclusive('\n').count())
+        .filter(|n| !surviving.contains(n))
+        .collect();
+    // Equal, not a subset: a deletion one comment line short keeps the
+    // meaning, so only this comparison sees it.
+    if deleted != allowed {
+        return Err(unprovable(
+            "the deleted lines are not the removed entries' lines",
+        ));
+    }
+    Ok(super::comments::comment_line_numbers(original, &deleted))
 }
 
 /// The value text `change` writes; `None` for a removal.
+/// The YAML text the editor writes for `change`'s value (a secret as its
+/// slot placeholder); `None` for a removal.
+pub(crate) fn value_text(change: &Change) -> Option<String> {
+    rendered(change)
+}
+
+/// The quoted placeholder text a secret slot holds in a template.
+pub(crate) fn slot_text(id: &SlotId) -> String {
+    quoted_placeholder(id)
+}
+
 fn rendered(change: &Change) -> Option<String> {
     Some(match change {
         Change::Set(Scalar::Str(s)) => crate::yaml::double_quoted(s),
@@ -355,8 +531,18 @@ fn rendered(change: &Change) -> Option<String> {
         Change::Set(Scalar::Bool(b)) => b.to_string(),
         Change::Set(Scalar::Num(n)) => float_text(n.0),
         Change::Secret(id) => quoted_placeholder(id),
+        Change::List(items) => inline_list(items),
         Change::Remove => return None,
     })
+}
+
+/// `items` as one inline list of double-quoted strings: `["a", "b"]`, `[]`.
+fn inline_list(items: &[String]) -> String {
+    let quoted: Vec<String> = items
+        .iter()
+        .map(|item| crate::yaml::double_quoted(item))
+        .collect();
+    format!("[{}]", quoted.join(", "))
 }
 
 /// A float always written with a decimal point, so it reads back as a
@@ -369,6 +555,19 @@ fn float_text(value: f64) -> String {
     match shortest.split_once('e') {
         Some((mantissa, exponent)) => format!("{mantissa}.0e{exponent}"),
         None => format!("{shortest}.0"),
+    }
+}
+
+/// Write `value` at `path`: through the parser's value span when the path is
+/// mapping keys alone, else by node position; inserted when absent.
+fn write_value(
+    lines: &mut shape::Lines,
+    path: &FieldPath,
+    value: &str,
+) -> Result<(), ComputeRefusal> {
+    match path.keys() {
+        Some(keys) => set_keyed(lines, path, &keys, value),
+        None => shape::place(lines, &path.0, value),
     }
 }
 
@@ -528,15 +727,31 @@ fn expected_value(change: &Change) -> Option<Value> {
         Change::Set(Scalar::Bool(b)) => Value::from(*b),
         Change::Set(Scalar::Num(n)) => Value::from(n.0),
         Change::Secret(id) => Value::from(placeholder(id)),
+        Change::List(items) => Value::Sequence(
+            items
+                .iter()
+                .map(|item| Value::from(item.as_str()))
+                .collect(),
+        ),
         Change::Remove => return None,
     })
 }
 
 /// Proof 1: `edited` parses to `original` with exactly `changes` applied,
-/// each secret slot holding its own placeholder. Value equality only: the
-/// parser refuses anchors, aliases and tags on any node an edit touches
-/// before this runs.
+/// each secret slot holding its own placeholder, and holds every anchor and
+/// alias the original does when it sets any value. Equal values alone are
+/// not enough: an alias replaced by its value compares equal and detaches
+/// the shared value. The editor never writes an anchor or an alias, so an
+/// unchanged count proves none was dropped. An edit that only removes keys
+/// may take the anchors and aliases inside them (a revoked key's element):
+/// an anchor still used elsewhere fails the reparse below.
 fn meaning_holds(original: &str, changes: &[(FieldPath, Change)], edited: &str) -> bool {
+    let sets_a_value = changes.iter().any(|(_, change)| *change != Change::Remove);
+    if sets_a_value
+        && crate::yaml::anchors_and_aliases(original) != crate::yaml::anchors_and_aliases(edited)
+    {
+        return false;
+    }
     let Ok(doc) = crate::yaml::from_str::<Value>(original) else {
         return false;
     };
@@ -552,8 +767,32 @@ fn meaning_holds(original: &str, changes: &[(FieldPath, Change)], edited: &str) 
     got == want
 }
 
+/// The document `original` means with `changes` applied, as YAML text: the
+/// editor's own model of the result, for a caller that must judge an edit
+/// the in-place proofs refused. Secret slots hold their placeholders.
+/// `None` when `original` does not parse or a path cannot be followed.
+pub(crate) fn expected_text(original: &str, changes: &[(FieldPath, Change)]) -> Option<String> {
+    let doc = match crate::yaml::from_str::<Value>(original).ok()? {
+        Value::Null if shape::no_content(original) => Value::Mapping(crate::yaml::Mapping::new()),
+        doc => doc,
+    };
+    crate::yaml::to_string(&shape::expected(&doc, changes)?).ok()
+}
+
 #[path = "config_persistence_keyedit_shape.rs"]
 mod shape;
+pub(crate) use shape::Hunk;
+#[cfg(test)]
+pub(crate) use shape::NewLine;
+/// Whether a node's path from the parser is `path`: the one comparison the
+/// editor and the preview's verifier share.
+pub(crate) use shape::same as is_node_at;
+
+#[path = "config_persistence_keyedit_revoke.rs"]
+mod revoke;
+
+#[path = "config_persistence_keyedit_list.rs"]
+mod list;
 
 #[cfg(test)]
 #[path = "config_persistence_keyedit_tests.rs"]

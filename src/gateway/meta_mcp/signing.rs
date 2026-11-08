@@ -17,9 +17,9 @@ use crate::security::message_signing::{NONCE_REASON_INVALID, record_nonce_reject
 
 pub(crate) fn wire_error_message(error: &crate::Error) -> String {
     match error {
-        crate::Error::JsonRpc { message, .. } | crate::Error::GatewayRefused { message, .. } => {
-            message.clone()
-        }
+        crate::Error::JsonRpc { message, .. }
+        | crate::Error::BackendJsonRpc { message, .. }
+        | crate::Error::GatewayRefused { message, .. } => message.clone(),
         _ => error.to_string(),
     }
 }
@@ -442,8 +442,7 @@ impl super::MetaMcp {
         !self.meta_tool_exposure.is_exposed(tool_name)
             || caller.retry.solicited_input_responses().is_err()
             || caller.retry.refuse_on_playbook_run(tool_name).is_err()
-            || !crate::gateway::router::CallerStanding::of_admin_flag(caller.is_admin)
-                .permits(tool_name)
+            || !crate::gateway::router::CallerStanding::of(caller.admin).permits(tool_name)
     }
 
     /// Dispatch's refusal of a signed call whose nonce was left unadmitted.
@@ -660,12 +659,30 @@ impl super::MetaMcp {
         let Some(store) = &self.nonce_store else {
             return Ok(None);
         };
+        let refused = |kind| super::invoke::audit::note_refused_by(kind, None);
         match nonce {
-            Some(nonce) => store.register_for_principal(nonce, principal).map(Some),
-            None if self.require_nonce => Err(crate::Error::json_rpc(
-                -32001,
-                "Nonce required when message signing is enforced",
-            )),
+            Some(nonce) => store
+                .register_for_principal(nonce, principal)
+                .map(Some)
+                .inspect_err(|e| {
+                    // A malformed nonce is the request's shape; a replayed or
+                    // over-limit one has no kind naming it yet (MIK-8914.API2A.17),
+                    // and `syntax` would call a replay malformed.
+                    refused(
+                        if e.to_rpc_code() == crate::error::rpc_codes::INVALID_PARAMS {
+                            crate::security::decision_record::DecisionKind::Syntax
+                        } else {
+                            crate::security::decision_record::DecisionKind::Unrecorded
+                        },
+                    );
+                }),
+            None if self.require_nonce => {
+                refused(crate::security::decision_record::DecisionKind::Syntax);
+                Err(crate::Error::json_rpc(
+                    -32001,
+                    "Nonce required when message signing is enforced",
+                ))
+            }
             None => Ok(None),
         }
     }

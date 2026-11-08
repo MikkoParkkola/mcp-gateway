@@ -65,13 +65,14 @@ async fn run_step_with_identity(
         stdio_nonce: None,
         caller_key: None,
         verified_identity: None,
-        is_admin: client.admin,
+        admin: client.admin_standing(),
         surface_request: crate::gateway::recovery::SurfaceRequest::Configured,
         input_capabilities: crate::protocol::meta::Declared::NONE,
         retry: &crate::protocol::mrtr::NO_RETRY,
         confirmation: crate::gateway::destructive_confirmation::ConfirmationChannel::Unavailable,
         era: crate::protocol::meta::Era::Legacy,
         channel: &crate::gateway::input_bridge::NoClientChannel,
+        generation: None,
     };
     Box::pin(state.meta_mcp.handle_tools_call(
         RequestId::Number(1),
@@ -288,13 +289,14 @@ async fn authz_ordinary_error_is_not_reclassified_as_forbidden() {
         stdio_nonce: None,
         caller_key: None,
         verified_identity: None,
-        is_admin: false,
+        admin: crate::gateway::authz::AdminStanding::None,
         surface_request: crate::gateway::recovery::SurfaceRequest::Configured,
         input_capabilities: crate::protocol::meta::Declared::NONE,
         retry: &crate::protocol::mrtr::NO_RETRY,
         confirmation: crate::gateway::destructive_confirmation::ConfirmationChannel::Unavailable,
         era: crate::protocol::meta::Era::Legacy,
         channel: &crate::gateway::input_bridge::NoClientChannel,
+        generation: None,
     };
     let response = Box::pin(state.meta_mcp.handle_tools_call(
         RequestId::Number(1),
@@ -369,13 +371,14 @@ async fn authz_four_refusal_branches_carry_the_status() {
         test_router_app_state_with_backend(http_backend_at("alpha", "http://127.0.0.1:1/")).await;
     {
         let state_mut = Arc::get_mut(&mut policy_state).expect("sole owner during setup");
-        state_mut.tool_policy = Arc::new(crate::security::ToolPolicy::from_config(
-            &crate::security::ToolPolicyConfig {
-                enabled: true,
-                deny: vec!["globally_blocked".to_string()],
-                ..crate::security::ToolPolicyConfig::default()
-            },
-        ));
+        // The router judges under the published generation's policy.
+        let mut config = (*state_mut.live_config.get()).clone();
+        config.security.tool_policy = crate::security::ToolPolicyConfig {
+            enabled: true,
+            deny: vec!["globally_blocked".to_string()],
+            ..crate::security::ToolPolicyConfig::default()
+        };
+        state_mut.live_config.set(config);
     }
     let unrestricted = scoped_client("scoped", vec!["*".into()], None);
     let policy_refusal = Box::pin(run_step_as(
@@ -420,13 +423,14 @@ async fn authz_3_playbook_step_denied_by_global_tool_policy_is_refused() {
         test_router_app_state_with_backend(http_backend_at("alpha", "http://127.0.0.1:1/")).await;
     {
         let state_mut = Arc::get_mut(&mut state).expect("sole owner during setup");
-        state_mut.tool_policy = Arc::new(crate::security::ToolPolicy::from_config(
-            &crate::security::ToolPolicyConfig {
-                enabled: true,
-                deny: vec!["globally_blocked".to_string()],
-                ..crate::security::ToolPolicyConfig::default()
-            },
-        ));
+        // The router judges under the published generation's policy.
+        let mut config = (*state_mut.live_config.get()).clone();
+        config.security.tool_policy = crate::security::ToolPolicyConfig {
+            enabled: true,
+            deny: vec!["globally_blocked".to_string()],
+            ..crate::security::ToolPolicyConfig::default()
+        };
+        state_mut.live_config.set(config);
     }
     let client = scoped_client("scoped", vec!["*".into()], None);
 
@@ -450,13 +454,14 @@ async fn authz_3a_global_policy_does_not_refuse_a_permitted_tool() {
         test_router_app_state_with_backend(http_backend_at("alpha", "http://127.0.0.1:1/")).await;
     {
         let state_mut = Arc::get_mut(&mut state).expect("sole owner during setup");
-        state_mut.tool_policy = Arc::new(crate::security::ToolPolicy::from_config(
-            &crate::security::ToolPolicyConfig {
-                enabled: true,
-                deny: vec!["globally_blocked".to_string()],
-                ..crate::security::ToolPolicyConfig::default()
-            },
-        ));
+        // The router judges under the published generation's policy.
+        let mut config = (*state_mut.live_config.get()).clone();
+        config.security.tool_policy = crate::security::ToolPolicyConfig {
+            enabled: true,
+            deny: vec!["globally_blocked".to_string()],
+            ..crate::security::ToolPolicyConfig::default()
+        };
+        state_mut.live_config.set(config);
     }
     let client = scoped_client("scoped", vec!["*".into()], None);
 
@@ -479,8 +484,8 @@ async fn authz_3a_global_policy_does_not_refuse_a_permitted_tool() {
 /// identity actually arrived.
 #[tokio::test]
 async fn authz_10_certificate_policy_refuses_and_permits_a_playbook_step() {
+    use crate::mtls::MtlsPolicy;
     use crate::mtls::config::{CertMatchConfig, MtlsConfig, PolicyRuleConfig, ToolScopeConfig};
-    use crate::mtls::{CertIdentity, MtlsPolicy};
 
     let policy = Arc::new(MtlsPolicy::from_config(&MtlsConfig {
         enabled: true,
@@ -505,12 +510,12 @@ async fn authz_10_certificate_policy_refuses_and_permits_a_playbook_step() {
         state_mut.mtls_policy = Arc::clone(&policy);
     }
     let client = scoped_client("scoped", vec!["*".into()], None);
-    let cert = CertIdentity {
+    let cert = crate::mtls::identity::CertIdentity::for_test(crate::mtls::identity::CertFields {
         quota_principal: None,
         common_name: Some("trusted-machine".to_string()),
         display_name: "trusted-machine".to_string(),
-        ..CertIdentity::default()
-    };
+        ..Default::default()
+    });
 
     let refused = Box::pin(run_step_with_identity(
         &state,
@@ -665,13 +670,14 @@ async fn authz_ordinary_error_carries_no_status_stamp() {
         stdio_nonce: None,
         caller_key: None,
         verified_identity: None,
-        is_admin: false,
+        admin: crate::gateway::authz::AdminStanding::None,
         surface_request: crate::gateway::recovery::SurfaceRequest::Configured,
         input_capabilities: crate::protocol::meta::Declared::NONE,
         retry: &crate::protocol::mrtr::NO_RETRY,
         confirmation: crate::gateway::destructive_confirmation::ConfirmationChannel::Unavailable,
         era: crate::protocol::meta::Era::Legacy,
         channel: &crate::gateway::input_bridge::NoClientChannel,
+        generation: None,
     };
     let response = Box::pin(state.meta_mcp.handle_tools_call(
         RequestId::Number(1),

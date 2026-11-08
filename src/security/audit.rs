@@ -83,10 +83,16 @@ impl AuditOutcome {
                 | Error::BackendNotFound(_)
                 | Error::ToolNotFound(_)),
             ) => Self::Invalid(e.to_rpc_code()),
-            Err(Error::JsonRpc {
-                code: INVALID_PARAMS,
-                ..
-            }) => Self::Invalid(INVALID_PARAMS),
+            Err(
+                Error::JsonRpc {
+                    code: INVALID_PARAMS,
+                    ..
+                }
+                | Error::BackendJsonRpc {
+                    code: INVALID_PARAMS,
+                    ..
+                },
+            ) => Self::Invalid(INVALID_PARAMS),
             Err(e) => Self::Error(e.to_rpc_code()),
         })
     }
@@ -255,8 +261,8 @@ impl AuditWho {
             credential_kind: Some(credential_kind),
             principal,
             account: account.unwrap_or("anonymous").to_string(),
-            authority: grant_subject.map(|g| g.authority.clone()),
-            subject: grant_subject.map(|g| g.subject.clone()),
+            authority: grant_subject.map(|g| g.authority().to_owned()),
+            subject: grant_subject.map(|g| g.subject().to_owned()),
         }
     }
 }

@@ -2,7 +2,9 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Operator controls: cost report, stats, kill/revive, reload, playbooks.
 
-use crate::error::rpc_codes::{INTERNAL_ERROR, INVALID_PARAMS, INVALID_REQUEST};
+use crate::error::rpc_codes::{
+    INTERNAL_ERROR, INVALID_PARAMS, INVALID_REQUEST, SERVER_ERROR_START,
+};
 use serde_json::{Value, json};
 use tracing::debug;
 
@@ -42,7 +44,7 @@ impl MetaMcp {
         // were read straight from the arguments. Refusing beats quietly
         // narrowing the report: a caller that asked for every session and got
         // one has no way to tell that it was scoped rather than empty.
-        if (include_all_sessions || include_all_keys) && !caller.is_admin {
+        if (include_all_sessions || include_all_keys) && !caller.admin.is_gateway() {
             return Err(crate::gateway::delivery_facts::refused(
                 crate::Error::Config(
                     "include_all_sessions and include_all_keys are admin views and require an \
@@ -57,7 +59,7 @@ impl MetaMcp {
         // client read any other client's spend by guessing or observing an id.
         let requested = extract_optional_str(args, "session_id");
         if let Some(requested) = requested
-            && !caller.is_admin
+            && !caller.admin.is_gateway()
             && Some(requested) != session_id
         {
             return Err(crate::gateway::delivery_facts::refused(
@@ -90,7 +92,7 @@ impl MetaMcp {
         // The gateway-wide total is every caller's spend combined, which is the
         // same cross-tenant view the explicit flags are gated on. Gating those
         // and leaving this open would have made the check cosmetic.
-        let aggregate = if caller.is_admin {
+        let aggregate = if caller.admin.is_gateway() {
             serde_json::to_value(self.cost_tracker.aggregate()).unwrap_or(json!(null))
         } else {
             json!(null)
@@ -181,7 +183,11 @@ impl MetaMcp {
         let include_costs = caller_is_admin;
         #[cfg(feature = "cost-governance")]
         if let Some(ref enforcer) = self.budget_enforcer {
-            let section = cost_section(&enforcer.snapshot());
+            // One generation for the whole response: limits and spend agree.
+            let snapshot = self.judged_by(enforcer, None, |governance| {
+                enforcer.snapshot_under(governance)
+            });
+            let section = cost_section(&snapshot);
             if include_costs && let Value::Object(ref mut map) = response {
                 map.insert("cost_governance".to_string(), section);
             }
@@ -332,6 +338,14 @@ impl MetaMcp {
             )
         })?;
 
+        // Never beside the startup scan: its pin-mismatch check could unload
+        // bytes this reload restores. Retryable: the scan ends on its own.
+        if !backend.initial_scan_complete() {
+            return Err(Error::json_rpc(
+                SERVER_ERROR_START,
+                "the startup capability scan is still running; retry when /readyz is ready",
+            ));
+        }
         match backend.reload().await {
             Ok(total) => {
                 // Listeners hear of it only if what they see changed (`MIK-8127`).
@@ -448,7 +462,27 @@ fn cost_section(snap: &crate::cost_accounting::enforcer::EnforcerSnapshot) -> Va
         "key_daily_spend": snap.key_daily,
         "tool_overflow_spend_usd": snap.tool_overflow_usd,
         "key_overflow_spend_usd": snap.key_overflow_usd,
+        "tool_estimated_start_usd": estimated_start(&snap.tool_limits, &snap.tool_estimate),
+        "key_estimated_start_usd": estimated_start(&snap.key_limits, &snap.key_estimate),
     })
+}
+
+/// Per budgeted name, the starting figure a reload charged it with today
+/// (its possible earlier spend in the overflow), or null when none above
+/// zero was taken (ADR-023).
+#[cfg(feature = "cost-governance")]
+fn estimated_start(
+    limits: &std::collections::HashMap<String, f64>,
+    estimates: &std::collections::HashMap<String, f64>,
+) -> Value {
+    limits
+        .keys()
+        .map(|name| {
+            let figure = estimates.get(name).copied().filter(|usd| *usd > 0.0);
+            (name.clone(), json!(figure))
+        })
+        .collect::<serde_json::Map<_, _>>()
+        .into()
 }
 
 #[cfg(all(test, feature = "cost-governance"))]
@@ -468,10 +502,40 @@ mod cost_section_tests {
             taken_at: Some(0),
             tool_overflow_usd: 1.25,
             key_overflow_usd: 0.5,
+            tool_estimate: std::collections::HashMap::new(),
+            key_estimate: std::collections::HashMap::new(),
         };
         let section = cost_section(&snap);
         assert_eq!(section["tool_overflow_spend_usd"], 1.25);
         assert_eq!(section["key_overflow_spend_usd"], 0.5);
+    }
+
+    /// Each budgeted name reports the starting figure a reload charged it
+    /// with, or null when none above zero was taken.
+    #[test]
+    fn the_cost_section_reports_each_estimated_start() {
+        let names = |pairs: &[(&str, f64)]| -> std::collections::HashMap<String, f64> {
+            pairs.iter().map(|(n, v)| ((*n).to_owned(), *v)).collect()
+        };
+        let snap = EnforcerSnapshot {
+            global_daily_usd: 0.0,
+            global_daily_limit: None,
+            tool_daily: names(&[]),
+            tool_limits: names(&[("seeded", 5.0), ("zero", 5.0), ("plain", 5.0)]),
+            key_daily: names(&[]),
+            key_limits: names(&[("k", 2.0)]),
+            taken_at: Some(0),
+            tool_overflow_usd: 3.0,
+            key_overflow_usd: 0.0,
+            tool_estimate: names(&[("seeded", 3.0), ("zero", 0.0)]),
+            key_estimate: names(&[("k", 1.5)]),
+        };
+        let section = cost_section(&snap);
+        let tools = &section["tool_estimated_start_usd"];
+        assert_eq!(tools["seeded"], 3.0, "{section}");
+        assert!(tools["zero"].is_null(), "{section}");
+        assert!(tools["plain"].is_null(), "{section}");
+        assert_eq!(section["key_estimated_start_usd"]["k"], 1.5, "{section}");
     }
 }
 

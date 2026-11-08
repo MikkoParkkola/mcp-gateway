@@ -10,13 +10,18 @@ python3 scripts/ci/check-gateway-spawns.py --self-test	0	closed
 python3 scripts/ci/check-pick-then-bind.py	13	closed
 python3 scripts/ci/check-pick-then-bind.py --self-test	0	closed
 python3 scripts/ci/check-pipefail-grep-q.py	0	closed
-python3 scripts/ci/check-request-panics.py	9	closed
-python3 scripts/ci/check-request-panics.py --base <BASE_TIP>	1	closed
-python3 scripts/ci/check-request-panics.py --self-test	18	closed
+"$GATE_PY" scripts/ci/check-request-panics.py	9	closed
+"$GATE_PY" scripts/ci/check-request-panics.py --base <BASE_TIP>	1	closed
+"$GATE_PY" scripts/ci/check-request-panics.py --self-test	18	closed
 python3 scripts/ci/check_advisory_exceptions.py	0	closed
 python3 scripts/ci/check_advisory_exceptions.py --self-test	0	closed
 python3 scripts/ci/check_needs.py --self-test	0	closed
 python3 scripts/ci/check_per_call_stages.py	0	closed
+python3 scripts/ci/check_swap_jobs.py	0	closed
+python3 scripts/ci/check_swap_jobs.py --self-test	0	closed
+python3 scripts/ci/compare_coverage.py --self-test	0	closed
+python3 scripts/ci/coverage_shards.py --self-test	0	closed
+python3 scripts/ci/job_time_watch.py --self-test	0	closed
 python3 scripts/ci/mutants/run_mutants.py --self-test	2	closed
 python3 scripts/ci/shard_tests.py --self-test	0	closed
 python3 scripts/ci/test_check_per_call_stages.py	0	closed
@@ -25,12 +30,15 @@ python3 scripts/ci/test_docs_only_gating.py	1	closed
 python3 scripts/ci/test_feature_shards.py	0	closed
 python3 scripts/ci/test_heavy_train_gating.py	1	closed
 python3 scripts/ci/test_os_shards.py	1	closed
+python3 scripts/ci/test_os_label_routing.py	1	closed
+python3 scripts/ci/test_mingw_debs.py	1	closed
+python3 scripts/ci/test_release_features.py	0	closed
 python3 scripts/ci/test_throwaway_routing.py	1	closed
 python3 scripts/dev/check-event-source-scope.py <BASE_TIP>	1	closed
 python3 scripts/dev/check-file-size.py --base <BASE_TIP>	1	closed
 python3 scripts/dev/check-orphan-test-modules.py	22	closed
 python3 scripts/dev/check-registry-packages.py --offline	1	closed
-python3 scripts/dev/check-timing-asserts.py --base <BASE_TIP>	1	closed
+"$GATE_PY" scripts/dev/check-timing-asserts.py --base <BASE_TIP>	1	closed
 python3 scripts/dev/cwe532-leak-lint.py src crates	5	closed
 python3 scripts/dev/test_check_control_drift.py	7	closed
 python3 scripts/dev/test_check_event_source_scope.py	3	closed
@@ -39,7 +47,7 @@ python3 scripts/dev/test_check_orphan_test_modules.py	22	closed
 python3 scripts/dev/test_check_owasp_citations.py	38	closed
 python3 scripts/dev/test_check_registry_packages.py	0	closed
 python3 scripts/dev/test_check_registry_content.py	0	closed
-python3 scripts/dev/test_check_timing_asserts.py	10	closed
+"$GATE_PY" scripts/dev/test_check_timing_asserts.py	10	closed
 python3 scripts/dev/test_cwe532_leak_lint.py	1	closed
 python3 scripts/dev/test_events8_run.py	8	closed
 python3 scripts/dev/test_mcp_events_failfast.py	1	closed
@@ -50,8 +58,8 @@ python3 scripts/perf/test_per_call_gate.py	1	closed
 python3 scripts/release/changelog_fragments.py assemble --dry-run > /dev/null	1	closed
 python3 scripts/release/changelog_fragments.py check --base <BASE_TIP> --head <HEAD>	1	closed
 python3 scripts/release/check_identity_sources.py	47	closed
-python3 scripts/release/check_inventory_rows.py --all	35	closed
-python3 scripts/release/check_inventory_rows.py <BASE_TIP>	1	closed
+"$GATE_PY" scripts/release/check_inventory_rows.py --all	35	closed
+"$GATE_PY" scripts/release/check_inventory_rows.py <BASE_TIP>	1	closed
 python3 scripts/release/check_known_issues.py --check	1	closed
 python3 scripts/release/check_macos_exclusions.py	4	closed
 python3 scripts/release/check_nfr_demo_1_recordings.py	1	closed
@@ -64,7 +72,7 @@ python3 scripts/release/test_c6_mutation_sample.py	1	closed
 python3 scripts/release/test_c6_resolve.py	26	closed
 python3 scripts/release/test_changelog_fragments.py	2	closed
 python3 scripts/release/test_check_identity_sources.py	73	closed
-python3 scripts/release/test_check_inventory_rows.py	21	closed
+"$GATE_PY" scripts/release/test_check_inventory_rows.py	21	closed
 python3 scripts/release/test_check_keyless_read_only.py	1	closed
 python3 scripts/release/test_check_known_issues.py	1	closed
 python3 scripts/release/test_check_macos_exclusions.py	4	closed
@@ -94,3 +102,14 @@ python3 scripts/release/test_windows_job_scope.py	0	closed
 python3 scripts/release/upgrading_fragments.py assemble --dry-run > <TMP>/UPGRADING-4.0.md	1	closed
 python3 scripts/release/upgrading_fragments.py check	1	closed
 python3 scripts/release/upgrading_fragments.py check --base <BASE_TIP> --head <HEAD>	1	closed
+"$GATE_PY" scripts/dev/test_cfg_items.py	1	closed
+python3 scripts/dev/test_gate_env_python.py	1	closed
+scripts/ci/changed-scope.sh --self-test	0	closed
+scripts/ci/check-capability-pin-counts.sh	1	closed
+scripts/ci/check-hosted-runners.sh	0	closed
+scripts/ci/check-hosted-runners.sh --self-test	0	closed
+scripts/ci/trusted-runner/job-started.sh --self-test	1	closed
+scripts/dev/check-commit-message-hygiene.sh <BASE_TIP>..HEAD	0	closed
+scripts/dev/check-public-repo-hygiene.sh	0	closed
+tests/artifact_licenses.sh	3	closed
+tests/commit_message_hygiene.sh	8	closed

@@ -36,10 +36,10 @@ fn request<'a>(
         agent_id: None,
         agent_declared: None,
         grant_subject: None,
-        is_admin: false,
+        admin: crate::gateway::authz::AdminStanding::None,
         scope: crate::gateway::meta_mcp::InvokeScope {
             authorizer: &crate::gateway::authz::AllowAll,
-            is_admin: false,
+            admin: crate::gateway::authz::AdminStanding::None,
             api_key_name: None,
             grant_key: None,
             agent_id: None,
@@ -164,11 +164,7 @@ fn key_holder(principal: &str) -> AuthenticatedClient {
 }
 
 fn named(subject: &str) -> GrantSubject {
-    GrantSubject {
-        authority: "corp-sso".to_string(),
-        subject: subject.to_string(),
-        label: None,
-    }
+    GrantSubject::for_test("corp-sso".to_string(), subject.to_string(), None)
 }
 
 /// MIK-7967: distinct keys own apart, a proven subject splits one shared key,

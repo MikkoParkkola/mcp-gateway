@@ -65,7 +65,7 @@ fn queued_observed(hub: &EventsHub, services: &Services, port: u16, event: &str)
             .expect("observes")
             .expect("per-user");
         sub.obs_basis = Some(basis);
-        sub.observed_identity = Some(person());
+        sub.observed_identity = Some(crate::events::records::StoredIdentity::from(&person()));
     });
     let row = hub.store.subscriptions().pop().expect("row");
     let observed = hub.observed_now(&row, &config, None).expect("observable");
@@ -132,12 +132,13 @@ fn regrant(hub: &EventsHub) {
 /// buried as `observation_changed`, and nothing reaches the callback.
 #[tokio::test]
 async fn a_record_queued_before_a_regrant_is_buried_as_observation_changed() {
-    let dir = tempfile::tempdir().expect("dir");
+    let dir = Arc::new(tempfile::tempdir().expect("dir"));
     let config = crate::config::EventsConfig {
         callback_allow_private: vec!["127.0.0.0/8".into()],
         ..crate::config::EventsConfig::default()
     };
     let hub = EventsHub::open(&config, dir.path()).expect("hub");
+    hub.keep_test_dir(Arc::clone(&dir));
     let services = services(dir.path());
     let (port, accepted) = counting_callback().await;
     offer(&hub, &[NAME]);
@@ -154,12 +155,13 @@ async fn a_record_queued_before_a_regrant_is_buried_as_observation_changed() {
 /// Control: the same record with the row unchanged is sent.
 #[tokio::test]
 async fn a_record_still_observed_as_it_was_is_sent() {
-    let dir = tempfile::tempdir().expect("dir");
+    let dir = Arc::new(tempfile::tempdir().expect("dir"));
     let config = crate::config::EventsConfig {
         callback_allow_private: vec!["127.0.0.0/8".into()],
         ..crate::config::EventsConfig::default()
     };
     let hub = EventsHub::open(&config, dir.path()).expect("hub");
+    hub.keep_test_dir(Arc::clone(&dir));
     let services = services(dir.path());
     let (port, accepted) = counting_callback().await;
     offer(&hub, &[NAME]);
@@ -210,12 +212,13 @@ async fn leased(hub: &EventsHub, services: &Services, exp: u64) -> crate::events
 /// callback: it was never authorized by the new token.
 #[tokio::test]
 async fn a_record_read_under_a_replaced_lease_is_buried_not_sent() {
-    let dir = tempfile::tempdir().expect("dir");
+    let dir = Arc::new(tempfile::tempdir().expect("dir"));
     let config = crate::config::EventsConfig {
         callback_allow_private: vec!["127.0.0.0/8".into()],
         ..crate::config::EventsConfig::default()
     };
     let hub = EventsHub::open(&config, dir.path()).expect("hub");
+    hub.keep_test_dir(Arc::clone(&dir));
     let services = services(dir.path());
     let (port, accepted) = counting_callback().await;
     offer(&hub, &[NAME]);
@@ -235,12 +238,13 @@ async fn a_record_read_under_a_replaced_lease_is_buried_not_sent() {
 /// The same once the lease is past its deadline, before any expiry sweep.
 #[tokio::test]
 async fn a_record_read_under_an_expired_lease_is_buried_before_any_sweep() {
-    let dir = tempfile::tempdir().expect("dir");
+    let dir = Arc::new(tempfile::tempdir().expect("dir"));
     let config = crate::config::EventsConfig {
         callback_allow_private: vec!["127.0.0.0/8".into()],
         ..crate::config::EventsConfig::default()
     };
     let hub = EventsHub::open(&config, dir.path()).expect("hub");
+    hub.keep_test_dir(Arc::clone(&dir));
     let services = services(dir.path());
     let (port, accepted) = counting_callback().await;
     offer(&hub, &[NAME]);
@@ -259,12 +263,13 @@ async fn a_record_read_under_an_expired_lease_is_buried_before_any_sweep() {
 /// and the deadline, not from leased records never being deliverable.
 #[tokio::test]
 async fn a_record_read_under_a_held_lease_is_sent() {
-    let dir = tempfile::tempdir().expect("dir");
+    let dir = Arc::new(tempfile::tempdir().expect("dir"));
     let config = crate::config::EventsConfig {
         callback_allow_private: vec!["127.0.0.0/8".into()],
         ..crate::config::EventsConfig::default()
     };
     let hub = EventsHub::open(&config, dir.path()).expect("hub");
+    hub.keep_test_dir(Arc::clone(&dir));
     let services = services(dir.path());
     let (port, accepted) = counting_callback().await;
     offer(&hub, &[NAME]);
@@ -320,10 +325,9 @@ async fn held_callback() -> (u16, Arc<tokio::sync::Notify>, Arc<tokio::sync::Not
 
 /// The queued record for `event_id` in the outbox under `dir`, if any.
 fn queued_record(dir: &std::path::Path, event_id: &str) -> Option<serde_json::Value> {
-    std::fs::read_dir(dir.join("outbox"))
-        .ok()?
-        .flatten()
-        .filter_map(|e| serde_json::from_slice(&std::fs::read(e.path()).ok()?).ok())
+    crate::events::records::committed_records(&dir.join("outbox"))
+        .iter()
+        .filter_map(|p| serde_json::from_slice(&std::fs::read(p).ok()?).ok())
         .find(|record: &serde_json::Value| record["event_id"] == event_id)
 }
 
@@ -332,12 +336,13 @@ fn queued_record(dir: &std::path::Path, event_id: &str) -> Option<serde_json::Va
 /// counted, and left for its retry to judge, never buried by the replace.
 #[tokio::test]
 async fn lease_t7_a_handoff_on_the_wire_at_a_replace_completes() {
-    let dir = tempfile::tempdir().expect("dir");
+    let dir = Arc::new(tempfile::tempdir().expect("dir"));
     let config = crate::config::EventsConfig {
         callback_allow_private: vec!["127.0.0.0/8".into()],
         ..crate::config::EventsConfig::default()
     };
     let hub = EventsHub::open(&config, dir.path()).expect("hub");
+    hub.keep_test_dir(Arc::clone(&dir));
     let services = services(dir.path());
     let (port, reached, release) = held_callback().await;
     offer(&hub, &[NAME]);

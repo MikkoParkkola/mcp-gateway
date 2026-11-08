@@ -107,7 +107,7 @@ fn intent(state: &Arc<AppState>, key: &str, arguments: &Value) -> TaskIntent {
             crate::gateway::record_principal::RecordPrincipal::none(),
             crate::gateway::meta_mcp::Authentication::Anonymous,
             crate::security::audit::CredentialKind::None,
-            false,
+            crate::gateway::authz::AdminStanding::None,
             Declared::NONE,
             None,
             None,
@@ -398,7 +398,7 @@ async fn a_task_worker_keeps_the_declared_agent_label() {
         crate::gateway::record_principal::RecordPrincipal::none(),
         crate::gateway::meta_mcp::Authentication::Anonymous,
         crate::security::audit::CredentialKind::None,
-        false,
+        crate::gateway::authz::AdminStanding::None,
         Declared::NONE,
         None,
         None,
@@ -407,7 +407,7 @@ async fn a_task_worker_keeps_the_declared_agent_label() {
     let host = crate::gateway::task_service::host::LiveHost::Http(Arc::clone(&state));
     let generation = host.generation();
     let authorizer = host.authorizer(owned.authorizer(), &generation);
-    let caller = owned.dispatch_context(&host, &authorizer);
+    let caller = owned.dispatch_context(&host, &authorizer, &generation);
 
     let declared = caller
         .agent_declared

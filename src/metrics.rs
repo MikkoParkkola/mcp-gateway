@@ -15,6 +15,18 @@ use metrics_exporter_prometheus::PrometheusHandle;
 #[cfg(feature = "metrics")]
 static HANDLE: OnceLock<PrometheusHandle> = OnceLock::new();
 
+/// The recorder's builder: buckets for the metrics that need a histogram.
+/// Every other histogram keeps the exporter's default rendering.
+#[cfg(feature = "metrics")]
+pub(crate) fn builder() -> metrics_exporter_prometheus::PrometheusBuilder {
+    use crate::gateway::health_metrics::layers::{ADDED_LATENCY, LATENCY_BUCKETS};
+    use metrics_exporter_prometheus::Matcher;
+    metrics_exporter_prometheus::PrometheusBuilder::new()
+        .set_buckets_for_metric(Matcher::Full(ADDED_LATENCY.to_owned()), &LATENCY_BUCKETS)
+        // Fails only for an empty bucket list, which this one is not.
+        .unwrap_or_else(|_| metrics_exporter_prometheus::PrometheusBuilder::new())
+}
+
 /// Install the global Prometheus metrics recorder.
 ///
 /// Idempotent: subsequent calls are silently ignored so that test helpers
@@ -25,9 +37,10 @@ pub fn install() {
         return;
     }
 
-    match metrics_exporter_prometheus::PrometheusBuilder::new().install_recorder() {
+    match builder().install_recorder() {
         Ok(handle) => {
             if HANDLE.set(handle).is_ok() {
+                crate::gateway::health_metrics::register();
                 tracing::info!("Prometheus metrics recorder installed; scrape at /metrics");
             }
         }
@@ -51,4 +64,21 @@ pub fn render() -> String {
         .get()
         .map(PrometheusHandle::render)
         .unwrap_or_default()
+}
+
+/// The value of the first series of `metric` in a [`render`] snapshot whose
+/// labels hold every one of `labels` (each `name="value"`); 0 when there is
+/// none yet. The recorder is process-wide, so a test reads a label no
+/// parallel test writes.
+#[cfg(all(test, feature = "metrics"))]
+pub(crate) fn series_value(text: &str, metric: &str, labels: &[&str]) -> f64 {
+    text.lines()
+        .find(|line| {
+            line.strip_prefix(metric)
+                .is_some_and(|rest| rest.starts_with('{'))
+                && labels.iter().all(|label| line.contains(label))
+        })
+        .and_then(|line| line.rsplit(' ').next())
+        .and_then(|n| n.parse::<f64>().ok())
+        .unwrap_or(0.0)
 }

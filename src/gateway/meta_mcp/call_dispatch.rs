@@ -263,7 +263,7 @@ impl MetaMcp {
         // Moving it here caught stdio passing a default non-admin context.
         // The same predicate `tools/list` filters with (`meta_tools_for`) and
         // the signing layer reads (`refused_before_dispatch`).
-        if !CallerStanding::of_admin_flag(caller.is_admin).permits(tool_name) {
+        if !CallerStanding::of(caller.admin).permits(tool_name) {
             return JsonRpcResponse::error(
                 Some(id),
                 INVALID_REQUEST,
@@ -489,7 +489,7 @@ impl MetaMcp {
                     ControlFlow::Break(stored) => return stored,
                 }
             }
-            Some(MetaArm::GetStats) => self.get_stats(&arguments, caller.is_admin).await,
+            Some(MetaArm::GetStats) => self.get_stats(&arguments, caller.admin.is_gateway()).await,
             Some(MetaArm::CostReport) => self.get_cost_report(&arguments, session_id, caller).await,
             Some(MetaArm::WebhookStatus) => self.webhook_status(),
             Some(MetaArm::RunPlaybook) => {
@@ -506,8 +506,10 @@ impl MetaMcp {
                 self.revalidate_caller_slots(Self::proof_of(caller)).await;
                 self.list_disabled_capabilities(caller.scope(), session_id)
             }
-            Some(MetaArm::SetProfile) => self.set_profile(&arguments, session_id, caller.is_admin),
-            Some(MetaArm::GetProfile) => self.get_profile(session_id, caller.is_admin),
+            Some(MetaArm::SetProfile) => {
+                self.set_profile(&arguments, session_id, caller.admin.is_gateway())
+            }
+            Some(MetaArm::GetProfile) => self.get_profile(session_id, caller.admin.is_gateway()),
             Some(MetaArm::ListProfiles) => self.list_profiles(),
             Some(MetaArm::SetState) => self.set_state(&arguments, session_id, caller.scope()),
             Some(MetaArm::ReloadConfig) => self.reload_config().await,
@@ -529,7 +531,7 @@ impl MetaMcp {
         let (declared, chain) = (caller.input_capabilities, (source, upstream));
         let mut response =
             response_security::shape_meta_result(id, tool_name, result, shape, declared, chain);
-        response.egress_scanned = inspected;
+        response.wire_meta.egress_scanned = inspected;
         response.invocation_trace = trace;
         response
     }

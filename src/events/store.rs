@@ -258,9 +258,39 @@ pub(crate) struct Store {
     /// in memory.
     #[cfg(test)]
     fail_next_dead_sync: std::sync::atomic::AtomicBool,
+    /// Test-only: the temporary directory this store lives in, held until
+    /// the store's last handle drops, so a write still in flight when its
+    /// test ends lands in a directory that is then removed with it.
+    #[cfg(test)]
+    test_dir: crate::test_dir_keep::TestDirKeep,
+    /// Test-only: one settle pauses before it rewrites the subscription's
+    /// delivery status line, the last write a delivery makes.
+    #[cfg(test)]
+    pub(crate) before_touch: crate::test_pause::Slot,
 }
 
 impl Store {
+    /// Test-only: hold a share of the temporary directory this store lives
+    /// in until the last handle to the store drops. A second call must name
+    /// the same directory: keeping a different one would leave this one
+    /// unowned.
+    #[cfg(test)]
+    pub(crate) fn keep_test_dir(&self, dir: std::sync::Arc<tempfile::TempDir>) {
+        self.test_dir.keep(dir, &self.subs_dir);
+    }
+
+    /// Test-only: see [`crate::test_dir_keep::TestDirKeep::opened_by_gateway`].
+    #[cfg(test)]
+    pub(crate) fn opened_by_gateway(&self) {
+        self.test_dir.opened_by_gateway();
+    }
+
+    /// Test-only: see [`crate::test_dir_keep::TestDirKeep::assert_kept`].
+    #[cfg(test)]
+    pub(crate) fn assert_test_dir_kept(&self, worker: &str) {
+        self.test_dir.assert_kept(worker);
+    }
+
     /// The next row generation. Checked: running out is an error, never a
     /// wrap that could repeat a generation a judgement still holds.
     pub(super) fn next_generation(&self) -> std::io::Result<u64> {
@@ -326,6 +356,10 @@ impl Store {
             generation: std::sync::atomic::AtomicU64::new(loaded),
             #[cfg(test)]
             fail_next_dead_sync: std::sync::atomic::AtomicBool::new(false),
+            #[cfg(test)]
+            test_dir: crate::test_dir_keep::TestDirKeep::default(),
+            #[cfg(test)]
+            before_touch: crate::test_pause::Slot::default(),
         };
         if let Some(now) = now {
             let mut state = store.state.lock();
@@ -536,6 +570,7 @@ impl Store {
                         state.verified.remove(&key);
                     })
                 };
+                drop(state);
                 if let Err(restore) = restored {
                     tracing::warn!(%restore, "events store: verification rollback failed");
                 }
@@ -747,6 +782,9 @@ impl Store {
     }
 }
 
+#[cfg(test)]
+#[path = "store_test_dir_tests.rs"]
+mod test_dir_tests;
 #[cfg(test)]
 #[path = "store_tests.rs"]
 mod tests;

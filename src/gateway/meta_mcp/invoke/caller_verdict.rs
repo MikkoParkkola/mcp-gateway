@@ -377,6 +377,12 @@ impl MetaMcp {
                 ..
             }) => {
                 witness.spend();
+                // A refusal of the caller is answered as itself (r2_check).
+                if super::gate::is_authorization_refusal(&error) {
+                    self.count_refused_fill(server, tool, &error, std::time::Instant::now());
+                    super::audit::note_send_refusal(&error);
+                    return Err(error);
+                }
                 let checked = (std::time::Instant::now(), surface);
                 let value = self.account_refused_fill(server, tool, &error, checked);
                 if crate::personal_accounts::refusal::marked(&error).is_some() {
@@ -458,7 +464,7 @@ impl MetaMcp {
                     Some(managed)
                         if crate::security::http_diagnostics::is_upstream_unauthorized(&error) =>
                     {
-                        managed.after_upstream_401(error).await
+                        super::audit::after_upstream_401(managed, error).await
                     }
                     _ => error,
                 };
@@ -568,6 +574,9 @@ mod dispatch_seam {
     }
 }
 
+#[cfg(test)]
+#[path = "not_found_race_tests.rs"]
+mod not_found_race_tests;
 #[cfg(test)]
 #[path = "noview_cooldown_tests.rs"]
 mod noview_cooldown_tests;

@@ -601,7 +601,9 @@ async fn commit_with(
     let _held = match lock_config(&dir.join("capabilities"), deadline).await {
         Ok(held) => held,
         Err(NotLocked::Busy) => return Err(Refused::LockBusy),
-        Err(NotLocked::Failed(error)) => return Err(unwritable(error, unified_diff("", sent))),
+        Err(NotLocked::Failed(error) | NotLocked::Refused(error)) => {
+            return Err(unwritable(error, unified_diff("", sent)));
+        }
     };
     // Under the lock: which file, whether it is a link, its bytes and its
     // mode all come from one look, so nothing installed while the lock was

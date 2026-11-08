@@ -12,7 +12,7 @@ use super::reload_context::replace::{
     Expected, FileRevision, Replace, ReplaceError, ReplaceOutcome, Replaced, SecretStep, Settle,
     replace_detached, settle_for,
 };
-use super::replace_test_support::{NEXT, START, WAIT, read, setup};
+use super::replace_test_support::{NEXT, START, WAIT, read, setup, setup_refusing_reload};
 use super::*;
 use crate::config_persistence::keyedit::{Segment, SlotId, Template};
 use crate::secret_store::{
@@ -253,9 +253,9 @@ async fn a_refused_compute_creates_no_entry() {
 
 #[tokio::test]
 async fn a_refused_reload_restores_the_original_and_discards() {
-    let (dir, path, ctx) = setup();
-    // A public URL over open tools: the posture check refuses the reload.
-    let exposed = || slotted("server:\n  public_url: \"https://gw.public.test\"\n");
+    // The bytes pass the writer's checks; the reload after the write refuses.
+    let (dir, path, ctx) = setup_refusing_reload();
+    let exposed = || slotted("");
 
     let failure = replace_detached(
         ctx,
@@ -348,6 +348,11 @@ fn entries_settle_by_the_final_result() {
             err(ReplaceError::Unsupported(String::new())),
             Settle::Discard,
         ),
+        (err(ReplaceError::NoConfigFile), Settle::Discard),
+        (
+            err(ReplaceError::ConfigRefused(String::new())),
+            Settle::Discard,
+        ),
         (err(ReplaceError::Failed(String::new())), Settle::Abandon),
         (
             err(ReplaceError::RollbackFailed {
@@ -375,8 +380,9 @@ fn entries_settle_by_the_final_result() {
 #[tokio::test]
 async fn a_rollback_that_fails_keeps_the_entries() {
     use crate::config_persistence::journal::fault;
-    let (dir, path, ctx) = setup();
-    let exposed = || slotted("server:\n  public_url: \"https://gw.public.test\"\n");
+    // The bytes pass the writer's checks; the reload after the write refuses.
+    let (dir, path, ctx) = setup_refusing_reload();
+    let exposed = || slotted("");
     let armed = fault::set(&path, fault::Fault::FailJournalRemove);
 
     let failure = replace_detached(
@@ -726,3 +732,9 @@ async fn two_secrets_for_one_field_are_refused_before_any_entry() {
     assert_eq!(read(&path), START);
     assert_eq!(creates.load(std::sync::atomic::Ordering::SeqCst), 0);
 }
+
+#[path = "replace_guard_tests.rs"]
+mod guard;
+
+#[path = "replace_deleted_tests.rs"]
+mod deleted;

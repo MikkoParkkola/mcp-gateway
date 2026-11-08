@@ -45,7 +45,7 @@ use jsonwebtoken::{
     Algorithm, DecodingKey, Header, TokenData, Validation,
     jwk::{AlgorithmParameters, JwkSet},
 };
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use tracing::{debug, warn};
 
 use crate::config::{KeyServerOidcConfig, KeyServerProviderConfig};
@@ -131,24 +131,12 @@ fn built(client: reqwest::Result<reqwest::Client>) -> Option<reqwest::Client> {
         .ok()
 }
 
-/// Verified identity extracted from a valid OIDC ID token.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct VerifiedIdentity {
-    /// OIDC `sub` claim (opaque user ID).
-    pub subject: String,
-    /// Email address from the token claims.
-    pub email: String,
-    /// Display name (optional).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub name: Option<String>,
-    /// Group memberships (from custom claims).
-    #[serde(default)]
-    pub groups: Vec<String>,
-    /// Issuer URL.
-    pub issuer: String,
-}
+// The verified identity and everything that touches its fields: `checked`,
+// `stable_actor_id` and the accessors, in one leaf module.
+mod verified;
+pub use verified::VerifiedIdentity;
 
-// `checked` and `stable_actor_id` live in `oidc_identity.rs` (size ceiling).
+// `VerifiedAssertion` lives in `oidc_identity.rs` (size ceiling).
 #[path = "oidc_identity.rs"]
 mod identity;
 pub(crate) use identity::VerifiedAssertion;

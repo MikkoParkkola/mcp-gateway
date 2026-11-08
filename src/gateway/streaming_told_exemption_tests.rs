@@ -114,11 +114,13 @@ async fn a_subject_with_only_a_cf_assertion_is_refused_at_attach() {
 #[tokio::test]
 async fn a_subject_with_only_a_certificate_is_refused_at_attach() {
     let subject = ViewSubject {
-        cert: Some(crate::mtls::CertIdentity {
-            common_name: Some("svc".to_owned()),
-            display_name: "svc".to_owned(),
-            ..Default::default()
-        }),
+        cert: Some(crate::mtls::identity::CertIdentity::for_test(
+            crate::mtls::identity::CertFields {
+                common_name: Some("svc".to_owned()),
+                display_name: "svc".to_owned(),
+                ..Default::default()
+            },
+        )),
         ..ViewSubject::default()
     };
     assert!(matches!(attached(subject).await, Err(DeadReason::Bearer)));

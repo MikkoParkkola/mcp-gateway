@@ -130,7 +130,7 @@ fn ctx() -> MetaMcpCallerContext<'static> {
         stdio_nonce: None,
         caller_key: None,
         verified_identity: None,
-        is_admin: false,
+        admin: crate::gateway::authz::AdminStanding::None,
         surface_request: crate::gateway::recovery::SurfaceRequest::Configured,
         input_capabilities: crate::protocol::meta::Declared::NONE,
         retry: &crate::protocol::mrtr::NO_RETRY,
@@ -138,6 +138,7 @@ fn ctx() -> MetaMcpCallerContext<'static> {
         task: None,
         era: crate::protocol::meta::Era::Legacy,
         channel: &crate::gateway::input_bridge::NoClientChannel,
+        generation: None,
     }
 }
 

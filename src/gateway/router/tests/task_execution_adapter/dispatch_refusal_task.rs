@@ -12,7 +12,7 @@ use pretty_assertions::assert_eq;
 
 /// A contract that fails closed: an answer from a tool with no declared
 /// contract is refused inside the dispatch, with `-32603`.
-fn fail_closed() -> ResponseContractConfig {
+pub(super) fn fail_closed() -> ResponseContractConfig {
     ResponseContractConfig {
         enabled: true,
         action_mode: true,
@@ -23,7 +23,7 @@ fn fail_closed() -> ResponseContractConfig {
 
 /// A contract that refuses only an answer carrying the mock's final text: an
 /// interim round with no text passes, the answer after it is refused.
-fn refusing_final_answer() -> ResponseContractConfig {
+pub(super) fn refusing_final_answer() -> ResponseContractConfig {
     let mut contract = ResponseContractConfig {
         enabled: true,
         action_mode: true,
@@ -40,7 +40,7 @@ fn refusing_final_answer() -> ResponseContractConfig {
     contract
 }
 
-async fn contract_state(
+pub(super) async fn contract_state(
     log: Arc<crate::security::TransparencyLogger>,
     contract: Option<ResponseContractConfig>,
 ) -> (Arc<AppState>, crate::gateway::router::tests::FixtureDir) {
@@ -88,7 +88,7 @@ async fn settled_task_with(
     (task, settled, entries, mock.calls())
 }
 
-async fn settled_task(
+pub(super) async fn settled_task(
     answer: Answer,
     contract: Option<ResponseContractConfig>,
 ) -> (String, Value, Vec<Value>) {
@@ -98,12 +98,12 @@ async fn settled_task(
     (task, settled, entries)
 }
 
-fn clean_answer() -> Answer {
+pub(super) fn clean_answer() -> Answer {
     Answer::Result(json!({"content": [{"type": "text", "text": "ok"}], "isError": false}))
 }
 
 /// The task's `task_settlement` records.
-fn settlements<'a>(entries: &'a [Value], task: &str) -> Vec<&'a Value> {
+pub(super) fn settlements<'a>(entries: &'a [Value], task: &str) -> Vec<&'a Value> {
     entries
         .iter()
         .filter(|entry| entry["route"] == "task_settlement" && entry["task_id"] == task)
@@ -213,4 +213,67 @@ async fn a_task_read_after_a_dispatch_refusal_records_no_refusal() {
         })
         .collect();
     assert!(refused.is_empty(), "{refused:#?}");
+}
+
+/// A capability set named [`BACKEND`] holding [`TOOL`], whose endpoint is a
+/// loopback literal: the capability destination check refuses every call.
+fn loopback_capability() -> Arc<crate::capability::CapabilityBackend> {
+    let caps = crate::capability::CapabilityBackend::new(
+        BACKEND,
+        Arc::new(crate::capability::CapabilityExecutor::new()),
+    );
+    let yaml = format!(
+        "name: {TOOL}\ndescription: Test capability\nproviders:\n  primary:\n    \
+         service: rest\n    config:\n      base_url: http://127.0.0.1:9\n      path: /echo\n"
+    );
+    caps.register_capability(crate::capability::parse_capability(&yaml).expect("capability"))
+        .expect("registered");
+    Arc::new(caps)
+}
+
+/// A destination refusal inside the worker's dispatch (a capability whose
+/// endpoint is a loopback literal) is tied to its task as a policy refusal
+/// is: one settlement record saying refused, carrying the SSRF refusal's
+/// code, joined to the worker's dispatch record by trace. The refusal reaches
+/// the task as an `isError` result, which the settlement reads as refused
+/// only because the dispatch cell says so.
+#[tokio::test]
+async fn a_destination_refusal_in_the_dispatch_is_tied_to_its_task() {
+    use crate::gateway::router::route_matrix_driver_tests::response::{delivery_rows, temp_log};
+    let (_dir, log) = temp_log(None);
+    let (state, _store) = contract_state(Arc::clone(&log), None).await;
+    state.meta_mcp.set_capabilities(loopback_capability());
+    let created = post(
+        &state,
+        "key-a",
+        task_invoke(2, "destination-refusal", json!({})),
+    )
+    .await;
+    let task = task_id(&created);
+    let settled = poll_until_terminal(&state, "key-a", &task).await;
+    // The capability's refusal is delivered as an `isError` result, so the
+    // task completes carrying it.
+    assert!(
+        settled.to_string().contains("SSRF blocked"),
+        "premise: the dispatch was refused: {settled}"
+    );
+    let _ = delivery_rows(&log).await;
+    let entries: Vec<Value> = std::fs::read_to_string(log.path())
+        .unwrap_or_default()
+        .lines()
+        .filter_map(|line| serde_json::from_str(line).ok())
+        .collect();
+    let records = settlements(&entries, &task);
+    let [record] = records.as_slice() else {
+        panic!("task {task}: one task_settlement record: {entries:#?}");
+    };
+    assert_eq!(record["response_effect"], "refused", "{record}");
+    assert_eq!(record["error_code"], -32600, "{record}");
+    let trace = &record["trace_id"];
+    assert!(
+        entries
+            .iter()
+            .any(|entry| entry["route"] == "meta" && &entry["trace_id"] == trace),
+        "the record joins the worker's dispatch record by trace: {entries:#?}"
+    );
 }

@@ -11,7 +11,9 @@ use axum::http::{Request, StatusCode};
 use serde_json::Value;
 use tower::ServiceExt;
 
-use super::{scoped_auth_config, test_router_app_state_with_auth_and_config};
+use super::{
+    full_admin_auth_config, scoped_auth_config, test_router_app_state_with_auth_and_config,
+};
 use crate::counters::{Call, CounterStore, Label, MarkerKind, Tally};
 use crate::gateway::router::create_router;
 
@@ -26,7 +28,12 @@ async fn state(
     crate::gateway::router::tests::FixtureDir,
 ) {
     let (state, dir) = test_router_app_state_with_auth_and_config(
-        &scoped_auth_config(admin),
+        // The history routes are gateway-wide: the admin holds every backend.
+        &if admin {
+            full_admin_auth_config()
+        } else {
+            scoped_auth_config(false)
+        },
         crate::config::Config::default(),
     )
     .await;
@@ -257,7 +264,7 @@ async fn t42_no_secret_and_no_caller_chosen_name_in_anything_u1_writes() {
 #[tokio::test]
 async fn t41_without_a_store_both_routes_say_counting_is_off() {
     let (state, _dir) = test_router_app_state_with_auth_and_config(
-        &scoped_auth_config(true),
+        &full_admin_auth_config(),
         crate::config::Config::default(),
     )
     .await;

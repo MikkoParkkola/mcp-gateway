@@ -25,6 +25,22 @@ pub(super) async fn drain_list_pages(
     transport: &dyn crate::transport::Transport,
     backend: &str,
     family: &ListFamily,
+    call: (&[(String, String)], Option<&str>),
+    seen: Option<&parking_lot::Mutex<Vec<Value>>>,
+) -> Result<(Option<Value>, bool)> {
+    // Not every drain runs inside its backend's send (an inline catalogue
+    // fill calls the transport directly), so the drain names it.
+    crate::transport::notify_ingress::in_backend(
+        backend.into(),
+        drain_pages(transport, backend, family, call, seen),
+    )
+    .await
+}
+
+async fn drain_pages(
+    transport: &dyn crate::transport::Transport,
+    backend: &str,
+    family: &ListFamily,
     (headers, identity_key): (&[(String, String)], Option<&str>),
     seen: Option<&parking_lot::Mutex<Vec<Value>>>,
 ) -> Result<(Option<Value>, bool)> {
@@ -57,7 +73,7 @@ pub(super) async fn drain_list_pages(
             .request_with_headers(family.method, params, headers, identity_key, permission)
             .await?;
         if let Some(error) = response.error {
-            return Err(Error::json_rpc(error.code, error.message));
+            return Err(page_error(error));
         }
         // Readable: a string cursor or none; the list an array, or absent
         // beside a cursor. A mistyped cursor would read as the last page.
@@ -144,4 +160,13 @@ pub(super) async fn drain_list_pages(
         );
     }
     Ok((merged, stop.is_some() || unreadable))
+}
+
+/// A backend's own error frame on a list page: the backend's error, its data
+/// dropped as it always was here, so the error the caller sees is unchanged.
+fn page_error(error: crate::protocol::JsonRpcError) -> Error {
+    Error::backend_json_rpc(crate::protocol::JsonRpcError {
+        data: None,
+        ..error
+    })
 }

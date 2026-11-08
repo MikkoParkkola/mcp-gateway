@@ -155,7 +155,7 @@ async fn capability_backend() -> (Arc<CapabilityBackend>, tempfile::TempDir) {
 fn grant_to_u1() -> IdentityGrant {
     IdentityGrant {
         grant_id: "g-u1".to_string(),
-        subject: GrantSubject::new("api_key", "u1", Some("u1".to_string())),
+        subject: GrantSubject::for_test("api_key", "u1", Some("u1".to_string())),
         agent: GrantAgent::Any,
         capability: "cap_granted".to_string(),
         tool: None,
@@ -198,6 +198,8 @@ fn keys() -> Vec<ApiKeyConfig> {
         key("alpha-key", &["alpha", "caps"]),
         key("alpha-only", &["alpha"]),
         key("both-key", &["alpha", "beta", "caps"]),
+        // Scoped to a name no backend registers, beside a registered one.
+        key("gamma-key", &["alpha", "beta", "gamma"]),
         ApiKeyConfig {
             allowed_tools: Some(vec!["alpha_read".to_string()]),
             ..key("read-key", &["*"])
@@ -280,14 +282,15 @@ pub(super) async fn fixture_with(auth: Auth, tune: impl FnOnce(MetaMcp) -> MetaM
     meta.set_identity_grants(LocalIdentityGrantStore::from_grants([grant_to_u1()]));
     let state_mut = Arc::get_mut(&mut state).expect("state is uniquely owned here");
     state_mut.meta_mcp = Arc::new(meta);
-    state_mut.tool_policy = Arc::new(crate::security::ToolPolicy::from_config(
-        &crate::security::ToolPolicyConfig {
-            enabled: true,
-            deny: vec!["alpha:alpha_write".to_string()],
-            use_default_deny: false,
-            ..Default::default()
-        },
-    ));
+    // The router judges under the published generation's policy.
+    let mut config = (*state_mut.live_config.get()).clone();
+    config.security.tool_policy = crate::security::ToolPolicyConfig {
+        enabled: true,
+        deny: vec!["alpha:alpha_write".to_string()],
+        use_default_deny: false,
+        ..Default::default()
+    };
+    state_mut.live_config.set(config);
     Fixture {
         router: create_router(Arc::clone(&state)),
         state,

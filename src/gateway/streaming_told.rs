@@ -192,7 +192,7 @@ impl ViewSubject {
                 // and a changing one must not mint a new view per request.
                 self.grant_subject
                     .as_ref()
-                    .map(|g| (g.authority.as_str(), g.subject.as_str())),
+                    .map(|g| (g.authority(), g.subject())),
                 // The agent's identity only: its scopes are judged live at
                 // every decision, so a scope change must not mint a new view
                 // a same-session listing would miss (MIK-8377).

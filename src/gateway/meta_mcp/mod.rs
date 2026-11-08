@@ -97,6 +97,7 @@ pub(in crate::gateway::meta_mcp) mod publish_gate;
 pub(crate) use dispatch_names::is_composite_meta_tool;
 mod effects;
 mod events_hook;
+mod first_fill;
 pub(crate) mod grant_audit;
 mod interim_promotion;
 #[cfg(test)]
@@ -154,6 +155,7 @@ mod call_dispatch;
 mod caller_context;
 mod construction;
 mod handlers;
+pub(crate) mod hiding;
 pub(crate) mod passthrough;
 mod session_tools;
 pub use caller_context::MetaMcpCallerContext;
@@ -192,7 +194,13 @@ pub struct MetaMcp {
     /// The web UI's open decisions; set by the HTTP server.
     #[cfg(feature = "webui")]
     pub(super) decisions: std::sync::OnceLock<Arc<crate::decisions::Shared>>,
-    pub(super) capabilities: RwLock<Option<Arc<CapabilityBackend>>>,
+    /// The client-config discovery cache the web UI's discovery route, the
+    /// radar and the decision set share; set by the HTTP server.
+    #[cfg(feature = "webui")]
+    pub(super) discovery_cache: std::sync::OnceLock<Arc<crate::discovery::listing::DiscoveryCache>>,
+    /// Shared with the firewall's folder check, which classifies a call by
+    /// the capability backend attached now, not the one at startup.
+    pub(super) capabilities: Arc<RwLock<Option<Arc<CapabilityBackend>>>>,
     pub(super) cache: Option<Arc<ResponseCache>>,
     pub(super) default_cache_ttl: Duration,
     pub(super) idempotency_cache: Option<Arc<IdempotencyCache>>,
@@ -238,6 +246,9 @@ pub struct MetaMcp {
     session_lifecycle:
         std::sync::OnceLock<std::sync::Weak<crate::gateway::session_lifecycle::SessionLifecycle>>,
     pub(super) reload_context: RwLock<Option<Arc<ReloadContext>>>,
+    /// The live config built at startup, with or without a config file, so
+    /// every record names a revision (a reload context shares the same one).
+    pub(super) startup_live_config: std::sync::OnceLock<Arc<crate::config_reload::LiveConfig>>,
     /// End-user identity-propagation strategy (MIK-6704 / ADR-007). `Some` when
     /// at least one backend is configured for propagation; the dispatch path
     /// uses it to mint a per-user credential for such backends. `None` disables
@@ -619,7 +630,13 @@ pub(crate) fn publish_identity_grants(
     sink: &RwLock<LocalIdentityGrantStore>,
     epoch: &AtomicU64,
     grants: LocalIdentityGrantStore,
+    key: Option<&crate::security::rule_id::RuleKey>,
 ) {
+    // Keyed before the swap, so no reader sees the new rows without ids.
+    let grants = match key {
+        Some(key) => grants.with_rule_ids(key),
+        None => grants,
+    };
     let mut lock = sink.write();
     *lock = grants;
     let prev = epoch.fetch_add(1, Ordering::Release);
@@ -749,6 +766,12 @@ mod slot_verdict_listing_tests;
 mod slot_verdict_listing_variant_tests;
 #[cfg(test)]
 mod slot_verdict_tests;
+/// Each refused exit of a stored read names the check that refused it.
+#[cfg(test)]
+mod stored_refusal_exit_tests;
+/// A withheld task notification names the check that refused its stored output.
+#[cfg(test)]
+mod task_notify_refused_by_tests;
 #[cfg(test)]
 mod task_notify_tests;
 /// MIK-8340 row 10: a listing follows the caller's own catalogue.

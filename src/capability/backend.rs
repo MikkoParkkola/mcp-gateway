@@ -179,6 +179,15 @@ pub struct CapabilityBackend {
     listing: parking_lot::Mutex<Option<Vec<String>>>,
     /// Wakes the listing watch when the catalogue changes.
     listing_wake: tokio::sync::Notify,
+    /// Test-only: the HTTP startup scan panics after its first directory,
+    /// so a row can prove the scan's exit guard still completes it.
+    #[cfg(test)]
+    pub(crate) scan_panics_after_first_dir: std::sync::atomic::AtomicBool,
+    /// Test-only: how many pin-mismatch records existed at the moment the
+    /// initial scan was marked complete, so a row can prove the startup
+    /// check ran before readiness without racing it.
+    #[cfg(test)]
+    pub(crate) records_at_scan_complete: std::sync::OnceLock<usize>,
 }
 
 /// Record of a detected rug-pull event for a single capability.
@@ -212,6 +221,10 @@ impl CapabilityBackend {
             catalogue_generation: std::sync::atomic::AtomicU64::new(0),
             listing: parking_lot::Mutex::new(None),
             listing_wake: tokio::sync::Notify::new(),
+            #[cfg(test)]
+            scan_panics_after_first_dir: std::sync::atomic::AtomicBool::new(false),
+            #[cfg(test)]
+            records_at_scan_complete: std::sync::OnceLock::new(),
         }
     }
 
@@ -539,14 +552,6 @@ impl CapabilityBackend {
         self.capabilities.read().get(name).cloned()
     }
 
-    /// The definition and the MCP revocation generation, read under one lock so
-    /// an unload cannot fall between them.
-    fn get_with_generation(&self, name: &str) -> Option<(CapabilityDefinition, u64)> {
-        let caps = self.capabilities.read();
-        let generation = self.executor.mcp_generation(name);
-        caps.get(name).cloned().map(|def| (def, generation))
-    }
-
     /// List all capability names in insertion order.
     pub fn list(&self) -> Vec<String> {
         self.capabilities
@@ -596,7 +601,9 @@ impl CapabilityBackend {
             .get_with_generation(name)
             .ok_or_else(|| crate::Error::Config(format!("Capability not found: {name}")))?;
         context.mcp_generation = Some(generation);
-        super::read_only_call::refuse_unless_read_only(&capability)?;
+        // The read-only refusal is the call's answer: its record says so.
+        super::read_only_call::refuse_unless_read_only(&capability)
+            .inspect_err(|_| crate::gateway::delivery_facts::refused_while_vouched())?;
         // U12: a web UI call is judged by the definition about to run, so a
         // reload after the dispatch gate cannot turn it into a write.
         #[cfg(feature = "webui")]
@@ -778,25 +785,9 @@ pub(crate) use listing::listing_watches_started;
 #[path = "backend_rug_pull.rs"]
 mod rug_pull;
 
-/// Status information for a capability backend
-#[derive(Debug, Clone, serde::Serialize)]
-pub struct CapabilityBackendStatus {
-    /// Backend name
-    pub name: String,
-    /// Number of loaded capabilities
-    pub capabilities_count: usize,
-    /// List of capability names
-    pub capabilities: Vec<String>,
-    /// Health-tracker liveness for outbound execution (MIK-5080). Flips false
-    /// after consecutive execution failures (e.g. upstream timeouts).
-    pub healthy: bool,
-    /// Consecutive execution failures recorded by the health tracker.
-    pub consecutive_failures: u64,
-    /// 95th percentile execution latency in milliseconds, if any samples exist.
-    pub latency_p95_ms: Option<u64>,
-    /// Whether the startup scan has loaded every directory (MIK-7268).
-    pub loaded: bool,
-}
+#[path = "backend_status.rs"]
+mod status;
+pub use status::CapabilityBackendStatus;
 
 #[cfg(test)]
 #[path = "backend_tests.rs"]

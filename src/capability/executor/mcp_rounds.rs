@@ -47,10 +47,8 @@ pub(super) async fn run_prepare(
 /// was sent and free its key, but the earlier round already ran: it is
 /// reported as a transport failure, which settles uncertain.
 pub(super) fn after_dispatch(error: Error, dispatched: bool) -> Error {
-    if dispatched && error.is_pre_dispatch() {
-        Error::Transport(format!(
-            "after an earlier round reached the backend: {error}"
-        ))
+    if dispatched {
+        error.after_a_send("after an earlier round reached the backend")
     } else {
         error
     }

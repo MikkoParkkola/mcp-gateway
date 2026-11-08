@@ -11,15 +11,10 @@
 use std::io::Write;
 use std::path::Path;
 
+use mcp_gateway::upgrade_notice::webhook::ITEM;
+
 /// Present once this install has had the notice.
 const MARKER: &str = ".notice-4.0.0-webhook-notify";
-
-/// The notice text, also carried as an item of the 4.0.0 release notice.
-pub(super) const ITEM: &str = "Webhook `notify` now defaults to false, and an \
-enabled webhook reaches only sessions whose API key may access the capability \
-backend. A 3.x webhook that relied on the old default is still acknowledged \
-but no longer notifies: add `notify: true` to each webhook that should reach \
-MCP sessions.";
 
 /// Record that this install has had, or needs no, notice.
 pub(super) fn mark(data_dir: &Path) -> std::io::Result<()> {

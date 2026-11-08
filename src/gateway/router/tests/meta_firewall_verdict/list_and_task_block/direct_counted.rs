@@ -31,6 +31,8 @@ fn rule(tool_match: &str, action: FirewallAction) -> FirewallRule {
         servers: None,
         keys: None,
         except: None,
+        allowed_roots: None,
+        path_args: None,
     }
 }
 
@@ -39,12 +41,12 @@ fn rule(tool_match: &str, action: FirewallAction) -> FirewallRule {
 struct Logged {
     wired: Wired,
     path: PathBuf,
-    _dir: tempfile::TempDir,
+    _dir: std::sync::Arc<tempfile::TempDir>,
 }
 
 async fn logged(description: String, rules: Vec<FirewallRule>) -> Logged {
     let mut wired = listing_state(description, rules).await;
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = dir.path().join("audit.jsonl");
     let log = TransparencyLogger::open(Arc::new(TransparencyLogConfig {
         enabled: true,

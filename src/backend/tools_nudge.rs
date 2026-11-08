@@ -301,10 +301,42 @@ impl super::Backend {
             &mut tools,
         );
         let entry = self.shared_entry();
+        // Emptied first and published last: until then no name reads
+        // undeclared from a mix of the old and new sets.
+        entry.effect_listed.write().clear();
         *entry.resend_permitted.write() = prepared.resend_permitted;
         *entry.hint_declared.write() = prepared.hint_declared;
+        *entry.write_declared.write() = prepared.write_declared;
+        *entry.effect_listed.write() = prepared.listed;
         self.commit_verdicts("", super::Listing::Complete, prepared.verdicts)
             .emit();
+        entry.tools_cache.replace(tools, || ());
+    }
+
+    /// Set the effect sets and the held list of the slot `binding` selects
+    /// (admitted already) as an accepted fill of `tools` would, so a row can
+    /// give two slots of one backend two different declarations, and a call
+    /// on the slot finds its list fresh instead of listing it again.
+    #[cfg(test)]
+    pub(crate) fn declare_slot_effects_for_test(
+        &self,
+        binding: Option<&str>,
+        mut tools: Vec<Tool>,
+    ) {
+        let prepared = super::prepare_tool_metadata(
+            &self.name,
+            self.flagged_tool_pins(),
+            super::Judging::Judge,
+            &mut tools,
+        );
+        let entry = self
+            .pooled_entry(&self.pool_key_for(binding))
+            .expect("test slot admitted");
+        entry.effect_listed.write().clear();
+        *entry.read_only_declared.write() = prepared.read_only_declared;
+        *entry.hint_declared.write() = prepared.hint_declared;
+        *entry.write_declared.write() = prepared.write_declared;
+        *entry.effect_listed.write() = prepared.listed;
         entry.tools_cache.replace(tools, || ());
     }
 

@@ -177,7 +177,7 @@ fn context<'a>(
         stdio_nonce: None,
         caller_key: None,
         verified_identity: who.identity.as_ref(),
-        is_admin: false,
+        admin: crate::gateway::authz::AdminStanding::None,
         surface_request: crate::gateway::recovery::SurfaceRequest::Configured,
         input_capabilities: crate::protocol::meta::Declared::NONE,
         retry: &crate::protocol::mrtr::NO_RETRY,
@@ -185,6 +185,7 @@ fn context<'a>(
         task: None,
         era: crate::protocol::meta::Era::Legacy,
         channel: &crate::gateway::input_bridge::NoClientChannel,
+        generation: None,
     }
 }
 
@@ -216,7 +217,7 @@ fn oidc_caller() -> Caller {
             .to_owned(),
         account: actor,
         authenticated: true,
-        grant: Some(GrantSubject::new(
+        grant: Some(GrantSubject::for_test(
             "https://a.example",
             "123",
             Some("x@corp.com".to_string()),
@@ -465,6 +466,20 @@ mod canary;
 mod tenants;
 // MIK-8520: a surfaced replay records the server it was admitted for.
 mod surfaced_replay;
+// MIK-8914.API2A.13: refusals answered with a non-refusal code name their check.
+mod decision_kinds;
+// A dispatched call records the effect its tool declared.
+mod effect_records;
+// A completed-execution replay records the stored slot's effect now.
+mod replay_effects;
+// A tool-policy refusal names its rule.
+mod rule_ids;
+// A call to a backend that does not exist records not_found.
+mod not_found;
+// The decision fixture table's meta-route refusal rows.
+mod fixture_rows;
+// The decision fixture table's meta-route allow rows.
+mod fixture_allow_rows;
 
 /// MIK-7735. A backend's own `-32001` / `-32004` answer is the peer's
 /// refusal, not the gateway's policy: the record says `error`, with the
@@ -513,6 +528,8 @@ async fn a_replay_keeps_the_stored_class_of_its_first_execution() {
                 crate::gateway::meta_mcp::admission::ReplayFacts {
                     audit: Some(ReplayAudit::new(stored, None)),
                     server: None,
+                    tool: None,
+                    slot: None,
                 },
             )
             .await;

@@ -5,6 +5,8 @@
 //! again writes no new record within the window; a changed decision, such as
 //! a revoked grant, is written at once.
 
+use std::sync::Arc;
+
 use serde_json::json;
 
 use super::grant_audit::with_grant_slot;
@@ -69,7 +71,10 @@ async fn poll_as(
 
 #[tokio::test]
 async fn polling_a_finished_task_records_an_unchanged_decision_once() {
-    let (endpoint, dir) = (Endpoint::start(false).await, tempfile::tempdir().unwrap());
+    let (endpoint, dir) = (
+        Endpoint::start(false).await,
+        Arc::new(tempfile::tempdir().unwrap()),
+    );
     let meta = gateway(
         &endpoint,
         vec![grant("g-poll", ALICE, ALICE)],
@@ -147,7 +152,10 @@ fn an_unchanged_decision_is_written_again_after_the_window() {
 /// the same caller and its unchanged decision is not written again.
 #[tokio::test]
 async fn a_relabelled_subject_is_the_same_caller() {
-    let (endpoint, dir) = (Endpoint::start(false).await, tempfile::tempdir().unwrap());
+    let (endpoint, dir) = (
+        Endpoint::start(false).await,
+        Arc::new(tempfile::tempdir().unwrap()),
+    );
     let meta = gateway(
         &endpoint,
         vec![grant("g-poll", ALICE, ALICE)],
@@ -158,7 +166,7 @@ async fn a_relabelled_subject_is_the_same_caller() {
     let alice = api_key("alice");
     for label in [Some("alice"), Some("Alice Renamed"), None] {
         let mut caller = context(&alice);
-        caller.grant_subject = Some(GrantSubject::new(
+        caller.grant_subject = Some(GrantSubject::for_test(
             "api_key",
             "alice",
             label.map(str::to_owned),
@@ -174,7 +182,10 @@ async fn a_relabelled_subject_is_the_same_caller() {
 /// Alice read is still a repeat of the first.
 #[tokio::test]
 async fn each_caller_field_keeps_callers_apart() {
-    let (endpoint, dir) = (Endpoint::start(false).await, tempfile::tempdir().unwrap());
+    let (endpoint, dir) = (
+        Endpoint::start(false).await,
+        Arc::new(tempfile::tempdir().unwrap()),
+    );
     let meta = gateway(
         &endpoint,
         vec![grant("g-poll", ALICE, ALICE)],
@@ -188,7 +199,7 @@ async fn each_caller_field_keeps_callers_apart() {
     let mut base = context(&alice);
     base.agent_id = Some(jwt);
     let subjects = [("api_key", "bob"), ("oidc", "alice")]
-        .map(|(a, s)| Some(GrantSubject::new(a, s, Some("alice".to_owned()))));
+        .map(|(a, s)| Some(GrantSubject::for_test(a, s, Some("alice".to_owned()))));
     let mut variants = vec![];
     for subject in subjects {
         let mut c = context(&alice);
@@ -224,7 +235,10 @@ async fn each_caller_field_keeps_callers_apart() {
 async fn a_suppressed_repeat_note_is_not_published() {
     use std::sync::{Arc, Mutex};
 
-    let (endpoint, dir) = (Endpoint::start(false).await, tempfile::tempdir().unwrap());
+    let (endpoint, dir) = (
+        Endpoint::start(false).await,
+        Arc::new(tempfile::tempdir().unwrap()),
+    );
     let meta = gateway(
         &endpoint,
         vec![],

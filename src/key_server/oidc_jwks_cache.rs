@@ -270,7 +270,9 @@ impl JwksCache {
         let fallback = default_jwks_uri(issuer);
         let ttl = self.ttl.min(self.fallback_ttl);
         match self.discovery.entry(issuer.to_string()) {
-            Entry::Occupied(entry) if !entry.get().is_stale() => entry.get().jwks_uri.clone(),
+            Entry::Occupied(entry) if !entry.get().is_stale() => {
+                return entry.get().jwks_uri.clone();
+            }
             entry => {
                 let record = CachedDiscovery {
                     jwks_uri: fallback.clone(),
@@ -285,14 +287,15 @@ impl JwksCache {
                         slot.insert(record);
                     }
                 }
-                warn!(
-                    issuer = %issuer,
-                    error = %why,
-                    "OIDC discovery for {issuer} failed; using {fallback}"
-                );
-                fallback
             }
         }
+        // Logged once the map entry, and its shard lock, is released.
+        warn!(
+            issuer = %issuer,
+            error = %why,
+            "OIDC discovery for {issuer} failed; using {fallback}"
+        );
+        fallback
     }
 
     // A forced refresh inside the cooldown serves the cached keys.

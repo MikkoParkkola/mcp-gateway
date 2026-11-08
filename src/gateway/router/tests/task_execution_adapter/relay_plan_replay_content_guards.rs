@@ -389,6 +389,8 @@ fn g11_router(rig: &Rig, redact: bool) -> Arc<Firewall> {
                     servers: None,
                     keys: None,
                     except: None,
+                    allowed_roots: None,
+                    path_args: None,
                 }],
                 ..FirewallConfig::default()
             },
@@ -411,6 +413,7 @@ fn with_unredacted_router(rig: Rig) -> Rig {
         beta,
     } = rig;
     let mut app = Arc::try_unwrap(state).unwrap_or_else(|_| panic!("fixture state is exclusive"));
+    crate::gateway::router::firewall_publish_fixture::publish_firewall(&app, &router_fw);
     app.firewall = Some(router_fw);
     Rig {
         state: Arc::new(app),
@@ -429,18 +432,23 @@ async fn redacting_gateway(
     let router_fw = g11_router(rig, true);
     let admission = Arc::clone(rig.state.meta_mcp.execution_admission());
     let shared = Arc::clone(&rig.relay);
-    let (on, on_store) = super::super::meta_fixture::test_router_app_state_with_meta_and_firewall(
-        &plan_auth(),
-        None,
-        Some(router_fw),
-        move |mut meta| {
-            meta.share_execution_admission_for_test(admission);
-            meta.share_keyring_with_for_test(&shared);
-            meta.set_firewall(Some(shared));
-            meta
-        },
-    )
-    .await;
+    let (mut on, on_store) =
+        super::super::meta_fixture::test_router_app_state_with_meta_and_firewall(
+            &plan_auth(),
+            None,
+            Some(router_fw),
+            move |mut meta| {
+                meta.share_execution_admission_for_test(admission);
+                meta.share_keyring_with_for_test(&shared);
+                meta.set_firewall(Some(shared));
+                meta
+            },
+        )
+        .await;
+    crate::security::firewall::collusion_live_rig::pair_state_with_meta(
+        &mut on,
+        crate::security::firewall::collusion_live_rig::Layer::CollusionOnly,
+    );
     register(&on, BACKEND, &answering("ok"));
     register(&on, ALPHA, &rig.alpha);
     register(&on, BETA, &rig.beta);

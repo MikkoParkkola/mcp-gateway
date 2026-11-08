@@ -458,8 +458,8 @@ async fn an_explicit_jwks_uri_overrides_both() {
 }
 
 /// D11: a derived discovery that times out falls back. The handler never
-/// answers; the client's own timeout ends the request, so a slow host only
-/// delays the row and cannot change its outcome.
+/// answers; the client's own timeout ends the request. The same 2 s bounds
+/// the fallback fetch, so a heavily loaded host could fail the row.
 #[tokio::test]
 async fn a_discovery_timeout_falls_back() {
     let fx = start().await;

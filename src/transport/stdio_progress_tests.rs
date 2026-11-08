@@ -14,7 +14,7 @@ use super::*;
 async fn a_message_stamped_with_a_registered_progress_token_is_not_delivered() {
     let transport = make_transport("cat");
     let stamped = r#"{"jsonrpc":"2.0","method":"notifications/message","params":{"progressToken":"tok-a","level":"debug","data":"x"}}"#;
-    let (call, mut rx) = crate::transport::notification_sink::scope(None, async {
+    let (call, mut rx) = crate::transport::notify_ingress::test_support::scope(None, async {
         let _ = transport.register_progress_token("tok-a");
         transport
             .handle_response(stamped)
@@ -43,16 +43,17 @@ async fn stdio_routes_a_progress_notification_to_only_the_call_that_supplied_the
     let transport = std::sync::Arc::new(make_transport("cat"));
     let reader = std::sync::Arc::clone(&transport);
 
-    let (call, mut tok_b_rx) = crate::transport::notification_sink::scope(None, async {
+    let (call, mut tok_b_rx) = crate::transport::notify_ingress::test_support::scope(None, async {
         // tok-a's caller gets its own scope, so a misroute is visible. Both
         // registrations in one scope share a sender, and a frame delivered
         // to the wrong destination then arrives on the right receiver --
         // the isolation this row exists to prove would be unfalsifiable.
         // The sender is cloned into the map at registration, so it outlives
         // the scope that supplied it.
-        let (tok_a_call, tok_a_rx) = crate::transport::notification_sink::scope(None, async {
-            let _ = transport.register_progress_token("tok-a");
-        });
+        let (tok_a_call, tok_a_rx) =
+            crate::transport::notify_ingress::test_support::scope(None, async {
+                let _ = transport.register_progress_token("tok-a");
+            });
         tok_a_call.await;
 
         let _ = transport.register_progress_token("tok-b");
@@ -103,11 +104,11 @@ async fn stdio_refuses_to_reroute_a_progress_token_that_is_already_live() {
     // a refused insert from an overwriting one -- both would deliver to
     // the same receiver.
     let (incumbent_call, mut incumbent_rx) =
-        crate::transport::notification_sink::scope(None, async {
+        crate::transport::notify_ingress::test_support::scope(None, async {
             let _owner = ProgressRegistrationGuard::register(&transport, "tok-a");
 
             let (newcomer_call, mut newcomer_rx) =
-                crate::transport::notification_sink::scope(None, async {
+                crate::transport::notify_ingress::test_support::scope(None, async {
                     let refused = ProgressRegistrationGuard::register(&transport, "tok-a");
                     assert!(
                         !refused.owns_registration,
@@ -182,7 +183,7 @@ async fn stdio_delivers_a_notification_into_the_callers_sink() {
     let t = make_transport("cat");
     let params = serde_json::json!({ "_meta": { "progressToken": "tok-live" } });
 
-    let ((), drained) = crate::transport::notification_sink::collect(None, async {
+    let ((), drained) = crate::transport::notify_ingress::test_support::collect(None, async {
         let token = request_progress_token(Some(&params)).expect("token");
         let _ = t.register_progress_token(&token);
         t.handle_response(&progress_line("tok-live", 3)).unwrap();
@@ -193,13 +194,33 @@ async fn stdio_delivers_a_notification_into_the_callers_sink() {
     assert_eq!(drained[0].method, "notifications/progress");
 }
 
+/// stdio in-call: the reader task's delivery strips what
+/// the backend planted, as the batched path does.
+#[tokio::test]
+async fn stdio_delivery_strips_what_a_backend_planted_on_a_progress_frame() {
+    use crate::protocol::reserved_members::test_support::{
+        assert_progress_stripped, planted_progress,
+    };
+    let t = make_transport("cat");
+    let ((), drained) = crate::transport::notify_ingress::test_support::collect(None, async {
+        let _ = t.register_progress_token("tok-live");
+        t.handle_response(&planted_progress("tok-live").to_string())
+            .unwrap();
+    })
+    .await;
+
+    assert_eq!(drained.len(), 1, "the progress frame must arrive");
+    let params = drained[0].params.as_ref().expect("params");
+    assert_progress_stripped("stdio in-call", "tok-live", params);
+}
+
 /// Negative control for stdio: a notification whose token nobody registered
 /// reaches no sink, even with a call in flight that has one.
 #[tokio::test]
 async fn stdio_never_attributes_a_stray_token_to_an_open_call() {
     let t = make_transport("cat");
 
-    let ((), drained) = crate::transport::notification_sink::collect(None, async {
+    let ((), drained) = crate::transport::notify_ingress::test_support::collect(None, async {
         let _ = t.register_progress_token("tok-mine");
         t.handle_response(&progress_line("tok-stray", 1)).unwrap();
     })
@@ -219,7 +240,7 @@ async fn stdio_request_retires_its_registration_even_when_the_write_fails() {
     let t = make_transport("cat"); // never connected: the write fails
     let params = serde_json::json!({ "_meta": { "progressToken": "tok-leak" } });
 
-    let (result, drained) = crate::transport::notification_sink::collect(None, async {
+    let (result, drained) = crate::transport::notify_ingress::test_support::collect(None, async {
         t.request("tools/call", Some(params)).await
     })
     .await;
@@ -247,7 +268,7 @@ async fn stdio_request_retires_its_registration_even_when_the_write_fails() {
 async fn a_dropped_progress_registration_retires_its_destination() {
     // GIVEN a registration holding one captured notification.
     let t = make_transport("cat");
-    let ((), drained) = crate::transport::notification_sink::collect(None, async {
+    let ((), drained) = crate::transport::notify_ingress::test_support::collect(None, async {
         let guard = ProgressRegistrationGuard::register(&t, "tok-cancel");
         t.handle_response(&progress_line("tok-cancel", 1)).unwrap();
 
@@ -275,7 +296,7 @@ async fn a_dropped_progress_registration_retires_its_destination() {
 async fn stdio_drops_a_progress_notification_no_caller_asked_for() {
     let t = make_transport("cat");
 
-    let ((), drained) = crate::transport::notification_sink::collect(None, async {
+    let ((), drained) = crate::transport::notify_ingress::test_support::collect(None, async {
         let _ = t.register_progress_token("tok-a");
         t.handle_response(&progress_line("tok-stray", 3)).unwrap();
     })
@@ -288,5 +309,97 @@ async fn stdio_drops_a_progress_notification_no_caller_asked_for() {
     assert!(
         !t.progress_destinations.contains_key("tok-stray"),
         "and it must not register itself on the way through"
+    );
+}
+
+const NEEDLE: &str = "control-id-secret-5b1e";
+
+/// A transport whose needle set holds [`NEEDLE`].
+fn with_needle() -> std::sync::Arc<StdioTransport> {
+    let transport = make_transport("cat");
+    let needles =
+        crate::security::needles::NeedleSet::with_grace(std::time::Duration::from_secs(3_600));
+    needles.insert("b", NEEDLE);
+    transport.attach_needles(std::sync::Arc::new(needles));
+    transport
+}
+
+/// DELTA-5 (T1.23): a progress token equal to an injected value
+/// routes by the token the backend sent; the caller's copy is scrubbed.
+#[tokio::test]
+async fn a_progress_token_equal_to_a_secret_routes_and_arrives_scrubbed() {
+    let transport = with_needle();
+    let (call, mut rx) = crate::transport::notify_ingress::test_support::scope(None, async {
+        let _ = transport.register_progress_token(NEEDLE);
+        transport
+            .handle_response(&progress_line(NEEDLE, 1))
+            .expect("a notification must not fail the read loop");
+    });
+    call.await;
+    let got = rx
+        .try_recv()
+        .expect("the frame routes by the token the backend sent");
+    let text = serde_json::to_string(&got.params).unwrap();
+    assert!(
+        !text.contains(NEEDLE),
+        "the caller's copy holds the secret: {text}"
+    );
+}
+
+/// DELTA-5 (T1.23): a subscription tag equal to an injected value
+/// still finds its listen.
+#[tokio::test]
+async fn a_subscription_tag_equal_to_a_secret_still_routes() {
+    use crate::transport::upstream_tap::{KindSet, Requested, UpstreamNote};
+    let transport = with_needle();
+    let requested = Requested {
+        kinds: KindSet {
+            resources_changed: true,
+            ..KindSet::default()
+        },
+        uris: Vec::new(),
+    };
+    let mut rx = transport.taps.listen(&serde_json::json!(NEEDLE), requested);
+    let frame = serde_json::json!({"jsonrpc": "2.0",
+        "method": "notifications/subscriptions/acknowledged",
+        "params": {"notifications": {"resourcesListChanged": true},
+                   "_meta": {"io.modelcontextprotocol/subscriptionId": NEEDLE}}})
+    .to_string();
+    transport
+        .handle_response(&frame)
+        .expect("a notification must not fail the read loop");
+    assert!(
+        matches!(rx.try_recv(), Ok(UpstreamNote::Ack { .. })),
+        "the acknowledgement did not reach its listen"
+    );
+}
+
+/// Lead ruling G9 (stdio): the watch filter compares the scrubbed note, the
+/// URI a client knows. A watcher of the redacted URI gets the update; one
+/// guessing the raw URI does not.
+#[tokio::test]
+async fn the_watch_filter_compares_the_redacted_uri() {
+    use crate::transport::upstream_tap::{UpstreamNote, Watched};
+    let line = serde_json::json!({"jsonrpc": "2.0",
+        "method": "notifications/resources/updated",
+        "params": {"uri": format!("file:///x?k={NEEDLE}")}})
+    .to_string();
+    let redacted = with_needle();
+    let mut rx = redacted
+        .taps
+        .unsolicited(Watched::by(|uri| uri == "file:///x?k=[redacted]"));
+    redacted.handle_response(&line).expect("a notification");
+    let Ok(UpstreamNote::Notice { uri: Some(uri), .. }) = rx.try_recv() else {
+        panic!("the watcher of the redacted URI got nothing");
+    };
+    assert_eq!(uri, "file:///x?k=[redacted]");
+    let raw = with_needle();
+    let mut rx = raw
+        .taps
+        .unsolicited(Watched::by(|uri| uri.contains(NEEDLE)));
+    raw.handle_response(&line).expect("a notification");
+    assert!(
+        rx.try_recv().is_err(),
+        "a watcher guessing the raw URI got it"
     );
 }

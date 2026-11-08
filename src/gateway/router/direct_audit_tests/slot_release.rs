@@ -347,6 +347,7 @@ async fn the_fixtures_firewalls_deliver_a_minted_continuation() {
         signing: None,
         chain_source: crate::protocol::ChainSource::default(),
         chain_nonce: None,
+        generation: None,
     };
     // The router's firewall judges a routed `tools/call`; without one, the
     // Meta-MCP's own does.

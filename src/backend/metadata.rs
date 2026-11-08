@@ -494,7 +494,13 @@ impl Backend {
         loan: Option<&crate::transport::Loan>,
     ) -> Result<Arc<dyn crate::transport::Transport>> {
         let _starting = loan.map(|held| entry.lender.starting(held.id()));
-        self.ensure_entry_started(key).await
+        // A fill's start is not inside a send: its handshake names this
+        // backend here.
+        crate::transport::notify_ingress::in_backend(
+            Arc::clone(&self.notify_origin),
+            self.ensure_entry_started(key),
+        )
+        .await
     }
 
     /// Startup warm-up's fill: recorded on the breaker, never admitted or

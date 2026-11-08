@@ -27,7 +27,15 @@ pub(super) fn dispatch_error_result(
     server: &str,
     surface: MetaSurface,
 ) -> Value {
+    // The delivered answer: the scrub's refusal of an echo records refused.
+    crate::gateway::delivery_facts::echo_refusal_delivered(e);
     audit::note_dispatch_failure(e);
+    // The answer is a tool result, not an error frame: the failure it folds
+    // is still the delivery's, counted with its own origin.
+    crate::gateway::delivery_facts::folded(crate::gateway::health_metrics::RpcError {
+        code: e.to_rpc_code(),
+        origin: e.origin(),
+    });
     let (category, detail) = classify_dispatch_error(e);
     let mut hint = recovery_for_surface(
         category,
@@ -74,7 +82,7 @@ impl super::MetaMcp {
             if self.code_mode_enabled || caller.surface_request == SurfaceRequest::CodeMode {
                 MetaSurface::CodeMode
             } else if self.meta_tool_exposure.is_exposed(REVIVE)
-                && CallerStanding::of_admin_flag(caller.is_admin).permits(REVIVE)
+                && CallerStanding::of(caller.admin).permits(REVIVE)
             {
                 MetaSurface::Standard(Revive::Offered)
             } else {
@@ -118,9 +126,9 @@ pub(super) fn classify_dispatch_error(error: &Error) -> (ErrorCategory, String) 
         // rate limit or transient 5xx is not mislabelled as a param error.
         Error::Protocol(msg) => (classify_from_detail(Some(msg)), msg.clone()),
         // A gateway refusal reads exactly as the JSON-RPC error it replaces.
-        Error::JsonRpc { message, .. } | Error::GatewayRefused { message, .. } => {
-            (ErrorCategory::BackendError, message.clone())
-        }
+        Error::JsonRpc { message, .. }
+        | Error::BackendJsonRpc { message, .. }
+        | Error::GatewayRefused { message, .. } => (ErrorCategory::BackendError, message.clone()),
         // A capability 429 arrives as a typed `Http` error and no longer says
         // "429" in its message, so the prose classifier above cannot see it.
         // Without this arm the hint silently degrades to `BackendError` and the
@@ -144,6 +152,10 @@ pub(in crate::gateway::meta_mcp) enum BudgetOutcome {
     /// rate limiter refused before dispatch (F23). Neither is evidence about
     /// the backend's health, so neither is sampled.
     IgnoredRateLimit,
+    /// The gateway refused the caller ([`super::gate::is_authorization_refusal`]):
+    /// a decision about the caller, no evidence about the backend, so not
+    /// sampled. One caller's refusals must not disable a backend for everyone.
+    IgnoredRefusal,
 }
 
 impl BudgetOutcome {
@@ -187,6 +199,9 @@ impl BudgetOutcome {
 
     /// [`Self::of`] for a dispatch that failed.
     pub(in crate::gateway::meta_mcp) fn of_error(error: &Error) -> Self {
+        if super::gate::is_authorization_refusal(error) {
+            return Self::IgnoredRefusal;
+        }
         // The gateway refused before asking the backend (F23, #2300).
         if error.is_gateway_throttle()
             || crate::gateway::recovery::is_rate_limited(&error.to_string())

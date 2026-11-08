@@ -193,7 +193,7 @@ impl MetaMcp {
             // backend's tool metadata via the static gateway OAuth token on a
             // multi-user gateway. Skip BEFORE backend_tools_for_discovery so the
             // guard precedes any network round-trip (fail-closed = omit).
-            let Some((headers, binding)) = self.tool_credential_for(&backend, caller).await else {
+            let Ok((headers, binding)) = self.tool_credential_for(&backend, caller).await else {
                 continue;
             };
             let backend_killed = self.kill_switch.is_killed(&backend.name);
@@ -310,7 +310,7 @@ impl MetaMcp {
             }
             // INV-2 (MIK-6742): omit isolated backends from tool discovery on a
             // multi-user gateway (fail-closed = omit, not leak).
-            let Some((headers, binding)) = self.tool_credential_for(&backend, caller).await else {
+            let Ok((headers, binding)) = self.tool_credential_for(&backend, caller).await else {
                 continue;
             };
             let backend_killed = self.kill_switch.is_killed(&backend.name);
@@ -435,7 +435,7 @@ impl MetaMcp {
 
         let mut out = build_search_response(&query, &matches, total_found, &suggestions);
         self.add_events_to(&mut out, &query, limit, caller, session_id);
-        self.inspect_discovery_value(&mut out)?;
+        self.inspect_discovery_value(caller.authorizer.generation(), &mut out)?;
         Ok(out)
     }
 
@@ -487,7 +487,11 @@ impl MetaMcp {
         // Code Mode carries the caller's identity + attribution through to
         // dispatch, so an identity-required backend gets the per-user credential
         // just like the direct gateway_invoke path (MIK-6734).
-        self.invoke_tool(&invoke_args, session_id, caller).await
+        let answer = self.invoke_tool(&invoke_args, session_id, caller).await;
+        // The execute delivers its one step's answer as its own, a failure
+        // folded into that answer included.
+        crate::gateway::delivery_facts::step_carried(None);
+        answer
     }
 
     /// List tools from a specific server, or ALL tools if server is omitted.
@@ -534,7 +538,7 @@ impl MetaMcp {
                 "status": if killed { "disabled" } else { "active" },
                 "tools": tools
             });
-            self.inspect_discovery_value(&mut out)?;
+            self.inspect_discovery_value(caller.authorizer.generation(), &mut out)?;
             return Ok(out);
         }
 
@@ -554,8 +558,16 @@ impl MetaMcp {
         // both the verdict and the fetch below. Admissible HERE and not at the
         // shared-credential sites because the fetch that follows runs over the
         // slot this credential selected.
-        let Some((headers, binding)) = self.tool_credential_for(&backend, caller).await else {
-            return Err(Error::BackendNotFound(server.to_string()));
+        // Named alone, a withheld backend is refused when that is the
+        // gateway's decision about the caller, never after a failed mint.
+        let (headers, binding) = match self.tool_credential_for(&backend, caller).await {
+            Ok(credential) => credential,
+            Err(omit) if omit.is_decision() => {
+                return Err(crate::gateway::delivery_facts::refused(
+                    Error::BackendNotFound(server.to_string()),
+                ));
+            }
+            Err(_) => return Err(Error::BackendNotFound(server.to_string())),
         };
 
         let fetched = backend
@@ -576,7 +588,7 @@ impl MetaMcp {
             "status": if killed { "disabled" } else { "active" },
             "tools": tools
         });
-        self.inspect_discovery_value(&mut out)?;
+        self.inspect_discovery_value(caller.authorizer.generation(), &mut out)?;
         Ok(out)
     }
 
@@ -637,7 +649,7 @@ impl MetaMcp {
             }
             // INV-2 (MIK-6742): omit isolated backends from tool discovery on a
             // multi-user gateway (fail-closed = omit, not leak).
-            let Some((headers, binding)) = self.tool_credential_for(&backend, caller).await else {
+            let Ok((headers, binding)) = self.tool_credential_for(&backend, caller).await else {
                 continue;
             };
             let backend_killed = self.kill_switch.is_killed(&backend.name);
@@ -675,7 +687,7 @@ impl MetaMcp {
             "tools": all_tools,
             "total": all_tools.len()
         });
-        self.inspect_discovery_value(&mut out)?;
+        self.inspect_discovery_value(caller.authorizer.generation(), &mut out)?;
         Ok(out)
     }
 
@@ -758,7 +770,7 @@ impl MetaMcp {
 
         let mut out = build_search_response(&query, &matches, total_found, &suggestions);
         self.add_events_to(&mut out, &query, limit, caller, session_id);
-        self.inspect_discovery_value(&mut out)?;
+        self.inspect_discovery_value(caller.authorizer.generation(), &mut out)?;
         Ok(out)
     }
 }

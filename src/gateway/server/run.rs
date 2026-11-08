@@ -9,7 +9,7 @@ use tokio::net::TcpListener;
 use tracing::{debug, info, warn};
 
 use super::Gateway;
-use super::control_plane_store::{build_control_plane_store, control_plane_base};
+use super::control_plane_store::{build_control_plane_store_with_log, control_plane_base};
 #[cfg(not(test))]
 use super::support;
 use super::support::log_startup_banner;
@@ -71,6 +71,7 @@ impl Gateway {
         #[cfg(feature = "metrics")]
         {
             crate::metrics::install();
+            crate::gateway::health_metrics::process::record_start_time(started.wall());
             crate::protocol_revision_telemetry::register_metrics();
         }
 
@@ -79,7 +80,6 @@ impl Gateway {
         // the protocol-revision window saver.
         let BuiltMetaMcp {
             meta_mcp,
-            tool_policy,
             mtls_policy,
             ranker,
             ranker_path,
@@ -88,6 +88,7 @@ impl Gateway {
             data_dir,
             record_key,
             transparency_log,
+            ..
         } = self.build_meta_mcp().await?;
         // One auditor for the process: the overrides in effect at start are
         // recorded now, and every reload context shares it.
@@ -97,13 +98,18 @@ impl Gateway {
             .record_at_start(&self.backends, transparency_log.as_ref())
             .await?;
         let reload_reporting =
-            crate::config_reload::refusals::ReloadReporting::with_override_audit(override_auditor);
+            crate::config_reload::refusals::ReloadReporting::with_override_audit(override_auditor)
+                .with_audit_log(transparency_log.clone());
         // Restored before anything is served or reloaded.
         let (counters, counter_saver) =
             counter_wiring::start(&data_dir, &meta_mcp, shutdown_tx.subscribe());
         // The web UI's open decisions: built, replayed and kept current here.
         #[cfg(feature = "webui")]
-        let _decisions = crate::gateway::ui::decisions::start(&meta_mcp, shutdown_tx.subscribe());
+        let _decisions = crate::gateway::ui::decisions::start(
+            &meta_mcp,
+            self.config_path.clone(),
+            shutdown_tx.subscribe(),
+        );
         // F24: this mode delivers tools/list_changed, so it may advertise it.
         meta_mcp.set_change_feed(crate::gateway::ChangeFeed::Http);
         let (tools_changed_tx, tools_changed_rx) = tokio::sync::mpsc::unbounded_channel();
@@ -180,6 +186,25 @@ impl Gateway {
             Arc::clone(&record_key),
         )?);
 
+        // The control-plane base, resolved once: the export task, the store
+        // and the admin API all name this directory.
+        let control_plane_base = control_plane_base(&self.config, self.config_path.as_deref());
+        // ONE grant sink for meta-tool and watcher (its mutex serializes grant
+        // reloads), built after the store it records into. Audited before the
+        // live config exists, so the served grants are in the startup inputs:
+        // the running revision names the grants this process serves.
+        let opened_store = build_control_plane_store_with_log(&self.config, &control_plane_base)?;
+        let governance_log = opened_store.as_ref().map(|o| Arc::clone(&o.governance_log));
+        let control_plane_store = opened_store.map(|o| o.store);
+        let (identity_grant_sink, grants_read) = identity_grants::start_identity_grant_audit(
+            &self.config,
+            &meta_mcp,
+            control_plane_store.as_ref(),
+            &control_plane_base.path,
+        )
+        .await?;
+        grants_read.into_startup(&self.env);
+
         // Live config handle: shared by the hot-reload watcher (which swaps it
         // on every applied reload) and AppState (which reads control-plane role
         // mapping through it, so a reload takes effect without restart —
@@ -193,28 +218,18 @@ impl Gateway {
                 self.config.clone(),
                 Arc::clone(&auth_config),
             ))
-            .with_policy_epoch(Arc::clone(&meta_mcp.policy_epoch)),
+            .with_policy_epoch(Arc::clone(&meta_mcp.policy_epoch))
+            .with_startup_revision(&record_key, self.env.take_startup_inputs()),
         );
+        meta_mcp.set_live_config(Arc::clone(&live_config));
 
         // SIEM evidence-export background task (MIK-6703). None when disabled.
-        // The control-plane base, resolved once: the export task, the store
-        // and the admin API all name this directory.
-        let control_plane_base = control_plane_base(&self.config, self.config_path.as_deref());
         let export_status =
             spawn_export_task(&self.config, &control_plane_base, shutdown_tx.subscribe());
 
         // Reload context into meta_mcp before AppState; the watcher starts after
         // `create_router`, so the bind-origin snapshot sees the bound config
-        // (MIK-6750 r4). ONE grant sink for meta-tool and watcher (its mutex
-        // serializes grant reloads), built after the store it records into.
-        let control_plane_store = build_control_plane_store(&self.config, &control_plane_base)?;
-        let identity_grant_sink = identity_grants::start_identity_grant_audit(
-            &self.config,
-            &meta_mcp,
-            control_plane_store.as_ref(),
-            &control_plane_base.path,
-        )
-        .await?;
+        // (MIK-6750 r4).
         if let Some(path) = self.reload_path() {
             // Ends this context's reload waits on shutdown (#1808): axum's
             // graceful shutdown waits for every handler, and an admin or
@@ -445,7 +460,6 @@ impl Gateway {
             proxy_manager,
             streaming_config: self.config.streaming.clone(),
             key_server,
-            tool_policy,
             mtls_policy,
             trust_configured_backends: self.config.security.trust_configured_backends,
             inflight: Arc::clone(&inflight),
@@ -468,9 +482,20 @@ impl Gateway {
             live_config: Arc::clone(&live_config),
             export_status,
             transparency_log,
+            governance_log,
             dashboard_bootstrap,
+            // One ProcessFacts, so one Activity read pool, per Gateway::run: its
+            // slots bound every read this gateway runs. A second listener shares
+            // this state (or this ProcessFacts); building another would double the
+            // bound. An embedder that calls run twice gets two pools.
             process: Arc::new(ProcessFacts::new(started, counters.upgrade.clone())),
         });
+        // The live stream's two feeds, attached once per process.
+        #[cfg(feature = "webui")]
+        state.dashboard_bootstrap.stream_hub().attach_logs(
+            state.transparency_log.as_deref(),
+            state.governance_log.as_deref(),
+        );
 
         // REST capability watch polls through the router's controls, so it
         // joins the running events hub once the router state exists.
@@ -595,6 +620,10 @@ impl Gateway {
             if let Some(every) = self.test_seams.window_save_every() {
                 settings.every = every;
             }
+            #[cfg(test)]
+            {
+                settings.spawner = self.test_seams.spawner();
+            }
             window_saver::start_window_saver(
                 self.config.server.protocol_revision_window,
                 data_dir.clone(),
@@ -670,11 +699,14 @@ impl Gateway {
         // Stop all backends, after their warmers can no longer start one.
         info!("Shutting down backends...");
         warmer.cancel().await;
+        // One deadline for the whole stage: each stdio backend gets its EOF,
+        // then SIGTERM, then the kill, planned to end by then.
+        let stop_deadline = tokio::time::Instant::now() + self.config.server.shutdown_timeout;
         #[allow(
             clippy::disallowed_methods,
             reason = "Lifecycle: gateway startup, wiring or shutdown; no caller request"
         )]
-        self.backends.stop_all().await;
+        self.backends.stop_all_by(stop_deadline).await;
 
         Ok(())
     }

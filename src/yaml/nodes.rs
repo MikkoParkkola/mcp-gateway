@@ -5,12 +5,26 @@
 //! of everything under it. The key editor inserts and removes whole lines
 //! from these positions; it never decides where a node ends by hand.
 
+use std::borrow::Cow;
 use std::ops::Range;
 
 use granit_parser::{Event, Parser, ScalarStyle, StructureStyle};
 
 use super::Error;
 use super::spans::Bytes;
+
+/// Each scalar of `text`, key or value, with its 1-based start line, in
+/// document order, up to the first parse error: text that does not parse
+/// yields nothing more. A comment is no scalar. Callers read scalars here so
+/// the parser stays behind the adapter.
+pub(crate) fn scalars_with_lines(text: &str) -> impl Iterator<Item = (Cow<'_, str>, usize)> {
+    Parser::new_from_str(text)
+        .map_while(Result::ok)
+        .filter_map(|(event, span)| match event {
+            Event::Scalar(value, ..) => Some((value, span.start.line())),
+            _ => None,
+        })
+}
 
 /// One step from a node to a child.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -154,6 +168,24 @@ pub(crate) fn block_nodes(text: &str) -> Result<Vec<Node>, Error> {
         }
     }
     Ok(out)
+}
+
+/// How many anchors and aliases `text` holds: a writer that never writes
+/// either proves it dropped none by finding the count unchanged. A quoted
+/// `"*x"` is a string, not an alias. `None` when the text does not parse.
+pub(crate) fn anchors_and_aliases(text: &str) -> Option<usize> {
+    let mut count = 0;
+    for item in Parser::new_from_str(text) {
+        let (event, _) = item.ok()?;
+        count += match event {
+            Event::Alias(_) => 1,
+            Event::Scalar(_, _, anchor, _)
+            | Event::MappingStart(_, anchor, _)
+            | Event::SequenceStart(_, anchor, _) => usize::from(anchor != 0),
+            _ => 0,
+        };
+    }
+    Some(count)
 }
 
 /// Add a node under the innermost open collection (or as the root), and

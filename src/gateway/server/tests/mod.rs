@@ -13,6 +13,14 @@
 
 mod admission_allocations;
 pub(crate) mod alloc_meter;
+#[cfg(all(unix, feature = "firewall"))]
+mod allowed_root_capability_rows;
+#[cfg(all(unix, feature = "firewall"))]
+mod allowed_root_route_rows;
+#[cfg(all(unix, feature = "firewall"))]
+mod allowed_root_routes;
+#[cfg(all(unix, feature = "firewall"))]
+mod allowed_root_secret_rows;
 mod descriptor_copies;
 mod fresh_slot_verdict;
 mod input_key_allocations;
@@ -55,6 +63,10 @@ mod reserved_member_stdio;
 /// Secret injection delivers a header rule as a header, a query rule never in the arguments.
 mod secret_injection_targets;
 mod stdio_cache_scope;
+mod stdio_first_list;
+mod stdio_first_list_commit;
+mod stdio_first_list_rows;
+mod stdio_first_list_scope;
 mod stdio_list_changed;
 mod stdio_listing_scope;
 #[cfg(feature = "firewall")]
@@ -87,6 +99,7 @@ mod stdio_cost_persistence;
 mod grant_decision_stdio;
 #[cfg(feature = "cost-governance")]
 mod http_cost_persistence;
+mod not_found_stdio;
 
 // MIK-7272.OWNER.3 and OWNER.5 (the sub4 stdio owner test plan, I1).
 mod owner3_stdio_keying;
@@ -96,6 +109,8 @@ mod owner5_stdio_context;
 mod owner1_stdio_management;
 mod owner1_stdio_reload;
 mod owner4_stdio_policy;
+#[cfg(feature = "cost-governance")]
+mod stdio_live_budget;
 
 // MIK-7272.LIFE.1 (the sub4 stdio owner test plan, I3).
 mod life1_stdio_cancel;

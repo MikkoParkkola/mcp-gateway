@@ -19,8 +19,16 @@ mod handshake_and_session;
 /// build_mcp_headers: the header builder and the close headers.
 mod headers;
 
+/// A resend the lender refuses after an expired session (Unix only: it uses
+/// the resend row's held port).
+#[cfg(unix)]
+mod refusal_over_http;
 /// Session expiry, re-initialise and retry (MIK-5982), and per-call headers.
 mod session_expiry;
+/// A resend after an expired session that never connected may have run.
+/// Unix only: the row holds its port with `SO_REUSEPORT`.
+#[cfg(unix)]
+mod session_expiry_resend;
 
 /// An unpinned flavour connects as a Streamable pin does (MIK-8044).
 mod unpinned_flavour;
@@ -90,11 +98,13 @@ fn sse_stream(body: impl Into<bytes::Bytes>) -> impl futures::Stream<Item = Resu
     futures::stream::iter(vec![Ok(body.into())])
 }
 
-fn oauth_client_for(resource: &str) -> crate::oauth::OAuthClient {
+/// A client for `resource` over a token store in its own temp folder, which
+/// the caller holds as long as the client: dropped, it takes the store with it.
+fn oauth_client_for(resource: &str) -> (tempfile::TempDir, crate::oauth::OAuthClient) {
     use crate::oauth::{OAuthClient, OAuthClientConfig, TokenStorage};
-    let storage =
-        Arc::new(TokenStorage::new(std::env::temp_dir().join("http_transport_tls_guard")).unwrap());
-    OAuthClient::new(
+    let dir = tempfile::tempdir().expect("token dir");
+    let storage = Arc::new(TokenStorage::new(dir.path().join("tokens")).unwrap());
+    let client = OAuthClient::new(
         reqwest::Client::new(),
         "test-backend".to_string(),
         resource.to_string(),
@@ -104,18 +114,24 @@ fn oauth_client_for(resource: &str) -> crate::oauth::OAuthClient {
             token_refresh_buffer_secs: Some(300),
             ..Default::default()
         },
-    )
+    );
+    (dir, client)
 }
 
-fn transport_with_oauth(url: &str) -> Result<Arc<HttpTransport>> {
+/// The temp folder an OAuth transport's token store lives in, and the
+/// transport for `url`. Bound in this order, the folder outlives the
+/// transport: locals drop in reverse.
+fn transport_with_oauth(url: &str) -> Result<(tempfile::TempDir, Arc<HttpTransport>)> {
+    let (dir, client) = oauth_client_for(url);
     HttpTransport::new_with_oauth(
         url,
         HashMap::new(),
         Duration::from_secs(5),
         true,
-        Some(oauth_client_for(url)),
+        Some(client),
         None,
     )
+    .map(|transport| (dir, transport))
 }
 
 /// Serve one fixed status and body to every POST, substituting the caller's own
@@ -393,7 +409,8 @@ mod status_typing;
 async fn an_oauth_transport_shares_one_gate_with_its_client() {
     let url = "http://127.0.0.1:1/mcp";
     let gate = Arc::new(crate::oauth::login_gate::LoginGate::default());
-    let gated = oauth_client_for(url).with_login_gate(Arc::clone(&gate));
+    let (_dir, client) = oauth_client_for(url);
+    let gated = client.with_login_gate(Arc::clone(&gate));
     let t = HttpTransport::new_with_oauth(
         url,
         HashMap::new(),
@@ -408,7 +425,7 @@ async fn an_oauth_transport_shares_one_gate_with_its_client() {
         "a gated client's gate is kept"
     );
 
-    let t = transport_with_oauth(url).unwrap();
+    let (_dir, t) = transport_with_oauth(url).unwrap();
     let client_gate = t
         .oauth_client
         .as_ref()
@@ -586,4 +603,26 @@ fn transport_follows_redirect_matches_the_runtime_decision() {
             "{status} {base} -> {target}, hardened {hardened}, private {private:?}"
         );
     }
+}
+
+/// C2: a backend's session-expiry refusal carried as its own JSON-RPC error
+/// (a non-2xx JSON body) still triggers session recovery, by code or by text.
+#[test]
+fn a_backends_own_session_expiry_refusal_triggers_recovery() {
+    let refusal = |code: i32, message: &str| {
+        Error::backend_json_rpc(crate::protocol::JsonRpcError {
+            code,
+            message: message.to_owned(),
+            data: None,
+        })
+    };
+    assert!(is_session_expired_error(&refusal(
+        SESSION_NOT_FOUND_CODE,
+        "x"
+    )));
+    assert!(is_session_expired_error(&refusal(
+        -32000,
+        "Session not found"
+    )));
+    assert!(!is_session_expired_error(&refusal(-32600, "bad request")));
 }

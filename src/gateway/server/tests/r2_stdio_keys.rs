@@ -74,16 +74,21 @@ async fn stdio_tools_call_refuses_nested_invented_key() {
     }));
     assert!(registry.register(backend));
     let meta = Arc::new(MetaMcp::new(registry));
-    let policy = Arc::new(crate::security::ToolPolicy::default());
     let mtls = Arc::new(crate::mtls::MtlsPolicy::from_config(
         &crate::mtls::MtlsConfig::default(),
     ));
     let dispatch = |request: Value| {
-        let (meta, policy, mtls) = (Arc::clone(&meta), Arc::clone(&policy), Arc::clone(&mtls));
+        let (meta, mtls) = (Arc::clone(&meta), Arc::clone(&mtls));
         async move {
-            super::super::Gateway::dispatch_single(&meta, &policy, &mtls, &request, "stdio-r2")
-                .await
-                .expect("a request is answered")
+            super::super::Gateway::dispatch_single(
+                &meta,
+                &crate::gateway::authz::default_line(&meta),
+                &mtls,
+                &request,
+                "stdio-r2",
+            )
+            .await
+            .expect("a request is answered")
         }
     };
 

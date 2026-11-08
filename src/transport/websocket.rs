@@ -29,18 +29,17 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
 
-use async_trait::async_trait;
 use serde_json::Value;
-use tokio::sync::mpsc::{Receiver, Sender, channel};
+use tokio::sync::mpsc::{Sender, channel};
 use tokio::sync::{Mutex, oneshot};
 use tokio::task::JoinHandle;
 use tokio_tungstenite::tungstenite::Message;
-use tracing::{debug, error, warn};
+use tracing::{debug, warn};
 use uuid::Uuid;
 
 use super::notification_sink::DeliveryHandle;
 use super::write_claim::WriteClaim;
-use super::{PendingRequestGuard, Transport, sanitize_url_for_diagnostics};
+use super::{Transport, sanitize_url_for_diagnostics};
 use crate::protocol::{
     JsonRpcNotification, JsonRpcRequest, JsonRpcResponse, PROTOCOL_VERSION, RequestId, Selectable,
     checked_selection, initialize_params, is_version_mismatch_error, negotiate_best_version,
@@ -119,21 +118,27 @@ impl McpFrame {
 
         // All remaining frames must be JSON-RPC 2.0.
         let version = v.get("jsonrpc").and_then(Value::as_str).unwrap_or("");
+        // No error below quotes the frame: it is backend text, and can hold
+        // an injected value.
         if version != "2.0" {
-            return Err(Error::Protocol(format!(
-                "Unexpected WebSocket frame: jsonrpc='{version}'"
-            )));
+            return Err(Error::Protocol(
+                "Unexpected WebSocket frame: jsonrpc is not \"2.0\"".to_string(),
+            ));
         }
+        let malformed =
+            |kind: &str| Error::Protocol(format!("WebSocket {kind} frame is malformed"));
 
         let has_id = v.get("id").is_some();
         let has_method = v.get("method").is_some();
         let has_result_or_error = v.get("result").is_some() || v.get("error").is_some();
 
         if has_id && has_method {
-            let req: JsonRpcRequest = serde_json::from_value(v)?;
+            let req: JsonRpcRequest =
+                serde_json::from_value(v).map_err(|_| malformed("request"))?;
             Ok(McpFrame::Request(req))
         } else if has_id && has_result_or_error {
-            let res: JsonRpcResponse = serde_json::from_value(v)?;
+            let res: JsonRpcResponse =
+                serde_json::from_value(v).map_err(|_| malformed("response"))?;
             Ok(McpFrame::Response(res))
         } else if !has_id && has_method {
             let method = v["method"]
@@ -144,7 +149,8 @@ impl McpFrame {
             Ok(McpFrame::Notification { method, params })
         } else {
             Err(Error::Protocol(format!(
-                "Cannot classify WebSocket frame: {v}"
+                "Cannot classify WebSocket frame ({} bytes)",
+                text.len()
             )))
         }
     }
@@ -213,6 +219,10 @@ struct Inner {
     progress_destinations: dashmap::DashMap<String, DeliveryHandle>,
     /// Upstream-notification taps of the events listener (MIK-7630 I5).
     pub(crate) taps: super::upstream_tap::Taps,
+    /// The values the backend's rules injected; every frame this transport
+    /// reads is scrubbed of them before it is routed. Set before
+    /// the connect, so the handshake is scrubbed too.
+    needles: std::sync::OnceLock<Arc<crate::security::needles::NeedleSet>>,
 }
 
 impl Inner {
@@ -226,6 +236,7 @@ impl Inner {
             task: parking_lot::Mutex::new(None),
             progress_destinations: dashmap::DashMap::new(),
             taps: super::upstream_tap::Taps::default(),
+            needles: std::sync::OnceLock::new(),
         })
     }
 }
@@ -305,6 +316,7 @@ impl WebSocketTransport {
             timeout,
             protocol_version,
             DestinationPolicy::Configured,
+            None,
         )
         .await?;
         Ok(started)
@@ -442,22 +454,44 @@ impl WebSocketTransport {
     /// Dispatch an inbound text frame to a pending request or log it.
     fn dispatch_inbound(inner: &Arc<Inner>, text: &str) -> Result<()> {
         debug!(len = text.len(), "Dispatching inbound WebSocket frame");
-        let frame = McpFrame::from_text(text)?;
+        let mut frame = McpFrame::from_text(text)?;
+        // Routing keys (a progress token, a subscription tag) are read from
+        // the frame as sent; only the delivered copy is scrubbed (DELTA-5).
+        let keys = match &frame {
+            McpFrame::Notification { params, .. } if inner.needles.get().is_some() => {
+                params.clone()
+            }
+            _ => None,
+        };
+        // A listen's own answer is classified as sent (lead ruling G9): an
+        // acknowledgement's URIs are the listen's requested ones. A listen is
+        // never a pending request (I5 design §4).
+        if let McpFrame::Response(response) = &frame
+            && let Some(ref id) = response.id
+            && inner
+                .taps
+                .response_to(id, response.result.as_ref(), response.error.as_ref())
+        {
+            return Ok(());
+        }
+        if let Some(needles) = inner.needles.get()
+            && !scrub_frame(needles, &mut frame)
+        {
+            return Ok(());
+        }
 
         match frame {
             McpFrame::Response(response) => {
-                if let Some(ref id) = response.id
-                    && inner
-                        .taps
-                        .response_to(id, response.result.as_ref(), response.error.as_ref())
-                {
-                    // A listen is never a pending request (I5 design §4).
-                } else if let Some(ref id) = response.id {
+                if let Some(ref id) = response.id {
                     let key = id.to_string();
                     if let Some((_, tx)) = inner.pending.remove(&key) {
                         let _ = tx.send(response);
                     } else {
-                        warn!(id = %key, "Received WebSocket response for unknown request");
+                        // The id is backend text: its length only.
+                        warn!(
+                            id_len = key.len(),
+                            "Received WebSocket response for unknown request"
+                        );
                     }
                 }
             }
@@ -468,9 +502,15 @@ impl WebSocketTransport {
                 debug!("Received application-level pong");
             }
             McpFrame::Notification { method, params } => {
-                if inner.taps.notification(&method, params.as_ref()) {
+                let keys = keys.as_ref().or(params.as_ref());
+                if inner.taps.notification_keyed(
+                    &method,
+                    keys,
+                    inner.needles.get().map(AsRef::as_ref),
+                ) {
                     return Ok(());
                 }
+                let token = progress_key(&method, keys);
                 route_progress(
                     inner,
                     JsonRpcNotification {
@@ -478,6 +518,7 @@ impl WebSocketTransport {
                         method,
                         params,
                     },
+                    token,
                 );
             }
             // Not relayed mid-call; the 2026 input bridge (`gateway::input_bridge`) is the path.
@@ -508,178 +549,7 @@ impl WebSocketTransport {
 
 // ── I/O loop (runs inside the spawned task) ───────────────────────────────────
 
-/// Drive reads from the WebSocket stream and writes from the outbound channel
-/// using `tokio::select!`.  Exits when the connection closes or the outbound
-/// channel is dropped.
-async fn run_io_loop(
-    inner: Arc<Inner>,
-    ws_stream: tokio_tungstenite::WebSocketStream<
-        tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
-    >,
-    mut outbound_rx: Receiver<Outbound>,
-) {
-    use futures::{SinkExt, StreamExt};
-
-    let (mut ws_sink, mut ws_source) = ws_stream.split();
-
-    loop {
-        tokio::select! {
-            // Inbound frame from the server.
-            maybe_msg = ws_source.next() => {
-                match maybe_msg {
-                    Some(Ok(Message::Text(text))) => {
-                        inner.session.lock().await.messages_received += 1;
-                        let text_str: &str = &text;
-                        if let Err(e) = WebSocketTransport::dispatch_inbound(&inner, text_str) {
-                            error!(error = %e, "Failed to dispatch inbound WebSocket frame");
-                        }
-                    }
-                    Some(Ok(Message::Ping(data))) => {
-                        debug!("Received transport-level WebSocket ping, replying with pong");
-                        let _ = ws_sink.send(Message::Pong(data)).await;
-                    }
-                    Some(Ok(Message::Pong(_))) => {
-                        debug!("Received transport-level WebSocket pong");
-                    }
-                    Some(Ok(Message::Close(frame))) => {
-                        debug!(frame = ?frame, "WebSocket close frame received");
-                        inner.connected.store(false, Ordering::Relaxed);
-                        break;
-                    }
-                    Some(Ok(_)) => {
-                        // Binary / continuation frames — not used by MCP.
-                    }
-                    Some(Err(e)) => {
-                        error!(error = %e, "WebSocket read error");
-                        inner.connected.store(false, Ordering::Relaxed);
-                        break;
-                    }
-                    None => {
-                        debug!("WebSocket stream ended");
-                        inner.connected.store(false, Ordering::Relaxed);
-                        break;
-                    }
-                }
-            }
-
-            // Outbound frame from the application.
-            maybe_out = outbound_rx.recv() => {
-                if let Some((msg, claim)) = maybe_out {
-                    // A request whose caller gave up while it was queued is
-                    // never written (`MIK-7642.PR.B`).
-                    if claim.is_some_and(|claim| !claim.claim_write()) {
-                        continue;
-                    }
-                    if let Err(e) = ws_sink.send(msg).await {
-                        error!(error = %e, "WebSocket write error");
-                        inner.connected.store(false, Ordering::Relaxed);
-                        break;
-                    }
-                    inner.session.lock().await.messages_sent += 1;
-                } else {
-                    // Channel dropped — application is closing the transport.
-                    debug!("WebSocket outbound channel closed; sending close frame");
-                    let _ = ws_sink.send(Message::Close(None)).await;
-                    inner.connected.store(false, Ordering::Relaxed);
-                    break;
-                }
-            }
-        }
-    }
-    // Fail in-flight calls now: their senders drop, so each caller sees
-    // "connection closed before the response arrived" instead of waiting out
-    // its timeout.
-    inner.pending.clear();
-    inner.taps.clear();
-}
-
 // ── Transport impl ────────────────────────────────────────────────────────────
-
-#[async_trait]
-impl Transport for WebSocketTransport {
-    async fn request(&self, method: &str, params: Option<Value>) -> Result<JsonRpcResponse> {
-        let id = self.next_id();
-        let request = JsonRpcRequest {
-            jsonrpc: "2.0".to_string(),
-            id: id.clone(),
-            method: method.to_string(),
-            params,
-        };
-
-        // Register before the send: the I/O task can route progress back
-        // before `send_message` returns, and an unregistered token is dropped.
-        let _progress_cleanup = ProgressRegistration::register(
-            &self.inner.progress_destinations,
-            request.params.as_ref(),
-        );
-
-        let (tx, rx) = oneshot::channel();
-        self.inner.pending.insert(id.to_string(), tx);
-        // See StdioTransport::request: removing the entry is the guard's job
-        // so a request future dropped by an OUTER timeout or task abort does
-        // not strand its `pending` entry.
-        let _cleanup = PendingRequestGuard::new(&self.inner.pending, &id.to_string());
-        // Declared after `_cleanup`, so it drops first and still finds the
-        // entry of a request nobody answered.
-        let claim = WriteClaim::new();
-        let mut cancel = cancel::CancelUnanswered::arm(&self.inner, &request, &claim);
-
-        let msg = McpFrame::Request(request).to_ws_message()?;
-        // The timeout covers the enqueue too: a full queue behind a stalled
-        // writer must not outlast the configured backend timeout.
-        let exchange = async {
-            self.enqueue((msg, Some(claim))).await?;
-            Ok::<_, Error>(rx.await)
-        };
-        let outcome = tokio::time::timeout(self.timeout, exchange).await;
-        // Finished, answered or failed: the transport's own timeout is not a
-        // cancel (design Q1).
-        cancel.disarm();
-        match outcome {
-            Ok(Ok(Ok(response))) => Ok(response),
-            Ok(Err(e)) => Err(e),
-            Ok(Ok(Err(_))) => Err(Error::Transport(
-                "WebSocket connection closed before the response arrived".to_string(),
-            )),
-            Err(_) => Err(Error::BackendTimeout(
-                "WebSocket request timed out".to_string(),
-            )),
-        }
-    }
-
-    async fn notify(&self, method: &str, params: Option<Value>) -> Result<()> {
-        let msg = McpFrame::Notification {
-            method: method.to_string(),
-            params,
-        }
-        .to_ws_message()?;
-        self.send_message(msg).await
-    }
-
-    fn is_connected(&self) -> bool {
-        self.inner.connected.load(Ordering::Relaxed)
-    }
-
-    async fn close(&self) -> Result<()> {
-        self.inner.connected.store(false, Ordering::Relaxed);
-
-        // Dropping the sender closes the outbound channel, which causes the I/O
-        // task to send a WebSocket close frame and exit cleanly.
-        self.inner.outbound_tx.lock().await.take();
-
-        // Abort the task (safe to call even after it has already exited).
-        if let Some(h) = self.inner.task.lock().take() {
-            h.abort();
-        }
-
-        // The aborted task skips its own cleanup: fail in-flight calls here so
-        // they do not wait out their timeouts.
-        self.inner.pending.clear();
-        self.inner.taps.clear();
-
-        Ok(())
-    }
-}
 
 /// A transport dropped without `close()` (a lifecycle that discards it, a
 /// start that was cancelled) must not orphan its I/O task: the task holds the
@@ -704,13 +574,21 @@ fn connect_error(error: &tokio_tungstenite::tungstenite::Error) -> String {
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
+#[path = "websocket_calls.rs"]
+mod calls;
 #[path = "websocket_cancel.rs"]
 mod cancel;
+#[path = "websocket_io.rs"]
+mod io;
 #[path = "websocket_listen.rs"]
 mod listen;
 #[path = "websocket_progress.rs"]
 mod progress;
-use progress::{ProgressRegistration, route_progress};
+#[path = "websocket_scrub.rs"]
+mod scrub;
+use io::run_io_loop;
+use progress::{ProgressRegistration, progress_key, route_progress};
+use scrub::{log_close, scrub_frame};
 
 #[cfg(test)]
 #[path = "websocket_tests.rs"]
@@ -730,3 +608,7 @@ mod backend_tests;
 #[cfg(test)]
 #[path = "websocket_negotiation_tests.rs"]
 mod negotiation_tests;
+
+#[cfg(test)]
+#[path = "websocket_scrub_tests.rs"]
+mod scrub_tests;

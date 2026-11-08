@@ -1,0 +1,1 @@
+src/gateway/router/process_facts.rs	activity_reads	1	Hands out this state's Activity read pool, which bounds how many reads run at once; decides nothing about access.

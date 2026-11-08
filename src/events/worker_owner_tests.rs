@@ -17,12 +17,13 @@ use super::{EventsHub, Flipping, counting_callback, logged_services, queued_with
 #[tokio::test]
 async fn an_owner_scoped_occurrence_is_refused_by_its_source() {
     for owner_scoped in [false, true] {
-        let dir = tempfile::tempdir().expect("dir");
+        let dir = Arc::new(tempfile::tempdir().expect("dir"));
         let config = crate::config::EventsConfig {
             callback_allow_private: vec!["127.0.0.0/8".into()],
             ..crate::config::EventsConfig::default()
         };
         let hub = EventsHub::open(&config, dir.path()).expect("hub");
+        hub.keep_test_dir(Arc::clone(&dir));
         hub.register_source(Arc::new(Flipping {
             free: &[],
             admits: 0,
@@ -53,12 +54,13 @@ async fn an_owner_scoped_occurrence_is_refused_by_its_source() {
 /// is checked on every attempt).
 #[tokio::test]
 async fn an_owner_scoped_occurrence_still_needs_its_callers_access() {
-    let dir = tempfile::tempdir().expect("dir");
+    let dir = Arc::new(tempfile::tempdir().expect("dir"));
     let config = crate::config::EventsConfig {
         callback_allow_private: vec!["127.0.0.0/8".into()],
         ..crate::config::EventsConfig::default()
     };
     let hub = EventsHub::open(&config, dir.path()).expect("hub");
+    hub.keep_test_dir(Arc::clone(&dir));
     hub.register_source(Arc::new(Flipping {
         free: &[],
         admits: usize::MAX,
@@ -73,6 +75,7 @@ async fn an_owner_scoped_occurrence_still_needs_its_callers_access() {
         sub.api_key = Some(crate::events::records::ApiKeyRef {
             name: "gone".to_owned(),
             principal: "000000000000".to_owned(),
+            digest_tag: Some("000000000000".to_owned()),
         });
     });
     hub.attempt(&services, "evt_owner_key").await;

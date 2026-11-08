@@ -227,6 +227,12 @@ pub(super) async fn preview_backend(
             return flat_error(StatusCode::UNPROCESSABLE_ENTITY, message).into_response();
         }
     };
+    // The add's own value rule, before anything is scrubbed for display: a
+    // preview never accepts what the save would refuse.
+    let refused = super::backend_ops::literal_refusals(&resolved.backend);
+    if !refused.is_empty() {
+        return super::secret_slots::refused_values(&refused);
+    }
     let mut backend = resolved.backend;
     let withheld = scrub(&mut backend);
     if let Some(refusal) = refusal(&backend) {
@@ -440,3 +446,7 @@ fn listed_body(listing: &PreviewListing, mut preview: Value, elapsed: Duration) 
             .collect::<Vec<_>>(),
     })
 }
+
+#[cfg(test)]
+#[path = "preview_secret_tests.rs"]
+mod secret_tests;

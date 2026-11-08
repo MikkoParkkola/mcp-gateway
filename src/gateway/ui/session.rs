@@ -128,6 +128,7 @@ async fn logout(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Respo
 pub(super) async fn dashboard_link(
     State(state): State<Arc<AppState>>,
     Extension(generation): Extension<Arc<crate::config_reload::Generation>>,
+    named: Option<Extension<crate::gateway::auth::NamedApiKey>>,
     guard: Guard,
 ) -> Response {
     if let Err(refused) = guard.admit() {
@@ -177,10 +178,20 @@ pub(super) async fn dashboard_link(
     // nothing: it is restart-only.
     // An API-key client that carries no quota identity cannot be bound to
     // its key, so it may not mint: fail closed.
-    let key = match (client.api_key_identity(), client.quota_principal.clone()) {
-        (None, _) => None,
-        (Some(_), Some(key)) => Some(key),
-        (Some(_), None) => return admin_auth_required().into_response(),
+    // The session lives while the secret this request matched is valid, so
+    // it is bound to that secret's fingerprint too; an API-key client whose
+    // match left none cannot be bound to its secret, and may not mint.
+    let digest_tag = named.map(|Extension(key)| key.digest_tag().to_owned());
+    let key = match (
+        client.api_key_identity(),
+        client.quota_principal.clone(),
+        digest_tag,
+    ) {
+        (None, _, _) => None,
+        (Some(_), Some(quota), Some(digest_tag)) => {
+            Some(crate::gateway::auth::MintingKey { quota, digest_tag })
+        }
+        (Some(_), _, _) => return admin_auth_required().into_response(),
     };
     let value = state
         .dashboard_bootstrap
@@ -284,7 +295,6 @@ mod mik_8659_dashboard_tests {
             proxy_manager,
             streaming_config,
             key_server: None,
-            tool_policy: Arc::new(crate::security::ToolPolicy::default()),
             mtls_policy: Arc::new(crate::mtls::MtlsPolicy::from_config(
                 &crate::mtls::MtlsConfig::default(),
             )),
@@ -305,6 +315,7 @@ mod mik_8659_dashboard_tests {
             )),
             export_status: None,
             transparency_log: None,
+            governance_log: None,
             dashboard_bootstrap: Arc::new(crate::gateway::auth::DashboardBootstrap::new()),
             tasks: task_service,
             task_executor,
@@ -362,6 +373,7 @@ mod mik_8659_dashboard_tests {
         let response = super::dashboard_link(
             axum::extract::State(Arc::clone(&state)),
             axum::extract::Extension(state.live_config.generation()),
+            None,
             super::super::guard::Guard::for_route(
                 crate::gateway::routes::UI_DASHBOARD_LINK,
                 &axum::http::Method::POST,
@@ -406,8 +418,8 @@ mod mik_8659_dashboard_tests {
             )
             .expect("fixture auth resolves"),
         );
-        let real = auth_config
-            .validate_token(secret)
+        let (real, named) = auth_config
+            .validate_token_with_origin(secret)
             .expect("admin key validates");
         // K13: an API-key client with no quota identity cannot bind the link
         // to its key, so the mint fails closed rather than minting a link no
@@ -429,6 +441,9 @@ mod mik_8659_dashboard_tests {
         let response = super::dashboard_link(
             axum::extract::State(Arc::clone(&state)),
             axum::extract::Extension(state.live_config.generation()),
+            // The match's own record, so the refusal is the missing quota
+            // identity's, not a missing secret binding's.
+            named.clone().map(axum::extract::Extension),
             super::super::guard::Guard::for_route(
                 crate::gateway::routes::UI_DASHBOARD_LINK,
                 &axum::http::Method::POST,
@@ -440,6 +455,28 @@ mod mik_8659_dashboard_tests {
             response.status(),
             axum::http::StatusCode::FORBIDDEN,
             "an unbindable API-key client minted a link"
+        );
+        // A client with its quota identity but no record of which secret it
+        // matched cannot be bound to that secret either: fail closed.
+        let response = super::dashboard_link(
+            axum::extract::State(Arc::clone(&state)),
+            axum::extract::Extension(state.live_config.generation()),
+            None,
+            super::super::guard::Guard::for_route(
+                crate::gateway::routes::UI_DASHBOARD_LINK,
+                &axum::http::Method::POST,
+                Some(
+                    auth_config
+                        .validate_token(secret)
+                        .expect("admin key validates"),
+                ),
+            ),
+        )
+        .await;
+        assert_eq!(
+            response.status(),
+            axum::http::StatusCode::FORBIDDEN,
+            "an API-key client with no matched secret minted a link"
         );
     }
 }

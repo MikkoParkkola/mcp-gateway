@@ -307,6 +307,14 @@ const READERS: &[(&str, &str)] = &[
     ),
     ("src/gateway/ui/activity/reader.rs", "Activity's pages"),
     (
+        "src/gateway/ui/activity/forward_place.rs",
+        "the live stream's forward read: where a read starts and resumes",
+    ),
+    (
+        "src/gateway/ui/activity/forward_scan.rs",
+        "the live stream's forward read: its record cap is the pager's window",
+    ),
+    (
         "src/gateway/ui/decisions.rs",
         "the decisions read model's retention edge",
     ),
@@ -406,6 +414,10 @@ const OPENERS: &[(&str, &str)] = &[
     (
         "src/security/transparency_log_hwm_scan.rs",
         "writer: the high-water scan at open",
+    ),
+    (
+        "src/security/transparency_log_identity.rs",
+        "writer: the log's id scan at open, under the lease",
     ),
     (
         "src/security/transparency_log_anchor.rs",

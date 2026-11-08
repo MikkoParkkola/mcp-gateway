@@ -36,6 +36,19 @@ pub(crate) enum Withholding {
 }
 
 impl Withholding {
+    /// The check a withheld tool's refusal is recorded under.
+    pub(crate) const fn kind(self) -> crate::security::decision_record::DecisionKind {
+        match self {
+            Self::Refused => crate::security::decision_record::DecisionKind::ToolPolicy,
+            Self::Schema | Self::Descriptor => {
+                crate::security::decision_record::DecisionKind::DescriptorBlock
+            }
+            Self::Unselected => crate::security::decision_record::DecisionKind::AllowedTools,
+            Self::Lacked => crate::security::decision_record::DecisionKind::ClientToolScope,
+            Self::Absent => crate::security::decision_record::DecisionKind::BackendScope,
+        }
+    }
+
     /// Withheld by the backend's own gate (its `allowed_tools`, or the
     /// descriptor check): answered at once, whatever the caller's slot holds.
     #[must_use]
@@ -451,6 +464,7 @@ pub(crate) mod seams {
         static AFTER_READMIT: RefCell<Option<Box<dyn FnOnce()>>> = RefCell::new(None);
         static AFTER_INTAKE: RefCell<Option<Box<dyn FnOnce()>>> = RefCell::new(None);
         static AFTER_CALLER: RefCell<Option<Box<dyn FnOnce()>>> = RefCell::new(None);
+        static AFTER_PIN: RefCell<Option<Box<dyn FnOnce()>>> = RefCell::new(None);
         static AT_TASK_START: RefCell<Option<Box<dyn FnOnce()>>> = RefCell::new(None);
         static AFTER_LIST_SNAPSHOT: RefCell<Option<Box<dyn FnOnce()>>> = RefCell::new(None);
         static AFTER_REVALIDATE: RefCell<Option<Pause>> = const { RefCell::new(None) };
@@ -555,9 +569,24 @@ pub(crate) mod seams {
         }
     }
 
+    /// Run `hook` once, the next time the router on this thread has pinned a
+    /// request's generation, before any layer after the pin runs: a reload
+    /// the hook publishes is current for authentication and every check that
+    /// follows, while the request carries the generation pinned before it.
+    pub(crate) fn after_pin(hook: impl FnOnce() + 'static) {
+        AFTER_PIN.with(|slot| *slot.borrow_mut() = Some(Box::new(hook)));
+    }
+
+    /// Called where the router has pinned a request's generation.
+    pub(crate) fn pinned() {
+        if let Some(hook) = AFTER_PIN.with(|slot| slot.borrow_mut().take()) {
+            hook();
+        }
+    }
+
     /// Run `hook` once, the next time `/mcp` or `/mcp/{name}` intake on this
     /// thread has made its sanitize decision (MIK-8154 NP3, F2).
-    #[cfg(feature = "firewall")]
+    #[cfg(any(feature = "firewall", feature = "cost-governance"))]
     pub(crate) fn after_intake(hook: impl FnOnce() + 'static) {
         AFTER_INTAKE.with(|slot| *slot.borrow_mut() = Some(Box::new(hook)));
     }
@@ -572,7 +601,7 @@ pub(crate) mod seams {
 
     /// Run `hook` once, the next time a task worker on this thread starts its
     /// dispatch: between the submit's intake and the run (MIK-8154 C2e2).
-    #[cfg(feature = "firewall")]
+    #[cfg(any(feature = "firewall", feature = "cost-governance"))]
     pub(crate) fn before_task_dispatch(hook: impl FnOnce() + 'static) {
         BEFORE_TASK_DISPATCH.with(|slot| *slot.borrow_mut() = Some(Box::new(hook)));
     }
@@ -587,7 +616,7 @@ pub(crate) mod seams {
     /// Run `hook` once, the next time a task worker on this thread has
     /// re-admitted its call: between the re-admission's judgement and the run
     /// (the C2e6 row).
-    #[cfg(feature = "firewall")]
+    #[cfg(any(feature = "firewall", feature = "cost-governance"))]
     pub(crate) fn after_readmit(hook: impl FnOnce() + 'static) {
         AFTER_READMIT.with(|slot| *slot.borrow_mut() = Some(Box::new(hook)));
     }
@@ -611,6 +640,24 @@ pub(crate) mod seams {
         if let Some(hook) = AFTER_ROUTE_STAGE.with(|slot| slot.borrow_mut().take()) {
             hook();
         }
+    }
+}
+
+#[cfg(test)]
+mod kind_tests {
+    use super::Withholding;
+
+    /// A withheld tool's refusal is recorded under the check that withheld
+    /// it: the backend's `allowed_tools` list is not a descriptor block.
+    #[test]
+    fn each_withholding_records_its_own_check() {
+        use crate::security::decision_record::DecisionKind;
+        assert_eq!(Withholding::Unselected.kind(), DecisionKind::AllowedTools);
+        assert_eq!(
+            Withholding::Descriptor.kind(),
+            DecisionKind::DescriptorBlock
+        );
+        assert_eq!(Withholding::Schema.kind(), DecisionKind::DescriptorBlock);
     }
 }
 

@@ -7,6 +7,9 @@
 //! reload must leave that report, and every other setting in its section must
 //! stay in it, alone or in a combined edit.
 
+#[cfg(feature = "firewall")]
+use std::sync::Arc;
+
 use serde_json::{Value, json};
 
 use super::{LiveConfig, compute_diff};
@@ -46,9 +49,9 @@ fn r1_a_security_flag_only_edit_is_not_restart_pending() {
     );
 }
 
-// R2: every other security field stays restart-pending, including the
-// collusion lists, which stay restart-only until their evidence is judged
-// against the current rules.
+// R2: every other security field stays restart-pending. The four live
+// collusion fields (action and the three lists) are not among them: they
+// apply on reload (`live_collusion_tests.rs`).
 #[test]
 fn r2_any_other_security_field_stays_restart_pending() {
     let running = Config::default();
@@ -65,14 +68,8 @@ fn r2_any_other_security_field_stays_restart_pending() {
         ),
         #[cfg(feature = "firewall")]
         (
-            "collusion.sources",
-            Box::new(|c| {
-                c.security
-                    .firewall
-                    .collusion
-                    .sources
-                    .push("mail".to_string());
-            }),
+            "collusion.window_secs",
+            Box::new(|c| c.security.firewall.collusion.window_secs += 1),
         ),
     ];
     for (name, edit) in edits {
@@ -175,6 +172,15 @@ type Report = (String, Vec<&'static str>, bool);
 /// serialized config. Returns the pending report per key, and the keys that
 /// could not be changed generically, so a new field cannot slip past.
 fn each_field_alone(section: &str, skip: &[&str]) -> (Vec<Report>, Vec<String>) {
+    each_field_alone_from(&Config::default(), section, skip)
+}
+
+/// [`each_field_alone`] over `running` instead of the default config.
+fn each_field_alone_from(
+    running: &Config,
+    section: &str,
+    skip: &[&str],
+) -> (Vec<Report>, Vec<String>) {
     // Fields with no bool or number inside: one hand-picked valid edit each.
     let by_hand: &[(&str, ValueEdit)] = &[
         ("posture", |v| *v = json!("hardened")),
@@ -185,9 +191,10 @@ fn each_field_alone(section: &str, skip: &[&str]) -> (Vec<Report>, Vec<String>) 
         }),
         ("idempotency_key", |v| *v = json!("required")),
         ("shutdown_timeout", |v| *v = json!("31s")),
+        ("tool_costs", |v| v["edited_tool"] = json!(0.5)),
+        ("alternatives", |v| *v = json!({"edited": ["a", "b"]})),
     ];
-    let running = Config::default();
-    let base = serde_json::to_value(&running).expect("config serializes");
+    let base = serde_json::to_value(running).expect("config serializes");
     let keys: Vec<String> = base[section]
         .as_object()
         .expect("section is an object")
@@ -212,17 +219,22 @@ fn each_field_alone(section: &str, skip: &[&str]) -> (Vec<Report>, Vec<String>) 
         }
         let wanted: Config = serde_json::from_value(v)
             .unwrap_or_else(|e| panic!("{section}.{key} changed is not a valid config: {e}"));
-        let changed = !compute_diff(&running, &wanted).is_empty();
-        reports.push((key, pending(&running, wanted), changed));
+        let changed = !compute_diff(running, &wanted).is_empty();
+        reports.push((key, pending(running, wanted), changed));
     }
     (reports, stuck)
 }
 
-// R2 (every field): each security field other than the two hot flags,
-// changed alone, keeps the section restart-pending.
+// R2 (every field): each security field other than the two hot flags and the
+// tool policy (ADR-029, amended), changed alone, keeps the section
+// restart-pending. The live firewall fields are nested in `firewall`, whose
+// generic edit flips a restart-only one; they have their own row.
 #[test]
 fn r2_each_other_security_field_alone_stays_restart_pending() {
-    let (reports, stuck) = each_field_alone("security", &["sanitize_input", "ssrf_protection"]);
+    let (reports, stuck) = each_field_alone(
+        "security",
+        &["sanitize_input", "ssrf_protection", "tool_policy"],
+    );
     let missed: Vec<&str> = reports
         .iter()
         .filter(|(_, p, _)| !p.contains(&"security"))
@@ -356,18 +368,21 @@ async fn g6_a_refused_preparation_changes_nothing_and_g5_one_publish() {
 
 // G7: the meta-tool's reload context and the file watcher publish through
 // the same holder, so either one changes what the next request takes. The
-// meta-tool path runs first, before any watcher can race it.
-#[tokio::test]
-async fn g7_the_meta_tool_and_the_watcher_both_publish_the_flag() {
+// meta-tool path runs first, before any watcher can race it. `texts` are the
+// file's three states: the start, the meta-tool's edit and the watcher's;
+// `published` says whether a generation shows the state of step 1 or 2.
+async fn both_contexts_publish(
+    texts: [String; 3],
+    published: impl Fn(&super::Generation, usize) -> bool,
+) {
     use std::sync::Arc;
     use std::time::Duration;
     let write = |path: &std::path::Path, text: &str| {
         crate::gateway::test_helpers::write_owner_only(path, text)
     };
-    let flag = |on: bool| format!("security:\n  sanitize_input: {on}\n");
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("gateway.yaml");
-    write(&path, &flag(true)).expect("write");
+    write(&path, &texts[0]).expect("write");
     let initial = Config::load(Some(&path)).expect("loads");
     let live = Arc::new(LiveConfig::new(initial.clone()));
     let registry = Arc::new(crate::backend::BackendRegistry::new());
@@ -380,15 +395,12 @@ async fn g7_the_meta_tool_and_the_watcher_both_publish_the_flag() {
         Duration::from_secs(60),
     )
     .expect("the registry pairs with the config");
-    write(&path, &flag(false)).expect("write");
+    write(&path, &texts[1]).expect("write");
     meta_tool
         .reload_outcome()
         .await
         .expect("the meta-tool reload applies");
-    assert!(
-        !live.generation().sanitize_input(),
-        "meta-tool: not published"
-    );
+    assert!(published(&live.generation(), 1), "meta-tool: not published");
 
     let (_shutdown, shutdown_rx) = tokio::sync::broadcast::channel(1);
     let _watcher = super::ConfigWatcher::start_with_hook(
@@ -408,15 +420,44 @@ async fn g7_the_meta_tool_and_the_watcher_both_publish_the_flag() {
         super::refusals::ReloadReporting::default(),
     )
     .expect("the watcher starts");
-    write(&path, &flag(true)).expect("write");
+    write(&path, &texts[2]).expect("write");
     let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
-    while !live.generation().sanitize_input() {
+    while !published(&live.generation(), 2) {
         assert!(
             tokio::time::Instant::now() < deadline,
             "watcher: the edit was never published"
         );
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
+}
+
+#[tokio::test]
+async fn g7_the_meta_tool_and_the_watcher_both_publish_the_flag() {
+    let flag = |on: bool| format!("security:\n  sanitize_input: {on}\n");
+    both_contexts_publish([flag(true), flag(false), flag(true)], |generation, step| {
+        generation.sanitize_input() == (step != 1)
+    })
+    .await;
+}
+
+// A budget-and-alert edit reaches the live generation through
+// both entry points.
+#[cfg(feature = "cost-governance")]
+#[tokio::test]
+async fn t20_both_reload_contexts_publish_a_budget_and_alert_edit() {
+    let governed = |daily: f64, percent: u32| {
+        format!(
+            "cost_governance:\n  enabled: true\n  budgets:\n    daily: {daily}\n  \
+             alerts:\n    - at_percent: {percent}\n      action: block\n"
+        )
+    };
+    let texts = [governed(10.0, 90), governed(5.0, 60), governed(7.0, 70)];
+    both_contexts_publish(texts, |generation, step| {
+        let governance = &generation.config().cost_governance;
+        governance.budgets.daily == Some([10.0, 5.0, 7.0][step])
+            && governance.alerts.first().map(|rule| rule.at_percent) == Some([90, 60, 70][step])
+    })
+    .await;
 }
 
 // F7: a reload of a file that does not parse is refused, and the running
@@ -448,4 +489,196 @@ async fn f7_a_malformed_file_leaves_the_running_generation() {
     assert!(Arc::ptr_eq(&before, &live.generation()), "published");
     assert!(live.generation().sanitize_input(), "the flag changed");
     assert_eq!(live.seq(), 0, "a refused reload published");
+}
+
+/// A running config with cost governance on and a per-tool budget.
+#[cfg(feature = "cost-governance")]
+fn governed() -> Config {
+    let mut config = Config::default();
+    config.cost_governance.enabled = true;
+    config
+        .cost_governance
+        .budgets
+        .per_tool
+        .insert("read".to_string(), 5.0);
+    config
+}
+
+// With governance on both sides, an edit to only the
+// budgets or the alerts applies on reload: not restart-pending, but still a
+// change.
+#[cfg(feature = "cost-governance")]
+#[test]
+fn t16a_a_budget_or_alert_only_edit_is_not_restart_pending() {
+    let running = governed();
+    let edits: [(&str, Edit); 2] = [
+        (
+            "budgets",
+            Box::new(|c| {
+                c.cost_governance
+                    .budgets
+                    .per_tool
+                    .insert("read".to_string(), 9.0);
+            }),
+        ),
+        ("alerts", Box::new(|c| c.cost_governance.alerts.truncate(1))),
+    ];
+    for (name, edit) in edits {
+        let mut wanted = running.clone();
+        edit(&mut wanted);
+        assert!(
+            !compute_diff(&running, &wanted).is_empty(),
+            "{name}: no change seen"
+        );
+        let pending = pending(&running, wanted);
+        assert!(!pending.contains(&"cost_governance"), "{name}: {pending:?}");
+    }
+}
+
+// T16b: every other cost_governance field, changed alone with governance on,
+// keeps the section restart-pending.
+#[cfg(feature = "cost-governance")]
+#[test]
+fn t16b_each_other_cost_governance_field_alone_stays_restart_pending() {
+    let (reports, stuck) =
+        each_field_alone_from(&governed(), "cost_governance", &["budgets", "alerts"]);
+    let missed: Vec<&str> = reports
+        .iter()
+        .filter(|(_, p, _)| !p.contains(&"cost_governance"))
+        .map(|(k, _, _)| k.as_str())
+        .collect();
+    assert!(missed.is_empty(), "not restart-pending: {missed:?}");
+    assert!(stuck.is_empty(), "no generic edit, add one: {stuck:?}");
+}
+
+// T16c: a budget edit together with another field's edit is pending.
+#[cfg(feature = "cost-governance")]
+#[test]
+fn t16c_a_budget_edit_with_another_field_is_restart_pending() {
+    let running = governed();
+    let mut wanted = running.clone();
+    wanted
+        .cost_governance
+        .budgets
+        .per_tool
+        .insert("read".to_string(), 9.0);
+    wanted.cost_governance.default_cost = 0.25;
+    assert!(pending(&running, wanted).contains(&"cost_governance"));
+}
+
+// T16d: with governance off on either side, a budget-only edit is pending:
+// the mask applies only while governance is on both sides.
+#[cfg(feature = "cost-governance")]
+#[test]
+fn t16d_a_budget_edit_across_an_off_side_is_restart_pending() {
+    let on = governed();
+    let mut off = on.clone();
+    off.cost_governance.enabled = false;
+    for (running, mut wanted) in [(on.clone(), off.clone()), (off.clone(), off.clone())] {
+        wanted
+            .cost_governance
+            .budgets
+            .per_tool
+            .insert("read".to_string(), 9.0);
+        let enabled = (
+            running.cost_governance.enabled,
+            wanted.cost_governance.enabled,
+        );
+        assert!(
+            pending(&running, wanted).contains(&"cost_governance"),
+            "running/wanted enabled {enabled:?}"
+        );
+    }
+}
+
+/// ADR-029 (amended): each generation compiles its own firewall policy from
+/// its own config, so a reload's policy is not the running one's.
+#[cfg(feature = "firewall")]
+#[test]
+fn each_generation_compiles_its_own_firewall_policy() {
+    let running = LiveConfig::new(Config::default()).generation();
+    let mut config = Config::default();
+    config.security.firewall.credential_redaction = false;
+    let wanted = super::Generation::following(config, Arc::clone(running.auth()), &running);
+    assert!(running.firewall_policy().redacts(), "the default redacts");
+    assert!(
+        !wanted.firewall_policy().redacts(),
+        "the reload's own switch"
+    );
+}
+
+/// ADR-029 (amended): a reload whose detector settings differ from the running
+/// detector keeps the previous generation's collusion view, never the
+/// startup's, so a pending parameter edit cannot drop a live `block`.
+#[cfg(feature = "firewall")]
+#[test]
+fn a_held_collusion_edit_keeps_the_previous_view_not_the_startup_one() {
+    use crate::security::firewall::CollusionAction;
+    let startup = LiveConfig::new(Config::default()).generation();
+    assert_eq!(startup.collusion_view().action(), CollusionAction::Off);
+    let mut block = Config::default();
+    block.security.firewall.collusion.action = CollusionAction::Block;
+    let live = super::Generation::following(block, Arc::clone(startup.auth()), &startup);
+    assert_eq!(
+        live.collusion_view().action(),
+        CollusionAction::Block,
+        "premise: the running detector runs it, so it applies"
+    );
+    let mut held = Config::default();
+    held.security.firewall.collusion.action = CollusionAction::Observe;
+    held.security.firewall.collusion.window_secs += 1;
+    let next = super::Generation::following(held, Arc::clone(live.auth()), &live);
+    assert_eq!(
+        next.collusion_view().action(),
+        CollusionAction::Block,
+        "a held edit keeps the previous view"
+    );
+}
+
+/// The tool policy applies on reload in every build, the firewall's too.
+#[test]
+fn a_tool_policy_edit_alone_reports_no_restart() {
+    let running = Config::default();
+    let mut wanted = running.clone();
+    wanted.security.tool_policy.deny = vec!["a:b".to_string()];
+    assert!(!pending(&running, wanted).contains(&"security"));
+}
+
+/// ADR-029 (amended): the policy fields the Policies screen edits apply on
+/// reload, so an edit to any one of them alone reports no restart.
+#[cfg(feature = "firewall")]
+#[test]
+fn a_policy_field_edit_alone_reports_no_restart() {
+    use crate::security::firewall::{FirewallAction, FirewallRule};
+    type Edit = (&'static str, fn(&mut Config));
+    let running = Config::default();
+    let edits: [Edit; 3] = [
+        ("tool_policy", |c| {
+            c.security.tool_policy.deny = vec!["a:b".to_string()];
+        }),
+        ("firewall.rules", |c| {
+            c.security.firewall.rules = vec![FirewallRule {
+                tool_match: "read".to_string(),
+                action: FirewallAction::Warn,
+                reason: None,
+                scan: Vec::new(),
+                servers: None,
+                keys: None,
+                except: None,
+                allowed_roots: None,
+                path_args: None,
+            }];
+        }),
+        ("firewall.credential_redaction", |c| {
+            c.security.firewall.credential_redaction = !c.security.firewall.credential_redaction;
+        }),
+    ];
+    for (field, edit) in edits {
+        let mut wanted = running.clone();
+        edit(&mut wanted);
+        assert!(
+            !pending(&running, wanted).contains(&"security"),
+            "{field} alone reports a restart"
+        );
+    }
 }

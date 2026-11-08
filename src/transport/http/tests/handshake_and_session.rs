@@ -269,7 +269,7 @@ async fn a_live_oauth_token_is_sent_as_a_bearer_on_requests_and_the_sse_stream()
         }
     })
     .await;
-    let t = transport_with_oauth(&format!("{base}/mcp")).unwrap();
+    let (_dir, t) = transport_with_oauth(&format!("{base}/mcp")).unwrap();
     t.oauth_client
         .as_ref()
         .unwrap()
@@ -289,7 +289,7 @@ async fn a_live_oauth_token_is_sent_as_a_bearer_on_requests_and_the_sse_stream()
 
 #[tokio::test]
 async fn an_unparseable_message_target_gets_no_oauth_token() {
-    let t = transport_with_oauth("http://127.0.0.1:1/mcp").unwrap();
+    let (_dir, t) = transport_with_oauth("http://127.0.0.1:1/mcp").unwrap();
     *t.message_url.write() = Some("not a url".to_string());
 
     let err = t.get_oauth_token().await.expect_err("no target, no token");
@@ -297,5 +297,34 @@ async fn an_unparseable_message_target_gets_no_oauth_token() {
     assert!(
         matches!(&err, Error::TransportPermanent(m) if m.contains("unparseable target")),
         "got {err:?}"
+    );
+}
+
+/// G4: a 2xx answer that fails to parse is named by its position,
+/// never by serde's text. serde would quote the string it rejected with its
+/// quote escaped, past the literal scrub (the byte-budget path, as the
+/// gateway's own backends read).
+#[cfg(feature = "webui")]
+#[tokio::test]
+async fn a_response_that_fails_to_parse_quotes_none_of_itself() {
+    const NEEDLE: &str = "answer-q\"secret-41c7";
+    let body = serde_json::json!({"jsonrpc": "2.0", "id": 1, "error": format!("refused {NEEDLE}")})
+        .to_string();
+    let (base, _) = peer(move |_| reply(StatusCode::OK, "application/json", body.clone())).await;
+    let t = make_transport(&format!("{base}/mcp"));
+    t.set_body_budget(1 << 20, 1 << 24);
+    let needles =
+        crate::security::needles::NeedleSet::with_grace(std::time::Duration::from_secs(3_600));
+    needles.insert("b", NEEDLE);
+    t.attach_needles(Arc::new(needles));
+    let text = t
+        .request("tools/call", None)
+        .await
+        .expect_err("an error that is a string is malformed")
+        .to_string();
+    assert!(text.contains("Failed to parse response"), "premise: {text}");
+    assert!(
+        !text.contains("secret-41c7"),
+        "the error quotes the answer: {text}"
     );
 }

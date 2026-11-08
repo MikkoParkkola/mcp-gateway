@@ -61,7 +61,14 @@ mod allowed_tools_task;
 mod live_key_tasks;
 mod support;
 
+/// A context-integrity refusal of a task settles with the gate's own code.
+#[cfg(feature = "firewall")]
+mod ci_refusal_task;
 /// A gateway refusal inside a task worker's dispatch is tied to its task.
+/// A task-augmented composite call that ends on a gateway-refused step
+/// writes a settlement record naming the join to the step that refused.
+#[cfg(feature = "firewall")]
+mod composite_settlement_task;
 #[cfg(feature = "firewall")]
 mod dispatch_refusal_task;
 
@@ -134,6 +141,9 @@ mod input_round_races;
 mod interlock;
 mod lifecycle;
 mod pending_input_policy;
+/// A call refused in its own send is no call a backend ran (tasks, plans).
+#[cfg(feature = "firewall")]
+mod presend_refused_send;
 mod proven_subject_admission;
 /// MIK-8398 C1d: a task the worker runs stores a sealed result.
 mod provenance_seal;

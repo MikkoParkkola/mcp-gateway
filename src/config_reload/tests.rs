@@ -280,6 +280,7 @@ fn patch_summary_lists_all_change_types() {
         backends_added: vec![("x".to_string(), BackendConfig::default())],
         backends_removed: vec!["y".to_string()],
         backends_modified: vec![("z".to_string(), BackendConfig::default())],
+        backends_display_changed: vec!["w".to_string()],
         server_changed: true,
         profiles_changed: true,
     };
@@ -288,6 +289,7 @@ fn patch_summary_lists_all_change_types() {
     assert!(s.contains("added backends"), "missing added: {s}");
     assert!(s.contains("removed backends"), "missing removed: {s}");
     assert!(s.contains("modified backends"), "missing modified: {s}");
+    assert!(s.contains("owner changed: [w]"), "missing owner: {s}");
     assert!(s.contains("restart required"), "missing server: {s}");
     assert!(s.contains("profiles"), "missing profiles: {s}");
 }
@@ -689,9 +691,11 @@ fn test_reload_context(config_path: &std::path::Path) -> ReloadContext {
     .expect("the registry pairs with the config")
 }
 
+mod applied_inputs;
 mod env_files;
 mod env_secrets;
 mod env_support;
+mod key_only_report;
 mod posture_refusal;
 mod reload_marker;
 mod reload_serialization;

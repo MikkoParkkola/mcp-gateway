@@ -14,6 +14,7 @@ use super::CapabilityExecutor;
 use super::params::status_error;
 use super::rest::{ExecutionContext, ProtocolExecutor};
 use crate::capability::definition::ProtocolConfig;
+use crate::capability::execution_context::{RefusalTest, record_refusal};
 use crate::capability::validate_personal_capability_identity;
 use crate::security::validate_url_not_ssrf;
 use crate::{Error, Result};
@@ -201,13 +202,16 @@ impl ProtocolExecutor for GraphqlExecutor<'_> {
                 "GraphQL endpoint URL not configured".to_string(),
             ));
         }
-        validate_url_not_ssrf(&graphql_config.endpoint)?;
-        crate::security::ssrf::refuse_loopback_name(&graphql_config.endpoint)?;
+        validate_url_not_ssrf(&graphql_config.endpoint)
+            .inspect_err(|e| record_refusal(e, RefusalTest::Destination))?;
+        crate::security::ssrf::refuse_loopback_name(&graphql_config.endpoint)
+            .inspect_err(|_| crate::gateway::delivery_facts::refused_while_vouched())?;
         crate::capability::require_tls_for_auth(
             &graphql_config.endpoint,
             &ctx.capability.auth,
             graphql_config.headers.values().map(String::as_str),
-        )?;
+        )
+        .inspect_err(|_| crate::gateway::delivery_facts::refused_while_vouched())?;
 
         // Build the { query, variables } body
         let body = Self::build_body(graphql_config, &params)?;
@@ -519,3 +523,6 @@ mod tests {
 #[cfg(test)]
 #[path = "cleartext_tests.rs"]
 mod cleartext_tests;
+#[cfg(test)]
+#[path = "refusal_record_tests.rs"]
+mod refusal_record_tests;

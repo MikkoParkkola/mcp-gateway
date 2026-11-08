@@ -34,42 +34,94 @@ if [[ -f Cargo.toml ]]; then
     echo "FAIL: no merge-base with origin/docs/ranking-1-release-line; run: git fetch origin docs/ranking-1-release-line"
     exit 1
   }
-  # changelog.yml skips this repository's throwaway/ branches (red-first and
-  # mutant probes), so the hook does too.
-  if [[ "$(git rev-parse --abbrev-ref HEAD)" != throwaway/* ]]; then
-    step "changelog fragment"
+  # PREPUSH_KEEP_GOING=1: run every cheap step below and name each one that fails,
+  # instead of stopping at the first; the default is unchanged (stop at the first failure).
+  # merge-base above and gate environment stay stop-first: every later step needs them.
+  cheap_failed=()
+  cheap() {
+    local name="$1"; shift
+    step "$name"
+    if [[ "${PREPUSH_KEEP_GOING:-0}" == "1" ]]; then
+      # Not `"$@" || ...`: bash ignores set -e inside a function called from a `||` list, so a
+      # failing command mid-step would be lost. A subshell outside any condition keeps set -e.
+      # So in this mode a step cannot set variables for later steps; keep them stateless.
+      local rc=0
+      set +e
+      ( set -e; "$@" )
+      rc=$?
+      set -e
+      (( rc == 0 )) || { echo "FAIL: $name (keep-going: continuing)"; cheap_failed+=("$name"); }
+    else
+      "$@"
+    fi
+  }
+  changelog_step() {
     python3 scripts/release/changelog_fragments.py check --base "$base" --head HEAD
-  fi
-  step "file size"
-  python3 scripts/dev/check-file-size.py --base "$base"
-  step "inventory rows"
-  python3 scripts/release/check_inventory_rows.py "$base" HEAD
-  step "timing asserts"
-  python3 scripts/dev/check-timing-asserts.py --base "$base"
-  step "C6 obligations"
+  }
+  file_size_step() {
+    python3 scripts/dev/check-file-size.py --base "$base"
+  }
+  inventory_step() {
+    "$GATE_PY" scripts/release/check_inventory_rows.py "$base" HEAD
+  }
+  timing_step() {
+    "$GATE_PY" scripts/dev/check-timing-asserts.py --base "$base"
+  }
   # One line per obligation: show them all only when one is unresolved.
-  c6="$(python3 scripts/release/c6_resolve.py --tree HEAD)" || { printf '%s\n' "$c6"; exit 1; }
-  printf '%s\n' "${c6##*$'\n'}"
-  step "scope acceptance"
-  python3 scripts/release/check_scope_acceptance.py --check
-
-  step "commit message hygiene"
+  c6_step() {
+    local c6
+    c6="$(python3 scripts/release/c6_resolve.py --tree HEAD)" || { printf '%s\n' "$c6"; return 1; }
+    printf '%s\n' "${c6##*$'\n'}"
+  }
+  scope_step() {
+    python3 scripts/release/check_scope_acceptance.py --check
+  }
   # This branch's own commits. With no argument the script falls back to the
   # upstream, else origin/main, which is far behind the release line.
-  scripts/dev/check-commit-message-hygiene.sh "$base..HEAD"
-
-  step "public repo hygiene"
-  scripts/dev/check-public-repo-hygiene.sh --base "$base"
-
+  commit_hygiene_step() {
+    scripts/dev/check-commit-message-hygiene.sh "$base..HEAD"
+  }
+  public_hygiene_step() {
+    scripts/dev/check-public-repo-hygiene.sh --base "$base"
+  }
   # MIK-8410: the CI-check scanner's own drift tests first (CI runs them too;
   # the runner's 22.5 s suite runs in CI only), then CI's cargo-free
   # PR-workflow checks, before any cargo step.
-  step "CI-check gate self-tests"
-  python3 -c 'import yaml' 2>/dev/null || { echo "PyYAML is missing: pip install --user pyyaml (CI pins 6.0.2); pre-push installs nothing"; exit 1; }
-  python3 scripts/dev/test_prepush_ci_checks.py
+  ci_selftest_step() {
+    python3 -c 'import yaml' 2>/dev/null || { echo "PyYAML is missing: pip install --user pyyaml (CI pins 6.0.2); pre-push installs nothing"; return 1; }
+    python3 scripts/dev/test_prepush_ci_checks.py
+  }
+  ci_scripts_step() {
+    bash scripts/dev/prepush_ci_step.sh "$base"
+  }
 
-  step "CI script checks"
-  bash scripts/dev/prepush_ci_step.sh "$base"
+  # changelog.yml skips this repository's throwaway/ branches (red-first and
+  # mutant probes), so the hook does too.
+  if [[ "$(git rev-parse --abbrev-ref HEAD)" != throwaway/* ]]; then
+    cheap "changelog fragment" changelog_step
+  fi
+  cheap "file size" file_size_step
+  # The gates that read Rust items run on their own pinned environment
+  # (tree-sitter, hash-locked). The hook installs nothing: an environment
+  # that is missing or out of date stops the push with the command to run.
+  step "gate environment"
+  GATE_PY="$(scripts/dev/gate-env-python.sh)"
+  # The CI-check runner below replays the gates on it too, in scratch clones.
+  export GATE_PY
+  cheap "inventory rows" inventory_step
+  cheap "timing asserts" timing_step
+  cheap "C6 obligations" c6_step
+  cheap "scope acceptance" scope_step
+  cheap "commit message hygiene" commit_hygiene_step
+  cheap "public repo hygiene" public_hygiene_step
+  cheap "CI-check gate self-tests" ci_selftest_step
+  cheap "CI script checks" ci_scripts_step
+  if (( ${#cheap_failed[@]} )); then
+    echo "FAIL: cheap steps failed (keep-going): ${cheap_failed[*]}"
+    # The EXIT trap names the stopping step last; name the first real one that failed.
+    current_step="${cheap_failed[0]}"
+    exit 1
+  fi
 
   # Cargo's own exit code decides, never a pipe's: the full output goes to a
   # log, a failure prints its tail and keeps the log, and every `test result:`
@@ -110,7 +162,10 @@ if [[ -f Cargo.toml ]]; then
   # compile cfg(not(debug_assertions)) code the dev passes never see, and some
   # lints fire only there (#4060: assigning_clones).
   step "registry ban, release profile (both feature sets)"
-  run_cargo "registry ban release all-features" clippy --release --lib --bins --all-features --quiet -- -D warnings
+  # Every feature but the test-only ones, as CI's step computes it. Under
+  # set -e a failing script stops the push at this step.
+  feats=$(python3 scripts/ci/release_features.py)
+  run_cargo "registry ban release features" clippy --release --lib --bins --features "$feats" --quiet -- -D warnings
   run_cargo "registry ban release no-default-features" clippy --release --lib --bins --no-default-features --quiet -- -D warnings
   unset CLIPPY_CONF_DIR
   step "registry lint self-test"

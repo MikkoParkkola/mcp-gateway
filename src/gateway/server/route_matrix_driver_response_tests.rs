@@ -63,6 +63,8 @@ pub(crate) async fn stdio_sealed(setup: StdioSetup, era: Era, answer: Value) -> 
                 servers: None,
                 keys: None,
                 except: None,
+                allowed_roots: None,
+                path_args: None,
             }];
         })
     });
@@ -76,6 +78,7 @@ pub(crate) async fn stdio_sealed(setup: StdioSetup, era: Era, answer: Value) -> 
             dual_signed(meta);
             if let Some(firewall) = firewall {
                 meta.share_keyring_with_for_test(&firewall);
+                crate::security::firewall::collusion_live_rig::seed_meta(meta, &firewall);
                 meta.set_firewall(Some(firewall));
             }
         },

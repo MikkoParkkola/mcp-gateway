@@ -17,6 +17,7 @@ use crate::gateway::meta_mcp::MetaMcp;
 use crate::mtls::MtlsPolicy;
 use crate::ranking::SearchRanker;
 use crate::routing_profile::ProfileRegistry;
+#[cfg(test)]
 use crate::security::ToolPolicy;
 #[cfg(feature = "firewall")]
 use crate::security::firewall::Firewall;
@@ -32,6 +33,9 @@ use crate::{Error, Result};
 /// without duplicating the construction logic.
 pub(super) struct BuiltMetaMcp {
     pub(super) meta_mcp: Arc<MetaMcp>,
+    /// The startup config's tool policy, for the stdio fixtures that build
+    /// their authorizer from it. Production judges under each generation's.
+    #[cfg(test)]
     pub(super) tool_policy: Arc<ToolPolicy>,
     pub(super) mtls_policy: Arc<MtlsPolicy>,
     /// Ranker handle retained for graceful-shutdown persistence (HTTP mode).
@@ -55,6 +59,42 @@ pub(super) struct BuiltMetaMcp {
     pub(super) transparency_log: Option<Arc<crate::security::TransparencyLogger>>,
 }
 
+/// The read verdict's mode when it runs while the firewall is off: it runs
+/// on its own switch (`arg_keys` set, `cross_tenant_reads` not `off`), not on
+/// `security.firewall.enabled`.
+#[cfg(feature = "firewall")]
+fn read_verdict_without_firewall(
+    config: &crate::security::firewall::FirewallConfig,
+) -> Option<crate::security::firewall::tenant_guard::CrossTenantReads> {
+    use crate::security::firewall::tenant_guard::CrossTenantReads;
+    let mode = config.tenant_guard.cross_tenant_reads;
+    (!config.enabled && !config.tenant_guard.arg_keys.is_empty() && mode != CrossTenantReads::Off)
+        .then_some(mode)
+}
+
+/// Say at startup that the read verdict still runs with the firewall off: at
+/// WARN under `block`, where answers can be withheld, at INFO under `observe`.
+#[cfg(feature = "firewall")]
+fn announce_read_verdict(config: &crate::security::firewall::FirewallConfig) {
+    use crate::security::firewall::tenant_guard::CrossTenantReads;
+    const STOP: &str = "Set cross_tenant_reads: off to stop it. \
+                        Tenant attribution in audit records also keeps running.";
+    match read_verdict_without_firewall(config) {
+        Some(CrossTenantReads::Block) => warn!(
+            "Security firewall is off; the cross-tenant read verdict \
+             (tenant_guard.cross_tenant_reads: block) still runs on every transport \
+             and answers may be withheld. {STOP}"
+        ),
+        // `off` never reaches here: the predicate is the one gate.
+        Some(_) => info!(
+            "Security firewall is off; the cross-tenant read verdict \
+             (tenant_guard.cross_tenant_reads: observe) still runs on every transport \
+             and only flags. {STOP}"
+        ),
+        None => {}
+    }
+}
+
 impl Gateway {
     /// A firewall with its own transition tracker, sharing `meta_mcp`'s relay
     /// detector (COLLUDE.1). Both transports build theirs here, so each leaves
@@ -72,7 +112,10 @@ impl Gateway {
                 .with_continuations(meta_mcp.continuation())
                 .with_posture(self.config.security.posture)
                 .with_reads(Arc::clone(&self.reads))
-                .sharing_relay_with(meta_mcp.firewall.as_deref()),
+                .sharing_relay_with(meta_mcp.firewall.as_deref())
+                // The folder check classifies a call's backend through the
+                // live registry and capability slot.
+                .with_registries(Arc::clone(&self.backends), meta_mcp.capability_slot()),
         );
         if fw_enabled {
             info!("Security firewall enabled (RFC-0071)");
@@ -109,8 +152,8 @@ impl Gateway {
         });
 
         // ── Security policies ────────────────────────────────────────────────
+        #[cfg(test)]
         let tool_policy = Arc::new(ToolPolicy::from_config(&self.config.security.tool_policy));
-        let mtls_policy = Arc::new(MtlsPolicy::from_config(&self.config.mtls));
 
         // ── Usage stats + search ranker with on-disk persistence ─────────────
         let usage_stats = Some(Arc::new(UsageStats::new()));
@@ -129,6 +172,12 @@ impl Gateway {
             &self.env.get(),
             &data_dir,
         )?);
+        // Built under the record key, so each rule carries the id a refusal
+        // records. mTLS and the key are both restart-only: compiled once.
+        let mtls_policy = Arc::new(MtlsPolicy::from_config_keyed(
+            &self.config.mtls,
+            &record_key.rule_id_key(),
+        ));
 
         let ranker_path = data_dir.join("usage.json");
         let ranker = Arc::new(SearchRanker::new());
@@ -455,9 +504,11 @@ impl Gateway {
             );
 
         // ── Local identity grants (MIK-6553 free/core) ───────────────────────
-        if let Some((path, grants)) =
+        if let Some((path, grants, bytes)) =
             load_configured_identity_grants(&self.config.security.identity_grants).await?
         {
+            // Into the startup inputs, moved: the first publish digests them.
+            self.env.set_startup_grants(Some(bytes));
             let count = grants.len();
             Arc::get_mut(&mut meta_mcp)
                 .expect("no other Arc references at this point")
@@ -476,6 +527,7 @@ impl Gateway {
         // (see `AppState`); each keeps its own `TransitionTracker`.
         #[cfg(feature = "firewall")]
         {
+            announce_read_verdict(&self.config.security.firewall);
             let fw = self.response_firewall(&meta_mcp);
             Arc::get_mut(&mut meta_mcp)
                 .expect("no other Arc references at this point")
@@ -484,6 +536,7 @@ impl Gateway {
 
         Ok(BuiltMetaMcp {
             meta_mcp,
+            #[cfg(test)]
             tool_policy,
             mtls_policy,
             ranker,
@@ -494,5 +547,19 @@ impl Gateway {
             record_key,
             transparency_log,
         })
+    }
+}
+
+// The same gate as its only caller's module (router/mod.rs: policy_barrier_tests).
+#[cfg(all(test, feature = "firewall"))]
+impl Gateway {
+    /// The mTLS policy the production builder compiles from this gateway's
+    /// config, with the rule key its ids are computed under, for a row that
+    /// installs that policy on a router.
+    pub(crate) async fn built_mtls_policy_for_test(
+        &self,
+    ) -> Result<(Arc<MtlsPolicy>, crate::security::rule_id::RuleKey)> {
+        let built = self.build_meta_mcp().await?;
+        Ok((built.mtls_policy, built.record_key.rule_id_key()))
     }
 }

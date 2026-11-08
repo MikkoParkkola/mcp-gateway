@@ -189,7 +189,11 @@ impl crate::gateway::input_bridge::ChallengeGate for BridgeDispatcher<'_> {
             key: crate::security::response_policy::KeyOf::of_client(self.caller.api_key_identity()),
         };
         self.meta
-            .enforce_firewall_challenge(&delivered_challenge(challenge), &targets, &correlation)
+            .enforce_firewall_challenge(
+                &delivered_challenge(challenge),
+                (&targets, &correlation),
+                self.caller.authorizer.generation(),
+            )
             .map_err(
                 |_| crate::gateway::input_bridge::BridgeError::ChallengeRefused {
                     dispatched: false,
@@ -234,6 +238,7 @@ impl crate::gateway::input_bridge::BackendInvoker for BridgeDispatcher<'_> {
                 cost_key: self.caller.cost_key(),
                 trace_id: "",
                 caller_key: None,
+                generation: self.caller.generation,
             })
             .map_err(|e| {
                 // A spend refusal ends the exchange as the delivered refusal.
@@ -303,6 +308,7 @@ impl crate::gateway::input_bridge::BackendInvoker for BridgeDispatcher<'_> {
         let sent = super::chokepoint::Outbound {
             arguments: self.arguments,
             answers: outbound.input_responses.as_ref(),
+            backend: self.captured.as_deref(),
         };
         let at = (self.server, self.tool);
         let source = super::chokepoint::Source::Bridged;
@@ -339,7 +345,7 @@ impl crate::gateway::input_bridge::BackendInvoker for BridgeDispatcher<'_> {
                 self.headers,
                 self.cache_binding,
                 self.account_credential.clone(),
-                self.caller.cost_key(),
+                (self.caller.cost_key(), self.caller.generation),
                 self.trace_id,
                 self.policy_epoch,
                 self.protocol_revision,
@@ -355,14 +361,25 @@ impl crate::gateway::input_bridge::BackendInvoker for BridgeDispatcher<'_> {
         drop(admission);
         let error = match dispatched {
             Ok(value) => {
-                // Asked again: the backend has not acted on this round.
+                // Asked again, inside this one legacy call: no client
+                // continuation receives the key, and stopping to ask does not
+                // prove the backend has not acted, so a drop from here on
+                // settles as may-have-run.
                 if crate::protocol::mrtr::InputRequired::claims_input_required(&value) {
-                    arm(self.reservation, false);
+                    arm(self.reservation, true);
                 }
                 return Ok(value);
             }
             Err(error) => error,
         };
+        // The exchange's failure is this round's: counted with its origin
+        // when the bridge answers it with its own refusal.
+        crate::gateway::delivery_facts::folded(crate::gateway::health_metrics::RpcError {
+            code: error.to_rpc_code(),
+            origin: error.origin(),
+        });
+        // A later round's send can be refused as the first one's can.
+        super::audit::note_send_refusal(&error);
         // A11-c: a 401 on a managed credential forces at most one refresh.
         let classified = classify_bridged_dispatch_error(&error);
         if matches!(
@@ -376,7 +393,12 @@ impl crate::gateway::input_bridge::BackendInvoker for BridgeDispatcher<'_> {
         if let Some(managed) = self.managed
             && is_upstream_unauthorized(&error)
         {
-            *self.account_refusal.lock() = Some(managed.after_upstream_401(error).await);
+            *self.account_refusal.lock() =
+                Some(super::audit::after_upstream_401(managed, error).await);
+        } else if super::gate::is_authorization_refusal(&error) {
+            // A refusal of the caller is parked too, so the call answers it as
+            // itself rather than as a failed exchange.
+            *self.account_refusal.lock() = Some(error);
         }
         Err(classified)
     }

@@ -85,21 +85,76 @@ impl CallTarget<'_> {
 }
 
 /// A refusal, carrying the code and status the client-facing envelope needs.
-#[derive(Debug, Clone)]
+///
+/// `kind` names the check that refused, for the decision record only: it is
+/// crate-private, never serialized, and left out of `Debug`, so no response
+/// body or log line can carry it and the wire stays exactly as it was.
+#[derive(Clone)]
 pub struct AuthorizationError {
     pub code: i32,
     pub status: StatusCode,
     pub message: String,
+    pub(crate) kind: crate::security::decision_record::DecisionKind,
+    /// The configured rule that refused, for the decision record only, never
+    /// delivered: a refused caller cannot learn which rule blocked it.
+    pub(crate) rule_id: Option<crate::security::rule_id::RuleId>,
+}
+
+#[expect(
+    clippy::missing_fields_in_debug,
+    reason = "kind and rule_id are deliberately left out so no log line can carry them"
+)]
+impl std::fmt::Debug for AuthorizationError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AuthorizationError")
+            .field("code", &self.code)
+            .field("status", &self.status)
+            .field("message", &self.message)
+            .finish()
+    }
 }
 
 impl AuthorizationError {
-    pub(crate) fn forbidden(code: i32, message: impl Into<String>) -> Self {
+    pub(crate) fn forbidden(
+        kind: crate::security::decision_record::DecisionKind,
+        code: i32,
+        message: impl Into<String>,
+    ) -> Self {
         Self {
             code,
             status: StatusCode::FORBIDDEN,
             message: message.into(),
+            kind,
+            rule_id: None,
         }
     }
+
+    /// This refusal, naming the configured rule that made it.
+    #[must_use]
+    pub(crate) fn with_rule(mut self, rule_id: Option<crate::security::rule_id::RuleId>) -> Self {
+        self.rule_id = rule_id;
+        self
+    }
+}
+
+/// The tool policy on `target`, as every transport's authorizer judges it: a
+/// refusal is `-32600` and names the policy entry that made it, for the
+/// decision record only.
+pub(crate) fn tool_policy_refusal(
+    policy: &crate::security::ToolPolicy,
+    target: ToolTarget<'_>,
+) -> Result<(), AuthorizationError> {
+    policy
+        .check_explained(target.server, target.tool)
+        .map(|_| ())
+        .map_err(|(e, rule)| {
+            AuthorizationError::forbidden(
+                crate::security::decision_record::DecisionKind::ToolPolicy,
+                INVALID_REQUEST,
+                e.to_string(),
+            )
+            .with_rule(rule.cloned())
+        })
 }
 
 /// The caller's backend scope: whether an API key or key-server token may
@@ -116,6 +171,7 @@ pub(crate) fn authorize_backend(
 ) -> Result<(), AuthorizationError> {
     match client {
         Some(client) if !client.can_access_backend(server) => Err(AuthorizationError::forbidden(
+            crate::security::decision_record::DecisionKind::BackendScope,
             -32003,
             client.backend_refusal(server),
         )),
@@ -139,12 +195,87 @@ pub enum BackendGrant<'a> {
 
 impl<'a> BackendGrant<'a> {
     pub(crate) fn of(client: Option<&'a super::auth::AuthenticatedClient>) -> Self {
-        match client {
-            None => Self::Unscoped,
-            Some(client) if client.backends.iter().any(|b| b == "*") => Self::Unscoped,
-            Some(client) if client.backends.is_empty() => Self::Empty,
-            Some(client) => Self::Scoped(&client.backends),
+        client.map_or(Self::Unscoped, |client| Self::of_list(&client.backends))
+    }
+
+    /// The grant a `backends` list makes, for a caller holding the list
+    /// apart from its client (an Activity read outlives the request).
+    pub(crate) fn of_list(backends: &'a [String]) -> Self {
+        if backends.iter().any(|b| b == "*") {
+            Self::Unscoped
+        } else if backends.is_empty() {
+            Self::Empty
+        } else {
+            Self::Scoped(backends)
         }
+    }
+
+    /// The grant the web UI reads and administers by. An admin key with an
+    /// empty backend list is a UI-wide admin that calls no backend; a
+    /// non-empty list without `*` narrows the UI to those backends, admin or
+    /// not. Every other case is [`Self::of`].
+    #[cfg(feature = "webui")]
+    pub(crate) fn for_ui(client: Option<&'a super::auth::AuthenticatedClient>) -> Self {
+        client.map_or(Self::Unscoped, |client| {
+            Self::for_ui_list(client.admin, &client.backends)
+        })
+    }
+
+    /// `for_ui` for a key held apart from its client (the web UI's rule, used
+    /// also where a session is checked against the key that minted it).
+    pub(crate) fn for_ui_list(admin: bool, backends: &'a [String]) -> Self {
+        match Self::of_list(backends) {
+            Self::Empty if admin => Self::Unscoped,
+            grant => grant,
+        }
+    }
+
+    /// Whether this grant reaches backend `name`: the one membership test the
+    /// UI's scoped reads share, so no surface judges a scope its own way. It
+    /// agrees with `AuthenticatedClient::can_access_backend` for every grant
+    /// shape, a pinned row (MCP dispatch still reads that one).
+    #[cfg(feature = "webui")]
+    pub(crate) fn admits(self, name: &str) -> bool {
+        match self {
+            Self::Unscoped => true,
+            Self::Scoped(backends) => backends.iter().any(|b| b == name),
+            Self::Empty => false,
+        }
+    }
+}
+
+/// How far a caller's admin flag reaches. Declared lowest first,
+/// so the derived order is the rank: a step down is `fresh < captured`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum AdminStanding {
+    /// Not an admin.
+    None,
+    /// An admin scoped to some backends: admin breadth inside the scope
+    /// (Activity, admin-only capabilities on its backends), never past it.
+    InScope,
+    /// An admin whose scope is every backend (`*`, or an admin key with no
+    /// backends): the gateway-wide admin powers.
+    Gateway,
+}
+
+impl AdminStanding {
+    /// Whether this standing holds the gateway-wide admin powers.
+    #[must_use]
+    pub(crate) const fn is_gateway(self) -> bool {
+        matches!(self, Self::Gateway)
+    }
+}
+
+/// The one rule from an admin flag and a backend list to a standing, on the
+/// web UI's reading of the list ([`BackendGrant::for_ui_list`]), so an admin
+/// key with no backends stays a gateway-wide admin.
+pub(crate) fn admin_standing(admin: bool, backends: &[String]) -> AdminStanding {
+    if !admin {
+        AdminStanding::None
+    } else if BackendGrant::for_ui_list(true, backends) == BackendGrant::Unscoped {
+        AdminStanding::Gateway
+    } else {
+        AdminStanding::InScope
     }
 }
 
@@ -204,6 +335,14 @@ pub trait ToolAuthorizer {
     /// `quota_principal`: a wrapper delegates, and only a transport with no
     /// client scope answers [`BackendGrant::Unscoped`].
     fn backend_grant(&self) -> BackendGrant<'_>;
+
+    /// The generation this caller is judged under: the request's pinned one,
+    /// or the one current at a queued dispatch. `None` only for an authorizer
+    /// built from no request (the unscoped operator, a test's), which is
+    /// judged under the generation published at the check, never the startup
+    /// policy. Required, with no default: an authorizer that forgot it would
+    /// judge with stale rules and nothing would fail.
+    fn generation(&self) -> Option<&crate::config_reload::Generation>;
 }
 
 /// Whether a decision writes its audit record. An enum rather than a `bool`
@@ -303,6 +442,9 @@ pub(crate) struct AllowAll;
 
 #[cfg(test)]
 impl ToolAuthorizer for AllowAll {
+    fn generation(&self) -> Option<&crate::config_reload::Generation> {
+        None
+    }
     fn quota_principal(&self) -> Option<&QuotaPrincipal> {
         None
     }
@@ -330,6 +472,9 @@ pub(crate) struct DenyAll;
 
 #[cfg(test)]
 impl ToolAuthorizer for DenyAll {
+    fn generation(&self) -> Option<&crate::config_reload::Generation> {
+        None
+    }
     fn quota_principal(&self) -> Option<&QuotaPrincipal> {
         None
     }
@@ -338,6 +483,7 @@ impl ToolAuthorizer for DenyAll {
     }
     fn decide<'a>(&'a self, target: ToolTarget<'a>) -> Decision<'a> {
         Decision::of(Err(AuthorizationError::forbidden(
+            crate::security::decision_record::DecisionKind::ToolPolicy,
             -32003,
             format!(
                 "denied by test authorizer: '{}' on '{}'",
@@ -368,6 +514,9 @@ pub(crate) struct DenyOne {
 
 #[cfg(test)]
 impl ToolAuthorizer for DenyOne {
+    fn generation(&self) -> Option<&crate::config_reload::Generation> {
+        None
+    }
     fn quota_principal(&self) -> Option<&QuotaPrincipal> {
         None
     }
@@ -377,6 +526,7 @@ impl ToolAuthorizer for DenyOne {
     fn decide<'a>(&'a self, target: ToolTarget<'a>) -> Decision<'a> {
         if target.tool == self.tool {
             return Decision::of(Err(AuthorizationError::forbidden(
+                crate::security::decision_record::DecisionKind::ToolPolicy,
                 -32003,
                 format!("denied by test authorizer: '{}'", target.tool),
             )));
@@ -427,6 +577,9 @@ impl<A: ToolAuthorizer> CountingAuthorizer<A> {
 
 #[cfg(test)]
 impl<A: ToolAuthorizer> ToolAuthorizer for CountingAuthorizer<A> {
+    fn generation(&self) -> Option<&crate::config_reload::Generation> {
+        self.inner.generation()
+    }
     fn quota_principal(&self) -> Option<&QuotaPrincipal> {
         self.inner.quota_principal()
     }
@@ -464,11 +617,81 @@ impl<A: ToolAuthorizer> ToolAuthorizer for CountingAuthorizer<A> {
 ///
 /// This replaces the inline check that ran for `gateway_invoke` alone, so a
 /// stdio playbook or code-mode step is now covered where it was not.
+/// What a stdio line is judged with: its generation, taken as the line is
+/// read (ADR-029, amended, item 5). Tests pass a real generation too
+/// (`test_line`), so no line is judged under an invented config.
+pub(crate) trait StdioLine: Sync {
+    /// The tool policy that decides the line's calls.
+    fn tool_policy(&self) -> &crate::security::ToolPolicy;
+    /// The generation the line is judged under: always the one pinned as the
+    /// line was read, never a later read of the live config.
+    fn generation(&self) -> &crate::config_reload::Generation;
+    /// The generation a reader that outlives the borrow judges the line
+    /// under. Never absent: a catalogue read has no fallback to the config
+    /// published later.
+    fn pinned(&self) -> std::sync::Arc<crate::config_reload::Generation>;
+}
+
+impl StdioLine for std::sync::Arc<crate::config_reload::Generation> {
+    fn tool_policy(&self) -> &crate::security::ToolPolicy {
+        crate::config_reload::Generation::tool_policy(self)
+    }
+    fn generation(&self) -> &crate::config_reload::Generation {
+        self
+    }
+    fn pinned(&self) -> std::sync::Arc<crate::config_reload::Generation> {
+        std::sync::Arc::clone(self)
+    }
+}
+
+/// A test's stdio line, pinned as the serve loop pins one when it reads it:
+/// the generation `meta` publishes now with `policy` as its tool policy (its
+/// keys kept), or, for a gateway that publishes none, the default config
+/// with it. Never a bare policy judged under no generation.
+#[cfg(test)]
+pub(crate) fn test_line(
+    meta: &crate::gateway::meta_mcp::MetaMcp,
+    policy: &crate::security::ToolPolicyConfig,
+) -> std::sync::Arc<crate::config_reload::Generation> {
+    use crate::config_reload::LiveConfig;
+    let Some(published) = meta.current_generation() else {
+        let mut config = crate::config::Config::default();
+        config.security.tool_policy = policy.clone();
+        return LiveConfig::new(config).generation();
+    };
+    let mut config = (**published.config()).clone();
+    config.security.tool_policy = policy.clone();
+    LiveConfig::with_auth(config, std::sync::Arc::clone(published.auth())).generation()
+}
+
+/// [`test_line`] under the default tool policy.
+#[cfg(test)]
+pub(crate) fn default_line(
+    meta: &crate::gateway::meta_mcp::MetaMcp,
+) -> std::sync::Arc<crate::config_reload::Generation> {
+    test_line(meta, &crate::security::ToolPolicyConfig::default())
+}
+
+/// The generation a published test gateway serves a stdio line under.
+#[cfg(test)]
+pub(crate) fn published_line(
+    meta: &crate::gateway::meta_mcp::MetaMcp,
+) -> std::sync::Arc<crate::config_reload::Generation> {
+    meta.current_generation()
+        .expect("the fixture publishes a generation")
+}
+
 pub(crate) struct ToolPolicyAuthorizer<'a> {
     pub(crate) tool_policy: &'a crate::security::ToolPolicy,
+    /// The generation the call is judged under; `tool_policy` is its policy.
+    /// `None` only for a test's own policy.
+    pub(crate) generation: Option<&'a crate::config_reload::Generation>,
 }
 
 impl ToolAuthorizer for ToolPolicyAuthorizer<'_> {
+    fn generation(&self) -> Option<&crate::config_reload::Generation> {
+        self.generation
+    }
     fn quota_principal(&self) -> Option<&QuotaPrincipal> {
         None
     }
@@ -481,12 +704,14 @@ impl ToolAuthorizer for ToolPolicyAuthorizer<'_> {
         }
         Decision::of(
             crate::security::validate_tool_name(target.tool)
-                .map_err(|e| AuthorizationError::forbidden(INVALID_REQUEST, e.clone()))
-                .and_then(|()| {
-                    self.tool_policy
-                        .check(target.server, target.tool)
-                        .map_err(|e| AuthorizationError::forbidden(INVALID_REQUEST, e.to_string()))
-                }),
+                .map_err(|e| {
+                    AuthorizationError::forbidden(
+                        crate::security::decision_record::DecisionKind::Syntax,
+                        INVALID_REQUEST,
+                        e.clone(),
+                    )
+                })
+                .and_then(|()| tool_policy_refusal(self.tool_policy, target)),
         )
     }
 
@@ -505,3 +730,10 @@ impl ToolAuthorizer for ToolPolicyAuthorizer<'_> {
         None
     }
 }
+
+#[cfg(test)]
+#[path = "authz_rule_id_tests.rs"]
+mod rule_id_tests;
+#[cfg(test)]
+#[path = "authz_standing_tests.rs"]
+mod standing_tests;

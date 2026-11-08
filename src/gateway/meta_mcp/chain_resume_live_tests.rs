@@ -170,7 +170,7 @@ fn resuming_ctx<'a>(
         stdio_nonce: None,
         caller_key: None,
         verified_identity: Some(who),
-        is_admin: false,
+        admin: crate::gateway::authz::AdminStanding::None,
         surface_request: crate::gateway::recovery::SurfaceRequest::Configured,
         input_capabilities: *caps,
         retry,
@@ -178,6 +178,7 @@ fn resuming_ctx<'a>(
         task: None,
         era: crate::protocol::meta::Era::Modern,
         channel: &crate::gateway::input_bridge::NoClientChannel,
+        generation: None,
     }
 }
 
@@ -617,6 +618,9 @@ mod nonce_tests;
 struct Granted(Vec<String>);
 
 impl crate::gateway::authz::ToolAuthorizer for Granted {
+    fn generation(&self) -> Option<&crate::config_reload::Generation> {
+        None
+    }
     fn quota_principal(&self) -> Option<&crate::gateway::auth::QuotaPrincipal> {
         None
     }

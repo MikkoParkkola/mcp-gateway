@@ -60,9 +60,10 @@ fn slot_mut<'v>(node: &'v mut Value, path: &[Segment]) -> Option<&'v mut Value> 
     slot_mut(child, rest)
 }
 
-/// Remove the key at `path`, if present, then every mapping on the way that
-/// this left empty. A missing key, or a path into a sequence element that
-/// does not exist, changes nothing.
+/// Remove the key or list element at `path`, if present (later elements
+/// shift down), then every mapping on the way that this left empty, and a
+/// list it emptied (only `auth.api_keys` gets here). A missing key, or a
+/// path into a sequence element that does not exist, changes nothing.
 fn remove(node: &mut Value, path: &[Segment]) -> bool {
     let Some((first, rest)) = path.split_first() else {
         return false;
@@ -79,15 +80,21 @@ fn remove(node: &mut Value, path: &[Segment]) -> bool {
                 return false;
             };
             let removed = remove(child, rest);
-            if removed && child.as_mapping().is_some_and(Mapping::is_empty) {
+            let emptied = child.as_mapping().is_some_and(Mapping::is_empty)
+                || child.as_sequence().is_some_and(Vec::is_empty);
+            if removed && emptied {
                 map.shift_remove(key.as_str());
             }
             removed
         }
-        Segment::Index(at) => node
-            .as_sequence_mut()
-            .and_then(|seq| seq.get_mut(*at))
-            .is_some_and(|child| remove(child, rest)),
+        Segment::Index(at) => match node.as_sequence_mut() {
+            Some(seq) if rest.is_empty() && *at < seq.len() => {
+                seq.remove(*at);
+                true
+            }
+            Some(seq) => seq.get_mut(*at).is_some_and(|child| remove(child, rest)),
+            None => false,
+        },
     }
 }
 
@@ -106,6 +113,85 @@ pub(super) enum Origin {
     },
     /// A new line.
     Inserted,
+}
+
+/// One run of changed lines: original lines removed or replaced, and the
+/// lines that take their place. Kept lines are never in a hunk.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Hunk {
+    /// The first original line of the run, 1-based; for a pure insertion,
+    /// the original line it follows (0: the start of the file).
+    pub(crate) old_start: usize,
+    /// The original lines of the run, 0-based, in order.
+    pub(crate) old: Vec<usize>,
+    /// The first edited line of the run, 1-based (for a pure removal, the
+    /// edited line it follows).
+    pub(crate) new_start: usize,
+    pub(crate) new: Vec<NewLine>,
+}
+
+/// A line an edit wrote, without its ending.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct NewLine {
+    pub(crate) text: String,
+    /// For a line whose value was replaced: the original line, 0-based, and
+    /// how many of its leading and trailing bytes (ending aside) it kept.
+    pub(crate) replaced: Option<(usize, usize, usize)>,
+}
+
+/// A hunk being built: where it starts, and its lines so far.
+#[derive(Default)]
+struct Run {
+    old: Vec<usize>,
+    new: Vec<NewLine>,
+    /// For a run with no original line: the original line it follows.
+    after_old: Option<usize>,
+    /// For a run with no new line: the edited line it follows.
+    after_new: Option<usize>,
+}
+
+impl Run {
+    fn removed(&mut self, lines: std::ops::Range<usize>, next: usize) {
+        if !lines.is_empty() {
+            self.after_old.get_or_insert(next);
+        }
+        self.old.extend(lines);
+    }
+
+    fn wrote(
+        &mut self,
+        text: &str,
+        replaced: Option<(usize, usize, usize)>,
+        written: usize,
+        next: usize,
+    ) {
+        self.after_new.get_or_insert(written);
+        self.after_old.get_or_insert(next);
+        self.new.push(NewLine {
+            text: text.to_owned(),
+            replaced,
+        });
+    }
+
+    fn flush(&mut self, out: &mut Vec<Hunk>, written: usize) {
+        let run = std::mem::take(self);
+        if run.old.is_empty() && run.new.is_empty() {
+            return;
+        }
+        out.push(Hunk {
+            old_start: run
+                .old
+                .first()
+                .map_or(run.after_old.unwrap_or(0), |first| first + 1),
+            new_start: if run.new.is_empty() {
+                written
+            } else {
+                run.after_new.unwrap_or(written) + 1
+            },
+            old: run.old,
+            new: run.new,
+        });
+    }
 }
 
 /// The text being edited, line by line, each line with its ending and its
@@ -229,6 +315,63 @@ impl Lines {
         }
     }
 
+    /// The 1-based line in the original that line `n` of the text comes
+    /// from; `None` for a line an edit inserted.
+    pub(super) fn original_line(&self, n: usize) -> Option<usize> {
+        match self.lines.get(n)?.1 {
+            Origin::Kept(i) | Origin::Replaced { line: i, .. } => Some(i + 1),
+            Origin::Inserted => None,
+        }
+    }
+
+    /// The changed lines against `original`: each maximal run of original
+    /// lines removed or replaced, with the lines written in their place.
+    /// Kept lines end a run and are never in one.
+    pub(super) fn hunks(&self, original: &str) -> Vec<Hunk> {
+        let total = original.split_inclusive('\n').count();
+        let mut out = Vec::new();
+        let mut run = Run::default();
+        // The next original line not yet accounted for, and the edited lines
+        // written so far.
+        let (mut next, mut written) = (0usize, 0usize);
+        for (text, origin) in &self.lines {
+            let text = split_ending(text).0;
+            match *origin {
+                Origin::Kept(i) => {
+                    run.removed(next..i, next);
+                    run.flush(&mut out, written);
+                    next = i + 1;
+                }
+                Origin::Replaced {
+                    line,
+                    before,
+                    after,
+                } => {
+                    run.removed(next..line, next);
+                    run.old.push(line);
+                    run.wrote(text, Some((line, before, after)), written, next);
+                    next = line + 1;
+                }
+                Origin::Inserted => run.wrote(text, None, written, next),
+            }
+            written += 1;
+        }
+        run.removed(next..total, next);
+        run.flush(&mut out, written);
+        out
+    }
+
+    /// The original lines still in the text, kept or with a value replaced.
+    pub(super) fn surviving(&self) -> std::collections::BTreeSet<usize> {
+        self.lines
+            .iter()
+            .filter_map(|(_, origin)| match origin {
+                Origin::Kept(i) | Origin::Replaced { line: i, .. } => Some(*i),
+                Origin::Inserted => None,
+            })
+            .collect()
+    }
+
     /// Proof 2: original lines appear in order; a kept line is byte-identical
     /// (the file's last line may only gain or lose the ending a file without
     /// a final newline needs); a replaced line keeps everything around its
@@ -308,7 +451,7 @@ pub(super) fn nodes(text: &str) -> Result<Vec<Node>, ComputeRefusal> {
         .map_err(|_| unprovable("the parser gives no node positions for this file"))
 }
 
-fn same(steps: &[Step], path: &[Segment]) -> bool {
+pub(crate) fn same(steps: &[Step], path: &[Segment]) -> bool {
     steps.len() == path.len()
         && steps
             .iter()
@@ -334,7 +477,7 @@ pub(super) fn child_count(nodes: &[Node], parent: &Node) -> usize {
 }
 
 /// The direct children of `parent`, in document order.
-fn children<'n>(nodes: &'n [Node], parent: &Node) -> impl Iterator<Item = &'n Node> {
+pub(super) fn children<'n>(nodes: &'n [Node], parent: &Node) -> impl Iterator<Item = &'n Node> {
     let depth = parent.path.len();
     let prefix = parent.path.clone();
     nodes
@@ -492,11 +635,37 @@ fn attach_refusal(nodes: &[Node], node: &Node, next: &Segment) -> Option<Compute
     }
 }
 
-/// Delete the entry at `path` and the lines under it. A missing entry is a
-/// no-op (`Ok(false)`). Gives up rather than delete operator text: a `#`
-/// anywhere in the deleted lines, or a comment line indented under the
+/// What a removal does with a comment on a line it deletes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum CommentRule {
+    /// Give up: the operator's text is never deleted silently.
+    Refuse,
+    /// Delete it; the caller reports it (a revocation and its cascade).
+    Drop,
+}
+
+/// Which lines of an entry a removal deletes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Span {
+    /// The key's line and everything under it.
+    Entry,
+    /// Only the lines under the key; its line stays, so a key on its
+    /// element's dash line qualifies. A `#` after the key's colon still
+    /// refuses: the line's value is about to be rewritten.
+    Under,
+}
+
+/// Delete the entry at `path` (or, under [`Span::Under`], the lines under
+/// its key). A missing entry is a no-op (`Ok(false)`). Under
+/// [`CommentRule::Refuse`] it gives up rather than delete operator text: a
+/// `#` anywhere in the deleted lines, or a comment line indented under the
 /// entry right after them.
-pub(super) fn remove_entry(lines: &mut Lines, path: &[Segment]) -> Result<bool, ComputeRefusal> {
+pub(super) fn remove_entry(
+    lines: &mut Lines,
+    path: &[Segment],
+    rule: CommentRule,
+    span: Span,
+) -> Result<bool, ComputeRefusal> {
     let text = lines.text();
     let nodes = nodes(&text)?;
     let Some(node) = find(&nodes, path) else {
@@ -522,13 +691,26 @@ pub(super) fn remove_entry(lines: &mut Lines, path: &[Segment]) -> Result<bool, 
     };
     let first = lines.line_of(key.start);
     let key_col = column(&text, key.start);
-    if lines.content(first)[..key_col].trim_end().ends_with('-') {
+    if span == Span::Entry && lines.content(first)[..key_col].trim_end().ends_with('-') {
         return Err(give_up(
             GiveUp::DashLine,
             "the key sits on its element's dash line",
         ));
     }
-    let mut last = lines.line_of(node.end.saturating_sub(1).max(key.start));
+    // The last line holding a non-space byte of the entry: a block scalar's
+    // span ends in the next line's indentation, or past trailing blank lines.
+    let entry = &text[node.start..node.end.min(text.len())];
+    let last_byte = node.start + entry.trim_end().len().saturating_sub(1);
+    let mut last = lines.line_of(last_byte.max(key.start));
+    // Blank lines wholly inside the span are the entry's (a block scalar's
+    // trailing lines, which a `|+` scalar above would otherwise take).
+    let end = node.end.min(text.len());
+    while last + 1 < lines.len()
+        && lines.content(last + 1).trim().is_empty()
+        && lines.line_start(last + 2) <= end
+    {
+        last += 1;
+    }
     // Comment and blank lines indented under the entry belong to it.
     // Blank lines between them do not end that.
     let mut next = last + 1;
@@ -545,19 +727,39 @@ pub(super) fn remove_entry(lines: &mut Lines, path: &[Segment]) -> Result<bool, 
         last = next;
         next += 1;
     }
-    if (first..=last).any(|n| lines.content(n).contains('#')) {
-        return Err(give_up(GiveUp::Comment, "a deleted line carries a comment"));
+    // Under `Span::Under` the key's line is judged after its colon only.
+    let after_key = column(&text, key.end);
+    let commented = |n: usize| match span {
+        Span::Under if n == first => lines.content(n)[after_key..].contains('#'),
+        _ => lines.content(n).contains('#'),
+    };
+    if rule == CommentRule::Refuse
+        && let Some(n) = (first..=last).find(|&n| commented(n))
+    {
+        // Named by its line in the original, never by its text.
+        let reason = match lines.original_line(n) {
+            Some(line) => format!("a deleted line carries a comment (line {line})"),
+            None => "a deleted line carries a comment".to_owned(),
+        };
+        return Err(give_up(GiveUp::Comment, &reason));
     }
-    lines.delete(first..last + 1);
+    let from = match span {
+        Span::Entry => first,
+        Span::Under => first + 1,
+    };
+    lines.delete(from..last + 1);
     Ok(true)
 }
 
 /// After the removals: every mapping on a removed path's way that was a
-/// mapping in `before` and is now empty goes too, deepest first.
+/// mapping in `before` and is now empty goes too, deepest first; on a
+/// revocation's way (`revoked`) so does the list it emptied, and the
+/// comments on those lines are dropped, not refused.
 pub(super) fn drop_emptied(
     lines: &mut Lines,
     before: &[Node],
     removed: &[&[Segment]],
+    revoked: Option<&[Segment]>,
 ) -> Result<(), ComputeRefusal> {
     let mut parents: Vec<&[Segment]> = removed
         .iter()
@@ -567,11 +769,18 @@ pub(super) fn drop_emptied(
     parents.sort_by_key(|p| std::cmp::Reverse(p.len()));
     parents.dedup();
     for parent in parents {
-        let was_mapping = find(before, parent).is_some_and(|n| n.shape == Shape::Mapping);
+        let rule = if revoked.is_some_and(|r| r.starts_with(parent)) {
+            CommentRule::Drop
+        } else {
+            CommentRule::Refuse
+        };
+        let was_collection = find(before, parent).is_some_and(|n| {
+            n.shape == Shape::Mapping || (rule == CommentRule::Drop && n.shape == Shape::Sequence)
+        });
         let now = nodes(&lines.text())?;
         let emptied = find(&now, parent).is_some_and(|n| n.shape == Shape::Scalar { empty: true });
-        if was_mapping && emptied {
-            remove_entry(lines, parent)?;
+        if was_collection && emptied {
+            remove_entry(lines, parent, rule, Span::Entry)?;
         }
     }
     Ok(())

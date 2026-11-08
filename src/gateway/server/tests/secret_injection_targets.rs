@@ -44,6 +44,13 @@ fn recording(seen: Arc<Mutex<Received>>) -> Recording {
 
 #[async_trait::async_trait]
 impl crate::transport::Transport for Recording {
+    /// A recording double: these rows check what a call sends, not what its
+    /// answer echoes, so it stands in for a transport holding its set
+    /// (DELTA-10 refuses an injected call on one that does not).
+    fn redacts_injected_values(&self) -> bool {
+        true
+    }
+
     async fn request(&self, method: &str, params: Option<Value>) -> crate::Result<JsonRpcResponse> {
         self.request_with_headers(method, params, &[], None, ResendPermission::Denied)
             .await
@@ -152,16 +159,21 @@ async fn invoke_read_with(meta: &Arc<MetaMcp>, arguments: Value) -> Value {
 
 /// `gateway_invoke read` with `arguments` on `server` over stdio: the answer.
 async fn invoke_read_on(meta: &Arc<MetaMcp>, server: &str, arguments: Value) -> Value {
-    let policy = Arc::new(crate::security::ToolPolicy::default());
     let mtls = Arc::new(crate::mtls::MtlsPolicy::from_config(
         &crate::mtls::MtlsConfig::default(),
     ));
     let request = json!({"jsonrpc": "2.0", "id": 7, "method": "tools/call",
         "params": {"name": "gateway_invoke",
                    "arguments": {"server": server, "tool": "read", "arguments": arguments}}});
-    super::super::Gateway::dispatch_single(meta, &policy, &mtls, &request, "stdio-inject")
-        .await
-        .expect("a request is answered")
+    super::super::Gateway::dispatch_single(
+        meta,
+        &crate::gateway::authz::default_line(meta),
+        &mtls,
+        &request,
+        "stdio-inject",
+    )
+    .await
+    .expect("a request is answered")
 }
 
 /// The call answered without an error.
@@ -247,6 +259,8 @@ async fn after_reload_resolving(
         assert!(registry.register(backend));
     }
     let meta = Arc::new(MetaMcp::new(Arc::clone(&registry)));
+    // As a reload does before it applies its patch.
+    registry.set_load_record(crate::config::configured_secrets::ConfiguredByBackend::default());
     let applied = crate::config_reload::apply_patch(
         &patch,
         &registry,

@@ -111,17 +111,31 @@ impl MetaMcp {
         // returned as the refusal it is) or tells the caller whether a
         // retry can help (the recovery hint below).
         let e = match managed {
-            Some(managed) if is_upstream_unauthorized(&e) => managed.after_upstream_401(e).await,
+            Some(managed) if is_upstream_unauthorized(&e) => {
+                super::audit::after_upstream_401(managed, e).await
+            }
             _ => e,
         };
-        // MIK-8139: the account marker rides on the backend's own error, so
-        // it is honoured only when the shared screen passes that error clean;
-        // otherwise the error becomes the result the gates and firewall read.
-        if crate::personal_accounts::refusal::marked(&e).is_some()
-            && self.backend_error_screens_clean(server, tool, &e)
+        super::audit::note_send_refusal(&e);
+        // Sent nothing (no counted send, and a pre-dispatch error or a refusal
+        // the backend's own send recorded): the one rule for releasing a key.
+        let unsent = crate::gateway::delivery_facts::unsent(&e);
+        // The account-marked refusal is honoured only when the shared screen
+        // passes its body clean; otherwise it becomes the result the gates and
+        // firewall read. A backend's own error is never marked: it is folded
+        // below and screened by the result gates.
+        if let Some(marked) = crate::personal_accounts::refusal::marked(&e)
+            && self.marked_error_screens_clean(server, tool, &marked)
         {
-            // Settled like every dispatched failure (ADR-012).
-            if let Some(reservation) = idem_reservation.as_mut() {
+            // Settled like every dispatched failure (ADR-012). A marked refusal
+            // comes only from `after_upstream_401`, on an upstream 401: one a
+            // sent call answered keeps the key; one the backend's own start
+            // met before the tools/call was sent (a managed slot started
+            // cold) sent nothing, so it is settled as unsent, and then
+            // answered with the offer as any marked refusal is.
+            if unsent {
+                settle_unsent(idem_reservation, execution);
+            } else if let Some(reservation) = idem_reservation.as_mut() {
                 reservation.commit(&withheld_side_effect());
             }
             return self.with_connect_offer(Err(e), verified_identity).await;
@@ -139,18 +153,8 @@ impl MetaMcp {
         // reservation left in the `Option` would be picked up by that
         // commit and re-inserted as a completed entry, which makes the
         // release a no-op and the key permanently wrong.
-        if e.is_pre_dispatch() {
-            // The backend never saw it: refused before its backend.
-            super::audit::note_pre_send(crate::gateway::meta_mcp::dispatch_log::PreSend::Refused);
-            if let Some(mut reservation) = idem_reservation.take() {
-                reservation.release();
-            }
-            // The outer lease was marked before this call; a refusal the
-            // backend never saw is not retained there either, or a keyed
-            // retry replays a stale refusal and its hint (MIK-7974).
-            if let Some(execution) = execution {
-                execution.withdraw_dispatch();
-            }
+        if unsent {
+            settle_unsent(idem_reservation, execution);
         }
         // MIK-7979: a lost round settles with the uncertainty notice, and the
         // reservation leaves the `Option` for the same reason as above: the
@@ -166,6 +170,17 @@ impl MetaMcp {
         if crate::playbook::current_step().is_some()
             && crate::personal_accounts::refusal::transient_data(&e).is_some()
         {
+            return Err(e);
+        }
+        // A refusal of the caller (the per-user lender refusing the send, a
+        // refused shared slot) is answered as the refusal it is, as the
+        // direct route answers it, never as a backend error to retry. A
+        // playbook step records it only while the plan still vouches for
+        // its answer, as the dispatch-time backstop does.
+        if super::gate::is_authorization_refusal(&e) {
+            if crate::playbook::current_step().is_some() {
+                crate::gateway::delivery_facts::refused_while_vouched();
+            }
             return Err(e);
         }
         // The error budget already counted this failure (the shared
@@ -518,6 +533,7 @@ impl MetaMcp {
             cost_key: caller.cost_key(),
             trace_id,
             caller_key: None,
+            generation: caller.generation,
         };
         let (gated, effect) = self.gate_payload(&call, result)?;
         if effect == super::super::response_security::GateEffect::Withheld {
@@ -635,4 +651,27 @@ fn refuse_unbindable(server: &str, tool: &str, trace_id: &str) -> crate::Error {
         "Cannot mint a continuation for this caller; refusing"
     );
     unbindable_continuation(server, tool)
+}
+
+/// A dispatch that provably sent nothing is refused before its backend: the
+/// invocation is marked refused, its key released (`take()`, or the commit
+/// that follows would re-insert it), and the outer lease withdrawn, or a keyed
+/// retry replays a stale refusal and its hint (MIK-7974). A refusal the
+/// backend's own send recorded is the gateway's: its delivery says refused.
+fn settle_unsent(
+    idem_reservation: &mut Option<IdempotencyReservation>,
+    execution: Option<&crate::gateway::meta_mcp::admission::SyncLease>,
+) {
+    super::audit::note_pre_send(crate::gateway::meta_mcp::dispatch_log::PreSend::Refused);
+    if crate::gateway::delivery_facts::refused_before_send_seen() {
+        crate::gateway::delivery_facts::raise(
+            crate::gateway::delivery_facts::ResponseEffect::Refused,
+        );
+    }
+    if let Some(mut reservation) = idem_reservation.take() {
+        reservation.release();
+    }
+    if let Some(execution) = execution {
+        execution.withdraw_dispatch();
+    }
 }

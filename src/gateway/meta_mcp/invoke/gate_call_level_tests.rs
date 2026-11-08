@@ -38,13 +38,15 @@ async fn a_hidden_malformed_name_is_refused_and_audited_as_the_authorizer_refuse
     let policy = crate::security::ToolPolicy::default();
     let authorizer = ToolPolicyAuthorizer {
         tool_policy: &policy,
+        generation: None,
     };
     let caller = ctx(&authorizer);
     let arguments = json!({"server": "alpha", "tool": "bad/tool", "arguments": {}});
 
     // The twin: what the policy this call skipped answers for the same name.
     let by_policy = meta
-        .authorize_invocation(&arguments, &caller)
+        .authorize_target_explained(&arguments, ("alpha", "bad/tool"), &caller)
+        .map_err(|(error, _)| error)
         .expect_err("the authorizer refuses a malformed name");
 
     let buffer = Buffer::default();
@@ -85,6 +87,7 @@ fn an_empty_hidden_name_is_refused_as_the_policy_refuses_it() {
     let policy = crate::security::ToolPolicy::default();
     let authorizer = ToolPolicyAuthorizer {
         tool_policy: &policy,
+        generation: None,
     };
     let caller = ctx(&authorizer);
     let arguments = json!({"server": "alpha", "tool": "", "arguments": {}});
@@ -213,6 +216,7 @@ async fn h3_a_killed_backend_refuses_a_malformed_nonce_alike_for_hidden_and_miss
         });
         let authorizer = ToolPolicyAuthorizer {
             tool_policy: &policy,
+            generation: None,
         };
         let caller = ctx(&authorizer);
         let arguments = json!({"server": "alpha", "tool": tool, "arguments": {}});

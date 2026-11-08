@@ -46,7 +46,7 @@ pub(super) mod tasks;
 use health::backends_overall_healthy;
 pub(super) use health::health_handler;
 #[cfg(feature = "metrics")]
-pub(super) use metrics_scrape::metrics_handler;
+pub(super) use metrics_scrape::{MetricsState, metrics_handler};
 pub(crate) use modern_response::shape_modern_response;
 pub(super) use owner::owner_of;
 // The direct route admits its execution lease under the same owner (MIK-8154).
@@ -130,7 +130,10 @@ async fn meta_mcp_dispatch(
     };
     let invoke_scope = InvokeScope {
         authorizer: &router_authorizer,
-        is_admin: client.as_ref().is_some_and(|c| c.admin),
+        admin: client.as_ref().map_or(
+            crate::gateway::authz::AdminStanding::None,
+            crate::gateway::auth::AuthenticatedClient::admin_standing,
+        ),
         api_key_name: client.as_ref().map(|c| c.name.as_str()),
         grant_key: client
             .as_ref()
@@ -231,7 +234,10 @@ async fn meta_mcp_dispatch(
                     agent_declared: None,
                     grant_subject: grant_subject.clone(),
                     verified_identity: verified_identity.as_ref(),
-                    is_admin: client.as_ref().is_some_and(|client| client.admin),
+                    admin: client.as_ref().map_or(
+                        crate::gateway::authz::AdminStanding::None,
+                        crate::gateway::auth::AuthenticatedClient::admin_standing,
+                    ),
                     input_capabilities: declared_capabilities,
                     session_id: Some(session_id.as_str()),
                 };
@@ -273,7 +279,7 @@ async fn meta_mcp_dispatch(
                     .into_iter()
                     .filter(|b| state.meta_mcp.admits_backend(b, invoke_scope, session))
                     .collect(),
-                admin: CallerStanding::of_client(client.as_ref()) == CallerStanding::Admin,
+                admin: crate::gateway::auth::is_gateway_admin(client.as_ref()),
             };
             events::answer(&hub, id, method, params, &caller).await
         }
@@ -372,15 +378,19 @@ async fn meta_mcp_dispatch(
             let answer_id = id.clone();
             // Boxed: an inline future would enlarge this dispatcher's own state.
             // The request's visibility memo is already open (see the handler).
-            let call = Box::pin(dispatch_tools_call::tools_call(
-                &state,
-                &intake,
-                id,
-                &router_authorizer,
-                invoke_scope,
-                &mut signing_context,
-                &mut response_targets,
-                &mut execution,
+            // In a route decision scope: a pre-check refusal's record names
+            // the check that made it (MIK-8914.API2A.1).
+            let call = Box::pin(crate::gateway::meta_mcp::invoke::audit::with_route_scope(
+                dispatch_tools_call::tools_call(
+                    &state,
+                    &intake,
+                    id,
+                    &router_authorizer,
+                    invoke_scope,
+                    &mut signing_context,
+                    &mut response_targets,
+                    &mut execution,
+                ),
             ));
             let called = match cancel_on {
                 Some(cancel_on) => cancel_on.run(call).await,
@@ -456,7 +466,7 @@ async fn meta_mcp_dispatch(
                 grant_subject.as_ref(),
                 cert_identity.as_ref(),
                 client.as_ref(),
-                session_id,
+                (session_id, &intake.generation),
             );
             // Boxed like `handle_tools_call` above: an inline future would
             // enlarge `meta_mcp_dispatch`'s own state, which every request
@@ -491,7 +501,7 @@ async fn meta_mcp_dispatch(
                 grant_subject.as_ref(),
                 cert_identity.as_ref(),
                 client.as_ref(),
-                session_id,
+                (session_id, &intake.generation),
             );
             Box::pin(relay::as_caller(
                 caller,
@@ -578,7 +588,10 @@ async fn meta_mcp_dispatch(
                 agent_declared: agent_identity.declared_agent_label(),
                 grant_subject: grant_subject.clone(),
                 verified_identity: verified_identity.as_ref(),
-                is_admin: client.as_ref().is_some_and(|client| client.admin),
+                admin: client.as_ref().map_or(
+                    crate::gateway::authz::AdminStanding::None,
+                    crate::gateway::auth::AuthenticatedClient::admin_standing,
+                ),
                 input_capabilities: declared_capabilities,
                 session_id: Some(session_id.as_str()),
             };
@@ -630,6 +643,7 @@ async fn meta_mcp_dispatch(
         signing: signing_context.as_ref(),
         chain_source: response.chain_source,
         chain_nonce: chain_nonce.as_deref(),
+        generation: Some(&intake.generation),
     };
     #[cfg(feature = "firewall")]
     let router = state.firewall.as_deref();
@@ -659,9 +673,6 @@ async fn meta_mcp_dispatch(
         finalized,
     )
     .await;
-    if let (Some(execution), Some(finalized)) = (execution, finalized) {
-        execution.complete_delivery(&finalized, signing_context.as_ref());
-    }
     let response = frame
         .response()
         .expect("an answer frame stays an answer through its replacements");
@@ -676,6 +687,14 @@ async fn meta_mcp_dispatch(
     }
     // COLLUDE.1: receipts ride on the response to `emit_http`, after the last replacer.
     state.meta_mcp.settle_relay_receipts(response);
+    // The receipts are final: a retained answer is captured pending now,
+    // before settlement publishes it for replay, so a retry that finds it
+    // finds its snapshot too. Settlement that does not retain it discards
+    // the capture (E1, `cancel_replay_capture`).
+    state.meta_mcp.capture_pending_now(response);
+    if let (Some(execution), Some(finalized)) = (execution, finalized) {
+        execution.complete_delivery(&finalized, signing_context.as_ref());
+    }
 
     telemetry_metrics::counter!(
         "mcp_jsonrpc_requests_total",

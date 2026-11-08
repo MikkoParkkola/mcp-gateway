@@ -40,6 +40,8 @@ pub(super) fn firewall_rules(
             servers: None,
             keys: FIREWALL_RULE_KEYS.with(|k| k.borrow().clone()),
             except: None,
+            allowed_roots: None,
+            path_args: None,
         })
         .to_vec()
 }
@@ -202,22 +204,19 @@ pub(super) struct CountingBackend {
     pub(super) kept: Arc<std::sync::Mutex<String>>,
 }
 
-#[async_trait::async_trait]
-impl Transport for CountingBackend {
-    async fn request(&self, method: &str, params: Option<Value>) -> crate::Result<JsonRpcResponse> {
+impl CountingBackend {
+    /// The answer this backend gives to `method`.
+    fn reply(&self, method: &str, params: Option<&Value>) -> crate::Result<JsonRpcResponse> {
         let id = RequestId::Number(1);
         if method == "tools/list" {
-            return Ok(JsonRpcResponse::success(
-                id,
-                listing(self.answer, params.as_ref()),
-            ));
+            return Ok(JsonRpcResponse::success(id, listing(self.answer, params)));
         }
         self.seen
             .lock()
             .unwrap()
-            .push(params.clone().unwrap_or(Value::Null));
+            .push(params.cloned().unwrap_or(Value::Null));
         let n = self.calls.fetch_add(1, Ordering::SeqCst);
-        if let Some(body) = recording_answer(self.answer, n, params.as_ref(), &self.kept) {
+        if let Some(body) = recording_answer(self.answer, n, params, &self.kept) {
             return Ok(JsonRpcResponse::success(id, body));
         }
         if let Answer::StateOnlyRounds(at, text) = self.answer {
@@ -250,10 +249,7 @@ impl Transport for CountingBackend {
                 | Answer::AskAlways
         ) {
             let asks_now = if matches!(self.answer, Answer::AskAlways) {
-                params
-                    .as_ref()
-                    .and_then(|p| p.get("requestState"))
-                    .is_none()
+                params.and_then(|p| p.get("requestState")).is_none()
             } else {
                 n == usize::from(matches!(self.answer, Answer::AskSecond))
             };
@@ -275,6 +271,24 @@ impl Transport for CountingBackend {
             });
         }
         call_answer(self.answer, id)
+    }
+}
+
+#[async_trait::async_trait]
+impl Transport for CountingBackend {
+    /// A recording double: these rows check what a call sends, not what its
+    /// answer echoes, so it stands in for a transport holding its set
+    /// (DELTA-10 refuses an injected call on one that does not).
+    fn redacts_injected_values(&self) -> bool {
+        true
+    }
+
+    async fn request(&self, method: &str, params: Option<Value>) -> crate::Result<JsonRpcResponse> {
+        // As every production transport does: the answer is a backend's.
+        crate::gateway::health_metrics::clock::backend_request(async {
+            self.reply(method, params.as_ref())
+        })
+        .await
     }
     async fn notify(&self, _method: &str, _params: Option<Value>) -> crate::Result<()> {
         Ok(())
@@ -310,5 +324,20 @@ pub(crate) async fn fixture_hardened_signed_firewalled(answer: Answer) -> Fx {
     super::HARDENED.with(|h| h.set(true));
     let fx = fixture_inner(answer, true, |meta| super::signing(meta, true)).await;
     super::HARDENED.with(|h| h.set(false));
+    fx
+}
+
+/// [`super::fixture_built`] with `log` as the state's transparency log and no
+/// firewall: `build` arms the same log on the `MetaMcp`, so both routes record
+/// their deliveries in one file with no egress scan changing the answer.
+#[cfg(feature = "firewall")]
+pub(crate) async fn fixture_logged(
+    answer: Answer,
+    log: Arc<crate::security::TransparencyLogger>,
+    build: impl FnOnce(crate::gateway::meta_mcp::MetaMcp) -> crate::gateway::meta_mcp::MetaMcp,
+) -> super::Fx {
+    super::STATE_LOG.with(|l| *l.borrow_mut() = Some(log));
+    let fx = super::fixture_built(answer, build).await;
+    super::STATE_LOG.with(|l| *l.borrow_mut() = None);
     fx
 }

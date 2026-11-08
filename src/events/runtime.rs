@@ -160,6 +160,8 @@ impl EventsHub {
         let Some(mut intake) = self.runtime.intake.lock().take() else {
             return;
         };
+        #[cfg(test)]
+        self.store.assert_test_dir_kept("the events hub");
         // Before anything reads the store: the worker drops outbox records it
         // cannot place, and every handle derives from the key (MIK-8697 §13.6).
         self.store.bind_key(services.record_key());
@@ -209,6 +211,20 @@ impl EventsHub {
             .services
             .get()
             .is_none_or(|services| services.admits(key, backend))
+    }
+
+    /// [`Self::live_admits`] for the API key that authenticated the request
+    /// being answered now, which has no holder and so no secret binding.
+    pub(crate) fn live_admits_this_request(
+        &self,
+        name: &str,
+        principal: &str,
+        backend: &str,
+    ) -> bool {
+        self.runtime
+            .services
+            .get()
+            .is_none_or(|services| services.admits_this_request(name, principal, backend))
     }
 
     /// The source of `kind`.

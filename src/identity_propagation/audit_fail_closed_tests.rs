@@ -78,19 +78,7 @@ async fn mint_audit_on_a_stalled_disk_is_bounded_and_fail_closed() {
         "{result:?}"
     );
     assert!(logger.is_stalled());
-    release.release();
-    // The released write still runs on a blocking thread. Wait for it to clear
-    // the stall, so it lands before this test's log folder is dropped; a write
-    // that outlived the test recreated the folder and left it behind.
-    crate::test_wait::wait_until(std::time::Duration::from_secs(30), || async {
-        if logger.is_stalled() {
-            std::ops::ControlFlow::Continue("still stalled".to_string())
-        } else {
-            std::ops::ControlFlow::Break(())
-        }
-    })
-    .await
-    .expect("the released write clears the stall");
+    logger.release_and_drain(release).await;
 }
 
 // Fail-closed contract: a genuine transparency-log write failure MUST

@@ -29,6 +29,11 @@ pub(crate) struct BackendCall<'a> {
     /// The router's caller key, for a session-less call's own spend record
     /// (MIK-7653). `None` where no spend is recorded, or the caller is keyless.
     pub caller_key: Option<&'a str>,
+    /// The generation whose budgets and alerts judge this call's spend, from
+    /// admission to settlement. `None` judges with the live config's current
+    /// one, for a call that was never pinned or spends nothing.
+    #[cfg_attr(not(feature = "cost-governance"), allow(dead_code))]
+    pub generation: Option<&'a crate::config_reload::Generation>,
 }
 
 /// What admitting one backend call leaves behind: the warnings for its result
@@ -71,6 +76,7 @@ pub(crate) enum DirectOutcome {
     Success { spend: bool },
     Failure { spend: bool },
     IgnoredRateLimit { spend: bool },
+    IgnoredRefusal { spend: bool },
 }
 
 impl DirectOutcome {
@@ -85,10 +91,17 @@ impl DirectOutcome {
     pub(crate) fn from_response(response: &Result<JsonRpcResponse>) -> Self {
         match response {
             Ok(r) => match &r.error {
-                Some(e) => Self::from_class(
-                    BudgetOutcome::of_error(&Error::json_rpc(e.code, e.message.clone())),
-                    false,
-                ),
+                Some(e) => {
+                    // A frame a backend wrote rebuilds as the backend's error,
+                    // so the class is read from the same variant the live
+                    // dispatch would have raised.
+                    let error = if r.wire_meta.origin == crate::protocol::Origin::Backend {
+                        Error::backend_json_rpc(e.clone())
+                    } else {
+                        Error::json_rpc(e.code, e.message.clone())
+                    };
+                    Self::from_class(BudgetOutcome::of_error(&error), false)
+                }
                 None => Self::from_class(
                     BudgetOutcome::of_value(r.result.as_ref().unwrap_or(&Value::Null)),
                     true,
@@ -103,6 +116,7 @@ impl DirectOutcome {
             BudgetOutcome::Success => Self::Success { spend },
             BudgetOutcome::Failure => Self::Failure { spend },
             BudgetOutcome::IgnoredRateLimit => Self::IgnoredRateLimit { spend },
+            BudgetOutcome::IgnoredRefusal => Self::IgnoredRefusal { spend },
         }
     }
 
@@ -111,6 +125,7 @@ impl DirectOutcome {
             Self::Success { spend } => (BudgetOutcome::Success, spend),
             Self::Failure { spend } => (BudgetOutcome::Failure, spend),
             Self::IgnoredRateLimit { spend } => (BudgetOutcome::IgnoredRateLimit, spend),
+            Self::IgnoredRefusal { spend } => (BudgetOutcome::IgnoredRefusal, spend),
         }
     }
 }
@@ -150,8 +165,17 @@ impl MetaMcp {
     /// S1 policy: session profile, kill switch, capability disable. Runs
     /// before idempotency, cache and nonce on both routes.
     pub(crate) fn admit_target(&self, call: &BackendCall<'_>) -> Result<()> {
-        self.admit_named_target(call)?;
-        self.admit_enabled_capability(call.server, call.tool)
+        self.admit_target_explained(call)
+            .map_err(super::audit::noted)
+    }
+
+    /// [`Self::admit_target`], with the refusing check's pair and no note.
+    pub(crate) fn admit_target_explained(
+        &self,
+        call: &BackendCall<'_>,
+    ) -> crate::security::decision_record::Explained {
+        self.admit_named_target_explained(call)?;
+        self.admit_enabled_capability_explained(call.server, call.tool)
     }
 
     /// [`Self::admit_target`] without the error-rate check: the session
@@ -162,11 +186,27 @@ impl MetaMcp {
         &self,
         call: &BackendCall<'_>,
     ) -> Result<()> {
+        self.admit_named_target_explained(call)
+            .map_err(super::audit::noted)
+    }
+
+    /// [`Self::admit_named_target`], with the refusing check's pair and no note.
+    pub(in crate::gateway::meta_mcp) fn admit_named_target_explained(
+        &self,
+        call: &BackendCall<'_>,
+    ) -> crate::security::decision_record::Explained {
         let (server, tool) = (call.server, call.tool);
-        self.active_profile(call.session_id)
-            .check(server, tool)
-            .map_err(Error::Protocol)?;
-        self.admit_backend_wide(server)
+        self.caller_profile_check(call.session_id, (server, tool))
+            .map_err(|e| {
+                (
+                    e,
+                    (
+                        crate::security::decision_record::DecisionKind::RoutingProfile,
+                        None,
+                    ),
+                )
+            })?;
+        self.admit_backend_wide_explained(server)
     }
 
     /// MIK-8475: whether `server`'s `tool` is a target whose error-rate check
@@ -207,6 +247,7 @@ impl MetaMcp {
             cost_key: None,
             trace_id,
             caller_key: None,
+            generation: None,
         })
         .map_err(|refusal| self.withheld_as_undefined((server, tool), session_id, refusal))
     }
@@ -216,10 +257,25 @@ impl MetaMcp {
     /// about the server. The MIK-8361 gate answers it for a withheld and a
     /// missing name alike, before any fill.
     pub(crate) fn admit_backend_wide(&self, server: &str) -> Result<()> {
+        self.admit_backend_wide_explained(server)
+            .map_err(super::audit::noted)
+    }
+
+    /// [`Self::admit_backend_wide`], with the refusing check's pair and no note.
+    fn admit_backend_wide_explained(
+        &self,
+        server: &str,
+    ) -> crate::security::decision_record::Explained {
         if self.kill_switch.is_killed(server) {
-            return Err(Error::gateway_refused(
-                -32000,
-                format!("Server '{server}' is currently disabled by operator kill switch"),
+            return Err((
+                Error::gateway_refused(
+                    -32000,
+                    format!("Server '{server}' is currently disabled by operator kill switch"),
+                ),
+                (
+                    crate::security::decision_record::DecisionKind::KillSwitch,
+                    None,
+                ),
             ));
         }
         Ok(())
@@ -234,17 +290,34 @@ impl MetaMcp {
         server: &str,
         tool: &str,
     ) -> Result<()> {
+        self.admit_enabled_capability_explained(server, tool)
+            .map_err(super::audit::noted)
+    }
+
+    /// [`Self::admit_enabled_capability`], with the refusing check's pair and no note.
+    fn admit_enabled_capability_explained(
+        &self,
+        server: &str,
+        tool: &str,
+    ) -> crate::security::decision_record::Explained {
         let cooldown = self.capability_budget_config.read().cooldown;
         if self
             .kill_switch
             .is_capability_disabled_with_cooldown(server, tool, cooldown)
         {
-            return Err(Error::gateway_refused(
-                -32000,
-                format!(
-                    "Capability '{tool}' on server '{server}' is temporarily disabled due to \
-                     a high error rate. It will auto-recover after the cooldown period. \
-                     Use gateway_list_disabled_capabilities to see all disabled capabilities."
+            return Err((
+                Error::gateway_refused(
+                    -32000,
+                    format!(
+                        "Capability '{tool}' on server '{server}' is temporarily disabled due \
+                         to a high error rate. It will auto-recover after the cooldown period. \
+                         Use gateway_list_disabled_capabilities to see all disabled \
+                         capabilities."
+                    ),
+                ),
+                (
+                    crate::security::decision_record::DecisionKind::CapabilityDisabled,
+                    None,
                 ),
             ));
         }
@@ -259,7 +332,7 @@ impl MetaMcp {
     )]
     pub(crate) fn admit_spend_for(&self, call: &BackendCall<'_>) -> Result<Admission> {
         #[cfg(feature = "cost-governance")]
-        return self.admit_spend(call.tool, call.cost_key);
+        return self.admit_spend(call.tool, call.cost_key, call.generation);
         #[cfg(not(feature = "cost-governance"))]
         {
             let _ = call;
@@ -311,7 +384,14 @@ impl MetaMcp {
         #[cfg(feature = "cost-governance")]
         if let Some(ref enforcer) = self.budget_enforcer {
             let cost = enforcer.registry.cost_for(call.tool);
-            enforcer.settle(admission.hold(), call.tool, call.cost_key, cost);
+            self.judged_by(enforcer, call.generation, |governance| {
+                enforcer.settle_under(
+                    governance,
+                    admission.hold(),
+                    (call.tool, call.cost_key),
+                    cost,
+                );
+            });
         }
     }
 

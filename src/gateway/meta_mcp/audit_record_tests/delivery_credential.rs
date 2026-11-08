@@ -120,9 +120,9 @@ fn caller_of(
         principal: client.principal.storage_form().to_owned(),
         account: client.name.clone(),
         authenticated: true,
-        grant: Some(GrantSubject::new(
-            identity.issuer.as_str(),
-            identity.subject.as_str(),
+        grant: Some(GrantSubject::for_test(
+            identity.issuer(),
+            identity.subject(),
             None,
         )),
         identity: Some(identity),

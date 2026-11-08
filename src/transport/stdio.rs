@@ -21,6 +21,7 @@ use tokio::process::Command;
 use tokio::sync::{Mutex, oneshot};
 use tracing::{debug, error, info, warn};
 
+use crate::gateway::health_metrics::clock::{backend_request, backend_wait};
 use crate::transport::notification_sink::DeliveryHandle;
 
 use super::{PendingRequestGuard, Transport, write_claim::WriteClaim};
@@ -82,8 +83,13 @@ pub struct StdioTransport {
     start: early_exit::StartState,
     /// Upstream-notification taps of the events listener (MIK-7630 I5).
     pub(crate) taps: super::upstream_tap::Taps,
+    /// The values the backend's rules injected; every line this transport
+    /// reads is scrubbed of them before it is routed.
+    needles: std::sync::OnceLock<std::sync::Arc<crate::security::needles::NeedleSet>>,
     /// Longest frame the reader accepts; set before `start`.
     max_frame_bytes: AtomicUsize,
+    /// The owning gateway's stop deadline, handed to each tree it ends.
+    stop_deadline: std::sync::OnceLock<std::sync::Arc<reaper::StopDeadline>>,
     /// What a failed start said, kept only long enough to classify it (#1759).
     failure: start_failure::FailureRecord,
     /// The cache directory the gateway assigned this backend, or `None`.
@@ -166,20 +172,22 @@ impl StdioTransport {
         // Vacant-only. A colliding live key must fail closed: overwriting the
         // incumbent reroutes one call's progress onto another call's channel,
         // which is worse than losing it. The third defect ADR-014 §2 names.
-        match self.progress_destinations.entry(token.to_string()) {
+        let registered = match self.progress_destinations.entry(token.to_string()) {
             dashmap::mapref::entry::Entry::Vacant(slot) => {
                 slot.insert(DeliveryHandle::capture(token));
                 true
             }
-            dashmap::mapref::entry::Entry::Occupied(_) => {
-                // ci-allow-secret-log: a minted progress token is a correlation id, not a credential
-                warn!(
-                    token = %token,
-                    "progress token is already registered to a live call; refusing to reroute it"
-                );
-                false
-            }
+            dashmap::mapref::entry::Entry::Occupied(_) => false,
+        };
+        // Logged once the entry's shard lock is released.
+        if !registered {
+            // ci-allow-secret-log: a minted progress token is a correlation id, not a credential
+            warn!(
+                token = %token,
+                "progress token is already registered to a live call; refusing to reroute it"
+            );
         }
+        registered
     }
 
     /// End a token's registration, dropping the sender it held.
@@ -203,14 +211,18 @@ impl StdioTransport {
     // ponytail: token-less methods (`notifications/message`) stay unattributable
     // over stdio; a per-request stream is what would carry them, and stdio has
     // none. Named as a design event in the SUB.2b note rather than papered over.
-    fn capture_notification(&self, notification: JsonRpcNotification) {
+    /// `keys` holds the params as the peer sent them when the delivered copy
+    /// was scrubbed; routing reads them, never the copy (DELTA-5).
+    fn capture_notification(&self, notification: JsonRpcNotification, keys: Option<&Value>) {
+        let keys = keys.or(notification.params.as_ref());
         // The listener's taps first: a frame tagged with a live listen, or
         // one of the three resource/prompt notifications while a legacy tap
         // is open. Never progress, so the route below is unchanged.
-        if self
-            .taps
-            .notification(&notification.method, notification.params.as_ref())
-        {
+        if self.taps.notification_keyed(
+            &notification.method,
+            keys,
+            self.needles.get().map(AsRef::as_ref),
+        ) {
             return;
         }
         // Note the asymmetry with the outgoing side: a request carries the
@@ -224,10 +236,7 @@ impl StdioTransport {
         // severity out.
         let token = (notification.method == "notifications/progress")
             .then(|| {
-                notification
-                    .params
-                    .as_ref()
-                    .and_then(|p| p.get("progressToken"))
+                keys.and_then(|p| p.get("progressToken"))
                     .and_then(progress_token_string)
             })
             .flatten();
@@ -246,6 +255,15 @@ impl StdioTransport {
         }
     }
 
+    /// The backend's injected values, attached before the child starts; the
+    /// first attach wins.
+    pub(crate) fn attach_needles(
+        &self,
+        needles: std::sync::Arc<crate::security::needles::NeedleSet>,
+    ) {
+        let _ = self.needles.set(needles);
+    }
+
     /// Handle a response line from stdout
     ///
     /// The line is classified before it is routed. A peer notification is kept
@@ -255,10 +273,42 @@ impl StdioTransport {
     fn handle_response(&self, line: &str) -> Result<()> {
         let line_len = line.len();
         debug!(line_len, "Parsing response");
-        let response = match JsonRpcMessage::from_line(line)? {
+        let mut message = JsonRpcMessage::from_line(line)?;
+        // Routing keys (a progress token, a subscription tag) are read from
+        // the line as sent; only the delivered copy is scrubbed (DELTA-5).
+        let keys = match &message {
+            JsonRpcMessage::Notification(notification) if self.needles.get().is_some() => {
+                notification.params.clone()
+            }
+            _ => None,
+        };
+        // A listen's own answer is classified as sent (lead ruling G9): an
+        // acknowledgement's URIs are the listen's requested ones, and an end
+        // carries none. A listen is never a pending request (design §4).
+        if let JsonRpcMessage::Response(response) = &message
+            && let Some(ref id) = response.id
+            && self
+                .taps
+                .response_to(id, response.result.as_ref(), response.error.as_ref())
+        {
+            return Ok(());
+        }
+        // A notification is scrubbed here, before it is published. An answer
+        // goes to its call as sent: the call scrubs it on its own task, so a
+        // rewrite lands on that call's delivery record.
+        if let Some(needles) = self.needles.get()
+            && !matches!(message, JsonRpcMessage::Response(_))
+        {
+            use crate::security::needles::{Scrubbed, ingress_scrub};
+            let outcome = ingress_scrub(needles, &mut message);
+            if matches!(outcome, Scrubbed::Withhold | Scrubbed::Refuse) {
+                return Ok(());
+            }
+        }
+        let response = match message {
             JsonRpcMessage::Response(response) => response,
             JsonRpcMessage::Notification(notification) => {
-                self.capture_notification(notification);
+                self.capture_notification(notification, keys.as_ref());
                 return Ok(());
             }
             JsonRpcMessage::Request(_) => {
@@ -270,14 +320,6 @@ impl StdioTransport {
             }
         };
 
-        if let Some(ref id) = response.id
-            && self
-                .taps
-                .response_to(id, response.result.as_ref(), response.error.as_ref())
-        {
-            // A listen is never a pending request (design §4).
-            return Ok(());
-        }
         if let Some(ref id) = response.id {
             let key = id.to_string();
             let pending_count = self.pending.len();
@@ -352,54 +394,70 @@ impl Drop for ProgressRegistrationGuard<'_> {
 
 #[async_trait]
 impl Transport for StdioTransport {
+    fn redacts_injected_values(&self) -> bool {
+        self.needles.get().is_some()
+    }
+
     async fn request(&self, method: &str, params: Option<Value>) -> Result<JsonRpcResponse> {
-        let id = self.next_id();
-        let request = JsonRpcRequest {
-            jsonrpc: "2.0".to_string(),
-            id: id.clone(),
-            method: method.to_string(),
-            params,
-        };
+        backend_request(async move {
+            let id = self.next_id();
+            let request = JsonRpcRequest {
+                jsonrpc: "2.0".to_string(),
+                id: id.clone(),
+                method: method.to_string(),
+                params,
+            };
 
-        // Register before the write: the reader task can route a notification
-        // back before `write_message` returns. The token registered is whatever
-        // the params carry on the wire -- for a call the gateway minted for
-        // (`src/gateway/meta_mcp/invoke.rs`) that is the minted `gw-<uuid>`,
-        // never the caller's own token (MIK-7272.SUB.2b). Draining it is the
-        // guard's job on every exit path, cancellation included.
-        let _progress_cleanup = request_progress_token(request.params.as_ref())
-            .map(|token| ProgressRegistrationGuard::register(self, &token));
+            // Register before the write: the reader task can route a notification
+            // back before `write_message` returns. The token registered is whatever
+            // the params carry on the wire -- for a call the gateway minted for
+            // (`src/gateway/meta_mcp/invoke.rs`) that is the minted `gw-<uuid>`,
+            // never the caller's own token (MIK-7272.SUB.2b). Draining it is the
+            // guard's job on every exit path, cancellation included.
+            let _progress_cleanup = request_progress_token(request.params.as_ref())
+                .map(|token| ProgressRegistrationGuard::register(self, &token));
 
-        let message = serde_json::to_string(&request)?;
-        let (tx, rx) = oneshot::channel();
-        self.pending.insert(id.to_string(), tx);
-        // Removing the entry is the guard's job on every path: on success the
-        // reader task has already routed the response and the removal is a
-        // no-op, and on an error, an internal timeout or CANCELLATION (an
-        // outer timeout or task abort dropping this future mid-await) the
-        // guard's Drop is the only thing that removes it — without it a
-        // stranded entry would leak here for the transport's lifetime.
-        let _cleanup = PendingRequestGuard::new(&self.pending, &id.to_string());
+            let message = serde_json::to_string(&request)?;
+            let (tx, rx) = oneshot::channel();
+            self.pending.insert(id.to_string(), tx);
+            // Removing the entry is the guard's job on every path: on success the
+            // reader task has already routed the response and the removal is a
+            // no-op, and on an error, an internal timeout or CANCELLATION (an
+            // outer timeout or task abort dropping this future mid-await) the
+            // guard's Drop is the only thing that removes it — without it a
+            // stranded entry would leak here for the transport's lifetime.
+            let _cleanup = PendingRequestGuard::new(&self.pending, &id.to_string());
 
-        // Declared after `_cleanup`, so it drops first and still finds the
-        // entry of a request nobody answered.
-        let claim = WriteClaim::new();
-        let mut cancel = tree::CancelUnanswered::arm(self, &request, &claim);
-        // The guards drop after this value: the pending entry and progress go.
-        let outcome = self.exchange(message, rx, Some(&claim)).await;
-        cancel.disarm();
-        outcome
+            // Declared after `_cleanup`, so it drops first and still finds the
+            // entry of a request nobody answered.
+            let claim = WriteClaim::new();
+            let mut cancel = tree::CancelUnanswered::arm(self, &request, &claim);
+            // The guards drop after this value: the pending entry and progress go.
+            let outcome = self.exchange(message, rx, Some(&claim)).await;
+            cancel.disarm();
+            // Scrubbed on the call's own task, as the body's last step: a
+            // redacted answer stays the backend's, and a refusal is an error
+            // `Error::origin` counts as the gateway's.
+            match self.needles.get() {
+                Some(needles) => crate::security::needles::scrub_answer(needles, outcome),
+                None => outcome,
+            }
+        })
+        .await
     }
 
     async fn notify(&self, method: &str, params: Option<Value>) -> Result<()> {
-        let notification = JsonRpcNotification {
-            jsonrpc: "2.0".to_string(),
-            method: method.to_string(),
-            params,
-        };
+        backend_wait(async move {
+            let notification = JsonRpcNotification {
+                jsonrpc: "2.0".to_string(),
+                method: method.to_string(),
+                params,
+            };
 
-        let message = serde_json::to_string(&notification)?;
-        self.write_message(message).await
+            let message = serde_json::to_string(&notification)?;
+            self.write_message(message).await
+        })
+        .await
     }
 
     fn is_connected(&self) -> bool {
@@ -430,7 +488,7 @@ impl Transport for StdioTransport {
     }
 
     async fn close(&self) -> Result<()> {
-        self.shut().await;
+        self.shut(reaper::StopKind::Graceful).await;
         Ok(())
     }
 }
@@ -439,6 +497,9 @@ impl Transport for StdioTransport {
 mod child_tree;
 #[path = "stdio_reaper.rs"]
 mod reaper;
+#[cfg(all(test, unix))]
+pub(crate) use reaper::KILL_RESERVE as KILL_RESERVE_FOR_TEST;
+pub(crate) use reaper::{LiveTree, StopDeadline, stop_deadline, within_stop_deadline};
 #[path = "stdio_tree.rs"]
 mod tree;
 // Only the unix frame tests build a tree by hand (MIK-8360).

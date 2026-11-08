@@ -484,7 +484,12 @@ fn via_label(
     extensions: &axum::http::Extensions,
 ) -> String {
     let subject = extensions.get::<VerifiedIdentity>().and_then(|id| {
-        crate::identity_grants::GrantSubject::checked(id.issuer.clone(), id.subject.clone(), None)
+        crate::identity_grants::GrantSubject::new(
+            id.issuer().to_owned(),
+            id.subject().to_owned(),
+            None,
+        )
+        .ok()
     });
     let who = crate::security::audit::AuditWho::from_request(
         client,

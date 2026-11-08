@@ -1,6 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 use super::*;
+// Each row publishes as a backend's call would, from inside its scope.
+use crate::transport::notify_ingress::test_support::{collect, scope};
 
 fn note(method: &str) -> JsonRpcNotification {
     JsonRpcNotification {
@@ -354,4 +356,58 @@ async fn two_mints_in_one_scope_each_translate_to_their_own_caller() {
     assert_eq!(drained.len(), 2);
     assert_eq!(token_of(&drained[0]), serde_json::json!("seven"));
     assert_eq!(token_of(&drained[1]), serde_json::json!(7));
+}
+
+/// The drop rule through the real sink: a transport publish with no backend
+/// scope (no test wrapper) is withheld with exactly one warn naming the
+/// method. The wrapped rows above always run inside a scope, so this is the
+/// one that sees the missing sender.
+#[test]
+fn a_publish_with_no_backend_scope_is_withheld_with_one_warn() {
+    let (delivered, logged) = crate::test_log_capture::capture_warnings(|| {
+        current_thread().block_on(async {
+            super::collect(None, async {
+                publish(vec![note("notifications/progress")]);
+            })
+            .await
+            .1
+        })
+    });
+    assert!(
+        delivered.is_empty(),
+        "delivered without a sender: {delivered:?}"
+    );
+    assert_eq!(logged.lines().count(), 1, "{logged}");
+    assert!(logged.contains("notifications/progress"), "{logged}");
+}
+
+/// The other half of a scope-less publish: a gateway log line raised outside
+/// any backend call is the gateway's, and is delivered unchanged.
+#[tokio::test]
+async fn a_gateway_log_line_with_no_backend_scope_is_delivered() {
+    let ((), delivered) = super::collect(None, async {
+        set_request_log_level(Some("info"));
+        emit_log(
+            LoggingLevel::Info,
+            "gateway.invoke",
+            || json!({ "message": "tool invoked" }),
+        );
+    })
+    .await;
+    assert_eq!(delivered.len(), 1, "the gateway's own line was withheld");
+    assert_eq!(
+        delivered[0].params,
+        Some(json!({
+            "level": "info",
+            "logger": "gateway.invoke",
+            "data": { "message": "tool invoked" },
+        }))
+    );
+}
+
+fn current_thread() -> tokio::runtime::Runtime {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("a test runtime")
 }

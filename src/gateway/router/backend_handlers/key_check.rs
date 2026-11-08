@@ -75,6 +75,7 @@ pub(super) async fn key_refusal(
         cost_key: None,
         trace_id: tool,
         caller_key: None,
+        generation: None,
     };
     // MIK-8356: on a per-user backend, a tool this caller's own catalogue
     // withholds or lacks answers as an absent name (-32601), whatever the
@@ -163,7 +164,7 @@ pub(super) async fn key_refusal(
             super::super::direct_guards::scan_direct_egress(
                 failed.state,
                 screen,
-                failed.client,
+                (failed.client, failed.generation),
                 &mut response,
             );
             Some(build_http_response(&Egressed::of(response), StatusCode::OK))

@@ -125,9 +125,7 @@ impl Backend {
             Ok(_) => {
                 self.unserved_consecutive.store(0, Ordering::SeqCst);
                 // Answered: nobody is waiting to sign in.
-                self.shared_entry()
-                    .auth_wait
-                    .store(false, Ordering::Relaxed);
+                self.shared_entry().auth_wait.clear();
                 if self.is_circuit_tripped() {
                     info!(
                         backend = %self.name,
@@ -139,7 +137,7 @@ impl Backend {
             }
             // The token step wanted a login: skip the tick, keep the login.
             Err(e) if e.is_authorization_wait() => {
-                self.shared_entry().auth_wait.store(true, Ordering::Relaxed);
+                self.shared_entry().set_auth_wait();
                 Err(e)
             }
             // A busy lock skips the rebuild too: no breaker sample, debug,
@@ -209,9 +207,7 @@ impl Backend {
         if code == METHOD_NOT_FOUND {
             self.unserved_consecutive.store(0, Ordering::SeqCst);
             // Answered: nobody is waiting to sign in.
-            self.shared_entry()
-                .auth_wait
-                .store(false, Ordering::Relaxed);
+            self.shared_entry().auth_wait.clear();
             debug!(
                 backend = %self.name,
                 method,
@@ -259,7 +255,10 @@ impl Backend {
     async fn rebuild_from_probe(&self) {
         // Boxed: a restart runs a whole start, too large to inline in
         // every probe path's future.
-        let _ = crate::oauth::login_gate::short_contention(Box::pin(self.force_restart())).await;
+        let _ = crate::oauth::login_gate::short_contention(Box::pin(
+            self.force_restart_for(super::restart::RestartCause::Unhealthy),
+        ))
+        .await;
     }
 }
 

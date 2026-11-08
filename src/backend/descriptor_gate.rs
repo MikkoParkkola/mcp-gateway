@@ -199,6 +199,14 @@ pub(crate) struct DescriptorGate {
     saturated: std::sync::atomic::AtomicBool,
 }
 
+impl DescriptorGate {
+    /// Whether another thread could take both locks now (G2).
+    #[cfg(test)]
+    pub(crate) fn locks_free_for_test(&self) -> bool {
+        self.blocked.try_write().is_some() && self.logged.try_lock().is_some()
+    }
+}
+
 /// Record a log line; `true` when it was not recorded before.
 ///
 /// Memory bound: a backend that keeps sending fresh descriptions cannot grow
@@ -284,6 +292,20 @@ impl Backend {
         // must not queue a nudge per fill.
         self.nudge_changed_coalesced();
         pending
+    }
+
+    /// The check that blocks `tool` here, for its decision record: the
+    /// backend's `allowed_tools` list, or the descriptor check. Read only for
+    /// a tool [`Self::blocked_tool_refusal`] refuses.
+    pub(crate) fn blocked_tool_kind(
+        &self,
+        tool: &str,
+    ) -> crate::security::decision_record::DecisionKind {
+        if self.is_unselected(tool) {
+            crate::security::decision_record::DecisionKind::AllowedTools
+        } else {
+            crate::security::decision_record::DecisionKind::DescriptorBlock
+        }
     }
 
     /// Refusal text when `tool` is blocked on this backend.

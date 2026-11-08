@@ -176,7 +176,7 @@ struct Fixture {
     state: Arc<AppState>,
     /// The receipt id of the record naming [`OTHER_DEV`].
     other_receipt: String,
-    _dirs: (crate::gateway::router::tests::FixtureDir, tempfile::TempDir),
+    _dirs: (super::tests::FixtureDir, Arc<tempfile::TempDir>),
 }
 
 async fn fixture(kind: Gateway, store: bool) -> Fixture {
@@ -206,6 +206,13 @@ async fn fixture(kind: Gateway, store: bool) -> Fixture {
     };
     state.live_config.set(config);
     let (log_dir, other_receipt) = seed_log(&mut state);
+    // The gateway's discovery cache, as startup attaches it, over a scan
+    // that finds nothing: discovery answers what an admitted caller gets.
+    state
+        .meta_mcp
+        .set_discovery_cache(Arc::new(crate::discovery::listing::DiscoveryCache::new(
+            Arc::new(NoClientFiles),
+        )));
     if store {
         Arc::get_mut(&mut state)
             .expect("state is unique")
@@ -220,11 +227,34 @@ async fn fixture(kind: Gateway, store: bool) -> Fixture {
     }
 }
 
+/// A client-file scan that finds no file.
+struct NoClientFiles;
+
+impl crate::discovery::listing::ScanSource for NoClientFiles {
+    fn fingerprint(&self) -> crate::discovery::config_scanner::client_scan::Fingerprint {
+        crate::discovery::config_scanner::ConfigScanner::fingerprint(&[])
+    }
+    fn scan(
+        &self,
+    ) -> futures::future::BoxFuture<'_, crate::discovery::config_scanner::client_scan::ClientScan>
+    {
+        let scan = crate::discovery::config_scanner::client_scan::ClientScan {
+            finds: Vec::new(),
+            fingerprint: self.fingerprint(),
+            unreadable: Vec::new(),
+        };
+        Box::pin(async move { scan })
+    }
+    fn now(&self) -> std::time::Instant {
+        std::time::Instant::now()
+    }
+}
+
 /// An invocation log holding one call by [`DEV`], one by [`OTHER_DEV`] and one
 /// by a key, chained and hashed like the logger's, opened as the server would.
-fn seed_log(state: &mut Arc<AppState>) -> (tempfile::TempDir, String) {
+pub(super) fn seed_log(state: &mut Arc<AppState>) -> (Arc<tempfile::TempDir>, String) {
     use crate::security::transparency_log::TransparencyLogConfig;
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = dir.path().join("audit.jsonl");
     let calls = [Some(DEV), Some(OTHER_DEV), None];
     let mut prev = "genesis".to_string();
@@ -283,7 +313,10 @@ fn paths() -> Vec<&'static str> {
         routes::UI_TOOLS_CALL,
         routes::UI_REFUSALS,
         routes::UI_DECISIONS,
+        routes::UI_DECISIONS_COUNT,
+        routes::UI_POLICIES,
         routes::UI_GATEWAY,
+        routes::UI_KEYS,
         routes::UI_CONFIG,
         routes::UI_RELOAD,
         routes::UI_DASHBOARD_LINK,
@@ -302,6 +335,8 @@ fn paths() -> Vec<&'static str> {
         routes::UI_BACKENDS,
         routes::UI_BACKEND,
         routes::UI_BACKEND_REVIVE,
+        routes::UI_BACKEND_SIGNIN,
+        routes::UI_BACKEND_SIGNIN_CONFIRM,
         routes::UI_REGISTRY,
         routes::UI_DISCOVERY,
         routes::UI_DISCOVERY_ADOPT,
@@ -758,6 +793,18 @@ fn every_ui_api_path_is_in_the_matrix() {
 #[path = "ui_access_matrix_known_tests.rs"]
 mod known;
 
+/// Who reads which identity grants in the control-plane snapshot.
+#[path = "ui_control_plane_scope_tests.rs"]
+mod control_plane_scope;
+
 /// The status report against the guards, through the same fixture.
 #[path = "ui_access_report_tests.rs"]
 mod report;
+
+/// A backend-scoped credential's reads, against two backends.
+#[path = "ui_backend_scope_tests.rs"]
+mod backend_scope;
+
+/// Each UI role check against the mapping pinned on the request, through the same fixture.
+#[path = "ui_pinned_mapping_tests.rs"]
+mod pinned_mapping;

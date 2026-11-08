@@ -592,6 +592,24 @@ class Runner(unittest.TestCase):
 
     # N3 (MIK-8787 GATE.4/5; characterization): a real failure still fails the
     # push and is compared on the merge-base.
+    # SH1 (MIK-9315.SHSTEP.3): a replayed shell-script line fails the step exactly as a python
+    # line does: red on HEAD fails and is compared with the merge base; green passes.
+    def test_sh1_a_shell_script_line_failing_on_head_fails_the_step(self):
+        f = Fixture(base={"scripts/ci/x.sh": "exit 0\n"}, head={"scripts/ci/x.sh": "echo planted >&2; exit 1\n"})
+        try:
+            report = f.run([line("bash scripts/ci/x.sh")])
+            self.assertNotEqual(report.rc, 0)
+            self.assertEqual([r.status for r in report.failures], ["failed"])
+            self.assertIn("FAILS ON HEAD", report.text)
+            self.assertIn("planted", report.text)
+        finally:
+            f.close()
+        g = Fixture(base={"scripts/ci/x.sh": "exit 0\n"}, head={"scripts/ci/x.sh": "exit 0\n"})
+        try:
+            self.assertEqual(g.run([line("bash scripts/ci/x.sh")]).rc, 0)
+        finally:
+            g.close()
+
     def test_n3_a_failing_check_still_fails_and_is_compared(self):
         report = self.f.run([line(py("raise SystemExit(3)"))])
         self.assertNotEqual(report.rc, 0)
@@ -781,6 +799,46 @@ class Runner(unittest.TestCase):
 
 
 class Step(unittest.TestCase):
+    # KG1 (SHSTEP.4): PREPUSH_KEEP_GOING=1, run on pre-push.sh's own helper and end-of-phase block:
+    # every cheap step runs, each failure is named, the hook exits 1 and its EXIT trap names the
+    # FIRST failure; a failing command inside a step fails that step even when a later command
+    # succeeds; all-green reaches the cargo phase; the default still stops at the first failure.
+    def _keep_going(self, calls, keep_going):
+        text = (HERE / "pre-push.sh").read_text()
+        prologue = text[text.index("set -euo pipefail"):text.index("\n", text.index("trap '")) + 1]
+        helper = text[text.index("  cheap_failed=()"):]
+        helper = helper[:helper.index("\n  }\n", helper.index("  cheap() {")) + 5]
+        end = text[text.index("  if (( ${#cheap_failed[@]} )); then"):]
+        end = end[:end.index("\n  fi\n") + 6]
+        stubs = ("ok_step() { true; }\n"
+                 "masked_step() { false; echo AFTER-THE-FAILING-COMMAND; }\n"
+                 "bad_step() { return 3; }\n")
+        script = prologue + helper + stubs + "".join(f'cheap "{n}" {fn}\n' for n, fn in calls) + end + "echo REACHED-CARGO\n"
+        env = {**os.environ, "PREPUSH_KEEP_GOING": "1" if keep_going else "0"}
+        return subprocess.run(["bash", "-c", script], capture_output=True, text=True, env=env, timeout=30)
+
+    def test_kg1_keep_going_names_every_failed_cheap_step(self):
+        calls = [("one", "ok_step"), ("two", "masked_step"), ("three", "ok_step"), ("four", "bad_step")]
+        done = self._keep_going(calls, keep_going=True)
+        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+        for line in ("[pre-push] three", "[pre-push] four", "FAIL: two (keep-going: continuing)",
+                     "FAIL: four (keep-going: continuing)", "FAIL: cheap steps failed (keep-going): two four"):
+            self.assertIn(line, done.stdout)
+        self.assertNotIn("AFTER-THE-FAILING-COMMAND", done.stdout)
+        self.assertNotIn("REACHED-CARGO", done.stdout)
+        self.assertEqual(done.stderr.strip().splitlines()[-1], "FAIL: pre-push stopped at step: two (exit 1)")
+
+    def test_kg1_keep_going_all_green_reaches_the_cargo_phase(self):
+        done = self._keep_going([("one", "ok_step"), ("two", "ok_step")], keep_going=True)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertIn("REACHED-CARGO", done.stdout)
+
+    def test_kg1_default_stops_at_the_first_failure(self):
+        done = self._keep_going([("one", "ok_step"), ("two", "bad_step"), ("three", "ok_step")], keep_going=False)
+        self.assertEqual(done.returncode, 3, done.stdout + done.stderr)
+        self.assertNotIn("[pre-push] three", done.stdout)
+        self.assertEqual(done.stderr.strip().splitlines()[-1], "FAIL: pre-push stopped at step: two (exit 3)")
+
     # P1: the step script fails when the runner fails, naming the step. Its
     # unconditional call from pre-push.sh is a text check (the weaker half).
     def test_p1_the_step_fails_when_the_runner_fails(self):
@@ -817,9 +875,11 @@ class Step(unittest.TestCase):
     # P2b (impl r1 F20)
     def test_p2b_the_rust_step_line_stops_the_hook_and_follows_the_lib_tests(self):
         pre_push = (HERE / "pre-push.sh").read_text()
-        steps = [l.strip() for l in pre_push.splitlines() if l.strip().startswith('step "')]
-        self.assertLess(steps.index('step "cargo test --lib"'), steps.index('step "doc/CLI Rust tests (--all-features)"'))
-        self.assertLess(steps.index('step "CI script checks"'), steps.index('step "cargo fmt --check"'))
+        # Steps are declared `step "<name>"` or, for the keep-going cheap steps, `cheap "<name>" <fn>`.
+        steps = [l.strip().split('"')[1] for l in pre_push.splitlines()
+                 if l.strip().startswith(('step "', 'cheap "')) and '"$' not in l]
+        self.assertLess(steps.index("cargo test --lib"), steps.index("doc/CLI Rust tests (--all-features)"))
+        self.assertLess(steps.index("CI script checks"), steps.index("cargo fmt --check"))
         rust = [l.strip() for l in pre_push.splitlines() if "run_prepush_ci_checks.py --rust" in l and not l.lstrip().startswith("#")]
         self.assertEqual(len(rust), 1, rust)
         with tempfile.TemporaryDirectory() as tmp:
@@ -835,12 +895,10 @@ class Step(unittest.TestCase):
     # prints the PyYAML hint and stops when PyYAML is missing; no traceback.
     def test_p4_the_self_test_step_without_yaml_prints_the_hint(self):
         pre_push = (HERE / "pre-push.sh").read_text().splitlines()
-        start = pre_push.index('  step "CI-check gate self-tests"')
-        body = []
-        for text in pre_push[start + 1:]:
-            if not text.strip() or text.strip().startswith("step "):
-                break
-            body.append(text)
+        self.assertIn('  cheap "CI-check gate self-tests" ci_selftest_step', pre_push)
+        start = pre_push.index("  ci_selftest_step() {")
+        body = pre_push[start:pre_push.index("  }", start) + 1]
+        body.append("  ci_selftest_step")  # define it, then call it as `cheap` would
         self.assertTrue(any("test_prepush_ci_checks.py" in t for t in body), body)
         with tempfile.TemporaryDirectory() as tmp:
             d = pathlib.Path(tmp)

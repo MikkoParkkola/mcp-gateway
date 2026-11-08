@@ -11,6 +11,8 @@ use futures::future::BoxFuture;
 
 use super::*;
 use crate::config::TransportConfig;
+use crate::config_reload::FileRevision;
+use crate::discovery::config_scanner::ConfigScanner;
 use crate::discovery::config_scanner::client_scan::{ClientScan, Fingerprint};
 use crate::discovery::listing::ScanSource;
 use crate::discovery::{DiscoveredServer, DiscoverySource, ServerMetadata};
@@ -26,7 +28,13 @@ impl ScanSource for Fixed {
         let scan = ClientScan {
             finds: self.0.clone(),
             fingerprint: self.fingerprint(),
-            unreadable: vec![(DiscoverySource::VsCode, "settings.json".to_string())],
+            unreadable: vec![
+                crate::discovery::config_scanner::client_scan::UnreadableClientFile {
+                    source: DiscoverySource::VsCode,
+                    path: std::path::PathBuf::from("/home/someone/.config/Code/settings.json"),
+                    reason: crate::decisions::UnreadableReason::DidNotParse,
+                },
+            ],
         };
         Box::pin(async move { scan })
     }
@@ -76,24 +84,24 @@ fn server<'a>(body: &'a serde_json::Value, name: &str) -> &'a serde_json::Value 
 #[test]
 fn the_config_file_is_read_once_and_judged_by_kind() {
     let dir = tempfile::tempdir().expect("tempdir");
-    assert!(matches!(read_gateway(None), Ok(Gateway::None)));
+    assert!(matches!(read_gateway("discovery", None), Ok(Gateway::None)));
     assert!(matches!(
-        read_gateway(Some(&dir.path().join("absent.yaml"))),
+        read_gateway("discovery", Some(&dir.path().join("absent.yaml"))),
         Ok(Gateway::None)
     ));
     // A directory exists but does not read as a file.
     assert_eq!(
-        read_gateway(Some(dir.path())).err(),
+        read_gateway("discovery", Some(dir.path())).err(),
         Some("gateway.yaml could not be loaded")
     );
     let broken = gateway_file(dir.path(), "backends: [\n");
     assert_eq!(
-        read_gateway(Some(&broken)).err(),
+        read_gateway("discovery", Some(&broken)).err(),
         Some("gateway.yaml could not be loaded")
     );
 
     let path = gateway_file(dir.path(), GATEWAY);
-    let Ok(Gateway::File { revision, .. }) = read_gateway(Some(&path)) else {
+    let Ok(Gateway::File { revision, .. }) = read_gateway("discovery", Some(&path)) else {
         panic!("a readable config");
     };
     assert_eq!(revision, FileRevision::of(GATEWAY.as_bytes()));
@@ -102,7 +110,8 @@ fn the_config_file_is_read_once_and_judged_by_kind() {
 #[tokio::test]
 async fn each_find_is_judged_against_the_config_read() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let gateway = read_gateway(Some(&gateway_file(dir.path(), GATEWAY))).expect("reads");
+    let gateway =
+        read_gateway("discovery", Some(&gateway_file(dir.path(), GATEWAY))).expect("reads");
     let Gateway::File { config, .. } = &gateway else {
         panic!("a config");
     };
@@ -154,7 +163,11 @@ async fn a_cached_listing_follows_a_config_change() {
     let dir = tempfile::tempdir().expect("tempdir");
     let listing = listing(&["a"]).await;
     let path = gateway_file(dir.path(), GATEWAY);
-    let before = body(&read_gateway(Some(&path)).expect("reads"), &listing, false);
+    let before = body(
+        &read_gateway("discovery", Some(&path)).expect("reads"),
+        &listing,
+        false,
+    );
     assert_eq!(server(&before, "a")["managed"], json!(false));
 
     write_owner_only(
@@ -162,7 +175,11 @@ async fn a_cached_listing_follows_a_config_change() {
         format!("{GATEWAY}  a:\n    http_url: \"http://127.0.0.1:9/mcp\"\n"),
     )
     .expect("add a");
-    let after = body(&read_gateway(Some(&path)).expect("reads"), &listing, false);
+    let after = body(
+        &read_gateway("discovery", Some(&path)).expect("reads"),
+        &listing,
+        false,
+    );
     assert_eq!(server(&after, "a")["managed"], json!(true));
     assert_eq!(after["radar"]["findings"], json!([]));
     assert_ne!(before["revision"], after["revision"]);
@@ -177,5 +194,66 @@ async fn without_a_config_file_nothing_is_adoptable() {
     assert_eq!(
         server(&body, "a")["refusals"],
         json!([{"reason": "no_config_file", "field": "name"}])
+    );
+}
+
+/// R5: the decision set's adopt rule is the route's own: a configured name
+/// (an adopted backend is written disabled), the capabilities name, an
+/// invalid name, no config file, or a scan-level refusal is no decision.
+#[tokio::test]
+async fn the_adopt_rule_is_the_routes_own() {
+    const DISABLED: &str =
+        "backends:\n  adopted:\n    http_url: \"http://127.0.0.1:9/mcp\"\n    enabled: false\n";
+    let dir = tempfile::tempdir().expect("tempdir");
+    let gateway =
+        read_gateway("discovery", Some(&gateway_file(dir.path(), DISABLED))).expect("reads");
+    let Gateway::File { config, .. } = &gateway else {
+        panic!("a config");
+    };
+    let capabilities = config.capabilities.name.clone();
+    let mut refused = find("needs-secret");
+    refused.uncarried = vec!["env.TOKEN".to_string()];
+    let cache = DiscoveryCache::new(Arc::new(Fixed(vec![
+        find("fresh"),
+        find("adopted"),
+        find(&capabilities),
+        find("x/y"),
+        refused,
+    ])));
+    let (listing, _) = cache.listing().await.expect("listing");
+    let eligible = |name: &str, gateway: &Gateway| {
+        let find = listing
+            .finds
+            .iter()
+            .find(|f| f.name == name)
+            .expect("listed");
+        adopt_eligible(find, gateway)
+    };
+    assert!(
+        eligible("fresh", &gateway),
+        "an unmanaged find is a decision"
+    );
+    for name in ["adopted", capabilities.as_str(), "x/y", "needs-secret"] {
+        assert!(!eligible(name, &gateway), "{name} is no decision");
+    }
+    assert!(
+        !eligible("fresh", &Gateway::None),
+        "without a config file nothing is a decision"
+    );
+}
+
+/// The line discovery logs when gateway.yaml does not load, word for word:
+/// the reader is shared, and discovery's own text must not change with it.
+#[test]
+fn a_config_that_does_not_load_logs_discoverys_own_line() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let broken = gateway_file(dir.path(), "backends: [\n");
+    let (captured, _guard) = crate::gateway::session_id::log_capture::capture_debug();
+    assert!(read_gateway("discovery", Some(&broken)).is_err());
+    let text = captured.text();
+    assert!(
+        text.lines().any(|line| line.contains("WARN")
+            && line.contains("discovery: gateway.yaml could not be loaded")),
+        "{text}"
     );
 }

@@ -22,6 +22,9 @@ pub struct ConfigPatch {
     pub backends_removed: Vec<String>,
     /// Backends whose config changed between `old` and `new`.
     pub backends_modified: Vec<(String, BackendConfig)>,
+    /// Backends whose only change is their display-only `owner`: published
+    /// with the new generation, never stopped or replaced.
+    pub backends_display_changed: Vec<String>,
     /// `true` when `server.host` or `server.port` changed (requires restart).
     pub server_changed: bool,
     /// `true` when any field outside of `backends` / `server` changed.
@@ -29,12 +32,15 @@ pub struct ConfigPatch {
 }
 
 impl ConfigPatch {
-    /// Returns `true` when no changes were detected.
+    /// Returns `true` when there is nothing to publish: a display-only
+    /// change (`backends_display_changed`) needs no apply work but must still
+    /// be published, so it counts.
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.backends_added.is_empty()
             && self.backends_removed.is_empty()
             && self.backends_modified.is_empty()
+            && self.backends_display_changed.is_empty()
             && !self.server_changed
             && !self.profiles_changed
     }
@@ -67,6 +73,12 @@ impl ConfigPatch {
                     .map(|(n, _)| n.as_str())
                     .collect::<Vec<_>>()
                     .join(", ")
+            ));
+        }
+        if !self.backends_display_changed.is_empty() {
+            parts.push(format!(
+                "owner changed: [{}]",
+                self.backends_display_changed.join(", ")
             ));
         }
         if self.server_changed {
@@ -207,7 +219,7 @@ pub(super) fn tracked_sections(running: &Config, wanted: &Config) -> Vec<(&'stat
     }
 
     let mut sections = sections![
-        "auth" => auth, // first: compared below without `dashboard_session`
+        "auth" => auth, // first: compared below without its live parts
         "mtls" => mtls,
         "key_server" => key_server,
         "agent_auth" => agent_auth,
@@ -239,10 +251,11 @@ pub(super) fn tracked_sections(running: &Config, wanted: &Config) -> Vec<(&'stat
     // ADR-023: the two request-path flags apply on reload, so `security` is
     // compared without them; a change to any other field in it still counts.
     // Pushed here, not listed above, so nothing has to find it to mask it.
+    let collusion = collusion_fields(running, wanted);
     sections.push((
         "security",
-        security_restart_only_json(&running.security)
-            != security_restart_only_json(&wanted.security),
+        security_restart_only_json(&running.security, collusion)
+            != security_restart_only_json(&wanted.security, collusion),
     ));
     // `meta_mcp.surfaced_tools` is applied by the reload (the surfaced
     // snapshot is swapped under `lock_reload`), so it is masked out on both
@@ -255,15 +268,90 @@ pub(super) fn tracked_sections(running: &Config, wanted: &Config) -> Vec<(&'stat
     if let Some(entry) = sections.iter_mut().find(|(name, _)| *name == "meta_mcp") {
         entry.1 = meta_mcp_restart_only(running) != meta_mcp_restart_only(wanted);
     }
+    #[cfg(feature = "cost-governance")]
+    if let Some(entry) = sections
+        .iter_mut()
+        .find(|(name, _)| *name == "cost_governance")
+    {
+        entry.1 = cost_governance_differs(running, wanted);
+    }
     sections
+}
+
+/// Whether `cost_governance` differs in a way only a restart applies. The
+/// budgets and the alerts apply on reload, so they are blanked on both sides,
+/// but only while governance is on on both: turning it on or off is
+/// restart-only (the enforcer is built, or not, at startup), and a budget edit
+/// across that line must still report.
+#[cfg(feature = "cost-governance")]
+fn cost_governance_differs(running: &Config, wanted: &Config) -> bool {
+    let live_budgets = running.cost_governance.enabled && wanted.cost_governance.enabled;
+    let view = |config: &Config| {
+        let mut governance = config.cost_governance.clone();
+        if live_budgets {
+            governance.budgets = crate::cost_accounting::config::BudgetLimits::default();
+            governance.alerts.clear();
+        }
+        canonical_json(&governance)
+    };
+    view(running) != view(wanted)
+}
+
+/// Whether `security.firewall.collusion`'s four live fields (`sources`,
+/// `non_egress`, `allowed_flows`, `action`) count for a restart.
+#[derive(Clone, Copy)]
+enum CollusionFields {
+    /// Compared: an edit to them needs a restart.
+    Compared,
+    /// Applied on reload, so left out of the comparison.
+    #[cfg_attr(
+        not(feature = "firewall"),
+        expect(dead_code, reason = "collusion exists only with the firewall")
+    )]
+    Masked,
+}
+
+/// The four live collusion fields apply on reload only when the running
+/// detector runs `wanted` (ADR-029, amended): the firewall is on and the
+/// detector's window and thresholds are the ones `wanted` asks for.
+#[cfg_attr(not(feature = "firewall"), expect(unused_variables))]
+fn collusion_fields(running: &Config, wanted: &Config) -> CollusionFields {
+    #[cfg(feature = "firewall")]
+    if crate::security::firewall::DetectorParams::of(&running.security.firewall)
+        .runs(&wanted.security.firewall)
+    {
+        return CollusionFields::Masked;
+    }
+    CollusionFields::Compared
 }
 
 /// `security` with the fields that apply on reload set to one fixed value, so
 /// only the restart-only remainder is compared.
-fn security_restart_only_json(security: &crate::config::SecurityConfig) -> String {
+fn security_restart_only_json(
+    security: &crate::config::SecurityConfig,
+    collusion: CollusionFields,
+) -> String {
     let mut view = security.clone();
     view.sanitize_input = false;
     view.ssrf_protection = false;
+    // ADR-029 (amended): the policy fields the Policies screen edits apply on
+    // reload through the request's generation.
+    view.tool_policy = crate::security::ToolPolicyConfig::default();
+    #[cfg(feature = "firewall")]
+    {
+        view.firewall.rules.clear();
+        view.firewall.credential_redaction = false;
+    }
+    #[cfg(feature = "firewall")]
+    if matches!(collusion, CollusionFields::Masked) {
+        let live = &mut view.firewall.collusion;
+        live.sources.clear();
+        live.non_egress.clear();
+        live.allowed_flows.clear();
+        live.action = crate::security::firewall::CollusionAction::default();
+    }
+    #[cfg(not(feature = "firewall"))]
+    let _ = collusion;
     canonical_json(&view)
 }
 
@@ -455,23 +543,35 @@ pub(super) fn classify_backends(old: &Config, new: &Config, patch: &mut ConfigPa
         }
     }
 
-    // Modified: in both but config differs
+    // Modified: in both but config differs. An `owner`-only difference is
+    // display only: published, never a reason to replace the backend.
     for (name, new_cfg) in &new_enabled {
-        if let Some(old_cfg) = old_enabled.get(name)
-            && (backend_config_changed(old_cfg, new_cfg)
-                || (runtime_changed && new_cfg.runtime_profile.is_some()))
+        let Some(old_cfg) = old_enabled.get(name) else {
+            continue;
+        };
+        if backend_config_changed(old_cfg, new_cfg)
+            || (runtime_changed && new_cfg.runtime_profile.is_some())
         {
             patch
                 .backends_modified
                 .push(((*name).to_string(), (*new_cfg).clone()));
+        } else if old_cfg.owner != new_cfg.owner {
+            patch.backends_display_changed.push((*name).to_string());
         }
     }
 }
 
-/// Returns `true` when any observable field of a backend config differs.
+/// Returns `true` when any field of a backend config that the running
+/// backend uses differs: every field but the display-only `owner`, which
+/// `classify_backends` reports apart.
 ///
 /// Uses canonical JSON for a stable, deep equality check without requiring
 /// `PartialEq` on all nested types.
 pub(super) fn backend_config_changed(old: &BackendConfig, new: &BackendConfig) -> bool {
-    canonical_json(old) != canonical_json(new)
+    let running = |c: &BackendConfig| {
+        let mut c = c.clone();
+        c.owner = None;
+        canonical_json(&c)
+    };
+    running(old) != running(new)
 }

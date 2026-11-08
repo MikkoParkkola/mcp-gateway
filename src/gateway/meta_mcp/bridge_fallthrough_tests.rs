@@ -363,12 +363,12 @@ async fn t3b_an_exhausted_exchange_releases_the_idempotency_key() {
     );
 }
 
-/// T3d — the same rule on a path that ends before the result completes: a
-/// caller the gateway cannot bind a continuation to is refused after the
-/// exhausted exchange, and the key must still be released on the way out. T3b
-/// cannot see this, because a completed interim removes the key regardless.
+/// T3d — a path that ends before the result completes: a caller the gateway
+/// cannot bind a continuation to is refused after the exhausted exchange.
+/// Every round of that exchange was a tools/call the backend ran, so the key
+/// is kept as may-have-run: a same-key retry must not run those rounds again.
 #[tokio::test]
-async fn t3d_an_exhausted_exchange_that_cannot_be_sealed_releases_the_key() {
+async fn t3d_an_exhausted_exchange_that_cannot_be_sealed_keeps_the_key() {
     let (m, calls) = meta_that_always_asks(ROOTS);
     let m = with_idempotency(m);
     let channel = Answering::default();
@@ -381,10 +381,12 @@ async fn t3d_an_exhausted_exchange_that_cannot_be_sealed_releases_the_key() {
         .await
         .expect_err("no principal to bind the continuation to");
     let first = calls.lock().len();
+    assert!(first > 0, "premise: the exchange reached the backend");
     let _ = m.invoke_tool(&args(), Some("session-1"), &caller).await;
-    assert!(
-        calls.lock().len() > first,
-        "the key was settled, so the retry was replayed"
+    assert_eq!(
+        calls.lock().len(),
+        first,
+        "the key was released, so the retry ran the backend's rounds again"
     );
 }
 
@@ -531,6 +533,7 @@ async fn a_minted_retry_under_a_discovery_name_is_inspected_once_and_unmarked() 
         .with_continuations(Arc::clone(&keys)),
     );
     m.set_firewall(Some(Arc::clone(&firewall)));
+    crate::security::firewall::collusion_live_rig::seed_meta(&m, &firewall);
     m.set_continuation_for_test(keys);
 
     let channel = NoSessionCounted::default();
@@ -568,7 +571,7 @@ async fn a_minted_retry_under_a_discovery_name_is_inspected_once_and_unmarked() 
     );
     assert_answers_native(&response);
     assert!(
-        !response.egress_scanned,
+        !response.wire_meta.egress_scanned,
         "a retry routed to its origin backend is never marked inspected"
     );
     assert_eq!(
@@ -595,6 +598,7 @@ async fn a_minted_retry_under_a_discovery_name_is_inspected_once_and_unmarked() 
                 signing: None,
                 chain_source: ChainSource::NotEligible,
                 chain_nonce: None,
+                generation: None,
             },
         )
         .await;

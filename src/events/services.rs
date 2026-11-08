@@ -110,14 +110,64 @@ impl Services {
     }
 }
 
+/// Whose API key an admission judges.
+#[derive(Clone, Copy)]
+enum KeyCheck<'a> {
+    /// A holder opened with that key: it names the secret that opened it,
+    /// which must still be valid; one that names none is refused.
+    Holder(&'a ApiKeyRef),
+    /// The caller of the request being answered now, whose secret its own
+    /// match just proved.
+    ThisRequest { name: &'a str, principal: &'a str },
+}
+
+/// Whether the secret fingerprinted `tag` still authenticates as key `k`:
+/// it is the key's current digest, or its previous one before the grace ends
+/// (ADR-022). A rotation that drops the old secret at once leaves no digest
+/// with that fingerprint, so whatever that secret opened stops here. A key
+/// whose digest is a reference this config read cannot resolve matches no
+/// fingerprint (fail closed).
+fn secret_still_valid(
+    k: &crate::config::ApiKeyConfig,
+    tag: &str,
+    now: Result<DateTime<Utc>, crate::clock::ClockBeforeEpoch>,
+) -> bool {
+    let digest = |spec: Option<&str>| spec.and_then(crate::config::parse_api_key_digest);
+    let current = digest(k.key_sha256.as_deref());
+    let previous = digest(k.previous_key_sha256.as_deref()).zip(k.previous_expires_at);
+    crate::gateway::auth::tag_still_valid(
+        tag,
+        current.as_ref(),
+        previous.as_ref().map(|(d, end)| (d, *end)),
+        |end| now.is_ok_and(|now| !crate::config::api_key_expired(Some(end), now)),
+    )
+}
+
 impl Services {
-    /// Whether a subscription made with API key `key` may still see
-    /// `backend` under the live config. A key that left the config, expired,
-    /// or was replaced under the same name sees nothing; a principal without
-    /// an API key has no live scope to re-read, so its subscribe-time check
-    /// stands.
+    /// Whether a holder opened with API key `key` (a subscription, a watch)
+    /// may still see `backend` under the live config. A key that left the
+    /// config, expired, or was replaced under the same name sees nothing,
+    /// and nor does a holder whose secret the key no longer accepts, or one
+    /// that names no secret (fail closed). A principal without an API key has
+    /// no live scope to re-read, so its subscribe-time check stands.
     pub(crate) fn admits(&self, key: Option<&ApiKeyRef>, backend: &str) -> bool {
-        self.admits_grant(key, Some(backend), crate::clock::utc_now())
+        self.admits_grant(
+            key.map(KeyCheck::Holder),
+            Some(backend),
+            crate::clock::utc_now(),
+        )
+    }
+
+    /// Whether the API key `name` under `principal`, which authenticated the
+    /// request being answered now, may see `backend`: the one check with no
+    /// holder behind it, so no secret binding to judge (the request's own
+    /// match just proved the secret).
+    pub(crate) fn admits_this_request(&self, name: &str, principal: &str, backend: &str) -> bool {
+        self.admits_grant(
+            Some(KeyCheck::ThisRequest { name, principal }),
+            Some(backend),
+            crate::clock::utc_now(),
+        )
     }
 
     /// As [`Self::admits`]; `None` asks only that the key be live, for
@@ -126,25 +176,36 @@ impl Services {
     /// cannot be read (MIK-8202).
     fn admits_grant(
         &self,
-        key: Option<&ApiKeyRef>,
+        key: Option<KeyCheck<'_>>,
         backend: Option<&str>,
         now: Result<DateTime<Utc>, crate::clock::ClockBeforeEpoch>,
     ) -> bool {
         let Some(key) = key else {
             return true;
         };
+        let (name, principal) = match key {
+            KeyCheck::Holder(r) => (r.name.as_str(), r.principal.as_str()),
+            KeyCheck::ThisRequest { name, principal } => (name, principal),
+        };
         self.live
             .get()
             .auth
             .api_keys
             .iter()
-            .find(|k| k.name == key.name)
+            .find(|k| k.name == name)
             .filter(|k| k.expires_at.is_none() || now.is_ok_and(|now| !k.is_expired_at(now)))
             .filter(|k| {
                 k.key_sha256
                     .as_deref()
                     .and_then(crate::config::parse_api_key_digest)
-                    .is_some_and(|digest| k.principal_for(&digest).storage_form() == key.principal)
+                    .is_some_and(|digest| k.principal_for(&digest).storage_form() == principal)
+            })
+            .filter(|k| match key {
+                KeyCheck::Holder(r) => r
+                    .digest_tag
+                    .as_deref()
+                    .is_some_and(|tag| secret_still_valid(k, tag, now)),
+                KeyCheck::ThisRequest { .. } => true,
             })
             .is_some_and(|k| {
                 backend.is_none_or(|backend| k.backends.iter().any(|b| b == "*" || b == backend))
@@ -190,10 +251,17 @@ impl Services {
     ) -> bool {
         use crate::security::audit::CredentialKind as Kind;
         match sub.credential_kind {
+            // A stored row must name the secret that opened it: one stored
+            // before holders were bound carries no fingerprint and is refused
+            // by the holder check.
             None | Some(Kind::ApiKey) => {
                 sub.legacy_api_key_name.is_none()
                     && sub.api_key.is_some()
-                    && self.admits_grant(sub.api_key.as_ref(), backend, Ok(now))
+                    && self.admits_grant(
+                        sub.api_key.as_ref().map(KeyCheck::Holder),
+                        backend,
+                        Ok(now),
+                    )
             }
             // No credential was presented: authentication is off.
             Some(Kind::None | Kind::LocalTransport) => true,
@@ -357,7 +425,9 @@ impl Services {
             // over every named key applies, which can only block more.
             key: crate::security::response_policy::KeyOf::NotKnown,
         };
+        let generation = self.live.generation();
         match firewall.check_response_artifact(
+            generation.firewall_policy(),
             data,
             &targets,
             &correlation,
@@ -435,10 +505,15 @@ impl Services {
         }
         let tool = format!("events:{name}");
         registry.register_from_capability(&tool, cost);
-        let verdict = enforcer.check(&tool, key);
+        // Not request-scoped: one generation per charge, for the check and the
+        // settlement alike.
+        let generation = self.live.generation();
+        let governance = enforcer.governance(Some(&generation));
+        let verdict = enforcer.check_under(governance, &tool, key);
         if verdict.allowed {
             // Spent and released in one step (MIK-7903).
-            enforcer.settle(verdict.hold.as_deref(), &tool, key, verdict.cost_usd);
+            let hold = verdict.hold.as_deref();
+            enforcer.settle_under(governance, hold, (&tool, key), verdict.cost_usd);
         }
         verdict.allowed
     }
@@ -605,6 +680,9 @@ impl Services {
                     &body_hash,
                     None,
                     extra,
+                    // A delivery its subscription made, not a call any gate
+                    // decided: it carries no decision object.
+                    None,
                 )
             })
             .await;

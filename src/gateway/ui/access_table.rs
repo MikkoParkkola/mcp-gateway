@@ -224,6 +224,14 @@ pub(super) static ROWS: &[Row] = &[
         false,
     ),
     row(routes::UI_DECISIONS, Get, Admin(AdminRequired), &[], false),
+    row(routes::UI_POLICIES, Get, Admin(AdminRequired), &[], false),
+    row(
+        routes::UI_DECISIONS_COUNT,
+        Get,
+        Admin(AdminRequired),
+        &[],
+        false,
+    ),
     row(
         routes::UI_REFUSALS,
         Get,
@@ -238,6 +246,15 @@ pub(super) static ROWS: &[Row] = &[
         &[(Page::Gateway, Tab::Status)],
         true,
     ),
+    // Lists every configured key: an admin read, as the config view is.
+    row(
+        routes::UI_KEYS,
+        Get,
+        Admin(Forbidden),
+        &[(Page::Access, Tab::Status)],
+        true,
+    ),
+    row(routes::UI_KEYS, Post, Admin(Forbidden), &[], false),
     row(
         routes::UI_DEAD_LETTERS,
         Get,
@@ -345,6 +362,20 @@ pub(super) static ROWS: &[Row] = &[
     ),
     row(
         routes::UI_BACKEND_REVIVE,
+        Post,
+        Admin(AdminRequired),
+        &[(Page::Servers, Tab::Actions)],
+        false,
+    ),
+    row(
+        routes::UI_BACKEND_SIGNIN,
+        Post,
+        Admin(AdminRequired),
+        &[(Page::Servers, Tab::Actions)],
+        false,
+    ),
+    row(
+        routes::UI_BACKEND_SIGNIN_CONFIRM,
         Post,
         Admin(AdminRequired),
         &[(Page::Servers, Tab::Actions)],

@@ -9,6 +9,7 @@ use tracing::debug;
 
 use super::Gateway;
 use super::StdioNonce;
+use super::first_list_wait;
 use super::stdio_route_stage::RouteStage;
 use super::{
     STDIO_CREDENTIAL_PRINCIPAL, StdioClient, stdio_catalogue, stdio_delivery,
@@ -26,7 +27,7 @@ impl Gateway {
     )]
     pub(super) async fn dispatch_relay_scoped(
         meta_mcp: &Arc<MetaMcp>,
-        tool_policy: &Arc<crate::security::ToolPolicy>,
+        generation: &dyn crate::gateway::authz::StdioLine,
         _mtls_policy: &Arc<crate::mtls::MtlsPolicy>,
         mut request: serde_json::Value,
         client: StdioClient<'_>,
@@ -37,7 +38,10 @@ impl Gateway {
         use crate::protocol::JsonRpcResponse;
 
         let session_id = client.session_id;
-        let policy = ToolPolicyAuthorizer { tool_policy };
+        let policy = ToolPolicyAuthorizer {
+            tool_policy: generation.tool_policy(),
+            generation: Some(generation.generation()),
+        };
         let scope = InvokeScope::stdio(
             &policy,
             crate::identity_propagation::CallerProof::new(
@@ -105,14 +109,18 @@ impl Gateway {
             super::super::meta_mcp::grant_audit::slot_rpc(
                 meta_mcp.transparency_logger.as_ref(),
                 id.clone(),
-                Box::pin(Self::dispatch_tools_call(
-                    meta_mcp,
-                    tool_policy,
-                    &mut request,
-                    id,
-                    client,
-                    &mut signing_context,
-                    &request_shape,
+                // In one route decision scope for the whole call, as on `/mcp`:
+                // inside the existing box, so nothing new is nested or boxed.
+                Box::pin(crate::gateway::meta_mcp::invoke::audit::with_route_scope(
+                    Self::dispatch_tools_call(
+                        meta_mcp,
+                        generation,
+                        &mut request,
+                        id,
+                        client,
+                        &mut signing_context,
+                        &request_shape,
+                    ),
                 )),
             )
             .await
@@ -147,6 +155,7 @@ impl Gateway {
                     }
                     m @ ("tasks/get" | "tasks/update" | "tasks/cancel") => {
                         let retry = crate::protocol::mrtr::RetryFields::from_params(params);
+                        let pinned = Some(generation.generation());
                         let caller = Self::build_stdio_caller_context(
                             true,
                             None,
@@ -154,21 +163,21 @@ impl Gateway {
                             &retry,
                             &request_shape,
                             client,
-                            meta_mcp.record_key(),
+                            (meta_mcp.record_key(), pinned),
                         );
                         let shape = &request_shape;
                         stdio_tasks::serve(client.tasks, m, id, params, shape, &caller, session_id)
                             .await
                     }
                     "tools/list" => {
-                        // MIK-8356: the same grant recheck HTTP runs before tools/list.
-                        meta_mcp.revalidate_caller_slots(scope.caller).await;
-                        // The same own-view warm HTTP runs.
-                        meta_mcp.warm_listing_views(scope, Some(session_id)).await;
+                        // The grant recheck and own-view warm HTTP runs, then a first wait.
+                        let era = request_shape.era();
+                        first_list_wait::prepare(meta_mcp, scope, session_id, era).await;
                         meta_mcp.handle_tools_list_with_params(id, params, Some(session_id), scope)
                     }
                     m if stdio_catalogue::METHODS.contains(&m) => {
-                        stdio_catalogue::dispatch(meta_mcp, m, id, params).await
+                        stdio_catalogue::dispatch(meta_mcp, m, id, params, generation.pinned())
+                            .await
                     }
                     "logging/setLevel" => meta_mcp.handle_logging_set_level(id, params).await,
                     "ping" => JsonRpcResponse::success(id, serde_json::json!({})),
@@ -214,6 +223,7 @@ impl Gateway {
                 signing: signing_context.as_ref(),
                 chain_source,
                 chain_nonce: chain_nonce.as_deref(),
+                generation: Some(generation.generation()),
             },
         );
         // MIK-7887.RECEIPT.4: the receipt describes the delivered answer, with
@@ -433,7 +443,11 @@ impl Gateway {
         retry: &'a crate::protocol::mrtr::RetryFields,
         request_shape: &crate::protocol::meta::RequestShape,
         client: StdioClient<'a>,
-        record_key: &crate::gateway::record_principal::RecordPrincipalKey,
+        // The record key, and the generation this message is judged by.
+        (record_key, generation): (
+            &crate::gateway::record_principal::RecordPrincipalKey,
+            Option<&'a crate::config_reload::Generation>,
+        ),
     ) -> MetaMcpCallerContext<'a> {
         MetaMcpCallerContext {
             // Filled after the route stage, by the task intent, when the
@@ -462,7 +476,7 @@ impl Gateway {
             // dispatcher: it previously lived on the HTTP path
             // alone, so stdio was never checked and the default
             // non-admin context went unnoticed.
-            is_admin: true,
+            admin: crate::gateway::authz::AdminStanding::Gateway,
             surface_request: crate::gateway::recovery::SurfaceRequest::Configured,
             // MRTR.9 declares capabilities per request, in the same `_meta`
             // this shape was classified from, so a modern call is read there.
@@ -501,6 +515,7 @@ impl Gateway {
             // exist here at all.
             confirmation:
                 crate::gateway::destructive_confirmation::ConfirmationChannel::Unavailable,
+            generation,
         }
     }
 
@@ -510,7 +525,7 @@ impl Gateway {
     #[expect(clippy::too_many_lines, reason = "one admission path, kept whole")]
     async fn dispatch_tools_call(
         meta_mcp: &Arc<MetaMcp>,
-        tool_policy: &Arc<crate::security::ToolPolicy>,
+        generation: &dyn crate::gateway::authz::StdioLine,
         request: &mut serde_json::Value,
         id: crate::protocol::RequestId,
         client: StdioClient<'_>,
@@ -539,7 +554,8 @@ impl Gateway {
             // for `gateway_invoke` alone, so a stdio playbook or code-mode
             // step reached a backend with no policy check at all.
             let stdio_authorizer = crate::gateway::authz::ToolPolicyAuthorizer {
-                tool_policy: tool_policy.as_ref(),
+                tool_policy: generation.tool_policy(),
+                generation: Some(generation.generation()),
             };
 
             let retry = crate::protocol::mrtr::RetryFields::from_params(params);
@@ -602,6 +618,9 @@ impl Gateway {
             // X14's granted retry fields, when it grants: declared ahead of
             // the caller context that borrows them.
             let granted;
+            // The message's own generation, the policy's config: its budgets
+            // judge the call from admission to settlement across a reload.
+            let pinned = Some(generation.generation());
             let mut caller = Self::build_stdio_caller_context(
                 is_modern,
                 protocol_revision_owned.as_deref(),
@@ -609,7 +628,7 @@ impl Gateway {
                 &retry,
                 request_shape,
                 client,
-                meta_mcp.record_key(),
+                (meta_mcp.record_key(), pinned),
             );
             // The signing nonce is admitted before the route stage, so a bad
             // nonce is refused without paying for the payload
@@ -710,6 +729,7 @@ impl Gateway {
                     target,
                     dispatched,
                     bindings,
+                    effect_slot,
                 )) => {
                     // STORED.2 site 1: a retained single-call result is
                     // served only on proven liveness; otherwise the call
@@ -723,7 +743,7 @@ impl Gateway {
                             arguments.as_ref(),
                             &caller,
                             target,
-                            (dispatched, bindings),
+                            (dispatched, bindings, effect_slot),
                             (response, audit),
                         )
                         .await

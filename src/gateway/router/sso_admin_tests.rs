@@ -142,6 +142,12 @@ struct Gateway {
 }
 
 async fn gateway(rules: &[&str]) -> Gateway {
+    gateway_with_public(rules, &[]).await
+}
+
+/// [`gateway`], with `public` as the auth section's public paths when given
+/// (the default `/health` otherwise).
+async fn gateway_with_public(rules: &[&str], public: &[&str]) -> Gateway {
     let (a, b) = (Idp::start(ISS_A).await, Idp::start(ISS_B).await);
     let config = KeyServerConfig {
         enabled: true,
@@ -166,6 +172,11 @@ async fn gateway(rules: &[&str]) -> Gateway {
         enabled: true,
         bearer_token: Some(BEARER.to_string()),
         api_keys: vec![api_key(STANDARD_KEY, false), api_key(ADMIN_KEY, true)],
+        public_paths: if public.is_empty() {
+            AuthConfig::default().public_paths
+        } else {
+            public.iter().map(|p| (*p).to_string()).collect()
+        },
         ..AuthConfig::default()
     };
     let (state, store) =
@@ -261,13 +272,23 @@ async fn standing_of(
     }
 }
 
+/// Activity's admin shortcut follows the pinned mapping too.
+#[cfg(feature = "webui")]
+#[path = "sso_admin_tests/activity_pin.rs"]
+mod activity_pin;
 #[path = "sso_admin_tests/cells.rs"]
 mod cells;
+/// A key-server caller's admin flag follows the request's pinned mapping.
+#[path = "sso_admin_tests/pinned_admin.rs"]
+mod pinned_admin;
 
 // Its helpers serve the UI cells, so the module needs the UI.
 #[cfg(feature = "webui")]
 #[path = "sso_admin_tests/admin_action.rs"]
 mod admin_action;
+/// A backend-scoped admin has no gateway-wide admin standing.
+#[path = "sso_admin_tests/backend_scope.rs"]
+mod backend_scope;
 /// E5-T7: an SSO admin cannot mint a dashboard link it could not redeem.
 #[cfg(feature = "webui")]
 #[path = "sso_admin_tests/dashboard_link.rs"]

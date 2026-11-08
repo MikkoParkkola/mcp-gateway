@@ -118,7 +118,7 @@ async fn cancelled_worker_on_stalled_log_writes_through_the_bound() {
     while row.log.refused_under_stall_for_test() == 0 && tokio::time::Instant::now() < deadline {
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
-    release();
+    row.log.release_and_drain(release).await;
     row.endpoint.release();
     assert!(
         row.log.refused_under_stall_for_test() >= 1,

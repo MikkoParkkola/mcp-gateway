@@ -36,13 +36,58 @@ impl MetaMcp {
         backend: Option<&crate::backend::Backend>,
         binding: Option<&str>,
     ) -> bool {
-        if let Some(capabilities) = self.get_capabilities()
+        if let Some(capabilities) = self.caller_capabilities()
             && server == capabilities.name
             && let Some(definition) = capabilities.get(tool)
         {
             return definition.metadata.read_only;
         }
         backend.is_some_and(|backend| backend.is_read_only_for(binding, tool))
+    }
+
+    /// Note on this call's decision the effect [`Self::declared_effect`]
+    /// reads; nothing when it reads none.
+    pub(super) fn note_declared_effect(
+        &self,
+        target: (&str, &str),
+        backend: Option<&crate::backend::Backend>,
+        binding: Option<&str>,
+    ) {
+        if let Some((effect, source)) = self.declared_effect(target, backend, binding) {
+            super::audit::note_declared_effect(effect, source);
+        }
+    }
+
+    /// What the called tool declares the call could change, asked as
+    /// [`Self::cache_admits`] asks: a capability by its definition, otherwise
+    /// the registry backend by what its slot declared. `None` when nothing
+    /// declared it in a way the evidence can read.
+    pub(super) fn declared_effect(
+        &self,
+        (server, tool): (&str, &str),
+        backend: Option<&crate::backend::Backend>,
+        binding: Option<&str>,
+    ) -> Option<(
+        crate::security::decision_record::Effect,
+        crate::security::decision_record::EffectSource,
+    )> {
+        use crate::security::decision_record::{Effect, EffectSource};
+        // The caller's view, as cache_admits reads it: a provider hidden
+        // from this caller is an unregistered name, never its definition.
+        if let Some(capabilities) = self.caller_capabilities()
+            && server == capabilities.name
+            && let Some(definition) = capabilities.get(tool)
+        {
+            let effect = if definition.metadata.read_only {
+                Effect::ReadOnly
+            } else {
+                Effect::MayWrite
+            };
+            return Some((effect, EffectSource::CapabilityDefinition));
+        }
+        backend?
+            .declared_effect_for(binding, tool)
+            .map(|effect| (effect, EffectSource::ToolAnnotation))
     }
 
     pub(super) fn refuse_shared_oauth_login(
@@ -156,15 +201,21 @@ impl MetaMcp {
                         );
                         return Err(Error::ResponseFirewallRefused);
                     }
-                    let (code, message) = crate::idempotency::cached_error_parts(&error);
+                    let (code, mut message) = crate::idempotency::cached_error_parts(&error);
+                    // Scrubbed on the way out against the values current now.
+                    self.backends.scrub_stored_text(&mut message)?;
                     debug!(target: INVOKE_TARGET,
                         server,
                         tool, trace_id, "Idempotency cache hit (failed)"
                     );
                     return Err(Error::json_rpc(code, message));
                 }
-                GuardOutcome::CachedResult(cached) => {
+                GuardOutcome::CachedResult(mut cached) => {
                     debug!(target: INVOKE_TARGET, server, tool, trace_id, "Idempotency cache hit");
+                    // Scrubbed on the way out against the values current now:
+                    // a value marked secret after this answer was stored is
+                    // removed; a refusal is this call's answer instead.
+                    self.backends.scrub_stored_value(&mut cached)?;
                     audit::counting::note_replay();
                     // A stored side-effect notice is the gateway's own text;
                     // its first call delivered no read either (MIK-7991).
@@ -192,18 +243,23 @@ impl MetaMcp {
                     .increment(1);
                     let predictions =
                         self.record_and_predict(session_id, arm_key, tool_key, caller.scope());
-                    return Ok(Some(GuardedValue::from_cache(cached).augment(|v| {
-                        let v =
-                            augment_with_trace(augment_with_predictions(v, predictions), trace_id);
-                        self.maybe_stamp_provenance(
-                            v,
-                            server,
-                            tool,
-                            api_key_name,
-                            crate::trust::CacheOutcome::Hit,
-                            client_claim,
-                        )
-                    })));
+                    let replay = audit::Answered::Replay;
+                    return Ok(Some(GuardedValue::from_cache(cached, replay).augment(
+                        |v| {
+                            let v = augment_with_trace(
+                                augment_with_predictions(v, predictions),
+                                trace_id,
+                            );
+                            self.maybe_stamp_provenance(
+                                v,
+                                server,
+                                tool,
+                                api_key_name,
+                                crate::trust::CacheOutcome::Hit,
+                                client_claim,
+                            )
+                        },
+                    )));
                 }
                 GuardOutcome::Proceed(reservation) => {
                     *idem_reservation = Some(reservation);
@@ -412,7 +468,16 @@ impl MetaMcp {
                     policy_epoch,
                 },
             )
-            && let Some((cached, read, writes)) = cache.get_read(&cache_key)
+            // Scrubbed on the way out against the values current now (a value
+            // marked secret after this entry was stored is removed); a refused
+            // scrub serves no hit, and the call goes to the backend.
+            && let Some((cached, read, writes)) =
+                cache.get_read(&cache_key).and_then(|(mut cached, read, writes)| {
+                    self.backends
+                        .scrub_stored_value(&mut cached)
+                        .ok()
+                        .map(|_| (cached, read, writes))
+                })
         {
             cache_reads::restore(read.as_ref());
             debug!(target: INVOKE_TARGET, server, tool, trace_id, "Cache hit");
@@ -441,7 +506,8 @@ impl MetaMcp {
             }
             let predictions =
                 self.record_and_predict(session_id, arm_key, tool_key, caller.scope());
-            return Some(GuardedValue::from_cache(cached).augment(|v| {
+            let hit = audit::Answered::CacheHit;
+            return Some(GuardedValue::from_cache(cached, hit).augment(|v| {
                 let v = augment_with_trace(augment_with_predictions(v, predictions), trace_id);
                 self.maybe_stamp_provenance(
                     v,
@@ -518,6 +584,9 @@ pub(super) fn derive_prompt_cache_key(args: &Value, session_id: Option<&str>) ->
         })
 }
 
+#[cfg(test)]
+#[path = "pre_dispatch_effect_tests.rs"]
+mod effect_tests;
 #[cfg(test)]
 #[path = "prompt_cache_key_tests.rs"]
 mod prompt_cache_key_tests;

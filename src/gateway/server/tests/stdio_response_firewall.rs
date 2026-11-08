@@ -104,6 +104,7 @@ impl Stdio {
             tool: TOOL.to_string(),
         }]);
         meta.set_firewall(Some(Arc::clone(&firewall)));
+        crate::security::firewall::collusion_live_rig::seed_meta(&meta, &firewall);
         meta.share_keyring_with_for_test(&firewall);
         Self {
             meta: Arc::new(meta),
@@ -113,7 +114,6 @@ impl Stdio {
 
     /// One stdio request; returns the answer and the inspections it cost.
     async fn send(&self, method: &str, params: Value) -> (Value, usize) {
-        let policy = Arc::new(crate::security::ToolPolicy::default());
         let mtls = Arc::new(crate::mtls::MtlsPolicy::from_config(
             &crate::mtls::MtlsConfig::default(),
         ));
@@ -121,7 +121,7 @@ impl Stdio {
         let request = json!({ "jsonrpc": "2.0", "id": 7, "method": method, "params": params });
         let body = super::super::Gateway::dispatch_single(
             &self.meta,
-            &policy,
+            &crate::gateway::authz::default_line(&self.meta),
             &mtls,
             &request,
             "stdio-7407",
@@ -223,6 +223,8 @@ async fn stdio_serves_allowed_responses_with_one_inspection() {
         servers: None,
         keys: None,
         except: None,
+        allowed_roots: None,
+        path_args: None,
     }];
     let stdio = Stdio::new(&format!("uses {}", canary()), "fine", warn).await;
     let (body, inspected) = stdio

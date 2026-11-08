@@ -69,20 +69,25 @@ async fn seam_state_with(
     for key in &mut auth.api_keys {
         key.backends.extend(more.iter().map(ToString::to_string));
     }
-    let (state, store) = super::super::meta_fixture::test_router_app_state_with_meta_and_firewall(
-        &auth,
-        None,
-        None,
-        |mut meta| {
-            meta.share_keyring_with_for_test(&relay);
-            meta.set_firewall(Some(relay));
-            let mut engine = crate::playbook::PlaybookEngine::new();
-            engine.register(definition);
-            meta.set_playbook_engine(engine);
-            meta
-        },
-    )
-    .await;
+    let (mut state, store) =
+        super::super::meta_fixture::test_router_app_state_with_meta_and_firewall(
+            &auth,
+            None,
+            None,
+            |mut meta| {
+                meta.share_keyring_with_for_test(&relay);
+                meta.set_firewall(Some(relay));
+                let mut engine = crate::playbook::PlaybookEngine::new();
+                engine.register(definition);
+                meta.set_playbook_engine(engine);
+                meta
+            },
+        )
+        .await;
+    crate::security::firewall::collusion_live_rig::pair_state_with_meta(
+        &mut state,
+        crate::security::firewall::collusion_live_rig::Layer::WholeSection,
+    );
     register(&state, BACKEND, mock);
     for server in more {
         register(&state, server, mock);
@@ -475,6 +480,8 @@ async fn a_redacted_field_is_no_steps_text() {
                     servers: None,
                     keys: None,
                     except: None,
+                    allowed_roots: None,
+                    path_args: None,
                 }],
                 ..FirewallConfig::default()
             },
@@ -497,20 +504,25 @@ async fn a_redacted_field_is_no_steps_text() {
         "    a:\n      path: $s1.content[0].text\n    b:\n      path: $s2.content[0].text\n",
     ))
     .expect("playbook fixture must parse");
-    let (state, _store) = super::super::meta_fixture::test_router_app_state_with_meta_and_firewall(
-        &two_principal_auth(),
-        None,
-        Some(router),
-        |mut meta| {
-            meta.share_keyring_with_for_test(&relay);
-            meta.set_firewall(Some(relay));
-            let mut engine = crate::playbook::PlaybookEngine::new();
-            engine.register(definition);
-            meta.set_playbook_engine(engine);
-            meta
-        },
-    )
-    .await;
+    let (mut state, _store) =
+        super::super::meta_fixture::test_router_app_state_with_meta_and_firewall(
+            &two_principal_auth(),
+            None,
+            Some(router),
+            |mut meta| {
+                meta.share_keyring_with_for_test(&relay);
+                meta.set_firewall(Some(relay));
+                let mut engine = crate::playbook::PlaybookEngine::new();
+                engine.register(definition);
+                meta.set_playbook_engine(engine);
+                meta
+            },
+        )
+        .await;
+    crate::security::firewall::collusion_live_rig::pair_state_with_meta(
+        &mut state,
+        crate::security::firewall::collusion_live_rig::Layer::CollusionOnly,
+    );
     register(&state, BACKEND, &mock);
     let output = run_seam(&state, json!({})).await;
     let delivered = output["a"].as_str().unwrap_or_default().to_owned();

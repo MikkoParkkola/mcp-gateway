@@ -78,6 +78,7 @@ async fn finalize(
             signing,
             chain_source: super::super::response_security::ChainSource::NotEligible,
             chain_nonce: None,
+            generation: None,
         },
     )
     .await
@@ -128,7 +129,7 @@ fn assert_failure(response: &JsonRpcResponse) {
     assert_eq!(error.code, -32603);
     assert_eq!(error.message, FAILURE);
     assert!(error.data.is_none());
-    assert!(response.delivery_refusal);
+    assert!(response.wire_meta.delivery_refusal);
     assert!(!response.confirmation_refusal);
     assert!(response.excludes_client_accounting());
     assert_eq!(
@@ -161,7 +162,7 @@ async fn signing_delivery_external_success_covers_all_supplied_final_fields() {
         .unwrap()
         .remove("_signature");
     assert_eq!(verified["result"], expected);
-    assert!(!actual.delivery_refusal);
+    assert!(!actual.wire_meta.delivery_refusal);
     let mut tampered = actual;
     tampered.result.as_mut().unwrap()["_meta"]["serverInfo"]["version"] = json!("forged");
     assert!(
@@ -194,7 +195,7 @@ async fn signing_delivery_internal_and_absent_origin_remain_unsigned() {
         let expected = serde_json::to_value(&original).unwrap();
         let actual = finalize(&meta, original, context).await;
         assert_eq!(serde_json::to_value(&actual).unwrap(), expected);
-        assert!(!actual.delivery_refusal);
+        assert!(!actual.wire_meta.delivery_refusal);
     }
 }
 
@@ -209,7 +210,7 @@ async fn signing_delivery_disabled_skips_invalid_context() {
     )
     .await;
     assert_eq!(serde_json::to_value(&actual).unwrap(), expected);
-    assert!(!actual.delivery_refusal);
+    assert!(!actual.wire_meta.delivery_refusal);
 }
 
 #[tokio::test]
@@ -297,13 +298,14 @@ fn logged_meta() -> (MetaMcp, tempfile::TempDir, std::path::PathBuf) {
 }
 
 fn assert_attempt(path: &std::path::Path, response: &JsonRpcResponse) -> Value {
-    let events: Vec<Value> = std::fs::read_to_string(path)
-        .unwrap()
-        .lines()
-        .map(|line| serde_json::from_str::<Value>(line).unwrap())
-        // Skip the log's genesis housekeeping record (#2275).
-        .filter(|e| e["event"] != "audit_segment_opened")
-        .collect();
+    let events = crate::security::transparency_log::without_log_identified(
+        std::fs::read_to_string(path)
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str::<Value>(line).unwrap())
+            // Skip the log's genesis housekeeping record (#2275).
+            .filter(|e| e["event"] != "audit_segment_opened"),
+    );
     assert_eq!(events.len(), 1, "exactly one event per delivery attempt");
     let event = events.into_iter().next().unwrap();
     assert_eq!(event["event"], "response_delivery_attempt");
@@ -356,8 +358,9 @@ fn assert_attempt(path: &std::path::Path, response: &JsonRpcResponse) -> Value {
         "actual attempt hash chain: {:?}",
         chain.error_message
     );
-    // Plus the genesis housekeeping record (#2275).
-    assert_eq!(chain.entries_checked, 2);
+    // Plus the genesis housekeeping record (#2275) and the log's
+    // `audit_log_identified` record.
+    assert_eq!(chain.entries_checked, 3);
     assert!(chain.error_at_counter.is_none());
     for forbidden in [KEY, NONCE, BODY] {
         assert!(!event.to_string().contains(forbidden));
@@ -495,7 +498,7 @@ fn assert_unsigned_bypass(original: JsonRpcResponse) {
     assert_eq!(serde_json::to_value(&actual).unwrap(), expected);
     #[cfg(feature = "metrics")]
     assert_eq!(failures, 0);
-    assert!(!actual.delivery_refusal);
+    assert!(!actual.wire_meta.delivery_refusal);
     assert!(!actual.confirmation_refusal);
     assert!(!actual.excludes_client_accounting());
     assert_attempt(&path, &actual);
@@ -521,6 +524,8 @@ fn install_firewall(
                     servers: None,
                     keys: None,
                     except: None,
+                    allowed_roots: None,
+                    path_args: None,
                 }],
                 ..FirewallConfig::default()
             },
@@ -591,7 +596,7 @@ async fn signing_delivery_firewall_block_skips_invalid_context_and_signing_failu
         actual.error.as_ref().unwrap().message,
         "Response blocked by security firewall"
     );
-    assert!(actual.delivery_refusal);
+    assert!(actual.wire_meta.delivery_refusal);
     assert_eq!(failures, 0, "firewall refusal must short-circuit signing");
     let counts = firewall.response_inspection_counts();
     assert_eq!(

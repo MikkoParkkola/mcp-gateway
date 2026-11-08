@@ -54,7 +54,7 @@ fn in_an_hour() -> u64 {
 struct Fixture {
     hub: Arc<EventsHub>,
     config: Arc<crate::config::Config>,
-    dir: tempfile::TempDir,
+    dir: Arc<tempfile::TempDir>,
 }
 
 fn fixture() -> Fixture {
@@ -62,9 +62,10 @@ fn fixture() -> Fixture {
 }
 
 fn fixture_with(yaml: &str) -> Fixture {
-    let dir = tempfile::tempdir().expect("dir");
+    let dir = Arc::new(tempfile::tempdir().expect("dir"));
     let events = crate::config::EventsConfig::default();
     let hub = EventsHub::open(&events, dir.path()).expect("hub");
+    hub.keep_test_dir(Arc::clone(&dir));
     let config: crate::config::Config = crate::yaml::from_str(yaml).expect("config");
     let live = Arc::new(crate::config_reload::LiveConfig::new(config));
     let config = live.get();
@@ -105,7 +106,9 @@ fn subscribe_to(f: &Fixture, principal: &str, backend: &str, subject: &str, url:
         .expect("observes")
         .expect("per-user");
     row.obs_basis = Some(observed);
-    row.observed_identity = Some(person(subject));
+    row.observed_identity = Some(crate::events::records::StoredIdentity::from(&person(
+        subject,
+    )));
     let id = row.id.clone();
     f.hub
         .store

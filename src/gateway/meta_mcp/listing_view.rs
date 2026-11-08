@@ -56,16 +56,26 @@ impl MetaMcp {
     /// This caller's [`ListingView`] on `backend`. Synchronous and side-effect
     /// free: no mint, no fill.
     pub(crate) fn listing_view(&self, backend: &Backend, scope: InvokeScope<'_>) -> ListingView {
+        self.listing_view_for(backend, scope.caller)
+    }
+
+    /// [`Self::listing_view`] from the caller's proof alone, the only part
+    /// of the scope it reads.
+    pub(crate) fn listing_view_for(
+        &self,
+        backend: &Backend,
+        caller: crate::identity_propagation::CallerProof<'_>,
+    ) -> ListingView {
         let Some(idp) = backend.identity_propagation_config() else {
             return ListingView::Shared;
         };
         if matches!(idp.strategy, PropagationStrategyKind::Passthrough) {
             return ListingView::Cold;
         }
-        if self.lacks_principal_on_required(backend, scope.caller) {
+        if self.lacks_principal_on_required(backend, caller) {
             return ListingView::NoView;
         }
-        let Some(principal) = self.principal_for(backend, scope.caller) else {
+        let Some(principal) = self.principal_for(backend, caller) else {
             return ListingView::Shared;
         };
         let id = principal.stable_actor_id();

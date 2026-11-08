@@ -68,12 +68,25 @@ static SEAL: LazyLock<Option<String>> = LazyLock::new(|| super::storage::random_
 /// reports it.
 const MARKED: i32 = INTERNAL_ERROR;
 
-/// A marked refusal as a dispatch site reads it.
+/// A marked refusal as a dispatch site reads it. Only [`marked`] builds one
+/// (`data` is private), so holding one proves the error carries the mark.
 pub(crate) struct Marked<'a> {
     /// The `Error::Config` text it was marked from.
     pub(crate) message: &'a str,
     pub(crate) account_id: &'a str,
     pub(crate) state: AccountState,
+    data: &'a Value,
+}
+
+impl Marked<'_> {
+    /// The marked error's JSON-RPC body: its code, text and data.
+    pub(crate) fn body(&self) -> crate::protocol::JsonRpcError {
+        crate::protocol::JsonRpcError {
+            code: MARKED,
+            message: self.message.to_owned(),
+            data: Some(self.data.clone()),
+        }
+    }
 }
 
 /// Mark `refused` (an `Error::Config`) when `cause` is a state a connect
@@ -234,6 +247,7 @@ pub(crate) fn marked(error: &Error) -> Option<Marked<'_>> {
         message,
         account_id: data["account_id"].as_str()?,
         state: AccountState::from_code(data["error"]["code"].as_str()?)?,
+        data,
     })
 }
 

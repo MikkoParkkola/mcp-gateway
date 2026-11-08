@@ -65,6 +65,10 @@ owned_routes! {
     UI_BACKENDS = "/ui/api/backends",
     UI_BACKEND = "/ui/api/backends/{name}",
     UI_BACKEND_REVIVE = "/ui/api/backends/{name}/revive",
+    /// Starts a person's sign-in to an OAuth backend.
+    UI_BACKEND_SIGNIN = "/ui/api/backends/{name}/signin",
+    /// Confirms or cancels the sign-in the callback just completed.
+    UI_BACKEND_SIGNIN_CONFIRM = "/ui/api/backends/{name}/signin/confirm",
     UI_REGISTRY = "/ui/api/registry",
     UI_REGISTRY_SEARCH = "/ui/api/registry/search",
     UI_DEAD_LETTERS = "/ui/api/events/dead-letters",
@@ -83,6 +87,11 @@ owned_routes! {
     UI_DISCOVERY_ADOPT = "/ui/api/discovery/adopt",
     /// The decisions an admin has open.
     UI_DECISIONS = "/ui/api/decisions",
+    /// How many decisions an admin has open, and their revision.
+    UI_DECISIONS_COUNT = "/ui/api/decisions/count",
+    /// The Policies screen's read model: the tool policy and the finding
+    /// rules, with coverage, shadowing and editability.
+    UI_POLICIES = "/ui/api/policies",
     /// The web UI's windowed call counters.
     UI_METRICS_SERIES = "/ui/api/metrics/series",
     /// Restarts, upgrades, reloads, pauses and switch-offs.
@@ -103,6 +112,8 @@ owned_routes! {
     UI_REFUSALS = "/ui/api/refusals",
     /// The Gateway page's facts: process, reloads, TLS, upgrade, clients.
     UI_GATEWAY = "/ui/api/gateway",
+    /// The configured API keys, with their last use (no secret, no digest).
+    UI_KEYS = "/ui/api/keys",
     /// The UI's live event feed (server-sent events).
     UI_STREAM = "/ui/api/stream",
 }

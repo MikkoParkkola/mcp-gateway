@@ -65,6 +65,7 @@ pub struct CallbackResult {
 
 /// State shared with the callback handler
 struct CallbackState {
+    page: SuccessPage,
     expected_state: String,
     tx: Option<oneshot::Sender<Result<CallbackResult>>>,
 }
@@ -234,7 +235,42 @@ fn url_host(host: &str, loopback_ip: Option<IpAddr>) -> String {
 ///
 /// This allows the caller to get the callback URL before waiting for the
 /// callback, which is necessary to build the authorization URL correctly.
+#[cfg(test)]
 pub async fn start_callback_server(
+    expected_state: String,
+    host: Option<&str>,
+    port: Option<u16>,
+    path: Option<&str>,
+) -> Result<CallbackServer> {
+    start_callback_server_with(SuccessPage::Close, expected_state, host, port, path).await
+}
+
+/// What the page of a good callback tells the person.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SuccessPage {
+    /// The login is done: the window can be closed.
+    Close,
+    /// A dashboard sign-in: return to the dashboard and confirm, or the login
+    /// is lost.
+    ConfirmInDashboard,
+}
+
+impl SuccessPage {
+    fn html(self) -> &'static str {
+        match self {
+            Self::Close => {
+                "<html><body><h1>Authorization Successful!</h1><p>You can close this window.</p></body></html>"
+            }
+            Self::ConfirmInDashboard => {
+                "<html><body><h1>Almost done</h1><p>Return to the dashboard and confirm to finish signing in.</p></body></html>"
+            }
+        }
+    }
+}
+
+/// [`start_callback_server`] with the page a good callback shows chosen.
+pub(crate) async fn start_callback_server_with(
+    page: SuccessPage,
     expected_state: String,
     host: Option<&str>,
     port: Option<u16>,
@@ -310,6 +346,7 @@ pub async fn start_callback_server(
     let (tx, rx) = oneshot::channel();
 
     let state = Arc::new(tokio::sync::Mutex::new(CallbackState {
+        page,
         expected_state,
         tx: Some(tx),
     }));
@@ -377,6 +414,7 @@ async fn handle_callback(
         .is_some_and(|s| bool::from(s.as_bytes().ct_eq(state.expected_state.as_bytes())));
     if !state_ok {
         let state_len = params.state.as_deref().map_or(0, str::len);
+        drop(state);
         warn!(
             event = "oauth.callback.state_mismatch",
             has_state, state_len, "OAuth state mismatch — possible CSRF attempt"
@@ -394,17 +432,20 @@ async fn handle_callback(
     // Check for errors
     if let Some(ref error) = params.error {
         let description = params.error_description.as_deref().unwrap_or_default();
+        // A provider can echo a state, a code or a URL in its error text, so
+        // only an RFC 6749 error code from the list reaches the log and the
+        // error the login ends with; the page the person sees keeps the text.
+        let code = provider_error_code(error);
+        let tx = state.tx.take();
+        drop(state);
         // #143 — structured telemetry: provider error event.
         warn!(
             event = "oauth.callback.provider_error",
-            error = %error,
-            description = %description,
+            error = %code,
             "OAuth provider returned an error"
         );
-        let result = Err(Error::OAuth(format!(
-            "OAuth error: {error} - {description}"
-        )));
-        if let Some(tx) = state.tx.take() {
+        let result = Err(Error::OAuth(format!("OAuth error: {code}")));
+        if let Some(tx) = tx {
             let _ = tx.send(result);
         }
         let escaped_error = escape_html(error);
@@ -417,12 +458,14 @@ async fn handle_callback(
 
     // Extract code
     let Some(code) = params.code else {
+        let tx = state.tx.take();
+        drop(state);
         warn!(
             event = "oauth.callback.missing_code",
             "OAuth callback arrived with no authorization code"
         );
         let result = Err(Error::OAuth("No authorization code received".to_string()));
-        if let Some(tx) = state.tx.take() {
+        if let Some(tx) = tx {
             let _ = tx.send(result);
         }
         return Html(
@@ -434,6 +477,9 @@ async fn handle_callback(
 
     // #143 — structured telemetry: successful callback event.
     let code_len = code.len();
+    let tx = state.tx.take();
+    let page = state.page.html().to_string();
+    drop(state);
     info!(
         event = "oauth.callback.success",
         code_len, "OAuth authorization code received successfully"
@@ -445,14 +491,11 @@ async fn handle_callback(
         state: params.state.unwrap_or_default(),
         iss: params.iss,
     });
-    if let Some(tx) = state.tx.take() {
+    if let Some(tx) = tx {
         let _ = tx.send(result);
     }
 
-    Html(
-        "<html><body><h1>Authorization Successful!</h1><p>You can close this window.</p></body></html>".to_string()
-    )
-    .into_response()
+    Html(page).into_response()
 }
 
 fn escape_html(input: &str) -> String {
@@ -468,6 +511,27 @@ fn escape_html(input: &str) -> String {
         }
     }
     escaped
+}
+
+/// The RFC 6749 error codes a provider may answer an authorization request
+/// with.
+const PROVIDER_ERROR_CODES: [&str; 7] = [
+    "invalid_request",
+    "unauthorized_client",
+    "access_denied",
+    "unsupported_response_type",
+    "invalid_scope",
+    "server_error",
+    "temporarily_unavailable",
+];
+
+/// `raw` if it is one of [`PROVIDER_ERROR_CODES`], else `other`.
+fn provider_error_code(raw: &str) -> &'static str {
+    PROVIDER_ERROR_CODES
+        .iter()
+        .find(|code| **code == raw)
+        .copied()
+        .unwrap_or("other")
 }
 
 #[cfg(test)]

@@ -50,15 +50,15 @@ fn http() -> TransportConfig {
     TransportConfig::default()
 }
 
+/// What a send carries: its params and its headers.
+type Sent = (Option<Value>, Vec<(String, String)>);
+
 /// The params and headers `backend` sends for `params`, given `headers`.
-fn send(
-    backend: &Backend,
-    params: Value,
-    headers: Vec<(String, String)>,
-) -> crate::Result<super::Outbound> {
-    Ok(backend
+fn send(backend: &Backend, params: Value, headers: Vec<(String, String)>) -> crate::Result<Sent> {
+    let (params, headers, _) = backend
         .prepare_secrets("tools/call", Some(params))?
-        .apply(headers))
+        .apply(headers);
+    Ok((params, headers))
 }
 
 #[test]
@@ -301,13 +301,18 @@ fn a_header_value_that_is_not_a_valid_header_value_is_refused_without_echoing_it
         vec![rule(InjectTarget::Header, "X-Api-Key", value)],
         true,
     );
-    let error = send(
-        &backend,
-        json!({"name": "read", "arguments": {}}),
-        Vec::new(),
-    )
-    .expect_err("the call is refused")
-    .to_string();
+    let mut error = String::new();
+    // The refusal comes before the audit line, so a refused call is never
+    // logged as injected.
+    let logged = crate::test_log_capture::records(|| {
+        error = send(
+            &backend,
+            json!({"name": "read", "arguments": {}}),
+            Vec::new(),
+        )
+        .expect_err("the call is refused")
+        .to_string();
+    });
     assert!(
         error.contains("secret rule 'api'") && error.contains("not a valid HTTP header value"),
         "{error}"
@@ -315,6 +320,20 @@ fn a_header_value_that_is_not_a_valid_header_value_is_refused_without_echoing_it
     assert!(
         !error.contains("line-two-cd08"),
         "the refusal echoed the value: {error}"
+    );
+    let injected: Vec<_> = logged
+        .iter()
+        .filter(|record| record["fields"]["message"] == "Secret injected")
+        .collect();
+    assert!(
+        injected.is_empty(),
+        "a refused call was logged as injected: {injected:?}"
+    );
+    assert!(
+        !logged
+            .iter()
+            .any(|record| record.to_string().contains("line-two-cd08")),
+        "a log record holds the value"
     );
 }
 

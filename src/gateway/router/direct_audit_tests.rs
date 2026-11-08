@@ -28,6 +28,7 @@ mod extras;
 use extras::{Extra, Log, arm_extras, audit_log, backend_config, harden};
 mod anon_key;
 mod backend_oracle;
+mod backend_origin;
 mod composite_refusals;
 mod counting;
 mod delivery;
@@ -39,6 +40,8 @@ mod lost_round;
 mod meta_malformed_retry;
 mod meta_refusal;
 mod meta_replay;
+// A call to a backend that does not exist records not_found.
+mod not_found;
 mod refused_effect;
 /// MIK-8689 R-RECJUDGE: the judge's verdict rides the delivery record.
 #[cfg(feature = "firewall")]
@@ -138,7 +141,10 @@ struct Fixture {
     path: std::path::PathBuf,
     calls: Arc<AtomicUsize>,
     lists: Arc<AtomicUsize>,
-    _dirs: (tempfile::TempDir, crate::gateway::router::tests::FixtureDir),
+    _dirs: (
+        Arc<tempfile::TempDir>,
+        crate::gateway::router::tests::FixtureDir,
+    ),
 }
 
 /// A direct `tools/call` of `t` naming `customer_id`, optionally keyed.
@@ -447,14 +453,16 @@ fn insert_identity(request: &mut axum::http::Request<axum::body::Body>, caller: 
     let extensions = request.extensions_mut();
     match caller {
         Caller::Cert => {
-            extensions.insert(crate::mtls::CertIdentity {
-                common_name: Some("cert-7938".to_string()),
-                organizational_unit: None,
-                san_uris: vec!["spiffe://example.invalid/cert-7938".to_string()],
-                san_dns_names: vec![],
-                display_name: "cert-7938".to_string(),
-                quota_principal: None,
-            });
+            extensions.insert(crate::mtls::identity::CertIdentity::for_test(
+                crate::mtls::identity::CertFields {
+                    common_name: Some("cert-7938".to_string()),
+                    organizational_unit: None,
+                    san_uris: vec!["spiffe://example.invalid/cert-7938".to_string()],
+                    san_dns_names: vec![],
+                    display_name: "cert-7938".to_string(),
+                    quota_principal: None,
+                },
+            ));
         }
         Caller::Agent => {
             extensions.insert(crate::gateway::oauth::OAuthAgentIdentity {

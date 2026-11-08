@@ -98,7 +98,9 @@ jobs:
           if [ "$EVENT" != pull_request ]; then
             echo "docs_only=false" | tee -a "$GITHUB_OUTPUT"
           else
-            bash scripts/ci/changed-scope.sh "$MERGE_SHA" "$PR_NUMBER" "$HEAD_SHA" | tee -a "$GITHUB_OUTPUT"
+            # One canonical command per line (pre-push's drift check reads no .sh in a pipeline).
+            bash scripts/ci/changed-scope.sh "$MERGE_SHA" "$PR_NUMBER" "$HEAD_SHA" > "$RUNNER_TEMP/changed-scope.out"
+            tee -a "$GITHUB_OUTPUT" < "$RUNNER_TEMP/changed-scope.out"
           fi
   public-repo-hygiene:
     name: Public repo hygiene
@@ -109,7 +111,8 @@ jobs:
         with:
           fetch-depth: 0
       - name: Validate public repo hygiene scripts
-        run: bash -n scripts/dev/check-public-repo-hygiene.sh scripts/dev/public-hygiene-patterns.sh scripts/dev/check-pr-body-hygiene.sh tests/public_repo_hygiene.sh scripts/dev/check-commit-message-hygiene.sh tests/commit_message_hygiene.sh
+        # One file per `bash -n`: it checks only its first argument.
+        run: for f in scripts/dev/check-public-repo-hygiene.sh scripts/dev/public-hygiene-patterns.sh scripts/dev/check-pr-body-hygiene.sh tests/public_repo_hygiene.sh scripts/dev/check-commit-message-hygiene.sh tests/commit_message_hygiene.sh; do bash -n "$f"; done
       - name: Validate public repo hygiene fixtures
         run: tests/public_repo_hygiene.sh
       - name: Validate commit message hygiene fixtures
@@ -119,9 +122,18 @@ jobs:
         run: scripts/dev/check-commit-message-hygiene.sh "origin/${{ github.base_ref }}..HEAD"
       # A function added on the seven COV.3 paths needs its inventory row in the
       # same change; without one the coverage grade cannot see it (MIK-8169).
+      # The check finds test items with tree-sitter, from the gates' own
+      # hash-locked environment (scripts/gate-env).
+      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+        with:
+          version: "0.13.1"
+      - name: The gates' pinned environment
+        env:
+          UV_MALWARE_CHECK: "1"
+        run: uv sync --locked --project scripts/gate-env
       - name: Every added COV.3 function has an inventory row (MIK-8169)
         if: github.event_name == 'pull_request'
-        run: python3 scripts/release/check_inventory_rows.py "origin/${{ github.base_ref }}"
+        run: scripts/gate-env/.venv/bin/python scripts/release/check_inventory_rows.py "origin/${{ github.base_ref }}"
       # A caller identity is built only by its checked constructor, so one that
       # names no one can never be made (MIK-8286, identity-collapse).
       - name: Caller identities are built only through their checked constructors (MIK-8286)
@@ -129,7 +141,7 @@ jobs:
       # Every function on the COV.3 paths has a row, whenever it was added
       # (MIK-8195).
       - name: Every function on the COV.3 paths has an inventory row (MIK-8195)
-        run: python3 scripts/release/check_inventory_rows.py --all
+        run: scripts/gate-env/.venv/bin/python scripts/release/check_inventory_rows.py --all
       # A new stage on the tools/call path gets a per-call timing row or a
       # stated reason (MIK-8014); the gate's verdict rules have their own test.
       - name: Every tools/call path function has a per-call stage (MIK-8014)
@@ -171,6 +183,10 @@ jobs:
         run: scripts/ci/trusted-runner/job-started.sh --self-test
       - name: Validate the mutant batch classifier
         run: python3 scripts/ci/mutants/run_mutants.py --self-test
+      - name: Every library-test job adds swap first
+        run: |
+          python3 scripts/ci/check_swap_jobs.py --self-test
+          python3 scripts/ci/check_swap_jobs.py
       - name: Validate throwaway and mutant-row routing (hosted until the trusted runner is ready)
         run: |
           python3 -c 'import yaml' 2>/dev/null || python3 -m pip install --user --quiet 'pyyaml==6.0.2'
@@ -189,6 +205,7 @@ jobs:
         run: |
           python3 -c 'import yaml' 2>/dev/null || python3 -m pip install --user --quiet 'pyyaml==6.0.2'
           python3 scripts/ci/test_feature_shards.py
+          python3 scripts/ci/test_release_features.py
       # The OS test shards are exact complements of the suites they replaced,
       # with each floor and aggregate wired as ruled (MIK-8482).
       - name: Validate the OS test shards and their aggregates
@@ -196,7 +213,17 @@ jobs:
           python3 -c 'import yaml' 2>/dev/null || python3 -m pip install --user --quiet 'pyyaml==6.0.2'
           python3 scripts/ci/shard_tests.py --self-test
           python3 scripts/ci/check_needs.py --self-test
+          python3 scripts/ci/job_time_watch.py --self-test
           python3 scripts/ci/test_os_shards.py
+          python3 scripts/ci/test_os_label_routing.py
+      # The rule that lets the sharded coverage grade replace the single job
+      # (MIK-9252.SHARD.7): its rows run here, not only where it was written.
+      - name: Validate the sharded-coverage comparison against planted runs
+        run: python3 scripts/ci/compare_coverage.py --self-test
+      # The Windows target shard's mingw download: bounded per attempt and
+      # retried once, so a trickling mirror cannot outlast the job.
+      - name: Validate the mingw package download bounds
+        run: python3 scripts/ci/test_mingw_debs.py
       - name: Validate the gateway-spawn check against planted spawns
         run: python3 scripts/ci/check-gateway-spawns.py --self-test
       - name: Start the gateway in tests only through its isolating helper
@@ -242,7 +269,7 @@ jobs:
   upgrade-rehearsal:
     name: Upgrade rehearsal (3.5.1 -> this build)
     needs: scope
-    if: ${{ !cancelled() && (needs.scope.result != 'success' || needs.scope.outputs.docs_only != 'true') && !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) && !(github.event_name == 'push' && github.ref == 'refs/heads/docs/ranking-1-release-line') && !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && !(startsWith(github.head_ref, 'train/') && github.event.pull_request.head.repo.full_name == github.repository)) }}
+    if: ${{ !cancelled() && (needs.scope.result != 'success' || needs.scope.outputs.docs_only != 'true') && !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) && !(github.event_name == 'push' && github.ref == 'refs/heads/docs/ranking-1-release-line') }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
@@ -496,10 +523,28 @@ jobs:
         run: |
           cargo clippy --lib --bins --all-features -- -D warnings
           cargo clippy --lib --bins --no-default-features -- -D warnings
-          cargo clippy --release --lib --bins --all-features -- -D warnings
+          # Every feature but the test-only ones, which refuse to build
+          # without debug_assertions. Its own line, so a failing script
+          # stops the step instead of running clippy with no features.
+          feats=$(python3 scripts/ci/release_features.py)
+          cargo clippy --release --lib --bins --features "$feats" -- -D warnings
           cargo clippy --release --lib --bins --no-default-features -- -D warnings
       - name: The registry lint still bites (MIK-8387)
         run: scripts/dev/check_registry_lint.sh --self-test
+      # The command preview's test seams must never compile into a build
+      # without debug assertions. This build must fail, and on the guard's
+      # own message, so deleting or breaking the guard turns the job red.
+      - name: A release build refuses the test-only feature
+        run: |
+          if cargo check --release --lib --features sandbox-fixtures 2> "$RUNNER_TEMP/fixtures.log"; then
+            echo "::error::a release build compiled the test-only sandbox-fixtures feature"
+            exit 1
+          fi
+          if ! grep -qF "cannot be built without debug_assertions" "$RUNNER_TEMP/fixtures.log"; then
+            cat "$RUNNER_TEMP/fixtures.log"
+            echo "::error::the release build failed, but not on the sandbox-fixtures guard"
+            exit 1
+          fi
       # Here because this job is a required Linux check: the futures' depth
       # margin below rustc's recursion limit, which Windows and Kani exceed
       # first (MIK-7678).
@@ -512,15 +557,16 @@ jobs:
         run: python3 scripts/ci/check-codeql-ignore.py
 
   # Feature combinations run on every release-line push (feature-combos.yml)
-  # and, before it lands, on a merge train: a pull request into the release line
-  # from a `train/` branch in this repository. No other pull request runs them,
-  # which keeps it to about one run per train. A docs-only train skips them like
-  # the other build jobs.
-  feature-combos-train:
+  # and, before a change lands, on its pull request into the release line, lane
+  # or merge train, so a feature-gating break fails the pull request that made
+  # it. A docs-only or throwaway pull request skips them. heavy-gate judges them
+  # on the train, where a lane run that predates them would leave them
+  # unrequired.
+  feature-combos-pr:
     needs: scope
     permissions:
       contents: read
-    if: ${{ !cancelled() && github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && startsWith(github.head_ref, 'train/') && github.event.pull_request.head.repo.full_name == github.repository && (needs.scope.result != 'success' || needs.scope.outputs.docs_only != 'true') }}
+    if: ${{ !cancelled() && github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && !(github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) && (needs.scope.result != 'success' || needs.scope.outputs.docs_only != 'true') }}
     uses: ./.github/workflows/feature-combos.yml
 
   # The Windows suite as shards (MIK-8482): `windows-check` below is the
@@ -530,7 +576,7 @@ jobs:
   # runner slots is the exception.
   windows-shards:
     name: Windows shard ${{ matrix.shard }}
-    if: ${{ !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) && !(github.event_name == 'push' && github.ref == 'refs/heads/docs/ranking-1-release-line') && !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && !(startsWith(github.head_ref, 'train/') && github.event.pull_request.head.repo.full_name == github.repository)) }}
+    if: ${{ !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) && !(github.event_name == 'push' && github.ref == 'refs/heads/docs/ranking-1-release-line') }}
     runs-on: windows-2025
     timeout-minutes: 90
     strategy:
@@ -640,7 +686,7 @@ jobs:
   # (MIK-8223).
   windows-clippy:
     name: Windows clippy
-    if: ${{ !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) && !(github.event_name == 'push' && github.ref == 'refs/heads/docs/ranking-1-release-line') && !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && !(startsWith(github.head_ref, 'train/') && github.event.pull_request.head.repo.full_name == github.repository)) }}
+    if: ${{ !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) && !(github.event_name == 'push' && github.ref == 'refs/heads/docs/ranking-1-release-line') }}
     runs-on: windows-2025
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -666,11 +712,12 @@ jobs:
   # succeeded: a skipped or cancelled one is red (scripts/ci/check_needs.py).
   # always() so a failed shard still yields a verdict; the skip guards are the
   # shards' own, so a throwaway PR or a post-merge push skips this as before;
-  # a lane PR into the release line skips it with them (heavy-gate).
+  # a lane PR into the release line runs it with them, and heavy-gate judges
+  # it on the train.
   windows-check:
     name: Windows check
     needs: [windows-shards, windows-clippy]
-    if: ${{ always() && !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) && !(github.event_name == 'push' && github.ref == 'refs/heads/docs/ranking-1-release-line') && !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && !(startsWith(github.head_ref, 'train/') && github.event.pull_request.head.repo.full_name == github.repository)) }}
+    if: ${{ always() && !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) && !(github.event_name == 'push' && github.ref == 'refs/heads/docs/ranking-1-release-line') }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -683,17 +730,20 @@ jobs:
 
   # The heavy jobs (the Windows shards, clippy and check, release tooling
   # tests, Task SDK recovery, gws dry-run, Linux keychain, Kani, upgrade
-  # rehearsal) skip a lane pull request into the release line and run on its
-  # merge train (a `train/` branch in this repository), which is how every
-  # change lands; every other event runs them as before. This job is their
-  # verdict on every release-line pull request but a throwaway one: on a lane
-  # it passes without judging, which makes it a check every lane passed, so
-  # the merge train needs it to pass on the train, where it fails unless every
-  # heavy job succeeded (on a docs-only train, the ones the docs-only rule
-  # skips may skip). scripts/ci/test_heavy_train_gating.py pins the routing.
+  # rehearsal, feature combinations) run on lane pull requests too, by their
+  # docs-only rule, so a break fails the pull request that made it. This job
+  # is their verdict on every release-line pull request but a throwaway one: on
+  # a lane it passes without judging (the lane's own checks fail it), which
+  # makes it a check every lane passed, so the merge train needs it to pass on
+  # the train, where it fails unless every heavy job succeeded (on a docs-only
+  # train, the ones the docs-only rule skips may skip). It judges them on the
+  # train because a train's required checks are its pull requests' own checks
+  # plus this one, and a pull request whose CI predates a job, or skipped it,
+  # would leave a red one unrequired there.
+  # scripts/ci/test_heavy_train_gating.py pins the routing.
   heavy-gate:
     name: Heavy checks (merge train)
-    needs: [scope, windows-shards, windows-clippy, windows-check, release-script-tests, task-sdk-recovery, gws-dry-run, linux-keychain, kani, upgrade-rehearsal]
+    needs: [scope, windows-shards, windows-clippy, windows-check, release-script-tests, task-sdk-recovery, gws-dry-run, linux-keychain, kani, upgrade-rehearsal, feature-combos-pr]
     if: ${{ always() && github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && !(github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -710,14 +760,14 @@ jobs:
           DOCS_ONLY: ${{ needs.scope.result == 'success' && needs.scope.outputs.docs_only == 'true' }}
         run: |
           if [ "$TRAIN" != true ]; then
-            echo "Heavy checks deferred to the merge train: not run on this pull request, not passed." | tee -a "$GITHUB_STEP_SUMMARY"
+            echo "Heavy checks are judged on the merge train; on this pull request each heavy job's own check decides." | tee -a "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
           skippable=()
           if [ "$DOCS_ONLY" = true ]; then
-            skippable=(--allow-skipped task-sdk-recovery,gws-dry-run,linux-keychain,kani,upgrade-rehearsal)
+            skippable=(--allow-skipped task-sdk-recovery,gws-dry-run,linux-keychain,kani,upgrade-rehearsal,feature-combos-pr)
           fi
-          python3 scripts/ci/check_needs.py "${skippable[@]}" scope windows-shards windows-clippy windows-check release-script-tests task-sdk-recovery gws-dry-run linux-keychain kani upgrade-rehearsal
+          python3 scripts/ci/check_needs.py "${skippable[@]}" scope windows-shards windows-clippy windows-check release-script-tests task-sdk-recovery gws-dry-run linux-keychain kani upgrade-rehearsal feature-combos-pr
   # The macOS suite as shards (MIK-8482); `macos-check` is the aggregate.
   # On a pull request it runs only for a merge train (a `train/` branch in
   # this repository): the account's few macOS runners go to trains, and every
@@ -726,16 +776,24 @@ jobs:
   # caught before it merges.
   macos-shards:
     name: macOS shard ${{ matrix.shard }}
-    if: ${{ !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) && !(github.event_name == 'push' && github.ref == 'refs/heads/docs/ranking-1-release-line') && (github.event_name != 'pull_request' || (startsWith(github.head_ref, 'train/') && github.event.pull_request.head.repo.full_name == github.repository)) }}
+    if: ${{ !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) && !(github.event_name == 'push' && github.ref == 'refs/heads/docs/ranking-1-release-line') && (github.event_name != 'pull_request' || (startsWith(github.head_ref, 'train/') && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && contains(github.event.pull_request.labels.*.name, 'os-sensitive'))) }}
     runs-on: macos-latest
-    timeout-minutes: 90
+    # The lib shard compiles the `--lib` test binary from cold (every macOS
+    # shard missed the cache on the last three trains, and a hit would save
+    # only the 2-4 min dependency build): 19 to 86 min, then about 32 min of
+    # tests. At 90 a slow runner cut off a train mid-test.
+    timeout-minutes: 150
     strategy:
       fail-fast: false
       matrix:
-        # Three jobs: the account has five macOS runners in all (MIK-8482).
-        shard: [lib-a, lib-b, int]
+        # Two jobs: about two macOS runners serve trains, so a third job
+        # queued behind the others, and lib-a and lib-b each compiled the
+        # same lib test binary. One lib shard builds it once.
+        # A lane PR labelled os-sensitive runs the lib shard alone: these
+        # runners serve every train (test_os_label_routing.py).
+        shard: ${{ fromJSON(contains(github.event.pull_request.labels.*.name, 'os-sensitive') && !(startsWith(github.head_ref, 'train/') && github.event.pull_request.head.repo.full_name == github.repository) && '["lib"]' || '["lib","int"]') }}
     env:
-      # Two build jobs on the 3-core, 7 GB runner: the default swapped. Kept
+      # Two build jobs on the 3-core, 7 GB runner (macos-latest also lands on a 5-core, 14 GB one): the default swapped. Kept
       # on measurement (MIK-8482): the slowest shard took 25.5 min (#3944
       # run 1), against 35 min at the default in the Stage 0 probe.
       CARGO_BUILD_JOBS: 2
@@ -751,10 +809,34 @@ jobs:
       # Tests job's, for the same reason; every test that does not run on
       # macOS is listed in docs/release/macos-test-exclusions.tsv.
       - name: Every test kept off macOS is listed (MIK-8174)
-        if: matrix.shard == 'lib-a'
+        if: matrix.shard == 'lib'
         run: python3 scripts/release/check_macos_exclusions.py
+      # The same build takes 19 or 86 min on these runners. Swap and memory
+      # pressure every 30 s, printed below, say whether the slow ones swap.
+      # The sampler outlives this step; the runner ends it with the job.
+      - name: Sample swap and memory pressure during the build
+        run: |
+          (
+            while :; do
+              printf '%s swap %s | %s\n' "$(date -u +%H:%M:%S)" "$(sysctl -n vm.swapusage)" \
+                "$(memory_pressure -Q 2>/dev/null | tail -1)" >> "$RUNNER_TEMP/mac-sampler.log"
+              sleep 30
+            done
+          ) &
       - name: Shard suite
+        # Under the job's limit, so a slow build still leaves time for the
+        # report below.
+        timeout-minutes: 145
         run: python3 scripts/ci/shard_tests.py run macos ${{ matrix.shard }}
+      - name: Runner, swap and memory pressure during the build
+        if: always()
+        run: |
+          echo "image $ImageOS $ImageVersion, $(sysctl -n hw.ncpu) CPUs, $(( $(sysctl -n hw.memsize) / 1073741824 )) GB, $(sysctl -n machdep.cpu.brand_string)"
+          if [ -s "$RUNNER_TEMP/mac-sampler.log" ]; then
+            cat "$RUNNER_TEMP/mac-sampler.log"
+          else
+            echo "::warning::no swap or memory pressure samples were recorded"
+          fi
 
   # Gated like its shards: on a pull request that is not a train it is
   # skipped, never red, and no required check needs it. On a train it runs
@@ -762,12 +844,29 @@ jobs:
   macos-check:
     name: macOS check
     needs: [macos-shards]
-    if: ${{ always() && !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) && !(github.event_name == 'push' && github.ref == 'refs/heads/docs/ranking-1-release-line') && (github.event_name != 'pull_request' || (startsWith(github.head_ref, 'train/') && github.event.pull_request.head.repo.full_name == github.repository)) }}
+    if: ${{ always() && !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) && !(github.event_name == 'push' && github.ref == 'refs/heads/docs/ranking-1-release-line') && (github.event_name != 'pull_request' || (startsWith(github.head_ref, 'train/') && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && contains(github.event.pull_request.labels.*.name, 'os-sensitive'))) }}
     runs-on: ubuntu-latest
+    # Read this run's job timings for the limit watch below.
+    permissions:
+      contents: read
+      actions: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      # A shard creeping toward its time limit is cut off mid-test one day and
+      # takes the train with it: warn at 80%, never fail.
+      - name: Warn when a macOS shard used over 80% of its time limit
+        if: always()
+        # Advisory: a failed install or read must not turn this check red,
+        # nor hold it.
+        continue-on-error: true
+        timeout-minutes: 5
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 -c 'import yaml' 2>/dev/null || python3 -m pip install --user --quiet 'pyyaml==6.0.2' || true
+          python3 scripts/ci/job_time_watch.py macos-shards
       - name: Every macOS shard succeeded
         env:
           NEEDS: ${{ toJSON(needs) }}
@@ -787,6 +886,7 @@ jobs:
         shard: [lib-a, lib-b, int-a, int-b]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/add-swap
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       # Each skip names the job that runs the test in full, and its ticket:
@@ -864,6 +964,9 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      # Hosted runners only: the trusted machine sizes its own memory.
+      - if: runner.environment == 'github-hosted'
+        uses: ./.github/actions/add-swap
       # The release tooling's Python suites, which `release-script-tests` runs
       # but which that job skips here. Without this, a throwaway meant to show
       # a workflow-wiring or release-script test going red passes on cargo
@@ -913,6 +1016,9 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      # Hosted runners only: the trusted machine sizes its own memory.
+      - if: runner.environment == 'github-hosted'
+        uses: ./.github/actions/add-swap
       # The release tooling's Python suites, which `release-script-tests` runs
       # but which that job skips here. Without this, a throwaway meant to show
       # a workflow-wiring or release-script test going red passes on cargo
@@ -947,7 +1053,7 @@ jobs:
   gws-dry-run:
     name: gws dry-run conformance
     needs: scope
-    if: ${{ !cancelled() && (needs.scope.result != 'success' || needs.scope.outputs.docs_only != 'true') && !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) && !(github.event_name == 'push' && github.ref == 'refs/heads/docs/ranking-1-release-line') && !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && !(startsWith(github.head_ref, 'train/') && github.event.pull_request.head.repo.full_name == github.repository)) }}
+    if: ${{ !cancelled() && (needs.scope.result != 'success' || needs.scope.outputs.docs_only != 'true') && !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) && !(github.event_name == 'push' && github.ref == 'refs/heads/docs/ranking-1-release-line') }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -955,6 +1061,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - uses: ./.github/actions/add-swap
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - name: Install the pinned gws
@@ -974,7 +1081,7 @@ jobs:
   linux-keychain:
     name: Linux keychain against gnome-keyring
     needs: scope
-    if: ${{ !cancelled() && (needs.scope.result != 'success' || needs.scope.outputs.docs_only != 'true') && !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) && !(github.event_name == 'push' && github.ref == 'refs/heads/docs/ranking-1-release-line') && !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && !(startsWith(github.head_ref, 'train/') && github.event.pull_request.head.repo.full_name == github.repository)) }}
+    if: ${{ !cancelled() && (needs.scope.result != 'success' || needs.scope.outputs.docs_only != 'true') && !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) && !(github.event_name == 'push' && github.ref == 'refs/heads/docs/ranking-1-release-line') }}
     runs-on: ubuntu-latest
     timeout-minutes: 40
     permissions:
@@ -983,6 +1090,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - uses: ./.github/actions/add-swap
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - name: Install gnome-keyring, secret-tool and gdbus
@@ -1012,7 +1120,7 @@ jobs:
   # pull request skips it; a failed scope decision runs it (fail-open).
   task-sdk-recovery:
     needs: scope
-    if: ${{ !cancelled() && (needs.scope.result != 'success' || needs.scope.outputs.docs_only != 'true') && !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) && !(github.event_name == 'push' && github.ref == 'refs/heads/docs/ranking-1-release-line') && !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && !(startsWith(github.head_ref, 'train/') && github.event.pull_request.head.repo.full_name == github.repository)) }}
+    if: ${{ !cancelled() && (needs.scope.result != 'success' || needs.scope.outputs.docs_only != 'true') && !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) && !(github.event_name == 'push' && github.ref == 'refs/heads/docs/ranking-1-release-line') }}
     uses: ./.github/workflows/task-sdk-recovery.yml
 
   # Release signing's own tests read nothing live, so they fail every ref:
@@ -1173,6 +1281,7 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/add-swap
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - name: Build the tests from the packaged crate
@@ -1221,7 +1330,10 @@ jobs:
   kani:
     name: Kani
     needs: scope
-    if: ${{ !cancelled() && (needs.scope.result != 'success' || needs.scope.outputs.docs_only != 'true') && !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) && !(github.event_name == 'push' && github.ref == 'refs/heads/docs/ranking-1-release-line') && !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && !(startsWith(github.head_ref, 'train/') && github.event.pull_request.head.repo.full_name == github.repository)) }}
+    # Not train-only: a lane pull request that is not docs-only runs it, so code that does
+    # not compile under cfg(kani) fails its own CI. Compiling is the whole cost (about 7 min; the 5
+    # harnesses verify in under a second), so this is the full job, not a compile-only leg.
+    if: ${{ !cancelled() && (needs.scope.result != 'success' || needs.scope.outputs.docs_only != 'true') && !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) && !(github.event_name == 'push' && github.ref == 'refs/heads/docs/ranking-1-release-line') }}
     # Kani's current toolchain is validated against Ubuntu 22.04. Keep this
     # job pinned to that image rather than following latest.
     runs-on: ubuntu-22.04
@@ -1268,7 +1380,7 @@ jobs:
     name: Release tooling unit tests
     runs-on: ubuntu-latest
     # Below runs-on: the wiring mutation harness anchors on name + runs-on.
-    if: ${{ !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) && !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && !(startsWith(github.head_ref, 'train/') && github.event.pull_request.head.repo.full_name == github.repository)) }}
+    if: ${{ !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install PyYAML 6.0.2 (the cosign floor parses workflows)
@@ -1291,8 +1403,15 @@ jobs:
         run: python3 scripts/release/test_critical_function_coverage.py
       - name: Test the critical path coverage grader
         run: python3 scripts/release/test_critical_path_coverage.py
+      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+        with:
+          version: "0.13.1"
+      - name: The gates' pinned environment (the inventory check reads Rust with tree-sitter)
+        env:
+          UV_MALWARE_CHECK: "1"
+        run: uv sync --locked --project scripts/gate-env
       - name: Test the inventory-row check (MIK-8169)
-        run: python3 scripts/release/test_check_inventory_rows.py
+        run: scripts/gate-env/.venv/bin/python scripts/release/test_check_inventory_rows.py
       - name: Test the inventory ledger and its fragments (MIK-8279)
         run: python3 scripts/release/test_inventory_ledger.py
       - name: Test the coverage grade download pruning
@@ -1415,7 +1534,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
-      - uses: trufflesecurity/trufflehog@3bcf19f51e91a9655d84ddb623728c7620be482a # main
+      - uses: trufflesecurity/trufflehog@ea68ca03c865c5f324e86e849ced20ed3cf9dbbb # v3.99.8
         with:
           extra_args: --only-verified
 
@@ -1503,8 +1622,17 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+      # The gate reads Rust items with tree-sitter, from the gates' own
+      # hash-locked environment (scripts/gate-env), never the system Python.
+      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+        with:
+          version: "0.13.1"
+      - name: The gates' pinned environment
+        env:
+          UV_MALWARE_CHECK: "1"
+        run: uv sync --locked --project scripts/gate-env
       - name: Check the guard refuses what it claims to
-        run: python3 scripts/dev/test_check_timing_asserts.py
+        run: scripts/gate-env/.venv/bin/python scripts/dev/test_check_timing_asserts.py
       - name: Check the tree and the allowlist against the previous tip
         if: github.event_name != 'pull_request'
         # The frozen design's base outside a PR: the tip this push replaced,
@@ -1516,10 +1644,10 @@ jobs:
           if [ -z "$base" ] || [ "$base" = "0000000000000000000000000000000000000000" ]; then
             base="HEAD^"
           fi
-          python3 scripts/dev/check-timing-asserts.py --base "$base"
+          scripts/gate-env/.venv/bin/python scripts/dev/check-timing-asserts.py --base "$base"
       - name: Check the tree and the allowlist against the base
         if: github.event_name == 'pull_request'
-        run: python3 scripts/dev/check-timing-asserts.py --base "origin/${{ github.base_ref }}"
+        run: scripts/gate-env/.venv/bin/python scripts/dev/check-timing-asserts.py --base "origin/${{ github.base_ref }}"
 
   request-panics:
     name: No new request-path panic site without an invariant (MIK-8691)
@@ -1533,10 +1661,19 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+      # The scanner finds test items with tree-sitter, from the gates' own
+      # hash-locked environment (scripts/gate-env), never the system Python.
+      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+        with:
+          version: "0.13.1"
+      - name: The gates' pinned environment
+        env:
+          UV_MALWARE_CHECK: "1"
+        run: uv sync --locked --project scripts/gate-env
       - name: Check the guard refuses what it claims to
-        run: python3 scripts/ci/check-request-panics.py --self-test
+        run: scripts/gate-env/.venv/bin/python scripts/ci/check-request-panics.py --self-test
       - name: No new panic site without an invariant
-        run: python3 scripts/ci/check-request-panics.py
+        run: scripts/gate-env/.venv/bin/python scripts/ci/check-request-panics.py
       - name: The baseline only shrinks against the previous tip
         if: github.event_name != 'pull_request'
         env:
@@ -1546,10 +1683,10 @@ jobs:
           if [ -z "$base" ] || [ "$base" = "0000000000000000000000000000000000000000" ]; then
             base="HEAD^"
           fi
-          python3 scripts/ci/check-request-panics.py --base "$base"
+          scripts/gate-env/.venv/bin/python scripts/ci/check-request-panics.py --base "$base"
       - name: The baseline only shrinks against the base
         if: github.event_name == 'pull_request'
-        run: python3 scripts/ci/check-request-panics.py --base "origin/${{ github.base_ref }}"
+        run: scripts/gate-env/.venv/bin/python scripts/ci/check-request-panics.py --base "origin/${{ github.base_ref }}"
 
   orphan-test-modules:
     name: Orphan test modules (MIK-7538)
@@ -1576,6 +1713,19 @@ jobs:
       # These pin both, and a guard that cannot fail is the thing it guards.
       - name: Check the guard catches what it claims to
         run: python3 scripts/dev/test_check_orphan_test_modules.py
+      # The shared cfg item finder the Rust-reading gates use: tree-sitter,
+      # from the gates' own hash-locked environment.
+      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+        with:
+          version: "0.13.1"
+      - name: The gates' pinned environment
+        env:
+          UV_MALWARE_CHECK: "1"
+        run: uv sync --locked --project scripts/gate-env
+      - name: Check the cfg item finder marks what it claims to
+        run: scripts/gate-env/.venv/bin/python scripts/dev/test_cfg_items.py
+      - name: Check the gate environment check refuses without installing
+        run: python3 scripts/dev/test_gate_env_python.py
       - name: MCP events OAuth shim rows
         run: python3 scripts/dev/test_mcp_events_oauth_shim.py
       - name: MCP events fail-fast harness rows

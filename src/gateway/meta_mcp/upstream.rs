@@ -554,7 +554,9 @@ impl MetaMcp {
             tool: tool.to_owned(),
             origin: crate::security::response_policy::TargetOrigin::Routed,
         };
-        self.inspect_task_result(&[target], trace_id, &mut gated)?;
+        // Task settlement: the published generation alone (ADR-029, amended,
+        // item 5); no request is pinned to a task's result.
+        self.inspect_task_result((&[target], trace_id), None, &mut gated)?;
         // Stamped last, as the live path is (MIK-6909): a peer receipt is
         // replaced, or dropped with stamping off, never stored as ours, and no
         // later rewrite touches the gateway's own receipt (MIK-8030). Sealed
@@ -614,7 +616,9 @@ impl MetaMcp {
         }
         let (_, raw_read) =
             super::invoke::audit::noted_response(self, json!({ "content": content }));
-        let screened = self.scan_backend_error((server, tool, trace_id), api_key_name, &mut error);
+        // Task settlement: the published generation alone.
+        let screened =
+            self.scan_backend_error((server, tool, trace_id), (api_key_name, None), &mut error);
         // A redaction is written back in place and stored, as a redacted task
         // result is; only a refusal withholds the peer's text.
         let clean = screened != super::invoke::egress::EgressOutcome::Refused;

@@ -32,8 +32,6 @@ mod descriptor_gate;
 mod era;
 mod fill_check;
 mod identity_slots;
-#[cfg(test)]
-mod logging_scan_tests;
 /// The identity-slot budget, which also bounds per-user event listeners.
 pub(crate) use identity_slots::{MAX_IDENTITY_SLOTS, MAX_SLOTS_PER_PRINCIPAL};
 mod input_keys;
@@ -52,9 +50,14 @@ mod repin;
 mod restart;
 mod runtime_launch;
 mod secret_send;
+mod send_scope;
 // The web UI's status rows are its only reader.
+mod auth_wait;
 #[cfg(feature = "webui")]
 pub(crate) mod server_state;
+#[cfg(feature = "webui")]
+pub(crate) mod sign_in_flow;
+mod sign_in_state;
 mod status;
 mod stdio_start;
 mod stop;
@@ -82,10 +85,7 @@ pub(crate) use era::start_detached_http;
 pub(crate) use input_keys::{KeyAnswer, KeyAnswerKind, Lens};
 #[cfg(feature = "webui")]
 pub(crate) use metadata::{PreviewListing, list_tools_for_preview};
-#[cfg(test)]
 pub(crate) use pool::PoolKey;
-#[cfg(not(test))]
-use pool::PoolKey;
 use pool::PooledEntry;
 pub(crate) use probe::HealthTicker;
 
@@ -109,6 +109,10 @@ pub struct Backend {
     /// `name` as the `backend` metric label, shared so that recording a
     /// metric costs a reference count, not a copy of the name (MIK-8014.PERF.5).
     metric_label: telemetry_metrics::SharedString,
+    /// `name` as the sender a notification raised in this backend's calls
+    /// names (`transport::notify_ingress`), built once so a send costs a
+    /// reference count.
+    notify_origin: Arc<str>,
     /// Configuration
     config: BackendConfig,
     /// Runtime plan compiled from the backend's configured runtime profile.
@@ -166,6 +170,10 @@ pub struct Backend {
     /// recorded for this backend's target (the pre-pass never ran).
     #[cfg(test)]
     pub(crate) unfilled_outcome_reads: std::sync::atomic::AtomicUsize,
+    /// Test-only: loans this backend's lent-only slots refused
+    /// (`lend_to_slot`), counted per binding, so a row reads its caller's own.
+    #[cfg(test)]
+    pub(crate) lend_refusals: parking_lot::Mutex<std::collections::HashMap<String, usize>>,
     /// Consecutive health-probe answers this peer declined to serve
     /// (MIK-7217, OUTBOUND.2).
     ///
@@ -296,6 +304,12 @@ pub struct Backend {
     /// Unstamped, a call a rule applies to is refused: it never resolves
     /// against the process environment in place of the gateway's own.
     secret_resolver: std::sync::OnceLock<Arc<crate::secrets::SecretResolver>>,
+    /// The values this backend's rules resolved to, shared with every
+    /// instance of its name; stamped by its registry.
+    needles: std::sync::OnceLock<Arc<crate::security::needles::NeedleSet>>,
+    /// The configured `headers:`/`env:` credentials this instance was seeded
+    /// with: held redacted while it is registered, compared on reload.
+    configured: std::sync::OnceLock<crate::config::configured_secrets::ConfiguredSecrets>,
     /// Where this backend says its shared start succeeded; stamped by its
     /// registry (MIK-8347). Unstamped: nobody listens.
     started: std::sync::OnceLock<tokio::sync::broadcast::Sender<String>>,
@@ -306,6 +320,8 @@ pub struct Backend {
     /// The one interactive login at a time every start of this backend
     /// shares (MIK-7982).
     pub(crate) login_gate: Arc<crate::oauth::login_gate::LoginGate>,
+    /// Everything this backend keeps about signing in.
+    pub(crate) sign_in: sign_in_state::SignInState,
     /// A test's pause point in an HTTP start, after it read the policy it
     /// builds under and before it builds anything from it or
     /// [`Backend::begin_connecting`] checks and marks.
@@ -362,6 +378,9 @@ pub struct Backend {
     /// Where this instance's nudges go, set when a registry with a change feed
     /// holds it.
     nudge_feed: std::sync::OnceLock<tools_nudge::NudgeFeed>,
+    /// The stop deadline of the registry that holds this instance, set when
+    /// it is registered; each stdio transport it builds joins it.
+    pub(crate) stop_deadline: std::sync::OnceLock<Arc<crate::transport::StopDeadline>>,
     /// Whether a per-user store nudge is queued and unread (`MIK-8148`).
     views_dirty: tools_nudge::ViewsDirty,
     /// A tool the next drain snapshot blocks between reading the descriptor
@@ -480,6 +499,7 @@ impl Backend {
             self.config.timeout,
             destination,
             lender,
+            self.needles.get().cloned(),
         )
         .await
     }
@@ -498,6 +518,7 @@ impl Backend {
             self.config.timeout,
             protocol_version,
             destination,
+            self.needles.get().cloned(),
         )
         .await
     }
@@ -584,7 +605,7 @@ pub(crate) struct CleanupState {
     /// design M1): a replaced transport held by a busy caller or an orphaned
     /// entry is still here, so [`Backend::retire_now`] reaches it. An entry
     /// dies with its last strong reference; the next registration prunes it.
-    pub(crate) live: Vec<std::sync::Weak<dyn crate::transport::Transport>>,
+    pub(crate) live: Vec<std::sync::Weak<dyn crate::transport::LiveTree>>,
 }
 
 // The cells read counters from a local Prometheus render.
@@ -619,6 +640,12 @@ mod silence_resend_tests;
 #[cfg(test)]
 #[path = "slot_eviction_tests.rs"]
 mod slot_eviction_tests;
+
+// MIK-9216.EFFECT.1: the slot a settled execution stores, and the exact
+// lookup its replay makes.
+#[cfg(test)]
+#[path = "slot_effect_tests.rs"]
+mod slot_effect_tests;
 
 #[cfg(test)]
 #[path = "send_check_eviction_tests.rs"]
@@ -675,6 +702,10 @@ mod a2a_lent_slot_tests;
 #[cfg(all(test, unix))]
 #[path = "frame_limit_start_tests.rs"]
 mod frame_limit_start_tests;
+
+#[cfg(all(test, unix))]
+#[path = "stop_deadline_tests.rs"]
+mod stop_deadline_tests;
 
 #[cfg(test)]
 #[path = "stateless_tools_slot_tests.rs"]

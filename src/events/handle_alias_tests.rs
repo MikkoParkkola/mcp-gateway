@@ -233,25 +233,20 @@ fn event(upstream_id: &str) -> SourceEvent {
 
 /// The committed outbox records under `dir`, as JSON.
 fn outbox(dir: &std::path::Path) -> Vec<Value> {
-    std::fs::read_dir(dir.join("outbox")).map_or_else(
-        |_| Vec::new(),
-        |entries| {
-            entries
-                .filter_map(Result::ok)
-                .filter(|e| !e.file_name().to_string_lossy().starts_with('.'))
-                .filter_map(|e| std::fs::read_to_string(e.path()).ok())
-                .filter_map(|t| serde_json::from_str(&t).ok())
-                .collect()
-        },
-    )
+    crate::events::records::committed_records(&dir.join("outbox"))
+        .iter()
+        .filter_map(|p| std::fs::read_to_string(p).ok())
+        .filter_map(|t| serde_json::from_str(&t).ok())
+        .collect()
 }
 
 // H1: the subscribe answer's handle is the keyed alias, never the stored id.
 #[tokio::test]
 async fn h1_the_subscribe_answer_carries_the_alias_not_the_stored_id() {
-    let dir = tempfile::tempdir().expect("dir");
+    let dir = Arc::new(tempfile::tempdir().expect("dir"));
     let config = crate::config::EventsConfig::default();
     let hub = hub_at(dir.path(), &config, "p", &url("p"));
+    hub.keep_test_dir(Arc::clone(&dir));
     hub.runtime.services.set(Arc::new(services())).ok();
     let answer = subscribe_at(&hub, "p", &url("p")).await;
     assert_ne!(
@@ -275,9 +270,10 @@ async fn h1_the_subscribe_answer_carries_the_alias_not_the_stored_id() {
 // H2: a repeat of the same subscribe answers the same alias, one row.
 #[tokio::test]
 async fn h2_an_idempotent_subscribe_answers_the_same_alias() {
-    let dir = tempfile::tempdir().expect("dir");
+    let dir = Arc::new(tempfile::tempdir().expect("dir"));
     let config = crate::config::EventsConfig::default();
     let hub = hub_at(dir.path(), &config, "p", &url("p"));
+    hub.keep_test_dir(Arc::clone(&dir));
     hub.runtime.services.set(Arc::new(services())).ok();
     let first = subscribe_at(&hub, "p", &url("p")).await;
     let second = subscribe_at(&hub, "p", &url("p")).await;
@@ -293,9 +289,10 @@ async fn h2_an_idempotent_subscribe_answers_the_same_alias() {
 // H4: a newly fanned-out event's eventId derives from the alias (fanout.rs:49).
 #[tokio::test]
 async fn h4_a_new_event_id_derives_from_the_alias() {
-    let dir = tempfile::tempdir().expect("dir");
+    let dir = Arc::new(tempfile::tempdir().expect("dir"));
     let config = crate::config::EventsConfig::default();
     let hub = hub_at(dir.path(), &config, "p", &url("p"));
+    hub.keep_test_dir(Arc::clone(&dir));
     hub.runtime.services.set(Arc::new(services())).ok();
     subscribe_at(&hub, "p", &url("p")).await;
     hub.fan_out(&services(), &event("up-1")).await;
@@ -312,9 +309,10 @@ async fn h4_a_new_event_id_derives_from_the_alias() {
 // H6: no client-visible field of the subscribe answer holds a stored id.
 #[tokio::test]
 async fn h6_the_subscribe_answer_holds_no_stored_id() {
-    let dir = tempfile::tempdir().expect("dir");
+    let dir = Arc::new(tempfile::tempdir().expect("dir"));
     let config = crate::config::EventsConfig::default();
     let hub = hub_at(dir.path(), &config, "p", &url("p"));
+    hub.keep_test_dir(Arc::clone(&dir));
     hub.runtime.services.set(Arc::new(services())).ok();
     let answer = subscribe_at(&hub, "p", &url("p")).await;
     assert!(
@@ -329,9 +327,10 @@ async fn h6_the_subscribe_answer_holds_no_stored_id() {
 // MetaMcp only after `start`, events_wiring.rs); this pins the order.
 #[tokio::test]
 async fn h8_a_subscribe_the_hub_cannot_key_writes_nothing() {
-    let dir = tempfile::tempdir().expect("dir");
+    let dir = Arc::new(tempfile::tempdir().expect("dir"));
     let config = crate::config::EventsConfig::default();
     let hub = hub_at(dir.path(), &config, "p", &url("p"));
+    hub.keep_test_dir(Arc::clone(&dir));
     let params = subscribe_params(&url("p"));
     let refused = hub.subscribe(&caller("p"), Some(&params)).await;
     assert!(refused.is_err(), "an unkeyable subscribe is refused");
@@ -342,9 +341,10 @@ async fn h8_a_subscribe_the_hub_cannot_key_writes_nothing() {
 // from its own arguments and removes it.
 #[tokio::test]
 async fn u1_the_owners_unsubscribe_removes_its_row() {
-    let dir = tempfile::tempdir().expect("dir");
+    let dir = Arc::new(tempfile::tempdir().expect("dir"));
     let config = crate::config::EventsConfig::default();
     let hub = hub_at(dir.path(), &config, "p", &url("p"));
+    hub.keep_test_dir(Arc::clone(&dir));
     hub.runtime.services.set(Arc::new(services())).ok();
     subscribe_at(&hub, "p", &url("p")).await;
     let answer = hub
@@ -358,9 +358,10 @@ async fn u1_the_owners_unsubscribe_removes_its_row() {
 // recomputes another id, finds nothing, and the owner's row stays.
 #[tokio::test]
 async fn u2_another_callers_unsubscribe_leaves_the_owners_row() {
-    let dir = tempfile::tempdir().expect("dir");
+    let dir = Arc::new(tempfile::tempdir().expect("dir"));
     let config = crate::config::EventsConfig::default();
     let hub = hub_at(dir.path(), &config, "p", &url("p"));
+    hub.keep_test_dir(Arc::clone(&dir));
     hub.runtime.services.set(Arc::new(services())).ok();
     subscribe_at(&hub, "p", &url("p")).await;
     let answer = hub
@@ -379,9 +380,10 @@ async fn u2_another_callers_unsubscribe_leaves_the_owners_row() {
 // another caller in.
 #[tokio::test]
 async fn u3_an_id_in_unsubscribe_params_is_ignored() {
-    let dir = tempfile::tempdir().expect("dir");
+    let dir = Arc::new(tempfile::tempdir().expect("dir"));
     let config = crate::config::EventsConfig::default();
     let hub = hub_at(dir.path(), &config, "p", &url("p"));
+    hub.keep_test_dir(Arc::clone(&dir));
     hub.runtime.services.set(Arc::new(services())).ok();
     subscribe_at(&hub, "p", &url("p")).await;
     let owner_alias = alias(&test_record_key(), "p", &url("p"));
@@ -408,9 +410,10 @@ async fn u3_an_id_in_unsubscribe_params_is_ignored() {
 // keeps one row; another caller's identical subscribe makes its own.
 #[tokio::test]
 async fn u4_refresh_by_repeat_subscribe_is_per_caller() {
-    let dir = tempfile::tempdir().expect("dir");
+    let dir = Arc::new(tempfile::tempdir().expect("dir"));
     let config = crate::config::EventsConfig::default();
     let hub = hub_at(dir.path(), &config, "p", &url("p"));
+    hub.keep_test_dir(Arc::clone(&dir));
     seed_verified_at(&hub, &config, "q", &url("p"));
     hub.runtime.services.set(Arc::new(services())).ok();
     subscribe_at(&hub, "p", &url("p")).await;
@@ -433,13 +436,15 @@ async fn u4_refresh_by_repeat_subscribe_is_per_caller() {
 // subscribe, and unsubscribe still works (it never needed the handle).
 #[tokio::test]
 async fn u5_after_a_key_change_a_repeat_subscribe_answers_the_new_alias() {
-    let dir = tempfile::tempdir().expect("dir");
+    let dir = Arc::new(tempfile::tempdir().expect("dir"));
     let config = crate::config::EventsConfig::default();
     let hub = hub_at(dir.path(), &config, "p", &url("p"));
+    hub.keep_test_dir(Arc::clone(&dir));
     hub.runtime.services.set(Arc::new(services())).ok();
     subscribe_at(&hub, "p", &url("p")).await;
     drop(hub);
     let hub = EventsHub::open(&config, dir.path()).expect("reopen");
+    hub.keep_test_dir(Arc::clone(&dir));
     hub.register_source(Arc::new(Probe));
     hub.runtime
         .services
@@ -581,9 +586,10 @@ fn header(headers: &axum::http::HeaderMap, name: &str) -> String {
 #[tokio::test]
 async fn h3_a_delivery_header_carries_the_alias() {
     let rx = receiver().await;
-    let dir = tempfile::tempdir().expect("dir");
+    let dir = Arc::new(tempfile::tempdir().expect("dir"));
     let config = delivery_config();
     let hub = EventsHub::open_trusting(&config, dir.path(), rx.root.clone()).expect("hub");
+    hub.keep_test_dir(Arc::clone(&dir));
     hub.register_source(Arc::new(Probe));
     seed_verified_at(&hub, &config, "p", &rx.url);
     hub.runtime.services.set(Arc::new(services())).ok();
@@ -591,6 +597,7 @@ async fn h3_a_delivery_header_carries_the_alias() {
     hub.fan_out(&services(), &event("up-3")).await;
     drop(hub);
     let hub = EventsHub::open_trusting(&config, dir.path(), rx.root.clone()).expect("reopen");
+    hub.keep_test_dir(Arc::clone(&dir));
     hub.register_source(Arc::new(Probe));
     start_delivery(&hub, dir.path());
     let headers = first_post(&rx).await;
@@ -608,9 +615,10 @@ async fn h3_a_delivery_header_carries_the_alias() {
 #[tokio::test]
 async fn h3b_the_verification_challenge_header_carries_the_alias() {
     let rx = receiver().await;
-    let dir = tempfile::tempdir().expect("dir");
+    let dir = Arc::new(tempfile::tempdir().expect("dir"));
     let config = delivery_config();
     let hub = EventsHub::open_trusting(&config, dir.path(), rx.root.clone()).expect("hub");
+    hub.keep_test_dir(Arc::clone(&dir));
     hub.register_source(Arc::new(Probe));
     hub.runtime.services.set(Arc::new(services())).ok();
     let _ = hub
@@ -633,9 +641,10 @@ async fn h5_an_enqueued_record_keeps_its_event_id_and_gets_the_alias_header() {
     let rx = receiver().await;
     // The pre-upgrade formula: the eventId built from the stored id.
     let legacy = fanout::event_id(SourceKind::RestWatch, "up-5", &stored("p", &rx.url));
-    let dir = tempfile::tempdir().expect("dir");
+    let dir = Arc::new(tempfile::tempdir().expect("dir"));
     let config = delivery_config();
     let hub = EventsHub::open_trusting(&config, dir.path(), rx.root.clone()).expect("hub");
+    hub.keep_test_dir(Arc::clone(&dir));
     hub.register_source(Arc::new(Probe));
     seed_verified_at(&hub, &config, "p", &rx.url);
     hub.runtime.services.set(Arc::new(services())).ok();
@@ -643,20 +652,16 @@ async fn h5_an_enqueued_record_keeps_its_event_id_and_gets_the_alias_header() {
     hub.fan_out(&services(), &event("up-5")).await;
     drop(hub);
     // Stamp the enqueued record with a pre-upgrade eventId.
-    let path = std::fs::read_dir(dir.path().join("outbox"))
-        .expect("outbox")
-        .filter_map(Result::ok)
-        .map(|e| e.path())
-        .find(|p| {
-            !p.file_name()
-                .is_some_and(|n| n.to_string_lossy().starts_with('.'))
-        })
+    let path = crate::events::records::committed_records(&dir.path().join("outbox"))
+        .into_iter()
+        .next()
         .expect("one record");
     let mut record: Value =
         serde_json::from_str(&std::fs::read_to_string(&path).expect("read")).expect("json");
     record["event_id"] = json!(legacy);
     std::fs::write(&path, serde_json::to_vec(&record).expect("json")).expect("write");
     let hub = EventsHub::open_trusting(&config, dir.path(), rx.root.clone()).expect("reopen");
+    hub.keep_test_dir(Arc::clone(&dir));
     hub.register_source(Arc::new(Probe));
     start_delivery(&hub, dir.path());
     let headers = first_post(&rx).await;
@@ -692,9 +697,10 @@ fn subscription_ids(v: &Value, out: &mut Vec<String>) {
 // its alias. Today `events.unsubscribe` records the stored id (rpc.rs:731).
 #[tokio::test]
 async fn h7_governance_records_carry_the_alias_not_the_stored_id() {
-    let dir = tempfile::tempdir().expect("dir");
+    let dir = Arc::new(tempfile::tempdir().expect("dir"));
     let config = crate::config::EventsConfig::default();
     let hub = hub_at(dir.path(), &config, "p", &url("p"));
+    hub.keep_test_dir(Arc::clone(&dir));
     let audit_path = dir.path().join("audit.jsonl");
     let log = Arc::new(
         crate::security::TransparencyLogger::open(Arc::new(

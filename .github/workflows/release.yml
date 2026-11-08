@@ -187,6 +187,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
+      - uses: ./.github/actions/add-swap
       - name: Check tag against manifest and classify the channel
         id: channel
         # First, so a tag/manifest mismatch stops the run before anything is
@@ -518,6 +519,10 @@ jobs:
       # and current npm@latest (12.x) requires Node >= 22.22.2, so pin Node 22.
       - name: Upgrade npm CLI for OIDC trusted publishing
         run: npm install -g npm@latest
+
+      # A wrapper whose binary check fails its tests is never published.
+      - name: Test the wrapper's release-binary check
+        run: node --test npm/run.test.js
 
       - name: Sync npm package version to git tag
         working-directory: npm

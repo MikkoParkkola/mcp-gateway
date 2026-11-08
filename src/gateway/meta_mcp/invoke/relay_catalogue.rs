@@ -23,6 +23,23 @@ pub(crate) struct CatalogueCaller {
     /// The session the read arrived on, for the audit record's session
     /// fingerprint (MIK-7832).
     pub(crate) session: String,
+    /// The generation the read is judged under.
+    pub(crate) generation: CatalogueGeneration,
+}
+
+/// The generation a catalogue read is judged under. Production builds only
+/// [`Self::Pinned`]: every route pins one on arrival, so no read can fall
+/// back to the config published later.
+#[derive(Clone)]
+#[cfg_attr(not(feature = "firewall"), allow(dead_code))]
+pub(crate) enum CatalogueGeneration {
+    /// The generation the read's request pinned on arrival (an HTTP
+    /// request's, a stdio line's).
+    Pinned(std::sync::Arc<crate::config_reload::Generation>),
+    /// Judged under the generation published now, else refused unpublished:
+    /// a test's own caller, which carries no request.
+    #[cfg(test)]
+    PublishedAtCheck,
 }
 
 tokio::task_local! {
@@ -52,6 +69,9 @@ impl MetaMcp {
         let caller = CATALOGUE_CALLER.try_with(Clone::clone).ok();
         #[cfg(feature = "firewall")]
         {
+            // Test builds: the witness hook runs before the first generation read on this route.
+            #[cfg(test)]
+            crate::security::firewall::relay_witness_hook::run();
             if let Some(refusal) =
                 self.catalogue_refusal(caller.as_ref(), &backend.name, method, &params, &id)
             {
@@ -86,12 +106,27 @@ impl MetaMcp {
             self.firewall.as_ref().filter(|fw| fw.relay_active())?,
         );
         let who = RelayCaller::new(&caller.key, caller.keyed);
-        let message = fw.relay_block_message(
-            who,
-            (backend, method),
-            params,
-            (&caller.session, &caller.name),
-        )?;
+        // The request's pinned generation; a test's own caller reads the one
+        // published now, and with none it fails closed (`unpublished_refusal`).
+        #[cfg(test)]
+        let published = matches!(caller.generation, CatalogueGeneration::PublishedAtCheck)
+            .then(|| self.current_generation())
+            .flatten();
+        let generation = match &caller.generation {
+            CatalogueGeneration::Pinned(generation) => Some(&**generation),
+            #[cfg(test)]
+            CatalogueGeneration::PublishedAtCheck => published.as_deref(),
+        };
+        let message = match generation {
+            Some(generation) => fw.relay_block_message(
+                generation.collusion_view(),
+                who,
+                (backend, method),
+                params,
+                (&caller.session, &caller.name),
+            )?,
+            None => super::staging::unpublished_refusal("catalogue witness"),
+        };
         // The same error `tools/call` refuses with, so the route stamps the
         // same HTTP status (MIK-7832).
         let refusal = crate::Error::Forbidden {
@@ -124,3 +159,7 @@ impl MetaMcp {
         self.stage_relay_receipt(RelayKey::new(&caller.key, caller.keyed), target, &recorded);
     }
 }
+
+#[cfg(all(test, feature = "firewall"))]
+#[path = "relay_catalogue_unpublished_tests.rs"]
+mod unpublished_tests;

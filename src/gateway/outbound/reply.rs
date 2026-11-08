@@ -34,7 +34,7 @@ pub(crate) async fn judged_reply(
 
 /// [`judged_reply`], also saying whether the answer went out as built (`false`:
 /// a failed read record replaced it): what a relay receipt may follow.
-pub(crate) async fn judged_reply_checked(
+async fn judged_reply_checked(
     response: Response,
     log: Option<&std::sync::Arc<crate::security::TransparencyLogger>>,
 ) -> (OutboundReply, bool) {

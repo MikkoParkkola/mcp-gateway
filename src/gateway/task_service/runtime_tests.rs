@@ -38,7 +38,7 @@ fn test_subscriptions() -> Arc<SubscriptionRegistry> {
 
 #[tokio::test]
 async fn open_runtime_creates_an_absent_store_directory_privately_and_reopens_it() {
-    let root = tempfile::tempdir().expect("a fixture root");
+    let root = Arc::new(tempfile::tempdir().expect("a fixture root"));
     let store_dir = root.path().join("nested").join("tasks");
     let subscriptions = test_subscriptions();
     let (service, _executor) = open_runtime(
@@ -49,6 +49,7 @@ async fn open_runtime_creates_an_absent_store_directory_privately_and_reopens_it
     )
     .await
     .expect("an absent store path is created by the store's own creator");
+    service.keep_test_dir(Arc::clone(&root));
     assert!(store_dir.is_dir());
     // POSIX mode bits: asserts 0600 owner-only; Windows enforces owner-only through DACLs (win_acl).
     #[cfg(unix)]
@@ -70,6 +71,7 @@ async fn open_runtime_creates_an_absent_store_directory_privately_and_reopens_it
         open_runtime(&store_dir, 1, StoreLimits::default(), subscriptions)
             .await
             .expect("the released private directory opens again");
+    reopened.keep_test_dir(Arc::clone(&root));
     reopened.shutdown().await.expect("custody is released");
 }
 
@@ -117,7 +119,7 @@ async fn shared_runtime_restores_task_bindings_before_synchronous_admission() {
     use serde_json::json;
     use tokio::sync::Semaphore;
 
-    let root = tempfile::tempdir().unwrap();
+    let root = Arc::new(tempfile::tempdir().unwrap());
     let directory = root.path().join("tasks");
     let operation = json!({"backend":"fixture", "tool":"write"});
     let representation = json!({"wire":"modern"});
@@ -139,6 +141,7 @@ async fn shared_runtime_restores_task_bindings_before_synchronous_admission() {
     )
     .await
     .expect("first startup");
+    service.keep_test_dir(Arc::clone(&root));
     let task = Task::create_at(
         "write",
         chrono::Utc::now(),
@@ -186,6 +189,7 @@ async fn shared_runtime_restores_task_bindings_before_synchronous_admission() {
     )
     .await
     .expect("startup imports the durable task");
+    restored.keep_test_dir(Arc::clone(&root));
     let fetched = restored
         .get("verified-owner", task.id())
         .expect("restored task is readable");
@@ -230,7 +234,7 @@ mod expiry;
 async fn task_store_under_readonly_home_is_fatal() {
     use std::fs;
 
-    let root = tempfile::tempdir().expect("a fixture root");
+    let root = Arc::new(tempfile::tempdir().expect("a fixture root"));
     let home = root.path().join("home");
     fs::create_dir(&home).unwrap();
     // Unix takes the write mode away; Windows denies the user write and append (DACL).
@@ -278,6 +282,7 @@ async fn task_store_under_readonly_home_is_fatal() {
         open_runtime(&store_dir, 1, StoreLimits::default(), test_subscriptions())
             .await
             .expect("the same path opens once its parent is writable");
+    service.keep_test_dir(Arc::clone(&root));
     service.shutdown().await.expect("custody is released");
 }
 

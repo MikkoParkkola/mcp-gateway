@@ -68,14 +68,12 @@ async fn dispatch(method: &str) -> Value {
         })
         .collect();
     let meta = Arc::new(MetaMcp::new(registry).with_surfaced_tools(surfaced));
-    let policy = Arc::new(crate::security::ToolPolicy::from_config(
-        &crate::security::ToolPolicyConfig {
-            enabled: true,
-            deny: vec!["alpha:alpha_write".to_string()],
-            use_default_deny: false,
-            ..Default::default()
-        },
-    ));
+    let policy = crate::security::ToolPolicyConfig {
+        enabled: true,
+        deny: vec!["alpha:alpha_write".to_string()],
+        use_default_deny: false,
+        ..Default::default()
+    };
     let mtls = Arc::new(crate::mtls::MtlsPolicy::from_config(
         &crate::mtls::MtlsConfig::default(),
     ));
@@ -85,9 +83,15 @@ async fn dispatch(method: &str) -> Value {
         json!({})
     };
     let request = json!({ "jsonrpc": "2.0", "id": 1, "method": method, "params": params });
-    super::super::Gateway::dispatch_single(&meta, &policy, &mtls, &request, "stdio-a3")
-        .await
-        .expect("a request is answered")
+    super::super::Gateway::dispatch_single(
+        &meta,
+        &crate::gateway::authz::test_line(&meta, &policy),
+        &mtls,
+        &request,
+        "stdio-a3",
+    )
+    .await
+    .expect("a request is answered")
 }
 
 /// T11: stdio `tools/list` withholds a tool the global policy denies.

@@ -26,6 +26,7 @@ const INVOKE_TARGET: &str = module_path!();
 
 // The per-dispatch credential and its redacting `Debug`, kept out of this file's size baseline.
 mod caller_credential;
+mod denial;
 mod gate;
 use caller_credential::{CallerCredential, DispatchCredential};
 
@@ -189,7 +190,7 @@ impl MetaMcp {
         // `Drop` releases the key, so an early return after dispatch cannot
         // strand the entry as in-flight until the guard times out.
         let mut idem_reservation: Option<IdempotencyReservation> = None;
-        let keyed = match self.admit_keys(
+        let admitted = self.admit_keys(
             keys::KeysIn {
                 caller,
                 session_id,
@@ -206,7 +207,18 @@ impl MetaMcp {
                 unproven: resolve_out.unproven,
             },
             &mut idem_reservation,
-        )? {
+        );
+        // A replay, of a stored answer or a stored failure, may stand in for
+        // a stored write, so it records what the slot declares now, as a
+        // fresh call would. Before the `?`: a stored failure returns as `Err`.
+        if audit::answered_by(audit::Answered::Replay) {
+            let (be, bind) = (
+                resolve_out.backend.as_deref(),
+                resolve_out.dispatch_binding.as_deref(),
+            );
+            self.note_declared_effect((intake.step.server, intake.step.tool), be, bind);
+        }
+        let keyed = match admitted? {
             std::ops::ControlFlow::Break(outcome) => return Ok(outcome),
             std::ops::ControlFlow::Continue(keyed) => keyed,
         };
@@ -310,6 +322,8 @@ mod error_classification_tests;
 // ============================================================================
 
 #[cfg(test)]
+mod context_integrity_note_tests;
+#[cfg(test)]
 mod response_transform_tests;
 
 #[cfg(test)]
@@ -357,6 +371,11 @@ mod response_cache_error_tests;
 mod ask_expiry_budget_tests;
 
 #[cfg(test)]
+mod bridge_send_refusal_tests;
+#[cfg(test)]
+mod refusal_first_scan_tests;
+
+#[cfg(test)]
 mod tracing_target_tests;
 
 #[cfg(test)]
@@ -366,3 +385,5 @@ mod stage_boundary_tests;
 
 #[cfg(test)]
 mod plan_step_guard_tests;
+#[cfg(test)]
+mod presend_refusal_tests;

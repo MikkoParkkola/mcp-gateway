@@ -61,6 +61,9 @@ pub(super) struct Admitted<'a> {
     pub(super) cancel_entry: Option<crate::gateway::router::inflight_calls::Registered>,
     /// Its abort half, taken by the one dispatch this call makes.
     pub(super) cancel_on: Option<crate::gateway::router::inflight_calls::CancelOn>,
+    /// The backend answered by asking: the lease is decided on the answer
+    /// that leaves ([`finish_response`]), not on the backend's.
+    pub(super) asked: bool,
 }
 
 /// A refusal before dispatch: give back the nonce this call admitted
@@ -122,6 +125,9 @@ async fn guard_and_sanitize(
         .await?;
     } else if matches!(envelope.method.as_str(), "prompts/get" | "resources/read") {
         // MIK-7765: a catalogue read's forwarded params are an egress too.
+        // Test builds: the witness hook runs before the first generation read on this route.
+        #[cfg(all(test, feature = "firewall"))]
+        crate::security::firewall::relay_witness_hook::run();
         #[cfg(feature = "firewall")]
         if let Some(refusal) = super::catalogue_refusal(
             scope.state,
@@ -192,6 +198,7 @@ pub(super) async fn admit<'a>(
         name,
         id: id.clone(),
         client,
+        generation: &caller.generation,
         identity: caller.verified_identity.as_ref(),
         managed: propagation.managed.as_ref(),
     };
@@ -214,6 +221,7 @@ pub(super) async fn admit<'a>(
         cost_key: client.and_then(|c| c.api_key_identity()),
         trace_id: "",
         caller_key,
+        generation: Some(&*caller.generation),
     };
     let auth = BackendAuthContext {
         generation: &caller.generation,
@@ -248,6 +256,7 @@ pub(super) async fn admit<'a>(
         witness: None,
         cancel_entry,
         cancel_on,
+        asked: false,
     };
     guard_and_sanitize(scope, envelope, propagation, &mut admitted).await?;
     // After authorize, the firewall and the caller's catalogue (MIK-8356 F3).
@@ -310,12 +319,12 @@ async fn finish_response(
             &target,
             crate::gateway::meta_mcp::invoke::egress::ContentChecks::for_method(method),
         ),
-        client,
+        (client, admitted.auth.generation),
         &mut response,
     );
     if method == "tools/list" {
         if response.error.is_none() {
-            super::record_client_success(state, client);
+            super::client_outcome::record_client_success(state, client);
         }
         super::normalize_tools_list_response(&route.backend, &mut response);
         // List = invoke: only what this route's `tools/call` admits.
@@ -333,7 +342,7 @@ async fn finish_response(
         );
     } else if method != "tools/call" {
         if !response.excludes_client_accounting() {
-            super::record_client_success(state, client);
+            super::client_outcome::record_client_success(state, client);
         }
     } else {
         super::stamp_direct_provenance(
@@ -347,10 +356,17 @@ async fn finish_response(
     // Settled before shaping: the cache holds no era-specific member, so a
     // replay is shaped for its own request's era (MIK-8022).
     super::settle_direct_idempotency(admitted.idem_reservation.as_mut(), &response);
-    // 7b on the same answer, unshaped and unsigned, as 7a stores it.
-    if let Some(lease) = admitted.lease.take() {
-        lease.complete_delivery(&response, None);
-    }
+    // 7b on the same answer, unshaped and unsigned, as 7a stores it. An
+    // asked call's lease stores nothing either way; it is held past the tail,
+    // which can still refuse the question.
+    let held = if admitted.asked {
+        admitted.lease.take()
+    } else {
+        if let Some(lease) = admitted.lease.take() {
+            lease.complete_delivery(&response, None);
+        }
+        None
+    };
     if method == "tools/list"
         && envelope.era != Era::Modern
         && let Some(result) = response.result.as_mut().and_then(Value::as_object_mut)
@@ -361,7 +377,26 @@ async fn finish_response(
     }
     let auth = (admitted.auth, admitted.call.tool);
     let response = finish_tail(scope, envelope, preflight, auth, response);
+    if let Some(lease) = held {
+        // Only a question the client can continue keeps the call counted, so a
+        // fresh same-key call is answered "unavailable", as on `/mcp`. Any
+        // refusal made of it (a seal, a gate, the tail) frees the key.
+        if !carries_continuation(&response) {
+            lease.withdraw_dispatch();
+        }
+        lease.complete_delivery(&response, None);
+    }
     build_http_response(&Egressed::of(response), StatusCode::OK)
+}
+
+/// Whether `response` hands the client a question it can continue: no error,
+/// a round the protocol reads as one, and the gateway's sealed state.
+fn carries_continuation(response: &JsonRpcResponse) -> bool {
+    response.error.is_none()
+        && response.result.as_ref().is_some_and(|result| {
+            result.get("requestState").is_some_and(Value::is_string)
+                && crate::protocol::mrtr::InputRequired::from_result(result).is_some()
+        })
 }
 
 /// The tail every success shares, a cached replay included: the 2026-07-28
@@ -447,11 +482,12 @@ async fn redeem_retry(
     })
 }
 
-/// MIK-8078: a backend that stopped to ask did not act, so its key is
-/// released rather than settled (the meta route's rule). Taken out here,
-/// before the guards, because a seal they refuse returns before settlement, and
-/// an armed reservation dropped unsettled records an uncertain outcome;
-/// [`settle_parked`] decides once they ran.
+/// A backend that stopped to ask: its idempotency key is released rather than
+/// settled, as on the meta route, while the call's execution lease stays
+/// counted until [`finish_response`] reads the answer that leaves. Taken out
+/// here, before the guards, because a seal they refuse returns before
+/// settlement, and an armed reservation dropped unsettled records an uncertain
+/// outcome; [`settle_parked`] decides once they ran.
 fn park_if_interim(
     forward: &crate::Result<JsonRpcResponse>,
     admitted: &mut Admitted<'_>,
@@ -465,7 +501,7 @@ fn park_if_interim(
         .and_then(|response| response.result.as_ref())
         .is_some_and(crate::protocol::mrtr::InputRequired::claims_input_required);
     if asked {
-        super::direct_idempotency::withdraw(admitted.lease.as_ref());
+        admitted.asked = true;
         admitted.idem_reservation.take()
     } else {
         None
@@ -483,7 +519,6 @@ fn settle_parked(
 ) {
     match (parked, guarded) {
         (Some(reservation), Err(_)) => {
-            super::direct_idempotency::mark(admitted.lease.as_ref());
             admitted.idem_reservation = Some(reservation);
         }
         (Some(mut reservation), Ok(_)) => reservation.release(),
@@ -507,14 +542,25 @@ pub(super) fn screen_target<'a>(call: &BackendCall<'a>, method: &'a str) -> Back
         cost_key: call.cost_key,
         trace_id: call.trace_id,
         caller_key: call.caller_key,
+        generation: call.generation,
     }
 }
 
 /// Answer a dispatch that failed, settling the reservation (`answer` consumes
 /// the failure context, so this takes the admission by value).
 async fn answer_failure(mut admitted: Admitted<'_>, e: crate::Error, method: &str) -> Rejection {
-    // Nothing reached the backend, so the nonce is given back (MIK-7698).
-    if e.is_pre_dispatch() {
+    // Nothing reached the backend: no send of this delivery counted, and the
+    // error is one the gateway raised before the backend or a refusal the
+    // send itself recorded. The lease is withdrawn, so the key is released.
+    // The nonce is offered back only through its refund witness, which this
+    // site never holds: it stays spent for every pre-dispatch class, as on
+    // `/mcp`, where a narrow pre-start refund was ruled out.
+    if crate::gateway::delivery_facts::unsent(&e) {
+        if crate::gateway::delivery_facts::refused_before_send_seen() {
+            crate::gateway::delivery_facts::raise(
+                crate::gateway::delivery_facts::ResponseEffect::Refused,
+            );
+        }
         give_back_nonce(admitted.failed.state, &mut admitted);
         super::direct_idempotency::withdraw(admitted.lease.as_ref());
     }

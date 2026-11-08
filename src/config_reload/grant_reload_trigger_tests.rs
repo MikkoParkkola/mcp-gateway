@@ -39,7 +39,7 @@ type Store = Arc<parking_lot::RwLock<LocalIdentityGrantStore>>;
 fn grant(grant_id: &str, subject: &str, capability: &str) -> IdentityGrant {
     IdentityGrant {
         grant_id: grant_id.to_string(),
-        subject: GrantSubject::new("https://idp".to_string(), subject.to_string(), None),
+        subject: GrantSubject::for_test("https://idp".to_string(), subject.to_string(), None),
         agent: GrantAgent::Any,
         capability: capability.to_string(),
         tool: None,
@@ -70,7 +70,7 @@ fn write_grants(path: &std::path::Path, rows: &[IdentityGrant]) {
 }
 
 fn allows(store: &Store, subject: &str, capability: &str) -> bool {
-    let subject = GrantSubject::new("https://idp".to_string(), subject.to_string(), None);
+    let subject = GrantSubject::for_test("https://idp".to_string(), subject.to_string(), None);
     store
         .read()
         .evaluate(&IdentityGrantRequest {

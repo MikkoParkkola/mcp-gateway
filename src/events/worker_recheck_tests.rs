@@ -93,8 +93,9 @@ impl crate::events::EventSource for Parking {
 #[tokio::test]
 async fn access_lost_during_the_second_verdict_is_not_sent() {
     for revoke in [false, true] {
-        let dir = tempfile::tempdir().expect("dir");
+        let dir = Arc::new(tempfile::tempdir().expect("dir"));
         let hub = open_hub(dir.path());
+        hub.keep_test_dir(Arc::clone(&dir));
         let source = Arc::new(Parking {
             asked: AtomicUsize::new(0),
             reached: tokio::sync::Notify::new(),
@@ -114,6 +115,7 @@ async fn access_lost_during_the_second_verdict_is_not_sent() {
                 principal: crate::gateway::auth::principal_of(SECRET)
                     .storage_form()
                     .to_owned(),
+                digest_tag: Some(crate::gateway::auth::secret_tag(SECRET)),
             });
         });
         let drive = async {
@@ -214,16 +216,18 @@ async fn an_attempt_waits_on_a_silent_catalogue_once() {
     const NAME: &str = "backend.b.resource_updated";
     let uri = serde_json::json!({"uri": "file:///a"});
 
-    let dir = tempfile::tempdir().expect("dir");
+    let dir = Arc::new(tempfile::tempdir().expect("dir"));
     let probe = open_hub(dir.path());
+    probe.keep_test_dir(Arc::clone(&dir));
     let once = silent_backend(&probe).await;
     let source = probe.source_offering(NAME).expect("offered");
     let _ = source.authorize("p", NAME, &uri).await;
     let one_lookup = once.load(Ordering::SeqCst);
     assert!(one_lookup >= 1, "the lookup reached the backend");
 
-    let dir = tempfile::tempdir().expect("dir");
+    let dir = Arc::new(tempfile::tempdir().expect("dir"));
     let hub = open_hub(dir.path());
+    hub.keep_test_dir(Arc::clone(&dir));
     let connections = silent_backend(&hub).await;
     let services = logged_services(dir.path());
     let (port, _accepted) = counting_callback().await;
@@ -253,8 +257,9 @@ async fn a_refusal_after_the_tenant_read_record_releases_the_frame() {
     use crate::security::firewall::tenant_guard::{CrossTenantReads, TenantGuardConfig};
     use crate::security::firewall::{Firewall, FirewallConfig};
 
-    let dir = tempfile::tempdir().expect("dir");
+    let dir = Arc::new(tempfile::tempdir().expect("dir"));
     let hub = open_hub(dir.path());
+    hub.keep_test_dir(Arc::clone(&dir));
     let source = Arc::new(AfterTenantRecord {
         log: dir.path().join("audit.jsonl"),
         asked: AtomicUsize::new(0),
@@ -314,8 +319,9 @@ async fn the_lookup_budget_is_per_attempt() {
     use crate::events::upstream_listener::FAILED_LOOKUP;
     const NAME: &str = "backend.b.resource_updated";
     let uri = serde_json::json!({"uri": "file:///a"});
-    let dir = tempfile::tempdir().expect("dir");
+    let dir = Arc::new(tempfile::tempdir().expect("dir"));
     let hub = open_hub(dir.path());
+    hub.keep_test_dir(Arc::clone(&dir));
     let connections = silent_backend(&hub).await;
     let source = hub.source_offering(NAME).expect("offered");
     let ask = || source.authorize("p", NAME, &uri);
@@ -399,8 +405,9 @@ impl crate::events::EventSource for AfterTenantRecord {
 #[tokio::test]
 async fn a_subscription_expiring_during_the_second_verdict_is_not_sent() {
     for expire in [false, true] {
-        let dir = tempfile::tempdir().expect("dir");
+        let dir = Arc::new(tempfile::tempdir().expect("dir"));
         let hub = open_hub(dir.path());
+        hub.keep_test_dir(Arc::clone(&dir));
         let source = Arc::new(Parking {
             asked: AtomicUsize::new(0),
             reached: tokio::sync::Notify::new(),
@@ -460,3 +467,111 @@ async fn a_subscription_expiring_during_the_second_verdict_is_not_sent() {
 mod admission;
 #[path = "worker_detect_gate_tests.rs"]
 mod detect_gate;
+
+/// A source that admits every ask at once.
+struct Open;
+
+#[async_trait::async_trait]
+impl crate::events::EventSource for Open {
+    fn kind(&self) -> SourceKind {
+        SourceKind::RestWatch
+    }
+    fn descriptors(&self) -> Vec<crate::events::types::EventDescriptor> {
+        vec![descriptor("probe.open", SourceKind::RestWatch)]
+    }
+    fn matches(
+        &self,
+        _principal: &str,
+        _arguments: &serde_json::Value,
+        _event: &crate::events::fanout::SourceEvent,
+        _now: chrono::DateTime<chrono::Utc>,
+    ) -> bool {
+        true
+    }
+    async fn authorize(&self, _p: &str, _n: &str, _a: &serde_json::Value) -> Result<(), RpcError> {
+        Ok(())
+    }
+}
+
+/// A subscription stored before holders were bound to their secret names no
+/// secret. Its first check after the upgrade is terminal: nothing is sent,
+/// the attempt is recorded `access_revoked`, and the row is deleted, though
+/// its key is live. The control, bound to the key's current secret, is sent
+/// and kept.
+#[tokio::test]
+async fn a_subscription_stored_without_its_secret_is_deleted_at_its_first_check() {
+    for tagged in [true, false] {
+        let dir = Arc::new(tempfile::tempdir().expect("dir"));
+        let hub = open_hub(dir.path());
+        hub.keep_test_dir(Arc::clone(&dir));
+        hub.register_source(Arc::new(Open) as Arc<dyn crate::events::EventSource>);
+        let services = logged_services(dir.path());
+        services.live.set(keyed());
+        let (port, accepted) = counting_callback().await;
+        let principal = crate::gateway::auth::principal_of(SECRET)
+            .storage_form()
+            .to_owned();
+        let tag = crate::gateway::auth::secret_tag(SECRET);
+        queued_with(&hub, port, "evt_key", "probe.open", |sub, _| {
+            sub.credential_kind = Some(crate::security::audit::CredentialKind::ApiKey);
+            sub.api_key = Some(ApiKeyRef {
+                name: "k".to_owned(),
+                principal: principal.clone(),
+                digest_tag: tagged.then(|| tag.clone()),
+            });
+        });
+        tokio::time::timeout(Duration::from_secs(20), hub.attempt(&services, "evt_key"))
+            .await
+            .expect("the attempt finished");
+        if tagged {
+            // The callback counts a connection in its own task: wait for it.
+            tokio::time::timeout(Duration::from_secs(20), async {
+                while accepted.load(Ordering::SeqCst) == 0 {
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .expect("the bound subscription was sent");
+        } else {
+            assert_eq!(accepted.load(Ordering::SeqCst), 0, "sent though unbound");
+        }
+        assert_eq!(
+            hub.store.subscriptions().is_empty(),
+            !tagged,
+            "deleted only when unbound (tagged {tagged})"
+        );
+        if !tagged {
+            // Refused before any send: the attempt's own record ends
+            // `access_revoked`, and no `sending` record was written.
+            let log = std::fs::read_to_string(dir.path().join("audit.jsonl")).unwrap_or_default();
+            let records: Vec<serde_json::Value> = log
+                .lines()
+                .filter_map(|l| serde_json::from_str(l).ok())
+                .collect();
+            let attempt = |status: &str| {
+                records
+                    .iter()
+                    .filter(|r| holds_attempt(r, "evt_key", status))
+                    .count()
+            };
+            assert_eq!(attempt("access_revoked"), 1, "{log}");
+            assert_eq!(attempt("sending"), 0, "{log}");
+        }
+    }
+}
+
+/// Whether `record`, at any depth, holds one object naming attempt `status`
+/// of event `event_id` with an attempt number: the attempt's own record, not
+/// any line that merely mentions the status.
+fn holds_attempt(record: &serde_json::Value, event_id: &str, status: &str) -> bool {
+    match record {
+        serde_json::Value::Object(map) => {
+            (map.get("event_id").and_then(serde_json::Value::as_str) == Some(event_id)
+                && map.get("status").and_then(serde_json::Value::as_str) == Some(status)
+                && map.get("attempt").is_some_and(serde_json::Value::is_u64))
+                || map.values().any(|v| holds_attempt(v, event_id, status))
+        }
+        serde_json::Value::Array(items) => items.iter().any(|v| holds_attempt(v, event_id, status)),
+        _ => false,
+    }
+}

@@ -13,7 +13,9 @@ use super::reload_context::replace::{
 };
 #[cfg(unix)]
 use super::replace_test_support::context;
-use super::replace_test_support::{NEXT, START, WAIT, names, read, running_has_b, setup, to};
+use super::replace_test_support::{
+    NEXT, START, WAIT, names, read, running_has_b, setup, setup_refusing_reload, to,
+};
 use super::*;
 use crate::config::Config;
 use crate::fs_lock::ExclusiveFileLock;
@@ -127,18 +129,17 @@ async fn kept_beside_leaves_the_replaced_bytes() {
     }
 }
 
-/// T8b: a reload refused by the posture check rolls the file back byte for
-/// byte; the running config never changed and no journal is left.
+/// T8b: a reload that refuses the written bytes rolls them back byte for
+/// byte; the running config never changed and no journal is left. The bytes
+/// pass the writer's own checks first: a posture refusal now stops before
+/// the write (`replace_validate_tests`).
 #[tokio::test]
 async fn a_refused_reload_rolls_the_file_back() {
-    // A public URL over open tools: the posture check refuses the reload
-    // (as in `tests/posture_refusal.rs`).
-    const EXPOSED: &str = "server:\n  public_url: \"https://gw.example.com\"\nbackends:\n  a:\n    http_url: \"http://127.0.0.1:9/mcp\"\n  b:\n    http_url: \"http://127.0.0.1:9/mcp\"\n";
-    let (dir, path, ctx) = setup();
+    let (dir, path, ctx) = setup_refusing_reload();
 
     let failure = replace_detached(
         Arc::clone(&ctx),
-        to(Expected::Any, EXPOSED, Replaced::Discard),
+        to(Expected::Any, NEXT, Replaced::Discard),
         WAIT,
     )
     .await
@@ -312,25 +313,6 @@ async fn an_all_renamed_journal_keeps_the_new_bytes() {
 
     assert_eq!(read(&path), NEXT);
     assert_eq!(names(dir.path()), [".gateway.yaml.lock", "gateway.yaml"]);
-}
-
-/// T9: a `staged` journal whose original is gone cannot be acted on: the
-/// lock is refused with the manual step, and no file changes.
-#[tokio::test]
-async fn a_journal_without_its_original_refuses_the_lock() {
-    let (_dir, path, _ctx) = setup();
-    crashed_after_rename(&path, NEXT);
-    std::fs::remove_file(crate::config_persistence::journal::original_path(&path)).expect("rm");
-
-    match lock_now(&path).await {
-        Err(crate::config_persistence::lock::NotLocked::Failed(message)) => {
-            assert!(message.contains("copy the staged original"), "{message}");
-        }
-        Err(other) => panic!("expected a refusal, got {other:?}"),
-        Ok(_) => panic!("an unusable journal must refuse the lock"),
-    }
-    assert_eq!(read(&path), NEXT);
-    assert!(crate::config_persistence::journal::exists(&path));
 }
 
 /// T6g: a stranded candidate that does not even parse never blocks an
@@ -747,3 +729,6 @@ async fn an_unchanged_replace_reloads_what_it_locked_when_the_link_moves() {
     let loaded = repointed_mid_reload(dir.path(), &link, replace, true).await;
     only_the_locked_target(&loaded, &real);
 }
+
+#[path = "replace_recovery_step_tests.rs"]
+mod recovery_step;

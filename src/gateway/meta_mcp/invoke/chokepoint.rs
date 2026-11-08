@@ -83,6 +83,10 @@ impl Source {
 pub(in crate::gateway) struct Outbound<'a> {
     pub(in crate::gateway) arguments: &'a Value,
     pub(in crate::gateway) answers: Option<&'a Value>,
+    /// The instance that sends: the folder check classifies it, never a
+    /// fresh lookup (a reload between the route scan and the send cannot
+    /// split the checked backend from the sending one).
+    pub(in crate::gateway) backend: Option<&'a crate::backend::Backend>,
 }
 
 /// Proof that one direct-route `tools/call` passed the chokepoint (MIK-8351).
@@ -133,7 +137,7 @@ impl MetaMcp {
         #[cfg(feature = "firewall")]
         self.rescan_outbound(scope, session_id, (server, tool), outbound, source)?;
         #[cfg(not(feature = "firewall"))]
-        let _ = (session_id, source, outbound.answers);
+        let _ = (session_id, source, outbound.answers, outbound.backend);
         Ok(Permit(()))
     }
 
@@ -230,7 +234,7 @@ impl MetaMcp {
         ) {
             return Err(refusal);
         }
-        match self.get_capabilities() {
+        match self.caller_capabilities() {
             // Even an unwritable record answers so: the call dispatches
             // nothing (D3-a narrowed, lead ruling 2026-10-11).
             Some(cap) if cap.name == server => Err(Error::ToolNotFound(tool.to_string())),
@@ -274,6 +278,7 @@ impl MetaMcp {
         session_id: &str,
         (server, tool, arguments): (&str, &str, &Value),
         (caller, control_identity, target): (&str, &str, ScanTarget),
+        generation: Option<&crate::config_reload::Generation>,
     ) -> Option<Error> {
         let firewall = self.firewall.as_deref()?;
         // stdio only: no API keys on that transport.
@@ -282,12 +287,17 @@ impl MetaMcp {
             tool,
             key: crate::security::response_policy::KeyOf::NoKey,
         };
+        // The line's generation (ADR-029, amended, item 5); the published one
+        // only for a caller with none.
+        let published = self.current_generation();
         let verdict = firewall.check_request_keyed(
+            firewall.policy_under(generation.or(published.as_deref())),
             session_id,
             rule_target,
             arguments,
             caller,
             control_identity,
+            None,
         );
         if verdict.action == crate::security::firewall::FirewallAction::Warn {
             tracing::warn!(
@@ -329,15 +339,28 @@ impl MetaMcp {
         };
         let decision = authorizer.decide(target);
         let refusal = if decision.verdict.is_err() {
-            decision.emit(Emit::Audit).map_err(|e| Error::Forbidden {
-                code: e.code,
-                status: e.status.as_u16(),
-                message: e.message,
+            decision.emit(Emit::Audit).map_err(|e| {
+                super::audit::note_refused_by(e.kind, e.rule_id.clone());
+                Error::Forbidden {
+                    code: e.code,
+                    status: e.status.as_u16(),
+                    message: e.message,
+                }
             })
         } else {
             // Allowed: the record, when this stage owns it, then the admin rule.
             let _allowed = decision.emit(on_allow);
-            self.admin_capability_rule(server, tool, scope.is_admin)
+            self.admin_capability_rule(
+                server,
+                tool,
+                scope.admin != crate::gateway::authz::AdminStanding::None,
+            )
+            .inspect_err(|_| {
+                super::audit::note_refused_by(
+                    crate::security::decision_record::DecisionKind::AdminCapability,
+                    None,
+                );
+            })
         };
         if let Err(e) = refusal {
             let (transport, name) = (authorizer.transport(), authorizer.caller_name());
@@ -392,11 +415,30 @@ impl MetaMcp {
                 crate::security::response_policy::KeyOf::Key,
             ),
         };
-        let mut verdict = firewall.rescan(target, outbound.arguments);
+        let published = self.current_generation();
+        let policy = firewall.policy_under(scope.authorizer.generation().or(published.as_deref()));
+        let (mut verdict, mut rule) = firewall.rescan_attributed(
+            policy,
+            target,
+            outbound.arguments,
+            crate::security::firewall::ScanSubject::Arguments,
+            outbound.backend,
+        );
         if let Some(answers) = outbound.answers {
-            let answered = firewall.rescan(target, answers);
+            let (answered, answered_rule) = firewall.rescan_attributed(
+                policy,
+                target,
+                answers,
+                crate::security::firewall::ScanSubject::Answers,
+                outbound.backend,
+            );
+            // The arguments' rule stands at an equal action; a stronger
+            // answer brings its own.
             if rank(answered.action) > rank(verdict.action) {
                 verdict.action = answered.action;
+                rule = answered_rule;
+            } else if answered.action == verdict.action && rule.is_none() {
+                rule = answered_rule;
             }
             verdict.findings.extend(answered.findings);
         }
@@ -424,6 +466,10 @@ impl MetaMcp {
             );
             return Ok(());
         }
+        super::audit::note_refused_by(
+            crate::security::decision_record::DecisionKind::Firewall,
+            rule,
+        );
         // The stateless rescan has no anomaly findings, so this is the
         // `-32600` arm of the one shared wording.
         let (code, message) = verdict.request_refusal().unwrap_or_else(|| {

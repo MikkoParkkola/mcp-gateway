@@ -14,6 +14,7 @@ use serde_json::Value;
 use super::{
     Admission, Guard, OutboundFrame, Payload, RejectionAudit, admission, answer_value, recorded,
 };
+use crate::gateway::health_metrics::Origin;
 use crate::protocol::JsonRpcNotification;
 use crate::security::TransparencyLogger;
 use crate::security::tenant_reads::ReadAttribution;
@@ -53,11 +54,18 @@ impl OutboundFrame {
         mut self,
         commit: Option<crate::gateway::input_bridge::DeliveryCommit>,
     ) -> Self {
-        self.delivery = commit.map(|c| Arc::new(parking_lot::Mutex::new(Some(c))));
+        debug_assert!(
+            self.delivery.is_none() || commit.is_none(),
+            "a frame carries one delivery commit"
+        );
+        if commit.is_some() {
+            self.delivery = commit.map(|c| Arc::new(parking_lot::Mutex::new(Some(c))));
+        }
         self
     }
 
-    /// `stdout` took this frame: commit it, and every item of a batch.
+    /// `stdout` took this frame: commit it, and every item of a batch,
+    /// each item's own delivery commit included.
     pub(crate) fn stdio_written(&self) {
         if let Some(commit) = self.delivery.as_ref().and_then(|slot| slot.lock().take()) {
             commit.commit();
@@ -65,7 +73,7 @@ impl OutboundFrame {
         self.written();
         if let Payload::Batch(items) = &self.payload {
             for item in items {
-                item.written();
+                item.stdio_written();
             }
         }
     }
@@ -122,6 +130,7 @@ impl StdioReads {
             value,
             request,
             hidden,
+            Origin::Gateway,
         );
         recorded(frame, self.log.as_ref()).await
     }

@@ -337,7 +337,6 @@ mod http {
         AppState, MetaMcp, StoreLimits, auth_state, create_router, open_runtime,
     };
     use mcp_gateway::mtls::{MtlsConfig, MtlsPolicy};
-    use mcp_gateway::security::{ToolPolicy, ToolPolicyConfig};
     use serde_json::{Value, json};
     use tower::ServiceExt;
 
@@ -378,7 +377,6 @@ mod http {
             // Authentication disabled: this criterion is about discovery needing
             // no credential exchange beyond the transport's own.
             key_server: None,
-            tool_policy: Arc::new(ToolPolicy::from_config(&ToolPolicyConfig::default())),
             mtls_policy: Arc::new(MtlsPolicy::from_config(&MtlsConfig::default())),
             trust_configured_backends: false,
             inflight: Arc::new(tokio::sync::Semaphore::new(100)),
@@ -397,6 +395,7 @@ mod http {
             )),
             export_status: None,
             transparency_log: None,
+            governance_log: None,
             dashboard_bootstrap: Arc::new(mcp_gateway::gateway::auth::DashboardBootstrap::new()),
             tasks,
             task_executor,

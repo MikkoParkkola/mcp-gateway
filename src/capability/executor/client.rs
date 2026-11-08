@@ -32,15 +32,27 @@ use crate::{Error, Result};
 ///
 /// Panics if the reqwest client cannot be created (invalid TLS config, etc.).
 pub(super) fn build(proxy: Option<&url::Url>) -> CapabilityClient {
+    over(route(proxy))
+}
+
+/// [`build`] over `builder`, for a test that supplies its own resolver: the
+/// same settings, redirect policy and redirect count.
+#[cfg(test)]
+pub(super) fn build_over(builder: reqwest::ClientBuilder) -> CapabilityClient {
+    over(builder)
+}
+
+/// A [`CapabilityClient`] over `builder`'s route, counting its redirects.
+fn over(builder: reqwest::ClientBuilder) -> CapabilityClient {
     let redirects = Arc::new(AtomicU64::new(0));
-    let http = http_client(proxy, Arc::clone(&redirects));
+    let http = configured(builder, Arc::clone(&redirects));
     CapabilityClient { http, redirects }
 }
 
-/// The reqwest client [`build`] wraps, its redirect policy counting each
-/// redirect response into `seen`.
-fn http_client(proxy: Option<&url::Url>, seen: Arc<AtomicU64>) -> Client {
-    route(proxy)
+/// [`build`]'s settings and redirect policy, over `builder`'s route, the
+/// policy counting each redirect response into `seen`.
+fn configured(builder: reqwest::ClientBuilder, seen: Arc<AtomicU64>) -> Client {
+    builder
         .timeout(Duration::from_secs(60))
         .pool_max_idle_per_host(10)
         .pool_idle_timeout(Duration::from_secs(90))
@@ -68,9 +80,9 @@ fn http_client(proxy: Option<&url::Url>, seen: Arc<AtomicU64>) -> Client {
                 RedirectDecision::Follow
                     if started_secure && !crate::gateway::is_tls_or_loopback(attempt.url()) =>
                 {
-                    attempt.error(
+                    attempt.error(RedirectRefused(
                         "refusing a capability redirect to cleartext http:// off this machine",
-                    )
+                    ))
                 }
                 RedirectDecision::Follow => attempt.follow(),
             }
@@ -116,6 +128,34 @@ impl std::ops::Deref for CapabilityClient {
 
     fn deref(&self) -> &Client {
         &self.http
+    }
+}
+
+/// A redirect hop the policy refused: typed, so the send can tell the
+/// gateway's refusal from a backend's transport failure.
+#[derive(Debug)]
+struct RedirectRefused(&'static str);
+
+impl std::fmt::Display for RedirectRefused {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.0)
+    }
+}
+
+impl std::error::Error for RedirectRefused {}
+
+/// Records a cleartext downgrade refused at a redirect hop (`RedirectRefused`)
+/// on the call's delivery; the caller still receives it as a transport
+/// error. A hop the destination policy refuses (a rejected address, a name
+/// for loopback) is recorded by `refuse_hop` at the hop itself, and again by
+/// the send's `ssrf_refusal` arm, which also covers a refusal by the address
+/// pin: the effect only rises, so the second raise changes nothing.
+fn note_redirect_refusal(error: &reqwest::Error) {
+    if error.is_redirect() && crate::security::ssrf::source_of::<RedirectRefused>(error).is_some() {
+        // Raised only while the cell vouches for the delivery: a composite's
+        // own cell does not, so a refusal there is not the plan's; each step
+        // runs in a vouched cell of its own.
+        crate::gateway::delivery_facts::refused_while_vouched();
     }
 }
 
@@ -217,7 +257,10 @@ pub(super) async fn send_with_retry(
     let mut request = Some(request);
     for attempt in 1..=MAX_SEND_ATTEMPTS {
         // A non-cloneable body gets a single attempt: the best we can do.
-        let (this, last) = match request.as_ref().and_then(reqwest::RequestBuilder::try_clone) {
+        let (this, last) = match request
+            .as_ref()
+            .and_then(reqwest::RequestBuilder::try_clone)
+        {
             Some(clone) => (clone, attempt == MAX_SEND_ATTEMPTS),
             None => match request.take() {
                 Some(only) => (only, true),
@@ -241,8 +284,10 @@ pub(super) async fn send_with_retry(
         };
         // A refused destination is refused again: one attempt, no health mark.
         if let Some(refused) = crate::security::http_diagnostics::ssrf_refusal(&e) {
+            crate::gateway::delivery_facts::refused_while_vouched();
             return Err(refused);
         }
+        note_redirect_refusal(&e);
         let transient = e.is_connect() || (retry_timeouts && e.is_timeout());
         let e = redact_url(e);
         if transient && !last {
@@ -307,7 +352,11 @@ async fn timed_attempt(
             Ok(reqwest::Response::from(rebuilt))
         }
         Err(e) => {
-            timer.finish(if e.is_timeout() { End::TimedOut } else { End::Failed });
+            timer.finish(if e.is_timeout() {
+                End::TimedOut
+            } else {
+                End::Failed
+            });
             // A refusal (a 401, a 429) keeps its status even when its body
             // never arrives: callers classify by status (credential refresh,
             // rate limits), so it goes back with an empty body. A success

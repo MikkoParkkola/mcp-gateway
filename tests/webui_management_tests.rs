@@ -62,7 +62,6 @@ use mcp_gateway::gateway::test_helpers::{
     open_runtime, write_owner_only,
 };
 use mcp_gateway::mtls::{MtlsConfig, MtlsPolicy};
-use mcp_gateway::security::{ToolPolicy, ToolPolicyConfig};
 
 #[path = "webui_management_tests/access_posture.rs"]
 mod access_posture;
@@ -146,7 +145,6 @@ async fn make_app_state(
 
     let authorizer = auth_state(&admin_auth_config(), crate::record_key::RECORD_KEY);
 
-    let tool_policy = Arc::new(ToolPolicy::from_config(&ToolPolicyConfig::default()));
     let mtls_policy = Arc::new(MtlsPolicy::from_config(&MtlsConfig::default()));
     let inflight = Arc::new(tokio::sync::Semaphore::new(100));
 
@@ -173,7 +171,6 @@ async fn make_app_state(
         proxy_manager,
         streaming_config: config.streaming.clone(),
         key_server: None,
-        tool_policy,
         mtls_policy,
         trust_configured_backends: false,
         inflight,
@@ -192,6 +189,7 @@ async fn make_app_state(
         )),
         export_status: None,
         transparency_log: None,
+        governance_log: None,
         dashboard_bootstrap: std::sync::Arc::new(
             mcp_gateway::gateway::auth::DashboardBootstrap::new(),
         ),
@@ -230,7 +228,6 @@ async fn make_app_state_with_reload(
     ));
     let proxy_manager = Arc::new(ProxyManager::new(Arc::clone(&multiplexer)));
     let authorizer = auth_state(&admin_auth_config(), crate::record_key::RECORD_KEY);
-    let tool_policy = Arc::new(ToolPolicy::from_config(&ToolPolicyConfig::default()));
     let mtls_policy = Arc::new(MtlsPolicy::from_config(&MtlsConfig::default()));
     let inflight = Arc::new(tokio::sync::Semaphore::new(100));
     let agent_registry = Arc::new(AgentRegistry::new());
@@ -265,7 +262,6 @@ async fn make_app_state_with_reload(
             proxy_manager,
             streaming_config: config.streaming.clone(),
             key_server: None,
-            tool_policy,
             mtls_policy,
             trust_configured_backends: false,
             inflight,
@@ -286,6 +282,7 @@ async fn make_app_state_with_reload(
             )),
             export_status: None,
             transparency_log: None,
+            governance_log: None,
             dashboard_bootstrap: std::sync::Arc::new(
                 mcp_gateway::gateway::auth::DashboardBootstrap::new(),
             ),

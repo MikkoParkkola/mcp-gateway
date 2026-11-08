@@ -120,6 +120,15 @@ pub(super) fn rewrite_line(file: &Path, index: usize, edit: impl FnOnce(&mut ser
     std::fs::write(file, body).unwrap();
 }
 
+/// Cut a fresh log back to its open record and drop `.hwm`: the state a crash
+/// before the first mark leaves (#2275). The id record and the mark come after
+/// it, so a crash can stop here, and nowhere with the id but no mark.
+pub(super) fn cut_to_open_record(path: &Path) {
+    let first = lines(path).remove(0);
+    std::fs::write(path, first.to_string() + "\n").unwrap();
+    std::fs::remove_file(sibling(path, "hwm")).unwrap();
+}
+
 /// Rewrite a fresh log as a pre-D6 one: drop the genesis open record and
 /// re-chain the rest from genesis (unsigned).
 pub(super) fn strip_genesis_open(path: &Path) {

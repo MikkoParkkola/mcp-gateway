@@ -131,7 +131,9 @@ async fn recorded(state: Arc<AppState>, request: Request, next: Next) -> Respons
     let subject = request
         .extensions()
         .get::<VerifiedIdentity>()
-        .and_then(|id| GrantSubject::checked(id.issuer.clone(), id.subject.clone(), None));
+        .and_then(|id| {
+            GrantSubject::new(id.issuer().to_owned(), id.subject().to_owned(), None).ok()
+        });
 
     // The handler and its record run on a task of their own: a client that
     // disconnects drops only this wait, so a write that commits after it left
@@ -196,19 +198,27 @@ pub(super) fn record_admin_action_as(
     status: StatusCode,
 ) -> Option<Response> {
     let log = state.transparency_log.as_ref()?;
-    let subject =
-        identity.and_then(|id| GrantSubject::checked(id.issuer.clone(), id.subject.clone(), None));
     let envelope = AuditEnvelope {
         outcome: AuditOutcome::from_http_status(status, None),
-        ..AuditEnvelope::ok(AuditWho::from_request(
-            client,
-            subject.as_ref(),
-            state.live_config.generation().auth().record_key(),
-        ))
+        ..AuditEnvelope::ok(caller_who(state, client, identity))
     };
     log.append_admin_action(surface, fields, &envelope)
         .err()
         .map(|error| withheld(&error))
+}
+
+/// Who a request came from, as every audit record names them: the client and
+/// the verified grant subject, keyed by the live generation.
+pub(super) fn caller_who(
+    state: &AppState,
+    client: Option<&AuthenticatedClient>,
+    identity: Option<&VerifiedIdentity>,
+) -> AuditWho {
+    let subject = identity.and_then(|id| {
+        GrantSubject::new(id.issuer().to_owned(), id.subject().to_owned(), None).ok()
+    });
+    let generation = state.live_config.generation();
+    AuditWho::from_request(client, subject.as_ref(), generation.auth().record_key())
 }
 
 /// The `AuditUnavailable` answer: the action may have run, its result is

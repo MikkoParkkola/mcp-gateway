@@ -2,10 +2,10 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! The composite id: round trip, order and refusals.
 
-use super::id::{IdError, LogCursor, LogPart, StreamId};
+use super::id::{IdError, LogCursor, Mark, StreamId};
 
-fn part(n: u64) -> LogPart {
-    LogPart {
+fn part(n: u64) -> Mark {
+    Mark {
         counter: n,
         hash16: "0123456789abcdef".to_owned(),
     }

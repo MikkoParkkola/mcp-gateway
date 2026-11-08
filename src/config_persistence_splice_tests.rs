@@ -121,7 +121,8 @@ fn a_real_comment_after_a_tag_or_alias_is_kept() {
         edited(tagged, "env:\n  TOKEN: old\n", "env:\n  TOKEN: new\n"),
         Some("backends:\n  svc:\n    env:\n      TOKEN: new  # keep\n".to_owned())
     );
-    // The alias resolves only in the whole document.
+    // The alias resolves only in the whole document. `edit_entry` keeps the
+    // comment; the entry point then refuses the dropped alias (S1).
     let aliased = "x: &shared {A: one}\nbackends:\n  svc:\n    env: *shared  # keep\n";
     assert_eq!(
             edited(aliased, "env:\n  A: one\n", "env:\n  A: one\n  B: two\n"),
@@ -359,4 +360,123 @@ fn a_sibling_sequence_item_ends_the_span() {
         3,
         "the item stops at `- name: y`"
     );
+}
+
+/// The locked config writer (the web UI and reload-API writes) never falls
+/// back to a plain read when the guarded load refuses the file: a file
+/// another account can change or read is refused, keeping its bytes and mode.
+#[cfg(unix)]
+#[test]
+fn a_write_over_a_config_the_guard_refuses_is_refused() {
+    use crate::config::Config;
+    use crate::config_persistence::{CommentLoss, write_config_with};
+    use std::os::unix::fs::PermissionsExt as _;
+    for mode in [0o620, 0o640, 0o602] {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("gateway.yaml");
+        let current = "backends:\n  a: {command: a}\n";
+        crate::gateway::test_helpers::write_owner_only(&path, current).expect("write");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode)).expect("chmod");
+        let next: Config =
+            crate::yaml::from_str("backends:\n  a: {command: a}\n  b: {command: b}\n")
+                .expect("config");
+        let held = crate::config_persistence::lock::lock_config_blocking(
+            &path,
+            std::time::Instant::now(),
+            |_| {},
+        )
+        .expect("config lock")
+        .held;
+
+        let result = write_config_with(&path, &next, CommentLoss::Rewrite, &held);
+
+        // The guard's own refusal, not some other failure.
+        assert!(
+            matches!(&result, Err(crate::config_persistence::Unwritten::Failed(why))
+                if why.contains("Refusing to load config file")),
+            "mode {mode:o}: {result:?}"
+        );
+        assert_eq!(std::fs::read_to_string(&path).expect("read"), current);
+        let now = std::fs::metadata(&path).expect("stat").permissions().mode();
+        assert_eq!(now & 0o777, mode, "mode {mode:o}: the file was rewritten");
+    }
+}
+
+/// `original` with backend `name`'s config changed by `change`, through the
+/// splice entry point every backend write uses.
+fn backend_edited(
+    original: &str,
+    name: &str,
+    change: impl FnOnce(&mut crate::config::Config),
+) -> Option<String> {
+    let before = crate::config::Config::from_file_text(original).expect("extracts");
+    let mut config = before.clone();
+    change(&mut config);
+    super::with_backend_edited(original, &before, &config, name)
+}
+
+const SPLICE_URL: &str = "http://127.0.0.1:9/mcp";
+
+/// S1: an edit that would expand an alias into its value
+/// is refused: the shared value would silently detach.
+#[test]
+fn a_dropped_alias_in_a_backend_edit_is_refused() {
+    let original = format!(
+        "x-shared: &shared {{A: one}}\nbackends:\n  svc:\n    http_url: \"{SPLICE_URL}\"\n    env: *shared  # keep\n"
+    );
+    let got = backend_edited(&original, "svc", |c| {
+        c.backends
+            .get_mut("svc")
+            .expect("svc")
+            .env
+            .insert("B".into(), "two".into());
+    });
+    assert_eq!(got, None);
+}
+
+/// S4: removing a backend may take its own alias with it.
+#[test]
+fn a_removed_backend_takes_its_own_alias() {
+    let original = format!(
+        "x-shared: &shared {{A: one}}\nbackends:\n  keep:\n    http_url: \"{SPLICE_URL}\"\n  svc:\n    http_url: \"{SPLICE_URL}\"\n    env: *shared\n"
+    );
+    let got = backend_edited(&original, "svc", |c| {
+        c.backends.remove("svc");
+    });
+    assert_eq!(
+        got.as_deref(),
+        Some(
+            format!(
+                "x-shared: &shared {{A: one}}\nbackends:\n  keep:\n    http_url: \"{SPLICE_URL}\"\n"
+            )
+            .as_str()
+        )
+    );
+}
+
+/// S5: an anchor on an edited value, even one nothing uses, is refused when
+/// the edit drops it; a quoted `"*x"` is a string, not an alias.
+#[test]
+fn a_dropped_unused_anchor_is_refused_and_a_quoted_star_is_not_counted() {
+    let anchored =
+        format!("backends:\n  svc:\n    http_url: \"{SPLICE_URL}\"\n    env:\n      A: &a one\n");
+    let got = backend_edited(&anchored, "svc", |c| {
+        c.backends
+            .get_mut("svc")
+            .expect("svc")
+            .env
+            .insert("A".into(), "two".into());
+    });
+    assert_eq!(got, None);
+    let quoted = format!(
+        "backends:\n  svc:\n    http_url: \"{SPLICE_URL}\"\n    env:\n      A: \"*x\"\n      B: one\n"
+    );
+    let got = backend_edited(&quoted, "svc", |c| {
+        c.backends
+            .get_mut("svc")
+            .expect("svc")
+            .env
+            .insert("B".into(), "two".into());
+    });
+    assert!(got.is_some_and(|t| t.contains("A: \"*x\"") && t.contains("B: two")));
 }

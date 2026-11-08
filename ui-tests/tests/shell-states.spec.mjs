@@ -28,6 +28,13 @@ async function open(page) {
   await shellReady(page);
 }
 
+/** Fix the date at noon in the browser's timezone before the shell loads. */
+async function fixedNoon(page) {
+  const now = await page.evaluate(() => new Date(2026, 10, 7, 12).getTime());
+  await page.clock.setFixedTime(now);
+  return now;
+}
+
 test('T1 the table has exactly the gateway\'s server states, each with a word, glyph and tone', async ({ page }) => {
   await open(page);
   // The word is the glossary's (UI1.24), so the table holds glyph, tone and copy only.
@@ -73,9 +80,11 @@ const ROWS = [
 ];
 
 test('T2 every state and condition gets its exact badge, banner and next step', async ({ page }) => {
+  const now = await fixedNoon(page);
   await open(page);
-  const got = await inShell(page, (m, rows) => {
-    const soon = new Date(Date.now() + 60_000);
+  expect(await page.evaluate(() => Date.now())).toBe(now);
+  const got = await inShell(page, (m, { rows, now }) => {
+    const soon = new Date(now + 60_000);
     const hhmm = soon.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     const colour = (value) => {
       const probe = document.createElement('span');
@@ -121,7 +130,7 @@ test('T2 every state and condition gets its exact badge, banner and next step', 
       out.banner = out.banner?.replace(hhmm, 'HHMM') ?? null;
       return out;
     });
-  }, ROWS);
+  }, { rows: ROWS, now });
   ROWS.forEach((row, i) => {
     const g = got[i];
     const at = `${row.server.state} ${JSON.stringify(row.server)}`;
@@ -139,6 +148,25 @@ test('T2 every state and condition gets its exact badge, banner and next step', 
     expect(g.html, at).not.toContain('Refused by the runtime policy');
     expect(g.html, at).not.toContain('warming_up');
   });
+});
+
+test('T2b a retry on another day includes its date and time in the banner', async ({ page }) => {
+  const now = await fixedNoon(page);
+  await open(page);
+  expect(await page.evaluate(() => Date.now())).toBe(now);
+  const { title, date, time } = await inShell(page, (m, now) => {
+    const tomorrow = new Date(now);
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    const banner = m.serverBanner({
+      name: 'github', state: 'paused', circuit_state: 'open', next_retry_at: tomorrow.toISOString(),
+    });
+    return {
+      title: banner.querySelector('h2')?.textContent,
+      date: tomorrow.toLocaleDateString(),
+      time: tomorrow.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+    };
+  }, now);
+  expect(title).toBe(`Calls to github are held back after failures. The gateway lets calls try it again from ${date} ${time}.`);
 });
 
 test('T6 stale data reads its time and dims the numbers until it clears', async ({ page }) => {
@@ -177,7 +205,7 @@ test('T6 stale data reads its time and dims the numbers until it clears', async 
   expect(title).toMatch(/^Updates stopped at .+ · reconnecting$/);
 });
 
-test('T7 a failed To do count reads "?", a route not shipped shows nothing, and a known count replaces "?"', async ({ page }) => {
+test('T7 a failed To do count reads "?", a 404 reads "?" too, and a known count replaces "?"', async ({ page }) => {
   let reply = { status: 500, json: {} };
   await page.route(COUNT, (r) => r.fulfill(reply));
   await open(page);
@@ -190,9 +218,13 @@ test('T7 a failed To do count reads "?", a route not shipped shows nothing, and 
   reply = { json: { total: 3 } }; // an answer without a whole-number count
   await inShell(page, (m) => m.refreshCounts());
   await expect(badge).toHaveText('?');
+  reply = { json: { count: 2 } };
+  await inShell(page, (m) => m.refreshCounts());
+  await expect(badge).toHaveText('2');
+  // The count route ships with the queue: a 404 is now a failure like any other.
   reply = { status: 404, json: {} };
   await inShell(page, (m) => m.refreshCounts());
-  await expect(badge).toHaveCount(0);
+  await expect(badge).toHaveText('?');
 });
 
 for (const width of WIDTHS) {

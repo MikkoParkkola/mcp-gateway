@@ -220,7 +220,11 @@ async fn run_dispatched(
     let generation = state.generation();
     // K15: the key that queued this task, as the current table holds it. A
     // refusal is the dispatch's answer below, before anything is sent.
-    let (rejudged, key_refused) = match state.rejudge(intent.owned.authorizer(), &generation) {
+    let (rejudged, key_refused) = match state.rejudge(
+        intent.owned.authorizer(),
+        intent.owned.verified_identity(),
+        &generation,
+    ) {
         Ok(rejudged) => (rejudged, None),
         Err(refused) => (None, Some(refused)),
     };
@@ -229,7 +233,9 @@ async fn run_dispatched(
     // Held through the call and an upstream job's follow, released before
     // settling: a parked round ends this worker, and its caller is idle then.
     let key_hold = intent.owned.hold_caller_key(&state);
-    let caller = intent.owned.dispatch_context(&state, &authorizer);
+    let caller = intent
+        .owned
+        .dispatch_context(&state, &authorizer, &generation);
     let session_id = intent.owned.session_id().map(str::to_owned);
 
     let submission = job
@@ -314,6 +320,11 @@ async fn run_dispatched(
     // submit's intake judged, as a synchronous call does.
     let dispatch =
         crate::gateway::meta_mcp::visible::memo::with_judged(intent.owned.judged(), dispatch);
+    // The run judges hiding as its caller, live, readmission included. Boxed,
+    // as an input round is: each wrapper would otherwise hold and move the
+    // whole run inline, and `large_futures` cannot see it (never awaited
+    // here, only passed on), so the worker's stack overflows.
+    let dispatch = state.as_caller(&intent.owned, Box::pin(dispatch));
     let mut dispatch = Box::pin(dispatched_in_cell(
         crate::gateway::meta_mcp::dispatch_log::with_dispatch_log(
             Arc::clone(intent.owned.dispatch_log()),
@@ -748,7 +759,7 @@ use held::{cancel_held_upstream, follow_upstream_job};
 
 #[path = "worker_inspect.rs"]
 mod inspect;
-pub(super) use inspect::{dispatched_in_cell, inspect_and_record};
+pub(super) use inspect::{CellRefusal, dispatched_in_cell, inspect_and_record};
 
 #[cfg(test)]
 #[path = "worker_rescue_seam.rs"]

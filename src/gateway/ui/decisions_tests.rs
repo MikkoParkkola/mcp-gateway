@@ -143,12 +143,12 @@ async fn an_admin_is_served_the_open_decisions_and_no_one_else() {
     assert_eq!(body["error"], "decisions_unavailable", "{body}");
 
     let (_stop, shutdown) = tokio::sync::broadcast::channel(1);
-    let _tick = start(&state.meta_mcp, shutdown);
+    let _tick = start(&state.meta_mcp, None, shutdown);
 
     // The note kept before start is replayed.
     let body = served_when(&state, |body| scope_len(body) == 1).await;
     assert_eq!(body["decisions"][0]["kind"], "access_request", "{body}");
-    assert_eq!(body["missing_kinds"], json!(["adopt"]), "{body}");
+    assert_eq!(body["missing_kinds"], json!([]), "{body}");
     assert_eq!(
         body["partial_kinds"],
         json!(["capability_changed"]),
@@ -172,7 +172,7 @@ async fn a_request_whose_refusals_left_the_log_is_closed() {
     let log = log_in(&dir, 2048, 1);
     let (state, _store) = state_with(&log).await;
     let (_stop, shutdown) = tokio::sync::broadcast::channel(1);
-    let _tick = start(&state.meta_mcp, shutdown);
+    let _tick = start(&state.meta_mcp, None, shutdown);
     let now = crate::clock::utc_now().expect("a readable clock");
 
     write(
@@ -207,7 +207,7 @@ async fn a_request_whose_refusals_left_the_log_is_closed() {
     // Both are open (the hand-off is asynchronous) before the edge is read.
     served_when(&state, |body| scope_len(body) == 2).await;
     let decisions = state.meta_mcp.decisions().expect("attached");
-    tick(&state.meta_mcp, decisions, true);
+    tick(&state.meta_mcp, decisions, &Latest::default(), None, true);
 
     let body = served_when(&state, |body| scope_len(body) == 1).await;
     let scope = body["decisions"][0]["scope"]
@@ -239,7 +239,7 @@ async fn a_reader_that_cannot_take_the_set_does_not_hold_up_an_append() {
     let log = log_in(&dir, 1 << 20, 12);
     let (state, _store) = state_with(&log).await;
     let (_stop, shutdown) = tokio::sync::broadcast::channel(1);
-    let _tick = start(&state.meta_mcp, shutdown);
+    let _tick = start(&state.meta_mcp, None, shutdown);
     served_when(&state, |_| true).await;
 
     let release = hold_the_set(Arc::clone(state.meta_mcp.decisions().expect("attached"))).await;
@@ -261,7 +261,9 @@ async fn a_burst_past_the_queue_is_replayed_not_lost() {
     let log = log_in(&dir, 1 << 20, 12);
     let (state, _store) = state_with(&log).await;
     let (_stop, shutdown) = tokio::sync::broadcast::channel(1);
-    let _tick = start_with(&state.meta_mcp, shutdown, 1);
+    let files = tempfile::tempdir().expect("tempdir");
+    let none = super::super::discovery_wiring_tests::Scripted::new(files.path(), &[]);
+    let _tick = start_with(&state.meta_mcp, None, shutdown, 1, none);
     served_when(&state, |_| true).await;
 
     let release = hold_the_set(Arc::clone(state.meta_mcp.decisions().expect("attached"))).await;
@@ -353,6 +355,7 @@ async fn a_replay_waits_for_the_one_already_running() {
     shared.update(|set| {
         set.set_health(Source::ControlPlane, Health::Ready);
         set.set_health(Source::Capability, Health::Absent);
+        set.set_health(Source::Discovery, Health::Ready);
     });
     let replays = Arc::new(Replays {
         path: log.path(),
@@ -398,6 +401,7 @@ async fn a_waiting_replay_unmarks_a_ready_it_did_not_read() {
         set.set_health(Source::ControlPlane, Health::Ready);
         set.set_health(Source::Capability, Health::Absent);
         set.set_health(Source::Access, Health::Ready);
+        set.set_health(Source::Discovery, Health::Ready);
     });
     assert!(shared.view().is_ok());
     drop(running);
@@ -430,4 +434,76 @@ fn a_log_with_no_sealed_segment_has_an_edge() {
         .max()
         .expect("a written record");
     assert!(edge <= last, "the edge keeps the record just written");
+}
+
+async fn count(state: &Arc<AppState>, admin: bool) -> (StatusCode, Value) {
+    let guard = Guard::for_route(
+        routes::UI_DECISIONS_COUNT,
+        &Method::GET,
+        Some(client(admin)),
+    );
+    let response = count_decisions(State(Arc::clone(state)), guard).await;
+    let status = response.status();
+    let bytes = to_bytes(response.into_body(), 1 << 20).await.expect("body");
+    (
+        status,
+        serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+    )
+}
+
+/// R6: while a source is unavailable the count answers the list's own 503,
+/// never a number.
+#[tokio::test]
+async fn the_count_is_unavailable_while_a_source_is() {
+    let dir = tempfile::tempdir().expect("dir");
+    let log = log_in(&dir, 1 << 20, 12);
+    let (state, _store) = state_with(&log).await;
+    let shared = Arc::new(Shared::with_key([7; 32]));
+    shared.update(|set| {
+        set.set_health(Source::ControlPlane, Health::Ready);
+        set.set_health(Source::Capability, Health::Absent);
+        set.set_health(Source::Access, Health::Ready);
+        set.discovery_down();
+    });
+    state.meta_mcp.set_decisions(shared);
+    let (status, list) = get(&state, true).await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{list}");
+    let (status, body) = count(&state, true).await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{body}");
+    assert_eq!(body, list, "the count's 503 is the list's");
+}
+
+/// R6: the count is the list's length and revision, for an admin only.
+#[tokio::test]
+async fn the_count_is_the_lists_length_and_revision_for_an_admin_only() {
+    let dir = tempfile::tempdir().expect("dir");
+    let log = log_in(&dir, 1 << 20, 12);
+    let now = crate::clock::utc_now().expect("a readable clock");
+    write(&log, note("stripe.charges", now));
+    let (state, _store) = state_with(&log).await;
+
+    let (status, body) = count(&state, true).await;
+    assert_eq!(
+        status,
+        StatusCode::SERVICE_UNAVAILABLE,
+        "before start: {body}"
+    );
+    assert_eq!(body["error"], "decisions_unavailable", "{body}");
+
+    let (_stop, shutdown) = tokio::sync::broadcast::channel(1);
+    let _tick = start(&state.meta_mcp, None, shutdown);
+    let list = served_when(&state, |body| scope_len(body) == 1).await;
+
+    let (status, body) = count(&state, true).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        body,
+        json!({
+            "count": list["decisions"].as_array().map_or(0, Vec::len),
+            "revision": list["revision"],
+        }),
+    );
+
+    let (status, _) = count(&state, false).await;
+    assert_eq!(status, admin_auth_required().0, "a non-admin is refused");
 }

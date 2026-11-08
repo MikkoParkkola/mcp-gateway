@@ -92,6 +92,16 @@ impl Default for Bound {
     }
 }
 
+/// How far a bounded append got.
+pub(super) enum Dispatch<T> {
+    /// No task exists: the log was stalled or the permit was not taken.
+    NotStarted(io::Error),
+    /// The task ran to its end; its result.
+    Joined(T),
+    /// The task was dispatched and its end is not confirmed.
+    Unconfirmed(io::Error),
+}
+
 fn timed_out() -> io::Error {
     io::Error::new(
         io::ErrorKind::TimedOut,
@@ -141,6 +151,25 @@ impl TransparencyLogger {
         T: Send + 'static,
         F: FnOnce(&TransparencyLogger) -> io::Result<T> + Send + 'static,
     {
+        match self.dispatch_bounded(cap, op).await {
+            Dispatch::Joined(result) => result,
+            Dispatch::NotStarted(e) | Dispatch::Unconfirmed(e) => Err(e),
+        }
+    }
+
+    /// Run `op` on the blocking pool under both F20 bounds, and say how far
+    /// it got: never started (the permit was not taken, so no task exists),
+    /// joined with its result, or dispatched and not confirmed (the task may
+    /// still run: a bound expired, or it failed to join).
+    pub(super) async fn dispatch_bounded<T, F>(
+        self: &Arc<Self>,
+        cap: Option<Duration>,
+        op: F,
+    ) -> Dispatch<T>
+    where
+        T: Send + 'static,
+        F: FnOnce(&TransparencyLogger) -> T + Send + 'static,
+    {
         // While stalled every append is refused at once, with no wait and no
         // thread; a best-effort caller logs it and serves anyway.
         if self.is_stalled() {
@@ -153,7 +182,7 @@ impl TransparencyLogger {
                     .stall_answers
                     .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             }
-            return Err(timed_out());
+            return Dispatch::NotStarted(timed_out());
         }
         let limit = cap.map_or(self.append_timeout(), |c| c.min(self.append_timeout()));
         let started = tokio::time::Instant::now();
@@ -163,16 +192,19 @@ impl TransparencyLogger {
         let queued_behind = self.bound.state.lock().ok().and_then(|s| s.in_flight);
         #[cfg(test)]
         self.bound.permit_waits.fetch_add(1, Ordering::SeqCst);
-        let permit = tokio::time::timeout(limit, Arc::clone(&self.bound.permit).acquire_owned())
-            .await
-            .map_err(|_| self.mark_stalled(queued_behind))?
-            .map_err(|_| io::Error::other("audit append permit closed"))?;
+        let permit =
+            match tokio::time::timeout(limit, Arc::clone(&self.bound.permit).acquire_owned()).await
+            {
+                Ok(Ok(permit)) => permit,
+                Ok(Err(_)) => {
+                    return Dispatch::NotStarted(io::Error::other("audit append permit closed"));
+                }
+                Err(_) => return Dispatch::NotStarted(self.mark_stalled(queued_behind)),
+            };
         let generation = {
-            let mut s = self
-                .bound
-                .state
-                .lock()
-                .map_err(|_| io::Error::other("stall lock"))?;
+            let Ok(mut s) = self.bound.state.lock() else {
+                return Dispatch::NotStarted(io::Error::other("stall lock"));
+            };
             s.next_gen += 1;
             s.in_flight = Some(s.next_gen);
             s.next_gen
@@ -212,11 +244,11 @@ impl TransparencyLogger {
             limit
         };
         match tokio::time::timeout(write_limit, task).await {
-            Ok(Ok(result)) => result,
-            Ok(Err(join)) => Err(io::Error::other(format!(
+            Ok(Ok(result)) => Dispatch::Joined(result),
+            Ok(Err(join)) => Dispatch::Unconfirmed(io::Error::other(format!(
                 "audit append task failed: {join}"
             ))),
-            Err(_) => Err(self.mark_stalled(Some(generation))),
+            Err(_) => Dispatch::Unconfirmed(self.mark_stalled(Some(generation))),
         }
     }
 
@@ -239,6 +271,7 @@ impl TransparencyLogger {
             && s.in_flight == generation
         {
             s.stalled = true;
+            drop(s);
             tracing::error!("audit append timed out; the audit log is stalled");
         }
         timed_out()
@@ -247,6 +280,19 @@ impl TransparencyLogger {
 
 #[cfg(test)]
 impl TransparencyLogger {
+    /// Close the append permit, as a logger shutting down would.
+    pub(crate) fn close_append_permit_for_test(&self) {
+        self.bound.permit.close();
+    }
+
+    /// Take the one append permit, as an append in progress holds it.
+    pub(crate) async fn hold_append_permit_for_test(&self) -> tokio::sync::OwnedSemaphorePermit {
+        Arc::clone(&self.bound.permit)
+            .acquire_owned()
+            .await
+            .expect("permit open")
+    }
+
     /// Test seam for callers outside this module: bound every append at
     /// `limit`, and block the next write until the returned barrier is
     /// released or dropped (a write stuck in the kernel).
@@ -279,7 +325,9 @@ impl TransparencyLogger {
         self.bound.permit_waits.load(Ordering::SeqCst)
     }
 
-    /// Whether a write's generation is still in the kernel.
+    /// Whether a write's generation is still in the kernel. Its callers are
+    /// all `firewall` test modules; others drain with `release_and_drain`.
+    #[cfg(feature = "firewall")]
     pub(crate) fn write_in_flight_for_test(&self) -> bool {
         self.bound
             .state
@@ -300,6 +348,23 @@ impl TransparencyLogger {
             .wait_timeout_while(state, bound, |s| s.in_flight.is_some())
             .expect("stall lock");
         state.in_flight.is_none()
+    }
+
+    /// Release a stalled write and wait, on the blocking pool, until it has
+    /// finished, failing the test past `HANG_BOUND`. A test whose log lives
+    /// in a temporary directory calls this before that directory drops: a
+    /// released write still running then rewrites `.hwm` (and the record)
+    /// mid-removal, and the directory stays behind.
+    pub(crate) async fn release_and_drain(self: &Arc<Self>, gate: super::rotation::StallRelease) {
+        gate.release();
+        drop(gate);
+        let log = Arc::clone(self);
+        let cleared = tokio::task::spawn_blocking(move || {
+            log.wait_write_cleared_for_test(crate::test_wait::HANG_BOUND)
+        })
+        .await
+        .expect("the wait does not panic");
+        assert!(cleared, "the released audit write finished");
     }
 }
 

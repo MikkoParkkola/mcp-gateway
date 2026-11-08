@@ -19,7 +19,9 @@
 //!
 //! A delivery the gateway cannot vouch for omits both fields; it never claims
 //! `delivered` or an empty finding list for something no scan of this request
-//! saw. Outside a cell every setter is a no-op and the recorder omits both.
+//! saw. It still records a refusal it ended on, and `rewritten` when the
+//! injected-value scrub removed a value during the call, a fact of the whole
+//! call rather than of any one step. Outside a cell every setter is a no-op and the recorder omits both.
 
 use std::cell::RefCell;
 use std::collections::BTreeSet;
@@ -36,7 +38,13 @@ pub(crate) enum ResponseEffect {
     Delivered,
     /// Delivered with a gateway annotation added (findings, contract notes).
     Annotated,
-    /// Delivered with bytes the gateway changed.
+    /// Delivered with bytes the gateway changed, or, from the injected-value
+    /// scrub: during this call the gateway removed an injected value from
+    /// something this backend sent. That can be an answer the caller never
+    /// received (a discarded page, a handshake, a retried attempt), so it
+    /// does not mean the answer delivered was edited. Over-reporting is the
+    /// safe direction for a secret-echo control: an under-report would hide
+    /// that a backend sent a credential back.
     Rewritten,
     /// Not delivered: the gateway answered with a refusal.
     Refused,
@@ -82,6 +90,8 @@ struct Finding {
 #[derive(Debug, Clone)]
 pub(crate) struct DeliveryFacts {
     effect: ResponseEffect,
+    /// What the transport's scrub did to an injected value this call sent.
+    echo: Echo,
     scanned: bool,
     findings: BTreeSet<Finding>,
     vouched: bool,
@@ -89,6 +99,77 @@ pub(crate) struct DeliveryFacts {
     /// Whether a composite's latest step ended in a gateway refusal the
     /// composite has not carried on past.
     last_step: LastStep,
+    /// What this delivery's backend sends did.
+    sends: Sends,
+    /// The failure this delivery's answer carries folded into a tool result,
+    /// for the error count: the worst noted (the gateway's own over a
+    /// backend failure over a backend's answer).
+    folded: Option<RpcError>,
+    /// The code of the latest refusal the gateway answered as a tool result:
+    /// last writer wins, so a later withhold is never recorded with an
+    /// earlier gate's code. Kept apart from `folded`, whose worst-wins rule is
+    /// for the error count, not for which gate built the delivered answer.
+    withheld_code: Option<i32>,
+    /// The latest composite step's fold, until the composite carries it
+    /// (`step_carried`), ends on it (`composite_ended`) or moves past it.
+    last_step_folded: Option<RpcError>,
+    /// Whose failure the error about to be delivered is (`wrapped_step`).
+    error_of: ErrorOf,
+    /// The check that refused a stored task's answer, and its rule when a
+    /// configured rule decided: the first one raised.
+    refused_by: Option<crate::security::decision_record::RefusedBy>,
+    /// The invocation trace of the record this step cell's step wrote
+    /// ([`note_step_trace`]); read by [`step`] when the step ends.
+    noted_trace: Option<std::sync::Arc<str>>,
+    /// The latest composite step's record trace and its `withheld_code`,
+    /// under the keep/drop rule documented on [`step`].
+    last_step_trace: Option<std::sync::Arc<str>>,
+    last_step_withheld: Option<i32>,
+    /// The record trace of the step the composite ended refused on: written
+    /// by [`composite_ended`] alone, so a trace a step left is never read as
+    /// the end unless the end kept it.
+    ended_on: Option<std::sync::Arc<str>>,
+}
+
+/// What the injected-value scrub did during a delivery.
+#[derive(Debug, Clone, Default)]
+struct Echo {
+    /// During this call the gateway removed an injected value from something
+    /// this backend sent: an answer the caller got, or one it never did (a
+    /// discarded page, a handshake, a retried attempt). Never cleared: an
+    /// over-report is the safe direction for a secret-echo control, which an
+    /// under-report would hide. Shared with every nested cell
+    /// ([`discarded`], [`step`]), so a nested send writes it at once, even
+    /// one later refused or cancelled; a fresh delivery ([`scope`]) has its own.
+    redacted: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    /// The scrub replaced an answer with its refusal in this cell. Read with
+    /// the delivered error ([`echo_refusal_delivered`]), so a replaced answer
+    /// the call never delivered records nothing.
+    refusal_built: bool,
+}
+
+/// The two facts a delivery keeps about its sends. Both can hold at once (a
+/// later round refused before its send after an earlier one was sent), so
+/// they are two facts, not one state.
+#[derive(Debug, Clone, Copy, Default)]
+struct Sends {
+    /// Sends that entered a transport and were not proven unsent: while any
+    /// is counted, the delivery may have reached its backend.
+    entered: u32,
+    /// The backend's send refused this delivery's call before any byte left.
+    refused_before: bool,
+}
+
+/// Whose failure the error about to be delivered is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ErrorOf {
+    /// Its own: counted with the error's own origin.
+    Own,
+    /// The step the composite ended on, which it wraps in an error with
+    /// `code`: counted with that step's fold while the delivered error is
+    /// still that wrapper. An error that replaced it (an audit outage's
+    /// -32005) carries another code and counts as itself.
+    EndedStep { code: i32 },
 }
 
 /// How a composite's latest step ended, for the composite's own record.
@@ -104,12 +185,44 @@ impl Default for DeliveryFacts {
     fn default() -> Self {
         Self {
             effect: ResponseEffect::Delivered,
+            echo: Echo::default(),
             scanned: false,
             findings: BTreeSet::new(),
             vouched: true,
             lone_target: false,
             last_step: LastStep::Settled,
+            sends: Sends::default(),
+            folded: None,
+            withheld_code: None,
+            last_step_folded: None,
+            error_of: ErrorOf::Own,
+            refused_by: None,
+            noted_trace: None,
+            last_step_trace: None,
+            last_step_withheld: None,
+            ended_on: None,
         }
+    }
+}
+
+use crate::gateway::health_metrics::{Origin, RpcError};
+
+/// How much a fold weighs: the gateway's own failure over a backend failure
+/// over a backend's answer, so the order of folds cannot lower the count.
+const fn weight(origin: Origin) -> u8 {
+    match origin {
+        Origin::Backend => 0,
+        Origin::BackendFailure => 1,
+        Origin::Gateway => 2,
+    }
+}
+
+/// The worse of two folds; the first on a tie.
+fn worst(kept: Option<RpcError>, new: Option<RpcError>) -> Option<RpcError> {
+    match (kept, new) {
+        (Some(k), Some(n)) if weight(n.origin) > weight(k.origin) => Some(n),
+        (None, n) => n,
+        (k, _) => k,
     }
 }
 
@@ -125,6 +238,46 @@ impl DeliveryFacts {
     pub(crate) fn refused(&self) -> bool {
         self.effect == ResponseEffect::Refused
     }
+
+    /// The code the latest refusal the gateway answered as a tool result was
+    /// built with. `None` when the gateway folded no refusal of its own.
+    pub(crate) fn withheld_code(&self) -> Option<i32> {
+        self.withheld_code
+    }
+
+    /// The record trace of the step a composite ended refused on: kept only
+    /// by [`composite_ended`] for a plan that Failed on a refused step.
+    pub(crate) fn ended_on(&self) -> Option<std::sync::Arc<str>> {
+        self.ended_on.clone()
+    }
+
+    /// The strongest effect: this cell's own, raised to `Rewritten` when the
+    /// scrub redacted anything during the call.
+    fn effect(&self) -> ResponseEffect {
+        if self.echo.redacted.load(std::sync::atomic::Ordering::SeqCst) {
+            self.effect.max(ResponseEffect::Rewritten)
+        } else {
+            self.effect
+        }
+    }
+
+    /// A nested cell: fresh facts, sharing this call's redaction fact.
+    fn nested(&self) -> Self {
+        Self {
+            echo: Echo {
+                redacted: std::sync::Arc::clone(&self.echo.redacted),
+                refusal_built: false,
+            },
+            ..Self::default()
+        }
+    }
+}
+
+/// A nested cell inside the open one, or a fresh one outside any delivery.
+fn nested_cell() -> DeliveryFacts {
+    FACTS
+        .try_with(|cell| cell.borrow().nested())
+        .unwrap_or_default()
 }
 
 /// Run `future` with a fresh cell open: one delivery.
@@ -138,10 +291,13 @@ pub(crate) async fn scope<F: std::future::Future>(future: F) -> F::Output {
 /// drops it) in a cell of its own, discarded: a refusal it meets, such as a
 /// refused redirect hop, is not this call's answer. Every such send site is
 /// listed in `boundary_pins/discarded_sends.rs`.
+///
+/// A redaction it meets is still this call's: the nested cell shares the
+/// call's redaction fact.
 pub(crate) async fn discarded<F: std::future::Future>(future: F) -> F::Output {
     // Boxed: the cell would otherwise sit inline in every dispatch future
     // that awaits a probe.
-    Box::pin(scope(future)).await
+    Box::pin(FACTS.scope(RefCell::new(nested_cell()), future)).await
 }
 
 /// Run one composite step in a cell of its own, as [`scope`] does, and note
@@ -149,16 +305,32 @@ pub(crate) async fn discarded<F: std::future::Future>(future: F) -> F::Output {
 /// Only the latest step's note is kept: a later step replaces it. A step
 /// names one target, so a step answered absent for a policy reason is
 /// refused ([`withheld`]).
+///
+/// The step's record trace ([`note_step_trace`]) and its `withheld_code` go
+/// up as `last_step_trace` and `last_step_withheld`, under one rule: both are
+/// set (or emptied) by every step that ends, both are cleared by
+/// [`step_absorbed`] and [`refused_before_step`], and [`composite_ended`]
+/// keeps them only when the plan Failed on a refused step, moving the trace
+/// into `ended_on` (the only trace a settlement reads) and the code into the
+/// plan cell's `withheld_code`; otherwise it drops them and empties
+/// `ended_on`. A step whose trace was never noted leaves no trace, never an
+/// earlier step's.
 pub(crate) async fn step<F: std::future::Future>(future: F) -> F::Output {
     let cell = DeliveryFacts {
         lone_target: true,
-        ..DeliveryFacts::default()
+        ..nested_cell()
     };
-    let (output, refused) = FACTS
+    let (output, (refused, folded, error_of), (trace, withheld)) = FACTS
         .scope(RefCell::new(cell), async {
             let output = future.await;
-            let refused = FACTS.with(|cell| cell.borrow().effect == ResponseEffect::Refused);
-            (output, refused)
+            let ended = FACTS.with(|cell| {
+                let cell = cell.borrow();
+                (
+                    (cell.refused(), cell.folded, cell.error_of),
+                    (cell.noted_trace.clone(), cell.withheld_code),
+                )
+            });
+            (output, ended.0, ended.1)
         })
         .await;
     with(|facts| {
@@ -167,6 +339,13 @@ pub(crate) async fn step<F: std::future::Future>(future: F) -> F::Output {
         } else {
             LastStep::Settled
         };
+        // Only the latest step's fold: a later step replaces it, and so
+        // does whether the step's error wraps it (the bridge's -32003 inside
+        // a single execute), which the delivered error then counts as.
+        facts.last_step_folded = folded;
+        facts.error_of = error_of;
+        facts.last_step_trace = trace;
+        facts.last_step_withheld = withheld;
     });
     output
 }
@@ -175,50 +354,144 @@ pub(crate) async fn step<F: std::future::Future>(future: F) -> F::Output {
 /// refusal of a step's arguments, a resumed chain's pending step): the
 /// composite now ends on that refusal unless it carries on past it.
 pub(crate) fn refused_before_step() {
-    with(|facts| facts.last_step = LastStep::Refused);
+    with(|facts| {
+        facts.last_step = LastStep::Refused;
+        forget_last_step(facts);
+    });
 }
 
 /// The composite carried on past its latest step's failure (a playbook's
 /// `continue`, or its `retry` once attempts run out): that step's refusal is
 /// no longer what the composite can end on.
 pub(crate) fn step_absorbed() {
-    with(|facts| facts.last_step = LastStep::Settled);
+    with(|facts| {
+        facts.last_step = LastStep::Settled;
+        // A failure carried past and not reported is not the answer's, and
+        // the wrapper built for it is not what is delivered.
+        facts.last_step_folded = None;
+        facts.error_of = ErrorOf::Own;
+        forget_last_step(facts);
+    });
 }
 
-/// How a composite ended.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum CompositeEnd {
-    Succeeded,
-    /// In an error, or a tool error result.
-    Failed,
-}
-
-impl CompositeEnd {
-    /// `Failed` for an error or a tool error result (`isError: true`).
-    pub(crate) fn of(result: &crate::Result<Value>) -> Self {
-        match result {
-            Ok(answer) if !crate::protocol::cacheable::is_error(answer) => Self::Succeeded,
-            _ => Self::Failed,
+/// The composite's latest step was a tool result reporting its own failure,
+/// which the composite wraps in an error of its own (a playbook's
+/// `tool_error`): the step's fold if it had one, else the tool's failure,
+/// the backend's; the wrapper is counted as that step's.
+pub(crate) fn step_tool_failed() {
+    with(|facts| {
+        if facts.last_step_folded.is_none() {
+            facts.last_step_folded = Some(RpcError {
+                code: crate::error::rpc_codes::INTERNAL_ERROR,
+                origin: Origin::Backend,
+            });
         }
-    }
+        facts.error_of = ErrorOf::EndedStep {
+            code: crate::error::rpc_codes::INTERNAL_ERROR,
+        };
+    });
+}
 
-    /// `Failed` for an error: a composite whose output is not a tool result.
-    #[cfg(test)]
-    pub(crate) fn of_outcome<T>(result: &crate::Result<T>) -> Self {
-        if result.is_err() {
-            Self::Failed
-        } else {
-            Self::Succeeded
+/// Note a failure this delivery's answer carries folded into a tool result
+/// (an `isError` result the gateway made of a dispatch failure, or one it
+/// wrote itself): the error count reads it when the answer has no error of
+/// its own. The worst noted wins.
+pub(crate) fn folded(marker: RpcError) {
+    with(|facts| {
+        facts.folded = worst(facts.folded, Some(marker));
+        if marker.origin == Origin::Gateway {
+            facts.withheld_code = Some(marker.code);
         }
+    });
+}
+
+/// [`folded`] for an `isError` result the gateway wrote itself (a refusal
+/// answered as a tool result): counted as the gateway's, with `code`.
+pub(crate) fn gateway_folded(code: i32) {
+    folded(RpcError {
+        code,
+        origin: Origin::Gateway,
+    });
+}
+
+/// The composite's answer carries its latest step's outcome (a playbook
+/// reporting a step it continued past, a single-tool execute delivering its
+/// step's answer as its own): `error`, the step's typed failure, unless it
+/// wraps the step's fold (`wrapped_step`, `step_tool_failed`) or there is
+/// none; then the step's fold. A typed error that replaced the step's folded
+/// answer (a gate's refusal) is counted as itself. Call before
+/// [`step_absorbed`].
+pub(crate) fn step_carried(error: Option<&crate::Error>) {
+    with(|facts| {
+        let fold = facts.last_step_folded.take();
+        let own = error.map(|e| RpcError {
+            code: e.to_rpc_code(),
+            origin: e.origin(),
+        });
+        let carried = match facts.error_of {
+            ErrorOf::EndedStep { .. } => fold.or(own),
+            ErrorOf::Own => own.or(fold),
+        };
+        facts.folded = worst(facts.folded, carried);
+    });
+}
+
+/// The error about to be delivered wraps the step the composite ended on (a
+/// playbook's `tool_error`, a chain's step failure, the bridge's refusal):
+/// it is counted with the origin of the failure folded into this delivery.
+pub(crate) fn wrapped_step(code: i32) {
+    with(|facts| facts.error_of = ErrorOf::EndedStep { code });
+}
+
+/// Stamp what this delivery's facts say about folded failures on `frame`,
+/// where the frame is finalised for delivery: a frame with no error carries
+/// the fold; a frame whose error is still the wrapper of the step the
+/// composite ended on (same code) is counted with that fold's origin. A
+/// frame's own error otherwise wins, a replacing one included.
+pub(crate) fn stamp_folded(frame: &mut crate::protocol::JsonRpcResponse) {
+    let Ok((folded, error_of)) = FACTS.try_with(|cell| {
+        let cell = cell.borrow();
+        (cell.folded, cell.error_of)
+    }) else {
+        return;
+    };
+    if frame.error.is_none() {
+        frame.wire_meta.folded = folded;
+    } else if let ErrorOf::EndedStep { code } = error_of
+        && frame.error.as_ref().is_some_and(|e| e.code == code)
+        && !frame.wire_meta.delivery_refusal
+        && let Some(folded) = folded
+    {
+        frame.wire_meta.origin = folded.origin;
     }
 }
+
+mod composite;
+use composite::forget_last_step;
+pub(crate) use composite::{CompositeEnd, note_step_trace};
 
 /// The composite ends as `end`. It records `refused` when it fails while its
-/// latest step's refusal still stands: the step it ends on was refused.
+/// latest step's refusal still stands: the step it ends on was refused. That
+/// step's record trace and code are kept then, and dropped otherwise ([`step`]).
 pub(crate) fn composite_ended(end: CompositeEnd) {
     with(|facts| {
         if end == CompositeEnd::Failed && facts.last_step == LastStep::Refused {
             facts.effect = facts.effect.max(ResponseEffect::Refused);
+            // The refusing gate's own code, which the plan's wrapper error
+            // would otherwise replace in the settlement record.
+            if let Some(code) = facts.last_step_withheld.take() {
+                facts.withheld_code = Some(code);
+            }
+            facts.ended_on = facts.last_step_trace.take();
+        } else {
+            forget_last_step(facts);
+            facts.ended_on = None;
+        }
+        // A composite that fails ends on its latest step's fold; one that
+        // succeeds carries only the failures it reported.
+        let ended_fold = facts.last_step_folded.take();
+        if end == CompositeEnd::Failed {
+            facts.folded = worst(facts.folded, ended_fold);
         }
     });
 }
@@ -244,6 +517,15 @@ pub(crate) fn raise(effect: ResponseEffect) {
     with(|facts| facts.effect = facts.effect.max(effect));
 }
 
+/// A stored task's answer refused by `refused_by`'s check: raise `Refused`
+/// and keep the check for the delivery record; the first one stands.
+pub(crate) fn refused_by(refused_by: crate::security::decision_record::RefusedBy) {
+    with(|facts| {
+        facts.effect = facts.effect.max(ResponseEffect::Refused);
+        facts.refused_by.get_or_insert(refused_by);
+    });
+}
+
 /// A gateway refusal decided at a delivering site: raise `Refused` and hand
 /// the error on unchanged.
 pub(crate) fn refused<E>(error: E) -> E {
@@ -254,16 +536,119 @@ pub(crate) fn refused<E>(error: E) -> E {
 /// Where an error becomes the delivered frame: a refusal a gateway decision
 /// sealed ([`crate::Error::GatewayRefused`]) raises `Refused`, and so does an
 /// authorization refusal ([`crate::Error::Forbidden`]), a decision about the
-/// caller wherever it was built, whatever its code. Every `Forbidden` site is
-/// classified in `boundary_pins/delivery_refusals.tsv`. Any other error raises
-/// nothing.
+/// caller wherever it was built, whatever its code, and the scrub's refusal
+/// of an answer that echoed an injected value ([`echo_refusal_delivered`]).
+/// Every `Forbidden` site is classified in
+/// `boundary_pins/delivery_refusals.tsv`. Any other error raises nothing.
 pub(crate) fn outlet(error: &crate::Error) {
+    echo_refusal_delivered(error);
     if matches!(
         error,
         crate::Error::GatewayRefused { .. } | crate::Error::Forbidden { .. }
     ) {
         raise(ResponseEffect::Refused);
     }
+}
+
+/// Where a backend's error becomes the delivered answer outside [`outlet`]
+/// (a tool result, a forwarded error, a composite step): `Refused` when the
+/// error is the scrub's refusal of an answer that echoed an injected value
+/// and this cell's scrub built one. The error alone is not enough: a backend
+/// can send the same code and text, which the scrub leaves as it is.
+pub(crate) fn echo_refusal_delivered(error: &crate::Error) {
+    if crate::security::needles::is_echo_refusal(error) {
+        with(|facts| {
+            if facts.echo.refusal_built {
+                facts.effect = facts.effect.max(ResponseEffect::Refused);
+            }
+        });
+    }
+}
+
+/// A send of this delivery entered its backend's transport: from here it may
+/// have reached the backend. Recorded before the transport call; a dropped or
+/// panicking call never takes it back.
+pub(crate) fn send_began() {
+    with(|facts| facts.sends.entered += 1);
+}
+
+/// The transport's scrub removed an injected value from something this
+/// backend sent during the call: recorded `rewritten` whether or not the
+/// caller receives it.
+pub(crate) fn echo_redacted() {
+    with(|facts| {
+        facts
+            .echo
+            .redacted
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+    });
+}
+
+/// The transport's scrub replaced an answer with its refusal. It is
+/// recorded `refused` only where that refusal is delivered
+/// ([`echo_refusal_delivered`]).
+pub(crate) fn echo_refusal_built() {
+    with(|facts| facts.echo.refusal_built = true);
+}
+
+/// Run one transport call of this delivery as a counted send: counted when
+/// it is first polled, taken back only if it returns an error that proves
+/// nothing was sent. A call dropped before it returns stays counted.
+pub(crate) async fn counted_send<T>(
+    send: impl std::future::Future<Output = crate::Result<T>>,
+) -> crate::Result<T> {
+    send_began();
+    let result = send.await;
+    if let Err(error) = &result {
+        send_returned(error);
+    }
+    result
+}
+
+/// The transport call [`send_began`] counted returned an error that proves
+/// nothing was sent (`is_pre_dispatch`), so it is taken back.
+pub(crate) fn send_returned(error: &crate::Error) {
+    if error.is_pre_dispatch() {
+        with(|facts| facts.sends.entered = facts.sends.entered.saturating_sub(1));
+    }
+}
+
+/// The backend's send refused this call before any byte left: the fact only.
+/// The settlement that delivers the refusal raises `Refused` ([`unsent`]).
+pub(crate) fn refused_before_send<E>(error: E) -> E {
+    with(|facts| facts.sends.refused_before = true);
+    error
+}
+
+/// [`refused_before_send`] on the error of a pre-send step's `result`.
+pub(crate) fn before_send<T>(result: crate::Result<T>) -> crate::Result<T> {
+    result.map_err(refused_before_send)
+}
+
+/// Whether `error` ends a delivery that provably sent nothing: no send of it
+/// is still counted, and the error is one the gateway raised before the
+/// backend (`is_pre_dispatch`) or a refusal its send recorded. The one
+/// predicate every settlement reads before it releases a key.
+pub(crate) fn unsent(error: &crate::Error) -> bool {
+    nothing_sent() && (error.is_pre_dispatch() || refused_before_send_seen())
+}
+
+/// Whether no send of this delivery is still counted: none entered a
+/// transport, or each that did returned a never-sent error. Outside a cell
+/// nothing is known, so `true`, and [`unsent`] falls back to the error's own
+/// verdict.
+pub(crate) fn nothing_sent() -> bool {
+    FACTS
+        .try_with(|cell| cell.borrow().sends.entered == 0)
+        .unwrap_or(true)
+}
+
+/// Whether this delivery's send refused it before any byte left, read by the
+/// settlement that raises `Refused` for it.
+pub(crate) fn refused_before_send_seen() -> bool {
+    FACTS
+        .try_with(|cell| cell.borrow().sends.refused_before)
+        .unwrap_or(false)
 }
 
 /// This delivery answers a tools/call that names exactly one target.
@@ -323,7 +708,8 @@ pub(crate) fn unvouched() {
 /// refusal, read off what is actually sent, so no later rebuild can hide
 /// it. A counted annotation raises `Annotated` in the cell where the gateway
 /// notes it. An unvouched delivery still records a refusal this request
-/// made, and omits everything else.
+/// made, and `rewritten` when the scrub removed an injected value during the
+/// call, and omits everything else.
 pub(crate) fn record_fields(
     facts: Option<&DeliveryFacts>,
     frame_refused: bool,
@@ -332,17 +718,26 @@ pub(crate) fn record_fields(
     let Some(facts) = facts else {
         return;
     };
-    let mut effect = facts.effect;
+    let mut effect = facts.effect();
     if frame_refused {
         effect = effect.max(ResponseEffect::Refused);
     }
     if !facts.vouched {
-        if effect == ResponseEffect::Refused {
+        // No one step's facts describe what a composite delivers, but a
+        // refusal it ends on does, and so does the scrub's redaction fact,
+        // which is the whole call's.
+        let echoed = facts
+            .echo
+            .redacted
+            .load(std::sync::atomic::Ordering::SeqCst);
+        if effect == ResponseEffect::Refused || echoed {
             fields.insert("response_effect".into(), effect.as_str().into());
+            insert_refused_by(facts, fields);
         }
         return;
     }
     fields.insert("response_effect".into(), effect.as_str().into());
+    insert_refused_by(facts, fields);
     if !facts.scanned {
         fields.insert("response_findings".into(), Value::Null);
         return;
@@ -368,9 +763,37 @@ pub(crate) fn record_fields(
     }
 }
 
+/// `refused_by`, beside `response_effect` in every branch that writes it.
+fn insert_refused_by(facts: &DeliveryFacts, fields: &mut Map<String, Value>) {
+    insert_notification_refused_by(facts.refused_by.as_ref(), fields);
+}
+
+/// `refused_by` on a delivery record, when a check refused the stored
+/// output: an answer's (from its cell) or a notification frame's.
+pub(crate) fn insert_notification_refused_by(
+    refused_by: Option<&crate::security::decision_record::RefusedBy>,
+    fields: &mut Map<String, Value>,
+) {
+    if let Some(refused_by) = refused_by {
+        // invariant: a kind and an optional string always serialise.
+        let value = serde_json::to_value(refused_by).expect("RefusedBy serialises");
+        fields.insert("refused_by".into(), value);
+    }
+}
+
+/// Every stored answer leaving the gateway is scrubbed against the values
+/// current when it is sent; the exits are enumerated.
+#[cfg(test)]
+#[path = "stored_scrub_pin_tests.rs"]
+mod stored_scrub_pin_tests;
+
 #[cfg(test)]
 #[path = "delivery_facts_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "delivery_facts_refused_by_tests.rs"]
+mod refused_by_tests;
 
 #[cfg(test)]
 #[path = "delivery_facts_withheld_tests.rs"]
@@ -379,3 +802,15 @@ mod withheld_tests;
 #[cfg(test)]
 #[path = "delivery_facts_composite_tests.rs"]
 mod composite_tests;
+
+#[cfg(test)]
+#[path = "delivery_facts_send_tests.rs"]
+mod send_tests;
+
+#[cfg(test)]
+#[path = "delivery_facts_calls_tests.rs"]
+mod calls_tests;
+
+#[cfg(test)]
+#[path = "delivery_facts_fold_tests.rs"]
+mod fold_tests;

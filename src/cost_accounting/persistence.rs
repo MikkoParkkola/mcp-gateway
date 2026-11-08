@@ -11,6 +11,41 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
+/// A name-to-USD map read entry by entry: an entry that is not a number
+/// (a NaN or infinity is saved as `null`, or a hand edit) is dropped with a
+/// warning, so one bad figure never costs the whole file and its spend.
+#[cfg(feature = "cost-governance")]
+fn lenient_figures<'de, D>(deserializer: D) -> Result<HashMap<String, f64>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    // The map itself may be damaged too (`null`, or not an object): read it
+    // as no figures rather than fail the file.
+    let serde_json::Value::Object(raw) = serde_json::Value::deserialize(deserializer)? else {
+        tracing::warn!(
+            target: "mcp_gateway::cost_accounting::enforcer",
+            file = "costs.json",
+            "Saved starting figures are not a map; restoring none"
+        );
+        return Ok(HashMap::new());
+    };
+    Ok(raw
+        .into_iter()
+        .filter_map(|(name, value)| {
+            let figure = value.as_f64();
+            if figure.is_none() {
+                tracing::warn!(
+                    target: "mcp_gateway::cost_accounting::enforcer",
+                    file = "costs.json",
+                    name,
+                    "Saved starting figure is not a number; restoring it as none"
+                );
+            }
+            figure.map(|usd| (name, usd))
+        })
+        .collect())
+}
+
 // ── PersistedCosts ────────────────────────────────────────────────────────────
 
 /// Today's spend as of `saved_at`, persisted so a restart keeps the daily
@@ -37,6 +72,102 @@ pub struct PersistedCosts {
     /// value also counts a UTC day, with a warning, so its spend is kept.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub day_basis: Option<String>,
+    /// The starting figure (USD) a reload charged each per-tool name it
+    /// started budgeting with that day, zeros included: kept apart from
+    /// `tool_totals`, never added into them on restore (ADR-023).
+    #[serde(default, deserialize_with = "lenient_figures")]
+    pub tool_estimate: HashMap<String, f64>,
+    /// The same for per-key names, apart from `key_totals`.
+    #[serde(default, deserialize_with = "lenient_figures")]
+    pub key_estimate: HashMap<String, f64>,
+    /// Every per-tool name budgeted since the saving process started, by its
+    /// startup config or a published generation. `None` in a file saved
+    /// before this field existed: such a file seeds nothing at restore.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "lenient_names"
+    )]
+    pub tool_owned: Option<Vec<String>>,
+    /// The same for per-key names.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "lenient_names"
+    )]
+    pub key_owned: Option<Vec<String>>,
+    /// The overflow total (USD) when each per-tool row was created that day,
+    /// for rows created after the overflow began. `None` in a file saved
+    /// before this field existed; a name missing from a present map was
+    /// created with no overflow to charge.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "lenient_born"
+    )]
+    pub tool_born: Option<HashMap<String, f64>>,
+    /// The same for per-key rows.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "lenient_born"
+    )]
+    pub key_born: Option<HashMap<String, f64>>,
+}
+
+/// A saved list of names, or none: a damaged list restores as a file saved
+/// before the list existed (nothing seeded), never failing the file.
+#[cfg(feature = "cost-governance")]
+fn lenient_names<'de, D>(deserializer: D) -> Result<Option<Vec<String>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let serde_json::Value::Array(raw) = serde_json::Value::deserialize(deserializer)? else {
+        tracing::warn!(
+            target: "mcp_gateway::cost_accounting::enforcer",
+            file = "costs.json",
+            "Saved budgeted names are not a list; restoring none"
+        );
+        return Ok(None);
+    };
+    // One entry that is not a name damages the whole list: a name dropped
+    // from it could be seeded as never budgeted, so none is trusted.
+    let names: Option<Vec<String>> = raw
+        .into_iter()
+        .map(|v| v.as_str().map(str::to_owned))
+        .collect();
+    if names.is_none() {
+        tracing::warn!(
+            target: "mcp_gateway::cost_accounting::enforcer",
+            file = "costs.json",
+            "Saved budgeted names hold an entry that is not a name; restoring none"
+        );
+    }
+    Ok(names)
+}
+
+/// A present creation-figure map; presence is kept, since an absent map and
+/// an empty one restore differently. A damaged map reads as absent, and an
+/// entry that is not a number is kept as NaN: the restore then charges that
+/// name the saved overflow, the upper bound, never less.
+#[cfg(feature = "cost-governance")]
+fn lenient_born<'de, D>(deserializer: D) -> Result<Option<HashMap<String, f64>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let serde_json::Value::Object(raw) = serde_json::Value::deserialize(deserializer)? else {
+        tracing::warn!(
+            target: "mcp_gateway::cost_accounting::enforcer",
+            file = "costs.json",
+            "Saved creation figures are not a map; charging the saved overflow"
+        );
+        return Ok(None);
+    };
+    Ok(Some(
+        raw.into_iter()
+            .map(|(name, value)| (name, value.as_f64().unwrap_or(f64::NAN)))
+            .collect(),
+    ))
 }
 
 /// Spend for a single tool on the day of `saved_at`.
@@ -86,6 +217,15 @@ pub(crate) struct EnforcerSaveSnapshot {
     pub(crate) key_overflow_usd: f64,
     /// Copied into `PersistedCosts.day_basis`.
     pub(crate) day_basis: Option<String>,
+    /// Copied into `PersistedCosts.tool_estimate` / `key_estimate`.
+    pub(crate) tool_estimate: HashMap<String, f64>,
+    pub(crate) key_estimate: HashMap<String, f64>,
+    /// Copied into `PersistedCosts.tool_owned` / `key_owned`.
+    pub(crate) tool_owned: Vec<String>,
+    pub(crate) key_owned: Vec<String>,
+    /// Copied into `PersistedCosts.tool_born` / `key_born`.
+    pub(crate) tool_born: HashMap<String, f64>,
+    pub(crate) key_born: HashMap<String, f64>,
 }
 
 #[cfg(feature = "cost-governance")]
@@ -104,6 +244,12 @@ impl EnforcerSaveSnapshot {
             tool_overflow_usd: snap.tool_overflow_usd,
             key_overflow_usd: snap.key_overflow_usd,
             day_basis,
+            tool_estimate: snap.tool_estimate,
+            key_estimate: snap.key_estimate,
+            tool_owned: Vec::new(),
+            key_owned: Vec::new(),
+            tool_born: HashMap::new(),
+            key_born: HashMap::new(),
         }
     }
 }

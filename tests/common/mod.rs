@@ -7,6 +7,7 @@
 //! harness layout, not a defect in either suite.
 #![allow(dead_code)]
 
+pub mod cert_identity;
 mod record_key;
 pub use record_key::RECORD_KEY;
 
@@ -23,7 +24,6 @@ pub use mcp_gateway::gateway::test_helpers::{
     AppState, MetaMcp, StoreLimits, auth_state, create_router, open_runtime,
 };
 pub use mcp_gateway::mtls::{MtlsConfig, MtlsPolicy};
-pub use mcp_gateway::security::{ToolPolicy, ToolPolicyConfig};
 pub use serde_json::{Value, json};
 pub use std::sync::Arc;
 pub use tower::ServiceExt;
@@ -154,7 +154,6 @@ pub async fn state(f: Fixture) -> (Arc<AppState>, tempfile::TempDir) {
         proxy_manager,
         streaming_config: config.streaming.clone(),
         key_server: None,
-        tool_policy: Arc::new(ToolPolicy::from_config(&ToolPolicyConfig::default())),
         mtls_policy: Arc::new(MtlsPolicy::from_config(&MtlsConfig::default())),
         trust_configured_backends: false,
         inflight: Arc::new(tokio::sync::Semaphore::new(100)),
@@ -173,6 +172,7 @@ pub async fn state(f: Fixture) -> (Arc<AppState>, tempfile::TempDir) {
         )),
         export_status: None,
         transparency_log: None,
+        governance_log: None,
         dashboard_bootstrap: Arc::new(mcp_gateway::gateway::auth::DashboardBootstrap::new()),
         tasks,
         task_executor,
@@ -254,11 +254,7 @@ pub async fn post_proven(
         .expect("request");
     request
         .extensions_mut()
-        .insert(mcp_gateway::mtls::identity::CertIdentity {
-            common_name: Some(subject.to_string()),
-            display_name: "cosmetic".to_string(),
-            ..Default::default()
-        });
+        .insert(cert_identity::cert_identity(Some(subject), None));
     let response = create_router(Arc::clone(state))
         .oneshot(request)
         .await

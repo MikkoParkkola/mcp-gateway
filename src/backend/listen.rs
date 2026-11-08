@@ -156,18 +156,7 @@ impl Backend {
                 let backend = Arc::clone(self);
                 #[cfg(test)]
                 self.events_resolutions.fetch_add(1, Ordering::SeqCst);
-                let task = tokio::spawn(async move {
-                    let started = backend
-                        .admitted_start()
-                        .await
-                        .inspect_err(|error| {
-                            tracing::debug!(backend = %backend.name, %error, "events: start failed");
-                        })
-                        .is_ok();
-                    // Held while this one was stored, so it is this one cleared.
-                    *backend.events_resolution.lock() = None;
-                    started
-                });
+                let task = tokio::spawn(Self::run_events_resolution(backend));
                 let resolution = async move { task.await.unwrap_or(false) }.boxed().shared();
                 *running = Some(resolution.clone());
                 resolution
@@ -176,6 +165,22 @@ impl Backend {
         tokio::time::timeout(self.config.timeout, resolution)
             .await
             .unwrap_or(false)
+    }
+
+    /// The spawned start behind `resolve_for_events`. Its own function so
+    /// the log line it writes is not lexically under the `running` guard
+    /// the spawn happens under; the task runs after that guard is gone.
+    async fn run_events_resolution(backend: Arc<Self>) -> bool {
+        let started = backend
+            .admitted_start()
+            .await
+            .inspect_err(|error| {
+                tracing::debug!(backend = %backend.name, %error, "events: start failed");
+            })
+            .is_ok();
+        // Held while this one was stored, so it is this one cleared.
+        *backend.events_resolution.lock() = None;
+        started
     }
 
     /// The start a client request runs, without the request: the slot's
@@ -223,6 +228,10 @@ impl Backend {
         // permitting a resend for a tool that is no longer read-only. Cleared
         // under the cache's guard, so a fill stored after keeps its own set.
         entry.tools_cache.invalidate_then(|| {
+            // The effect's listed names first, so a reader between these
+            // clears never sees a listed name whose hints are already gone.
+            entry.effect_listed.write().clear();
+            entry.write_declared.write().clear();
             entry.resend_permitted.write().clear();
             // MIK-8393: the cache's admission set is derived from the same list.
             entry.read_only_declared.write().clear();

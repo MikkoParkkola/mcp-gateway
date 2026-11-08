@@ -64,6 +64,8 @@ pub(crate) struct McpChildren {
     /// Bumped on every unload, reload and quarantine; see
     /// `CapabilityExecutionContext::mcp_generation`.
     generations: Mutex<HashMap<String, u64>>,
+    /// The gateway's stop deadline, joined by every child backend built here.
+    pub(super) stop_deadline: std::sync::OnceLock<Arc<crate::transport::StopDeadline>>,
 }
 
 /// Decrements a child's in-flight count when a call ends, however it ends.
@@ -136,6 +138,9 @@ impl McpChildren {
                 stale.extend(map.remove(&victim));
             }
             let (backend, workdir) = start()?;
+            if let Some(deadline) = self.stop_deadline.get() {
+                let _ = backend.stop_deadline.set(Arc::clone(deadline));
+            }
             map.insert(
                 key.clone(),
                 Child {
@@ -160,7 +165,9 @@ impl McpChildren {
             id: child.id,
         };
         drop(map);
-        stop_all(stale);
+        // A changed config or the least recently used idle child: healthy, so
+        // the graceful stop.
+        stop_all(stale, ChildEnd::Graceful);
         Ok(lease)
     }
 
@@ -169,20 +176,28 @@ impl McpChildren {
     pub(crate) fn evict(&self, idle: Duration, loaded: &dyn Fn(&str) -> bool) {
         let now = Instant::now();
         let mut map = self.map.lock();
-        let gone: Vec<_> = map
+        // An unloaded capability's child goes even mid-call, and at once: a
+        // revocation. An idle one only when it has no call in flight, and
+        // gracefully.
+        let unloaded: Vec<_> = map
+            .keys()
+            .filter(|(cap, _)| !loaded(cap))
+            .cloned()
+            .collect();
+        let idle_keys: Vec<_> = map
             .iter()
             .filter(|((cap, _), child)| {
-                // An unloaded capability's child goes even mid-call; an idle one
-                // only when it has no call in flight.
-                !loaded(cap)
-                    || (child.in_flight.load(Ordering::Acquire) == 0
-                        && now.duration_since(*child.last_used.lock()) >= idle)
+                loaded(cap)
+                    && child.in_flight.load(Ordering::Acquire) == 0
+                    && now.duration_since(*child.last_used.lock()) >= idle
             })
             .map(|(k, _)| k.clone())
             .collect();
-        let stale: Vec<Child> = gone.iter().filter_map(|k| map.remove(k)).collect();
+        let revoked: Vec<Child> = unloaded.iter().filter_map(|k| map.remove(k)).collect();
+        let idled: Vec<Child> = idle_keys.iter().filter_map(|k| map.remove(k)).collect();
         drop(map);
-        stop_all(stale);
+        stop_all(revoked, ChildEnd::Now);
+        stop_all(idled, ChildEnd::Graceful);
     }
 
     /// Start the once-a-minute idle sweep. It holds only a `Weak`, so it
@@ -241,7 +256,8 @@ impl McpChildren {
             None
         };
         drop(map);
-        stop_all(gone.into_iter().collect());
+        // It timed out: unresponsive, so the kill at once.
+        stop_all(gone.into_iter().collect(), ChildEnd::Now);
     }
 
     /// Mark the caller's child busy, as a call in flight would.
@@ -299,17 +315,33 @@ impl McpChildren {
     }
 }
 
-/// Stop each child's backend (which kills its process tree), then drop its
+/// How a stopped child's process tree ends.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ChildEnd {
+    /// Healthy (idle, or its config changed): the MCP stdio order, within
+    /// its backend's close budget.
+    Graceful,
+    /// Revoked or unresponsive: the kill at once.
+    Now,
+}
+
+/// Stop each child's backend (which ends its process tree), then drop its
 /// directory. Runs off the caller's path.
-fn stop_all(children: Vec<Child>) {
+fn stop_all(children: Vec<Child>, end: ChildEnd) {
     // Each child stops on the runtime that drives it: the current one may be
     // entered but never driven, and a stop spawned there would never run.
     let current = tokio::runtime::Handle::try_current().ok();
     for child in children {
-        // First, synchronously and without any runtime: end every process tree
-        // the child's backend owns, pooled or held by a busy caller. The async
-        // stop below may never run on an idle or dropped runtime (MIK-7923).
-        child.backend.retire_now();
+        // First, synchronously and without any runtime: hand every process tree
+        // the child's backend owns, pooled or held by a busy caller, to the
+        // reaper. The async stop below may never run on an idle or dropped
+        // runtime (MIK-7923).
+        match end {
+            ChildEnd::Graceful => child
+                .backend
+                .hand_over_now(child.backend.budgets.close_stage),
+            ChildEnd::Now => child.backend.retire_now(),
+        }
         let Some(handle) = child.runtime.clone().or_else(|| current.clone()) else {
             continue;
         };
@@ -340,10 +372,10 @@ pub(crate) fn principal(
     if let Some(subject) = context.caller_identity.as_ref() {
         return Ok(format!(
             "grant:{}:{}:{}:{}",
-            subject.authority.len(),
-            subject.authority,
-            subject.subject.len(),
-            subject.subject
+            subject.authority().len(),
+            subject.authority(),
+            subject.subject().len(),
+            subject.subject()
         ));
     }
     // An API-key caller named by nothing above: its credential owner key
@@ -562,7 +594,8 @@ impl CapabilityExecutor {
         params: &Value,
         context: &CapabilityExecutionContext,
     ) -> Result<Value> {
-        super::cli::refuse_egress(capability)?;
+        super::cli::refuse_egress(capability)
+            .inspect_err(|_| crate::gateway::delivery_facts::refused_while_vouched())?;
         let params = super::cli::confine_paths(capability, params, &self.process_policy.files)?;
         let Selected {
             tool,
@@ -775,3 +808,7 @@ impl super::CapabilityExecutor {
             .evict(Duration::MAX, &|name| name != capability);
     }
 }
+
+#[cfg(test)]
+#[path = "mcp_presend_tests.rs"]
+mod presend_tests;

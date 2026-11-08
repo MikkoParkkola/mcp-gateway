@@ -8,7 +8,7 @@
 //! builds the state, a test builds the state with a start it chooses, and
 //! nothing falls back to "the first request".
 
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 use std::time::Instant;
 
 use chrono::{DateTime, Utc};
@@ -42,6 +42,12 @@ impl ProcessStart {
         }
     }
 
+    #[cfg(feature = "metrics")]
+    /// The wall-clock start; `None` when the host clock could not be read.
+    pub(crate) fn wall(&self) -> Option<DateTime<Utc>> {
+        self.wall
+    }
+
     /// A start a test chooses.
     #[cfg(test)]
     pub(crate) fn at(wall: Option<DateTime<Utc>>, mono: Instant) -> Self {
@@ -63,7 +69,17 @@ pub struct ProcessFacts {
     /// Set once, after the startup backend pass has finalised what the
     /// runtime policy denies. Later denials stay on `/ui/api/refusals`.
     refused_at_start: OnceLock<Vec<Refusal>>,
+    /// The read slots Activity reads take (see [`MAX_CONCURRENT_READS`]). A live
+    /// limit, not a fact: it is here because this value is built once per
+    /// process in production and once per state in a test, so one test's reads
+    /// never hold another's slots.
+    activity_reads: Arc<tokio::sync::Semaphore>,
 }
+
+/// The most Activity reads (list, receipt, export, live-stream pages) running
+/// at once. Each is bounded by its own budget; this bounds how many budgets run
+/// together, so callers cannot multiply them into the disk and the blocking pool.
+pub(crate) const MAX_CONCURRENT_READS: usize = 4;
 
 #[cfg_attr(
     not(feature = "webui"),
@@ -77,7 +93,13 @@ impl ProcessFacts {
             upgrade,
             host_name: resolve_host_name(),
             refused_at_start: OnceLock::new(),
+            activity_reads: Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_READS)),
         }
+    }
+
+    /// The read slots Activity reads take, [`MAX_CONCURRENT_READS`] of them.
+    pub(crate) fn activity_reads(&self) -> &Arc<tokio::sync::Semaphore> {
+        &self.activity_reads
     }
 
     /// Whole seconds since the process started.

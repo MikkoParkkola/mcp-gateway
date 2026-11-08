@@ -218,6 +218,9 @@ impl PlaybookEngine {
                         ErrorStrategy::Abort if sent => return Err(e.with_may_have_run()),
                         ErrorStrategy::Abort => return Err(e),
                         ErrorStrategy::Continue | ErrorStrategy::Retry => {
+                            // Reported in `step_errors`: the answer carries this
+                            // step's failure, counted once with its origin.
+                            crate::gateway::delivery_facts::step_carried(Some(&e));
                             // Carried on past: this step no longer ends the plan.
                             crate::gateway::delivery_facts::step_absorbed();
                             // Both arms null-fill and carry on, so both must say
@@ -344,6 +347,7 @@ async fn dispatch(
             // apart from a second send of whatever the first one did (D1).
             Ok(result) if is_tool_error(&result) => {
                 warn!(step = %step.name, "Step failed: the tool reported an error");
+                crate::gateway::delivery_facts::step_tool_failed();
                 return Err(tool_error(step, &result));
             }
             Ok(result) => return Ok(result),
@@ -359,10 +363,14 @@ async fn dispatch(
                 // variant instead of arriving as an opaque error. A firewall
                 // refusal is as final as a denial (MIK-8325): the gate's verdict
                 // on the same answer will not change, and a retry calls the
-                // backend again.
+                // backend again. A gateway decision's refusal (a switched-off
+                // server, a spent budget) is as final, though it reads as
+                // never sent: re-sending it only repeats the refusal.
                 let refused = matches!(
                     e,
-                    crate::Error::Forbidden { .. } | crate::Error::ResponseFirewallRefused
+                    crate::Error::Forbidden { .. }
+                        | crate::Error::GatewayRefused { .. }
+                        | crate::Error::ResponseFirewallRefused
                 );
                 warn!(step = %step.name, error = %e, refused, "Step failed");
                 // Re-sent only when the error was raised before the request

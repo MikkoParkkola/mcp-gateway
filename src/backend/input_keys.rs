@@ -7,9 +7,7 @@ use std::sync::Arc;
 
 use serde_json::Value;
 
-use super::fill_check::{
-    Completeness, TEXT_UNAVAILABLE, is_transport_failure, text_absent, text_partial,
-};
+use super::fill_check::{Completeness, TEXT_UNAVAILABLE, text_absent, text_partial};
 use super::{Backend, PoolKey};
 use crate::config::InputSchemaEnforcement;
 use crate::transport::LentCredential;
@@ -338,26 +336,15 @@ impl Backend {
                 Some(now) => now,
                 None => return cached.as_ref().map_or(Ok(None), held),
             },
-            // Raised only by the fill's own failsafe gate or slot admission
-            // (#2300): no transport constructs any of these variants.
-            Err(
-                e @ (crate::Error::CircuitOpen { .. }
-                | crate::Error::RateLimited(_)
-                | crate::Error::IdentitySlotsExhausted { .. }),
-            ) => {
-                return Err(e);
-            }
-            // A3: under `closed`, a backend that could not be reached answers
-            // as a failed dispatch would (and is accounted as one). A cooldown
-            // fast-fail answers as the failure it stands in for. `standard`
-            // forwards, and the dispatch then fails on its own. A login wait
-            // answers as itself, with its remedy, and is accounted as nothing.
-            Err(e)
-                if mode == InputSchemaEnforcement::Closed
-                    && (is_transport_failure(&e) || e.is_authorization_wait()) =>
-            {
-                return Err(e);
-            }
+            // F13's table (`catalogue_verdict::fill_error_answers`): the fill's
+            // own failsafe gate or slot admission (#2300) and a refusal of the
+            // caller answer as themselves in every mode; A3: under `closed`, a
+            // backend that could not be reached answers as a failed dispatch
+            // would (and is accounted as one), a cooldown fast-fail as the
+            // failure it stands in for, and a login wait as itself with its
+            // remedy, accounted as nothing. `standard` forwards anything else,
+            // and the dispatch then fails on its own.
+            Err(e) if super::catalogue_verdict::fill_error_answers(mode, &e) => return Err(e),
             Err(_) => return Ok(unavailable((mode, lens))),
         };
         // A store voided by a newer list (a list replaced the slot mid-fill)
@@ -468,6 +455,8 @@ impl Backend {
         let safe = prepared.resend_permitted;
         let read_only = prepared.read_only_declared;
         let hint_declared = prepared.hint_declared;
+        let write = prepared.write_declared;
+        let effect_listed = prepared.listed;
         let mut verdicts = prepared.verdicts;
         verdicts.add_unparseable(unparseable);
         let withheld = verdicts.withheld_names();
@@ -476,7 +465,7 @@ impl Backend {
         // own catalogue the page is (a blocked name is per backend).
         let credentialed_shared = matches!(key, PoolKey::Shared) && sent_caller_credential;
         if credentialed_shared || listing == super::descriptor_gate::Listing::Truncated {
-            self.revoke_from_page(&key, &listed, &read_only, &safe);
+            self.revoke_from_page(&key, &listed, (&read_only, &write, &hint_declared), &safe);
             let source = match &key {
                 PoolKey::PerUser { binding } => binding.as_str(),
                 PoolKey::Shared => identity_key.unwrap_or("credentialed"),
@@ -498,8 +487,14 @@ impl Backend {
         let mut logs = None;
         entry.tools_cache.replace(parsed, || {
             logs = Some(self.commit_verdicts(&source, listing, verdicts));
+            // Emptied first and published last: until then no name reads
+            // undeclared from a mix of the old and new sets.
+            entry.effect_listed.write().clear();
             // Display only, so replaced outright: it labels this list.
             *entry.hint_declared.write() = hint_declared;
+            // The declared effect's evidence, from this same list.
+            *entry.write_declared.write() = write;
+            *entry.effect_listed.write() = effect_listed;
             entry
                 .tools_truncated
                 .store(false, std::sync::atomic::Ordering::SeqCst);

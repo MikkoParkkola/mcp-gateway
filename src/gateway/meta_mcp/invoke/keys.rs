@@ -255,6 +255,9 @@ impl MetaMcp {
             backend.as_deref(),
             dispatch_binding.as_deref(),
         );
+        let (be, bind) = (backend.as_deref(), dispatch_binding.as_deref());
+        self.note_declared_effect((server, tool), be, bind);
+        note_dispatch_slot(caller.execution, be, bind);
         // U12: a web UI call runs only as the call the route checked, and a
         // tool this slot did not declare read-only only when confirmed. Here
         // the backend instance and the caller's binding are the dispatched
@@ -299,5 +302,21 @@ impl MetaMcp {
             chained,
             read_only,
         }))
+    }
+}
+
+/// Note on `execution` the slot this dispatch runs under, as the backend
+/// resolves it, kept with a settled answer so its replay reads that slot's
+/// declaration, never the replaying caller's. A dispatch with no backend (a
+/// capability) notes none.
+fn note_dispatch_slot(
+    execution: Option<&crate::gateway::meta_mcp::admission::SyncLease>,
+    backend: Option<&Backend>,
+    binding: Option<&str>,
+) {
+    if let Some(execution) = execution
+        && let Some(backend) = backend
+    {
+        execution.note_effect_slot(backend.slot_key_for(binding));
     }
 }

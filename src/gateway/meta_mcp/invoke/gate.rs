@@ -10,7 +10,6 @@
 //! construction. A name the caller may see and the catalogue lists passes on
 //! untouched.
 
-use crate::error::rpc_codes::INVALID_REQUEST;
 use serde_json::{Value, json};
 
 use super::{GuardedValue, MetaMcp};
@@ -22,7 +21,13 @@ use crate::gateway::meta_mcp::visible::{
     Visibility, Withholding, absent::absent_name, memo::note_denial_code, memo::record_visibility,
     memo::recorded_visibility,
 };
+use crate::identity_propagation::CallerProof;
+use crate::security::decision_record::DecisionKind;
 use crate::{Error, Result};
+
+#[path = "gate_as_undefined.rs"]
+mod as_undefined;
+mod fill_marks;
 
 /// What a shared catalogue says about a name the caller's policy allows.
 enum Shared {
@@ -67,185 +72,6 @@ impl MetaMcp {
                 || (backend.keeps_per_user_catalogues()
                     && recorded_visibility(server, tool) != Some(Visibility::Visible))
             })
-    }
-
-    /// What signing still judges for a target it skipped the policy for: what
-    /// a missing name meets there that its existence does not decide, the
-    /// name's form and the call's attestation, in the policy's order. Only
-    /// the refusals that name it are skipped (amendment A1).
-    ///
-    /// # Errors
-    ///
-    /// The policy's own refusal of a malformed name or a missing attestation.
-    pub(crate) fn check_call_level_policy(
-        &self,
-        arguments: &Value,
-        caller: &MetaMcpCallerContext<'_>,
-    ) -> Result<()> {
-        let tool = crate::gateway::meta_mcp_helpers::extract_required_str(arguments, "tool")?;
-        if let Err(reason) = crate::security::validate_tool_name(tool) {
-            let server =
-                crate::gateway::meta_mcp_helpers::extract_required_str(arguments, "server")?;
-            // Every authorizer passes an empty server or tool, so the policy's
-            // own name check answers it, as it did before A1.
-            if server.is_empty() || tool.is_empty() {
-                return Err(Error::Protocol(format!(
-                    "Invalid tool name '{tool}': {reason}"
-                )));
-            }
-            // As every authorizer refuses a malformed name, and as
-            // `authorize_invocation` answers and audits it: the policy this
-            // call skipped would have, and so does a missing name.
-            let refusal = Error::Forbidden {
-                code: INVALID_REQUEST,
-                status: axum::http::StatusCode::FORBIDDEN.as_u16(),
-                message: reason,
-            };
-            let authorizer = caller.authorizer;
-            crate::gateway::authz::audit_refusal(
-                authorizer.transport(),
-                authorizer.caller_name(),
-                server,
-                tool,
-                &refusal.to_string(),
-            );
-            return Err(refusal);
-        }
-        self.check_attestation(
-            arguments,
-            caller.agent_id.map(crate::security::ProvenAgentId::as_str),
-            "gateway_invoke",
-        )?;
-        // The kill switch says nothing about the name: a missing name meets
-        // it in the policy, right after the attestation, so a skipped one
-        // meets it here (H3). A disabled capability names the tool and is
-        // not met for a name the caller cannot see (#3872 review C).
-        let server = crate::gateway::meta_mcp_helpers::extract_required_str(arguments, "server")?;
-        self.admit_backend_wide(server)
-    }
-    /// The invocation policy as the caller may see it: a capability the
-    /// caller may not reach answered as the undefined one is
-    /// ([`Self::as_undefined_capability`]). Signing runs it for a target it
-    /// does not skip (H2), and a stored read runs it so it answers what the
-    /// live call answers (MIK-8392 D-POLICY under MIK-8361).
-    ///
-    /// # Errors
-    ///
-    /// The policy's refusal, so mapped.
-    pub(crate) fn check_visible_policy(
-        &self,
-        arguments: &Value,
-        session: Option<&str>,
-        caller: &MetaMcpCallerContext<'_>,
-    ) -> Result<()> {
-        self.check_invocation_policy(arguments, session, caller)
-            .map_err(|refusal| self.as_undefined_capability(arguments, caller, refusal))
-    }
-
-    /// The policy's refusal of a capability the caller may not reach (admin
-    /// rule, identity grant), as the undefined twin is answered: it meets the
-    /// same authorizer, then the grant check's `ToolNotFound`. The two rules
-    /// are re-read silently, with no second authorizer decision; a refusal
-    /// they did not give (the authorizer's, a later step's) is the undefined
-    /// twin's too and is kept.
-    fn as_undefined_capability(
-        &self,
-        arguments: &Value,
-        caller: &MetaMcpCallerContext<'_>,
-        refusal: Error,
-    ) -> Error {
-        let (Ok(server), Ok(tool)) = (
-            crate::gateway::meta_mcp_helpers::extract_required_str(arguments, "server"),
-            crate::gateway::meta_mcp_helpers::extract_required_str(arguments, "tool"),
-        ) else {
-            return refusal;
-        };
-        match self.capability_rule_refusal((server, tool), caller.scope(), caller.is_admin) {
-            Some(rule) if rule.to_string() == refusal.to_string() => {
-                Error::ToolNotFound(tool.to_string())
-            }
-            _ => refusal,
-        }
-    }
-
-    /// [`Self::profile_refusal_as_undefined`] at a site that delivers it: a
-    /// profile refusal answered as an absent name is the gateway's refusal,
-    /// raised for a one-target call (`delivery_facts::withheld`). Never
-    /// called from the decision functions themselves, so a discarded policy
-    /// probe raises nothing.
-    pub(super) fn withheld_as_undefined(
-        &self,
-        named: (&str, &str),
-        session_id: Option<&str>,
-        refusal: Error,
-    ) -> Error {
-        let answered = self.profile_refusal_as_undefined(named, session_id, refusal);
-        // Only the profile refusal maps to `ToolNotFound` here; every other
-        // refusal of `admit_target` passes through unchanged.
-        if matches!(answered, Error::ToolNotFound(_)) {
-            crate::gateway::delivery_facts::withheld();
-        }
-        answered
-    }
-
-    /// `refusal`, unless the session's routing profile excludes a defined
-    /// capability: then the undefined capability's answer (MIK-8361), as
-    /// [`Self::profile_withheld_capability`] gives it. Any other refusal (kill
-    /// switch, a backend tool's profile refusal) is kept.
-    pub(super) fn profile_refusal_as_undefined(
-        &self,
-        named: (&str, &str),
-        session_id: Option<&str>,
-        refusal: Error,
-    ) -> Error {
-        self.profile_withheld_capability(named, session_id)
-            .unwrap_or(refusal)
-    }
-
-    /// `ToolNotFound` for a defined capability the session's routing profile
-    /// excludes, as the undefined twin is answered at the route stage before
-    /// any profile is read: the profile's refusal would confirm the capability
-    /// exists (MIK-8361). It writes nothing: a profile refusal leaves no
-    /// invocation record, before this mapping and after it. `None` for any
-    /// other target.
-    pub(super) fn profile_withheld_capability(
-        &self,
-        (server, tool): (&str, &str),
-        session_id: Option<&str>,
-    ) -> Option<Error> {
-        let defined = self
-            .get_capabilities()
-            .is_some_and(|cap| server == cap.name && cap.has_capability(tool));
-        self.active_profile(session_id)
-            .check(server, tool)
-            .err()
-            .filter(|_| defined)
-            .map(|_| Error::ToolNotFound(tool.to_string()))
-    }
-
-    /// The refusal a defined capability gets from a rule that depends on it
-    /// existing: the admin rule or the identity grant, re-read silently with
-    /// no authorizer decision. `None` for an undefined capability, any other
-    /// server, or a capability both rules admit. The gate and
-    /// [`Self::check_visible_policy`] both answer such a refusal as the
-    /// undefined capability, through this one predicate (MIK-8361).
-    fn capability_rule_refusal(
-        &self,
-        (server, tool): (&str, &str),
-        scope: crate::gateway::meta_mcp::visibility::InvokeScope<'_>,
-        is_admin: bool,
-    ) -> Option<Error> {
-        let defined = self
-            .get_capabilities()
-            .is_some_and(|cap| server == cap.name && cap.has_capability(tool));
-        if !defined {
-            return None;
-        }
-        self.admin_capability_rule(server, tool, is_admin)
-            .and_then(|()| {
-                self.identity_grant_rule(server, tool, scope, crate::gateway::authz::Emit::Silent)
-            })
-            .err()
     }
 
     /// What `backend`'s shared catalogue says about `tool`, filled once if
@@ -315,58 +141,6 @@ impl MetaMcp {
         }
         let filled = schema_effect(self.filled_since(&marks, servers()));
         (invisible, RefundWitness::carry(witness, filled))
-    }
-
-    /// Each named backend's fill count plus the registry's membership epoch,
-    /// for [`Self::filled_since`], read in one call under the registry's
-    /// membership lock. No instance is held: the lock serializes the marks
-    /// against every add, replace or remove, so an unmoved epoch means every
-    /// target is the same instance as at the mark and its count compares
-    /// soundly.
-    fn fill_marks<'s>(&self, servers: impl Iterator<Item = &'s str>) -> (u64, Vec<Option<u64>>) {
-        self.backends.membership_for(
-            crate::gateway::meta_mcp::scoped_backends::Unscoped::Discovery,
-            |membership| {
-                let fills = servers
-                    .map(|server| {
-                        self.backends
-                            .get_for(
-                                crate::gateway::meta_mcp::scoped_backends::Unscoped::Discovery,
-                                server,
-                            )
-                            .map(|backend| backend.list_fills())
-                    })
-                    .collect();
-                (membership, fills)
-            },
-        )
-    }
-
-    /// Whether a named backend filled since `marks`: any count changed OR
-    /// the epoch changed counts as a fill, so the nonce stays spent. The
-    /// counts and the epoch are read in one call under the registry's
-    /// membership lock, so the snapshot and the final read agree with the
-    /// map; only reloads pay this, and equal marks prove nothing acted.
-    fn filled_since<'s>(
-        &self,
-        (membership, marks): &(u64, Vec<Option<u64>>),
-        servers: impl Iterator<Item = &'s str>,
-    ) -> bool {
-        self.backends.membership_for(
-            crate::gateway::meta_mcp::scoped_backends::Unscoped::Discovery,
-            |epoch| {
-                let counts_changed = marks.iter().zip(servers).any(|(mark, server)| {
-                    self.backends
-                        .get_for(
-                            crate::gateway::meta_mcp::scoped_backends::Unscoped::Discovery,
-                            server,
-                        )
-                        .map(|backend| backend.list_fills())
-                        != *mark
-                });
-                counts_changed || epoch != *membership
-            },
-        )
     }
 
     /// The route stage's judgement of one requested backend target: whether
@@ -487,21 +261,6 @@ impl MetaMcp {
         Some(answer)
     }
 
-    /// The session profile's refusal of `(server, tool)`, if it refuses it:
-    /// the error the meta path's own check gives it. A reason a listing hides
-    /// it (R6), read by the direct route, whose authorize ignores profiles.
-    pub(crate) fn profile_refusal(
-        &self,
-        server: &str,
-        tool: &str,
-        session_id: Option<&str>,
-    ) -> Option<Error> {
-        self.active_profile(session_id)
-            .check(server, tool)
-            .err()
-            .map(Error::Protocol)
-    }
-
     /// The dispatch-time backstop (design r2 item 4): a refusal the policy
     /// check gives a name that slipped past the gate is answered as the gate
     /// would answer it, the absent name's answer, never by its reason. Any
@@ -558,9 +317,21 @@ impl MetaMcp {
         crate::gateway::meta_mcp::visible::memo::record_absent(server, tool);
         let scoped = self.scoped(caller.scope().authorizer.backend_grant());
         if scoped.absence(server) == Some(Absence::OutOfScope) {
-            note_denial_code(server, tool, -32003);
+            note_denial_code(
+                server,
+                tool,
+                -32003,
+                Some((DecisionKind::BackendScope, None)),
+            );
             // Outside the key's scope: refused, not merely missing.
             crate::gateway::delivery_facts::withheld();
+            crate::gateway::delivery_facts::gateway_folded(-32003);
+        } else {
+            // Not out of scope: the name matches nothing, the gateway's own
+            // refusal, recorded as an unscoped caller's missing backend is.
+            super::audit::note_refused_by(DecisionKind::NotFound, None);
+            super::audit::note_not_found();
+            crate::gateway::delivery_facts::gateway_folded(-32001);
         }
         self.record_withheld(server, tool, Withholding::Absent, caller, session_id)
             .await;
@@ -588,6 +359,9 @@ impl MetaMcp {
         caller: &MetaMcpCallerContext<'_>,
         session_id: Option<&str>,
     ) -> Option<Result<GuardedValue>> {
+        // First, before every early return: a provisional miss belongs to the
+        // invocation that judged it, never to a later one on the same name.
+        crate::gateway::meta_mcp::visible::memo::clear_gate_absent(server, tool);
         // MIK-8387 S3: an absent name is answered before any name-keyed check
         // (policy, capability, kill switch, catalogue), from the record first,
         // so a reload since the route stage cannot reach a dispatch.
@@ -599,6 +373,51 @@ impl MetaMcp {
         }
         self.named_gate_answer((server, tool), caller, session_id)
             .await
+    }
+
+    /// [`Self::named_gate_answer`] on a backend that keeps a catalogue per
+    /// caller: `None` hands the name to MIK-8356's caller-slot check.
+    async fn per_user_withheld_answer(
+        &self,
+        (server, tool): (&str, &str),
+        backend: &Backend,
+        refused: bool,
+        caller: &MetaMcpCallerContext<'_>,
+        session_id: Option<&str>,
+    ) -> Option<Result<GuardedValue>> {
+        let scope = caller.scope();
+        // Lead ruling (8356 x 8361): a policy- or descriptor-withheld name
+        // answers -32601 at once, with no fill and no credential; every
+        // other name is MIK-8356's caller-slot check's.
+        let reason = if refused {
+            Withholding::Refused
+        } else {
+            match self.tool_visible_to(server, tool, scope, session_id) {
+                Visibility::Withheld(reason) if reason.is_backend_gate() => reason,
+                _ => return None,
+            }
+        };
+        self.record_withheld(server, tool, reason, caller, session_id)
+            .await;
+        withheld_for(reason);
+        // Ruling B (A5): a caller with no view of this backend cannot
+        // tell names apart, so a withheld name it names gets the connect
+        // offer a missing one gets; -32601 at once is for a caller with a
+        // view. Resolution mints nothing without a grant.
+        let proof = CallerProof::new(caller.verified_identity, caller.provenance());
+        if self.has_no_view_for(backend, proof).await
+            && let Err(offer) = self
+                .resolve_dispatch(
+                    (server, tool),
+                    Some(backend),
+                    proof,
+                    caller.verified_identity,
+                )
+                .await
+        {
+            return Some(Err(offer));
+        }
+        Some(Err(absent_name(tool)))
     }
 
     /// The lens the key check reads a named tool under: withheld when the
@@ -632,19 +451,24 @@ impl MetaMcp {
     ) -> Option<Result<GuardedValue>> {
         let scope = caller.scope();
         // Policy, profile, admin rule, grants: known without a catalogue.
-        let refusal = self.may_invoke(server, tool, scope, session_id).err();
-        let refused = refusal.is_some();
-        if let Some(refusal) = &refusal {
-            // The call's one record names it (MIK-8361); a code the route
-            // stage kept first stands.
-            note_denial_code(server, tool, refusal.to_rpc_code());
-        }
-        if let Some(cap) = self.get_capabilities()
+        let refused = self
+            .may_invoke_explained(server, tool, scope, session_id)
+            .inspect_err(|(error, refusal)| {
+                // The call's one record names it (MIK-8361); a code the route
+                // stage kept first stands.
+                note_denial_code(server, tool, error.to_rpc_code(), Some(refusal.clone()));
+            })
+            .is_err();
+        if let Some(cap) = self.caller_capabilities()
             && server == cap.name
         {
             // A capability the caller may not reach answers as one that is
             // not defined: the same `ToolNotFound` the grant check gives it.
-            let by_rule = self.capability_rule_refusal((server, tool), scope, caller.is_admin);
+            let by_rule = self.capability_rule_refusal(
+                (server, tool),
+                scope,
+                caller.admin != crate::gateway::authz::AdminStanding::None,
+            );
             if !refused || by_rule.is_none() {
                 return None;
             }
@@ -653,50 +477,24 @@ impl MetaMcp {
             withheld_for(Withholding::Refused);
             return Some(Err(Error::ToolNotFound(tool.to_string())));
         }
-        let backend = self
+        let Some(backend) = self
             .scoped(caller.scope().authorizer.backend_grant())
-            .scoped_get(server)?;
+            .scoped_get(server)
+        else {
+            // Unregistered for this caller, provisionally: the dispatch records
+            // `not_found` only if it misses too (a reload may register it first).
+            crate::gateway::meta_mcp::visible::memo::mark_gate_absent(server, tool);
+            return None;
+        };
         // Not existence-sensitive: answered alike for every name, before any
         // fill (K2).
         if let Err(refusal) = self.admit_backend_wide(server) {
             return Some(Err(refusal));
         }
         if backend.keeps_per_user_catalogues() {
-            // Lead ruling (8356 x 8361): a policy- or descriptor-withheld name
-            // answers -32601 at once, with no fill and no credential; every
-            // other name is MIK-8356's caller-slot check's.
-            let reason = if refused {
-                Withholding::Refused
-            } else {
-                match self.tool_visible_to(server, tool, scope, session_id) {
-                    Visibility::Withheld(reason) if reason.is_backend_gate() => reason,
-                    _ => return None,
-                }
-            };
-            self.record_withheld(server, tool, reason, caller, session_id)
+            return self
+                .per_user_withheld_answer((server, tool), &backend, refused, caller, session_id)
                 .await;
-            withheld_for(reason);
-            // Ruling B (A5): a caller with no view of this backend cannot
-            // tell names apart, so a withheld name it names gets the connect
-            // offer a missing one gets; -32601 at once is for a caller with a
-            // view. Resolution mints nothing without a grant.
-            let proof = crate::identity_propagation::CallerProof::new(
-                caller.verified_identity,
-                caller.provenance(),
-            );
-            if self.has_no_view_for(&backend, proof).await
-                && let Err(offer) = self
-                    .resolve_dispatch(
-                        (server, tool),
-                        Some(&backend),
-                        proof,
-                        caller.verified_identity,
-                    )
-                    .await
-            {
-                return Some(Err(offer));
-            }
-            return Some(Err(absent_name(tool)));
         }
         let headers = backend.gate_headers();
         // One judgement per request: a verdict the route stage recorded
@@ -749,34 +547,6 @@ impl MetaMcp {
     }
 }
 
-/// D4's meta denial count for `result`, and MIK-8361's one record per call:
-/// the answer to a requested target the route stage or the gate refused is
-/// counted once and recorded `denied` with the refusal's own code (the
-/// returned outcome), whatever it reads as to the caller (the missing name's
-/// answer). The log is the operator's, so the real reason there tells the
-/// caller nothing. `None` for every other call, classed by its result.
-pub(super) fn count_meta_denial(
-    args: &Value,
-    result: &Result<Value>,
-) -> Option<crate::security::audit::AuditOutcome> {
-    use crate::security::security_metrics::{DenialRoute, denied, meta_denial, meta_refused};
-    let code = args
-        .get("server")
-        .and_then(Value::as_str)
-        .zip(args.get("tool").and_then(Value::as_str))
-        .and_then(|(server, tool)| {
-            crate::gateway::meta_mcp::visible::memo::denial_code(server, tool)
-        });
-    if let Some(code) = code {
-        meta_refused(code);
-        return Some(crate::security::audit::AuditOutcome::Denied(code));
-    }
-    if let Some(reason) = meta_denial(result) {
-        denied(DenialRoute::Meta, reason);
-    }
-    None
-}
-
 #[cfg(test)]
 #[path = "gate_fill_tests.rs"]
 mod fill_tests;
@@ -789,11 +559,14 @@ mod call_level_tests;
 #[path = "gate_refusal_kind_tests.rs"]
 mod refusal_kind_tests;
 
-/// Whether a refusal the dispatch-time policy check gave is an authorization
-/// decision about the caller (`Forbidden`, which a playbook step answers
-/// neutrally); an audit failure, an undefined capability or an absent name is
-/// not.
-fn is_authorization_refusal(error: &Error) -> bool {
+/// Whether `error` is the gateway's own decision about the caller, wherever
+/// it was built (`Forbidden`, as `delivery_facts::outlet` reads it): a
+/// dispatch-time policy refusal, the per-user lender's refusal of a send, a
+/// refused shared slot. Such a refusal is answered as the refusal it is,
+/// never folded into a backend error result, and never sampled against the
+/// backend's error budget; a playbook step answers it neutrally. An audit
+/// failure, an undefined capability or an absent name is not one.
+pub(super) fn is_authorization_refusal(error: &Error) -> bool {
     matches!(error, Error::Forbidden { .. })
 }
 

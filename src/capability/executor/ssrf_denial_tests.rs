@@ -56,9 +56,15 @@ async fn capability_ssrf_denial_is_not_retried() {
     // one would show.
     for call in 1..=3 {
         let request = client.get("http://private.test/");
-        let error = send_with_retry(request, &std::sync::atomic::AtomicU64::new(0), "test", true, &health)
-            .await
-            .expect_err("a private destination is refused");
+        let error = send_with_retry(
+            request,
+            &std::sync::atomic::AtomicU64::new(0),
+            "test",
+            true,
+            &health,
+        )
+        .await
+        .expect_err("a private destination is refused");
         assert_eq!(error.to_rpc_code(), -32600, "call {call}: {error}");
         assert!(
             error.to_string().contains("SSRF blocked"),
@@ -81,9 +87,15 @@ async fn capability_connect_error_still_retried() {
     let (client, lookups) = pinned_client(None);
     let health = crate::failsafe::HealthTracker::new("test");
     let request = client.get("http://unresolvable.test/");
-    let error = send_with_retry(request, &std::sync::atomic::AtomicU64::new(0), "test", true, &health)
-        .await
-        .expect_err("resolution fails");
+    let error = send_with_retry(
+        request,
+        &std::sync::atomic::AtomicU64::new(0),
+        "test",
+        true,
+        &health,
+    )
+    .await
+    .expect_err("resolution fails");
     assert_eq!(error.to_rpc_code(), -32000, "{error}");
     assert_eq!(
         lookups.load(Ordering::SeqCst),
@@ -99,7 +111,14 @@ async fn a_first_hop_ssrf_denial_notes_no_send_time() {
     let (client, _) = pinned_client(Some(IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1))));
     let health = crate::failsafe::HealthTracker::new("test");
     let (result, notes) = crate::gateway::with_dispatch_scope(async {
-        send_with_retry(client.get("http://private.test/"), &std::sync::atomic::AtomicU64::new(0), "test", true, &health).await
+        send_with_retry(
+            client.get("http://private.test/"),
+            &std::sync::atomic::AtomicU64::new(0),
+            "test",
+            true,
+            &health,
+        )
+        .await
     })
     .await;
     assert!(result.is_err());
@@ -146,12 +165,93 @@ async fn a_redirect_refused_at_dns_notes_a_failed_send() {
     let send = std::time::Duration::from_millis(7);
     crate::gateway::send_timer_seam::inject(send);
     let (result, notes) = crate::gateway::with_dispatch_scope(async {
-        send_with_retry(client.get(format!("http://{addr}/")), &redirects, "test", true, &health).await
+        send_with_retry(
+            client.get(format!("http://{addr}/")),
+            &redirects,
+            "test",
+            true,
+            &health,
+        )
+        .await
     })
     .await;
     crate::gateway::send_timer_seam::clear();
     let error = result.expect_err("the next hop is refused");
     assert!(crate::security::ssrf::is_ssrf_refusal(&error), "{error}");
-    assert_eq!(lookups.load(Ordering::SeqCst), 1, "the redirect's host was resolved");
-    assert_eq!(notes.backend_sample(), Some((send, crate::counters::End::Failed)));
+    assert_eq!(
+        lookups.load(Ordering::SeqCst),
+        1,
+        "the redirect's host was resolved"
+    );
+    assert_eq!(
+        notes.backend_sample(),
+        Some((send, crate::counters::End::Failed))
+    );
+}
+
+/// A send the pin refuses records `refused` on the call's delivery.
+#[tokio::test]
+async fn capability_ssrf_denial_records_refused() {
+    use crate::gateway::delivery_facts;
+    let (client, _lookups) = pinned_client(Some(IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1))));
+    let health = crate::failsafe::HealthTracker::new("test");
+    let (outcome, facts) = delivery_facts::scope(async {
+        let outcome = send_with_retry(
+            client.get("http://private.test/"),
+            &std::sync::atomic::AtomicU64::new(0),
+            "test",
+            true,
+            &health,
+        )
+        .await;
+        (outcome, delivery_facts::snapshot())
+    })
+    .await;
+    let error = outcome.expect_err("a private destination is refused");
+    assert!(error.to_string().contains("SSRF blocked"), "{error}");
+    let mut fields = serde_json::Map::new();
+    delivery_facts::record_fields(facts.as_ref(), false, &mut fields);
+    assert_eq!(
+        fields.get("response_effect"),
+        Some(&"refused".into()),
+        "{fields:?}"
+    );
+}
+
+/// A streaming body cannot be cloned for a retry, so the send takes its
+/// single-attempt path; a refusal there records `refused` too.
+#[tokio::test]
+async fn a_single_attempt_ssrf_denial_records_refused() {
+    use crate::gateway::delivery_facts;
+    let (client, _lookups) = pinned_client(Some(IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1))));
+    let health = crate::failsafe::HealthTracker::new("test");
+    let body = reqwest::Body::wrap_stream(futures::stream::once(async {
+        Ok::<_, std::io::Error>(bytes::Bytes::from_static(b"streamed"))
+    }));
+    let request = client.post("http://private.test/").body(body);
+    assert!(
+        request.try_clone().is_none(),
+        "the body must not be cloneable"
+    );
+    let (outcome, facts) = delivery_facts::scope(async {
+        let outcome = send_with_retry(
+            request,
+            &std::sync::atomic::AtomicU64::new(0),
+            "test",
+            true,
+            &health,
+        )
+        .await;
+        (outcome, delivery_facts::snapshot())
+    })
+    .await;
+    let error = outcome.expect_err("a private destination is refused");
+    assert!(error.to_string().contains("SSRF blocked"), "{error}");
+    let mut fields = serde_json::Map::new();
+    delivery_facts::record_fields(facts.as_ref(), false, &mut fields);
+    assert_eq!(
+        fields.get("response_effect"),
+        Some(&"refused".into()),
+        "{fields:?}"
+    );
 }

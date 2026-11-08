@@ -114,10 +114,12 @@ fn proven_as_a(
 ) -> axum::http::Request<axum::body::Body> {
     request
         .extensions_mut()
-        .insert(crate::mtls::identity::CertIdentity {
-            san_uris: vec![PROVEN_A.to_string()],
-            ..Default::default()
-        });
+        .insert(crate::mtls::identity::CertIdentity::for_test(
+            crate::mtls::identity::CertFields {
+                san_uris: vec![PROVEN_A.to_string()],
+                ..Default::default()
+            },
+        ));
     request
 }
 

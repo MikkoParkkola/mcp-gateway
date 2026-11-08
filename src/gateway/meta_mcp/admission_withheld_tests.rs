@@ -259,7 +259,7 @@ fn a_keyed_chain_on_a_killed_backend_answers_a_withheld_step_as_a_missing_one() 
 /// of the first hidden step it was served, never one it was not (review B).
 #[test]
 fn a_stored_result_without_a_step_list_keeps_the_refusal() {
-    use super::stored::{dispatched_steps, refusal_to_meet};
+    use super::stored::{refusal_to_meet, stored_steps};
     let step = |tool: &str| ("beta".to_string(), tool.to_string());
     let withheld = || {
         vec![
@@ -276,16 +276,12 @@ fn a_stored_result_without_a_step_list_keeps_the_refusal() {
         super::stored::stored_response(&older).is_some(),
         "an older record still decodes"
     );
-    assert_eq!(
-        dispatched_steps(&older),
-        None,
-        "an older record has no list"
-    );
+    assert_eq!(stored_steps(&older).0, None, "an older record has no list");
     let refused = |served: Option<&[(String, String)]>| {
         refusal_to_meet(served, withheld()).map(|error| error.to_string())
     };
     assert_eq!(
-        refused(dispatched_steps(&older).as_deref()),
+        refused(stored_steps(&older).0.as_deref()),
         Some(crate::Error::json_rpc(-32003, "other").to_string()),
         "an older record keeps the first refusal"
     );
@@ -380,7 +376,7 @@ fn assert_sub4_refusal(answer: crate::Result<()>, row: &str) {
 /// A step answered from the response cache, then revoked: its replay refuses.
 #[tokio::test]
 async fn a_replay_past_revocation_of_a_cached_step_keeps_its_refusal() {
-    let answer = replay_after_revoking(Some("read"), "read").await;
+    let answer = Box::pin(replay_after_revoking(Some("read"), "read")).await;
     assert_sub4_refusal(answer, "cached step");
 }
 
@@ -388,7 +384,7 @@ async fn a_replay_past_revocation_of_a_cached_step_keeps_its_refusal() {
 /// dispatch path's own note is what proves it ran).
 #[tokio::test]
 async fn a_replay_past_revocation_of_a_sent_step_keeps_its_refusal() {
-    let answer = replay_after_revoking(None, "write").await;
+    let answer = Box::pin(replay_after_revoking(None, "write")).await;
     assert_sub4_refusal(answer, "sent step");
 }
 
@@ -416,6 +412,9 @@ async fn a_replay_past_revocation_records_refused() {
 struct DenyEach(&'static [&'static str]);
 
 impl ToolAuthorizer for DenyEach {
+    fn generation(&self) -> Option<&crate::config_reload::Generation> {
+        None
+    }
     fn quota_principal(&self) -> Option<&crate::gateway::auth::QuotaPrincipal> {
         None
     }
@@ -429,6 +428,7 @@ impl ToolAuthorizer for DenyEach {
         if self.0.contains(&target.tool) {
             return crate::gateway::authz::Decision::of(Err(
                 crate::gateway::authz::AuthorizationError::forbidden(
+                    crate::security::decision_record::DecisionKind::ToolPolicy,
                     -32003,
                     format!("denied by test authorizer: '{}'", target.tool),
                 ),

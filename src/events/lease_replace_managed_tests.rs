@@ -44,7 +44,7 @@ impl Grants {
 #[async_trait::async_trait]
 impl ListenerMint for Grants {
     async fn mint(&self, _: &str, identity: &VerifiedIdentity) -> crate::Result<ListenerGrant> {
-        let subject = identity.subject.as_str();
+        let subject = identity.subject();
         Ok(ListenerGrant {
             headers: vec![(
                 "authorization".to_owned(),
@@ -60,7 +60,7 @@ impl ListenerMint for Grants {
         _: &str,
         identity: &VerifiedIdentity,
     ) -> Result<Option<String>, FenceRead> {
-        Ok(Some(self.binding(&identity.subject)))
+        Ok(Some(self.binding(identity.subject())))
     }
 }
 
@@ -85,12 +85,13 @@ async fn counting_callback() -> (String, Arc<AtomicUsize>) {
 /// A hub whose `pt` is a managed-account backend at `peer`, with an audit
 /// log (delivery sends nothing without one) and loopback callbacks allowed.
 fn managed_fixture(peer: &TwoTokenPeer) -> Fixture {
-    let dir = tempfile::tempdir().expect("dir");
+    let dir = Arc::new(tempfile::tempdir().expect("dir"));
     let events = crate::config::EventsConfig {
         callback_allow_private: vec!["127.0.0.0/8".into()],
         ..crate::config::EventsConfig::default()
     };
     let hub = EventsHub::open(&events, dir.path()).expect("hub");
+    hub.keep_test_dir(Arc::clone(&dir));
     let config: crate::config::Config =
         crate::yaml::from_str(&managed_yaml(&peer.url)).expect("config");
     let live = Arc::new(crate::config_reload::LiveConfig::new(config));
@@ -140,12 +141,11 @@ fn managed_yaml(url: &str) -> String {
 
 /// The event id, subscription and lease stamp of every record in `f`'s outbox.
 fn queued(f: &Fixture) -> Vec<(String, String, Option<String>)> {
-    let entries = std::fs::read_dir(f.dir.path().join("outbox")).expect("outbox");
-    entries
-        .flatten()
-        .map(|e| {
+    crate::events::records::committed_records(&f.dir.path().join("outbox"))
+        .iter()
+        .map(|p| {
             let record: serde_json::Value =
-                serde_json::from_slice(&std::fs::read(e.path()).expect("read")).expect("record");
+                serde_json::from_slice(&std::fs::read(p).expect("read")).expect("record");
             let text = |v: &serde_json::Value| v.as_str().unwrap_or_default().to_owned();
             (
                 text(&record["event_id"]),

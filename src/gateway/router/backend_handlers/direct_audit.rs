@@ -20,9 +20,9 @@ use crate::security::audit::{
 use crate::security::transparency_log::CorrelationKey;
 
 use super::super::AppState;
-use super::super::helpers::build_http_error_response;
+use super::super::helpers::{RpcHttp, build_http_error_response};
 
-type Answer = (StatusCode, Json<Value>);
+type Answer = RpcHttp;
 
 /// The slot the inner handler fills once the body is JSON with
 /// `"method": "tools/call"`, before the envelope is validated (D2-a), so a
@@ -185,6 +185,22 @@ pub(super) async fn audited_call(
     crate::gateway::meta_mcp::sealed_hold::scoped(Box::pin(judged)).await
 }
 
+/// The credential `request` presented, as the delivery record names it.
+fn presented_credential(
+    request: &axum::http::Request<axum::body::Body>,
+) -> (
+    crate::security::audit::CredentialKind,
+    crate::gateway::record_principal::InternalPrincipal,
+) {
+    let client = request
+        .extensions()
+        .get::<crate::gateway::auth::AuthenticatedClient>();
+    (
+        crate::security::audit::CredentialKind::of(client),
+        client.map(|c| c.principal.clone()).unwrap_or_default(),
+    )
+}
+
 async fn audited_call_judged(
     state: Arc<AppState>,
     name: String,
@@ -192,25 +208,13 @@ async fn audited_call_judged(
 ) -> crate::gateway::outbound::OutboundReply {
     // MIK-8672: captured before the request moves on, so a refusal in any later stage still names the
     // presented credential; a local, not an Option, so the writer below cannot be reached without it.
-    let presented = request
-        .extensions()
-        .get::<crate::gateway::auth::AuthenticatedClient>()
-        .map(|c| {
-            (
-                crate::security::audit::CredentialKind::of(Some(c)),
-                c.principal.clone(),
-            )
-        });
-    let (credential_kind, principal) = presented.unwrap_or((
-        crate::security::audit::CredentialKind::of(None),
-        crate::gateway::record_principal::InternalPrincipal::default(),
-    ));
+    let (credential_kind, principal) = presented_credential(&request);
     let mut call = None;
     let mut reads = DirectReads::default();
     let guard = super::super::helpers::read_guard(&state);
     // One memo spans the guard and the record, so a withheld call's one
     // record names its refusal (MIK-8361).
-    let (((mut status, Json(body)), hidden), trace) =
+    let ((answer, hidden), trace) =
         crate::gateway::meta_mcp::visible::memo::with_visibility_memo(async {
             let inner = Box::pin(crate::gateway::outbound::read_scoped(
                 guard.clone(),
@@ -228,20 +232,28 @@ async fn audited_call_judged(
             ((answer, hidden), trace)
         })
         .await;
-    if status == StatusCode::ACCEPTED {
+    if answer.status == StatusCode::ACCEPTED {
         // An accepted notification: the gateway's own placeholder, sent
         // with no body (MIK-7759), carries nothing to judge.
         return crate::gateway::outbound::gateway_reply(super::super::helpers::bodiless_accepted(
-            (status, Json(body)),
+            answer,
         ));
     }
+    let RpcHttp {
+        mut status,
+        body: Json(body),
+        origin,
+        folded,
+    } = answer;
     let mut frame = crate::gateway::outbound::answer_value(
         guard.as_deref(),
         reads.key.as_deref(),
         body,
         reads.params.as_ref(),
         hidden.as_ref(),
-    );
+        origin,
+    )
+    .folded_by(folded);
     // MIK-7669: the delivery record the meta route writes (`judged_answer`),
     // after the judge and with the answer's `tenant_read` fields in it. The
     // direct route keeps no session, so the session fingerprint is empty.
@@ -295,15 +307,12 @@ async fn audited_call_judged(
     // they follow the judge, the audit write and the delivery record (which
     // carries the read verdict), as each can still replace the answer.
     let delivers = frame.delivers_result();
-    let response = crate::gateway::outbound::to_http(frame, status, "");
-    let (reply, written) =
-        crate::gateway::outbound::judged_reply_checked(response, state.transparency_log.as_ref())
-            .await;
-    #[cfg(feature = "firewall")]
-    super::relay::commit_direct_receipts(&state, delivers && written);
-    #[cfg(not(feature = "firewall"))]
-    let _ = (delivers, written);
-    reply
+    let response = with_deferred_receipts(
+        &state,
+        crate::gateway::outbound::to_http(frame, status, ""),
+        delivers,
+    );
+    crate::gateway::outbound::judged_reply(response, state.transparency_log.as_ref()).await
 }
 
 /// [`record`] for `call`, when the inner handler made one, under a trace
@@ -336,7 +345,7 @@ pub(super) async fn record(
     answer: Answer,
     notes: DispatchNotes,
 ) -> Answer {
-    let (status, Json(body)) = &answer;
+    let (status, Json(body)) = (&answer.status, &answer.body);
     // MIK-8361: a withheld call's one record is `denied` with its refusal's
     // code, whatever it answered the caller (the missing name's answer).
     let outcome = call
@@ -344,6 +353,15 @@ pub(super) async fn record(
         .as_deref()
         .and_then(|tool| crate::gateway::meta_mcp::visible::memo::denial_code(server, tool))
         .map_or_else(|| direct_outcome(*status, body), AuditOutcome::Denied);
+    // A withheld call's record carries the memo's code, so its check.
+    let mut notes = notes;
+    if let Some(refusal) = call
+        .tool
+        .as_deref()
+        .and_then(|tool| crate::gateway::meta_mcp::visible::memo::denial(server, tool))
+    {
+        notes.refused_by_memo(refusal);
+    }
     // D4: counted before the log check, so auth off still counts.
     let firewall = body
         .get("error")
@@ -368,6 +386,7 @@ pub(super) async fn record(
     let response_hash = body.get("result").is_some().then(|| sha256_of(body));
     // MIK-7116.MIN.1: what the gates saw, or the delivered value on a replay.
     let tenants = state.meta_mcp.request_tenants(&call.arguments);
+    let decision = Box::new(notes.decided(&state.meta_mcp, outcome));
     let attribution = notes.attribution(&state.meta_mcp, tenants, body.get("result"));
     let trace_id = trace_id.to_owned();
     let envelope = AuditEnvelope {
@@ -399,6 +418,7 @@ pub(super) async fn record(
                 &request_hash,
                 response_hash.as_deref(),
                 attribution,
+                Some(decision.as_ref()),
             )
         })
         .await;
@@ -419,6 +439,33 @@ pub(super) async fn record(
             answer
         }
     }
+}
+
+/// `response` carrying what this call staged, recorded when the server
+/// takes its body's first chunk under the generation current then, as the
+/// meta route's answers are (`emit_http`). `delivers`: the answer as written
+/// delivers a result.
+fn with_deferred_receipts(
+    state: &AppState,
+    #[cfg_attr(not(feature = "firewall"), allow(unused_mut))]
+    mut response: axum::response::Response,
+    delivers: bool,
+) -> axum::response::Response {
+    #[cfg(feature = "firewall")]
+    if state.firewall.is_some() {
+        let staged =
+            crate::gateway::meta_mcp::invoke::relay::take_staged_now(state.firewall.clone());
+        response.extensions_mut().insert(
+            crate::gateway::meta_mcp::invoke::relay::DeferredReceipts::new(
+                staged,
+                delivers,
+                Some(std::sync::Arc::clone(&state.live_config)),
+            ),
+        );
+    }
+    #[cfg(not(feature = "firewall"))]
+    let _ = (state, delivers);
+    response
 }
 
 #[cfg(test)]

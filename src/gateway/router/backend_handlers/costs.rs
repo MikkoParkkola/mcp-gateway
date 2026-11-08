@@ -28,11 +28,7 @@ pub(in crate::gateway::router) async fn costs_handler(
     // Spend per session and per API key is cross-tenant inventory, and this
     // endpoint consulted no identity at all. `/ui/api/costs` already requires
     // admin; the two views of the same data now agree.
-    if !request
-        .extensions()
-        .get::<AuthenticatedClient>()
-        .is_some_and(|c| c.admin)
-    {
+    if !crate::gateway::auth::is_gateway_admin(request.extensions().get::<AuthenticatedClient>()) {
         return (
             StatusCode::FORBIDDEN,
             Json(json!({ "error": "Admin authentication required" })),

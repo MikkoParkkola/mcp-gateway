@@ -38,6 +38,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import inventory_ledger as ledger  # noqa: E402
+import critical_function_coverage as coverage  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[2]
 ROOT_OF_SCRIPTS = Path(__file__).resolve().parents[1]
@@ -96,21 +97,6 @@ def blanked(lines: list[str]) -> list[str]:
     return orphan_gate().blank("\n".join(lines))[0].split("\n")
 
 
-def test_only(text: str) -> bool:
-    """Whether an attribute line carries a `#[cfg(<expr>)]` that compiles
-    only under test, by the orphan gate's one cfg judgement (`cfg_is_test`).
-    Several attributes may share the line (`#[cfg(test)] #[cfg(unix)]`), so
-    each expression is read to its balancing `)`."""
-    text = text.strip()
-    if not text.startswith("#["):
-        return False
-    gate = orphan_gate()
-    return any(
-        gate.cfg_is_test(gate.cfg_expression(text, m.end()))
-        for m in re.finditer(r"#\s*\[\s*cfg\s*\(", text)
-    )
-
-
 def bodyless(lines: list[str], line: int) -> bool:
     """The signature at 1-based `line` ends in `;` before any `{`: a trait
     declaration, which has no lines of its own to cover. `lines` are
@@ -124,30 +110,30 @@ def bodyless(lines: list[str], line: int) -> bool:
     return False
 
 
-def test_lines(lines: list[str]) -> set[int]:
-    """1-based line numbers inside a `#[cfg(test)]` item (a module, fn or
-    impl). `lines` are [`blanked`]."""
-    inside: set[int] = set()
-    pending = False
-    depth = 0
-    start_depth: int | None = None
-    for n, raw in enumerate(lines, 1):
-        text = raw.strip()
-        if start_depth is not None:
-            inside.add(n)
-        elif test_only(text):
-            pending = True
-        elif pending and text and not text.startswith("#["):
-            inside.add(n)
-            if text.endswith(";"):
-                pending = False  # `#[cfg(test)] mod x;` or a use: one line
-            else:
-                start_depth = depth
-                pending = False
-        depth += text.count("{") - text.count("}")
-        if start_depth is not None and depth <= start_depth and "}" in text:
-            start_depth = None
-    return inside
+# Which files the finder parsed with errors, for the line the gate prints;
+# cleared at the start of each `main` run.
+PARSE_REPORT: dict[str, tuple[bool, bool]] = {}
+
+
+def test_lines(lines: list[str], path: str = "") -> set[int]:
+    """1-based line numbers inside an item under a test-only cfg, by its own
+    extent, as the orphan gate's shared parser finds it in the original
+    `lines`. This gate looks for product functions, so an unsure case stays
+    product code: LEAN_SHORT."""
+    gate = orphan_gate()
+    text = "\n".join(lines)
+    found = gate.cfg_items(text, gate.SafeSide.LEAN_SHORT, path=path, report=PARSE_REPORT)
+    # A line is test code only when its first character of code lies inside a
+    # test item: `fn product(#[cfg(test)] probe: ())` shares its line with a
+    # test-only parameter and is still product code.
+    tests: set[int] = set()
+    start = 0
+    for n, line in enumerate(lines, 1):
+        first = start + len(line) - len(line.lstrip())
+        if any(item.start <= first < item.end for item in found.items):
+            tests.add(n)
+        start += len(line) + 1
+    return tests
 
 
 @functools.lru_cache(maxsize=None)
@@ -296,7 +282,7 @@ def added_functions(base: str, head: str) -> list[tuple[str, str, int, int]]:
             if path:
                 lines = (show(head, path) or "").splitlines()
                 code = blanked(lines)
-                tests = test_lines(code)
+                tests = test_lines(lines, path)
         elif line.startswith("@@"):
             new_line = int(re.match(r"@@ -\S+ \+(\d+)", line).group(1))
         elif line.startswith("+") and path:
@@ -316,20 +302,56 @@ def missing_rows(base: str, head: str) -> list[tuple[str, str, int, int]]:
     return [f for f in added_functions(base, head) if (f[0], f[1], f[3]) not in known]
 
 
+def stale_rows(base: str, head: str) -> list[tuple[str, str, int]]:
+    """Rows `head` adds since its merge-base with `base` that name no such
+    function (or occurrence) at `head`: (file, fn, occurrence). A row left by
+    a rename or a deletion vouches for nothing. Only added rows: an older one
+    is retired with the code it named, so `--all` judges none."""
+    if base == ALL:
+        return []
+    head = git("rev-parse", head).strip()
+    merge_base = git("merge-base", base, head).strip()
+    added = set()
+    for ledger_path in (INVENTORY, UNENFORCING):
+        added |= rows(head, ledger_path) - rows(merge_base, ledger_path)
+    # The grader's own resolver over the raw file, so the occurrence means
+    # what it means to the grader and to `missing_rows`; then the line it
+    # resolves to must be code once comments and literals are blanked, so a
+    # `fn <name>` left in a comment or a string keeps no row alive. Each file
+    # is read and blanked once.
+    files = {}
+    for path in {row[0] for row in added}:
+        raw = (show(head, path) or "").splitlines()
+        files[path] = (raw, blanked(raw))
+    return [(path, name, nth) for path, name, nth in sorted(added) if not names_code(*files[path], name, nth)]
+
+
+def names_code(raw: list[str], code: list[str], name: str, nth: int) -> bool:
+    """The `nth` `fn <name>` in `raw`, counted as the grader counts, is a real
+    definition: its line still names the function in the blanked `code`."""
+    line = coverage.fn_line(raw, name, nth)
+    return line is not None and re.search(r"\bfn\s+" + re.escape(name) + r"\b", code[line - 1]) is not None
+
+
 def main(argv: list[str]) -> int:
     if len(argv) not in (2, 3):
         print(__doc__, file=sys.stderr)
         return 2
     head = argv[2] if len(argv) == 3 else "HEAD"
+    # One run's files: a second run in the same process reports only its own.
+    PARSE_REPORT.clear()
     try:
         resolved = git("rev-parse", head).strip()
         broken = ledger.overlap(list(ledger_rows(ROOT, resolved, INVENTORY)), list(ledger_rows(ROOT, resolved, UNENFORCING)))
         missing = missing_rows(argv[1], head)
         misnamed = test_file_problems(argv[1], resolved)
+        stale = stale_rows(argv[1], resolved)
     except ledger.LedgerError as error:
         broken = error.problems
         missing = []
         misnamed = []
+        stale = []
+    print(orphan_gate().parse_error_summary(PARSE_REPORT))
     for problem in broken:
         print(f"inventory: {problem}")
     if broken:
@@ -350,7 +372,11 @@ def main(argv: list[str]) -> int:
             "docs/release/inventory.d/<pr>.critical.tsv (it enforces) or "
             "docs/release/inventory.d/<pr>.unenforcing.tsv (it does not, with a reason)."
         )
-    if misnamed or missing:
+    for path, name, nth in stale:
+        print(f"stale inventory row: {path} fn {name} (occurrence {nth}) is not at head")
+    if stale:
+        print(f"{len(stale)} added row(s) name no function at head. Delete each, or name the function that replaced it.")
+    if misnamed or missing or stale:
         return 1
     scope = "on the COV.3 paths" if argv[1] == ALL else "added on the COV.3 paths"
     print(f"every function {scope} has a row")

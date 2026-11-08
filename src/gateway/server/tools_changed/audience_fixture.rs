@@ -75,7 +75,7 @@ impl crate::identity_propagation::IdentityPropagation for PerIdentityMint {
         if self.0.hang_mints.load(SeqCst) {
             std::future::pending::<()>().await;
         }
-        let subject_key = identity.subject.clone();
+        let subject_key = identity.subject().to_owned();
         Ok(crate::identity_propagation::PropagatedCredential {
             expiry_synthetic: false,
             headers: vec![(
@@ -271,7 +271,7 @@ pub(super) fn adapter_assertion(sub: &str) -> String {
 /// The fixture's credentials under `access`: `k-std`, `k-deny` (denied
 /// `read`, `fetch` and the capability), `k-narrow` (`beta` alone), `k-exp`
 /// (expiring at [`K_EXP_UNTIL`]) and the agents' keys.
-fn fixture_auth(access: &super::audience_access::McpAccess) -> AuthConfig {
+pub(super) fn fixture_auth(access: &super::audience_access::McpAccess) -> AuthConfig {
     let mut auth = AuthConfig {
         // An `AgentOnly` caller presents its agent token and no API key.
         enabled: !matches!(access, super::audience_access::McpAccess::AgentOnly(_)),

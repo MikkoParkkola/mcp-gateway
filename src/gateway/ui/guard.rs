@@ -62,18 +62,20 @@ impl<S: Send + Sync> FromRequestParts<S> for Guard {
 /// Activity and control-plane needs are refused here; they admit through
 /// their own resolvers.
 pub(super) fn decide(need: Need, client: Option<&AuthenticatedClient>) -> Result<(), Refused> {
-    let admin = super::is_admin(client);
+    let admin = crate::gateway::auth::is_gateway_admin(client);
     match need {
         Need::Open => Ok(()),
         Need::Admin(shape) => admin.then_some(()).ok_or(shape.into()),
         Need::AdminSplit => match client {
             None => Err(Refused::Unauthorized),
-            Some(c) if !c.admin => Err(Refused::AdminRequired),
+            Some(c) if !c.is_gateway_admin() => Err(Refused::AdminRequired),
             Some(_) => Ok(()),
         },
+        // A dashboard session is unscoped, so only an unscoped admin mints one:
+        // a scoped admin key would otherwise trade its scope for the session's.
         Need::AdminKeyLink => client
             .is_some_and(|c| {
-                c.admin
+                c.is_gateway_admin()
                     && (c.credential_kind == CredentialKind::StaticBearer
                         || c.api_key_identity().is_some())
             })

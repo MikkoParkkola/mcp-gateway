@@ -11,6 +11,9 @@
 
 mod access_report;
 mod access_table;
+/// Every admin route refuses a backend-scoped admin.
+#[cfg(test)]
+mod admin_scope_tests;
 #[cfg(test)]
 pub(in crate::gateway) use self::access_table::plain_rows;
 mod activity;
@@ -18,6 +21,7 @@ pub mod admin_audit;
 pub mod backend_ops;
 pub mod backends;
 pub mod capabilities;
+mod config_file;
 pub mod control_plane;
 mod dashboard;
 pub(in crate::gateway) mod decisions;
@@ -29,10 +33,28 @@ mod gateway_upgrade;
 mod guard;
 mod history;
 pub mod import;
+mod keys;
+mod keys_create;
 mod overview;
+mod policies;
+#[cfg(feature = "firewall")]
+mod policies_part2;
+#[cfg(all(test, feature = "firewall"))]
+mod policies_part2_tests;
+#[cfg(all(test, feature = "firewall"))]
+mod policies_relay_tests;
+#[cfg(feature = "firewall")]
+mod policies_rules;
+#[cfg(all(test, feature = "firewall"))]
+mod policies_shadow_tests;
+#[cfg(test)]
+mod policies_test_support;
+#[cfg(test)]
+mod policies_tests;
 mod preview;
 mod preview_identity;
 mod refusals;
+mod secret_slots;
 pub(crate) mod session;
 mod shell;
 mod status;
@@ -56,23 +78,30 @@ use self::errors::flat_error;
 use self::guard::Guard;
 use super::auth::AuthenticatedClient;
 use super::router::AppState;
+use crate::config_reload::{
+    AuditPosture, GatewayAuth, IntentKind, RELOAD_LOCK_WAIT, ReloadContext, Replace, ReplaceError,
+    ReplaceOutcome, replace_audited,
+};
 use crate::stats::{StatsSnapshot, TopTool};
 
 use self::dashboard::dashboard_handler;
 
+/// Writes `replace` under this gateway's audit posture: an intent of `kind`
+/// first on an audited gateway, refused outright with auth on and no audit
+/// log. The one way a web UI route writes gateway.yaml.
+async fn write_audited(
+    state: &AppState,
+    context: Arc<ReloadContext>,
+    replace: Replace,
+    kind: IntentKind,
+) -> Result<ReplaceOutcome, ReplaceError> {
+    let auth = GatewayAuth::of(state.live_config.running().auth.enabled);
+    let audit = AuditPosture::of(state.transparency_log.clone(), auth).audit(kind)?;
+    replace_audited(context, replace, audit, RELOAD_LOCK_WAIT).await
+}
+
 /// Embedded HTML — compiled into the binary, zero filesystem dependency.
 const INDEX_HTML: &str = include_str!("index.html");
-
-/// Returns `true` when the caller has admin-level access.
-///
-/// Admin access follows a credential: the bearer, an API key with `admin: true`,
-/// or an SSO identity while a `role: admin` mapping rule matches it (E1). The
-/// identity used when authentication is disabled is NOT admin, because an
-/// unauthenticated gateway cannot tell its operator from any other caller that
-/// reaches the port.
-fn is_admin(client: Option<&AuthenticatedClient>) -> bool {
-    client.is_some_and(|c| c.admin)
-}
 
 /// Build the authenticated `/ui/api/*` and `/dashboard` sub-router.
 pub fn api_router() -> Router<Arc<AppState>> {
@@ -83,6 +112,10 @@ pub fn api_router() -> Router<Arc<AppState>> {
         .route(routes::UI_TOOLS_CALL, post(tool_call::call))
         .route(routes::UI_REFUSALS, get(refusals::refusals))
         .route(routes::UI_GATEWAY, get(gateway_status::gateway_status))
+        .route(
+            routes::UI_KEYS,
+            get(keys::keys).post(keys_create::create_key),
+        )
         .route(routes::UI_CONFIG, get(config))
         .route(routes::UI_RELOAD, post(reload))
         .route(routes::UI_DASHBOARD_LINK, post(session::dashboard_link))
@@ -96,6 +129,7 @@ pub fn api_router() -> Router<Arc<AppState>> {
         .merge(import::import_router())
         .merge(discovery::discovery_router())
         .merge(decisions::decisions_router())
+        .merge(policies::policies_router())
         .merge(history::history_router())
         .merge(stream::stream_router());
 
@@ -384,7 +418,7 @@ fn auth_facts(state: &AppState, client: Option<&AuthenticatedClient>) -> Value {
     json!({
         "enabled": state.live_config.generation().auth().enabled,
         "signed_in": client.is_some_and(|c| c.authenticated),
-        "admin": is_admin(client),
+        "admin": crate::gateway::auth::is_gateway_admin(client),
     })
 }
 
@@ -462,16 +496,20 @@ async fn tools(
         .iter()
         .map(|(server, tool)| crate::counters::Filter::Tool(server, tool))
         .collect();
-    let (windows, counts_since) = call_windows(&state, &labels);
-    for (entry, (day, prev)) in entries.iter_mut().zip(windows) {
-        entry["calls_24h"] = json!(day);
-        entry["calls_prev_24h"] = json!(prev);
+    let (windows, counts_since, series_start) = call_windows(&state, &labels);
+    for (entry, w) in entries.iter_mut().zip(windows) {
+        entry["calls_24h"] = json!(w.day);
+        entry["calls_prev_24h"] = json!(w.prev_day);
+        entry["calls_1h"] = json!(w.hour);
+        entry["calls_prev_1h"] = json!(w.prev_hour);
+        entry["calls_series"] = json!(w.series);
     }
 
     Json(json!({
         "tools": entries,
         "total": entries.len(),
         "counts_since": counts_since,
+        "series_start": series_start,
     }))
     .into_response()
 }
@@ -497,8 +535,19 @@ async fn config(
         .iter()
         .map(|b| {
             let s = b.status();
+            // Read from the request's generation, not the backend instance:
+            // an owner-only reload replaces no backend (display only), and a
+            // backend a concurrent reload registered may not be in this
+            // generation yet (then `null`). Admin only, by ruling: never on
+            // the open `/ui/api/status`.
+            let owner = generation
+                .config()
+                .backends
+                .get(&s.name)
+                .and_then(crate::config::BackendConfig::owner);
             json!({
                 "name": s.name,
+                "owner": owner,
                 "transport": s.transport,
                 "running": s.running,
                 // As written, so a pattern that matches no current tool shows.
@@ -659,23 +708,54 @@ struct ToolsQuery {
 /// Each label's calls in the last 24 hours (the 48 half-hour buckets ending
 /// with the current, partial one) and in the same local wall-clock hours of
 /// the day before (on a DST date that span is one hour shorter or longer),
-/// read in one store read, plus when counting began. A count is `None` when
+/// and the hour windows and half-hour series, read in one store read, plus
+/// when counting began and the series' first point. A count is `None` when
 /// it could be low (calls folded into an overflow, or no longer held); every
-/// count and the start are `None` when the counter store is not running or
+/// count and both starts are `None` when the counter store is not running or
 /// the clock cannot be read: the caller still answers, with nulls.
 fn call_windows(
     state: &AppState,
     labels: &[crate::counters::Filter<'_>],
-) -> (Vec<crate::counters::CallWindows>, Option<u64>) {
-    let unknown = || vec![(None, None); labels.len()];
+) -> (Vec<crate::counters::CallWindows>, Option<u64>, Option<i64>) {
     let (Some(store), Ok(now)) = (state.meta_mcp.counters(), crate::clock::unix_secs()) else {
-        return (unknown(), None);
+        return (
+            vec![crate::counters::CallWindows::UNKNOWN; labels.len()],
+            None,
+            None,
+        );
     };
     let sums = store.window_sums(labels, now, &crate::local_day::host_zone());
-    (sums.counts, Some(sums.since))
+    (sums.counts, Some(sums.since), Some(sums.series_start))
 }
 
 // ── Tests ────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+#[path = "keys_tests.rs"]
+mod keys_tests;
+
+#[cfg(test)]
+#[path = "keys_file_tests.rs"]
+mod keys_file_tests;
+
+#[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod discovery_wiring_tests;
+
+#[cfg(test)]
+#[path = "keys_create_fixture_tests.rs"]
+mod keys_create_fixture_tests;
+
+#[cfg(test)]
+#[path = "keys_create_tests.rs"]
+mod keys_create_tests;
+
+#[cfg(test)]
+#[path = "keys_create_refusal_tests.rs"]
+mod keys_create_refusal_tests;
+
+#[cfg(test)]
+#[path = "keys_create_writer_tests.rs"]
+mod keys_create_writer_tests;

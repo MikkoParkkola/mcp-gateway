@@ -19,28 +19,41 @@ impl FirewallConfig {
     /// Rule `match` globs are checked only when the firewall is on.
     /// Anomaly thresholds are checked only when `anomaly_detection` is on,
     /// relay settings only when `collusion.action` is not `off`, so a config
-    /// that enables neither loads exactly as before.
+    /// that enables neither loads exactly as before. An empty or
+    /// whitespace-only `memory_poisoning.scan_tools` entry is refused whatever
+    /// is enabled.
     ///
     /// # Errors
     ///
-    /// A message naming the first out-of-range field.
+    /// A message naming the first out-of-range field, or the first blank
+    /// `memory_poisoning.scan_tools` entry.
     pub fn validate(&self) -> Result<(), String> {
+        // `scan_tools` is a substring match: an empty entry is in every tool
+        // name, and a whitespace-only entry is in none. Refused whatever
+        // `enabled` says: neither is ever meant.
+        let scan_tools = &self.memory_poisoning.scan_tools;
+        if let Some(i) = scan_tools.iter().position(|t| t.trim().is_empty()) {
+            let why = if scan_tools[i].is_empty() {
+                "is empty, which matches every tool, so every call would be scanned as a \
+                 memory write"
+            } else {
+                "is only whitespace, which matches no tool, so it scans nothing"
+            };
+            return Err(format!(
+                "security.firewall.memory_poisoning.scan_tools[{i}] {why}. Remove it, or list \
+                 the memory tools' names"
+            ));
+        }
         // A `match` glob that does not parse would fail open at runtime, so it
         // is refused while the rules can run. The message names the rule's
         // path, not its text.
-        if self.enabled
-            && let Some(i) = self
-                .rules
-                .iter()
-                .position(|rule| glob::Pattern::new(&rule.tool_match).is_err())
-        {
-            return Err(format!(
-                "security.firewall.rules[{i}].match is not a valid glob"
-            ));
-        }
         if self.enabled {
             for (i, rule) in self.rules.iter().enumerate() {
-                validate_rule_scope(i, rule)?;
+                super::verdict::glob_problem(i, rule)?;
+            }
+            for (i, rule) in self.rules.iter().enumerate() {
+                super::verdict::scope_problem(i, rule)?;
+                super::allowed_root::validate_rule(i, rule)?;
             }
         }
         // Relay detection is independent of anomaly detection: checked first.
@@ -103,39 +116,6 @@ pub(crate) fn refuse_keyless_http_anomaly(config: &crate::config::Config) -> Res
     Ok(())
 }
 
-/// The scope keys of rule `i` (`servers`, `keys`, `except`): an absent key
-/// means unscoped, so an empty list is refused rather than read as "nothing";
-/// every glob must parse; an exception must set a field. Paths, never values.
-fn validate_rule_scope(i: usize, rule: &super::FirewallRule) -> Result<(), String> {
-    let path = format!("security.firewall.rules[{i}]");
-    let invalid = |glob: &str| glob::Pattern::new(glob).is_err();
-    for (key, empty) in [
-        ("servers", rule.servers.as_ref().is_some_and(Vec::is_empty)),
-        ("keys", rule.keys.as_ref().is_some_and(Vec::is_empty)),
-        ("except", rule.except.as_ref().is_some_and(Vec::is_empty)),
-    ] {
-        if empty {
-            return Err(format!(
-                "{path}.{key} must not be empty; leave it out to apply to all"
-            ));
-        }
-    }
-    if let Some(j) = rule.servers.iter().flatten().position(|g| invalid(g)) {
-        return Err(format!("{path}.servers[{j}] is not a valid glob"));
-    }
-    for (j, entry) in rule.except.iter().flatten().enumerate() {
-        if entry.server.is_none() && entry.tool.is_none() && entry.key.is_none() {
-            return Err(format!("{path}.except[{j}] sets no field"));
-        }
-        for (field, glob) in [("server", &entry.server), ("tool", &entry.tool)] {
-            if glob.as_deref().is_some_and(invalid) {
-                return Err(format!("{path}.except[{j}].{field} is not a valid glob"));
-            }
-        }
-    }
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use crate::config::Config;
@@ -144,6 +124,56 @@ mod tests {
         let yaml = format!("security:\n  firewall:\n{anomaly}");
         let config: Config = crate::yaml::from_str(&yaml).expect("the YAML parses");
         config.validate()
+    }
+
+    /// `scan_tools` is a substring match, so an empty entry is in every tool
+    /// name and makes every call a memory write. Refused whatever the firewall
+    /// and the scanner say, so turning either on never surfaces it.
+    #[test]
+    fn an_empty_memory_scan_tools_entry_is_refused_at_load() {
+        for firewall in ["true", "false"] {
+            for scanner in ["true", "false"] {
+                let err = load(&format!(
+                    "    enabled: {firewall}\n    memory_poisoning:\n      enabled: {scanner}\n      \
+                     scan_tools: [\"remember\", \"\"]\n"
+                ))
+                .expect_err("an empty entry loaded")
+                .to_string();
+                assert!(
+                    err.contains("security.firewall.memory_poisoning.scan_tools[1]"),
+                    "error does not name the entry: {err}"
+                );
+                assert!(err.contains("every tool"), "error does not say why: {err}");
+            }
+        }
+    }
+
+    /// The boundaries of the refusal: an empty list loads (it scans nothing,
+    /// as configured); an empty entry first is refused at index 0; a
+    /// whitespace-only entry is refused as matching nothing.
+    #[test]
+    fn scan_tools_refusal_boundaries() {
+        load("    memory_poisoning:\n      scan_tools: []\n").expect("an empty list loads");
+        for (list, at, why) in [
+            ("[\"\", \"store\"]", "scan_tools[0]", "every tool"),
+            ("[\"store\", \"  \"]", "scan_tools[1]", "matches no tool"),
+            ("[\"\\t\"]", "scan_tools[0]", "matches no tool"),
+        ] {
+            let err = load(&format!(
+                "    memory_poisoning:\n      scan_tools: {list}\n"
+            ))
+            .expect_err("a blank entry loaded")
+            .to_string();
+            assert!(err.contains(at), "{list}: {err}");
+            assert!(err.contains(why), "{list}: {err}");
+        }
+    }
+
+    /// Case is no load error: matching ignores it.
+    #[test]
+    fn an_uppercase_memory_scan_tools_entry_loads() {
+        load("    memory_poisoning:\n      scan_tools: [\"STORE\", \"Kv_Set\"]\n")
+            .expect("case is no error");
     }
 
     #[test]

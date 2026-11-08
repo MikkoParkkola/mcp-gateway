@@ -3,14 +3,16 @@
 //! `cap discover`: finding MCP servers on this machine, the shadow scan, and
 //! printing what either found. Moved from `cap.rs` for the file-size ceiling.
 
+use std::io::Write as _;
 use std::process::ExitCode;
 
 use mcp_gateway::discovery::{
     AutoDiscovery,
-    shadow::{ShadowRemediationAction, ShadowScanReport, ShadowTrustStatus},
+    shadow::{ShadowRemediationAction, ShadowScanReport},
 };
 
 use super::super::config_write::CommentLoss;
+use super::render::{render_server_entry, render_shadow_report};
 
 pub(super) async fn cap_discover(
     format: String,
@@ -41,47 +43,52 @@ pub(super) async fn cap_discover(
 
             // In json/yaml mode stdout carries only the document; every other
             // line goes to stderr so the output parses as one value (#1909).
-            let say = |text: &str| {
-                if structured_output {
-                    eprintln!("{text}");
-                } else {
-                    println!("{text}");
-                }
+            // A writer, not a closure taking text: each line below is its
+            // own output site for the discovery output guard.
+            let mut say: Box<dyn std::io::Write> = if structured_output {
+                Box::new(std::io::stderr())
+            } else {
+                Box::new(std::io::stdout())
             };
             if servers.is_empty() {
                 if structured_output {
                     print_discovered_servers(&servers, &format);
                 }
-                say(DISCOVER_EMPTY);
+                let _ = writeln!(say, "{DISCOVER_EMPTY}");
                 return ExitCode::SUCCESS;
             }
             print_discovered_servers(&servers, &format);
             if write_config {
-                say("\n📝 Writing discovered servers to config...");
+                let _ = writeln!(say, "\n📝 Writing discovered servers to config...");
                 match crate::write_discovered_to_config(&servers, config_path.as_deref(), mode) {
                     Ok((path, written, skipped)) => {
-                        say(&format!(
+                        let _ = writeln!(
+                            say,
                             "✅ Wrote {written} server(s) to {}; skipped {skipped}",
                             path.display()
-                        ));
-                        say(&format!(
+                        );
+                        let _ = writeln!(
+                            say,
                             "\nTo use discovered servers, start gateway with: mcp-gateway -c {}",
                             path.display()
-                        ));
+                        );
                     }
                     Err(e) => {
-                        eprintln!("❌ Failed to write config: {e}");
+                        eprintln!("{}", failure_line("Failed to write config", &e));
                         return ExitCode::FAILURE;
                     }
                 }
             } else {
-                say("\n💡 To add these servers to your gateway config, run:");
-                say("   mcp-gateway cap discover --write-config");
+                let _ = writeln!(
+                    say,
+                    "\n💡 To add these servers to your gateway config, run:"
+                );
+                let _ = writeln!(say, "   mcp-gateway cap discover --write-config");
             }
             ExitCode::SUCCESS
         }
         Err(e) => {
-            eprintln!("❌ Discovery failed: {e}");
+            eprintln!("{}", failure_line("Discovery failed", &e));
             ExitCode::FAILURE
         }
     }
@@ -102,28 +109,32 @@ async fn cap_discover_shadow(
     let compare_config_path =
         gateway_config.unwrap_or_else(|| std::path::PathBuf::from("gateway.yaml"));
 
-    let registered_names: std::collections::HashSet<String> =
-        if let Ok(config) = mcp_gateway::config::Config::load(Some(&compare_config_path)) {
-            config.backends.into_keys().collect()
-        } else {
-            // Config not found or unreadable — all discovered servers are unregistered.
-            eprintln!(
-                "⚠️  Could not load gateway config from '{}'; \
-                 treating all discovered servers as unregistered.",
-                compare_config_path.display()
-            );
-            std::collections::HashSet::new()
-        };
+    let loaded = mcp_gateway::config::Config::load(Some(&compare_config_path)).ok();
+    let registered_names: std::collections::HashSet<String> = if let Some(config) = &loaded {
+        config.backends.keys().cloned().collect()
+    } else {
+        // Config not found or unreadable — all discovered servers are unregistered.
+        eprintln!(
+            "⚠️  Could not load gateway config from '{}'; \
+             treating all discovered servers as unregistered.",
+            compare_config_path.display()
+        );
+        std::collections::HashSet::new()
+    };
 
     let shadow_servers: Vec<_> = discovered
         .iter()
         .filter(|s| !registered_names.contains(&s.name))
         .cloned()
         .collect();
+    // The record key is only read here, never created: a report keys its
+    // URL asset ids with the gateway's key, or says they are for this run.
     let report = ShadowScanReport::from_discovered(
         &discovered,
         &registered_names,
         Some(&compare_config_path),
+        loaded.as_ref(),
+        &mcp_gateway::config_persistence::gateway_data_dir(),
     );
     let adoptable_names: std::collections::HashSet<&str> = report
         .assets
@@ -175,7 +186,7 @@ async fn cap_discover_shadow(
                 );
             }
             Err(e) => {
-                eprintln!("❌ Failed to adopt shadow servers: {e}");
+                eprintln!("{}", failure_line("Failed to adopt shadow servers", &e));
                 return ExitCode::FAILURE;
             }
         }
@@ -185,63 +196,7 @@ async fn cap_discover_shadow(
 }
 
 fn print_shadow_report(report: &ShadowScanReport) {
-    if report.assets.is_empty() {
-        println!("✅ No shadow servers found — all discovered MCP servers are registered.");
-        println!("Passive scan only; no discovered tools were invoked.");
-        return;
-    }
-
-    println!(
-        "⚠️  Found {} shadow (unregistered) MCP server(s). Passive scan only; no discovered tools were invoked.\n",
-        report.summary.unmanaged_total
-    );
-    println!("Action groups:");
-    for group in &report.action_groups {
-        println!("  {:?}: {} asset(s)", group.action, group.count);
-    }
-    println!();
-
-    for asset in &report.assets {
-        println!("📦 {}", asset.name);
-        println!("   ID: {}", asset.id);
-        println!("   Severity: {:?}", asset.severity);
-        println!("   Source: {:?}", asset.source);
-        println!("   Trust: {:?}", asset.trust_status);
-        println!("   Transport: {}", asset.transport.kind);
-        if let Some(endpoint) = &asset.transport.endpoint {
-            println!("   Endpoint: {endpoint}");
-        }
-        if let Some(path) = &asset.evidence.config_path {
-            println!("   Config: {path}");
-        }
-        if let Some(pid) = asset.evidence.pid {
-            println!("   PID: {pid}");
-        }
-        if let Some(executable) = &asset.evidence.executable {
-            println!("   Executable: {executable} (arguments redacted)");
-        }
-        println!("   Auth exposure: {:?}", asset.auth_exposure);
-        println!("   Data risk: {:?}", asset.data_risk);
-        println!("   Recommended action: {:?}", asset.remediation.action);
-        println!("   Confidence: {:?}", asset.remediation.confidence);
-        println!(
-            "   Confirmation required: {}",
-            asset.remediation.confirmation_required
-        );
-        println!("   Verify: {}", asset.remediation.verification_step);
-        if asset.remediation.action == ShadowRemediationAction::AdoptIntoGateway
-            && let Some(command) = &asset.remediation.apply_command
-        {
-            println!("   Apply after review: {command}");
-        }
-        if asset.trust_status == ShadowTrustStatus::Unmanaged {
-            println!("   Reason: {}", asset.risk_reasons.join(", "));
-        }
-        println!();
-    }
-
-    println!("Default mode is dry-run. To adopt reviewed local unmanaged servers, rerun with:");
-    println!("   mcp-gateway cap discover --shadow --write-config");
+    render_shadow_report(&mut std::io::stdout().lock(), report);
 }
 
 const DISCOVER_EMPTY: &str = "No MCP servers found.
@@ -280,39 +235,16 @@ fn print_discovered_servers(servers: &[mcp_gateway::discovery::DiscoveredServer]
 }
 
 fn print_server_entry(server: &mcp_gateway::discovery::DiscoveredServer) {
-    println!("📦 {}", server.name);
-    println!("   Description: {}", server.description);
-    println!("   Source: {:?}", server.source);
-    match &server.transport {
-        mcp_gateway::config::TransportConfig::Stdio { command, .. } => {
-            println!("   Transport: stdio");
-            println!(
-                "   Command: {}",
-                mcp_gateway::security::summarize_stdio_command(command)
-            );
-        }
-        mcp_gateway::config::TransportConfig::Http { http_url, .. } => {
-            println!("   Transport: http");
-            println!(
-                "   URL: {}",
-                mcp_gateway::security::diagnostic_url(http_url)
-            );
-        }
-        mcp_gateway::config::TransportConfig::WebSocket { ws_url, .. } => {
-            println!("   Transport: websocket");
-            println!("   URL: {}", mcp_gateway::security::diagnostic_url(ws_url));
-        }
-        #[cfg(feature = "a2a")]
-        mcp_gateway::config::TransportConfig::A2a { a2a_url, .. } => {
-            println!("   Transport: a2a");
-            println!("   URL: {}", mcp_gateway::security::diagnostic_url(a2a_url));
-        }
-    }
-    if let Some(ref path) = server.metadata.config_path {
-        println!("   Config: {}", path.display());
-    }
-    if let Some(pid) = server.metadata.pid {
-        println!("   PID: {pid}");
-    }
-    println!();
+    render_server_entry(&mut std::io::stdout().lock(), server);
 }
+
+/// The terminal line for a failed step, escaped whole: an error can carry a
+/// path or text from a client's config file. One `shown` call, so the
+/// discovery output guard accepts it where it is printed.
+fn failure_line(what: &str, error: &impl std::fmt::Display) -> mcp_gateway::cli_support::Shown {
+    mcp_gateway::cli_support::shown(&format!("❌ {what}: {error}"))
+}
+
+#[cfg(test)]
+#[path = "server_scan_failure_tests.rs"]
+mod failure_tests;

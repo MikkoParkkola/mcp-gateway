@@ -91,7 +91,9 @@ async fn r1_a_surfaced_replay_records_the_admitted_server() {
     lease.complete_secured(&JsonRpcResponse::success(RequestId::Number(1), ok_result()));
     let again =
         meta.admit_meta_sync_for_test(owner(), &ctx, NAME, &args, None, &RequestId::Number(2));
-    let Ok(SyncAdmission::Replay(response, audit, target, dispatched, bindings)) = again else {
+    let Ok(SyncAdmission::Replay(response, audit, target, dispatched, bindings, effect_slot)) =
+        again
+    else {
         panic!("premise: the repeat is admitted as a replay");
     };
     assert_eq!(
@@ -106,7 +108,7 @@ async fn r1_a_surfaced_replay_records_the_admitted_server() {
             &args,
             &ctx,
             target,
-            (dispatched, bindings),
+            (dispatched, bindings, effect_slot),
             (response, audit),
         )
         .await
@@ -150,7 +152,7 @@ async fn r7_a_continuation_origin_replay_writes_no_record() {
             &json!({}),
             &ctx,
             Some(origin),
-            (None, Vec::new()),
+            (None, Vec::new(), None),
             (stored, None),
         )
         .await
@@ -203,7 +205,7 @@ async fn r5b_a_failed_deferral_records_the_admitted_server() {
             &json!({}),
             &ctx,
             Some(target),
-            (None, Vec::new()),
+            (None, Vec::new(), None),
             (stored, None),
         )
         .await
@@ -285,7 +287,7 @@ async fn r2_a_surfaced_replay_stages_its_receipt_for_the_admitted_server() {
             &json!({}),
             &ctx,
             Some(target),
-            (None, Vec::new()),
+            (None, Vec::new(), None),
             (stored, None),
         )
         .await
@@ -296,10 +298,10 @@ async fn r2_a_surfaced_replay_stages_its_receipt_for_the_admitted_server() {
         .collecting_staged(meta.audit_replay(NAME, &json!({}), None, &ctx, response, audit))
         .await;
     assert!(answer.error.is_none(), "premise: delivered: {answer:?}");
-    staged.commit(true);
+    staged.commit(true, &firewall.paired_generation_for_test());
     let params = json!({"name": "send", "arguments": {"text": PROSE}});
     let relayed = !firewall
-        .check_relay(
+        .check_relay_paired(
             RelayCaller::Keyed("bob"),
             "alpha",
             "send",
@@ -334,7 +336,7 @@ async fn r8_an_unkeyed_named_replay_carries_the_admitted_server() {
             &json!({}),
             &ctx,
             Some(target),
-            (None, Vec::new()),
+            (None, Vec::new(), None),
             (stored, None),
         )
         .await
@@ -390,7 +392,7 @@ async fn r3_no_carried_server_records_and_stages_nothing() {
     let (_, staged) = meta
         .collecting_staged(meta.audit_replay(NAME, &json!({}), None, &ctx, replay, facts))
         .await;
-    staged.commit(true);
+    staged.commit(true, &firewall.paired_generation_for_test());
     assert!(
         records(&dir).is_empty(),
         "R3: a replay with no carried server wrote a record: {:?}",
@@ -399,7 +401,7 @@ async fn r3_no_carried_server_records_and_stages_nothing() {
     let params = json!({"name": "send", "arguments": {"text": PROSE}});
     assert!(
         firewall
-            .check_relay(
+            .check_relay_paired(
                 RelayCaller::Keyed("bob"),
                 "beta",
                 "send",
@@ -443,7 +445,7 @@ async fn r5_a_refused_replay_records_the_admitted_server() {
             &json!({}),
             &ctx,
             Some(target),
-            (None, bindings),
+            (None, bindings, None),
             (stored, None),
         )
         .await

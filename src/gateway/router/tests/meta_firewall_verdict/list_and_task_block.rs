@@ -268,6 +268,8 @@ async fn discovery_inspection_reads_the_unescaped_value() {
         servers: None,
         keys: None,
         except: None,
+        allowed_roots: None,
+        path_args: None,
     }];
     // Built at run time so no key-shaped literal sits in the source.
     let secret = "A".repeat(20);
@@ -410,7 +412,7 @@ async fn a_task_mode_discovery_settles_with_one_inspection() {
             crate::gateway::record_principal::RecordPrincipal::none(),
             crate::gateway::meta_mcp::Authentication::Anonymous,
             crate::security::audit::CredentialKind::None,
-            false,
+            crate::gateway::authz::AdminStanding::None,
             crate::protocol::meta::Declared::NONE,
             None,
             None,

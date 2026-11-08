@@ -65,6 +65,16 @@ impl HttpSegmentSink {
     pub(crate) fn open(data_dir: &Path, identity: WriterIdentity, now: u64) -> io::Result<Self> {
         let (window_path, lock_path) = window_paths(data_dir);
         let directory = data_dir.join(DURABLE_TELEMETRY_DIR);
+        // A missing data directory here means the open is about to rebuild a
+        // test directory already removed: name the test that opened it.
+        #[cfg(test)]
+        let created_by = crate::test_late_write::Creator::default();
+        #[cfg(test)]
+        created_by.witness("telemetry window open", data_dir);
+        // Recorded before anything is written, so a row that sees the segment
+        // on disk also sees who opened it.
+        #[cfg(test)]
+        stall_seam::record_opener(&window_path, created_by.name());
         std::fs::create_dir_all(&directory)?;
         force_directory_owner_only(&directory)?;
         #[cfg(test)]
@@ -92,7 +102,7 @@ impl HttpSegmentSink {
             index,
             identity,
             #[cfg(test)]
-            created_by: crate::test_late_write::Creator::default(),
+            created_by,
         })
     }
 
@@ -128,6 +138,10 @@ impl HttpSegmentSink {
         self.created_by
             .witness("telemetry window", &self.window_path);
         let _lock = ExclusiveFileLock::acquire(&self.lock_path)?;
+        // A lock taken beside a missing window is the lock-only leftover.
+        #[cfg(test)]
+        self.created_by
+            .witness("telemetry window lock", &self.window_path);
         let mut window = read_window_v2(&self.window_path)?;
         let segment = window
             .http_segments
@@ -189,6 +203,14 @@ pub(crate) mod stall_seam {
         Open,
         Checkpoint,
         Close,
+        /// A saver's checkpoint thread, before it tries the sink mutex.
+        BeforeLock,
+        /// The saver's seal closure, once it has finished.
+        Sealed,
+        /// A saver's checkpoint thread, as it ends.
+        CheckpointDone,
+        /// The saver, as it starts waiting for its writer threads.
+        Draining,
     }
 
     type Gate = (mpsc::Sender<()>, Arc<Mutex<mpsc::Receiver<()>>>);
@@ -211,7 +233,69 @@ pub(crate) mod stall_seam {
         (entered_rx, release_tx)
     }
 
-    pub(super) fn pass(path: &Path, role: Role) {
+    static OPENERS: Mutex<Option<HashMap<PathBuf, String>>> = Mutex::new(None);
+
+    /// Record the test a window at `path` was opened for.
+    pub(crate) fn record_opener(path: &Path, opener: &str) {
+        OPENERS
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get_or_insert_with(HashMap::new)
+            .insert(path.to_path_buf(), opener.to_owned());
+    }
+
+    /// The test the window at `path` was last opened for, if any.
+    pub(crate) fn opened_by(path: &Path) -> Option<String> {
+        OPENERS
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .as_ref()
+            .and_then(|openers| openers.get(path).cloned())
+    }
+
+    static LIVE: Mutex<Option<HashMap<PathBuf, usize>>> = Mutex::new(None);
+
+    /// A saver write for the window at `path`, counted until it drops.
+    pub(crate) struct Live(PathBuf);
+
+    /// Count a saver write for the window at `path` while the guard lives.
+    pub(crate) fn live(path: &Path) -> Live {
+        *LIVE
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get_or_insert_with(HashMap::new)
+            .entry(path.to_path_buf())
+            .or_default() += 1;
+        Live(path.to_path_buf())
+    }
+
+    impl Drop for Live {
+        fn drop(&mut self) {
+            if let Some(count) = LIVE
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .as_mut()
+                .and_then(|live| live.get_mut(&self.0))
+            {
+                *count -= 1;
+            }
+        }
+    }
+
+    /// Saver writes still running for windows under `dir`.
+    pub(crate) fn live_under(dir: &Path) -> usize {
+        LIVE.lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .as_ref()
+            .map_or(0, |live| {
+                live.iter()
+                    .filter(|(path, _)| path.starts_with(dir))
+                    .map(|(_, count)| count)
+                    .sum()
+            })
+    }
+
+    pub(crate) fn pass(path: &Path, role: Role) {
         let gate = GATES
             .lock()
             .unwrap_or_else(PoisonError::into_inner)

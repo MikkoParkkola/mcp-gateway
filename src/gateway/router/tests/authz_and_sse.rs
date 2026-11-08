@@ -48,7 +48,6 @@ async fn test_router_app_state_with_ssrf(
         proxy_manager,
         streaming_config,
         key_server: None,
-        tool_policy: Arc::new(crate::security::ToolPolicy::default()),
         mtls_policy: Arc::new(MtlsPolicy::from_config(&MtlsConfig::default())),
         trust_configured_backends,
         inflight: Arc::new(tokio::sync::Semaphore::new(8)),
@@ -64,6 +63,7 @@ async fn test_router_app_state_with_ssrf(
         live_config: Arc::clone(&live_config),
         export_status: None,
         transparency_log: None,
+        governance_log: None,
         dashboard_bootstrap: std::sync::Arc::new(crate::gateway::auth::DashboardBootstrap::new()),
         tasks: task_service,
         task_executor,
@@ -424,7 +424,7 @@ async fn gateway_reload_capabilities_needs_an_admin_key() {
         .load_from_directory(dir.path().to_str().expect("the tempdir path is utf-8"))
         .await
         .expect("the fixture directory loads");
-    let (state, _store) = test_router_app_state_with_auth(&scoped_auth_config(true)).await;
+    let (state, _store) = test_router_app_state_with_auth(&full_admin_auth_config()).await;
     state.meta_mcp.set_capabilities(Arc::clone(&backend));
     std::fs::write(dir.path().join("a.yaml"), cap_yaml("v2-much-longer")).expect("write v2");
     let router = create_router(state);

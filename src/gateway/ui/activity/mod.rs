@@ -10,6 +10,7 @@ pub(in crate::gateway::ui) mod access;
 mod csv;
 mod cursor;
 mod export;
+pub(in crate::gateway::ui) mod forward;
 mod reader;
 mod receipt;
 /// The decision set's startup read of one record kind.
@@ -20,7 +21,7 @@ mod seek;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use axum::extract::{Path, Query, State};
+use axum::extract::{Extension, Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
@@ -30,10 +31,11 @@ use serde_json::{Value, json};
 
 use self::access::{Access, Refused};
 use self::reader::{Limits, read_page};
-use self::rows::{FeedOutcome, Filter, kind_of, owned_by, row};
+use self::rows::{FeedOutcome, Filter, kind_of, row};
 use super::AppState;
 use super::errors::{auth_required, flat_error};
 use super::guard::Guard;
+use crate::config_reload::Generation;
 use crate::gateway::routes;
 
 /// Rows per page unless the caller asks for fewer or more.
@@ -119,10 +121,14 @@ fn refused(r: Refused) -> Response {
     }
 }
 
-/// The caller's access and the logs to read, or the refusal.
-fn admit(state: &AppState, guard: &Guard) -> Result<(Access, Logs), Early> {
-    let config = state.live_config.get();
-    let mapping = &config.control_plane.role_mapping;
+/// The caller's access and the logs to read, or the refusal. The role is the
+/// one the request's pinned generation maps (ADR-023).
+fn admit(
+    state: &AppState,
+    generation: &Generation,
+    guard: &Guard,
+) -> Result<(Access, Logs), Early> {
+    let mapping = &generation.config().control_plane.role_mapping;
     let access = guard.admit_activity(|client, identity| {
         access::resolve(client, identity, mapping).map_err(|r| Box::new(refused(r)))
     })?;
@@ -134,25 +140,29 @@ fn admit(state: &AppState, guard: &Guard) -> Result<(Access, Logs), Early> {
     Ok((access, logs))
 }
 
-/// The most Activity reads (list, receipt, export) running at once. Each is
-/// bounded by its own budget; this bounds how many budgets run together, so
-/// callers cannot multiply them into the disk and the blocking pool.
-const MAX_CONCURRENT_READS: usize = 4;
-
-static READS: std::sync::LazyLock<tokio::sync::Semaphore> =
-    std::sync::LazyLock::new(|| tokio::sync::Semaphore::new(MAX_CONCURRENT_READS));
-
-/// Run a blocking read off the async runtime, one of at most
-/// [`MAX_CONCURRENT_READS`]; a read beyond that waits its turn.
-async fn blocking(read: impl FnOnce() -> Response + Send + 'static) -> Response {
-    let Ok(_permit) = READS.acquire().await else {
+/// Run a blocking read off the async runtime, holding one of `reads`' slots
+/// (the state's [`ProcessFacts::activity_reads`]); a read beyond the limit waits
+/// its turn. The slot moves into the blocking closure, so it is held until the
+/// read itself finishes, even when the caller stops waiting.
+///
+/// [`ProcessFacts::activity_reads`]: crate::gateway::router::ProcessFacts::activity_reads
+async fn blocking(
+    reads: &Arc<tokio::sync::Semaphore>,
+    read: impl FnOnce() -> Response + Send + 'static,
+) -> Response {
+    let Ok(permit) = Arc::clone(reads).acquire_owned().await else {
         return flat_error(
             StatusCode::INTERNAL_SERVER_ERROR,
             "the activity read failed",
         )
         .into_response();
     };
-    tokio::task::spawn_blocking(read).await.unwrap_or_else(|_| {
+    tokio::task::spawn_blocking(move || {
+        let _held = permit;
+        read()
+    })
+    .await
+    .unwrap_or_else(|_| {
         flat_error(
             StatusCode::INTERNAL_SERVER_ERROR,
             "the activity read failed",
@@ -161,13 +171,49 @@ async fn blocking(read: impl FnOnce() -> Response + Send + 'static) -> Response 
     })
 }
 
+/// What one live-stream read is given: the list's page byte budget, and the
+/// key the rows' HMACs are checked with, resolved as the list resolves it.
+pub(in crate::gateway::ui) struct StreamRead {
+    pub(in crate::gateway::ui) bytes: u64,
+    pub(in crate::gateway::ui) secret: Option<Vec<u8>>,
+}
+
+/// Run one live-stream read under the same gate as the list, the receipt and
+/// the export. The permit moves into the blocking closure, so it is held
+/// until the read itself finishes, even when the caller stops waiting.
+pub(in crate::gateway::ui) async fn stream_read<T: Send + 'static>(
+    state: &AppState,
+    read: impl FnOnce(StreamRead) -> std::io::Result<T> + Send + 'static,
+) -> std::io::Result<T> {
+    let given = StreamRead {
+        bytes: PAGE_SCAN_BYTES,
+        secret: verification_secret(&state.live_config),
+    };
+    let permit = Arc::clone(state.process.activity_reads())
+        .acquire_owned()
+        .await
+        .map_err(|_| std::io::Error::other("the activity read gate is closed"))?;
+    tokio::task::spawn_blocking(move || {
+        let _held = permit;
+        read(given)
+    })
+    .await
+    .map_err(|_| std::io::Error::other("the activity read did not finish"))?
+}
+
 async fn list(
     State(state): State<Arc<AppState>>,
+    Extension(generation): Extension<Arc<Generation>>,
     guard: Guard,
     Query(query): Query<ListQuery>,
 ) -> Response {
-    match admit(&state, &guard) {
-        Ok((access, logs)) => blocking(move || list_page(&logs, &access, &query)).await,
+    match admit(&state, &generation, &guard) {
+        Ok((access, logs)) => {
+            blocking(state.process.activity_reads(), move || {
+                list_page(&logs, &access, &query)
+            })
+            .await
+        }
         Err(r) => *r,
     }
 }
@@ -178,10 +224,11 @@ fn not_kept() -> Response {
 
 async fn receipt_route(
     State(state): State<Arc<AppState>>,
+    Extension(generation): Extension<Arc<Generation>>,
     guard: Guard,
     Path(id): Path<String>,
 ) -> Response {
-    let (access, logs) = match admit(&state, &guard) {
+    let (access, logs) = match admit(&state, &generation, &guard) {
         Ok(admitted) => admitted,
         Err(r) => return *r,
     };
@@ -196,6 +243,7 @@ async fn receipt_route(
         },
     };
     blocking(
+        state.process.activity_reads(),
         move || match receipt::receipt(&log, &id, &access, logs.secret.as_deref()) {
             Ok(Some(body)) => Json(body).into_response(),
             Ok(None) => not_kept(),
@@ -298,13 +346,8 @@ fn list_page(logs: &Logs, access: &Access, query: &ListQuery) -> Response {
         bytes: PAGE_SCAN_BYTES,
     };
     let keep = |line: &reader::Line| {
-        kind_of(line).is_some_and(|kind| {
-            parsed.filter.matches(line, kind)
-                && match access {
-                    Access::All => true,
-                    Access::Own { issuer, subject } => owned_by(line, kind, issuer, subject),
-                }
-        })
+        kind_of(line)
+            .is_some_and(|kind| parsed.filter.matches(line, kind) && access.admits(line, kind))
     };
     let page = match read_page(
         &logs.invocation,
@@ -357,15 +400,19 @@ fn filters_sent(q: &ListQuery) -> Value {
 
 async fn export_route(
     State(state): State<Arc<AppState>>,
+    Extension(generation): Extension<Arc<Generation>>,
     guard: Guard,
     Query(query): Query<ExportQuery>,
 ) -> Response {
-    let (access, logs) = match admit(&state, &guard) {
+    let (access, logs) = match admit(&state, &generation, &guard) {
         Ok(admitted) => admitted,
         Err(r) => return *r,
     };
     let signer = state.meta_mcp.public_provenance_signer();
-    blocking(move || export_response(&logs, &access, &query, signer.as_deref())).await
+    blocking(state.process.activity_reads(), move || {
+        export_response(&logs, &access, &query, signer.as_deref())
+    })
+    .await
 }
 
 /// One export. NDJSON is signed with the provenance key and refused without
@@ -472,6 +519,12 @@ fn export_response(
 #[cfg(test)]
 #[path = "list_tests.rs"]
 mod list_tests;
+#[cfg(test)]
+#[path = "refusal_tests.rs"]
+mod refusal_tests;
+#[cfg(test)]
+#[path = "scope_tests.rs"]
+mod scope_tests;
 #[cfg(test)]
 #[path = "security_tests.rs"]
 mod security_tests;

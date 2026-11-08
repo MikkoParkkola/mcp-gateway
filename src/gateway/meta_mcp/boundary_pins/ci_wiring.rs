@@ -167,7 +167,11 @@ jobs:
         run: |
           cargo clippy --lib --bins --all-features -- -D warnings
           cargo clippy --lib --bins --no-default-features -- -D warnings
-          cargo clippy --release --lib --bins --all-features -- -D warnings
+          # Every feature but the test-only ones, which refuse to build
+          # without debug_assertions. Its own line, so a failing script
+          # stops the step instead of running clippy with no features.
+          feats=$(python3 scripts/ci/release_features.py)
+          cargo clippy --release --lib --bins --features \"$feats\" -- -D warnings
           cargo clippy --release --lib --bins --no-default-features -- -D warnings
       - name: The registry lint still bites (MIK-8387)
         run: scripts/dev/check_registry_lint.sh --self-test

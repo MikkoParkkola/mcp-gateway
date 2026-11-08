@@ -6,7 +6,6 @@ use crate::error::rpc_codes::{INVALID_PARAMS, INVALID_REQUEST};
 use std::sync::Arc;
 
 use axum::{
-    Json,
     extract::{Path, State},
     http::StatusCode,
 };
@@ -14,9 +13,9 @@ use serde_json::Value;
 use tracing::warn;
 
 use super::AppState;
-use super::authorization::{ToolTarget, authorize_tool_target};
+use super::authorization::ToolTarget;
 use super::direct_guards::refusal;
-use super::helpers::{bodiless_accepted, build_http_error_response};
+use super::helpers::{RpcHttp, bodiless_accepted, build_http_error_response};
 use crate::gateway::auth::AuthenticatedClient;
 use crate::gateway::meta_mcp::invoke::relay::GatewayStamps;
 use crate::gateway::oauth::OAuthAgentIdentity;
@@ -28,7 +27,7 @@ use crate::security::firewall::FirewallAction;
 use crate::security::response_policy::{KeyOf, RuleTarget, ServerOf};
 use crate::security::validate_tool_name;
 
-type BackendRejection = (StatusCode, Json<Value>);
+type BackendRejection = RpcHttp;
 type BackendSecurityResult = Result<Option<Value>, BackendRejection>;
 
 /// Forwarded passthrough headers paired with the caller's stable upstream-session
@@ -131,10 +130,18 @@ async fn guard_tool_call(
 ) -> Result<Option<BackendRejection>, BackendRejection> {
     let named = params.and_then(|params| Some((params, params.get("name")?.as_str()?)));
     let Some((params, tool_name)) = named.filter(|(_, tool)| !tool.is_empty()) else {
+        crate::gateway::meta_mcp::invoke::audit::note_refused_by(
+            crate::security::decision_record::DecisionKind::Syntax,
+            None,
+        );
         return Err(unnamed_call(id));
     };
 
     if let Err(e) = validate_tool_name(tool_name) {
+        crate::gateway::meta_mcp::invoke::audit::note_refused_by(
+            crate::security::decision_record::DecisionKind::Syntax,
+            None,
+        );
         warn!(backend = %backend_name, tool = %tool_name, "Tool name rejected by validation");
         return Err(backend_security_error(id, &e));
     }
@@ -145,73 +152,34 @@ async fn guard_tool_call(
         tool: tool_name,
         arguments,
     };
-    let withheld_code = authorize_tool_target(
-        state,
-        auth.generation,
-        auth.client,
-        auth.oauth_agent_identity,
-        auth.cert_identity,
-        target,
-    )
-    .err()
-    .map(|refusal| refusal.code)
-    .or_else(|| {
-        state
-            .meta_mcp
-            .profile_refusal(backend_name, tool_name, session_id)
-            .map(|refusal| refusal.to_rpc_code())
-    });
-    // A name its description withholds is the gate's too, judged here before
-    // any credential (MIK-8356's caller verdict leaves it to the gate).
-    let withheld =
-        withheld_code.is_some() || backend.blocked_tool_refusal(None, tool_name).is_some();
+    // Test builds: the witness hook runs before the first generation read on this route
+    // (the withheld verdict's authorization, then `firewall_refusal` and the relay check
+    // under it, read it).
+    #[cfg(all(test, feature = "firewall"))]
+    crate::security::firewall::relay_witness_hook::run();
+    let (withheld_code, withheld) =
+        direct_preflight::withheld_verdict(state, auth, target, (backend, session_id));
     if let Some(code) = withheld_code {
         // The call's one record names it (MIK-8361).
-        crate::gateway::meta_mcp::visible::memo::note_denial_code(backend_name, tool_name, code);
+        crate::gateway::meta_mcp::visible::memo::note_denial_code(
+            backend_name,
+            tool_name,
+            code,
+            crate::gateway::meta_mcp::invoke::audit::take_refusal(),
+        );
         warn!(backend = %backend_name, tool = %tool_name, "Tool withheld by authorization; answered as absent");
     }
 
     #[cfg(feature = "firewall")]
-    if let Some(ref fw) = state.firewall {
-        let caller_name = auth.client.map_or("anonymous", |c| c.name.as_str());
-        let session_id = format!("direct:{backend_name}");
-        let control_identity = direct_control_identity(state, auth, &session_id);
-        let target = RuleTarget {
-            server: ServerOf::Backend(backend_name),
-            tool: tool_name,
-            key: KeyOf::of_client(auth.client.and_then(AuthenticatedClient::api_key_identity)),
-        };
-        let verdict = fw.check_request_keyed(
-            &session_id,
-            target,
-            arguments,
-            caller_name,
-            &control_identity,
-        );
-        if verdict.action == FirewallAction::Warn {
-            warn!(
-                backend = %backend_name,
-                tool = %tool_name,
-                findings = verdict.findings.len(),
-                "Firewall: direct backend request warning"
-            );
-        }
-        if let Some((code, message)) = verdict.request_refusal() {
-            crate::gateway::meta_mcp::invoke::audit::counting::note_request_firewall();
-            // The shared wording's code, ASI10's -32002 included, with this
-            // route's own HTTP status (403).
-            return Err(backend_security_error_with_status(
-                id,
-                code,
-                &message,
-                StatusCode::FORBIDDEN,
-            ));
-        }
-        let target = (backend_name, tool_name);
-        let audit = (session_id.as_str(), caller_name);
-        if let Some(refusal) = relay_refusal(fw, auth, id, target, params, audit) {
-            return Err(refusal);
-        }
+    if let Some(rejection) = firewall_refusal(
+        state,
+        auth,
+        id,
+        (backend_name, tool_name),
+        (params, arguments),
+        backend,
+    ) {
+        return Err(rejection);
     }
 
     // The kill switch says nothing about the name, so it is answered alike
@@ -245,6 +213,63 @@ async fn guard_tool_call(
             .await
             .unwrap_or(key_check::absent_response(id, tool_name)),
     ))
+}
+
+/// The request firewall and the relay rule for a direct call, for a withheld
+/// and a missing name alike: the refusal to answer with, if either refuses.
+#[cfg(feature = "firewall")]
+fn firewall_refusal(
+    state: &AppState,
+    auth: BackendAuthContext<'_>,
+    id: &RequestId,
+    (backend_name, tool_name): (&str, &str),
+    (params, arguments): (&Value, &Value),
+    backend: &crate::backend::Backend,
+) -> Option<BackendRejection> {
+    let fw = state.firewall.as_ref()?;
+    let caller_name = auth.client.map_or("anonymous", |c| c.name.as_str());
+    let session_id = format!("direct:{backend_name}");
+    let control_identity = direct_control_identity(state, auth, &session_id);
+    let target = RuleTarget {
+        server: ServerOf::Backend(backend_name),
+        tool: tool_name,
+        key: KeyOf::of_client(auth.client.and_then(AuthenticatedClient::api_key_identity)),
+    };
+    let (verdict, rule) = fw.check_request_attributed(
+        auth.generation.firewall_policy(),
+        &session_id,
+        target,
+        arguments,
+        caller_name,
+        &control_identity,
+        Some(backend),
+    );
+    if verdict.action == FirewallAction::Warn {
+        warn!(
+            backend = %backend_name,
+            tool = %tool_name,
+            findings = verdict.findings.len(),
+            "Firewall: direct backend request warning"
+        );
+    }
+    if let Some((code, message)) = verdict.request_refusal() {
+        crate::gateway::meta_mcp::invoke::audit::note_refused_by(
+            crate::security::decision_record::DecisionKind::Firewall,
+            rule,
+        );
+        crate::gateway::meta_mcp::invoke::audit::counting::note_request_firewall();
+        // The shared wording's code, ASI10's -32002 included, with this
+        // route's own HTTP status (403).
+        return Some(backend_security_error_with_status(
+            id,
+            code,
+            &message,
+            StatusCode::FORBIDDEN,
+        ));
+    }
+    let target = (backend_name, tool_name);
+    let audit = (session_id.as_str(), caller_name);
+    relay_refusal(fw, auth, id, target, params, audit)
 }
 
 /// What a direct-route call's token must grant (MIK-7570.ATTEST.1 part 3).
@@ -285,7 +310,7 @@ fn take_attestation_token(params: Option<&mut Value>) -> Option<String> {
 }
 
 /// Build a `403 Forbidden` JSON-RPC error response for security rejections.
-fn backend_security_error(id: &RequestId, message: &str) -> (StatusCode, Json<Value>) {
+fn backend_security_error(id: &RequestId, message: &str) -> RpcHttp {
     build_http_error_response(
         Some(id.clone()),
         INVALID_REQUEST,
@@ -300,7 +325,7 @@ fn backend_security_error_with_status(
     code: i32,
     message: &str,
     status: StatusCode,
-) -> (StatusCode, Json<Value>) {
+) -> RpcHttp {
     build_http_error_response(Some(id.clone()), code, message, status)
 }
 
@@ -471,9 +496,12 @@ pub(super) async fn backend_handler(
     // instance the send compares), boxed so the scope wraps a pointer.
     // The minted-receipt scope rides outside the memo.
     crate::gateway::meta_mcp::invoke::with_minted_receipts(Box::pin(
-        crate::gateway::meta_mcp::visible::memo::with_visibility_memo(Box::pin(
-            direct_audit::audited_call(Arc::clone(&state), name, request),
-        )),
+        // The caller's hiding judgment, filled once the caller is resolved.
+        crate::gateway::meta_mcp::hiding::with_caller_slot(
+            crate::gateway::meta_mcp::visible::memo::with_visibility_memo(Box::pin(
+                direct_audit::audited_call(Arc::clone(&state), name, request),
+            )),
+        ),
     ))
     .await
 }
@@ -492,18 +520,24 @@ async fn backend_handler_inner(
     request: axum::http::Request<axum::body::Body>,
     call: &mut Option<direct_audit::DirectCall>,
     reads: &mut direct_audit::DirectReads,
-) -> (StatusCode, Json<Value>) {
+) -> RpcHttp {
+    let shared = Arc::clone(&state);
     let state = &*state;
     let (caller, key, request) = match direct_caller::resolve_caller(state, request).await {
         Ok(resolved) => resolved,
         Err(response) => return response,
     };
+    // The owned session first: hiding is judged under the profile the call
+    // is routed under.
+    let session = direct_caller::owned_session(state, &caller, key);
+    // Before the absence stage and the backend lookup read the scoped view.
+    direct_caller::record_hiding_caller(shared, &caller, session);
     let mut envelope =
         match direct_caller::read_envelope(state, &name, request, &caller, (call, reads)).await {
             Ok(envelope) => envelope,
             Err(response) => return response,
         };
-    let route = match direct_caller::route(state, &name, &caller, key, &envelope) {
+    let route = match direct_caller::route(state, &name, &caller, session, &envelope) {
         Ok(route) => route,
         Err(response) => return response,
     };
@@ -569,6 +603,8 @@ async fn backend_handler_inner(
         Ok(admitted) => admitted,
         Err(response) => return response,
     };
+    // What the called tool declared, from the slot this dispatch runs under.
+    direct_idempotency::note_caller_slot_effect(scope, &propagation, admitted.call.tool);
     direct_dispatch::dispatch(scope, &envelope, (&preflight, &propagation), admitted).await
 }
 
@@ -618,7 +654,7 @@ fn settle_direct_idempotency(
     let Some(reservation) = reservation else {
         return;
     };
-    if response.delivery_refusal {
+    if response.wire_meta.delivery_refusal {
         reservation.fail(&stored_failure(
             crate::gateway::meta_mcp::invoke::dispatch_guards::firewall_refusal_body(),
         ));
@@ -652,7 +688,8 @@ fn settle_direct_idempotency(
 /// itself — an open circuit, an unknown backend or tool — carries no such
 /// ambiguity: nothing ran, so caching it for the entry's whole lifetime would
 /// deny the caller a retry of work that provably never happened. See
-/// [`crate::Error::is_pre_dispatch`] for why that allowlist stays tight. A
+/// [`crate::Error::is_pre_dispatch`] for why that allowlist stays tight, and
+/// `delivery_facts::unsent` for the send count that must also be empty. A
 /// lost round stores the uncertainty notice under the first caller's code
 /// (MIK-7979), the same sentence the meta route stores.
 fn settle_direct_failure(
@@ -666,7 +703,7 @@ fn settle_direct_failure(
     // The lease (7b) follows 7a: a pre-dispatch failure was withdrawn and
     // releases on drop; a lost round stays uncertain, as 7a's notice does;
     // otherwise it settles on the answer 7a stores.
-    if error.is_pre_dispatch() {
+    if crate::gateway::delivery_facts::unsent(error) {
         if let Some(reservation) = reservation {
             reservation.release();
         }
@@ -707,16 +744,6 @@ fn cached_error_response(id: Option<RequestId>, error: &Value) -> JsonRpcRespons
     }
 }
 
-fn record_client_success(state: &AppState, client: Option<&AuthenticatedClient>) {
-    if let Some(client) = client {
-        state
-            .live_config
-            .generation()
-            .auth()
-            .record_client_success(client);
-    }
-}
-
 /// Stamp a signed runtime-provenance receipt onto a direct-route `tools/call`
 /// result (MIK-6905 rung 3). The `/mcp/{name}` passthrough bypasses the meta
 /// chokepoint, so without this a client could route around provenance simply
@@ -748,16 +775,7 @@ fn stamp_direct_provenance(
     ));
 }
 
-fn record_client_failure(state: &AppState, client: Option<&AuthenticatedClient>) {
-    if let Some(client) = client {
-        state
-            .live_config
-            .generation()
-            .auth()
-            .record_client_failure(client);
-    }
-}
-
+mod client_outcome;
 mod costs;
 mod direct_audit;
 mod direct_caller;

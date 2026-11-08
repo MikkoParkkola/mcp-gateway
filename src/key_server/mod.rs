@@ -39,6 +39,9 @@ pub mod oidc;
 #[cfg(test)]
 #[path = "oidc_harness_tests.rs"]
 pub(crate) mod oidc_test_harness;
+/// The output-only doc tests fail for the reason they name.
+#[cfg(test)]
+mod output_only_doc_tests;
 pub mod policy;
 pub mod store;
 
@@ -125,7 +128,7 @@ impl KeyServer {
         let Some(temp) = self.store.get(token).await else {
             return KeyServerLookup::Absent;
         };
-        if !crate::identity_grants::names_someone(&temp.identity.issuer, &temp.identity.subject) {
+        if !crate::identity_grants::names_someone(temp.identity.issuer(), temp.identity.subject()) {
             return KeyServerLookup::Nameless;
         }
 

@@ -37,6 +37,10 @@ mod session_fp;
 mod admin_exposure;
 #[path = "tests/backend_lists.rs"]
 mod backend_lists;
+#[path = "tests/bridge_drop_tests.rs"]
+mod bridge_drop;
+#[path = "tests/bridged_origin.rs"]
+mod bridged_origin;
 #[path = "tests/code_mode.rs"]
 mod code_mode;
 #[path = "tests/confirmation_binding.rs"]
@@ -90,7 +94,7 @@ fn allow_all_ctx_named<'a>(
         stdio_nonce: None,
         caller_key: None,
         verified_identity: None,
-        is_admin: false,
+        admin: crate::gateway::authz::AdminStanding::None,
         surface_request: crate::gateway::recovery::SurfaceRequest::Configured,
         input_capabilities: crate::protocol::meta::Declared::NONE,
         retry: &crate::protocol::mrtr::NO_RETRY,
@@ -100,6 +104,7 @@ fn allow_all_ctx_named<'a>(
         // same reasoning that puts `Declared::NONE` on the line above.
         era: crate::protocol::meta::Era::Legacy,
         channel: &crate::gateway::input_bridge::NoClientChannel,
+        generation: None,
     }
 }
 
@@ -127,7 +132,7 @@ fn allow_all_ctx() -> crate::gateway::meta_mcp::MetaMcpCallerContext<'static> {
         stdio_nonce: None,
         caller_key: None,
         verified_identity: None,
-        is_admin: false,
+        admin: crate::gateway::authz::AdminStanding::None,
         surface_request: crate::gateway::recovery::SurfaceRequest::Configured,
         input_capabilities: crate::protocol::meta::Declared::NONE,
         retry: &crate::protocol::mrtr::NO_RETRY,
@@ -137,6 +142,7 @@ fn allow_all_ctx() -> crate::gateway::meta_mcp::MetaMcpCallerContext<'static> {
         // same reasoning that puts `Declared::NONE` on the line above.
         era: crate::protocol::meta::Era::Legacy,
         channel: &crate::gateway::input_bridge::NoClientChannel,
+        generation: None,
     }
 }
 
@@ -254,6 +260,11 @@ mod chain_withheld;
 #[cfg(test)]
 #[path = "clock_p2_tests.rs"]
 mod clock_p2;
+/// The scrub's refusal of an echo, delivered from a composite step and a
+/// caller-forwarded read, records refused only where it is delivered.
+#[cfg(test)]
+#[path = "echo_refusal_delivery_tests.rs"]
+mod echo_refusal_delivery;
 /// A playbook step the policy refuses at dispatch records refused.
 #[cfg(test)]
 #[path = "playbook_dispatch_refusal_tests.rs"]
@@ -262,6 +273,10 @@ mod playbook_dispatch_refusal;
 #[cfg(test)]
 #[path = "playbook_writes_tests.rs"]
 mod playbook_writes;
+/// Both gateway refusals read as never sent.
+#[cfg(test)]
+#[path = "refusal_stage_rows_tests.rs"]
+mod refusal_stage_rows;
 
 /// A caller the gateway can name, and so can bind a continuation to.
 ///
@@ -446,6 +461,8 @@ const TARGET_STATE: &str = "triage";
 
 #[path = "bridge_fallthrough_tests.rs"]
 mod bridge_fallthrough;
+#[path = "ci_rewrite_cache_tests.rs"]
+mod ci_rewrite_cache;
 #[cfg(feature = "firewall")]
 #[path = "collusion_bridge_tests.rs"]
 mod collusion_bridge;

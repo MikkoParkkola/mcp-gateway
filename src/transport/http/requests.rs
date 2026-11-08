@@ -5,8 +5,6 @@
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
-use tokio::sync::Mutex as TokioMutex;
-
 use reqwest::header;
 use serde_json::Value;
 use tracing::{debug, info};
@@ -22,7 +20,6 @@ use super::{
     peer_refusal, require_secure_oauth_target,
 };
 use crate::gateway::trace;
-use crate::oauth::OAuthClient;
 use crate::oauth::login_gate::{self, Provenance};
 use crate::protocol::era::PeerEra;
 use crate::protocol::meta::MODERN_VERSIONS;
@@ -36,6 +33,10 @@ use crate::security::http_diagnostics::{
     status_refusal,
 };
 use crate::{Error, Result};
+
+#[path = "requests_detach_token.rs"]
+mod detach_token;
+use detach_token::detach_token_step;
 
 impl HttpTransport {
     /// Build an [`header::HeaderMap`] according to `mode`.
@@ -266,11 +267,15 @@ impl HttpTransport {
             // client mutex a login holds for minutes, and never detaches
             // (MIK-7982 C2, MIK-8339).
             if !login_gate::interactive() {
-                let oauth = oauth_mutex
-                    .try_lock()
-                    .map_err(|_| Error::AuthorizationRequired {
-                        backend: sanitize_url_for_diagnostics(&self.base_url),
-                    })?;
+                let mut oauth =
+                    oauth_mutex
+                        .try_lock()
+                        .map_err(|_| Error::AuthorizationRequired {
+                            backend: sanitize_url_for_diagnostics(&self.base_url),
+                        })?;
+                // Holding the client: a confirmed sign-in under a changed
+                // issuer is re-discovered here before any token is used.
+                oauth.rediscover_if_moved().await?;
                 let token = oauth.get_token().await?;
                 Provenance::mark_dispatched();
                 return Ok(Some(token));
@@ -471,6 +476,24 @@ impl HttpTransport {
         identity_key: Option<&str>,
         waiting: Option<super::sse_channel::Waiting>,
     ) -> Result<JsonRpcResponse> {
+        let answer = self
+            .read_answer_unscrubbed(request, response, message_url, identity_key, waiting)
+            .await;
+        match self.needles.get() {
+            Some(needles) => crate::security::needles::scrub_answer(needles, answer),
+            None => answer,
+        }
+    }
+
+    /// [`Self::read_answer`] before the scrub: every body is parsed here.
+    async fn read_answer_unscrubbed(
+        &self,
+        request: &JsonRpcRequest,
+        response: reqwest::Response,
+        message_url: &str,
+        identity_key: Option<&str>,
+        waiting: Option<super::sse_channel::Waiting>,
+    ) -> Result<JsonRpcResponse> {
         // Extract session ID from response headers if this caller's bucket is
         // empty (MIK-6784: store under the caller's identity key, never a shared
         // slot). The first request for a new identity has no session; the
@@ -518,12 +541,9 @@ impl HttpTransport {
             // carry `set-cookie`, `authorization` echoes and bearer material.
             // Computed before the macro, as above (MIK-7324).
             let diagnostic_url = sanitize_url_for_diagnostics(message_url);
-            let names: Vec<&str> = response
-                .headers()
-                .keys()
-                .map(header::HeaderName::as_str)
-                .collect();
-            debug!(target: HTTP_TARGET, url = %diagnostic_url, "No session ID in response. Header names: {:?}", names);
+            // The count only: a header name is backend text.
+            let headers = response.headers().len();
+            debug!(target: HTTP_TARGET, url = %diagnostic_url, headers, "No session ID in response");
         }
 
         let status = response.status();
@@ -576,15 +596,15 @@ impl HttpTransport {
             // notification until the call it belongs to had already finished
             // -- the liveness `MIK-7272.SUB.2b` asks for is unreachable from a
             // complete body. Each frame is published as its chunk arrives.
+            use super::sse_decoder::decode_sse_exchange;
             use futures::TryStreamExt;
             let stream = response
                 .bytes_stream()
                 .map_err(|e| safe_request_error("Failed to read SSE response", &e));
+            let needles = self.needles.get().map(AsRef::as_ref);
             match self.body_budget.get() {
-                Some(budget) => {
-                    super::sse_decoder::decode_sse_exchange(budget.metered(stream)).await
-                }
-                None => super::sse_decoder::decode_sse_exchange(stream).await,
+                Some(budget) => decode_sse_exchange(budget.metered(stream), needles).await,
+                None => decode_sse_exchange(stream, needles).await,
             }
         } else if let Some(waiting) = waiting {
             self.body_or_stream(status, response, waiting).await
@@ -606,8 +626,9 @@ impl HttpTransport {
     /// A 2xx JSON body, counted against the byte budget when one is set.
     async fn json_body(&self, response: reqwest::Response) -> Result<JsonRpcResponse> {
         match self.body_budget.get() {
-            Some(budget) => serde_json::from_slice(&budget.read(response).await?)
-                .map_err(|e| Error::Transport(format!("Failed to parse response: {e}"))),
+            Some(budget) => serde_json::from_slice(&budget.read(response).await?).map_err(|e| {
+                Error::Transport(super::parse_failure("Failed to parse response", &e))
+            }),
             None => response
                 .json()
                 .await
@@ -648,7 +669,7 @@ impl HttpTransport {
             return Ok(answer);
         }
         serde_json::from_slice(&body)
-            .map_err(|e| Error::Transport(format!("Failed to parse response: {e}")))
+            .map_err(|e| Error::Transport(super::parse_failure("Failed to parse response", &e)))
     }
 
     /// Get next request ID
@@ -733,47 +754,6 @@ impl HttpTransport {
     }
 }
 
-/// Run an interactive caller's token step in a task of its own (MIK-8339):
-/// the login it may lead belongs to the task, so a caller whose deadline
-/// fires drops only its wait, and a person who approves later still stores a
-/// token. The caller's scopes are carried in, so the task's marks land on the
-/// caller's own Provenance. Before it holds the client, the task observes a
-/// restart or stop and ends at the authorization window; no timeout ever
-/// wraps a live Lead (the Lead stage bounds itself, in `authorize_until`).
-async fn detach_token_step(
-    oauth: Arc<TokioMutex<OAuthClient>>,
-    gate: Arc<crate::oauth::login_gate::LoginGate>,
-    set_out: crate::oauth::login_gate::SetOut,
-    backend: String,
-) -> Result<String> {
-    let crate::oauth::login_gate::SetOut {
-        since,
-        cohort,
-        deadline,
-    } = set_out;
-    #[cfg(test)]
-    gate.note_detached();
-    let carried = crate::oauth::login_gate::carry_scopes();
-    let task = tokio::spawn(carried.run(async move {
-        let client = tokio::select! {
-            biased;
-            () = gate.revoked_since(since) => {
-                return Err(Error::AuthorizationCancelled { backend });
-            }
-            () = tokio::time::sleep_until(crate::oauth::login_gate::stage_end(
-                crate::oauth::OAUTH_AUTHORIZATION_WINDOW,
-                deadline,
-            )) => {
-                return Err(gate.classify(&cohort, &backend, Error::BackendTimeout(backend.clone())));
-            }
-            client = oauth.lock_owned() => client,
-        };
-        client.get_token_detached(true, since, &cohort, deadline).await
-    }));
-    task.await
-        .map_err(|e| Error::OAuth(format!("the detached token step failed: {e}")))?
-}
-
 /// Whose credential a request's headers carry.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum CredentialOrigin {
@@ -782,3 +762,7 @@ enum CredentialOrigin {
     /// A subscriber's, lent per request by a credential source: neither.
     Lent,
 }
+
+#[cfg(test)]
+#[path = "token_refusal_tests.rs"]
+mod token_refusal_tests;

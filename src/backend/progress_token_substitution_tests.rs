@@ -3,7 +3,9 @@
 //! `substitute_progress_token` cases, split out of `ops.rs` to keep that
 //! file under the line-count ceiling.
 use super::*;
-use crate::transport::notification_sink::{collect, publish, translate_back};
+use crate::transport::notification_sink::{publish, translate_back};
+// Published as the backend's call would, from inside its scope.
+use crate::transport::notify_ingress::test_support::collect;
 use serde_json::json;
 
 fn token_of(params: &Value) -> Value {

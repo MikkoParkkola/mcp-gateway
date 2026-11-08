@@ -47,7 +47,7 @@ pub(crate) struct OwnedCallerContext {
     authentication: Authentication,
     /// How the creating request presented its credential (D1-c audit `who`).
     credential_kind: crate::security::audit::CredentialKind,
-    is_admin: bool,
+    admin: crate::gateway::authz::AdminStanding,
     input_capabilities: Declared,
     session_id: Option<String>,
     /// The creating or resuming request's caller key, which the A/B arm and the
@@ -89,7 +89,7 @@ impl OwnedCallerContext {
         record_principal: crate::gateway::record_principal::RecordPrincipal,
         authentication: Authentication,
         credential_kind: crate::security::audit::CredentialKind,
-        is_admin: bool,
+        admin: crate::gateway::authz::AdminStanding,
         input_capabilities: Declared,
         session_id: Option<String>,
         protocol_revision: Option<String>,
@@ -110,7 +110,7 @@ impl OwnedCallerContext {
             record_principal,
             authentication,
             credential_kind,
-            is_admin,
+            admin,
             input_capabilities,
             session_id,
             caller_key: None,
@@ -167,6 +167,11 @@ impl OwnedCallerContext {
         self.session_id.as_deref()
     }
 
+    /// What the caller proved at submit, to find its own catalogue slot.
+    pub(crate) fn verified_identity(&self) -> Option<&VerifiedIdentity> {
+        self.verified_identity.as_ref()
+    }
+
     /// Hold the caller key for the length of one backend call, so an idle
     /// sweep cannot reclaim it under a call that outlasts `IDLE_TTL`
     /// (MIK-7828.FIX.2). Only an HTTP host tracks caller keys.
@@ -199,8 +204,9 @@ impl OwnedCallerContext {
         &'a self,
         host: &LiveHost,
         authorizer: &'a HostAuthorizer<'a>,
+        generation: &'a crate::config_reload::Generation,
     ) -> MetaMcpCallerContext<'a> {
-        self.dispatch_context_retrying(host, authorizer, &self.retry)
+        self.dispatch_context_retrying(host, authorizer, (&self.retry, generation))
     }
 
     /// The retry fields of one input-round continuation: the gateway-sealed
@@ -219,12 +225,13 @@ impl OwnedCallerContext {
     }
 
     /// [`Self::dispatch_context`] carrying `retry` instead of this context's
-    /// own fields: the continuation of an input round.
+    /// own fields: the continuation of an input round. `generation` is the one
+    /// current at this dispatch; its budgets judge the spend (ADR-023).
     pub(crate) fn dispatch_context_retrying<'a>(
         &'a self,
         host: &LiveHost,
         authorizer: &'a HostAuthorizer<'a>,
-        retry: &'a RetryFields,
+        (retry, generation): (&'a RetryFields, &'a crate::config_reload::Generation),
     ) -> MetaMcpCallerContext<'a> {
         let authorizer: &'a (dyn ToolAuthorizer + Sync) = authorizer;
         MetaMcpCallerContext {
@@ -273,7 +280,7 @@ impl OwnedCallerContext {
             stdio_nonce: host.stdio_nonce(),
             caller_key: self.caller_key.as_deref(),
             verified_identity: self.verified_identity.as_ref(),
-            is_admin: self.is_admin,
+            admin: self.admin,
             surface_request: self.surface_request,
             input_capabilities: self.input_capabilities,
             confirmation: ConfirmationChannel::Unavailable,
@@ -281,6 +288,7 @@ impl OwnedCallerContext {
             task: None,
             era: crate::protocol::meta::Era::Modern,
             channel: &crate::gateway::input_bridge::NoClientChannel,
+            generation: Some(generation),
         }
     }
 }

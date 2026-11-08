@@ -197,6 +197,9 @@ mod source_checks {
             "src/protocol/member_scope_tests.rs",
             "src/gateway/router/protocol_member_scope_tests.rs",
             "src/gateway/meta_mcp/chain_withheld_tests.rs",
+            // The notification ingress rows plant it in a backend's
+            // notification and read back whether it was removed.
+            "src/transport/notify_ingress_tests.rs",
         ];
         let mut offenders = Vec::new();
         let root = Path::new(env!("CARGO_MANIFEST_DIR"));
@@ -238,7 +241,6 @@ mod fixture {
         AppState, MetaMcp, StoreLimits, create_router, open_runtime,
     };
     use mcp_gateway::mtls::{MtlsConfig, MtlsPolicy};
-    use mcp_gateway::security::{ToolPolicy, ToolPolicyConfig};
     use serde_json::{Value, json};
     use tower::ServiceExt;
 
@@ -378,7 +380,6 @@ mod fixture {
             proxy_manager,
             streaming_config: config.streaming.clone(),
             key_server: None,
-            tool_policy: Arc::new(ToolPolicy::from_config(&ToolPolicyConfig::default())),
             mtls_policy: Arc::new(MtlsPolicy::from_config(&MtlsConfig::default())),
             trust_configured_backends: false,
             inflight: Arc::new(tokio::sync::Semaphore::new(100)),
@@ -400,6 +401,7 @@ mod fixture {
             )),
             export_status: None,
             transparency_log: None,
+            governance_log: None,
             dashboard_bootstrap: Arc::new(mcp_gateway::gateway::auth::DashboardBootstrap::new()),
             tasks,
             task_executor,

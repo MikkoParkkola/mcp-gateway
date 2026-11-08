@@ -6,6 +6,7 @@ mod command_split;
 mod http;
 mod lender;
 pub(crate) mod notification_sink;
+pub(crate) mod notify_ingress;
 mod stdio;
 pub(crate) mod submit_mark;
 pub(crate) mod upstream_tap;
@@ -22,12 +23,16 @@ pub(crate) use self::http::SlotCredential;
 pub(crate) use self::http::guarded_client;
 #[cfg(any(test, feature = "webui"))]
 pub(crate) use self::http::is_budget_refusal;
+#[cfg(test)]
+pub(crate) use self::http::peer_refusal_for_test;
 #[doc(hidden)]
 pub use self::http::transport_follows_redirect;
 pub(crate) use self::lender::{Lender, LentCredential, Loan, Refusal, SendCheck};
 // Only the A2A deferred cancel counts its refusal from outside the lender.
 #[cfg(feature = "a2a")]
 pub(crate) use self::lender::count_refusal;
+#[cfg(all(test, unix))]
+pub(crate) use self::stdio::KILL_RESERVE_FOR_TEST;
 #[cfg(test)]
 pub(crate) use self::stdio::assigned_package_cache_dir;
 pub(crate) use self::stdio::isolated_env_and_assigned_cache;
@@ -35,6 +40,7 @@ pub use self::stdio::{
     CEILING_MAX_FRAME_BYTES, DEFAULT_MAX_FRAME_BYTES, MIN_MAX_FRAME_BYTES, StdioTransport,
     isolated_package_manager_env,
 };
+pub(crate) use self::stdio::{LiveTree, StopDeadline, stop_deadline, within_stop_deadline};
 pub use self::websocket::McpFrame;
 
 /// Reduce a URL to its origin before it reaches a log line or an error string.
@@ -209,6 +215,16 @@ pub trait Transport: Send + Sync {
     /// overrides this to `true`. stdio and websocket transports carry no
     /// per-request HTTP header channel and must not claim otherwise.
     fn carries_identity_headers(&self) -> bool {
+        false
+    }
+
+    /// Whether this transport scrubs a backend's injected values out of what
+    /// it reads: it holds the backend's value set (DELTA-10). A call
+    /// carrying an injected value is refused on a transport that does not.
+    ///
+    /// Defaults to `false` (fail closed): a transport that never attached a
+    /// set, or a new kind that does not say, gets no secret.
+    fn redacts_injected_values(&self) -> bool {
         false
     }
 

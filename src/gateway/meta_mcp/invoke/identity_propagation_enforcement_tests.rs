@@ -417,13 +417,14 @@ async fn legacy_caller_is_asked_in_band_and_the_backend_is_retried() {
         agent_id: None,
         agent_declared: None,
         grant_subject: None,
-        is_admin: false,
+        admin: crate::gateway::authz::AdminStanding::None,
         surface_request: crate::gateway::recovery::SurfaceRequest::Configured,
         input_capabilities: declared,
         retry: &crate::protocol::mrtr::NO_RETRY,
         confirmation: crate::gateway::destructive_confirmation::ConfirmationChannel::Unavailable,
         era: crate::protocol::meta::Era::Legacy,
         channel: &channel,
+        generation: None,
     };
     let args = json!({"server": "asks", "tool": "ask", "arguments": {}});
     m.invoke_tool_traced(&args, Some("session-1"), &caller, "trace-1")
@@ -498,13 +499,14 @@ async fn a_failed_bridged_retry_does_not_free_the_idempotency_key() {
         agent_id: None,
         agent_declared: None,
         grant_subject: None,
-        is_admin: false,
+        admin: crate::gateway::authz::AdminStanding::None,
         surface_request: crate::gateway::recovery::SurfaceRequest::Configured,
         input_capabilities: declared,
         retry: &retry,
         confirmation: crate::gateway::destructive_confirmation::ConfirmationChannel::Unavailable,
         era: crate::protocol::meta::Era::Legacy,
         channel: &channel,
+        generation: None,
     };
     let args = json!({"server": "asks", "tool": "ask", "arguments": {}});
 
@@ -586,13 +588,14 @@ async fn a_bridged_retry_refused_before_dispatch_frees_the_idempotency_key() {
         agent_id: None,
         agent_declared: None,
         grant_subject: None,
-        is_admin: false,
+        admin: crate::gateway::authz::AdminStanding::None,
         surface_request: crate::gateway::recovery::SurfaceRequest::Configured,
         input_capabilities: declared,
         retry: &retry,
         confirmation: crate::gateway::destructive_confirmation::ConfirmationChannel::Unavailable,
         era: crate::protocol::meta::Era::Legacy,
         channel: &channel,
+        generation: None,
     };
     let args = json!({"server": "asks", "tool": "ask", "arguments": {}});
 

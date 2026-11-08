@@ -25,6 +25,9 @@ const CODE: i32 = -32042;
 struct RefusesArguments;
 
 impl ToolAuthorizer for RefusesArguments {
+    fn generation(&self) -> Option<&crate::config_reload::Generation> {
+        None
+    }
     fn quota_principal(&self) -> Option<&crate::gateway::auth::QuotaPrincipal> {
         None
     }
@@ -34,6 +37,7 @@ impl ToolAuthorizer for RefusesArguments {
     fn decide<'a>(&'a self, target: ToolTarget<'a>) -> Decision<'a> {
         if target.arguments.as_object().is_some_and(|a| !a.is_empty()) {
             return Decision::of(Err(AuthorizationError::forbidden(
+                crate::security::decision_record::DecisionKind::ToolPolicy,
                 CODE,
                 "refused for its arguments".to_owned(),
             )));
@@ -57,6 +61,15 @@ async fn route_stage<T>(
     targets: &[CallTarget<'_>],
     read: impl FnOnce() -> T,
 ) -> (Option<crate::protocol::JsonRpcResponse>, T) {
+    route_stage_as(&RefusesArguments, targets, read).await
+}
+
+/// [`route_stage`] judged by `authorizer`.
+async fn route_stage_as<T>(
+    authorizer: &(dyn crate::gateway::authz::ToolAuthorizer + Sync),
+    targets: &[CallTarget<'_>],
+    read: impl FnOnce() -> T,
+) -> (Option<crate::protocol::JsonRpcResponse>, T) {
     let registry = Arc::new(BackendRegistry::new());
     assert!(registry.register(Arc::new(Backend::new(
         "alpha",
@@ -66,8 +79,8 @@ async fn route_stage<T>(
     ))));
     let meta = MetaMcp::new(registry);
     let scope = crate::gateway::meta_mcp::InvokeScope {
-        authorizer: &RefusesArguments,
-        is_admin: false,
+        authorizer,
+        admin: crate::gateway::authz::AdminStanding::None,
         api_key_name: None,
         grant_key: None,
         agent_id: None,
@@ -136,4 +149,40 @@ async fn a_lone_withheld_target_records_refused() {
             crate::gateway::delivery_facts::scope(route_stage(&targets, effect)).await;
         assert_eq!(recorded, expected, "{} targets", targets.len());
     }
+}
+
+/// A stdio tool-policy refusal, withheld at the route stage, keeps the deny
+/// entry's id beside its kind in the visibility memo the record reads.
+#[tokio::test]
+async fn a_withheld_stdio_tool_policy_refusal_keeps_its_rule_id() {
+    let key = crate::gateway::record_principal::test_record_key().rule_id_key();
+    let policy = crate::security::ToolPolicy::from_config_keyed(
+        &crate::security::ToolPolicyConfig {
+            deny: vec!["alpha:read".to_string()],
+            use_default_deny: false,
+            ..crate::security::ToolPolicyConfig::default()
+        },
+        &key,
+    );
+    let authorizer = crate::gateway::authz::ToolPolicyAuthorizer {
+        tool_policy: &policy,
+        generation: None,
+    };
+    // Inside the route scope the stdio dispatch opens around the route stage
+    // (stdio_dispatch.rs), where the refusal's note lands.
+    let (_, noted) = crate::gateway::meta_mcp::invoke::audit::with_route_scope(route_stage_as(
+        &authorizer,
+        &[target(false)],
+        || crate::gateway::meta_mcp::visible::memo::denial("alpha", "read"),
+    ))
+    .await;
+    let bytes = serde_json::to_vec(&("deny", "alpha:read")).expect("serialises");
+    let expected = crate::security::rule_id::RuleId::of("tool_policy", &key, &bytes);
+    assert_eq!(
+        noted,
+        Some((
+            crate::security::decision_record::DecisionKind::ToolPolicy,
+            Some(expected)
+        ))
+    );
 }

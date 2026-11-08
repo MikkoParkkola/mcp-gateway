@@ -140,7 +140,9 @@ fn is_session_expired_error(err: &Error) -> bool {
         // `-32600`: on this path a malformed-request refusal is what it says it
         // is, and treating it as an expiry would re-initialize and retry every
         // one of them.
-        Error::JsonRpc { code, message, .. } | Error::JsonRpcRetryable { code, message, .. } => {
+        Error::JsonRpc { code, message, .. }
+        | Error::BackendJsonRpc { code, message, .. }
+        | Error::JsonRpcRetryable { code, message, .. } => {
             let lower = message.to_lowercase();
             // The marker set is the Transport arm's, mirrored: a peer that words
             // its expiry as "session expired" reaches one arm or the other
@@ -173,6 +175,18 @@ fn status_invites_a_retry(status: reqwest::StatusCode) -> bool {
     ) || status.is_server_error()
 }
 
+/// The text for a backend body that did not parse: its category and
+/// position, never serde's message, which can quote (and escape) the bytes it
+/// read, an injected value among them (DELTA-4).
+pub(super) fn parse_failure(what: &str, error: &serde_json::Error) -> String {
+    format!(
+        "{what}: {:?} error at line {}, column {}",
+        error.classify(),
+        error.line(),
+        error.column()
+    )
+}
+
 /// The peer's own JSON-RPC error, if that is what this non-2xx body is.
 ///
 /// The MCP HTTP binding lets a peer refuse with a status rather than a 200, so
@@ -195,6 +209,17 @@ fn status_invites_a_retry(status: reqwest::StatusCode) -> bool {
 /// status keeps both facts in [`Error::JsonRpcRetryable`], because the health
 /// probe reads the code and the retry classifiers read the carriage
 /// (MIK-7217, OUTBOUND.2).
+/// [`peer_refusal`] for rows outside this module that need the error a peer's
+/// non-2xx JSON-RPC body really becomes, not a hand-built look-alike.
+#[cfg(test)]
+pub(crate) fn peer_refusal_for_test(
+    body: &str,
+    id: &RequestId,
+    status: reqwest::StatusCode,
+) -> Option<Error> {
+    peer_refusal(body, id, status)
+}
+
 fn peer_refusal(body: &str, id: &RequestId, status: reqwest::StatusCode) -> Option<Error> {
     let response: JsonRpcResponse = serde_json::from_str(body).ok()?;
     if response.id.as_ref() != Some(id) {
@@ -209,11 +234,7 @@ fn peer_refusal(body: &str, id: &RequestId, status: reqwest::StatusCode) -> Opti
             data: error.data,
         }
     } else {
-        Error::JsonRpc {
-            code: error.code,
-            message: error.message,
-            data: error.data,
-        }
+        Error::backend_json_rpc(error)
     })
 }
 
@@ -290,6 +311,9 @@ pub struct HttpTransport {
     /// The start-once preview's byte budget; unset everywhere
     /// else, so a live backend reads its bodies as before.
     body_budget: std::sync::OnceLock<Arc<budget::ByteBudget>>,
+    /// The values the backend's rules injected; every answer this transport
+    /// reads is scrubbed of them. Attached before the first send.
+    needles: std::sync::OnceLock<Arc<crate::security::needles::NeedleSet>>,
 
     /// Request ID counter
     request_id: AtomicU64,
@@ -512,6 +536,7 @@ impl HttpTransport {
             lent_only: AtomicBool::new(false),
             lender: std::sync::OnceLock::new(),
             body_budget: std::sync::OnceLock::new(),
+            needles: std::sync::OnceLock::new(),
             request_id: AtomicU64::new(1),
             listen_cancel: tokio_util::sync::CancellationToken::new(),
             reinit_needed: AtomicBool::new(false),
@@ -572,6 +597,12 @@ impl HttpTransport {
     /// did.
     pub(crate) fn attach_era(&self, era: Arc<crate::protocol::era::EraCache>) {
         let _ = self.era.set(era);
+    }
+
+    /// The backend's injected values, attached before the first send, as
+    /// [`Self::attach_era`] is: the first attach wins.
+    pub(crate) fn attach_needles(&self, needles: Arc<crate::security::needles::NeedleSet>) {
+        let _ = self.needles.set(needles);
     }
 
     /// The peer's era, as far as it is known right now.
@@ -691,3 +722,13 @@ mod sse_decoder_tests;
 
 #[cfg(test)]
 mod private_redirect_tests;
+
+#[cfg(all(test, feature = "webui"))]
+mod serving_adopt_tests;
+
+#[cfg(all(test, feature = "webui"))]
+mod issuer_change_fixture;
+#[cfg(all(test, feature = "webui"))]
+mod issuer_change_more_tests;
+#[cfg(all(test, feature = "webui"))]
+mod issuer_change_tests;

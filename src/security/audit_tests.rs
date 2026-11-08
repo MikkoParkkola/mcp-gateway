@@ -90,7 +90,9 @@ fn v1_and_v2_entries_verify_in_one_chain() {
     append(&v2, fields(&[("event", json!("v2"))])).expect("v2 append");
     let result = verify_log(&path).expect("verify");
     assert!(result.ok, "mixed chain must verify");
-    assert_eq!(entries(&path).len(), 3);
+    // The two v1 entries, the `audit_log_identified` record the upgrade
+    // writes when it mints the log's id, then the v2 entry.
+    assert_eq!(entries(&path).len(), 4);
 }
 
 /// D1-T11. A governance mutation by an OIDC actor carries the envelope, and
@@ -280,4 +282,28 @@ fn http_status_maps_to_outcome() {
         defaults,
         [None, None, Some(-32600), Some(-32602), Some(-32603)]
     );
+}
+
+/// C6 and A1 (live): a backend's own `INVALID_PARAMS` is audited `invalid` as
+/// the gateway's twin is; a backend's -32001 / -32004 is the backend's
+/// error, never the gateway's denial, which stays `denied` (control).
+#[test]
+fn a_backends_own_codes_are_audited_as_the_backends() {
+    let backend = |code: i32| {
+        Err(crate::Error::backend_json_rpc(
+            crate::protocol::JsonRpcError {
+                code,
+                message: "backend says no".to_owned(),
+                data: None,
+            },
+        ))
+    };
+    let label = |result: &crate::Result<Value>| {
+        AuditOutcome::from_result(result).map(|o| (o.label(), o.error_code()))
+    };
+    assert_eq!(label(&backend(-32602)), Some(("invalid", Some(-32602))));
+    assert_eq!(label(&backend(-32001)), Some(("error", Some(-32001))));
+    assert_eq!(label(&backend(-32004)), Some(("error", Some(-32004))));
+    let gateway = Err(crate::Error::json_rpc(-32001, "not found"));
+    assert_eq!(label(&gateway), Some(("denied", Some(-32001))));
 }

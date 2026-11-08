@@ -32,11 +32,15 @@ pub use quota::QuotaPrincipal;
 #[path = "auth_api_key.rs"]
 mod api_key;
 pub use api_key::ResolvedApiKey;
-pub(crate) use api_key::{PreviousDigest, refuse_shared_digests};
+#[cfg(test)]
+pub(crate) use api_key::secret_tag;
+pub(crate) use api_key::{PreviousDigest, digest_tag_of, refuse_shared_digests, tag_still_valid};
 #[path = "auth_dashboard.rs"]
 mod dashboard;
 pub use dashboard::DashboardBootstrap;
-pub(crate) use dashboard::{Bound, Now, Redeem, Redemption, SessionCheck, SessionLimits, Touch};
+pub(crate) use dashboard::{
+    Bound, MintingKey, Now, Redeem, Redemption, SessionCheck, SessionLimits, Touch,
+};
 #[path = "auth_bootstrap.rs"]
 mod bootstrap;
 #[path = "auth_handoff.rs"]
@@ -174,12 +178,28 @@ impl std::fmt::Debug for ResolvedAuthConfig {
 /// written against these names, so if any other code could build one — from a
 /// header, from `AuthenticatedClient::name`, from an OIDC subject — the
 /// allow-list would be satisfiable by an identity that never presented the key.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub(crate) struct NamedApiKey {
     name: String,
     personal: bool,
     /// The key's previous digest matched, not its current one (ADR-022).
     matched_previous_digest: bool,
+    /// The fingerprint ([`digest_tag_of`]) of the digest that matched,
+    /// current or previous: what a watch or session opened by this request is bound to,
+    /// so it ends when that secret stops being valid. Never the digest.
+    digest_tag: String,
+}
+
+// The tag fingerprints a secret: redacted, as `ApiKeyRef` redacts it.
+impl std::fmt::Debug for NamedApiKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("NamedApiKey")
+            .field("name", &self.name)
+            .field("personal", &self.personal)
+            .field("matched_previous_digest", &self.matched_previous_digest)
+            .field("digest_tag", &"<redacted>")
+            .finish()
+    }
 }
 
 impl NamedApiKey {
@@ -199,10 +219,18 @@ impl NamedApiKey {
     pub(crate) fn matched_previous_digest(&self) -> bool {
         self.matched_previous_digest
     }
+
+    /// The fingerprint of the digest this request matched, taken at the
+    /// match: a holder this request opens is bound to it, never to a later
+    /// read of the key table.
+    pub(crate) fn digest_tag(&self) -> &str {
+        &self.digest_tag
+    }
 }
 
 #[path = "auth_resolved.rs"]
 mod resolved;
+pub(crate) use resolved::KeyBinding;
 
 /// Carries the matched key's provenance with the request, so downstream checks
 /// read it rather than re-derive it. A request that presented a rotated key's
@@ -219,240 +247,18 @@ fn attach_api_key(request: &mut Request<Body>, api_key: Option<NamedApiKey>) {
 
 pub use crate::security::audit::CredentialKind;
 
-/// The one API-key predicate (MIK-8659): a caller's API-key name iff it authenticated with an API key.
-pub(in crate::gateway) fn api_key_name(
-    authenticated: bool,
-    kind: CredentialKind,
-    name: Option<&str>,
-) -> Option<&str> {
-    if authenticated && kind == CredentialKind::ApiKey {
-        name
-    } else {
-        None
-    }
-}
-
-/// What the caller-principal predicate needs of a principal: whether it is
-/// the empty one. Implemented by the opaque [`InternalPrincipal`] (so its bytes
-/// never leave through the predicate, MIK-8697 §16.6) and by the `&str` the
-/// caller contexts carry.
-pub(in crate::gateway) trait Principal {
-    /// Whether this is the empty principal of a caller with no credential.
-    fn is_empty(&self) -> bool;
-}
-
-impl Principal for str {
-    fn is_empty(&self) -> bool {
-        str::is_empty(self)
-    }
-}
-
-impl Principal for InternalPrincipal {
-    fn is_empty(&self) -> bool {
-        InternalPrincipal::is_empty(self)
-    }
-}
-
-/// The one caller-principal predicate (MIK-8659): the principal iff the caller authenticated and it is non-empty.
-pub(in crate::gateway) fn authenticated_principal<P: Principal + ?Sized>(
-    authenticated: bool,
-    principal: Option<&P>,
-) -> Option<&P> {
-    if authenticated {
-        principal.filter(|p| !p.is_empty())
-    } else {
-        None
-    }
-}
-
-/// Information about an authenticated client
-#[derive(Debug, Clone)]
-pub struct AuthenticatedClient {
-    /// Client name
-    pub name: String,
-    /// Rate limit (0 = unlimited)
-    pub rate_limit: u32,
-    /// Allowed backends (`["*"]` = all; empty = none)
-    pub backends: Vec<String>,
-    /// Allowed tools (allowlist if Some): exact names or a trailing `prefix*`.
-    pub allowed_tools: Option<Vec<String>>,
-    /// Denied tools (blocklist if Some): exact names or a trailing `prefix*`.
-    pub denied_tools: Option<Vec<String>>,
-    /// Admin-level UI and management tool access.
-    pub admin: bool,
-    /// Stable identifier for the principal behind this identity.
-    ///
-    /// A digest of the validated secret, not the display name: `name` is
-    /// operator-chosen and two API keys may share one, which would let them
-    /// attach to each other's sessions. Empty for an identity that presented
-    /// no credential.
-    pub(crate) principal: InternalPrincipal,
-    /// Authenticated nonce-quota authority; never derived from audit labels.
-    pub quota_principal: Option<QuotaPrincipal>,
-    /// Whether a credential was actually presented and validated.
-    ///
-    /// False for the anonymous identity used when authentication is disabled,
-    /// and for the identity given to a public path. Authorization must test
-    /// this rather than compare `name` against `"public"` or `"anonymous"`: a
-    /// name is data, and a rule written against one silently admits any client
-    /// configured with a different name.
-    pub authenticated: bool,
-    /// How the credential was presented, for the audit record's `who`
-    /// (4.0.0 item D1-c). Set at each mint site; it has no `Default`.
-    // ci-allow-secret-debug: an enum naming how a credential was presented; it holds no secret bytes.
-    pub credential_kind: CredentialKind,
-}
-
-impl AuthenticatedClient {
-    /// Check if this client can access a backend
-    #[must_use]
-    pub fn can_access_backend(&self, backend: &str) -> bool {
-        self.backends.iter().any(|b| b == "*" || b == backend)
-    }
-
-    /// The API key's name when this client authenticated with an API key,
-    /// else `None`: the identity-grant fallback subject (MIK-8518).
-    #[must_use]
-    pub(crate) fn api_key_identity(&self) -> Option<&str> {
-        api_key_name(self.authenticated, self.credential_kind, Some(&self.name))
-    }
-
-    /// The record principal of `client`, keyed (MIK-8697 §16.11): what a record
-    /// of its request writes as `who.principal`. No client is no credential.
-    pub(crate) fn record_principal_of(
-        client: Option<&Self>,
-        key: &crate::gateway::record_principal::RecordPrincipalKey,
-    ) -> crate::gateway::record_principal::RecordPrincipal {
-        client.map_or_else(
-            || InternalPrincipal::default().record_form(key),
-            |c| c.principal.record_form(key),
-        )
-    }
-
-    /// The validated credential principal iff this client authenticated with a non-empty one (MIK-8659).
-    #[must_use]
-    pub(in crate::gateway) fn credential_principal(&self) -> Option<&InternalPrincipal> {
-        authenticated_principal(self.authenticated, Some(&self.principal))
-    }
-
-    /// The refusal text when this client may not reach `backend`.
-    ///
-    /// An empty grant names that cause and not the backend, so the answer is
-    /// the same whether or not the backend exists.
-    pub(crate) fn backend_refusal(&self, backend: &str) -> String {
-        if self.backends.is_empty() {
-            format!(
-                "Client '{}' has no backends granted: an empty `backends` list reaches none \
-                 (docs/UPGRADING-4.0.md section 32)",
-                self.name
-            )
-        } else {
-            format!(
-                "Client '{}' not authorized for backend '{backend}'",
-                self.name
-            )
-        }
-    }
-
-    /// Check if this client can access a tool (per-client scope).
-    ///
-    /// Logic:
-    /// - If `allowed_tools` is Some, only tools matching the allowlist are permitted.
-    /// - If `denied_tools` is Some, tools matching the denylist are blocked.
-    /// - If both are None, fall back to global policy (caller's responsibility).
-    ///
-    /// Returns `Ok(())` if allowed, `Err(message)` if denied.
-    pub fn check_tool_scope(&self, server: &str, tool: &str) -> std::result::Result<(), String> {
-        let qualified = format!("{server}:{tool}");
-
-        // If allowlist is set, ONLY tools in the list are permitted
-        if let Some(ref allowed) = self.allowed_tools
-            && !crate::config::tool_pattern_matches(allowed, tool, &qualified)
-        {
-            return Err(format!(
-                "Tool '{tool}' on server '{server}' is not in the allowlist for client '{}'",
-                self.name
-            ));
-        }
-
-        // If denylist is set, tools in the list are blocked
-        if let Some(ref denied) = self.denied_tools
-            && crate::config::tool_pattern_matches(denied, tool, &qualified)
-        {
-            return Err(format!(
-                "Tool '{tool}' on server '{server}' is blocked by client '{}' policy",
-                self.name
-            ));
-        }
-
-        Ok(())
-    }
-}
-
-/// Name of the browser session cookie the dashboard bootstrap sets.
-///
-/// A browser cannot attach an `Authorization` header to a navigation, so a
-/// bearer token alone leaves the dashboard unusable however correct the
-/// credential is. The gateway prints a one-time link; opening it exchanges the
-/// credential for this cookie and redirects, so the token never lingers in the
-/// address bar, the history, or a `Referer`.
-pub const SESSION_COOKIE: &str = "mcp_gateway_session";
-
-/// The session limits in force now: read from the live config, so a reload
-/// applies to sessions already open.
-pub(super) fn session_limits(state: &AuthState) -> SessionLimits {
-    SessionLimits::from(&state.live_config.get().auth.dashboard_session)
-}
-
-/// The `Set-Cookie` value for `handle`; an empty handle with `max_age` 0
-/// clears it.
-///
-/// `Secure` whenever this listener speaks TLS, or a proxy terminates it in
-/// front. Without it a downgrade puts the cookie on the wire; with a
-/// plain-HTTP loopback listener the attribute would stop the cookie being sent
-/// at all, so it is conditional rather than unconditional.
-pub(crate) fn session_cookie(handle: &str, max_age: u64, secure: bool) -> String {
-    let secure = if secure { " Secure;" } else { "" };
-    format!(
-        "{SESSION_COOKIE}={handle}; HttpOnly;{secure} SameSite=Strict; Path=/; Max-Age={max_age}"
-    )
-}
-
-/// Whether browsers reach this gateway over HTTPS, so its cookies must be
-/// `Secure`: a TLS listener, or a `public_url` behind a TLS-terminating proxy.
-///
-/// TLS is read from the RUNNING listener (restart-only); `public_url` from the
-/// live config, which a reload applies.
-pub(crate) fn cookies_are_secure(live: &crate::config_reload::LiveConfig) -> bool {
-    live.running().mtls.enabled
-        || live
-            .get()
-            .server
-            .public_url
-            .as_deref()
-            .is_some_and(is_https_url)
-}
-
-/// `true` for a URL whose scheme is `https`, in any letter case.
-///
-/// Parses with the same WHATWG URL parser `origin_guard::public_url_parts` and
-/// `cleartext::public_url_host` already use, rather than a byte prefix: the
-/// scheme is case-insensitive (RFC 3986 section 3.1) and the parser also
-/// trims leading and trailing spaces and C0 controls, so `url.starts_with("https://")` rejects
-/// values the rest of the gateway accepts — leaving cookies without `Secure`
-/// behind a front end this parser agrees is HTTPS. Shared by the cookie
-/// security check, the startup-banner link refusal and the OIDC
-/// issuer/`jwks_uri` checks, so one fix covers all of them.
-pub(crate) fn is_https_url(url: &str) -> bool {
-    url::Url::parse(url).is_ok_and(|u| u.scheme() == "https")
-}
-
-/// Whether a session cookie set or cleared now must be `Secure`: the listener
-/// speaks TLS, or the live config names an HTTPS `public_url` (a reload may add
-/// or remove one, so it is read per response, never snapshotted).
-pub(crate) fn cookie_secure(state: &AuthState) -> bool {
-    state.tls_enabled || cookies_are_secure(&state.live_config)
-}
+#[path = "auth_caller.rs"]
+mod caller;
+pub use caller::AuthenticatedClient;
+pub(in crate::gateway) use caller::{api_key_name, authenticated_principal, is_gateway_admin};
+#[path = "auth_cookies.rs"]
+mod cookies;
+pub use cookies::SESSION_COOKIE;
+pub(super) use cookies::session_limits;
+pub(crate) use cookies::{cookie_secure, is_https_url, session_cookie};
+// Outside this module only the web UI asks; `cookie_secure` asks it inside.
+#[cfg(feature = "webui")]
+pub(crate) use cookies::cookies_are_secure;
 
 /// Who a dashboard-session action is attributed to in the audit log: the same
 /// identity the middleware gives a valid session.
@@ -614,10 +420,12 @@ async fn authenticate_request(
     mut request: Request<Body>,
     next: Next,
 ) -> Response {
-    let Some(pinned) = live::pinned_auth(&request) else {
+    // One generation judges the request: its keys, its `auth` settings and
+    // the role mapping a key-server caller's admin flag comes from.
+    let Some(generation) = crate::gateway::router::pinned_generation(request.extensions()) else {
         return live::unpinned();
     };
-    let auth_config = &*pinned;
+    let auth_config = &**generation.auth();
     let path = request.uri().path();
 
     // A public path skips the credential REQUIREMENT, not the credential. An
@@ -640,7 +448,7 @@ async fn authenticate_request(
         // the anonymous identity — and with it the anonymous quota, which any
         // unauthenticated flood can exhaust. Unrecognised input still falls
         // through to the anonymous identity below, exactly as before.
-        match key_server_credential(&state, &presented).await {
+        match key_server_credential(&state, &generation, &presented).await {
             live::KsCredential::Credential(found) => {
                 let (client, identity, via) = *found;
                 debug!(client = %client.name, path = %path, "Public path authenticated via {via}");
@@ -702,7 +510,9 @@ async fn authenticate_request(
     // 2. Try the key server: temporary token, then delegated OIDC bearer. The
     //    verified subject is bound into request extensions so downstream grant
     //    evaluation can scope capabilities to the caller identity.
-    if let live::KsCredential::Credential(found) = key_server_credential(&state, token).await {
+    if let live::KsCredential::Credential(found) =
+        key_server_credential(&state, &generation, token).await
+    {
         let (client, identity, via) = *found;
         if let Some(deny) = client_preflight(auth_config, &client, path) {
             return deny;
@@ -790,6 +600,10 @@ mod client_state_tests;
 #[cfg(test)]
 #[path = "auth_rotation_tests.rs"]
 mod rotation_tests;
+
+#[cfg(test)]
+#[path = "auth_limit_state_tests.rs"]
+mod limit_state_tests;
 
 /// SIGNING.5 row 44: which nonce-quota authority a dashboard session carries.
 ///

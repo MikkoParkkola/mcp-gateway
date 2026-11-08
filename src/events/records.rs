@@ -87,14 +87,57 @@ pub(crate) struct Subscription {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub watch_class: Option<WatchClass>,
     /// The identity a per-user backend observes this subscriber as, when
-    /// `binding` does not already carry it. `Debug`
-    /// leaves it out.
+    /// `binding` does not already carry it, as stored: it is verified again
+    /// only through [`StoredIdentity::verified`]. `Debug` leaves it out.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub observed_identity: Option<crate::key_server::oidc::VerifiedIdentity>,
+    pub observed_identity: Option<StoredIdentity>,
     /// The backend config the observation key was derived from (design B3):
     /// `None` on a shared backend and on rows written before it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub obs_basis: Option<super::observation::ObsBasis>,
+}
+
+/// A subscriber's observed identity as a row stores it on disk: the fields of
+/// the verified identity it was written from, in the same JSON shape, so rows
+/// written before it load unchanged. Bytes are no verification, so it never
+/// becomes a [`VerifiedIdentity`](crate::key_server::oidc::VerifiedIdentity)
+/// except through the checked constructor.
+#[derive(Clone, Serialize, Deserialize)]
+pub(crate) struct StoredIdentity {
+    subject: String,
+    email: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    name: Option<String>,
+    #[serde(default)]
+    groups: Vec<String>,
+    issuer: String,
+}
+
+impl StoredIdentity {
+    /// The verified identity these fields name, through the checked
+    /// constructor: `None` for one that names nobody (an empty or blank
+    /// issuer or subject), which then observes as no one.
+    pub(crate) fn verified(&self) -> Option<crate::key_server::oidc::VerifiedIdentity> {
+        crate::key_server::oidc::VerifiedIdentity::checked(
+            self.issuer.clone(),
+            self.subject.clone(),
+            self.email.clone(),
+            self.name.clone(),
+            self.groups.clone(),
+        )
+    }
+}
+
+impl From<&crate::key_server::oidc::VerifiedIdentity> for StoredIdentity {
+    fn from(identity: &crate::key_server::oidc::VerifiedIdentity) -> Self {
+        Self {
+            subject: identity.subject().to_owned(),
+            email: identity.email().to_owned(),
+            name: identity.name().map(str::to_owned),
+            groups: identity.groups().to_vec(),
+            issuer: identity.issuer().to_owned(),
+        }
+    }
 }
 
 /// How a REST watch is polled: one shared poller for a credential-free
@@ -205,13 +248,22 @@ impl Credential {
     }
 }
 
-/// An API key as a caller presented it: its configured name and the
-/// principal derived from its secret's digest. A key replaced under the same
-/// name derives another principal, so it no longer matches (I2).
+/// An API key as a caller presented it: its configured name, the
+/// principal derived from its secret's digest, and the fingerprint of the
+/// digest the caller matched. A key replaced under the same name derives
+/// another principal, so it no longer matches (I2); a rotation that keeps the
+/// principal still ends whatever the old secret opened once that secret stops
+/// being valid, because the fingerprint no longer matches a valid digest.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct ApiKeyRef {
     pub name: String,
     pub principal: String,
+    /// The fingerprint of the digest that authenticated the caller
+    /// (`crate::gateway::auth::digest_tag_of`). Absent on rows stored before
+    /// holders were bound to their secret: those are refused (fail closed),
+    /// since nothing says which secret opened them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub digest_tag: Option<String>,
 }
 
 // Not derived: the principal is the key's stored digest (MIK-8697).
@@ -220,6 +272,10 @@ impl std::fmt::Debug for ApiKeyRef {
         f.debug_struct("ApiKeyRef")
             .field("name", &self.name)
             .field("principal", &"<redacted>")
+            .field(
+                "digest_tag",
+                &self.digest_tag.as_ref().map(|_| "<redacted>"),
+            )
             .finish()
     }
 }
@@ -264,7 +320,7 @@ impl Subscription {
                 groups.clone(),
             );
         }
-        self.observed_identity.clone()
+        self.observed_identity.as_ref()?.verified()
     }
 
     /// When the row stops being live: its expiry or the bound of its hold,
@@ -428,6 +484,32 @@ pub(crate) fn remove_record(dir: &Path, name: &str) -> std::io::Result<()> {
     }
 }
 
+/// Whether `path` names a committed record: a `*.json` file. A rewrite's
+/// staged copy (`.{name}.{n}.tmp`, [`write_record`]) is not one.
+fn is_record_file(path: &Path) -> bool {
+    path.extension().and_then(|e| e.to_str()) == Some("json")
+}
+
+/// The committed record files in `dir`, test builds only, sorted. A rewrite
+/// stages a hidden `.{name}.{n}.tmp` file beside its record until the rename
+/// ([`write_record`]), so a raw listing reads a record twice while the worker
+/// settles an attempt. The filter is the loader's own ([`is_record_file`]).
+#[cfg(test)]
+pub(crate) fn committed_records(dir: &Path) -> Vec<PathBuf> {
+    let mut paths: Vec<PathBuf> = std::fs::read_dir(dir).map_or_else(
+        |_| Vec::new(),
+        |entries| {
+            entries
+                .flatten()
+                .map(|e| e.path())
+                .filter(|p| is_record_file(p))
+                .collect()
+        },
+    );
+    paths.sort();
+    paths
+}
+
 /// Every `*.json` record in `dir` this build can load. A record of an
 /// unreadable version or shape is skipped and logged, never deleted.
 pub(crate) fn load_records<T: for<'de> Deserialize<'de>>(dir: &Path) -> Vec<(PathBuf, T)> {
@@ -436,7 +518,7 @@ pub(crate) fn load_records<T: for<'de> Deserialize<'de>>(dir: &Path) -> Vec<(Pat
     };
     let mut records = Vec::new();
     for path in entries.flatten().map(|e| e.path()) {
-        if path.extension().and_then(|e| e.to_str()) != Some("json") {
+        if !is_record_file(&path) {
             continue;
         }
         // Mode-checked on the handle it is read from: a subscription file
@@ -484,3 +566,8 @@ pub(crate) fn sync_dir(dir: &Path) -> std::io::Result<()> {
         std::fs::File::open(dir)?.sync_all()
     }
 }
+
+/// A stored identity is verified only through the checked constructor.
+#[cfg(test)]
+#[path = "stored_identity_pin_tests.rs"]
+mod stored_identity_pin_tests;

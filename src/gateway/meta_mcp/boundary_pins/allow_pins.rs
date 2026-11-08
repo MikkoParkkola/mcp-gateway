@@ -8,34 +8,45 @@ use std::path::Path;
 use syn::visit::Visit;
 
 use super::ci_wiring::{assert_ci_registry_ban_conf_dir, checked_in_workflow};
+use super::fragments::{
+    Table, live_base, multiset_delta, pin_table, scratch_table, without_first_row,
+};
 use super::packaged::{PinnedFile, repo_file};
 use super::scan::{Place, Sink, expr_attrs, item_attrs, walk};
 
 const ROOTS: [&str; 3] = ["src/lib.rs", "src/main.rs", "src/bin/provenance-eval.rs"];
 
-/// The banned names: the dedicated config's 18 methods and 2 APIs.
-const BANNED: [&str; 20] = [
-    "subscribe_started",
-    "reload_read_slot",
-    "lock_reload",
-    "register",
-    "observe_breakers",
-    "enforce_destinations",
-    "set_change_feed",
-    "catalogue_hook",
-    "nudge_catalogue",
-    "nudge_catalogue_scanned",
-    "nudge_surfaced",
-    "resolve_unwarmed",
-    "with_membership",
-    "get",
-    "all",
-    "statuses",
-    "remove",
-    "stop_all",
-    "resolve_propagation_credential",
-    "resolve_propagation_headers",
-];
+/// The banned names: the method of each `path` in the dedicated config's
+/// span, read from it, so a newly banned method is named in one place (the
+/// span itself is pinned to the config byte for byte, T1f).
+fn banned() -> &'static [String] {
+    static NAMES: std::sync::LazyLock<Vec<String>> = std::sync::LazyLock::new(|| {
+        include_str!("registry_ban_span.toml")
+            .lines()
+            .filter_map(|line| line.split_once("path = \"")?.1.split_once('"'))
+            .filter_map(|(path, _)| path.rsplit("::").next().map(str::to_string))
+            .collect()
+    });
+    &NAMES
+}
+
+/// The names `banned` must read, a row against a misparse of the span.
+#[test]
+fn the_banned_names_are_read_from_the_config_span() {
+    let names = banned();
+    assert!(names.len() >= 20, "too few names read: {names:?}");
+    for name in [
+        "get",
+        "stop_all",
+        "stop_all_by",
+        "resolve_propagation_headers",
+    ] {
+        assert!(
+            names.iter().any(|n| n == name),
+            "{name} not read: {names:?}"
+        );
+    }
+}
 
 fn crate_root() -> &'static Path {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -93,7 +104,7 @@ impl<'ast> Visit<'ast> for Names {
     fn visit_expr_method_call(&mut self, call: &'ast syn::ExprMethodCall) {
         let name = call.method.to_string();
         // `get` with no argument is a `OnceLock` read; the registry's takes a name.
-        if BANNED.contains(&name.as_str()) && !(name == "get" && call.args.is_empty()) {
+        if banned().contains(&name) && !(name == "get" && call.args.is_empty()) {
             *self.0.entry(name).or_default() += 1;
         }
         syn::visit::visit_expr_method_call(self, call);
@@ -109,7 +120,7 @@ impl<'ast> Visit<'ast> for Names {
             .map(|s| s.ident.to_string())
             .collect();
         if let [.., owner, name] = segs.as_slice()
-            && BANNED.contains(&name.as_str())
+            && banned().contains(name)
             && ["BackendRegistry", "MetaMcp", "Self"].contains(&owner.as_str())
         {
             *self.0.entry(name.clone()).or_default() += 1;
@@ -188,20 +199,8 @@ fn inventory() -> Vec<String> {
 /// added inside the clock module's allow).
 #[test]
 fn t1b_every_production_allow_of_the_ban_is_pinned() {
-    let mut pinned: Vec<String> = include_str!("allows.tsv")
-        .lines()
-        .filter(|l| !l.starts_with('#') && !l.trim().is_empty())
-        .map(str::to_string)
-        .collect();
-    pinned.sort();
     let actual = inventory();
-    assert!(
-        actual == pinned,
-        "allow inventory changed ({} rows pinned, {} found)\nfull inventory:\n{}",
-        pinned.len(),
-        actual.len(),
-        actual.join("\n")
-    );
+    allows_check(&actual, &pin_table("allows")).unwrap_or_else(|m| panic!("{m}"));
     let classes = [
         "Visibility",
         "Discovery",
@@ -392,14 +391,30 @@ fn t1a_every_classed_read_is_pinned() {
         "unclassifiable operation use: {:?}",
         found.bad
     );
-    let want = pinned(include_str!("scoped_backends_classes.tsv"));
-    assert!(
-        found.rows == want,
-        "class table changed ({} pinned, {} found)\nfull table:\n{}",
-        want.len(),
-        found.rows.len(),
-        found.rows.join("\n")
-    );
+    classes_check(&found.rows, &pin_table("scoped_backends_classes"))
+        .unwrap_or_else(|m| panic!("{m}"));
+}
+
+/// The allow table check: `actual` against the pinned rows of `table`.
+fn allows_check(actual: &[String], table: &Table) -> Result<(), String> {
+    let pinned: Vec<(&Path, &str)> = table
+        .rows()
+        .iter()
+        .filter(|(_, l)| !l.trim().is_empty())
+        .map(|(file, l)| (file.as_path(), l.as_str()))
+        .collect();
+    multiset_delta("allows", actual, &pinned).map_or(Ok(()), Err)
+}
+
+/// The class table check: the found rows against the pinned rows of `table`.
+fn classes_check(found: &[String], table: &Table) -> Result<(), String> {
+    let pinned: Vec<(&Path, &str)> = table
+        .rows()
+        .iter()
+        .filter(|(_, l)| !l.trim().is_empty())
+        .map(|(file, l)| (file.as_path(), l.as_str()))
+        .collect();
+    multiset_delta("scoped_backends_classes", found, &pinned).map_or(Ok(()), Err)
 }
 
 /// T1d: the `Registry::new` call sites. Mutant T1d-m1: a second one.
@@ -413,4 +428,104 @@ fn t1d_registry_construction_sites_are_pinned() {
         ),
         "unpinned Registry::new"
     );
+}
+
+/// FRAG.2 through the allow check's own path: a real row held only by a
+/// fragment still counts.
+#[test]
+fn allows_reads_a_required_row_from_a_fragment() {
+    let (base, moved) = without_first_row(&live_base("allows"));
+    let (_root, table) = scratch_table("allows", &base, &[("0.tsv", &moved)]);
+    allows_check(&inventory(), &table).unwrap_or_else(|m| panic!("{m}"));
+}
+
+/// FRAG.2: a stale row in a fragment fails the allow check, naming the
+/// fragment that holds it.
+#[test]
+fn allows_rejects_a_stale_fragment_row() {
+    let stale = "src/nowhere.rs\tnothing\tstatement\tLifecycle\tgetx1\n";
+    let (_root, table) = scratch_table("allows", &live_base("allows"), &[("0.tsv", stale)]);
+    let err = allows_check(&inventory(), &table).expect_err("a stale fragment row fails");
+    assert!(err.contains("0.tsv"), "{err}");
+}
+
+/// FRAG.2 through the class check's own path: a real row held only by a
+/// fragment still counts.
+#[test]
+fn scoped_classes_reads_a_required_row_from_a_fragment() {
+    let (base, moved) = without_first_row(&live_base("scoped_backends_classes"));
+    let (_root, table) = scratch_table("scoped_backends_classes", &base, &[("0.tsv", &moved)]);
+    classes_check(&ops().rows, &table).unwrap_or_else(|m| panic!("{m}"));
+}
+
+/// FRAG.2: a stale row in a fragment fails the class check, naming the
+/// fragment that holds it.
+#[test]
+fn scoped_classes_rejects_a_stale_fragment_row() {
+    let stale = "src/nowhere.rs\tnothing\tget\tVisibility\n";
+    let (_root, table) = scratch_table(
+        "scoped_backends_classes",
+        &live_base("scoped_backends_classes"),
+        &[("0.tsv", stale)],
+    );
+    let err = classes_check(&ops().rows, &table).expect_err("a stale fragment row fails");
+    assert!(err.contains("0.tsv"), "{err}");
+}
+
+/// A legitimately repeated allow row (two identical statements in one fn)
+/// may have its copies in different files: the counts add up.
+#[test]
+fn a_legitimate_repeat_may_split_across_files() {
+    let base = live_base("allows");
+    let mut seen = std::collections::BTreeSet::new();
+    let repeated = base
+        .lines()
+        .filter(|l| !l.starts_with('#') && !l.trim().is_empty())
+        .find(|l| !seen.insert(*l))
+        .expect("allows.tsv holds a repeated row")
+        .to_owned();
+    let at = base
+        .rfind(&format!("{repeated}\n"))
+        .expect("the second copy");
+    let rest = format!("{}{}", &base[..at], &base[at + repeated.len() + 1..]);
+    let (_root, table) = scratch_table("allows", &rest, &[("0.tsv", &format!("{repeated}\n"))]);
+    allows_check(&inventory(), &table).unwrap_or_else(|m| panic!("{m}"));
+}
+
+/// A row the table lacks is listed to add, in the reader's own fragment.
+#[test]
+fn a_missing_allow_row_is_listed_to_add_in_your_fragment() {
+    let (base, _) = without_first_row(&live_base("allows"));
+    let (_root, table) = scratch_table("allows", &base, &[]);
+    let err = allows_check(&inventory(), &table).expect_err("a missing row fails");
+    assert!(err.contains("rows to add"), "{err}");
+    assert!(err.contains("allows.d/<ticket>.tsv"), "{err}");
+}
+
+/// A count-1 row copied into a fragment is a surplus: the message names the
+/// quantity and every file holding a copy.
+#[test]
+fn a_surplus_copy_across_files_fails_naming_both() {
+    let (_, moved) = without_first_row(&live_base("allows"));
+    let (_root, table) = scratch_table("allows", &live_base("allows"), &[("0.tsv", &moved)]);
+    let err = allows_check(&inventory(), &table).expect_err("a surplus copy fails");
+    assert!(err.contains("1 x "), "{err}");
+    assert!(
+        err.contains("allows.tsv") && err.contains("allows.d/0.tsv"),
+        "{err}"
+    );
+}
+
+/// The emitted message puts what to add before the comparison dump, and the
+/// dump carries the do-not-paste warning.
+#[test]
+fn the_delta_comes_before_any_dump() {
+    let (base, _) = without_first_row(&live_base("allows"));
+    let (_root, table) = scratch_table("allows", &base, &[]);
+    let err = allows_check(&inventory(), &table).expect_err("a missing row fails");
+    let add = err.find("rows to add").expect("a rows-to-add section");
+    let dump = err
+        .find("for comparison only; do not paste into any table")
+        .expect("the comparison warning");
+    assert!(add < dump, "{err}");
 }

@@ -37,8 +37,9 @@ type GrantVerdict = (IdentityGrantRequest, IdentityGrantEvaluation);
 pub struct InvokeScope<'a> {
     /// The per-transport invocation predicate.
     pub authorizer: &'a (dyn ToolAuthorizer + Sync),
-    /// Whether the caller holds admin.
-    pub is_admin: bool,
+    /// The caller's admin standing: `Gateway` for gateway-wide
+    /// powers; `InScope` also reaches admin breadth inside its backends.
+    pub(crate) admin: crate::gateway::authz::AdminStanding,
     /// The caller's display name, for guards and audit; never a grant subject (MIK-8518).
     pub api_key_name: Option<&'a str>,
     /// The API key's name, only for an authenticated API-key credential: the identity-grant
@@ -67,8 +68,27 @@ impl MetaMcp {
         scope: InvokeScope<'_>,
         session_id: Option<&str>,
     ) -> Result<()> {
-        self.may_invoke_before_grants(server, tool, scope, session_id)?;
+        self.may_invoke_explained(server, tool, scope, session_id)
+            .map_err(|(error, _)| error)
+    }
+
+    /// [`Self::may_invoke`], naming the check that refused: the one sequence,
+    /// so a caller that records the refusal names the check that made it.
+    pub(crate) fn may_invoke_explained(
+        &self,
+        server: &str,
+        tool: &str,
+        scope: InvokeScope<'_>,
+        session_id: Option<&str>,
+    ) -> std::result::Result<(), (Error, crate::security::decision_record::Refusal)> {
+        self.may_invoke_before_grants_explained(server, tool, scope, session_id)?;
         self.identity_grant_rule(server, tool, scope, Emit::Silent)
+            .map_err(|error| {
+                (
+                    error,
+                    (crate::security::decision_record::DecisionKind::Grant, None),
+                )
+            })
     }
 
     /// The pieces of [`Self::may_invoke`] before identity grants.
@@ -79,9 +99,28 @@ impl MetaMcp {
         scope: InvokeScope<'_>,
         session_id: Option<&str>,
     ) -> Result<()> {
-        self.active_profile(session_id)
-            .check(server, tool)
-            .map_err(Error::Protocol)?;
+        self.may_invoke_before_grants_explained(server, tool, scope, session_id)
+            .map_err(|(error, _)| error)
+    }
+
+    /// [`Self::may_invoke_before_grants`], naming the check that refused.
+    fn may_invoke_before_grants_explained(
+        &self,
+        server: &str,
+        tool: &str,
+        scope: InvokeScope<'_>,
+        session_id: Option<&str>,
+    ) -> std::result::Result<(), (Error, crate::security::decision_record::Refusal)> {
+        self.caller_profile_check(session_id, (server, tool))
+            .map_err(|error| {
+                (
+                    error,
+                    (
+                        crate::security::decision_record::DecisionKind::RoutingProfile,
+                        None,
+                    ),
+                )
+            })?;
         // `{}`, never `Null`: invocation builds its target with an empty
         // object, and two gates that see different targets can disagree.
         let empty = json!({});
@@ -94,12 +133,31 @@ impl MetaMcp {
             .authorizer
             .decide(target)
             .emit(Emit::Silent)
-            .map_err(|e| Error::Forbidden {
-                code: e.code,
-                status: e.status.as_u16(),
-                message: e.message,
+            .map_err(|e| {
+                let refusal = (e.kind, e.rule_id);
+                (
+                    Error::Forbidden {
+                        code: e.code,
+                        status: e.status.as_u16(),
+                        message: e.message,
+                    },
+                    refusal,
+                )
             })?;
-        self.admin_capability_rule(server, tool, scope.is_admin)
+        self.admin_capability_rule(
+            server,
+            tool,
+            scope.admin != crate::gateway::authz::AdminStanding::None,
+        )
+        .map_err(|error| {
+            (
+                error,
+                (
+                    crate::security::decision_record::DecisionKind::AdminCapability,
+                    None,
+                ),
+            )
+        })
     }
 
     /// Whether a piece of `may_invoke` other than the authorizer refuses
@@ -113,7 +171,11 @@ impl MetaMcp {
     ) -> bool {
         self.active_profile(None).check(server, tool).is_err()
             || self
-                .admin_capability_rule(server, tool, scope.is_admin)
+                .admin_capability_rule(
+                    server,
+                    tool,
+                    scope.admin != crate::gateway::authz::AdminStanding::None,
+                )
                 .is_err()
             || self
                 .identity_grant_rule(server, tool, scope, Emit::Silent)
@@ -209,6 +271,8 @@ impl MetaMcp {
             | super::visible::Withholding::Descriptor
             | super::visible::Withholding::Unselected
             | super::visible::Withholding::Lacked => {
+                // Its record names the check that withheld it, never an allow.
+                crate::gateway::meta_mcp::invoke::audit::note_refused_by(reason.kind(), None);
                 tracing::warn!(
                     server,
                     tool = tool_name,
@@ -369,7 +433,7 @@ impl MetaMcp {
         is_admin: bool,
     ) -> Result<()> {
         if !is_admin
-            && let Some(capabilities) = self.get_capabilities()
+            && let Some(capabilities) = self.caller_capabilities()
             && server == capabilities.name
             && capabilities
                 .with_definition(
@@ -402,9 +466,38 @@ impl MetaMcp {
         scope: InvokeScope<'_>,
         emit: Emit,
     ) -> Result<()> {
-        self.grant_evaluation(server, tool, scope)?
-            .map_or(Ok(()), |verdict| {
-                self.settle_grant(server, tool, scope, &verdict, emit)
+        // Noted only when audited: a silent evaluation is a listing's, and a
+        // listing inside a call must not name another target's check.
+        self.identity_grant_rule_explained(server, tool, scope, emit)
+            .map_err(|refusal| {
+                if emit == Emit::Audit {
+                    crate::gateway::meta_mcp::invoke::audit::noted(refusal)
+                } else {
+                    refusal.0
+                }
+            })
+    }
+
+    /// [`Self::identity_grant_rule`], with the refusing check's pair and no
+    /// note.
+    pub(super) fn identity_grant_rule_explained(
+        &self,
+        server: &str,
+        tool: &str,
+        scope: InvokeScope<'_>,
+        emit: Emit,
+    ) -> crate::security::decision_record::Explained {
+        self.grant_evaluation(server, tool, scope)
+            .and_then(|evaluation| {
+                evaluation.map_or(Ok(()), |verdict| {
+                    self.settle_grant(server, tool, scope, &verdict, emit)
+                })
+            })
+            .map_err(|e| {
+                (
+                    e,
+                    (crate::security::decision_record::DecisionKind::Grant, None),
+                )
             })
     }
 
@@ -416,7 +509,7 @@ impl MetaMcp {
         tool: &str,
         scope: InvokeScope<'_>,
     ) -> Result<Option<GrantVerdict>> {
-        let Some(cap) = self.get_capabilities() else {
+        let Some(cap) = self.caller_capabilities() else {
             return Ok(None);
         };
         if server != cap.name {
@@ -500,7 +593,7 @@ impl MetaMcp {
 impl From<InvokeScope<'_>> for crate::gateway::router::CallerStanding {
     /// The admin bit has one source: the scope the caller is judged by.
     fn from(scope: InvokeScope<'_>) -> Self {
-        Self::of_admin_flag(scope.is_admin)
+        Self::of(scope.admin)
     }
 }
 
@@ -509,6 +602,9 @@ impl From<InvokeScope<'_>> for crate::gateway::router::CallerStanding {
 struct Operator;
 
 impl ToolAuthorizer for Operator {
+    fn generation(&self) -> Option<&crate::config_reload::Generation> {
+        None
+    }
     fn decide<'a>(&'a self, _target: ToolTarget<'a>) -> crate::gateway::authz::Decision<'a> {
         crate::gateway::authz::Decision::of(Ok(()))
     }
@@ -537,7 +633,7 @@ impl InvokeScope<'static> {
     pub fn unscoped(standing: crate::gateway::router::CallerStanding) -> Self {
         Self {
             authorizer: &Operator,
-            is_admin: standing == crate::gateway::router::CallerStanding::Admin,
+            admin: standing.admin_standing(),
             api_key_name: None,
             grant_key: None,
             agent_id: None,
@@ -578,7 +674,7 @@ impl InvokeScope<'static> {
     pub(crate) fn allow_all(standing: crate::gateway::router::CallerStanding) -> Self {
         Self {
             authorizer: &crate::gateway::authz::AllowAll,
-            is_admin: standing == crate::gateway::router::CallerStanding::Admin,
+            admin: standing.admin_standing(),
             api_key_name: None,
             grant_key: None,
             agent_id: None,
@@ -599,7 +695,7 @@ impl<'a> InvokeScope<'a> {
     ) -> Self {
         Self {
             authorizer,
-            is_admin: true,
+            admin: crate::gateway::authz::AdminStanding::Gateway,
             api_key_name: None,
             grant_key: None,
             agent_id: None,

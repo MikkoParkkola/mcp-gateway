@@ -72,9 +72,11 @@ impl Backend {
         cache_ttl: Duration,
         runtime_plan: Option<RuntimePlan>,
     ) -> Self {
+        let sign_in = super::sign_in_state::SignInState::for_config(&config);
         Self {
             name: name.to_string(),
             metric_label: Arc::<str>::from(name).into(),
+            notify_origin: Arc::from(name),
             config,
             runtime_plan,
             pool: Arc::new({
@@ -104,6 +106,8 @@ impl Backend {
             skip_account_prepass: std::sync::atomic::AtomicBool::new(false),
             #[cfg(test)]
             unfilled_outcome_reads: std::sync::atomic::AtomicUsize::new(0),
+            #[cfg(test)]
+            lend_refusals: parking_lot::Mutex::default(),
             unserved_consecutive: AtomicU64::new(0),
             unserved_total: AtomicU64::new(0),
             probe_in_flight: std::sync::atomic::AtomicBool::new(false),
@@ -125,8 +129,11 @@ impl Backend {
             events_resolutions: std::sync::atomic::AtomicUsize::new(0),
             connected_unpinned: std::sync::atomic::AtomicBool::new(false),
             login_gate: Arc::default(),
+            sign_in,
             destination: std::sync::OnceLock::new(),
             secret_resolver: std::sync::OnceLock::new(),
+            needles: std::sync::OnceLock::new(),
+            configured: std::sync::OnceLock::new(),
             started: std::sync::OnceLock::new(),
             #[cfg(test)]
             mark_window_gate: parking_lot::Mutex::new(None),
@@ -152,6 +159,7 @@ impl Backend {
             oauth_test_seam: parking_lot::Mutex::new(None),
             instance: super::tools_nudge::next_instance(),
             nudge_feed: std::sync::OnceLock::new(),
+            stop_deadline: std::sync::OnceLock::new(),
             views_dirty: std::sync::Arc::default(),
             #[cfg(test)]
             snapshot_seam: parking_lot::Mutex::new(None),
@@ -405,7 +413,7 @@ impl Backend {
         &self,
         built_under: crate::security::ssrf::DestinationPolicy,
     ) -> Result<()> {
-        let _pairing = self.replaced_transport_cleanups.lock();
+        let pairing = self.replaced_transport_cleanups.lock();
         if self.destination.get().is_none() {
             self.connected_unpinned
                 .store(true, std::sync::atomic::Ordering::SeqCst);
@@ -414,6 +422,7 @@ impl Backend {
         if self.destination() == built_under {
             return Ok(());
         }
+        drop(pairing);
         debug!(backend = %self.name, "Not connecting: the destination policy changed while it was starting");
         Err(Error::BackendUnavailable(self.name.clone()))
     }
@@ -450,6 +459,7 @@ impl Backend {
             built_under,
         )?;
         transport.mark_single_tenant();
+        self.attach_needles_to(&transport);
         // The same pairing check a slot's start runs: refused when the
         // policy changed since it was read, and recorded when none is pinned.
         self.begin_connecting(built_under)?;
@@ -489,9 +499,9 @@ impl Backend {
             Ok(_) => {
                 entry.ever_started.store(true, Ordering::Relaxed);
                 entry.start_failed.store(false, Ordering::Relaxed);
-                entry.auth_wait.store(false, Ordering::Relaxed);
+                entry.auth_wait.clear();
             }
-            Err(e) if e.is_authorization_wait() => entry.auth_wait.store(true, Ordering::Relaxed),
+            Err(e) if e.is_authorization_wait() => entry.set_auth_wait(),
             Err(_) => entry.start_failed.store(true, Ordering::Relaxed),
         }
         started
@@ -594,6 +604,7 @@ impl Backend {
                 // it reads this cache to know it is the one message that may
                 // not wait for a verdict.
                 transport.attach_era(Arc::clone(&entry.era));
+                self.attach_needles_to(&transport);
                 // Connect without handshaking: the probe needs the credential
                 // and the message endpoint, and nothing else.
                 self.begin_connecting(built_under)?;

@@ -20,6 +20,14 @@ use tracing::{debug, info};
 use identity::ClientIdSource;
 pub use identity::{registration_body, storage_key, validate_issuer};
 
+/// The documents one discovery fetched, kept only once they are committed.
+struct Discovered {
+    oauth_base_url: String,
+    resource_metadata: Option<ProtectedResourceMetadata>,
+    scopes: Option<Vec<String>>,
+    auth: AuthorizationServerMetadata,
+}
+
 /// OAuth client for a specific backend
 pub struct OAuthClient {
     /// HTTP client for token requests
@@ -60,6 +68,37 @@ pub struct OAuthClient {
     /// Token storage
     storage: Arc<TokenStorage>,
 
+    /// Where this client publishes its backend's sign-in status, if it has
+    /// one.
+    sign_in_status: Option<Arc<sign_in::SignInStatus>>,
+
+    /// The status cell's installed count this client last adopted.
+    installed_seen: std::sync::atomic::AtomicU64,
+
+    /// Where a test holds a login at the top of its client registration.
+    #[cfg(all(test, feature = "webui"))]
+    pub(crate) registration_pause: crate::test_pause::Slot,
+
+    /// Where a test holds a re-discovery after it fetched the documents.
+    #[cfg(all(test, feature = "webui"))]
+    pub(crate) rediscovery_pause: crate::test_pause::Slot,
+
+    /// Where a test holds an adopt after it read the store.
+    #[cfg(all(test, feature = "webui"))]
+    pub(crate) adopt_pause: crate::test_pause::Slot,
+
+    /// Where a test holds a stored-login adopt after its read, before it answers.
+    #[cfg(all(test, feature = "webui"))]
+    pub(crate) stored_read_pause: crate::test_pause::Slot,
+
+    /// Where a test holds a publish between its issuer check and its write.
+    #[cfg(all(test, feature = "webui"))]
+    pub(crate) publish_pause: crate::test_pause::Slot,
+
+    /// Where a test holds a background renewal before its client-credentials grant.
+    #[cfg(all(test, feature = "webui"))]
+    pub(crate) renewal_pause: crate::test_pause::Slot,
+
     /// Current token (cached)
     current_token: RwLock<Option<TokenInfo>>,
 
@@ -82,6 +121,10 @@ pub struct OAuthClient {
 
     /// Hands the authorization URL to its approver (the browser; a test in tests).
     open_browser: Box<dyn Fn(&str) -> bool + Send + Sync>,
+
+    /// Shows the authorization URL to a person at the terminal (stderr in
+    /// production; a recorder in tests).
+    announce: Box<dyn Fn(&str) + Send + Sync>,
 
     /// Fixed callback port (None = OS-assigned).
     callback_port: Option<u16>,
@@ -221,10 +264,25 @@ impl OAuthClient {
             client_secret: cfg.client_secret,
             callback_host: cfg.callback_host,
             open_browser: Box::new(browser::open_browser),
+            announce: Box::new(browser::announce_on_stderr),
             callback_port: cfg.callback_port,
             callback_path: cfg.callback_path,
             token_refresh_buffer_secs: cfg.token_refresh_buffer_secs,
             destination: crate::security::ssrf::DestinationPolicy::Configured,
+            sign_in_status: None,
+            installed_seen: std::sync::atomic::AtomicU64::new(0),
+            #[cfg(all(test, feature = "webui"))]
+            registration_pause: crate::test_pause::Slot::default(),
+            #[cfg(all(test, feature = "webui"))]
+            rediscovery_pause: crate::test_pause::Slot::default(),
+            #[cfg(all(test, feature = "webui"))]
+            adopt_pause: crate::test_pause::Slot::default(),
+            #[cfg(all(test, feature = "webui"))]
+            stored_read_pause: crate::test_pause::Slot::default(),
+            #[cfg(all(test, feature = "webui"))]
+            publish_pause: crate::test_pause::Slot::default(),
+            #[cfg(all(test, feature = "webui"))]
+            renewal_pause: crate::test_pause::Slot::default(),
         }
     }
 
@@ -239,6 +297,14 @@ impl OAuthClient {
     /// Panics if `oauth_base_url` is `None` after metadata discovery, which
     /// should not occur since both success and error paths set it.
     pub async fn initialize(&mut self) -> Result<()> {
+        let discovered = self.discover_documents().await?;
+        self.commit_discovery(discovered)
+    }
+
+    /// Fetch the protected-resource and authorization-server documents without
+    /// keeping any of them: nothing on the client changes until
+    /// [`Self::commit_discovery`].
+    async fn discover_documents(&self) -> Result<Discovered> {
         let base_url = metadata::base_url(&self.resource_url)?;
 
         // Which kind of issuer string this ends up with decides how exactly the
@@ -248,59 +314,75 @@ impl OAuthClient {
         // assignment rather than inferred later, because by then only the
         // string is left and the two are indistinguishable.
         let mut issuer_source = IssuerSource::Origin;
+        let mut oauth_base_url = base_url.clone();
+        let mut scopes = None;
 
         // Which protected-resource document describes this backend, held to
         // the configured resource (MIK-8320, MIK-8324). A mismatch or a policy
         // refusal is an answer, not a missing document: it ends discovery
         // rather than falling back (MIK-7701).
-        if let Some(meta) = self.discover_resource_metadata().await? {
+        let resource_metadata = self.discover_resource_metadata().await?;
+        if let Some(meta) = &resource_metadata {
             // Read before the macro so its count is graded (MIK-7725).
             let resource = &meta.resource;
             debug!(resource = %resource, "Found protected resource metadata");
 
             // Get authorization server from metadata
             if let Some(auth_server) = meta.authorization_server() {
-                self.oauth_base_url = Some(auth_server.to_string());
+                oauth_base_url = auth_server.to_string();
                 issuer_source = IssuerSource::Advertised;
-            } else {
-                // Fallback to same base URL
-                self.oauth_base_url = Some(base_url.clone());
             }
 
             // Use scopes from metadata if not specified
             if self.scopes.is_empty() && !meta.scopes_supported.is_empty() {
-                self.scopes.clone_from(&meta.scopes_supported);
+                scopes = Some(meta.scopes_supported.clone());
             }
-
-            self.resource_metadata = Some(meta);
         } else {
             debug!("No protected resource metadata, using base URL");
-            self.oauth_base_url = Some(base_url.clone());
         }
 
         // Discover authorization server metadata
-        let auth_base = self.oauth_base_url.as_ref().unwrap();
-        self.check_destination(auth_base, "authorization server")?;
-        let previous_issuer = self.auth_metadata.as_ref().map(|m| m.issuer.clone());
-        let discovered = AuthorizationServerMetadata::discover(
-            self.client_for(auth_base)?,
-            auth_base,
+        self.check_destination(&oauth_base_url, "authorization server")?;
+        let auth = AuthorizationServerMetadata::discover(
+            self.client_for(&oauth_base_url)?,
+            &oauth_base_url,
             issuer_source,
         )
         .await?;
         // Checked before it is kept: a refused document never reaches a request.
-        self.check_advertised_endpoints(&discovered)?;
-        self.auth_metadata = Some(discovered);
+        self.check_advertised_endpoints(&auth)?;
+        Ok(Discovered {
+            oauth_base_url,
+            resource_metadata,
+            scopes,
+            auth,
+        })
+    }
+
+    /// Keep what [`Self::discover_documents`] fetched, and load the credential
+    /// stored under the issuer it names.
+    fn commit_discovery(&mut self, discovered: Discovered) -> Result<()> {
+        let previous_issuer = self.auth_metadata.as_ref().map(|m| m.issuer.clone());
+        self.oauth_base_url = Some(discovered.oauth_base_url);
+        if let Some(scopes) = discovered.scopes {
+            self.scopes = scopes;
+        }
+        if discovered.resource_metadata.is_some() {
+            self.resource_metadata = discovered.resource_metadata;
+        }
+        self.auth_metadata = Some(discovered.auth);
 
         self.drop_credentials_from_other_issuer(previous_issuer.as_deref());
 
         // Load any cached token
-        if let Some(token) = self
+        let loaded = self
             .storage
-            .load(&self.credential_key()?, &self.resource_url)
-        {
-            *self.current_token.write() = Some(token);
+            .load(&self.credential_key()?, &self.resource_url);
+        if let Some(token) = &loaded {
+            self.cache_if_current(token.clone());
         }
+        // The issuer is known now: say what the token file says, once.
+        self.publish_token_state(loaded.as_ref());
 
         // Restore a previously-registered dynamic client id so we do NOT
         // re-register (and pop a fresh browser authorize tab) every time the
@@ -427,8 +509,7 @@ fn refuse_oversized_expires_in(endpoint: &str, expires_in: Option<u64>) -> Resul
 /// Generate PKCE code verifier and challenge
 fn generate_pkce() -> (String, String) {
     // Generate 32 random bytes for verifier
-    let verifier_bytes: [u8; 32] = rand::rng().random();
-    let verifier = URL_SAFE_NO_PAD.encode(verifier_bytes);
+    let verifier = crate::random_secret::random_secret("");
 
     // SHA256 hash for challenge
     let mut hasher = Sha256::new();
@@ -452,13 +533,19 @@ fn generate_client_id() -> String {
 }
 
 #[cfg(test)]
-mod authorize_tests;
+pub(crate) mod authorize_tests;
 mod browser;
+#[cfg(test)]
+mod cache_write_pin_tests;
 #[cfg(test)]
 mod deadline_tests;
 pub(crate) mod destination;
 mod discovery;
 mod identity;
+#[cfg(test)]
+mod issue_token_tests;
+#[cfg(test)]
+mod publish_tests;
 #[cfg(test)]
 mod refresh_flight_tests;
 #[cfg(test)]
@@ -475,12 +562,67 @@ impl OAuthClient {
         self.open_browser = Box::new(move |url: &str| open(url));
         self
     }
+
+    /// This client with `record` standing in for the terminal announcement.
+    pub(crate) fn with_announce(
+        mut self,
+        record: std::sync::Arc<dyn Fn(&str) + Send + Sync>,
+    ) -> Self {
+        self.announce = Box::new(move |url: &str| record(url));
+        self
+    }
+}
+
+#[cfg(all(test, feature = "webui"))]
+impl OAuthClient {
+    /// Store `token` under this client's credential and hold it in memory, as
+    /// a completed login would, and publish the status.
+    pub(crate) fn seed_token_for_test(&self, token: &TokenInfo) {
+        let key = self
+            .credential_key()
+            .expect("a resolved issuer keys the store");
+        self.storage
+            .save(&key, &self.resource_url, token)
+            .expect("the seed saves");
+        *self.current_token.write() = Some(token.clone());
+        self.publish_sign_in();
+    }
+
+    /// The issuer this client last discovered.
+    pub(crate) fn issuer_for_test(&self) -> Option<String> {
+        self.auth_metadata.as_ref().map(|m| m.issuer.clone())
+    }
+
+    /// The storage key this client's credentials are under.
+    pub(crate) fn credential_key_for_test(&self) -> Option<String> {
+        self.credential_key().ok()
+    }
+
+    /// Whether an install is waiting to be adopted.
+    pub(crate) fn install_stale_for_test(&self) -> bool {
+        self.install_stale()
+    }
+
+    /// Where this client's token file is.
+    pub(crate) fn token_path_for_test(&self) -> std::path::PathBuf {
+        let key = self
+            .credential_key()
+            .expect("a resolved issuer keys the store");
+        self.storage.token_path(&key, &self.resource_url)
+    }
+
+    /// The token this client holds in memory.
+    pub(crate) fn cached_token_for_test(&self) -> Option<TokenInfo> {
+        self.current_token.read().clone()
+    }
 }
 #[cfg(test)]
 use url::Url;
 
 mod grants;
 pub(crate) use grants::OAUTH_AUTHORIZATION_WINDOW;
+#[cfg(test)]
+mod grants_log_tests;
 #[cfg(test)]
 mod grants_tests;
 mod refresh_flight;
@@ -496,6 +638,9 @@ mod issuer_provenance_tests;
 mod prm_discovery_tests;
 mod registration;
 mod renewal;
+pub(crate) mod sign_in;
+#[cfg(test)]
+mod sign_in_tests;
 #[cfg(test)]
 mod tests;
 mod token_access;

@@ -119,6 +119,33 @@ impl<'a> OverlayEnv<'a> {
     }
 }
 
+impl OverlayEnv<'_> {
+    /// The `MCP_GATEWAY_*` overrides applied from `base` and the env files:
+    /// (name, nested path, value). The one filter both the provider and the
+    /// revision capture read, so they cannot disagree on what was applied.
+    pub(super) fn overrides<I>(&self, base: I) -> Vec<(String, Vec<String>, String)>
+    where
+        I: Iterator<Item = (std::ffi::OsString, std::ffi::OsString)>,
+    {
+        self.merged_vars(base)
+            .into_iter()
+            .filter_map(|(key, value)| {
+                // Whole names only: `MCP_GATEWAY_CAPABILITIES__NAME` is still a
+                // nested override of `capabilities.name`.
+                if CLI_OWNED_ENV.contains(&key.as_str()) {
+                    return None;
+                }
+                let rest = key.strip_prefix(Self::PREFIX)?;
+                let parts: Vec<String> = rest.split("__").map(str::to_lowercase).collect();
+                if parts.iter().any(String::is_empty) {
+                    return None;
+                }
+                Some((key, parts, value))
+            })
+            .collect()
+    }
+}
+
 impl Provider for OverlayEnv<'_> {
     fn metadata(&self) -> Metadata {
         Metadata::named("environment variable(s)")
@@ -126,19 +153,7 @@ impl Provider for OverlayEnv<'_> {
 
     fn data(&self) -> figment::Result<Map<Profile, Dict>> {
         let mut dict = Dict::new();
-        for (key, value) in self.merged_vars(std::env::vars_os()) {
-            // Whole names only: `MCP_GATEWAY_CAPABILITIES__NAME` is still a
-            // nested override of `capabilities.name`.
-            if CLI_OWNED_ENV.contains(&key.as_str()) {
-                continue;
-            }
-            let Some(rest) = key.strip_prefix(Self::PREFIX) else {
-                continue;
-            };
-            let parts: Vec<String> = rest.split("__").map(str::to_lowercase).collect();
-            if parts.iter().any(String::is_empty) {
-                continue;
-            }
+        for (_, parts, value) in self.overrides(std::env::vars_os()) {
             Self::insert_nested(&mut dict, &parts, value);
         }
         backend_transport::refuse_backend_url(&dict).map_err(figment::Error::from)?;

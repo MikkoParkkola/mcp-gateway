@@ -1,13 +1,13 @@
 diff --git a/src/gateway/router/authorization.rs b/src/gateway/router/authorization.rs
-index 5106c217b..96bb0b9a5 100644
+index 027a2713f5..93bde39566 100644
 --- a/src/gateway/router/authorization.rs
 +++ b/src/gateway/router/authorization.rs
-@@ -258,7 +258,7 @@ pub(super) fn decide_tool_target<'a>(
-                 .map_err(|e| AuthorizationError::forbidden(INVALID_REQUEST, e.to_string()))
-         })
+@@ -364,7 +364,7 @@ pub(super) fn decide_tool_target<'a>(
+         .and_then(|()| crate::gateway::authz::authorize_backend(client, target.server))
+         .and_then(|()| crate::gateway::authz::tool_policy_refusal(generation.tool_policy(), target))
          .and_then(|()| {
 -            client.map_or(Ok(()), |client| {
 +            client.filter(|_| false).map_or(Ok(()), |client| {
                  client
                      .check_tool_scope(target.server, target.tool)
-                     .map_err(|e| AuthorizationError::forbidden(INVALID_REQUEST, e))
+                     .map_err(|e| refused(DecisionKind::ClientToolScope, e))

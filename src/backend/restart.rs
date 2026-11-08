@@ -32,6 +32,13 @@ impl Backend {
     /// backend is shutting down: nothing was rebuilt, and a caller reporting
     /// "revived" on the strength of an `Ok` would be lying to its operator.
     pub async fn force_restart(&self) -> Result<RestartOutcome> {
+        self.force_restart_for(RestartCause::Requested).await
+    }
+
+    /// [`Self::force_restart`], with the cause that decides how the old stdio
+    /// child ends: killed at once when it failed its health probe, else the
+    /// graceful stop, within `close_stage`.
+    pub(crate) async fn force_restart_for(&self, cause: RestartCause) -> Result<RestartOutcome> {
         // Rebuild only the canonical shared slot; per-user sessions are left
         // intact so one caller's health recovery cannot tear down another's
         // in-flight session (MIK-6735). The idle reaper reclaims per-user slots.
@@ -39,7 +46,7 @@ impl Backend {
         // `Backend::lifecycle`: without this, the check below can pass before
         // stop() latches, and the restart then registers a cleanup after the
         // final drain or starts a child after teardown.
-        let _lifecycle = self.lifecycle.read().await;
+        let lifecycle_held = self.lifecycle.read().await;
 
         // Refuse once shutdown has begun. `stop()` has already taken every
         // transport out of the pool; restarting here would spawn a fresh child
@@ -48,6 +55,7 @@ impl Backend {
         // its shutdown signal between ticks, so a probe already in flight can
         // reach this point during teardown.
         if self.replaced_transport_cleanups.lock().stopping {
+            drop(lifecycle_held);
             debug!(backend = %self.name, "Skipping force_restart: backend is stopping");
             return Ok(RestartOutcome::SkippedStopping);
         }
@@ -76,7 +84,7 @@ impl Backend {
         let set_out_cohort = self.login_gate.cohort();
 
         let entry = self.shared_entry();
-        let _guard = if interactive {
+        let start_held = if interactive {
             entry.start_lock.lock().await
         } else {
             entry.start_lock.try_lock().map_err(|_| required())?
@@ -88,6 +96,8 @@ impl Backend {
         // rather than hang forever. Correctness must not depend on having won
         // the lock, only on this flag.
         if self.replaced_transport_cleanups.lock().stopping {
+            drop(start_held);
+            drop(lifecycle_held);
             debug!(backend = %self.name, "Abandoning force_restart: shutdown began while waiting");
             return Ok(RestartOutcome::SkippedStopping);
         }
@@ -155,7 +165,10 @@ impl Backend {
                 // can re-handshake and retry in ways no formula sees.
                 self.close_after_last_owner(old);
             } else {
-                let _ = old.close().await;
+                if cause == RestartCause::Unhealthy {
+                    old.kill_tree_now();
+                }
+                close_replaced(&self.name, &old, self.budgets.close_stage).await;
             }
         }
         // `start_entry` refuses to publish once shutdown has latched, so there
@@ -235,6 +248,7 @@ impl Backend {
         const WARN_AFTER: Duration = Duration::from_secs(300);
 
         let name = self.name.clone();
+        let budget = self.budgets.close_stage;
         let handle = tokio::spawn(async move {
             let started = tokio::time::Instant::now();
             let mut delay = FIRST_POLL;
@@ -255,9 +269,9 @@ impl Backend {
                 }
             }
 
-            if let Err(error) = old.close().await {
-                warn!(backend = %name, %error, "Replaced transport failed to close cleanly");
-            }
+            // It served its last owner until now, so it is not dead: the
+            // graceful stop, whatever caused the restart.
+            close_replaced(&name, &old, budget).await;
         });
 
         // Drop handles for cleanups that already finished so a long-lived
@@ -265,5 +279,30 @@ impl Backend {
         let mut pending = self.replaced_transport_cleanups.lock();
         pending.handles.retain(|h| !h.is_finished());
         pending.handles.push(handle);
+    }
+}
+
+/// Why a backend is restarted, which decides how its old stdio child ends.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RestartCause {
+    /// Asked for (an operator, the UI): the old child may still save.
+    Requested,
+    /// Its health probe failed: the old child is killed at once.
+    Unhealthy,
+}
+
+/// Close a replaced transport within `budget`, a hard limit: an unbounded
+/// close could hang a restart forever. The close plans its exit waits to fit.
+async fn close_replaced(name: &str, old: &Arc<dyn Transport>, budget: Duration) {
+    let close =
+        crate::transport::within_stop_deadline(tokio::time::Instant::now() + budget, old.close());
+    match tokio::time::timeout(budget, close).await {
+        Ok(Ok(())) => {}
+        Ok(Err(error)) => {
+            warn!(backend = %name, %error, "Replaced transport failed to close cleanly");
+        }
+        Err(_) => {
+            warn!(backend = %name, "Replaced transport did not close within its budget; abandoned");
+        }
     }
 }

@@ -41,7 +41,7 @@ fn cache_principal_tags_cannot_collide() {
     );
     assert_ne!(cred, other, "two API keys must not share one principal");
 
-    let subject = GrantSubject::new(digest, digest, None);
+    let subject = GrantSubject::for_test(digest, digest, None);
     let actor = crate::key_server::oidc::VerifiedIdentity {
         subject: digest.to_string(),
         email: String::new(),
@@ -301,7 +301,7 @@ fn the_reserved_owner_value_stays_in_the_reserved_prefix() {
 /// before the change.
 #[test]
 fn named_callers_keep_their_cache_principal_byte_for_byte() {
-    let subject = GrantSubject::new("mtls", "agent-a", None);
+    let subject = GrantSubject::for_test("mtls", "agent-a", None);
     assert_eq!(
         caller_cache_principal(
             None,

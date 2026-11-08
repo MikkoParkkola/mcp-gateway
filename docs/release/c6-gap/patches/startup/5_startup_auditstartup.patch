@@ -1,13 +1,13 @@
 diff --git a/src/gateway/server/identity_grants.rs b/src/gateway/server/identity_grants.rs
-index 1da85a81c..9375fd143 100644
+index 4005380e6..4b27fff7e 100644
 --- a/src/gateway/server/identity_grants.rs
 +++ b/src/gateway/server/identity_grants.rs
-@@ -182,7 +182,7 @@ async fn audit_startup(
+@@ -229,7 +229,7 @@ async fn audit_startup(
      if let Recorded::Unrecorded(reason) = auditor.record(prepared) {
          return Err(reason.into());
      }
--    auditor.snapshot(&rows, snapshot_time()?)?;
-+    let _ = auditor.snapshot(&rows, snapshot_time()?);
+-    auditor.snapshot(&rows.0, snapshot_time()?)?;
++    let _ = auditor.snapshot(&rows.0, snapshot_time()?);
      drop(read.guard);
      Ok(rows)
  }

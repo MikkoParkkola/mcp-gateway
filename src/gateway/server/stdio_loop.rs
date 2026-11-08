@@ -46,19 +46,20 @@ impl Gateway {
         // ── Shared MetaMcp initialisation ────────────────────────────────────
         let BuiltMetaMcp {
             meta_mcp,
-            tool_policy,
             mtls_policy,
             data_dir,
             record_key,
             ..
         } = self.build_meta_mcp().await?;
         // Held for the whole serve: it owns the governance store's lease.
-        let grant_sink = identity_grants::stdio_identity_grants(
+        let (grant_sink, grants_read) = identity_grants::stdio_identity_grants(
             &self.config,
             self.config_path.as_deref(),
             &meta_mcp,
         )
         .await?;
+        // Published later, with the stdio session's config.
+        grants_read.into_startup(&self.env);
         // MIK-8278: this session announces tool-list changes to an
         // initialize-era client, so it may say so; the feed is installed
         // before warm-start and the capability load, so their nudges count.
@@ -105,6 +106,8 @@ impl Gateway {
         };
         // One config for everything stdio judges with and for its reload
         // context, so a stdio reload reaches intake, tasks and policy (ADR-023).
+        // Records name its revision with or without a config file; the startup
+        // load's raw bytes are taken here and never outlive this function.
         // Its auth is the default one: stdio authenticates by API key nothing,
         // and the gateway's own `auth` is never resolved here, so one that does
         // not resolve cannot turn stdio's tasks off.
@@ -118,11 +121,12 @@ impl Gateway {
                     )),
                 ),
             )
-            .with_policy_epoch(Arc::clone(&meta_mcp.policy_epoch)),
+            .with_policy_epoch(Arc::clone(&meta_mcp.policy_epoch))
+            .with_startup_revision(meta_mcp.record_key(), self.env.take_startup_inputs()),
         );
+        meta_mcp.set_live_config(Arc::clone(&live_config));
         // MIK-7272.OWNER.2: `<tasks.store_dir>/stdio`, or `None` to serve as before.
-        let task_store =
-            stdio_tasks::open(&self.config, &meta_mcp, &tool_policy, &live_config).await;
+        let task_store = stdio_tasks::open(&self.config, &meta_mcp, &live_config).await;
         // MIK-7839.CANCEL.3: a session future dropped before EOF never reaches
         // the async teardown; this guard still stops its task workers.
         let _stop_tasks = task_store.as_ref().map(|(tasks, _)| tasks.stop_on_drop());
@@ -159,7 +163,8 @@ impl Gateway {
             .record_at_start(&self.backends, meta_mcp.transparency_log())
             .await?;
         let reporting =
-            crate::config_reload::refusals::ReloadReporting::with_override_audit(override_auditor);
+            crate::config_reload::refusals::ReloadReporting::with_override_audit(override_auditor)
+                .with_audit_log(meta_mcp.transparency_log().cloned());
         self.install_stdio_startup_catalogue(
             &meta_mcp,
             &live_config,
@@ -220,7 +225,7 @@ impl Gateway {
         // watchers stop with the announcer, so they end on every exit path.
         let announcer = super::tools_changed::stdio::StdioAnnouncer::start(
             (Arc::clone(&self.backends), Arc::clone(&meta_mcp)),
-            Arc::clone(&tool_policy),
+            Arc::clone(&live_config),
             nudge_rx,
             writer.clone(),
         );
@@ -243,6 +248,8 @@ impl Gateway {
         // Whether this session began with `initialize`: only such a client
         // is told of changes (a modern one was told `listChanged: false`).
         let mut legacy_handshake = false;
+        // Whether a first list's answer was queued (`first_list_wait`).
+        let first_list = super::first_list_wait::FirstList::default();
 
         // Use a fixed session ID for stdio sessions (single client, long-lived)
         let session_id = STDIO_SESSION_ID;
@@ -321,9 +328,9 @@ impl Gateway {
             // ADR-023: this line is judged by the generation current as it is
             // read, held for its whole dispatch; taken before parsing, so a
             // reload while the line is parsed cannot reach it.
-            let sanitize = super::stdio_single::InputSanitizing::from_setting(
-                live_config.generation().sanitize_input(),
-            );
+            let generation = live_config.generation();
+            let sanitize =
+                super::stdio_single::InputSanitizing::from_setting(generation.sanitize_input());
             let line = line.trim().to_string();
             if line.is_empty() {
                 continue;
@@ -421,7 +428,7 @@ impl Gateway {
                     break;
                 }
                 let meta_mcp = Arc::clone(&meta_mcp);
-                let tool_policy = Arc::clone(&tool_policy);
+                let generation = Arc::clone(&generation);
                 let mtls_policy = Arc::clone(&mtls_policy);
                 let (writer, reads) = (writer.clone(), Arc::clone(&reads));
                 let admission = Arc::clone(&admission);
@@ -440,7 +447,7 @@ impl Gateway {
                         let (responses, _) = Self::dispatch_streaming_notifications(
                             Box::pin(Self::dispatch_batch_read(
                                 &meta_mcp,
-                                &tool_policy,
+                                &generation,
                                 &mtls_policy,
                                 request,
                                 (session_id, sanitize, serving),
@@ -448,7 +455,10 @@ impl Gateway {
                             )),
                             &writer,
                             &reads,
-                            Some(meta_mcp.notification_screen("stdio", session_id)),
+                            Some(meta_mcp.notification_screen(
+                                ("stdio", session_id),
+                                Some(Arc::clone(&generation)),
+                            )),
                         )
                         .await;
                         if !responses.is_empty() {
@@ -511,7 +521,7 @@ impl Gateway {
                 .and_then(|id| serde_json::from_value(id.clone()).ok());
             let task = {
                 let meta_mcp = Arc::clone(&meta_mcp);
-                let tool_policy = Arc::clone(&tool_policy);
+                let generation = Arc::clone(&generation);
                 let mtls_policy = Arc::clone(&mtls_policy);
                 // Cloned, not borrowed: the caller context holds
                 // `&dyn ClientChannel` and a spawned task needs `'static`.
@@ -521,6 +531,7 @@ impl Gateway {
                 let params = reads.judges().then(|| request.get("params").cloned());
                 let cancelled = cancelled.clone();
                 let answers = request_id.clone();
+                let first_list = first_list.clone();
                 #[cfg(test)]
                 let gate = initialize_gate.clone().filter(|_| !spawned);
                 #[cfg(test)]
@@ -528,14 +539,14 @@ impl Gateway {
                 // MIK-8176: this request's slots are owned by its task, from
                 // dispatch through the writer queue.
                 // One delivery's facts: dispatch, judge and record.
-                Box::pin(crate::gateway::delivery_facts::scope(
+                Box::pin(first_list.scope(crate::gateway::delivery_facts::scope(
                     crate::gateway::meta_mcp::sealed_hold::scoped(async move {
                         #[cfg(test)]
                         hold.pause().await;
                         let ((response, staged), hidden) = Self::dispatch_streaming_notifications(
                             Box::pin(Self::dispatch_single_staged(
                                 &meta_mcp,
-                                &tool_policy,
+                                &generation,
                                 &mtls_policy,
                                 request,
                                 StdioClient {
@@ -550,7 +561,10 @@ impl Gateway {
                             )),
                             &writer,
                             &reads,
-                            Some(meta_mcp.notification_screen("stdio", session_id)),
+                            Some(meta_mcp.notification_screen(
+                                ("stdio", session_id),
+                                Some(Arc::clone(&generation)),
+                            )),
                         )
                         .await;
                         #[cfg(test)]
@@ -588,7 +602,7 @@ impl Gateway {
                             cancelled.send_unless_cancelled(answers.as_ref(), permit, response);
                         }
                     }),
-                ))
+                )))
             };
             if spawned {
                 let slot = slot.expect("a spawned request holds the slot it was admitted on");
@@ -641,6 +655,8 @@ impl Gateway {
         // The read loop is over: the session is ending, so nothing more is
         // announced, though accepted requests still drain (MIK-8278).
         announcer.stop();
+        // A first list still waiting answers now (`first_list_wait`).
+        first_list.end();
         // `writer.is_closed()` as well as the flag: stdout can die during the
         // wait for a line that never comes, and the loop then leaves by the EOF
         // arm. Reporting that as an ordinary EOF would hand the operator the

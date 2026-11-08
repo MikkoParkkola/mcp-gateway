@@ -73,6 +73,8 @@ mod playbook_authz;
 /// MIK-8158: no authorization server, no protected-resource metadata.
 mod prm_without_issuer;
 mod quota_principal;
+mod refusal_kind_private;
+mod refusal_wire_pins;
 mod request_parsing;
 mod responses;
 mod session_hold_direct;
@@ -206,7 +208,6 @@ async fn test_router_app_state_with(
         proxy_manager,
         streaming_config,
         key_server: None,
-        tool_policy: Arc::new(crate::security::ToolPolicy::default()),
         mtls_policy: Arc::new(MtlsPolicy::from_config(&MtlsConfig::default())),
         trust_configured_backends: false,
         inflight: Arc::new(tokio::sync::Semaphore::new(8)),
@@ -222,6 +223,7 @@ async fn test_router_app_state_with(
         live_config: Arc::clone(&live_config),
         export_status: None,
         transparency_log: None,
+        governance_log: None,
         dashboard_bootstrap: std::sync::Arc::new(crate::gateway::auth::DashboardBootstrap::new()),
         tasks: task_service,
         task_executor,
@@ -273,7 +275,6 @@ async fn test_router_app_state_with_agent_auth_enabled() -> (Arc<AppState>, Fixt
         proxy_manager,
         streaming_config,
         key_server: None,
-        tool_policy: Arc::new(crate::security::ToolPolicy::default()),
         mtls_policy: Arc::new(MtlsPolicy::from_config(&MtlsConfig::default())),
         trust_configured_backends: false,
         inflight: Arc::new(tokio::sync::Semaphore::new(8)),
@@ -289,6 +290,7 @@ async fn test_router_app_state_with_agent_auth_enabled() -> (Arc<AppState>, Fixt
         live_config: Arc::clone(&live_config),
         export_status: None,
         transparency_log: None,
+        governance_log: None,
         dashboard_bootstrap: std::sync::Arc::new(crate::gateway::auth::DashboardBootstrap::new()),
         tasks: task_service,
         task_executor,
@@ -446,7 +448,6 @@ pub(super) async fn test_router_app_state_with_auth_and_config(
         proxy_manager,
         streaming_config,
         key_server: None,
-        tool_policy: Arc::new(crate::security::ToolPolicy::default()),
         mtls_policy: Arc::new(MtlsPolicy::from_config(&MtlsConfig::default())),
         trust_configured_backends: false,
         inflight: Arc::new(tokio::sync::Semaphore::new(8)),
@@ -462,6 +463,7 @@ pub(super) async fn test_router_app_state_with_auth_and_config(
         live_config: Arc::clone(&live_config),
         export_status: None,
         transparency_log: None,
+        governance_log: None,
         dashboard_bootstrap: std::sync::Arc::new(crate::gateway::auth::DashboardBootstrap::new()),
         tasks: task_service,
         task_executor,
@@ -490,6 +492,14 @@ pub(super) fn scoped_auth_config(admin: bool) -> AuthConfig {
         public_paths: vec!["/health".to_string()],
         ..AuthConfig::default()
     }
+}
+
+/// The `scoped-key` admin with every backend in its scope (`backends: ["*"]`):
+/// the caller that sees every registered server on the UI routes.
+pub(super) fn full_admin_auth_config() -> AuthConfig {
+    let mut auth = scoped_auth_config(true);
+    auth.api_keys[0].backends = vec!["*".to_string()];
+    auth
 }
 
 struct RouterNotificationTestTransport {
@@ -608,7 +618,6 @@ fn scoped_client(
 #[test]
 fn authz_refusal_principal_names_the_authenticated_identity() {
     use crate::gateway::oauth::OAuthAgentIdentity;
-    use crate::mtls::CertIdentity;
 
     let api_key = scoped_client("keyed", vec!["*".into()], None);
     assert_eq!(
@@ -630,10 +639,10 @@ fn authz_refusal_principal_names_the_authenticated_identity() {
         "an agent caller must not be reported as unauthenticated"
     );
 
-    let cert = CertIdentity {
+    let cert = crate::mtls::identity::CertIdentity::for_test(crate::mtls::identity::CertFields {
         display_name: "machine-7".to_string(),
-        ..CertIdentity::default()
-    };
+        ..Default::default()
+    });
     assert_eq!(
         super::authorization::refusal_principal(None, None, Some(&cert)).as_deref(),
         Some("cert:machine-7"),

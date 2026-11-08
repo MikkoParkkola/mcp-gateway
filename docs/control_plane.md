@@ -126,9 +126,18 @@ or SIEM/OTel sinks.
   A `role: admin` rule also makes that identity a gateway admin on every other
   admin surface (meta-tools and `/ui/api/*`), and a `role: admin` rule whose
   only condition is `domain` fails to load. See `docs/MULTI_USER.md`.
+  Admin is gateway-wide: an admin whose backend scope names some backends but
+  not `*` (an admin key with such a `backends` list, or an Admin-role token
+  whose key-server policy scopes it so) is an `auditor` here and holds no
+  gateway-wide admin power elsewhere. It keeps admin breadth inside its scope:
+  Activity on its backends and the admin-only capabilities on its backends.
+  An admin key with an empty `backends` list stays a gateway-wide admin.
 - `security_reviewer`: can read inventory/evidence and record reviews, but cannot mutate grants or policies.
-- `developer`: can read inventory/evidence.
-- `auditor`: read-only inventory/evidence role.
+- `developer`: can read inventory/evidence, but only its own grants and audit events.
+- `auditor`: read-only inventory/evidence role, over every principal's grants and audit events.
+- `viewer`: a caller no role rule maps (an API key without admin rights, or a signed-in identity no rule matches). Reads inventory/evidence, but only its own grants and audit events.
+
+Admin, security reviewer and auditor read every principal's grants and audit events in the snapshot; viewer and developer read only rows about themselves (grants under their own subject, events they performed). `auditor` is an explicit role rule, or the cap on a backend-scoped admin. A key's backend scope bounds every role, whatever its identity maps to. A key whose `backends` names some backends (admin or not) sees only those backends, and a non-admin key with an empty `backends` sees none. Either is shown no identity grant, local policy, store audit event or shadow-radar discovery, since each is gateway-wide, and its radar reads `scan_status: "out_of_scope"`.
 
 All mutations require an audit event whose actor, action, and target match the requested mutation, plus a rollback plan.
 

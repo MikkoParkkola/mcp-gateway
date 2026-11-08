@@ -11,7 +11,6 @@ use serde_json::{Map, Value};
 use crate::capability::ProcessNote;
 use crate::context_integrity::ContextIntegrityEvaluation;
 use crate::gateway::meta_mcp::{MetaMcp, MetaMcpCallerContext};
-use crate::protocol::JsonRpcResponse;
 use crate::security::audit::{
     AuditEnvelope, AuditFailurePolicy, AuditOutcome, AuditWho, InvocationTarget,
 };
@@ -41,6 +40,21 @@ pub(crate) struct SettledTask<'a> {
     pub id: &'a str,
 }
 
+/// What a composite task's settlement record joins by, written as
+/// `joined_by` on composite records only; a single-target record keeps its
+/// dispatch-trace join and has no such member.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum SettlementJoin {
+    /// `trace_id` is the record trace of the step the plan ended on: the
+    /// record of the check that refused.
+    StepTrace,
+    /// `trace_id` is the task id: the plan ended with no usable trace from
+    /// the step it ended on. Usually no step ran; when a later step's
+    /// arguments were refused, the earlier steps' records still exist.
+    TaskId,
+}
+
 /// What one call's gates saw, handed out of [`with_dispatch_scope`] as an
 /// owned value: the scope ends before the invocation record is written.
 #[derive(Debug, Default)]
@@ -54,8 +68,9 @@ pub(crate) struct DispatchNotes {
     /// The context-integrity kernel's data classes for that response, as
     /// their snake-case names.
     data_classes: BTreeSet<String>,
-    /// Served from a cache: no gate ran, so the delivered value is attributed.
-    cached: bool,
+    /// Served from a store past every gate, and which store: the delivered
+    /// value is attributed, and the record says which it was.
+    cached: Option<Answered>,
     /// What the web UI's counters need from the gates.
     counting: counting::CountNotes,
     /// MIN.1: the response held text over the attribution parse bound, so its
@@ -64,6 +79,10 @@ pub(crate) struct DispatchNotes {
     /// MIN.2: a backend answered this call (its raw response reached the
     /// response gates); a gateway refusal returned as a result did not.
     responded: bool,
+    /// This call's dispatch missed a backend its gate also found
+    /// unregistered: recorded `not_found` and denied with -32001, for this
+    /// call only.
+    not_found: bool,
     /// Whether this call's last step was a refusal before its backend.
     pre_send: crate::gateway::meta_mcp::dispatch_log::PreSend,
     /// MIN.1 gap 1: the gateway task whose raw upstream handle this dispatch
@@ -80,6 +99,8 @@ pub(crate) struct DispatchNotes {
     /// This call's backend send time, summed over its rounds, and
     /// how its last round ended. `None`: no send began.
     backend: Option<(std::time::Duration, crate::counters::End)>,
+    /// MIK-8914.API2A.1: which check decided this call.
+    decision: crate::security::decision_record::Noted,
 }
 
 /// A backend send of this call took `elapsed` and ended `end`. A
@@ -101,6 +122,17 @@ impl DispatchNotes {
         self.backend
     }
 }
+
+#[path = "audit_decision.rs"]
+mod decision;
+#[path = "audit_replay.rs"]
+mod replay;
+#[cfg(test)]
+pub(crate) use decision::take_refusal_kind;
+pub(crate) use decision::{
+    after_upstream_401, note_declared_effect, note_refused_by, note_send_refusal, noted,
+    take_refusal, take_route_noted, with_route_scope,
+};
 
 /// Most process notes one record carries (a playbook may run many).
 const MAX_PROCESS_NOTES: usize = 16;
@@ -136,6 +168,11 @@ tokio::task_local! {
 /// Outside [`with_dispatch_scope`] (upstream task recovery) this does nothing.
 fn note(f: impl FnOnce(&mut DispatchNotes)) {
     let _ = NOTES.try_with(|notes| f(&mut notes.borrow_mut()));
+}
+
+/// Note that this call's dispatch missed a backend its gate found absent.
+pub(super) fn note_not_found() {
+    note(|notes| notes.not_found = true);
 }
 
 /// Note what this call's last pre-send step decided: a refusal before its
@@ -221,10 +258,28 @@ pub(crate) fn note_refusal(result: &Result<Value>) {
     }
 }
 
-/// MIK-7116.MIN.1: this call is answered from a cache, past every gate. The
+/// What answered a call past every gate. A response-cache hit stands in only
+/// for a call the slot declared read-only; a replay may stand in for a stored
+/// write, so its record must not read as a cache hit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Answered {
+    /// The response cache.
+    CacheHit,
+    /// An idempotency key's stored answer.
+    Replay,
+}
+
+/// Whether `answered` answered this call; false outside a dispatch scope.
+pub(crate) fn answered_by(answered: Answered) -> bool {
+    NOTES
+        .try_with(|notes| notes.borrow().cached == Some(answered))
+        .unwrap_or(false)
+}
+
+/// MIK-7116.MIN.1: this call is answered from a store, past every gate. The
 /// answer is not this request's, so its delivery states no effect or findings.
-pub(crate) fn note_cached() {
-    note(|notes| notes.cached = true);
+pub(crate) fn note_cached(answered: Answered) {
+    note(|notes| notes.cached = Some(answered));
     crate::gateway::delivery_facts::unvouched();
 }
 
@@ -248,7 +303,7 @@ pub(crate) fn stored_failure(mut failure: Value) -> Value {
 /// MIK-7636: a keyed replay of the stored `failure`, noted as cached and, when
 /// its first call was, uninspected.
 pub(crate) fn note_cached_failure(failure: &Value) {
-    note_cached();
+    note_cached(Answered::Replay);
     if failure.get(UNINSPECTED_MARKER).and_then(Value::as_bool) == Some(true) {
         note(|notes| notes.uninspected = true);
     }
@@ -267,6 +322,11 @@ pub(crate) async fn with_dispatch_scope<F: std::future::Future>(
 }
 
 impl DispatchNotes {
+    /// [`note_not_found`] for notes built outside a dispatch scope.
+    pub(super) fn mark_not_found(&mut self) {
+        self.not_found = true;
+    }
+
     /// MIN.2: whether a backend answered this call.
     pub(crate) const fn responded(&self) -> bool {
         self.responded
@@ -297,7 +357,7 @@ impl DispatchNotes {
         delivered: Option<&Value>,
     ) -> Map<String, Value> {
         let mut uninspected = self.uninspected;
-        if self.cached {
+        if self.cached.is_some() {
             if let Some(value) = delivered {
                 tenants.extend(meta.response_tenants(value));
                 uninspected |= meta.response_uninspected(value);
@@ -337,7 +397,7 @@ impl DispatchNotes {
         }
         // One value names how far the attribution can be trusted: past the
         // gates (a cache or replay), unread (text over the parse bound), or both.
-        let marker = match (self.cached, uninspected) {
+        let marker = match (self.cached.is_some(), uninspected) {
             (true, true) => Some("cached_delivery_uninspected"),
             (true, false) => Some("cached_delivery"),
             (false, true) => Some("uninspected"),
@@ -505,10 +565,10 @@ impl MetaMcp {
         caller: &MetaMcpCallerContext<'_>,
         trace_id: &str,
         result: Result<Value>,
-        notes: DispatchNotes,
+        mut notes: DispatchNotes,
     ) -> Result<Value> {
         // D4: counted before the log check, so auth off still counts.
-        let withheld = super::gate::count_meta_denial(args, &result);
+        let withheld = super::denial::count_meta_denial(args, &result, notes.not_found);
         self.count_invocation(args, caller, &result, &notes, withheld);
         let Some(log) = self.transparency_logger.as_ref() else {
             return result;
@@ -517,6 +577,20 @@ impl MetaMcp {
             return result;
         };
         let outcome = notes.outcome(outcome);
+        // A withheld target's record carries the memo's code, so its check.
+        if withheld.is_some()
+            && let Some(refusal) = args
+                .get("server")
+                .and_then(Value::as_str)
+                .zip(args.get("tool").and_then(Value::as_str))
+                .and_then(|(server, tool)| {
+                    crate::gateway::meta_mcp::visible::memo::denial(server, tool)
+                })
+        {
+            notes.refused_by_memo(refusal);
+        }
+        // Boxed: held across the write, it would grow every dispatch future.
+        let decision = Box::new(notes.decided(self, outcome));
         // MIK-7116.MIN.1: the tool's own arguments, as the firewall walks them.
         let arguments = crate::gateway::meta_mcp_helpers::parse_tool_arguments(args);
         let tenants = self.request_tenants(arguments.as_ref().unwrap_or(&Value::Null));
@@ -528,7 +602,16 @@ impl MetaMcp {
             super::super::admission::ReplayAudit::new(outcome, result.as_ref().ok().map(sha256_of))
                 .with_request_hash(sha256_of(args));
         let written = self
-            .write_invocation(log, args, session_id, caller, trace_id, &facts, attribution)
+            .write_invocation(
+                log,
+                args,
+                session_id,
+                caller,
+                trace_id,
+                &facts,
+                attribution,
+                decision,
+            )
             .await;
         // #2472: a replay of this execution is recorded with these facts, but
         // only once they describe what was delivered (#2521): a failed write
@@ -545,6 +628,10 @@ impl MetaMcp {
     /// hash) and `attribution`. `Err` only when the write failed under
     /// [`AuditFailurePolicy::FailClosed`] (D1-f).
     #[allow(clippy::too_many_arguments)]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the record's parts, each owned by a different stage of the call"
+    )]
     async fn write_invocation(
         &self,
         log: &std::sync::Arc<crate::security::TransparencyLogger>,
@@ -554,6 +641,7 @@ impl MetaMcp {
         trace_id: &str,
         facts: &super::super::admission::ReplayAudit,
         attribution: Map<String, Value>,
+        decision: Box<crate::security::decision_record::Decision>,
     ) -> Result<()> {
         let server = args
             .get("server")
@@ -595,6 +683,7 @@ impl MetaMcp {
                     &request_hash,
                     response_hash.as_deref(),
                     attribution,
+                    Some(decision.as_ref()),
                 )
             })
             .await;
@@ -608,98 +697,6 @@ impl MetaMcp {
                 tracing::warn!(server, tool, trace_id, %error, "Transparency log write failed (non-fatal)");
                 Ok(())
             }
-        }
-    }
-
-    /// #2472: record a replay of a completed execution, which is a delivered
-    /// call like any other (D1-d). Only an invocation is recorded, over the
-    /// envelope its first execution hashed, and with that execution's
-    /// outcome and response hash, under the server it was admitted for
-    /// (`facts`, MIK-8520), so it reads as the original record did. A meta tool that wrote no invocation record the first
-    /// time writes none on replay. Under `FailClosed` a failed write
-    /// withholds the replay (D1-f).
-    pub(crate) async fn audit_replay(
-        &self,
-        tool_name: &str,
-        arguments: &Value,
-        session_id: Option<&str>,
-        caller: &MetaMcpCallerContext<'_>,
-        replay: JsonRpcResponse,
-        facts: super::super::admission::ReplayFacts,
-    ) -> JsonRpcResponse {
-        // A replay delivers a first run's answer: not this request's to state.
-        crate::gateway::delivery_facts::unvouched();
-        let server = facts.server.as_deref();
-        self.stage_replay((tool_name, server), arguments, session_id, caller, &replay);
-        let Some(log) = self.transparency_logger.as_ref() else {
-            return replay;
-        };
-        let envelope = if tool_name == "gateway_invoke" {
-            arguments.clone()
-        } else if let Some(server) = server {
-            super::super::admission::named_tool_envelope(server, tool_name, arguments, caller)
-        } else {
-            return replay;
-        };
-        // The store is process memory, so this build wrote every entry; facts
-        // are absent only when the first run wrote no record. Derive them from
-        // the replayed response then, where a wrapped tool error reads as `ok`.
-        let facts = if let Some(facts) = facts.audit {
-            facts
-        } else {
-            let result = match (&replay.result, &replay.error) {
-                (Some(value), _) => Ok(value.clone()),
-                (None, Some(error)) => Err(Error::json_rpc(error.code, error.message.clone())),
-                (None, None) => return replay,
-            };
-            let Some(outcome) = AuditOutcome::from_result(&result) else {
-                return replay;
-            };
-            // A delivered error carries a code and no provenance, and `from_result`
-            // reads a bare `-32001`/`-32004` as a gateway refusal: with no stored
-            // class, that is a peer's answer as likely as a refusal (MIK-7735).
-            let outcome = match outcome {
-                AuditOutcome::Denied(code) => AuditOutcome::Error(code),
-                other => other,
-            };
-            super::super::admission::ReplayAudit::new(outcome, result.as_ref().ok().map(sha256_of))
-        };
-        let trace_id =
-            crate::gateway::trace::current().unwrap_or_else(crate::gateway::trace::generate);
-        // MIK-7116.MIN.1: a replay is answered past every gate, so it is
-        // attributed like a cached delivery, from the value it delivers. A
-        // `gateway_invoke` result wraps the tool's value as JSON text
-        // (`wrap_tool_success`); attribute that value, as a live call does.
-        let unwrapped = match (tool_name, replay.result.as_ref()) {
-            ("gateway_invoke", Some(result)) => crate::protocol::tool_result_payload(result),
-            _ => None,
-        };
-        let delivered = unwrapped.as_ref().or(replay.result.as_ref());
-        let arguments = crate::gateway::meta_mcp_helpers::parse_tool_arguments(&envelope);
-        let tenants = self.request_tenants(arguments.as_ref().unwrap_or(&Value::Null));
-        let attribution = DispatchNotes {
-            cached: true,
-            ..DispatchNotes::default()
-        }
-        .attribution(self, tenants, delivered);
-        match self
-            .write_invocation(
-                log,
-                &envelope,
-                session_id,
-                caller,
-                &trace_id,
-                &facts,
-                attribution,
-            )
-            .await
-        {
-            // The replay's delivery joins this record.
-            Ok(()) => replay.with_invocation_trace(trace_id.as_str().into()),
-            Err(error) => replay.id.clone().map_or_else(
-                || JsonRpcResponse::error(None, error.to_rpc_code(), error.to_string()),
-                |id| super::super::error_response_preserving_status(id, &error),
-            ),
         }
     }
 

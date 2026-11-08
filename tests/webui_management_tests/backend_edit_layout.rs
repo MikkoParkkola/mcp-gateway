@@ -15,7 +15,7 @@ const FLOW: &str = "server: {port: 39401}\nbackends: {alpha: {command: x}, beta:
 const ALIAS: &str =
     "server: {port: 39401}\nbackends:\n  alpha:\n    command: &c x\n  beta:\n    command: *c\n";
 
-/// One write through `route`: `success` with every line that does not name
+/// One write: `success` with every line that does not name
 /// `name` kept in order, the canary among them, and `holds` true of the
 /// reloaded config; or 409 with the file byte-identical.
 async fn in_place_or_refused(
@@ -27,37 +27,37 @@ async fn in_place_or_refused(
     success: &[StatusCode],
     holds: fn(&Config) -> bool,
 ) {
-    for route in [Route::Live, Route::File] {
-        let (router, path, _keep) = served(yaml, route).await;
-        let (status, answer) = send_json(&router, method.clone(), uri, body.clone()).await;
-        let after = read(&path);
-        if status == StatusCode::CONFLICT {
-            assert_eq!(after, yaml, "{route:?}: refused, but the file changed");
-            let message = answer.to_string();
-            assert!(
-                message.contains("Not saved:") && message.contains("in place"),
-                "{route:?}: not the in-place refusal: {message}"
-            );
-            continue;
-        }
-        assert!(success.contains(&status), "{route:?}: {status}: {answer}");
+    let (router, path, _keep) = served(yaml).await;
+    let files = mcp_gateway::gateway::test_helpers::ConfigFiles::snapshot(&path);
+    let (status, answer) = send_json(&router, method.clone(), uri, body.clone()).await;
+    let after = read(&path);
+    if status == StatusCode::CONFLICT {
+        assert_eq!(after, yaml, "refused, but the file changed");
+        files.assert_unchanged(&path, "the in-place refusal");
+        let message = answer.to_string();
         assert!(
-            after.contains(CANARY),
-            "{route:?}: the file was re-serialised:\n{after}"
+            message.contains("Not saved:") && message.contains("in place"),
+            "not the in-place refusal: {message}"
         );
-        let marker = format!("{name}:");
-        let untouched =
-            yaml.lines()
-                .filter(|l| !l.contains(&marker))
-                .fold(String::new(), |mut kept, l| {
-                    kept.push_str(l);
-                    kept.push('\n');
-                    kept
-                });
-        kept_in_order(&untouched, &after);
-        let config = Config::load_literal(Some(&path)).expect("the written file loads");
-        assert!(holds(&config), "{route:?}: the change is missing:\n{after}");
+        return;
     }
+    assert!(success.contains(&status), "{status}: {answer}");
+    assert!(
+        after.contains(CANARY),
+        "the file was re-serialised:\n{after}"
+    );
+    let marker = format!("{name}:");
+    let untouched =
+        yaml.lines()
+            .filter(|l| !l.contains(&marker))
+            .fold(String::new(), |mut kept, l| {
+                kept.push_str(l);
+                kept.push('\n');
+                kept
+            });
+    kept_in_order(&untouched, &after);
+    let config = Config::load_literal(Some(&path)).expect("the written file loads");
+    assert!(holds(&config), "the change is missing:\n{after}");
 }
 
 const PATCHED: &[StatusCode] = &[StatusCode::OK];
@@ -178,22 +178,20 @@ async fn a_delete_of_an_anchors_owner_is_in_place_or_refused() {
 #[tokio::test]
 async fn a_patch_of_a_comment_free_block_file_changes_one_line() {
     let yaml = "server: {port: 39401}\nbackends:\n  alpha:\n    command: x\n    description: old\n";
-    for route in [Route::Live, Route::File] {
-        let (router, path, _keep) = served(yaml, route).await;
-        let (status, body) = patch(&router, "alpha", json!({"description": "new"})).await;
-        assert_eq!(status, StatusCode::OK, "{route:?}: {body}");
-        assert_eq!(
-            read(&path),
-            yaml.replace("description: old", "description: new")
-        );
-    }
+    let (router, path, _keep) = served(yaml).await;
+    let (status, body) = patch(&router, "alpha", json!({"description": "new"})).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        read(&path),
+        yaml.replace("description: old", "description: new")
+    );
 }
 
 /// C2 control: a comment-free file without a `backends` key takes an add in place.
 #[tokio::test]
 async fn an_add_to_a_file_without_backends_is_in_place() {
     let yaml = "server: {port: 39401}\n";
-    let (router, path, _keep) = served(yaml, Route::File).await;
+    let (router, path, _keep) = served(yaml).await;
     let (status, body) =
         send_json(&router, Method::POST, "/ui/api/backends", Some(add_gamma())).await;
     assert_eq!(status, StatusCode::CREATED, "{body}");
@@ -203,18 +201,21 @@ async fn an_add_to_a_file_without_backends_is_in_place() {
     assert!(config.backends.contains_key("gamma"), "{after}");
 }
 
-/// L7: a UI edit of an existing file that does not parse writes nothing:
-/// the route's own load fails before any write, offering no `--force` and
-/// quoting no file text. The live route cannot even start on such a file.
+/// L7: a UI edit of a file that stopped parsing after the gateway started
+/// writes nothing: the edit fails before any write, offering no `--force`
+/// and quoting no file text.
 #[tokio::test]
 async fn an_edit_of_an_unparseable_file_writes_nothing() {
     let broken = "server: {port: 39401}\nbackends: [unclosed\n";
-    let (router, path, _keep) = served(broken, Route::File).await;
+    let (router, path, _keep) =
+        served("server: {port: 39401}\nbackends:\n  alpha:\n    command: x\n").await;
+    write_owner_only(&path, broken).expect("break the file");
+    let files = mcp_gateway::gateway::test_helpers::ConfigFiles::snapshot(&path);
     let (status, body) = patch(&router, "alpha", json!({"description": "new"})).await;
     assert!(!status.is_success(), "{status}: {body}");
     assert_eq!(read(&path), broken, "the file was written");
+    files.assert_unchanged(&path, "the edit of an unparseable file");
     let message = body.to_string();
-    assert!(message.contains("Failed to load"), "{message}");
     assert!(!message.contains("--force"), "dead advice: {message}");
     assert!(!message.contains("unclosed"), "quotes the file: {message}");
 }
@@ -223,7 +224,7 @@ async fn an_edit_of_an_unparseable_file_writes_nothing() {
 /// default config, and the splice fills the missing `backends`.
 #[tokio::test]
 async fn an_add_to_an_empty_file_is_in_place() {
-    let (router, path, _keep) = served("", Route::File).await;
+    let (router, path, _keep) = served("").await;
     let (status, body) =
         send_json(&router, Method::POST, "/ui/api/backends", Some(add_gamma())).await;
     assert_eq!(status, StatusCode::CREATED, "{body}");
@@ -375,24 +376,22 @@ async fn every_patchable_field_edits_the_gateways_own_output_in_place() {
     let yaml = gateway_written();
     let mut failed = Vec::new();
     for (label, name, body, holds) in rows {
-        for route in [Route::Live, Route::File] {
-            let (router, path, _keep) = served(&yaml, route).await;
-            let (status, answer) = patch(&router, name, body.clone()).await;
-            let after = read(&path);
-            let mut rest = after.lines();
-            let kept = outside_entry(&yaml, name)
-                .lines()
-                .all(|line| rest.any(|l| l == line));
-            let config = Config::load_literal(Some(&path)).ok();
-            let changed = config
-                .as_ref()
-                .and_then(|c| c.backends.get(*name))
-                .is_some_and(holds);
-            if status != StatusCode::OK || !kept || !changed {
-                failed.push(format!(
-                    "{label} ({route:?}): {status} kept={kept} changed={changed} {answer}"
-                ));
-            }
+        let (router, path, _keep) = served(&yaml).await;
+        let (status, answer) = patch(&router, name, body.clone()).await;
+        let after = read(&path);
+        let mut rest = after.lines();
+        let kept = outside_entry(&yaml, name)
+            .lines()
+            .all(|line| rest.any(|l| l == line));
+        let config = Config::load_literal(Some(&path)).ok();
+        let changed = config
+            .as_ref()
+            .and_then(|c| c.backends.get(*name))
+            .is_some_and(holds);
+        if status != StatusCode::OK || !kept || !changed {
+            failed.push(format!(
+                "{label}: {status} kept={kept} changed={changed} {answer}"
+            ));
         }
     }
     assert!(failed.is_empty(), "not in place:\n{}", failed.join("\n"));

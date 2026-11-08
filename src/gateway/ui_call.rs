@@ -18,6 +18,8 @@
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::{Arc, OnceLock};
 
+use crate::security::decision_record::DecisionKind;
+
 /// Web UI tool calls that may run at once, per gateway. A constant: the
 /// shell's contract leaves no status for "wait", so a full pool refuses.
 pub(crate) const MAX_UI_CALLS: usize = 4;
@@ -142,7 +144,10 @@ pub(crate) fn admit_send(step: (&str, &str)) -> crate::Result<()> {
         return Ok(());
     };
     if !call.targets(step) || !call.gated.load(Ordering::SeqCst) {
-        return Err(refused("this send is not the call the web UI checked"));
+        return Err(ui_call_refused(
+            DecisionKind::AdminCapability,
+            "this send is not the call the web UI checked",
+        ));
     }
     // The send's claim: it loses only to a deadline that cancelled first.
     match call
@@ -150,7 +155,11 @@ pub(crate) fn admit_send(step: (&str, &str)) -> crate::Result<()> {
         .compare_exchange(OPEN, SENDING, Ordering::SeqCst, Ordering::SeqCst)
     {
         Ok(_) | Err(SENDING) => Ok(()),
-        Err(_) => Err(refused("the web UI stopped waiting for this call")),
+        // The web UI's deadline: no kind names it yet.
+        Err(_) => Err(ui_call_refused(
+            DecisionKind::Unrecorded,
+            "the web UI stopped waiting for this call",
+        )),
     }
 }
 
@@ -192,7 +201,7 @@ pub(crate) fn refuses_task() -> bool {
 
 /// The refusal for [`refuses_task`].
 pub(crate) fn task_refused() -> crate::Error {
-    refused("a web UI call does not run as a task")
+    ui_call_refused(DecisionKind::Syntax, "a web UI call does not run as a task")
 }
 
 /// The gate before the send, where the dispatched backend and the caller's
@@ -208,11 +217,55 @@ pub(crate) fn gate(
     };
     // The principal is the one the route checked as an admin.
     if !call.targets(step) || principal != Some(call.principal.as_str()) {
-        return Err(refused("this call is not the one the web UI checked"));
+        return Err(ui_call_refused(
+            DecisionKind::AdminCapability,
+            "this call is not the one the web UI checked",
+        ));
     }
     confirmed(&call, declared_read_only)?;
     call.gated.store(true, Ordering::SeqCst);
+    #[cfg(test)]
+    gate_seam::admitted();
     Ok(())
+}
+
+/// Test-only: a hook run once, the next time a call on this thread passes
+/// [`gate`], so a row can change what the dispatch is about to run after the
+/// gate judged it (a capability reloaded as a write). The same shape as
+/// `caller_verdict`'s dispatch seam: thread-local, so rows that arm it run on
+/// a current-thread runtime. Never built outside tests.
+#[cfg(test)]
+pub(crate) mod gate_seam {
+    use std::cell::RefCell;
+
+    thread_local! {
+        static AFTER_GATE: RefCell<Option<Box<dyn FnOnce()>>> = RefCell::new(None);
+    }
+
+    /// Clears an unfired hook when dropped, so it cannot fire in a later
+    /// test on the same thread.
+    pub(crate) struct Armed;
+
+    impl Drop for Armed {
+        fn drop(&mut self) {
+            AFTER_GATE.with(|slot| slot.borrow_mut().take());
+        }
+    }
+
+    /// Run `hook` once, the next time a call on this thread passes the gate,
+    /// until the returned guard drops.
+    #[must_use]
+    pub(crate) fn after_gate(hook: impl FnOnce() + 'static) -> Armed {
+        AFTER_GATE.with(|slot| *slot.borrow_mut() = Some(Box::new(hook)));
+        Armed
+    }
+
+    /// Called where a call has passed the gate.
+    pub(super) fn admitted() {
+        if let Some(hook) = AFTER_GATE.with(|slot| slot.borrow_mut().take()) {
+            hook();
+        }
+    }
 }
 
 /// The capability executor's arm: `read_only` is the definition it is about
@@ -227,14 +280,18 @@ pub(crate) fn gate_capability(read_only: bool) -> crate::Result<()> {
 fn confirmed(call: &UiCall, read_only: bool) -> crate::Result<()> {
     if call.confirm == Confirm::DeclaredReadOnlyOnly && !read_only {
         call.confirm_refused.store(true, Ordering::SeqCst);
-        return Err(refused(
+        return Err(ui_call_refused(
+            DecisionKind::ToolPolicy,
             "this tool is not declared read-only; confirm_write is required",
         ));
     }
     Ok(())
 }
 
-fn refused(message: &str) -> crate::Error {
+/// A refusal by this gate's `kind` of check, noted so the call's decision
+/// record names the check that refused it.
+fn ui_call_refused(kind: DecisionKind, message: &str) -> crate::Error {
+    crate::gateway::meta_mcp::invoke::audit::note_refused_by(kind, None);
     // A gateway refusal of the delivery this call answers: its record says so.
     crate::gateway::delivery_facts::raise(crate::gateway::delivery_facts::ResponseEffect::Refused);
     crate::Error::Forbidden {
@@ -314,5 +371,37 @@ mod refusal_effect_tests {
             admit_send(("srv", "tool")).expect("the send is admitted");
         });
         assert_eq!(admitted.await, "delivered");
+    }
+}
+
+/// The gate's test hook is never built outside tests: its call in [`gate`]
+/// and its module each carry `#[cfg(test)]` on the line above.
+#[cfg(test)]
+mod gate_seam_tests {
+    #[test]
+    fn the_gate_hook_is_built_only_in_tests() {
+        let source = include_str!("ui_call.rs");
+        let lines: Vec<&str> = source.lines().collect();
+        let gated = |needle: &str| {
+            let at = lines
+                .iter()
+                .position(|line| line.trim_start() == needle)
+                .unwrap_or_else(|| panic!("`{needle}` is not in ui_call.rs"));
+            assert_eq!(
+                lines[at - 1].trim(),
+                "#[cfg(test)]",
+                "`{needle}` is built outside tests"
+            );
+        };
+        gated("gate_seam::admitted();");
+        gated("pub(crate) mod gate_seam {");
+        assert_eq!(
+            lines
+                .iter()
+                .filter(|line| line.trim_start() == "gate_seam::admitted();")
+                .count(),
+            1,
+            "the hook is called from one place, the gate"
+        );
     }
 }

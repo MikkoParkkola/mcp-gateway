@@ -23,20 +23,39 @@ impl MetaMcp {
         session_id: Option<&str>,
         caller: &crate::gateway::meta_mcp::MetaMcpCallerContext<'_>,
     ) -> Result<()> {
-        let server = extract_required_str(args, "server")?;
-        let tool = extract_required_str(args, "tool")?;
-        self.authorize_invocation(args, caller)?;
-        crate::gateway::meta_mcp::visible::memo::refuse_withheld(server, tool)?;
+        self.check_invocation_policy_explained(args, session_id, caller)
+            .map_err(audit::noted)
+    }
+
+    /// [`Self::check_invocation_policy`], with the refusing check's pair and
+    /// no note: a stored read records the pair of the check that
+    /// refused it, never a note another check left.
+    pub(crate) fn check_invocation_policy_explained(
+        &self,
+        args: &Value,
+        session_id: Option<&str>,
+        caller: &crate::gateway::meta_mcp::MetaMcpCallerContext<'_>,
+    ) -> crate::security::decision_record::Explained {
+        use crate::security::decision_record::DecisionKind;
+        // A missing target is the request's shape.
+        let required =
+            |key| extract_required_str(args, key).map_err(|e| (e, (DecisionKind::Syntax, None)));
+        let server = required("server")?;
+        let tool = required("tool")?;
+        self.authorize_target_explained(args, (server, tool), caller)?;
+        crate::gateway::meta_mcp::visible::absent::refuse_withheld_explained(server, tool)?;
         if let Err(reason) = validate_tool_name(tool) {
-            return Err(Error::Protocol(format!(
-                "Invalid tool name '{tool}': {reason}"
-            )));
+            return Err((
+                Error::Protocol(format!("Invalid tool name '{tool}': {reason}")),
+                (DecisionKind::Syntax, None),
+            ));
         }
         self.check_attestation(
             args,
             caller.agent_id.map(crate::security::ProvenAgentId::as_str),
             "gateway_invoke",
-        )?;
+        )
+        .map_err(|e| (e, (DecisionKind::Attestation, None)))?;
         // S1 (kill switch, capability disable, session profile) is shared with
         // the per-backend route; every admission path reaches it through here.
         // MIK-8439/8475: on a per-user backend or an account-bearing
@@ -51,31 +70,42 @@ impl MetaMcp {
             cost_key: None,
             trace_id: "",
             caller_key: None,
+            generation: caller.generation,
         };
         let view = self.scoped(caller.scope().authorizer.backend_grant());
         if self.defers_error_rate_cooldown(&view, server, tool) {
-            self.admit_named_target(&call)
+            self.admit_named_target_explained(&call)
         } else {
-            self.admit_target(&call)
+            self.admit_target_explained(&call)
         }
-        .map_err(|refusal| self.withheld_as_undefined((server, tool), session_id, refusal))?;
+        .map_err(|(refusal, pair)| {
+            (
+                self.withheld_as_undefined((server, tool), session_id, refusal),
+                pair,
+            )
+        })?;
         // #2445: a withheld tool is refused here, ahead of every replay layer.
         let backend = self
             .scoped(caller.scope().authorizer.backend_grant())
             .scoped_get(server);
-        match backend.and_then(|b| b.blocked_tool_refusal(None, tool)) {
-            Some(refusal) => Err(Error::Protocol(refusal)),
+        match backend.and_then(|b| b.blocked_tool_refusal(None, tool).map(|r| (b, r))) {
+            Some((backend, refusal)) => Err((
+                Error::Protocol(refusal),
+                (backend.blocked_tool_kind(tool), None),
+            )),
             None => Ok(()),
         }
     }
 
-    pub(in crate::gateway::meta_mcp) fn authorize_invocation(
+    /// The authorization chokepoint for `server`'s `tool`, read from `args`:
+    /// the authorizer, the admin-capability rule and the identity grants,
+    /// with the refusing check's pair.
+    pub(in crate::gateway::meta_mcp) fn authorize_target_explained(
         &self,
         args: &Value,
+        (server, tool): (&str, &str),
         caller: &crate::gateway::meta_mcp::MetaMcpCallerContext<'_>,
-    ) -> Result<()> {
-        let server = extract_required_str(args, "server")?;
-        let tool = extract_required_str(args, "tool")?;
+    ) -> crate::security::decision_record::Explained {
         // === THE AUTHORIZATION CHOKEPOINT (MIK-7252) ===
         //
         // Every meta-layer dispatch passes through here: a surfaced tool, a
@@ -106,22 +136,41 @@ impl MetaMcp {
         // The admin-capability rule is refused and audited like the authorizer.
         let refusal = authorizer
             .authorize(target)
-            .map_err(|e| Error::Forbidden {
-                code: e.code,
-                status: e.status.as_u16(),
-                message: e.message,
+            .map_err(|e| {
+                let pair = (e.kind, e.rule_id.clone());
+                let error = Error::Forbidden {
+                    code: e.code,
+                    status: e.status.as_u16(),
+                    message: e.message,
+                };
+                (error, pair)
             })
-            .and_then(|()| self.admin_capability_rule(server, tool, caller.is_admin));
-        if let Err(e) = refusal {
+            .and_then(|()| {
+                self.admin_capability_rule(
+                    server,
+                    tool,
+                    caller.admin != crate::gateway::authz::AdminStanding::None,
+                )
+                .map_err(|e| {
+                    (
+                        e,
+                        (
+                            crate::security::decision_record::DecisionKind::AdminCapability,
+                            None,
+                        ),
+                    )
+                })
+            });
+        if let Err((e, pair)) = refusal {
             let (transport, name) = (authorizer.transport(), authorizer.caller_name());
             crate::gateway::authz::audit_refusal(transport, name, server, tool, &e.to_string());
-            return Err(e);
+            return Err((e, pair));
         }
         // Identity grants are the same decision as the authorizer above, taken
         // here with every other refusal because the response cache and the
         // idempotency short-circuit both return below this point: a gate under
         // a cache read decides nothing on a hit.
-        self.identity_grant_rule(server, tool, caller.scope(), Emit::Audit)
+        self.identity_grant_rule_explained(server, tool, caller.scope(), Emit::Audit)
     }
 
     /// Validate the per-action attestation token presented at `boundary`
@@ -353,18 +402,29 @@ impl MetaMcp {
         let recorded_trace = trace_id.clone();
         let recorded = trace::with_trace_id(trace_id, async move {
             if absence == Some(crate::gateway::meta_mcp::scoped_backends::Absence::OutOfScope) {
-                crate::gateway::meta_mcp::visible::memo::note_denial_code(server, tool, -32003);
+                crate::gateway::meta_mcp::visible::memo::note_denial_code(
+                    server,
+                    tool,
+                    -32003,
+                    Some((
+                        crate::security::decision_record::DecisionKind::BackendScope,
+                        None,
+                    )),
+                );
             }
             let missing = Err(Error::BackendNotFound(server.to_owned()));
-            self.audit_invocation(
-                &args,
-                session_id,
-                caller,
-                &recorded_trace,
-                missing,
-                audit::DispatchNotes::default(),
-            )
-            .await
+            // Out of scope, the memo's code names its check; otherwise the
+            // name matches nothing.
+            let mut notes = audit::DispatchNotes::default();
+            notes.refused_by_memo((
+                crate::security::decision_record::DecisionKind::NotFound,
+                None,
+            ));
+            // A denial with the miss's code; out of scope, the memo's -32003
+            // was kept first and wins.
+            notes.mark_not_found();
+            self.audit_invocation(&args, session_id, caller, &recorded_trace, missing, notes)
+                .await
         });
         match crate::gateway::meta_mcp::visible::memo::with_visibility_memo(recorded).await {
             Err(error) => error,
@@ -413,6 +473,7 @@ impl MetaMcp {
         crate::security::signature_chain::strip_chain(&mut result);
         let (mut result, raw_read) = audit::noted_response(self, result);
         self.apply_response_contract_gate(server, tool, trace_id, &mut result)
+            .inspect_err(|_| note_response_gate())
             .map_err(crate::gateway::delivery_facts::refused)?;
 
         // === POST-INVOKE: Response content inspection (issue #133, D2) ===
@@ -431,6 +492,7 @@ impl MetaMcp {
                 &text,
                 crate::gateway::delivery_facts::Part::Result,
             )
+            .inspect_err(|_| note_response_gate())
             .map_err(crate::gateway::delivery_facts::refused)?;
         if !findings.is_empty() {
             super::gateway_writes::insert_noted(
@@ -447,7 +509,12 @@ impl MetaMcp {
         // an exchange the caller cannot see. Strip, Summarize, Quarantine and
         // Deny alike; a round the gate let through is unchanged.
         let round = crate::protocol::mrtr::InputRequired::claims_input_required(&result);
-        let delivered = self.apply_context_integrity(server, tool, api_key_name, trace_id, result);
+        let (value, effect, withheld) =
+            self.context_integrity_outcome(server, tool, api_key_name, trace_id, result);
+        if withheld {
+            note_response_gate();
+        }
+        let delivered = (value, effect);
         // MIN.2: past every gate, so this dispatch's raw reading counts.
         crate::security::tenant_reads::note_attribution(raw_read);
         if round
@@ -457,6 +524,7 @@ impl MetaMcp {
                     | super::super::response_security::GateEffect::Withheld
             )
         {
+            note_response_gate();
             return Err(Error::ResponseFirewallRefused);
         }
         Ok(delivered)
@@ -619,3 +687,17 @@ impl MetaMcp {
         Ok(())
     }
 }
+
+/// A response gate refused the backend's answer. Its blocks answer -32603,
+/// which no outcome reads as a refusal, so the note is what keeps the
+/// record from reading `default_allow` (MIK-8914.API2A.13).
+fn note_response_gate() {
+    super::audit::note_refused_by(
+        crate::security::decision_record::DecisionKind::ResponseGate,
+        None,
+    );
+}
+
+#[cfg(test)]
+#[path = "ci_rewrite_gate_tests.rs"]
+mod ci_rewrite_gate_tests;

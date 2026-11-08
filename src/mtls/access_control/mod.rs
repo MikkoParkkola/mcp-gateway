@@ -50,8 +50,10 @@ pub enum PolicyDecision {
 
 /// Compiled mTLS access control policy.
 ///
-/// Build once at startup with [`MtlsPolicy::from_config`], then call
-/// [`MtlsPolicy::evaluate`] on every tool invocation.
+/// A production builder compiles it once at startup with
+/// `MtlsPolicy::from_config_keyed`, so each rule carries the keyed id a
+/// refusal records; [`MtlsPolicy::from_config`] builds the same policy with
+/// no ids. Call [`MtlsPolicy::evaluate`] on every tool invocation.
 #[derive(Debug, Clone)]
 pub struct MtlsPolicy {
     rules: Vec<CompiledRule>,
@@ -66,15 +68,66 @@ impl MtlsPolicy {
     /// [`PolicyDecision::Allow`] so the gateway behaves as before.
     #[must_use]
     pub fn from_config(config: &MtlsConfig) -> Self {
+        Self::compile(config, None)
+    }
+
+    /// [`Self::from_config`], each rule carrying its id under `key`: the
+    /// HMAC of the rule's serde form, computed in the same pass that compiles
+    /// it, so an id can never sit beside another rule.
+    ///
+    /// The id hashes every field `PolicyRuleConfig` serialises. A field added
+    /// later must skip serialising its default, or every configured rule's id
+    /// rotates; a golden row pins today's form.
+    #[must_use]
+    pub(crate) fn from_config_keyed(
+        config: &MtlsConfig,
+        key: &crate::security::rule_id::RuleKey,
+    ) -> Self {
+        Self::compile(config, Some(key))
+    }
+
+    /// One pass over `config.policies`: each rule compiled, with its id when
+    /// `key` is given.
+    fn compile(config: &MtlsConfig, key: Option<&crate::security::rule_id::RuleKey>) -> Self {
         let rules = config
             .policies
             .iter()
-            .map(CompiledRule::from_config)
+            .map(|rule| {
+                let id = key.map(|key| {
+                    // invariant: a derived Serialize of strings and options cannot fail.
+                    let bytes = serde_json::to_vec(rule).expect("a policy rule serialises");
+                    crate::security::rule_id::RuleId::of("mtls", key, &bytes)
+                });
+                CompiledRule::from_config(rule, id)
+            })
             .collect();
-
         Self {
             rules,
             enabled: config.enabled,
+        }
+    }
+
+    /// [`Self::evaluate`], with the id of the rule that decided: the first
+    /// rule matching the certificate. `None` when the policy is off, when no
+    /// certificate is presented, when no rule matches, and when the policy
+    /// was built unkeyed.
+    #[must_use]
+    pub(crate) fn evaluate_explained(
+        &self,
+        identity: Option<&CertIdentity>,
+        backend: &str,
+        tool: &str,
+    ) -> (PolicyDecision, Option<&crate::security::rule_id::RuleId>) {
+        if !self.enabled {
+            return (PolicyDecision::Allow, None);
+        }
+        let Some(id) = identity else {
+            return (PolicyDecision::Deny, None);
+        };
+        match self.rules.iter().find(|rule| rule.matches(id)) {
+            Some(rule) => (rule.decide(backend, tool), rule.id.as_ref()),
+            // Fail-closed: no rule matched.
+            None => (PolicyDecision::Deny, None),
         }
     }
 
@@ -92,22 +145,28 @@ impl MtlsPolicy {
         backend: &str,
         tool: &str,
     ) -> PolicyDecision {
+        self.evaluate_explained(identity, backend, tool).0
+    }
+
+    /// Whether every tool on `backend` is refused to `identity`, decided from
+    /// the backend's name alone: no rule, or the first matching rule (as
+    /// [`Self::evaluate`] picks it) denies the backend or leaves it out of its
+    /// allow list. `false` when the policy is off, or when the answer depends
+    /// on the tool.
+    #[must_use]
+    pub(crate) fn refuses_backend(&self, identity: Option<&CertIdentity>, backend: &str) -> bool {
         if !self.enabled {
-            return PolicyDecision::Allow;
+            return false;
         }
-
         let Some(id) = identity else {
-            return PolicyDecision::Deny;
+            return true;
         };
-
-        for rule in &self.rules {
-            if rule.matches(id) {
-                return rule.decide(backend, tool);
-            }
-        }
-
-        // Fail-closed: no rule matched.
-        PolicyDecision::Deny
+        self.rules
+            .iter()
+            .find(|rule| rule.matches(id))
+            .is_none_or(|rule| {
+                rule.deny.matches_backend(backend) || !rule.allow.matches_backend(backend)
+            })
     }
 
     /// Returns `true` when the policy has zero rules (no restrictions).
@@ -128,11 +187,14 @@ struct CompiledRule {
     criteria: CompiledCriteria,
     allow: CompiledScope,
     deny: CompiledScope,
+    /// The rule's keyed id; `None` when the policy was built unkeyed.
+    id: Option<crate::security::rule_id::RuleId>,
 }
 
 impl CompiledRule {
-    fn from_config(rule: &PolicyRuleConfig) -> Self {
+    fn from_config(rule: &PolicyRuleConfig, id: Option<crate::security::rule_id::RuleId>) -> Self {
         Self {
+            id,
             criteria: CompiledCriteria::from_config(&rule.match_criteria),
             allow: CompiledScope::from_config(&rule.allow),
             deny: CompiledScope::from_config(&rule.deny),
@@ -191,28 +253,24 @@ impl CompiledCriteria {
 
         // All specified criteria must match
         if let Some(ref pat) = self.cn
-            && !identity
-                .common_name
-                .as_deref()
-                .is_some_and(|cn| pat.matches(cn))
+            && !identity.common_name().is_some_and(|cn| pat.matches(cn))
         {
             return false;
         }
         if let Some(ref pat) = self.ou
             && !identity
-                .organizational_unit
-                .as_deref()
+                .organizational_unit()
                 .is_some_and(|ou| pat.matches(ou))
         {
             return false;
         }
         if let Some(ref pat) = self.san_uri
-            && !identity.san_uris.iter().any(|u| pat.matches(u))
+            && !identity.san_uris().iter().any(|u| pat.matches(u))
         {
             return false;
         }
         if let Some(ref pat) = self.san_dns
-            && !identity.san_dns_names.iter().any(|d| pat.matches(d))
+            && !identity.san_dns_names().iter().any(|d| pat.matches(d))
         {
             return false;
         }
@@ -303,5 +361,8 @@ impl GlobPattern {
 // Tests
 // ─────────────────────────────────────────────────────────────────────────────
 
+#[cfg(test)]
+#[path = "rule_id_tests.rs"]
+pub(crate) mod rule_id_tests;
 #[cfg(test)]
 mod tests;

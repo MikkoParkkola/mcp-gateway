@@ -15,7 +15,11 @@ mod allocator;
 #[path = "clock.rs"]
 #[allow(dead_code, reason = "the binary uses a subset")]
 mod clock;
+// The library's credential generator, compiled again for `gateway init`;
+// random_secret.rs states why this copy may hold no shared state.
 mod commands;
+#[path = "random_secret.rs"]
+mod random_secret;
 // Its one user in this crate is `dashboard-link`, compiled with `webui`.
 #[cfg(feature = "webui")]
 #[path = "debug_trust_roots.rs"]
@@ -57,17 +61,21 @@ fn main() -> ExitCode {
     on_main_stack(|| {
         // Parsed here, so the shutdown mode is known before the runtime exists.
         let cli = Cli::parse();
+        // Bound here, outside the runtime, so the log flush runs after the
+        // runtime's own shutdown and keeps what that shutdown logs.
+        let _flush_logs = match setup_tracing(&cli.log_level, cli.log_format.as_deref()) {
+            Ok(flush) => flush,
+            Err(e) => {
+                eprintln!("Failed to setup tracing: {e}");
+                return ExitCode::FAILURE;
+            }
+        };
         runtime::block_on(RuntimeShutdown::of(cli.command.as_ref()), run(cli))
     })
 }
 
 #[allow(clippy::too_many_lines)] // Feature-gated fallback arms inflate line count
 async fn run(cli: Cli) -> ExitCode {
-    if let Err(e) = setup_tracing(&cli.log_level, cli.log_format.as_deref()) {
-        eprintln!("Failed to setup tracing: {e}");
-        return ExitCode::FAILURE;
-    }
-
     // Capture config path (and the port/host overrides `stats` also needs)
     // before consuming `cli` in the match below.
     let config_path = cli.config.clone();
@@ -501,20 +509,15 @@ async fn run_stdio_server(cli: Cli) -> ExitCode {
     // gateway carries, never into the process environment, so the environment
     // has to travel with the config it was evaluated against.
     let (config, env) = match commands::load_for_serve(load_path.as_deref()) {
-        Ok(evaluated) => {
+        Ok(mut evaluated) => {
+            let env = std::sync::Arc::new(evaluated.live_env());
             let mut config = evaluated.config;
             if let Err(e) = apply_cli_overrides_and_validate(&mut config, &cli, &evaluated.overlay)
             {
                 eprintln!("Failed to apply configuration overrides: {e}");
                 return ExitCode::FAILURE;
             }
-            (
-                config,
-                std::sync::Arc::new(mcp_gateway::config::LiveEnv::new(
-                    evaluated.overlay,
-                    evaluated.env_paths,
-                )),
-            )
+            (config, env)
         }
         Err(e) => {
             eprintln!("Failed to load configuration: {e}");
@@ -543,6 +546,10 @@ async fn run_stdio_server(cli: Cli) -> ExitCode {
         return ExitCode::FAILURE;
     }
 
+    // The stdio path's last line, as the HTTP path's "Gateway shutdown
+    // complete": written just before exit, so it is the line the exit flush
+    // must not lose.
+    info!("stdio: shutdown complete");
     ExitCode::SUCCESS
 }
 
@@ -561,20 +568,15 @@ async fn run_server(cli: Cli) -> ExitCode {
     // serve_config_path / run_stdio_server.
     let (discovered, load_path) = discovered_config::resolve(cli.config.as_deref());
     let (config, env) = match commands::load_for_serve(load_path.as_deref()) {
-        Ok(evaluated) => {
+        Ok(mut evaluated) => {
+            let env = std::sync::Arc::new(evaluated.live_env());
             let mut config = evaluated.config;
             if let Err(e) = apply_cli_overrides_and_validate(&mut config, &cli, &evaluated.overlay)
             {
                 error!("Failed to apply configuration overrides: {e}");
                 return ExitCode::FAILURE;
             }
-            (
-                config,
-                std::sync::Arc::new(mcp_gateway::config::LiveEnv::new(
-                    evaluated.overlay,
-                    evaluated.env_paths,
-                )),
-            )
+            (config, env)
         }
         Err(e) => {
             error!("Failed to load configuration: {e}");

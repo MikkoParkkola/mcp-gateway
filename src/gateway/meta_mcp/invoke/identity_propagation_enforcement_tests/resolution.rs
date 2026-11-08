@@ -28,13 +28,14 @@ async fn code_mode_execute_propagates_identity_to_backend() {
         agent_id: None,
         agent_declared: None,
         grant_subject: None,
-        is_admin: false,
+        admin: crate::gateway::authz::AdminStanding::None,
         surface_request: crate::gateway::recovery::SurfaceRequest::Configured,
         input_capabilities: crate::protocol::meta::Declared::NONE,
         retry: &crate::protocol::mrtr::NO_RETRY,
         confirmation: crate::gateway::destructive_confirmation::ConfirmationChannel::Unavailable,
         era: crate::protocol::meta::Era::Legacy,
         channel: &crate::gateway::input_bridge::NoClientChannel,
+        generation: None,
     };
     let args = json!({ "tool": "mem:read", "arguments": {} });
     m.code_mode_execute(&args, Some("s1"), &caller)
@@ -72,13 +73,14 @@ async fn code_mode_execute_fails_closed_without_identity() {
         stdio_nonce: None,
         caller_key: None,
         verified_identity: None,
-        is_admin: false,
+        admin: crate::gateway::authz::AdminStanding::None,
         surface_request: crate::gateway::recovery::SurfaceRequest::Configured,
         input_capabilities: crate::protocol::meta::Declared::NONE,
         retry: &crate::protocol::mrtr::NO_RETRY,
         confirmation: crate::gateway::destructive_confirmation::ConfirmationChannel::Unavailable,
         era: crate::protocol::meta::Era::Legacy,
         channel: &crate::gateway::input_bridge::NoClientChannel,
+        generation: None,
     };
     let args = json!({ "tool": "mem:read", "arguments": {} });
     let err = m
@@ -124,13 +126,14 @@ async fn required_mint_without_transparency_log_fails_closed() {
         agent_id: None,
         agent_declared: None,
         grant_subject: None,
-        is_admin: false,
+        admin: crate::gateway::authz::AdminStanding::None,
         surface_request: crate::gateway::recovery::SurfaceRequest::Configured,
         input_capabilities: crate::protocol::meta::Declared::NONE,
         retry: &crate::protocol::mrtr::NO_RETRY,
         confirmation: crate::gateway::destructive_confirmation::ConfirmationChannel::Unavailable,
         era: crate::protocol::meta::Era::Legacy,
         channel: &crate::gateway::input_bridge::NoClientChannel,
+        generation: None,
     };
     let args = json!({ "tool": "mem:read", "arguments": {} });
     let err = m

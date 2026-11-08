@@ -229,26 +229,38 @@ where
     }
 }
 
+/// What a connection's verified client certificate says about its caller.
+#[derive(Debug, Clone)]
+enum PeerCert {
+    /// No client certificate was presented.
+    Absent,
+    /// The certificate names its subject.
+    Named(CertIdentity),
+    /// The certificate parses but names no one (no SAN URI, no CN): a
+    /// presented identity naming nobody, refused, never served as `Absent`.
+    Nameless,
+}
+
 fn client_identity_from_peer_chain(
     peer_certs: Option<&[CertificateDer<'static>]>,
-) -> io::Result<Option<CertIdentity>> {
+) -> io::Result<PeerCert> {
     let Some(leaf) = peer_certs.and_then(|certs| certs.first()) else {
-        return Ok(None);
+        return Ok(PeerCert::Absent);
     };
 
     CertIdentity::from_der(leaf.as_ref())
-        .map(Some)
+        .map(|identity| identity.map_or(PeerCert::Nameless, PeerCert::Named))
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))
 }
 
 #[derive(Debug, Clone)]
 struct PeerCertIdentityLayer {
-    identity: Option<CertIdentity>,
+    identity: PeerCert,
     not_after: Option<crate::mtls::identity::CertNotAfter>,
 }
 
 impl PeerCertIdentityLayer {
-    fn new(identity: Option<CertIdentity>) -> Self {
+    fn new(identity: PeerCert) -> Self {
         Self {
             identity,
             not_after: None,
@@ -281,14 +293,10 @@ impl<S> Layer<S> for PeerCertIdentityLayer {
 /// before the inner service runs; `/health` included.
 const NAMELESS_CERTIFICATE: &str = "client certificate names no subject (no SAN URI and no CN)";
 
-fn names_nobody(identity: Option<&CertIdentity>) -> bool {
-    identity.is_some_and(|identity| identity.subject_id().is_none())
-}
-
 #[derive(Debug, Clone)]
 struct PeerCertIdentityService<S> {
     inner: S,
-    identity: Option<CertIdentity>,
+    identity: PeerCert,
     not_after: Option<crate::mtls::identity::CertNotAfter>,
 }
 
@@ -308,7 +316,7 @@ where
     }
 
     fn call(&mut self, mut request: axum::http::Request<B>) -> Self::Future {
-        if names_nobody(self.identity.as_ref()) {
+        if matches!(self.identity, PeerCert::Nameless) {
             telemetry_metrics::counter!(
                 "mcp_identity_refused_total",
                 "reason" => "nameless_certificate"
@@ -319,8 +327,8 @@ where
                 crate::gateway::middleware::errors::unauthenticated_response(NAMELESS_CERTIFICATE),
             )));
         }
-        if let Some(identity) = self.identity.clone() {
-            request.extensions_mut().insert(identity);
+        if let PeerCert::Named(identity) = &self.identity {
+            request.extensions_mut().insert(identity.clone());
         }
         if let Some(not_after) = self.not_after {
             request.extensions_mut().insert(not_after);
@@ -392,6 +400,12 @@ pub(super) fn build_persisted_costs(
         tool_overflow_usd: snap.tool_overflow_usd,
         key_overflow_usd: snap.key_overflow_usd,
         day_basis: snap.day_basis.clone(),
+        tool_estimate: snap.tool_estimate.clone(),
+        key_estimate: snap.key_estimate.clone(),
+        tool_owned: Some(snap.tool_owned.clone()),
+        key_owned: Some(snap.key_owned.clone()),
+        tool_born: Some(snap.tool_born.clone()),
+        key_born: Some(snap.key_born.clone()),
     }
 }
 
@@ -668,3 +682,6 @@ pub fn replica_state_refusal(config: &Config) -> Option<String> {
 #[cfg(test)]
 #[path = "support_network_bind_tests.rs"]
 mod network_bind_tests;
+#[cfg(test)]
+#[path = "support_peer_identity_tests.rs"]
+mod peer_identity_tests;

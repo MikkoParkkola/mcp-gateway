@@ -91,6 +91,12 @@ impl Scope {
         })
     }
 
+    /// Whether this scope can grant `action` on some tool of `backend`.
+    #[must_use]
+    pub(crate) fn may_grant_on(&self, backend: &str, action: &Action) -> bool {
+        (self.backend == "*" || self.backend == backend) && self.action.allows(action)
+    }
+
     /// Test whether this scope grants access to `(backend, tool, action)`.
     pub fn grants(&self, backend: &str, tool: &str, action: &Action) -> bool {
         let backend_ok = self.backend == "*" || self.backend == backend;

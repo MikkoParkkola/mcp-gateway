@@ -355,6 +355,8 @@ fn collecting_then_refused() -> (MetaMcp, Arc<AtomicUsize>) {
         servers: None,
         keys: None,
         except: None,
+        allowed_roots: None,
+        path_args: None,
     };
     let config = FirewallConfig {
         rules: vec![rule],

@@ -1,0 +1,122 @@
+# file	function	kind	count	class	reason
+src/a2a/transport.rs	spawn_sweeper	spawn	1	outside-calls	A2A sweeper: on a timer cancels the agent task of questions left unanswered past their TTL
+src/backend/era.rs	reprobe_if_code_contradicts	spawn	1	outside-calls	background reprobe of a backend's protocol era after a contradicting error code; nobody awaits it
+src/backend/identity_slots.rs	spawn_close	spawn	1	no-refusal-inside	closes an evicted identity-slot transport under a timeout and logs failures
+src/backend/listen.rs	resolve_for_events	spawn	1	raised-at-join	shared backend start for events/subscribe; an admission refusal (open circuit, rate limit) returns as false and the rpc caller answers backend_unavailable
+src/backend/package_cache.rs	discard_tombstone	spawn-blocking	1	no-refusal-inside	deletes a package cache tombstone directory in the background
+src/backend/package_cache.rs	retire_cache_dir	spawn-blocking	1	no-refusal-inside	renames a package cache dir to a tombstone on the blocking pool; Retired outcome returned to the awaiting caller
+src/backend/package_cache.rs	sweep_tombstones_once	spawn-blocking	1	no-refusal-inside	once-per-root sweep deleting leftover package cache tombstones
+src/backend/restart.rs	close_after_last_owner	spawn	1	no-refusal-inside	polls until the old transport's last owner drops, then closes it
+src/capability/backend_listing.rs	spawn_listing_watch	spawn	1	outside-calls	background watch that re-lists capabilities when a listing expiry passes
+src/capability/executor/cli_run.rs	run	spawn	1	no-refusal-inside	writes the CLI tool's stdin bytes to the child and closes it
+src/capability/executor/save_file.rs	save	spawn-blocking	1	raised-at-join	writes the decoded file under the downloads root; a quota or name refusal returns as Err through the join and save maps it
+src/capability/watcher.rs	report_startup_scan	spawn	1	outside-calls	start-up task that polls until the initial capability scan finishes and reports it
+src/capability/watcher.rs	spawn_reload	spawn	1	outside-calls	capability hot-reload run (rug-pull scan, then reload) triggered by file events
+src/capability/watcher.rs	spawn_reload_task_tuned	spawn	1	outside-calls	capability directory watcher loop (debounce, fingerprint walks, reloads)
+src/capability/watcher.rs	start_walk	spawn-blocking	1	no-refusal-inside	fingerprint walk of the watched capability directories on the blocking pool
+src/commands/cap.rs	cap_pin	spawn-blocking	1	outside-calls	CLI cap pin command: pins a capability file under its directory lock
+src/config_reload/override_audit.rs	start	spawn	1	no-refusal-inside	override-audit worker that drains a queue into the audit log
+src/config_reload/replace.rs	create_entries	spawn-blocking	1	outside-calls	creates vault secret entries for a web UI settings save; errors return to the UI handler, not a tool call
+src/config_reload/replace.rs	settle	spawn-blocking	1	no-refusal-inside	discards or keeps a refused save's pending secret entries
+src/config_reload/replace.rs	spawn_locked	spawn	1	outside-calls	web UI settings save or history restore of gateway.yaml plus reload; refusals return to the UI handler at join, not a tool call
+src/config_reload/replace_audit.rs	recover_held	spawn-blocking	1	outside-calls	recovers a config write's journal for the web UI settings save; no tool call's answer waits on it
+src/config_reload/replace_validate.rs	validate_template	spawn-blocking	1	outside-calls	loads a config template for the web UI settings save; the refusal returns to the UI handler at join, not a tool call
+src/config_reload/watch_chain.rs	spawn_rewatch_task	spawn	1	outside-calls	config include-chain rewatch loop on file events and a retry timer
+src/config_reload/watcher.rs	spawn_reload_task	spawn	1	outside-calls	config file watcher loop that debounces and triggers reloads
+src/events/fanout.rs	reconcile_until_done	spawn-blocking	1	no-refusal-inside	reconciles event subscriptions against the capability catalogue, retrying on failure
+src/events/lease.rs	install	spawn	1	no-refusal-inside	timer that zeroizes a held events callback authorization when it expires
+src/events/rpc.rs	blocking	spawn-blocking	1	no-refusal-inside	events store read/commit on the blocking pool; io error returned as RpcError::internal
+src/events/runtime.rs	blocking	spawn-blocking	1	no-refusal-inside	events store write on the blocking pool; failures only logged
+src/events/runtime.rs	start	spawn	4	outside-calls	events hub background tasks: intake fan-out, the delivery worker, credential-revocation watch, start-up replay
+src/events/schedule_source.rs	install_schedule_source	spawn	1	outside-calls	minute-boundary ticker for schedule event sources
+src/events/schedule_source.rs	install_schedule_source	spawn-blocking	1	no-refusal-inside	schedule source tick: fires due timers and syncs their files
+src/events/upstream_listener.rs	start	spawn	1	outside-calls	background upstream notification session for an events listener (non-interactive)
+src/events/watch_source.rs	on_first_subscriber	spawn	1	outside-calls	poller loop for a watch event source, started on its first subscriber
+src/events/webhook_source.rs	webhook_received	spawn-blocking	1	no-refusal-inside	webhook dedupe: records first sighting of an inbound key in the seen store
+src/events/worker_dispatch.rs	dispatch	spawn	1	outside-calls	events worker attempt: delivers one queued event to its subscriber callback URL
+src/gateway/meta_mcp/discovery_fetch.rs	refresh_stale_backend_tools_in_background	spawn	1	outside-calls	background tools/list cache fill for a backend with no cached tools; nobody awaits it
+src/gateway/meta_mcp/events_hook.rs	reconcile_events_after_scan	spawn	1	outside-calls	waits for the initial capability scan then reconciles event routes
+src/gateway/meta_mcp/first_fill.rs	wait_surfaced_first_fill	spawn	1	no-refusal-inside	joins or leads a surfaced backend's shared tool fill for a stdio first tools/list; a listing is not a call, so no call's delivery runs inside, and the fill's result is dropped (the list reads the cache)
+src/gateway/meta_mcp/grant_audit.rs	note_withheld_best_effort	spawn	1	no-refusal-inside	best-effort append of withheld grant-decision records; failure only logged
+src/gateway/meta_mcp/grant_audit.rs	write_owned	spawn	1	raised-at-join	owned append of grant-decision records; a failed append returns through the join and the caller turns it into AuditUnavailable under FailClosed
+src/gateway/meta_mcp/listing_warm.rs	warm_listing_views	spawn	1	no-refusal-inside	fills a caller's listing view during a tools/list warm-up; a listing is not a call, so no call's delivery runs inside
+src/gateway/outbound/audit.rs	submit	spawn	1	no-refusal-inside	audits a tenant_read rejection to the log; the frame is withheld either way
+src/gateway/router/handlers/sse.rs	mcp_sse_handler	spawn	1	no-refusal-inside	auto-subscribes a new SSE session to configured backends' notifications
+src/gateway/server/background.rs	poll_export_source	spawn-blocking	1	no-refusal-inside	reads the on-disk transparency log tail for SIEM export
+src/gateway/server/background.rs	spawn_export_task	spawn	1	outside-calls	SIEM evidence-export timer loop
+src/gateway/server/background.rs	spawn_health_loop	spawn	1	outside-calls	backend health-check loop
+src/gateway/server/background.rs	spawn_idle_reaper	spawn	1	outside-calls	idle per-user backend reaper loop
+src/gateway/server/listener.rs	serve	spawn	1	outside-calls	bridges the shutdown signal to the HTTP server's graceful shutdown
+src/gateway/server/persistence.rs	spawn_periodic_save	spawn	1	outside-calls	periodic state save loop
+src/gateway/server/run.rs	run	spawn	1	outside-calls	waits for shutdown and cancels the reload token
+src/gateway/server/run_steps.rs	start_capability_watcher	spawn	1	outside-calls	start-up capability scan run in the background; refusals only logged
+src/gateway/server/stdio_loop.rs	run_stdio_on	spawn	1	no-refusal-inside	stdio stdout writer: writes already-decided answer frames from the queue to stdout
+src/gateway/server/tools_changed.rs	spawn_drain	spawn	1	no-refusal-inside	tools/list_changed notification fan-out for HTTP sessions
+src/gateway/server/tools_changed/stdio.rs	start	spawn	2	no-refusal-inside	stdio tools-changed announcer: decides and queues list_changed notifications, plus the send-when-ready task
+src/gateway/server/warmstart.rs	spawn	spawn	1	outside-calls	warm-start task that fills a backend's tool cache
+src/gateway/server/window_saver.rs	start_window_saver	spawn	1	outside-calls	protocol-revision window checkpoint timer
+src/gateway/streaming.rs	spawn_reaper_on	spawn	1	outside-calls	SSE session reaper loop
+src/gateway/task_service/execution/expiry.rs	start_expiry	spawn	1	outside-calls	task expiry sweep loop
+src/gateway/task_service/execution/operations.rs	spawn_now	spawn	1	own-cell	runs a task worker detached; each settlement it decides opens its own delivery_facts::scope, and a refusal or rewrite there is written to the task's own record (task_settlement for gateway-run tasks, task_recovery for upstream-run) before the commit
+src/gateway/task_service/execution/pending_cancel.rs	claim_and_send	spawn	1	no-refusal-inside	sends a claimed upstream cancel and re-checks the row; the claim is answered in the caller
+src/gateway/task_service/execution/pending_cancel.rs	flush	spawn	1	outside-calls	spawns cancel senders for pending upstream cancels that are due
+src/gateway/task_service/execution/pending_cancel.rs	listen_for_starts	spawn	1	outside-calls	listens for backend starts to resend pending cancels
+src/gateway/task_service/store.rs	close	spawn-blocking	1	outside-calls	closes the task store at shutdown
+src/gateway/task_service/store.rs	create	spawn-blocking	1	raised-at-join	writes a new task record; a Capacity or Duplicate refusal returns as StoreError through the join
+src/gateway/task_service/store.rs	mark_dispatched	spawn-blocking	1	no-refusal-inside	task store write marking a task dispatched; error returned to the awaiting caller
+src/gateway/task_service/store.rs	mark_upstream	spawn-blocking	1	no-refusal-inside	task store write recording the upstream task binding; error returned to the awaiting caller
+src/gateway/task_service/store.rs	open	spawn-blocking	1	outside-calls	opens and loads the task store at start-up
+src/gateway/task_service/store_expiry.rs	expire	spawn-blocking	1	outside-calls	task store expiry write, called only from the expiry sweep
+src/gateway/task_service/store_expiry.rs	reread_sealed	spawn-blocking	1	outside-calls	rereads sealed task records during expiry and start-up recovery
+src/gateway/task_service/store_input.rs	close_round	spawn-blocking	1	no-refusal-inside	task store write closing an input round; error returned to the awaiting caller
+src/gateway/task_service/store_input.rs	provide_input	spawn-blocking	1	raised-at-join	task store write accepting provided input; a refused answer returns as ProvideOutcome or StoreError through the join
+src/gateway/task_service/store_input.rs	require_input	spawn-blocking	1	no-refusal-inside	task store write moving a task to input-required; error returned to the awaiting caller
+src/gateway/task_service/store_pending_cancel.rs	record_cancel_attempt	spawn-blocking	1	no-refusal-inside	task store write recording an upstream cancel attempt
+src/gateway/task_service/store_targets.rs	add_targets	spawn-blocking	1	no-refusal-inside	task store write adding upstream targets; error returned to the awaiting caller
+src/gateway/task_service/store_targets.rs	claim_upstream_cancel	spawn-blocking	1	no-refusal-inside	task store claim of an upstream cancel; claim returned to the awaiting caller
+src/gateway/task_service/store_targets.rs	claim_upstream_cancel_undated	spawn-blocking	1	no-refusal-inside	task store claim of an upstream cancel without a date; claim returned to the awaiting caller
+src/gateway/task_service/store_targets.rs	settle_bounded_by	spawn-blocking	1	no-refusal-inside	task store write settling a task within its bound; error returned to the awaiting caller
+src/gateway/ui/activity/mod.rs	blocking	spawn-blocking	1	no-refusal-inside	web UI activity read from disk
+src/gateway/ui/activity/mod.rs	stream_read	spawn-blocking	1	outside-calls	reads the web UI activity stream from the audit log
+src/gateway/ui/admin_audit.rs	recorded	spawn	1	no-refusal-inside	runs an admin UI handler and writes its admin audit record; no tool call's delivery runs inside
+src/gateway/ui/backends/signin_flow.rs	start	spawn	1	outside-calls	runs a web UI backend sign-in; it serves the sign-in page, not a tool call
+src/gateway/ui/backends/slotting.rs	read_expecting	spawn-blocking	1	no-refusal-inside	reads gateway.yaml off the async workers before a backend write stores a secret; a read failure returns as the config refusal
+src/gateway/ui/decisions.rs	replay_until_ready	spawn-blocking	1	outside-calls	replays the decision log into the web UI's decision source at start-up
+src/gateway/ui/decisions.rs	start_discovery	spawn	1	outside-calls	keeps the web UI's client-file discovery cache current in the background
+src/gateway/ui/decisions.rs	start_with	spawn	3	outside-calls	the web UI decision source's background readers and hand-off queue
+src/gateway/ui/decisions.rs	start_with	spawn-blocking	1	outside-calls	the web UI decision source's blocking log reader
+src/gateway/ui/discovery.rs	list_discovery	spawn-blocking	1	no-refusal-inside	reads gateway.yaml off the async workers for the discovery list; a read failure returns as a 503
+src/gateway/ui/discovery_adopt.rs	adopt_discovery	spawn-blocking	1	no-refusal-inside	reads gateway.yaml off the async workers before an adopt; a read failure returns as a 503
+src/gateway/ui/keys.rs	keys	spawn-blocking	1	no-refusal-inside	reads gateway.yaml off the async workers for the key list; a read failure lists the live keys as file unloadable
+src/gateway/ui/keys_create.rs	preconditions	spawn-blocking	1	no-refusal-inside	reads gateway.yaml off the async workers before a key create; a read failure returns as a 503
+src/gateway/ui/mod.rs	config	spawn-blocking	1	no-refusal-inside	web UI config page reads the literal config file for secret references
+src/gateway/ui/preview.rs	preview_backend	spawn	1	outside-calls	web UI backend preview: starts and describes a backend in its own task; not a tool call
+src/gateway/ui/secret_slots.rs	open_store	spawn-blocking	1	no-refusal-inside	opens the secret store choice and the vault off the async workers for adopt and the backend routes; a keychain that does not answer in time is a 503
+src/gateway/ui/stream/mod.rs	stream	spawn	1	outside-calls	feeds the web UI's server-sent event stream
+src/gateway/ui/stream/watcher.rs	spawn	spawn	1	outside-calls	watches for changes to publish on the web UI stream
+src/gateway/ui/tool_call.rs	spawn_call	spawn	1	own-cell	runs a web UI tool call detached through the /mcp handler, which opens the call's own delivery cell and records its refusal
+src/idempotency/guard.rs	spawn_cleanup_task	spawn	1	outside-calls	idempotency cache cleanup timer
+src/identity_grants.rs	write_identity_grants_file	spawn-blocking	1	no-refusal-inside	atomic write of the identity grants file
+src/identity_grants/journal.rs	acquire_lock	spawn-blocking	1	outside-calls	takes the grant journal lock for a CLI identity grant change
+src/identity_grants/journal.rs	apply_change_with	spawn-blocking	2	outside-calls	directory sync and journal append for a CLI identity grant change
+src/identity_grants/journal.rs	read_locked	spawn-blocking	2	outside-calls	locked grant-file and journal reads at start-up and config reload
+src/key_server/store.rs	spawn_reaper	spawn	1	outside-calls	expired temporary token reaper loop
+src/oauth/callback.rs	start_callback_server_with	spawn	2	outside-calls	OAuth callback HTTP listeners (IPv4 and IPv6) for a login
+src/oauth/client/refresh_flight.rs	spawn	spawn	1	raised-at-join	refresh_stored awaits the exchange in the caller's task, so a destination refusal returns there
+src/oauth/client/renewal.rs	spawn_refresh_task	spawn	1	outside-calls	background OAuth token renewal loop
+src/personal_accounts/mod.rs	start_custody_with_http	spawn-blocking	1	outside-calls	opens personal-account custody at start-up
+src/personal_accounts/worker.rs	offload	spawn-blocking	1	raised-at-join	personal-account store operation on the blocking pool; a refusal (e.g. scope broadening) returns as AccountServiceError through the join
+src/personal_accounts/worker.rs	refresh_after_rejection	spawn-blocking	1	raised-at-join	refreshes a personal-account credential lease; a refusal returns as AccountServiceError through the join
+src/personal_accounts/worker.rs	refresh_if_expired	spawn-blocking	1	raised-at-join	refreshes a credential lease if expired; a refusal returns as AccountServiceError through the join
+src/security/message_signing.rs	spawn_nonce_cleanup_task	spawn	1	outside-calls	nonce cache cleanup timer
+src/security/transparency_log_bounded.rs	dispatch_bounded	spawn-blocking	1	raised-at-join	bounded transparency-log append; the joined result, a join failure or a timeout returns as a dispatch phase: append_bounded raises it as an io error the caller refuses with AuditUnavailable under FailClosed, settle as Refused or Unconfirmed
+src/skills/watcher.rs	spawn_regen_task	spawn	1	outside-calls	skills directory watcher that regenerates skill output on changes
+src/transport/http/listen.rs	open_listen_as	spawn	1	no-refusal-inside	reads a backend's listen response into a channel of unsolicited notifications
+src/transport/http/listen.rs	open_session_stream_as	spawn	1	no-refusal-inside	reads a backend's session SSE stream into a channel of admitted notifications
+src/transport/http/requests_detach_token.rs	detach_token_step	spawn	1	raised-at-join	detached OAuth token step; the caller records an SSRF destination refusal after task.await
+src/transport/http/sse_channel.rs	open	spawn	1	no-refusal-inside	reads a backend SSE response and routes frames or errors to waiting requests over channels
+src/transport/http/startup.rs	connect_as	spawn	1	raised-at-join	connect awaits the OAuth handshake task in the caller's task, so a destination refusal returns there
+src/transport/stdio_early_exit.rs	spawn_stderr_tail	spawn	1	no-refusal-inside	drains the backend's stderr into the log and a tail buffer
+src/transport/stdio_start.rs	start	spawn	1	no-refusal-inside	backend stdout reader routing response frames to pending requests
+src/transport/stdio_tree.rs	finish_whole	spawn	1	no-refusal-inside	finishes a stdin write to the backend process; transport error returned through the join
+src/transport/websocket.rs	do_connect	spawn	1	no-refusal-inside	WebSocket backend io loop routing frames between socket and pending requests

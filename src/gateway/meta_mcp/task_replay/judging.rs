@@ -10,10 +10,11 @@ use serde_json::json;
 use super::super::visible::{self, memo::AccountOutcome};
 use super::super::{MetaMcp, MetaMcpCallerContext, error_response_preserving_status};
 use super::{
-    StoredAnswer, StoredEffect, StoredRead, StoredVisibility, StoredWithheld, retry_later,
+    StoredAnswer, StoredRead, StoredVisibility, StoredWithheld, retry_later, withholding_check,
 };
 use crate::gateway::task_service::CommittedTask;
 use crate::protocol::{JsonRpcResponse, RequestId};
+use crate::security::decision_record::{DecisionKind, Refusal};
 use crate::{Error, Result};
 
 impl MetaMcp {
@@ -25,13 +26,13 @@ impl MetaMcp {
         caller: &MetaMcpCallerContext<'_>,
         read: StoredRead,
     ) -> Option<StoredAnswer> {
-        let refused = |error: &Error| {
-            StoredAnswer::new(
-                StoredEffect::Refused,
-                error_response_preserving_status(id.clone(), error),
+        let refused = |(error, refusal): (Error, Refusal)| {
+            StoredAnswer::refused(
+                error_response_preserving_status(id.clone(), &error),
+                refusal,
             )
         };
-        let unrecorded = |response| StoredAnswer::new(StoredEffect::Unrecorded, response);
+        let unrecorded = StoredAnswer::unrecorded;
         if !stored.serves_backend_output() {
             return None;
         }
@@ -47,18 +48,21 @@ impl MetaMcp {
                 continue;
             };
             // Out of the key's scope is a policy refusal; unregistered, a miss.
-            let effect = if absence == super::super::scoped_backends::Absence::OutOfScope {
-                let args = json!({"server": target.server, "tool": target.tool, "arguments": {}});
-                let _ = self.check_visible_policy(&args, session, caller);
-                StoredEffect::Refused
-            } else {
-                StoredEffect::Unrecorded
-            };
             let missing = crate::backend::text_absent(&target.tool);
-            return Some(StoredAnswer::new(
-                effect,
-                JsonRpcResponse::error(Some(id.clone()), -32001, missing),
-            ));
+            let missing = JsonRpcResponse::error(Some(id.clone()), -32001, missing);
+            if absence != super::super::scoped_backends::Absence::OutOfScope {
+                return Some(unrecorded(missing));
+            }
+            // The stored policy check's refusal, noted as it notes it; out of
+            // scope is a backend-scope refusal if no earlier check refused.
+            let args = json!({"server": target.server, "tool": target.tool, "arguments": {}});
+            let refusal = self
+                .check_visible_policy_explained(&args, session, caller)
+                .err()
+                .map_or((DecisionKind::BackendScope, None), |refused| {
+                    noting(refused).1
+                });
+            return Some(StoredAnswer::refused(missing, refusal));
         }
         // Visibility first, as on the live path: a Descriptor, Schema or Lacked
         // target answers as absent even where policy would also refuse.
@@ -66,18 +70,15 @@ impl MetaMcp {
         // a cold one defers its retry until after policy and accounts, as the
         // live path fills a cold slot only after route policy.
         let (cold, caller_catalogue) = match self.judge_stored_visibility(stored, session, caller) {
-            Err((error, effect)) => {
-                return Some(StoredAnswer::new(
-                    effect,
-                    error_response_preserving_status(id.clone(), &error),
-                ));
+            Err((error, judged)) => {
+                return Some(stored_withheld(id, &error, judged));
             }
             Ok(judged) => judged,
         };
         // Policy before accounts, as on the live path: route authorize before
         // caller verdicts, and the dispatch policy before its resolution.
-        if let Err(error) = self.authorize_stored(stored, attestation, session, caller) {
-            return Some(refused(&error));
+        if let Err(refusal) = self.authorize_stored(stored, attestation, session, caller) {
+            return Some(refused(refusal));
         }
         // A removed backend answers as the live call does
         // (`BackendNotFound`, the invoke path's answer for an unknown
@@ -98,7 +99,7 @@ impl MetaMcp {
         // A stored output the gateway will not serve under today's bindings
         // is its refusal.
         if let Err(error) = self.judge_stored_provenance(stored, caller) {
-            return Some(refused(&error));
+            return Some(refused((error, (DecisionKind::Provenance, None))));
         }
         if let Err(withheld) = self.judge_stored_accounts(
             &self.scoped(caller.scope().authorizer.backend_grant()),
@@ -116,11 +117,11 @@ impl MetaMcp {
         // The caller's own catalogue is judged after its account, as the
         // live caller verdict resolves the credential before it reads the
         // caller's slot.
-        if let Some((error, effect)) = caller_catalogue {
-            return Some(StoredAnswer::new(
-                effect,
-                error_response_preserving_status(id.clone(), &error),
-            ));
+        // Its pair is built here, from the verdict this answer delivers, never
+        // from the note the judgement left when it deferred it.
+        if let Some((judged, tool)) = caller_catalogue {
+            let error = visible::absent::absent_name(&tool);
+            return Some(stored_withheld(id, &error, judged));
         }
         if let Some(after) = cold {
             return Some(unrecorded(retry_later(id, after)));
@@ -150,10 +151,10 @@ impl MetaMcp {
         stored: &CommittedTask,
         session: Option<&str>,
         caller: &MetaMcpCallerContext<'_>,
-    ) -> std::result::Result<StoredVisibility, (Error, StoredEffect)> {
+    ) -> std::result::Result<StoredVisibility, (Error, visible::Visibility)> {
         let scope = caller.scope();
         let mut cold: Option<Option<std::time::Duration>> = None;
-        let mut caller_catalogue: Option<(Error, StoredEffect)> = None;
+        let mut caller_catalogue: Option<(visible::Visibility, String)> = None;
         for target in &stored.targets {
             let (server, tool) = (target.server.as_str(), target.tool.as_str());
             let Some(judged) = self.stored_target_view(server, tool, scope, session) else {
@@ -182,14 +183,16 @@ impl MetaMcp {
                 );
             if own_catalogue {
                 if caller_catalogue.is_none() {
+                    // Noted here, as before; its pair is built only if this
+                    // verdict is the one answered.
                     caller_catalogue = visible::memo::absent_if_withheld(Some(judged), tool)
                         .err()
-                        .map(|error| (error, StoredEffect::of(judged)));
+                        .map(|_| (judged, tool.to_owned()));
                 }
                 continue;
             }
             visible::memo::absent_if_withheld(Some(judged), tool)
-                .map_err(|error| (error, StoredEffect::of(judged)))?;
+                .map_err(|error| (error, judged))?;
         }
         Ok((cold, caller_catalogue))
     }
@@ -212,7 +215,7 @@ impl MetaMcp {
                 continue;
             }
             let offered = self
-                .get_capabilities()
+                .caller_capabilities()
                 .is_some_and(|cap| cap.name == server && cap.get(tool).is_some());
             if !offered {
                 return Some(Error::BackendNotFound(server.to_string()));
@@ -292,7 +295,7 @@ impl MetaMcp {
         attestation: Option<&str>,
         session: Option<&str>,
         caller: &MetaMcpCallerContext<'_>,
-    ) -> Result<()> {
+    ) -> crate::security::decision_record::Explained {
         if stored.targets.is_empty() {
             // A recording gateway's empty list means nothing was planned or
             // attempted (`Record::targets`).
@@ -304,11 +307,14 @@ impl MetaMcp {
             return if stored.targets_recorded {
                 Ok(())
             } else {
-                Err(Error::Forbidden {
-                    code: -32003,
-                    status: 403,
-                    message: "stored task result has no recorded provenance".to_owned(),
-                })
+                Err((
+                    Error::Forbidden {
+                        code: -32003,
+                        status: 403,
+                        message: "stored task result has no recorded provenance".to_owned(),
+                    },
+                    (DecisionKind::Provenance, None),
+                ))
             };
         }
         // A poll that meets the same decision again is not written
@@ -322,7 +328,7 @@ impl MetaMcp {
             caller
                 .grant_subject
                 .as_ref()
-                .map(|s| [s.authority.as_str(), s.subject.as_str()]),
+                .map(|s| [s.authority(), s.subject()]),
             caller.agent_id.map(|a| (a.as_str(), a.proof())),
         ])
         .to_string();
@@ -335,9 +341,28 @@ impl MetaMcp {
                     &json!({}),
                     attestation,
                 );
-                self.check_visible_policy(&args, session, caller)?;
+                self.check_visible_policy_explained(&args, session, caller)
+                    .map_err(noting)?;
             }
             Ok(())
         })
+    }
+}
+
+/// A refusal noted as its plain check notes it, and handed on:
+/// the stored read keeps the notes the plain checks wrote, and takes the pair
+/// from the check's own return.
+fn noting(refused: (Error, Refusal)) -> (Error, Refusal) {
+    crate::gateway::meta_mcp::invoke::audit::note_refused_by(refused.1.0, refused.1.1.clone());
+    refused
+}
+
+/// The answer for a withheld target: refused, naming the withholding, for
+/// a policy reason; otherwise no refusal.
+fn stored_withheld(id: &RequestId, error: &Error, judged: visible::Visibility) -> StoredAnswer {
+    let response = error_response_preserving_status(id.clone(), error);
+    match withholding_check(judged) {
+        Some(refusal) => StoredAnswer::refused(response, refusal),
+        None => StoredAnswer::unrecorded(response),
     }
 }

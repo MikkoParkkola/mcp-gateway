@@ -32,6 +32,7 @@ fn real_stdio_context_carries_principal_and_no_personal_identity() {
     let policy = crate::security::ToolPolicy::default();
     let authorizer = ToolPolicyAuthorizer {
         tool_policy: &policy,
+        generation: None,
     };
     let context = super::super::Gateway::build_stdio_caller_context(
         false,
@@ -48,7 +49,7 @@ fn real_stdio_context_carries_principal_and_no_personal_identity() {
             discover: crate::gateway::server::stdio_single::DiscoverListing::Configured,
             sanitize: crate::gateway::server::stdio_single::InputSanitizing::Off,
         },
-        &crate::gateway::record_principal::test_record_key(),
+        (&crate::gateway::record_principal::test_record_key(), None),
     );
 
     assert_eq!(
@@ -140,6 +141,8 @@ async fn stdio_refuses_an_account_dependent_call_and_serves_a_local_mutation() {
         },
     );
     let data_dir = tempfile::tempdir().expect("tempdir");
+    // The builder publishes nothing: the line is the fixture's own config.
+    let line = crate::config_reload::LiveConfig::new(config.clone()).generation();
     let built = Gateway::new(config)
         .await
         .expect("the production constructor accepts this configuration")
@@ -151,7 +154,7 @@ async fn stdio_refuses_an_account_dependent_call_and_serves_a_local_mutation() {
 
     let refused = Gateway::dispatch_single(
         &built.meta_mcp,
-        &built.tool_policy,
+        &line,
         &built.mtls_policy,
         &call(
             1,
@@ -177,7 +180,7 @@ async fn stdio_refuses_an_account_dependent_call_and_serves_a_local_mutation() {
 
     let mutated = Gateway::dispatch_single(
         &built.meta_mcp,
-        &built.tool_policy,
+        &line,
         &built.mtls_policy,
         &call(2, "gateway_set_state", &json!({"state": "triage"})),
         session,

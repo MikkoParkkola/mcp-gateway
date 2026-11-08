@@ -83,7 +83,7 @@ async fn personal_caps(
 /// the grant's owner equal to its subject.
 fn bearer_grant(tool: &str) -> IdentityGrant {
     let subject =
-        GrantSubject::checked("api_key", "bearer", None).expect("api_key:bearer names someone");
+        GrantSubject::new("api_key", "bearer", None).expect("api_key:bearer names someone");
     IdentityGrant {
         grant_id: format!("g-8518-{tool}"),
         subject: subject.clone(),
@@ -429,6 +429,7 @@ async fn watch_poll_admits_the_api_key_for_its_grant() {
         api_key: ApiKeyRef {
             name: KEY.to_string(),
             principal: principal_of(KEY).storage_form().to_owned(),
+            digest_tag: Some(crate::gateway::auth::secret_tag(KEY)),
         },
     };
     let target = Target {

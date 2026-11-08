@@ -6,14 +6,16 @@ use super::super::super::auth::AuthenticatedClient;
 use super::super::super::router::AppState;
 use super::super::access_table::CpCheck;
 use super::super::guard::Guard;
+use crate::config_reload::Generation;
 use crate::control_plane::{
     ControlPlaneAction, ControlPlaneActor, ControlPlaneAuditEvent, ControlPlaneDecisionTargetKind,
     ControlPlaneGrant, ControlPlaneMutation, ControlPlanePolicy, ControlPlaneRole,
     ControlPlaneRoleMappingConfig, ControlPlaneRollbackPlan, ControlPlaneStore,
 };
+use crate::gateway::authz::AdminStanding;
 use crate::key_server::oidc::VerifiedIdentity;
 use axum::Json;
-use axum::extract::State;
+use axum::extract::{Extension, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use serde::{Deserialize, Serialize};
@@ -51,9 +53,10 @@ pub(super) struct MutationResponse {
 
 /// The actor and the action its row authorizes, derived where the handler
 /// always derived its actor: the RBAC check itself stays in
-/// `validate_for_actor`, after the store check.
+/// `validate_for_actor`, after the store check. The role is the one the
+/// request's pinned generation maps (ADR-023).
 fn admitted_actor(
-    state: &AppState,
+    generation: &Generation,
     guard: &Guard,
 ) -> Result<(crate::control_plane::ControlPlaneActor, ControlPlaneAction), super::super::guard::Early>
 {
@@ -62,7 +65,7 @@ fn admitted_actor(
             actor_from_client(
                 client,
                 identity,
-                &state.live_config.get().control_plane.role_mapping,
+                &generation.config().control_plane.role_mapping,
             ),
             action,
         )),
@@ -76,10 +79,11 @@ fn admitted_actor(
 /// enforces grants from the identity-grants file, never from this store.
 pub(super) async fn mutate_grant(
     State(state): State<Arc<AppState>>,
+    Extension(generation): Extension<Arc<Generation>>,
     guard: Guard,
     Json(req): Json<GrantMutationRequest>,
 ) -> axum::response::Response {
-    let (actor, action) = match admitted_actor(&state, &guard) {
+    let (actor, action) = match admitted_actor(&generation, &guard) {
         Ok(admitted) => admitted,
         Err(refused) => return *refused,
     };
@@ -100,10 +104,11 @@ pub(super) async fn mutate_grant(
 /// Dispatch enforces policies from gateway config, never from this store.
 pub(super) async fn mutate_policy(
     State(state): State<Arc<AppState>>,
+    Extension(generation): Extension<Arc<Generation>>,
     guard: Guard,
     Json(req): Json<PolicyMutationRequest>,
 ) -> axum::response::Response {
-    let (actor, action) = match admitted_actor(&state, &guard) {
+    let (actor, action) = match admitted_actor(&generation, &guard) {
         Ok(admitted) => admitted,
         Err(refused) => return *refused,
     };
@@ -150,6 +155,7 @@ pub(super) struct DecisionRequest {
 /// actionable here yet and return 422.
 pub(super) async fn resolve_decision(
     State(state): State<Arc<AppState>>,
+    Extension(generation): Extension<Arc<Generation>>,
     guard: Guard,
     Json(req): Json<DecisionRequest>,
 ) -> axum::response::Response {
@@ -158,7 +164,7 @@ pub(super) async fn resolve_decision(
         CpCheck::FromBody(_) => Ok(actor_from_client(
             client,
             identity,
-            &state.live_config.get().control_plane.role_mapping,
+            &generation.config().control_plane.role_mapping,
         )),
         CpCheck::Read | CpCheck::Action(_) => Err(Box::new(
             super::super::guard::Refused::AdminRequired.into_response(),
@@ -394,42 +400,59 @@ pub(super) fn apply_mutation(
 /// Resolve the control-plane actor.
 ///
 /// When a verified identity is present, the role comes from the issuer-scoped
-/// role mapping (MIK-6688); an identity that matches no rule gets `Auditor`
-/// (least privilege). With no verified identity, the legacy admin-key
-/// projection applies (admin key -> Admin, else Auditor) — backward compatible.
+/// role mapping; an identity that matches no rule gets `Viewer`, which reads
+/// only its own grants and audit events. With no verified identity, an admin
+/// key is `Admin` and any other caller `Viewer`. `Auditor` is otherwise only
+/// an explicit role rule, since it reads every principal's rows.
+///
+/// `Admin` is gateway-wide: a caller whose UI scope is not every
+/// backend, by its key or its token's policy, is capped at `Auditor`, read
+/// breadth that the scoped snapshot bounds to its backends.
 pub(in crate::gateway::ui) fn actor_from_client(
     client: Option<&AuthenticatedClient>,
     identity: Option<&VerifiedIdentity>,
     role_mapping: &ControlPlaneRoleMappingConfig,
 ) -> ControlPlaneActor {
     if let Some(id) = identity {
-        let role = role_mapping
+        let mut role = role_mapping
             .resolve_role(id)
-            .unwrap_or(ControlPlaneRole::Auditor);
-        let display_name = id.name.clone().unwrap_or_else(|| id.email.clone());
+            .unwrap_or(ControlPlaneRole::Viewer);
+        let scoped = client.is_some_and(|c| {
+            crate::gateway::authz::BackendGrant::for_ui(Some(c))
+                != crate::gateway::authz::BackendGrant::Unscoped
+        });
+        if scoped && role == ControlPlaneRole::Admin {
+            role = ControlPlaneRole::Auditor;
+        }
+        let display_name = id.name().unwrap_or_else(|| id.email()).to_owned();
         return ControlPlaneActor {
             actor_id: id.stable_actor_id(),
             display_name,
             role,
-            group_ids: id.groups.clone(),
+            group_ids: id.groups().to_vec(),
         };
     }
 
-    let (name, role, group_id) = match client {
-        Some(client) if client.admin => (
+    let (name, role, group_id) = match client.map(|c| (c, c.admin_standing())) {
+        Some((client, AdminStanding::Gateway)) => (
             client.name.clone(),
             ControlPlaneRole::Admin,
             "local-admins".to_string(),
         ),
-        Some(client) => (
+        Some((client, AdminStanding::InScope)) => (
             client.name.clone(),
             ControlPlaneRole::Auditor,
-            "local-auditors".to_string(),
+            "local-admins".to_string(),
+        ),
+        Some((client, AdminStanding::None)) => (
+            client.name.clone(),
+            ControlPlaneRole::Viewer,
+            "local-viewers".to_string(),
         ),
         None => (
             "anonymous".to_string(),
-            ControlPlaneRole::Auditor,
-            "local-auditors".to_string(),
+            ControlPlaneRole::Viewer,
+            "local-viewers".to_string(),
         ),
     };
 

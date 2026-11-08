@@ -132,4 +132,12 @@ async fn a_backend_the_runtime_policy_denies_is_in_refused_at_start() {
     assert_eq!(refused.len(), 1, "{body}");
     assert_eq!(refused[0]["kind"], "startup", "{body}");
     assert_eq!(refused[0]["backend"], "sandboxed", "{body}");
+    // The cause names why: the profile mounts `/etc`, a forbidden mount.
+    let forbidden = serde_json::to_value(crate::runtime::RuntimeDenyReason::ForbiddenMount)
+        .expect("the reason serializes");
+    let cause = refused[0]["cause"].as_str().expect("a cause");
+    assert!(
+        cause.contains(forbidden.as_str().expect("a code")),
+        "the refusal must name the forbidden mount: {cause}"
+    );
 }

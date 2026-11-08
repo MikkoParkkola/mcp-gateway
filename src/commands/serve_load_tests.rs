@@ -21,20 +21,26 @@ fn write_private(path: &Path, text: &str) {
 /// journal's on-disk form: the candidate in place, the original staged, the
 /// journal `staged`. Returns the journal's path.
 fn crashed_write(config: &Path) -> PathBuf {
-    write_private(config, CANDIDATE);
+    crashed_write_as(config, ORIGINAL, CANDIDATE, "staged")
+}
+
+/// [`crashed_write`] with the staged `original`, the `candidate` on disk and
+/// the journal in `state` given.
+fn crashed_write_as(config: &Path, original: &str, candidate: &str, state: &str) -> PathBuf {
+    write_private(config, candidate);
     let target = std::fs::canonicalize(config).unwrap();
     let staged = target.with_file_name(".gateway.yaml.replace-original");
-    write_private(&staged, ORIGINAL);
+    write_private(&staged, original);
     let journal = target.with_file_name(".gateway.yaml.replace-journal");
-    let revision = hex::encode(sha2::Sha256::digest(ORIGINAL.as_bytes()));
+    let revision = hex::encode(sha2::Sha256::digest(original.as_bytes()));
     let body = serde_json::json!({
         "version": 1,
-        "state": "staged",
+        "state": state,
         "target": target,
         "original": staged,
         "original_revision": revision,
     });
-    std::fs::write(&journal, body.to_string()).unwrap();
+    write_private(&journal, &body.to_string());
     journal
 }
 
@@ -161,4 +167,257 @@ fn validate_and_doctor_never_reach_the_startup_recovery() {
             assert!(!text.contains(name), "{} names {name}", file.display());
         }
     }
+}
+
+/// Startup's half of the audit posture: serve's own load refuses auth on
+/// with the audit log off, so no running gateway has auth on and no log.
+#[test]
+fn serve_refuses_auth_on_with_the_audit_log_off() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("gateway.yaml");
+    let digest = hex::encode(sha2::Sha256::digest(b"zq-startup-pin-key"));
+    write_private(
+        &path,
+        &format!(
+            "auth:\n  enabled: true\n  api_keys:\n    - name: ci\n      key_sha256: \"sha256:{digest}\"\nsecurity:\n  transparency_log:\n    enabled: false\n"
+        ),
+    );
+    let refused = super::load_for_serve(Some(&path))
+        .expect_err("serve refuses auth on without an audit log")
+        .to_string();
+    assert!(
+        refused.contains("security.transparency_log must be enabled"),
+        "the refusal names the audit log: {refused}"
+    );
+}
+
+/// [`ORIGINAL`] with its audit log on at `log`, auth off.
+fn logged(log: &Path) -> String {
+    format!(
+        "{ORIGINAL}security:\n  transparency_log:\n    enabled: true\n    path: {:?}\n",
+        log.display().to_string()
+    )
+}
+
+/// A config with auth on (one API key) and the audit log at `log`, or off.
+fn auth_on(log: Option<&Path>) -> String {
+    let digest = hex::encode(sha2::Sha256::digest(b"zq-startup-pin-key"));
+    let log = match log {
+        Some(log) => format!("enabled: true\n    path: {:?}", log.display().to_string()),
+        None => "enabled: false".to_owned(),
+    };
+    format!(
+        "{ORIGINAL}auth:\n  enabled: true\n  api_keys:\n    - name: ci\n      key_sha256: \"sha256:{digest}\"\nsecurity:\n  transparency_log:\n    {log}\n"
+    )
+}
+
+/// The recovery intents in the audit log at `log`, as their JSON lines.
+fn recovery_intents(log: &Path) -> Vec<serde_json::Value> {
+    std::fs::read_to_string(log)
+        .unwrap_or_default()
+        .lines()
+        .filter(|line| line.contains("config_recovery_intent"))
+        .map(|line| serde_json::from_str(line).expect("an audit line is JSON"))
+        .collect()
+}
+
+/// The string at `key` anywhere in `value`.
+fn field<'a>(value: &'a serde_json::Value, key: &str) -> Option<&'a str> {
+    match value {
+        serde_json::Value::Object(map) => map
+            .get(key)
+            .and_then(serde_json::Value::as_str)
+            .or_else(|| map.values().find_map(|v| field(v, key))),
+        serde_json::Value::Array(items) => items.iter().find_map(|v| field(v, key)),
+        _ => None,
+    }
+}
+
+/// A refused start recovered nothing: the candidate is still on disk and the
+/// journal and the staged original are still beside it.
+fn nothing_recovered(config: &Path, journal: &Path, candidate: &str) {
+    assert_eq!(std::fs::read_to_string(config).unwrap(), candidate);
+    assert!(journal.exists(), "the journal stays for the hand recovery");
+    assert!(
+        journal
+            .with_file_name(".gateway.yaml.replace-original")
+            .exists(),
+        "the staged original stays"
+    );
+}
+
+/// The refusal of a start whose recovery cannot be audited.
+fn refused_start(config: &Path) -> String {
+    match super::load_for_serve(Some(config)) {
+        Err(e) => e.to_string(),
+        Ok(_) => panic!("a recovery that cannot be audited must refuse the start"),
+    }
+}
+
+/// STARTREC.1: a staged journal is recovered to the original, so its intent
+/// goes to the original's audit log, never the candidate's, and names the
+/// bytes on disk before the recovery. The log is free again afterwards and
+/// its chain still opens for the next start.
+#[test]
+fn a_start_records_the_recovery_in_the_surviving_configs_log_first() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = dir.path().join("gateway.yaml");
+    let (log_a, log_b) = (dir.path().join("a.ndjson"), dir.path().join("b.ndjson"));
+    let original = logged(&log_a);
+    let candidate = logged(&log_b);
+    let journal = crashed_write_as(&config, &original, &candidate, "staged");
+
+    super::load_for_serve(Some(&config)).expect("recovered, then loaded");
+
+    let intents = recovery_intents(&log_a);
+    assert_eq!(
+        intents.len(),
+        1,
+        "one intent in the original's log: {intents:?}"
+    );
+    let base = field(&intents[0], "base_revision").expect("the intent names its base");
+    let before = hex::encode(sha2::Sha256::digest(candidate.as_bytes()));
+    assert!(
+        base.contains(&before),
+        "the intent names the bytes before recovery ({before}), so it came first: {base}"
+    );
+    assert!(!log_b.exists(), "nothing in the candidate's log");
+    assert_eq!(std::fs::read_to_string(&config).unwrap(), original);
+    assert!(!journal.exists());
+
+    // A second crashed write recovered by a second start reopens the same
+    // log: the first start let its lease go and left a chain that opens.
+    crashed_write_as(&config, &original, &candidate, "staged");
+    super::load_for_serve(Some(&config)).expect("the log opens again");
+    assert_eq!(
+        recovery_intents(&log_a).len(),
+        2,
+        "both recoveries recorded"
+    );
+}
+
+/// STARTREC.1: an `all_renamed` journal keeps the new bytes, so its intent
+/// goes to the new file's log.
+#[test]
+fn a_kept_write_records_its_recovery_in_the_new_files_log() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = dir.path().join("gateway.yaml");
+    let (log_a, log_b) = (dir.path().join("a.ndjson"), dir.path().join("b.ndjson"));
+    let candidate = logged(&log_b);
+    let journal = crashed_write_as(&config, &logged(&log_a), &candidate, "all_renamed");
+
+    super::load_for_serve(Some(&config)).expect("recovered, then loaded");
+
+    assert_eq!(
+        recovery_intents(&log_b).len(),
+        1,
+        "one intent in the new file's log"
+    );
+    assert!(!log_a.exists(), "nothing in the replaced file's log");
+    assert_eq!(std::fs::read_to_string(&config).unwrap(), candidate);
+    assert!(!journal.exists());
+}
+
+/// STARTREC.2: the surviving config has auth on and no audit log, so the
+/// recovery cannot be recorded: the start refuses, recovers nothing, and
+/// says how to finish by hand.
+#[test]
+fn auth_on_without_a_log_refuses_the_recovery_and_says_how_to_finish() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = dir.path().join("gateway.yaml");
+    let journal = crashed_write_as(&config, &auth_on(None), CANDIDATE, "staged");
+
+    let message = refused_start(&config);
+
+    nothing_recovered(&config, &journal, CANDIDATE);
+    assert!(
+        message.contains(".gateway.yaml.replace-journal"),
+        "{message}"
+    );
+    assert!(
+        message.contains("original_revision"),
+        "the hand steps: {message}"
+    );
+}
+
+/// STARTREC.3: a staged original that matches its digest but does not parse
+/// cannot say where its recovery is recorded: refused, nothing recovered.
+#[test]
+fn an_unparseable_surviving_config_refuses_the_recovery() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = dir.path().join("gateway.yaml");
+    let journal = crashed_write_as(&config, "backends: [not: yaml\n", ORIGINAL, "staged");
+
+    let message = refused_start(&config);
+
+    nothing_recovered(&config, &journal, ORIGINAL);
+    assert!(
+        message.contains(".gateway.yaml.replace-journal"),
+        "{message}"
+    );
+    assert!(
+        message.contains("original_revision"),
+        "the hand steps: {message}"
+    );
+}
+
+/// STARTREC.3: the surviving config is refused as the normal load refuses
+/// it: one naming a reserved writer slot is not recovered to, so the start
+/// refuses before its journal is touched.
+#[test]
+fn a_surviving_config_naming_a_reserved_slot_refuses_the_recovery() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = dir.path().join("gateway.yaml");
+    let original = format!("{ORIGINAL}    description: \"env:MCPGW_PENDING_SLOT_X\"\n");
+    let journal = crashed_write_as(&config, &original, CANDIDATE, "staged");
+
+    let message = refused_start(&config);
+
+    nothing_recovered(&config, &journal, CANDIDATE);
+    assert!(message.contains("MCPGW_PENDING_SLOT_X"), "{message}");
+}
+
+/// A log under a regular file cannot open: with auth on or off, a configured
+/// log that cannot record the recovery refuses it.
+#[test]
+fn a_log_that_cannot_open_refuses_the_recovery() {
+    for auth in [true, false] {
+        let dir = tempfile::tempdir().unwrap();
+        let config = dir.path().join("gateway.yaml");
+        let blocker = dir.path().join("blocker");
+        std::fs::write(&blocker, "a file, not a directory").unwrap();
+        let log = blocker.join("audit.ndjson");
+        let original = if auth {
+            auth_on(Some(&log))
+        } else {
+            logged(&log)
+        };
+        let journal = crashed_write_as(&config, &original, CANDIDATE, "staged");
+
+        let message = refused_start(&config);
+
+        nothing_recovered(&config, &journal, CANDIDATE);
+        assert!(
+            message.contains(".gateway.yaml.replace-journal"),
+            "auth {auth}: {message}"
+        );
+    }
+}
+
+/// The journal's own refusals come before any log is opened: a staged
+/// original that does not match its digest records nothing.
+#[test]
+fn a_digest_mismatch_refuses_before_any_log_opens() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = dir.path().join("gateway.yaml");
+    let log = dir.path().join("a.ndjson");
+    let journal = crashed_write_as(&config, &logged(&log), CANDIDATE, "staged");
+    let staged = journal.with_file_name(".gateway.yaml.replace-original");
+    write_private(&staged, &logged(&dir.path().join("planted.ndjson")));
+
+    refused_start(&config);
+
+    assert!(journal.exists());
+    assert_eq!(std::fs::read_to_string(&config).unwrap(), CANDIDATE);
+    assert!(!log.exists() && !dir.path().join("planted.ndjson").exists());
 }

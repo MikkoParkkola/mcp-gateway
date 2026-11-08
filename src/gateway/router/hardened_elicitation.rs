@@ -12,12 +12,11 @@
 
 use crate::error::rpc_codes::{INVALID_PARAMS, INVALID_REQUEST};
 use crate::gateway::meta_mcp::invoke::egress::Egressed;
-use axum::Json;
 use axum::http::{HeaderMap, StatusCode};
 use serde_json::Value;
 
 use super::AppState;
-use super::helpers::{build_http_error_response, build_http_response};
+use super::helpers::{RpcHttp, build_http_error_response, build_http_response};
 use crate::protocol::RequestId;
 use crate::protocol::meta::{Era, RequestShape};
 use crate::security::SecurityPosture;
@@ -44,7 +43,7 @@ pub(super) fn declares_elicitation(request: &Value) -> bool {
 }
 
 /// The 403 a legacy client without elicitation gets.
-pub(super) fn refusal() -> (StatusCode, Json<Value>) {
+pub(super) fn refusal() -> RpcHttp {
     build_http_error_response(None, INVALID_REQUEST, REFUSAL, StatusCode::FORBIDDEN)
 }
 
@@ -110,7 +109,7 @@ pub(super) fn direct_refusal(
     (method, params): (&str, Option<&Value>),
     id: Option<&RequestId>,
     (shape, declared_version): (&RequestShape, Option<&str>),
-) -> Option<(StatusCode, Json<Value>)> {
+) -> Option<RpcHttp> {
     if let RequestShape::Malformed { missing } = shape {
         return Some(build_http_error_response(
             id.cloned(),

@@ -124,6 +124,7 @@ pub fn add_backend(
     if config.backends.contains_key(name) {
         return Err(format!("Backend '{name}' already exists. Remove it first."));
     }
+    refuse_literal_beside_template(&resolved.backend, name)?;
     let mut backend = resolved.backend;
     let mut notes = Vec::new();
     if let Some(entry) = resolved.entry {
@@ -187,6 +188,86 @@ pub fn add_backend(
 /// The phrase every unresolved-secret refusal carries, so a caller can tell
 /// it from a duplicate or a missing backend.
 pub(crate) const UNRESOLVED_SECRETS: &str = "has secret references that do not resolve";
+
+/// The phrase every literal-beside-a-template refusal carries, so a caller
+/// can tell it from a duplicate (a 422, never a 409).
+pub(crate) const LITERAL_IN_VALUE: &str = "holds literal text a template would write as text";
+
+/// How one `env` or `headers` value of a backend is written to gateway.yaml.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ValueClass {
+    /// Written as given: empty, a whole-value secret reference (`env:`,
+    /// `file:`, `keychain:`), or a template the load expands.
+    Kept,
+    /// A literal: on the web UI it goes to the secret store and gateway.yaml
+    /// holds the store's reference (the CLI writes it as given today).
+    Stored,
+}
+
+/// The one rule for a value an operator gives a backend, shared by the web UI
+/// add, update and preview and the CLI `add`. `Err` is the refusal's stable
+/// code: `literal_default` for `${NAME:-text}` with a non-empty default, and
+/// `literal_in_template` for literal text beside a template other than one
+/// scheme word (`Bearer ${TOKEN}` is a template; `sk-${SUFFIX}` is not), the
+/// same codes discovery adopt refuses with. Either would put text that may be
+/// a secret into gateway.yaml as text.
+pub(crate) fn classify(value: &str) -> Result<ValueClass, &'static str> {
+    use crate::config::secret_ref::{has_literal_default, only_scheme_beside_templates};
+    if value.is_empty() || crate::config::is_reference(value) {
+        return Ok(ValueClass::Kept);
+    }
+    if !value.contains("${") {
+        return Ok(ValueClass::Stored);
+    }
+    if has_literal_default(value) {
+        Err("literal_default")
+    } else if !only_scheme_beside_templates(value) {
+        Err("literal_in_template")
+    } else {
+        Ok(ValueClass::Kept)
+    }
+}
+
+/// Each refused `env`/`headers` value of `backend` as `(code, field)`, sorted
+/// by field; the value itself is never part of it.
+pub(crate) fn literal_refusals(
+    backend: &crate::config::BackendConfig,
+) -> Vec<(&'static str, String)> {
+    let env = backend.env.iter().map(|(k, v)| ("env", k, v));
+    let headers = backend.headers.iter().map(|(k, v)| ("headers", k, v));
+    let mut refused: Vec<_> = env
+        .chain(headers)
+        .filter_map(|(map, key, value)| {
+            classify(value)
+                .err()
+                .map(|code| (code, format!("{map}.{key}")))
+        })
+        .collect();
+    refused.sort_by(|a, b| a.1.cmp(&b.1));
+    refused
+}
+
+/// The add's refusal for a refused value: names each field and code, never
+/// a value, and carries [`LITERAL_IN_VALUE`].
+fn refuse_literal_beside_template(
+    backend: &crate::config::BackendConfig,
+    name: &str,
+) -> Result<(), String> {
+    let refused = literal_refusals(backend);
+    if refused.is_empty() {
+        return Ok(());
+    }
+    let fields: Vec<String> = refused
+        .iter()
+        .map(|(code, field)| format!("backends.{name}.{field} ({code})"))
+        .collect();
+    Err(format!(
+        "Backend '{name}' {LITERAL_IN_VALUE}: {}; give the whole value as a template \
+         (`${{NAME}}`, optionally after one scheme word such as `Bearer `) or as a \
+         secret reference (`env:`, `file:`, `keychain:`)",
+        fields.join(", ")
+    ))
+}
 
 fn refuse_unresolved_secrets(
     backend: &crate::config::BackendConfig,

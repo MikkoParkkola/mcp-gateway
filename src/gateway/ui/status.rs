@@ -12,7 +12,10 @@ use serde::Serialize;
 use serde_json::{Value, json};
 
 use super::guard::Guard;
-use super::{AppState, access_report, auth_facts, call_windows, is_admin};
+use super::{AppState, access_report, auth_facts, call_windows};
+use crate::gateway::auth::is_gateway_admin;
+use crate::gateway::authz::BackendGrant;
+use crate::oauth::client::sign_in::SignIn;
 
 /// `GET /ui/api/status` — JSON snapshot of gateway health.
 pub(super) async fn status(
@@ -22,19 +25,18 @@ pub(super) async fn status(
 ) -> Json<Value> {
     // Open to every caller that reaches it; the answer is shaped by caller.
     let _ = guard.admit();
-    let access = access_report::report(
-        &state,
-        &generation,
-        guard.client.as_ref(),
-        guard.identity.as_ref(),
-    );
+    let access = access_report::report(&generation, guard.client.as_ref(), guard.identity.as_ref());
     let client = guard.client;
-    let view = if is_admin(client.as_ref()) {
+    // A caller with no credential (a public status path) has no scope to
+    // narrow by. A scoped admin gets the counts, within its scope: the full
+    // view lists every backend.
+    let scope = BackendGrant::for_ui(client.as_ref());
+    let view = if is_gateway_admin(client.as_ref()) && scope == BackendGrant::Unscoped {
         StatusView::Full
     } else {
         StatusView::CountsOnly
     };
-    let mut body = status_body(&state, view);
+    let mut body = status_body(&state, view, scope);
     body["auth"] = auth_facts(&state, client.as_ref());
     // An auth-on caller with no credential gets no `access` member at all.
     if let Some(access) = access {
@@ -46,14 +48,16 @@ pub(super) async fn status(
 /// Which of the two views a caller gets.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum StatusView {
-    /// Every server row: admin callers.
+    /// Every server row: unscoped admin callers.
     Full,
-    /// Counts only: every other caller.
+    /// Counts only, of the backends the caller's scope reaches: every other
+    /// caller.
     CountsOnly,
 }
 
 /// The status body without the caller's `auth` member, which the caller adds.
-pub(super) fn status_body(state: &AppState, view: StatusView) -> Value {
+/// `CountsOnly` counts only the backends `scope` admits.
+pub(super) fn status_body(state: &AppState, view: StatusView, scope: BackendGrant<'_>) -> Value {
     #[allow(
         clippy::disallowed_methods,
         reason = "Admin: the operator dashboard behind admin auth; not a tenant read"
@@ -63,7 +67,9 @@ pub(super) fn status_body(state: &AppState, view: StatusView) -> Value {
 
     if view == StatusView::CountsOnly {
         // Redacted view: counts only, no names/details
-        let healthy = backends
+        let counted: Vec<_> = backends.iter().filter(|b| scope.admits(&b.name)).collect();
+        let total = counted.len();
+        let healthy = counted
             .iter()
             .filter(|b| b.status().circuit_state != crate::failsafe::CircuitState::Open)
             .count();
@@ -105,6 +111,12 @@ pub(super) fn status_body(state: &AppState, view: StatusView) -> Value {
                 .next_retry_at
                 .and_then(crate::config_reload::refusals::rfc3339),
             cleartext_credentials_accepted: backend.cleartext_override_in_effect(),
+            needs_sign_in: backend.needs_sign_in(),
+            sign_in: Some(backend.sign_in()).filter(|sign_in| *sign_in != SignIn::NotOAuth),
+            // A sign-in in flight: only its phase and end, never a secret.
+            sign_in_flow: backend.sign_in_flow_view().map(|(phase, until)| {
+                super::backends::with_time(json!({ "phase": phase.word() }), "until", until)
+            }),
             calls_24h: None,
             calls_prev_24h: None,
             name: bs.name,
@@ -128,10 +140,10 @@ pub(super) fn status_body(state: &AppState, view: StatusView) -> Value {
         .iter()
         .map(|s| crate::counters::Filter::Server(&s.name))
         .collect();
-    let (windows, counts_since) = call_windows(state, &labels);
-    for (server, (day, prev)) in servers.iter_mut().zip(windows) {
-        server.calls_24h = day;
-        server.calls_prev_24h = prev;
+    let (windows, counts_since, _) = call_windows(state, &labels);
+    for (server, w) in servers.iter_mut().zip(windows) {
+        server.calls_24h = w.day;
+        server.calls_prev_24h = w.prev_day;
     }
 
     json!({
@@ -149,6 +161,10 @@ pub(super) fn status_body(state: &AppState, view: StatusView) -> Value {
     })
 }
 
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "each flag is one independent fact on the wire; no two encode a state"
+)]
 #[derive(Debug, Serialize)]
 struct ServerStatus {
     name: String,
@@ -178,6 +194,16 @@ struct ServerStatus {
     /// Loads only because `allow_cleartext_credentials` accepts sending its
     /// credentials in cleartext.
     cleartext_credentials_accepted: bool,
+    /// Whether a person must sign in: the one predicate
+    /// (`Backend::needs_sign_in`), shown beside `state` so display keys on it.
+    needs_sign_in: bool,
+    /// Its sign-in, for a backend that has an `oauth` block or waits on a
+    /// sign-in made elsewhere.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    sign_in: Option<SignIn>,
+    /// A sign-in in flight: only `phase` and `until`, never a secret.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    sign_in_flow: Option<Value>,
 }
 
 #[cfg(test)]

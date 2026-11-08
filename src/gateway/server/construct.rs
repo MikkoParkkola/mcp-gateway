@@ -75,6 +75,9 @@ impl Gateway {
         env: Arc<crate::config::LiveEnv>,
         config_path: Option<std::path::PathBuf>,
     ) -> Result<Self> {
+        // Before any await: in a test, this thread is the test's own.
+        #[cfg(test)]
+        let test_seams = test_seams::TestSeams::new();
         // A config built in memory never passed through `Config::load`.
         // Before validation, so the ranges of what it forces are checked.
         posture::resolve(&mut config, posture::FirewallBuild::CURRENT)?;
@@ -91,9 +94,17 @@ impl Gateway {
         // The one resolver every backend's `secrets:` values go through, over
         // the same env this config was validated against; each backend
         // registered, at boot or on reload, is stamped with it.
-        let backends = Arc::new(BackendRegistry::with_secret_resolver(Arc::new(
-            crate::secrets::SecretResolver::new().with_env(Arc::clone(&env)),
-        )));
+        let grace = crate::security::needles::redaction_grace(&config);
+        tracing::info!(
+            grace_secs = grace.as_secs(),
+            "an injected secret stays redacted from backend answers for this long after its last send"
+        );
+        let backends = Arc::new(
+            BackendRegistry::with_secret_resolver(Arc::new(
+                crate::secrets::SecretResolver::new().with_env(Arc::clone(&env)),
+            ))
+            .with_redaction_grace(grace),
+        );
         #[allow(
             clippy::disallowed_methods,
             reason = "Lifecycle: gateway startup, wiring or shutdown; no caller request"
@@ -111,6 +122,10 @@ impl Gateway {
         // the constructor below reads that field to decide whether to build
         // one, so the decision has to be made before it, not after.
         let bound_accounts = crate::config::account_bindings::compile(&config)?;
+
+        // The startup load's configured `headers:`/`env:` credentials, held
+        // by the registry before any backend registers and seeds from them.
+        backends.set_load_record(env.take_startup_configured());
 
         // Register backends
         for (name, backend_config) in config.enabled_backends() {
@@ -140,6 +155,9 @@ impl Gateway {
             );
             info!(backend = %name, transport = %backend_config.transport.transport_type(), "Registered backend");
         }
+        // Startup's registrations used the record: a later patch must set its
+        // own before it applies.
+        let _ = backends.take_load_record();
         if let Some(warning) = config.remote_provenance_warning() {
             warn!("{warning}");
         }
@@ -149,7 +167,7 @@ impl Gateway {
 
         Ok(Self {
             #[cfg(test)]
-            test_seams: test_seams::TestSeams::default(),
+            test_seams,
             config,
             config_path,
             watched_config: None,

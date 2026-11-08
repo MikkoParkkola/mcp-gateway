@@ -77,7 +77,7 @@ struct Row {
 const AUDITOR_KEY: &str = "auditor-key";
 
 /// The auth-on posture: the admin bearer plus the Auditor API key from
-/// registry.rs (`test_control_plane_endpoint_projects_non_admin_api_key_as_auditor`).
+/// registry.rs (`test_control_plane_endpoint_projects_non_admin_api_key_as_viewer`).
 fn auth_on() -> AuthConfig {
     AuthConfig {
         enabled: true,
@@ -484,13 +484,15 @@ const ROWS: &[Row] = &[
         Payload::None,
         [401, 403, 403, 404],
     ),
-    // src/gateway/ui/discovery.rs (list_discovery)
+    // src/gateway/ui/discovery.rs (list_discovery; this fixture attaches no
+    // discovery cache, which the gateway's decision set owns, so the admin's
+    // answer is 503 rather than a scan of its own)
     row(
         "/ui/api/discovery",
         Method::GET,
         "/ui/api/discovery",
         Payload::None,
-        [401, 403, 403, 200],
+        [401, 403, 403, 503],
     ),
     // src/gateway/ui/discovery_adopt.rs (adopt_discovery; `{}` is not a find,
     // so the admin's answer is the fixed invalid_body refusal)
@@ -500,6 +502,15 @@ const ROWS: &[Row] = &[
         "/ui/api/discovery/adopt",
         Payload::Json("{}"),
         [401, 403, 403, 422],
+    ),
+    // src/gateway/ui/policies.rs (read_policies; read-only, from the
+    // published config, so the admin is served)
+    row(
+        "/ui/api/policies",
+        Method::GET,
+        "/ui/api/policies",
+        Payload::None,
+        [401, 403, 403, 200],
     ),
     // src/gateway/ui/preview.rs (preview_backend): describe step
     row(

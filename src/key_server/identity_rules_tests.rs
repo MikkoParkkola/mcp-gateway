@@ -85,7 +85,7 @@ async fn missing_email_verified_is_unverified() {
     let h = Harness::start(&config_yaml("[]", &policies(&rules))).await;
     let token = h.mint(ISS_A, "attacker", &json!({"email": "ceo@corp.com"}));
     let id = h.verify(&token).await.expect("signature is valid");
-    assert_eq!(id.email, "", "no email_verified claim means no email");
+    assert_eq!(id.email(), "", "no email_verified claim means no email");
     assert!(
         h.ks.policy
             .resolve_scopes(&id, &RequestedScopes::default())
@@ -124,7 +124,7 @@ async fn verified_email_matches() {
             &json!({"email": "ceo@corp.com", "email_verified": verified}),
         );
         let id = h.verify(&token).await.expect("valid");
-        assert_eq!(id.email, "ceo@corp.com", "email_verified={verified}");
+        assert_eq!(id.email(), "ceo@corp.com", "email_verified={verified}");
         let (status, body) = h.exchange(&token).await;
         assert_eq!(status, 200, "email_verified={verified}: {body}");
     }
@@ -399,7 +399,7 @@ async fn token_from_an_uppercase_https_or_loopback_issuer_verifies() {
             .verify(&token, &AGE)
             .await
             .unwrap_or_else(|e| panic!("{issuer}: {e}"));
-        assert_eq!(id.issuer, issuer);
+        assert_eq!(id.issuer(), issuer);
     }
 }
 
@@ -459,6 +459,36 @@ async fn an_empty_subject_is_refused_as_a_missing_claim() {
         .verify(&token)
         .await
         .expect_err("an empty sub must not verify");
+    assert!(
+        matches!(
+            &err,
+            OidcError::JwtError(e)
+                if matches!(e.kind(), jsonwebtoken::errors::ErrorKind::MissingRequiredClaim(c) if c == "sub")
+        ),
+        "{err}"
+    );
+    let (status, body) = h.exchange(&token).await;
+    assert_eq!(status, 401, "{body}");
+    assert!(
+        body.get("access_token").is_none(),
+        "no token is issued: {body}"
+    );
+}
+
+/// A `sub` of only whitespace names nobody either, so it is refused exactly
+/// as an empty one: the missing-claim error, and no token from the exchange.
+#[tokio::test]
+async fn a_blank_subject_is_refused_as_a_missing_claim() {
+    let h = Harness::start(&config_yaml("[]", "")).await;
+    let token = h.mint(
+        ISS_A,
+        "   ",
+        &json!({"email": "alice@corp.com", "email_verified": true}),
+    );
+    let err = h
+        .verify(&token)
+        .await
+        .expect_err("a blank sub must not verify");
     assert!(
         matches!(
             &err,

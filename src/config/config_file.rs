@@ -14,6 +14,38 @@ use figment::{Metadata, Profile, Provider};
 
 use crate::Result;
 
+/// Env names the config writer resolves its template's secret slots through
+/// while it validates a save, before any store entry exists. Reserved: a
+/// config file or env file naming one is refused at load, so no config can
+/// reach a slot's stand-in value.
+pub(crate) const PENDING_SLOT_PREFIX: &str = "MCPGW_PENDING_SLOT_";
+
+/// The first reference to a reserved name, with its 1-based line: a scalar,
+/// key or value, that is `env:NAME` or holds `${NAME}`, the two forms the
+/// loader resolves through the overlay (`SecretRef::parse` and the template
+/// expander in `secret_ref.rs`). A comment is no scalar, so text that only
+/// mentions the prefix never matches. Text that does not parse is left to
+/// the loader, which reports it.
+pub(crate) fn reserved_slot_reference(text: &str) -> Option<(String, usize)> {
+    for (value, line) in crate::yaml::scalars_with_lines(text) {
+        // The loader's own parse of `env:NAME`, so the two cannot drift.
+        let env = match super::secret_ref::SecretRef::parse(&value) {
+            super::secret_ref::SecretRef::Env(name) => Some(name),
+            _ => None,
+        };
+        let name = env
+            .filter(|name| name.starts_with(PENDING_SLOT_PREFIX))
+            .or_else(|| {
+                super::secret_ref::template_names(&value)
+                    .find(|name| name.starts_with(PENDING_SLOT_PREFIX))
+            });
+        if let Some(name) = name {
+            return Some((name.to_owned(), line));
+        }
+    }
+    None
+}
+
 /// A selected config file and the text it held when it was read.
 #[derive(Debug, Clone)]
 pub(crate) struct ConfigFile {
@@ -26,6 +58,22 @@ impl ConfigFile {
     pub(crate) fn read(path: PathBuf) -> Result<Self> {
         let text =
             super::secret_file::read_secret_file(&path, super::secret_file::SecretFile::Config)?;
+        Self::of_text(path, text)
+    }
+
+    /// `text` as the file at `path`, refused as [`Self::read`] refuses a file
+    /// naming a reserved writer slot: the check a file read and startup's
+    /// recovery preview share. [`super::Config::load_pending`] skips it on
+    /// purpose, since its template names those slots.
+    fn of_text(path: PathBuf, text: String) -> Result<Self> {
+        if let Some((name, line)) = reserved_slot_reference(&text) {
+            return Err(crate::Error::Config(format!(
+                "Refusing to load {}: line {line} references {name}; names starting \
+                 {PENDING_SLOT_PREFIX} are reserved for the gateway's config writer, so \
+                 rename it",
+                path.display()
+            )));
+        }
         Ok(Self { path, text })
     }
 
@@ -51,6 +99,45 @@ impl super::Config {
             super::Expansion::Literal,
         )?;
         Ok((evaluated.config, file.text))
+    }
+
+    /// `text` evaluated as the file at `path` exactly as
+    /// [`super::Config::load_evaluated`] evaluates a file read from disk (same
+    /// home, env files, secret resolution and validation), only with the
+    /// bytes supplied: startup's look at the config a pending journal's
+    /// recovery would leave, before that recovery writes it.
+    pub(crate) fn load_evaluated_text(path: &Path, text: &str) -> Result<super::Evaluated> {
+        let file = ConfigFile::of_text(path.to_path_buf(), text.to_owned())?;
+        Self::evaluate(
+            Some(&file),
+            &super::SystemHome,
+            super::Tolerance::Fail,
+            super::Expansion::Resolve,
+        )
+    }
+
+    /// `text` loaded as the file at `path` would be on a reload against
+    /// `env_paths`, with `pending` names resolving above the env files: the
+    /// config writer's full validation of a template whose secret slots name
+    /// them, so no submitted secret goes through the loader.
+    pub(crate) fn load_pending(
+        path: &Path,
+        text: &str,
+        env_paths: &super::ResolvedEnvFiles,
+        pending: std::collections::BTreeMap<String, String>,
+    ) -> Result<super::Evaluated> {
+        let file = ConfigFile {
+            path: path.to_path_buf(),
+            text: text.to_owned(),
+        };
+        let overlay =
+            super::EnvOverlay::from_paths_checked(env_paths.as_paths())?.with_pending(pending);
+        Self::finish(
+            Some(&file),
+            overlay,
+            env_paths.clone(),
+            super::Expansion::Resolve,
+        )
     }
 
     /// `text` loaded as a config file is, `url` resolved, with no environment

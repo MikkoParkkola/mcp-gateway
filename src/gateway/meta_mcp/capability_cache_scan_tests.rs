@@ -81,6 +81,8 @@ fn gateway(port: u16) -> MetaMcp {
         servers: None,
         keys: None,
         except: None,
+        allowed_roots: None,
+        path_args: None,
     }];
     let config = FirewallConfig {
         enabled: true,
@@ -91,6 +93,10 @@ fn gateway(port: u16) -> MetaMcp {
         ..FirewallConfig::default()
     };
     meta.set_firewall(Some(Arc::new(Firewall::from_config(config, None))));
+    crate::security::firewall::collusion_live_rig::seed_meta(
+        &meta,
+        &meta.firewall_for_test().expect("set above"),
+    );
     meta
 }
 
@@ -130,6 +136,7 @@ async fn delivered(meta: &MetaMcp) -> (Value, Map<String, Value>) {
                 signing: None,
                 chain_source: ChainSource::NotEligible,
                 chain_nonce: None,
+                generation: None,
             },
         );
         let mut fields = Map::new();

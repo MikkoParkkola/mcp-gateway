@@ -393,6 +393,8 @@ fn the_challenge_gate_scans_a_prompt_as_it_is_delivered() {
                     servers: None,
                     keys: None,
                     except: None,
+                    allowed_roots: None,
+                    path_args: None,
                 }],
                 ..FirewallConfig::default()
             },
@@ -478,6 +480,10 @@ async fn a_bridged_round_whose_answers_the_firewall_blocks_is_not_sent() {
             )
             .with_continuations(meta.continuation()),
         )));
+        crate::security::firewall::collusion_live_rig::seed_meta(
+            &meta,
+            &meta.firewall_for_test().expect("set above"),
+        );
         let slot = Arc::new(Slot::default());
         backend.set_transport_for_test(Arc::clone(&slot) as Arc<dyn crate::transport::Transport>);
         let arguments = json!({"edits": []});

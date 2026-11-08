@@ -22,6 +22,7 @@ use crate::gateway::meta_mcp::invoke::relay::GatewayStamps;
 use crate::identity_grants::GrantSubject;
 use crate::mtls::CertIdentity;
 use crate::protocol::RequestId;
+use crate::security::firewall::collusion_live_rig::paired;
 use crate::security::firewall::{CollusionAction, CollusionConfig, Firewall, FirewallConfig};
 
 const PROSE: &str = "The orchard ledger for the north slope records seven rows of late pears, \
@@ -38,11 +39,11 @@ fn shared_key() -> AuthenticatedClient {
 }
 
 fn cert(san_uri: &str) -> CertIdentity {
-    CertIdentity {
+    crate::mtls::identity::CertIdentity::for_test(crate::mtls::identity::CertFields {
         san_uris: vec![san_uri.to_string()],
         display_name: "agent".to_string(),
         ..Default::default()
-    }
+    })
 }
 
 /// One identity carrier per caller: a grant subject, or a certificate with
@@ -52,20 +53,20 @@ enum Who {
     Cert(CertIdentity, GrantSubject),
 }
 
-/// The relay rows judge nothing a generation holds; one default serves all.
-static GENERATION: std::sync::LazyLock<Arc<crate::config_reload::Generation>> =
-    std::sync::LazyLock::new(|| {
-        crate::config_reload::LiveConfig::new(crate::config::Config::default()).generation()
-    });
-
 impl Who {
-    fn auth<'a>(&'a self, client: &'a AuthenticatedClient) -> BackendAuthContext<'a> {
+    /// The call's auth context under `generation`, the one the fixture's
+    /// state published (its detector and its firewall agree).
+    fn auth<'a>(
+        &'a self,
+        client: &'a AuthenticatedClient,
+        generation: &'a crate::config_reload::Generation,
+    ) -> BackendAuthContext<'a> {
         let (grant_subject, cert_identity) = match self {
             Self::Subject(s) => (Some(s), None),
             Self::Cert(c, s) => (Some(s), Some(c)),
         };
         BackendAuthContext {
-            generation: &GENERATION,
+            generation,
             client: Some(client),
             oauth_agent_identity: None,
             cert_identity,
@@ -86,11 +87,13 @@ async fn blocking_state() -> (Arc<AppState>, crate::gateway::router::tests::Fixt
         },
         ..FirewallConfig::default()
     };
-    // With its gateway's keyring, as the gateway builds it (#2210, MIK-8276).
+    // The firewall and the live config come from this one section.
     let keys = state.meta_mcp.continuation();
-    Arc::get_mut(&mut state).expect("state is unique").firewall = Some(Arc::new(
-        Firewall::from_config(config, None).with_continuations(keys),
-    ));
+    let state_mut = Arc::get_mut(&mut state).expect("state is unique");
+    let (firewall, live) = paired(config, &state_mut.live_config);
+    state_mut.live_config = Arc::new(live);
+    // With its gateway's keyring, as the gateway builds it (#2210, MIK-8276).
+    state_mut.firewall = Some(Arc::new(firewall.with_continuations(keys)));
     (state, store)
 }
 
@@ -117,6 +120,7 @@ fn refused(state: &AppState, auth: BackendAuthContext<'_>) -> bool {
 /// excused. The control identity agrees with the relay key throughout.
 async fn parity(a: &Who, a_other_key: &Who, b: &Who) {
     let (state, _store) = blocking_state().await;
+    let generation = state.live_config.generation();
     let key = shared_key();
     let other_key = AuthenticatedClient {
         principal: principal_of("a second key"),
@@ -126,7 +130,7 @@ async fn parity(a: &Who, a_other_key: &Who, b: &Who) {
     crate::gateway::meta_mcp::invoke::relay::collecting(async {
         stage_direct_delivery(
             &state,
-            a.auth(&key),
+            a.auth(&key, &generation),
             ("alpha", "read"),
             Some(&delivered),
             GatewayStamps::Legacy,
@@ -136,20 +140,20 @@ async fn parity(a: &Who, a_other_key: &Who, b: &Who) {
     .await;
 
     assert!(
-        refused(&state, b.auth(&key)),
+        refused(&state, b.auth(&key, &generation)),
         "another principal behind the same key must be refused"
     );
     assert!(
-        !refused(&state, a.auth(&key)),
+        !refused(&state, a.auth(&key, &generation)),
         "the receiver is not relaying"
     );
     assert!(
-        !refused(&state, a_other_key.auth(&other_key)),
+        !refused(&state, a_other_key.auth(&other_key, &generation)),
         "the same principal on another key is the receiver"
     );
 
     let control = |who: &Who, client: &AuthenticatedClient| {
-        direct_control_identity(&state, who.auth(client), "x")
+        direct_control_identity(&state, who.auth(client, &generation), "x")
     };
     assert_eq!(control(a, &key), control(a_other_key, &other_key));
     assert_ne!(control(a, &key), control(b, &key));
@@ -157,14 +161,14 @@ async fn parity(a: &Who, a_other_key: &Who, b: &Who) {
 
 #[tokio::test]
 async fn grant_subject_keys_relay_and_recording() {
-    let subject = |id: &str| Who::Subject(GrantSubject::new("oidc:https://idp", id, None));
+    let subject = |id: &str| Who::Subject(GrantSubject::for_test("oidc:https://idp", id, None));
     parity(&subject("alice"), &subject("alice"), &subject("bob")).await;
 }
 
 #[tokio::test]
 async fn certificate_keys_relay_and_recording() {
     let cert = |uri: &str| {
-        let subject = GrantSubject::new("mtls", uri, Some("agent".to_string()));
+        let subject = GrantSubject::for_test("mtls", uri, Some("agent".to_string()));
         Who::Cert(cert(uri), subject)
     };
     parity(
@@ -184,6 +188,7 @@ async fn a_signing_refusal_records_nothing() {
     use crate::security::message_signing::MessageSigner;
 
     let (mut state, _store) = blocking_state().await;
+    let generation = state.live_config.generation();
     let mut meta = crate::gateway::meta_mcp::MetaMcp::new(Arc::clone(&state.backends));
     let signer = MessageSigner::new(
         b"relay-signing-key-sentinel-0123456789abcdef".to_vec(),
@@ -193,7 +198,7 @@ async fn a_signing_refusal_records_nothing() {
     meta.enable_message_signing(signer, std::time::Duration::from_secs(300), false);
     Arc::get_mut(&mut state).expect("state is unique").meta_mcp = Arc::new(meta);
     let key = shared_key();
-    let subject = |id: &str| Who::Subject(GrantSubject::new("oidc:https://idp", id, None));
+    let subject = |id: &str| Who::Subject(GrantSubject::for_test("oidc:https://idp", id, None));
     let (a, b) = (subject("alice"), subject("bob"));
     let delivered = json!({"content": [{"type": "text", "text": PROSE}]});
     let mut response = JsonRpcResponse::success(RequestId::Number(1), delivered);
@@ -201,7 +206,7 @@ async fn a_signing_refusal_records_nothing() {
     let target = ("alpha", "read");
     super::super::sign_and_record(
         &state,
-        a.auth(&key),
+        a.auth(&key, &generation),
         target,
         &mut response,
         (Some(&Some(String::new())), GatewayStamps::Legacy),
@@ -211,7 +216,7 @@ async fn a_signing_refusal_records_nothing() {
         "signing did not refuse: {response:?}"
     );
     assert!(
-        !refused(&state, b.auth(&key)),
+        !refused(&state, b.auth(&key, &generation)),
         "a result the caller never received was recorded"
     );
 }
@@ -220,15 +225,16 @@ async fn a_signing_refusal_records_nothing() {
 /// only when relay detection is on. Classification notes its data classes in
 /// the call's dispatch scope, which is how the skip is observed.
 async fn classes_noted_by_staging(state: &AppState) -> String {
+    let generation = state.live_config.generation();
     let key = shared_key();
-    let who = Who::Subject(GrantSubject::new("oidc:https://idp", "alice", None));
+    let who = Who::Subject(GrantSubject::for_test("oidc:https://idp", "alice", None));
     let text = format!("{PROSE} Contact: keeper@orchardcoop.fi");
     let result = json!({"contents": [{"uri": "res://orchard", "text": text}]});
     let ((), notes) = crate::gateway::meta_mcp::invoke::audit::with_dispatch_scope(async {
         crate::gateway::meta_mcp::invoke::relay::collecting(async {
             stage_direct_catalogue(
                 state,
-                who.auth(&key),
+                who.auth(&key, &generation),
                 ("alpha", "resources/read"),
                 Some(&result),
                 GatewayStamps::Legacy,
@@ -240,8 +246,12 @@ async fn classes_noted_by_staging(state: &AppState) -> String {
     format!("{notes:?}")
 }
 
+/// Staging classifies whenever the firewall is on, under an effective `off`
+/// too: a reload from `off` to `on` between staging and delivery must not
+/// fail open (ADR-029, amended; this inverts the earlier "only when relay is
+/// on" row).
 #[tokio::test]
-async fn staging_a_catalogue_result_classifies_only_when_relay_is_on() {
+async fn staging_a_catalogue_result_classifies_while_the_firewall_is_on() {
     let (active, _store) = blocking_state().await;
     assert!(active.firewall.as_ref().is_some_and(|fw| fw.relay_active()));
     let noted = classes_noted_by_staging(&active).await;
@@ -251,21 +261,40 @@ async fn staging_a_catalogue_result_classifies_only_when_relay_is_on() {
         crate::gateway::router::tests::test_router_app_state_with_auth(&AuthConfig::default())
             .await;
     let keys = inactive.meta_mcp.continuation();
+    let off = FirewallConfig::default();
+    // Pinned, so a changed default cannot turn this into an on-staging row.
+    assert_eq!(
+        off.collusion.action,
+        crate::security::firewall::CollusionAction::Off,
+        "premise: the leg's action is off"
+    );
+    assert_eq!(
+        inactive
+            .live_config
+            .get()
+            .security
+            .firewall
+            .collusion
+            .action,
+        crate::security::firewall::CollusionAction::Off,
+        "premise: the generation staged under is off"
+    );
     Arc::get_mut(&mut inactive)
         .expect("state is unique")
         .firewall = Some(Arc::new(
-        Firewall::from_config(FirewallConfig::default(), None).with_continuations(keys),
+        Firewall::from_config(off, None).with_continuations(keys),
     ));
     assert!(
-        !inactive
+        inactive
             .firewall
             .as_ref()
-            .is_some_and(|fw| fw.relay_active())
+            .is_some_and(|fw| fw.relay_active()),
+        "the firewall is on, so staging runs whatever the action"
     );
     let noted = classes_noted_by_staging(&inactive).await;
     assert!(
-        !noted.contains("personal_data"),
-        "classified with relay off: {noted}"
+        noted.contains("personal_data"),
+        "not classified with the firewall on and the action off: {noted}"
     );
 }
 
@@ -284,16 +313,18 @@ async fn blocking_state_for(
         },
         ..FirewallConfig::default()
     };
-    // With its gateway's keyring, as the gateway builds it (#2210, MIK-8276).
+    // The firewall and the live config come from this one section.
     let keys = state.meta_mcp.continuation();
-    Arc::get_mut(&mut state).expect("state is unique").firewall = Some(Arc::new(
-        Firewall::from_config(config, None).with_continuations(keys),
-    ));
+    let state_mut = Arc::get_mut(&mut state).expect("state is unique");
+    let (firewall, live) = paired(config, &state_mut.live_config);
+    state_mut.live_config = Arc::new(live);
+    // With its gateway's keyring, as the gateway builds it (#2210, MIK-8276).
+    state_mut.firewall = Some(Arc::new(firewall.with_continuations(keys)));
     (state, store)
 }
 
 fn subject(id: &str) -> Who {
-    Who::Subject(GrantSubject::new("oidc:https://idp", id, None))
+    Who::Subject(GrantSubject::for_test("oidc:https://idp", id, None))
 }
 
 /// A result whose only copy of `PROSE` is the gateway's `serverInfo` stamp.
@@ -313,13 +344,14 @@ async fn a_direct_receipt_leaves_out_the_gateway_server_info() {
         (GatewayStamps::Legacy, true),
     ] {
         let (state, _store) = blocking_state().await;
+        let generation = state.live_config.generation();
         let key = shared_key();
         let (a, b) = (subject("alice"), subject("bob"));
         let delivered = stamped_with_prose(json!({"content": [{"type": "text", "text": "ok"}]}));
         crate::gateway::meta_mcp::invoke::relay::collecting(async {
             stage_direct_delivery(
                 &state,
-                a.auth(&key),
+                a.auth(&key, &generation),
                 ("alpha", "read"),
                 Some(&delivered),
                 stamps,
@@ -327,7 +359,11 @@ async fn a_direct_receipt_leaves_out_the_gateway_server_info() {
             commit_direct_receipts(&state, true);
         })
         .await;
-        assert_eq!(refused(&state, b.auth(&key)), relays, "{stamps:?}");
+        assert_eq!(
+            refused(&state, b.auth(&key, &generation)),
+            relays,
+            "{stamps:?}"
+        );
     }
 }
 
@@ -336,13 +372,14 @@ async fn a_direct_receipt_leaves_out_the_gateway_server_info() {
 #[tokio::test]
 async fn the_strip_keeps_backend_text() {
     let (state, _store) = blocking_state().await;
+    let generation = state.live_config.generation();
     let key = shared_key();
     let (a, b) = (subject("alice"), subject("bob"));
     let delivered = stamped_with_prose(json!({"content": [{"type": "text", "text": PROSE}]}));
     crate::gateway::meta_mcp::invoke::relay::collecting(async {
         stage_direct_delivery(
             &state,
-            a.auth(&key),
+            a.auth(&key, &generation),
             ("alpha", "read"),
             Some(&delivered),
             GatewayStamps::Modern,
@@ -351,7 +388,7 @@ async fn the_strip_keeps_backend_text() {
     })
     .await;
     assert!(
-        refused(&state, b.auth(&key)),
+        refused(&state, b.auth(&key, &generation)),
         "backend text was stripped too"
     );
 }
@@ -364,13 +401,14 @@ async fn a_direct_catalogue_receipt_leaves_out_the_gateway_server_info() {
         (GatewayStamps::Legacy, true),
     ] {
         let (state, _store) = blocking_state_for("alpha:resources/read").await;
+        let generation = state.live_config.generation();
         let key = shared_key();
         let (a, b) = (subject("alice"), subject("bob"));
         let result = stamped_with_prose(json!({"contents": [{"uri": "res://x", "text": "ok"}]}));
         crate::gateway::meta_mcp::invoke::relay::collecting(async {
             stage_direct_catalogue(
                 &state,
-                a.auth(&key),
+                a.auth(&key, &generation),
                 ("alpha", "resources/read"),
                 Some(&result),
                 stamps,
@@ -378,6 +416,10 @@ async fn a_direct_catalogue_receipt_leaves_out_the_gateway_server_info() {
             commit_direct_receipts(&state, true);
         })
         .await;
-        assert_eq!(refused(&state, b.auth(&key)), relays, "{stamps:?}");
+        assert_eq!(
+            refused(&state, b.auth(&key, &generation)),
+            relays,
+            "{stamps:?}"
+        );
     }
 }

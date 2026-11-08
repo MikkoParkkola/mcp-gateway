@@ -16,6 +16,19 @@ use crate::identity_grants::GrantSubject;
 
 use super::BudgetOutcome;
 
+/// Whether enforcement withheld the backend's answer, from what
+/// [`MetaMcp::context_integrity_delivered_result`] says it did: `None` is a
+/// whole withhold and `Refused` a malformed round, both withheld; every other
+/// effect delivered the answer. Exhaustive, so a new effect must be placed.
+fn withheld_by(effect: Option<ResponseEffect>) -> bool {
+    match effect {
+        None | Some(ResponseEffect::Refused) => true,
+        Some(ResponseEffect::Delivered | ResponseEffect::Annotated | ResponseEffect::Rewritten) => {
+            false
+        }
+    }
+}
+
 impl MetaMcp {
     /// Record an outcome against both backend and per-capability error budgets.
     pub(super) fn record_error_budget(&self, server: &str, tool: &str, outcome: BudgetOutcome) {
@@ -33,6 +46,21 @@ impl MetaMcp {
             debug!(
                 server,
                 tool, "Rate-limited response excluded from error budget accounting"
+            );
+            return;
+        }
+        // A refusal of the caller says nothing about the backend either: one
+        // caller's refusals must not disable a backend for everyone.
+        if outcome == BudgetOutcome::IgnoredRefusal {
+            telemetry_metrics::counter!(
+                "mcp_error_budget_suppressed_total",
+                "server" => server.to_owned(),
+                "reason" => "refused"
+            )
+            .increment(1);
+            debug!(
+                server,
+                tool, "Refusal of the caller excluded from error budget accounting"
             );
             return;
         }
@@ -54,6 +82,8 @@ impl MetaMcp {
             let cap_disabled = self
                 .kill_switch
                 .record_capability_failure(server, tool, &cap_cfg);
+            drop(cap_cfg);
+            drop(cfg);
             if auto_killed {
                 warn!(server, "Server auto-killed by error budget exhaustion");
             }
@@ -115,10 +145,10 @@ impl MetaMcp {
 
     /// The identity-grant fallback subject for `grant_key`: only an API key's
     /// name may be passed (MIK-8518); every other credential passes `None`.
-    pub(in crate::gateway::meta_mcp) fn grant_subject_from_api_key(
+    pub(in crate::gateway) fn grant_subject_from_api_key(
         grant_key: Option<&str>,
     ) -> Option<GrantSubject> {
-        grant_key.and_then(|name| GrantSubject::checked("api_key", name, Some(name.to_string())))
+        grant_key.and_then(|name| GrantSubject::new("api_key", name, Some(name.to_string())).ok())
     }
 
     /// Whether the kernel enforces on `carrier`. Notes no data classes: the
@@ -190,16 +220,32 @@ impl MetaMcp {
         trace_id: &str,
         result: Value,
     ) -> (Value, super::super::response_security::GateEffect) {
+        let (value, effect, _) =
+            self.context_integrity_outcome(server, tool, api_key_name, trace_id, result);
+        (value, effect)
+    }
+
+    /// [`Self::apply_context_integrity`], plus whether enforcement withheld the
+    /// result outright. Only the caller that delivers the result notes that as
+    /// a refusal; a classification of a copy notes nothing.
+    pub(super) fn context_integrity_outcome(
+        &self,
+        server: &str,
+        tool: &str,
+        api_key_name: Option<&str>,
+        trace_id: &str,
+        result: Value,
+    ) -> (Value, super::super::response_security::GateEffect, bool) {
         use super::super::response_security::GateEffect;
         let input = self.context_integrity_input((server, tool), api_key_name, trace_id, &result);
         let evaluation = audit::noted_classes(self.context_integrity_kernel.read().evaluate(input));
         if evaluation.classification.findings.is_empty()
             && evaluation.policy.would_decision == ContextIntegrityDecisionKind::Allow
         {
-            return (result, GateEffect::PassedThrough);
+            return (result, GateEffect::PassedThrough, false);
         }
 
-        let (delivered, effect) = if evaluation.policy.enforcement_applied {
+        let (delivered, effect, withheld) = if evaluation.policy.enforcement_applied {
             // A rebuilt round is raised here; a malformed round and a whole
             // withhold are both Withheld, raised once where they are delivered.
             let (delivered, rebuilt) =
@@ -211,18 +257,23 @@ impl MetaMcp {
                 }
                 _ => GateEffect::Withheld,
             };
-            (delivered, effect)
+            (delivered, effect, withheld_by(rebuilt))
         } else {
-            (result, GateEffect::PassedThrough)
+            (result, GateEffect::PassedThrough, false)
         };
         (
             Self::attach_context_integrity_metadata(delivered, &evaluation),
             effect,
+            withheld,
         )
     }
 
+    /// The read-only and destructive flags of `server`'s `tool` when it is a
+    /// capability the caller sees. A provider hidden from the caller has none,
+    /// as an unregistered name has none, so its answer's integrity audit
+    /// cannot tell the two apart.
     pub(super) fn capability_context_flags(&self, server: &str, tool: &str) -> (bool, bool) {
-        if let Some(capabilities) = self.get_capabilities()
+        if let Some(capabilities) = self.caller_capabilities()
             && server == capabilities.name
             && let Some(capability) = capabilities.get(tool)
         {
@@ -243,6 +294,10 @@ impl MetaMcp {
         original: &Value,
     ) -> (Value, Option<ResponseEffect>) {
         let Some(delivered) = evaluation.transformed.delivered.clone() else {
+            // The gateway's own withhold, answered as a tool result.
+            crate::gateway::delivery_facts::gateway_folded(
+                crate::error::rpc_codes::INVALID_REQUEST,
+            );
             let withheld = json!({
                 "isError": true,
                 "content": [{
@@ -287,6 +342,9 @@ impl MetaMcp {
         let malformed = result_type.is_some_and(|value| !value.is_string())
             || is_error.is_some_and(|value| !value.is_boolean());
         if malformed {
+            // The gateway's refusal of a malformed round, answered as a tool
+            // result.
+            crate::gateway::delivery_facts::gateway_folded(crate::error::rpc_codes::INTERNAL_ERROR);
             let refused = json!({
                 "content": [{
                     "type": "text",
@@ -335,5 +393,35 @@ impl MetaMcp {
                 "_context_integrity": metadata
             })
         }
+    }
+}
+
+#[cfg(test)]
+mod withheld_by_tests {
+    use super::{ResponseEffect, withheld_by};
+
+    #[test]
+    fn a_whole_withhold_is_withheld() {
+        assert!(withheld_by(None));
+    }
+
+    #[test]
+    fn a_refused_round_is_withheld() {
+        assert!(withheld_by(Some(ResponseEffect::Refused)));
+    }
+
+    #[test]
+    fn a_rewritten_answer_is_delivered() {
+        assert!(!withheld_by(Some(ResponseEffect::Rewritten)));
+    }
+
+    #[test]
+    fn an_annotated_answer_is_delivered() {
+        assert!(!withheld_by(Some(ResponseEffect::Annotated)));
+    }
+
+    #[test]
+    fn an_untouched_answer_is_delivered() {
+        assert!(!withheld_by(Some(ResponseEffect::Delivered)));
     }
 }

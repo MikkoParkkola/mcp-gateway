@@ -18,7 +18,7 @@ use super::observe::{Acceptance, Handoff};
 use super::settlement::{
     DispatchSettlement, abandoned_input_round, classify_dispatch, interrupted_before_dispatch,
 };
-use super::worker::{dispatched_in_cell, inspect_and_record, settle_surfaced_refused};
+use super::worker::{CellRefusal, dispatched_in_cell, inspect_and_record, settle_surfaced_refused};
 use super::{CommitStage, OwnedCallerContext, TaskCall, TaskExecutor};
 use crate::gateway::task_service::host::LiveHost;
 use crate::gateway::task_service::record::{CONTINUATION_DEADLINE_MARGIN_SECS, InputRound};
@@ -342,18 +342,19 @@ async fn dispatch(
     let generation = state.generation();
     // K15: the key that created this task, as the current table holds it: a
     // reload since the round was accepted can refuse the continuation.
-    let rejudged = match state.rejudge(owned.authorizer(), &generation) {
+    let rejudged = match state.rejudge(owned.authorizer(), owned.verified_identity(), &generation) {
         Ok(rejudged) => rejudged,
         Err(refused) => return Some(*refused),
     };
     let authorizer = state.authorizer(rejudged.as_ref().unwrap_or(owned.authorizer()), &generation);
     let _key_hold = owned.hold_caller_key(state);
-    let caller = owned.dispatch_context_retrying(state, &authorizer, retry);
+    let caller = owned.dispatch_context_retrying(state, &authorizer, (retry, &generation));
     // `redeeming_dispatch` has checked the surfaced target holds. The pin
     // covers the readmission as well as the dispatch.
     let meta = state.meta_mcp();
     let recorded = call.surfaced_server.as_ref();
-    meta.with_surfaced_pin(&call.tool, recorded, async {
+    // The round judges hiding as its caller, live, readmission included.
+    let round = meta.with_surfaced_pin(&call.tool, recorded, async {
         let (arguments, judged) = match state
             .readmit(call, &caller, (owned.session_id(), &generation))
             .await
@@ -381,8 +382,9 @@ async fn dispatch(
             _ = cancel_rx.changed() => None,
             response = dispatched => Some(response),
         }
-    })
-    .await
+    });
+    // Boxed: the round is too large to hold inline (`large_futures`).
+    state.as_caller(owned, Box::pin(round)).await
 }
 
 /// What a `tasks/update` carrying answers came to.

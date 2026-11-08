@@ -26,7 +26,7 @@ const BEARER: &str = "t16-static-bearer";
 fn grant(id: &str) -> IdentityGrant {
     IdentityGrant {
         grant_id: id.to_string(),
-        subject: GrantSubject::new("api_key".to_string(), "alice".to_string(), None),
+        subject: GrantSubject::for_test("api_key".to_string(), "alice".to_string(), None),
         agent: GrantAgent::Any,
         capability: "cap".to_string(),
         tool: None,
@@ -56,6 +56,7 @@ async fn state_with_grants() -> (Arc<AppState>, crate::gateway::router::tests::F
         &live,
         &epoch,
         LocalIdentityGrantStore::from_grants(vec![expiring, revoked, grant("g-open")]),
+        None,
     );
     (state, dir)
 }

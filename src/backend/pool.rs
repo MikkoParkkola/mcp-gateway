@@ -28,7 +28,8 @@ mod eviction;
 /// caller identity is present, the backend additionally owns one
 /// [`PoolKey::PerUser`] slot per stable identity binding, so two distinct users
 /// never share a backend transport or its upstream MCP session (IDP.7).
-#[derive(Clone, PartialEq, Eq, Hash)]
+#[derive(Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "slot", rename_all = "snake_case")]
 pub(crate) enum PoolKey {
     /// The canonical single-tenant slot. Every backend without identity
     /// propagation, and every propagating request that lacks a resolved
@@ -140,6 +141,14 @@ pub(crate) struct PooledEntry {
     /// as of its last `tools/list`: the UI's declared-or-inferred label.
     /// Grants nothing, so revocation never narrows it; the next fill rewrites it.
     pub(crate) hint_declared: RwLock<std::collections::HashSet<String>>,
+    /// Tools every listed occurrence of which declared `readOnlyHint: false`,
+    /// as of this slot's last `tools/list`: the declared effect's may-write
+    /// evidence. Narrowed with `read_only_declared` on revocation.
+    pub(crate) write_declared: RwLock<std::collections::HashSet<String>>,
+    /// The names this slot's last `tools/list` listed, for the declared
+    /// effect: a name loses its place when a revocation clears its
+    /// declaration, so the record then carries no effect.
+    pub(crate) effect_listed: RwLock<std::collections::HashSet<String>>,
     /// Set when the last drain (MIK 7570 PAGING.1) stopped before the
     /// catalogue was exhausted (page cap, repeated cursor, or the fill
     /// budget); cleared by the next complete fill. Tools and resources only.
@@ -166,7 +175,7 @@ pub(crate) struct PooledEntry {
     pub(crate) request_failed_since_close: parking_lot::Mutex<bool>,
     /// The last dispatch or fill waited on a sign-in and nothing has succeeded
     /// since (`Error::is_authorization_wait`); read as `needs_sign_in`.
-    pub(crate) auth_wait: AtomicBool,
+    pub(crate) auth_wait: super::auth_wait::AuthWait,
     /// This slot has had a transport published at least once.
     pub(crate) ever_started: AtomicBool,
     /// The last start failed (not on a sign-in) and none has succeeded since.
@@ -247,6 +256,11 @@ impl Drop for ActivityGuard {
 }
 
 impl PooledEntry {
+    /// Record that this slot waits on a sign-in, bumping the wait's generation.
+    pub(crate) fn set_auth_wait(&self) {
+        self.auth_wait.set();
+    }
+
     pub(crate) fn new(name: &str, failsafe_config: &crate::config::FailsafeConfig) -> Self {
         Self {
             transport: RwLock::new(None),
@@ -262,12 +276,14 @@ impl PooledEntry {
             resend_permitted: RwLock::default(),
             read_only_declared: RwLock::default(),
             hint_declared: RwLock::default(),
+            write_declared: RwLock::default(),
+            effect_listed: RwLock::default(),
             tools_truncated: AtomicBool::new(false),
             resources_truncated: AtomicBool::new(false),
             tools_fill_failed_at: parking_lot::Mutex::new(None),
             tools_refresh_failed_at: parking_lot::Mutex::new(None),
             request_failed_since_close: parking_lot::Mutex::new(false),
-            auth_wait: AtomicBool::new(false),
+            auth_wait: super::auth_wait::AuthWait::default(),
             ever_started: AtomicBool::new(false),
             start_failed: AtomicBool::new(false),
 
@@ -728,7 +744,13 @@ impl Backend {
         // is already out of the pool, so abandoning the wait cannot strand a
         // caller — only, at worst, the child process, which is exactly what the
         // failure branch below already reports.
-        let close = tokio::time::timeout(self.budgets.close_stage, transport.close()).await;
+        // The close plans its exit waits to fit the same budget.
+        let budget = self.budgets.close_stage;
+        let close = crate::transport::within_stop_deadline(
+            tokio::time::Instant::now() + budget,
+            transport.close(),
+        );
+        let close = tokio::time::timeout(budget, close).await;
         match close {
             Ok(Ok(())) => {}
             Ok(Err(error)) => {

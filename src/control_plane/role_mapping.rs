@@ -9,8 +9,13 @@
 //! privileged role via a different provider (cross-IdP collision).
 //!
 //! Fallbacks (resolved by the caller, not here):
-//! - verified identity present but no rule matches -> `Auditor` (least privilege);
-//! - no verified identity / no mapping configured  -> legacy admin-key behaviour.
+//! - verified identity present but no rule matches -> `Viewer` (least privilege:
+//!   inventory and evidence, but only its own grants and audit events);
+//! - no verified identity / no mapping configured  -> an admin key is `Admin`,
+//!   any other caller `Viewer`.
+//!
+//! `Auditor` reads every principal's grants and events, so it is only ever an
+//! explicit rule.
 //!
 //! Admin is grantable only by an explicit `role: admin` rule; there is no
 //! implicit path to Admin. Invalid config fails closed at load/reload.
@@ -100,13 +105,18 @@ impl ControlPlaneRoleRule {
     /// True when `identity` satisfies this rule: the issuer must match exactly
     /// AND every present discriminator must match.
     fn matches(&self, identity: &VerifiedIdentity) -> bool {
-        if identity.issuer != self.issuer {
+        if identity.issuer() != self.issuer {
             return false;
         }
         if let Some(group) = &self.group {
             // Symmetric with email/domain: an empty rule group, or an empty
             // identity group entry, must never match.
-            if group.is_empty() || !identity.groups.iter().any(|g| !g.is_empty() && g == group) {
+            if group.is_empty()
+                || !identity
+                    .groups()
+                    .iter()
+                    .any(|g| !g.is_empty() && g == group)
+            {
                 return false;
             }
         }
@@ -115,8 +125,8 @@ impl ControlPlaneRoleRule {
             // match: a token with no `email` claim resolves to "" and must not
             // satisfy an email discriminator.
             if email.is_empty()
-                || identity.email.is_empty()
-                || !identity.email.eq_ignore_ascii_case(email)
+                || identity.email().is_empty()
+                || !identity.email().eq_ignore_ascii_case(email)
             {
                 return false;
             }
@@ -125,7 +135,7 @@ impl ControlPlaneRoleRule {
             // `email_domain` is `None` for a missing email or one without
             // exactly one `@`, so neither can satisfy a domain rule.
             if domain.is_empty()
-                || !email_domain(&identity.email).is_some_and(|d| d.eq_ignore_ascii_case(domain))
+                || !email_domain(identity.email()).is_some_and(|d| d.eq_ignore_ascii_case(domain))
             {
                 return false;
             }
@@ -301,7 +311,7 @@ mod tests {
         );
     }
 
-    // MIK-6688.ROLE.2 — no matching rule -> None (caller defaults to Auditor).
+    // MIK-6688.ROLE.2 — no matching rule -> None (caller defaults to Viewer).
     // First-match-wins order is honoured.
     #[test]
     fn no_match_returns_none_and_first_match_wins() {

@@ -132,8 +132,8 @@ impl crate::identity_propagation::IdentityPropagation for CountingMint {
             expiry_synthetic: false,
             headers: vec![("Authorization".to_string(), "Bearer minted".to_string())],
             expires_at: i64::MAX,
-            cache_binding: format!("{}@{}", identity.subject, backend.audience),
-            subject_key: identity.subject.clone(),
+            cache_binding: format!("{}@{}", identity.subject(), backend.audience),
+            subject_key: identity.subject().to_owned(),
             audience: backend.audience.clone(),
             scopes: Vec::new(),
         })
@@ -248,7 +248,7 @@ async fn ask(fx: &Fixture, retry: &RetryFields, declared: Declared) -> TaskConfi
 fn open_scope() -> crate::gateway::meta_mcp::InvokeScope<'static> {
     crate::gateway::meta_mcp::InvokeScope {
         authorizer: &crate::gateway::authz::AllowAll,
-        is_admin: true,
+        admin: crate::gateway::authz::AdminStanding::Gateway,
         api_key_name: None,
         grant_key: None,
         agent_id: None,

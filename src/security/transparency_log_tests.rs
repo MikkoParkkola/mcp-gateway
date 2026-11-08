@@ -67,7 +67,7 @@ fn basic_write_and_verify_passes() {
     // THEN: verify passes with correct count
     let result = verify_log(tmp.path()).unwrap();
     assert!(result.ok, "verify must pass: {:?}", result.error_message);
-    assert_eq!(result.entries_checked, 4);
+    assert_eq!(result.entries_checked, 5);
 }
 
 // ── Test 2: modifying response_hash breaks verification ───────────────────
@@ -105,9 +105,9 @@ fn deleted_middle_entry_breaks_verification() {
     // WHEN: the second (middle) line is deleted
     let content = std::fs::read_to_string(tmp.path()).unwrap();
     let lines: Vec<&str> = content.lines().collect();
-    assert_eq!(lines.len(), 4, "open record plus 3 entries");
+    assert_eq!(lines.len(), 5, "open and identified records plus 3 entries");
     // Skip "y" and keep the tail, so the gap is mid-chain, not tail loss.
-    let kept = format!("{}\n{}\n{}\n", lines[0], lines[1], lines[3]);
+    let kept = format!("{}\n{}\n{}\n{}\n", lines[0], lines[1], lines[2], lines[4]);
     std::fs::write(tmp.path(), &kept).unwrap();
 
     // THEN: verify detects the gap
@@ -160,16 +160,15 @@ fn recovery_continues_chain_correctly() {
 
     // THEN: the chain is intact and counters are sequential
     let entries = read_entries(tmp.path());
-    assert_eq!(entries.len(), 4);
-    // Counter 1 is the genesis open record (#2275).
-    assert_eq!(entries[0]["counter"], 1u64);
-    assert_eq!(entries[1]["counter"], 2u64);
-    assert_eq!(entries[2]["counter"], 3u64);
-    assert_eq!(entries[3]["counter"], 4u64);
+    assert_eq!(entries.len(), 5);
+    // Counter 1 is the genesis open record (#2275), counter 2 the log's id.
+    for (i, entry) in entries.iter().enumerate() {
+        assert_eq!(entry["counter"], i as u64 + 1);
+    }
 
     let result = verify_log(tmp.path()).unwrap();
     assert!(result.ok, "recovered chain must pass verification");
-    assert_eq!(result.entries_checked, 4);
+    assert_eq!(result.entries_checked, 5);
 }
 
 // ── Test 6: HMAC signature is present when secret is configured ───────────
@@ -183,7 +182,7 @@ fn hmac_signature_present_when_secret_configured() {
 
     // WHEN: reading the written entry
     let entries = read_entries(tmp.path());
-    assert_eq!(entries.len(), 2, "open record plus the caller record");
+    assert_eq!(entries.len(), 3, "open, identified and the caller record");
 
     // THEN: sig and key_id are present and correctly formatted on both
     for entry in &entries {
@@ -208,7 +207,7 @@ fn no_sig_when_secret_empty() {
 
     // WHEN: reading the entry
     let entries = read_entries(tmp.path());
-    assert_eq!(entries.len(), 2, "open record plus the caller record");
+    assert_eq!(entries.len(), 3, "open, identified and the caller record");
 
     // THEN: sig and key_id are absent on both
     for entry in &entries {
@@ -266,7 +265,7 @@ fn verify_and_show_after_mixed_sessions() {
     // Chain must verify
     let verify = verify_log(tmp.path()).unwrap();
     assert!(verify.ok);
-    assert_eq!(verify.entries_checked, 6);
+    assert_eq!(verify.entries_checked, 7);
 
     // Show must filter correctly
     let even = show_session_entries(tmp.path(), "even").unwrap();
@@ -345,11 +344,11 @@ fn intact_signed_log_passes_signed_verify() {
         "intact signed log must verify: {:?}",
         result.error_message
     );
-    assert_eq!(result.entries_checked, 3);
+    assert_eq!(result.entries_checked, 4);
 }
 
-/// Rewrite the log from `entries`; tamper tests edit `entries[1]`, the caller
-/// record after the open record, so the tail and `.hwm` still agree.
+/// Rewrite the log from `entries`; tamper tests edit `entries[1]`, the
+/// identified record after the open record, so the tail and `.hwm` still agree.
 fn write_entries(path: &Path, entries: &[serde_json::Value]) {
     let body: String = entries
         .iter()
