@@ -116,11 +116,12 @@ async fn k25_a_read_judged_under_off_and_written_under_block_is_kept() {
     rig.lapse().await;
     publish(&rig, CollusionAction::Off);
     switch_at_write(&rig, CollusionAction::Block);
+    let before = crate::gateway::meta_mcp::invoke::relay::commit_capture_hook::reached();
     let reply = read(&rig, &task).await;
     assert_eq!(status_of(&reply), "completed", "{reply}");
     assert_eq!(
         crate::gateway::meta_mcp::invoke::relay::commit_capture_hook::reached(),
-        1,
+        before + 1,
         "premise: the switch ran at the write"
     );
     assert!(entry_held(&rig, &task), "the block write did not keep it");
@@ -279,11 +280,12 @@ async fn k21_limit_an_untrackable_read_switched_to_block_mid_read_is_delivered()
         config.security.firewall.collusion.action = CollusionAction::Block;
         switched.live_config.set(config);
     });
+    let before = crate::gateway::meta_mcp::invoke::relay::commit_capture_hook::reached();
     let reply = get_task(&state, "key-a", &task).await;
     assert_eq!(status_of(&reply), "completed", "{reply}");
     assert_eq!(
         crate::gateway::meta_mcp::invoke::relay::commit_capture_hook::reached(),
-        1,
+        before + 1,
         "premise: the switch ran at the write"
     );
 }
