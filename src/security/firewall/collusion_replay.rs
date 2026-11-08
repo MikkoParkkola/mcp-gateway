@@ -102,6 +102,9 @@ pub(in super::super) struct ReplayEntry {
     /// was noted at capture, which never matches and always filters.
     pub(in super::super) answer_digest: String,
     pub(in super::super) expires: Instant,
+    /// The insertion sequence it was stored under: a [`ReplayHandle`]
+    /// belongs to it only when their sequences match.
+    seq: u64,
 }
 
 /// An entry as stored, with its insertion sequence (its eviction age) and
@@ -110,6 +113,24 @@ struct Held {
     entry: Arc<ReplayEntry>,
     seq: u64,
     bytes: usize,
+    /// How long the entry may stay: kept until it expires, or pending on
+    /// the deliveries still holding it (ADR-029 pending-snapshot rule).
+    life: Life,
+}
+
+/// A stored entry's lifecycle. A delivery-time capture (the task path) is
+/// [`Life::Kept`] at once; a synchronous answer's judge-time capture is
+/// [`Life::Pending`] until a write that is not under `off` keeps it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Life {
+    Kept,
+    Pending {
+        /// Deliveries holding a [`ReplayHandle`] that is neither settled
+        /// nor released.
+        outstanding: u32,
+        /// A write under an effective `off` delivered it.
+        delivered_off: bool,
+    },
 }
 
 #[derive(Default)]
@@ -128,6 +149,47 @@ impl Inner {
         self.order.remove(&held.seq);
         self.bytes = self.bytes.saturating_sub(held.bytes);
         Some(held)
+    }
+
+    /// Take out every entry expired at `now`, whatever its age order.
+    fn sweep(&mut self, now: Instant) {
+        let expired: Vec<StoredKey> = self
+            .by_key
+            .iter()
+            .filter(|(_, held)| now >= held.entry.expires)
+            .map(|(key, _)| key.clone())
+            .collect();
+        for key in &expired {
+            self.take(key);
+        }
+    }
+
+    /// The pending entry under `key` taken at `seq`, if it is still that
+    /// one; a replaced, evicted, expired or kept entry gives `None`.
+    fn pending_at(&mut self, key: &StoredKey, seq: u64) -> Option<&mut Held> {
+        self.by_key
+            .get_mut(key)
+            .filter(|held| held.seq == seq && matches!(held.life, Life::Pending { .. }))
+    }
+
+    /// One outstanding delivery of `key`'s pending entry `seq` ended, under
+    /// `off` when it was written under an effective `off`. Once none is
+    /// outstanding, an entry delivered under `off` goes.
+    fn end_delivery(&mut self, key: &StoredKey, seq: u64, off: bool) {
+        let Some(held) = self.pending_at(key, seq) else {
+            return;
+        };
+        if let Life::Pending {
+            outstanding,
+            delivered_off,
+        } = &mut held.life
+        {
+            *outstanding = outstanding.saturating_sub(1);
+            *delivered_off |= off;
+            if *outstanding == 0 && *delivered_off {
+                self.take(key);
+            }
+        }
     }
 
     /// Take the oldest entry out, if any.
@@ -190,6 +252,25 @@ impl ReplayReceipts {
         now: Instant,
         retention: Duration,
     ) {
+        self.insert_with(
+            key,
+            (receipts, calls, answer_digest),
+            (now, retention),
+            Life::Kept,
+        );
+    }
+
+    /// [`Self::insert`] with the entry's starting `life`, returning its
+    /// sequence; `None` when it was not stored (`too_large`). Expired
+    /// entries are swept first (activity-driven, as the detector sweeps;
+    /// a read sweeps nothing but its own key, as `lookup` does).
+    fn insert_with(
+        &self,
+        key: StoredKey,
+        (receipts, calls, answer_digest): (Vec<ReplayReceipt>, ReplayCalls, String),
+        (now, retention): (Instant, Duration),
+        life: Life,
+    ) -> Option<u64> {
         let mut bytes = receipts
             .iter()
             .map(ReplayReceipt::bytes)
@@ -205,8 +286,10 @@ impl ReplayReceipts {
         // is dropped: no counter increment runs with the lock held.
         let mut evicted_now = 0_u64;
         let too_large = bytes > self.entry_cap || bytes > self.total_cap;
+        let mut stored = None;
         {
             let mut inner = self.inner.lock();
+            inner.sweep(now);
             // Overwrite or refusal, the previous entry under the key goes first.
             inner.take(&key);
             if !too_large {
@@ -217,6 +300,7 @@ impl ReplayReceipts {
                     evicted_now = evicted_now.saturating_add(1);
                 }
                 let seq = inner.next;
+                stored = Some(seq);
                 inner.next = inner.next.saturating_add(1);
                 inner.bytes = inner.bytes.saturating_add(bytes);
                 inner.order.insert(seq, key.clone());
@@ -224,6 +308,7 @@ impl ReplayReceipts {
                     key,
                     Held {
                         entry: Arc::new(ReplayEntry {
+                            seq,
                             receipts,
                             calls,
                             answer_digest,
@@ -231,6 +316,7 @@ impl ReplayReceipts {
                         }),
                         seq,
                         bytes,
+                        life,
                     },
                 );
             }
@@ -242,6 +328,7 @@ impl ReplayReceipts {
             self.evicted.fetch_add(evicted_now, Ordering::Relaxed);
             telemetry_metrics::counter!(REPLAY_EVICTED_METRIC).increment(evicted_now);
         }
+        stored
     }
 
     /// Drop `key`'s entry: a non-plan commit under the key, or its stored
@@ -282,5 +369,257 @@ impl ReplayReceipts {
     #[cfg(test)]
     pub(in super::super) fn evicted_for_test(&self) -> u64 {
         self.evicted.load(Ordering::Relaxed)
+    }
+}
+
+/// How a capture enters the store: [`CaptureMode::Pending`] for a
+/// synchronous answer captured at judge, before anything is delivered;
+/// [`CaptureMode::AtDelivery`] for a capture made where the answer is
+/// already delivered (the task path), stored kept as it always was.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CaptureMode {
+    Pending,
+    AtDelivery,
+}
+
+/// One delivery's hold on a pending entry: its key and the insertion
+/// sequence it was taken against, never the payload, so every byte stays
+/// under the store's caps. Settled at the delivery's write; dropped
+/// unsettled, it releases. A handle whose entry was replaced, evicted or
+/// expired acts on nothing.
+pub(crate) struct ReplayHandle {
+    /// `None` once settled or discarded, so `Drop` releases nothing.
+    store: Option<std::sync::Weak<ReplayReceipts>>,
+    key: StoredKey,
+    seq: u64,
+}
+
+impl std::fmt::Debug for ReplayHandle {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ReplayHandle")
+            .field("seq", &self.seq)
+            .finish_non_exhaustive()
+    }
+}
+
+impl ReplayHandle {
+    /// Its answer was not retained (E1): its pending entry goes. A kept
+    /// entry, or a newer capture under the key, is untouched.
+    pub(crate) fn discard(self) {
+        if let Some(store) = self.store.as_ref().and_then(std::sync::Weak::upgrade) {
+            store.discard(self);
+        }
+    }
+
+    /// The key and sequence, consuming the handle without releasing it.
+    fn into_parts(mut self) -> (StoredKey, u64) {
+        self.store = None;
+        (self.key.clone(), self.seq)
+    }
+}
+
+impl Drop for ReplayHandle {
+    fn drop(&mut self) {
+        if let Some(store) = self.store.take().and_then(|weak| weak.upgrade()) {
+            store.release_seq(&self.key, self.seq);
+        }
+    }
+}
+
+impl ReplayReceipts {
+    /// [`Self::insert`] for a judge-time capture: stored pending with one
+    /// outstanding delivery, whose handle is returned. `None` when nothing
+    /// was stored (`too_large`).
+    pub(in super::super) fn insert_pending(
+        self: &Arc<Self>,
+        key: StoredKey,
+        receipts: Vec<ReplayReceipt>,
+        calls: ReplayCalls,
+        answer_digest: String,
+        now: Instant,
+        retention: Duration,
+    ) -> Option<ReplayHandle> {
+        let seq = self.insert_with(
+            key.clone(),
+            (receipts, calls, answer_digest),
+            (now, retention),
+            Life::Pending {
+                outstanding: 1,
+                delivered_off: false,
+            },
+        )?;
+        Some(self.handle(key, seq))
+    }
+
+    /// [`Self::lookup`] for a replay that will deliver the entry: a pending
+    /// entry gains one outstanding delivery, whose handle is returned; a
+    /// kept entry needs none. The entry, its expiry check and the handle
+    /// are taken under one lock, so the handle always names the entry
+    /// returned, never one that replaced it in between.
+    pub(in super::super) fn acquire(
+        self: &Arc<Self>,
+        key: &StoredKey,
+        now: Instant,
+    ) -> Option<Acquired> {
+        // The miss reason is decided under the lock and counted after it
+        // is dropped, as `lookup` does.
+        let (found, skipped) = {
+            let mut inner = self.inner.lock();
+            match inner.by_key.get(key).map(|held| now >= held.entry.expires) {
+                None => (None, Some("absent")),
+                Some(true) => {
+                    inner.take(key);
+                    (None, Some("expired"))
+                }
+                Some(false) => {
+                    let held = inner.by_key.get_mut(key)?;
+                    let seq = match &mut held.life {
+                        Life::Kept => None,
+                        Life::Pending { outstanding, .. } => {
+                            *outstanding = outstanding.saturating_add(1);
+                            Some(held.seq)
+                        }
+                    };
+                    (Some((Arc::clone(&held.entry), seq)), None)
+                }
+            }
+        };
+        if let Some(reason) = skipped {
+            count_replay_skipped(reason);
+        }
+        let (entry, seq) = found?;
+        let handle = seq.map(|seq| self.handle(key.clone(), seq));
+        Acquired::pair(entry, handle)
+    }
+
+    /// `handle`'s delivery was written; `off` when the write-time action
+    /// is an effective `off`. A write not under `off` keeps the entry;
+    /// one under `off` ends that delivery, and once none is outstanding an
+    /// entry still pending goes (nothing delivered while off is held).
+    pub(in super::super) fn settle(&self, handle: ReplayHandle, off: bool) {
+        let (key, seq) = handle.into_parts();
+        let mut inner = self.inner.lock();
+        if off {
+            inner.end_delivery(&key, seq, true);
+        } else if let Some(held) = inner.pending_at(&key, seq) {
+            held.life = Life::Kept;
+        }
+    }
+
+    /// `handle`'s answer was not retained (E1): its pending entry goes.
+    /// A kept entry, or a newer capture under the key, is untouched.
+    pub(in super::super) fn discard(&self, handle: ReplayHandle) {
+        let (key, seq) = handle.into_parts();
+        let mut inner = self.inner.lock();
+        if inner.pending_at(&key, seq).is_some() {
+            inner.take(&key);
+        }
+    }
+
+    /// One outstanding delivery of the entry `seq` under `key` ended
+    /// unwritten.
+    fn release_seq(&self, key: &StoredKey, seq: u64) {
+        self.inner.lock().end_delivery(key, seq, false);
+    }
+
+    fn handle(self: &Arc<Self>, key: StoredKey, seq: u64) -> ReplayHandle {
+        ReplayHandle {
+            store: Some(Arc::downgrade(self)),
+            key,
+            seq,
+        }
+    }
+
+    /// The lifecycle of `key`'s entry (tests only).
+    #[cfg(test)]
+    pub(in super::super) fn life_for_test(&self, key: &StoredKey) -> TestLife {
+        match self.inner.lock().by_key.get(key).map(|held| held.life) {
+            None => TestLife::Absent,
+            Some(Life::Kept) => TestLife::Kept,
+            Some(Life::Pending {
+                outstanding,
+                delivered_off,
+            }) => TestLife::Pending {
+                outstanding,
+                delivered_off,
+            },
+        }
+    }
+
+    /// A weak reference to `key`'s payload, to show what keeps it alive
+    /// (tests only).
+    #[cfg(test)]
+    pub(in super::super) fn entry_weak_for_test(
+        &self,
+        key: &StoredKey,
+    ) -> Option<std::sync::Weak<ReplayEntry>> {
+        self.inner
+            .lock()
+            .by_key
+            .get(key)
+            .map(|held| Arc::downgrade(&held.entry))
+    }
+
+    /// Entries the store holds now (tests only).
+    #[cfg(test)]
+    pub(in super::super) fn len_for_test(&self) -> usize {
+        self.inner.lock().by_key.len()
+    }
+
+    /// Bytes the store holds now (tests only).
+    #[cfg(test)]
+    pub(in super::super) fn bytes_for_test(&self) -> usize {
+        self.inner.lock().bytes
+    }
+}
+
+/// An entry's lifecycle as a row reads it.
+#[cfg(test)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(in super::super) enum TestLife {
+    Absent,
+    Kept,
+    Pending {
+        outstanding: u32,
+        delivered_off: bool,
+    },
+}
+
+/// A replay's snapshot and its handle, as one value: the only way a handle
+/// on an existing entry is handed out ([`ReplayReceipts::acquire`]), and
+/// built only through [`Acquired::pair`], which refuses a handle that does
+/// not belong to the snapshot. A delivery therefore settles exactly the
+/// entry whose receipts it staged.
+pub(crate) struct Acquired {
+    entry: Arc<ReplayEntry>,
+    handle: Option<ReplayHandle>,
+}
+
+impl std::fmt::Debug for Acquired {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Acquired")
+            .field("seq", &self.entry.seq)
+            .field("handle", &self.handle)
+            .finish_non_exhaustive()
+    }
+}
+
+impl Acquired {
+    /// `entry` with `handle`, or `None` when the handle was taken against
+    /// another entry (another insertion sequence). A kept entry has no
+    /// handle.
+    pub(in super::super) fn pair(
+        entry: Arc<ReplayEntry>,
+        handle: Option<ReplayHandle>,
+    ) -> Option<Self> {
+        if handle.as_ref().is_some_and(|h| h.seq != entry.seq) {
+            return None;
+        }
+        Some(Self { entry, handle })
+    }
+
+    /// The snapshot and its handle, taken apart for the delivery.
+    pub(in super::super) fn into_parts(self) -> (Arc<ReplayEntry>, Option<ReplayHandle>) {
+        (self.entry, self.handle)
     }
 }
