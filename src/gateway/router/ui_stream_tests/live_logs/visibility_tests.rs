@@ -30,7 +30,7 @@ async fn keyed(
         crate::config::KeyServerConfig::default(),
     ));
     key_server.store.insert(tok).await;
-    let dir = Arc::new(tempfile::tempdir().unwrap());
+    let dir = crate::test_dir_keep::kept_tempdir();
     let inv = logger(&dir, "invocation.jsonl");
     inv.keep_test_dir(Arc::clone(&dir));
     let (state, fixture) =

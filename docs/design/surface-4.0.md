@@ -166,7 +166,7 @@ Generated from the tables at the end; each row there carries the reason and migr
 
 | Area | KEEP | AUTO | INTERNAL, hidden but honoured | INTERNAL | REMOVE |
 |---|---|---|---|---|---|
-| `env` | 19 | `MCP_GATEWAY_CAPABILITIES` | `MCP_GATEWAY_PROTOCOL_REVISION_WINDOW` | `MCP_GATEWAY_KIND_CLUSTER`; `MCP_GATEWAY_KIND_KEEP`; `MCP_GATEWAY_KIND_NAMESPACE`; `MCP_GATEWAY_ROLLOUT_TIMEOUT`; `MCP_GATEWAY_RUNTIME_DOCKER_IMAGE`; `MCP_GATEWAY_RUNTIME_DOCKER_RESTART_IMAGE`; `MCP_GATEWAY_RUNTIME_DOCKER_SMOKE`; `MCP_GATEWAY_TEST_CLOCK`; `MCP_GATEWAY_TEST_ERA_PROBE_CAP_MS`; `MCP_GATEWAY_TEST_HOLD_CAPABILITY_SCAN`; `MCP_GATEWAY_TEST_HOME_DIR`; `MCP_GATEWAY_TEST_PAUSE_AT_PUBLISHED`; `MCP_GATEWAY_TEST_TRUST_CA` |  |
+| `env` | 19 | `MCP_GATEWAY_CAPABILITIES` | `MCP_GATEWAY_PROTOCOL_REVISION_WINDOW` | `MCP_GATEWAY_KIND_CLUSTER`; `MCP_GATEWAY_KIND_KEEP`; `MCP_GATEWAY_KIND_NAMESPACE`; `MCP_GATEWAY_MUTANT`; `MCP_GATEWAY_MUTANT_CHILD`; `MCP_GATEWAY_ROLLOUT_TIMEOUT`; `MCP_GATEWAY_RUNTIME_DOCKER_IMAGE`; `MCP_GATEWAY_RUNTIME_DOCKER_RESTART_IMAGE`; `MCP_GATEWAY_RUNTIME_DOCKER_SMOKE`; `MCP_GATEWAY_TEST_CLOCK`; `MCP_GATEWAY_TEST_ERA_PROBE_CAP_MS`; `MCP_GATEWAY_TEST_HOLD_CAPABILITY_SCAN`; `MCP_GATEWAY_TEST_HOME_DIR`; `MCP_GATEWAY_TEST_PAUSE_AT_PUBLISHED`; `MCP_GATEWAY_TEST_TRUST_CA` |  |
 
 ### routes
 
@@ -1401,6 +1401,8 @@ Every lib item becomes INTERNAL. crates.io lists no reverse dependencies for `mc
 | `MCP_GATEWAY_LOG_FORMAT` | KEEP | container and service-manager form of the global flags | - | src/cli/mod.rs:148 |
 | `MCP_GATEWAY_LOG_LEVEL` | KEEP | container and service-manager form of the global flags | - | src/cli/mod.rs:142 |
 | `MCP_GATEWAY_METRICS_TOKEN` | KEEP | example name the user picks for `env:` in `server.metrics_token`; not read by the binary | - | docs/DEPLOYMENT.md:678 |
+| `MCP_GATEWAY_MUTANT` | INTERNAL | names the one mutant a mutation-proof test process switches on; read only in a build with `--cfg mutants`, never in a normal or release build | test-only | src/mutant.rs:23 |
+| `MCP_GATEWAY_MUTANT_CHILD` | INTERNAL | marks the child process of the `mutant!` switch's own tests; compiled into test builds only (`cfg(test)`) | test-only | src/mutant.rs:36 |
 | `MCP_GATEWAY_PORT` | KEEP | container and service-manager form of the global flags | - | src/cli/mod.rs:131 |
 | `MCP_GATEWAY_ROLLOUT_TIMEOUT` | INTERNAL | variable of a repository test script, not read by the binary | test-only; docs say so | deploy/kubernetes/enterprise-alpha/scripts/kind-rollback-smoke.sh:25 |
 | `MCP_GATEWAY_RUNTIME_DOCKER_IMAGE` | INTERNAL | variable of a repository test script, not read by the binary | test-only; docs say so | docs/runtime/provider_planner.md:193 |

@@ -252,72 +252,19 @@ pub(crate) fn recover(config: &Path) -> Result<Recovered, NotRecovered> {
     let target = resolved(config);
     let path = journal_path(&target);
     let original = original_path(&target);
-    let journal = match read(&path) {
-        Ok(Some(journal)) => journal,
-        Ok(None) => {
-            // A staged copy with no journal is a crash before the journal
-            // existed: the file was never replaced.
-            let _ = remove_if_present(&original);
-            return Ok(Recovered::Nothing);
-        }
-        Err(UnreadConfig::Refused(why)) => return Err(NotRecovered::Refused(guard_refused(&why))),
-        // Its state is unknown, and it may be `all_renamed`: the step is
-        // conditional on what the operator finds in it.
-        Err(UnreadConfig::Failed(e) | UnreadConfig::NotTheConfig(e)) => {
-            return Err(NotRecovered::Failed(format!(
-                "{journal} cannot be read ({e}); nothing was changed. Its state is unknown, so leave {target} as it is until you have inspected the journal. If it names {target} and its state is staged, restore the staged original {original} over {target} only if its SHA-256 matches the journal's original_revision, then delete the journal; if its state is all_renamed, only delete the journal; if it names another file, restore nothing over {target}",
-                journal = path.display(),
-                target = target.display(),
-                original = original.display(),
-            )));
-        }
+    let Some(journal) = read_checked(&target, &path, &original)? else {
+        // A staged copy with no journal is a crash before the journal
+        // existed: the file was never replaced.
+        let _ = remove_if_present(&original);
+        return Ok(Recovered::Nothing);
     };
-    // Another file's journal says nothing about this one: no restore over it,
-    // and the journal stays until that file is resolved.
-    if journal.target != target {
-        return Err(NotRecovered::Failed(format!(
-            "{journal} names {other}, not {target}; nothing was changed. Resolve that journal for {other} first: restore nothing over {target}, and do not delete the journal",
-            journal = path.display(),
-            other = journal.target.display(),
-            target = target.display(),
-        )));
-    }
     let recovered = match journal.state {
         State::Staged => {
             #[cfg(test)]
             if let Some(fault::Fault::Pause(pause)) = fault::get(&target) {
                 pause.enter_and_wait();
             }
-            // The bytes restored as gateway.yaml: read through the config
-            // guard, so a staged original another account could plant or
-            // change, with a digest to match, is never restored. With no
-            // original to restore, the file is checked by hand.
-            let unreadable = |e: &dyn std::fmt::Display| {
-                NotRecovered::Failed(format!(
-                    "{original} cannot be read ({e}); nothing was changed. Do not restore it: check {target} by hand against the change that was being made, then delete the journal {journal}",
-                    original = original.display(),
-                    target = target.display(),
-                    journal = path.display(),
-                ))
-            };
-            let bytes = match crate::config::read_recovery_text(&original) {
-                Ok(Some(text)) => text.into_bytes(),
-                Ok(None) => return Err(unreadable(&"it is gone")),
-                Err(UnreadConfig::Refused(why)) => {
-                    return Err(NotRecovered::Refused(guard_refused(&why)));
-                }
-                Err(UnreadConfig::Failed(e) | UnreadConfig::NotTheConfig(e)) => {
-                    return Err(unreadable(&e));
-                }
-            };
-            if crate::hashing::sha256_hex(&bytes) != journal.original_revision {
-                return Err(NotRecovered::Failed(format!(
-                    "{} does not match the digest its journal {} records, so it was not restored; compare it with {} by hand before restoring anything, then delete the journal",
-                    original.display(),
-                    path.display(),
-                    target.display()
-                )));
-            }
+            let bytes = verified_original(&target, &path, &original, &journal)?.into_bytes();
             write_atomic(&target, &bytes, FileMode::Private, Symlink::Replace)
                 .and_then(|()| sync_dir_of(&target))
                 .map_err(|e| {
@@ -344,6 +291,116 @@ pub(crate) fn recover(config: &Path) -> Result<Recovered, NotRecovered> {
         tracing::warn!(error = %e, journal = %path.display(), "cleaning up a recovered replace journal failed; the next config write retries");
     }
     Ok(recovered)
+}
+
+/// The config text [`recover`] would leave at `config`, worked out without
+/// changing anything: `staged`, the staged original (read and checked
+/// against its digest exactly as [`recover`] checks the bytes it restores);
+/// `all_renamed`, the file on disk. `None`: no journal. Errors are
+/// [`recover`]'s, each saying what to do by hand.
+pub(crate) fn surviving_text(config: &Path) -> Result<Option<String>, NotRecovered> {
+    let target = resolved(config);
+    let path = journal_path(&target);
+    let original = original_path(&target);
+    let Some(journal) = read_checked(&target, &path, &original)? else {
+        return Ok(None);
+    };
+    match journal.state {
+        State::Staged => verified_original(&target, &path, &original, &journal).map(Some),
+        State::AllRenamed => match crate::config::read_config_text(&target) {
+            Ok(Some(text)) => Ok(Some(text)),
+            Ok(None) => Err(NotRecovered::Failed(format!(
+                "{target} is gone but its journal {journal} is all_renamed; nothing was changed. Restore {target} from your own copy, then delete the journal",
+                target = target.display(),
+                journal = path.display(),
+            ))),
+            Err(UnreadConfig::Refused(why)) => Err(NotRecovered::Refused(guard_refused(&why))),
+            Err(UnreadConfig::Failed(e) | UnreadConfig::NotTheConfig(e)) => {
+                Err(NotRecovered::Failed(format!(
+                    "{target} cannot be read ({e}); nothing was changed. Its journal {journal} is all_renamed: keep {target} as it is, then delete the journal",
+                    target = target.display(),
+                    journal = path.display(),
+                )))
+            }
+        },
+    }
+}
+
+/// The journal at `path` for `target`, read through the config guard;
+/// `None` when there is none. A journal naming another file is refused.
+fn read_checked(
+    target: &Path,
+    path: &Path,
+    original: &Path,
+) -> Result<Option<Journal>, NotRecovered> {
+    let journal = match read(path) {
+        Ok(Some(journal)) => journal,
+        Ok(None) => return Ok(None),
+        Err(UnreadConfig::Refused(why)) => return Err(NotRecovered::Refused(guard_refused(&why))),
+        // Its state is unknown, and it may be `all_renamed`: the step is
+        // conditional on what the operator finds in it.
+        Err(UnreadConfig::Failed(e) | UnreadConfig::NotTheConfig(e)) => {
+            return Err(NotRecovered::Failed(format!(
+                "{journal} cannot be read ({e}); nothing was changed. Its state is unknown, so leave {target} as it is until you have inspected the journal. If it names {target} and its state is staged, restore the staged original {original} over {target} only if its SHA-256 matches the journal's original_revision, then delete the journal; if its state is all_renamed, only delete the journal; if it names another file, restore nothing over {target}",
+                journal = path.display(),
+                target = target.display(),
+                original = original.display(),
+            )));
+        }
+    };
+    // Another file's journal says nothing about this one: no restore over it,
+    // and the journal stays until that file is resolved.
+    if journal.target != target {
+        return Err(NotRecovered::Failed(format!(
+            "{journal} names {other}, not {target}; nothing was changed. Resolve that journal for {other} first: restore nothing over {target}, and do not delete the journal",
+            journal = path.display(),
+            other = journal.target.display(),
+            target = target.display(),
+        )));
+    }
+    Ok(Some(journal))
+}
+
+/// The staged original's text, read through the config guard and checked
+/// against the digest `journal` records: the one check both [`recover`]
+/// (before it restores the bytes) and [`surviving_text`] run.
+fn verified_original(
+    target: &Path,
+    path: &Path,
+    original: &Path,
+    journal: &Journal,
+) -> Result<String, NotRecovered> {
+    // The bytes restored as gateway.yaml: read through the config
+    // guard, so a staged original another account could plant or
+    // change, with a digest to match, is never restored. With no
+    // original to restore, the file is checked by hand.
+    let unreadable = |e: &dyn std::fmt::Display| {
+        NotRecovered::Failed(format!(
+            "{original} cannot be read ({e}); nothing was changed. Do not restore it: check {target} by hand against the change that was being made, then delete the journal {journal}",
+            original = original.display(),
+            target = target.display(),
+            journal = path.display(),
+        ))
+    };
+    let text = match crate::config::read_recovery_text(original) {
+        Ok(Some(text)) => text,
+        Ok(None) => return Err(unreadable(&"it is gone")),
+        Err(UnreadConfig::Refused(why)) => {
+            return Err(NotRecovered::Refused(guard_refused(&why)));
+        }
+        Err(UnreadConfig::Failed(e) | UnreadConfig::NotTheConfig(e)) => {
+            return Err(unreadable(&e));
+        }
+    };
+    if crate::hashing::sha256_hex(text.as_bytes()) != journal.original_revision {
+        return Err(NotRecovered::Failed(format!(
+            "{} does not match the digest its journal {} records, so it was not restored; compare it with {} by hand before restoring anything, then delete the journal",
+            original.display(),
+            path.display(),
+            target.display()
+        )));
+    }
+    Ok(text)
 }
 
 /// Targets whose original was restored by a recovery that then refused the

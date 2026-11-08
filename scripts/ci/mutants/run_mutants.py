@@ -43,7 +43,8 @@ PLATFORMS = ("linux", "windows")
 MUTANTS_DIR = ".mutants"
 # The harness may ride along in the batch commit (a source head older than it
 # lacks it) only when it is byte-identical to the reviewed copy.
-HARNESS = (".github/workflows/mutants.yml", "scripts/ci/mutants/run_mutants.py")
+HARNESS = (".github/workflows/mutants.yml", "scripts/ci/mutants/run_mutants.py",
+           ".github/actions/add-swap/action.yml")
 COMPILE_LIMIT = 30 * 60
 TEST_LIMIT = 20 * 60
 EVIDENCE_LINES = 15
@@ -189,7 +190,7 @@ def classify_baseline(run: Outcome) -> Verdict | None:
     return None
 
 
-def run_cmd(cmd: list[str], limit: int, log: Path) -> Outcome:
+def run_cmd(cmd: list[str], limit: int, log: Path, env: dict | None = None) -> Outcome:
     """Runs cmd in its own process group; on timeout kills the whole tree and waits
     for it, so no test process outlives its row (or locks files on Windows)."""
     kw: dict = {}
@@ -198,7 +199,7 @@ def run_cmd(cmd: list[str], limit: int, log: Path) -> Outcome:
     else:
         kw["start_new_session"] = True
     with tempfile.TemporaryFile(mode="w+", encoding="utf-8", errors="replace") as buf:
-        proc = subprocess.Popen(cmd, stdout=buf, stderr=subprocess.STDOUT, **kw)
+        proc = subprocess.Popen(cmd, stdout=buf, stderr=subprocess.STDOUT, env=env, **kw)
         timed_out = False
         try:
             proc.wait(timeout=limit)
@@ -424,6 +425,589 @@ def write_outputs(out: Path, platform: str, meta: dict, results: list[dict]) -> 
             f.write("\n".join(md) + "\n")
 
 
+# ---------------------------------------------------------------------------
+# Schemata mode: every mutant of a batch in ONE `--cfg mutants` build.
+#
+# A batch carries `.mutants/schemata.tsv` instead of a patch manifest. The
+# source wraps each mutated expression in `mutant!("ID", mutated, original)`
+# (src/mutant.rs); one all-targets build with `--cfg mutants` carries them
+# all, and each test process switches on at most one through
+# MCP_GATEWAY_MUTANT. Each expected row runs by exact name, alone.
+#
+# Spec:   #features <cargo features>          (optional, once)
+#         #mutant <ID> [multi=<n>]            (one per mutant)
+#         <executable>\t<exact test name>\t<file:line>   (its rows)
+#
+# The verdicts are stricter than patch mode's: a row only counts as killed if
+# it FAILED and panicked at the file:line its spec names, and anything
+# unclear is ERROR, never VOID. The table, checked in order:
+#   baseline failed, or the build failed    -> run refused (exit 1)
+#   output unparseable, a row missing or reported twice, a timeout, an abort
+#   or signal, a panic elsewhere             -> ERROR
+#   every row ran and one PASSED             -> SURVIVED
+#   every row FAILED at its spec location    -> KILLED
+# Exit 0 only when the baseline passed and every spec mutant has exactly one
+# verdict and it is KILLED; refusals before any run exit 2.
+# ---------------------------------------------------------------------------
+
+SCHEMATA_SPEC = "schemata.tsv"
+MUTANT_ENV = "MCP_GATEWAY_MUTANT"
+# Exists only in a `--cfg mutants` build: the proof the cfg took (V1).
+CFG_PROBE = "mutant::mutants_build::only_the_named_site_switches_on"
+# The gateway library's test executable, by target name: a workspace build also
+# produces other libraries' test executables (crates/gateway-core), and the
+# probe and the site listing live only in this one.
+LIB_TARGET = "mcp_gateway"
+MUTANT_HEAD_RE = re.compile(r"^#mutant\s+([A-Za-z0-9._-]+)(?:\s+multi=([1-9][0-9]*))?\s*$")
+LOCATION_RE = re.compile(r"^[^\s:]+\.rs:[1-9][0-9]*$")
+SITE_LINE_RE = re.compile(r"^MUTANT-SITE (\S+) (\S+):(\d+)$")
+TEST_LINE_RE = re.compile(r"^test (.+?) \.\.\. (ok|FAILED|ignored)$")
+PANIC_RE = re.compile(r"^thread '([^']+)'(?: \(\d+\))? panicked at ([^:\s]+):(\d+):\d+:")
+
+
+class BaselineRefused(Exception):
+    """The all-off baseline did not pass every expected row: no verdicts (exit 1)."""
+
+
+@dataclass
+class SpecRow:
+    executable: str
+    test: str
+    location: str
+
+
+@dataclass
+class SpecMutant:
+    id: str
+    multi: int
+    rows: list[SpecRow]
+
+
+def parse_spec(text: str) -> tuple[str | None, dict[str, SpecMutant]]:
+    """The features line and the mutants, in order. Any malformed line refuses."""
+    features: str | None = None
+    mutants: dict[str, SpecMutant] = {}
+    current: SpecMutant | None = None
+    for n, raw in enumerate(text.splitlines(), start=1):
+        line = raw.rstrip()
+        if not line.strip():
+            continue
+        if line.startswith("#features"):
+            if features is not None or mutants:
+                raise Abort(f"spec line {n}: #features must come once, first")
+            features = line[len("#features"):].strip()
+            continue
+        if line.startswith("#mutant"):
+            m = MUTANT_HEAD_RE.match(line)
+            if not m:
+                raise Abort(f"spec line {n}: want `#mutant <ID> [multi=<n>]`")
+            if m.group(1) in mutants:
+                raise Abort(f"spec line {n}: mutant {m.group(1)} declared twice")
+            current = SpecMutant(m.group(1), int(m.group(2) or 1), [])
+            mutants[current.id] = current
+            continue
+        if line.startswith("#"):
+            continue
+        if current is None:
+            raise Abort(f"spec line {n}: a row before any #mutant header")
+        parts = line.split("\t")
+        if len(parts) != 3 or not all(p.strip() for p in parts):
+            raise Abort(f"spec line {n}: want executable, exact test name, file:line")
+        exe, test, loc = (p.strip() for p in parts)
+        if not LOCATION_RE.match(loc):
+            raise Abort(f"spec line {n}: location {loc!r} is not file.rs:line")
+        current.rows.append(SpecRow(exe, test, loc))
+    if not mutants:
+        raise Abort("the spec names no mutants")
+    empty = [m.id for m in mutants.values() if not m.rows]
+    if empty:
+        raise Abort(f"mutants with no expected rows: {', '.join(empty)}")
+    return features, mutants
+
+
+def parse_sites(listing: str) -> list[tuple[str, str]]:
+    """(id, path:line) per site from the library's site-listing test; refuses an
+    incomplete listing (no completion marker)."""
+    if "MUTANT-SITES-DONE" not in listing:
+        raise Abort("the site listing did not complete")
+    sites = []
+    for line in listing.splitlines():
+        m = SITE_LINE_RE.match(line.strip())
+        if m:
+            sites.append((m.group(1), f"{m.group(2)}:{m.group(3)}"))
+    return sites
+
+
+def reconcile(mutants: dict[str, SpecMutant], sites: list[tuple[str, str]]) -> None:
+    """The spec's IDs must equal the source's site IDs, each with its count."""
+    counts: dict[str, int] = {}
+    for sid, _ in sites:
+        counts[sid] = counts.get(sid, 0) + 1
+    unknown = sorted(set(mutants) - set(counts))
+    missing = sorted(set(counts) - set(mutants))
+    if unknown:
+        raise Abort(f"spec IDs no site carries: {', '.join(unknown)}")
+    if missing:
+        raise Abort(f"site IDs the spec does not name: {', '.join(missing)}")
+    wrong = [f"{i} ({counts[i]} sites, spec says {m.multi})" for i, m in mutants.items() if counts[i] != m.multi]
+    if wrong:
+        raise Abort(f"site counts differ from the spec: {'; '.join(wrong)}")
+
+
+def check_public_text(text: str, patterns: list[re.Pattern]) -> None:
+    """The spec rides on a public branch: no private content in it (U5)."""
+    for p in patterns:
+        m = p.search(text)
+        if m:
+            raise Abort(f"the spec carries private content ({m.group(0).strip()!r}); keep ids and names out")
+
+
+def classify_row(outcome: Outcome, test: str, location: str) -> str:
+    """PASSED, FAILED_AT_SPEC, or ERROR:<why> for one exact-name row run."""
+    if outcome.timed_out:
+        return "ERROR:timeout"
+    reports = [m.group(2) for line in outcome.output.splitlines()
+               if (m := TEST_LINE_RE.match(line.strip())) and m.group(1) == test]
+    if outcome.exit is None or outcome.exit < 0 or outcome.exit in (134, 137):
+        return "ERROR:abort or signal"
+    if not any(SUMMARY_RE.match(line.strip()) for line in outcome.output.splitlines()):
+        return "ERROR:no result line"
+    if not reports:
+        return "ERROR:row did not run"
+    if len(reports) > 1:
+        return "ERROR:row reported twice"
+    if reports[0] == "ok":
+        return "PASSED"
+    if reports[0] != "FAILED":
+        return f"ERROR:row {reports[0]}"
+    panics = [f"{m.group(2)}:{m.group(3)}" for line in outcome.output.splitlines()
+              if (m := PANIC_RE.match(line.strip())) and m.group(1) == test]
+    if location in panics:
+        return "FAILED_AT_SPEC"
+    return f"ERROR:panicked at {', '.join(panics) or 'no location'}, spec {location}"
+
+
+def mutant_verdict(row_results: list[str]) -> str:
+    """The verdict table, in order: ERROR, then SURVIVED, then KILLED."""
+    if any(r.startswith("ERROR") for r in row_results):
+        return "ERROR"
+    if any(r == "PASSED" for r in row_results):
+        return "SURVIVED"
+    return "KILLED"
+
+
+def check_baseline(row_results: dict[str, str]) -> None:
+    """Every expected row must pass with no mutant on, or the batch is refused."""
+    bad = [f"{name}: {r}" for name, r in row_results.items() if r != "PASSED"]
+    if bad:
+        raise BaselineRefused("the baseline did not pass: " + "; ".join(bad))
+
+
+def schemata_exit(mutants: dict[str, SpecMutant], verdicts: list[tuple[str, str]]) -> int:
+    """Exit 0 only when every spec mutant has exactly one verdict and it is KILLED."""
+    seen: dict[str, int] = {}
+    for mid, _ in verdicts:
+        seen[mid] = seen.get(mid, 0) + 1
+    if set(seen) != set(mutants) or any(c != 1 for c in seen.values()):
+        return 1
+    return 0 if all(v == "KILLED" for _, v in verdicts) else 1
+
+
+def hygiene_patterns() -> list[re.Pattern]:
+    """The repository's private-content patterns, from the release line's copy
+    (the ticket-id and reviewer-name rules), as Python regexes."""
+    text = git("show", "FETCH_HEAD:scripts/dev/public-hygiene-patterns.sh")
+    posix = {"[:alnum:]": "A-Za-z0-9", "[:alpha:]": "A-Za-z", "[:space:]": r"\s", "[:digit:]": "0-9"}
+    found = []
+    for name in ("ticket_id_regex", "reviewer_regex"):
+        m = re.search(rf"^{name}='(.*)'$", text, re.MULTILINE)
+        if not m:
+            raise Abort(f"public-hygiene-patterns.sh on {RELEASE_LINE} has no {name}")
+        expr = m.group(1)
+        for k, v in posix.items():
+            expr = expr.replace(k, v)
+        found.append(re.compile(expr, re.IGNORECASE if name == "reviewer_regex" else 0))
+    return found
+
+
+def plan_schemata() -> tuple[str | None, dict[str, SpecMutant]]:
+    """The schemata batch's integrity checks; any failure refuses (exit 2)."""
+    ref = os.environ.get("GITHUB_REF", "")
+    if not REF_RE.match(ref):
+        raise Abort(f"ref {ref!r} is not refs/heads/throwaway/mutants-<pr>")
+    spec_path = Path(MUTANTS_DIR, SCHEMATA_SPEC)
+    text = spec_path.read_text(encoding="utf-8")
+    head_line, _, rest = text.lstrip().partition("\n")
+    head = head_line.split("\t")
+    if len(head) != 2 or head[0] != "head_sha" or not SHA_RE.match(head[1]):
+        raise Abort(f"{spec_path} line 1 must be head_sha<TAB><40-hex sha>")
+    if git("rev-parse", "HEAD^") != head[1]:
+        raise Abort(f"spec head_sha {head[1]} is not the batch commit's parent")
+    changed = [p for p in git("diff", "--name-only", "HEAD^", "HEAD").splitlines() if p]
+    stray = [p for p in changed if not p.startswith(MUTANTS_DIR + "/") and p not in HARNESS]
+    if stray:
+        raise Abort(f"the batch commit may only add {MUTANTS_DIR}/ (and the harness); it also changes {stray}")
+    fetch_release_line()
+    for path in HARNESS:
+        if git("rev-parse", f"HEAD:{path}") != git("rev-parse", f"FETCH_HEAD:{path}", check=False):
+            raise Abort(f"{path} differs from the reviewed copy on {RELEASE_LINE}")
+    check_public_text(text, hygiene_patterns())
+    return parse_spec(rest)
+
+
+def build_schemata(features: str | None, logs: Path) -> dict[str, dict]:
+    """One `--cfg mutants` build of every test target. Returns target name ->
+    {path, sha256, kinds}. A failed build refuses the run and names its sites."""
+    env = dict(os.environ)
+    env["RUSTFLAGS"] = (env.get("RUSTFLAGS", "") + " --cfg mutants").strip()
+    env.pop(MUTANT_ENV, None)
+    feats = ["--features", features] if features else ["--all-features"]
+    cmd = ["cargo", "test", "--workspace", "--all-targets", "--no-run", "--message-format=json",
+           "--target-dir", "target/mutants-cfg", *feats]
+    built = run_cmd(cmd, COMPILE_LIMIT, logs / "schemata-build.log", env)
+    if built.timed_out or built.exit != 0:
+        sites = sorted(set(re.findall(r"-->\s+(\S+\.rs:\d+)", built.output)))
+        raise BaselineRefused(f"the --cfg mutants build failed at {sites or 'an unknown site'}; "
+                              "move those mutants to the patch flow and rerun the rest")
+    artifacts: dict[str, dict] = {}
+    for line in built.output.splitlines():
+        if not line.startswith("{"):
+            continue
+        msg = json.loads(line)
+        if msg.get("reason") == "compiler-artifact" and msg.get("executable") and msg["profile"].get("test"):
+            path = Path(msg["executable"])
+            artifacts[msg["target"]["name"]] = {"path": str(path), "sha256": sha256(path),
+                                                "kinds": msg["target"]["kind"]}
+    return artifacts
+
+
+def run_row(exe: str, test: str, mutant: str | None, logs: Path, tag: str) -> tuple[Outcome, float, list[str]]:
+    env = dict(os.environ)
+    env.pop(MUTANT_ENV, None)
+    if mutant is not None:
+        env[MUTANT_ENV] = mutant
+    cmd = [exe, "--exact", test, "--test-threads=1"]
+    start = time.monotonic()
+    outcome = run_cmd(cmd, TEST_LIMIT, logs / f"{tag}.log", env)
+    return outcome, round(time.monotonic() - start, 2), cmd
+
+
+def run_schemata(out: Path) -> int:
+    features, mutants = plan_schemata()
+    return execute_schemata(features, mutants, out)
+
+
+def library_executable(artifacts: dict[str, dict]) -> dict:
+    """The gateway library's test executable, picked by target name."""
+    lib = artifacts.get(LIB_TARGET)
+    if lib is None or "lib" not in lib["kinds"]:
+        libs = sorted(name for name, a in artifacts.items() if "lib" in a["kinds"])
+        raise Abort(f"the build produced no {LIB_TARGET} library test executable (libraries: {libs})")
+    return lib
+
+
+def execute_schemata(features: str | None, mutants: dict[str, SpecMutant], out: Path) -> int:
+    """Build, prove the cfg, reconcile, baseline, then each mutant (after plan)."""
+    logs = out / "logs"
+    artifacts = build_schemata(features, logs)
+    named = sorted({r.executable for m in mutants.values() for r in m.rows})
+    absent = [e for e in named if e not in artifacts]
+    if absent:
+        raise Abort(f"spec executables the build did not produce: {absent}")
+    lib = library_executable(artifacts)
+    listed = run_cmd([lib["path"], "--list", "--format", "terse"], TEST_LIMIT, logs / "list.log")
+    if f"{CFG_PROBE}: test" not in listed.output.splitlines():
+        raise Abort("the build has no --cfg mutants (the probe test is absent); check RUSTFLAGS")
+    env = dict(os.environ, MCP_GATEWAY_MUTANT_LIST="1")
+    env.pop(MUTANT_ENV, None)
+    listing = run_cmd([lib["path"], "--exact", "mutant_scan::tests::list_mutant_sites", "--nocapture"],
+                      TEST_LIMIT, logs / "sites.log", env)
+    reconcile(mutants, parse_sites(listing.output))
+    print(f"{len(mutants)} mutants to run", flush=True)
+    records: list[dict] = []
+    baseline: dict[str, str] = {}
+    rows = [(m, r) for m in mutants.values() for r in m.rows]
+    for i, (m, r) in enumerate(rows):
+        outcome, secs, cmd = run_row(artifacts[r.executable]["path"], r.test, None, logs, f"baseline-{i}")
+        baseline[r.test] = classify_row(outcome, r.test, r.location)
+        records.append({"mutant": "baseline", "test": r.test, "command": cmd, "exit": outcome.exit,
+                        "seconds": secs, "result": baseline[r.test], "log": f"logs/baseline-{i}.log"})
+    check_baseline(baseline)
+    verdicts: list[tuple[str, str]] = []
+    for m in mutants.values():
+        results = []
+        for j, r in enumerate(m.rows):
+            outcome, secs, cmd = run_row(artifacts[r.executable]["path"], r.test, m.id, logs, f"{m.id}-{j}")
+            res = classify_row(outcome, r.test, r.location)
+            results.append(res)
+            records.append({"mutant": m.id, "test": r.test, "command": cmd, "exit": outcome.exit,
+                            "seconds": secs, "result": res, "location": r.location,
+                            "executable_sha256": artifacts[r.executable]["sha256"], "log": f"logs/{m.id}-{j}.log"})
+        verdicts.append((m.id, mutant_verdict(results)))
+        print(f"{m.id}: {verdicts[-1][1]} ({'; '.join(results)})", flush=True)
+    out.mkdir(parents=True, exist_ok=True)
+    (out / "mutants-schemata.json").write_text(json.dumps({
+        "head_sha": git("rev-parse", "HEAD^", check=False), "batch_sha": git("rev-parse", "HEAD", check=False),
+        "run_id": os.environ.get("GITHUB_RUN_ID", ""), "queue_wait_seconds": os.environ.get("MUTANTS_QUEUE_WAIT", ""),
+        "executables": artifacts, "verdicts": dict(verdicts), "rows": records}, indent=2), encoding="utf-8")
+    summary = os.environ.get("GITHUB_STEP_SUMMARY")
+    if summary:
+        with open(summary, "a", encoding="utf-8") as f:
+            f.write("### Mutants (schemata)\n\n| id | verdict |\n|---|---|\n")
+            f.write("".join(f"| {i} | {v} |\n" for i, v in verdicts))
+            f.write(f"\nqueue wait: {os.environ.get('MUTANTS_QUEUE_WAIT', 'unknown')} s\n")
+    return schemata_exit(mutants, verdicts)
+
+
+def schemata_self_test() -> tuple[int, list[str]]:
+    """(cases run, failures) for the schemata mode's decisions (R1-R30)."""
+    def out(test: str, status: str, panic: str | None = None, extra: str = "") -> str:
+        lines = ["running 1 test", f"test {test} ... {status}", ""]
+        if status == "FAILED":
+            lines += ["failures:", "", f"---- {test} stdout ----"]
+            if panic:
+                lines.append(f"thread '{test}' (1234) panicked at {panic}:5:")
+            lines += ["assertion `left == right` failed", ""]
+        p, f = (1, 0) if status == "ok" else (0, 1)
+        res = "ok" if status == "ok" else "FAILED"
+        lines.append(f"test result: {res}. {p} passed; {f} failed; 0 ignored; 0 measured; 9 filtered out")
+        return "\n".join(lines) + "\n" + extra
+
+    t, loc = "m::t1", "src/x.rs:9"
+    spec_ok = f"#mutant A\nlib\t{t}\t{loc}\n#mutant B multi=2\nlib\tm::t2\tsrc/y.rs:4\nlib\tm::t3\tsrc/y.rs:7\n"
+    sites_ok = [("A", "src/x.rs:3"), ("B", "src/y.rs:1"), ("B", "src/y.rs:2")]
+    failures: list[str] = []
+    n = 0
+
+    def refuses(name: str, fn) -> None:
+        nonlocal n
+        n += 1
+        try:
+            fn()
+        except Abort:
+            return
+        failures.append(f"{name}: not refused")
+
+    def expect(name: str, got, want) -> None:
+        nonlocal n
+        n += 1
+        if got != want:
+            failures.append(f"{name}: expected {want!r}, got {got!r}")
+
+    refuses("R1 empty spec", lambda: parse_spec("\n#features x\n"))
+    other_lib = {"path": "core", "sha256": "", "kinds": ["lib"]}
+    gateway_lib = {"path": "gw", "sha256": "", "kinds": ["lib"]}
+    expect("R28 the gateway library is picked by name, not the first library",
+           library_executable({"gateway_core": other_lib, LIB_TARGET: gateway_lib})["path"], "gw")
+    refuses("R29 a build without the gateway library", lambda: library_executable({"gateway_core": other_lib}))
+    refuses("R30 an mcp_gateway target that is not a library",
+            lambda: library_executable({LIB_TARGET: {"path": "gw", "sha256": "", "kinds": ["test"]}}))
+    refuses("R2 a mutant with no rows", lambda: parse_spec("#mutant A\n#mutant B\nlib\tt\tsrc/x.rs:1\n"))
+    _, ms = parse_spec(spec_ok)
+    refuses("R3 a spec ID no site carries", lambda: reconcile({**ms, "Z": SpecMutant("Z", 1, [])}, sites_ok))
+    refuses("R4 a site ID the spec omits", lambda: reconcile(ms, sites_ok + [("C", "src/z.rs:1")]))
+    refuses("R5 a mutant declared twice", lambda: parse_spec("#mutant A\nlib\tt\tsrc/x.rs:1\n#mutant A\nlib\tt\tsrc/x.rs:1\n"))
+    refuses("R6 two sites, no multi", lambda: reconcile(ms, sites_ok + [("A", "src/q.rs:8")]))
+    refuses("R7 multi=2 with three sites", lambda: reconcile(ms, sites_ok + [("B", "src/y.rs:3")]))
+    refuses("R8 a nested duplicate site", lambda: reconcile(ms, sites_ok + [("A", "src/m.rs:2")]))
+    refuses("a row with a bad location", lambda: parse_spec("#mutant A\nlib\tt\tx.rs\n"))
+    refuses("a row before any header", lambda: parse_spec("lib\tt\tsrc/x.rs:1\n#mutant A\n"))
+    refuses("an incomplete site listing", lambda: parse_sites("MUTANT-SITE A src/x.rs:3\n"))
+    expect("reconciled spec", reconcile(ms, sites_ok), None)
+    expect("site listing parsed", parse_sites("noise\nMUTANT-SITE A src/x.rs:3\nMUTANT-SITES-DONE\n"),
+           [("A", "src/x.rs:3")])
+    n += 1
+    try:
+        check_baseline({t: classify_row(Outcome(101, out(t, "FAILED", "src/x.rs:9"), False), t, loc)})
+        failures.append("R10/R24 a failing baseline row was accepted")
+    except BaselineRefused:
+        pass
+    for name, outcome in [("R25 baseline timeout", Outcome(None, "", True)),
+                          ("R26 baseline ran no test", Outcome(0, "running 0 tests\n\ntest result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 9 filtered out\n", False)),
+                          ("R27 baseline row twice", Outcome(0, out(t, "ok") + out(t, "ok"), False))]:
+        n += 1
+        try:
+            check_baseline({t: classify_row(outcome, t, loc)})
+            failures.append(f"{name}: accepted")
+        except BaselineRefused:
+            pass
+    expect("baseline passes", check_baseline({t: classify_row(Outcome(0, out(t, "ok"), False), t, loc)}), None)
+    killed = classify_row(Outcome(101, out(t, "FAILED", "src/x.rs:9"), False), t, loc)
+    expect("R11 failed at the spec location", killed, "FAILED_AT_SPEC")
+    expect("R11 KILLED", mutant_verdict([killed]), "KILLED")
+    expect("R12 one row passed", mutant_verdict([killed, classify_row(Outcome(0, out(t, "ok"), False), t, loc)]), "SURVIVED")
+    expect("R13 panicked elsewhere", mutant_verdict([classify_row(Outcome(101, out(t, "FAILED", "src/x.rs:10"), False), t, loc)]), "ERROR")
+    expect("R14 the row did not run", classify_row(Outcome(0, out("m::other", "ok"), False), t, loc), "ERROR:row did not run")
+    expect("R15 the row reported twice", classify_row(Outcome(101, out(t, "FAILED", "src/x.rs:9") * 2, False), t, loc), "ERROR:row reported twice")
+    expect("R16 aborted, exit 134", mutant_verdict([classify_row(Outcome(134, f"running 1 test\ntest {t} ... ", False), t, loc)]), "ERROR")
+    expect("R16 no result line", classify_row(Outcome(101, f"running 1 test\ntest {t} ... FAILED\n", False), t, loc), "ERROR:no result line")
+    expect("R17 timeout is never KILLED", mutant_verdict([classify_row(Outcome(124, out(t, "FAILED", "src/x.rs:9"), True), t, loc)]), "ERROR")
+    expect("R18 all killed exits 0", schemata_exit(ms, [("A", "KILLED"), ("B", "KILLED")]), 0)
+    expect("R18 a missing verdict exits 1", schemata_exit(ms, [("A", "KILLED")]), 1)
+    expect("R18 a duplicated verdict exits 1", schemata_exit(ms, [("A", "KILLED"), ("A", "KILLED"), ("B", "KILLED")]), 1)
+    expect("R18 an extra verdict exits 1", schemata_exit(ms, [("A", "KILLED"), ("B", "KILLED"), ("C", "KILLED")]), 1)
+    expect("R12 a survivor exits 1", schemata_exit(ms, [("A", "KILLED"), ("B", "SURVIVED")]), 1)
+    b2 = classify_row(Outcome(101, out("m::t2", "FAILED", "src/y.rs:4"), False), "m::t2", "src/y.rs:4")
+    b3 = classify_row(Outcome(101, out("m::t3", "FAILED", "src/y.rs:7"), False), "m::t3", "src/y.rs:7")
+    b3ok = classify_row(Outcome(0, out("m::t3", "ok"), False), "m::t3", "src/y.rs:7")
+    expect("R19 multi=2, both sites' rows fail", mutant_verdict([b2, b3]), "KILLED")
+    expect("R19 multi=2, one site's rows pass", mutant_verdict([b2, b3ok]), "SURVIVED")
+    priv = [re.compile(r"(^|[^A-Za-z0-9])MIK-[0-9]+")]
+    refuses("R22 a ticket id in the spec", lambda: check_public_text("#mutant A\n# see MI" "K-1234\n", priv))
+    expect("R22 a clean spec", check_public_text(spec_ok, priv), None)
+    return n, failures
+
+
+FAKE_TEST_BINARY = r'''#!/usr/bin/env python3
+"""A stand-in libtest executable: answers from a scripted table."""
+import json, os, subprocess, sys, time
+table = json.load(open(os.environ["FAKE_TABLE"]))
+args = sys.argv[1:]
+with open(os.environ["FAKE_CALLS"], "a") as f:
+    f.write(json.dumps({"args": args, "mutant": os.environ.get("MCP_GATEWAY_MUTANT")}) + "\n")
+if args[:1] == ["--list"]:
+    if not table.get("no_probe"):
+        print("mutant::mutants_build::only_the_named_site_switches_on: test")
+    print("m::t1: test")
+    sys.exit(0)
+if "--exact" not in args:
+    # libtest without --exact: the name is a substring filter, so the sibling
+    # m::t10 runs beside m::t1.
+    flt = next(a for a in args if not a.startswith("-"))
+    names = [n for n in ("m::t1", "m::t10") if flt in n]
+    mutant = os.environ.get("MCP_GATEWAY_MUTANT") or "base"
+    print(f"running {len(names)} tests")
+    failed = 0
+    for name in names:
+        row = table["rows"].get(mutant + " " + name, {"status": "ok"})
+        print(f"test {name} ... {row['status']}")
+        if row["status"] == "FAILED":
+            failed += 1
+            print(f"thread '{name}' (7) panicked at {row['panic']}:5:")
+    print(f"test result: {'FAILED' if failed else 'ok'}. {len(names) - failed} passed; {failed} failed; 0 ignored; 0 measured; 3 filtered out")
+    sys.exit(101 if failed else 0)
+test = args[args.index("--exact") + 1]
+if test == "mutant_scan::tests::list_mutant_sites":
+    for site in table["sites"]:
+        print("MUTANT-SITE " + site)
+    print("MUTANT-SITES-DONE")
+    sys.exit(0)
+key = (os.environ.get("MCP_GATEWAY_MUTANT") or "base") + " " + test
+row = table["rows"].get(key, {"status": "ok"})
+if row["status"] == "hang":
+    child = subprocess.Popen(["sleep", "60"])
+    open(os.environ["FAKE_CHILD"], "w").write(str(child.pid))
+    time.sleep(60)
+print("running 1 test")
+print(f"test {test} ... {row['status']}")
+if row["status"] == "FAILED":
+    print(f"thread '{test}' (7) panicked at {row['panic']}:5:")
+    print(f"test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 3 filtered out")
+    sys.exit(101)
+print("test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out")
+'''
+
+FAKE_CARGO = r'''#!/usr/bin/env python3
+import json, os, sys
+with open(os.environ["FAKE_CALLS"], "a") as f:
+    f.write(json.dumps({"cargo": sys.argv[1:], "rustflags": os.environ.get("RUSTFLAGS", ""),
+                        "mutant": os.environ.get("MCP_GATEWAY_MUTANT")}) + "\n")
+exe = os.environ["FAKE_EXE"]
+for name, kind in (("mcp_gateway", ["lib"]), ("itest", ["test"])):
+    print(json.dumps({"reason": "compiler-artifact", "executable": exe, "profile": {"test": True},
+                      "target": {"name": name, "kind": kind}}))
+'''
+
+
+def schemata_driver_self_test() -> tuple[int, list[str]]:
+    """(cases run, failures) for the driver (D1-D3, D6-D9, R9, R23), with a fake
+    cargo and a fake test executable on PATH."""
+    global TEST_LIMIT
+    failures: list[str] = []
+    n = 0
+    saved_path, saved_limit = os.environ.get("PATH", ""), TEST_LIMIT
+    with tempfile.TemporaryDirectory() as tmp:
+        d = Path(tmp)
+        exe, cargo = d / "fake-test", d / "cargo"
+        exe.write_text(FAKE_TEST_BINARY)
+        cargo.write_text(FAKE_CARGO)
+        for f in (exe, cargo):
+            f.chmod(0o755)
+        os.environ.update(PATH=f"{d}{os.pathsep}{saved_path}", FAKE_EXE=str(exe),
+                          FAKE_CALLS=str(d / "calls"), FAKE_TABLE=str(d / "table.json"),
+                          FAKE_CHILD=str(d / "child.pid"), RUSTFLAGS="--cap-lints=warn")
+        os.environ.pop("GITHUB_STEP_SUMMARY", None)
+        _, ms = parse_spec("#mutant A\nmcp_gateway\tm::t1\tsrc/x.rs:9\n")
+
+        def run(table: dict, mutants=ms) -> tuple[int | str, list[dict]]:
+            (d / "calls").write_text("")
+            (d / "table.json").write_text(json.dumps(table))
+            try:
+                rc: int | str = execute_schemata(None, mutants, d / "out")
+            except BaselineRefused:
+                rc = "refused"
+            except Abort:
+                rc = "aborted"
+            calls = [json.loads(l) for l in (d / "calls").read_text().splitlines()]
+            return rc, calls
+
+        def expect(name: str, got, want) -> None:
+            nonlocal n
+            n += 1
+            if got != want:
+                failures.append(f"{name}: expected {want!r}, got {got!r}")
+
+        killed = {"sites": ["A src/x.rs:3"], "rows": {"A m::t1": {"status": "FAILED", "panic": "src/x.rs:9"}}}
+        try:
+            rc, calls = run(killed)
+            expect("a killed mutant exits 0", rc, 0)
+            builds = [c for c in calls if "cargo" in c]
+            expect("D1 one build for the batch", len(builds), 1)
+            expect("D1 the build carries --cfg mutants and the workflow's flags",
+                   builds[0]["rustflags"] if builds else None, "--cap-lints=warn --cfg mutants")
+            expect("D1 the build has its own target dir",
+                   "target/mutants-cfg" in (builds[0]["cargo"] if builds else []), True)
+            runs = [c for c in calls if "m::t1" in c.get("args", [])]
+            expect("D3 the baseline runs with no mutant on", [c["mutant"] for c in runs], [None, "A"])
+            expect("D2 each row runs alone by exact name", [c["args"] for c in runs],
+                   [["--exact", "m::t1", "--test-threads=1"]] * 2)
+            sibling = {**killed, "rows": {"A m::t10": {"status": "FAILED", "panic": "src/x.rs:9"}}}
+            rc, calls = run(sibling)
+            expect("D2b a substring sibling's failure does not kill the mutant", rc, 1)
+            sib_runs = [c for c in calls if c.get("mutant") == "A" and "--exact" in c.get("args", [])]
+            expect("D2b the mutant's row ran by exact name", [c["args"][1] for c in sib_runs], ["m::t1"])
+            rc, calls = run({**killed, "rows": {"base m::t1": {"status": "FAILED", "panic": "src/x.rs:9"}}})
+            expect("D7 a failed baseline refuses (exit 1)", rc, "refused")
+            expect("D7 no mutant runs after a failed baseline",
+                   [c for c in calls if c.get("mutant") == "A"], [])
+            rc, _ = run({**killed, "rows": {}})
+            expect("D8 a surviving mutant exits 1", rc, 1)
+            rc, _ = run({**killed, "no_probe": True})
+            expect("R23 a build without --cfg mutants is refused", rc, "aborted")
+            _, ms_absent = parse_spec("#mutant A\nnot_built\tm::t1\tsrc/x.rs:9\n")
+            rc, _ = run(killed, ms_absent)
+            expect("R9 an executable the build did not produce is refused", rc, "aborted")
+            rc, _ = run({**killed, "sites": ["B src/x.rs:3"]})
+            expect("D6 a spec that does not reconcile refuses before any row", rc, "aborted")
+            TEST_LIMIT = 2
+            rc, _ = run({**killed, "rows": {"A m::t1": {"status": "hang"}}})
+            expect("D9 a hung row is ERROR and exits 1", rc, 1)
+            pid_file = d / "child.pid"
+            expect("D9 the hung row started its child", pid_file.is_file(), True)
+            alive = None
+            if pid_file.is_file():
+                try:
+                    os.kill(int(pid_file.read_text()), 0)
+                    alive = True
+                except ProcessLookupError:
+                    alive = False
+            expect("D9 the hung row's child process is killed too", alive, False)
+        finally:
+            TEST_LIMIT = saved_limit
+            os.environ["PATH"] = saved_path
+    return n, failures
+
+
 def self_test() -> int:
     ok = "running 3 tests\ntest a ... ok\n\ntest result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 9 filtered out\n"
     empty = "running 0 tests\n\ntest result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 12 filtered out\n"
@@ -502,8 +1086,15 @@ def self_test() -> int:
     for err in fetch_check():
         print(f"self-test: release-line fetch: {err}", file=sys.stderr)
         rc = 1
+    schemata_cases, schemata_failures = schemata_self_test()
+    driver_cases, driver_failures = schemata_driver_self_test() if os.name != "nt" else (0, [])
+    schemata_cases += driver_cases
+    schemata_failures += driver_failures
+    for failure in schemata_failures:
+        print(f"self-test: schemata: {failure}", file=sys.stderr)
+        rc = 1
     if rc == 0:
-        total = len(cases) + 2 + len(bad) + len(refs_ok) + len(refs_bad) + FETCH_CASES
+        total = len(cases) + 2 + len(bad) + len(refs_ok) + len(refs_bad) + FETCH_CASES + schemata_cases
         print(f"self-test: {total} classifier, manifest, ref and release-line fetch cases as expected")
     return rc
 
@@ -518,6 +1109,19 @@ def main() -> int:
     if a.self_test:
         return self_test()
     try:
+        schemata = Path(MUTANTS_DIR, SCHEMATA_SPEC).is_file()
+        if a.mode == "plan" and schemata:
+            plan_schemata()
+            lines = ["has_linux=true", "has_windows=false"]
+            print("\n".join(lines))
+            if os.environ.get("GITHUB_OUTPUT"):
+                with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as f:
+                    f.write("\n".join(lines) + "\n")
+            return 0
+        if a.mode == "run" and schemata:
+            if a.platform != "linux":
+                raise Abort("schemata batches run on linux only")
+            return run_schemata(a.out)
         if a.mode == "plan":
             rows = plan()
             lines = [f"has_{p}={'true' if any(r.platform == p for r in rows) else 'false'}" for p in PLATFORMS]
@@ -529,6 +1133,9 @@ def main() -> int:
         if a.mode == "run" and a.platform:
             return run(a.platform, a.out)
         ap.error("need plan, run --platform P, or --self-test")
+    except BaselineRefused as exc:
+        print(f"::error::mutant batch refused: {exc}", file=sys.stderr)
+        return 1
     except Abort as exc:
         print(f"::error::mutant batch aborted: {exc}", file=sys.stderr)
         return 2

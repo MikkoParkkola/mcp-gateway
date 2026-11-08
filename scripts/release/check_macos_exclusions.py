@@ -62,7 +62,9 @@ LINUX = {
     "target_env": {"gnu"},
 }
 TRUE_FLAGS = {"test", "unix", "debug_assertions", "true"}
-FALSE_FLAGS = {"windows", "false"}
+# `mutants` is set only by the mutation build (`--cfg mutants`), never by
+# either CI configuration, so it is off on both.
+FALSE_FLAGS = {"windows", "false", "mutants"}
 UNDECIDED = None
 ATTR = re.compile(r"#!?\[(cfg|cfg_attr)\(")
 TOKEN = re.compile(r'\s*(?:(\w+)|("(?:[^"\\]|\\.)*")|([(),=]))')
