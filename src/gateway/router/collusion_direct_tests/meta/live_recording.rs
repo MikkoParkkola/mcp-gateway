@@ -24,7 +24,7 @@ use super::*;
 /// The fixture with its live config seeded from the firewall's own
 /// collusion parameters (`Setup::default()`, with `action`), so a reload
 /// that edits only the action applies rather than being held.
-async fn live_fixture(action: CollusionAction) -> Fixture {
+pub(super) async fn live_fixture(action: CollusionAction) -> Fixture {
     let mut fx = meta_fixture(
         Setup {
             action,

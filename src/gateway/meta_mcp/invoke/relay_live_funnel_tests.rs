@@ -28,7 +28,8 @@ fn publish(live: &LiveConfig, action: crate::security::firewall::CollusionAction
 
 /// Alice's HTTP plan call over `lm`: collected, delivered, then handed to
 /// `emit_http_checked` with `block` published in between (the delivery-time
-/// generation) and the capture hook armed with `hook`. Whether the hook ran.
+/// generation) and the capture hook armed with `hook`, and its body read.
+/// Whether the hook ran.
 async fn http_plan(lm: &LiveMeta, text: &str, hook: impl FnOnce() + 'static) -> bool {
     let (meta, result) = (Arc::clone(&lm.meta), text_result(text));
     let response = collecting_http(Arc::clone(&meta), async move {
@@ -43,7 +44,9 @@ async fn http_plan(lm: &LiveMeta, text: &str, hook: impl FnOnce() + 'static) -> 
     publish(lm.live(), Block);
     let before = commit_capture_hook::reached();
     commit_capture_hook::arm(hook);
-    crate::gateway::outbound::emit_http_checked(response, None).await;
+    let (response, _) = crate::gateway::outbound::emit_http_checked(response, None).await;
+    // The server takes the body: that is the write the receipts commit at.
+    let _ = axum::body::to_bytes(response.into_body(), usize::MAX).await;
     commit_capture_hook::reached() > before
 }
 
