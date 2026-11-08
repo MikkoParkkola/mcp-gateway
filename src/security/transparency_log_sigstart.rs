@@ -205,6 +205,14 @@ pub(crate) enum Placed {
 #[derive(Debug, Default)]
 pub(crate) struct Checked(std::collections::HashMap<(u64, u64), bool>);
 
+#[cfg(all(test, feature = "webui"))]
+impl Checked {
+    /// Chunks hashed so far.
+    pub(crate) fn hashed(&self) -> usize {
+        self.0.len()
+    }
+}
+
 /// The kept files of `path` as (seq, file): sealed segments, then the active one.
 fn kept(path: &Path) -> io::Result<Vec<(u64, std::path::PathBuf)>> {
     let sealed = segments::list_segments(path)?;

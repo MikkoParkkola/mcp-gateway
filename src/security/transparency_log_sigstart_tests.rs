@@ -240,3 +240,124 @@ fn r22_first_signing_after_a_torn_tail_is_a_first_start() {
     assert_eq!(sidecar(&fx)["state"], "open");
     assert_eq!(all_events(&fx), [0, 0, 0, 0]);
 }
+
+use super::sigstart::{self, Fault, LegacyFile, SigStart, State};
+
+fn body(offset: u64, legacy: Vec<LegacyFile>) -> SigStart {
+    SigStart {
+        log_id: "id".into(),
+        state: State::Open,
+        segment_seq: 0,
+        offset,
+        counter: 3,
+        legacy,
+        unanchored: false,
+        announced: true,
+    }
+}
+
+/// R14 (round 3 J6): encode/decode round trip; torn, garbled, extended and
+/// wrong-key bytes are refused; the log id is outside the MAC (round 3 J4).
+#[test]
+fn r14_sidecar_bytes_round_trip_and_refuse_damage() {
+    let secret = super::sigstart_fixture::SECRET.as_bytes();
+    let b = body(10, Vec::new());
+    let bytes = sigstart::encode(&b, secret).unwrap();
+    assert_eq!(sigstart::decode(&bytes, secret), Ok(b.clone()));
+    assert_eq!(
+        sigstart::decode(&bytes[..bytes.len() - 2], secret),
+        Err(Fault::Torn)
+    );
+    assert_eq!(sigstart::decode(b"{not json}\n", secret), Err(Fault::Torn));
+    let mut extended = bytes.clone();
+    extended.extend_from_slice(b"{}\n");
+    assert_eq!(sigstart::decode(&extended, secret), Err(Fault::Torn));
+    assert_eq!(sigstart::decode(&bytes, b"another-secret"), Err(Fault::Mac));
+    // A changed log id still verifies; a changed offset does not.
+    let text = String::from_utf8(bytes).unwrap();
+    let renamed = text.replace("\"log_id\":\"id\"", "\"log_id\":\"other\"");
+    assert!(sigstart::decode(renamed.as_bytes(), secret).is_ok());
+    let moved = text.replace("\"offset\":10", "\"offset\":11");
+    assert_eq!(sigstart::decode(moved.as_bytes(), secret), Err(Fault::Mac));
+}
+
+/// A one-file log whose first `p` bytes are legacy, frozen.
+#[cfg(feature = "webui")]
+fn frozen(fx: &Fixture, bytes: &[u8], p: u64) -> super::sigstart::Anchor {
+    use super::sigstart::{Anchor, CHUNK};
+    std::fs::write(&fx.path, bytes).unwrap();
+    let chunks = (0..p.div_ceil(CHUNK))
+        .map(|i| {
+            let s = usize::try_from(i * CHUNK).unwrap();
+            let e = usize::try_from(((i + 1) * CHUNK).min(p)).unwrap();
+            hex::encode(super::sha256_raw(&bytes[s..e]))
+        })
+        .collect();
+    Anchor::Known(body(
+        p,
+        vec![LegacyFile {
+            seq: 0,
+            len: p,
+            chunks,
+        }],
+    ))
+}
+
+/// R24 (round 2 HI1): positions P-1, P and P+1 against an anchor at P.
+#[cfg(feature = "webui")]
+#[test]
+fn r24_the_boundary_is_at_p() {
+    use super::sigstart::{Checked, LinePos, Placed};
+    let fx = Fixture::new();
+    let a = frozen(&fx, &[b'x'; 64], 32);
+    let at = |offset| LinePos::At {
+        segment: 0,
+        offset,
+        len: 1,
+    };
+    let mut c = Checked::default();
+    assert_eq!(
+        a.place(&fx.path, at(31), &mut c),
+        Placed::Legacy { unanchored: false }
+    );
+    assert_eq!(
+        a.place(&fx.path, at(32), &mut c),
+        Placed::Invalid("sig_missing")
+    );
+    assert_eq!(
+        a.place(&fx.path, at(33), &mut c),
+        Placed::Invalid("sig_missing")
+    );
+    // A line that starts below P but runs past it is not legacy (round 3 J1).
+    let crossing = LinePos::At {
+        segment: 0,
+        offset: 30,
+        len: 4,
+    };
+    assert_eq!(
+        a.place(&fx.path, crossing, &mut c),
+        Placed::Invalid("legacy_unlisted")
+    );
+}
+
+/// R31 (round 3 J7): a record near the end of a 5 MiB legacy range hashes
+/// only the chunks its line touches, and classifies without the rest.
+#[cfg(feature = "webui")]
+#[test]
+fn r31_a_large_legacy_file_hashes_only_the_touched_chunks() {
+    use super::sigstart::{CHUNK, Checked, LinePos, Placed};
+    let fx = Fixture::new();
+    let p = 5 * CHUNK;
+    let a = frozen(&fx, &vec![b'y'; usize::try_from(p).unwrap()], p);
+    let mut c = Checked::default();
+    let near_end = LinePos::At {
+        segment: 0,
+        offset: p - CHUNK / 2,
+        len: 100,
+    };
+    assert_eq!(
+        a.place(&fx.path, near_end, &mut c),
+        Placed::Legacy { unanchored: false }
+    );
+    assert_eq!(c.hashed(), 1, "one chunk hashed, not five");
+}
