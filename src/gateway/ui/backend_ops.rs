@@ -193,6 +193,21 @@ pub(crate) const UNRESOLVED_SECRETS: &str = "has secret references that do not r
 /// can tell it from a duplicate (a 422, never a 409).
 pub(crate) const LITERAL_IN_VALUE: &str = "holds literal text a template would write as text";
 
+/// The phrase every credential-in-a-command-or-URL refusal carries, so the
+/// CLI can answer it as a usage error (exit 2).
+pub(crate) const CREDENTIAL_IN_ARGV: &str = "would write a credential into gateway.yaml as text";
+
+/// Each credential the saved field would carry as text, as `(code, field)`,
+/// never a value: `command` when given (it takes precedence), else `url`.
+pub(crate) fn credential_refusals(
+    command: Option<&str>,
+    url: Option<&str>,
+) -> Vec<(&'static str, String)> {
+    // RED STUB: rows first.
+    let _ = (command, url);
+    Vec::new()
+}
+
 pub(crate) use crate::config::secret_values::{ValueClass, classify};
 
 /// Each refused `env`/`headers` value of `backend` as `(code, field)`, sorted

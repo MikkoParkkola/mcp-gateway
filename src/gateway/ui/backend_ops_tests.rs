@@ -707,3 +707,101 @@ fn b3i_a_resolvable_reference_is_added_and_kept_as_written() {
     // Checked, never substituted: the config keeps the reference text.
     assert_eq!(backend.env["API_KEY"], reference);
 }
+
+/// R1 (D-CLI r2): what a saved command or URL may not carry as text. A
+/// credential-named query, userinfo, command flag, `NAME=value` or
+/// `Name: value` argument with a literal (or literal-bearing) value is
+/// refused by field; templates, references, ordinary queries and positional
+/// words pass; a URL is not checked when a command is given. (URLs with
+/// userinfo are built from parts.)
+#[test]
+fn r1_credential_refusals_table() {
+    use super::credential_refusals;
+    let refused = |cmd: Option<&str>, url: Option<&str>| {
+        credential_refusals(cmd, url)
+            .into_iter()
+            .map(|(code, field)| format!("{code}:{field}"))
+            .collect::<Vec<_>>()
+    };
+    let url = |u: &str| refused(None, Some(u));
+    let cmd = |c: &str| refused(Some(c), None);
+    let bad_url = vec!["secret_in_url:url".to_string()];
+    let bad_cmd = vec!["secret_in_command:command".to_string()];
+    let none: Vec<String> = Vec::new();
+
+    assert_eq!(
+        url(&["https://svc:", "pw-0123456789", "@h.example/mcp"].concat()),
+        bad_url,
+        "userinfo"
+    );
+    assert_eq!(
+        url("https://h.example/mcp?api_key=k1"),
+        bad_url,
+        "short credential query"
+    );
+    assert_eq!(
+        url("https://h.example/mcp?token=${T:-dflt-0123}"),
+        bad_url,
+        "literal default"
+    );
+    assert_eq!(
+        url("https://h.example/mcp?transport=sse&region=eu"),
+        none,
+        "ordinary query"
+    );
+    assert_eq!(
+        url("wss://h.example/ws?access_token=abc12345"),
+        bad_url,
+        "websocket"
+    );
+    assert_eq!(url("https://h.example/mcp"), none, "plain");
+
+    assert_eq!(cmd("npx tool --api-key=k1"), bad_cmd, "flag=value");
+    assert_eq!(
+        cmd("npx tool --token tok-0123456789"),
+        bad_cmd,
+        "flag value"
+    );
+    assert_eq!(
+        cmd("env GITHUB_TOKEN=ghp-0123 npx tool"),
+        bad_cmd,
+        "name=value"
+    );
+    assert_eq!(
+        cmd("npx tool --authorization 'Bearer tok-0123456789'"),
+        bad_cmd,
+        "quoted value"
+    );
+    assert_eq!(cmd("npx tool \"--api-key=k1\""), bad_cmd, "quoted flag");
+    assert_eq!(
+        cmd("curl -H 'Authorization: Bearer tok-0123'"),
+        bad_cmd,
+        "header-shaped"
+    );
+    assert_eq!(
+        cmd("npx tool --url=https://h/?api_key=k1"),
+        bad_cmd,
+        "url in an argument"
+    );
+    assert_eq!(cmd("npx tool --token ${MY_TOKEN}"), none, "template");
+    assert_eq!(cmd("npx tool --token env:MY_TOKEN"), none, "reference");
+    assert_eq!(
+        cmd("npx -y @scope/server --port 8080 data.json"),
+        none,
+        "ordinary"
+    );
+    assert_eq!(
+        cmd("npx tool --token-limit 5"),
+        none,
+        "not a credential name"
+    );
+
+    assert_eq!(
+        refused(
+            Some("npx tool"),
+            Some(&["https://svc:", "pw-0123456789", "@h/mcp"].concat())
+        ),
+        none,
+        "the URL is not saved when a command is given"
+    );
+}
