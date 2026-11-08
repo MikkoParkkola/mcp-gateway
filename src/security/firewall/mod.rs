@@ -431,7 +431,11 @@ impl Firewall {
             ScanSubject::Answers => allowed_root::RootOutcome::default(),
         };
         let mut findings = self.content_findings(target.tool, args);
-        let provenance = Self::allow_provenance(policy, target, &findings, &roots.findings);
+        // Only the arguments' scan names an allow (D10); an answers scan would
+        // compute it for nothing.
+        let provenance = matches!(subject, ScanSubject::Arguments)
+            .then(|| Self::allow_provenance(policy, target, &findings, &roots.findings))
+            .flatten();
         let (content_action, content_rule) = Self::resolve_attributed(policy, target, &findings);
         let ((action, rule), root_findings) =
             allowed_root::apply_roots(roots, (content_action, content_rule.cloned()));
