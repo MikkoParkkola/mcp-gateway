@@ -214,11 +214,14 @@ impl Firewall {
         };
         let mut persisted = Vec::with_capacity(snapshots.len());
         for snapshot in snapshots {
-            if !snapshot.delivered_by(&delivered) {
+            if mutant!("N8", false, !snapshot.delivered_by(&delivered)) {
                 return untrackable;
             }
-            let Some(receipt) = PersistedReceipt::of(&snapshot.with_join_fingerprints(detector))
-            else {
+            let Some(receipt) = PersistedReceipt::of(&mutant!(
+                "N8b",
+                snapshot.clone(),
+                snapshot.with_join_fingerprints(detector)
+            )) else {
                 return untrackable;
             };
             persisted.push(receipt);
@@ -250,9 +253,9 @@ impl Firewall {
             return Adopted::NoSnapshot;
         };
         let Ok(persisted) = serde_json::from_value::<Persisted>(snapshot.clone()) else {
-            return Adopted::Untrackable;
+            return mutant!("N11", Adopted::NoSnapshot, Adopted::Untrackable);
         };
-        if persisted.epoch != replay_epoch() {
+        if mutant!("N6", false, persisted.epoch != replay_epoch()) {
             return Adopted::Untrackable;
         }
         let receipts = persisted
@@ -292,11 +295,15 @@ impl Firewall {
     ) -> Option<super::super::FirewallVerdict> {
         self.relay_detector()?;
         let trackable = serde_json::from_value::<Persisted>(snapshot?.clone())
-            .is_ok_and(|persisted| persisted.epoch == replay_epoch());
-        if trackable || view.action() == super::CollusionAction::Off {
+            .is_ok_and(|persisted| mutant!("N6", true, persisted.epoch == replay_epoch()));
+        if trackable || mutant!("K21m", false, view.action() == super::CollusionAction::Off) {
             return None;
         }
-        let block = view.action() == super::CollusionAction::Block;
+        let block = mutant!(
+            "N7",
+            view.action() != super::CollusionAction::Off,
+            view.action() == super::CollusionAction::Block
+        );
         let label = if block { "block" } else { "observe" };
         telemetry_metrics::counter!(super::RELAY_METRIC, "action" => label, "reason" => "untrackable")
             .increment(1);

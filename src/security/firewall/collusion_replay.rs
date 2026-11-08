@@ -321,7 +321,9 @@ impl ReplayReceipts {
         life: Life,
     ) -> (Option<u64>, u64) {
         let mut evicted = 0_u64;
-        inner.sweep(now);
+        if mutant!("SW", false, true) {
+            inner.sweep(now);
+        }
         // Overwrite or refusal, the previous entry under the key goes first.
         inner.take(&key);
         if bytes > self.entry_cap || bytes > self.total_cap {
@@ -551,7 +553,7 @@ impl ReplayReceipts {
     pub(in super::super) fn settle(&self, handle: ReplayHandle, off: bool) {
         let (key, seq) = handle.into_parts();
         let mut inner = self.inner.lock();
-        if off {
+        if mutant!("K4m", false, off) {
             inner.end_delivery(&key, seq, true);
         } else if let Some(held) = inner.pending_at(&key, seq) {
             held.life = Life::Kept;
