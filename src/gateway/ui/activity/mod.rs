@@ -519,6 +519,9 @@ mod decision_export_tests;
 #[path = "decision_fixtures_tests.rs"]
 mod decision_fixtures;
 #[cfg(test)]
+#[path = "decision_receipt_tests.rs"]
+mod decision_receipt_tests;
+#[cfg(test)]
 #[path = "list_tests.rs"]
 mod list_tests;
 #[cfg(test)]
