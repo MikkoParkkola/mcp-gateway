@@ -45,6 +45,24 @@ mod tests {
     use crate::security::TransparencyLogger;
     use crate::security::transparency_log::TransparencyLogConfig;
 
+    /// A logger opened at a `TempLog` path is in a kept dir: no unkept open is
+    /// recorded, so the logger holds the dir past the `TempLog` itself.
+    /// Mutant: `TempLog` back to an unregistered `tempfile::Builder` dir.
+    #[test]
+    fn a_log_in_a_temp_log_is_kept() {
+        let log = TempLog::new();
+        let unkept = crate::test_dir_keep::expect_unkept();
+        let logger = TransparencyLogger::open(Arc::new(TransparencyLogConfig {
+            enabled: true,
+            path: log.path().to_string_lossy().to_string(),
+            key_id: "temp-log".to_string(),
+            ..TransparencyLogConfig::default()
+        }))
+        .expect("the log opens");
+        assert_eq!(unkept.recorded(), vec![]);
+        drop(logger);
+    }
+
     /// A logger and its `TempLog`, dropped in that order, leave nothing behind:
     /// the log, its sidecars and their folder all go. On Windows this fails if
     /// the logger still holds its `.lock` open when the folder is removed.
