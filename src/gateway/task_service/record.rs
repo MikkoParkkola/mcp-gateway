@@ -554,6 +554,13 @@ pub(crate) struct CommittedTask {
     pub(crate) bindings_recorded: bool,
     /// The relay replay snapshot stored with the result; see
     /// `Record::replay_snapshot`.
+    #[cfg_attr(
+        not(feature = "firewall"),
+        allow(
+            dead_code,
+            reason = "read by the relay replay path, built with the firewall"
+        )
+    )]
     pub(crate) replay_snapshot: Option<Value>,
 }
 

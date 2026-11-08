@@ -88,6 +88,7 @@ impl MetaMcp {
     /// untrackable marker), under the collusion action published now, at
     /// the read's start. Under `observe` the fact is counted and audited
     /// and the read goes on; under `off`, or with nothing to track, `None`.
+    #[cfg_attr(not(feature = "firewall"), allow(clippy::unused_self))]
     pub(crate) fn untrackable_refusal(
         &self,
         stored: &CommittedTask,

@@ -716,6 +716,7 @@ pub(crate) mod publish_log {
     }
 
     /// `(completed, carried a snapshot)` for each publication of task `id`.
+    #[cfg(feature = "firewall")]
     pub(crate) fn of(id: &str) -> Vec<(bool, bool)> {
         LOG.lock()
             .map(|log| {
