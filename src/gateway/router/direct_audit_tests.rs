@@ -39,6 +39,7 @@ mod lost_round;
 mod meta_malformed_retry;
 mod meta_refusal;
 mod meta_replay;
+mod one_record;
 // A call to a backend that does not exist records not_found.
 mod not_found;
 mod refused_effect;
