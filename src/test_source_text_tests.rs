@@ -175,6 +175,11 @@ fn an_inner_cfg_counts_only_in_the_leading_run_of_its_scope() {
         "ignore!(#![cfg(test)]);\nfn product() {}\n",
         "mod outer { fn f() {} #![cfg(test)] fn product() {} }\n",
         "fn f() {}\n#![cfg(test)]\nfn product() {}\n",
+        // A `mod` inside a macro's tokens is input the macro may drop.
+        "emit! { mod m { #![cfg(test)] fn product() {} } }\n",
+        "emit!( mod m { #![cfg(test)] fn product() {} } );\n",
+        "emit![ mod m { #![cfg(test)] fn product() {} } ];\n",
+        "macro_rules! m { () => { mod x { #![cfg(test)] fn product() {} } }; }\n",
     ];
     for source in kept {
         assert!(
@@ -182,6 +187,11 @@ fn an_inner_cfg_counts_only_in_the_leading_run_of_its_scope() {
             "lost: {source:?}"
         );
     }
+    // A real module after a macro call still leads its own scope.
+    let after = "emit! { x }\nmod t {\n    #![cfg(test)]\n    fn probe() {}\n}\nfn product() {}\n";
+    let out = production_text(after);
+    assert!(!out.contains("probe"), "{out:?}");
+    assert!(out.contains("fn product()"), "{out:?}");
 }
 
 /// A predicate that does not parse keeps its item (the scan sees more).

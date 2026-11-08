@@ -256,8 +256,30 @@ def file_is_test(source: Path) -> bool:
     return _scan(source, True)[1]
 
 
+MACRO_CALL = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\s*!\s*(?:[A-Za-z_][A-Za-z0-9_]*\s*)?[(\[{]")
+
+
+def macro_spans(code: str) -> list[tuple[int, int]]:
+    """Each macro's tokens in blanked `code`: a `name!(..)`, `name![..]` or
+    `name!{..}` call, or a `macro_rules! name {..}` body. A `mod` written there
+    is input the macro may drop or rewrite, so its inner attributes mark
+    nothing (MIK-9387.TCFG.1). An unclosed one runs to the end."""
+    spans, pos = [], 0
+    while m := MACRO_CALL.search(code, pos):
+        open_at, depth, end = m.end() - 1, 0, len(code)
+        for i in range(open_at, len(code)):
+            depth += {"(": 1, "[": 1, "{": 1, ")": -1, "]": -1, "}": -1}.get(code[i], 0)
+            if depth == 0:
+                end = i + 1
+                break
+        spans.append((open_at, end))
+        pos = end
+    return spans
+
+
 def _scan(source: Path, owns_dir: bool) -> tuple[set[tuple[Path, bool, bool]], bool]:
     code, literals = blank(source.read_text(encoding="utf-8", errors="replace"))
+    macros = macro_spans(code)
     base = module_dir(source, owns_dir)
     declared: set[tuple[Path, bool, bool]] = set()
     # Each open brace: the inline module name it opens (None for any other
@@ -287,7 +309,7 @@ def _scan(source: Path, owns_dir: bool) -> tuple[set[tuple[Path, bool, bool]], b
             pos = attribute_end(code, code.index("[", m.start()) + 1)
             if not m.group("inner"):
                 pending_test = pending_test or test
-            elif not leading[-1]:
+            elif not leading[-1] or any(s < m.start() < e for s, e in macros):
                 pass
             elif inline:
                 inline[-1] = (inline[-1][0], inline[-1][1] or test)

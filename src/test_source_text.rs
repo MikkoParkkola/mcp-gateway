@@ -230,10 +230,50 @@ fn leading_scope(code: &[u8], at: usize) -> Option<Scope> {
                 }
                 i = back(k - 2);
             }
-            b'{' if module_header(&code[..i - 1]) => return Some(Scope::Module(i - 1)),
+            b'{' if module_header(&code[..i - 1]) && !in_macro_tokens(code, i - 1) => {
+                return Some(Scope::Module(i - 1));
+            }
             _ => return None,
         }
     }
+}
+
+/// Whether offset `at` sits inside a macro's tokens: a `name!(..)`, `name![..]`
+/// or `name!{..}` call, or a `macro_rules! name {..}` body. A `mod` written
+/// there is input the macro may drop or rewrite, so its inner attributes mark
+/// nothing.
+fn in_macro_tokens(code: &[u8], at: usize) -> bool {
+    let ident = |c: u8| c.is_ascii_alphanumeric() || c == b'_';
+    let mut i = 0;
+    while i < at {
+        if code[i] == b'!' && i > 0 && ident(code[i - 1]) {
+            let mut j = i + 1;
+            while code.get(j).is_some_and(u8::is_ascii_whitespace) {
+                j += 1;
+            }
+            // `macro_rules! name {`: step over the name.
+            if code.get(j).copied().is_some_and(ident) {
+                while code.get(j).copied().is_some_and(ident) {
+                    j += 1;
+                }
+                while code.get(j).is_some_and(u8::is_ascii_whitespace) {
+                    j += 1;
+                }
+            }
+            if matches!(code.get(j), Some(b'(' | b'[' | b'{')) {
+                match matching(code, j) {
+                    Some(close) if j < at && at < close => return true,
+                    Some(close) => {
+                        i = close;
+                        continue;
+                    }
+                    None => return j < at,
+                }
+            }
+        }
+        i += 1;
+    }
+    false
 }
 
 /// Whether `before` ends with `mod name` (so the `{` after it opens an inline

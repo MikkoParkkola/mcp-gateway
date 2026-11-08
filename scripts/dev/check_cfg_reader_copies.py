@@ -27,9 +27,11 @@ from __future__ import annotations
 import argparse
 import ast
 import collections
+import io
 import re
 import subprocess
 import sys
+import tokenize
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -47,6 +49,7 @@ EXEMPT = (
 PY_IDIOMS = [
     re.compile(r"cfg\\+\(\s*(?:\(\?:)?(?:all\\+\()?\)?\??\s*test"),
     re.compile(r"""\(\s*["']flag["']\s*,\s*["']test["']\s*\)"""),
+    re.compile(r"""(?:==|!=|startswith\()\s*["']#!?\[cfg\(test\)\]|["']#!?\[cfg\(test\)\]["']\s*(?:==|!=)"""),
 ]
 RS_IDIOMS = [
     re.compile(r'is_ident\(\s*"test"\s*\)'),
@@ -56,6 +59,7 @@ RS_IDIOMS = [
         r'\s*"#!?\[cfg\(test\)\]'
     ),
     re.compile(r'const\s+\w+\s*:\s*&(?:\'static\s+)?str\s*=\s*"#!?\[cfg\(test\)\]"'),
+    re.compile(r'"#!?\[cfg\(test\)\]"\s*(?:==|!=)'),
 ]
 ITEM = re.compile(r"\b(?:fn|mod)\s+(?:r#)?(\w+)|\bimpl\b(?:<[^{]*?>)?\s+(?:[\w:<>, ]+\s+for\s+)?([\w:]+)")
 
@@ -126,8 +130,41 @@ def rs_scope(text: str):
     return lambda at: scope(at) or "<module>"
 
 
+def py_code(text: str) -> str:
+    """`text` with comments and docstrings blanked (newlines kept): prose, not code."""
+    out = list(text)
+    starts = [0]
+    for line in text.splitlines(keepends=True):
+        starts.append(starts[-1] + len(line))
+
+    def blank(sl, sc, el, ec):
+        for i in range(starts[sl - 1] + sc, starts[el - 1] + ec):
+            if out[i] != "\n":
+                out[i] = " "
+
+    try:
+        for tok in tokenize.generate_tokens(io.StringIO(text).readline):
+            if tok.type == tokenize.COMMENT:
+                blank(*tok.start, *tok.end)
+        for node in ast.walk(ast.parse(text)):
+            body = getattr(node, "body", None)
+            if isinstance(body, list) and body and isinstance(body[0], ast.Expr):
+                doc = body[0].value
+                if isinstance(doc, ast.Constant) and isinstance(doc.value, str):
+                    blank(doc.lineno, doc.col_offset, doc.end_lineno, doc.end_col_offset)
+    except (SyntaxError, tokenize.TokenError):
+        pass
+    return "".join(out)
+
+
+def rs_code(text: str) -> str:
+    """`text` with `//` comments blanked, string literals kept (an idiom can be one)."""
+    return re.sub(r'"(?:\\.|[^"\\])*"|(//[^\n]*)', lambda m: " " * len(m.group(0)) if m.group(1) else m.group(0), text)
+
+
 def matches(rel: str, text: str) -> collections.Counter[Key]:
     found: collections.Counter[Key] = collections.Counter()
+    text = py_code(text) if rel.endswith(".py") else rs_code(text)
     if rel.endswith(".py"):
         scope = py_scope(text)
         for idiom in PY_IDIOMS:
@@ -190,7 +227,9 @@ def git(*args: str) -> str:
 
 def base_allowances(rev: str) -> tuple[str | None, collections.Counter[Key] | None]:
     """The base's list, or, when the base has none yet, its tree's matches."""
-    commit = git("merge-base", rev, "HEAD").strip()
+    # The given revision itself, not a merge-base: a list the base already
+    # shrank may not regrow, whatever the branch's own history holds.
+    commit = git("rev-parse", "--verify", f"{rev}^{{commit}}").strip()
     if LIST in git("ls-tree", "-r", "--name-only", commit, "--", LIST).split():
         return git("show", f"{commit}:{LIST}"), None
     found: collections.Counter[Key] = collections.Counter()

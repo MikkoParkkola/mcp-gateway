@@ -188,6 +188,10 @@ class TestOnlyFiles(unittest.TestCase):
             "mod outer { ignore![#![cfg(test)]]; mod child; }\n",
             "mod outer { ignore!{ #![cfg(test)] } mod child; }\n",
             "mod outer { fn f() {} #![cfg(test)] mod child; }\n",
+            # A `mod` inside a macro's tokens is input the macro may drop.
+            "emit! { mod outer { #![cfg(test)] mod child; } }\n",
+            "emit!( mod outer { #![cfg(test)] mod child; } );\n",
+            "macro_rules! m { () => { mod outer { #![cfg(test)] mod child; } }; }\n",
         ):
             with self.subTest(body=body):
                 found = self.only_test_files({"src/lib.rs": body, "src/outer/child.rs": ""})
@@ -196,6 +200,12 @@ class TestOnlyFiles(unittest.TestCase):
     def test_an_inner_cfg_leading_its_module_still_counts(self):
         found = self.only_test_files(
             {"src/lib.rs": "mod t {\n    #![cfg(test)]\n    mod child;\n}\n", "src/t/child.rs": ""}
+        )
+        self.assertEqual(found, ["src/t/child.rs"])
+
+    def test_a_module_after_a_macro_call_still_leads_its_scope(self):
+        found = self.only_test_files(
+            {"src/lib.rs": "emit! { x }\nmod t {\n    #![cfg(test)]\n    mod child;\n}\n", "src/t/child.rs": ""}
         )
         self.assertEqual(found, ["src/t/child.rs"])
 

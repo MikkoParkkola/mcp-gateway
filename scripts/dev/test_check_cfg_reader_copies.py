@@ -85,6 +85,23 @@ class Detection(Tree):
             self.write(rel, "x = ('flag', 'test')\n" if rel.endswith(".py") else READER_RS)
         self.assertEqual(self.problems(), [])
 
+    def test_comments_and_docstrings_are_prose(self):
+        self.write("src/a.rs", '// judge with a.path().is_ident("test") here\nfn judge() {}\n')
+        self.write("scripts/x.py", '"""Matches cfg\\\\(test spellings."""\n# also ("flag", "test")\nX = 1\n')
+        self.assertEqual(self.problems(), [])
+
+    def test_reversed_and_python_comparisons_are_copies(self):
+        for rel, body, scope in (
+            ("src/a.rs", 'fn judge(l: &str) -> bool { "#[cfg(test)]" == l.trim() }\n', "judge"),
+            ("scripts/x.py", 'def judge(line):\n    return line.strip() == "#[cfg(test)]"\n', "judge"),
+            ("scripts/x.py", 'def judge(line):\n    return line.startswith("#[cfg(test)]")\n', "judge"),
+        ):
+            with self.subTest(body=body):
+                for old in ("src/a.rs", "scripts/x.py"):
+                    (self.root / old).unlink(missing_ok=True)
+                self.write(rel, body)
+                self.assertEqual(self.problems(), [f"new copy: {rel} {scope} (1, listed 0)"])
+
 
 class Allowances(Tree):
     def test_a_listed_copy_passes_and_a_second_in_its_scope_fails(self):
@@ -128,6 +145,58 @@ class Cli(unittest.TestCase):
     def test_the_real_tree_passes(self):
         r = self.run_script()
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+
+
+class BaseRevision(unittest.TestCase):
+    """--base reads the given revision itself, and falls back to that tree's own
+    matches when it has no list yet."""
+
+    def setUp(self):
+        self.dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.dir.cleanup)
+        self.root = Path(self.dir.name)
+        self.git("init", "-q")
+        self.git("config", "user.email", "t@example.invalid")
+        self.git("config", "user.name", "t")
+        self.old_root = C.ROOT
+        C.ROOT = self.root
+        self.addCleanup(setattr, C, "ROOT", self.old_root)
+
+    def git(self, *args):
+        subprocess.run(["git", "-C", str(self.root), *args], check=True, capture_output=True)
+
+    def commit(self, files):
+        for rel, text in files.items():
+            path = self.root / rel
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(text, encoding="utf-8")
+        self.git("add", "-A")
+        self.git("commit", "-qm", "c")
+
+    def test_a_base_without_a_list_allows_its_own_copies(self):
+        self.commit({"src/a.rs": READER_RS})
+        listed, found = C.base_allowances("HEAD")
+        self.assertIsNone(listed)
+        self.assertEqual(dict(found), {("src/a.rs", "judge"): 1})
+
+    def test_a_base_with_a_list_is_read_from_that_revision(self):
+        self.commit({"src/a.rs": READER_RS, C.LIST: C.HEADER + ROW})
+        self.commit({C.LIST: C.HEADER})
+        listed, found = C.base_allowances("HEAD")
+        self.assertEqual(listed, C.HEADER)
+        self.assertIsNone(found)
+        listed, _ = C.base_allowances("HEAD~1")
+        self.assertEqual(listed, C.HEADER + ROW)
+
+    def test_an_allowance_the_base_dropped_after_the_branch_point_stays_dropped(self):
+        self.commit({"src/a.rs": READER_RS, C.LIST: C.HEADER + ROW})
+        self.git("branch", "-M", "line")
+        self.git("checkout", "-q", "-b", "feature")
+        self.git("checkout", "-q", "line")
+        self.commit({C.LIST: C.HEADER})
+        self.git("checkout", "-q", "feature")
+        listed, _ = C.base_allowances("line")
+        self.assertEqual(listed, C.HEADER)
 
 
 if __name__ == "__main__":
