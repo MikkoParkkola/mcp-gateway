@@ -70,6 +70,9 @@ def release_features(manifest: dict) -> list[str]:
         reached = TEST_ONLY.intersection(enabled(features, f))
         if reached:
             raise SystemExit(f"release-features: {f} enables test-only {sorted(reached)}")
+        marked = PRODUCT_MARKERS.intersection(enabled(features, f))
+        if marked:
+            raise SystemExit(f"release-features: {f} enables product marker {sorted(marked)}")
     return picked
 
 

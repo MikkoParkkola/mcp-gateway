@@ -114,6 +114,15 @@ class ClientReleaseSet(unittest.TestCase):
         self.assertEqual(rc, 1, out)
         self.assertIn("mcp-gateway-linux-x86_64.spdx.json: does not describe mcp-gateway 4.0.0", out)
 
+    def test_b2_sbom_only_mode_uses_the_client_root(self):
+        rc, out = self.run_gate("--sbom-only", "--client-root", "mcp-gateway-cli",
+                                expected=["mcp-gateway-cli-linux-x86_64"])
+        self.assertEqual(rc, 1, out)
+        self.assertIn("mcp-gateway-cli-linux-x86_64.spdx.json: does not describe mcp-gateway-cli 4.0.0", out)
+        rc, out = self.run_gate("--sbom-only", "--client-root", "mcp-gateway",
+                                expected=["mcp-gateway-cli-linux-x86_64"])
+        self.assertEqual(rc, 0, out)
+
 
 if __name__ == "__main__":
     unittest.main()
