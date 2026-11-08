@@ -274,7 +274,14 @@ impl Source {
     /// The counter fields that could not be read.
     fn degraded(&self) -> &'static [&'static str] {
         if matches!(self, Self::Unreadable) {
-            &COUNTER_FIELDS
+            mutant!(
+                "not-degraded",
+                {
+                    let all: &'static [&'static str] = &COUNTER_FIELDS;
+                    &all[..7]
+                },
+                &COUNTER_FIELDS
+            )
         } else {
             &[]
         }
@@ -398,7 +405,7 @@ fn latency(store: &CounterStore, now: u64) -> Value {
         "to": hour.to,
         "servers": rows,
         "more": { "count": hour.servers.len().saturating_sub(SERVER_ROWS) },
-        "slowest": hour.slowest.as_ref().map(row),
+        "slowest": mutant!("slowest-in-rows", hour.servers.iter().take(SERVER_ROWS).find(|s| s.calls >= 21).map(row), hour.slowest.as_ref().map(row)),
     })
 }
 

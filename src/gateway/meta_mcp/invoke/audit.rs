@@ -315,7 +315,13 @@ pub(crate) async fn with_dispatch_scope<F: std::future::Future>(
 ) -> (F::Output, DispatchNotes) {
     NOTES
         .scope(RefCell::new(DispatchNotes::default()), async {
+            let timer = mutant!(
+                "scope-timed",
+                crate::gateway::SendTimer::start(),
+                crate::gateway::SendTimer::start_if(false)
+            );
             let output = future.await;
+            timer.finish(crate::counters::End::Answered);
             (output, NOTES.with(RefCell::take))
         })
         .await
