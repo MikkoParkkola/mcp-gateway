@@ -323,7 +323,10 @@ src/gateway/ui/discovery_adopt.rs	adopt_discovery	name_refusal	1	no-record	admin
 src/gateway/ui/discovery_adopt.rs	answer	config_refusal	1	no-record	admin UI discovery adopt: the config writer's guarded read refused gateway.yaml, fixed text, no call delivery
 src/gateway/ui/events.rs	replay_one	refusal	1	no-record	accounts, SSE, start-up or admin UI: no call delivery
 src/gateway/ui/import.rs	fetch_error_message	ssrf_refusal	1	no-record	accounts, SSE, start-up or admin UI: no call delivery
+src/gateway/ui/keys_create.rs	check_expiry	refuse_with	1	no-record	admin UI key create: refuses an expiry past the clock read under the config lock, fixed text, no call delivery
 src/gateway/ui/keys_create.rs	check_flip	refuse_multi_user_flip	1	no-record	admin UI key create: refuses a key that would flip the running multi-user status, no call delivery
+src/gateway/ui/keys_create.rs	check_flip	refuse_with	1	no-record	admin UI key create: records the flip refusal the route answers as restart_required, fixed text, no call delivery
+src/gateway/ui/keys_create.rs	compute	refuse_with	1	no-record	admin UI key create: records the in-place edit refusal the route answers as not_written, fixed text, no call delivery
 src/gateway/ui/overview.rs	kpi_and_servers	startup_refusal	1	no-record	the Overview's Needs-you list: a start-up denial shown to the admin, no call delivery
 src/gateway/ui/policies_rules.rs	refused	first_refusal	1	not-delivered	the Policies read model's flag on a rule; nothing is refused
 src/gateway/ui/preview.rs	preview_backend	refusal	1	no-record	accounts, SSE, start-up or admin UI: no call delivery
