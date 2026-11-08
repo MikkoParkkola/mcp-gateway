@@ -855,6 +855,27 @@ def schemata_self_test() -> tuple[int, list[str]]:
     priv = [re.compile(r"(^|[^A-Za-z0-9])MIK-[0-9]+")]
     refuses("R22 a ticket id in the spec", lambda: check_public_text("#mutant A\n# see MI" "K-1234\n", priv))
     expect("R22 a clean spec", check_public_text(spec_ok, priv), None)
+    # R31-R35: a line written straight to stderr while a row runs can land
+    # between libtest's `test NAME ... ` and its result (fixtures/libtest).
+    fx = Path(__file__).resolve().parent / "fixtures" / "libtest"
+    h12 = "gateway::server::test_seams::health_start_tests::h12_both_files_are_saved_before_serving_and_the_stop_is_clean"
+    meter = ("gateway::router::stored_read_account_tests::http_nonce_alloc::"
+             "a_refused_meta_call_costs_its_parse_plus_a_fixed_cap")
+    for name, file, exit_code, test, want in [
+        ("R31 a stderr line glued after the prefix, then ok", "midline-stderr.txt", 0, h12, "PASSED"),
+        ("R32 forwarded measurement lines, then ok", "alloc-meter-one-thread.txt", 0, meter, "PASSED"),
+        ("R33 a stderr line, then FAILED at the spec line", "failed-after-noise.txt", 101, "m::row_that_fails",
+         "FAILED_AT_SPEC"),
+        ("R34 a caught panic printed by a passing row", "panic-in-passing-test.txt", 0,
+         "m::passes_after_a_caught_panic", "PASSED"),
+        ("R35 a filter that matched nothing", "zero-match.txt", 0, h12, "ERROR:row did not run"),
+    ]:
+        text = (fx / file).read_text(encoding="utf-8")
+        expect(name, classify_row(Outcome(exit_code, text, False), test, "src/x.rs:9"), want)
+    expect("R36 a held prefix with no result stays unrun",
+           classify_row(Outcome(0, f"running 1 test\ntest {t} ... noise\n\ntest result: ok. 1 passed; 0 failed;"
+                                   " 0 ignored; 0 measured; 9 filtered out\n", False), t, loc),
+           "ERROR:row did not run")
     return n, failures
 
 

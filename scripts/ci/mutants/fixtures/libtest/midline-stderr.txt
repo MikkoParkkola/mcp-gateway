@@ -1,0 +1,7 @@
+
+running 1 test
+test gateway::server::test_seams::health_start_tests::h12_both_files_are_saved_before_serving_and_the_stop_is_clean ... audit log at /tmp/.tmpmFJ46f/audit.jsonl is in a temp dir no test kept; created by gateway::server::test_seams::health_start_tests::h12_both_files_are_saved_before_serving_and_the_stop_is_clean
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 17769 filtered out; finished in 0.32s
+
