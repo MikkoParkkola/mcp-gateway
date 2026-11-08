@@ -826,7 +826,7 @@ fn r1_credential_refusals_table() {
 /// checked when a command is given.
 #[test]
 fn r1b_command_credential_refusals_table() {
-    assert_eq!(url("https://h.example/mcp"), none, "plain");
+    assert_eq!(url("https://h.example/mcp"), NONE, "plain");
 
     assert_eq!(cmd("npx tool --api-key=k1"), BAD_CMD, "flag=value");
     assert_eq!(
@@ -855,8 +855,8 @@ fn r1b_command_credential_refusals_table() {
         BAD_CMD,
         "url in an argument"
     );
-    assert_eq!(cmd("npx tool --token ${MY_TOKEN}"), none, "template");
-    assert_eq!(cmd("npx tool --token env:MY_TOKEN"), none, "reference");
+    assert_eq!(cmd("npx tool --token ${MY_TOKEN}"), NONE, "template");
+    assert_eq!(cmd("npx tool --token env:MY_TOKEN"), NONE, "reference");
     assert_eq!(
         cmd("npx -y @scope/server --port 8080 data.json"),
         NONE,
