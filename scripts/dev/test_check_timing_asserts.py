@@ -403,7 +403,8 @@ class NewCode(unittest.TestCase):
         prelude = "// timing-oracle: vs 150 ms SESSION_TTL (why: expiry is what this asserts)\nconst ORACLE: Duration = Duration::from_millis(100);"
         self.assertPasses('timeout(ORACLE, run()).await.expect("x");', prelude=prelude)
         for note in ("vs DRAIN_TIMEOUT (why:)", "vs DRAIN_TIMEOUT (why:   )", "vs the timeout (why: it is short)",
-                     "vs DRAIN_TIMEOUT why: no brackets", "vs DRAIN_TIMEOUT (because: x)"):
+                     "vs DRAIN_TIMEOUT why: no brackets", "vs DRAIN_TIMEOUT (because: x)",
+                     "vs DRAIN_TIMEOUT (why: a) b)", "vs the timeout (why: vs 30 s DRAIN_TIMEOUT)"):
             with self.subTest(note=note):
                 self.assertRefused(f'// timing-oracle: {note}\ntimeout(Duration::from_secs(5), run()).await.expect("x");', guard.ORACLE)
 
