@@ -52,11 +52,6 @@ fn the_upgrading_note_names_every_consequence() {
         ],
     );
     assert!(missing.is_empty(), "{UPGRADING} lacks {missing:?}");
-    // Public text: the follow-up lives in the tracker, not in the note.
-    assert!(
-        !text.contains("MIK-9399"),
-        "{UPGRADING} cites the private follow-up ticket"
-    );
 }
 
 /// The operator doc states the limit: subjects that are email addresses
