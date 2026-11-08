@@ -248,7 +248,10 @@ fn s14_both_crate_roots_carry_the_macros_and_the_switch() {
         let first_mod = first_mod.unwrap_or_else(|| panic!("{crate_root} declares no module"));
         assert!(
             first_mod.ident == "mutant_macro"
-                && first_mod.attrs.iter().any(|a| a.path().is_ident("macro_use")),
+                && first_mod
+                    .attrs
+                    .iter()
+                    .any(|a| a.path().is_ident("macro_use")),
             "{crate_root}: the first module must be `#[macro_use] mod mutant_macro;`"
         );
         let module = file.items.iter().find_map(|item| match item {
@@ -259,7 +262,10 @@ fn s14_both_crate_roots_carry_the_macros_and_the_switch() {
         if crate_root == "src/main.rs" {
             let path = module.attrs.iter().find_map(|a| match &a.meta {
                 syn::Meta::NameValue(nv) if nv.path.is_ident("path") => match &nv.value {
-                    syn::Expr::Lit(syn::ExprLit { lit: syn::Lit::Str(s), .. }) => Some(s.value()),
+                    syn::Expr::Lit(syn::ExprLit {
+                        lit: syn::Lit::Str(s),
+                        ..
+                    }) => Some(s.value()),
                     _ => None,
                 },
                 _ => None,

@@ -73,8 +73,9 @@ mod normal_build {
     fn a_normal_build_drops_the_mutated_tokens() {
         use proc_macro2::{Delimiter, TokenTree};
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/mutant_macro.rs");
-        let file = syn::parse_file(&std::fs::read_to_string(path).expect("read src/mutant_macro.rs"))
-            .expect("parse src/mutant_macro.rs");
+        let file =
+            syn::parse_file(&std::fs::read_to_string(path).expect("read src/mutant_macro.rs"))
+                .expect("parse src/mutant_macro.rs");
         let defs: Vec<&syn::ItemMacro> = file
             .items
             .iter()
