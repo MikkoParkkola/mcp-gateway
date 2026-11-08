@@ -648,3 +648,73 @@ fn a_stream_wrapper_still_matches_its_own_members() {
         Admission::Admitted(frame) => panic!("a source naming B was admitted: {frame:?}"),
     }
 }
+
+/// An answer frame naming A that holds a reservation, as `to_http` writes
+/// it, carrying relay receipts as the meta route's collector leaves them.
+fn held_answer_with_receipts(fw: &Firewall) -> axum::response::Response {
+    let mut response = to_http(read_a(fw), axum::http::StatusCode::OK, "");
+    let live = std::sync::Arc::new(crate::config_reload::LiveConfig::new(
+        crate::config::Config::default(),
+    ));
+    response.extensions_mut().insert(
+        crate::gateway::meta_mcp::invoke::relay::DeferredReceipts::new(
+            crate::gateway::meta_mcp::invoke::relay::StagedReceipts::none(),
+            true,
+            Some(live),
+        ),
+    );
+    response
+}
+
+/// Whether a notification naming B is withheld for the caller now.
+fn b_withheld(fw: &Firewall) -> bool {
+    let b = Payload::Notification(JsonRpcNotification {
+        jsonrpc: "2.0".to_string(),
+        method: names_b(),
+        params: None,
+    });
+    matches!(admit(fw, Some(KEY), b, None), Admission::Blocked(_))
+}
+
+/// h6: a reservation-holding answer that also carries receipts. One read of
+/// the body commits both, each once: the reservation (A is committed, so
+/// B stays withheld after the frame is gone) and the receipts. The control
+/// drops the body unread: neither commits, and B is admitted once the
+/// reservation is released.
+/// Mutants killed: a receipt commit that runs once per chunk; a rewrap
+/// that reads the held body (and so commits its reservation) early.
+#[tokio::test(flavor = "current_thread")]
+async fn h6_a_held_body_with_receipts_commits_each_once() {
+    use crate::gateway::meta_mcp::invoke::relay::commit_capture_hook;
+    let read = firewall(CrossTenantReads::Block);
+    let before = commit_capture_hook::reached();
+    let (response, written) = emit_http_checked(held_answer_with_receipts(&read), None).await;
+    assert!(written, "base: the answer goes out as built");
+    assert_eq!(
+        commit_capture_hook::reached(),
+        before,
+        "nothing commits before the read"
+    );
+    let _ = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    assert_eq!(
+        commit_capture_hook::reached(),
+        before + 1,
+        "the receipts commit once"
+    );
+    assert!(b_withheld(&read), "the read committed A's reservation");
+
+    let dropped = firewall(CrossTenantReads::Block);
+    let (response, _) = emit_http_checked(held_answer_with_receipts(&dropped), None).await;
+    drop(response);
+    assert_eq!(
+        commit_capture_hook::reached(),
+        before + 1,
+        "control: a dropped body commits nothing"
+    );
+    assert!(
+        !b_withheld(&dropped),
+        "control: the unread reservation was released"
+    );
+}
