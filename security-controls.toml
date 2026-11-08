@@ -53,6 +53,10 @@ module = "src/security/rule_id.rs"
 reason = "the keyed id a decision record names a configured rule by (derived key, id form); it names rules, it refuses no request"
 
 [[coverage.not_a_control]]
+module = "src/security/decision_fixture_table.rs"
+reason = "the decision fixture table's row shape, compiled in test builds only (#[cfg(test)] in security/mod.rs); it asserts recorded decisions and refuses no request"
+
+[[coverage.not_a_control]]
 module = "src/security/decision_record.rs"
 reason = "the decision object a record carries (which check decided, config revision); it records a verdict, it refuses no request"
 
@@ -107,6 +111,10 @@ reason = "segment file naming, listing and the high-water mark codec; a helper f
 [[coverage.not_a_control]]
 module = "src/security/transparency_log_checks.rs"
 reason = "the check half of the audit-log-verify control (first-record seams, each entry's chain and signature, the tail against .hwm and the anchor verdict); an offline report that refuses no request; the control row names transparency_log_verify.rs"
+
+[[coverage.not_a_control]]
+module = "src/security/transparency_log_pairing.rs"
+reason = "the settle-pairing half of the audit-log-verify control (each settle record against its intent, fed only the records the chain check verified); an offline report that refuses no request; the control row names transparency_log_verify.rs"
 
 [[coverage.not_a_control]]
 module = "src/security/transparency_log_session.rs"

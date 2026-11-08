@@ -209,7 +209,7 @@ fn refused_write(e: &ReplaceError) -> axum::response::Response {
         )
         .into_response(),
         // The gateway's own posture, fixed text: the operator can act on it.
-        ReplaceError::Refused(why) if why == NO_AUDIT_LOG => structured_error(
+        ReplaceError::NoAuditLog => structured_error(
             StatusCode::SERVICE_UNAVAILABLE,
             "audit_log_required",
             NO_AUDIT_LOG,
@@ -227,6 +227,7 @@ fn refused_write(e: &ReplaceError) -> axum::response::Response {
             .into_response()
         }
         ReplaceError::Refused(_) => unwritten("refused"),
+        ReplaceError::AuditRefused(_) => unwritten("audit_refused"),
         ReplaceError::ReloadRefused(_) => unwritten("reload_refused"),
         ReplaceError::Unsupported(_) => unwritten("unsupported"),
         ReplaceError::Stage(_) => unwritten("stage"),

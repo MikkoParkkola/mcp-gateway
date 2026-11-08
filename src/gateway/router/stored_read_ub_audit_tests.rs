@@ -23,7 +23,7 @@ fn refusals(path: &std::path::Path) -> usize {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn ub_an_unbindable_callers_repeat_writes_the_live_calls_audit_records() {
     let auth = AuthConfig::default();
-    let audit = tempfile::tempdir().expect("a log directory");
+    let audit = crate::test_dir_keep::kept_tempdir();
     let log_path = audit.path().join("audit.jsonl");
     let log = Arc::new(
         crate::security::TransparencyLogger::open(Arc::new(

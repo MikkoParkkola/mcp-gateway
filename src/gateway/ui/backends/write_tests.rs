@@ -55,6 +55,30 @@ async fn the_writer_refusals_answer_fixed_text() {
     );
 }
 
+/// SAVE.6: the audit-log answer follows the refusal's type. A refusal
+/// carrying the same words answers exactly as any other refusal.
+#[tokio::test]
+async fn the_audit_log_answer_follows_the_type_not_the_words() {
+    let look_alike = message(&ReplaceError::Refused(NO_AUDIT_LOG.to_owned())).await;
+    let other = message(&ReplaceError::Refused("zq-other-refusal".to_owned())).await;
+    assert_eq!(look_alike, other, "{look_alike:?}");
+    assert!(
+        !look_alike.1.contains("audit_log_required"),
+        "{look_alike:?}"
+    );
+}
+
+/// SAVE.6: the typed refusal answers 503 `audit_log_required` with its text.
+#[tokio::test]
+async fn the_no_audit_log_refusal_answers_503_audit_log_required() {
+    let (status, text) = message(&ReplaceError::NoAuditLog).await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{text}");
+    assert!(
+        text.contains("audit_log_required") && text.contains(NO_AUDIT_LOG),
+        "{text}"
+    );
+}
+
 /// T6e and the store's other refusals: each answers fixed text naming no
 /// store detail. A vault lock another save held past the deadline is the
 /// store's `Refused(Failed(..))` (`secret_store/save.rs` `take_lock`): a 503

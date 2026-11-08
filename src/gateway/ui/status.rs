@@ -12,7 +12,8 @@ use serde::Serialize;
 use serde_json::{Value, json};
 
 use super::guard::Guard;
-use super::{AppState, access_report, auth_facts, call_windows, is_admin};
+use super::{AppState, access_report, auth_facts, call_windows};
+use crate::gateway::auth::is_gateway_admin;
 use crate::gateway::authz::BackendGrant;
 use crate::oauth::client::sign_in::SignIn;
 
@@ -30,7 +31,7 @@ pub(super) async fn status(
     // narrow by. A scoped admin gets the counts, within its scope: the full
     // view lists every backend.
     let scope = BackendGrant::for_ui(client.as_ref());
-    let view = if is_admin(client.as_ref()) && scope == BackendGrant::Unscoped {
+    let view = if is_gateway_admin(client.as_ref()) && scope == BackendGrant::Unscoped {
         StatusView::Full
     } else {
         StatusView::CountsOnly
