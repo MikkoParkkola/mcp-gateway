@@ -138,6 +138,13 @@ def self_test():
     assert ignored("src/b_tests.rs", glob_regex("src/**/*_tests.rs")), "** spans zero directories"
     assert not ignored("src/a/b.rs", glob_regex("src/**/*_tests.rs"))
     assert ignored("src/cli/complete.js", glob_regex("src/**/*.js")), "embedded files are checked too"
+    # Dep-info (row A13): continued lines, escaped spaces, a Windows drive letter.
+    assert dep_info_paths("/r/t/x.d: /r/src/a.rs \\\n  /r/src/b.rs\n\n/r/src/a.rs:\n") == [
+        "/r/src/a.rs", "/r/src/b.rs"], "a backslash-continued rule keeps its later paths"
+    assert dep_info_paths("/r/t/x.d: /r/src/a\\ b.rs /r/src/c.rs\n") == [
+        "/r/src/a b.rs", "/r/src/c.rs"], "an escaped space stays inside its path"
+    assert dep_info_paths("C:\\r\\t\\x.d: C:\\r\\src\\a.rs C:\\r\\src\\b.rs\n") == [
+        "C:\\r\\src\\a.rs", "C:\\r\\src\\b.rs"], "the rule splits at colon-space, not a drive letter"
 
 
 def main():
