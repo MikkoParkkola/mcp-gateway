@@ -5,8 +5,9 @@
 
 Static checks on ci.yml and scripts/ci/shard_tests.py:
 
-- every OS's shards are exact complements: the whole lib unfiltered, or one
-  lib filter and its `--skip`, and integration globs that are `*` alone or a class and its negation;
+- every OS's shards are exact complements: the whole lib unfiltered, or a
+  cascade of lib filters (each shard skips every earlier shard's filters, one
+  catch-all skips them all), and integration globs that are `*` alone or a class and its negation;
 - together they cover the targets the unsharded command ran (Linux, macOS:
   lib, bins, tests, doctests; Windows: `--tests`, which is lib, bins, tests);
 - each shard matrix in ci.yml lists exactly that OS's shards;
@@ -91,7 +92,8 @@ def lib_cascade(lib_filters) -> bool:
         return False
     taken = set()
     for pos, skip in sorted(rest, key=lambda p: len(p[1])):
-        if skip != taken or pos & taken:
+        # libtest filters match substrings: a filter containing a skipped one selects nothing.
+        if skip != taken or any(t in p for p in pos for t in taken):
             return False
         taken |= pos
     return catch[0][1] == taken
@@ -316,6 +318,9 @@ def cascade_rows() -> None:
         "middle shard does not skip the earlier group": [(split,), ("a::",), ("--skip", split, "--skip", "a::")],
         "a shard takes a group an earlier one took": [(split,), (split, "--skip", split), ("--skip", split)],
         "two catch-alls": [(split,), ("--skip", split), ("--skip", split)],
+        # Every name containing x::gateway:: also contains gateway::, so the skip empties that shard.
+        "a later filter contains an earlier one (selects nothing)": [
+            (split,), ("x::" + split, "--skip", split), ("--skip", split, "--skip", "x::" + split)],
     }
     for name, filters in accepted.items():
         assert lib_cascade(filters), f"cascade rule refused a valid split: {name}"

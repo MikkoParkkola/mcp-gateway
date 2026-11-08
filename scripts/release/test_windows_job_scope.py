@@ -33,7 +33,7 @@ def shard_table():
 
 
 def test_the_job_runs_every_test_target_skipping_only_the_full_burst():
-    # Since MIK-8482 the suite is four shards; together they are exactly
+    # Since MIK-8482 the suite is sharded (five shards, three of them lib); together they are exactly
     # `cargo test --all-features --tests --no-fail-fast -- --skip mik_7479_full_burst`.
     job = windows_job()
     # Exact match on purpose: any change to the command must revisit this guard.
@@ -80,7 +80,7 @@ def test_the_windows_lib_shards_split_the_library_exactly_once():
         "gateway::server::tests::a", "gateway::security::x", "security::firewall::t", "capability::parser::t",
         "events::bus::t", "backend::http::t", "transport::stdio::t", "oauth::storage::t",
         "config::tests::t", "config_reload::events::t", "personal_accounts::t", "protocol::t", "trust::t",
-        "cost_accounting::t", "x::transport::y", "eventsource::t",
+        "cost_accounting::t", "x::transport::y", "eventsource::t", "security::transport::tests::x",
     ]
     for name in names:
         hits = [n for n, args in lib.items() if libtest_selects(name, args)]
