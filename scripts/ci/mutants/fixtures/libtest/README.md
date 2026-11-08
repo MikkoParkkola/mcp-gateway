@@ -13,3 +13,5 @@ result in a merged stream; each parser must still read one record per test.
 | failed-after-noise.txt | libtest's format, a stderr line glued after the prefix | m::row_that_fails, FAILED, panicked at src/x.rs:9 |
 | panic-in-passing-test.txt | libtest's --nocapture format, a caught panic | m::passes_after_a_caught_panic, ok |
 | zero-match.txt | libtest's format, a filter that matched nothing | no record |
+| stray-ok-before-failed.txt | libtest's format, a stderr line that is `ok` alone before the real FAILED | must not read as a pass |
+| stray-failed-before-ok.txt | libtest's format, a stderr `FAILED` line and a caught panic at the spec line before the real ok | must not read as a kill |

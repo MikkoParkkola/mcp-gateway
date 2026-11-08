@@ -900,6 +900,14 @@ def schemata_self_test() -> tuple[int, list[str]]:
     ]:
         text = (fx / file).read_text(encoding="utf-8")
         expect(name, classify_row(Outcome(exit_code, text, False), test, "src/x.rs:9"), want)
+    for name, file, exit_code, want in [
+        ("R37 a stray ok line before the real FAILED is no pass", "stray-ok-before-failed.txt", 101,
+         "ERROR:record disagrees with the exit code or summary"),
+        ("R38 a stray FAILED line before the real ok is no kill", "stray-failed-before-ok.txt", 0,
+         "ERROR:record disagrees with the exit code or summary"),
+    ]:
+        text = (fx / file).read_text(encoding="utf-8")
+        expect(name, classify_row(Outcome(exit_code, text, False), "m::row_with_noise", "src/x.rs:9"), want)
     expect("R36 a held prefix with no result stays unrun",
            classify_row(Outcome(0, f"running 1 test\ntest {t} ... noise\n\ntest result: ok. 1 passed; 0 failed;"
                                    " 0 ignored; 0 measured; 9 filtered out\n", False), t, loc),
