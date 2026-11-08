@@ -11,6 +11,9 @@ use axum::response::Response;
 use serde_json::{Value, json};
 
 use super::access::{self, Access, Refused};
+use super::decision_fixtures::{
+    assert_no_sentinel, call as dcall, decision, write_chained as write_dec,
+};
 use super::{ListQuery, Logs, list_page};
 use crate::control_plane::ControlPlaneRole;
 use crate::control_plane::role_mapping::{ControlPlaneRoleMappingConfig, ControlPlaneRoleRule};
@@ -82,6 +85,7 @@ fn query(pairs: &[(&str, &str)]) -> ListQuery {
         match *k {
             "outcome" => q.outcome = v,
             "rule" => q.rule = v,
+            "server" => q.server = v,
             "limit" => q.limit = v,
             "cursor" => q.cursor = v,
             other => panic!("no query field {other}"),
@@ -245,13 +249,102 @@ async fn r3_cleaned_answers_400_with_the_supported_list() {
     );
 }
 
+/// Write decision-carrying calls, given newest first.
+fn write_newest_first(l: &Logs, mut calls: Vec<Value>) {
+    calls.reverse();
+    write_dec(&l.invocation, &mut calls);
+}
+
+fn named(server: &str, tool: &str, rule: &str) -> Value {
+    dcall(server, tool, Some(decision(Some(rule))))
+}
+
 #[tokio::test]
-async fn a_rule_filter_answers_400_until_rules_are_recorded() {
+async fn list_rule_filter_returns_exactly_that_rules_rows() {
     let dir = tempfile::tempdir().unwrap();
-    let logs = fixture(&dir);
-    let (status, v) = body(list_page(&logs, &Access::All, &query(&[("rule", "r1")]))).await;
-    assert_eq!(status, StatusCode::BAD_REQUEST);
-    assert_eq!(v["error"], "rules are not recorded by this gateway version");
+    let l = logs(&dir);
+    write_newest_first(
+        &l,
+        vec![
+            named("srv", "t_r1", "r1"),
+            named("srv", "t_r2", "r2"),
+            dcall("srv", "t_norule", Some(decision(None))),
+            dcall("srv", "t_nodec", None),
+        ],
+    );
+    let (status, v) = body(list_page(&l, &Access::All, &query(&[("rule", "r1")]))).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(tools(&v), BTreeSet::from(["t_r1".to_string()]));
+    assert_no_sentinel(&v.to_string());
+}
+
+/// Page with `limit=1` through `next_cursor`, collecting the tools in order.
+async fn paged_tools(l: &Logs, pairs: &[(&str, &str)]) -> Vec<String> {
+    let mut seen = Vec::new();
+    let mut cursor: Option<String> = None;
+    for _ in 0..20 {
+        let mut q = pairs.to_vec();
+        q.push(("limit", "1"));
+        if let Some(c) = &cursor {
+            q.push(("cursor", c));
+        }
+        let (status, v) = body(list_page(l, &Access::All, &query(&q))).await;
+        assert_eq!(status, StatusCode::OK);
+        seen.extend(
+            v["rows"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|r| r["tool"].as_str().unwrap().to_string()),
+        );
+        match v["next_cursor"].as_str() {
+            Some(c) => cursor = Some(c.to_string()),
+            None => return seen,
+        }
+    }
+    panic!("the cursor never ended");
+}
+
+#[tokio::test]
+async fn list_rule_filter_ands_with_server_and_pages() {
+    let dir = tempfile::tempdir().unwrap();
+    let l = logs(&dir);
+    write_newest_first(
+        &l,
+        vec![
+            named("srv", "a1", "r1"),
+            named("srv", "x1", "r2"),
+            named("other", "o1", "r1"),
+            named("srv", "x2", "r2"),
+            named("srv", "a2", "r1"),
+            named("srv", "x3", "r2"),
+            named("srv", "a3", "r1"),
+        ],
+    );
+    let got = paged_tools(&l, &[("rule", "r1"), ("server", "srv")]).await;
+    assert_eq!(got, ["a1", "a2", "a3"]);
+}
+
+#[tokio::test]
+async fn list_sparse_rule_filter_resumes_past_scan_exhausted() {
+    let dir = tempfile::tempdir().unwrap();
+    let l = logs(&dir);
+    let pad = "z".repeat(400);
+    let mut calls = vec![named("srv", "needle", "r1")];
+    for i in 0..25_000 {
+        let mut c = named("srv", &format!("hay_{i}"), "r2");
+        c["pad"] = pad.clone().into();
+        calls.push(c);
+    }
+    write_dec(&l.invocation, &mut calls);
+    assert!(std::fs::metadata(&l.invocation).unwrap().len() > 9 << 20);
+    let (_, first) = body(list_page(&l, &Access::All, &query(&[("rule", "r1")]))).await;
+    assert!(first["rows"].as_array().unwrap().is_empty());
+    assert_eq!(first["scan_exhausted"], true);
+    let cursor = first["next_cursor"].as_str().expect("a cursor to resume");
+    let q = query(&[("rule", "r1"), ("cursor", cursor)]);
+    let (_, next) = body(list_page(&l, &Access::All, &q)).await;
+    assert_eq!(tools(&next), BTreeSet::from(["needle".to_string()]));
 }
 
 #[tokio::test]
