@@ -100,6 +100,8 @@ pub(crate) mod rotation_fault {
 pub(crate) mod pager;
 #[path = "transparency_log_segments.rs"]
 pub(crate) mod segments;
+#[path = "transparency_log_sigstart.rs"]
+pub(crate) mod sigstart;
 #[cfg(test)]
 #[path = "transparency_log_sigstart_fixture.rs"]
 pub(crate) mod sigstart_fixture;
