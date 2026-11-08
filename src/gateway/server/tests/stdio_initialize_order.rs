@@ -98,7 +98,12 @@ async fn spawn_backend() -> (String, Seen) {
 async fn serve(
     output: DuplexStream,
     gate: Option<Arc<Semaphore>>,
-) -> (DuplexStream, Seen, JoinHandle<()>, std::sync::Arc<tempfile::TempDir>) {
+) -> (
+    DuplexStream,
+    Seen,
+    JoinHandle<()>,
+    std::sync::Arc<tempfile::TempDir>,
+) {
     let (backend_url, seen) = spawn_backend().await;
     let dir = crate::test_dir_keep::kept_tempdir();
     let path = dir.path().join("gateway.yaml");

@@ -16,7 +16,11 @@ async fn gateway(auth: bool, dir: &std::sync::Arc<tempfile::TempDir>) -> Gateway
 
 /// [`gateway`] with the audit switch as given, so the unset row (MIK-8044
 /// P2c2) shares the blocked-path fixture with the explicit one.
-async fn gateway_with(auth: bool, enabled: Option<bool>, dir: &std::sync::Arc<tempfile::TempDir>) -> Gateway {
+async fn gateway_with(
+    auth: bool,
+    enabled: Option<bool>,
+    dir: &std::sync::Arc<tempfile::TempDir>,
+) -> Gateway {
     let blocker = dir.path().join("not-a-dir");
     std::fs::write(&blocker, b"x").expect("blocker file");
     let mut config = Config::default();

@@ -271,7 +271,10 @@ mod tests {
 
     #[test]
     fn store_opens_at_explicit_store_dir() {
-        let (cfg_dir, data) = (crate::test_dir_keep::kept_tempdir(), crate::test_dir_keep::kept_tempdir());
+        let (cfg_dir, data) = (
+            crate::test_dir_keep::kept_tempdir(),
+            crate::test_dir_keep::kept_tempdir(),
+        );
         let store_dir = data.path().join("cp");
         let (config, path) = load(
             cfg_dir.path(),
@@ -295,7 +298,10 @@ mod tests {
 
     #[test]
     fn explicit_unopenable_store_dir_refuses_start() {
-        let (cfg_dir, data) = (crate::test_dir_keep::kept_tempdir(), crate::test_dir_keep::kept_tempdir());
+        let (cfg_dir, data) = (
+            crate::test_dir_keep::kept_tempdir(),
+            crate::test_dir_keep::kept_tempdir(),
+        );
         crate::gateway::test_helpers::write_owner_only(
             data.path().join("file"),
             b"not a directory",
@@ -399,7 +405,10 @@ mod tests {
 
     #[tokio::test]
     async fn export_reads_governance_log_from_store_dir() {
-        let (cfg_dir, data) = (crate::test_dir_keep::kept_tempdir(), crate::test_dir_keep::kept_tempdir());
+        let (cfg_dir, data) = (
+            crate::test_dir_keep::kept_tempdir(),
+            crate::test_dir_keep::kept_tempdir(),
+        );
         let store_dir = data.path().join("cp");
         // The invocation log path goes into the one `security` block the
         // auth-on config already carries (D1: auth on requires the log).

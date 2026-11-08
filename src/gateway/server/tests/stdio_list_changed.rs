@@ -174,7 +174,11 @@ tasks:\n  store_dir: {}\n",
 
 /// A stdio gateway booted from `yaml`, written as `gateway.yaml` in `dir`, as
 /// production starts it, served over in-memory pipes.
-pub(super) async fn boot(dir: std::sync::Arc<tempfile::TempDir>, yaml: String, stdout_bytes: usize) -> Serve {
+pub(super) async fn boot(
+    dir: std::sync::Arc<tempfile::TempDir>,
+    yaml: String,
+    stdout_bytes: usize,
+) -> Serve {
     let path = dir.path().join("gateway.yaml");
     crate::gateway::test_helpers::write_owner_only(&path, yaml).expect("write config");
     let serve_dir = dir;
