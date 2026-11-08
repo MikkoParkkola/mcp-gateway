@@ -33,29 +33,9 @@ use crate::secret_store::{
 use super::ReloadContext;
 use crate::config_persistence::keyedit::Template;
 
-/// The SHA-256 of a file's bytes, lowercase hex: the revision a diff or a
-/// history view was made from. Not `config_revision`, which also covers the
-/// process environment and `file:` secrets.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct FileRevision(String);
-
-impl FileRevision {
-    /// The revision of `bytes`.
-    #[must_use]
-    pub(crate) fn of(bytes: &[u8]) -> Self {
-        Self(crate::hashing::sha256_hex(bytes))
-    }
-
-    /// The hex digest.
-    #[must_use]
-    #[cfg_attr(
-        all(not(feature = "webui"), not(test)),
-        expect(dead_code, reason = "read by the web UI's discovery route")
-    )]
-    pub(crate) fn as_str(&self) -> &str {
-        &self.0
-    }
-}
+// The revision type lives with the config commit primitive, which every
+// build compiles; the replace path names it from there.
+pub(crate) use crate::config_persistence::commit::FileRevision;
 
 /// What the file must hold for the write to go ahead.
 #[cfg_attr(
@@ -679,7 +659,7 @@ impl ReloadContext {
                 let _ = std::fs::remove_file(kept);
             }
         };
-        if let Err(e) = journal::begin(target, FileRevision::of(current).0) {
+        if let Err(e) = journal::begin(target, FileRevision::of(current).as_str().to_owned()) {
             unkeep();
             return Err(Self::roll_back(
                 target,
