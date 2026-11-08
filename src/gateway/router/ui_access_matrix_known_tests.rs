@@ -133,7 +133,7 @@ fn the_expectation_holds_known_answers() {
     }
 }
 
-/// MIK-9242: a receipt for a call with no decision object reads the by-version
+/// A receipt for a call with no decision object reads the by-version
 /// line in `findings`, not the old placeholder. That text is why the six
 /// `other-receipt` 200 cells (AdminKey, AdminKeyUnmapped, Bearer, OidcAdmin,
 /// OidcAuditor, Session) carry a new digest in `ui_access_matrix.tsv`.
@@ -153,7 +153,7 @@ async fn matrix_known_receipt_cells_moved_for_findings_line() {
 
 /// The six `other-receipt` 200 cells that moved, each with why: the seeded
 /// call has no decision object, so the receipt's `findings` text changed from
-/// the old placeholder to the reader's by-version line (MIK-9242).
+/// the old placeholder to the reader's by-version line.
 const MOVED_FOR_FINDINGS_LINE: [(&str, &str); 6] = [
     (
         "AdminKey",

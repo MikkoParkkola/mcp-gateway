@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Records with a decision object, shared by the rule-filter, receipt and
-//! export rows of MIK-9242. Every record carries nested secret sentinels that
+//! export rows. Every record carries nested secret sentinels that
 //! no row may ever serve.
 
 use std::path::Path;

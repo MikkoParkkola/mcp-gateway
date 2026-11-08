@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! MIK-9242 rows T4, T5, T6 and the CSV half of T13: the rule filter through
+//! Rows T4, T5, T6 and the CSV half of T13: the rule filter through
 //! the NDJSON and CSV exports, and the scan cap over a filter nothing meets.
 
 use serde_json::{Value, json};

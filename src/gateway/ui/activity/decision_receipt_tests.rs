@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! MIK-9242 rows T7-T12, T15, T16 and the receipt half of T18: the receipt's
+//! Rows T7-T12, T15, T16 and the receipt half of T18: the receipt's
 //! decision evidence, read back through the decision reader's lines.
 
 use serde_json::{Value, json};
