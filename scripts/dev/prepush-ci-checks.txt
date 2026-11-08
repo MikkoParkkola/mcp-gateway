@@ -78,6 +78,7 @@ python3 scripts/release/test_check_known_issues.py	1	closed
 python3 scripts/release/test_check_macos_exclusions.py	4	closed
 python3 scripts/release/test_check_nfr_demo_1_recordings.py	1	closed
 python3 scripts/release/test_check_release_assets.py	1	closed
+python3 scripts/release/test_check_release_assets_client.py	1	closed
 python3 scripts/release/test_check_security_fragments.py	1	closed
 # Surface inventory: non-cli tables and row format for all tables. The cli table's membership
 # gate is tests/cli_surface_inventory.rs (cargo, CI only), not this cargo-free step.
