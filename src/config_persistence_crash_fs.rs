@@ -209,19 +209,28 @@ pub(super) fn note_dir_synced(dir: &Path) {
 pub(super) struct Staged {
     generation: FileId,
     bytes: Vec<u8>,
+    // The synced scratch, held from staging on (default sharing, so the
+    // rename still works) so its identity cannot be reused before bind.
+    held: File,
 }
 
 /// The synced scratch's identity, taken by path (nothing else touches the
 /// scratch), and the exact bytes write_atomic wrote and synced into it.
 pub(super) fn stage(target: &Path, scratch: &Path, bytes: &[u8]) -> Option<Staged> {
     let dir = key(target.parent()?);
-    let armed = ARMED
+    let mut armed = ARMED
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    armed.as_ref()?.get(&dir)?;
+    let overlay = armed.as_mut()?.get_mut(&dir)?;
+    let held = File::open(scratch).expect("crash_fs: hold scratch");
+    let generation = file_id(&held).expect("crash_fs: scratch identity");
+    // The scratch's bytes were synced before this call: durable now, under
+    // its own generation, whatever happens to its name later.
+    overlay.data.insert(generation, bytes.to_vec());
     Some(Staged {
-        generation: path_id(scratch).expect("crash_fs: scratch identity"),
+        generation,
         bytes: bytes.to_vec(),
+        held,
     })
 }
 
@@ -236,20 +245,20 @@ pub(super) fn bind(target: &Path, staged: Staged) {
     else {
         return;
     };
-    let Ok(file) = File::open(target) else {
+    overlay.held.insert(staged.generation, staged.held);
+    // Bind the name only if the file now at the target is the staged one.
+    let Ok(now) = File::open(target).and_then(|f| file_id(&f)) else {
         return;
     };
-    let generation = file_id(&file).expect("crash_fs: file identity");
-    if generation != staged.generation {
+    if now != staged.generation {
         return;
     }
     let name = target
         .file_name()
         .and_then(|n| n.to_str())
         .expect("crash_fs: UTF-8 name");
-    overlay.data.insert(generation, staged.bytes);
-    overlay.current.insert(name.to_owned(), generation);
-    overlay.held.insert(generation, file);
+    overlay.data.insert(now, staged.bytes);
+    overlay.current.insert(name.to_owned(), now);
 }
 
 /// Trust boundary: this notification follows the real sync_all in flush;
@@ -267,12 +276,22 @@ pub(super) fn note_flushed(target: &Path, file: &mut File) -> io::Result<()> {
         return Ok(());
     };
     let generation = file_id(file)?;
+    // Hold the generation before recording it. Unix: a clone of the flushed
+    // handle. Windows: the read-back handle denies delete sharing (holding a
+    // clone would block later renames), and it also stops the file being
+    // replaced while held, so a fresh default-sharing handle is this file.
+    #[cfg(unix)]
+    let held = file.try_clone()?;
+    #[cfg(not(unix))]
+    let held = {
+        let fresh = File::open(target)?;
+        if file_id(&fresh)? != generation {
+            return Err(io::Error::other("crash_fs: flushed file was replaced"));
+        }
+        fresh
+    };
     let bytes = read_bytes(file)?;
+    overlay.held.insert(generation, held);
     overlay.data.insert(generation, bytes);
-    // A fresh handle keeps default delete sharing on Windows.
-    let held = File::open(target)?;
-    if file_id(&held)? == generation {
-        overlay.held.insert(generation, held);
-    }
     Ok(())
 }

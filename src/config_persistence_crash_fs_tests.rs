@@ -184,3 +184,26 @@ fn an_in_place_flush_updates_only_the_current_generation() {
         assert_eq!(std::fs::read(path).expect("read"), expected, "{mode:?}");
     }
 }
+
+/// C9: red oracle: after a replacement the overlay never saw (a plain
+/// rename), a flush of the new file is what the keep modes keep: cut binds
+/// names to the files it reads, not to a stale generation.
+#[test]
+fn an_unhooked_replacement_then_flush_keeps_the_flushed_bytes() {
+    const FLUSHED: &[u8] = b"server:\n  port: 5\n";
+    let (dir, path) = config();
+    let _armed = crash_fs::arm(dir.path());
+    let other = dir.path().join("replacement");
+    std::fs::write(&other, FLUSHED).expect("replacement");
+    std::fs::rename(&other, &path).expect("unhooked replace");
+    let mut file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&path)
+        .expect("open replacement");
+    file.sync_all().expect("data sync");
+    crash_fs::note_flushed(&path, &mut file).expect("record flush");
+    drop(file);
+    crash_fs::cut(dir.path(), Mode::KeepRenameDropData { seed: 3 });
+    assert_eq!(std::fs::read(&path).expect("read"), FLUSHED);
+}
