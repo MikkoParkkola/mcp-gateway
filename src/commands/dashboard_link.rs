@@ -14,6 +14,26 @@ use mcp_gateway::cli::dashboard_link::DashboardLinkTls;
 /// The environment variable the admin credential is read from.
 pub(crate) const TOKEN_ENV: &str = "MCP_GATEWAY_TOKEN";
 
+/// A missing credential and an explicitly blank setting have different exits.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum TokenError {
+    Missing,
+    Blank,
+}
+
+impl std::fmt::Display for TokenError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Missing => write!(
+                formatter,
+                "{TOKEN_ENV} is not set. Export the gateway's bearer token or an admin API \
+                 key in {TOKEN_ENV}; it is never read from the command line."
+            ),
+            Self::Blank => write!(formatter, "{TOKEN_ENV} is empty."),
+        }
+    }
+}
+
 /// What the link request trusts and presents.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct LinkTls {
@@ -28,18 +48,15 @@ pub struct LinkTls {
 ///
 /// # Errors
 ///
-/// A message naming [`TOKEN_ENV`] when it is unset or blank.
-pub(crate) fn read_token(lookup: impl Fn(&str) -> Option<String>) -> Result<String, String> {
+/// Distinguishes an unset [`TOKEN_ENV`] from an explicitly blank value.
+pub(crate) fn read_token(lookup: impl Fn(&str) -> Option<String>) -> Result<String, TokenError> {
     // Not trimmed: credentials compare byte for byte, so rewriting one would
-    // turn a valid key into a refused one. Only a blank value is missing.
-    lookup(TOKEN_ENV)
-        .filter(|t| !t.trim().is_empty())
-        .ok_or_else(|| {
-            format!(
-                "{TOKEN_ENV} is not set. Export the gateway's bearer token or an admin API \
-                 key in {TOKEN_ENV}; it is never read from the command line."
-            )
-        })
+    // turn a valid key into a refused one.
+    match lookup(TOKEN_ENV) {
+        None => Err(TokenError::Missing),
+        Some(token) if token.trim().is_empty() => Err(TokenError::Blank),
+        Some(token) => Ok(token),
+    }
 }
 
 /// The gateway to ask: `--url` when given, otherwise the listener the config
@@ -173,14 +190,13 @@ pub(crate) async fn admin_call(
     tls: &LinkTls,
 ) -> Result<serde_json::Value, String> {
     let endpoint = format!("{}{path}", base.trim_end_matches('/'));
-    let response = send_admin_request(method, &endpoint, base, token, tls, None).await?;
+    let response = send_admin_request(method, &endpoint, base, token, tls, None)
+        .await
+        .map_err(|error| error.to_string())?;
     let status = response.status();
     let body: serde_json::Value = response.json().await.unwrap_or_default();
     if !status.is_success() {
-        let reason = body["reason"]
-            .as_str()
-            .or_else(|| body["error"].as_str())
-            .unwrap_or("no reason given");
+        let reason = gateway_reason(&body).unwrap_or("no reason given");
         return Err(format!("the gateway answered {status}: {reason}"));
     }
     if body.is_null() {
@@ -189,9 +205,57 @@ pub(crate) async fn admin_call(
     Ok(body)
 }
 
+/// The server's reason across its structured, JSON-RPC and flat error shapes.
+pub(crate) fn gateway_reason(body: &serde_json::Value) -> Option<&str> {
+    body["message"]
+        .as_str()
+        .or_else(|| body["error"]["message"].as_str())
+        .or_else(|| body["error"].as_str())
+        .or_else(|| body["reason"].as_str())
+}
+
+/// Classifications retained before transport errors become diagnostic strings.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum AdminFailureKind {
+    Target,
+    LocalIo,
+    Settings,
+    Dns,
+    Connect,
+    Tls,
+    ResponseLost,
+}
+
+/// A transport failure and any response metadata received before it failed.
+#[derive(Debug)]
+pub(crate) struct AdminCallError {
+    pub(crate) kind: AdminFailureKind,
+    pub(crate) detail: String,
+    pub(crate) status: Option<reqwest::StatusCode>,
+    pub(crate) request_id: Option<String>,
+}
+
+impl AdminCallError {
+    fn new(kind: AdminFailureKind, detail: String) -> Self {
+        Self {
+            kind,
+            detail,
+            status: None,
+            request_id: None,
+        }
+    }
+}
+
+impl std::fmt::Display for AdminCallError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.detail)
+    }
+}
+
 /// The status and unmodified body, including an unsuccessful HTTP answer.
 pub(crate) struct AdminResponse {
     pub(crate) status: reqwest::StatusCode,
+    pub(crate) headers: reqwest::header::HeaderMap,
     pub(crate) body: Vec<u8>,
 }
 
@@ -206,7 +270,7 @@ pub(crate) async fn admin_call_url(
     token: &str,
     tls: &LinkTls,
     body: Option<&serde_json::Value>,
-) -> Result<AdminResponse, String> {
+) -> Result<AdminResponse, AdminCallError> {
     let response = send_admin_request(
         method,
         endpoint.clone(),
@@ -217,12 +281,25 @@ pub(crate) async fn admin_call_url(
     )
     .await?;
     let status = response.status();
+    let headers = response.headers().clone();
     let body = response
         .bytes()
         .await
-        .map_err(|e| transport_error(endpoint.as_str(), e, tls))?
+        .map_err(|error| AdminCallError {
+            kind: AdminFailureKind::ResponseLost,
+            detail: transport_error(endpoint.as_str(), error, tls),
+            status: Some(status),
+            request_id: headers
+                .get("x-request-id")
+                .and_then(|value| value.to_str().ok())
+                .map(ToString::to_string),
+        })?
         .to_vec();
-    Ok(AdminResponse { status, body })
+    Ok(AdminResponse {
+        status,
+        headers,
+        body,
+    })
 }
 
 /// Share target checks and TLS policy without changing legacy body handling.
@@ -233,14 +310,15 @@ async fn send_admin_request(
     token: &str,
     tls: &LinkTls,
     body: Option<&serde_json::Value>,
-) -> Result<reqwest::Response, String> {
-    check_target(base)?;
+) -> Result<reqwest::Response, AdminCallError> {
+    check_target(base).map_err(|detail| AdminCallError::new(AdminFailureKind::Target, detail))?;
     // Direct, never through an environment proxy: an HTTP_PROXY would carry the
     // credential off this machine even to a loopback URL. No redirects either:
     // `check_target` vetted only this URL, and a same-host, same-port hop
     // (https to http) would keep the bearer.
     let mut builder = reqwest::Client::builder()
         .no_proxy()
+        .retry(reqwest::retry::never())
         .redirect(reqwest::redirect::Policy::none());
     // A named CA is the only root (#1832); the test roots join only the
     // default roots, so a named CA replaces them too.
@@ -251,9 +329,12 @@ async fn send_admin_request(
     if let Some((cert, key)) = &tls.identity {
         builder = builder.identity(read_identity(cert, key)?);
     }
-    let client = builder
-        .build()
-        .map_err(|e| format!("could not build the HTTP client: {e}"))?;
+    let client = builder.build().map_err(|error| {
+        AdminCallError::new(
+            AdminFailureKind::Settings,
+            format!("could not build the HTTP client: {error}"),
+        )
+    })?;
     let mut request = client
         .request(method, endpoint)
         .timeout(std::time::Duration::from_secs(30))
@@ -261,10 +342,35 @@ async fn send_admin_request(
     if let Some(body) = body {
         request = request.json(body);
     }
-    request
-        .send()
-        .await
-        .map_err(|e| transport_error(base, e, tls))
+    request.send().await.map_err(|error| {
+        AdminCallError::new(send_failure_kind(&error), transport_error(base, error, tls))
+    })
+}
+
+/// Connect errors precede HTTP dispatch; other send failures may follow it.
+fn send_failure_kind(error: &reqwest::Error) -> AdminFailureKind {
+    if error.is_builder() {
+        return AdminFailureKind::Settings;
+    }
+    if error.is_dns() {
+        return AdminFailureKind::Dns;
+    }
+    if !error.is_connect() {
+        return AdminFailureKind::ResponseLost;
+    }
+    let mut cause = std::error::Error::source(error);
+    while let Some(inner) = cause {
+        let tls_error = inner.is::<rustls::Error>()
+            || inner
+                .downcast_ref::<std::io::Error>()
+                .and_then(std::io::Error::get_ref)
+                .is_some_and(|source| source.is::<rustls::Error>());
+        if tls_error {
+            return AdminFailureKind::Tls;
+        }
+        cause = inner.source();
+    }
+    AdminFailureKind::Connect
 }
 
 /// `mcp-gateway events dead-letters`: the request the arguments describe.
@@ -358,7 +464,7 @@ async fn run_dead_letters_command(
     args: &mcp_gateway::cli::events::DeadLettersArgs,
 ) -> ExitCode {
     let result = match (
-        read_token(|name| std::env::var(name).ok()),
+        read_token(|name| std::env::var(name).ok()).map_err(|error| error.to_string()),
         dead_letters_request(args),
     ) {
         (Ok(token), Ok((method, path))) => admin_call(method, base, &path, &token, tls).await,
@@ -379,31 +485,46 @@ async fn run_dead_letters_command(
     }
 }
 
-fn read_file(path: &Path) -> Result<Vec<u8>, String> {
-    std::fs::read(path).map_err(|e| format!("could not read {}: {e}", path.display()))
+fn read_file(path: &Path) -> Result<Vec<u8>, AdminCallError> {
+    std::fs::read(path).map_err(|error| {
+        AdminCallError::new(
+            AdminFailureKind::LocalIo,
+            format!("could not read {}: {error}", path.display()),
+        )
+    })
 }
 
 /// The CA bundle at `path`, which must hold at least one certificate.
-fn read_roots(path: &Path) -> Result<Vec<reqwest::Certificate>, String> {
-    let roots = reqwest::Certificate::from_pem_bundle(&read_file(path)?)
-        .map_err(|e| format!("{}: not a PEM certificate bundle ({e})", path.display()))?;
+fn read_roots(path: &Path) -> Result<Vec<reqwest::Certificate>, AdminCallError> {
+    let roots = reqwest::Certificate::from_pem_bundle(&read_file(path)?).map_err(|error| {
+        AdminCallError::new(
+            AdminFailureKind::Settings,
+            format!("{}: not a PEM certificate bundle ({error})", path.display()),
+        )
+    })?;
     if roots.is_empty() {
-        return Err(format!("{}: holds no PEM certificate", path.display()));
+        return Err(AdminCallError::new(
+            AdminFailureKind::Settings,
+            format!("{}: holds no PEM certificate", path.display()),
+        ));
     }
     Ok(roots)
 }
 
 /// The client identity from a PEM certificate file and a PEM key file.
-fn read_identity(cert: &Path, key: &Path) -> Result<reqwest::Identity, String> {
+fn read_identity(cert: &Path, key: &Path) -> Result<reqwest::Identity, AdminCallError> {
     let mut pem = read_file(cert)?;
     // Two files that each lack a final newline still concatenate to PEM.
     pem.push(b'\n');
     pem.extend(read_file(key)?);
-    reqwest::Identity::from_pem(&pem).map_err(|e| {
-        format!(
-            "{} with {}: not a PEM certificate and private key ({e})",
-            cert.display(),
-            key.display()
+    reqwest::Identity::from_pem(&pem).map_err(|error| {
+        AdminCallError::new(
+            AdminFailureKind::Settings,
+            format!(
+                "{} with {}: not a PEM certificate and private key ({error})",
+                cert.display(),
+                key.display()
+            ),
         )
     })
 }
@@ -443,7 +564,7 @@ fn transport_error(base: &str, error: reqwest::Error, tls: &LinkTls) -> String {
 pub async fn run_dashboard_link_command(base: &str, tls: &LinkTls) -> ExitCode {
     let result = match read_token(|name| std::env::var(name).ok()) {
         Ok(token) => fetch_link(base, &token, tls).await,
-        Err(message) => Err(message),
+        Err(error) => Err(error.to_string()),
     };
     match result {
         Ok(link) => {
@@ -460,7 +581,7 @@ pub async fn run_dashboard_link_command(base: &str, tls: &LinkTls) -> ExitCode {
 
 #[cfg(test)]
 mod tests {
-    use super::{DashboardLinkTls, LinkTls, TOKEN_ENV, read_token};
+    use super::{DashboardLinkTls, LinkTls, TOKEN_ENV, TokenError, read_token};
 
     fn no_flags() -> DashboardLinkTls {
         DashboardLinkTls::default()
@@ -554,10 +675,14 @@ mod tests {
         assert_eq!(token.as_deref(), Ok("tok"));
 
         let missing = read_token(|_| None).expect_err("no variable, no token");
-        assert!(missing.contains(TOKEN_ENV), "{missing}");
+        assert_eq!(missing, TokenError::Missing);
+        assert!(missing.to_string().contains(TOKEN_ENV), "{missing}");
 
-        let blank = read_token(|_| Some("  ".to_string())).expect_err("blank is unset");
-        assert!(blank.contains(TOKEN_ENV), "{blank}");
+        for value in ["", "   "] {
+            let blank = read_token(|_| Some(value.to_string())).expect_err("blank credential");
+            assert_eq!(blank, TokenError::Blank);
+            assert_eq!(blank.to_string(), "MCP_GATEWAY_TOKEN is empty.");
+        }
 
         let padded = read_token(|_| Some(" tok ".to_string()));
         assert_eq!(

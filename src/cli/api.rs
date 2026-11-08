@@ -6,8 +6,7 @@
 use super::dashboard_link::DashboardLinkTls;
 
 /// The HTTP methods `mcp-gateway api` sends. Anything else is a usage error.
-#[derive(clap::ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
-#[value(rename_all = "UPPER")]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ApiMethod {
     /// `GET`
     Get,
@@ -19,13 +18,30 @@ pub enum ApiMethod {
     Patch,
     /// `DELETE`
     Delete,
+    /// Retained so the API error renderer can report usage in either mode.
+    Unsupported(String),
+}
+
+impl std::str::FromStr for ApiMethod {
+    type Err = std::convert::Infallible;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        Ok(match value.to_ascii_uppercase().as_str() {
+            "GET" => Self::Get,
+            "POST" => Self::Post,
+            "PUT" => Self::Put,
+            "PATCH" => Self::Patch,
+            "DELETE" => Self::Delete,
+            _ => Self::Unsupported(value.to_string()),
+        })
+    }
 }
 
 /// Arguments of `mcp-gateway api`.
 #[derive(clap::Args, Debug, Clone)]
 pub struct ApiArgs {
     /// GET, POST, PUT, PATCH or DELETE.
-    #[arg(value_enum, ignore_case = true)]
+    #[arg(value_name = "METHOD")]
     pub method: ApiMethod,
     /// A path under `/ui/api/`, with an optional query string. A path that
     /// URL normalisation would rewrite (`..`, `.`, `\`, encoded dots or
@@ -37,6 +53,10 @@ pub struct ApiArgs {
     /// Gateway base URL (default as for `dashboard-link`).
     #[arg(short, long)]
     pub url: Option<String>,
+    /// Emit errors as one structured JSON object on stderr.
+    /// Successful responses retain the gateway's native JSON or raw bytes.
+    #[arg(long)]
+    pub json: bool,
     /// TLS material to present and trust.
     #[command(flatten)]
     pub tls: DashboardLinkTls,
