@@ -22,6 +22,8 @@ mod pids;
 mod yaml;
 const PROTOCOL_VERSION: &str = "2025-11-25";
 const READY_BOUND: Duration = Duration::from_secs(60);
+/// How long a gateway's stop may take before its leaves must be gone: above the 30 s parent timeout, with slack for a loaded host.
+const STOP_BOUND: Duration = Duration::from_secs(45);
 const LEAF_SCRIPT: &str = r#"import json, os, signal, sys, time
 name = sys.argv[1]
 signal.signal(signal.SIGTERM, signal.SIG_IGN)
@@ -207,7 +209,8 @@ impl Drop for KillGroup {
 }
 async fn run(seconds: u64, leaves: &[&str]) {
     let temp = tempfile::tempdir().expect("temp root");
-    let root = temp.path();
+    let root = temp.path().to_path_buf();
+    let root = root.as_path();
     let inner = write_inner_config(root, leaves);
     let config = write_outer_config(root, &inner, seconds);
     let log = std::fs::File::create(root.join("gateway.log")).expect("log");
@@ -220,20 +223,22 @@ async fn run(seconds: u64, leaves: &[&str]) {
         .current_dir(root)
         .arg("--config")
         .arg(config);
-    let mut gateway = command
+    let child = command
         .stdin(Stdio::piped())
         .stdout(Stdio::from(log.try_clone().expect("log handle")))
         .stderr(Stdio::from(log))
         .process_group(0)
         .kill_on_drop(true)
-        .spawn()
-        .expect("gateway"); // spawn-check: waits for exit: budget assertion then gateway.wait(); KillGroup covers panic
-    let pid = gateway.id().expect("pid");
+        .spawn() // spawn-check: waits for exit: reaped.reap_within below; KillGroup covers panic
+        .expect("gateway");
+    let mut reaped = gateway_bin::Reaped::new(child);
+    reaped.owning(temp);
+    let pid = reaped.child_mut().id().expect("pid");
     let _cleanup = KillGroup {
         pid,
         root: root.into(),
     };
-    let stdin = gateway.stdin.take().expect("stdin");
+    let stdin = reaped.child_mut().stdin.take().expect("stdin");
     let mut calls = tokio::task::JoinSet::new();
     let client = reqwest::Client::new();
     let base = format!("http://127.0.0.1:{}", ready_port(&client, root).await);
@@ -279,14 +284,8 @@ async fn run(seconds: u64, leaves: &[&str]) {
         leaves.iter().all(|pid| pids::alive(*pid)),
         "leaves must be live at stop"
     );
-    let deadline = Instant::now() + Duration::from_secs(seconds + 15);
-    assert!(
-        std::process::Command::new("kill")
-            .args(["-TERM", &pid.to_string()])
-            .status()
-            .expect("kill")
-            .success()
-    );
+    let deadline = Instant::now() + STOP_BOUND;
+    reaped.reap_within(STOP_BOUND).await;
     while leaves.iter().any(|pid| pids::alive(*pid)) {
         assert!(
             Instant::now() < deadline,
@@ -295,10 +294,6 @@ async fn run(seconds: u64, leaves: &[&str]) {
         );
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
-    tokio::time::timeout_at(deadline, gateway.wait())
-        .await
-        .expect("gateway exit deadline")
-        .expect("gateway exit");
     drop(stdin);
 }
 
@@ -328,10 +323,11 @@ async fn a_busy_nested_gateway_stops_two_leaves_within_one_deadline() {
 #[tokio::test]
 async fn a_sigterm_to_a_stdio_gateway_leaves_no_backend_running() {
     let temp = tempfile::tempdir().expect("temp root");
-    let root = temp.path();
+    let root = temp.path().to_path_buf();
+    let root = root.as_path();
     let config = write_inner_config(root, &["leaf"]);
     let log = std::fs::File::create(root.join("gateway.log")).expect("log");
-    let mut gateway = tokio::process::Command::from(gateway_bin::command(
+    let child = tokio::process::Command::from(gateway_bin::command(
         &root.join("home"),
         gateway_bin::Inherit::Environment,
     ))
@@ -345,14 +341,16 @@ async fn a_sigterm_to_a_stdio_gateway_leaves_no_backend_running() {
     .stderr(Stdio::from(log))
     .process_group(0)
     .kill_on_drop(true)
-    .spawn()
-    .expect("gateway"); // spawn-check: bounded gateway.wait(); KillGroup covers panic
-    let pid = gateway.id().expect("pid");
+    .spawn() // spawn-check: waits for exit: reaped.reap_within below; KillGroup covers panic
+    .expect("gateway");
+    let mut reaped = gateway_bin::Reaped::new(child);
+    reaped.owning(temp);
+    let pid = reaped.child_mut().id().expect("pid");
     let _cleanup = KillGroup {
         pid,
         root: root.into(),
     };
-    let mut stdin = gateway.stdin.take().expect("stdin");
+    let mut stdin = reaped.child_mut().stdin.take().expect("stdin");
     for message in [
         initialize(),
         json!({"jsonrpc":"2.0", "method":"notifications/initialized"}),
@@ -384,17 +382,7 @@ async fn a_sigterm_to_a_stdio_gateway_leaves_no_backend_running() {
         "leaf must be live at stop\n{}",
         logs(root)
     );
-    assert!(
-        std::process::Command::new("kill")
-            .args(["-TERM", &pid.to_string()])
-            .status()
-            .expect("kill")
-            .success()
-    );
-    tokio::time::timeout(Duration::from_secs(60), gateway.wait())
-        .await
-        .unwrap_or_else(|_| panic!("gateway exit deadline\n{}", logs(root)))
-        .expect("gateway exit");
+    reaped.reap_within(Duration::from_secs(60)).await;
     let leaf_deadline = Instant::now() + Duration::from_secs(10);
     while pids::alive(leaf) {
         assert!(
