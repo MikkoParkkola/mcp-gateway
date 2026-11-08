@@ -45,7 +45,7 @@ use std::time::Duration;
 
 use dashmap::DashMap;
 use parking_lot::RwLock;
-use reqwest::{Client, Method};
+use reqwest::Method;
 use serde_json::Value;
 
 use super::{

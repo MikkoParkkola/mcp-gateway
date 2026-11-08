@@ -321,19 +321,16 @@ async fn a_single_attempt_rejected_redirect_leaves_health_alone() {
 
 /// The `response_effect` a delivery cell holds after one send of `request`
 /// through `client`, and whether the send succeeded.
-async fn effect_of_send(request: reqwest::RequestBuilder) -> (bool, Option<serde_json::Value>) {
+async fn effect_of_send(
+    request: reqwest::RequestBuilder,
+    redirects: &std::sync::atomic::AtomicU64,
+) -> (bool, Option<serde_json::Value>) {
     use crate::gateway::delivery_facts;
     let health = crate::failsafe::HealthTracker::new("test");
     let (ok, facts) = delivery_facts::scope(async {
         let outcome = tokio::time::timeout(
             crate::test_wait::HANG_BOUND,
-            super::send_with_retry(
-                request,
-                &std::sync::atomic::AtomicU64::new(0),
-                "test",
-                true,
-                &health,
-            ),
+            super::send_with_retry(request, redirects, "test", true, &health),
         )
         .await
         .expect("bounded");
@@ -379,6 +376,7 @@ async fn an_allowed_redirect_is_followed_and_records_no_refusal() {
     let client = super::client::build(Some(&proxy));
     let (ok, effect) = Box::pin(effect_of_send(
         client.get("http://capability-fixture.test/"),
+        &client.redirects,
     ))
     .await;
     assert!(ok, "premise: the send succeeds");
@@ -414,6 +412,7 @@ async fn an_ordinary_transport_failure_records_no_refusal() {
     let client = super::client::build(None);
     let (ok, effect) = Box::pin(effect_of_send(
         client.get(format!("http://127.0.0.1:{port}/")),
+        &client.redirects,
     ))
     .await;
     assert!(!ok, "premise: the send fails");
@@ -529,6 +528,7 @@ async fn a_redirect_to_a_name_the_pin_refuses_records_refused() {
     );
     let (ok, effect) = Box::pin(effect_of_send(
         client.get(format!("http://127.0.0.1:{port}/")),
+        &client.redirects,
     ))
     .await;
     assert!(!ok, "premise: the pin refused the hop");
