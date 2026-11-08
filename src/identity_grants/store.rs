@@ -105,8 +105,7 @@ impl LocalIdentityGrantStore {
 
     /// [`Self::evaluate`], with the matched grant's keyed id read under the
     /// same borrow as the match, so a reload cannot pair one row's match
-    /// with another row's id. A stub for now: it never names the id.
-    #[expect(dead_code, reason = "the grant settle reads it once wired")]
+    /// with another row's id. Only a matched grant names one.
     #[must_use]
     pub(crate) fn evaluate_explained(
         &self,
@@ -115,7 +114,14 @@ impl LocalIdentityGrantStore {
         IdentityGrantEvaluation,
         Option<crate::security::rule_id::RuleId>,
     ) {
-        (self.evaluate(request), None)
+        let evaluation = self.evaluate(request);
+        let id = match (&evaluation.reason, &evaluation.grant_id) {
+            (IdentityGrantDecisionReason::GrantMatched, Some(grant_id)) => {
+                self.rule_id(grant_id).cloned()
+            }
+            _ => None,
+        };
+        (evaluation, id)
     }
 
     /// Evaluate one request against the local grant set.
