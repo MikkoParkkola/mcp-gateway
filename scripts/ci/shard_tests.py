@@ -47,6 +47,12 @@ BASE = ["test", "--all-features", "--no-fail-fast"]
 #  libtest args before the OS skips, floor of selected tests)
 _LIB_A = ("suite", ["--lib"], [LIB_SPLIT])
 _LIB_B = ("suite", ["--lib"], ["--skip", LIB_SPLIT])
+# Windows splits lib-b again: its tests ran about 23 min after a 22-min build (run 42493724287),
+# the longest job on a lane pull request. These top-level modules move to lib-c (4,727 of 9,251
+# tests then); lib-b skips them, so each library test still runs in exactly one shard.
+LIB_C_MODULES = ["security::", "capability::", "events::", "backend::", "transport::", "oauth::"]
+_WIN_LIB_B = ("suite", ["--lib"], ["--skip", LIB_SPLIT, *(x for m in LIB_C_MODULES for x in ("--skip", m))])
+_WIN_LIB_C = ("suite", ["--lib"], [*LIB_C_MODULES, "--skip", LIB_SPLIT])
 SHARDS: dict[str, dict[str, list[tuple[str, list[str], list[str], int]]]] = {
     # Floors: the selections measured by the MIK-8482 probe (run 39135535466).
     "linux": {
@@ -57,7 +63,9 @@ SHARDS: dict[str, dict[str, list[tuple[str, list[str], list[str], int]]]] = {
     },
     "windows": {
         "lib-a": [(*_LIB_A, 5335)],
-        "lib-b": [(*_LIB_B, 6747)],
+        # The former lib-b floor (6747), divided in the measured proportion.
+        "lib-b": [(*_WIN_LIB_B, 3299)],
+        "lib-c": [(*_WIN_LIB_C, 3448)],
         "int-a": [("suite", ["--bins", "--test", GLOB_A], [], 763)],
         "int-b": [("suite", ["--test", GLOB_B], [], 1238)],
     },

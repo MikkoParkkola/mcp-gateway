@@ -70,6 +70,33 @@ def runner():
     return module
 
 
+def lib_cascade(lib_filters) -> bool:
+    """Whether the lib shards run each library test exactly once: one shard with no filter at
+    all, or a cascade where each shard takes its own filter group and skips every group an
+    earlier shard took, and one shard takes no group and skips them all."""
+    if lib_filters == [()]:
+        return True
+    parsed = []
+    for args in lib_filters:
+        pos, skip, it = set(), set(), iter(args)
+        for a in it:
+            if a == "--skip":
+                skip.add(next(it, ""))
+            else:
+                pos.add(a)
+        parsed.append((pos, skip))
+    rest = [p for p in parsed if p[0]]
+    catch = [p for p in parsed if not p[0]]
+    if len(catch) != 1 or not rest:
+        return False
+    taken = set()
+    for pos, skip in sorted(rest, key=lambda p: len(p[1])):
+        if skip != taken or pos & taken:
+            return False
+        taken |= pos
+    return catch[0][1] == taken
+
+
 def table_problems(st) -> list[str]:
     out = []
     for os_kind, shards in st.SHARDS.items():
@@ -91,8 +118,8 @@ def table_problems(st) -> list[str]:
                     globs.append(args[args.index("--test") + 1])
                 if "--skip" in args or any(a in st.SKIPS[os_kind] for a in test_args if a != "--skip"):
                     out.append(f"{os_kind} {name} {step}: an OS skip belongs in SKIPS, not the shard")
-        if sorted(lib_filters) not in ([()], sorted([(st.LIB_SPLIT,), ("--skip", st.LIB_SPLIT)])):
-            out.append(f"{os_kind}: lib shards {lib_filters} are not the whole lib or one filter and its --skip")
+        if not lib_cascade(lib_filters):
+            out.append(f"{os_kind}: lib shards {lib_filters} are not the whole lib or a cascade of filters and their --skips")
         if sorted(globs) not in ([st.GLOB_ALL], sorted([st.GLOB_A, st.GLOB_B])):
             out.append(f"{os_kind}: integration globs {globs} are not `*` or a class and its negation")
         if st.GLOB_B != "[!" + st.GLOB_A[1:]:
@@ -275,6 +302,27 @@ def self_test(jobs: dict, st) -> None:
         st.SHARDS["linux"] = linux
 
 
+def cascade_rows() -> None:
+    """The lib cascade rule accepts exact splits and refuses gaps and overlaps."""
+    split = "gateway::"
+    accepted = {
+        "whole lib": [()],
+        "one filter and its skip": [(split,), ("--skip", split)],
+        "three-way cascade": [(split,), ("a::", "b::", "--skip", split), ("--skip", split, "--skip", "a::", "--skip", "b::")],
+    }
+    refused = {
+        "skip of another filter (gap)": [(split,), ("--skip", "other::")],
+        "catch-all forgets a group (overlap)": [(split,), ("a::", "--skip", split), ("--skip", split)],
+        "middle shard does not skip the earlier group": [(split,), ("a::",), ("--skip", split, "--skip", "a::")],
+        "a shard takes a group an earlier one took": [(split,), (split, "--skip", split), ("--skip", split)],
+        "two catch-alls": [(split,), ("--skip", split), ("--skip", split)],
+    }
+    for name, filters in accepted.items():
+        assert lib_cascade(filters), f"cascade rule refused a valid split: {name}"
+    for name, filters in refused.items():
+        assert not lib_cascade(filters), f"cascade rule accepted a broken split: {name}"
+
+
 def main() -> int:
     st = runner()
     jobs = yaml.safe_load((ROOT / ".github" / "workflows" / "ci.yml").read_text())["jobs"]
@@ -284,6 +332,7 @@ def main() -> int:
     if problems:
         return 1
     self_test(jobs, st)
+    cascade_rows()
     print(f"os-shards: {sum(len(s) for s in st.SHARDS.values())} shards on 3 OSes are complete; wiring holds")
     return 0
 
