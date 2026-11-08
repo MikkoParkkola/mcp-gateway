@@ -701,7 +701,8 @@ def library_executable(artifacts: dict[str, dict]) -> dict:
     """The gateway library's test executable, picked by target name."""
     lib = artifacts.get(LIB_TARGET)
     if lib is None or "lib" not in lib["kinds"]:
-        raise Abort(f"the build produced no {LIB_TARGET} library test executable")
+        libs = sorted(name for name, a in artifacts.items() if "lib" in a["kinds"])
+        raise Abort(f"the build produced no {LIB_TARGET} library test executable (libraries: {libs})")
     return lib
 
 
@@ -759,7 +760,7 @@ def execute_schemata(features: str | None, mutants: dict[str, SpecMutant], out: 
 
 
 def schemata_self_test() -> tuple[int, list[str]]:
-    """(cases run, failures) for the schemata mode's decisions (R1-R29)."""
+    """(cases run, failures) for the schemata mode's decisions (R1-R30)."""
     def out(test: str, status: str, panic: str | None = None, extra: str = "") -> str:
         lines = ["running 1 test", f"test {test} ... {status}", ""]
         if status == "FAILED":
@@ -799,6 +800,8 @@ def schemata_self_test() -> tuple[int, list[str]]:
     expect("R28 the gateway library is picked by name, not the first library",
            library_executable({"gateway_core": other_lib, LIB_TARGET: gateway_lib})["path"], "gw")
     refuses("R29 a build without the gateway library", lambda: library_executable({"gateway_core": other_lib}))
+    refuses("R30 an mcp_gateway target that is not a library",
+            lambda: library_executable({LIB_TARGET: {"path": "gw", "sha256": "", "kinds": ["test"]}}))
     refuses("R2 a mutant with no rows", lambda: parse_spec("#mutant A\n#mutant B\nlib\tt\tsrc/x.rs:1\n"))
     _, ms = parse_spec(spec_ok)
     refuses("R3 a spec ID no site carries", lambda: reconcile({**ms, "Z": SpecMutant("Z", 1, [])}, sites_ok))
