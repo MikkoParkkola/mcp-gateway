@@ -175,7 +175,7 @@ pub(crate) fn verify(
     #[cfg(test)]
     hook(&locked.target, HookAt::BeforeRecheck);
     if let Some(why) = refusal(locked, configured) {
-        return Err(NotDurable::Refused(why));
+        return Err(mutant!("verify-refused-repointed", NotDurable::Repointed(why), NotDurable::Refused(why)));
     }
     Ok(CommitToken {
         revision: expected.clone(),
@@ -214,7 +214,7 @@ fn read_back(target: &Path, expected: &FileRevision) -> Result<(), NotDurable> {
     }
     // A directory sync makes the name durable, not the data: flush the file
     // too, so a match read from the page cache proves bytes on disk.
-    flush(&mut file, target).map_err(NotDurable::Sync)?;
+    mutant!("flush-removed", Ok::<(), io::Error>(()), flush(&mut file, target)).map_err(NotDurable::Sync)?;
     let found = FileRevision::of_reader(&mut file).map_err(NotDurable::Sync)?;
     if &found == expected {
         return Ok(());

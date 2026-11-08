@@ -114,9 +114,9 @@ pub(crate) fn cut(dir: &Path, mode: Mode) {
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     let durable = armed.as_mut().and_then(|dirs| dirs.get_mut(&dir));
-    let durable = durable.unwrap_or_else(|| {
+    let durable = mutant!("unarmed-noop", match durable { Some(d) => d, None => return }, durable.unwrap_or_else(|| {
         panic!("crash_fs: directory not armed: {}", dir.display());
-    });
+    }));
     let mut observed = BTreeMap::new();
     for entry in std::fs::read_dir(&dir).expect("crash_fs: read directory") {
         let entry = entry.expect("crash_fs: read entry");
@@ -151,12 +151,11 @@ pub(crate) fn project(
     mode: Mode,
 ) -> BTreeMap<String, Vec<u8>> {
     match mode {
-        Mode::DropAll => durable
-            .names
+        Mode::DropAll => mutant!("dropall-current", &durable.current, &durable.names)
             .iter()
             .map(|(name, generation)| (name.clone(), durable.data[generation].clone()))
             .collect(),
-        Mode::KeepAll => observed.clone(),
+        Mode::KeepAll => mutant!("keepall-snapshot", project(durable, observed, Mode::DropAll), observed.clone()),
         Mode::KeepRenameDropData { seed } => observed
             .iter()
             .map(|(name, obs)| {
@@ -164,8 +163,8 @@ pub(crate) fn project(
                 let bytes = match data {
                     Some(data) if data == obs => obs.clone(),
                     Some(data) if obs.starts_with(data) && data.len() < obs.len() => {
-                        let tail = (seed % (obs.len() - data.len()) as u64) as usize;
-                        obs[..data.len() + tail].to_vec()
+                        let tail = mutant!("seed-ignored", (3 % (obs.len() - data.len()) as u64) as usize, (seed % (obs.len() - data.len()) as u64) as usize);
+                        mutant!("tear-inside", obs[..tail].to_vec(), obs[..data.len() + tail].to_vec())
                     }
                     Some(data) => data.clone(),
                     None => obs[..(seed % obs.len().max(1) as u64) as usize].to_vec(),
