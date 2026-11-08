@@ -616,8 +616,7 @@ impl super::MetaMcp {
         // stdio its slot is judged only after signing.
         let skipped = context.origin == Origin::GatewayInvoke
             && self.withheld_invoke_target(arguments, session, caller);
-        // D3: the allow the policy notes here is kept for the prepared
-        // target, whose dispatch skips its own check.
+        // D3: kept for the prepared target, whose dispatch skips its check.
         let mut signing_allow = None;
         if context.origin == Origin::GatewayInvoke && !skipped {
             let (checked, allow) = super::invoke::audit::collect_allow(|| {

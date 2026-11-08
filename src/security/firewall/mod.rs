@@ -403,14 +403,35 @@ impl Firewall {
         subject: ScanSubject,
         backend: Option<&crate::backend::Backend>,
     ) -> (FirewallVerdict, Option<crate::security::rule_id::RuleId>) {
+        let (verdict, rule, _) =
+            self.rescan_with_provenance(policy, target, args, subject, backend);
+        (verdict, rule)
+    }
+
+    /// [`Self::rescan_attributed`], plus the firewall rule that let a finding
+    /// through, for the allow record only (D9): ranked apart from
+    /// enforcement, from the content findings and the decided root findings.
+    pub(crate) fn rescan_with_provenance(
+        &self,
+        policy: &FirewallPolicy,
+        target: RuleTarget<'_>,
+        args: &Value,
+        subject: ScanSubject,
+        backend: Option<&crate::backend::Backend>,
+    ) -> (
+        FirewallVerdict,
+        Option<crate::security::rule_id::RuleId>,
+        Option<crate::security::decision_record::Allow>,
+    ) {
         if !self.config.enabled {
-            return (FirewallVerdict::allow(), None);
+            return (FirewallVerdict::allow(), None, None);
         }
         let roots = match subject {
             ScanSubject::Arguments => allowed_root::root_check(self, policy, target, args, backend),
             ScanSubject::Answers => allowed_root::RootOutcome::default(),
         };
         let mut findings = self.content_findings(target.tool, args);
+        let provenance = Self::allow_provenance(policy, target, &findings, &roots.findings);
         let (content_action, content_rule) = Self::resolve_attributed(policy, target, &findings);
         let ((action, rule), root_findings) =
             allowed_root::apply_roots(roots, (content_action, content_rule.cloned()));
@@ -422,7 +443,7 @@ impl Firewall {
             findings,
             anomaly_score: None,
         };
-        (verdict, rule)
+        (verdict, rule, provenance)
     }
 
     /// One audit row for a chokepoint decision that is not a plain allow
@@ -723,31 +744,6 @@ impl Firewall {
             .fold((FirewallAction::Allow, None), merge_attributed)
     }
 
-    /// The firewall rule that let a finding through, for the allow record
-    /// only, kept apart from enforcement: a rule letting through a finding
-    /// whose default blocks ranks first, any other letting-through rule
-    /// last; the lowest rank wins, then the first. Content findings are
-    /// ranked from the rule that decides them, root findings (`roots`) from
-    /// the action and rule they arrive decided with. A stub for now: it
-    /// names no rule.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "the send rescan notes it once wired")
-    )]
-    fn allow_provenance(
-        policy: &FirewallPolicy,
-        target: RuleTarget<'_>,
-        findings: &[Finding],
-        roots: &[(
-            Finding,
-            FirewallAction,
-            Option<crate::security::rule_id::RuleId>,
-        )],
-    ) -> Option<crate::security::decision_record::Allow> {
-        let _ = (policy, target, findings, roots);
-        None
-    }
-
     /// Resolve each finding on its own, then take the most restrictive result.
     ///
     /// A finding is decided by the first rule that applies to `target` and
@@ -854,3 +850,6 @@ mod severity_tests;
 #[cfg(test)]
 #[path = "firewall_tests.rs"]
 mod tests;
+
+#[path = "allow_provenance.rs"]
+mod allow_provenance;

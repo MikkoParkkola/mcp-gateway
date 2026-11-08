@@ -179,13 +179,6 @@ impl From<Refusal> for RefusedBy {
 /// How strongly a check's allow names the call's decider: lower wins, and
 /// two notes of the same rank keep the earlier one. Declared in rank order,
 /// so the derived `Ord` is the rank.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the checks note their allows once attribution is wired"
-    )
-)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum AllowRank {
     /// A firewall rule that let through a finding whose default is to block.
