@@ -55,18 +55,23 @@ def _heredoc_scan(lines, reading: Reading) -> list[tuple[str, Role]]:
     Inside a payload only the terminator is looked for. Scanning for a further opener there
     would resume on `<<~CAVEATS` (Ruby source inside a shell heredoc) and hand the rest of
     the payload back to the assertions as workflow text."""
-    out, pending, buffer = [], [], None
+    out, pending, buffer, body_continues = [], [], None, False
     for line in lines:
         if pending and buffer is None:
             head = pending[0]
             if reading is Reading.YAML_TEXT:
                 closes = line.strip() == head.delimiter
             else:
-                closes = (line.lstrip("\t") if head.strip_tabs else line) == head.delimiter
+                # In an unquoted body bash joins a backslash-newline first, so the line after
+                # `a\` is part of that body line, never a terminator.
+                closes = not body_continues and (line.lstrip("\t") if head.strip_tabs else line) == head.delimiter
             if closes:
                 pending.pop(0)
+                body_continues = False
             else:
                 out.append((line, Role.QUOTED_BODY if head.quoted else Role.BODY))
+                trailing = len(line) - len(line.rstrip("\\"))
+                body_continues = reading is Reading.SHELL and not head.quoted and trailing % 2 == 1
             continue
         if reading is Reading.YAML_TEXT:
             out.append((line, Role.COMMAND))
@@ -82,7 +87,7 @@ def _heredoc_scan(lines, reading: Reading) -> list[tuple[str, Role]]:
         if state.open:
             buffer += "\n"  # a quote or substitution spans the newline: one command still
             continue
-        command = _comment_dropped(buffer, state)
+        command = _ansi_c_decoded(_comment_dropped(buffer, state))
         buffer = None
         if command.strip():
             out.append((command, Role.COMMAND))
@@ -224,38 +229,54 @@ SH_MENTION_QUOTED = re.compile(r"\.[\\'\"]*s[\\'\"]*h(?![\w.-])")
 
 def _names_sh(text):
     """Whether `text` names a .sh, as written or once the shell drops quotes and escapes (x.s"h",
-    x.$'sh'). Text shlex cannot split counts if `.sh` survives any quotes or escapes between.
-    A dotted word with an escape inside `$'…'` counts too: bash decodes `\\x68`, `\\163` (and
-    octal values past 255, which wrap to one byte) where no reading here does."""
+    x.$'\x73h'). Text shlex cannot split counts if `.sh` survives any quotes or escapes between."""
     if SH_MENTION.search(text):
         return True
-    if _escaped_ansi_c_in_dotted_word(text):
-        return True
-    text = text.replace("$'", "'").replace('$"', '"')  # bash's ANSI-C and locale quoting
+    text = _ansi_c_decoded(text)
     try:
         return bool(SH_MENTION.search(" ".join(shlex.split(text))))
     except ValueError:
         return bool(SH_MENTION_QUOTED.search(text))
 
 
-def _escaped_ansi_c_in_dotted_word(text):
-    """Whether a `$'…'` that bash sees (not text inside single quotes, like `'…$'`) holds an
-    escape, in a word that has a dot."""
-    top, _ = _lex(text)
-    for i in range(len(text) - 1):
-        if not (top[i] and text.startswith("$'", i)):
-            continue
-        close = text.find("'", i + 2)
-        if "\\" not in text[i + 2:len(text) if close < 0 else close]:
-            continue
-        start, end = i, i
-        while start > 0 and not (top[start - 1] and text[start - 1] in _WORD_END):
-            start -= 1
-        while end < len(text) and not (top[end] and text[end] in _WORD_END):
-            end += 1
-        if "." in text[start:end]:
-            return True
-    return False
+_ANSI_C_SIMPLE = {"a": "\a", "b": "\b", "e": "\x1b", "E": "\x1b", "f": "\f", "n": "\n", "r": "\r",
+                  "t": "\t", "v": "\v", "\\": "\\", "'": "'", '"': '"', "?": "?"}
+_ANSI_C_ESCAPE = re.compile(r"\\(?:x([0-9A-Fa-f]{1,2})|([0-7]{1,3})|u([0-9A-Fa-f]{1,4})|U([0-9A-Fa-f]{1,8})|c(.)|(.))", re.S)
+
+
+def _ansi_c_value(body):
+    r"""What bash makes of the text between `$'` and `'`: octal and hex give one byte (an octal
+    past 255 wraps), `\u`/`\U` a code point, `\cX` a control character; an unknown escape keeps
+    its backslash."""
+    def one(m):
+        hexa, octal, u4, u8, ctrl, other = m.groups()
+        if hexa or octal:
+            return chr(int(hexa, 16) if hexa else int(octal, 8) & 0xFF)
+        if u4 or u8:
+            return chr(min(int(u4 or u8, 16), 0x10FFFF))
+        if ctrl:
+            return chr(ord(ctrl) & 0x1F)
+        return _ANSI_C_SIMPLE.get(other, "\\" + other)
+    return _ANSI_C_ESCAPE.sub(one, body)
+
+
+def _ansi_c_decoded(text):
+    """`text` with every `$'…'` bash reads rewritten as the single-quoted string it stands for, and
+    a top-level `$"…"` as plain double quotes, so every reader after this sees what bash passes.
+    A `$'` left unterminated stays as written (and is refused where a word must be read)."""
+    state = _lex_state(text)
+    out, i = [], 0
+    for begin, finish in state.ansi_c:
+        out.append(text[i:begin])
+        out.append("'" + _ansi_c_value(text[begin + 2:finish - 1]).replace("'", "'\\''") + "'")
+        i = finish
+    out.append(text[i:])
+    decoded = "".join(out)
+    top, _ = _lex(decoded)
+    locale = [k for k in range(len(decoded)) if top[k] and decoded.startswith('$"', k)]
+    return "".join(ch for k, ch in enumerate(decoded) if k not in locale)  # `$"x"` -> `"x"`
+
+
 SH_SYNTAX_LOOP = re.compile(r'^for\s+(\w+)\s+in\s+((?:\S+\.sh\s+)*\S+\.sh)\s*;\s*do\s+bash\s+-n\s+"\$\1"\s*;\s*done$')
 
 
@@ -337,10 +358,12 @@ def _words(text):
 
 
 def _ansi_c(written):
-    """Whether a word uses bash's `$'…'`/`$"…"` quoting (which shlex does not decode); a `$'`
-    inside single quotes is text."""
-    top, _ = _lex(written)
-    return any(top[i] and written.startswith(("$'", '$"'), i) for i in range(len(written)))
+    """Whether a word still uses `$'…'` quoting bash reads (one left unterminated: complete ones
+    were decoded by the scanner) or `$"…"`."""
+    state = _lex_state(written)
+    top = state.top
+    return bool(state.ansi_c) or state.ansi_c_open or any(
+        top[i] and written.startswith('$"', i) for i in range(len(written)))
 
 
 def _single_value(value):
@@ -365,6 +388,8 @@ class _LexState:
     open: bool  # `text` ends inside a quote or a command substitution
     continued: bool  # `text` ends in a backslash bash removes with the newline after it
     comment: int  # where a top-level `#` comment starts, -1 for none
+    ansi_c: list  # (start, end) of each complete `$'…'` (start at the `$`, end past the `'`)
+    ansi_c_open: bool  # `text` ends inside a `$'…'`
 
 
 def _lex_state(text):
@@ -379,6 +404,7 @@ def _lex_state(text):
     comments out the rest of its line: quotes in a comment open nothing.
     """
     top, spans, stack, escaped, i, start, comment = [False] * len(text), [], [], False, 0, None, -1
+    ansi_c, ansi_start = [], None
     while i < len(text):
         frame = stack[-1] if stack else None
         char, width = text[i], 1
@@ -387,7 +413,17 @@ def _lex_state(text):
         elif frame == "'":
             if char == "'":
                 stack.pop()
-        elif not stack and char == "#" and (i == 0 or text[i - 1] in " \t\n;&|()"):
+        elif frame == "$'":
+            # Bash's ANSI-C quoting: a backslash escapes here, so `\'` does not end it.
+            if char == "\\":
+                escaped = True
+            elif char == "'":
+                stack.pop()
+                ansi_c.append((ansi_start, i + 1))
+        elif text.startswith("$'", i) and frame != '"':
+            stack.append("$'")
+            ansi_start, width = i, 2
+        elif not stack and char == "#" and (i == 0 or (top[i - 1] and text[i - 1] in " \t\n;&|()")):
             end = text.find("\n", i)
             comment = i if comment < 0 else comment
             i = len(text) if end < 0 else end
@@ -420,7 +456,7 @@ def _lex_state(text):
         i += width
     # An unterminated quote leaves the rest non-top: a Python stage then fails
     # to tokenize (fail closed); any other command runs nothing seen here.
-    return _LexState(top, spans, bool(stack), escaped, comment)
+    return _LexState(top, spans, bool(stack), escaped, comment, ansi_c, "$'" in stack)
 
 
 def _comment_dropped(text, state):
@@ -451,17 +487,22 @@ def _openers(command):
         word, quoted = "", False
         while j < len(command) and command[j] not in _WORD_END:
             char = command[j]
-            if char in "'\"":
-                close = command.find(char, j + 1)
+            if char == "'":
+                close = command.find("'", j + 1)
                 close = len(command) if close < 0 else close
                 word, quoted, j = word + command[j + 1:close], True, close + 1
+            elif char == '"':
+                j, quoted = j + 1, True
+                while j < len(command) and command[j] != '"':
+                    if command[j] == "\\" and command[j + 1:j + 2] in ('"', "\\", "$", "`"):
+                        j += 1
+                    word, j = word + command[j:j + 1], j + 1
+                j += 1
             elif char == "\\":
                 word, quoted, j = word + command[j + 1:j + 2], True, j + 2
             else:
                 word, j = word + char, j + 1
-        # ponytail: a delimiter with no word character (`<<:` in YAML-looking text) is not read
-        # as an opener, as before; bash would take it.
-        if re.search(r"\w", word):
+        if word or quoted:  # `<<''` is an empty delimiter; a bare `<<` opens nothing
             found.append(_Opener(word, strip_tabs, quoted))
         i = j
     return found
@@ -675,7 +716,7 @@ def _stage_execution(stage, stages, bound, loops):
         rest.pop(0)
     if not rest:
         return found
-    target = rest[0].strip("'\"")
+    target = rest[0]
     for var, pattern in loops.items():
         if target in ("$" + var, "${" + var + "}"):
             target = pattern
