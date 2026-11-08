@@ -6,7 +6,12 @@
 //! receipt's forward scan.
 
 use std::fs::File;
-use std::io::{self, BufReader, Take};
+use std::io::{self, BufRead, BufReader, Read, Seek, SeekFrom, Take};
+
+use crate::security::transparency_log::pager::ASSEMBLY_WINDOW;
+
+/// The buffer's size: one fill is at most this, and is charged whole.
+const READ_AHEAD: u64 = 64 * 1024;
 
 /// What the next line was.
 #[derive(Debug, PartialEq, Eq)]
@@ -27,18 +32,33 @@ pub(super) struct Forward {
 
 impl Forward {
     /// Read from `offset` of `file`, at most `budget` bytes.
-    pub(super) fn open(file: File, offset: u64, budget: u64) -> io::Result<Self> {
-        let _ = (&file, offset);
-        let take = io::Read::take(file, 0);
+    pub(super) fn open(mut file: File, offset: u64, budget: u64) -> io::Result<Self> {
+        file.seek(SeekFrom::Start(offset))?;
+        let capacity = usize::try_from(budget.min(READ_AHEAD)).unwrap_or(1).max(1);
         Ok(Self {
-            reader: BufReader::with_capacity(1, take),
+            reader: BufReader::with_capacity(capacity, file.take(budget)),
             budget,
         })
     }
 
     pub(super) fn next_line(&mut self) -> io::Result<Next> {
-        let _ = &mut self.reader;
-        Ok(Next::End)
+        let mut buf = Vec::new();
+        (&mut self.reader)
+            .take(ASSEMBLY_WINDOW)
+            .read_until(b'\n', &mut buf)?;
+        if buf.last() == Some(&b'\n') {
+            buf.pop();
+            return Ok(Next::Line(buf));
+        }
+        let cut = self.pulled() >= self.budget;
+        // ponytail: a line over the record cap ends the read as Budget; the
+        // logger never writes one, so it is never a delivery to find.
+        let over_cap = u64::try_from(buf.len()).unwrap_or(u64::MAX) >= ASSEMBLY_WINDOW;
+        Ok(if cut || over_cap {
+            Next::Budget
+        } else {
+            Next::End
+        })
     }
 
     /// Bytes pulled from the file so far, counted at the limited reader.
