@@ -8,7 +8,7 @@ use serde_json::{Value, json};
 use super::access::Access;
 use super::csv::Truncated;
 use super::decision_fixtures::{assert_no_sentinel, call, decision, write_chained};
-use super::export::{CAPS, Caps, collect, csv, csv_size, ndjson_size};
+use super::export::{CAPS, Caps, collect, csv, ndjson_size};
 use super::rows::Filter;
 use super::{ExportQuery, ListQuery, Logs, export_response};
 use crate::security::decision_record::read as evidence;
@@ -153,5 +153,4 @@ fn export_rule_filter_stops_at_scan_cap() {
     assert!(!some.rows.is_empty());
     assert_eq!(some.unreadable, 0);
     assert!(some.rows.iter().all(|r| r["decision"]["rule"] == "r2"));
-    let _ = csv_size;
 }
