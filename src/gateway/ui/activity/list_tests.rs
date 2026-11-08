@@ -341,10 +341,23 @@ async fn list_sparse_rule_filter_resumes_past_scan_exhausted() {
     let (_, first) = body(list_page(&l, &Access::All, &query(&[("rule", "r1")]))).await;
     assert!(first["rows"].as_array().unwrap().is_empty());
     assert_eq!(first["scan_exhausted"], true);
-    let cursor = first["next_cursor"].as_str().expect("a cursor to resume");
-    let q = query(&[("rule", "r1"), ("cursor", cursor)]);
-    let (_, next) = body(list_page(&l, &Access::All, &q)).await;
-    assert_eq!(tools(&next), BTreeSet::from(["needle".to_string()]));
+    // The log is several page budgets long: follow the cursor until the needle.
+    let mut cursor = first["next_cursor"].as_str().map(str::to_string);
+    for _ in 0..8 {
+        let c = cursor.as_deref().expect("a cursor to resume");
+        let (_, next) = body(list_page(
+            &l,
+            &Access::All,
+            &query(&[("rule", "r1"), ("cursor", c)]),
+        ))
+        .await;
+        if !next["rows"].as_array().unwrap().is_empty() {
+            assert_eq!(tools(&next), BTreeSet::from(["needle".to_string()]));
+            return;
+        }
+        cursor = next["next_cursor"].as_str().map(str::to_string);
+    }
+    panic!("the cursor never reached the needle");
 }
 
 async fn rule_tools(l: &Logs, rule: &str) -> BTreeSet<String> {
