@@ -62,14 +62,14 @@ pub(super) fn start(
     );
     let history = Arc::new(history);
     if let Some(path) = &path {
-        file::save(&history, path, now);
+        file::save(&history, path, now, file::Wait::Block);
     }
     file::install(Arc::clone(&history));
     let saver = spawn_periodic_save("health save", COUNTER_SAVE_INTERVAL, Some(shutdown), {
         let (history, path) = (Arc::clone(&history), path.clone());
         move || {
             if let (Some(path), Ok(now)) = (&path, crate::clock::unix_secs()) {
-                file::save(&history, path, now);
+                file::save(&history, path, now, file::Wait::SkipIfBusy);
             }
         }
     });
@@ -133,7 +133,7 @@ impl Health {
                 if let Ok(now) = crate::clock::unix_secs() {
                     history.stop(now);
                     if let Some(path) = &path {
-                        file::save(&history, path, now);
+                        file::save(&history, path, now, file::Wait::Block);
                     }
                 }
             }),

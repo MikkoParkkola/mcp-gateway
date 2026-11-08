@@ -369,10 +369,16 @@ fn h8c_a_failed_save_marks_the_run_incomplete_until_one_succeeds() {
     assert!(!file::save(
         &h,
         &blocker.join("sub").join("health.json"),
-        T0 + 1
+        T0 + 1,
+        file::Wait::Block
     ));
     assert!(h.incomplete());
-    assert!(file::save(&h, &dir.path().join("health.json"), T0 + 2));
+    assert!(file::save(
+        &h,
+        &dir.path().join("health.json"),
+        T0 + 2,
+        file::Wait::Block
+    ));
     assert!(!h.incomplete());
 }
 
@@ -391,7 +397,7 @@ fn h6b_a_save_waits_for_the_one_in_progress() {
         let (h, path) = (std::sync::Arc::clone(&h), path.clone());
         std::thread::spawn(move || {
             queued.send(()).expect("send");
-            file::save(&h, &path, T0 + 100)
+            file::save(&h, &path, T0 + 100, file::Wait::Block)
         })
     };
     started.recv().expect("the save started");
@@ -404,6 +410,36 @@ fn h6b_a_save_waits_for_the_one_in_progress() {
     let on_disk: serde_json::Value =
         serde_json::from_slice(&std::fs::read(&path).expect("saved")).expect("json");
     assert_eq!(on_disk["clean_stop"], T0 + 90, "{on_disk}");
+}
+
+/// H6c (delta r1): the periodic save skips when another save holds the
+/// lock: it returns at once without writing and leaves the incomplete flag
+/// to the save in progress, so a stalled write never piles up waiting
+/// threads. The holder lets go after 2 s at the latest, so a save that
+/// waited fails the row instead of hanging it.
+#[test]
+fn h6c_a_periodic_save_skips_while_another_save_runs() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("health.json");
+    let h = fresh(T0);
+    let (holding, held) = std::sync::mpsc::channel();
+    let (release, released) = std::sync::mpsc::channel::<()>();
+    let holder = std::thread::spawn(move || {
+        let _guard = file::hold_saves();
+        holding.send(()).expect("send");
+        let _ = released.recv_timeout(std::time::Duration::from_secs(2));
+    });
+    held.recv().expect("the lock is held");
+    assert!(!file::save(&h, &path, T0 + 100, file::Wait::SkipIfBusy));
+    assert!(!path.exists(), "a skipped save wrote");
+    assert!(
+        !h.incomplete(),
+        "a skipped save marked the history incomplete"
+    );
+    release.send(()).expect("release");
+    holder.join().expect("joined");
+    assert!(file::save(&h, &path, T0 + 100, file::Wait::SkipIfBusy));
+    assert!(path.exists(), "the save after the hold wrote");
 }
 
 /// H9e (code review r1): a clock set backward between runs never counts a

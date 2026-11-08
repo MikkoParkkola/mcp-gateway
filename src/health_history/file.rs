@@ -69,13 +69,31 @@ enum Unsaved {
 /// the old one. Returns whether the rename completed; a failure marks the
 /// run's history incomplete until a later save succeeds. The snapshot through
 /// the rename runs under [`SAVES`]; the outcome is logged after it is released.
-pub(crate) fn save(history: &HealthHistory, path: &Path, now: u64) -> bool {
+/// How a save meets another save in progress.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Wait {
+    /// Wait for it (the startup and shutdown saves: each must land).
+    Block,
+    /// Skip this save (the periodic one: the next tick tries again, and a
+    /// stalled write never piles up waiting threads).
+    SkipIfBusy,
+}
+
+pub(crate) fn save(history: &HealthHistory, path: &Path, now: u64, wait: Wait) -> bool {
     let outcome = {
-        let _one_at_a_time = SAVES.lock();
-        snapshot_and_write(history, path, now)
+        let _one_at_a_time = match wait {
+            Wait::Block => SAVES.lock(),
+            Wait::SkipIfBusy => match SAVES.try_lock() {
+                Some(guard) => guard,
+                None => return false,
+            },
+        };
+        let outcome = snapshot_and_write(history, path, now);
+        // Under the lock, so two saves set the flag in the order they wrote.
+        history.set_incomplete(outcome.is_err());
+        outcome
     };
     let Err(why) = outcome else {
-        history.set_incomplete(false);
         return true;
     };
     match why {
@@ -88,7 +106,6 @@ pub(crate) fn save(history: &HealthHistory, path: &Path, now: u64) -> bool {
             "Failed to save the health history; this run's history is incomplete until a save succeeds"
         ),
     }
-    history.set_incomplete(true);
     false
 }
 
