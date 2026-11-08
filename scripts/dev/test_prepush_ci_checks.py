@@ -34,6 +34,7 @@ CI_ONLY_CLASSES = ("cargo", "binary", "artifact", "release", "ci-env", "network"
 # classified by the walker and are not listed here.
 CI_ONLY: dict[tuple[str, tuple[str, ...]], str] = {
     ("scripts/ci/check-codeql-ignore.py", ()): "cargo: runs cargo metadata/build; Spark only",
+    ("scripts/ci/check-reads-token.py", ()): "cargo: builds the library with the read-token probe; Spark only",
     ("scripts/ci/check_docker_hub_pulls.py", ()): "network: queries Docker Hub",
     ("scripts/ci/check_needs.py", ("macos-shards",)): "ci-env: reads NEEDS from ${{ toJSON(needs) }}",
     ("scripts/ci/job_time_watch.py", ("macos-shards",)): "ci-env: reads this run's jobs from the Actions API (GITHUB_RUN_ID, actions: read)",

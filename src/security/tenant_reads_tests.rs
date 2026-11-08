@@ -153,7 +153,8 @@ fn expiry_from_the_last_write() {
         .unwrap();
     a.ticket.as_ref().unwrap().emitted();
     drop(a);
-    std::thread::sleep(Duration::from_millis(80));
+    // Past the window from the last write, on the history's own test clock.
+    history.advance_for_test(Duration::from_millis(80));
     let b = history
         .reserve(&test_token(), KEY, &tenant("b"), window, false)
         .unwrap();
