@@ -70,7 +70,7 @@ async fn read_route_with(config: Config, dir: &std::path::Path) -> serde_json::V
 
 #[tokio::test]
 async fn a_started_gateway_reports_its_own_start_and_an_empty_refused_list() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = crate::test_dir_keep::kept_tempdir();
     let body = Box::pin(read_route(dir.path())).await;
     assert!(body["started_at"].is_string(), "{body}");
     assert!(body["uptime_secs"].is_u64(), "{body}");
@@ -80,7 +80,7 @@ async fn a_started_gateway_reports_its_own_start_and_an_empty_refused_list() {
 
 #[tokio::test]
 async fn a_restore_from_another_version_is_reported_as_the_upgrade() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = crate::test_dir_keep::kept_tempdir();
     seed_counters(dir.path(), "3.5.1");
     let body = Box::pin(read_route(dir.path())).await;
     assert_eq!(body["upgrade"]["from"], "3.5.1", "{body}");
@@ -122,7 +122,7 @@ fn config_with_denied_backend(dir: &std::path::Path) -> Config {
 
 #[tokio::test]
 async fn a_backend_the_runtime_policy_denies_is_in_refused_at_start() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = crate::test_dir_keep::kept_tempdir();
     let body = Box::pin(read_route_with(
         config_with_denied_backend(dir.path()),
         dir.path(),
