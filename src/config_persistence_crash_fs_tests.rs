@@ -34,7 +34,6 @@ fn durable(bytes: &[u8]) -> Overlay {
         names: BTreeMap::from([(NAME.to_owned(), (1, 1))]),
         current: BTreeMap::from([(NAME.to_owned(), (1, 1))]),
         data: BTreeMap::from([((1, 1), bytes.to_vec())]),
-        arming: observation(OLD),
         ..Overlay::default()
     }
 }
@@ -99,13 +98,13 @@ fn an_unsynced_create_vanishes_and_an_unsynced_delete_returns() {
     assert_eq!(std::fs::read(path).expect("deleted file restored"), OLD);
 }
 
-/// C5: red oracle: exact 3- and 11-byte torn tails after the durable prefix;
+/// C5: red oracle: exact seed % 16 torn tails after the durable prefix;
 /// independent observations affect the result, and repeating a seed agrees.
 #[test]
 fn keep_rename_drop_data_tears_an_unsynced_append() {
-    for seed in [3, 11] {
+    for seed in [0, 3, 11, 19] {
         for tail in [b"abcdefghijklmnop", b"ABCDEFGHIJKLMNOP"] {
-            let expected = [OLD, &tail[..seed as usize]].concat();
+            let expected = [OLD, &tail[..(seed % 16) as usize]].concat();
             for _ in 0..2 {
                 let (dir, path) = config();
                 let _armed = crash_fs::arm(dir.path());
@@ -153,29 +152,35 @@ fn cut_on_an_unarmed_dir_panics_by_name() {
 fn an_in_place_flush_updates_only_the_current_generation() {
     const SECOND: &[u8] = b"server:\n  port: 3\n";
     const FLUSHED: &[u8] = b"server:\n  port: 4\n";
-    let (dir, path) = config();
-    let _armed = crash_fs::arm(dir.path());
-    write_atomic(&path, NEW, FileMode::Private, Symlink::Replace).expect("first");
-    sync_dir_of(&path).expect("first dir sync");
-    write_atomic(&path, SECOND, FileMode::Private, Symlink::Replace).expect("second");
-    std::fs::write(&path, FLUSHED).expect("in-place write");
-    let mut file = OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open(&path)
-        .expect("open flushed generation");
-    file.sync_all().expect("data sync");
-    crash_fs::note_flushed(&path, &mut file).expect("record flush");
-    drop(file);
+    for mode in [Mode::DropAll, Mode::KeepRenameDropData { seed: 3 }] {
+        let (dir, path) = config();
+        let _armed = crash_fs::arm(dir.path());
+        write_atomic(&path, NEW, FileMode::Private, Symlink::Replace).expect("first");
+        sync_dir_of(&path).expect("first dir sync");
+        write_atomic(&path, SECOND, FileMode::Private, Symlink::Replace).expect("second");
+        std::fs::write(&path, FLUSHED).expect("in-place write");
+        let mut file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&path)
+            .expect("open flushed generation");
+        file.sync_all().expect("data sync");
+        crash_fs::note_flushed(&path, &mut file).expect("record flush");
+        drop(file);
 
-    // First replacement is the snapshot; only generation 3 was flushed.
-    let mut state = durable(OLD);
-    state.names.insert(NAME.to_owned(), (1, 2));
-    state.data.insert((1, 2), NEW.to_vec());
-    state.current.insert(NAME.to_owned(), (1, 3));
-    state.data.insert((1, 3), FLUSHED.to_vec());
-    let projected = crash_fs::project(&state, &observation(FLUSHED), Mode::DropAll);
-    crash_fs::cut(dir.path(), Mode::DropAll);
-    assert_eq!(projected, observation(NEW), "first generation is unchanged");
-    assert_eq!(std::fs::read(path).expect("read"), NEW);
+        // First replacement is the snapshot; only generation 3 was flushed.
+        let mut state = durable(OLD);
+        state.names.insert(NAME.to_owned(), (1, 2));
+        state.data.insert((1, 2), NEW.to_vec());
+        state.current.insert(NAME.to_owned(), (1, 3));
+        state.data.insert((1, 3), FLUSHED.to_vec());
+        let expected = match mode {
+            Mode::DropAll => NEW,
+            _ => FLUSHED,
+        };
+        let projected = crash_fs::project(&state, &observation(FLUSHED), mode);
+        crash_fs::cut(dir.path(), mode);
+        assert_eq!(projected, observation(expected), "{mode:?}");
+        assert_eq!(std::fs::read(path).expect("read"), expected, "{mode:?}");
+    }
 }
