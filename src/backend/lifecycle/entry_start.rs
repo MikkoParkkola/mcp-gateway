@@ -3,7 +3,8 @@
 //! Starting one pool entry, from the build through the publish: the one path
 //! every start runs through (lazy, `start()`, restart and revive, warm start),
 //! and the publish where shutdown and a moved destination policy are enforced.
-//! Moved from `lifecycle.rs`.
+//! Moved from `lifecycle.rs`; the code is unchanged, and the comments state
+//! their rules without ticket references.
 
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
