@@ -57,7 +57,7 @@ where
 #[tokio::test]
 async fn r2h_a_read_queued_behind_a_dark_clock_settle_asks_nothing_further() {
     let (state, transport, adapter, _store) = armed_fixture(Script::Hold).await;
-    let log_dir = tempfile::tempdir().expect("a log directory");
+    let log_dir = crate::test_dir_keep::kept_tempdir();
     let state = with_audit_log(state, &log_dir);
     let executor = Arc::clone(&state.task_executor);
 
