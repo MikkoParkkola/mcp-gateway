@@ -178,7 +178,11 @@ fn calls_counted(store: &crate::counters::CounterStore) -> u64 {
     use crate::counters::{Filter, Metric, Query, Window};
     let now = crate::clock::unix_secs().expect("a readable clock");
     store
-        .series(&Query::new(Metric::Calls, Window::Day, Filter::All), now, &chrono::Local)
+        .series(
+            &Query::new(Metric::Calls, Window::Day, Filter::All),
+            now,
+            &chrono::Local,
+        )
         .points
         .iter()
         .map(|p| p.v)
@@ -384,7 +388,11 @@ fn per_call_timing() {
         };
         for (store, rows) in counted.iter().zip([rows(false), rows(true)]) {
             let calls = u64::try_from((WARMUP + CALLS) * rows).expect("a small count");
-            assert_eq!(calls_counted(store), calls, "the store counts every timed call");
+            assert_eq!(
+                calls_counted(store),
+                calls,
+                "the store counts every timed call"
+            );
         }
         let mut stdio = StdioLoop::start().await;
         for &(stage, _, blob, batch) in STAGES.iter().filter(|stage| !stage.1) {

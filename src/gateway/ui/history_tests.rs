@@ -101,6 +101,10 @@ fn latency_refuses_every_other_filter() {
         let refusal = latency_of(&params(&all)).expect_err("refused");
         assert!(refusal.contains("server="), "{pairs:?}: {refusal}");
     }
-    let p = params(&[("metric", "latency_p95"), ("server", "s"), ("window", "48h")]);
+    let p = params(&[
+        ("metric", "latency_p95"),
+        ("server", "s"),
+        ("window", "48h"),
+    ]);
     assert_eq!(latency_of(&p), Ok((Some("s"), Window::TwoDays, false)));
 }

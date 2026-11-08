@@ -446,9 +446,17 @@ async fn a_response_cache_hit_records_no_latency() {
         .expect("answered");
     }
     seam::clear();
-    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1, "the second was a hit");
+    assert_eq!(
+        calls.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "the second was a hit"
+    );
     let counted: u64 = store
-        .series(&Query::new(Metric::Calls, Window::Day, Filter::All), now, &chrono::Local)
+        .series(
+            &Query::new(Metric::Calls, Window::Day, Filter::All),
+            now,
+            &chrono::Local,
+        )
         .points
         .iter()
         .map(|p| p.v)

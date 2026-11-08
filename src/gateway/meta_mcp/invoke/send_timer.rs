@@ -201,11 +201,15 @@ mod tests {
             assert_eq!(notes.backend_sample(), None);
         }
         let ((), notes) = with_dispatch_scope(async {
-            let _ = SendTimer::start().finish_with::<()>(Err(crate::Error::Transport("reset".into())));
+            let _ =
+                SendTimer::start().finish_with::<()>(Err(crate::Error::Transport("reset".into())));
         })
         .await;
         seam::clear();
-        assert_eq!(notes.backend_sample(), Some((Duration::from_millis(7), End::Failed)));
+        assert_eq!(
+            notes.backend_sample(),
+            Some((Duration::from_millis(7), End::Failed))
+        );
     }
 
     /// Test plan row 26: a call's rounds (a bridged retry) add up into one

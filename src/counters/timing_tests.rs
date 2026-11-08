@@ -68,7 +68,9 @@ fn record_timing() {
 #[test]
 #[ignore = "timing: prints the latency record cost at a slot rollover"]
 fn latency_rollover_timing() {
-    let names: Vec<String> = (0..MAX_LABELS).map(|i| format!("label-{i:0>120}")).collect();
+    let names: Vec<String> = (0..MAX_LABELS)
+        .map(|i| format!("label-{i:0>120}"))
+        .collect();
     let sample = Some((std::time::Duration::from_millis(40), End::Answered));
     let call = |i: usize| Call {
         caller: &names[0],
@@ -108,7 +110,9 @@ fn latency_rollover_timing() {
 fn latency_reader_with_8_writers_timing() {
     const WRITERS: usize = 8;
     const CALLS: usize = 200_000;
-    let names: Vec<String> = (0..MAX_LABELS).map(|i| format!("label-{i:0>120}")).collect();
+    let names: Vec<String> = (0..MAX_LABELS)
+        .map(|i| format!("label-{i:0>120}"))
+        .collect();
     let sample = Some((std::time::Duration::from_millis(40), End::Answered));
     let store = CounterStore::new(T0);
     let write = |w: usize| {
@@ -127,7 +131,9 @@ fn latency_reader_with_8_writers_timing() {
         let mut reads = Vec::new();
         let started = std::time::Instant::now();
         std::thread::scope(|scope| {
-            let handles: Vec<_> = (0..WRITERS).map(|w| scope.spawn(move || write(w))).collect();
+            let handles: Vec<_> = (0..WRITERS)
+                .map(|w| scope.spawn(move || write(w)))
+                .collect();
             let reading = reader.then(|| {
                 scope.spawn(|| {
                     let mut took = Vec::new();

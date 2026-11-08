@@ -21,7 +21,12 @@ fn call(server: &str) -> Call<'_> {
 }
 
 fn timed_in<Tz: chrono::TimeZone>(store: &CounterStore, server: &str, at: u64, ms: u64, zone: &Tz) {
-    store.record_timed(&call(server), at, zone, Some((Duration::from_millis(ms), End::Answered)));
+    store.record_timed(
+        &call(server),
+        at,
+        zone,
+        Some((Duration::from_millis(ms), End::Answered)),
+    );
 }
 
 fn timed(store: &CounterStore, server: &str, at: u64, ms: u64, end: End) {
@@ -90,7 +95,10 @@ fn series_latency_compare_prev() {
 fn series_latency_folded() {
     let store = CounterStore::new(T0);
     let view = store.latency_series(Some("ghost"), Window::Day, false, T0 + 10, &Utc);
-    assert!(!view.folded && view.points.is_empty(), "room left: not folded");
+    assert!(
+        !view.folded && view.points.is_empty(),
+        "room left: not folded"
+    );
     for i in 0..super::super::MAX_LABELS {
         timed(&store, &format!("srv-{i}"), T0 + 10, 100, End::Answered);
     }
@@ -117,7 +125,10 @@ fn series_latency_compare_prev_follows_local_wall_time() {
     let view = store.latency_series(Some("alpha"), Window::Day, true, noon_25 + 20, &Amsterdam);
     let previous = view.previous.expect("asked for");
     let last = previous.last().expect("the previous period's newest slot");
-    assert_eq!(last.t, noon_24, "noon maps to the previous date's noon: {previous:?}");
+    assert_eq!(
+        last.t, noon_24,
+        "noon maps to the previous date's noon: {previous:?}"
+    );
 }
 
 /// Row 36: the Overview hour, slowest first, bounded by the two slots.
@@ -175,12 +186,23 @@ fn server_cap_overflow_and_sweep() {
         timed(&store, &format!("srv-{i}"), T0 + 10, 100, End::Answered);
     }
     timed(&store, "late", T0 + 10, 100, End::Answered);
-    assert!(store.latency_series(Some("late"), Window::Day, false, T0 + 20, &Utc).folded);
-    assert!(!store.snapshot().server.overflow.latency.is_empty(), "overflow holds it");
+    assert!(
+        store
+            .latency_series(Some("late"), Window::Day, false, T0 + 20, &Utc)
+            .folded
+    );
+    assert!(
+        !store.snapshot().server.overflow.latency.is_empty(),
+        "overflow holds it"
+    );
     let aged = T0 + 31 * 86_400;
     timed(&store, "fresh", aged, 900, End::Failed);
     assert!(store.sweeps() > 0, "the full dimension was swept");
-    assert_eq!(store.labels(super::super::Dim::Server), 1, "every aged label freed");
+    assert_eq!(
+        store.labels(super::super::Dim::Server),
+        1,
+        "every aged label freed"
+    );
     let view = store.latency_series(Some("fresh"), Window::Day, false, aged + 10, &Utc);
     assert!(!view.folded);
     let [point] = view.points.as_slice() else {
@@ -208,10 +230,16 @@ fn previous_period_omits_what_the_overflow_may_hold() {
     timed(&store, "alpha", admitted, 100, End::Answered);
     let view = store.latency_series(Some("alpha"), Window::Day, true, now, &Utc);
     assert!(!view.folded, "the server's own points are exact");
-    assert!(!view.previous_complete, "the overflow may hold its previous calls");
+    assert!(
+        !view.previous_complete,
+        "the overflow may hold its previous calls"
+    );
     let start = admitted - admitted % HALF;
     assert!(
-        view.previous.expect("asked for").iter().all(|p| p.t >= start),
+        view.previous
+            .expect("asked for")
+            .iter()
+            .all(|p| p.t >= start),
         "no previous point from before it was admitted"
     );
 }

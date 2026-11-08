@@ -468,7 +468,8 @@ impl<const W: u64, const LIVE: u64> LatRing<W, LIVE> {
         dedup_slots(&mut ring.live, |l| l.bucket);
         // A slot a file holds both live and closed keeps its closed row: that
         // history was finalized, and one slot is never both.
-        let closed: std::collections::BTreeSet<u64> = ring.closed.iter().map(|c| c.bucket).collect();
+        let closed: std::collections::BTreeSet<u64> =
+            ring.closed.iter().map(|c| c.bucket).collect();
         ring.live.retain(|l| !closed.contains(&l.bucket));
         while ring.live.len() > usize::try_from(LIVE).unwrap_or(usize::MAX) {
             if let Some(oldest) = ring.live.pop_front() {

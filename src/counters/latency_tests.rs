@@ -120,7 +120,11 @@ fn p95_bin_is_the_exact_samples_bin() {
 #[test]
 fn interior_bins_report_their_midpoint() {
     for (bin, reported) in [(10, 8), (22, 121), (27, 370), (40, 6_729), (62, 911_939)] {
-        assert_eq!(Sketch::from_bins(vec![(bin, 1)]).p95_ms(), Some(reported), "bin {bin}");
+        assert_eq!(
+            Sketch::from_bins(vec![(bin, 1)]).p95_ms(),
+            Some(reported),
+            "bin {bin}"
+        );
     }
 }
 
@@ -153,7 +157,10 @@ fn interior_p95_within_root_ratio_plus_rounding() {
             let reported = Sketch::from_bins(vec![(bin_of(ms(sample)), 1)])
                 .p95_ms()
                 .expect("one sample");
-            #[expect(clippy::cast_precision_loss, reason = "at most 1.25^62 ms, exact in f64")]
+            #[expect(
+                clippy::cast_precision_loss,
+                reason = "at most 1.25^62 ms, exact in f64"
+            )]
             let reported = reported as f64;
             assert!(
                 (sample / root - 0.5..=sample * root + 0.5).contains(&reported),
@@ -333,8 +340,17 @@ fn restore_reapplies_the_bounds() {
         .iter()
         .map(|l| (l.bucket, l.sketch.bins().to_vec()))
         .collect();
-    assert_eq!(live, [(now - 1, vec![(4, 1)]), (now, vec![(3, 3)])], "{live:?}");
-    let closed: Vec<(u64, u64)> = series.half.closed.iter().map(|c| (c.bucket, c.p95_ms)).collect();
+    assert_eq!(
+        live,
+        [(now - 1, vec![(4, 1)]), (now, vec![(3, 3)])],
+        "{live:?}"
+    );
+    let closed: Vec<(u64, u64)> = series
+        .half
+        .closed
+        .iter()
+        .map(|c| (c.bucket, c.p95_ms))
+        .collect();
     // The duplicate closed row and the two-field one are gone; the slot held
     // both live and closed keeps its closed row (40 ms, not bin 9's value);
     // the extra live slot is closed, not lost.
@@ -354,7 +370,12 @@ fn restore_reapplies_the_bounds() {
     }))
     .expect("a file of the right shape");
     let series = LatencySeries::from_file(&file, now * 1_800, None);
-    let closed: Vec<(u64, u64)> = series.half.closed.iter().map(|c| (c.bucket, c.p95_ms)).collect();
+    let closed: Vec<(u64, u64)> = series
+        .half
+        .closed
+        .iter()
+        .map(|c| (c.bucket, c.p95_ms))
+        .collect();
     assert_eq!(closed, [(now - 6, 40)], "one row for the slot: {closed:?}");
     let live: Vec<u64> = series.half.live.iter().map(|l| l.bucket).collect();
     assert_eq!(live, [now], "{live:?}");

@@ -88,7 +88,11 @@ impl<const W: u64, const LIVE: u64> LatRing<W, LIVE> {
     /// clock that stepped back left ahead of the window.
     fn merged_from(&self, first: u64, last: u64) -> Sketch {
         let mut sketch = Sketch::default();
-        for live in self.live.iter().filter(|l| (first..=last).contains(&l.bucket)) {
+        for live in self
+            .live
+            .iter()
+            .filter(|l| (first..=last).contains(&l.bucket))
+        {
             sketch.merge(&live.sketch);
         }
         sketch
@@ -161,7 +165,10 @@ impl CounterStore {
                     {
                         previous_since = previous_since.max(admitted);
                     }
-                    if slots[..first].iter().any(|slot| held(overflow, slot).is_some()) {
+                    if slots[..first]
+                        .iter()
+                        .any(|slot| held(overflow, slot).is_some())
+                    {
                         since = since.max(slots[first].t);
                         slots.drain(..first);
                     }

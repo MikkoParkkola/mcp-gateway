@@ -206,7 +206,11 @@ async fn a_dropped_call_records_nothing() {
     drop(call);
     seam::clear();
     assert_eq!(totals(&store), [0; 5]);
-    assert!(points(&store, None).is_empty(), "{:?}", points(&store, None));
+    assert!(
+        points(&store, None).is_empty(),
+        "{:?}",
+        points(&store, None)
+    );
 }
 
 /// Review F1: a transport failure that proves nothing was sent (here the
@@ -226,5 +230,9 @@ async fn an_unsent_call_is_counted_without_a_sample() {
     let _ = post(&fx, "alpha", &tools_call("t"), &Caller::Anonymous).await;
     seam::clear();
     assert_eq!(totals(&store)[0], 1, "the call is counted");
-    assert!(points(&store, None).is_empty(), "{:?}", points(&store, None));
+    assert!(
+        points(&store, None).is_empty(),
+        "{:?}",
+        points(&store, None)
+    );
 }

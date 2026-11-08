@@ -10,8 +10,8 @@ use serde_json::Value;
 
 use super::{Attempts, send_timed};
 use crate::counters::{Call, CounterStore, End, Label, Tally, Window};
-use crate::gateway::with_dispatch_scope;
 use crate::gateway::send_timer_seam as seam;
+use crate::gateway::with_dispatch_scope;
 use crate::protocol::JsonRpcResponse;
 use crate::transport::{ResendPermission, Transport};
 
@@ -20,7 +20,11 @@ struct Hung;
 
 #[async_trait::async_trait]
 impl Transport for Hung {
-    async fn request(&self, _method: &str, _params: Option<Value>) -> crate::Result<JsonRpcResponse> {
+    async fn request(
+        &self,
+        _method: &str,
+        _params: Option<Value>,
+    ) -> crate::Result<JsonRpcResponse> {
         std::future::pending().await
     }
     async fn notify(&self, _method: &str, _params: Option<Value>) -> crate::Result<()> {
