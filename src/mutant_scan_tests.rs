@@ -202,8 +202,8 @@ fn s12_a_definition_is_found_at_any_depth() {
 
 /// S12: in the live repository the only definitions are the two in
 /// `src/mutant_macro.rs` (one per cfg; `a_normal_build_drops_the_mutated_tokens`
-/// checks their bodies). The library and the binary include that one file,
-/// so neither crate has a copy of its own.
+/// checks their bodies). The library and the binary both declare that one
+/// file as a module, so neither crate has a copy of its own.
 #[test]
 fn s12_no_definition_outside_the_macro_file() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
@@ -228,7 +228,7 @@ const MACRO_FILE: &str = "src/mutant_macro.rs";
 
 /// S14: both crate roots carry the mutant machinery, so a
 /// site in the binary's modules compiles and switches like one in the
-/// library's: each root includes the macro file before its modules, and the
+/// library's: each root declares the macro file first, `#[macro_use]`, and the
 /// binary compiles `src/mutant.rs` again as its own private `mutant` module
 /// (as it does `clock.rs`), which is what the macro's `crate::mutant::on`
 /// names there.
@@ -238,24 +238,18 @@ fn s14_both_crate_roots_carry_the_macros_and_the_switch() {
     for crate_root in ["src/lib.rs", "src/main.rs"] {
         let text = std::fs::read_to_string(root.join(crate_root)).expect("read the crate root");
         let file = syn::parse_file(&text).expect("parse the crate root");
-        // macro_rules! is textually scoped: the include must come before
-        // every module, or a site in an earlier module cannot see it.
-        let include_at = file.items.iter().position(|item| match item {
-            syn::Item::Macro(m) => {
-                m.mac.path.is_ident("include")
-                    && m.mac.tokens.to_string() == "\"mutant_macro.rs\""
-            }
-            _ => false,
+        // macro_rules! is textually scoped: the macro module must be the first
+        // module, `#[macro_use]`, or a site in an earlier module cannot see it.
+        // A module, not include!(): the source walkers follow `mod` items.
+        let first_mod = file.items.iter().find_map(|item| match item {
+            syn::Item::Mod(m) => Some(m),
+            _ => None,
         });
-        let include_at = include_at
-            .unwrap_or_else(|| panic!("{crate_root} does not include!(\"mutant_macro.rs\")"));
-        let first_mod = file
-            .items
-            .iter()
-            .position(|item| matches!(item, syn::Item::Mod(_)));
+        let first_mod = first_mod.unwrap_or_else(|| panic!("{crate_root} declares no module"));
         assert!(
-            first_mod.is_none_or(|m| include_at < m),
-            "{crate_root} includes mutant_macro.rs after a module"
+            first_mod.ident == "mutant_macro"
+                && first_mod.attrs.iter().any(|a| a.path().is_ident("macro_use")),
+            "{crate_root}: the first module must be `#[macro_use] mod mutant_macro;`"
         );
         let module = file.items.iter().find_map(|item| match item {
             syn::Item::Mod(m) if m.ident == "mutant" => Some(m),
