@@ -20,6 +20,7 @@ use super::{
     BackendAuthContext, BackendRejection, BackendSecurityResult, DirectFailure, direct_preflight,
     key_check,
 };
+#[cfg(feature = "firewall")]
 use crate::gateway::auth::AuthenticatedClient;
 use crate::protocol::RequestId;
 #[cfg(feature = "firewall")]
