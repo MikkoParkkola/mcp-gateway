@@ -5,6 +5,7 @@
 use std::sync::Arc;
 
 use axum::extract::{Path, State};
+use axum::http::StatusCode;
 use serde_json::Value;
 
 use super::AppState;

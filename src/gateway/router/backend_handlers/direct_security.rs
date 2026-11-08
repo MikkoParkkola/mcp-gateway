@@ -16,7 +16,10 @@ use super::super::direct_guards::refusal;
 use super::super::helpers::{RpcHttp, build_http_error_response};
 #[cfg(feature = "firewall")]
 use super::relay::{direct_control_identity, relay_refusal};
-use super::{BackendAuthContext, BackendRejection, BackendSecurityResult};
+use super::{
+    BackendAuthContext, BackendRejection, BackendSecurityResult, DirectFailure, direct_preflight,
+    key_check,
+};
 use crate::gateway::auth::AuthenticatedClient;
 use crate::protocol::RequestId;
 #[cfg(feature = "firewall")]
