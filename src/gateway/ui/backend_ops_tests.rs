@@ -828,6 +828,15 @@ fn r1_credential_refusals_table() {
         "userinfo template without a password"
     );
 
+    // Delta G5b: spellings the URL parser accepts without exactly `://`.
+    for spelling in ["https:/", "https:///", "https:", "https:\\\\"] {
+        assert_eq!(
+            url(&[spelling, "svc:", "pw-0123456789", "@h.example/mcp"].concat()),
+            bad_url,
+            "userinfo after {spelling}"
+        );
+    }
+
     assert_eq!(
         refused(
             Some("npx tool"),
