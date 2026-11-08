@@ -1106,6 +1106,31 @@ mod tests {
         assert_eq!(bytes.len(), ENV_FILE_MAX_BYTES + 1);
         assert!(env_inputs(&[], Some(&bytes), |_| None).is_err());
     }
+
+    /// C1, C2 (D-CLI r2): a credential in `--url` or in the command is a
+    /// usage error (exit 2) before any write; no config is created.
+    #[tokio::test]
+    async fn c1_a_credential_in_the_url_or_command_exits_2() {
+        for (cmd, url) in [
+            (None, Some("https://h.example/mcp?api_key=zz-canary-0123")),
+            (Some("npx tool --token zz-canary-0123"), None),
+        ] {
+            let (dir, path) = temp_config();
+            let code = run_add_command(
+                "srv",
+                cmd,
+                url,
+                None,
+                AddValues::default(),
+                &path,
+                CommentLoss::Refuse,
+            )
+            .await;
+            assert_eq!(code, ExitCode::from(2), "{cmd:?} {url:?}");
+            assert!(!path.exists(), "a config was created");
+            assert_eq!(std::fs::read_dir(dir.path()).expect("dir").count(), 0);
+        }
+    }
 }
 
 #[cfg(test)]
