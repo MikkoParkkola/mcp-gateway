@@ -161,6 +161,8 @@ mod dispatch_parity_tests;
 /// E5: dashboard session expiry, logout and re-entry (MIK-7570.SESSION.1).
 #[cfg(all(test, feature = "webui"))]
 mod e5_dashboard_session_tests;
+#[cfg(test)]
+mod mrtr_component_tests;
 
 #[cfg(all(test, feature = "metrics"))]
 mod backend_origin_count_tests;
