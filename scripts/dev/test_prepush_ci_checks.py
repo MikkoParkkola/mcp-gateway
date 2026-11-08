@@ -724,7 +724,6 @@ class Rows(unittest.TestCase):
     def test_d27_r3_fail_open_shapes_fail_closed_naming_the_step(self):
         self.t.script("scripts/x.py")
         shapes = {
-            "multi-line substitution": "out=$(python3 scripts/x.py\n)",
             "bare ampersand": "echo done & python3 scripts/x.py",
             "time prefix": "time python3 scripts/x.py",
             "nohup prefix": "nohup python3 scripts/x.py",
@@ -740,6 +739,11 @@ class Rows(unittest.TestCase):
                 self.t.workflow("ci.yml", pr_job(run).replace("      - run:", "      - name: shape step\n        run:", 1))
                 found = problems(self.t.root, ci_only={})
                 self.assertTrue(any(p.startswith("unsupported execution syntax in ci.yml step 'shape step'") for p in found), found)
+
+    # D27b (SHDRIFT.1): a substitution spanning lines is one command, read as bash runs it.
+    def test_d27b_a_multi_line_substitution_is_read(self):
+        found = workflow_shell.executions("out=$(python3 scripts/x.py\n)")
+        self.assertEqual([(e.script, e.args) for e in found], [("scripts/x.py", ())])
 
     # D28 (lead ruling 2026-10-23): a `.py` path run by something other than a
     # python word is named, not lost.
@@ -851,26 +855,40 @@ class Rows(unittest.TestCase):
         found = workflow_shell.executions("for f in scripts/ci/check_*.py; do\npython3 $f\ndone")
         self.assertEqual([e.script for e in found], ["scripts/ci/check_*.py"])
 
-    # D39 (SHDRIFT.1): one heredoc scanner; the three readers agree on where a body ends, and a
-    # delimiter word with quoting anywhere in it (`E"OF"`) is the whole word, quoted.
+    # D39 (SHDRIFT.1): one heredoc scanner; the walker, the guard and the .sh body check agree on
+    # where a body ends. Bash rules: the delimiter is the whole word and any quoting in it makes
+    # the body data; the terminator is exact (`<<-` strips leading tabs only); openers in quotes
+    # or comments open nothing; two openers on a line queue their bodies in order.
     def test_d39_the_heredoc_readers_agree(self):
-        for block, body, tail in (
-            ('cat <<-"EOF"\n\tpython3 scripts/ci/b.py\n\tEOF\npython3 scripts/ci/y.py',
-             ["\tpython3 scripts/ci/b.py"], "python3 scripts/ci/y.py"),
-            ('cat <<E"OF"\npython3 scripts/ci/b.py\nE\nEOF\npython3 scripts/ci/y.py',
-             ["python3 scripts/ci/b.py", "E"], "python3 scripts/ci/y.py"),
+        shell = workflow_shell.Reading.SHELL
+        y = "python3 scripts/ci/y.py"
+        for block, body in (
+            (f'cat <<-"EOF"\n\tpython3 scripts/ci/b.py\n\tEOF\n{y}', ["\tpython3 scripts/ci/b.py"]),
+            (f'cat <<E"OF"\npython3 scripts/ci/b.py\nE\nEOF\n{y}', ["python3 scripts/ci/b.py", "E"]),
+            (f"cat <<'EOF'\npython3 scripts/ci/b.py\n EOF\nEOF \nEOF\n{y}", ["python3 scripts/ci/b.py", " EOF", "EOF "]),
+            (f"cat <<'A' <<'B'\npython3 scripts/ci/b.py\nA\npython3 scripts/ci/c.py\nB\n{y}",
+             ["python3 scripts/ci/b.py", "python3 scripts/ci/c.py"]),
+            (f"cat <<'EOF-X'\npython3 scripts/ci/b.py\nEOF\nEOF-X\n{y}", ["python3 scripts/ci/b.py", "EOF"]),
         ):
             with self.subTest(block):
-                lines = block.splitlines()
-                self.assertEqual(workflow_shell.heredoc_bodies(lines), body)
-                self.assertEqual(workflow_shell.heredocs_dropped(lines), [lines[0], tail])
+                scanned = workflow_shell._heredoc_scan(block.splitlines(), shell)
+                self.assertEqual([t for t, r in scanned if r is workflow_shell.Role.QUOTED_BODY], body)
+                self.assertEqual([t for t, r in scanned if r is workflow_shell.Role.COMMAND], [block.splitlines()[0], y])
                 # Quoted body: data to the guard too, so only y.py is named and it is read.
+                self.assertEqual([e.script for e in workflow_shell.executions(block)], ["scripts/ci/y.py"])
+        # Openers bash never sees open nothing: the python line after them is read.
+        for block in (f"# cat <<'EOF'\n{y}", f'echo "<<EOF"\n{y}', f"echo '<<EOF'\n{y}", f"read -r x <<< EOF\n{y}"):
+            with self.subTest(block):
                 self.assertEqual([e.script for e in workflow_shell.executions(block)], ["scripts/ci/y.py"])
         # Unquoted body: the guard counts the python command in it, which no execution reads.
         with self.assertRaises(workflow_shell.UnsupportedSyntax):
             workflow_shell.executions("cat <<EOF\npython3 scripts/ci/b.py\nEOF")
+        # A .sh in any body, quoted or not, fails closed.
+        with self.assertRaises(workflow_shell.UnsupportedSyntax):
+            workflow_shell.executions("cat <<'A' <<'B'\nx\nA\nbash scripts/ci/x.sh\nB")
         source = (HERE / "workflow_shell.py").read_text()
-        self.assertEqual(len(re.findall(r"HEREDOC\.(?:search|match|finditer)", source)), 1, "one opener parse")
+        self.assertEqual(len(re.findall(r"HEREDOC\.(?:search|match|finditer)", source)), 1, "one opener regex use")
+        self.assertEqual(len(re.findall(r"== *(?:head\.)?delimiter", source)), 2, "terminators compared in one place")
 
     # D40 (SHDRIFT.2): attached redirections are redirections.
     def test_d40_attached_redirections_are_not_arguments(self):
@@ -941,6 +959,8 @@ class Rows(unittest.TestCase):
             return {_form(e.script, e) for e in workflow_shell.executions(text)}
         for a, b in (
             ('scripts/ci/x.sh "a b"', "scripts/ci/x.sh a b"),
+            ('scripts/ci/x.sh "\'a\'"', "scripts/ci/x.sh a"),
+            ('python3 scripts/ci/x.py "\'a\'"', "python3 scripts/ci/x.py a"),
             ('scripts/ci/x.sh "--"strict', "scripts/ci/x.sh -- strict"),
             ('scripts/ci/x.sh ">" f', "scripts/ci/x.sh > f"),
             ('python3 scripts/ci/x.py "a b"', "python3 scripts/ci/x.py a b"),
@@ -955,9 +975,14 @@ class Rows(unittest.TestCase):
 
     # D45 (SHDRIFT.7): ANSI-C escapes cannot spell .sh past the trigger.
     def test_d45_ansi_c_escapes_spelling_sh_fail_closed(self):
-        for line in ("scripts/ci/x.$'s\\x68'", "scripts/ci/x.$'\\163h'", "bash scripts/ci/x.$'\\x73\\x68'"):
+        for line in ("scripts/ci/x.$'s\\x68'", "scripts/ci/x.$'\\163h'", "bash scripts/ci/x.$'\\x73\\x68'",
+                     "scripts/ci/x.$'\\563\\550'", "bash scripts/ci/x.sh $'\\x61'"):
             with self.subTest(line), self.assertRaises(workflow_shell.UnsupportedSyntax):
                 workflow_shell.executions(line)
+
+        # `$'` inside single quotes (a regex ending in `$`) is text, not ANSI-C quoting.
+        (ex,) = workflow_shell.executions("python3 scripts/ci/x.py '^v[0-9]+\\.[0-9]+$'")
+        self.assertEqual(ex.args, ("^v[0-9]+\\.[0-9]+$",))
 
     # D46 (SHDRIFT.8): adjacent quoted and unquoted fragments are one word.
     def test_d46_adjacent_fragments_are_one_word(self):
@@ -974,12 +999,25 @@ class Rows(unittest.TestCase):
         self.assertEqual((ex.script, ex.args), ("scripts/ci/x.sh", ("a",)))
         (ex,) = workflow_shell.executions("python3 scripts/ci/x.py \\\n  --strict")
         self.assertEqual(ex.args, ("--strict",))
-        # Inside single quotes bash keeps the backslash and the newline; an escaped backslash
-        # before a newline is no continuation.
-        for text in ("x 'a\\\nb'", "x a\\\\\nb"):
-            with self.subTest(text):
-                self.assertEqual(workflow_shell._continued(text), text)
-        self.assertEqual(workflow_shell._continued('x "a\\\nb"'), 'x "ab"')
+        # Inside single quotes bash keeps the backslash and the newline; inside double quotes it
+        # removes them; an escaped backslash before a newline is no continuation.
+        (ex,) = workflow_shell.executions("python3 scripts/ci/x.py 'a\\\nb'")
+        self.assertEqual(ex.args, ("a\\\nb",))
+        (ex,) = workflow_shell.executions('python3 scripts/ci/x.py "a\\\nb"')
+        self.assertEqual(ex.args, ("ab",))
+        found = workflow_shell.executions("python3 scripts/ci/x.py a\\\\\npython3 scripts/ci/y.py")
+        self.assertEqual([(e.script, e.args) for e in found], [("scripts/ci/x.py", ("a\\",)), ("scripts/ci/y.py", ())])
+        # A quoted string spanning lines is one command: its text never reads as a command line.
+        with self.assertRaises(workflow_shell.UnsupportedSyntax):
+            workflow_shell.executions("echo 'a\\\nbash scripts/ci/x.sh\n'")
+        try:
+            found = workflow_shell.executions("echo 'a\npython3 scripts/ci/x.py\n'")
+        except workflow_shell.UnsupportedSyntax:
+            found = []
+        self.assertEqual(found, [], "quoted text credited as a run")
+        # A comment ends at its newline; a backslash in it continues nothing.
+        (ex,) = workflow_shell.executions("# note \\\nbash scripts/ci/x.sh")
+        self.assertEqual(ex.script, "scripts/ci/x.sh")
 
     # D29 (lead ruling 2026-10-23): the guard's exceptions are closed lists.
     def test_d29_the_guards_exception_lists_are_closed(self):
