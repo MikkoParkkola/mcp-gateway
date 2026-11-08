@@ -601,6 +601,9 @@ mod answer_receipt2_tests;
 #[path = "answer_receipt_tests.rs"]
 mod answer_receipt_tests;
 #[cfg(test)]
+#[path = "answer_segment_tests.rs"]
+mod answer_segment_tests;
+#[cfg(test)]
 #[path = "answer_stream_tests.rs"]
 mod answer_stream_tests;
 #[cfg(test)]

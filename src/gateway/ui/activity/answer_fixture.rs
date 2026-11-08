@@ -201,3 +201,28 @@ pub(super) fn forge(entry: &mut Value, key: &str, value: Value, strip_sig: bool)
         o.remove("key_id");
     }
 }
+
+/// 32 findings, about 3 KiB: a delivery record that fills a small segment.
+pub(super) fn fat_findings() -> Value {
+    let many: Vec<Value> = (0..32)
+        .map(|i| json!({"kind": format!("kind-{i:02}-padding-padding"), "severity": "low", "where": "text"}))
+        .collect();
+    json!(many)
+}
+
+/// The sealed segment files holding `trace`'s delivery record.
+pub(super) fn segments_with_delivery(path: &Path, trace: &str) -> Vec<PathBuf> {
+    use crate::security::transparency_log::segments::{list_segments, sealed_path};
+    let wanted = format!("\"trace_id\":\"{trace}\"");
+    list_segments(path)
+        .unwrap()
+        .iter()
+        .map(|s| sealed_path(path, s.seq))
+        .filter(|p| {
+            std::fs::read_to_string(p).is_ok_and(|t| {
+                t.lines()
+                    .any(|l| l.contains(&wanted) && l.contains("response_delivery_attempt"))
+            })
+        })
+        .collect()
+}
