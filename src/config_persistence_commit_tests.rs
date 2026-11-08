@@ -36,7 +36,7 @@ fn listing(dir: &Path) -> Vec<String> {
     let mut names: Vec<String> = std::fs::read_dir(dir)
         .expect("read_dir")
         .map(|e| e.expect("entry").file_name().to_string_lossy().into_owned())
-        .filter(|n| !n.ends_with(".lock"))
+        .filter(|n| n != ".gateway.yaml.lock")
         .collect();
     names.sort();
     names
@@ -110,7 +110,10 @@ fn a_write_failure_is_write_and_leaves_the_old_file() {
     let _armed = fault::set(&path, Fault::FailWrite);
     let got = commit(&held, &path, Action::Forward, NEW);
     assert_eq!(fault::fired(&path), 1, "the seam was reached");
-    assert!(matches!(got, Err(NotDurable::Write(_))), "{got:?}");
+    assert!(
+        matches!(&got, Err(NotDurable::Write(e)) if e.to_string() == "injected write failure"),
+        "{got:?}"
+    );
     assert_eq!(std::fs::read(&path).expect("read"), OLD);
     assert_eq!(listing(dir.path()), names, "no scratch left");
 }
@@ -136,7 +139,7 @@ fn a_dir_sync_failure_after_the_rename_is_sync() {
         let _armed = fault::set(&path, Fault::FailDirSync(armed));
         let got = commit(&held, &path, action, NEW);
         assert!(
-            matches!(got, Err(NotDurable::Sync(_))),
+            matches!(&got, Err(NotDurable::Sync(e)) if e.to_string() == "injected dir-sync failure"),
             "{action:?}: {got:?}"
         );
         assert_eq!(fault::fired(&path), 1, "{action:?}: the seam was reached");
@@ -337,7 +340,7 @@ fn commit_reports_bytes_changed_before_the_read_back() {
     let _armed = fault::set(
         &path,
         hook(HookAt::BeforeReadBack, |t| {
-            std::fs::write(t, CHANGED).expect("change")
+            std::fs::write(t, CHANGED).expect("change");
         }),
     );
     let got = commit(&held, &path, Action::Forward, NEW);
