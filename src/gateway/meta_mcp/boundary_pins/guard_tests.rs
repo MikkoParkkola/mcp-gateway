@@ -6,7 +6,7 @@
 use std::collections::BTreeSet;
 use std::path::Path;
 
-use super::scan::{Owner, Place, Sink, test_only, walk};
+use super::scan::{Owner, Place, Sink, derives_in, test_only, walk};
 
 /// Every target the second clippy pass checks (`--lib --bins`).
 const ROOTS: [&str; 3] = ["src/lib.rs", "src/main.rs", "src/bin/provenance-eval.rs"];
@@ -166,33 +166,6 @@ fn t2b_only_read_envelope_builds_the_envelope_route_consumes() {
         Some(true),
         "route takes &Envelope"
     );
-}
-
-/// Derive names, including derives under any depth of `cfg_attr`.
-fn derives_in(attrs: &[syn::Attribute]) -> BTreeSet<String> {
-    type Metas = syn::punctuated::Punctuated<syn::Meta, syn::Token![,]>;
-    fn walk_meta(meta: &syn::Meta, out: &mut BTreeSet<String>) {
-        let syn::Meta::List(list) = meta else { return };
-        let Ok(args) = list.parse_args_with(Metas::parse_terminated) else {
-            return;
-        };
-        if list.path.is_ident("derive") {
-            for arg in &args {
-                if let Some(last) = arg.path().segments.last() {
-                    out.insert(last.ident.to_string());
-                }
-            }
-        } else if list.path.is_ident("cfg_attr") {
-            for arg in args.iter().skip(1) {
-                walk_meta(arg, out);
-            }
-        }
-    }
-    let mut out = BTreeSet::new();
-    for attr in attrs {
-        walk_meta(&attr.meta, &mut out);
-    }
-    out
 }
 
 fn is_registry(ty: &syn::Type) -> bool {

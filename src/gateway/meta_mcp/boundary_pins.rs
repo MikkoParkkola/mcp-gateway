@@ -14,6 +14,7 @@ mod delivery_framing;
 mod discarded_sends;
 mod discovery_output_sites;
 mod echo_rows_real_transports;
+mod email_sinks;
 mod fold_sites;
 mod fragments;
 mod guard_tests;

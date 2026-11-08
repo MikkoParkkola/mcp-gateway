@@ -220,7 +220,11 @@ fn a_listed_std_macro_near_identity_fields_is_allowed() {
 /// prints what to add, fix or remove.
 #[test]
 fn every_identity_source_is_a_reviewed_row() {
-    let wrong = differences(&crate_scan(), &pin_table("identity_sources"));
+    let wrong = differences(
+        &crate_scan(),
+        &pin_table("identity_sources"),
+        "identity_sources",
+    );
     assert!(
         wrong.is_empty(),
         "identity sources differ from identity_sources.tsv ({}):\n{}",
