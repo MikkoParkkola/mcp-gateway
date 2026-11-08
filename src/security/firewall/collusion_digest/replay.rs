@@ -155,6 +155,54 @@ impl ReplayReceipt {
     }
 }
 
+/// Whether `delivered` carries segment `s` as a replay keeps it: held
+/// whole, or (a part of a leaf) inside a delivered leaf of its own kind.
+fn delivers(delivered: &Delivered<'_>, s: &Segment) -> bool {
+    if delivered.holds(s) {
+        return true;
+    }
+    if s.whole {
+        return false;
+    }
+    let leaves = if s.key {
+        &delivered.all[delivered.values_len.min(delivered.all.len())..]
+    } else {
+        &delivered.all[..delivered.values_len.min(delivered.all.len())]
+    };
+    leaves.iter().any(|leaf| leaf.contains(s.text.as_str()))
+}
+
+impl ReplayReceipt {
+    /// Whether `delivered` carries every segment of this snapshot, by the
+    /// test a replay keeps a segment with: the persisted form holds a
+    /// receipt's text only when the stored result already holds it.
+    pub(in super::super) fn delivered_by(&self, delivered: &Delivered<'_>) -> bool {
+        self.segments.iter().all(|s| {
+            let segment = Segment {
+                text: s.text.clone(),
+                whole: s.whole,
+                gap_before: s.gap_before,
+                key: s.key,
+            };
+            delivers(delivered, &segment)
+        })
+    }
+
+    /// This snapshot with its text joins as their fingerprints, the form
+    /// recording reads them in either way, so the persisted form holds no
+    /// joined key text (each join fingerprinted alone, as recording does).
+    pub(in super::super) fn with_join_fingerprints(mut self, detector: &CollusionDetector) -> Self {
+        if let ReplayJoins::Text(joins) = &self.joins {
+            let fps: Vec<u64> = joins
+                .iter()
+                .flat_map(|j| detector.fingerprints(j))
+                .collect();
+            self.joins = ReplayJoins::Fps(fps.into_boxed_slice());
+        }
+        self
+    }
+}
+
 impl DeliveryDigest {
     /// This committed receipt as an immutable replay snapshot (F2), under
     /// step label `label` and source `server:tool`: every field recording
@@ -289,20 +337,7 @@ impl DeliveryDigest {
             Judged::Unread { receipt, .. } => &receipt.fps,
             _ => &[],
         };
-        let delivered_segment = |s: &Segment| {
-            if delivered.holds(s) {
-                return true;
-            }
-            if s.whole {
-                return false;
-            }
-            let leaves = if s.key {
-                &delivered.all[delivered.values_len.min(delivered.all.len())..]
-            } else {
-                &delivered.all[..delivered.values_len.min(delivered.all.len())]
-            };
-            leaves.iter().any(|leaf| leaf.contains(s.text.as_str()))
-        };
+        let delivered_segment = |s: &Segment| delivers(delivered, s);
         // As retention decides: a fingerprint also stays when it spans
         // adjacent kept leaves of this receipt's own runs, not only when
         // the answer's own forms hold it. The joins are not rechecked:

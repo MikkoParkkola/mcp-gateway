@@ -33,6 +33,7 @@ mod walk;
 pub(crate) use judged::{Judged, UnreadReceipt};
 mod replay;
 pub(crate) use replay::ReplayReceipt;
+pub(super) use replay::{ReplayJoins, ReplayJudged, ReplaySegment};
 
 /// Reference-list walks built on this thread (tests only, `MIK-8066` D2).
 #[cfg(test)]

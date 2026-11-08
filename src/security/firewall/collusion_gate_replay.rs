@@ -222,7 +222,9 @@ impl Firewall {
 }
 
 /// Fresh digests for every snapshot of `entry` (F2).
-fn replayed(entry: &super::super::collusion::replay::ReplayEntry) -> Vec<ReplayedDigest> {
+pub(super) fn replayed(
+    entry: &super::super::collusion::replay::ReplayEntry,
+) -> Vec<ReplayedDigest> {
     entry
         .receipts
         .iter()

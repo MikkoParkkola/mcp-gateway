@@ -271,6 +271,16 @@ fn key() -> &'static RandomState {
     KEY.get_or_init(RandomState::new)
 }
 
+/// The epoch of this process's fingerprint keys: drawn once, beside them.
+/// A task's persisted replay snapshot carries the epoch it was fingerprinted
+/// under, and is rebuilt only by a process with the same epoch, because no
+/// other process's fingerprints match it.
+pub(super) fn replay_epoch() -> u64 {
+    use rand::RngExt as _;
+    static EPOCH: OnceLock<u64> = OnceLock::new();
+    *EPOCH.get_or_init(|| rand::rng().random())
+}
+
 /// `MIK-8066` D6: a second, independent per-process key, used only by
 /// [`CollusionDetector::unread_holder`]. Every presented identity is digested
 /// under [`key`], so it reaches an unread holder only by a keyed collision.

@@ -51,6 +51,9 @@ pub(crate) use record::{CommittedTask, ErrorAuthor, SurfacedKind, SurfacedTarget
 // The router's settle rows name it; production stays inside the service.
 #[cfg(test)]
 pub(crate) use record::Provenance;
+/// The marker text the firewall's own constant is pinned against.
+#[cfg(all(test, feature = "firewall"))]
+pub(crate) use record::SNAPSHOT_UNTRACKABLE;
 /// Re-exported at crate-public visibility for the same reason as
 /// [`TaskExecutor`]: [`open_runtime`] is `pub` and returns this error, so its
 /// name has to be reachable from outside the crate.
