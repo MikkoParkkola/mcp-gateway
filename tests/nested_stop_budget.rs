@@ -229,10 +229,9 @@ async fn run(seconds: u64, leaves: &[&str]) {
         .stderr(Stdio::from(log))
         .process_group(0)
         .kill_on_drop(true)
-        .spawn() // spawn-check: waits for exit: reaped.reap_within below; KillGroup covers panic
+        .spawn() // spawn-check: waits for exit: the SIGTERM under test, then a bounded child wait; Reaped reaps after; KillGroup covers panic
         .expect("gateway");
     let mut reaped = gateway_bin::Reaped::new(child);
-    reaped.owning(temp);
     let pid = reaped.child_mut().id().expect("pid");
     let _cleanup = KillGroup {
         pid,
@@ -285,7 +284,19 @@ async fn run(seconds: u64, leaves: &[&str]) {
         "leaves must be live at stop"
     );
     let deadline = Instant::now() + STOP_BOUND;
-    reaped.reap_within(STOP_BOUND).await;
+    // The action under test: a plain SIGTERM to the gateway alone. Reaped
+    // signals nothing here; it only reaps after the assertions.
+    assert!(
+        std::process::Command::new("kill")
+            .args(["-TERM", &pid.to_string()])
+            .status()
+            .expect("kill")
+            .success()
+    );
+    tokio::time::timeout_at(deadline, reaped.child_mut().wait())
+        .await
+        .unwrap_or_else(|_| panic!("gateway exit deadline\n{}", logs(root)))
+        .expect("gateway exit");
     while leaves.iter().any(|pid| pids::alive(*pid)) {
         assert!(
             Instant::now() < deadline,
@@ -294,6 +305,8 @@ async fn run(seconds: u64, leaves: &[&str]) {
         );
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
+    // Safety net only: the gateway has already exited, so this sends no signal.
+    reaped.reap().await;
     drop(stdin);
 }
 
@@ -341,10 +354,9 @@ async fn a_sigterm_to_a_stdio_gateway_leaves_no_backend_running() {
     .stderr(Stdio::from(log))
     .process_group(0)
     .kill_on_drop(true)
-    .spawn() // spawn-check: waits for exit: reaped.reap_within below; KillGroup covers panic
+    .spawn() // spawn-check: waits for exit: the SIGTERM under test, then a bounded child wait; Reaped reaps after; KillGroup covers panic
     .expect("gateway");
     let mut reaped = gateway_bin::Reaped::new(child);
-    reaped.owning(temp);
     let pid = reaped.child_mut().id().expect("pid");
     let _cleanup = KillGroup {
         pid,
@@ -382,7 +394,19 @@ async fn a_sigterm_to_a_stdio_gateway_leaves_no_backend_running() {
         "leaf must be live at stop\n{}",
         logs(root)
     );
-    reaped.reap_within(Duration::from_secs(60)).await;
+    // The action under test: a plain SIGTERM to the gateway alone. Reaped
+    // signals nothing here; it only reaps after the assertions.
+    assert!(
+        std::process::Command::new("kill")
+            .args(["-TERM", &pid.to_string()])
+            .status()
+            .expect("kill")
+            .success()
+    );
+    tokio::time::timeout(Duration::from_secs(60), reaped.child_mut().wait())
+        .await
+        .unwrap_or_else(|_| panic!("gateway exit deadline\n{}", logs(root)))
+        .expect("gateway exit");
     let leaf_deadline = Instant::now() + Duration::from_secs(10);
     while pids::alive(leaf) {
         assert!(
@@ -392,5 +416,7 @@ async fn a_sigterm_to_a_stdio_gateway_leaves_no_backend_running() {
         );
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
+    // Safety net only: the gateway has already exited, so this sends no signal.
+    reaped.reap().await;
     drop(stdin);
 }
