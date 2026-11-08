@@ -718,6 +718,9 @@ fn read_last_nonempty_line_raw(path: &Path) -> io::Result<Option<String>> {
 #[path = "transparency_log_anchor_tests.rs"]
 mod anchor_tests;
 #[cfg(test)]
+#[path = "transparency_log_sigstart_tests.rs"]
+mod sigstart_tests;
+#[cfg(test)]
 #[path = "transparency_log_attributed_tests.rs"]
 mod attributed_tests;
 #[cfg(test)]

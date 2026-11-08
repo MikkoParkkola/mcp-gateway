@@ -153,3 +153,41 @@ pub(crate) fn events(file: &Path, event: &str) -> usize {
         .filter(|(_, v)| v.get("event").and_then(Value::as_str) == Some(event))
         .count()
 }
+
+/// Write a log the way v3.5.1 left it: one file, chained from genesis
+/// starting at `first_counter`, `unsigned` plain records then `signed`
+/// signed ones, no `.hwm`, no identity or segment record. A `first_counter`
+/// above 1 is a v3 log whose head an external tool trimmed (its first
+/// record's `prev_entry_hash` is then a hash, not "genesis").
+pub(crate) fn write_v3(path: &Path, first_counter: u64, unsigned: usize, signed: usize) {
+    let plain = TransparencyLogConfig::default();
+    let keyed = TransparencyLogConfig {
+        key_id: KEY_ID.into(),
+        shared_secret: SECRET.into(),
+        ..TransparencyLogConfig::default()
+    };
+    let mut prev = if first_counter == 1 {
+        "genesis".to_string()
+    } else {
+        format!("sha256:{}", "ab".repeat(32))
+    };
+    let mut body = String::new();
+    for i in 0..unsigned + signed {
+        let config = if i < unsigned { &plain } else { &keyed };
+        let mut fields = serde_json::Map::new();
+        fields.insert("session_id".into(), "s".into());
+        fields.insert("caller".into(), "c".into());
+        fields.insert("server".into(), "srv".into());
+        fields.insert("tool".into(), format!("tool_{i}").into());
+        fields.insert("request_hash".into(), "sha256:aa".into());
+        fields.insert("response_hash".into(), "sha256:bb".into());
+        fields.insert("timestamp".into(), "2026-01-01T00:00:00Z".into());
+        let (line, hash) =
+            super::entry_hash::chain_line(config, fields, first_counter + i as u64, &prev)
+                .expect("chain");
+        body.push_str(&line);
+        body.push('\n');
+        prev = hash;
+    }
+    std::fs::write(path, body).expect("write v3 log");
+}
