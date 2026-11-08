@@ -393,6 +393,20 @@ class NewCode(unittest.TestCase):
         prelude = "// timing-oracle: vs 150 ms SESSION_TTL (MIK-8280)\nconst ORACLE: Duration = Duration::from_millis(100);"
         self.assertPasses('timeout(ORACLE, run()).await.expect("x");', prelude=prelude)
 
+    def test_an_oracle_annotation_may_give_a_reason_instead_of_a_ticket(self):
+        # New lines cannot carry a ticket id (the public-repo check refuses them), so a reason
+        # stands in its place; the timer the window is measured against is still required.
+        for note in ("vs 30 s STDIO_DRAIN_TIMEOUT (why: the drain must outlast this read)",
+                     "vs DRAIN_TIMEOUT (why:x)"):
+            with self.subTest(note=note):
+                self.assertPasses(f'// timing-oracle: {note}\ntimeout(Duration::from_secs(5), run()).await.expect("x");')
+        prelude = "// timing-oracle: vs 150 ms SESSION_TTL (why: expiry is what this asserts)\nconst ORACLE: Duration = Duration::from_millis(100);"
+        self.assertPasses('timeout(ORACLE, run()).await.expect("x");', prelude=prelude)
+        for note in ("vs DRAIN_TIMEOUT (why:)", "vs DRAIN_TIMEOUT (why:   )", "vs the timeout (why: it is short)",
+                     "vs DRAIN_TIMEOUT why: no brackets", "vs DRAIN_TIMEOUT (because: x)"):
+            with self.subTest(note=note):
+                self.assertRefused(f'// timing-oracle: {note}\ntimeout(Duration::from_secs(5), run()).await.expect("x");', guard.ORACLE)
+
     def test_a_malformed_oracle_annotation_is_refused(self):
         for note in ("vs 30 s STDIO_DRAIN_TIMEOUT", "vs the timeout (MIK-8247)", "30 s (MIK-8247)", "vs 30 s (8247)"):
             with self.subTest(note=note):
