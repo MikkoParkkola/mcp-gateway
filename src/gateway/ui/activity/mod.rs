@@ -582,6 +582,9 @@ mod answer_integrity_tests;
 #[path = "answer_list_tests.rs"]
 mod answer_list_tests;
 #[cfg(test)]
+#[path = "answer_page_tests.rs"]
+mod answer_page_tests;
+#[cfg(test)]
 #[path = "list_tests.rs"]
 mod list_tests;
 #[cfg(test)]
