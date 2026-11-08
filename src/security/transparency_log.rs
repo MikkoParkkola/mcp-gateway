@@ -128,8 +128,8 @@ pub(crate) use verify::is_signed_entry;
 #[cfg(test)]
 pub(crate) use verify::verify_segments;
 pub use verify::{
-    VerifyMode, VerifyResult, log_contains_signed_entry, show_session_entries, verify_log,
-    verify_log_signed,
+    FailedCheck, VerifyMode, VerifyResult, log_contains_signed_entry, show_session_entries,
+    verify_log, verify_log_signed,
 };
 
 use crate::security::audit::{AuditEnvelope, AuditWho, InvocationTarget};
@@ -206,6 +206,11 @@ pub struct TransparencyLogger {
     /// and lease close first.
     #[cfg(test)]
     test_dir: crate::test_dir_keep::TestDirKeep,
+    /// Test-only: every registered temp dir containing this log, taken at
+    /// open before any file is touched (`crate::test_dir_keep`). Declared
+    /// last, so the log's files and lease close before these shares drop.
+    #[cfg(test)]
+    _kept_dirs: Vec<Arc<tempfile::TempDir>>,
 }
 
 /// Which rung of the correlation chain supplied an invocation entry's
@@ -284,6 +289,16 @@ impl TransparencyLogger {
         home: Option<&Path>,
     ) -> io::Result<Self> {
         let path = resolved_path(&config.path, home.map(Path::to_path_buf));
+        // Before any filesystem call: hold every registered temp dir that
+        // contains the log, so none can be removed while it opens or writes.
+        #[cfg(test)]
+        let kept_dirs = crate::test_dir_keep::kept_dirs_for(&path);
+        #[cfg(test)]
+        if kept_dirs.is_empty() {
+            crate::test_dir_keep::report_unkept(crate::test_dir_keep::AUDIT_LOG, &path);
+        }
+        #[cfg(test)]
+        crate::test_dir_keep::run_before_first_fs_call();
         if home.is_none() && crate::home_dir::tilde_rest(&config.path).is_some() {
             let abs = std::path::absolute(&path).unwrap_or_else(|_| path.clone());
             tracing::warn!(
@@ -343,6 +358,8 @@ impl TransparencyLogger {
             subscribers: append::Subscribers::default(),
             #[cfg(test)]
             test_dir: crate::test_dir_keep::TestDirKeep::default(),
+            #[cfg(test)]
+            _kept_dirs: kept_dirs,
         })
     }
 
@@ -542,18 +559,22 @@ impl TransparencyLogger {
         Self::reject_reserved_fields(fields)
     }
 
+    /// The chain, envelope and segment fields: the one list settle's refusal
+    /// and its caller view both read.
+    pub(crate) fn reserved_field_names() -> impl Iterator<Item = &'static str> {
+        const CHAIN: [&str; 5] = ["counter", "prev_entry_hash", "entry_hash", "sig", "key_id"];
+        CHAIN
+            .into_iter()
+            .chain(AuditEnvelope::RESERVED)
+            .chain(rotation::RESERVED_SEGMENT_FIELDS)
+    }
+
     /// The chain, envelope and segment fields no caller may supply, whatever
     /// the record's event.
     fn reject_reserved_fields(
         fields: &serde_json::Map<String, serde_json::Value>,
     ) -> io::Result<()> {
-        let chain = ["counter", "prev_entry_hash", "entry_hash", "sig", "key_id"];
-        let segment = rotation::RESERVED_SEGMENT_FIELDS;
-        for reserved in chain
-            .into_iter()
-            .chain(AuditEnvelope::RESERVED)
-            .chain(segment)
-        {
+        for reserved in Self::reserved_field_names() {
             if fields.contains_key(reserved) {
                 return Err(io::Error::other(format!(
                     "transparency log: reserved chain field '{reserved}' cannot be supplied by caller"
@@ -718,6 +739,9 @@ mod keep_dir_tests;
 #[path = "transparency_log_keep_scan_tests.rs"]
 mod keep_scan_tests;
 #[cfg(test)]
+#[path = "transparency_log_kept_dir_tests.rs"]
+mod kept_dir_tests;
+#[cfg(test)]
 #[path = "transparency_log_kill_tests.rs"]
 mod kill_tests;
 #[cfg(test)]
@@ -763,6 +787,14 @@ mod settle_bound_tests;
 #[cfg(test)]
 #[path = "transparency_log_settle_kind_tests.rs"]
 mod settle_kind_tests;
+
+#[cfg(test)]
+#[path = "transparency_log_pairing_tests.rs"]
+mod pairing_tests;
+
+#[cfg(test)]
+#[path = "transparency_log_pairing_field_tests.rs"]
+mod pairing_field_tests;
 
 /// Test support: `records` without the logger's `audit_log_identified`
 /// record, which every new log writes after its open record. For a row that
