@@ -481,6 +481,53 @@ fn a_refused_meta_call_costs_its_parse_plus_a_fixed_cap() {
     });
 }
 
+/// `key=<integer>` from a forwarded measurement line.
+fn field(line: &str, key: &str) -> i128 {
+    line.split_whitespace()
+        .find_map(|w| w.strip_prefix(key)?.strip_prefix('='))
+        .and_then(|v| v.parse().ok())
+        .unwrap_or_else(|| panic!("no {key}=<integer> in {line:?}"))
+}
+
+/// MIK-9396 MEMB.3: a PASSING INTAKE.2(a) run shows its readings in the log.
+/// The row runs here as a libtest parent with capture on, as in CI: its
+/// stderr carries one line per size with the margin under the cap, and
+/// its stdout keeps exactly one whole `test <name> ... ok` record, with
+/// libtest's default concurrency and on one thread alike.
+#[test]
+fn a_passing_refusal_row_prints_its_bytes_and_margin() {
+    let row = test_path("a_refused_meta_call_costs_its_parse_plus_a_fixed_cap");
+    let exe = std::env::current_exe().expect("the running test binary must be locatable");
+    for threads in [None, Some("--test-threads=1")] {
+        let mut cmd = std::process::Command::new(&exe);
+        cmd.args([row.as_str(), "--exact"]).args(threads);
+        let out = cmd.output().expect("re-executing the test binary must succeed");
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(out.status.success(), "{threads:?}: the row failed\n{stdout}\n{stderr}");
+        let record = format!("test {row} ... ok");
+        assert_eq!(
+            stdout.lines().filter(|l| l.trim_end() == record).count(),
+            1,
+            "{threads:?}: not exactly one whole record\n{stdout}"
+        );
+        let lines: Vec<&str> = stderr
+            .lines()
+            .filter(|l| l.starts_with("alloc-meter: INTAKE.2(a) "))
+            .collect();
+        let sizes: Vec<i128> = lines.iter().map(|l| field(l, "size")).collect();
+        assert_eq!(sizes, [1 << 20, 3 << 20], "{threads:?}: {stderr}");
+        for line in lines {
+            assert_eq!(field(line, "cap"), i128::from(OVER_PARSE), "{line}");
+            assert_eq!(
+                field(line, "margin"),
+                i128::from(OVER_PARSE) - field(line, "over_parse"),
+                "{line}"
+            );
+        }
+    }
+}
+
 /// MIK-8499 INTAKE.2(b): what the input sanitizer adds to a refused call.
 /// Lead-ruled 2026-10-20: 64 KiB fixed, tightened only on new evidence.
 const SANITIZER_SHARE: u64 = 64 * 1024;
