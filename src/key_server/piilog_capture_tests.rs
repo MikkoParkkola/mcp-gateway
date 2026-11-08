@@ -17,7 +17,7 @@ use serde_json::json;
 use tracing_subscriber::layer::SubscriberExt as _;
 use tracing_subscriber::util::SubscriberInitExt as _;
 
-use super::oidc_test_harness::{AUD, Harness, ISS_A, config_yaml};
+use super::oidc_test_harness::{AUD, Harness, ISS_A, ISS_B, config_yaml};
 use crate::log_writer::{self, NoticeFormat};
 
 const CASE: &str = "MCP_GW_TEST_PIILOG_CASE";
@@ -81,6 +81,9 @@ fn in_child(case: &str) {
     );
 }
 
+/// Markers the capture must hold, and markers it must not.
+type Markers = (&'static [&'static str], &'static [&'static str]);
+
 /// A sink the writer thread fills and the child reads back.
 #[derive(Clone, Default)]
 struct Captured(Arc<Mutex<Vec<u8>>>);
@@ -102,7 +105,7 @@ fn child() {
         return;
     };
     let format = match case.as_str() {
-        "json" => NoticeFormat::Json,
+        "json" | "delegated" | "denials" => NoticeFormat::Json,
         "text" => NoticeFormat::Text,
         other => panic!("unknown case {other}"),
     };
@@ -125,7 +128,7 @@ fn child() {
         .enable_all()
         .build()
         .expect("runtime");
-    rt.block_on(async {
+    let (required, forbidden): Markers = rt.block_on(async {
         let yaml = config_yaml(
             "[]",
             &format!(
@@ -134,27 +137,24 @@ fn child() {
             ),
         );
         let h = Harness::start(&yaml).await;
-        let id_token = h.mint(
-            ISS_A,
-            SUBJECT,
-            &json!({"email": EMAIL, "email_verified": true, "aud": AUD}),
-        );
-        let (status, body) = h.exchange(&id_token).await;
-        assert_eq!(status, 200, "exchange: {body}");
-        let bearer = body["access_token"]
-            .as_str()
-            .expect("access_token")
-            .to_owned();
-        assert!(
-            h.ks.validate_token(&bearer).await.is_some(),
-            "stored token use"
-        );
+        // The email is planted in every claim that can carry text.
+        let claims = json!({
+            "email": EMAIL, "email_verified": true, "aud": AUD,
+            "name": format!("Ada <{EMAIL}>"), "groups": [EMAIL, "staff"], "nickname": EMAIL,
+        });
+        let markers = match case.as_str() {
+            "json" | "text" => exchange_and_use(&h, &claims).await,
+            "delegated" => delegated(&h, &claims).await,
+            "denials" => denials(&h, &claims).await,
+            other => panic!("unknown case {other}"),
+        };
         tokio::spawn(async { tracing::info!("piilog-sentinel-task") })
             .await
             .expect("task");
         tokio::task::spawn_blocking(|| tracing::info!("piilog-sentinel-blocking"))
             .await
             .expect("blocking");
+        markers
     });
     std::thread::spawn(|| tracing::info!("piilog-sentinel-thread"))
         .join()
@@ -175,13 +175,19 @@ fn child() {
         "piilog-sentinel-blocking",
         "piilog-sentinel-thread",
         LAST,
-        "token.issued",
-        "token.used",
-        SUBJECT,
-    ] {
+    ]
+    .iter()
+    .chain(required)
+    {
         assert!(
             text.contains(marker),
             "{case}: no {marker:?} in the capture:\n{text}"
+        );
+    }
+    for marker in forbidden {
+        assert!(
+            !text.contains(marker),
+            "{case}: {marker:?} in the capture:\n{text}"
         );
     }
     let leaks: Vec<&str> = text
@@ -205,4 +211,80 @@ fn a_json_log_of_exchange_and_use_carries_no_email() {
 #[test]
 fn a_text_log_of_exchange_and_use_carries_no_email() {
     in_child("text");
+}
+
+/// A signed exchange, then a use of the stored token.
+async fn exchange_and_use(h: &Harness, claims: &serde_json::Value) -> Markers {
+    let (status, body) = h.exchange(&h.mint(ISS_A, SUBJECT, claims)).await;
+    assert_eq!(status, 200, "exchange: {body}");
+    let bearer = body["access_token"]
+        .as_str()
+        .expect("access_token")
+        .to_owned();
+    assert!(
+        h.ks.validate_token(&bearer).await.is_some(),
+        "stored token use"
+    );
+    (&["token.issued", "token.used", SUBJECT], &[])
+}
+
+/// A raw ID token presented as a bearer: verified and matched, no token
+/// minted and no stored-token use.
+async fn delegated(h: &Harness, claims: &serde_json::Value) -> Markers {
+    let verified =
+        h.ks.verify_bearer_identity(&h.mint(ISS_A, SUBJECT, claims))
+            .await;
+    let (_, identity) = verified.expect("the delegated bearer verifies and matches a rule");
+    assert_eq!(identity.subject(), SUBJECT);
+    (&["Policy rule matched"], &["token.issued", "token.used"])
+}
+
+/// Every refusal: no matching rule, an invalid token, an expired token, a
+/// revoked token's use; plus the identity's own `Debug`.
+async fn denials(h: &Harness, claims: &serde_json::Value) -> Markers {
+    let (status, body) = h.exchange(&h.mint(ISS_B, SUBJECT, claims)).await;
+    assert_eq!(status, 403, "no rule for issuer B: {body}");
+    let (status, _) = h.exchange("not.a.jwt").await;
+    assert_ne!(status, 200, "a garbage token is refused");
+    let mut expired = claims.clone();
+    expired["exp"] = json!(1);
+    expired["iat"] = json!(0);
+    let (status, _) = h.exchange(&h.mint(ISS_A, SUBJECT, &expired)).await;
+    assert_ne!(status, 200, "an expired token is refused");
+    let (status, body) = h.exchange(&h.mint(ISS_A, SUBJECT, claims)).await;
+    assert_eq!(status, 200, "exchange: {body}");
+    let bearer = body["access_token"]
+        .as_str()
+        .expect("access_token")
+        .to_owned();
+    let jti = body["jti"].as_str().expect("jti").to_owned();
+    let (status, _) = h.revoke(&format!("jti={jti}")).await;
+    assert!(status == 200 || status == 204, "revoke answered {status}");
+    assert!(
+        h.ks.validate_token(&bearer).await.is_none(),
+        "a revoked token is refused"
+    );
+    let identity = h
+        .verify(&h.mint(ISS_A, SUBJECT, claims))
+        .await
+        .expect("verifies");
+    tracing::info!(?identity, "piilog identity debug");
+    (
+        &[
+            "No policy rule matched",
+            "token.revoked",
+            "piilog identity debug",
+        ],
+        &[],
+    )
+}
+
+#[test]
+fn a_delegated_sign_in_logs_no_email_and_mints_nothing() {
+    in_child("delegated");
+}
+
+#[test]
+fn refusals_and_the_identity_debug_carry_no_email() {
+    in_child("denials");
 }
