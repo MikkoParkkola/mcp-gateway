@@ -571,6 +571,12 @@ fn export_response(
 }
 
 #[cfg(test)]
+#[path = "answer_alloc_tests.rs"]
+mod answer_alloc_tests;
+#[cfg(test)]
+#[path = "answer_budget_tests.rs"]
+mod answer_budget_tests;
+#[cfg(test)]
 #[path = "answer_export2_tests.rs"]
 mod answer_export2_tests;
 #[cfg(test)]
