@@ -212,10 +212,21 @@ impl CallerStanding {
     /// gateway-wide powers, so only `Gateway` holds them.
     #[must_use]
     pub(crate) fn of(standing: AdminStanding) -> Self {
-        if standing == AdminStanding::Gateway {
+        if standing.is_gateway() {
             Self::Admin
         } else {
             Self::Standard
+        }
+    }
+
+    /// The admin standing this caller standing stands for: the inverse of
+    /// [`Self::of`]. Lossy by design, as `of` is: an in-scope admin is
+    /// `Standard` here, so it comes back as `AdminStanding::None`.
+    #[must_use]
+    pub(crate) fn admin_standing(self) -> AdminStanding {
+        match self {
+            Self::Admin => AdminStanding::Gateway,
+            Self::Standard => AdminStanding::None,
         }
     }
 
@@ -301,7 +312,7 @@ pub(super) fn require_admin_log_level(
     server: &str,
 ) -> Result<(), AuthorizationError> {
     if !method.eq_ignore_ascii_case("logging/setLevel")
-        || CallerStanding::of_client(client) == CallerStanding::Admin
+        || crate::gateway::auth::is_gateway_admin(client)
     {
         return Ok(());
     }

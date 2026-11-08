@@ -304,6 +304,8 @@ criterion = { version = "0.8", features = ["html_reports"] }
 jsonschema = { version = "0.60.0", default-features = false }
 # MIK-8387 boundary pins: parse the crate's own source (already in Cargo.lock).
 syn = { version = "2.0.119", features = ["full", "visit"] }
+# The mutant-site scan (src/mutant_scan.rs) walks raw token trees (already in Cargo.lock).
+proc-macro2 = { version = "1.0.107", features = ["span-locations"] }
 
 [features]
 default = ["a2a", "webui", "config-export", "cost-governance", "firewall", "discovery", "semantic-search", "tool-profiles", "metrics"]
@@ -367,7 +369,7 @@ strip = true
 
 [lints.rust]
 unsafe_code = "deny"
-unexpected_cfgs = { level = "warn", check-cfg = ['cfg(kani)', 'cfg(coverage)'] }
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(kani)', 'cfg(coverage)', 'cfg(mutants)'] }
 
 [lints.clippy]
 all = { level = "warn", priority = -1 }

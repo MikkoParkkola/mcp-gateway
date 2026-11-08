@@ -327,6 +327,23 @@ is_public_data() {
 # Literal paths throughout: a quoted name ("tickets/\303\244.md") would slip
 # past every prefix comparison.
 git_lit() { git -c core.quotePath=false "$@"; }
+# scan NAME CMD...: runs CMD, whose output feeds a scan. A process substitution drops its command's
+# exit status, so a failure is written to $scan_failures and the check exits 2 at the end: a scan
+# that could not run is never read as a clean one. A NAME starting grep: treats exit 1 ("no match")
+# as success, as grep means it.
+scan_failures="$(mktemp)"
+trap 'rm -f "$scan_failures"' EXIT
+# A failure that cannot even be recorded stops the check at once (scan() signals this shell).
+trap 'printf "FAIL: a scan failed and its failure could not be recorded; the check cannot pass\n" >&2; exit 2' USR1
+scan() {
+  local name="$1" rc=0
+  shift
+  "$@" || rc=$?
+  if (( rc != 0 )) && ! [[ "$name" == grep:* && "$rc" -eq 1 ]]; then
+    printf '%s (exit %d)\n' "$name" "$rc" >>"$scan_failures" || kill -USR1 "$$"
+  fi
+  return 0
+}
 
 merge_base=""
 declare -A added=()
@@ -336,7 +353,7 @@ if [[ -n "$base" ]]; then
   # name is judged as the addition it is.
   while IFS= read -r -d '' file; do
     added["$file"]=1
-  done < <(git_lit diff -z --no-renames --name-only --diff-filter=A "$merge_base" HEAD)
+  done < <(scan "diff:added-files" git_lit diff -z --no-renames --name-only --diff-filter=A "$merge_base" HEAD)
 fi
 
 while IFS= read -r -d '' file; do
@@ -346,7 +363,7 @@ while IFS= read -r -d '' file; do
   [[ -z "${added[$file]:-}" ]] && is_debt "$file" private-path && continue
   report_failure "$file is a private path; it belongs in the private companion repository"
   printf 'Remediation: move it into the private companion repository (cloned at internal/) keeping its path, then git rm it here.\n' >&2
-done < <(git_lit ls-files -z -- "${private_path_prefixes[@]}" "${private_file_names[@]/#/:(glob)**/}")
+done < <(scan "ls-files:private-paths" git_lit ls-files -z -- "${private_path_prefixes[@]}" "${private_file_names[@]/#/:(glob)**/}")
 
 # One fixed-string git grep finds every candidate line (an ERE grep over the
 # tree costs seconds); each candidate is then matched against the checks.
@@ -377,7 +394,7 @@ while IFS= read -r -d '' file && IFS= read -r -d '' lineno && IFS= read -r text;
     report_failure "$file:$hit -- $reason ($id)"
   done
 done < <(
-  git_lit grep -I -n -i -F --null "${private_content_prefilter[@]/#/-e}" -- . "${self_skips[@]}" || true)
+  scan "grep:private-content" git_lit grep -I -n -i -F --null "${private_content_prefilter[@]/#/-e}" -- . "${self_skips[@]}")
 
 if [[ -n "$base" ]]; then
   # Added lines, as path TAB line TAB text. An id that the same file's removed
@@ -386,7 +403,7 @@ if [[ -n "$base" ]]; then
     is_self_file "$file" && continue
     is_ticket_keyed "$file" && continue
     report_failure "$file:$line adds a ticket id: $text"
-  done < <(git_lit diff --no-color --no-ext-diff --unified=0 -M "$merge_base" HEAD |
+  done < <(scan "diff:added-lines" git_lit diff --no-color --no-ext-diff --unified=0 -M "$merge_base" HEAD |
     awk -v re="$ticket_id_regex" '
       # An acceptance-criterion id (MIK-N.AREA.n) is the key tests report
       # evidence under, not a citation, so it is stripped before the search.
@@ -446,7 +463,7 @@ while IFS= read -r hit; do
     report_failure "$file contains ${blocked_reasons[$i]} marker: ${hit#*:}"
     printf 'Remediation: move the material into the private companion repository (cloned at internal/).\n' >&2
   done
-done < <(git_lit grep -I -n -i -E "${blocked_patterns[@]/#/-e}" -- "${doc_specs[@]}" "${doc_skips[@]}" || true)
+done < <(scan "grep:blocked-markers" git_lit grep -I -n -i -E "${blocked_patterns[@]/#/-e}" -- "${doc_specs[@]}" "${doc_skips[@]}")
 shopt -u nocasematch
 
 # A working document announces itself in a heading within its first fifteen
@@ -462,8 +479,8 @@ while IFS=$'\t' read -r file evidence; do
   report_internal_doc "$file" "$evidence"
 done < <(
   {
-    git_lit ls-files -- '*.md' "${md_skips[@]}" | sed 's/^/F\t/'
-    git_lit grep -I -n -E -e '^#{1,3} ' -- '*.md' "${md_skips[@]}" | sed 's/^/H\t/' || true
+    scan "ls-files:docs" git_lit ls-files -- '*.md' "${md_skips[@]}" | sed 's/^/F\t/'
+    scan "grep:doc-headings" git_lit grep -I -n -E -e '^#{1,3} ' -- '*.md' "${md_skips[@]}" | sed 's/^/H\t/'
   } | awk -F'\t' -v hm="$heading_list" -v pm="$path_list" '
     BEGIN { nh = split(hm, H, "\037") - 1; np = split(pm, P, "\037") - 1 }
     $1 == "F" { order[++nf] = $2; next }
@@ -491,7 +508,7 @@ done < <(
 
 for surface in "${shipped_surfaces[@]}"; do
   [[ -f "$surface" ]] || continue
-  if match="$(grep -E -n -m 1 '(/Users|/home)/[a-z][a-z0-9_-]*/' "$surface" || true)"; [[ -n "$match" ]]; then
+  if match="$(scan "grep:surface-home-paths" grep -E -n -m 1 '(/Users|/home)/[a-z][a-z0-9_-]*/' "$surface")"; [[ -n "$match" ]]; then
     report_failure "$surface carries a home-directory path a reader cannot have: $match"
   fi
 done
@@ -506,7 +523,7 @@ while IFS= read -r file; do
   if [[ "$allowed" -eq 0 ]]; then
     report_failure "$file is a top-level file that is not on the root allowlist; move it under docs/ or add it to root_doc_allowlist in this script"
   fi
-done < <(git_lit ls-files | awk '!/\//')
+done < <(scan "ls-files:top-level" git_lit ls-files | awk '!/\//')
 
 # A change may shrink the debt list, never grow it: no new entry, no higher
 # count than the base carried.
@@ -516,7 +533,7 @@ if [[ -n "$merge_base" ]] && git cat-file -e "$merge_base:$debt_file" 2>/dev/nul
   while IFS=$'\t' read -r where id most; do
     [[ -z "$where" || "$where" == \#* ]] && continue
     base_most["$where"$'\t'"$id"]="${most:-0}"
-  done < <(git show "$merge_base:$debt_file" 2>/dev/null || true)
+  done < <(scan "show:base-debt-list" git show "$merge_base:$debt_file")
   for entry in ${debt_entries[@]+"${debt_entries[@]}"}; do
     key="${entry%$'\t'*}"
     [[ "$entry" == *$'\t'*$'\t'* ]] || key="$entry"
@@ -550,6 +567,16 @@ for entry in ${debt_entries[@]+"${debt_entries[@]}"}; do
   fi
 done
 
+if [[ ! -f "$scan_failures" ]]; then
+  printf 'FAIL: the scan-failure record is gone; the check cannot pass\n' >&2
+  exit 2
+fi
+if [[ -s "$scan_failures" ]]; then
+  while IFS= read -r failed; do
+    printf 'FAIL: scan failed: %s; the check could not read the tree, so it cannot pass\n' "$failed" >&2
+  done <"$scan_failures"
+  exit 2
+fi
 if (( failures > 0 )); then
   printf 'Public repo hygiene failed with %d issue(s).\n' "$failures" >&2
   exit 1
