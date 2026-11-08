@@ -733,6 +733,7 @@ class Rows(unittest.TestCase):
             "nohup prefix": "nohup python3 scripts/x.py",
             "subshell": "(python3 scripts/x.py)",
             "case arm": "case x in *) python3 scripts/x.py ;; esac",
+            "ansi-c quote": "python3 $'scripts/x.py'",
             "process substitution": "cat <(python3 scripts/x.py)",
             "xargs": "echo scripts/x.py | xargs -I{} python3 {}",
             "unquoted heredoc": "cat <<EOF\n$(python3 scripts/x.py)\nEOF",
@@ -743,22 +744,19 @@ class Rows(unittest.TestCase):
                 found = problems(self.t.root, ci_only={})
                 self.assertTrue(any(p.startswith("unsupported execution syntax in ci.yml step 'shape step'") for p in found), found)
 
-    # D27b (SHDRIFT.1; a loosening, lead ruling 2026-11-08): a well-formed substitution spanning
-    # lines is one command, read as bash runs it (it was refused); one bash cannot parse
-    # (unterminated, stray `)`, an unterminated quote inside) is still refused.
-    def test_d27b_a_multi_line_substitution_is_read(self):
-        for block, scripts in (
-            ("out=$(python3 scripts/x.py\n)", ["scripts/x.py"]),
-            ("out=`python3 scripts/x.py\n`", ["scripts/x.py"]),
-            ("out=$(python3 scripts/x.py\n)\npython3 scripts/y.py", ["scripts/x.py", "scripts/y.py"]),
-        ):
-            with self.subTest(block):
-                self.assertEqual([e.script for e in workflow_shell.executions(block)], scripts)
-        for block in ("out=$(python3 scripts/x.py", "out=$(python3 scripts/x.py\necho done",
-                      'out=$(python3 "scripts/x.py\n)', "out=$(python3 scripts/x.py\n))",
-                      "out=$(python3 scripts/x.py\n) )", "out=$(bash scripts/ci/x.sh\n)"):
+    # D27b (lead ruling 2026-11-08): a substitution spanning lines stays refused, well formed or not;
+    # accepting it would credit runs bash never performs (`out=$(python3 x.py<newline>) |`).
+    def test_d27b_a_multi_line_substitution_is_refused(self):
+        for block in ("out=$(python3 scripts/x.py\n)", "out=`python3 scripts/x.py\n`",
+                      "out=$(python3 scripts/x.py\n) |", "out=$(python3 scripts/x.py",
+                      "out=$(python3 scripts/x.py\necho done", 'out=$(python3 "scripts/x.py\n)',
+                      "out=$(python3 scripts/x.py\n))", "out=$(bash scripts/ci/x.sh\n)"):
             with self.subTest(block), self.assertRaises(workflow_shell.UnsupportedSyntax):
                 workflow_shell.executions(block)
+        # One that names no script runs nothing this check reads (a multi-line jq filter).
+        self.assertEqual(workflow_shell.executions("LIST=\"$(jq -r '.a\n  // empty' f.json)\""), [])
+        # A one-line substitution is read as before.
+        self.assertEqual([e.script for e in workflow_shell.executions("out=$(python3 scripts/x.py)")], ["scripts/x.py"])
 
     # D28 (lead ruling 2026-10-23): a `.py` path run by something other than a
     # python word is named, not lost.
@@ -988,7 +986,6 @@ class Rows(unittest.TestCase):
             ('scripts/ci/x.sh "a b"', "scripts/ci/x.sh a b"),
             ('scripts/ci/x.sh "\'a\'"', "scripts/ci/x.sh a"),
             ('python3 scripts/ci/x.py "\'a\'"', "python3 scripts/ci/x.py a"),
-            ("$GATE_PY scripts/ci/x.py $'\\x61'", "$GATE_PY scripts/ci/x.py '$\\x61'"),
             ('scripts/ci/x.sh "--"strict', "scripts/ci/x.sh -- strict"),
             ('scripts/ci/x.sh ">" f', "scripts/ci/x.sh > f"),
             ('python3 scripts/ci/x.py "a b"', "python3 scripts/ci/x.py a b"),
@@ -1008,12 +1005,13 @@ class Rows(unittest.TestCase):
             with self.subTest(line), self.assertRaises(workflow_shell.UnsupportedSyntax):
                 workflow_shell.executions(line)
 
-        (ex,) = workflow_shell.executions("bash scripts/ci/x.sh $'\\x61' $'it\\'s'")
-        self.assertEqual(ex.args, ("a", "it's"))
-        # A loosening (was refused, D27): `$'…'` is decoded as bash does, so a script it spells is read.
-        self.assertEqual([e.script for e in workflow_shell.executions("python3 $'scripts/x.py'")], ["scripts/x.py"])
-        (ex,) = workflow_shell.executions("py$'\\x74'hon3 scripts/ci/x.p$'\\x79' $'\\x61'")
-        self.assertEqual((ex.script, ex.args), ("scripts/ci/x.py", ("a",)))
+        # `$'…'` in a command the check would credit is refused (lead ruling 2026-11-08: no decoding
+        # here is trusted for its value); decoding only finds what it spells.
+        for line in ("bash scripts/ci/x.sh $'\\x61' $'it\\'s'", "python3 $'scripts/x.py'",
+                     "py$'\\x74'hon3 scripts/ci/x.py", "python3 scripts/ci/x.p$'\\x79'",
+                     "$GATE_PY scripts/ci/x.py $'\\x61'", "python3 scripts/ci/x.py $'--strict\\0x'"):
+            with self.subTest(line), self.assertRaises(workflow_shell.UnsupportedSyntax):
+                workflow_shell.executions(line)
         # A script word with literal quotes in it is not that script.
         try:
             found = workflow_shell.executions('python3 "\'scripts/ci/x.py\'"')

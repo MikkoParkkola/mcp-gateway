@@ -87,11 +87,11 @@ def _heredoc_scan(lines, reading: Reading) -> list[tuple[str, Role]]:
         if state.open:
             buffer += "\n"  # a quote or substitution spans the newline: one command still
             continue
-        command = _ansi_c_decoded(_comment_dropped(buffer, state))
+        command = _comment_dropped(buffer, state)
         buffer = None
         if command.strip():
             out.append((command, Role.COMMAND))
-        pending += _openers(command)
+        pending += _openers(_ansi_c_decoded(command))  # `<<$'EOF'` is delimiter EOF, quoted
     if buffer is not None and buffer.strip():
         out.append((buffer, Role.COMMAND))  # unterminated: read as written (Python fails to tokenize)
     return out
@@ -358,8 +358,8 @@ def _words(text):
 
 
 def _ansi_c(written):
-    """Whether a word still uses `$'…'` quoting bash reads (one left unterminated: complete ones
-    were decoded by the scanner) or `$"…"`."""
+    """Whether a word uses `$'…'` quoting bash reads (complete or unterminated) or `$"…"`: a
+    credited command using it is refused, since no decoding here is trusted for its value."""
     state = _lex_state(written)
     top = state.top
     return bool(state.ansi_c) or state.ansi_c_open or any(
@@ -549,7 +549,12 @@ def _command_words(piece):
     """The words of a simple command, redirections removed and prefixes peeled: keywords,
     `VAR=value` assignments and `env [VAR=value…]`. Python commands must tokenize and may not
     use `$'…'` quoting; other commands whose quoting cannot be read run nothing this check sees."""
-    is_python = bool(PYTHONS & set(re.split(r"[\s\"'/]+", piece)))
+    decoded = _ansi_c_decoded(piece)
+    try:
+        names = set(shlex.split(decoded)) | {w.rsplit("/", 1)[-1] for w in shlex.split(decoded)}
+    except ValueError:
+        names = set(re.split(r"[\s\"'/]+", decoded))
+    is_python = bool((PYTHONS | GATE_PYTHONS) & names)
     try:
         pairs = _words(piece)
     except ValueError as err:
@@ -587,7 +592,8 @@ def _guard_lines(run_block):
     """`run_block`'s command text for the guard: commands as bash reads them (see
     `_heredoc_scan`) plus UNQUOTED heredoc bodies (they expand `$( )`)."""
     text = re.sub(r"\$\{\{\s*(.*?)\s*\}\}", lambda m: "${{" + m.group(1).replace(" ", "") + "}}", run_block)
-    return [line for line, role in _heredoc_scan(text.splitlines(), Reading.SHELL) if role is not Role.QUOTED_BODY]
+    return [_ansi_c_decoded(line) for line, role in _heredoc_scan(text.splitlines(), Reading.SHELL)
+            if role is not Role.QUOTED_BODY]
 
 
 def _data_stripped(line):
@@ -647,10 +653,12 @@ def _walk(run_block: str, shell_lines: ShellLines = ShellLines.STRICT, ci_only_l
     lines = [text for text, role in scanned if role is Role.COMMAND]
     found, bound, loops = [], {}, {}
     for raw in lines:
-        if any("\n" in body for _, _, body in _lex(raw)[1]) and _parens_unbalanced(raw):
-            # A substitution read across lines is accepted only when bash could parse the
-            # command: a stray `)` is a syntax error, and the step runs nothing.
-            raise UnsupportedSyntax(f"a command spanning lines that bash cannot parse: {raw.strip()}")
+        if any("\n" in body and (PY_WORD.search(body) or PY_PATH.search(body) or _names_sh(body))
+               for _, _, body in _lex(raw)[1]):
+            # One that names a script is refused, as before the one scanner (lead ruling 2026-11-08, after a review found
+            # `out=$(python3 x.py<newline>) |`, which bash rejects, credited as a run): reading it
+            # would need bash's own parse to tell a runnable command from a syntax error.
+            raise UnsupportedSyntax(f"a command substitution spanning lines; write it on one line: {raw.strip()}")
         if _names_sh(raw):
             if " ".join(raw.split()) in ci_only_lines:
                 continue
@@ -684,19 +692,6 @@ def _walk(run_block: str, shell_lines: ShellLines = ShellLines.STRICT, ci_only_l
             for stage in stages:
                 found += _stage_execution(stage, stages, bound, loops)
     return found
-
-
-def _parens_unbalanced(text):
-    """Whether `text`'s top-level parentheses (subshells; a substitution's own are not top) fail
-    to pair up."""
-    top, _ = _lex(text)
-    depth = 0
-    for flag, char in zip(top, text):
-        if flag and char in "()":
-            depth += 1 if char == "(" else -1
-            if depth < 0:
-                return True
-    return depth != 0
 
 
 def _stage_execution(stage, stages, bound, loops):
