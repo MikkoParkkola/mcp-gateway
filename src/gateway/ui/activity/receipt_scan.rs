@@ -8,9 +8,7 @@ use std::path::Path;
 
 use serde_json::{Value, json};
 
-use super::answer::{
-    Delivery, Effect, Findings, Joined, RECEIPT_LINES, RECEIPT_SCAN, Searched, Why,
-};
+use super::answer::{Delivery, Effect, Findings, Joined, RECEIPT_SCAN, Searched, Why};
 use super::joiner::{Joiner, Seen};
 use super::reader::{Line, Which};
 use super::seek::{Found, segments};
@@ -58,8 +56,9 @@ fn is_delivery(entry: &Value, trace: &str) -> bool {
         && text("response_stage") == Some("transport_finalized")
 }
 
-/// Read forward from `found`, up to [`RECEIPT_SCAN`] bytes or
-/// [`RECEIPT_LINES`] lines, crossing at most one segment boundary.
+/// Read forward from `found`, up to [`RECEIPT_SCAN`] bytes, crossing at most
+/// one segment boundary. The byte bound governs alone: a valid chained record
+/// is over 131 bytes, so no line cap could fire before it (design I1).
 pub(super) fn scan(
     log: &Path,
     found: &Found,
@@ -93,12 +92,6 @@ pub(super) fn scan(
                 other => break other,
             };
             out.lines += 1;
-            if out.lines > RECEIPT_LINES {
-                out.lines = RECEIPT_LINES;
-                (out.stopped, out.finished) = ("line limit", false);
-                out.bytes += forward.pulled();
-                break 'segments;
-            }
             let Ok(entry @ Value::Object(_)) = serde_json::from_slice::<Value>(&bytes) else {
                 continue;
             };

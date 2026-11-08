@@ -21,8 +21,6 @@ pub(super) const DELIVERY_WINDOW: u64 = 256 << 10;
 pub(super) const LOOK_ABOVE: u64 = DELIVERY_WINDOW;
 /// What a receipt reads forward from its call.
 pub(super) const RECEIPT_SCAN: u64 = DELIVERY_WINDOW;
-/// The receipt's line cap.
-pub(super) const RECEIPT_LINES: usize = 2_000;
 /// Deliveries held per read.
 pub(super) const MAX_PENDING: usize = 256;
 /// Tombstones held per read.

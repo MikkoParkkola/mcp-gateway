@@ -581,6 +581,9 @@ mod answer_budget_tests;
 #[path = "answer_export2_tests.rs"]
 mod answer_export2_tests;
 #[cfg(test)]
+#[path = "answer_export3_tests.rs"]
+mod answer_export3_tests;
+#[cfg(test)]
 #[path = "answer_export_tests.rs"]
 mod answer_export_tests;
 #[cfg(test)]
