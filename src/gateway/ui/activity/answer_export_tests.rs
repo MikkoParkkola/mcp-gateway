@@ -48,6 +48,7 @@ pub(super) fn csv_records(text: &str) -> Vec<Vec<String>> {
             }
             (true, '"') => quoted = false,
             (false, '"') => quoted = true,
+            (false, '\r') => {}
             (false, ',') => record.push(std::mem::take(&mut cell)),
             (false, '\n') => {
                 record.push(std::mem::take(&mut cell));

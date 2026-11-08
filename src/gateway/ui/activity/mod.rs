@@ -584,7 +584,7 @@ mod answer_export2_tests;
 #[path = "answer_export_tests.rs"]
 mod answer_export_tests;
 #[cfg(test)]
-#[path = "answer_fixture.rs"]
+#[path = "answer_fixture_tests.rs"]
 mod answer_fixture;
 #[cfg(test)]
 #[path = "answer_integrity2_tests.rs"]
