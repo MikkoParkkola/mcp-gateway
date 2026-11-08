@@ -5,6 +5,7 @@
 
 /// The record key the router's auth config is built with: a self-describing
 /// test value, never a deployment's key.
+#[cfg(test)]
 pub const RECORD_KEY: &str = "test-record-key-not-a-secret-0123456789abcdef";
 
 pub use crate::backend::BackendRegistry;
@@ -95,7 +96,7 @@ impl Default for Fixture {
 /// function would delete the records under a state the test is still posting
 /// to. Callers bind it for the whole test — `let (app, _store_dir) = …` — and
 /// each call gets a fresh private directory, so no two cases share a lease.
-pub async fn state(f: Fixture) -> (Arc<AppState>, tempfile::TempDir) {
+pub async fn state(f: Fixture) -> (Arc<AppState>, Arc<tempfile::TempDir>) {
     let mut config = Config::default();
     config.server.modern_protocol = f.modern_protocol;
     config.auth = f.auth;
@@ -117,7 +118,7 @@ pub async fn state(f: Fixture) -> (Arc<AppState>, tempfile::TempDir) {
         64,
         auth_state(&config.auth, RECORD_KEY),
     ));
-    let store_dir = tempfile::tempdir().expect("a private task-store directory");
+    let store_dir = Arc::new(tempfile::tempdir().expect("a private task-store directory"));
     let (tasks, task_executor) = open_runtime(
         &store_dir.path().join("tasks"),
         config.tasks.max_workers,
@@ -126,6 +127,9 @@ pub async fn state(f: Fixture) -> (Arc<AppState>, tempfile::TempDir) {
     )
     .await
     .expect("the fixture task store opens");
+    // The task worker outlives no store directory: the test's share of it
+    // keeps the directory until the worker's last write lands.
+    tasks.keep_test_dir(Arc::clone(&store_dir));
 
     // The router's firewall on the Meta-MCP too when the row asks, as the
     // server installs it on both.

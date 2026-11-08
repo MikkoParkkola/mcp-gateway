@@ -98,7 +98,7 @@ pub(super) struct Fixture {
     /// `None` when the TEST owns the directory, which is how one store
     /// outlives one gateway: a reconnect fixture opens a second state over
     /// a directory the test keeps alive across both.
-    _store_dir: Option<tempfile::TempDir>,
+    _store_dir: Option<Arc<tempfile::TempDir>>,
 }
 
 /// The suite's standard gateway: authentication on, two principals, one
@@ -150,8 +150,8 @@ pub(super) async fn state_from(auth: AuthConfig) -> Fixture {
 }
 
 pub(super) async fn state_from_with(auth: AuthConfig, backend: Arc<CountedBackend>) -> Fixture {
-    let store_dir = tempfile::tempdir().expect("a private task-store directory");
-    let fixture = state_in(auth, backend, store_dir.path()).await;
+    let store_dir = Arc::new(tempfile::tempdir().expect("a private task-store directory"));
+    let fixture = state_in(auth, backend, &store_dir).await;
     Fixture {
         _store_dir: Some(store_dir),
         ..fixture
@@ -167,14 +167,14 @@ pub(super) async fn state_from_with(auth: AuthConfig, backend: Arc<CountedBacken
 /// finishing at that instant, so the open is retried to [`fixture::BOUND`]
 /// rather than raced. A lease that never frees fails here by name instead of
 /// surfacing as an unrelated store error inside a task assertion.
-pub(super) async fn state_over(store_root: &std::path::Path) -> Fixture {
-    state_in(two_principal_auth(), CountedBackend::open(), store_root).await
+pub(super) async fn state_over(store: &Arc<tempfile::TempDir>) -> Fixture {
+    state_in(two_principal_auth(), CountedBackend::open(), store).await
 }
 
 async fn state_in(
     auth: AuthConfig,
     backend: Arc<CountedBackend>,
-    store_root: &std::path::Path,
+    store: &Arc<tempfile::TempDir>,
 ) -> Fixture {
     let mut config = Config::default();
     config.server.modern_protocol = true;
@@ -191,7 +191,7 @@ async fn state_in(
     let authorizer = auth_state(&config.auth, super::RECORD_KEY);
     let auth_config = Arc::clone(authorizer.live_config.generation().auth());
     let subscriptions = Arc::new(SubscriptionRegistry::new(SUBSCRIPTION_CAPACITY, authorizer));
-    let tasks_dir = store_root.join("tasks");
+    let tasks_dir = store.path().join("tasks");
     let deadline = tokio::time::Instant::now() + fixture::BOUND;
     let (tasks, task_executor) = loop {
         match open_runtime(
@@ -221,6 +221,9 @@ async fn state_in(
             ),
         }
     };
+    // The task worker outlives no store directory: the test's share of it
+    // keeps the directory until the worker's last write lands.
+    tasks.keep_test_dir(Arc::clone(store));
 
     let state = Arc::new(AppState {
         process: std::sync::Arc::default(),
