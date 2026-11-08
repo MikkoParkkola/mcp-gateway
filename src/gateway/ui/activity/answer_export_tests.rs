@@ -74,8 +74,9 @@ async fn r14_exports_carry_the_effect_and_findings() {
     fx.delivery("gw-2", &d);
     let (_, page) = get(&fx, &[]).await;
     let (rows, _) = ndjson(&export(&fx, "ndjson").await);
+    let exported_page = json!({"rows": rows});
     for trace in ["gw-1", "gw-2"] {
-        let (listed, exported) = (row_of(&page, trace), row_of(&json!({"rows": rows}), trace));
+        let (listed, exported) = (row_of(&page, trace), row_of(&exported_page, trace));
         for key in ["effect", "answer_findings", "answer_findings_total"] {
             assert_eq!(listed.get(key), exported.get(key), "{trace} {key}");
         }

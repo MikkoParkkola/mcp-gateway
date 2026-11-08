@@ -6,17 +6,7 @@
 use super::answer::{Joined, Searched};
 use super::reader::Line;
 
-/// Where the reader is when it hands a call to the join.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) struct Seen {
-    /// Bytes of the invocation log read above this line in this read:
-    /// look-above bytes plus every line consumed since the page top.
-    pub(super) above: u64,
-    /// The bytes of this line, newline included.
-    pub(super) len: u64,
-    /// The first page of a read starts at the log head: nothing is above.
-    pub(super) head_covered: bool,
-}
+pub(super) use super::reader::Seen;
 
 /// The join state of one read.
 #[derive(Debug, Default)]
