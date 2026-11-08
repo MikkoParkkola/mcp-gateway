@@ -138,12 +138,21 @@ fn keep_rename_drop_data_keeps_names_and_synced_data() {
     assert_eq!(std::fs::read(path).expect("read"), NEW);
 }
 
-/// C7: red oracle: forgetting to arm fails with a useful name.
+/// C7: red oracle: forgetting to arm fails with a useful name, caught and
+/// checked here so a cut that silently does nothing fails at this assertion.
 #[test]
-#[should_panic(expected = "not armed")]
 fn cut_on_an_unarmed_dir_panics_by_name() {
     let dir = tempfile::tempdir().expect("tempdir");
-    crash_fs::cut(dir.path(), Mode::DropAll);
+    let path = dir.path().to_path_buf();
+    let caught = std::panic::catch_unwind(move || crash_fs::cut(&path, Mode::DropAll));
+    let message = caught
+        .err()
+        .and_then(|e| e.downcast_ref::<String>().cloned())
+        .unwrap_or_default();
+    assert!(
+        message.contains("not armed"),
+        "cut on an unarmed dir: {message:?}"
+    );
 }
 
 /// C8: red oracle: flushing the second replacement cannot change the first
