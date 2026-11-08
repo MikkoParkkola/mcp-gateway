@@ -522,3 +522,23 @@ fn a_file_flush_failure_is_sync() {
     assert_eq!(fault::fired(&path2), 1, "the seam was reached");
     assert_eq!(std::fs::read(&path2).expect("read"), NEW);
 }
+
+/// A21: a target deleted after the read-back refuses the token as
+/// `Repointed`: the rename happened, so the refusal names that, on every
+/// platform. Red oracle: `Repointed(Other)` naming the deletion.
+#[test]
+fn a_target_deleted_after_the_read_back_is_repointed() {
+    let (_dir, path) = config();
+    let held = lock(&path);
+    let _armed = fault::set(
+        &path,
+        hook(HookAt::BeforeRecheck, |t| {
+            std::fs::remove_file(t).expect("delete");
+        }),
+    );
+    let got = commit(&held, &path, Action::Forward, NEW);
+    assert!(
+        matches!(&got, Err(NotDurable::Repointed(Refusal::Other(why))) if why.contains("deleted")),
+        "{got:?}"
+    );
+}
