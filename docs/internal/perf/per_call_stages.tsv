@@ -477,6 +477,11 @@ src/gateway/meta_mcp/invoke/relay_staging.rs	stage_with	-	direct /mcp/{backend} 
 src/gateway/meta_mcp/invoke/relay_staging.rs	take_staged_for_test	-	test-only helper (cfg(test))
 src/gateway/meta_mcp/invoke/relay_staging.rs	unpublished	-	unreachable through binary startup, which publishes a generation before serving; a library embedding that serves before publishing reaches it (logs only)
 src/gateway/meta_mcp/invoke/relay_staging.rs	unpublished_refusal	-	unreachable through binary startup, which publishes a generation before serving; a library embedding that serves before publishing reaches it (the fail-closed refusal)
+src/gateway/meta_mcp/invoke/relay_staging.rs	capture_pending	-	on-path, untimed: takes a pending replay capture only for a retained synchronous answer with relay detection active; the harness routes configure none
+src/gateway/meta_mcp/invoke/relay_staging.rs	capture_pending_now	http_invoke_tiny	called for every meta HTTP answer before settlement; with no firewall it returns at its first check
+src/gateway/meta_mcp/invoke/relay_staging.rs	commit_on_write	stdio_invoke_tiny	builds the write-time commit of every judged stdio answer (or commits a non-result at once)
+src/gateway/meta_mcp/invoke/relay_staging.rs	take_staged_now	-	direct-route receipt hand-off only, with a firewall configured
+src/gateway/meta_mcp/invoke/relay_staging.rs	delivers	-	on-path, untimed: read only when an HTTP answer carries deferred receipts, which needs relay detection active
 src/gateway/meta_mcp/invoke/relay_catalogue.rs	as_caller	-	prompts/get and resources/read only, not the tools/call path
 src/gateway/meta_mcp/invoke/relay_catalogue.rs	catalogue_refusal	-	prompts/get and resources/read only, not the tools/call path
 src/gateway/meta_mcp/invoke/relay_catalogue.rs	forward_catalogue	-	prompts/get and resources/read only, not the tools/call path
@@ -517,6 +522,13 @@ src/gateway/meta_mcp/invoke/relay_replay.rs	stage_task_replay	-	on-path, untimed
 src/gateway/meta_mcp/invoke/relay_replay.rs	stored_answer_digest	-	on-path, untimed: relay detection on, in the replayed-receipt keep only; one task-local read and a clone of the staged entry's digest when a replay staged
 src/gateway/meta_mcp/invoke/relay_replay.rs	sync_replay_key	-	on-path, untimed: keyed synchronous calls with relay detection on only (two canonical-JSON sha256 hashes); skipped entirely when relay detection is off (admission.rs relay_active().then)
 src/gateway/meta_mcp/invoke/relay_replay.rs	take_capture	-	on-path, untimed: every receipt commit; two task-local takes that return empty without a relay-active scope; the harness stages no receipt
+src/gateway/meta_mcp/invoke/relay_replay.rs	capture_pending_now	-	on-path, untimed: only with relay detection active and a synchronous capture key noted
+src/gateway/meta_mcp/invoke/relay_replay.rs	discard_captured	-	on-path, untimed: only when admission does not retain an answer that was captured pending
+src/gateway/meta_mcp/invoke/relay_replay.rs	hold_replay_handle	-	plan replays only, with relay detection active
+src/gateway/meta_mcp/invoke/relay_replay.rs	is_sync_capture	-	on-path, untimed: only with relay detection active and a capture key noted
+src/gateway/meta_mcp/invoke/relay_replay.rs	new	stdio_invoke_tiny	const constructor of an empty handle set, built with every stdio answer's staged receipts
+src/gateway/meta_mcp/invoke/relay_replay.rs	settle	stdio_invoke_tiny	settles the delivery's handles inside every stdio commit; with none held it returns at once
+src/gateway/meta_mcp/invoke/relay_replay.rs	take_held	-	on-path, untimed: hands a collector's handles to its deferred commit, only with relay detection active
 src/gateway/meta_mcp/invoke/relay_seams.rs	note_plan_member	-	gateway_execute and playbook plan deliveries only, not a single gateway_invoke
 src/gateway/meta_mcp/invoke/relay_seams.rs	noting_plan_members	-	test-only helper (cfg(test))
 src/gateway/meta_mcp/invoke/relay_seams.rs	pointer_token	-	gateway_execute and playbook plan deliveries only, not a single gateway_invoke

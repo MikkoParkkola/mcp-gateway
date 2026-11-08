@@ -24,7 +24,7 @@ async fn two_accounts() -> Fx {
     let state_mut = Arc::get_mut(&mut state).expect("state is unique");
     state_mut.backends = gateway.backends();
     // The direct route mints only with a propagation audit log (G1).
-    let audit = tempfile::tempdir().expect("an audit dir");
+    let audit = crate::test_dir_keep::kept_tempdir();
     let log = Arc::new(
         crate::security::TransparencyLogger::open(Arc::new(
             crate::security::transparency_log::TransparencyLogConfig {

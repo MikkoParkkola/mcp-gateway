@@ -1,0 +1,2 @@
+src/gateway/outbound/http.rs	commit_at_first_chunk	1	Wraps a response body so its delivery commit fires when the server takes the first successful chunk, keeping the exact length; receipt timing like committing_on_write, it admits or refuses nothing.
+src/gateway/router/backend_handlers/direct_audit.rs	with_deferred_receipts	1	Moves a direct answer's staged receipts onto its response so they commit at the body's first chunk; receipt timing, it admits or refuses nothing.
