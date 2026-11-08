@@ -348,13 +348,7 @@ async fn revoke_tokens_by_subject(
     };
     // An empty subject names no one: refused before anything is revoked
     // (MIK-8286).
-    let Some(actor) = VerifiedIdentity::checked(
-        issuer.clone(),
-        params.subject.clone(),
-        String::new(),
-        None,
-        Vec::new(),
-    ) else {
+    let Some(actor_id) = VerifiedIdentity::stable_actor_id_for(&issuer, &params.subject) else {
         return error_response(
             StatusCode::BAD_REQUEST,
             "invalid_request",
@@ -365,7 +359,7 @@ async fn revoke_tokens_by_subject(
     if count > 0 {
         crate::events::credentials_changed();
     }
-    let ev = AuditEvent::revoked(&format!("bulk:{}", actor.stable_actor_id()), None);
+    let ev = AuditEvent::revoked(&format!("bulk:{actor_id}"), None);
     audit::emit(&ev);
 
     (
