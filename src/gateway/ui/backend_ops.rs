@@ -253,14 +253,15 @@ fn url_carries_credential(raw: &str) -> bool {
         Some((user, _)) => user,
         None => written,
     };
-    // A spelling the parser accepts without exactly `://` (`https:/`,
-    // `https:///`, `https:`): the parsed userinfo, encoded, so a template
-    // there counts as text.
+    // The parser's reading too (it also accepts `https:/`, `https:///`,
+    // `https:`): refused when either reading is a literal. Its encoded form
+    // of a placeholder is ignored only when the written text shows one.
     let parsed = match url.password() {
         Some(password) if !password.is_empty() => password,
         _ => url.username(),
     };
-    if literal_value(secret) || (written.is_empty() && literal_value(parsed)) {
+    let placeholder = !secret.is_empty() && !literal_value(secret);
+    if literal_value(secret) || (!placeholder && literal_value(parsed)) {
         return true;
     }
     url.query_pairs()
