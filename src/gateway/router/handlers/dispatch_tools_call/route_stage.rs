@@ -128,9 +128,10 @@ impl<'a> RouteStage<'a> {
             };
             // A step's target is operator-defined: any refusal of it is neutral (A3).
             if index >= self.request_targets && routed.is_err() {
-                return Err(Box::new(Err(refused
-                    .with_trace(step_trace)
-                    .answer(
+                // Boxed at its creation: this answer is the cold path, and
+                // inline it would size every call's route-stage future.
+                let answer = Box::pin(
+                    refused.with_trace(step_trace).answer(
                         state,
                         target.as_target(),
                         self.id.clone(),
@@ -138,8 +139,9 @@ impl<'a> RouteStage<'a> {
                         STEP_NOT_PERMITTED.to_string(),
                         StatusCode::from_u16(STEP_NOT_PERMITTED_STATUS)
                             .unwrap_or(StatusCode::FORBIDDEN),
-                    )
-                    .await)));
+                    ),
+                );
+                return Err(Box::new(Err(answer.await)));
             }
             match routed {
                 Ok(()) => {}
@@ -151,17 +153,16 @@ impl<'a> RouteStage<'a> {
                     // Answered here, not in the meta layer, so the refusal keeps
                     // the route's own answer (its HTTP status included).
                     let status = StatusCode::from_u16(status).unwrap_or(StatusCode::FORBIDDEN);
-                    return Err(Box::new(Err(refused
-                        .with_trace(step_trace)
-                        .answer(
-                            state,
-                            target.as_target(),
-                            self.id.clone(),
-                            code,
-                            message,
-                            status,
-                        )
-                        .await)));
+                    // Boxed at its creation, as the step answer above is.
+                    let answer = Box::pin(refused.with_trace(step_trace).answer(
+                        state,
+                        target.as_target(),
+                        self.id.clone(),
+                        code,
+                        message,
+                        status,
+                    ));
+                    return Err(Box::new(Err(answer.await)));
                 }
                 // Any other refusal (an unwritable grant record) is answered as
                 // the meta layer answers it.
