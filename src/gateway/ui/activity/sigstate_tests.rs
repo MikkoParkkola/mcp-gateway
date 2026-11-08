@@ -257,7 +257,7 @@ async fn r19_edits_to_legacy_bytes_are_caught() {
     let kept: String = text
         .lines()
         .filter(|l| !l.contains("\"tool_0\""))
-        .map(|l| format!("{l}\n"))
+        .flat_map(|l| [l, "\n"])
         .collect();
     std::fs::write(&fx.path, kept).unwrap();
     assert_invalid(&seen(&fx, "tool_1").await, "legacy_edited");

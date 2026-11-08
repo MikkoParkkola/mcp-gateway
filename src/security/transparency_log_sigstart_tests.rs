@@ -210,7 +210,7 @@ fn r26_a_rotated_v4_log_with_files_deleted_is_tamper() {
             .filter(|l| {
                 !l.contains("\"audit_segment_opened\"") && !l.contains("\"audit_log_identified\"")
             })
-            .map(|l| format!("{l}\n"))
+            .flat_map(|l| [l, "\n"])
             .collect();
         std::fs::write(&file, kept).unwrap();
     }

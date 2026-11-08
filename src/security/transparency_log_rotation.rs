@@ -231,8 +231,7 @@ pub(super) fn recover(
     let hw = segments::read_hwm(path, secret, &config.key_id);
     // The signing anchor's plan is decided before tail repair writes a
     // record, so a record it signs cannot make an unsigned log look signed.
-    let identified = identity::resolve(path, &sealed)?.is_some();
-    let plan = sigstart::classify(path, secret, &config.key_id, identified)?;
+    let plan = anchor_plan(path, config, &sealed)?;
     let dropped = if std::fs::metadata(path).is_ok_and(|m| m.len() > 0) {
         repair_torn_tail(path, config, sealed.last(), hw.as_ref())?
     } else {
@@ -260,7 +259,7 @@ pub(super) fn recover(
     let opened = identity::open_fields(&id, evidence);
     // Written before the open record, so P lies at or before every record
     // this open signs; its event waits for the announce phase below.
-    let mut anchor = sigstart::body_for(&plan, path, id.as_str())?;
+    let anchor = sigstart::body_for(&plan, path, id.as_str())?;
     if let Some(body) = &anchor {
         sigstart::publish(path, body, secret)?;
     }
@@ -339,6 +338,43 @@ pub(super) fn recover(
             true,
         )?;
     }
+    settle_anchor(path, config, &plan, anchor, &mut state)?;
+    state.seg.id = file_id(&state.file)?;
+    state.seg.sealed = segments::list_segments(path)?.len();
+    segments::sync_dir(path)?;
+    Ok((state, id))
+}
+
+/// The signing anchor's plan, decided before tail repair writes a record,
+/// so a record the repair signs cannot make an unsigned log look signed.
+fn anchor_plan(
+    path: &Path,
+    config: &TransparencyLogConfig,
+    sealed: &[Segment],
+) -> io::Result<sigstart::Plan> {
+    // A path that is not a regular file fails later with its own error.
+    if path.exists() && !path.is_file() {
+        return Ok(sigstart::Plan::Nothing);
+    }
+    let identified = identity::resolve(path, sealed)?.is_some();
+    sigstart::classify(
+        path,
+        config.shared_secret.as_bytes(),
+        &config.key_id,
+        identified,
+    )
+}
+
+/// After segment recovery: correct a first start's predicted seq, then write
+/// the record the plan owes (round 3 J3) and move the mark past it.
+fn settle_anchor(
+    path: &Path,
+    config: &TransparencyLogConfig,
+    plan: &sigstart::Plan,
+    mut anchor: Option<sigstart::SigStart>,
+    state: &mut Recovered,
+) -> io::Result<()> {
+    let secret = config.shared_secret.as_bytes();
     // A first start predicted the new active file's seq; correct it before
     // any caller record if reopen_tail chose another.
     if let Some(body) = anchor
@@ -352,9 +388,9 @@ pub(super) fn recover(
         sigstart::publish(path, body, secret)?;
     }
     let mut announced = false;
-    sigstart::announce(&plan, anchor.as_ref(), path, secret, |event, extra| {
+    sigstart::announce(plan, anchor.as_ref(), path, secret, |event, extra| {
         announced = true;
-        chain_onto(&mut state, config, housekeeping(event, &extra))
+        chain_onto(state, config, housekeeping(event, &extra))
     })?;
     if announced {
         write_mark(
@@ -366,10 +402,7 @@ pub(super) fn recover(
             true,
         )?;
     }
-    state.seg.id = file_id(&state.file)?;
-    state.seg.sealed = segments::list_segments(path)?.len();
-    segments::sync_dir(path)?;
-    Ok((state, id))
+    Ok(())
 }
 
 /// Write `.hwm` at a tail: the last record's `counter` and `entry_hash`, in

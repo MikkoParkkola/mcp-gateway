@@ -45,7 +45,10 @@ fn set(names: &[&str]) -> BTreeSet<String> {
     names.iter().map(|s| (*s).to_string()).collect()
 }
 
-const COMMON: [&str; 7] = [
+/// Every hand-built entry here carries a placeholder `entry_hash`, so each
+/// row also names its integrity failure.
+const COMMON: [&str; 8] = [
+    "integrity",
     "id",
     "kind",
     "counter",

@@ -202,7 +202,7 @@ pub(super) fn ndjson(
     );
     let faults = [inv, gov]
         .iter()
-        .filter(|a| !matches!(**a, "ok" | "no_secret"))
+        .filter(|a| !matches!(**a, "ok" | "no_secret" | "none"))
         .count();
     manifest.insert("anchor_faults".into(), faults.into());
     manifest.insert("unreadable".into(), collected.unreadable.into());

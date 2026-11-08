@@ -85,6 +85,10 @@ fn next_line_start(file: &mut File, from: u64, reads: &mut Reads) -> io::Result<
     after_next_newline(file, from - 1, reads)
 }
 
+/// A readable record: its counter, its bytes, where its line starts, and
+/// the offset after it.
+type Readable = (u64, Vec<u8>, u64, u64);
+
 /// The first readable line at or after `start` and below `hi`, with its
 /// counter and the offset after it. Unreadable lines in between (torn,
 /// hand-edited, over the cap) are stepped over, so a bad line never hides
@@ -94,7 +98,7 @@ fn first_readable(
     start: u64,
     hi: u64,
     reads: &mut Reads,
-) -> io::Result<Option<(u64, Vec<u8>, u64, u64)>> {
+) -> io::Result<Option<Readable>> {
     let mut at = start;
     while at < hi {
         match line_at(file, at, reads)? {

@@ -72,9 +72,10 @@ impl<'a> Check<'a> {
         }
     }
 
-    /// The log-wide anchor state, as the exports and receipts report it.
+    /// The log-wide anchor state, as the exports and receipts report it;
+    /// `none` for a log this gateway does not keep (no governance log).
     pub(super) fn report(&self, which: Which) -> &'static str {
-        self.log(which).map_or("missing", |(_, a)| a.report())
+        self.log(which).map_or("none", |(_, a)| a.report())
     }
 
     /// Judge `line` against its log's anchor.
