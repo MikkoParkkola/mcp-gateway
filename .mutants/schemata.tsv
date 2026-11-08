@@ -1,0 +1,7 @@
+head_sha	5db68b639d8dfc421377c710597cae281275ec0e
+#mutant b1
+mcp-gateway	truncate::tests::bytes_within_keeps_the_result_inside_the_budget	src/truncate.rs:81
+#mutant b2
+e4_hash_key_cli	hash_key_cli_prints_digest	tests/e4_hash_key_cli.rs:48
+#mutant c0
+mcp-gateway	truncate::tests::bytes_after_keeps_the_text_inside_the_budget_and_adds_the_marker	src/truncate.rs:98
