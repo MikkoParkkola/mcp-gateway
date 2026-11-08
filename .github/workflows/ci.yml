@@ -791,7 +791,7 @@ jobs:
         # Two jobs: about two macOS runners serve trains, and a second build of
         # the lib test binary cost 19-86 min (#4562). So lib-b builds it once,
         # uploads it and runs its half; int runs its suite, then the lib-a half
-        # from that binary (MIK-9403).
+        # from that binary.
         # A lane PR labelled os-sensitive runs lib-b alone, and that job runs
         # the lib-a half too: these runners serve every train
         # (test_os_label_routing.py).

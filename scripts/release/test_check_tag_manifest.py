@@ -705,7 +705,7 @@ HANDOFF_RETENTION_DAYS = 90
 # A re-run of the grade job alone after they expire fails (the merge refuses a
 # missing bundle); re-running all jobs rebuilds them.
 COVERAGE_BUNDLE = ("7", "rerunning all jobs rebuilds them; multi-GB bundles per PR run")
-# The macOS lib test binary lib-b hands to int in the same run (MIK-9403): a
+# The macOS lib test binary lib-b hands to int in the same run: a
 # rerun of int alone within the day reuses it, after that int builds its half
 # itself; nothing published depends on it.
 MACOS_LIB_BINARY = ("1", "int rebuilds its half when it is gone; a large test binary per run")

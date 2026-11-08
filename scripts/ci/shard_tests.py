@@ -511,7 +511,7 @@ def self_test() -> int:
 
 
 def prebuilt_rows() -> None:
-    """MIK-9403: the lib test binary is found in cargo's JSON, exported, and a PREBUILT shard run
+    """The lib test binary is found in cargo's JSON, exported, and a PREBUILT shard run
     from it counts its selection against its floor and fails on a red binary."""
     art = {"reason": "compiler-artifact", "target": {"kind": ["lib"], "name": "mcp_gateway"},
            "profile": {"test": True}, "executable": "/t/deps/mcp_gateway-1"}
