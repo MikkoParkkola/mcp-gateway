@@ -19,15 +19,21 @@ use crate::security::audit::AuditFailurePolicy;
 /// A live continuation for the personal capability's backend, minted by
 /// `meta`'s own keyring.
 async fn live_retry(meta: &super::MetaMcp) -> RetryFields {
+    live_retry_for(meta, CAPS).await
+}
+
+/// A live continuation whose sealed envelope names `backend` as the backend
+/// that opened the exchange, minted by `meta`'s own keyring.
+async fn live_retry_for(meta: &super::MetaMcp, backend: &str) -> RetryFields {
     let state = meta.continuation();
     let now = now_unix_secs();
     let hold_key = state
         .in_flight()
-        .hold(CAPS, &QuotaKey::for_test("caller"), now + 300, now)
+        .hold(backend, &QuotaKey::for_test("caller"), now + 300, now)
         .await
         .expect("the in-flight table has room for one exchange");
     let payload = Payload::mint(
-        CAPS.into(),
+        backend.into(),
         Some("backend-state".into()),
         "caller".into(),
         "digest".into(),
@@ -90,6 +96,54 @@ async fn a_retry_that_recorded_its_invocation_makes_the_withheld_decision_record
 
     assert_eq!(recorded, 1, "the retry's own invocation record: {decision}");
     assert_eq!(decision["invocation_recorded"], json!(true), "{decision}");
+}
+
+/// The withheld call names a surfaced tool of the capability backend, but its
+/// continuation was minted by an exchange with another backend, so the retry
+/// routes there and its dispatch notes no grant decision for the withheld
+/// `(server, tool)`. The withheld decision is then the one decision record,
+/// and it says the call has an invocation record only because the retry's
+/// dispatch noted its trace id for it.
+#[tokio::test]
+async fn a_retry_from_another_backend_that_recorded_its_invocation_makes_the_withheld_decision_recorded()
+ {
+    let (endpoint, dir) = (
+        Endpoint::start(false).await,
+        Arc::new(tempfile::tempdir().unwrap()),
+    );
+    let meta = gateway(
+        &endpoint,
+        vec![],
+        Some(&dir),
+        AuditFailurePolicy::BestEffort,
+    )
+    .with_surfaced_tools(vec![crate::config::SurfacedToolConfig {
+        server: CAPS.to_string(),
+        tool: PERSONAL.to_string(),
+    }]);
+    let retry = live_retry_for(&meta, "origin_backend").await;
+    let who = api_key("alice");
+    let mut caller = context(&who);
+    caller.retry = &retry;
+    let _ = meta
+        .handle_tools_call(
+            RequestId::Number(1),
+            PERSONAL,
+            json!({}),
+            Some("d12-other-origin"),
+            caller,
+        )
+        .await;
+
+    let held = wait_for_decisions(&dir, 1).await;
+    assert_eq!(held.len(), 1, "{held:#?}");
+    assert_eq!(
+        invocations(&dir).len(),
+        1,
+        "the retry's own invocation record: {held:#?}"
+    );
+    assert_eq!(held[0]["server"], json!(CAPS), "{held:#?}");
+    assert_eq!(held[0]["invocation_recorded"], json!(true), "{held:#?}");
 }
 
 #[tokio::test]
