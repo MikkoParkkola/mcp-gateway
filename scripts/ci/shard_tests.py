@@ -337,6 +337,19 @@ def self_test() -> int:
                "running 4 tests",
                "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out"]
     assert selected(rustdoc) == 55, selected(rustdoc)
+    # libtest-record-parse: a line written straight to stderr mid-test can split
+    # a `test NAME ... RESULT` record (scripts/ci/mutants/fixtures/libtest).
+    # Floors read `running N` and `test result:` lines, which libtest writes
+    # before and after the tests, so the shared fixtures must count exactly.
+    fx = os.path.join(os.path.dirname(os.path.abspath(__file__)), "mutants", "fixtures", "libtest")
+    for name, running, passed in [("midline-stderr.txt", 1, 1), ("alloc-meter-one-thread.txt", 1, 1),
+                                  ("failed-after-noise.txt", 1, 0), ("panic-in-passing-test.txt", 1, 1),
+                                  ("zero-match.txt", 0, 0)]:
+        lines = ["     Running unittests src/lib.rs (x)",
+                 *open(os.path.join(fx, name), encoding="utf-8").read().splitlines()]
+        assert selected(lines) == running, (name, selected(lines))
+        got = [int(m.group(1)) for m in map(RESULT.search, lines) if m]
+        assert got == [passed], (name, got)
     # #3944: a byte cp1252 cannot map, mirrored to a strict cp1252 stdout as
     # on the Windows runner. The mirror must not raise, and the line counts.
     import io
