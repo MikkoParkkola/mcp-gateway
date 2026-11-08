@@ -82,6 +82,7 @@ const ROWS = [
 test('T2 every state and condition gets its exact badge, banner and next step', async ({ page }) => {
   const now = await fixedNoon(page);
   await open(page);
+  expect(await page.evaluate(() => Date.now())).toBe(now);
   const got = await inShell(page, (m, { rows, now }) => {
     const soon = new Date(now + 60_000);
     const hhmm = soon.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
@@ -152,6 +153,7 @@ test('T2 every state and condition gets its exact badge, banner and next step', 
 test('T2b a retry on another day includes its date and time in the banner', async ({ page }) => {
   const now = await fixedNoon(page);
   await open(page);
+  expect(await page.evaluate(() => Date.now())).toBe(now);
   const { title, date, time } = await inShell(page, (m, now) => {
     const tomorrow = new Date(now);
     tomorrow.setDate(tomorrow.getDate() + 1);
