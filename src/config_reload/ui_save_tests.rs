@@ -182,10 +182,8 @@ async fn a_save_after_a_hand_edit_writes_nothing_and_returns_a_fresh_preview() {
 async fn a_refused_save_leaves_store_and_file_unchanged() {
     let gw = gw(BASE);
     let refusals = [
-        vec![(
-            "cost_governance.alerts.at_percent",
-            SaveValue::Set(Scalar::Int(101)),
-        )],
+        // A field every feature set has, given a value of the wrong kind.
+        vec![("auth.enabled", SaveValue::Set(Scalar::Int(1)))],
         vec![
             ("auth.bearer_token", s("plain")),
             ("environment", s("prod")),
