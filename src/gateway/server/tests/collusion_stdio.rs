@@ -453,10 +453,10 @@ async fn a_batch_item_sees_the_receipt_of_an_earlier_item() {
 }
 
 /// A fail-closed log whose next delivery record fails.
-fn failing_audit() -> (Arc<crate::security::TransparencyLogger>, tempfile::TempDir) {
+fn failing_audit() -> (Arc<crate::security::TransparencyLogger>, std::sync::Arc<tempfile::TempDir>) {
     use crate::security::audit::AuditFailurePolicy;
     use crate::security::transparency_log::TransparencyLogConfig;
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let log = Arc::new(
         crate::security::TransparencyLogger::open(Arc::new(TransparencyLogConfig {
             enabled: true,
