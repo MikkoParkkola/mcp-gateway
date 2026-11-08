@@ -3,6 +3,8 @@
 //! Test support for the signing anchor: logs written by the real logger,
 //! and the file edits an attacker makes to them. Shared by the writer rows
 //! and the reader rows, so every reader is attacked the same way.
+// The reader rows need the web UI; without it some helpers go unused.
+#![cfg_attr(not(feature = "webui"), allow(dead_code))]
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;

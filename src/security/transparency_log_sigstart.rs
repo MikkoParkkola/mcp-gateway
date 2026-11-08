@@ -111,7 +111,7 @@ pub(crate) enum Anchor {
 
 impl Anchor {
     /// The log-wide report value.
-    #[cfg(any(test, feature = "webui"))]
+    #[cfg(feature = "webui")]
     pub(crate) fn report(&self) -> &'static str {
         match self {
             Self::NoSecret => "no_secret",
@@ -178,7 +178,7 @@ pub(crate) fn load(path: &Path, secret: Option<&[u8]>) -> Anchor {
     }
 }
 
-#[cfg(any(test, feature = "webui"))]
+#[cfg(feature = "webui")]
 /// Where a line sits: its file's segment number and its byte range.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum LinePos {
@@ -189,6 +189,7 @@ pub(crate) enum LinePos {
 }
 
 #[cfg(any(test, feature = "webui"))]
+#[cfg_attr(not(feature = "webui"), allow(dead_code))]
 /// What a reader says about an unsigned record whose hash recomputes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Placed {
@@ -198,7 +199,7 @@ pub(crate) enum Placed {
     Invalid(&'static str),
 }
 
-#[cfg(any(test, feature = "webui"))]
+#[cfg(feature = "webui")]
 /// Per-request memory of chunks already hashed, so a page of records in one
 /// chunk hashes it once.
 #[derive(Debug, Default)]
@@ -243,7 +244,7 @@ fn covers(path: &Path, body: &SigStart) -> bool {
         .all(|l| l.chunks.len() as u64 == l.len.div_ceil(CHUNK))
 }
 
-#[cfg(any(test, feature = "webui"))]
+#[cfg(feature = "webui")]
 /// The file holding segment `seq` of `path`: sealed, else the active file.
 fn file_of(path: &Path, seq: u64) -> std::path::PathBuf {
     let sealed = segments::sealed_path(path, seq);
@@ -264,7 +265,7 @@ fn digest(file: &Path, start: u64, end: u64) -> Option<String> {
     (buf.len() as u64 == end - start).then(|| hex::encode(sha256_raw(&buf)))
 }
 
-#[cfg(any(test, feature = "webui"))]
+#[cfg(feature = "webui")]
 impl Anchor {
     /// Place an unsigned record of the log at `path`.
     pub(crate) fn place(&self, path: &Path, pos: LinePos, checked: &mut Checked) -> Placed {
@@ -318,7 +319,7 @@ impl Anchor {
     }
 }
 
-#[cfg(any(test, feature = "webui"))]
+#[cfg(feature = "webui")]
 fn broken_reason(f: Fault) -> &'static str {
     match f {
         Fault::Mac => "sigstart_mac",

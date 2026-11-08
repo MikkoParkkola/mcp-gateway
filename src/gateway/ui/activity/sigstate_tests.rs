@@ -41,7 +41,7 @@ async fn json_body(r: axum::response::Response) -> Vec<u8> {
 struct Seen {
     list: Value,
     /// `Null` when the receipt's counter seek cannot find the record (an
-    /// insertion that breaks counter order); only R19 (c) allows that.
+    /// appended copy that repeats a counter); only R29 allows that.
     receipt: Value,
     ndjson: Value,
     manifest: Value,
@@ -295,17 +295,18 @@ async fn r19_edits_to_legacy_bytes_are_caught() {
     std::fs::write(&fx.path, out.join("\n") + "\n").unwrap();
     assert_invalid(&seen(&fx, "tool_9").await, "legacy_edited");
 
-    // (c) a stripped record inserted inside the legacy range.
+    // (c) a legacy record's content edited and its hash recomputed: it is
+    // still unsigned and chain-shaped, but its bytes are not the frozen ones.
     let fx = turned_on_midway();
-    let text = std::fs::read_to_string(&fx.path).unwrap();
-    let mut lines: Vec<String> = text.lines().map(str::to_string).collect();
-    let mut extra: Value = serde_json::from_str(&lines[1]).unwrap();
-    extra["tool"] = "tool_8".into();
-    strip_sig(&mut extra);
-    // Between the two legacy lines, so it lies wholly below P.
-    lines.insert(1, extra.to_string());
-    std::fs::write(&fx.path, lines.join("\n") + "\n").unwrap();
-    assert_invalid_unseekable(&seen(&fx, "tool_8").await, "legacy_edited");
+    rewrite(&fx.path, |v| {
+        let hit = v["tool"] == "tool_1";
+        if hit {
+            v["response_hash"] = "sha256:ff".into();
+            strip_sig(v);
+        }
+        hit
+    });
+    assert_invalid(&seen(&fx, "tool_1").await, "legacy_edited");
 }
 
 /// R21 (round 1 G6): a broken sidecar is reported log-wide even when every
@@ -575,5 +576,6 @@ async fn r29_bytes_past_a_legacy_files_length_are_not_legacy() {
         .unwrap();
     std::io::Write::write_all(&mut f, (extra.to_string() + "\n").as_bytes()).unwrap();
     drop(f);
-    assert_invalid(&seen(&fx, "tool_99").await, "legacy_edited");
+    // Its copied counter repeats one, so the receipt's seek cannot reach it.
+    assert_invalid_unseekable(&seen(&fx, "tool_99").await, "legacy_edited");
 }
