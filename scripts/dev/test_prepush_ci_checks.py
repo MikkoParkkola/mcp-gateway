@@ -902,6 +902,17 @@ class Rows(unittest.TestCase):
         # Unquoted body: bash joins `a\` with the next line, so that `EOF` is body, not the end.
         scanned = workflow_shell._heredoc_scan(["cat <<EOF", "a\\", "EOF", "b", "EOF", y], shell)
         self.assertEqual([t for t, r in scanned if r is workflow_shell.Role.BODY], ["a\\", "EOF", "b"])
+        # A lone `\` joins with the next line to make `EOF`: the body ends there and y.py runs.
+        block = f"cat <<EOF\n\\\nEOF\n{y}"
+        scanned = workflow_shell._heredoc_scan(block.splitlines(), shell)
+        self.assertEqual([t for t, r in scanned if r is workflow_shell.Role.BODY], ["\\"])
+        self.assertEqual([e.script for e in workflow_shell.executions(block)], ["scripts/ci/y.py"])
+        # And `E\` + `OF` joins to `EOF`: that ends the body too.
+        block = f"cat <<EOF\nE\\\nOF\n{y}"
+        self.assertEqual([e.script for e in workflow_shell.executions(block)], ["scripts/ci/y.py"])
+        # Bash ends a `$'…'` value at a NUL: `<<$'EOF\0x'` is delimiter EOF.
+        block = f"cat <<$'EOF\\0ignored'\npython3 scripts/ci/b.py\nEOF\n{y}"
+        self.assertEqual([e.script for e in workflow_shell.executions(block)], ["scripts/ci/y.py"])
         # A `#` inside a word (after `$( )`) is no comment: the command after `;` runs.
         found = workflow_shell.executions("echo $(echo ok)#; python3 scripts/ci/y.py")
         self.assertEqual([e.script for e in found], ["scripts/ci/y.py"])

@@ -55,23 +55,25 @@ def _heredoc_scan(lines, reading: Reading) -> list[tuple[str, Role]]:
     Inside a payload only the terminator is looked for. Scanning for a further opener there
     would resume on `<<~CAVEATS` (Ruby source inside a shell heredoc) and hand the rest of
     the payload back to the assertions as workflow text."""
-    out, pending, buffer, body_continues = [], [], None, False
+    out, pending, buffer, carry = [], [], None, ""
     for line in lines:
         if pending and buffer is None:
             head = pending[0]
             if reading is Reading.YAML_TEXT:
                 closes = line.strip() == head.delimiter
             else:
-                # In an unquoted body bash joins a backslash-newline first, so the line after
-                # `a\` is part of that body line, never a terminator.
-                closes = not body_continues and (line.lstrip("\t") if head.strip_tabs else line) == head.delimiter
+                # In an unquoted body bash joins backslash-newlines first and compares the
+                # joined line: `a\` + `EOF` is body, a lone `\` + `EOF` still ends it.
+                joined = carry + line
+                closes = (joined.lstrip("\t") if head.strip_tabs else joined) == head.delimiter
             if closes:
                 pending.pop(0)
-                body_continues = False
+                carry = ""
             else:
                 out.append((line, Role.QUOTED_BODY if head.quoted else Role.BODY))
                 trailing = len(line) - len(line.rstrip("\\"))
-                body_continues = reading is Reading.SHELL and not head.quoted and trailing % 2 == 1
+                continues = reading is Reading.SHELL and not head.quoted and trailing % 2 == 1
+                carry = (carry + line)[:-1] if continues else ""
             continue
         if reading is Reading.YAML_TEXT:
             out.append((line, Role.COMMAND))
@@ -257,7 +259,7 @@ def _ansi_c_value(body):
         if ctrl:
             return chr(ord(ctrl) & 0x1F)
         return _ANSI_C_SIMPLE.get(other, "\\" + other)
-    return _ANSI_C_ESCAPE.sub(one, body)
+    return _ANSI_C_ESCAPE.sub(one, body).split("\0", 1)[0]  # bash ends the value at a NUL
 
 
 def _ansi_c_decoded(text):
