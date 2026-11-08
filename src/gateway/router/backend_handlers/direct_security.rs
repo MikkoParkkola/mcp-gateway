@@ -27,14 +27,14 @@ use crate::security::validate_tool_name;
 
 /// The check a direct `tools/call` meets once its credential is resolved:
 /// the argument-key check (R2, F13). Authorize and the firewall ran before
-/// the credential, in [`guard_tool_call`] (MIK-8361).
+/// the credential, in [`guard_tool_call`].
 ///
 /// Returns `Ok(Some(params))` when the check passes, `Ok(None)` for a
 /// passthrough backend, or `Err(response)` when a check fails and the caller
 /// should return an HTTP error immediately.
 ///
 /// Sanitization is not here: the whole request is sanitized at intake
-/// (MIK-8154 SAN.1, `direct_caller::read_envelope`).
+/// (`direct_caller::read_envelope`).
 #[allow(clippy::result_large_err)]
 pub(super) async fn apply_backend_tool_call_security(
     state: &AppState,
@@ -47,7 +47,7 @@ pub(super) async fn apply_backend_tool_call_security(
     let Some(params) = params else {
         return Err(unnamed_call(id));
     };
-    // MIK-7570.SCHEMA.1 (R2), F13: above the passthrough return, so a
+    // The argument-key check (R2), F13: above the passthrough return, so a
     // passthrough backend is checked too.
     let lens = crate::backend::Lens::Catalogue;
     if let Some(rejection) =
@@ -62,7 +62,7 @@ pub(super) async fn apply_backend_tool_call_security(
 
     let _ = (state, backend_name);
     // The request was sanitized as a whole at intake when the setting is on
-    // (MIK-8154 SAN.1, `direct_caller::read_envelope`); these are the params
+    // (`direct_caller::read_envelope`); these are the params
     // to forward.
     Ok(Some(params.clone()))
 }
@@ -81,7 +81,7 @@ fn unnamed_call(id: &RequestId) -> BackendRejection {
 }
 
 /// The checks a direct `tools/call` meets before any credential is resolved
-/// (MIK-8361 ORACLE.3/.4), in `meta_mcp_handler`'s order:
+/// in `meta_mcp_handler`'s order:
 /// 1. `validate_tool_name` rejects dangerous names before any policy lookup;
 /// 2. authorize: a refusal means the caller's listing hides the tool, so it
 ///    takes the missing name's path (it is not refused for its reason here);
@@ -129,7 +129,7 @@ pub(super) async fn guard_tool_call(
     let (withheld_code, withheld) =
         direct_preflight::withheld_verdict(state, auth, target, (backend, session_id));
     if let Some(code) = withheld_code {
-        // The call's one record names it (MIK-8361).
+        // The call's one record names it.
         crate::gateway::meta_mcp::visible::memo::note_denial_code(
             backend_name,
             tool_name,
@@ -155,7 +155,7 @@ pub(super) async fn guard_tool_call(
     // for every name, before any fill (K2). A capability disabled for its
     // error rate names the tool: it is met at dispatch, by a caller who can
     // see it.
-    // A per-user backend keeps MIK-8356's order: the caller's own catalogue
+    // A per-user backend keeps its own order: the caller's own catalogue
     // decides first, with no fill for a withheld name anyway.
     if !backend.keeps_per_user_catalogues()
         && let Err(e) = state.meta_mcp.admit_backend_wide(backend_name)
@@ -241,7 +241,7 @@ fn firewall_refusal(
     relay_refusal(fw, auth, id, target, params, audit)
 }
 
-/// What a direct-route call's token must grant (MIK-7570.ATTEST.1 part 3).
+/// What a direct-route call's token must grant.
 ///
 /// A missing target field is matched as the empty capability, which only a
 /// `"*"` token satisfies: a malformed call never falls back to authenticity.
