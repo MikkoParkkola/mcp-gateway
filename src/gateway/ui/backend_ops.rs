@@ -242,10 +242,17 @@ fn url_carries_credential(raw: &str) -> bool {
     };
     // The userinfo as written (the text gateway.yaml keeps; the parser would
     // percent-encode a template's braces): the password, or the username
-    // when the password is absent or empty.
+    // when the password is absent or empty. Read only from a `//` right after
+    // the scheme, up to where the parser ends the authority (a backslash too
+    // for the special schemes), so no later `://` or fragment can lend one.
+    let special = matches!(url.scheme(), "http" | "https" | "ws" | "wss" | "ftp");
     let written = raw
-        .split_once("://")
-        .and_then(|(_, rest)| rest.split(['/', '\\', '?', '#']).next())
+        .get(url.scheme().len()..)
+        .and_then(|rest| rest.strip_prefix("://"))
+        .and_then(|rest| {
+            rest.split(|c| matches!(c, '/' | '?' | '#') || (special && c == '\\'))
+                .next()
+        })
         .and_then(|authority| authority.rsplit_once('@'))
         .map_or("", |(userinfo, _)| userinfo);
     let secret = match written.split_once(':') {
