@@ -267,6 +267,9 @@ mod capability_edit_audit_tests;
 /// A context-integrity rewrite is recorded as the gateway's rewrite.
 #[cfg(all(test, feature = "firewall"))]
 mod context_integrity_effect_tests;
+/// The decision fixture table's HTTP rows (direct route and the meta HTTP gate).
+#[cfg(all(test, feature = "firewall"))]
+mod decision_fixture_rows;
 /// A delivery record says what the gateway did to the answer.
 #[cfg(all(test, feature = "firewall"))]
 mod delivery_effect_tests;

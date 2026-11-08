@@ -176,7 +176,7 @@ struct Fixture {
     state: Arc<AppState>,
     /// The receipt id of the record naming [`OTHER_DEV`].
     other_receipt: String,
-    _dirs: (crate::gateway::router::tests::FixtureDir, tempfile::TempDir),
+    _dirs: (super::tests::FixtureDir, Arc<tempfile::TempDir>),
 }
 
 async fn fixture(kind: Gateway, store: bool) -> Fixture {
@@ -252,9 +252,9 @@ impl crate::discovery::listing::ScanSource for NoClientFiles {
 
 /// An invocation log holding one call by [`DEV`], one by [`OTHER_DEV`] and one
 /// by a key, chained and hashed like the logger's, opened as the server would.
-pub(super) fn seed_log(state: &mut Arc<AppState>) -> (tempfile::TempDir, String) {
+pub(super) fn seed_log(state: &mut Arc<AppState>) -> (Arc<tempfile::TempDir>, String) {
     use crate::security::transparency_log::TransparencyLogConfig;
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = dir.path().join("audit.jsonl");
     let calls = [Some(DEV), Some(OTHER_DEV), None];
     let mut prev = "genesis".to_string();

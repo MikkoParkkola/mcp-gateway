@@ -476,6 +476,10 @@ mod replay_effects;
 mod rule_ids;
 // A call to a backend that does not exist records not_found.
 mod not_found;
+// The decision fixture table's meta-route refusal rows.
+mod fixture_rows;
+// The decision fixture table's meta-route allow rows.
+mod fixture_allow_rows;
 
 /// MIK-7735. A backend's own `-32001` / `-32004` answer is the peer's
 /// refusal, not the gateway's policy: the record says `error`, with the

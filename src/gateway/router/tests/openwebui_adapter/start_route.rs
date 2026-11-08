@@ -123,7 +123,7 @@ struct Gateway {
     config: crate::config::Config,
     state: Arc<super::super::super::AppState>,
     fixture: RevokeFixture,
-    _dir: tempfile::TempDir,
+    _dir: std::sync::Arc<tempfile::TempDir>,
 }
 
 async fn gateway(owui: &FakeOwui, starts: u32) -> Gateway {
@@ -135,7 +135,7 @@ async fn gateway(owui: &FakeOwui, starts: u32) -> Gateway {
 
 /// The gateway over a given custody fixture, with a working transparency log.
 async fn gateway_on(owui: &FakeOwui, starts: u32, fixture: RevokeFixture) -> Gateway {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let env = dir.path().join("adapter.env");
     crate::gateway::test_helpers::write_owner_only(
         &env,

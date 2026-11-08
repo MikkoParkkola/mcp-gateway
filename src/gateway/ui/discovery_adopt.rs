@@ -137,8 +137,9 @@ pub(super) fn answer(name: &str, written: Result<ReplaceOutcome, ReplaceError>) 
             Json(json!({"error": "not_in_place", "message": NOT_IN_PLACE})),
         )
             .into_response(),
-        // The gateway's own posture, fixed text: the operator can act on it.
-        Err(ReplaceError::Refused(why)) if why == NO_AUDIT_LOG => (
+        // The gateway's own posture, or the audit log refusing the intent:
+        // fixed text the operator can act on.
+        Err(ReplaceError::NoAuditLog | ReplaceError::AuditRefused(_)) => (
             StatusCode::SERVICE_UNAVAILABLE,
             Json(json!({"error": "audit_log_required", "message": NO_AUDIT_LOG})),
         )
@@ -332,7 +333,7 @@ pub(super) async fn adopt_discovery(
     };
     let read = {
         let path = path.clone();
-        tokio::task::spawn_blocking(move || read_gateway(Some(&path))).await
+        tokio::task::spawn_blocking(move || read_gateway("discovery", Some(&path))).await
     };
     let Ok(Ok(gateway)) = read else {
         return config_refusal().into_response();

@@ -50,10 +50,8 @@ pub(in crate::gateway::router) async fn health_handler(
     // Admin is a grant, not a name. Comparing against "public"/"anonymous"
     // gave full backend detail to every authenticated non-admin key the moment
     // an operator removed /health from `auth.public_paths`.
-    let is_admin = request
-        .extensions()
-        .get::<AuthenticatedClient>()
-        .is_some_and(AuthenticatedClient::is_gateway_admin);
+    let is_admin =
+        crate::gateway::auth::is_gateway_admin(request.extensions().get::<AuthenticatedClient>());
 
     let status = if healthy { "healthy" } else { "degraded" };
     // A non-admin gets `status` and `version` only: a backend count is
