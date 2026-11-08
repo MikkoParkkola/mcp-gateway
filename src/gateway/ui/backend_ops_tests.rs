@@ -837,6 +837,21 @@ fn r1_credential_refusals_table() {
         );
     }
 
+    // Delta G5c: a later `://` or a fragment cannot lend a placeholder, and
+    // a placeholder outside the canonical spelling counts as text.
+    for tail in ["/mcp://${T}@x", "/mcp#https://svc:${T}@x"] {
+        assert_eq!(
+            url(&["https:svc:", "pw-0123456789", "@h.example", tail].concat()),
+            bad_url,
+            "placeholder lent by {tail}"
+        );
+    }
+    assert_eq!(
+        url("https:svc:${SVC_TOKEN}@h.example/mcp"),
+        bad_url,
+        "placeholder outside the canonical spelling"
+    );
+
     assert_eq!(
         refused(
             Some("npx tool"),
