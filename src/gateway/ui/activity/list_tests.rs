@@ -347,6 +347,43 @@ async fn list_sparse_rule_filter_resumes_past_scan_exhausted() {
     assert_eq!(tools(&next), BTreeSet::from(["needle".to_string()]));
 }
 
+async fn rule_tools(l: &Logs, rule: &str) -> BTreeSet<String> {
+    let (status, v) = body(list_page(l, &Access::All, &query(&[("rule", rule)]))).await;
+    assert_eq!(status, StatusCode::OK);
+    tools(&v)
+}
+
+#[tokio::test]
+async fn rule_filter_ignores_the_id_in_another_field() {
+    let dir = tempfile::tempdir().unwrap();
+    let l = logs(&dir);
+    let mut e = named("srv", "rule-1", "r2");
+    e["payload"] = "rule-1".into();
+    write_newest_first(&l, vec![e]);
+    assert!(rule_tools(&l, "rule-1").await.is_empty());
+}
+
+#[tokio::test]
+async fn rule_filter_has_no_prefix_collision() {
+    let dir = tempfile::tempdir().unwrap();
+    let l = logs(&dir);
+    write_newest_first(
+        &l,
+        vec![
+            named("srv", "t_one", "rule-1"),
+            named("srv", "t_ten", "rule-10"),
+        ],
+    );
+    assert_eq!(
+        rule_tools(&l, "rule-1").await,
+        BTreeSet::from(["t_one".to_string()])
+    );
+    assert_eq!(
+        rule_tools(&l, "rule-10").await,
+        BTreeSet::from(["t_ten".to_string()])
+    );
+}
+
 #[tokio::test]
 async fn page_size_defaults_to_50_and_is_capped_at_200() {
     let dir = tempfile::tempdir().unwrap();
