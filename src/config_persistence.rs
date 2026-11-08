@@ -142,6 +142,14 @@ fn sync_dir_for(path: &Path, key: Option<commit::SyncKey>) -> std::io::Result<()
 pub(crate) mod commit;
 
 #[cfg(test)]
+#[path = "config_persistence_crash_fs.rs"]
+pub(crate) mod crash_fs;
+
+#[cfg(test)]
+#[path = "config_persistence_crash_fs_tests.rs"]
+mod crash_fs_tests;
+
+#[cfg(test)]
 #[path = "config_persistence_commit_tests.rs"]
 mod commit_tests;
 pub use scratch::write_text_atomic;

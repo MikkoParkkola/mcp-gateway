@@ -269,6 +269,8 @@ fn hook(target: &Path, at: HookAt) {
 /// held nothing can change or replace the file; once dropped, both work.
 #[cfg(all(test, windows))]
 mod windows_share_tests {
+    /// A26 (register 1168): red oracle: both blocked operations report
+    /// ERROR_SHARING_VIOLATION (32), not just any unrelated I/O failure.
     #[test]
     fn the_read_back_handle_blocks_writes_and_replacement_while_held() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -277,17 +279,13 @@ mod windows_share_tests {
         std::fs::write(&target, b"a").expect("seed");
         std::fs::write(&other, b"b").expect("seed");
         let held = super::open_target(&target).expect("open");
-        assert!(
-            std::fs::OpenOptions::new()
-                .write(true)
-                .open(&target)
-                .is_err(),
-            "write while held"
-        );
-        assert!(
-            std::fs::rename(&other, &target).is_err(),
-            "replace while held"
-        );
+        let write_error = std::fs::OpenOptions::new()
+            .write(true)
+            .open(&target)
+            .expect_err("write while held");
+        assert_eq!(write_error.raw_os_error(), Some(32), "write while held");
+        let rename_error = std::fs::rename(&other, &target).expect_err("replace while held");
+        assert_eq!(rename_error.raw_os_error(), Some(32), "replace while held");
         drop(held);
         std::fs::OpenOptions::new()
             .write(true)
