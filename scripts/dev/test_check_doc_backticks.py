@@ -95,6 +95,41 @@ class Misses(unittest.TestCase):
         self.assertEqual(hits(src), [])
 
 
+class ClippyMarkdown(unittest.TestCase):
+    """Markdown shapes clippy's parser treats as code or skips: each must not
+    block, since a false block stops every push."""
+
+    def test_a_double_backtick_span_is_not_a_hit(self):
+        self.assertEqual(hits("/// Uses ``start_entry`` here.\nfn f() {}\n"), [])
+
+    def test_a_tilde_fence_is_not_a_hit(self):
+        src = "/// Example:\n///\n/// ~~~\n/// let start_entry = 1;\n/// ~~~\nfn f() {}\n"
+        self.assertEqual(hits(src), [])
+
+    def test_an_indented_code_block_is_not_a_hit(self):
+        src = "/// Example:\n///\n///     let start_entry = 1;\nfn f() {}\n"
+        self.assertEqual(hits(src), [])
+
+    def test_html_code_and_a_blockquote_skip_the_paragraph(self):
+        self.assertEqual(hits("/// Uses <code>start_entry</code>.\nfn f() {}\n"), [])
+        self.assertEqual(hits("/// > quoted start_entry\nfn f() {}\n"), [])
+
+    def test_a_reference_definition_without_a_space_is_not_a_hit(self):
+        self.assertEqual(hits("/// See [x].\n///\n/// [x]:crate::a_b\nfn f() {}\n"), [])
+
+    def test_a_doc_attribute_beside_the_run_skips_it(self):
+        src = '#[doc = "```"]\n/// let start_entry = 1;\n#[doc = "```"]\nfn f() {}\n'
+        self.assertEqual(hits(src), [])
+
+    def test_lines_in_a_raw_string_are_not_docs(self):
+        src = 'const SRC: &str = r#"\n/// a start_entry note\nnot an item\n"#;\n'
+        self.assertEqual(hits(src), [])
+
+    def test_a_doc_on_a_field_or_variant_is_checked(self):
+        src = "struct S {\n    /// The start_entry flag.\n    pub flag: bool,\n}\nenum E {\n    /// A publish_started case.\n    Started,\n}\n"
+        self.assertEqual(hits(src), [(2, "start_entry"), (6, "publish_started")])
+
+
 class CamelCase(unittest.TestCase):
     def test_camel_case_is_a_warning_not_a_hit(self):
         src = "/// Require the resource to match this ETag.\nfn f() {}\n"
@@ -131,6 +166,38 @@ class Cli(unittest.TestCase):
             self.assertIn("src/new.rs:1: publish_started", out.stdout)
             self.assertNotIn("old.rs", out.stdout)
             self.assertIn("put it in backticks", out.stdout)
+
+    def test_base_mode_checks_a_renamed_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            git = lambda *a: subprocess.run(["git", *a], cwd=root, check=True, capture_output=True)
+            git("init", "-q")
+            git("config", "user.email", "t@example.com")
+            git("config", "user.name", "t")
+            (root / "src").mkdir()
+            body = "".join(f"/// Line {i} of a long, unchanged doc.\n" for i in range(30))
+            (root / "src/old.rs").write_text(body + "fn f() {}\n")
+            git("add", "-A")
+            git("commit", "-q", "-m", "base")
+            base = subprocess.run(["git", "rev-parse", "HEAD"], cwd=root, capture_output=True, text=True).stdout.strip()
+            git("mv", "src/old.rs", "src/new.rs")
+            (root / "src/new.rs").write_text(body + "/// A bare start_entry.\nfn g() {}\n")
+            git("add", "-A")
+            git("commit", "-q", "-m", "rename")
+            out = self.run_check(root, "--base", base)
+            self.assertEqual(out.returncode, 1, out)
+            self.assertIn("src/new.rs:31: start_entry", out.stdout)
+
+    def test_a_non_utf8_file_is_skipped_not_fatal(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "src").mkdir()
+            (root / "src/bad.rs").write_bytes(b"/// \xff\xfe start_entry\nfn f() {}\n")
+            subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+            subprocess.run(["git", "add", "-A"], cwd=root, check=True)
+            out = self.run_check(root)
+            self.assertEqual(out.returncode, 0, out)
+            self.assertIn("src/bad.rs: skipped, not UTF-8", out.stdout)
 
     def test_a_clean_tree_exits_zero(self):
         with tempfile.TemporaryDirectory() as tmp:
