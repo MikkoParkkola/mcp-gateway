@@ -394,13 +394,7 @@ pub(super) fn capture_commit(
         CaptureKey::Sync { .. } => crate::security::firewall::CaptureMode::Pending,
         CaptureKey::Task { .. } => crate::security::firewall::CaptureMode::AtDelivery,
     };
-    let sources: Vec<crate::security::firewall::ReplaySource<'_>> = receipts
-        .iter()
-        .filter(|r| {
-            !r.pending_retain && r.kind != Kind::Replayed && (r.in_plan || r.kind == Kind::Seam)
-        })
-        .map(|r| (&r.digest, r.step, r.server.as_str(), r.tool.as_str()))
-        .collect();
+    let sources = replay_sources(receipts);
     // No candidates removes, never stores: `store_replay` returns early
     // with relay detection off, which would keep the prior entry (F1).
     if sources.is_empty() {
@@ -417,6 +411,53 @@ pub(super) fn capture_commit(
             generation,
             mode,
         )
+    }
+}
+
+/// The committed receipts a capture snapshots: in-plan and seam receipts
+/// as `record_digest` gets them, never one still pending its retain or
+/// one itself replayed. The one filter a capture and a persisted task
+/// snapshot share, so the two hold the same receipts.
+#[cfg(feature = "firewall")]
+fn replay_sources(receipts: &[Receipt]) -> Vec<crate::security::firewall::ReplaySource<'_>> {
+    receipts
+        .iter()
+        .filter(|r| {
+            !r.pending_retain && r.kind != Kind::Replayed && (r.in_plan || r.kind == Kind::Seam)
+        })
+        .map(|r| (&r.digest, r.step, r.server.as_str(), r.tool.as_str()))
+        .collect()
+}
+
+/// The persisted replay snapshot of the task result `stored` this settle
+/// writes (MIK-9379): built from what this delivery staged so far, read in
+/// place (the commit after the settle still records it), for the settle's
+/// own compare-and-set to store. `None` with relay detection off or
+/// nothing to replay.
+pub(crate) fn persisted_task_replay(meta: &MetaMcp, stored: &Value) -> Option<Value> {
+    #[cfg(feature = "firewall")]
+    {
+        let fw = meta.firewall.as_deref().filter(|fw| fw.relay_active())?;
+        let answer = CAPTURE_ANSWER
+            .try_with(|slot| slot.borrow().clone())
+            .ok()
+            .flatten()
+            .unwrap_or_default();
+        let calls = super::REPLAY_CALLS
+            .try_with(|calls| calls.borrow().clone())
+            .unwrap_or_default();
+        RELAY_RECEIPTS
+            .try_with(|receipts| {
+                let receipts = receipts.borrow();
+                fw.persisted_replay(&replay_sources(&receipts), &calls, &answer, stored)
+            })
+            .ok()
+            .flatten()
+    }
+    #[cfg(not(feature = "firewall"))]
+    {
+        let _ = (meta, stored);
+        None
     }
 }
 
@@ -463,9 +504,19 @@ pub(crate) fn stage_task_replay(meta: &MetaMcp, who: RelayKey<'_>, stored: &Comm
             id: stored.task.id().to_owned(),
             revision: stored.revision,
         };
-        let Some((digests, calls)) = fw.replay_digests(&key) else {
+        // MIK-9379: the entry in memory, else rebuilt from the row's own
+        // snapshot, pending and held by this delivery until its write; the
+        // task's TTL bounds it from this read (24 h without one).
+        let retention = stored.task.ttl_ms().map_or(
+            Duration::from_secs(crate::idempotency::admission::RETENTION_SECS),
+            Duration::from_millis,
+        );
+        let crate::security::firewall::Adopted::Held(digests, calls, handle) =
+            fw.adopt_replay(&key, stored.replay_snapshot.as_ref(), retention)
+        else {
             return false;
         };
+        hold_replay_handle(handle);
         let targets: Vec<(&str, &str)> =
             crate::gateway::task_service::Target::pairs(&stored.targets);
         stage_entries(fw, who, digests, &calls, Some(&targets));
