@@ -28,22 +28,69 @@ fn entry_held(rig: &Rig, task: &str) -> bool {
         .is_some()
 }
 
+/// Alice's plan task run to its end without any read: the store row is
+/// polled and the worker joined, so no tasks/get has rebuilt an entry.
+async fn settle_unread(rig: &Rig, key: &str) -> String {
+    let call = super::relay_plan_replay::task_call(1, key, "gateway_execute", &chain());
+    let created = post(&rig.state, "key-a", call).await;
+    let task = task_id(&created);
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        let status = committed(&rig.state, &task).task.status();
+        if status == crate::protocol::tasks::TaskStatus::Completed {
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the task never completed: {status:?}"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    let joined = rig
+        .state
+        .task_executor
+        .drain(std::time::Duration::from_secs(10))
+        .await;
+    assert!(joined.is_clean(), "the worker must finish: {joined:?}");
+    task
+}
+
+/// Arm the write-time hook to publish `action` when the delivery's write
+/// commits: a read judged under one action and written under another.
+fn switch_at_write(rig: &Rig, action: CollusionAction) {
+    let state = Arc::clone(&rig.state);
+    crate::gateway::meta_mcp::invoke::relay::commit_capture_hook::arm(move || {
+        let mut config = (*state.live_config.get()).clone();
+        config.security.firewall.collusion.action = action;
+        state.live_config.set(config);
+    });
+}
+
 /// Alice reads `task`; the reply.
 async fn read(rig: &Rig, task: &str) -> Value {
     get_task(&rig.state, "key-a", task).await
 }
 
-/// K1 and K6: the row that becomes readable already holds the snapshot and
-/// nothing is held in memory; alice's first read (receipts aged out) stages
-/// it, and bob's relay of the stored answer is refused.
-/// Mutants: snapshot written after the result (N1); entry inserted at
-/// commit (N2).
+/// K1 and K6: no completed revision of the task is ever published without
+/// its snapshot, and none is held in memory before a read; alice's first
+/// read (live receipts aged out) stages it, and bob's relay is refused.
+/// Mutants: snapshot written in a second write after the result (N1);
+/// entry inserted at commit (N2).
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn k1_k6_the_readable_row_holds_its_snapshot_and_a_read_stages_it() {
+async fn k1_k6_no_completed_revision_is_readable_without_its_snapshot() {
     let rig = rig(PROSE, OTHER_PROSE, None).await;
-    let task = rig.settle_task("k1", "gateway_execute", chain()).await;
-    let row = committed(&rig.state, &task);
-    assert!(row.replay_snapshot.is_some(), "the row holds no snapshot");
+    let task = settle_unread(&rig, "k1").await;
+    let published = crate::gateway::task_service::publish_log::of(&task);
+    assert!(
+        published.iter().any(|(completed, _)| *completed),
+        "premise: the completed row was published: {published:?}"
+    );
+    assert!(
+        published
+            .iter()
+            .all(|(completed, snapshot)| !completed || *snapshot),
+        "a completed revision was readable without its snapshot: {published:?}"
+    );
     assert!(
         !entry_held(&rig, &task),
         "a commit inserted an in-memory entry"
@@ -56,6 +103,27 @@ async fn k1_k6_the_readable_row_holds_its_snapshot_and_a_read_stages_it() {
         rig.refused("key-b", 102, PROSE).await,
         "the read staged nothing from the row"
     );
+}
+
+/// K25: a read judged under off and written under block (a trackable
+/// snapshot): the write's action decides, the entry is kept, bob refused.
+/// Mutant: rebuild only when the read starts under a non-off action.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn k25_a_read_judged_under_off_and_written_under_block_is_kept() {
+    let rig = rig(PROSE, OTHER_PROSE, None).await;
+    let task = settle_unread(&rig, "k25").await;
+    rig.lapse().await;
+    publish(&rig, CollusionAction::Off);
+    switch_at_write(&rig, CollusionAction::Block);
+    let reply = read(&rig, &task).await;
+    assert_eq!(status_of(&reply), "completed", "{reply}");
+    assert_eq!(
+        crate::gateway::meta_mcp::invoke::relay::commit_capture_hook::reached(),
+        1,
+        "premise: the switch ran at the write"
+    );
+    assert!(entry_held(&rig, &task), "the block write did not keep it");
+    assert!(rig.refused("key-b", 2501, PROSE).await);
 }
 
 /// K4: steady off; after alice's delivering read nothing is held.
@@ -159,42 +227,62 @@ async fn rig_state() -> Rig {
 }
 
 /// K26b: a snapshot from another epoch: block refuses alice's read with
-/// `-32002`; observe and off deliver it. Nothing is rebuilt from it.
-/// Mutants: epoch check skipped (N6); untrackable refused under observe (N7).
+/// `-32002`; observe delivers it and counts the relay `untrackable` once;
+/// off delivers it and counts nothing. Nothing is rebuilt from it.
+/// Mutants: epoch check skipped (N6); refused under observe (N7).
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn k26_another_epoch_is_refused_under_block_only() {
-    for (action, refused) in [
-        (CollusionAction::Block, true),
-        (CollusionAction::Observe, false),
-        (CollusionAction::Off, false),
+    for (action, refused, counted) in [
+        (CollusionAction::Block, true, 1),
+        (CollusionAction::Observe, false, 1),
+        (CollusionAction::Off, false, 0),
     ] {
         let first = rig_state().await;
-        let task = first.settle_task("k26", "gateway_execute", chain()).await;
+        let task = settle_unread(&first, "k26").await;
         let state = foreign_epoch(first, &task).await;
         let mut config = (*state.live_config.get()).clone();
         config.security.firewall.collusion.action = action;
         state.live_config.set(config);
-        let reply = get_task(&state, "key-a", &task).await;
+        let measured = get_task(&state, "key-a", &task);
+        #[cfg(feature = "metrics")]
+        let (reply, count) = crate::gateway::count_relay_reason("untrackable", measured);
+        #[cfg(not(feature = "metrics"))]
+        let reply = measured.await;
         if refused {
             assert_eq!(reply["error"]["code"], -32002, "{action:?}: {reply}");
         } else {
             assert_eq!(status_of(&reply), "completed", "{action:?}: {reply}");
             assert!(reply.to_string().contains(PROSE), "{action:?}: {reply}");
         }
+        #[cfg(feature = "metrics")]
+        assert_eq!(count, counted, "{action:?}: untrackable count");
+        #[cfg(not(feature = "metrics"))]
+        let _ = counted;
     }
 }
 
-/// The dropped K21 leg, pinned as today's outcome (the stated limit): a
-/// read that starts under off is decided then, so an untrackable result is
-/// delivered; the refusal is decided at read start only.
+/// K21-limit, today's outcome of the stated limit (register row 1181): an
+/// untrackable read judged under off and written after a switch to block
+/// is delivered; the refusal is decided at read start only.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn k21_limit_an_untrackable_read_started_under_off_is_delivered() {
+async fn k21_limit_an_untrackable_read_switched_to_block_mid_read_is_delivered() {
     let first = rig_state().await;
-    let task = first.settle_task("k21", "gateway_execute", chain()).await;
+    let task = settle_unread(&first, "k21").await;
     let state = foreign_epoch(first, &task).await;
     let mut config = (*state.live_config.get()).clone();
     config.security.firewall.collusion.action = CollusionAction::Off;
     state.live_config.set(config);
+    let switched = Arc::clone(&state);
+    crate::gateway::meta_mcp::invoke::relay::commit_capture_hook::arm(move || {
+        let mut config = (*switched.live_config.get()).clone();
+        config.security.firewall.collusion.action = CollusionAction::Block;
+        switched.live_config.set(config);
+    });
     let reply = get_task(&state, "key-a", &task).await;
     assert_eq!(status_of(&reply), "completed", "{reply}");
+    assert_eq!(
+        crate::gateway::meta_mcp::invoke::relay::commit_capture_hook::reached(),
+        1,
+        "premise: the switch ran at the write"
+    );
 }

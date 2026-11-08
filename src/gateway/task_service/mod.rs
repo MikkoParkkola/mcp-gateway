@@ -73,6 +73,8 @@ pub(crate) use service::CreateOutcome;
 pub(crate) use store::TaskStore;
 #[cfg(test)]
 pub(crate) use store::input::RedemptionRead;
+#[cfg(test)]
+pub(crate) use store::publish_log;
 
 /// Open the durable store, import restored bindings, build the executor, and
 /// settle whatever a previous process left mid-flight.

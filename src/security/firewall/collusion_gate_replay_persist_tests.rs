@@ -16,7 +16,9 @@ use super::{Adopted, SNAPSHOT_UNTRACKABLE};
 use crate::security::firewall::{Firewall, FirewallConfig};
 
 const ANSWER: &str = "the orchard ledger lists every rootstock and the grafting dates for each";
-const CANARY: &str = "canaryjoinZQX";
+/// A join over the detector's k-gram length, so it adds fingerprints.
+const CANARY: &str =
+    "canaryjoinZQX the rootstock register for the eastern terraces and its grafting notes";
 
 fn firewall(action: CollusionAction) -> Firewall {
     let config = FirewallConfig {
@@ -65,6 +67,15 @@ fn a_round_trip_records_what_the_digest_recorded() {
     let fw = firewall(CollusionAction::Block);
     let detector = fw.relay_detector().expect("relay detection on: fixture");
     let original = digest(ANSWER);
+    let (bare, _) = DeliveryDigest::of_parts(&[ANSWER], 1, false);
+    let bare_fps = bare.fingerprints(detector);
+    assert!(
+        original
+            .fingerprints(detector)
+            .iter()
+            .any(|fp| !bare_fps.contains(fp)),
+        "premise: the join adds fingerprints of its own"
+    );
     let value = persisted(&fw, &original, &json!(ANSWER)).expect("a snapshot");
     assert_ne!(value, json!(SNAPSHOT_UNTRACKABLE), "premise: kept");
     let Adopted::Held(digests, calls, handle) = fw.adopt_replay(&key("t1"), Some(&value), hour())
@@ -75,8 +86,17 @@ fn a_round_trip_records_what_the_digest_recorded() {
         handle.is_some(),
         "a rebuilt entry is pending, held by the read"
     );
-    assert_eq!(calls.len(), 1);
+    assert_eq!(
+        calls,
+        vec![(Some(1), "alpha".to_owned(), "read".to_owned())]
+    );
     assert_eq!(digests.len(), 1);
+    assert_eq!(digests[0].label, Some(1));
+    assert_eq!(
+        (digests[0].server.as_str(), digests[0].tool.as_str()),
+        ("alpha", "read")
+    );
+    assert!(digests[0].seam_sources.is_none());
     assert_eq!(digests[0].answer_digest, "digest-of-answer");
     assert_eq!(
         digests[0].digest.fingerprints(detector),
@@ -132,9 +152,16 @@ fn another_epoch_is_untrackable() {
 }
 
 /// K16: two reads that both find no entry leave exactly one, pending with
-/// both deliveries outstanding.
+/// both deliveries outstanding. Repeated on fresh keys, so a check-then-
+/// insert split meets the race (its mutant is the evidence the row fails).
 #[test]
 fn two_reads_that_find_nothing_leave_one_entry() {
+    for round in 0..200 {
+        two_reads_once(&format!("t3-{round}"));
+    }
+}
+
+fn two_reads_once(id: &str) {
     let fw = std::sync::Arc::new(firewall(CollusionAction::Block));
     let value = persisted(&fw, &digest(ANSWER), &json!(ANSWER)).expect("a snapshot");
     let barrier = std::sync::Barrier::new(2);
@@ -143,7 +170,7 @@ fn two_reads_that_find_nothing_leave_one_entry() {
             .map(|_| {
                 scope.spawn(|| {
                     barrier.wait();
-                    match fw.adopt_replay(&key("t3"), Some(&value), hour()) {
+                    match fw.adopt_replay(&key(id), Some(&value), hour()) {
                         Adopted::Held(_, _, handle) => handle,
                         _ => panic!("adopted"),
                     }
@@ -155,7 +182,7 @@ fn two_reads_that_find_nothing_leave_one_entry() {
     assert_eq!(fw.replay_entries_for_test(), 1);
     assert!(handles.iter().all(Option::is_some), "both reads hold it");
     assert_eq!(
-        fw.relay.replay.life_for_test(&key("t3")),
+        fw.relay.replay.life_for_test(&key(id)),
         TestLife::Pending {
             outstanding: 2,
             delivered_off: false

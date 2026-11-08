@@ -251,3 +251,38 @@ async fn a_lost_compare_and_set_stores_no_snapshot() {
     assert!(row.get("replaySnapshot").is_none(), "{row}");
     assert_eq!(row["model"]["task"]["status"], "working", "{row}");
 }
+
+/// The boundary below the room row: the result fits on its own but not
+/// with even the marker. Pinned as today's outcome: the cascade goes on to
+/// the bounded failure (a register row names the window), never to a
+/// completed row that holds no snapshot, which a read would serve untracked.
+#[tokio::test]
+async fn a_row_with_no_room_for_the_marker_settles_as_the_bounded_failure() {
+    let bare = tempfile::tempdir().unwrap();
+    let (bare_path, bare_id, settled) = settle(
+        bare.path(),
+        StoreLimits::default(),
+        TaskTransition::Complete(result()),
+        carrying(None),
+        0,
+    )
+    .await;
+    settled.unwrap();
+    let room = encoded_len(&record_file(&bare_path, &bare_id));
+    let dir = tempfile::tempdir().unwrap();
+    let (path, id, settled) = settle(
+        dir.path(),
+        StoreLimits {
+            record_bytes: room + 4,
+            ..StoreLimits::default()
+        },
+        TaskTransition::Complete(result()),
+        carrying(Some(snapshot(4))),
+        0,
+    )
+    .await;
+    settled.expect("the task settles");
+    let row = record_file(&path, &id);
+    assert_eq!(row["outputFree"], true, "{row}");
+    assert!(row.get("replaySnapshot").is_none(), "{row}");
+}
