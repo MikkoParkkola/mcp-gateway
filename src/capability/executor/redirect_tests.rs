@@ -330,7 +330,17 @@ async fn effect_of_send(
     let (ok, facts) = delivery_facts::scope(async {
         let outcome = tokio::time::timeout(
             crate::test_wait::HANG_BOUND,
-            super::send_with_retry(request, redirects, "test", true, &health),
+            super::send_with_retry(
+                request,
+                mutant!(
+                    "effect-counter-zero",
+                    &*Box::leak(Box::new(std::sync::atomic::AtomicU64::new(0))),
+                    redirects
+                ),
+                "test",
+                true,
+                &health,
+            ),
         )
         .await
         .expect("bounded");

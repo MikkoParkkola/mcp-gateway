@@ -35,7 +35,7 @@ impl SendTimer {
             seam::note_start();
         }
         Self {
-            started: on.then(Instant::now),
+            started: mutant!("timers-off", None, on.then(Instant::now)),
         }
     }
 
@@ -66,7 +66,7 @@ impl SendTimer {
     /// `isError` included), the backend timeout, or any other failure.
     pub(crate) fn end_of<T>(result: &crate::Result<T>) -> End {
         match result {
-            Ok(_) => End::Answered,
+            Ok(_) => mutant!("ok-is-failed", End::Failed, End::Answered),
             Err(crate::Error::BackendTimeout(_)) => End::TimedOut,
             Err(_) => End::Failed,
         }
@@ -76,7 +76,9 @@ impl SendTimer {
 impl Drop for SendTimer {
     fn drop(&mut self) {
         if let Some(started) = self.started.take() {
-            super::audit::note_backend(elapsed(started), End::Cancelled);
+            if mutant!("no-drop-note", false, true) {
+                super::audit::note_backend(elapsed(started), End::Cancelled);
+            }
         }
     }
 }
@@ -87,7 +89,24 @@ impl Drop for SendTimer {
 /// stdio writer reports an unsent request this way), a refusal before the
 /// send), plus shutdown. None of them is the backend's latency.
 fn never_sent(e: &crate::Error) -> bool {
-    e.is_pre_dispatch() || matches!(e, crate::Error::Shutdown)
+    mutant!(
+        "sent-anyway",
+        false,
+        mutant!(
+            "r4-narrow",
+            matches!(
+                e,
+                crate::Error::IdentitySlotsExhausted { .. }
+                    | crate::Error::AuthorizationCancelled { .. }
+                    | crate::Error::AuthorizationIncomplete { .. }
+                    | crate::Error::AuthorizationRequired { .. }
+                    | crate::Error::AuthorizationPending { .. }
+                    | crate::Error::TransportConnect(_)
+                    | crate::Error::Shutdown
+            ),
+            e.is_pre_dispatch() || matches!(e, crate::Error::Shutdown)
+        )
+    )
 }
 
 /// The send's time: the injected test duration when a row set one.

@@ -51,7 +51,10 @@ static EDGES_NS: LazyLock<[f64; 63]> = LazyLock::new(|| {
 pub(crate) fn bin_of(elapsed: Duration) -> u8 {
     let ns = elapsed.as_nanos() as f64;
     // Edges at or below `ns`: 0 under 1 ms, 63 at the top edge and above.
-    u8::try_from(EDGES_NS.partition_point(|edge| *edge <= ns)).unwrap_or(BINS - 1)
+    u8::try_from(
+        EDGES_NS.partition_point(|edge| mutant!("edge-off-by-one", *edge < ns, *edge <= ns)),
+    )
+    .unwrap_or(BINS - 1)
 }
 
 /// The value a bin reports, in whole ms: the geometric midpoint of an
@@ -65,9 +68,11 @@ pub(crate) fn bin_of(elapsed: Duration) -> u8 {
 )]
 pub(crate) fn bin_ms(bin: u8) -> u64 {
     match bin {
-        0 => 1,
+        0 => mutant!("open-edges", 0, 1),
         b if b >= BINS - 1 => (EDGES_NS[62] / 1_000_000.0).ceil() as u64,
-        b => RATIO.powf(f64::from(b) - 0.5).round() as u64,
+        b => RATIO
+            .powf(f64::from(b) - mutant!("lower-edge", 1.0, 0.5))
+            .round() as u64,
     }
 }
 
@@ -81,7 +86,12 @@ pub(crate) fn bin_ms(bin: u8) -> u64 {
     reason = "a sample count; the rank is clamped to n - 1"
 )]
 fn p95_rank(n: u64) -> u64 {
-    ((n as f64 * 0.95).floor() as u64).min(n.saturating_sub(1))
+    (mutant!(
+        "rank-ceil",
+        (n as f64 * 0.95).ceil(),
+        (n as f64 * 0.95).floor()
+    ) as u64)
+        .min(n.saturating_sub(1))
 }
 
 /// A sparse histogram: non-zero bins only, ascending.
@@ -102,7 +112,10 @@ impl Sketch {
     pub(crate) fn merge(&mut self, other: &Self) {
         for &(bin, count) in &other.0 {
             match self.0.binary_search_by_key(&bin, |(b, _)| *b) {
-                Ok(i) => self.0[i].1 = self.0[i].1.saturating_add(count),
+                Ok(i) => {
+                    self.0[i].1 =
+                        mutant!("merge-unsummed", count, self.0[i].1.saturating_add(count))
+                }
                 Err(i) => self.0.insert(i, (bin, count)),
             }
         }
@@ -123,7 +136,7 @@ impl Sketch {
         let mut seen = 0u64;
         self.0.iter().find_map(|&(bin, count)| {
             seen += u64::from(count);
-            (seen > rank).then_some(bin)
+            (mutant!("walk-off-by-one", seen >= rank, seen > rank)).then_some(bin)
         })
     }
 
@@ -238,6 +251,11 @@ impl<const W: u64, const LIVE: u64> LatRing<W, LIVE> {
     /// Close the live slots `now` has passed and drop what the window no
     /// longer holds.
     pub(crate) fn finalize(&mut self, now: u64) {
+        let now = mutant!(
+            "newest-seen",
+            self.live.back().map_or(now, |l| l.bucket),
+            now
+        );
         while let Some(i) = self.live.iter().position(|l| !Self::is_live(l.bucket, now)) {
             let Some(live) = self.live.remove(i) else {
                 break;
@@ -332,6 +350,9 @@ impl LatencySeries {
     /// Record one call's send time, finished at unix second `at`, on local
     /// day `day` when the zone could place it.
     pub(crate) fn add(&mut self, at: u64, day: Option<u64>, elapsed: Duration, end: End) {
+        if mutant!("store-off", true, false) {
+            return;
+        }
         let bin = bin_of(elapsed);
         let now = at / super::HALF;
         self.half.add(now, now, bin, end);
@@ -388,6 +409,7 @@ impl<const W: u64, const LIVE: u64> LatRing<W, LIVE> {
             live: self
                 .live
                 .iter()
+                .take(mutant!("live-not-saved", 0, usize::MAX))
                 .map(|l| {
                     (
                         l.bucket,
@@ -412,7 +434,15 @@ impl<const W: u64, const LIVE: u64> LatRing<W, LIVE> {
                     if c.late > 0 {
                         row.push(u64::from(c.late));
                     }
-                    ClosedRow(row)
+                    ClosedRow(mutant!(
+                        "closed-dense",
+                        {
+                            let mut row = row;
+                            row.extend([0; 64]);
+                            row
+                        },
+                        row
+                    ))
                 })
                 .collect(),
         }
@@ -431,7 +461,11 @@ impl<const W: u64, const LIVE: u64> LatRing<W, LIVE> {
             // counts and bins past the last dropped.
             let mut clean = Sketch::default();
             for &(bin, count) in &sketch.0 {
-                if bin < BINS && count > 0 {
+                if mutant!(
+                    "restore-unclean",
+                    bin < u8::MAX || count > 0,
+                    bin < BINS && count > 0
+                ) {
                     clean.merge(&Sketch(vec![(bin, count)]));
                 }
             }
@@ -470,7 +504,13 @@ impl<const W: u64, const LIVE: u64> LatRing<W, LIVE> {
         // history was finalized, and one slot is never both.
         let closed: std::collections::BTreeSet<u64> =
             ring.closed.iter().map(|c| c.bucket).collect();
-        ring.live.retain(|l| !closed.contains(&l.bucket));
+        ring.live.retain(|l| {
+            mutant!(
+                "live-over-closed",
+                closed.contains(&l.bucket) || l.bucket > 0,
+                !closed.contains(&l.bucket)
+            )
+        });
         while ring.live.len() > usize::try_from(LIVE).unwrap_or(usize::MAX) {
             if let Some(oldest) = ring.live.pop_front() {
                 ring.closed.push_back(oldest.close());
@@ -491,7 +531,7 @@ fn dedup_slots<T>(slots: &mut VecDeque<T>, bucket: impl Fn(&T) -> u64) {
     let mut seen: Option<u64> = None;
     slots.retain(|slot| {
         let b = bucket(slot);
-        let keep = seen != Some(b);
+        let keep = mutant!("restore-undeduped", true, seen != Some(b));
         seen = Some(b);
         keep
     });
