@@ -92,8 +92,7 @@ impl Backend {
         // The policy this start builds under. The backend is marked for a
         // pairing to refuse only once the start can connect (`mark_connecting`,
         // `begin_connecting`): a start refused before that built nothing that
-        // could be unpinned, so it must not block a later hardened pairing
-        // (MIK-7855).
+        // could be unpinned, so it must not block a later hardened pairing.
         let built_under: crate::security::ssrf::DestinationPolicy;
 
         // Whatever the reason for starting - a client request, a health-driven
@@ -142,7 +141,7 @@ impl Backend {
                     built_under,
                 )?;
                 // A per-user pool slot's transport serves one caller identity
-                // for life (MIK-6735 fix 2): tell it so, with the slot's
+                // for life: tell it so, with the slot's
                 // lender its dispatches lend through. It marks itself single
                 // tenant only when lent-only, the one kind holding a single
                 // session.
@@ -184,7 +183,7 @@ impl Backend {
                 // `Legacy`, the fallback the RFC requires. The era is this
                 // start's own probe result, not the shared cache: another
                 // slot's start or re-probe may have written that since, and
-                // its verdict is about a different peer (MIK-8056).
+                // its verdict is about a different peer.
                 transport.finish_startup(era).await?;
                 warn_if_configured_transport_refused(&self.name, *streamable_http, &transport);
                 listen = Some(super::super::listen::handle_of(&transport));
@@ -195,7 +194,7 @@ impl Backend {
                 protocol_version,
             } => {
                 // A target the upgrade request cannot be built for is refused
-                // before the mark: such a start never connects (MIK-7855).
+                // before the mark: such a start never connects.
                 crate::transport::websocket::WebSocketTransport::upgrade_request(
                     ws_url,
                     &self.config.headers,
@@ -228,7 +227,7 @@ impl Backend {
 
     /// Publish a started transport over `entry`, or close it when the backend
     /// shut down or its destination policy moved while it started. A
-    /// `deferred` era probe is installed with the publish (MIK-8012).
+    /// `deferred` era probe is installed with the publish.
     async fn publish_started(
         &self,
         entry: &PooledEntry,
