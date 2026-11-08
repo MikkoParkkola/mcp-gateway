@@ -121,7 +121,10 @@ async fn a_settle_record_reaches_only_readers_of_its_settle_kind() {
 
     // WHEN: a save intent is settled
     let role = Role::Intent(IntentKind::Save);
-    let got = l.settle(&l.log_id(), "w-1", role, payload()).await;
+    // An intent's row (step 3 section 2): `kind`, and no `intent_counter`.
+    let mut intent = payload();
+    intent.retain(|k, _| k == "kind");
+    let got = l.settle(&l.log_id(), "w-1", role, intent).await;
 
     // THEN: only the `settle.save` reader is told, once
     assert!(got.is_ok(), "{got:?}");
