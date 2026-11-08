@@ -252,6 +252,89 @@ pub(crate) async fn replace_audited(
     super::spawn_locked(ctx, replace, audit, wait).await
 }
 
+/// With anything pending (a crashed write's journal, or a reload `owed`
+/// after a failed one), append the recovery's own intent. `None`: nothing
+/// pending. A refused intent recovers nothing; the next holder tries again.
+/// It does not wait, so a recovery sink lent to it is never held across an
+/// await. Shared by the running gateway and startup
+/// ([`crate::config_reload::recover_before_start`]); the sink is a
+/// parameter so where intents go can change underneath both.
+pub(crate) fn recovery_intent(
+    sink: &mut dyn IntentSink,
+    locked: &Locked,
+    owed: bool,
+) -> Result<Option<IntentId>, ReplaceError> {
+    if !locked.journal_pending && !owed {
+        return Ok(None);
+    }
+    // An absent file is the empty revision: the intent names what is on
+    // disk before recovery. The read every loader uses: a file the guard
+    // refuses is refused before any intent, and nothing is recovered.
+    let on_disk = match crate::config::read_config_text(&locked.target) {
+        Ok(text) => text.map(String::into_bytes).unwrap_or_default(),
+        Err(crate::config::UnreadConfig::Refused(why)) => {
+            return Err(ReplaceError::ConfigRefused(why));
+        }
+        Err(
+            crate::config::UnreadConfig::Failed(why)
+            | crate::config::UnreadConfig::NotTheConfig(why),
+        ) => {
+            return Err(ReplaceError::Failed(format!(
+                "reading the config for the recovery's record failed: {why}"
+            )));
+        }
+    };
+    let intent = Intent {
+        kind: IntentKind::Recovery,
+        base: FileRevision::of(&on_disk),
+        outside_change: true,
+        recovery_intent_id: None,
+        writer: None,
+    };
+    sink.append(&intent).map(Some).map_err(|e| {
+        ReplaceError::AuditRefused(format!(
+            "the audit log refused the recovery's record; nothing was recovered or reloaded: {e}"
+        ))
+    })
+}
+
+/// Startup's recovery intent, before the gateway is built: the audit of the
+/// config that survives the recovery (`config`), so the record lands in the
+/// log the starting gateway will write. A configured log that cannot open
+/// refuses, whatever the auth setting: a recovery is never unaudited when
+/// the surviving config names a log. The log is closed on return, so the
+/// gateway's own open finds its lease free.
+///
+/// # Errors
+///
+/// Why the recovery cannot be recorded; the caller recovers nothing.
+pub(crate) fn startup_recovery_intent(
+    locked: &Locked,
+    config: &crate::config::Config,
+) -> Result<(), String> {
+    let log = match config.audit_log() {
+        None => None,
+        Some(log) => Some(Arc::new(
+            TransparencyLogger::open(Arc::new(log))
+                .map_err(|e| format!("its audit log cannot be opened ({e})"))?,
+        )),
+    };
+    let posture = AuditPosture::of(log, GatewayAuth::of(config.auth.enabled));
+    let refused = |e: ReplaceError| match e {
+        ReplaceError::Refused(why)
+        | ReplaceError::AuditRefused(why)
+        | ReplaceError::ConfigRefused(why)
+        | ReplaceError::Failed(why) => why,
+        other => format!("{other:?}"),
+    };
+    match posture.audit(IntentKind::Recovery).map_err(refused)? {
+        Audit::Off => Ok(()),
+        Audit::Required { mut sink, .. } => recovery_intent(sink.as_mut(), locked, false)
+            .map(drop)
+            .map_err(refused),
+    }
+}
+
 impl ReloadContext {
     /// Audit this gateway's recoveries through `sink`, from its posture at
     /// start.
@@ -264,49 +347,14 @@ impl ReloadContext {
         self.set_recovery_audit(Box::new(LogSink(log)));
     }
 
-    /// With anything pending (a crashed write's journal, or a reload owed
-    /// after a failed one), append the recovery's own intent. `None`:
-    /// nothing pending. A refused intent recovers nothing; the next holder
-    /// tries again. It does not wait, so a recovery sink lent to it is never
-    /// held across an await.
+    /// [`recovery_intent`] with this gateway's owed reload.
     fn recovery_intent(
         &self,
         sink: &mut dyn IntentSink,
         locked: &Locked,
     ) -> Result<Option<IntentId>, ReplaceError> {
         let owed = self.reload_owed.load(std::sync::atomic::Ordering::SeqCst);
-        if !locked.journal_pending && !owed {
-            return Ok(None);
-        }
-        // An absent file is the empty revision: the intent names what is on
-        // disk before recovery. The read every loader uses: a file the guard
-        // refuses is refused before any intent, and nothing is recovered.
-        let on_disk = match crate::config::read_config_text(&locked.target) {
-            Ok(text) => text.map(String::into_bytes).unwrap_or_default(),
-            Err(crate::config::UnreadConfig::Refused(why)) => {
-                return Err(ReplaceError::ConfigRefused(why));
-            }
-            Err(
-                crate::config::UnreadConfig::Failed(why)
-                | crate::config::UnreadConfig::NotTheConfig(why),
-            ) => {
-                return Err(ReplaceError::Failed(format!(
-                    "reading the config for the recovery's record failed: {why}"
-                )));
-            }
-        };
-        let intent = Intent {
-            kind: IntentKind::Recovery,
-            base: FileRevision::of(&on_disk),
-            outside_change: true,
-            recovery_intent_id: None,
-            writer: None,
-        };
-        sink.append(&intent).map(Some).map_err(|e| {
-            ReplaceError::AuditRefused(format!(
-                "the audit log refused the recovery's record; nothing was recovered or reloaded: {e}"
-            ))
-        })
+        recovery_intent(sink, locked, owed)
     }
 
     /// The write path's recovery: on an audited write, its intent, then the
