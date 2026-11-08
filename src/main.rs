@@ -9,6 +9,18 @@
 #[path = "cli/stdout.rs"]
 mod stdout;
 
+// The `mutant!` macros and their switch, for mutant proofs whose sites sit
+// in the binary's modules. src/mutant.rs is compiled again
+// here as this crate's own module, as clock.rs is; a normal build has no
+// switch in it.
+// ponytail: a second private copy of the switch; if the operator approves
+// widening the library's API, export `mutant::on` under cfg(mutants) and
+// drop this module.
+include!("mutant_macro.rs");
+#[path = "mutant.rs"]
+#[allow(dead_code, reason = "a scratch commit's sites are its only users")]
+mod mutant;
+
 mod allocator;
 // The library's wall-clock reader, compiled again for the CLI commands
 // (MIK-8202 P4a); clock.rs states why this copy may hold no shared state.
