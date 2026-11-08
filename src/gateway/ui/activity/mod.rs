@@ -573,6 +573,12 @@ fn export_response(
 #[path = "answer_fixture.rs"]
 mod answer_fixture;
 #[cfg(test)]
+#[path = "answer_integrity2_tests.rs"]
+mod answer_integrity2_tests;
+#[cfg(test)]
+#[path = "answer_integrity_tests.rs"]
+mod answer_integrity_tests;
+#[cfg(test)]
 #[path = "answer_list_tests.rs"]
 mod answer_list_tests;
 #[cfg(test)]
