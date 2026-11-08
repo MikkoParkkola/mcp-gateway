@@ -240,10 +240,20 @@ fn url_carries_credential(raw: &str) -> bool {
     let Ok(url) = url::Url::parse(raw) else {
         return false;
     };
-    let userinfo = url
-        .password()
-        .map_or_else(|| url.username().to_string(), str::to_string);
-    if literal_value(&userinfo) {
+    // The userinfo as written (the text gateway.yaml keeps; the parser would
+    // percent-encode a template's braces): the password, or the username
+    // when the password is absent or empty.
+    let userinfo = raw
+        .split_once("://")
+        .and_then(|(_, rest)| rest.split(['/', '?', '#']).next())
+        .and_then(|authority| authority.rsplit_once('@'))
+        .map_or("", |(userinfo, _)| userinfo);
+    let secret = match userinfo.split_once(':') {
+        Some((_, password)) if !password.is_empty() => password,
+        Some((user, _)) => user,
+        None => userinfo,
+    };
+    if literal_value(secret) {
         return true;
     }
     url.query_pairs()
@@ -257,6 +267,10 @@ fn command_carries_credential(command: &str) -> bool {
     let words = crate::transport::split_command(command)
         .unwrap_or_else(|| command.split_whitespace().map(str::to_string).collect());
     words.iter().enumerate().any(|(i, word)| {
+        // A whole URL first: its query holds `=` signs of its own.
+        if url_carries_credential(word) {
+            return true;
+        }
         if let Some((name, value)) = word.split_once(": ")
             && credential_name(name)
             && literal_value(value)
@@ -270,9 +284,10 @@ fn command_carries_credential(command: &str) -> bool {
         if word.starts_with("--") && credential_name(word) {
             return words
                 .get(i + 1)
-                .is_some_and(|next| !next.starts_with('-') && literal_value(next));
+                // A token may start with one dash; the next long flag is no value.
+                .is_some_and(|next| !next.starts_with("--") && literal_value(next));
         }
-        url_carries_credential(word)
+        false
     })
 }
 
