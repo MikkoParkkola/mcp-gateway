@@ -31,7 +31,7 @@ use std::io::{self, Read, Seek};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-use crate::security::transparency_log::rotation::{FileId, file_id, path_id};
+use crate::security::transparency_log::rotation::{FileId, file_id};
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum Mode {
@@ -206,12 +206,10 @@ pub(super) fn note_dir_synced(dir: &Path) {
     overlay.names = names;
 }
 
+/// The staged scratch's generation; its data and held handle are already in
+/// the overlay, so bind only binds the target's name to it.
 pub(super) struct Staged {
     generation: FileId,
-    bytes: Vec<u8>,
-    // The synced scratch, held from staging on (default sharing, so the
-    // rename still works) so its identity cannot be reused before bind.
-    held: File,
 }
 
 /// The synced scratch's identity, taken by path (nothing else touches the
@@ -222,16 +220,34 @@ pub(super) fn stage(target: &Path, scratch: &Path, bytes: &[u8]) -> Option<Stage
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     let overlay = armed.as_mut()?.get_mut(&dir)?;
-    let held = File::open(scratch).expect("crash_fs: hold scratch");
+    let held = open_shared(scratch).expect("crash_fs: hold scratch");
     let generation = file_id(&held).expect("crash_fs: scratch identity");
     // The scratch's bytes were synced before this call: durable now, under
-    // its own generation, whatever happens to its name later.
+    // its own generation, and held so the identity cannot be reused, even if
+    // the rename never happens.
     overlay.data.insert(generation, bytes.to_vec());
-    Some(Staged {
-        generation,
-        bytes: bytes.to_vec(),
-        held,
-    })
+    overlay.held.insert(generation, held);
+    Some(Staged { generation })
+}
+
+/// A handle that never blocks the writer: on Windows attributes-only with full
+/// sharing (the scratch is still open exclusively by its creator), as
+/// `path_id` opens; on unix a plain read handle.
+fn open_shared(path: &Path) -> io::Result<File> {
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        const FILE_READ_ATTRIBUTES: u32 = 0x80;
+        const SHARE_ALL: u32 = 0x7; // FILE_SHARE_READ | WRITE | DELETE
+        std::fs::OpenOptions::new()
+            .access_mode(FILE_READ_ATTRIBUTES)
+            .share_mode(SHARE_ALL)
+            .open(path)
+    }
+    #[cfg(not(windows))]
+    {
+        File::open(path)
+    }
 }
 
 pub(super) fn bind(target: &Path, staged: Staged) {
@@ -245,9 +261,10 @@ pub(super) fn bind(target: &Path, staged: Staged) {
     else {
         return;
     };
-    overlay.held.insert(staged.generation, staged.held);
     // Bind the name only if the file now at the target is the staged one.
-    let Ok(now) = File::open(target).and_then(|f| file_id(&f)) else {
+    // Its data was recorded at staging; a later flush may have updated it,
+    // so bind never writes data.
+    let Ok(now) = open_shared(target).and_then(|f| file_id(&f)) else {
         return;
     };
     if now != staged.generation {
@@ -257,7 +274,6 @@ pub(super) fn bind(target: &Path, staged: Staged) {
         .file_name()
         .and_then(|n| n.to_str())
         .expect("crash_fs: UTF-8 name");
-    overlay.data.insert(now, staged.bytes);
     overlay.current.insert(name.to_owned(), now);
 }
 
@@ -277,9 +293,10 @@ pub(super) fn note_flushed(target: &Path, file: &mut File) -> io::Result<()> {
     };
     let generation = file_id(file)?;
     // Hold the generation before recording it. Unix: a clone of the flushed
-    // handle. Windows: the read-back handle denies delete sharing (holding a
-    // clone would block later renames), and it also stops the file being
-    // replaced while held, so a fresh default-sharing handle is this file.
+    // handle. Windows: holding a clone of the read-back handle would block
+    // later renames (it denies delete sharing), so a fresh default-sharing
+    // handle is opened and kept only after its identity is checked against
+    // the flushed handle's.
     #[cfg(unix)]
     let held = file.try_clone()?;
     #[cfg(not(unix))]
