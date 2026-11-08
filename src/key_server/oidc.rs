@@ -667,6 +667,10 @@ use redirect::remote_redirect_policy;
 mod tests;
 
 #[cfg(test)]
+#[path = "oidc_claims_debug_tests.rs"]
+mod claims_debug_tests;
+
+#[cfg(test)]
 #[path = "oidc_fallback_tests.rs"]
 mod fallback_tests;
 
