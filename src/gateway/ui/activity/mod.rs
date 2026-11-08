@@ -570,6 +570,12 @@ fn export_response(
 }
 
 #[cfg(test)]
+#[path = "answer_fixture.rs"]
+mod answer_fixture;
+#[cfg(test)]
+#[path = "answer_list_tests.rs"]
+mod answer_list_tests;
+#[cfg(test)]
 #[path = "list_tests.rs"]
 mod list_tests;
 #[cfg(test)]

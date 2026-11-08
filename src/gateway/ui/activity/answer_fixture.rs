@@ -1,0 +1,203 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+//! Test fixture for the delivery-join rows: a log written by the real logger,
+//! so hashes, chains and HMACs are the logger's own.
+
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+
+use serde_json::{Map, Value, json};
+
+use super::{Logs, access::Access};
+use crate::security::audit::{AuditEnvelope, AuditWho, InvocationTarget};
+use crate::security::audit_rotation_config::{OnDiskFull, RotationConfig};
+use crate::security::transparency_log::{CorrelationKey, CorrelationSource};
+use crate::security::{TransparencyLogConfig, TransparencyLogger};
+
+pub(super) const SECRET: &str = "a-test-secret-that-is-at-least-32-bytes!!";
+
+/// What a delivery record says (the writer's fields, delivery_facts.rs).
+#[derive(Clone)]
+pub(super) struct Dl {
+    pub(super) stage: &'static str,
+    pub(super) effect: Option<&'static str>,
+    /// `None` omits the field; `Some(Value::Null)` is vouched, not scanned.
+    pub(super) findings: Option<Value>,
+    pub(super) total: Option<u64>,
+}
+
+impl Dl {
+    pub(super) fn effect(effect: &'static str) -> Self {
+        Self {
+            stage: "transport_finalized",
+            effect: Some(effect),
+            findings: Some(json!([])),
+            total: None,
+        }
+    }
+
+    /// An unvouched answer: neither field is written.
+    pub(super) fn omitted() -> Self {
+        Self {
+            stage: "transport_finalized",
+            effect: None,
+            findings: None,
+            total: None,
+        }
+    }
+
+    pub(super) fn findings(mut self, findings: Value) -> Self {
+        self.findings = Some(findings);
+        self
+    }
+
+    pub(super) fn stage(mut self, stage: &'static str) -> Self {
+        self.stage = stage;
+        self
+    }
+}
+
+pub(super) struct Fixture {
+    pub(super) dir: tempfile::TempDir,
+    pub(super) path: PathBuf,
+    pub(super) logger: TransparencyLogger,
+    pub(super) secret: Option<&'static str>,
+}
+
+impl Fixture {
+    pub(super) fn new(secret: Option<&'static str>) -> Self {
+        Self::rotating(secret, 0)
+    }
+
+    /// `max_segment_bytes` of 0 never rotates.
+    pub(super) fn rotating(secret: Option<&'static str>, max_segment_bytes: u64) -> Self {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("inv.jsonl");
+        let logger = TransparencyLogger::open(Arc::new(TransparencyLogConfig {
+            enabled: true,
+            path: path.to_string_lossy().into_owned(),
+            key_id: "test".into(),
+            shared_secret: secret.unwrap_or_default().into(),
+            rotation: RotationConfig {
+                max_segment_bytes,
+                max_segment_age_secs: 0,
+                retain_segments: 1000,
+                on_disk_full: OnDiskFull::ExpireOldest,
+            },
+        }))
+        .unwrap();
+        Self {
+            dir,
+            path,
+            logger,
+            secret,
+        }
+    }
+
+    pub(super) fn logs(&self) -> Logs {
+        Logs {
+            invocation: self.path.clone(),
+            governance: None,
+            secret: self.secret.map(|s| s.as_bytes().to_vec()),
+        }
+    }
+
+    pub(super) fn access(&self) -> Access {
+        Access::All
+    }
+
+    /// A call on `srv` carrying `trace`.
+    pub(super) fn call(&self, trace: &str) {
+        self.call_on("srv", trace);
+    }
+
+    pub(super) fn call_on(&self, server: &str, trace: &str) {
+        let envelope = AuditEnvelope {
+            trace_id: Some(trace.to_string()),
+            ..AuditEnvelope::ok(AuditWho::from_actor_id("c"))
+        };
+        self.logger
+            .log_invocation_correlated(
+                CorrelationKey {
+                    id: "s",
+                    source: CorrelationSource::SessionId,
+                },
+                &envelope,
+                InvocationTarget::meta(server, "tool"),
+                "sha256:aa",
+                Some("sha256:bb"),
+            )
+            .unwrap();
+    }
+
+    /// A delivery record for `trace`, as the writer shapes it.
+    pub(super) fn delivery(&self, trace: &str, d: &Dl) {
+        let mut f = Map::new();
+        f.insert("event".into(), "response_delivery_attempt".into());
+        f.insert("response_stage".into(), d.stage.into());
+        f.insert("response_hash".into(), "sha256:bb".into());
+        f.insert("server".into(), "srv".into());
+        f.insert("tool".into(), "tool".into());
+        if let Some(e) = d.effect {
+            f.insert("response_effect".into(), e.into());
+        }
+        if let Some(v) = &d.findings {
+            f.insert("response_findings".into(), v.clone());
+        }
+        if let Some(t) = d.total {
+            f.insert("response_findings_total".into(), t.into());
+        }
+        let envelope = AuditEnvelope {
+            trace_id: Some(trace.to_string()),
+            ..AuditEnvelope::ok(AuditWho::from_actor_id("c"))
+        };
+        self.logger.append_event(f, &envelope).unwrap();
+    }
+
+    /// The log's lines, parsed.
+    pub(super) fn lines(&self) -> Vec<Value> {
+        read_lines(&self.path)
+    }
+
+    /// Rewrite line `index` (0-based) through `edit`, leaving the rest.
+    pub(super) fn edit(&self, index: usize, edit: impl FnOnce(&mut Value)) {
+        let mut lines = self.lines();
+        edit(&mut lines[index]);
+        write_lines(&self.path, &lines);
+    }
+
+    /// The index of the first line whose `trace_id` is `trace` and that is a
+    /// delivery record.
+    pub(super) fn delivery_index(&self, trace: &str) -> usize {
+        self.lines()
+            .iter()
+            .position(|l| l["trace_id"] == trace && l["event"] == "response_delivery_attempt")
+            .unwrap()
+    }
+}
+
+pub(super) fn read_lines(path: &Path) -> Vec<Value> {
+    std::fs::read_to_string(path)
+        .unwrap()
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect()
+}
+
+pub(super) fn write_lines(path: &Path, lines: &[Value]) {
+    let body: String = lines.iter().map(|l| l.to_string() + "\n").collect();
+    std::fs::write(path, body).unwrap();
+}
+
+/// Set a field and recompute `entry_hash`, as a forger without the key would;
+/// `sig` is kept unless `strip_sig`.
+pub(super) fn forge(entry: &mut Value, key: &str, value: Value, strip_sig: bool) {
+    entry[key] = value;
+    let hash = crate::security::transparency_log::recompute_entry_hash(entry).unwrap();
+    entry["entry_hash"] = hash.into();
+    if strip_sig {
+        let o = entry.as_object_mut().unwrap();
+        o.remove("sig");
+        o.remove("key_id");
+    }
+}

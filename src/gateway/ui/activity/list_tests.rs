@@ -226,22 +226,27 @@ fn l4_l5_other_credentials_are_refused() {
 }
 
 #[tokio::test]
-async fn r3_cleaned_answers_400_with_the_supported_list() {
+async fn r3_cleaned_is_no_longer_400_and_the_supported_list_names_it() {
     let dir = tempfile::tempdir().unwrap();
-    let logs = fixture(&dir);
+    let logs = logs(&dir);
     let (status, v) = body(list_page(
         &logs,
         &Access::All,
         &query(&[("outcome", "cleaned")]),
     ))
     .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(v["rows"], json!([]));
+    let (status, v) = body(list_page(
+        &logs,
+        &Access::All,
+        &query(&[("outcome", "bogus")]),
+    ))
+    .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert_eq!(
-        v,
-        json!({
-            "error": "answer changes are not recorded by this gateway version",
-            "supported": ["ok", "failed", "blocked"],
-        })
+        v["supported"],
+        json!(["ok", "failed", "blocked", "cleaned"])
     );
 }
 
