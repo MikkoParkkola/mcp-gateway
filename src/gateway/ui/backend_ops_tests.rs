@@ -796,6 +796,38 @@ fn r1_credential_refusals_table() {
         "not a credential name"
     );
 
+    // Code review r2 (G5): forms the first cut let through or refused wrongly.
+    assert_eq!(
+        cmd("npx tool https://h.example/mcp?transport=sse&api_key=k1"),
+        bad_cmd,
+        "URL argument with the credential after an ordinary query"
+    );
+    assert_eq!(
+        cmd("npx tool --token -abc123"),
+        bad_cmd,
+        "value with a leading dash"
+    );
+    assert_eq!(
+        cmd("npx tool --token --verbose"),
+        none,
+        "a long flag after the name"
+    );
+    assert_eq!(
+        url(&["https://", "user-0123456789", ":@h.example/mcp"].concat()),
+        bad_url,
+        "username with an empty password"
+    );
+    assert_eq!(
+        url(&["https://svc:", "${SVC_TOKEN}", "@h.example/mcp"].concat()),
+        none,
+        "userinfo template"
+    );
+    assert_eq!(
+        url(&["https://", "${SVC_USER}", "@h.example/mcp"].concat()),
+        none,
+        "userinfo template without a password"
+    );
+
     assert_eq!(
         refused(
             Some("npx tool"),
