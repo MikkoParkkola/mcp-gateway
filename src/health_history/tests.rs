@@ -436,10 +436,25 @@ fn h6c_a_periodic_save_skips_while_another_save_runs() {
         !h.incomplete(),
         "a skipped save marked the history incomplete"
     );
+    h.set_incomplete(true);
+    assert!(!file::save(&h, &path, T0 + 100, file::Wait::SkipIfBusy));
+    assert!(h.incomplete(), "a skipped save cleared an earlier failure");
     release.send(()).expect("release");
     holder.join().expect("joined");
-    assert!(file::save(&h, &path, T0 + 100, file::Wait::SkipIfBusy));
+    // Other tests in this process save too; retry while one holds the lock.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while !file::save(&h, &path, T0 + 100, file::Wait::SkipIfBusy) {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "no save landed after the hold"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
     assert!(path.exists(), "the save after the hold wrote");
+    assert!(
+        !h.incomplete(),
+        "a save that landed left the history incomplete"
+    );
 }
 
 /// H9e (code review r1): a clock set backward between runs never counts a

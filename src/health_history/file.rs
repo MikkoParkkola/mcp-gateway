@@ -65,10 +65,6 @@ enum Unsaved {
     Write(std::io::Error),
 }
 
-/// Save `history` to `path` at `now`: a temporary file, flushed, renamed over
-/// the old one. Returns whether the rename completed; a failure marks the
-/// run's history incomplete until a later save succeeds. The snapshot through
-/// the rename runs under [`SAVES`]; the outcome is logged after it is released.
 /// How a save meets another save in progress.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Wait {
@@ -79,6 +75,11 @@ pub(crate) enum Wait {
     SkipIfBusy,
 }
 
+/// Save `history` to `path` at `now`: a temporary file, flushed, renamed over
+/// the old one. Returns whether the rename completed (false for a
+/// [`Wait::SkipIfBusy`] save that skipped, which leaves the flag alone); a failure marks the
+/// run's history incomplete until a later save succeeds. The snapshot through
+/// the rename runs under [`SAVES`]; the outcome is logged after it is released.
 pub(crate) fn save(history: &HealthHistory, path: &Path, now: u64, wait: Wait) -> bool {
     let outcome = {
         let _one_at_a_time = match wait {
