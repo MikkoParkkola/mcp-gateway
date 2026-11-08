@@ -200,10 +200,16 @@ pub(super) async fn delivered_under(
     named_last(&o.fx, before.0).await
 }
 
-/// The one record written since `seen` records: `(kind, rule_id, grant_id)`.
+/// The one invocation record written since `seen` records: `(kind,
+/// rule_id, grant_id)`. The grant check's own `identity_grant_decision`
+/// record beside it carries no decision object, so it is skipped.
 pub(super) async fn named_last(fx: &Logged, seen: usize) -> (Value, Value, Value) {
     let rows = invocations(fx).await;
-    let [row] = &rows[seen..] else {
+    let new: Vec<&Value> = rows[seen..]
+        .iter()
+        .filter(|r| r.get("decision").is_some())
+        .collect();
+    let [row] = new.as_slice() else {
         panic!("wanted one new invocation record: {:?}", &rows[seen..]);
     };
     let d = &row["decision"];
@@ -274,7 +280,7 @@ async fn warn_to_allow_loses_to_grant() {
     let o = owned(vec![owner_grant("g-m")]).await;
     let expected = held_id(&o, "g-m");
     let warn_to_allow = probe_rule(&o, FirewallAction::Allow, &[ScanType::SqlInjection]);
-    let got = delivered_under(&o, vec![warn_to_allow], json!({"q": "' OR 1=1"})).await;
+    let got = delivered_under(&o, vec![warn_to_allow], json!({"cmd": "' OR 1=1"})).await;
     assert_eq!(got, as_grant(&expected, "g-m"));
 }
 
@@ -294,7 +300,8 @@ async fn attribution_ladder_top() {
     let softener = probe_rule(&o, FirewallAction::Allow, &[ScanType::ShellInjection]);
     let warn_to_allow = probe_rule(&o, FirewallAction::Allow, &[ScanType::SqlInjection]);
     let mut args = injected();
-    args["q"] = json!("' OR 1=1");
+    let cmd = format!("{} ' OR 1=1", args["cmd"].as_str().unwrap_or_default());
+    args["cmd"] = json!(cmd);
     let all = vec![warn_to_allow.clone(), softener.clone()];
     let got = delivered_under(&o, all, args.clone()).await;
     assert_eq!(

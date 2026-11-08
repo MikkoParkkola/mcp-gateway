@@ -156,14 +156,14 @@ async fn public_and_shared_capabilities_name_no_grant() {
     }
 }
 
-/// Publish `next` once a grant evaluation lands inside a call's notes;
-/// evaluations outside them (admission) re-arm the hook untouched.
+/// Publish `next` just before a matched grant is noted inside a call's
+/// notes; a note outside them (admission) re-arms the hook untouched.
 fn swap_inside_dispatch(
     store: Arc<parking_lot::RwLock<LocalIdentityGrantStore>>,
     next: LocalIdentityGrantStore,
     fired: Rc<Cell<bool>>,
 ) {
-    super::super::visibility::after_grant_evaluation::set(move || {
+    super::super::visibility::before_grant_note::set(move || {
         if crate::gateway::meta_mcp::invoke::audit::in_dispatch_scope_for_test() {
             *store.write() = next;
             fired.set(true);

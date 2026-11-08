@@ -17,8 +17,10 @@ use crate::security::firewall::{FirewallAction, FirewallRule, ScanType};
 /// The shell injection (High, blocks by default) beside a SQL injection
 /// (Medium, warns by default) in one call's arguments.
 fn shell_and_sql() -> Value {
+    // One declared parameter carries both: the fixture tool takes only `cmd`.
     let mut args = injected();
-    args["q"] = json!("' OR 1=1");
+    let cmd = format!("{} ' OR 1=1", args["cmd"].as_str().unwrap_or_default());
+    args["cmd"] = json!(cmd);
     args
 }
 

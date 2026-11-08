@@ -164,14 +164,20 @@ async fn an_mtls_deny_rule_refusal_records_its_rule_id_on_the_direct_route() {
 }
 
 /// B allows only `read`: `write` is refused with B's id, and `read` with the
-/// same certificate and backend is allowed.
+/// same certificate and backend is allowed, naming B as its allow.
 async fn excluded_by_b(route: Route) {
     refused_by_b(route, read_only_rules()).await;
     let fx = with_policy(enabled(read_only_rules())).await;
     let got = call_cert(&fx, route, "read", Some("agent-1")).await;
     assert!(
-        !got.refused && got.calls == 1 && got.kind != "mtls",
+        !got.refused && got.calls == 1,
         "{route:?}: B allows read: {got:?}"
+    );
+    let b = mtls_id(&rule_key(&fx), &read_only_rules()[1]);
+    assert_eq!(
+        (got.kind, got.rule),
+        (json!("mtls"), json!(b.as_str())),
+        "{route:?}: the allowed read names B"
     );
 }
 

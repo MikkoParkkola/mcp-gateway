@@ -204,7 +204,7 @@ async fn attribution_ladder_below_grant() {
         scan: vec![crate::security::firewall::ScanType::SqlInjection],
         ..base
     };
-    let sql = json!({"q": "' OR 1=1"});
+    let sql = json!({"cmd": "' OR 1=1"});
     let rung = |entry: bool, rule: bool| {
         let warn_to_allow = warn_to_allow.clone();
         edited(&fx, move |c| {

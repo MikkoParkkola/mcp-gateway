@@ -582,6 +582,8 @@ impl MetaMcp {
                 && evaluation.reason
                     == crate::identity_grants::IdentityGrantDecisionReason::GrantMatched
             {
+                #[cfg(test)]
+                before_grant_note::fire();
                 let mut allow = crate::security::decision_record::Allow::by(
                     crate::security::decision_record::AllowRank::Grant,
                     rule_id.clone(),
@@ -673,6 +675,28 @@ pub(super) mod after_grant_evaluation {
     }
 
     /// Run `hook` once, after the next grant evaluation on this thread.
+    pub(in crate::gateway::meta_mcp) fn set(hook: impl FnOnce() + 'static) {
+        HOOK.with(|slot| *slot.borrow_mut() = Some(Box::new(hook)));
+    }
+
+    pub(super) fn fire() {
+        if let Some(hook) = HOOK.with(|slot| slot.borrow_mut().take()) {
+            hook();
+        }
+    }
+}
+
+/// A reload landing between a matched grant's evaluation and its note, set
+/// by a test cell: the note must name the row the evaluation matched.
+#[cfg(test)]
+pub(super) mod before_grant_note {
+    use std::cell::RefCell;
+
+    thread_local! {
+        static HOOK: RefCell<Option<Box<dyn FnOnce()>>> = const { RefCell::new(None) };
+    }
+
+    /// Run `hook` once, just before the next matched grant is noted.
     pub(in crate::gateway::meta_mcp) fn set(hook: impl FnOnce() + 'static) {
         HOOK.with(|slot| *slot.borrow_mut() = Some(Box::new(hook)));
     }
