@@ -1,0 +1,41 @@
+head_sha	843f1b2ca185dc4d0060d39075024f1a9e988b60
+#mutant m1
+mcp_gateway	gateway::server::signing_allocation_tests::collusion_stdio::write_rows::s3_batch_items_record_at_the_batch_write	src/gateway/server/tests/collusion_stdio_write.rs:148
+#mutant m2
+mcp_gateway	gateway::server::signing_allocation_tests::collusion_stdio::write_rows::s1_a_stdio_answer_records_under_the_generation_at_its_write	src/gateway/server/tests/collusion_stdio_write.rs:59
+#mutant m3
+mcp_gateway	gateway::streaming::receipt_commit_tests::h4_a_request_scoped_sse_answer_records_when_the_client_reads_it	src/gateway/streaming_receipt_commit_tests.rs:89
+mcp_gateway	gateway::streaming::receipt_commit_tests::h4b_a_request_scoped_sse_stream_dropped_unread_records_nothing	src/gateway/streaming_receipt_commit_tests.rs:116
+mcp_gateway	gateway::outbound::tests::h6_a_held_body_with_receipts_commits_each_once	src/gateway/outbound/tests.rs:693
+mcp_gateway	gateway::router::collusion_direct_tests::meta::write_time::h1_a_meta_answer_records_at_its_body_poll	src/gateway/router/collusion_direct_tests/meta.rs:142
+mcp_gateway	gateway::router::collusion_direct_tests::meta::write_time::h2_a_meta_body_dropped_unread_records_nothing	src/gateway/router/collusion_direct_tests/meta.rs:152
+#mutant m4
+mcp_gateway	gateway::router::collusion_direct_tests::meta::write_time::h3_an_answer_with_receipts_keeps_its_length_and_type	src/gateway/router/collusion_direct_tests/meta/write_time.rs:134
+#mutant m5
+mcp_gateway	gateway::server::signing_allocation_tests::collusion_stdio_plan_replay::replay_write::r5_dropped_then_replayed_under_block_records	src/gateway/server/tests/collusion_stdio_replay_write.rs:143
+mcp_gateway	gateway::server::signing_allocation_tests::collusion_stdio_plan_replay::replay_write::r4_a_retry_overtaking_the_unwritten_original_records	src/gateway/server/tests/collusion_stdio_replay_write.rs:126
+#mutant m6
+mcp_gateway	gateway::server::signing_allocation_tests::collusion_stdio_plan_replay::replay_write::r3_off_at_judge_block_at_write_keeps_the_snapshot	src/gateway/server/tests/collusion_stdio_replay_write.rs:104
+mcp_gateway	gateway::server::signing_allocation_tests::collusion_stdio_plan_replay::replay_write::r5_dropped_then_replayed_under_block_records	src/gateway/server/tests/collusion_stdio_replay_write.rs:143
+mcp_gateway	gateway::server::signing_allocation_tests::collusion_stdio_plan_replay::replay_write::r4_a_retry_overtaking_the_unwritten_original_records	src/gateway/server/tests/collusion_stdio_replay_write.rs:126
+#mutant m7
+mcp_gateway	security::firewall::collusion::replay_pending_tests::r2_steady_off_holds_no_snapshot_after_the_write	src/security/firewall/collusion_replay_pending_tests.rs:98
+mcp_gateway	security::firewall::collusion::replay_pending_tests::r21_off_settle_then_the_last_handle_dropped_removes	src/security/firewall/collusion_replay_pending_tests.rs:230
+mcp_gateway	gateway::server::signing_allocation_tests::collusion_stdio_plan_replay::replay_write::r6_dropped_then_replayed_under_off_discards	src/gateway/server/tests/collusion_stdio_replay_write.rs:156
+#mutant m8
+mcp_gateway	security::firewall::collusion::replay_pending_tests::r10_a_block_write_then_an_off_write_keeps_it	src/security/firewall/collusion_replay_pending_tests.rs:149
+#mutant m9
+mcp_gateway	security::firewall::collusion::replay_pending_tests::r23_a_stale_handle_is_a_no_op	src/security/firewall/collusion_replay_pending_tests.rs:260
+mcp_gateway	security::firewall::collusion::replay_pending_tests::r18_discard_never_touches_a_kept_or_newer_entry	src/security/firewall/collusion_replay_pending_tests.rs:210
+#mutant m10
+mcp_gateway	security::firewall::collusion::replay_pending_tests::r2_steady_off_holds_no_snapshot_after_the_write	src/security/firewall/collusion_replay_pending_tests.rs:98
+#mutant m11 multi=2
+mcp_gateway	gateway::server::signing_allocation_tests::collusion_stdio_plan_replay::replay_write::r12_the_snapshot_exists_when_the_answer_becomes_replayable	src/gateway/server/tests/collusion_stdio_replay_write.rs:187
+#mutant m12
+mcp_gateway	security::firewall::collusion::replay_tests::r16_a_task_capture_keeps_the_delivery_time_gate	src/security/firewall/collusion_replay_tests.rs:699
+#mutant m13
+mcp_gateway	gateway::router::collusion_direct_tests::meta::write_time::h7_a_direct_answer_records_at_its_body_poll	src/gateway/router/collusion_direct_tests.rs:471
+# control: identity mutant, mutated == original; expected SURVIVED
+#mutant c0
+mcp_gateway	security::firewall::collusion::replay_pending_tests::r23_a_stale_handle_is_a_no_op	src/security/firewall/collusion_replay_pending_tests.rs:260
+mcp_gateway	security::firewall::collusion::replay_pending_tests::r18_discard_never_touches_a_kept_or_newer_entry	src/security/firewall/collusion_replay_pending_tests.rs:210
