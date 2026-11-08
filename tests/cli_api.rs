@@ -508,3 +508,78 @@ async fn expired_and_revoked_credentials_are_both_refused() {
         }
     }
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn api_bearer_bypasses_environment_proxies() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let gateway_hits = Arc::new(AtomicUsize::new(0));
+    let seen = Arc::clone(&gateway_hits);
+    let gateway_app = axum::Router::new().route(
+        "/ui/api/status",
+        axum::routing::get(move |headers: axum::http::HeaderMap| {
+            let seen = Arc::clone(&seen);
+            async move {
+                assert_eq!(headers["authorization"], format!("Bearer {ADMIN}"));
+                seen.fetch_add(1, Ordering::SeqCst);
+                axum::Json(json!({"ok":true}))
+            }
+        }),
+    );
+    let gateway_listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("gateway");
+    let gateway_url = format!("http://{}", gateway_listener.local_addr().expect("address"));
+    let gateway_task = tokio::spawn(async move {
+        axum::serve(gateway_listener, gateway_app)
+            .await
+            .expect("serve")
+    });
+    let proxy_hits = Arc::new(AtomicUsize::new(0));
+    let seen = Arc::clone(&proxy_hits);
+    let proxy_app = axum::Router::new().fallback(move || {
+        let seen = Arc::clone(&seen);
+        async move {
+            seen.fetch_add(1, Ordering::SeqCst);
+            axum::http::StatusCode::BAD_GATEWAY
+        }
+    });
+    let proxy_listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("proxy");
+    let proxy_url = format!("http://{}", proxy_listener.local_addr().expect("address"));
+    let proxy_task =
+        tokio::spawn(async move { axum::serve(proxy_listener, proxy_app).await.expect("serve") });
+    let out = tokio::task::spawn_blocking(move || {
+        let home = tempfile::tempdir().expect("home");
+        let mut cmd = gateway_bin::command(home.path(), gateway_bin::Inherit::Environment);
+        cmd.args(["api", "GET", "/ui/api/status", "--url", &gateway_url])
+            .env("MCP_GATEWAY_TOKEN", ADMIN)
+            .env_remove("NO_PROXY")
+            .env_remove("no_proxy");
+        for name in [
+            "HTTP_PROXY",
+            "HTTPS_PROXY",
+            "ALL_PROXY",
+            "http_proxy",
+            "https_proxy",
+            "all_proxy",
+        ] {
+            cmd.env(name, &proxy_url);
+        }
+        cmd.output().expect("CLI")
+    })
+    .await
+    .expect("join");
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(proxy_hits.load(Ordering::SeqCst), 0);
+    assert_eq!(gateway_hits.load(Ordering::SeqCst), 1);
+    assert!(!String::from_utf8_lossy(&out.stdout).contains(ADMIN));
+    assert!(!String::from_utf8_lossy(&out.stderr).contains(ADMIN));
+    gateway_task.abort();
+    proxy_task.abort();
+}

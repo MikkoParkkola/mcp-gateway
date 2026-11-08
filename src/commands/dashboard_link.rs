@@ -190,7 +190,7 @@ pub(crate) async fn admin_call(
     tls: &LinkTls,
 ) -> Result<serde_json::Value, String> {
     let endpoint = format!("{}{path}", base.trim_end_matches('/'));
-    let response = send_admin_request(method, &endpoint, base, token, tls, None)
+    let response = send_admin_request(method, &endpoint, base, token, tls, None, None)
         .await
         .map_err(|error| error.to_string())?;
     let status = response.status();
@@ -224,6 +224,7 @@ pub(crate) enum AdminFailureKind {
     Connect,
     Tls,
     ResponseLost,
+    ResponseTooLarge,
 }
 
 /// A transport failure and any response metadata received before it failed.
@@ -270,31 +271,43 @@ pub(crate) async fn admin_call_url(
     token: &str,
     tls: &LinkTls,
     body: Option<&serde_json::Value>,
+    if_match: Option<&reqwest::header::HeaderValue>,
 ) -> Result<AdminResponse, AdminCallError> {
-    let response = send_admin_request(
+    let mut response = send_admin_request(
         method,
         endpoint.clone(),
         endpoint.as_str(),
         token,
         tls,
         body,
+        if_match,
     )
     .await?;
     let status = response.status();
     let headers = response.headers().clone();
-    let body = response
-        .bytes()
-        .await
-        .map_err(|error| AdminCallError {
-            kind: AdminFailureKind::ResponseLost,
-            detail: transport_error(endpoint.as_str(), error, tls),
-            status: Some(status),
-            request_id: headers
-                .get("x-request-id")
-                .and_then(|value| value.to_str().ok())
-                .map(ToString::to_string),
-        })?
-        .to_vec();
+    let mut body = Vec::new();
+    while let Some(chunk) = response.chunk().await.map_err(|error| AdminCallError {
+        kind: AdminFailureKind::ResponseLost,
+        detail: transport_error(endpoint.as_str(), error, tls),
+        status: Some(status),
+        request_id: headers
+            .get("x-request-id")
+            .and_then(|value| value.to_str().ok())
+            .map(ToString::to_string),
+    })? {
+        if chunk.len() > 16 * 1024 * 1024 - body.len() {
+            return Err(AdminCallError {
+                kind: AdminFailureKind::ResponseTooLarge,
+                detail: "Gateway response exceeded 16 MiB.".to_string(),
+                status: Some(status),
+                request_id: headers
+                    .get("x-request-id")
+                    .and_then(|value| value.to_str().ok())
+                    .map(ToString::to_string),
+            });
+        }
+        body.extend_from_slice(&chunk);
+    }
     Ok(AdminResponse {
         status,
         headers,
@@ -310,6 +323,7 @@ async fn send_admin_request(
     token: &str,
     tls: &LinkTls,
     body: Option<&serde_json::Value>,
+    if_match: Option<&reqwest::header::HeaderValue>,
 ) -> Result<reqwest::Response, AdminCallError> {
     check_target(base).map_err(|detail| AdminCallError::new(AdminFailureKind::Target, detail))?;
     // Direct, never through an environment proxy: an HTTP_PROXY would carry the
@@ -317,6 +331,7 @@ async fn send_admin_request(
     // `check_target` vetted only this URL, and a same-host, same-port hop
     // (https to http) would keep the bearer.
     let mut builder = reqwest::Client::builder()
+        .connect_timeout(std::time::Duration::from_secs(10))
         .no_proxy()
         .retry(reqwest::retry::never())
         .redirect(reqwest::redirect::Policy::none());
@@ -342,6 +357,9 @@ async fn send_admin_request(
     if let Some(body) = body {
         request = request.json(body);
     }
+    if let Some(value) = if_match {
+        request = request.header(reqwest::header::IF_MATCH, value);
+    }
     request.send().await.map_err(|error| {
         AdminCallError::new(send_failure_kind(&error), transport_error(base, error, tls))
     })
@@ -364,7 +382,7 @@ fn send_failure_kind(error: &reqwest::Error) -> AdminFailureKind {
             || inner
                 .downcast_ref::<std::io::Error>()
                 .and_then(std::io::Error::get_ref)
-                .is_some_and(|source| source.is::<rustls::Error>());
+                .is_some_and(<dyn std::error::Error + Send + Sync>::is::<rustls::Error>);
         if tls_error {
             return AdminFailureKind::Tls;
         }

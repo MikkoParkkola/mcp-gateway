@@ -27,6 +27,7 @@ fn args(path: &str) -> ApiArgs {
         method: ApiMethod::Get,
         path: path.to_string(),
         data: None,
+        if_match: None,
         json: false,
         url: None,
         tls: DashboardLinkTls::default(),
@@ -37,7 +38,7 @@ fn credential(name: &str) -> Option<String> {
     (name == TOKEN_ENV).then(|| TOKEN.to_string())
 }
 
-fn no_stdin() -> Result<String, String> {
+fn no_stdin() -> Result<Vec<u8>, String> {
     panic!("stdin must only be read for --data -")
 }
 
@@ -48,6 +49,7 @@ async fn send(request: ApiRequest) -> Result<AdminResponse, AdminCallError> {
         &request.token,
         &request.tls,
         request.body.as_ref(),
+        request.if_match.as_ref(),
     )
     .await
 }
@@ -261,8 +263,8 @@ async fn a13_a_base_with_a_path_or_query_is_refused() {
         refused(
             &format!("{https}{suffix}"),
             "/ui/api/keys",
-            "API path is outside the unchanged /ui/api/ boundary.",
-            "Use an unchanged relative path beginning /ui/api/.",
+            "Gateway URL must have no path, query or fragment.",
+            "Use the gateway's origin only, for example https://gateway.example:8443.",
         )
         .await;
     }
@@ -414,7 +416,7 @@ async fn data_sources_and_query_are_sent_unchanged() {
             credential,
             || {
                 stdin_calls.fetch_add(1, Ordering::SeqCst);
-                Ok(r#"{"source":"stdin"}"#.to_string())
+                Ok(br#"{"source":"stdin"}"#.to_vec())
             },
             send,
         )
@@ -754,7 +756,7 @@ async fn gateway_status_reasons_use_the_exact_message_and_remedy() {
                 "http://127.0.0.1:1/",
                 &LinkTls::default(),
                 credential,
-                || Ok("{}".to_string()),
+                || Ok(b"{}".to_vec()),
                 |_| {
                     calls.fetch_add(1, Ordering::SeqCst);
                     async move {
@@ -800,7 +802,7 @@ async fn rate_limit_jsonrpc_preserves_retry_after_and_does_not_retry() {
             &listener.base,
             &LinkTls::default(),
             credential,
-            || Ok("{}".to_string()),
+            || Ok(b"{}".to_vec()),
             send,
         )
         .await;
@@ -1010,6 +1012,20 @@ async fn only_the_exact_503_middleware_envelope_is_known_not_run() {
             "The gateway may have applied this change.",
             "Inspect the gateway state before retrying; this command did not retry.",
         ),
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            r#"{"jsonrpc":"2.0","error":{"code":-32003},"id":null}"#,
+            8,
+            "The gateway may have applied this change.",
+            "Inspect the gateway state before retrying; this command did not retry.",
+        ),
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            r#"{"jsonrpc":"2.0","error":{"code":-32003,"message":42},"id":null}"#,
+            8,
+            "The gateway may have applied this change.",
+            "Inspect the gateway state before retrying; this command did not retry.",
+        ),
     ] {
         for json_output in [false, true] {
             let mut args = args("/ui/api/keys");
@@ -1022,7 +1038,7 @@ async fn only_the_exact_503_middleware_envelope_is_known_not_run() {
                 "http://127.0.0.1:1",
                 &LinkTls::default(),
                 credential,
-                || Ok("{}".to_string()),
+                || Ok(b"{}".to_vec()),
                 |_| {
                     calls.fetch_add(1, Ordering::SeqCst);
                     async move {
@@ -1082,10 +1098,34 @@ async fn uncertain_codes_and_disposition_override_http_mapping() {
             "state_uncertain",
             " Disposition: may_have_run. Receipt: {\"name\":\"cli-a\",\"revoked\":true,\"revision\":\"R2\"}.",
         ),
+        (
+            StatusCode::OK,
+            json!({"disposition":"may_have_run"}),
+            "may_have_run",
+            " Disposition: may_have_run.",
+        ),
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            json!({"disposition":"not_run","error":"state_uncertain"}),
+            "state_uncertain",
+            "",
+        ),
+        (
+            StatusCode::CONFLICT,
+            json!({"error":"state_uncertain","recovery":"Inspect api-unit-credential."}),
+            "state_uncertain",
+            " Inspect [REDACTED].",
+        ),
+        (
+            StatusCode::CONFLICT,
+            json!({"error":"state_uncertain","recovery":"unsafe\nrecovery"}),
+            "state_uncertain",
+            "",
+        ),
     ] {
         for json_output in [false, true] {
             let mut args = args("/ui/api/keys/cli-a");
-            args.method = ApiMethod::Delete;
+            args.method = ApiMethod::Post;
             args.json = json_output;
             let body = serde_json::to_vec(&body).expect("fixture");
             let calls = AtomicUsize::new(0);
@@ -1253,7 +1293,7 @@ fn output_io_is_local_failure_and_an_ordinary_broken_pipe_succeeds() {
             };
             let mut stdout = FailedOutput::new(failure);
             let mut stderr = Vec::new();
-            let exit = write_outcome(out, json_output, TOKEN, &mut stdout, &mut stderr);
+            let exit = write_outcome(&out, json_output, TOKEN, &mut stdout, &mut stderr);
             assert!(
                 stdout.written.is_empty(),
                 "output errors never reach stdout"
@@ -1397,7 +1437,7 @@ fn output_failure_does_not_redact_json_syntax_as_credential_bytes() {
     };
     let mut stdout = FailedOutput::new(io::ErrorKind::PermissionDenied);
     let mut stderr = Vec::new();
-    let exit = write_outcome(out, true, "null", &mut stdout, &mut stderr);
+    let exit = write_outcome(&out, true, "null", &mut stdout, &mut stderr);
     assert!(
         stdout.written.is_empty(),
         "output errors never reach stdout"
@@ -1481,7 +1521,7 @@ async fn stderr_output_failure_is_local_io_without_stdout_fallback() {
         let attempted = out.stderr.as_bytes().to_vec();
         let mut stdout = Vec::new();
         let mut stderr = FailedOutput::new(io::ErrorKind::PermissionDenied);
-        let exit = write_outcome(out, json_output, TOKEN, &mut stdout, &mut stderr);
+        let exit = write_outcome(&out, json_output, TOKEN, &mut stdout, &mut stderr);
         assert_eq!(exit.code(), 1);
         assert!(stdout.is_empty());
         assert!(stderr.written.is_empty());
@@ -1589,5 +1629,355 @@ async fn truncated_http_response_preserves_phase_and_request_metadata() {
             assert!(requests[0].starts_with(request_line));
             assert!(requests[0].contains(&format!("Bearer {TOKEN}")));
         }
+    }
+}
+
+#[tokio::test]
+async fn raw_success_echoes_are_redacted() {
+    let stand = stand_in(StatusCode::OK, "text/plain", "echo api-unit-credential").await;
+    let out = run_api_with(
+        &args("/ui/api/status"),
+        &stand.base,
+        &LinkTls::default(),
+        credential,
+        no_stdin,
+        send,
+    )
+    .await;
+    assert_eq!(out.exit.code(), 0);
+    assert_eq!(out.stdout, b"echo [REDACTED]");
+    assert!(!out.stderr.contains(TOKEN));
+}
+
+#[tokio::test]
+async fn read_500_and_path_404_keep_their_error_mapping() {
+    for (status, body, code, kind, message, remedy) in [
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "{}",
+            6,
+            "Gateway",
+            "The gateway returned an invalid response.",
+            "Check the gateway response against UI API 1.",
+        ),
+        (
+            StatusCode::NOT_FOUND,
+            "{}",
+            4,
+            "NotFound",
+            "API path was not found.",
+            "Check the path against docs/api/stable-ui-routes.md.",
+        ),
+        (
+            StatusCode::NOT_FOUND,
+            r#"{"error":"Backend 'nope' not found"}"#,
+            4,
+            "NotFound",
+            "Backend 'nope' not found",
+            "List gateway backends and choose an existing name before retrying.",
+        ),
+    ] {
+        let stand = stand_in(status, "application/json", body).await;
+        for json_output in [false, true] {
+            let mut args = args("/ui/api/missing");
+            args.json = json_output;
+            let out = run_api_with(
+                &args,
+                &stand.base,
+                &LinkTls::default(),
+                credential,
+                no_stdin,
+                send,
+            )
+            .await;
+            assert_error(
+                &out,
+                json_output,
+                code,
+                kind,
+                message,
+                remedy,
+                Some(status.as_u16()),
+                None,
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn refused_connection_is_network_through_real_transport() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind");
+    let base = format!("http://{}", listener.local_addr().expect("address"));
+    drop(listener);
+    for json_output in [false, true] {
+        let mut args = args("/ui/api/keys");
+        args.method = ApiMethod::Post;
+        args.json = json_output;
+        let out = run_api_with(
+            &args,
+            &base,
+            &LinkTls::default(),
+            credential,
+            no_stdin,
+            send,
+        )
+        .await;
+        assert_error(
+            &out,
+            json_output,
+            5,
+            "Network",
+            "Could not connect to the gateway.",
+            "Check the gateway address and listener, then retry.",
+            None,
+            None,
+        );
+    }
+}
+
+#[tokio::test]
+async fn if_match_controls_capability_delete() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind");
+    let base = format!("http://{}", listener.local_addr().expect("address"));
+    let app = axum::Router::new().route(
+        "/ui/api/capabilities/x",
+        axum::routing::delete(|headers: axum::http::HeaderMap| async move {
+            if headers
+                .get("if-match")
+                .and_then(|value| value.to_str().ok())
+                == Some("\"E1\"")
+            {
+                (StatusCode::OK, axum::Json(json!({"deleted":true})))
+            } else {
+                (
+                    StatusCode::PRECONDITION_REQUIRED,
+                    axum::Json(json!({"message":"If-Match is required."})),
+                )
+            }
+        }),
+    );
+    let server = tokio::spawn(async move { axum::serve(listener, app).await.expect("serve") });
+    for json_output in [false, true] {
+        for if_match in [None, Some("\"E1\"".to_string())] {
+            let mut args = args("/ui/api/capabilities/x");
+            args.method = ApiMethod::Delete;
+            args.json = json_output;
+            args.if_match = if_match;
+            let out = run_api_with(
+                &args,
+                &base,
+                &LinkTls::default(),
+                credential,
+                no_stdin,
+                send,
+            )
+            .await;
+            if args.if_match.is_some() {
+                assert_eq!(out.exit.code(), 0);
+                assert_eq!(
+                    serde_json::from_slice::<serde_json::Value>(&out.stdout).expect("JSON"),
+                    json!({"deleted":true})
+                );
+            } else {
+                assert_error(
+                    &out,
+                    json_output,
+                    6,
+                    "Gateway",
+                    "If-Match is required.",
+                    "Send the request with If-Match set to the current revision.",
+                    Some(428),
+                    None,
+                );
+            }
+        }
+    }
+    server.abort();
+}
+
+#[tokio::test]
+async fn control_characters_in_if_match_are_refused_before_send() {
+    for value in ["E1\r", "E1\n", "E1\t", "E1\0", "E1\u{7f}"] {
+        for json_output in [false, true] {
+            let mut args = args("/ui/api/capabilities/x");
+            args.method = ApiMethod::Delete;
+            args.if_match = Some(value.to_string());
+            args.json = json_output;
+            let out = run_api_with(
+                &args,
+                "http://127.0.0.1:1",
+                &LinkTls::default(),
+                credential,
+                no_stdin,
+                |_| async { panic!("invalid header must not send") },
+            )
+            .await;
+            assert_error(
+                &out,
+                json_output,
+                2,
+                "Usage",
+                "If-Match value is not a valid header value.",
+                "Pass the ETag exactly as the gateway returned it.",
+                None,
+                None,
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn oversized_request_sources_are_usage_errors() {
+    let mut file = tempfile::NamedTempFile::new().expect("file");
+    let body = " ".repeat(16 * 1024 * 1024 + 1);
+    file.write_all(body.as_bytes()).expect("body");
+    for data in [format!("@{}", file.path().display()), "-".to_string()] {
+        for json_output in [false, true] {
+            let mut args = args("/ui/api/keys");
+            args.method = ApiMethod::Post;
+            args.data = Some(data.clone());
+            args.json = json_output;
+            let out = run_api_with(
+                &args,
+                "http://127.0.0.1:1",
+                &LinkTls::default(),
+                credential,
+                || Ok(body.as_bytes().to_vec()),
+                |_| async { panic!("oversized body must not send") },
+            )
+            .await;
+            assert_error(
+                &out,
+                json_output,
+                2,
+                "Usage",
+                "Request body exceeds 16 MiB.",
+                "Send a smaller body.",
+                None,
+                None,
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn decoded_response_limit_preserves_mutation_uncertainty() {
+    for size in [16 * 1024 * 1024, 16 * 1024 * 1024 + 1] {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind");
+        let base = format!("http://{}", listener.local_addr().expect("address"));
+        let app = axum::Router::new().fallback(move || async move { vec![b'x'; size] });
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.expect("serve") });
+        for (method, code, kind) in [
+            (ApiMethod::Get, 5, "Network"),
+            (ApiMethod::Post, 8, "UncertainOutcome"),
+        ] {
+            for json_output in [false, true] {
+                let mut args = args("/ui/api/keys");
+                args.method = method.clone();
+                args.json = json_output;
+                let out = run_api_with(
+                    &args,
+                    &base,
+                    &LinkTls::default(),
+                    credential,
+                    no_stdin,
+                    send,
+                )
+                .await;
+                if size == 16 * 1024 * 1024 {
+                    assert_eq!(out.exit.code(), 0);
+                    assert_eq!(out.stdout.len(), size);
+                } else {
+                    assert_error(
+                        &out,
+                        json_output,
+                        code,
+                        kind,
+                        "Gateway response exceeded 16 MiB.",
+                        "Narrow the request or read the data in smaller pages.",
+                        Some(200),
+                        None,
+                    );
+                }
+            }
+        }
+        server.abort();
+    }
+}
+
+#[tokio::test]
+async fn lost_response_request_ids_use_safe_text() {
+    for (id, expected) in [
+        ("request-api-unit-credential", Some("request-[REDACTED]")),
+        ("bad\tvalue", None),
+        ("", None),
+    ] {
+        for json_output in [false, true] {
+            let mut args = args("/ui/api/keys");
+            args.method = ApiMethod::Post;
+            args.json = json_output;
+            let out = run_api_with(
+                &args,
+                "http://127.0.0.1:1",
+                &LinkTls::default(),
+                credential,
+                no_stdin,
+                |_| async {
+                    Err(AdminCallError {
+                        kind: AdminFailureKind::ResponseLost,
+                        detail: String::new(),
+                        status: Some(StatusCode::OK),
+                        request_id: Some(id.to_string()),
+                    })
+                },
+            )
+            .await;
+            assert_error(
+                &out,
+                json_output,
+                8,
+                "UncertainOutcome",
+                "The gateway may have applied this change.",
+                "Inspect the gateway state before retrying; this command did not retry.",
+                Some(200),
+                expected,
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn request_sources_accept_exactly_sixteen_mib() {
+    let mut body = vec![b' '; 16 * 1024 * 1024];
+    body[..2].copy_from_slice(b"{}");
+    let mut file = tempfile::NamedTempFile::new().expect("file");
+    file.write_all(&body).expect("body");
+    for data in [format!("@{}", file.path().display()), "-".to_string()] {
+        let mut args = args("/ui/api/keys");
+        args.method = ApiMethod::Post;
+        args.data = Some(data);
+        let out = run_api_with(
+            &args,
+            "http://127.0.0.1:1",
+            &LinkTls::default(),
+            credential,
+            || Ok(body.clone()),
+            |request| async move {
+                assert_eq!(request.body, Some(json!({})));
+                Ok(AdminResponse {
+                    status: StatusCode::OK,
+                    headers: reqwest::header::HeaderMap::new(),
+                    body: b"{}".to_vec(),
+                })
+            },
+        )
+        .await;
+        assert_eq!(out.exit.code(), 0, "{}", out.stderr);
     }
 }
