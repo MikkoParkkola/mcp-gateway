@@ -49,6 +49,7 @@ fn the_upgrading_note_names_every_consequence() {
             "pseudonym",
             "WARN",
             "rollback",
+            "IDNA",
         ],
     );
     assert!(missing.is_empty(), "{UPGRADING} lacks {missing:?}");
