@@ -22,6 +22,8 @@ const BODY_LIMIT: u64 = 16 * 1024 * 1024;
 const UNCERTAIN_MESSAGE: &str = "The gateway may have applied this change.";
 const UNCERTAIN_REMEDY: &str =
     "Inspect the gateway state before retrying; this command did not retry.";
+const UNSAFE_BODY_MESSAGE: &str = "The response could not be printed safely.";
+const UNSAFE_BODY_REMEDY: &str = "The response was received but could not be printed safely; inspect the gateway state before sending the request again.";
 const PROTOCOL_MESSAGE: &str = "The gateway returned an invalid response.";
 const PROTOCOL_REMEDY: &str = "Check the gateway response against UI API 1.";
 
@@ -104,7 +106,7 @@ impl ApiError {
             .request_id
             .map(|id| redact::text(&id, &[token.to_string()]));
         let stderr = if json {
-            let mut error = serde_json::json!({
+            let error = serde_json::json!({
                 "schema_version": 1,
                 "error": {
                     "kind": self.kind,
@@ -114,7 +116,6 @@ impl ApiError {
                     "request_id": request_id,
                 },
             });
-            redact::json(&mut error, &[token.to_string()]);
             format!("{error}\n")
         } else {
             format!("error: {message}\n{remedy}\n")
@@ -704,6 +705,16 @@ fn http_refusal(
     }
 }
 
+fn object_entry_count(value: &Value) -> usize {
+    match value {
+        Value::Object(entries) => {
+            entries.len() + entries.values().map(object_entry_count).sum::<usize>()
+        }
+        Value::Array(items) => items.iter().map(object_entry_count).sum(),
+        _ => 0,
+    }
+}
+
 fn render_response(
     response: &AdminResponse,
     token: &str,
@@ -724,7 +735,16 @@ fn render_response(
         return error.outcome(json_output, token);
     }
     let (stdout, stderr) = if let Some(body) = &mut json {
+        let entries = object_entry_count(body);
         redact::json(body, &[token.to_string()]);
+        if object_entry_count(body) < entries {
+            return ApiError::new(
+                ApiExit::LocalFailure,
+                UNSAFE_BODY_MESSAGE,
+                UNSAFE_BODY_REMEDY,
+            )
+            .outcome(json_output, token);
+        }
         let mut stdout = serde_json::to_vec_pretty(body).unwrap_or_default();
         stdout.push(b'\n');
         (stdout, String::new())
@@ -736,8 +756,8 @@ fn render_response(
             Err(_) => {
                 return ApiError::new(
                     ApiExit::LocalFailure,
-                    "The response could not be printed safely.",
-                    "Repeat with --json, or inspect the gateway directly.",
+                    UNSAFE_BODY_MESSAGE,
+                    UNSAFE_BODY_REMEDY,
                 )
                 .outcome(json_output, token);
             }

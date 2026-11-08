@@ -50,7 +50,7 @@ pub struct ApiArgs {
     /// The JSON request body: inline, `@FILE`, or `-` for standard input.
     #[arg(long)]
     pub data: Option<String>,
-    /// Require the gateway resource to match this ETag.
+    /// Require the gateway resource to match this `ETag`.
     #[arg(long, value_name = "VALUE")]
     pub if_match: Option<String>,
     /// Gateway base URL (default as for `dashboard-link`).

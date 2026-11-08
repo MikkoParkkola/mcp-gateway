@@ -190,11 +190,25 @@ pub(crate) async fn admin_call(
     tls: &LinkTls,
 ) -> Result<serde_json::Value, String> {
     let endpoint = format!("{}{path}", base.trim_end_matches('/'));
-    let response = send_admin_request(method, &endpoint, base, token, tls, None, None)
+    let response = send_admin_request(
+        method,
+        &endpoint,
+        token,
+        tls,
+        None,
+        None,
+        &AdminClientOptions::default(),
+    )
+    .await
+    .map_err(|error| error.to_string())?;
+    let response = read_admin_response(response, &endpoint, tls)
         .await
-        .map_err(|error| error.to_string())?;
-    let status = response.status();
-    let body: serde_json::Value = response.json().await.unwrap_or_default();
+        .map_err(|error| match error.kind {
+            AdminFailureKind::ResponseTooLarge => "the gateway answer exceeded 16 MiB".to_string(),
+            _ => error.to_string(),
+        })?;
+    let status = response.status;
+    let body: serde_json::Value = serde_json::from_slice(&response.body).unwrap_or_default();
     if !status.is_success() {
         let reason = gateway_reason(&body).unwrap_or("no reason given");
         return Err(format!("the gateway answered {status}: {reason}"));
@@ -260,6 +274,18 @@ pub(crate) struct AdminResponse {
     pub(crate) body: Vec<u8>,
 }
 
+pub(crate) struct AdminClientOptions {
+    pub(crate) connect_timeout: std::time::Duration,
+}
+
+impl Default for AdminClientOptions {
+    fn default() -> Self {
+        Self {
+            connect_timeout: std::time::Duration::from_secs(10),
+        }
+    }
+}
+
 /// Send the exact URL the caller validated, optionally carrying a JSON body.
 ///
 /// # Errors
@@ -273,22 +299,51 @@ pub(crate) async fn admin_call_url(
     body: Option<&serde_json::Value>,
     if_match: Option<&reqwest::header::HeaderValue>,
 ) -> Result<AdminResponse, AdminCallError> {
-    let mut response = send_admin_request(
+    admin_call_url_with_options(
         method,
-        endpoint.clone(),
+        endpoint,
+        token,
+        tls,
+        body,
+        if_match,
+        &AdminClientOptions::default(),
+    )
+    .await
+}
+
+pub(crate) async fn admin_call_url_with_options(
+    method: reqwest::Method,
+    endpoint: reqwest::Url,
+    token: &str,
+    tls: &LinkTls,
+    body: Option<&serde_json::Value>,
+    if_match: Option<&reqwest::header::HeaderValue>,
+    options: &AdminClientOptions,
+) -> Result<AdminResponse, AdminCallError> {
+    let response = send_admin_request(
+        method,
         endpoint.as_str(),
         token,
         tls,
         body,
         if_match,
+        options,
     )
     .await?;
+    read_admin_response(response, endpoint.as_str(), tls).await
+}
+
+async fn read_admin_response(
+    mut response: reqwest::Response,
+    endpoint: &str,
+    tls: &LinkTls,
+) -> Result<AdminResponse, AdminCallError> {
     let status = response.status();
     let headers = response.headers().clone();
     let mut body = Vec::new();
     while let Some(chunk) = response.chunk().await.map_err(|error| AdminCallError {
         kind: AdminFailureKind::ResponseLost,
-        detail: transport_error(endpoint.as_str(), error, tls),
+        detail: transport_error(endpoint, error, tls),
         status: Some(status),
         request_id: headers
             .get("x-request-id")
@@ -315,23 +370,24 @@ pub(crate) async fn admin_call_url(
     })
 }
 
-/// Share target checks and TLS policy without changing legacy body handling.
+/// Share target checks and TLS policy across admin callers.
 async fn send_admin_request(
     method: reqwest::Method,
-    endpoint: impl reqwest::IntoUrl,
-    base: &str,
+    endpoint: &str,
     token: &str,
     tls: &LinkTls,
     body: Option<&serde_json::Value>,
     if_match: Option<&reqwest::header::HeaderValue>,
+    options: &AdminClientOptions,
 ) -> Result<reqwest::Response, AdminCallError> {
-    check_target(base).map_err(|detail| AdminCallError::new(AdminFailureKind::Target, detail))?;
+    check_target(endpoint)
+        .map_err(|detail| AdminCallError::new(AdminFailureKind::Target, detail))?;
     // Direct, never through an environment proxy: an HTTP_PROXY would carry the
     // credential off this machine even to a loopback URL. No redirects either:
     // `check_target` vetted only this URL, and a same-host, same-port hop
     // (https to http) would keep the bearer.
     let mut builder = reqwest::Client::builder()
-        .connect_timeout(std::time::Duration::from_secs(10))
+        .connect_timeout(options.connect_timeout)
         .no_proxy()
         .retry(reqwest::retry::never())
         .redirect(reqwest::redirect::Policy::none());
@@ -361,7 +417,10 @@ async fn send_admin_request(
         request = request.header(reqwest::header::IF_MATCH, value);
     }
     request.send().await.map_err(|error| {
-        AdminCallError::new(send_failure_kind(&error), transport_error(base, error, tls))
+        AdminCallError::new(
+            send_failure_kind(&error),
+            transport_error(endpoint, error, tls),
+        )
     })
 }
 

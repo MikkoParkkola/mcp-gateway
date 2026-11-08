@@ -1166,26 +1166,17 @@ async fn uncertain_codes_and_disposition_override_http_mapping() {
             let remedy = format!(
                 "Inspect the gateway state before retrying; this command did not retry.{suffix}"
             );
-            if suffix.contains(TOKEN) {
-                assert_eq!(out.exit, ApiExit::UncertainOutcome);
-                assert!(out.stdout.is_empty());
-                assert!(!out.stderr.contains(TOKEN));
-                if json_output {
-                    serde_json::from_str::<serde_json::Value>(&out.stderr)
-                        .expect("valid JSON error");
-                }
-            } else {
-                assert_error(
-                    &out,
-                    json_output,
-                    8,
-                    "UncertainOutcome",
-                    message,
-                    &remedy,
-                    Some(status.as_u16()),
-                    None,
-                );
-            }
+            let remedy = mcp_gateway::cli::redact::text(&remedy, &[TOKEN.to_string()]);
+            assert_error(
+                &out,
+                json_output,
+                8,
+                "UncertainOutcome",
+                message,
+                &remedy,
+                Some(status.as_u16()),
+                None,
+            );
             assert_eq!(calls.load(Ordering::SeqCst), 1);
         }
     }
@@ -1677,7 +1668,8 @@ async fn the_raw_2xx_body_is_redacted() {
     )
     .await;
     assert_eq!(out.exit.code(), 0);
-    assert!(!String::from_utf8(out.stdout).expect("text").contains(TOKEN));
+    let expected = mcp_gateway::cli::redact::text("echo api-unit-credential", &[TOKEN.to_string()]);
+    assert_eq!(String::from_utf8(out.stdout).expect("text"), expected);
     assert!(!out.stderr.contains(TOKEN));
 }
 
@@ -2089,8 +2081,187 @@ async fn invalid_utf8_is_preserved_only_without_token_bytes() {
         1,
         "LocalFailure",
         "The response could not be printed safely.",
-        "Repeat with --json, or inspect the gateway directly.",
+        "The response was received but could not be printed safely; inspect the gateway state before sending the request again.",
         None,
+        None,
+    );
+}
+
+#[tokio::test]
+async fn dropped_object_entries_refuse_the_entire_success_body() {
+    for body in [
+        json!({"#":"first","[REDACTED]":"second"}),
+        json!({"nested":[{"#":"first","[REDACTED]":"second"}]}),
+    ] {
+        let out = echoed_body("#", serde_json::to_vec(&body).expect("body")).await;
+        assert_error(
+            &out,
+            false,
+            1,
+            "LocalFailure",
+            "The response could not be printed safely.",
+            "The response was received but could not be printed safely; inspect the gateway state before sending the request again.",
+            None,
+            None,
+        );
+        assert!(!out.stderr.contains('#'));
+    }
+}
+
+#[tokio::test]
+async fn error_envelope_keeps_fixed_keys_and_numeric_metadata() {
+    for token in ["1", "error"] {
+        let mut args = args("/ui/api/status");
+        args.json = true;
+        let out = run_api_with(
+            &args,
+            "http://127.0.0.1:1",
+            &LinkTls::default(),
+            |_| Some(token.to_string()),
+            no_stdin,
+            |_| async move {
+                Ok(AdminResponse {
+                    status: StatusCode::UNAUTHORIZED,
+                    headers: reqwest::header::HeaderMap::new(),
+                    body: serde_json::to_vec(&json!({
+                        "message": format!("rejected {token}"),
+                        "request_id": format!("request-{token}"),
+                    }))
+                    .expect("body"),
+                })
+            },
+        )
+        .await;
+        let redact = |text: &str| mcp_gateway::cli::redact::text(text, &[token.to_string()]);
+        assert_error(
+            &out,
+            true,
+            3,
+            "AuthRefused",
+            &redact(&format!("rejected {token}")),
+            &redact("Run mcp-gateway login --gateway http://127.0.0.1:1, then retry."),
+            Some(401),
+            Some(&redact(&format!("request-{token}"))),
+        );
+        let printed: serde_json::Value = serde_json::from_str(&out.stderr).expect("error JSON");
+        for value in printed["error"].as_object().expect("error key").values() {
+            if let Some(text) = value.as_str() {
+                assert!(!text.contains(token));
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn tls_connect_timeout_is_network_even_for_a_mutation() {
+    use super::dashboard_link::{AdminClientOptions, admin_call_url_with_options};
+    use tokio::io::AsyncReadExt;
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind");
+    let base = format!("https://{}", listener.local_addr().expect("address"));
+    let (hello_sent, hello_received) = tokio::sync::oneshot::channel();
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.expect("accept");
+        let mut byte = [0];
+        socket.read_exact(&mut byte).await.expect("TLS ClientHello");
+        assert_eq!(byte[0], 0x16, "TLS handshake record");
+        hello_sent.send(()).expect("notify");
+        std::future::pending::<()>().await;
+        drop(socket);
+    });
+    let mut args = args("/ui/api/keys");
+    args.method = ApiMethod::Post;
+    let out = run_api_with(
+        &args,
+        &base,
+        &LinkTls::default(),
+        credential,
+        no_stdin,
+        |request| async move {
+            admin_call_url_with_options(
+                request.method,
+                request.url,
+                &request.token,
+                &request.tls,
+                request.body.as_ref(),
+                request.if_match.as_ref(),
+                &AdminClientOptions {
+                    connect_timeout: std::time::Duration::from_millis(300),
+                },
+            )
+            .await
+        },
+    )
+    .await;
+    server.abort();
+    hello_received.await.expect("listener received ClientHello");
+    assert_error(
+        &out,
+        false,
+        5,
+        "Network",
+        "Could not connect to the gateway.",
+        "Check the gateway address and listener, then retry.",
+        None,
+        None,
+    );
+}
+
+#[tokio::test]
+async fn legacy_admin_calls_refuse_oversized_bodies() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind");
+    let base = format!("http://{}", listener.local_addr().expect("address"));
+    let app = axum::Router::new().fallback(|| async { vec![b'x'; 16 * 1024 * 1024 + 1] });
+    let server = tokio::spawn(async move { axum::serve(listener, app).await.expect("serve") });
+    for path in ["/ui/api/dashboard-link", "/ui/api/events/dead-letters"] {
+        let error = admin_call(
+            reqwest::Method::POST,
+            &base,
+            path,
+            TOKEN,
+            &LinkTls::default(),
+        )
+        .await
+        .expect_err("body cap");
+        assert_eq!(error, "the gateway answer exceeded 16 MiB");
+    }
+    server.abort();
+}
+
+#[tokio::test]
+async fn gzip_response_is_capped_after_decompression() {
+    // Gzip of 16 MiB + 1 ASCII x bytes, smaller than the wire-size cap.
+    let compressed = include_bytes!("../../tests/fixtures/api-response-over-limit.txt.gz");
+    assert!(compressed.len() < 16 * 1024 * 1024);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind");
+    let base = format!("http://{}", listener.local_addr().expect("address"));
+    let app = axum::Router::new()
+        .fallback(move || async move { ([("content-encoding", "gzip")], compressed.as_slice()) });
+    let server = tokio::spawn(async move { axum::serve(listener, app).await.expect("serve") });
+    let out = run_api_with(
+        &args("/ui/api/status"),
+        &base,
+        &LinkTls::default(),
+        credential,
+        no_stdin,
+        send,
+    )
+    .await;
+    server.abort();
+    assert_error(
+        &out,
+        false,
+        5,
+        "Network",
+        "Gateway response exceeded 16 MiB.",
+        "Narrow the request or read the data in smaller pages.",
+        Some(200),
         None,
     );
 }
