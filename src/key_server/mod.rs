@@ -37,6 +37,8 @@ pub mod audit;
 mod cap_race_tests;
 /// The installation key behind `email_hash`.
 pub(crate) mod email_hash;
+/// Where the `email_hash` installation key lives.
+pub(crate) mod email_hmac_store;
 pub mod handler;
 #[cfg(test)]
 mod identity_rules_tests;
