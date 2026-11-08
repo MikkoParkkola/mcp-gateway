@@ -201,7 +201,7 @@ fn s12_a_definition_is_found_at_any_depth() {
 }
 
 /// S12: in the live repository the only definitions are the two in
-/// src/mutant_macro.rs (one per cfg; `a_normal_build_drops_the_mutated_tokens`
+/// `src/mutant_macro.rs` (one per cfg; `a_normal_build_drops_the_mutated_tokens`
 /// checks their bodies). The library and the binary include that one file,
 /// so neither crate has a copy of its own.
 #[test]
@@ -229,8 +229,8 @@ const MACRO_FILE: &str = "src/mutant_macro.rs";
 /// S14: both crate roots carry the mutant machinery, so a
 /// site in the binary's modules compiles and switches like one in the
 /// library's: each root includes the macro file before its modules, and the
-/// binary compiles src/mutant.rs again as its own private `mutant` module
-/// (as it does clock.rs), which is what the macro's `crate::mutant::on`
+/// binary compiles `src/mutant.rs` again as its own private `mutant` module
+/// (as it does `clock.rs`), which is what the macro's `crate::mutant::on`
 /// names there.
 #[test]
 fn s14_both_crate_roots_carry_the_macros_and_the_switch() {
