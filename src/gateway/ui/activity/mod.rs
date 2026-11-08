@@ -605,6 +605,9 @@ mod answer_list_tests;
 #[path = "answer_page_tests.rs"]
 mod answer_page_tests;
 #[cfg(test)]
+#[path = "answer_profile_tests.rs"]
+mod answer_profile_tests;
+#[cfg(test)]
 #[path = "answer_receipt2_tests.rs"]
 mod answer_receipt2_tests;
 #[cfg(test)]

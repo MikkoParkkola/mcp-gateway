@@ -14,7 +14,7 @@ const MIB: u64 = 1 << 20;
 /// `calls` calls, each with a delivery carrying `findings`, then 4,500 more
 /// deliveries: 300 pending past the cap and 4,200 evicted past the tombstone
 /// cap.
-fn over_caps(calls: usize, fat: bool) -> Fixture {
+pub(super) fn over_caps(calls: usize, fat: bool) -> Fixture {
     let fx = Fixture::new(None);
     for i in 0..calls {
         fx.call(&format!("gw-c{i}"));
