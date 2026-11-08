@@ -219,7 +219,7 @@ impl LogTail {
                 continue;
             };
             let (tail, read) = tail_window_assembled(file, self.end, WINDOW)?;
-            *spent += read;
+            *spent += mutant!("M5", 0, read);
             match tail {
                 Tail::LineTooLong => {
                     // Over the record cap: report it once, step below the

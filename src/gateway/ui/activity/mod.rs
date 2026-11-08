@@ -321,7 +321,7 @@ fn parse(q: &ListQuery) -> Result<Parsed, Early> {
             server: q.server.clone(),
             caller: q.caller.clone(),
             q: q.q.clone(),
-            rule: q.rule.clone(),
+            rule: mutant!("M2", None, q.rule.clone()),
             from: time("from", q.from.as_deref())?,
             to: time("to", q.to.as_deref())?,
         },
@@ -390,7 +390,7 @@ struct ExportQuery {
 fn filters_sent(q: &ListQuery) -> Value {
     json!({
         "outcome": q.outcome, "server": q.server, "caller": q.caller,
-        "q": q.q, "rule": q.rule, "from": q.from, "to": q.to,
+        "q": q.q, "rule": mutant!("M3", None::<String>, q.rule.clone()), "from": q.from, "to": q.to,
     })
 }
 

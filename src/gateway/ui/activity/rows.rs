@@ -168,7 +168,14 @@ pub(super) fn row(line: &Line, secret: Option<&[u8]>) -> Option<Value> {
             }
             row.insert("who".into(), who.into());
             let decision = read::decision_evidence(e);
-            row.insert("findings".into(), findings_value(decision.as_ref()));
+            row.insert(
+                "findings".into(),
+                mutant!(
+                    "M19",
+                    e.get("response_findings").cloned().unwrap_or(Value::Null),
+                    findings_value(decision.as_ref())
+                ),
+            );
             if decision.is_some_and(|d| d.request_findings_truncated) {
                 row.insert("findings_truncated".into(), true.into());
             }
@@ -211,12 +218,11 @@ pub(super) fn row(line: &Line, secret: Option<&[u8]>) -> Option<Value> {
 /// findings here, so the two always agree.
 pub(super) fn findings_value(decision: Option<&Decision>) -> Value {
     let Some(decision) = decision else {
-        return read::NOT_RECORDED_BY_VERSION.into();
+        return mutant!("M20", read::NO_FINDINGS, read::NOT_RECORDED_BY_VERSION).into();
     };
-    read::findings_line(decision).map_or_else(
-        || serde_json::to_value(&decision.request_findings).unwrap_or(Value::Null),
-        Value::from,
-    )
+    let array = || serde_json::to_value(&decision.request_findings).unwrap_or(Value::Null);
+    read::findings_line(decision)
+        .map_or_else(array, |line| mutant!("M10", array(), Value::from(line)))
 }
 
 /// The list's filters, AND-ed. `None` is no filter on that field.
@@ -270,7 +276,15 @@ impl Filter {
             }
         }
         if let Some(rule) = &self.rule
-            && !read::matches_rule(e, rule)
+            && mutant!(
+                "M1",
+                false,
+                mutant!(
+                    "M4",
+                    read::matches_rule(e, rule),
+                    !read::matches_rule(e, rule)
+                )
+            )
         {
             return false;
         }

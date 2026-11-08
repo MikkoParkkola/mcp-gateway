@@ -91,43 +91,68 @@ fn recorded(entry: &Value, key: &str) -> Value {
 /// the recorded value. Revisions are copied only when the record has them.
 fn decision_projection(decision: Option<&Decision>) -> Value {
     let Some(d) = decision else {
-        return read::NOT_RECORDED_BY_VERSION.into();
+        return mutant!("M7", Value::Null, read::NOT_RECORDED_BY_VERSION.into());
     };
     let mut out = Map::new();
-    out.insert("v".into(), d.v.into());
+    out.insert("v".into(), mutant!("M21", Value::Null, d.v.into()));
     out.insert("kind".into(), json!(d.kind));
     out.insert("rule".into(), rule_value(d));
     out.insert(
         "grant".into(),
         d.grant_id
             .as_deref()
-            .unwrap_or(read::NOT_RECORDED_FOR_CALL)
+            .unwrap_or(mutant!(
+                "M9",
+                read::RULE_NOT_RECORDED,
+                read::NOT_RECORDED_FOR_CALL
+            ))
             .into(),
     );
     out.insert("flags".into(), read::flags_line(d).into());
     out.insert("findings".into(), findings_value(Some(d)));
     out.insert("effect".into(), effect_value(d));
-    out.insert("decided".into(), read::decided_line(d).into());
-    if d.request_findings_truncated {
+    out.insert(
+        "decided".into(),
+        mutant!("M12", read::DECIDED_FRESH, read::decided_line(d)).into(),
+    );
+    if mutant!(
+        "M18",
+        false,
+        mutant!("M17", true, d.request_findings_truncated)
+    ) {
         out.insert("findings_truncated".into(), true.into());
     }
     for (key, rev) in [
         ("config_revision", &d.config_revision),
         ("running_revision", &d.running_revision),
     ] {
-        if let Some(rev) = rev {
-            out.insert(key.into(), rev.as_str().into());
+        let rev = mutant!("M15", &None, rev);
+        let shown = mutant!("M16", Some(rev.as_deref().unwrap_or("")), rev.as_deref());
+        if let Some(rev) = shown {
+            out.insert(key.into(), rev.into());
         }
     }
     out.into()
 }
 
 fn rule_value(d: &Decision) -> Value {
-    read::rule_line(d).map_or_else(|| json!(d.rule_id), Value::from)
+    read::rule_line(d).map_or_else(
+        || json!(d.rule_id),
+        |line| {
+            mutant!(
+                "M8",
+                Value::from(read::NOT_RECORDED_FOR_CALL),
+                Value::from(line)
+            )
+        },
+    )
 }
 
 fn effect_value(d: &Decision) -> Value {
-    read::effect_line(d).map_or_else(|| json!(d.declared_effect), Value::from)
+    read::effect_line(d).map_or_else(
+        || json!(d.declared_effect),
+        |line| mutant!("M11", json!(d.declared_effect), Value::from(line)),
+    )
 }
 
 /// What a receipt and an export row add to a list row: for a call, the

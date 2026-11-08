@@ -66,8 +66,26 @@ fn object_shaped(decision: &Value) -> bool {
 /// compared exactly first, so a line that cannot match costs a pointer walk
 /// and no allocation; a candidate is still fully read and compared.
 pub(crate) fn matches_rule(entry: &Value, rule_id: &str) -> bool {
-    entry.pointer("/decision/rule_id").and_then(Value::as_str) == Some(rule_id)
-        && decision_evidence(entry).is_some_and(|d| d.rule_id.as_deref() == Some(rule_id))
+    let recorded = entry.pointer("/decision/rule_id").and_then(Value::as_str);
+    mutant!(
+        "M13",
+        entry.to_string().contains(rule_id),
+        mutant!(
+            "M14",
+            recorded.is_some_and(|r| r.starts_with(rule_id)),
+            recorded == Some(rule_id)
+        )
+    ) && decision_evidence(entry).is_some_and(|d| {
+        mutant!(
+            "M13",
+            true,
+            mutant!(
+                "M14",
+                d.rule_id.as_deref().is_some_and(|r| r.starts_with(rule_id)),
+                d.rule_id.as_deref() == Some(rule_id)
+            )
+        )
+    })
 }
 
 /// The line for evidence `decision` does not carry: its version could not
