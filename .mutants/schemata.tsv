@@ -1,0 +1,30 @@
+head_sha	96bea18e66001746b441ab2909a39c86e9b62c76
+#mutant memory-last
+mcp_gateway	health_history::tests::h4_gauges_keep_the_bucket_maximum_and_a_missing_reading_is_null	src/health_history/tests.rs:89
+#mutant unobserved-zero
+mcp_gateway	health_history::tests::h5_unobserved_is_null_observed_idle_is_zero	src/health_history/tests.rs:100
+#mutant clean-stop-estimated
+mcp_gateway	health_history::tests::h7_a_clean_stop_then_a_start_is_measured	src/health_history/tests.rs:145
+#mutant clean-stop-reused
+mcp_gateway	health_history::tests::h8b_a_clean_stop_is_consumed_once	src/health_history/tests.rs:172
+#mutant saved-stays-incomplete
+mcp_gateway	health_history::tests::h8c_a_failed_save_marks_the_run_incomplete_until_one_succeeds	src/health_history/tests.rs:382
+#mutant restarts-uncapped
+mcp_gateway	health_history::tests::h9_restart_details_are_capped_and_rollups_count_everything	src/health_history/tests.rs:190
+#mutant no-block-split
+mcp_gateway	health_history::tests::h9b_downtime_across_a_block_boundary_splits	src/health_history/tests.rs:222
+#mutant percent-off
+mcp_gateway	health_history::tests::h13_percent_is_running_over_covered	src/health_history/tests.rs:294
+#mutant missed-run-ignored
+mcp_gateway	health_history::tests::h14_a_missed_run_is_unaccounted_not_downtime	src/health_history/tests.rs:309
+mcp_gateway	health_history::tests::h19_a_lower_restore_count_is_a_missed_run	src/health_history/tests.rs:342
+#mutant restore-not-counted
+mcp_gateway	counters::persist_tests::h20_the_restore_count_outlives_aged_markers	src/counters/persist_tests.rs:220
+#mutant restarts-unfiltered
+mcp_gateway	health_history::tests::h16_restart_details_follow_the_interval	src/health_history/tests.rs:322
+#mutant no-move-aside
+mcp_gateway	gateway::server::test_seams::health_start_tests::h10b_an_undecodable_history_is_moved_aside_not_overwritten	src/gateway/server/health_start_tests.rs:105
+#mutant no-startup-save
+mcp_gateway	gateway::server::test_seams::health_start_tests::h12_both_files_are_saved_before_serving_and_the_stop_is_clean	src/gateway/server/health_start_tests.rs:71
+#mutant failed-save-stops-start
+mcp_gateway	gateway::server::test_seams::health_start_tests::h17_unwritable_history_never_stops_the_start	src/gateway/server/health_start_tests.rs:45
