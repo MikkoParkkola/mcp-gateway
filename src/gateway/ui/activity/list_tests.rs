@@ -12,7 +12,7 @@ use serde_json::{Value, json};
 
 use super::access::{self, Access, Refused};
 use super::decision_fixtures::{
-    assert_no_sentinel, call as dcall, decision, write_chained as write_dec,
+    assert_no_sentinel, call as dcall, decision, finding, write_chained as write_dec,
 };
 use super::{ListQuery, Logs, list_page};
 use crate::control_plane::ControlPlaneRole;
@@ -382,6 +382,35 @@ async fn rule_filter_has_no_prefix_collision() {
         rule_tools(&l, "rule-10").await,
         BTreeSet::from(["t_ten".to_string()])
     );
+}
+
+/// Shared with the answer-findings change: it adds the `answer_findings`
+/// half; this change pins that `findings` never reads the answer's.
+#[tokio::test]
+async fn field_split_findings_vs_answer_findings() {
+    let dir = tempfile::tempdir().unwrap();
+    let l = logs(&dir);
+    let request = finding("pii", "high", "arguments.q");
+    let answer = finding("injection", "critical", "response.text");
+    let mut d = decision(Some("r1"));
+    d["request_findings"] = json!([request.clone()]);
+    let mut c = dcall("srv", "t", Some(d));
+    c["trace_id"] = "trace-1".into();
+    let delivery = json!({
+        "event": "response_delivery_attempt", "trace_id": "trace-1", "tool": "t",
+        "response_findings": [answer.clone()],
+    });
+    write_dec(&l.invocation, &mut [c, delivery]);
+    let (status, v) = body(list_page(&l, &Access::All, &ListQuery::default())).await;
+    assert_eq!(status, StatusCode::OK);
+    let rows = v["rows"].as_array().unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["findings"], json!([request]));
+    let text = rows[0]["findings"].to_string();
+    assert!(!text.contains("injection") && !text.contains("response.text"));
+    if let Some(got) = rows[0].get("answer_findings") {
+        assert_eq!(got, &json!([answer]));
+    }
 }
 
 #[tokio::test]

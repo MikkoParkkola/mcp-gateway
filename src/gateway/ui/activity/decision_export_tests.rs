@@ -154,3 +154,57 @@ fn export_rule_filter_stops_at_scan_cap() {
     assert_eq!(some.unreadable, 0);
     assert!(some.rows.iter().all(|r| r["decision"]["rule"] == "r2"));
 }
+
+/// The CSV `findings_truncated` cell of one call: `true`, or empty.
+fn truncated_cell(extra: Value) -> String {
+    let dir = tempfile::tempdir().unwrap();
+    let mut d = decision(Some("r1"));
+    d["request_findings"] = json!([super::decision_fixtures::finding(
+        "pii",
+        "high",
+        "arguments.q"
+    )]);
+    for (k, v) in extra.as_object().unwrap() {
+        d[k] = v.clone();
+    }
+    let logs = logs_of(&dir, vec![call("srv", "t", Some(d))]);
+    let c = gather_all(&logs);
+    let text = csv(&c);
+    let mut lines = text.lines();
+    let columns: Vec<&str> = lines.next().unwrap().split(',').collect();
+    let at = columns
+        .iter()
+        .position(|c| *c == "findings_truncated")
+        .unwrap();
+    assert_eq!(columns[at - 1], "findings");
+    // The row carries one JSON array in `findings`, quoted, so read the last cell.
+    let row = lines.next().unwrap();
+    assert_eq!(at, columns.len() - 1);
+    row.rsplit(',').next().unwrap().to_string()
+}
+
+fn gather_all(logs: &Logs) -> super::export::Collected {
+    collect(
+        &logs.invocation,
+        None,
+        &Filter::default(),
+        &Access::All,
+        None,
+        CAPS,
+        ndjson_size,
+    )
+    .unwrap()
+}
+
+#[test]
+fn csv_truncation_cell_is_true_or_empty() {
+    assert_eq!(
+        truncated_cell(json!({"request_findings_truncated": true})),
+        "true"
+    );
+    assert_eq!(
+        truncated_cell(json!({"request_findings_truncated": false})),
+        ""
+    );
+    assert_eq!(truncated_cell(json!({})), "");
+}
