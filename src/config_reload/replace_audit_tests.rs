@@ -88,7 +88,7 @@ async fn a_pending_journal_with_a_failing_intent_changes_nothing() {
         to(Expected::Any, NEXT, Replaced::Discard),
         Audit::Required {
             sink: Box::new(recorder.clone()),
-            kind: IntentKind::Save,
+            kind: IntentKind::Save { fields: Vec::new() },
             writer: None,
         },
         WAIT,
@@ -122,7 +122,7 @@ async fn an_owed_reload_runs_after_its_recovery_intent() {
         to(Expected::Any, NEXT, Replaced::Discard),
         Audit::Required {
             sink: Box::new(recorder.clone()),
-            kind: IntentKind::Save,
+            kind: IntentKind::Save { fields: Vec::new() },
             writer: None,
         },
         WAIT,
@@ -132,7 +132,13 @@ async fn an_owed_reload_runs_after_its_recovery_intent() {
 
     let seen = recorder.seen.lock().expect("lock");
     let kinds: Vec<_> = seen.iter().map(|s| s.intent.kind.clone()).collect();
-    assert_eq!(kinds, [IntentKind::Recovery, IntentKind::Save]);
+    assert_eq!(
+        kinds,
+        [
+            IntentKind::Recovery,
+            IntentKind::Save { fields: Vec::new() }
+        ]
+    );
     assert!(seen[0].journal_pending, "recovery ran before its intent");
     assert_eq!(seen[0].file, NEXT, "recovery ran before its intent");
     assert_eq!(seen[1].intent.base, FileRevision::of(START.as_bytes()));
@@ -156,7 +162,7 @@ async fn an_owed_reload_flag_alone_gets_a_recovery_intent() {
         to(Expected::Any, NEXT, Replaced::Discard),
         Audit::Required {
             sink: Box::new(recorder.clone()),
-            kind: IntentKind::Save,
+            kind: IntentKind::Save { fields: Vec::new() },
             writer: None,
         },
         WAIT,
@@ -164,7 +170,13 @@ async fn an_owed_reload_flag_alone_gets_a_recovery_intent() {
     .await
     .expect("the write goes ahead");
 
-    assert_eq!(recorder.kinds(), [IntentKind::Recovery, IntentKind::Save]);
+    assert_eq!(
+        recorder.kinds(),
+        [
+            IntentKind::Recovery,
+            IntentKind::Save { fields: Vec::new() }
+        ]
+    );
 }
 
 /// W8: the operation's own intent fails: nothing is written, the running
@@ -179,7 +191,7 @@ async fn an_intent_failure_writes_nothing() {
         to(Expected::Any, NEXT, Replaced::Discard),
         Audit::Required {
             sink: Box::new(recorder.clone()),
-            kind: IntentKind::Save,
+            kind: IntentKind::Save { fields: Vec::new() },
             writer: None,
         },
         WAIT,
@@ -192,7 +204,7 @@ async fn an_intent_failure_writes_nothing() {
     );
     assert_eq!(read(&path), START);
     assert!(!running_has_b(&ctx));
-    assert_eq!(recorder.kinds(), [IntentKind::Save]);
+    assert_eq!(recorder.kinds(), [IntentKind::Save { fields: Vec::new() }]);
 }
 
 /// W29 to W31: the file-watch reload, the API reload and the admin tool all
@@ -541,7 +553,7 @@ async fn a_save_the_loader_refuses_records_no_intent() {
         to(Expected::Any, EXPOSED, Replaced::Discard),
         Audit::Required {
             sink: Box::new(recorder.clone()),
-            kind: IntentKind::Save,
+            kind: IntentKind::Save { fields: Vec::new() },
             writer: None,
         },
         WAIT,
@@ -576,7 +588,7 @@ async fn an_unchanged_save_appends_its_intent_before_its_reload() {
         unchanged(),
         Audit::Required {
             sink: Box::new(refusing.clone()),
-            kind: IntentKind::Save,
+            kind: IntentKind::Save { fields: Vec::new() },
             writer: None,
         },
         WAIT,
@@ -603,7 +615,7 @@ async fn an_unchanged_save_appends_its_intent_before_its_reload() {
         unchanged(),
         Audit::Required {
             sink: Box::new(recorder.clone()),
-            kind: IntentKind::Save,
+            kind: IntentKind::Save { fields: Vec::new() },
             writer: None,
         },
         WAIT,
@@ -616,7 +628,7 @@ async fn an_unchanged_save_appends_its_intent_before_its_reload() {
         seen.iter()
             .map(|s| (s.intent.kind.clone(), s.intent.outside_change))
             .collect::<Vec<_>>(),
-        [(IntentKind::Save, true)],
+        [(IntentKind::Save { fields: Vec::new() }, true)],
         "an unchanged save's intent"
     );
     assert!(running_has_b(&ctx), "the unchanged save did not reload");
@@ -639,7 +651,7 @@ async fn a_config_others_can_write_is_refused_before_its_intent() {
         to(Expected::Any, NEXT, Replaced::Discard),
         Audit::Required {
             sink: Box::new(recorder.clone()),
-            kind: IntentKind::Save,
+            kind: IntentKind::Save { fields: Vec::new() },
             writer: None,
         },
         WAIT,
@@ -674,7 +686,7 @@ async fn a_pending_recovery_on_a_config_others_can_write_is_refused_before_its_i
         to(Expected::Any, NEXT, Replaced::Discard),
         Audit::Required {
             sink: Box::new(recorder.clone()),
-            kind: IntentKind::Save,
+            kind: IntentKind::Save { fields: Vec::new() },
             writer: None,
         },
         WAIT,
