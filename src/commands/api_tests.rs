@@ -2187,6 +2187,9 @@ async fn tls_connect_timeout_is_network_even_for_a_mutation() {
                 request.body.as_ref(),
                 request.if_match.as_ref(),
                 &AdminClientOptions {
+                    // The listener never answers its ClientHello, so this timer
+                    // must fire; a slower firing under load still gives Network.
+                    // timing: lower-bound
                     connect_timeout: std::time::Duration::from_millis(300),
                 },
             )

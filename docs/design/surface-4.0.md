@@ -1419,7 +1419,7 @@ Every lib item becomes INTERNAL. crates.io lists no reverse dependencies for `mc
 | `MCP_GATEWAY_TEST_HOME_DIR` | INTERNAL | test hook compiled into debug builds only (`cfg(debug_assertions)`); absent from release binaries | test-only | src/home_dir.rs:23 |
 | `MCP_GATEWAY_TEST_PAUSE_AT_PUBLISHED` | INTERNAL | test hook compiled into debug builds only (`cfg(debug_assertions)`); absent from release binaries | test-only | src/gateway/task_service/execution/pause_hook.rs:16 |
 | `MCP_GATEWAY_TEST_TRUST_CA` | INTERNAL | test hook compiled into debug builds only (`cfg(debug_assertions)`); absent from release binaries. Adds test CA roots beside the platform's so macOS test children trust a temporary CA (MIK-8188). Forcing debug assertions on in a release build brings it back; whoever controls build flags and the process env already controls trust (Linux honours `SSL_CERT_FILE`) | test-only | src/debug_trust_roots.rs:22 |
-| `MCP_GATEWAY_TOKEN` | KEEP | credentials for `dashboard-link` and `events dead-letters` against a remote gateway | - | src/commands/dashboard_link.rs:13 |
+| `MCP_GATEWAY_TOKEN` | KEEP | credentials for `api`, `dashboard-link` and `events dead-letters` against a remote gateway | - | src/commands/api.rs:286 |
 | `MCP_GATEWAY_TRANSPARENCY_SECRET` | KEEP | example name the user picks for `env:` in `security.transparency_log.shared_secret`; not read by the binary | - | examples/gateway-full.yaml:74 |
 
 ## Surface: routes

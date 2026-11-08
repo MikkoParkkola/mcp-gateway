@@ -128,6 +128,7 @@ async fn stable_routes_answer_their_method() {
                 admin: true,
                 authenticated: true,
                 credential_kind: crate::security::audit::CredentialKind::StaticBearer,
+                principal: super::auth::principal_of("stable-ui-routes-test-secret"),
                 ..super::auth::anonymous_client()
             })
             .body(Body::empty())
