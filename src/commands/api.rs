@@ -9,6 +9,7 @@ use std::io::{Read, Write};
 use std::process::ExitCode;
 
 use mcp_gateway::cli::api::{ApiArgs, ApiMethod};
+use mcp_gateway::cli::redact;
 use serde_json::Value;
 
 use super::dashboard_link::{
@@ -96,24 +97,25 @@ impl ApiError {
 
     fn outcome(self, json: bool, token: &str) -> ApiOutcome {
         // Redact values before serialization: a token resembling JSON
-        // punctuation must never replace syntax or change its types.
-        let message = redact_text(&self.message, token);
-        let remedy = redact_text(&self.remedy, token);
-        let request_id = self.request_id.map(|id| redact_text(&id, token));
+        // punctuation must never replace JSON syntax.
+        let message = redact::text(&self.message, &[token.to_string()]);
+        let remedy = redact::text(&self.remedy, &[token.to_string()]);
+        let request_id = self
+            .request_id
+            .map(|id| redact::text(&id, &[token.to_string()]));
         let stderr = if json {
-            format!(
-                "{}\n",
-                serde_json::json!({
-                    "schema_version": 1,
-                    "error": {
-                        "kind": self.kind,
-                        "message": message,
-                        "remedy": remedy,
-                        "http_status": self.http_status,
-                        "request_id": request_id,
-                    },
-                })
-            )
+            let mut error = serde_json::json!({
+                "schema_version": 1,
+                "error": {
+                    "kind": self.kind,
+                    "message": message,
+                    "remedy": remedy,
+                    "http_status": self.http_status,
+                    "request_id": request_id,
+                },
+            });
+            redact::json(&mut error, &[token.to_string()]);
+            format!("{error}\n")
         } else {
             format!("error: {message}\n{remedy}\n")
         };
@@ -316,7 +318,7 @@ fn method(method: &ApiMethod, token: &str) -> Result<reqwest::Method, ApiError> 
         ApiMethod::Patch => reqwest::Method::PATCH,
         ApiMethod::Delete => reqwest::Method::DELETE,
         ApiMethod::Unsupported(value) => {
-            let value = redact_text(value, token);
+            let value = redact::text(value, &[token.to_string()]);
             return Err(ApiError::new(
                 ApiExit::Usage,
                 format!("Unsupported API method {value:?}."),
@@ -471,17 +473,9 @@ fn transport_failure(error: AdminCallError, mutation: bool, token: &str) -> ApiE
     failure
 }
 
-fn redact_text(text: &str, token: &str) -> String {
-    if token.is_empty() {
-        text.to_string()
-    } else {
-        text.replace(token, "[REDACTED]")
-    }
-}
-
 /// Only bounded, single-line diagnostic values from known fields are shown.
 fn safe_text(text: &str, token: &str) -> Option<String> {
-    let text = redact_text(text, token);
+    let text = redact::text(text, &[token.to_string()]);
     (!text.is_empty() && text.len() <= 4096 && !text.chars().any(char::is_control)).then_some(text)
 }
 
@@ -665,7 +659,7 @@ fn http_refusal(
                 .strip_prefix("/ui/api/capabilities/")
                 .and_then(|rest| rest.split(['/', '?']).next())
                 .unwrap_or("x");
-            let name = redact_text(name, token);
+            let name = redact::text(name, &[token.to_string()]);
             (
                 ApiExit::Gateway,
                 PROTOCOL_MESSAGE,
@@ -730,19 +724,32 @@ fn render_response(
         return error.outcome(json_output, token);
     }
     let (stdout, stderr) = if let Some(body) = &mut json {
-        redact_json(body, token);
+        redact::json(body, &[token.to_string()]);
         let mut stdout = serde_json::to_vec_pretty(body).unwrap_or_default();
         stdout.push(b'\n');
         (stdout, String::new())
     } else {
+        let checked = String::from_utf8_lossy(&response.body);
+        let stdout = match std::str::from_utf8(&response.body) {
+            Ok(text) => redact::text(text, &[token.to_string()]).into_bytes(),
+            Err(_) if token.is_empty() || !checked.contains(token) => response.body.clone(),
+            Err(_) => {
+                return ApiError::new(
+                    ApiExit::LocalFailure,
+                    "The response could not be printed safely.",
+                    "Repeat with --json, or inspect the gateway directly.",
+                )
+                .outcome(json_output, token);
+            }
+        };
         (
-            redact_bytes(&response.body, token),
-            redact_text(
+            stdout,
+            redact::text(
                 &format!(
                     "api: the gateway answered {} with a non-JSON body\n",
                     response.status
                 ),
-                token,
+                &[token.to_string()],
             ),
         )
     };
@@ -751,42 +758,4 @@ fn render_response(
         stderr,
         exit: ApiExit::Ok,
     }
-}
-
-/// Redact decoded strings, including keys, without damaging JSON syntax.
-fn redact_json(value: &mut Value, token: &str) {
-    match value {
-        Value::String(text) => *text = redact_text(text, token),
-        Value::Array(values) => {
-            for value in values {
-                redact_json(value, token);
-            }
-        }
-        Value::Object(entries) => {
-            for (key, mut value) in std::mem::take(entries) {
-                redact_json(&mut value, token);
-                entries.insert(redact_text(&key, token), value);
-            }
-        }
-        _ => {}
-    }
-}
-
-/// Keep a non-JSON response byte-for-byte except for an echoed credential.
-fn redact_bytes(bytes: &[u8], token: &str) -> Vec<u8> {
-    if token.is_empty() {
-        return bytes.to_vec();
-    }
-    let mut safe = Vec::new();
-    let mut remaining = bytes;
-    while let Some(at) = remaining
-        .windows(token.len())
-        .position(|part| part == token.as_bytes())
-    {
-        safe.extend_from_slice(&remaining[..at]);
-        safe.extend_from_slice(b"[REDACTED]");
-        remaining = &remaining[at + token.len()..];
-    }
-    safe.extend_from_slice(remaining);
-    safe
 }

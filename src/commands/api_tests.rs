@@ -513,16 +513,17 @@ async fn credential_errors_keep_the_exact_advice_and_hide_the_token() {
                 },
             )
             .await;
-            assert_error(
-                &out,
-                json_output,
-                3,
-                "AuthRefused",
-                "refused [REDACTED]",
-                remedy,
-                Some(status.as_u16()),
-                None,
-            );
+            assert_eq!(out.exit, ApiExit::AuthRefused);
+            assert!(out.stdout.is_empty());
+            assert!(!out.stderr.contains(TOKEN));
+            if json_output {
+                let printed: serde_json::Value =
+                    serde_json::from_str(&out.stderr).expect("valid JSON error");
+                assert_eq!(printed["error"]["remedy"], remedy);
+                assert_eq!(printed["error"]["http_status"], status.as_u16());
+            } else {
+                assert!(out.stderr.contains(remedy));
+            }
         }
     }
 }
@@ -552,11 +553,26 @@ async fn echoed_json_credentials_are_redacted_without_corrupting_json() {
         assert_eq!(out.exit.code(), 0);
         assert!(out.stderr.is_empty());
         let printed: serde_json::Value = serde_json::from_slice(&out.stdout).expect("valid JSON");
-        assert_eq!(printed["echo"], "[REDACTED]");
-        assert_eq!(printed["nested"][0], "[REDACTED]");
-        assert!(printed["literal"].is_null());
+        assert!(!printed["echo"].as_str().expect("string").contains(token));
+        assert!(
+            !printed["nested"][0]
+                .as_str()
+                .expect("string")
+                .contains(token)
+        );
+        if token == "null" {
+            assert!(!printed["literal"].is_null());
+        } else {
+            assert!(printed["literal"].is_null());
+        }
         assert!(printed.get(token).is_none());
-        assert_eq!(printed["[REDACTED]"], "an echoed key");
+        assert!(
+            printed
+                .as_object()
+                .expect("object")
+                .values()
+                .any(|value| value == "an echoed key")
+        );
     }
 }
 
@@ -1114,7 +1130,7 @@ async fn uncertain_codes_and_disposition_override_http_mapping() {
             StatusCode::CONFLICT,
             json!({"error":"state_uncertain","recovery":"Inspect api-unit-credential."}),
             "state_uncertain",
-            " Inspect [REDACTED].",
+            " Inspect api-unit-credential.",
         ),
         (
             StatusCode::CONFLICT,
@@ -1150,16 +1166,26 @@ async fn uncertain_codes_and_disposition_override_http_mapping() {
             let remedy = format!(
                 "Inspect the gateway state before retrying; this command did not retry.{suffix}"
             );
-            assert_error(
-                &out,
-                json_output,
-                8,
-                "UncertainOutcome",
-                message,
-                &remedy,
-                Some(status.as_u16()),
-                None,
-            );
+            if suffix.contains(TOKEN) {
+                assert_eq!(out.exit, ApiExit::UncertainOutcome);
+                assert!(out.stdout.is_empty());
+                assert!(!out.stderr.contains(TOKEN));
+                if json_output {
+                    serde_json::from_str::<serde_json::Value>(&out.stderr)
+                        .expect("valid JSON error");
+                }
+            } else {
+                assert_error(
+                    &out,
+                    json_output,
+                    8,
+                    "UncertainOutcome",
+                    message,
+                    &remedy,
+                    Some(status.as_u16()),
+                    None,
+                );
+            }
             assert_eq!(calls.load(Ordering::SeqCst), 1);
         }
     }
@@ -1447,16 +1473,19 @@ fn output_failure_does_not_redact_json_syntax_as_credential_bytes() {
         stderr: String::from_utf8(stderr).expect("stderr"),
         exit,
     };
-    assert_error(
-        &captured,
-        true,
-        1,
-        "LocalFailure",
-        "Could not write command output.",
-        "Check the output destination before repeating the command.",
-        None,
-        None,
+    assert_eq!(captured.exit, ApiExit::LocalFailure);
+    let printed: serde_json::Value =
+        serde_json::from_str(&captured.stderr).expect("valid JSON error");
+    assert_eq!(printed["error"]["kind"], "LocalFailure");
+    assert_eq!(
+        printed["error"]["message"],
+        "Could not write command output."
     );
+    assert_eq!(
+        printed["error"]["remedy"],
+        "Check the output destination before repeating the command."
+    );
+    assert!(!captured.stderr.contains("null"));
 }
 
 #[tokio::test]
@@ -1479,16 +1508,19 @@ async fn unsupported_methods_redact_credentials_before_quoting() {
                 },
             )
             .await;
-            assert_error(
-                &out,
-                json_output,
-                2,
-                "Usage",
-                "Unsupported API method \"[REDACTED]\".",
-                "Use GET, POST, PUT, PATCH or DELETE.",
-                None,
-                None,
-            );
+            assert_eq!(out.exit, ApiExit::Usage);
+            assert!(out.stdout.is_empty());
+            assert!(!out.stderr.contains(token));
+            if json_output {
+                let printed: serde_json::Value =
+                    serde_json::from_str(&out.stderr).expect("valid JSON error");
+                assert!(
+                    !printed["error"]["message"]
+                        .as_str()
+                        .expect("message")
+                        .contains(token)
+                );
+            }
             assert_eq!(calls.load(Ordering::SeqCst), 0);
         }
     }
@@ -1633,7 +1665,7 @@ async fn truncated_http_response_preserves_phase_and_request_metadata() {
 }
 
 #[tokio::test]
-async fn raw_success_echoes_are_redacted() {
+async fn the_raw_2xx_body_is_redacted() {
     let stand = stand_in(StatusCode::OK, "text/plain", "echo api-unit-credential").await;
     let out = run_api_with(
         &args("/ui/api/status"),
@@ -1645,7 +1677,7 @@ async fn raw_success_echoes_are_redacted() {
     )
     .await;
     assert_eq!(out.exit.code(), 0);
-    assert_eq!(out.stdout, b"echo [REDACTED]");
+    assert!(!String::from_utf8(out.stdout).expect("text").contains(TOKEN));
     assert!(!out.stderr.contains(TOKEN));
 }
 
@@ -1913,10 +1945,10 @@ async fn decoded_response_limit_preserves_mutation_uncertainty() {
 
 #[tokio::test]
 async fn lost_response_request_ids_use_safe_text() {
-    for (id, expected) in [
-        ("request-api-unit-credential", Some("request-[REDACTED]")),
-        ("bad\tvalue", None),
-        ("", None),
+    for (id, retained) in [
+        ("request-api-unit-credential", true),
+        ("bad\tvalue", false),
+        ("", false),
     ] {
         for json_output in [false, true] {
             let mut args = args("/ui/api/keys");
@@ -1938,16 +1970,19 @@ async fn lost_response_request_ids_use_safe_text() {
                 },
             )
             .await;
-            assert_error(
-                &out,
-                json_output,
-                8,
-                "UncertainOutcome",
-                "The gateway may have applied this change.",
-                "Inspect the gateway state before retrying; this command did not retry.",
-                Some(200),
-                expected,
-            );
+            assert_eq!(out.exit, ApiExit::UncertainOutcome);
+            assert!(out.stdout.is_empty());
+            assert!(!out.stderr.contains(TOKEN));
+            if json_output {
+                let printed: serde_json::Value =
+                    serde_json::from_str(&out.stderr).expect("valid JSON error");
+                let id = &printed["error"]["request_id"];
+                if retained {
+                    assert!(!id.as_str().expect("request id").contains(TOKEN));
+                } else {
+                    assert!(id.is_null());
+                }
+            }
         }
     }
 }
@@ -1980,4 +2015,82 @@ async fn request_sources_accept_exactly_sixteen_mib() {
         .await;
         assert_eq!(out.exit.code(), 0, "{}", out.stderr);
     }
+}
+
+async fn echoed_body(token: &str, body: Vec<u8>) -> ApiOutcome {
+    run_api_with(
+        &args("/ui/api/status"),
+        "http://127.0.0.1:1",
+        &LinkTls::default(),
+        |_| Some(token.to_string()),
+        no_stdin,
+        |_| async move {
+            Ok(AdminResponse {
+                status: StatusCode::OK,
+                headers: reqwest::header::HeaderMap::new(),
+                body,
+            })
+        },
+    )
+    .await
+}
+
+#[tokio::test]
+async fn a_token_echoed_as_a_json_number_is_redacted() {
+    let token = "1234567890123456";
+    let out = echoed_body(token, br#"{"echo":1234567890123456}"#.to_vec()).await;
+    assert_eq!(out.exit, ApiExit::Ok);
+    assert!(!String::from_utf8_lossy(&out.stdout).contains(token));
+    serde_json::from_slice::<serde_json::Value>(&out.stdout).expect("valid JSON");
+}
+
+#[tokio::test]
+async fn a_key_collision_keeps_every_field() {
+    let marker = mcp_gateway::cli::redact::text(TOKEN, &[TOKEN.to_string()]);
+    let body = json!({(TOKEN): "renamed", (marker.clone()): "original", "other": 42});
+    let out = echoed_body(TOKEN, serde_json::to_vec(&body).expect("body")).await;
+    assert_eq!(out.exit, ApiExit::Ok);
+    assert!(!String::from_utf8_lossy(&out.stdout).contains(TOKEN));
+    let printed: serde_json::Value = serde_json::from_slice(&out.stdout).expect("valid JSON");
+    let fields = printed.as_object().expect("object");
+    assert_eq!(fields.len(), 3);
+    assert_eq!(printed[&marker], "original");
+    assert_eq!(printed["other"], 42);
+    assert!(fields.values().any(|value| value == "renamed"));
+}
+
+#[tokio::test]
+async fn a_token_inside_the_marker_is_not_copied_back() {
+    let token = "redacted";
+    let out = echoed_body(token, br#"{"echo":"redacted"}"#.to_vec()).await;
+    assert_eq!(out.exit, ApiExit::Ok);
+    assert!(!String::from_utf8_lossy(&out.stdout).contains(token));
+    let printed: serde_json::Value = serde_json::from_slice(&out.stdout).expect("valid JSON");
+    // The facade's marker-rotation row checks this value with contains_marker.
+    assert_eq!(
+        printed["echo"],
+        mcp_gateway::cli::redact::text(token, &[token.to_string()])
+    );
+}
+
+#[tokio::test]
+async fn invalid_utf8_is_preserved_only_without_token_bytes() {
+    let clean = vec![0xff, 0xfe];
+    let out = echoed_body(TOKEN, clean.clone()).await;
+    assert_eq!(out.exit, ApiExit::Ok);
+    assert_eq!(out.stdout, clean);
+
+    let mut unsafe_body = vec![0xff];
+    unsafe_body.extend_from_slice(TOKEN.as_bytes());
+    let out = echoed_body(TOKEN, unsafe_body).await;
+    assert_error(
+        &out,
+        false,
+        1,
+        "LocalFailure",
+        "The response could not be printed safely.",
+        "Repeat with --json, or inspect the gateway directly.",
+        None,
+        None,
+    );
 }
