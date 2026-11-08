@@ -546,11 +546,7 @@ async fn r29_bytes_past_a_legacy_files_length_are_not_legacy() {
     drop(log);
     let legacy = &sealed[0].path;
     let text = std::fs::read_to_string(legacy).unwrap();
-    let last = text
-        .lines()
-        .filter(|l| l.contains("\"tool\""))
-        .last()
-        .unwrap();
+    let last = text.lines().rev().find(|l| l.contains("\"tool\"")).unwrap();
     let mut extra: Value = serde_json::from_str(last).unwrap();
     extra["tool"] = "tool_99".into();
     strip_sig(&mut extra);
