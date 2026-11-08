@@ -45,7 +45,7 @@ src/gateway/router/authorization.rs	decide_tool_target	1	critical	a,d	decide_too
 src/gateway/router/authorization.rs	permits	1	critical	a	CallerStanding::permits	The admin meta-tool allow/deny predicate shared by list and call.
 src/gateway/router/authorization.rs	require_admin_log_level	1	critical	a	require_admin_log_level	logging/setLevel, case-insensitive, is admin-only.
 src/gateway/router/authorization.rs	require_admin_tool_access	1	critical	a	require_admin_tool_access	Admin gate for meta-tools; refuses fail-closed when the audit log is unavailable.
-src/gateway/router/backend_handlers.rs	apply_backend_tool_call_security	1	critical	a,d	apply_backend_tool_call_security	Direct route: name validation, authorization, firewall verdict, R2 key check, sanitization.
+src/gateway/router/backend_handlers/direct_security.rs	apply_backend_tool_call_security	1	critical	a,d	apply_backend_tool_call_security	Direct route: name validation, authorization, firewall verdict, R2 key check, sanitization.
 src/gateway/router/backend_handlers.rs	backend_handler	1	critical	d	backend_handler	Refuses the direct route with 503 while the audit log is down (D1-f).
 src/gateway/router/backend_handlers.rs	backend_handler_inner	1	critical	a,b,c,d	backend_handler_inner	Direct-route gate chain: identity, hardened, scope, session owner, attestation, OAuth isolation, firewall.
 src/gateway/router/backend_handlers/direct_list.rs	normalize_tools_list_response	1	critical	borderline	normalize_tools_list_response	Drops unjudged entries and rebuilds the result from an allow-list (A3).
