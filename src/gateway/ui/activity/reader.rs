@@ -13,8 +13,12 @@ use chrono::{DateTime, FixedOffset};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use super::answer::LOOK_ABOVE;
+use super::seek::segments;
+use super::strict_scan::{Forward, Next};
 use crate::security::transparency_log::pager::{
     self, ASSEMBLY_WINDOW, Tail, lines_newest_first, older_segment, tail_window_assembled,
+    tail_window_in,
 };
 
 /// The window each read takes.
@@ -225,8 +229,20 @@ impl LogTail {
                 self.end = 0;
                 continue;
             };
-            let (tail, read) = tail_window_assembled(file, self.end, WINDOW)?;
+            // One page budget: the window takes what is left, and the pager's
+            // re-read for a line longer than the window (up to ASSEMBLY_WINDOW)
+            // is not taken past it. The page then ends resumable, and the next
+            // one, with a fresh budget, reads the line whole.
+            let remaining = budget - *spent;
+            let (tail, read) = if remaining < ASSEMBLY_WINDOW {
+                tail_window_in(file, self.end, WINDOW.min(remaining))?
+            } else {
+                tail_window_assembled(file, self.end, WINDOW)?
+            };
             *spent += read;
+            if remaining < ASSEMBLY_WINDOW && matches!(tail, Tail::LineTooLong) {
+                return Ok(None);
+            }
             match tail {
                 Tail::LineTooLong => {
                     // Over the record cap: report it once, step below the
@@ -362,7 +378,10 @@ pub(super) fn read_page_joined(
         head_covered,
     } = match look {
         Look::Carried(seen) => seen,
-        Look::Fold(fold) => look_above(inv, cursor, fold, &mut spent)?,
+        Look::Fold(fold) => {
+            let valid = cursor.filter(|_| !cursor_reset);
+            look_above(inv, valid, fold, &mut spent, LOOK_ABOVE.min(limits.bytes))?
+        }
     };
     let mut lines = Vec::new();
     let mut unreadable = Vec::new();
@@ -450,20 +469,77 @@ pub(super) fn read_page_joined(
     })
 }
 
-/// Read forward from the invocation cursor over [`LOOK_ABOVE`], crossing
-/// newer segments, giving each line to `fold`. Charged to `spent`.
+/// Read forward from the invocation cursor over at most `budget` bytes,
+/// crossing newer retained segments, giving each line to `fold`. Charged to
+/// `spent`. A gap in the segment numbers, a vanished file or the byte limit
+/// leaves `head_covered` false; only reaching the active file's end sets it.
 fn look_above(
     inv: &Path,
     cursor: Option<&Cursor>,
     fold: &mut dyn FnMut(&Line),
     spent: &mut u64,
+    budget: u64,
 ) -> io::Result<Seen> {
-    // Stub: nothing is read above a cursor yet.
-    let _ = (inv, fold, spent);
+    let Some(pos) = cursor.and_then(|c| c.inv) else {
+        // No cursor, or this log already read to its oldest line: nothing
+        // lies above that a page has not seen.
+        return Ok(Seen {
+            above: 0,
+            head_covered: true,
+        });
+    };
+    let mut above = 0_u64;
+    let mut previous: Option<u64> = None;
+    for seq in segments(inv)? {
+        if seq < pos.segment {
+            continue;
+        }
+        let contiguous = previous.is_none_or(|p| seq == p + 1);
+        let file = pager::open_segment(inv, seq, || {})?;
+        let (true, Some(file)) = (contiguous, file) else {
+            break;
+        };
+        previous = Some(seq);
+        let offset = if seq == pos.segment { pos.offset } else { 0 };
+        let mut forward = Forward::open(file, offset, budget - above)?;
+        let ended = loop {
+            match forward.next_line()? {
+                Next::Line(bytes) => fold_line(&bytes, seq, fold),
+                other => break other,
+            }
+        };
+        above += forward.pulled();
+        if ended == Next::Budget {
+            break;
+        }
+        if previous == seg_last(inv)? {
+            *spent += above;
+            return Ok(Seen {
+                above,
+                head_covered: true,
+            });
+        }
+    }
+    *spent += above;
     Ok(Seen {
-        above: 0,
-        head_covered: cursor.is_none(),
+        above,
+        head_covered: false,
     })
+}
+
+/// The newest segment's number, the active file's included.
+fn seg_last(inv: &Path) -> io::Result<Option<u64>> {
+    Ok(segments(inv)?.last().copied())
+}
+
+fn fold_line(bytes: &[u8], segment: u64, fold: &mut dyn FnMut(&Line)) {
+    if let Ok(entry @ Value::Object(_)) = serde_json::from_slice::<Value>(bytes) {
+        fold(&Line {
+            log: Which::Invocation,
+            entry,
+            segment,
+        });
+    }
 }
 
 fn item_time(item: &Item) -> Option<DateTime<FixedOffset>> {
