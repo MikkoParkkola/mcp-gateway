@@ -1,1 +1,14 @@
 # file	owner	kind	value	reason
+src/config/features/key_server.rs	KeyServerConfig::validate_policy_match	read	2	operator-written email rule in the config, checked at load; not a verified identity's email
+src/control_plane/role_mapping.rs	ControlPlaneRoleMappingConfig::validate	read	3	operator-written role-mapping email rules, checked at load; not a verified identity's email
+src/control_plane/role_mapping.rs	ControlPlaneRoleRule::matches	read	4	exact email or domain match for a control-plane role; no log or export
+src/events/records.rs	StoredIdentity::from	read	1	existing subscription carrier copies the email from the verified identity; no new persistence
+src/events/records.rs	StoredIdentity::verified	read	1	existing subscription carrier rebuilds the identity for delivery authorization
+src/gateway/router/handlers/events.rs	Presented::credential	read	1	existing OIDC subscription binding at creation; never populated from lookup input
+src/gateway/router/identity.rs	grant_subject_from_verified_identity	read	1	grant label copy; the label is excluded from identity equality and hash
+src/gateway/ui/control_plane/mutations.rs	actor_from_client	read	1	UI actor display falls back to the email; display only, no key-server audit permission
+src/identity_propagation/mod.rs	SignedAssertionStrategy::mint	read	1	email copied into the signed backend assertion; propagation only, never an audit or tracing record
+src/key_server/oidc.rs	OidcVerifier::verify_inner	read	1	verification and domain authorization of the token's email claim
+src/key_server/oidc/verified.rs	VerifiedIdentity::email	read	1	the accessor itself
+src/key_server/policy.rs	matches_rule	read	4	policy matching on the email and its domain; no log field
+src/projection/engine.rs	build_actor	read	1	reads ActorSpec.email, a projection setting naming where an email sits in a record; not a verified identity's email
