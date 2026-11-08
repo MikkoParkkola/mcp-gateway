@@ -5,7 +5,9 @@
 use serde_json::{Value, json};
 
 use super::super::direct_guards_fixture::{Answer, fixture, fixture_modern_off};
-use super::{BACKENDS, CACHEABLE, call_params, legacy, missing, modern, params_for, post};
+use super::{
+    BACKENDS, CACHEABLE, call_params, legacy, missing, modern, params_for, post, post_status,
+};
 use crate::protocol::mrtr::IDEMPOTENCY_KEY_META;
 
 /// DIRECT.1: a modern listing from a legacy backend carries all three fields.
@@ -308,8 +310,17 @@ async fn a_public_scope_replay_does_not_dispatch_again() {
     // Both request eras: the row this replaces sent legacy requests.
     for (backend, modern) in BACKENDS.into_iter().flat_map(|b| [(b, false), (b, true)]) {
         let fx = fixture(Answer::PublicScope, |_| {}).await;
-        let first = keyed(&fx, backend, (modern, 1), "replayed").await;
-        let replay = keyed(&fx, backend, (modern, 2), "replayed").await;
+        let meta = json!({ IDEMPOTENCY_KEY_META: "replayed" });
+        let route = (backend, "tools/call");
+        let (first_status, first) =
+            post_status(&fx, route, (modern, 1), call_params(), meta.clone()).await;
+        let (replay_status, replay) =
+            post_status(&fx, route, (modern, 2), call_params(), meta).await;
+        assert_eq!(
+            (first_status, replay_status),
+            (axum::http::StatusCode::OK, axum::http::StatusCode::OK),
+            "{backend} modern={modern}: both answers are 200"
+        );
         assert_eq!(
             fx.calls.load(std::sync::atomic::Ordering::SeqCst),
             1,
