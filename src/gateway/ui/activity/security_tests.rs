@@ -52,6 +52,7 @@ async fn everything(logs: &Logs, inv: &[Value], gov: &[Value]) -> Vec<String> {
                 log: which,
                 entry: e.clone(),
                 segment: 0,
+                span: None,
             };
             let id = parse_id(&row_id(&line).unwrap()).unwrap();
             if let Some(body) = receipt(path, &id, &Access::All, logs.secret.as_deref()).unwrap() {

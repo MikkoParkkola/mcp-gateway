@@ -61,7 +61,7 @@ async fn seen(fx: &Fixture, tool: &str) -> Seen {
         .unwrap_or_else(|| panic!("{tool} not in the list"))
         .clone();
     let id = parse_id(list["id"].as_str().unwrap()).unwrap();
-    let receipt = receipt(&fx.path, &id, &Access::All, logs.secret.as_deref())
+    let receipt = receipt(&fx.path, &id, &Access::All, &logs.check())
         .unwrap()
         .expect("a receipt");
     let s = signer();

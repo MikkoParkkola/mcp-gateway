@@ -130,6 +130,7 @@ fn a_scoped_receipt_answers_as_a_missing_one() {
             log: which,
             entry: entry.clone(),
             segment: 0,
+            span: None,
         };
         let id = parse_id(&row_id(&line).unwrap()).unwrap();
         receipt(path, &id, access, None).unwrap()

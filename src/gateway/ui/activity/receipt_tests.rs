@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! C2, C3, C5a, C6, C7 and the Developer receipts (L3) of the U2 test plan.
 
+use crate::gateway::ui::activity::rows::Check;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -45,6 +46,7 @@ fn id_of(log: Which, entry: &Value) -> RowId {
         log,
         entry: entry.clone(),
         segment: 0,
+        span: None,
     };
     parse_id(&row_id(&line).unwrap()).unwrap()
 }
@@ -116,9 +118,14 @@ fn c3_links_mid_segment_and_across_a_seam_verify() {
     let seg = lines(&sealed_path(&path, sealed[1].seq));
     let calls: Vec<&Value> = seg.iter().filter(|v| is_call(v)).collect();
     for entry in [calls[0], calls[calls.len() / 2]] {
-        let body = receipt(&path, &id_of(Which::Invocation, entry), &Access::All, None)
-            .unwrap()
-            .expect("kept");
+        let body = receipt(
+            &path,
+            &id_of(Which::Invocation, entry),
+            &Access::All,
+            &Check::bare(None),
+        )
+        .unwrap()
+        .expect("kept");
         assert_eq!(body["chain"]["link"], "verified", "{entry}");
         assert_eq!(body["signature"], "unsigned");
     }
@@ -190,14 +197,14 @@ fn c2_a_wrong_hash_prefix_or_an_id_not_kept_is_none() {
     let mut wrong = id_of(Which::Invocation, &entries[1]);
     wrong.hash16 = "ffffffffffffffff".into();
     assert!(
-        receipt(&path, &wrong, &Access::All, None)
+        receipt(&path, &wrong, &Access::All, &Check::bare(None))
             .unwrap()
             .is_none()
     );
     let mut absent = id_of(Which::Invocation, &entries[1]);
     absent.counter = 99;
     assert!(
-        receipt(&path, &absent, &Access::All, None)
+        receipt(&path, &absent, &Access::All, &Check::bare(None))
             .unwrap()
             .is_none()
     );
@@ -298,9 +305,14 @@ fn an_edited_predecessor_or_a_gap_in_the_middle_reads_broken() {
         .collect();
     write_chained(&path, &mut entries);
     let link = |e: &Value| {
-        receipt(&path, &id_of(Which::Invocation, e), &Access::All, None)
-            .unwrap()
-            .unwrap()["chain"]["link"]
+        receipt(
+            &path,
+            &id_of(Which::Invocation, e),
+            &Access::All,
+            &Check::bare(None),
+        )
+        .unwrap()
+        .unwrap()["chain"]["link"]
             .clone()
     };
     // Record 2 edited, its stored hash kept: record 3's link is broken.

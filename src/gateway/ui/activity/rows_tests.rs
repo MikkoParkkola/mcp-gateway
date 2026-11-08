@@ -3,6 +3,7 @@
 //! R1, R2, R4 and R6 of the U2 test plan, at the row level, plus the
 //! Developer join.
 
+use crate::gateway::ui::activity::rows::Check;
 use std::collections::BTreeSet;
 
 use serde_json::{Value, json};
@@ -17,6 +18,7 @@ fn line(log: Which, entry: Value) -> Line {
         log,
         entry,
         segment: 0,
+        span: None,
     }
 }
 
@@ -55,7 +57,7 @@ const COMMON: [&str; 7] = [
 
 #[test]
 fn r1_each_kind_holds_exactly_its_allowlist() {
-    let r = row(&line(Which::Invocation, call("ok")), None).unwrap();
+    let r = row(&line(Which::Invocation, call("ok")), &Check::bare(None)).unwrap();
     let mut want = set(&COMMON);
     want.extend(set(&[
         "outcome",
@@ -85,7 +87,7 @@ fn r1_each_kind_holds_exactly_its_allowlist() {
         "reason": "pasted secret", "rollback_summary": "r", "rollback_step": "s",
         "grant_change": {"x": 1}, "extra_field_never_named": "leak"
     });
-    let r = row(&line(Which::Governance, config), None).unwrap();
+    let r = row(&line(Which::Governance, config), &Check::bare(None)).unwrap();
     let mut want = set(&COMMON);
     want.extend(set(&["action", "actor_id", "target_id", "outcome"]));
     assert_eq!(keys(&r), want);
@@ -97,7 +99,7 @@ fn r1_each_kind_holds_exactly_its_allowlist() {
         "surface": "ui", "route": "/ui/api/reload", "method": "POST", "http_status": 200,
         "tool": "t", "who": {"account": "a"}, "extra_field_never_named": "leak"
     });
-    let r = row(&line(Which::Invocation, admin), None).unwrap();
+    let r = row(&line(Which::Invocation, admin), &Check::bare(None)).unwrap();
     let mut want = set(&COMMON);
     want.extend(set(&[
         "surface",
@@ -119,7 +121,7 @@ fn r2_outcomes_group_into_ok_failed_and_blocked() {
         ("denied", "blocked"),
         ("invalid", "blocked"),
     ] {
-        let r = row(&line(Which::Invocation, call(recorded)), None).unwrap();
+        let r = row(&line(Which::Invocation, call(recorded)), &Check::bare(None)).unwrap();
         assert_eq!(r["outcome"], feed, "{recorded}");
     }
     let only = |o| Filter {
