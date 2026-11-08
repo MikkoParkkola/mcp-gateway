@@ -2,8 +2,9 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! The direct route's security checks: authorize and the firewall before a
 //! call's credential, the argument-key check after it, and the attestation
-//! scope and token a direct request carries. Moved from `backend_handlers.rs`
-//! unchanged.
+//! scope and token a direct request carries. Moved from `backend_handlers.rs`;
+//! the code is unchanged, and the comments state their rules without ticket
+//! references.
 
 use crate::error::rpc_codes::{INVALID_PARAMS, INVALID_REQUEST};
 use axum::http::StatusCode;
