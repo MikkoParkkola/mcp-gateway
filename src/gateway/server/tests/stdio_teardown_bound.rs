@@ -55,7 +55,7 @@ impl Transport for NeverCloses {
 // real (MIK-7839).
 #[tokio::test(start_paused = true)]
 async fn stdio_eof_returns_within_the_bound_when_a_backend_never_stops() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = dir.path().join("gateway.yaml");
     // The task store under the test's own directory, never the default under $HOME.
     let yaml = format!(
