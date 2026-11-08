@@ -298,14 +298,16 @@ impl Anchor {
         let Some(frozen) = body.legacy.iter().find(|l| l.seq == segment) else {
             return Placed::Invalid("legacy_unlisted");
         };
-        if offset + len > frozen.len {
-            return Placed::Invalid("legacy_unlisted");
-        }
+        // A sealed file never changes after its seal: any other length is an
+        // edit. Checked first, so bytes appended to it read as an edit.
         let file = file_of(path, segment);
         if segment != body.segment_seq
             && std::fs::metadata(&file).map(|m| m.len()).ok() != Some(frozen.len)
         {
             return Placed::Invalid("legacy_edited");
+        }
+        if offset + len > frozen.len {
+            return Placed::Invalid("legacy_unlisted");
         }
         let last = (offset + len).saturating_sub(1) / CHUNK;
         for chunk in offset / CHUNK..=last {
