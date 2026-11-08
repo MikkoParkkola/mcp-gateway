@@ -5,10 +5,11 @@
 //! Single-port multiplexing with a compact Meta-MCP tool surface.
 
 // The `mutant!` macros, for mutant proofs whose sites sit in the binary's
-// modules. Before every module: macro_rules! is textually scoped.
-include!("mutant_macro.rs");
+// modules. The first module: macro_rules! is textually scoped.
+#[macro_use]
+mod mutant_macro;
 
-// First module, so every module below prints through the broken-pipe-safe macros.
+// Next, so every module below prints through the broken-pipe-safe macros.
 #[macro_use]
 #[path = "cli/stdout.rs"]
 mod stdout;

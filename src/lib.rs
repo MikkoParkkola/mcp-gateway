@@ -22,7 +22,10 @@
 // threshold.  Clippy cannot show a source location for these — allow crate-wide.
 #![allow(clippy::large_stack_arrays)]
 
-include!("mutant_macro.rs");
+// The `mutant!` macros (src/mutant_macro.rs), first so every module below
+// may hold a site on a scratch commit.
+#[macro_use]
+mod mutant_macro;
 
 #[cfg(feature = "a2a")]
 pub(crate) mod a2a;

@@ -1,7 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-// The `mutant!` macro pair, `include!`d at the top of src/lib.rs and of
-// src/main.rs so a site can sit in either crate's modules. Each expansion names `crate::mutant::on`: the library's own
+// The `mutant!` macro pair, declared `#[macro_use]` as the first module of
+// src/lib.rs and of src/main.rs, so a site can sit in either crate's
+// modules. Each expansion names `crate::mutant::on`: the library's own
 // module, and the binary's copy of src/mutant.rs compiled again there.
 
 /// `mutant!("ID", mutated, original)`: a mutant site for a one-build mutation
