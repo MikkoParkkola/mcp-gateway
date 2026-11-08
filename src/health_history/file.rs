@@ -91,7 +91,7 @@ pub(crate) fn save(history: &HealthHistory, path: &Path, now: u64, wait: Wait) -
         };
         let outcome = snapshot_and_write(history, path, now);
         // Under the lock, so two saves set the flag in the order they wrote.
-        history.set_incomplete(outcome.is_err());
+        history.set_incomplete(mutant!("saved-stays-incomplete", true, outcome.is_err()));
         outcome
     };
     let Err(why) = outcome else {

@@ -112,7 +112,7 @@ impl Inner {
     fn spread(&mut self, from: u64, to: u64, down: bool, estimated: bool) {
         let mut at = from;
         while at < to {
-            let end = (at - at % BLOCK + BLOCK).min(to);
+            let end = mutant!("no-block-split", to, (at - at % BLOCK + BLOCK).min(to));
             if let Some(block) = self.block_mut(at) {
                 if down {
                     block.down_seconds += end - at;
@@ -145,7 +145,7 @@ impl Inner {
     /// Keep the restart detail list within its cap, noting what was dropped.
     fn push_restart(&mut self, restart: Restart) {
         self.restarts.push_back(restart);
-        while self.restarts.len() > MAX_RESTARTS {
+        while self.restarts.len() > mutant!("restarts-uncapped", MAX_RESTARTS * 100, MAX_RESTARTS) {
             if let Some(old) = self.restarts.pop_front() {
                 self.dropped_newest = Some(old.started_at);
             }
@@ -159,12 +159,12 @@ impl Inner {
         // count, or a count that started again, means a run this history did
         // not record: the gap is never claimed as known downtime.
         let (missed_run, count) = match counters {
-            Restores::Counted(count) => (count != expected, count),
+            Restores::Counted(count) => (mutant!("missed-run-ignored", false, count != expected), count),
             // The count started again: whatever it says, a run went
             // unrecorded (an older binary wrote counters.json).
             Restores::Restarted(count) => (true, count),
         };
-        let clean_stop = self.clean_stop.take();
+        let clean_stop = mutant!("clean-stop-reused", self.clean_stop, self.clean_stop.take());
         let mut restart = None;
         if missed_run {
             self.gaps.push_back((self.saved_at, now.max(self.saved_at)));
@@ -175,7 +175,7 @@ impl Inner {
             }
         } else {
             let (stopped_at, mut source) = match clean_stop {
-                Some(at) => (at, DowntimeSource::Measured),
+                Some(at) => (at, mutant!("clean-stop-estimated", DowntimeSource::Estimated, DowntimeSource::Measured)),
                 None => (self.saved_at, DowntimeSource::Estimated),
             };
             // Never before the last second already counted as running (a
@@ -259,7 +259,7 @@ impl HealthHistory {
             return;
         };
         if let Some(bytes) = memory {
-            half.memory_max = Some(half.memory_max.map_or(bytes, |m| m.max(bytes)));
+            half.memory_max = mutant!("memory-last", Some(bytes), Some(half.memory_max.map_or(bytes, |m| m.max(bytes))));
         }
         half.sessions_max = Some(half.sessions_max.map_or(sessions, |m| m.max(sessions)));
     }

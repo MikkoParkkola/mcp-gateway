@@ -465,7 +465,7 @@ impl CounterStore {
 
     /// Count one restore of this store's file.
     pub(crate) fn note_restore(&self) {
-        self.inner.lock().restores += 1;
+        self.inner.lock().restores += mutant!("restore-not-counted", 0, 1);
     }
 
     /// Every restore of this store's file so far, this start's included,
