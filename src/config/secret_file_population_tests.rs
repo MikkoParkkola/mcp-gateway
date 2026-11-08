@@ -122,11 +122,15 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
         "the atomic writer's Windows half: opens the save target with READ_CONTROL only, to read its access list; never reads its bytes",
     ),
     (
-        "src/config_persistence_journal.rs",
-        "the replace journal (paths, SHA-256 revisions and a state; no secret) and the staged \
-         original of gateway.yaml, both created owner-only and both read back through the config \
-         guard (read_config_text) before recovery acts on them; the original is also checked \
-         against the journal's digest; File::open only fsyncs its directory",
+        "src/config_persistence.rs",
+        "the shared directory sync: File::open on a directory only to fsync it; reads no file bytes",
+    ),
+    (
+        "src/config_persistence_commit.rs",
+        "the config commit primitive's read-back: opens gateway.yaml (unix: without waiting; \
+         Windows: read-write without write or delete sharing) only to check it is a regular file, \
+         flush it and hash its bytes against the revision it just wrote; never parses or returns \
+         the bytes",
     ),
     (
         "src/config_persistence_lock.rs",

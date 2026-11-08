@@ -1,0 +1,3 @@
+# file	fn	callee	count	class	note (classes: see delivery_framing.rs)
+src/config_persistence_commit.rs	commit	refusal	2	no-record	a config write: the commit primitive refuses before or after its rename when the configured path no longer names the locked target or the target was deleted; no call delivery
+src/config_persistence_commit.rs	verify	refusal	2	no-record	a config write: the commit primitive's verify refuses when the configured path no longer names the locked target or the target was deleted; it writes nothing; no call delivery
