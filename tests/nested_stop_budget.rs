@@ -68,11 +68,11 @@ fn backend(root: &Path, command: String) -> BackendConfig {
         ..BackendConfig::default()
     }
 }
-fn save(root: &Path, name: &str, config: Config) -> PathBuf {
+fn save(root: &Path, name: &str, config: &Config) -> PathBuf {
     let path = root.join(name);
     mcp_gateway::gateway::test_helpers::write_owner_only(
         &path,
-        yaml::to_string(&config).expect("yaml"),
+        yaml::to_string(config).expect("yaml"),
     )
     .expect("config");
     path
@@ -87,7 +87,7 @@ fn write_inner_config(root: &Path, leaves: &[&str]) -> PathBuf {
             backend(root, format!("python3 -u leaf.py {name}")),
         );
     }
-    save(root, "inner.yaml", config)
+    save(root, "inner.yaml", &config)
 }
 fn write_outer_config(root: &Path, inner: &Path, seconds: u64) -> PathBuf {
     // Record the inner before exec so cleanup also covers failure during warm start.
@@ -109,7 +109,7 @@ fn write_outer_config(root: &Path, inner: &Path, seconds: u64) -> PathBuf {
         .env
         .insert("HOME".into(), root.join("inner-home").display().to_string());
     config.backends.insert("inner".into(), inner_backend);
-    save(root, "gateway.yaml", config)
+    save(root, "gateway.yaml", &config)
 }
 fn logs(root: &Path) -> String {
     std::fs::read_to_string(root.join("gateway.log")).unwrap_or_default()
