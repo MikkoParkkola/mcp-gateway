@@ -171,7 +171,8 @@ mcp-gateway add tavily                                       # known server, wri
 mcp-gateway add notion                                       # hosted server, logs in with OAuth
 mcp-gateway add my-server -- npx -y @some/mcp-server --flag  # arbitrary stdio command
 mcp-gateway add --url https://mcp.example.com/mcp my-server  # HTTP server
-mcp-gateway add -e API_KEY=xxx my-server -- npx my-mcp-server
+export MY_TOKEN=...   # values never go on the command line
+mcp-gateway add -e MY_TOKEN my-server -- npx my-mcp-server
 ```
 
 The registry is a library. `mcp-gateway init` turns on the servers that need no account (memory,
