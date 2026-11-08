@@ -305,14 +305,15 @@ async fn a_replayed_public_scope_is_private_on_the_wire() {
 /// replay carries a `cacheScope`; the replay's content is the first's.
 #[tokio::test]
 async fn a_public_scope_replay_does_not_dispatch_again() {
-    for backend in BACKENDS {
+    // Both request eras: the row this replaces sent legacy requests.
+    for (backend, modern) in BACKENDS.into_iter().flat_map(|b| [(b, false), (b, true)]) {
         let fx = fixture(Answer::PublicScope, |_| {}).await;
-        let first = keyed(&fx, backend, (true, 1), "replayed").await;
-        let replay = keyed(&fx, backend, (true, 2), "replayed").await;
+        let first = keyed(&fx, backend, (modern, 1), "replayed").await;
+        let replay = keyed(&fx, backend, (modern, 2), "replayed").await;
         assert_eq!(
             fx.calls.load(std::sync::atomic::Ordering::SeqCst),
             1,
-            "{backend}: the replay must not dispatch"
+            "{backend} modern={modern}: the replay must not dispatch"
         );
         for body in [&first, &replay] {
             assert!(body.get("error").is_none(), "{backend}: {body}");

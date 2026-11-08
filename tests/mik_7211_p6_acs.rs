@@ -133,6 +133,10 @@ mod source_checks {
             // MIK-8143: the cacheable-field tests, moved out of handlers.rs;
             // they read the key from built responses.
             "src/gateway/router/handlers/cacheable_field_tests.rs",
+            // The task lifecycle rows, moved here from an integration suite: their
+            // fixture and scope rows name the key in requests they assert on.
+            "src/gateway/router/task_lifecycle_tests/fixture.rs",
+            "src/gateway/router/task_lifecycle_tests/scope.rs",
             "src/protocol/cacheable.rs",
             // MIK-8025: the shaper's own module notes the hints it wrote, and
             // the write record names the path to strip it; neither writes it.
