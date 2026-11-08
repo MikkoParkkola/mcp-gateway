@@ -25,6 +25,7 @@ const RATIO: f64 = 1.25;
 /// slowest. Under the p95 rank `floor(n * 0.95)`, n = 20 picks rank 19, the
 /// slowest call itself, so one slow call would decide; 21 is the first n
 /// whose p95 is not the last sample.
+#[cfg(any(test, feature = "webui"))]
 pub(crate) const SLOWEST_FLOOR: u64 = 21;
 
 /// Half-hour slots that keep a histogram: the current one and the one
