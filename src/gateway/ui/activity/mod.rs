@@ -19,6 +19,7 @@ mod receipt;
 pub(super) mod replay;
 mod rows;
 mod seek;
+mod strict_scan;
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -585,6 +586,9 @@ mod answer_integrity2_tests;
 #[path = "answer_integrity_tests.rs"]
 mod answer_integrity_tests;
 #[cfg(test)]
+#[path = "answer_joiner_tests.rs"]
+mod answer_joiner_tests;
+#[cfg(test)]
 #[path = "answer_list_tests.rs"]
 mod answer_list_tests;
 #[cfg(test)]
@@ -596,6 +600,9 @@ mod answer_receipt2_tests;
 #[cfg(test)]
 #[path = "answer_receipt_tests.rs"]
 mod answer_receipt_tests;
+#[cfg(test)]
+#[path = "answer_stream_tests.rs"]
+mod answer_stream_tests;
 #[cfg(test)]
 #[path = "list_tests.rs"]
 mod list_tests;
