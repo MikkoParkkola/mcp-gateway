@@ -526,13 +526,22 @@ async fn a_redirect_to_a_name_the_pin_refuses_records_refused() {
                 .with_policy(crate::security::ssrf::DestinationPolicy::Public),
         ),
     );
-    let (ok, effect) = Box::pin(effect_of_send(
+    // A server answered the first hop, so the refused hop is one Failed
+    // send: only the client's own redirect count tells it from an unsent one.
+    let send = std::time::Duration::from_millis(7);
+    crate::gateway::send_timer_seam::inject(send);
+    let ((ok, effect), notes) = crate::gateway::with_dispatch_scope(Box::pin(effect_of_send(
         client.get(format!("http://127.0.0.1:{port}/")),
         &client.redirects,
-    ))
+    )))
     .await;
+    crate::gateway::send_timer_seam::clear();
     assert!(!ok, "premise: the pin refused the hop");
     assert_eq!(effect, Some("refused".into()));
+    assert_eq!(
+        notes.backend_sample(),
+        Some((send, crate::counters::End::Failed))
+    );
 }
 
 /// Latency row 23c(b): a public hop answered 302 to a denied address. A
