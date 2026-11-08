@@ -453,8 +453,8 @@ class SelectHeadLines(unittest.TestCase):
 
 class LocalMacroCollection(unittest.TestCase):
     """A `macro_rules!` name leaves SAFE_MACROS only when the definition is
-    production code. Text in a string or comment, and a test-only file, do not
-    count."""
+    code. Text in a string or comment does not count. A test-like path is
+    not an exemption, and a file the blanker cannot lex is scanned raw."""
 
     def names(self, files):
         with tempfile.TemporaryDirectory() as tmp:
@@ -465,8 +465,8 @@ class LocalMacroCollection(unittest.TestCase):
                 path.write_text(text)
             return cfc.macro_names(root)
 
-    def test_quoted_and_test_only_macro_rules_leave_format_safe(self):
-        # format stays in SAFE_MACROS unless a real production definition names it.
+    def test_quoted_macro_rules_text_leaves_format_safe(self):
+        # format stays in SAFE_MACROS unless a real definition names it.
         rows = [
             ("string literal", {"src/lib.rs": 'const FIXTURE: &str = "macro_rules! format { () => {} }";\n'}, True),
             ("raw string", {"src/lib.rs": 'const FIXTURE: &str = r"macro_rules! format { () => {} }";\n'}, True),
@@ -476,22 +476,6 @@ class LocalMacroCollection(unittest.TestCase):
             ("line comment", {"src/lib.rs": "// macro_rules! format { () => {} }\n"}, True),
             ("block comment", {"src/lib.rs": "/* macro_rules! format { () => {} } */\n"}, True),
             ("real definition", {"src/lib.rs": "macro_rules! format { () => {} }\n"}, False),
-            (
-                "tests file",
-                {
-                    "src/lib.rs": "fn prod() {}\n",
-                    "src/identity_sources_tests.rs": "macro_rules! format { () => {} }\n",
-                },
-                True,
-            ),
-            (
-                "tests directory",
-                {
-                    "src/lib.rs": "fn prod() {}\n",
-                    "src/gateway/tests/case.rs": "macro_rules! format { () => {} }\n",
-                },
-                True,
-            ),
         ]
         for label, files, stays in rows:
             with self.subTest(label=label):
@@ -500,6 +484,47 @@ class LocalMacroCollection(unittest.TestCase):
                     self.assertIn("format", safe)
                 else:
                     self.assertNotIn("format", safe)
+
+    def test_a_real_macro_in_a_tests_named_file_still_shadows(self):
+        # No #[cfg(test)]. A *_tests.rs path must not hide the definition.
+        rows = [
+            (
+                "tests-named file",
+                {"src/identity_sources_tests.rs": "macro_rules! format { () => {} }\n"},
+            ),
+        ]
+        for label, files in rows:
+            with self.subTest(label=label):
+                self.assertNotIn("format", self.names(files))
+
+    def test_an_unlexable_file_is_scanned_raw(self):
+        # c6_resolve.blank raises Unsupported on an unterminated string.
+        # Scanning the raw text shadows the name instead of aborting the grade.
+        rows = [
+            (
+                "unterminated string",
+                {"src/lib.rs": 'const FIXTURE: &str = "macro_rules! format { () => {} }\n'},
+            ),
+        ]
+        for label, files in rows:
+            with self.subTest(label=label):
+                self.assertNotIn("format", self.names(files))
+
+    def test_lexer_shapes_before_a_real_definition_still_shadow(self):
+        # Each shape is one the blanker must step over. The definition after
+        # it is real and must still take its name off the safe set.
+        real = "macro_rules! format { () => {} }\n"
+        rows = [
+            ("lifetime", "fn f<'a>(s: &'a str) {}\n"),
+            ("quote char", "let q = '\"';\n"),
+            ("byte quote char", "let q = b'\"';\n"),
+            ("nested block comment", "/* outer /* inner */ tail */\n"),
+            ("escaped-quote string", 'const S: &str = "say \\"hi\\"";\n'),
+            ("multi-hash raw string", 'const S: &str = r##"he said "hi""##;\n'),
+        ]
+        for label, prefix in rows:
+            with self.subTest(label=label):
+                self.assertNotIn("format", self.names({"src/lib.rs": prefix + real}))
 
     def test_a_real_definition_beside_quoted_text_shadows_only_its_own_name(self):
         safe = self.names({
