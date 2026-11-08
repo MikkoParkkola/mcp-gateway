@@ -57,7 +57,14 @@ mod tests {
         }))
         .expect("the log opens");
         assert_eq!(unkept.recorded(), vec![]);
+        let folder = log.path().parent().expect("a parent").to_path_buf();
+        drop(log);
+        logger
+            .log_invocation("s", "c", "srv", "kept", "sha256:aa", "sha256:bb")
+            .expect("an append after the TempLog dropped");
+        assert!(folder.exists(), "the logger did not keep the folder");
         drop(logger);
+        assert!(!folder.exists(), "the folder did not go with the logger");
     }
 
     /// A logger and its `TempLog`, dropped in that order, leave nothing behind:
