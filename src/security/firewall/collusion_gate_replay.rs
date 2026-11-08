@@ -130,7 +130,9 @@ impl Firewall {
     }
 
     /// Fresh digests for the snapshots stored under `key`, with its calls;
-    /// `None` stages nothing, counted `absent` or `expired` (E2).
+    /// `None` stages nothing, counted `absent` or `expired` (E2). Rows read
+    /// it; a delivery acquires (`replay_digests_for_delivery`, `adopt_replay`).
+    #[cfg(test)]
     pub(crate) fn replay_digests(
         &self,
         key: &StoredKey,

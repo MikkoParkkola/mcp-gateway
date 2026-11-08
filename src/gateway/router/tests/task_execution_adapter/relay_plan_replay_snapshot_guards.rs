@@ -12,6 +12,7 @@ use super::relay_plan_replay_guards::{committed, state_over_tasks, task_key};
 use super::support::*;
 
 use crate::security::firewall::CollusionAction;
+use pretty_assertions::assert_eq;
 
 /// Publish `action` on the live config the router and Meta-MCP share.
 fn publish(rig: &Rig, action: CollusionAction) {

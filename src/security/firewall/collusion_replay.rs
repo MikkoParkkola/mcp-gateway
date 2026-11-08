@@ -375,6 +375,7 @@ impl ReplayReceipts {
     /// The entry under `key` at `now`, if one is held and live. Past its
     /// expiry the lookup removes it and misses, counted `reason=expired`;
     /// no entry at all is counted `reason=absent` (G36).
+    #[cfg(test)]
     pub(in super::super) fn lookup(
         &self,
         key: &StoredKey,
@@ -524,27 +525,26 @@ impl ReplayReceipts {
         let bytes = entry_bytes(&parts.0, &parts.1, &parts.2);
         let (found, evicted) = {
             let mut inner = self.inner.lock();
-            match acquire_locked(&mut inner, key, now).0 {
-                Some(found) => (Some(found), 0),
-                None => {
-                    let (seq, evicted) = self.insert_locked(
-                        &mut inner,
-                        key.clone(),
-                        parts,
-                        (now, retention, bytes),
-                        Life::Pending {
-                            outstanding: 1,
-                            delivered_off: false,
-                        },
-                    );
-                    let entry = seq.and_then(|seq| {
-                        inner
-                            .by_key
-                            .get(key)
-                            .map(|held| (Arc::clone(&held.entry), Some(seq)))
-                    });
-                    (entry, evicted)
-                }
+            if let Some(found) = acquire_locked(&mut inner, key, now).0 {
+                (Some(found), 0)
+            } else {
+                let (seq, evicted) = self.insert_locked(
+                    &mut inner,
+                    key.clone(),
+                    parts,
+                    (now, retention, bytes),
+                    Life::Pending {
+                        outstanding: 1,
+                        delivered_off: false,
+                    },
+                );
+                let entry = seq.and_then(|seq| {
+                    inner
+                        .by_key
+                        .get(key)
+                        .map(|held| (Arc::clone(&held.entry), Some(seq)))
+                });
+                (entry, evicted)
             }
         };
         self.count_insert(found.is_none(), evicted);

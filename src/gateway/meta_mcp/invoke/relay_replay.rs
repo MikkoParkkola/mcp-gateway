@@ -282,31 +282,6 @@ pub(crate) fn note_sync_lookup(identity: String, round: String, operation: Strin
     let _ = (identity, round, operation);
 }
 
-/// Note that this delivery settles task `id` at `revision`: its committed
-/// in-plan receipts are captured under that key at commit, live for the
-/// task's own TTL (`ttl_ms`). A task with no TTL falls back to 24 h
-/// ([`RETENTION_SECS`], the retained sync answer's retention): the bound
-/// is stated here, at the one place both settlement paths compute it.
-///
-/// [`RETENTION_SECS`]: crate::idempotency::admission::RETENTION_SECS
-pub(crate) fn note_task_capture(id: String, revision: u64, ttl_ms: Option<u64>) {
-    #[cfg(feature = "firewall")]
-    {
-        let retention = ttl_ms.map_or(
-            Duration::from_secs(crate::idempotency::admission::RETENTION_SECS),
-            Duration::from_millis,
-        );
-        let capture = Capture {
-            key: CaptureKey::Task { id, revision },
-            retention,
-            answer_digest: None,
-        };
-        let _ = super::REPLAY_CAPTURE.try_with(|slot| *slot.borrow_mut() = Some(capture));
-    }
-    #[cfg(not(feature = "firewall"))]
-    let _ = (id, revision, ttl_ms);
-}
-
 /// This delivery's answer was not retained: nothing is captured for it,
 /// and a capture already taken pending goes (E1).
 pub(crate) fn cancel_replay_capture() {

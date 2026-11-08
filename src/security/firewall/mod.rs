@@ -76,11 +76,10 @@ pub(crate) use collusion::replay::{CaptureMode, ReplayHandle, StoredKey};
 pub(crate) use collusion_digest::{note_walk_for_test, walks_built};
 #[cfg(test)]
 pub(crate) use collusion_gate::relay_witness_hook;
-pub use collusion_gate::{AllowedFlow, CollusionAction, CollusionConfig};
 pub(crate) use collusion_gate::{
     Adopted, DeliveryDigest, PlanStaging, RelayCaller, ReplaySource, ReplayedDigest,
-    SNAPSHOT_UNTRACKABLE,
 };
+pub use collusion_gate::{AllowedFlow, CollusionAction, CollusionConfig};
 mod config;
 pub use config::{FirewallAction, FirewallConfig, FirewallRule, RuleException, ScanType};
 pub mod input_scanner;
