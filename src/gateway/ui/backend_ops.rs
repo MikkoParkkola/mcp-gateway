@@ -243,17 +243,24 @@ fn url_carries_credential(raw: &str) -> bool {
     // The userinfo as written (the text gateway.yaml keeps; the parser would
     // percent-encode a template's braces): the password, or the username
     // when the password is absent or empty.
-    let userinfo = raw
+    let written = raw
         .split_once("://")
-        .and_then(|(_, rest)| rest.split(['/', '?', '#']).next())
+        .and_then(|(_, rest)| rest.split(['/', '\\', '?', '#']).next())
         .and_then(|authority| authority.rsplit_once('@'))
         .map_or("", |(userinfo, _)| userinfo);
-    let secret = match userinfo.split_once(':') {
+    let secret = match written.split_once(':') {
         Some((_, password)) if !password.is_empty() => password,
         Some((user, _)) => user,
-        None => userinfo,
+        None => written,
     };
-    if literal_value(secret) {
+    // A spelling the parser accepts without exactly `://` (`https:/`,
+    // `https:///`, `https:`): the parsed userinfo, encoded, so a template
+    // there counts as text.
+    let parsed = match url.password() {
+        Some(password) if !password.is_empty() => password,
+        _ => url.username(),
+    };
+    if literal_value(secret) || (written.is_empty() && literal_value(parsed)) {
         return true;
     }
     url.query_pairs()
