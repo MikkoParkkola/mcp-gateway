@@ -129,7 +129,7 @@ async fn r1c_a_replay_that_shows_nothing_leaves_later_ids_without_the_marker() {
 async fn r2_a_gapped_log_reached_by_a_replay_goes_live_across_reconnects() {
     // An invocation log rotating every few KB, with one sealed segment in
     // the middle removed: a replay from the oldest record meets the gap.
-    let dir = Arc::new(tempfile::tempdir().unwrap());
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = dir.path().join("invocation.jsonl");
     let config = TransparencyLogConfig {
         enabled: true,
