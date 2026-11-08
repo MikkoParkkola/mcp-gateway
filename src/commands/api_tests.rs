@@ -1454,7 +1454,7 @@ async fn login_remedy_uses_the_normalised_resolved_origin() {
 }
 
 #[test]
-fn output_failure_does_not_redact_json_syntax_as_credential_bytes() {
+fn output_failure_with_a_token_inside_json_null_prints_the_fixed_sentence() {
     let out = ApiOutcome {
         stdout: b"data\n".to_vec(),
         stderr: String::new(),
@@ -1473,25 +1473,12 @@ fn output_failure_does_not_redact_json_syntax_as_credential_bytes() {
         exit,
     };
     assert_eq!(captured.exit, ApiExit::LocalFailure);
-    let printed: serde_json::Value =
-        serde_json::from_str(&captured.stderr).expect("valid JSON error");
-    assert_eq!(printed["error"]["kind"], "LocalFailure");
+    // The token is "null", which JSON's own null fields contain: the report
+    // becomes the fixed sentence instead.
     assert_eq!(
-        printed["error"]["message"],
-        "Could not write command output."
+        captured.stderr,
+        "error: The error report could not be printed without exposing the credential.\n"
     );
-    assert_eq!(
-        printed["error"]["remedy"],
-        "Check the output destination before repeating the command."
-    );
-    // The token is "null": JSON's own null stays JSON null, and no string
-    // value carries the token.
-    assert!(printed["error"]["http_status"].is_null());
-    assert!(printed["error"]["request_id"].is_null());
-    for field in ["kind", "message", "remedy"] {
-        let text = printed["error"][field].as_str().expect("a string field");
-        assert!(!text.contains("null"), "{field}: {text}");
-    }
 }
 
 #[tokio::test]
@@ -2127,7 +2114,7 @@ async fn dropped_object_entries_refuse_the_entire_success_body() {
 }
 
 #[tokio::test]
-async fn error_envelope_keeps_fixed_keys_and_numeric_metadata() {
+async fn a_token_inside_a_fixed_key_or_number_replaces_the_json_report() {
     for token in ["1", "error"] {
         let mut args = args("/ui/api/status");
         args.json = true;
@@ -2150,23 +2137,17 @@ async fn error_envelope_keeps_fixed_keys_and_numeric_metadata() {
             },
         )
         .await;
-        let redact = |text: &str| mcp_gateway::cli::redact::text(text, &[token.to_string()]);
-        assert_error(
-            &out,
-            true,
-            3,
-            "AuthRefused",
-            &redact(&format!("rejected {token}")),
-            &redact("Run mcp-gateway login --gateway http://127.0.0.1:1, then retry."),
-            Some(401),
-            Some(&redact(&format!("request-{token}"))),
-        );
-        let printed: serde_json::Value = serde_json::from_str(&out.stderr).expect("error JSON");
-        for value in printed["error"].as_object().expect("error key").values() {
-            if let Some(text) = value.as_str() {
-                assert!(!text.contains(token));
-            }
-        }
+        // "1" is the schema version and "error" a fixed key, so the JSON report
+        // would carry the token: it becomes the fixed sentence, or nothing when
+        // the sentence itself contains the token ("error").
+        assert_eq!(out.exit.code(), 3, "{token}");
+        assert!(out.stdout.is_empty(), "{token}: stdout");
+        let expected = if token == "error" {
+            ""
+        } else {
+            "error: The error report could not be printed without exposing the credential.\n"
+        };
+        assert_eq!(out.stderr, expected, "{token}");
     }
 }
 
@@ -2306,8 +2287,8 @@ async fn answered(token: &str, status: StatusCode, body: &str, json_output: bool
     .await
 }
 
-/// A token equal to a fixed field of the JSON error (its http_status, its
-/// schema_version, or text inside its kind) never reaches stderr: the report
+/// A token equal to a fixed field of the JSON error (its `http_status`, its
+/// `schema_version`, or text inside its kind) never reaches stderr: the report
 /// becomes one fixed token-free sentence.
 #[tokio::test]
 async fn a_token_equal_to_a_fixed_error_field_never_reaches_stderr() {
@@ -2343,7 +2324,7 @@ async fn the_token_is_absent_from_every_stream_whatever_the_redactor_says() {
 }
 
 /// The dropped-entry refusal in JSON mode: stdout empty and one structured
-/// LocalFailure object on stderr.
+/// `LocalFailure` object on stderr.
 #[tokio::test]
 async fn dropped_entry_refusal_in_json_mode_is_one_local_failure_object() {
     let out = answered(
