@@ -478,8 +478,8 @@ fn verify_syncs_before_reading_back() {
 
 /// A19: a link swapped in at the target, even to a regular file holding the
 /// payload, never earns a token: the configured path now resolves elsewhere,
-/// so the recheck finds it moved. (A ConfigMap's links resolve at lock time;
-/// its target is the final regular file.) Red oracle: `Repointed(Moved)`.
+/// so the recheck finds it moved. (A Kubernetes config map's links resolve
+/// at lock time; its target is the final regular file.) Red oracle: `Repointed(Moved)`.
 #[cfg(unix)]
 #[test]
 fn a_link_swapped_in_at_the_target_is_repointed() {
