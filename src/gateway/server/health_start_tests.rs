@@ -65,7 +65,7 @@ async fn run_once(tasks: &std::path::Path, data: &std::path::Path, at_bound: imp
 /// the shutdown records a clean stop, so the next start's restart is measured.
 #[tokio::test]
 async fn h12_both_files_are_saved_before_serving_and_the_stop_is_clean() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = crate::test_dir_keep::kept_tempdir();
     let data = dir.path().join("data");
     Box::pin(run_once(dir.path(), &data, |_| {
         assert!(
@@ -88,7 +88,7 @@ async fn h12_both_files_are_saved_before_serving_and_the_stop_is_clean() {
 /// intact (as counters.json is), and the start writes a fresh one.
 #[tokio::test]
 async fn h10b_an_undecodable_history_is_moved_aside_not_overwritten() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = crate::test_dir_keep::kept_tempdir();
     let data = dir.path().join("data");
     std::fs::create_dir_all(&data).expect("data dir");
     std::fs::write(data.join("health.json"), b"not json").expect("seed");
@@ -118,7 +118,7 @@ async fn h10b_an_undecodable_history_is_moved_aside_not_overwritten() {
 #[tokio::test]
 async fn h17_unwritable_history_never_stops_the_start() {
     use std::os::unix::fs::PermissionsExt;
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = crate::test_dir_keep::kept_tempdir();
     let data = dir.path().join("data");
     Box::pin(run_once(dir.path(), &data, |_| {})).await;
     for name in ["health.json", "counters.json"] {
@@ -148,7 +148,7 @@ async fn h17_unwritable_history_never_stops_the_start() {
 #[tokio::test]
 async fn h10c_a_failed_move_aside_keeps_the_original_bytes() {
     use std::os::unix::fs::PermissionsExt;
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = crate::test_dir_keep::kept_tempdir();
     let data = dir.path().join("data");
     Box::pin(run_once(dir.path(), &data, |_| {})).await;
     std::fs::write(data.join("health.json"), b"not json").expect("seed");
