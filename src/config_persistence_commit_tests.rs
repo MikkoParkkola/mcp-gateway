@@ -558,11 +558,11 @@ fn crash_modes() -> [super::crash_fs::Mode; 3] {
 #[test]
 fn a_token_survives_power_loss_in_every_mode() {
     for mode in crash_modes() {
-        let (dir, path) = config();
+        let (_dir, path) = config();
         let held = lock(&path);
-        let _armed = super::crash_fs::arm(dir.path());
+        let _armed = super::crash_fs::arm(held.target.parent().unwrap());
         let token = commit(&held, &path, Action::Forward, NEW).expect("token");
-        super::crash_fs::cut(dir.path(), mode);
+        super::crash_fs::cut(held.target.parent().unwrap(), mode);
         let bytes = std::fs::read(&path).expect("read after cut");
         assert_eq!(bytes, NEW, "{mode:?}");
         assert_eq!(&FileRevision::of(&bytes), token.revision(), "{mode:?}");
@@ -574,14 +574,14 @@ fn a_token_survives_power_loss_in_every_mode() {
 #[test]
 fn a_sync_failure_is_lost_under_drop_all_kept_under_keep_all() {
     for mode in crash_modes() {
-        let (dir, path) = config();
+        let (_dir, path) = config();
         let held = lock(&path);
-        let _armed = super::crash_fs::arm(dir.path());
+        let _armed = super::crash_fs::arm(held.target.parent().unwrap());
         let _fault = fault::set(&path, Fault::FailDirSync(SyncKey::Commit(Action::Forward)));
         let got = commit(&held, &path, Action::Forward, NEW);
         assert!(matches!(got, Err(NotDurable::Sync(_))), "{got:?}");
         assert_eq!(fault::fired(&path), 1, "sync failure reached");
-        super::crash_fs::cut(dir.path(), mode);
+        super::crash_fs::cut(held.target.parent().unwrap(), mode);
         let expected = match mode {
             super::crash_fs::Mode::DropAll => OLD,
             _ => NEW,
@@ -599,12 +599,12 @@ fn a_sync_failure_is_lost_under_drop_all_kept_under_keep_all() {
 #[test]
 fn verify_flushes_bytes_written_without_sync() {
     for mode in crash_modes() {
-        let (dir, path) = config();
+        let (_dir, path) = config();
         let held = lock(&path);
-        let _armed = super::crash_fs::arm(dir.path());
+        let _armed = super::crash_fs::arm(held.target.parent().unwrap());
         std::fs::write(&path, NEW).expect("unsynced in-place write");
         let token = verify(&held, &path, &FileRevision::of(NEW)).expect("token");
-        super::crash_fs::cut(dir.path(), mode);
+        super::crash_fs::cut(held.target.parent().unwrap(), mode);
         let bytes = std::fs::read(&path).expect("read after cut");
         assert_eq!(bytes, NEW, "{mode:?}");
         assert_eq!(&FileRevision::of(&bytes), token.revision(), "{mode:?}");

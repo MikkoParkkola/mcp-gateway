@@ -31,6 +31,8 @@ use std::io::{self, Read, Seek};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
+use crate::security::transparency_log::rotation::{FileId, file_id, path_id};
+
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum Mode {
     DropAll,
@@ -38,21 +40,16 @@ pub(crate) enum Mode {
     KeepRenameDropData { seed: u64 },
 }
 
-/// Identity components, with room for the Windows 128-bit file id.
-pub(crate) type Generation = (u64, u128);
-
 /// Durable state; rows can construct independent projection inputs.
 #[derive(Default)]
 pub(crate) struct Overlay {
     /// Name -> generation as of the last directory sync (what DropAll keeps).
-    pub(crate) names: BTreeMap<String, Generation>,
+    pub(crate) names: BTreeMap<String, FileId>,
     /// Name -> generation now: a rename binds a new generation here at once,
     /// before any directory sync makes it durable (what the keep modes see).
-    pub(crate) current: BTreeMap<String, Generation>,
-    pub(crate) data: BTreeMap<Generation, Vec<u8>>,
-    // Immutable after arming; never reconstructed from later durable data.
-    pub(crate) arming: BTreeMap<String, Vec<u8>>,
-    pub(crate) held: BTreeMap<Generation, File>,
+    pub(crate) current: BTreeMap<String, FileId>,
+    pub(crate) data: BTreeMap<FileId, Vec<u8>>,
+    pub(crate) held: BTreeMap<FileId, File>,
 }
 
 static ARMED: Mutex<Option<HashMap<PathBuf, Overlay>>> = Mutex::new(None);
@@ -65,22 +62,13 @@ impl Drop for Armed {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         if let Some(dirs) = armed.as_mut() {
-            dirs.remove(&self.0);
+            dirs.remove(&key(&self.0));
         }
     }
 }
 
-fn identity(file: &File) -> io::Result<Generation> {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt;
-        let metadata = file.metadata()?;
-        Ok((metadata.dev(), u128::from(metadata.ino())))
-    }
-    #[cfg(windows)]
-    {
-        crate::win_acl::file_identity(file)
-    }
+fn key(dir: &Path) -> PathBuf {
+    std::fs::canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf())
 }
 
 fn read_bytes(mut file: &File) -> io::Result<Vec<u8>> {
@@ -93,8 +81,9 @@ fn read_bytes(mut file: &File) -> io::Result<Vec<u8>> {
 }
 
 pub(crate) fn arm(dir: &Path) -> Armed {
+    let dir = key(dir);
     let mut overlay = Overlay::default();
-    for entry in std::fs::read_dir(dir).expect("crash_fs: read directory") {
+    for entry in std::fs::read_dir(&dir).expect("crash_fs: read directory") {
         let entry = entry.expect("crash_fs: read entry");
         if !entry.file_type().expect("crash_fs: file type").is_file() {
             continue;
@@ -104,11 +93,10 @@ pub(crate) fn arm(dir: &Path) -> Armed {
             .into_string()
             .expect("crash_fs: UTF-8 name");
         let file = File::open(entry.path()).expect("crash_fs: open file");
-        let generation = identity(&file).expect("crash_fs: file identity");
+        let generation = file_id(&file).expect("crash_fs: file identity");
         let bytes = read_bytes(&file).expect("crash_fs: read file");
         overlay.names.insert(name.clone(), generation);
         overlay.current.insert(name.clone(), generation);
-        overlay.arming.insert(name, bytes.clone());
         overlay.data.insert(generation, bytes);
         overlay.held.insert(generation, file);
     }
@@ -116,30 +104,32 @@ pub(crate) fn arm(dir: &Path) -> Armed {
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
         .get_or_insert_with(HashMap::new)
-        .insert(dir.to_path_buf(), overlay);
-    Armed(dir.to_path_buf())
+        .insert(dir.clone(), overlay);
+    Armed(dir)
 }
 
 pub(crate) fn cut(dir: &Path, mode: Mode) {
-    let armed = ARMED
+    let dir = key(dir);
+    let mut armed = ARMED
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    let durable = armed.as_ref().and_then(|dirs| dirs.get(dir));
+    let durable = armed.as_mut().and_then(|dirs| dirs.get_mut(&dir));
     let durable = durable.unwrap_or_else(|| {
         panic!("crash_fs: directory not armed: {}", dir.display());
     });
     let mut observed = BTreeMap::new();
-    for entry in std::fs::read_dir(dir).expect("crash_fs: read directory") {
+    for entry in std::fs::read_dir(&dir).expect("crash_fs: read directory") {
         let entry = entry.expect("crash_fs: read entry");
         if entry.file_type().expect("crash_fs: file type").is_file() {
             let name = entry
                 .file_name()
                 .into_string()
                 .expect("crash_fs: UTF-8 name");
-            observed.insert(
-                name,
-                std::fs::read(entry.path()).expect("crash_fs: read file"),
-            );
+            let file = File::open(entry.path()).expect("crash_fs: open file");
+            let generation = file_id(&file).expect("crash_fs: file identity");
+            let bytes = read_bytes(&file).expect("crash_fs: read file");
+            durable.current.insert(name.clone(), generation);
+            observed.insert(name, bytes);
         }
     }
     let want = project(durable, &observed, mode);
@@ -187,14 +177,15 @@ pub(crate) fn project(
 }
 
 pub(super) fn note_dir_synced(dir: &Path) {
+    let dir = key(dir);
     let mut armed = ARMED
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    let Some(overlay) = armed.as_mut().and_then(|dirs| dirs.get_mut(dir)) else {
+    let Some(overlay) = armed.as_mut().and_then(|dirs| dirs.get_mut(&dir)) else {
         return;
     };
     let mut names = BTreeMap::new();
-    for entry in std::fs::read_dir(dir).expect("crash_fs: read directory") {
+    for entry in std::fs::read_dir(&dir).expect("crash_fs: read directory") {
         let entry = entry.expect("crash_fs: read entry");
         if !entry.file_type().expect("crash_fs: file type").is_file() {
             continue;
@@ -204,7 +195,7 @@ pub(super) fn note_dir_synced(dir: &Path) {
             .into_string()
             .expect("crash_fs: UTF-8 name");
         let file = File::open(entry.path()).expect("crash_fs: open file");
-        let generation = identity(&file).expect("crash_fs: file identity");
+        let generation = file_id(&file).expect("crash_fs: file identity");
         if let std::collections::btree_map::Entry::Vacant(entry) = overlay.data.entry(generation) {
             entry.insert(read_bytes(&file).expect("crash_fs: read file"));
             overlay.held.insert(generation, file);
@@ -215,27 +206,50 @@ pub(super) fn note_dir_synced(dir: &Path) {
     overlay.names = names;
 }
 
-pub(super) fn note_data_durable(target: &Path, file: &File) {
+pub(super) struct Staged {
+    generation: FileId,
+    bytes: Vec<u8>,
+}
+
+/// The synced scratch's identity, taken by path (nothing else touches the
+/// scratch), and the exact bytes write_atomic wrote and synced into it.
+pub(super) fn stage(target: &Path, scratch: &Path, bytes: &[u8]) -> Option<Staged> {
+    let dir = key(target.parent()?);
+    let armed = ARMED
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    armed.as_ref()?.get(&dir)?;
+    Some(Staged {
+        generation: path_id(scratch).expect("crash_fs: scratch identity"),
+        bytes: bytes.to_vec(),
+    })
+}
+
+pub(super) fn bind(target: &Path, staged: Staged) {
     let mut armed = ARMED
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     let Some(overlay) = target
         .parent()
-        .and_then(|dir| armed.as_mut().and_then(|dirs| dirs.get_mut(dir)))
+        .map(key)
+        .and_then(|dir| armed.as_mut().and_then(|dirs| dirs.get_mut(&dir)))
     else {
         return;
     };
-    let generation = identity(file).expect("crash_fs: file identity");
-    let bytes = read_bytes(file).expect("crash_fs: read durable file");
+    let Ok(file) = File::open(target) else {
+        return;
+    };
+    let generation = file_id(&file).expect("crash_fs: file identity");
+    if generation != staged.generation {
+        return;
+    }
     let name = target
         .file_name()
         .and_then(|n| n.to_str())
         .expect("crash_fs: UTF-8 name");
-    overlay.data.insert(generation, bytes);
+    overlay.data.insert(generation, staged.bytes);
     overlay.current.insert(name.to_owned(), generation);
-    overlay
-        .held
-        .insert(generation, file.try_clone().expect("crash_fs: hold file"));
+    overlay.held.insert(generation, file);
 }
 
 /// Trust boundary: this notification follows the real sync_all in flush;
@@ -247,12 +261,18 @@ pub(super) fn note_flushed(target: &Path, file: &mut File) -> io::Result<()> {
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     let Some(overlay) = target
         .parent()
-        .and_then(|dir| armed.as_mut().and_then(|dirs| dirs.get_mut(dir)))
+        .map(key)
+        .and_then(|dir| armed.as_mut().and_then(|dirs| dirs.get_mut(&dir)))
     else {
         return Ok(());
     };
-    let generation = identity(file)?;
+    let generation = file_id(file)?;
     let bytes = read_bytes(file)?;
     overlay.data.insert(generation, bytes);
+    // A fresh handle keeps default delete sharing on Windows.
+    let held = File::open(target)?;
+    if file_id(&held)? == generation {
+        overlay.held.insert(generation, held);
+    }
     Ok(())
 }
