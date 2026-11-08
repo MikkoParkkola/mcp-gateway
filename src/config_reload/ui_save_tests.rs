@@ -440,18 +440,19 @@ async fn an_anchored_key_returns_the_validated_patch_and_writes_nothing() {
 async fn a_save_names_its_fields_in_the_intent() {
     use crate::security::TransparencyLogger;
     use crate::security::transparency_log::TransparencyLogConfig;
-    use crate::security::transparency_log::temp::TempLog;
 
-    let log = TempLog::new();
+    let dir = Arc::new(tempfile::tempdir().expect("log dir"));
+    let path = dir.path().join("audit.jsonl");
     let logger = Arc::new(
         TransparencyLogger::open(Arc::new(TransparencyLogConfig {
             enabled: true,
-            path: log.path().to_string_lossy().to_string(),
+            path: path.to_string_lossy().into_owned(),
             key_id: "test".to_string(),
             ..TransparencyLogConfig::default()
         }))
         .expect("logger opens"),
     );
+    logger.keep_test_dir(Arc::clone(&dir));
     let gw = gw(BASE);
     gw.save_as(
         AuditPosture::of(Some(logger), GatewayAuth::Off),
@@ -464,7 +465,7 @@ async fn a_save_names_its_fields_in_the_intent() {
     .await
     .expect("the save stands");
 
-    let records = std::fs::read_to_string(log.path()).expect("the log");
+    let records = std::fs::read_to_string(&path).expect("the log");
     let intent = records
         .lines()
         .find(|l| l.contains("config_save_intent"))
