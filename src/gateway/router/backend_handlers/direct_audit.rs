@@ -454,12 +454,25 @@ fn with_deferred_receipts(
     if state.firewall.is_some() {
         let staged =
             crate::gateway::meta_mcp::invoke::relay::take_staged_now(state.firewall.clone());
-        response.extensions_mut().insert(
-            crate::gateway::meta_mcp::invoke::relay::DeferredReceipts::new(
-                staged,
-                delivers,
-                Some(std::sync::Arc::clone(&state.live_config)),
-            ),
+        mutant!(
+            "m13",
+            {
+                crate::gateway::meta_mcp::invoke::relay::DeferredReceipts::new(
+                    staged,
+                    delivers,
+                    Some(std::sync::Arc::clone(&state.live_config)),
+                )
+                .commit(true);
+            },
+            {
+                response.extensions_mut().insert(
+                    crate::gateway::meta_mcp::invoke::relay::DeferredReceipts::new(
+                        staged,
+                        delivers,
+                        Some(std::sync::Arc::clone(&state.live_config)),
+                    ),
+                );
+            }
         );
     }
     #[cfg(not(feature = "firewall"))]

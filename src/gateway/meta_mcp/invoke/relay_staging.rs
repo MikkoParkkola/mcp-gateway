@@ -343,13 +343,24 @@ impl MetaMcp {
             unpublished("staged commit");
             return None;
         };
-        Some(crate::gateway::input_bridge::DeliveryCommit::new(
-            move || {
-                // Read when the frame is written, not when it was queued.
+        mutant!(
+            "m2",
+            {
                 let generation = live.generation();
-                staged.commit(true, &generation);
+                Some(crate::gateway::input_bridge::DeliveryCommit::new(
+                    move || {
+                        staged.commit(true, &generation);
+                    },
+                ))
             },
-        ))
+            Some(crate::gateway::input_bridge::DeliveryCommit::new(
+                move || {
+                    // Read when the frame is written, not when it was queued.
+                    let generation = live.generation();
+                    staged.commit(true, &generation);
+                },
+            ))
+        )
     }
 
     /// Commit `staged` under the generation current at delivery. Before

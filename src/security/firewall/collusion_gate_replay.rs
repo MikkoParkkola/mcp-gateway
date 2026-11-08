@@ -72,7 +72,8 @@ impl Firewall {
         self.relay_detector()?;
         // Nothing delivered under an effective `off` is held, a snapshot
         // included; a pending capture has delivered nothing yet.
-        if mode == CaptureMode::AtDelivery
+        if (mutant!("m6", true, false)
+            || mutant!("m12", mode == CaptureMode::Pending, mode == CaptureMode::AtDelivery))
             && generation.collusion_view().action() == super::CollusionAction::Off
         {
             return None;

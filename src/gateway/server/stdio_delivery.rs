@@ -186,7 +186,7 @@ async fn deliver(
     // The answer as recorded is final: a retained one is captured pending
     // now, before settlement publishes it for replay, so a retry that
     // finds it finds its snapshot too.
-    if frame.delivers_result() {
+    if mutant!("m5", false, true) && mutant!("m11", false, true) && frame.delivers_result() {
         staged.capture_pending(meta.current_generation().as_deref());
     }
     let retained = match (settle.execution, stored) {
@@ -197,6 +197,9 @@ async fn deliver(
         ),
         _ => false,
     };
+    if mutant!("m11", frame.delivers_result(), false) {
+        staged.capture_pending(meta.current_generation().as_deref());
+    }
     (frame, retained)
 }
 

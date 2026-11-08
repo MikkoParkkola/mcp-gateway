@@ -73,7 +73,7 @@ impl OutboundFrame {
         self.written();
         if let Payload::Batch(items) = &self.payload {
             for item in items {
-                item.stdio_written();
+                mutant!("m1", item.written(), item.stdio_written());
             }
         }
     }

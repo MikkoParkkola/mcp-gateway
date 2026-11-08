@@ -91,7 +91,14 @@ fn commit_at_first_chunk(
     use futures::StreamExt as _;
     let length = response.body().size_hint().exact();
     let mut response = response.map(|body| {
-        let mut pending = Some(receipts);
+        let mut pending = mutant!(
+            "m3",
+            {
+                receipts.commit(true);
+                None
+            },
+            Some(receipts)
+        );
         let chunks = body.into_data_stream().map(move |chunk| {
             if chunk.is_ok()
                 && let Some(receipts) = pending.take()
@@ -102,7 +109,7 @@ fn commit_at_first_chunk(
         });
         axum::body::Body::from_stream(chunks)
     });
-    if let Some(length) = length {
+    if let Some(length) = mutant!("m4", None, length) {
         response.headers_mut().insert(
             axum::http::header::CONTENT_LENGTH,
             HeaderValue::from(length),

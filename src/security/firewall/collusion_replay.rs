@@ -165,8 +165,8 @@ impl Inner {
     /// one; a replaced, evicted, expired or kept entry gives `None`.
     fn pending_at(&mut self, key: &StoredKey, seq: u64) -> Option<&mut Held> {
         self.by_key
-            .get_mut(key)
-            .filter(|held| held.seq == seq && matches!(held.life, Life::Pending { .. }))
+            .get_mut(mutant!("c0", key, key))
+            .filter(|held| mutant!("m9", true, held.seq == seq) && matches!(held.life, Life::Pending { .. }))
     }
 
     /// One outstanding delivery of `key`'s pending entry `seq` ended, under
@@ -181,9 +181,13 @@ impl Inner {
             delivered_off,
         } = &mut held.life
         {
-            *outstanding = outstanding.saturating_sub(1);
+            *outstanding = mutant!(
+                "m10",
+                if off { *outstanding } else { outstanding.saturating_sub(1) },
+                outstanding.saturating_sub(1)
+            );
             *delivered_off |= off;
-            if *outstanding == 0 && *delivered_off {
+            if mutant!("m7", false, *outstanding == 0 && *delivered_off) {
                 self.take(key);
             }
         }
@@ -478,7 +482,17 @@ impl ReplayReceipts {
         let (key, seq) = handle.into_parts();
         let mut inner = self.inner.lock();
         if off {
-            inner.end_delivery(&key, seq, true);
+            mutant!(
+                "m8",
+                {
+                    if inner.by_key.get(&key).is_some_and(|held| held.seq == seq) {
+                        inner.take(&key);
+                    }
+                },
+                {
+                    inner.end_delivery(&key, seq, true);
+                }
+            );
         } else if let Some(held) = inner.pending_at(&key, seq) {
             held.life = Life::Kept;
         }
