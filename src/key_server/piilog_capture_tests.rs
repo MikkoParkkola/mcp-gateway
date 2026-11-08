@@ -257,9 +257,12 @@ async fn denials(h: &Harness, claims: &serde_json::Value) -> Markers {
         .as_str()
         .expect("access_token")
         .to_owned();
-    let jti = body["jti"].as_str().expect("jti").to_owned();
-    let (status, _) = h.revoke(&format!("jti={jti}")).await;
-    assert!(status == 200 || status == 204, "revoke answered {status}");
+    // The bulk route, as an offboarding admin would use it.
+    let issuer: String = url::form_urlencoded::byte_serialize(ISS_A.as_bytes()).collect();
+    let (status, body) = h
+        .revoke(&format!("issuer={issuer}&subject={SUBJECT}"))
+        .await;
+    assert_eq!(status, 200, "bulk revoke: {body}");
     assert!(
         h.ks.validate_token(&bearer).await.is_none(),
         "a revoked token is refused"
