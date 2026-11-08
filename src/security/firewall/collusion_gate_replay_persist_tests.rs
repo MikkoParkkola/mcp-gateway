@@ -198,3 +198,36 @@ fn the_store_and_the_firewall_share_the_marker() {
         crate::gateway::task_service::SNAPSHOT_UNTRACKABLE
     );
 }
+
+/// Off mode cannot grow memory: an entry a read rebuilt whose answer was
+/// never delivered (the handle dropped unwritten: the client gone) stays
+/// pending, and the next insertion after its retention sweeps it out; the
+/// total cap's eviction bounds the rest (r20). The action does not enter:
+/// the rebuild is the same under every action, and only a write settles.
+/// Mutant: an insertion that does not sweep the expired.
+#[test]
+fn an_undelivered_rebuilt_entry_is_swept_after_its_retention() {
+    let fw = firewall(CollusionAction::Off);
+    fw.advance_collusion_clock_for_test(Duration::ZERO);
+    let value = persisted(&fw, &digest(ANSWER), &json!(ANSWER)).expect("a snapshot");
+    let Adopted::Held(_, _, handle) = fw.adopt_replay(&key("t5"), Some(&value), hour()) else {
+        panic!("adopted");
+    };
+    drop(handle);
+    assert_eq!(
+        fw.relay.replay.life_for_test(&key("t5")),
+        TestLife::Pending {
+            outstanding: 0,
+            delivered_off: false
+        },
+        "premise: undelivered, still pending"
+    );
+    fw.advance_collusion_clock_for_test(hour() + Duration::from_secs(1));
+    let _ = fw.adopt_replay(&key("t6"), Some(&value), hour());
+    assert_eq!(
+        fw.relay.replay.life_for_test(&key("t5")),
+        TestLife::Absent,
+        "an expired undelivered entry outlived the next insertion"
+    );
+    assert_eq!(fw.replay_entries_for_test(), 1);
+}
