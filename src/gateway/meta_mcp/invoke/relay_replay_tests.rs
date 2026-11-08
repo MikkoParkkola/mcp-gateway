@@ -160,8 +160,6 @@ fn store_entry(
         calls,
         "",
         Duration::from_secs(3600),
-        &fw.paired_generation_for_test(),
-        crate::security::firewall::CaptureMode::AtDelivery,
     );
 }
 

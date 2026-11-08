@@ -305,13 +305,9 @@ pub(super) fn is_sync_capture(capture: Option<&Capture>) -> bool {
 /// Capture this delivery's retained synchronous answer now, pending,
 /// before admission publishes it for replay, so a retry that finds the
 /// stored answer finds its snapshot too. `receipts` are its final
-/// receipts. A task capture is left for its own commit point.
+/// receipts. A task's entry is persisted in its row instead.
 #[cfg(feature = "firewall")]
-pub(super) fn capture_pending_now(
-    fw: &crate::security::firewall::Firewall,
-    receipts: &[Receipt],
-    generation: &crate::config_reload::Generation,
-) {
+pub(super) fn capture_pending_now(fw: &crate::security::firewall::Firewall, receipts: &[Receipt]) {
     let is_sync = super::REPLAY_CAPTURE
         .try_with(|slot| is_sync_capture(slot.borrow().as_ref()))
         .unwrap_or(false);
@@ -319,7 +315,7 @@ pub(super) fn capture_pending_now(
         return;
     }
     let (capture, calls) = take_capture();
-    let handle = capture_commit(fw, capture, receipts, calls, generation);
+    let handle = capture_commit(fw, capture, receipts, calls);
     let _ = HELD.try_with(|held| held.borrow_mut().captured = handle);
 }
 
@@ -356,19 +352,12 @@ pub(super) fn capture_commit(
     capture: Option<Capture>,
     receipts: &[Receipt],
     calls: ReplayCallList,
-    generation: &crate::config_reload::Generation,
 ) -> Option<crate::security::firewall::ReplayHandle> {
     let Capture {
         key,
         retention,
         answer_digest,
     } = capture?;
-    // A retained synchronous answer is captured pending, before it is
-    // delivered; a task's result where it is stored, as it always was.
-    let mode = match key {
-        CaptureKey::Sync { .. } => crate::security::firewall::CaptureMode::Pending,
-        CaptureKey::Task { .. } => crate::security::firewall::CaptureMode::AtDelivery,
-    };
     let sources = replay_sources(receipts);
     // No candidates removes, never stores: `store_replay` returns early
     // with relay detection off, which would keep the prior entry (F1).
@@ -377,15 +366,7 @@ pub(super) fn capture_commit(
         None
     } else {
         let answer_digest = answer_digest.as_deref().unwrap_or("");
-        fw.store_replay(
-            key,
-            &sources,
-            calls,
-            answer_digest,
-            retention,
-            generation,
-            mode,
-        )
+        fw.store_replay(key, &sources, calls, answer_digest, retention)
     }
 }
 

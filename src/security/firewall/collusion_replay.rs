@@ -121,9 +121,9 @@ struct Held {
     life: Life,
 }
 
-/// A stored entry's lifecycle. A delivery-time capture (the task path) is
-/// [`Life::Kept`] at once; a synchronous answer's judge-time capture is
-/// [`Life::Pending`] until a write that is not under `off` keeps it.
+/// A stored entry's lifecycle. Every capture, and every entry a task read
+/// rebuilds from its row, starts [`Life::Pending`] and is [`Life::Kept`]
+/// once a write that is not under `off` delivers it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Life {
     Kept,
@@ -263,6 +263,7 @@ impl ReplayReceipts {
     /// `reason=too_large`, and the key's previous entry goes with it, so a
     /// key never replays an older commit's receipts. Past the total cap
     /// the oldest entries are evicted until it fits, counted.
+    #[cfg(test)]
     pub(in super::super) fn insert(
         &self,
         key: StoredKey,
@@ -406,16 +407,6 @@ impl ReplayReceipts {
     pub(in super::super) fn evicted_for_test(&self) -> u64 {
         self.evicted.load(Ordering::Relaxed)
     }
-}
-
-/// How a capture enters the store: [`CaptureMode::Pending`] for a
-/// synchronous answer captured at judge, before anything is delivered;
-/// [`CaptureMode::AtDelivery`] for a capture made where the answer is
-/// already delivered (the task path), stored kept as it always was.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum CaptureMode {
-    Pending,
-    AtDelivery,
 }
 
 /// One delivery's hold on a pending entry: its key and the insertion
