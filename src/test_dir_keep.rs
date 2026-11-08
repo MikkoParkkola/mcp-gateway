@@ -93,6 +93,16 @@ pub(crate) fn kept_tempdir() -> Arc<tempfile::TempDir> {
     register(tempfile::tempdir().expect("a temp dir"))
 }
 
+/// [`kept_tempdir`] with a name prefix, for a helper whose dirs carry one.
+pub(crate) fn kept_tempdir_prefixed(prefix: &str) -> Arc<tempfile::TempDir> {
+    register(
+        tempfile::Builder::new()
+            .prefix(prefix)
+            .tempdir()
+            .expect("a temp dir"),
+    )
+}
+
 /// [`kept_tempdir`], created inside `parent`.
 pub(crate) fn kept_tempdir_in(parent: &Path) -> Arc<tempfile::TempDir> {
     register(tempfile::tempdir_in(parent).expect("a temp dir"))

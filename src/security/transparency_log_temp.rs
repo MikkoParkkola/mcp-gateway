@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 /// directory with an open `.lock` inside cannot be removed on Windows.
 pub(crate) struct TempLog {
     path: PathBuf,
-    _dir: tempfile::TempDir,
+    _dir: std::sync::Arc<tempfile::TempDir>,
 }
 
 impl TempLog {
@@ -22,10 +22,7 @@ impl TempLog {
     pub(crate) fn new() -> Self {
         // A name of its own, so a leaked log directory never passes as one of
         // the plain temp dirs the CI shard guard still tolerates.
-        let dir = tempfile::Builder::new()
-            .prefix("audit-log-")
-            .tempdir()
-            .expect("log tempdir");
+        let dir = crate::test_dir_keep::kept_tempdir_prefixed("audit-log-");
         let path = dir.path().join("audit.jsonl");
         std::fs::File::create(&path).expect("log file");
         Self { path, _dir: dir }
