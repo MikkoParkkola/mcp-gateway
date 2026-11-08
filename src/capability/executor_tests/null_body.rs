@@ -44,7 +44,7 @@ async fn call_raw(yaml: &str, arguments: serde_json::Value, seen: &Seen) -> (Str
     assert!(validation.is_valid(), "{:?}", validation.violations);
     let mut executor = CapabilityExecutor::new();
     executor.client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(5))
+        .timeout(Duration::from_secs(10))
         .build()
         .unwrap()
         .into();

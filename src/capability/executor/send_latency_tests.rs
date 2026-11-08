@@ -13,6 +13,10 @@ use crate::counters::End;
 use crate::gateway::{send_timer_seam as seam, with_dispatch_scope};
 
 const SEND: Duration = Duration::from_millis(7);
+/// The client timeout these rows expect to fire on a stalled body or a
+/// silent listener (both hold for 30 s). At the tests' 10 s floor, so a slow
+/// runner cannot fire it on a reply that would have arrived.
+const STALL_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// A local listener that answers every connection with `reply` (or never
 /// answers when `None`), on its own thread.
@@ -62,7 +66,7 @@ fn stalled_body(status: &'static str) -> String {
 async fn a_stalled_body_notes_timed_out() {
     let url = stalled_body("200 OK");
     let client = reqwest::Client::builder()
-        .timeout(Duration::from_millis(200))
+        .timeout(STALL_TIMEOUT)
         .build()
         .expect("a client");
     let health = crate::failsafe::HealthTracker::new("test");
@@ -94,7 +98,7 @@ async fn a_stalled_body_notes_timed_out() {
 async fn a_refusal_with_a_stalled_body_keeps_its_status() {
     let url = stalled_body("429 Too Many Requests");
     let client = reqwest::Client::builder()
-        .timeout(Duration::from_millis(200))
+        .timeout(STALL_TIMEOUT)
         .build()
         .expect("a client");
     let health = crate::failsafe::HealthTracker::new("test");
@@ -208,13 +212,13 @@ async fn an_answered_http_send_notes_one_sample() {
 }
 
 /// Row 25 (HTTP): a send past the client's timeout notes `TimedOut`, read from
-/// reqwest's own flag although the error is wrapped as `Transport`. A short
-/// client timeout keeps the real wait short; only the end is asserted.
+/// reqwest's own flag although the error is wrapped as `Transport`. Only the
+/// end is asserted.
 #[tokio::test]
 async fn an_http_send_past_its_timeout_notes_timed_out() {
     let url = listener(None);
     let client = reqwest::Client::builder()
-        .timeout(Duration::from_millis(200))
+        .timeout(STALL_TIMEOUT)
         .build()
         .expect("a client");
     let health = crate::failsafe::HealthTracker::new("test");
