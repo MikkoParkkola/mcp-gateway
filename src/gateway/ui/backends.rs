@@ -395,6 +395,35 @@ fn requested_transport(command: Option<String>, url: Option<String>) -> Option<T
         .or_else(|| url.map(|url| TransportConfig::for_url(&url)))
 }
 
+/// The update's refusals before anything is read: an invalid allowed-tools
+/// list, both a command and a URL, or a credential in the new command or URL
+/// (it would land in gateway.yaml as text; refused by field).
+fn refuse_update(
+    name: &str,
+    allowed_tools: Option<&[String]>,
+    command: Option<&str>,
+    url: Option<&str>,
+) -> Option<axum::response::Response> {
+    if let Some(list) = allowed_tools
+        && let Err(refused) = crate::config::check_backend_allowed_tools(name, list)
+    {
+        return Some(
+            flat_error(StatusCode::UNPROCESSABLE_ENTITY, refused.to_string()).into_response(),
+        );
+    }
+    if command.is_some() && url.is_some() {
+        return Some(
+            flat_error(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "Provide either 'command' or 'url', not both",
+            )
+            .into_response(),
+        );
+    }
+    let refused = super::backend_ops::credential_refusals(command, url);
+    (!refused.is_empty()).then(|| super::secret_slots::refused_values(&refused))
+}
+
 async fn update_backend(
     State(state): State<Arc<AppState>>,
     #[cfg(test)] store_for_test: Option<axum::Extension<slotting::BackendStoreForTest>>,
@@ -416,25 +445,9 @@ async fn update_backend(
         allowed_tools,
     } = req;
 
-    if let Some(Some(list)) = &allowed_tools
-        && let Err(refused) = crate::config::check_backend_allowed_tools(&name, list)
-    {
-        return flat_error(StatusCode::UNPROCESSABLE_ENTITY, refused.to_string()).into_response();
-    }
-
-    // Validate: only one of command/url may be specified
-    if command.is_some() && url.is_some() {
-        return flat_error(
-            StatusCode::UNPROCESSABLE_ENTITY,
-            "Provide either 'command' or 'url', not both",
-        )
-        .into_response();
-    }
-    // A credential in a new command or URL is refused by field (it would land
-    // in gateway.yaml as text).
-    let refused = super::backend_ops::credential_refusals(command.as_deref(), url.as_deref());
-    if !refused.is_empty() {
-        return super::secret_slots::refused_values(&refused);
+    let tools = allowed_tools.as_ref().and_then(Option::as_deref);
+    if let Some(refused) = refuse_update(&name, tools, command.as_deref(), url.as_deref()) {
+        return refused;
     }
 
     // Only the values this request sets are judged and stored; values already
