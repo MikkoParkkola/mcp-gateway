@@ -333,3 +333,6 @@ async fn a_detection_off_answer_replayed_on_never_receipts_gateway_text_over_std
         "the replay receipted the gateway's own advice as the backend's text"
     );
 }
+
+#[path = "collusion_stdio_replay_write.rs"]
+mod replay_write;

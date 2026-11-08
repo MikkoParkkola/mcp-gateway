@@ -572,6 +572,7 @@ fn d25_a_still_staged_step_yields_no_snapshot_and_no_entry() {
         "",
         hour(),
         &fw.paired_generation_for_test(),
+        crate::security::firewall::CaptureMode::AtDelivery,
     );
     assert!(
         fw.replay_digests(&task_key("task-d25", 1)).is_none(),
@@ -598,6 +599,7 @@ fn a_ttl_less_tasks_entry_expires_after_24h_on_the_relay_clock_not_before() {
         "",
         Duration::from_secs(crate::idempotency::admission::RETENTION_SECS),
         &fw.paired_generation_for_test(),
+        crate::security::firewall::CaptureMode::AtDelivery,
     );
     assert!(
         fw.replay_digests(&task_key("task-24h", 3)).is_some(),
@@ -661,4 +663,59 @@ fn g47_parallel_commits_and_replays_on_a_shared_store_each_find_their_own_entry(
             assert!(thread.join().is_ok(), "a worker thread panicked");
         }
     });
+}
+
+/// r16: a task capture keeps its delivery-time gate. Under an effective
+/// `off` it stores nothing and returns no handle; a synchronous capture
+/// under the same `off` is stored pending, because nothing is delivered
+/// yet.
+/// Mutant killed: m12 (the task mode behaving as the pending mode).
+#[test]
+fn r16_a_task_capture_keeps_the_delivery_time_gate() {
+    let config = FirewallConfig {
+        collusion: CollusionConfig {
+            action: CollusionAction::Off,
+            window_secs: 1,
+            min_matches: 1,
+            sources: vec!["alpha:*".to_string()],
+            ..CollusionConfig::default()
+        },
+        ..FirewallConfig::default()
+    };
+    let fw = Firewall::from_config(config, None).keeping_every_kgram();
+    let digest = DeliveryDigest::of_seam((0..8_u64).collect(), true, None);
+    let generation = fw.paired_generation_for_test();
+    let task = task_key("task-r16", 1);
+    let handle = fw.store_replay(
+        task.clone(),
+        &[(&digest, None, "alpha", "read")],
+        Vec::new(),
+        "",
+        hour(),
+        &generation,
+        crate::security::firewall::CaptureMode::AtDelivery,
+    );
+    assert!(handle.is_none(), "a task capture returns no handle");
+    assert!(
+        fw.replay_digests(&task).is_none(),
+        "under off a task capture stores nothing"
+    );
+    let sync = sync_key("alice", "r16", "op");
+    let handle = fw.store_replay(
+        sync.clone(),
+        &[(&digest, None, "alpha", "read")],
+        Vec::new(),
+        "",
+        hour(),
+        &generation,
+        crate::security::firewall::CaptureMode::Pending,
+    );
+    assert!(
+        handle.is_some(),
+        "a synchronous capture is held for its write"
+    );
+    assert!(
+        fw.replay_digests(&sync).is_some(),
+        "a synchronous capture is stored pending under off"
+    );
 }

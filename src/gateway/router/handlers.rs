@@ -673,9 +673,6 @@ async fn meta_mcp_dispatch(
         finalized,
     )
     .await;
-    if let (Some(execution), Some(finalized)) = (execution, finalized) {
-        execution.complete_delivery(&finalized, signing_context.as_ref());
-    }
     let response = frame
         .response()
         .expect("an answer frame stays an answer through its replacements");
@@ -690,6 +687,14 @@ async fn meta_mcp_dispatch(
     }
     // COLLUDE.1: receipts ride on the response to `emit_http`, after the last replacer.
     state.meta_mcp.settle_relay_receipts(response);
+    // The receipts are final: a retained answer is captured pending now,
+    // before settlement publishes it for replay, so a retry that finds it
+    // finds its snapshot too. Settlement that does not retain it discards
+    // the capture (E1, `cancel_replay_capture`).
+    state.meta_mcp.capture_pending_now(response);
+    if let (Some(execution), Some(finalized)) = (execution, finalized) {
+        execution.complete_delivery(&finalized, signing_context.as_ref());
+    }
 
     telemetry_metrics::counter!(
         "mcp_jsonrpc_requests_total",
