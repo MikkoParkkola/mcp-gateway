@@ -166,16 +166,47 @@ def py_code(text: str) -> str:
 
 
 # A lexer step: a raw string, a string, a char literal (kept), or a comment (blanked).
-RS_LEX = re.compile(
-    r"""(?:br|r)(?P<h>#*)"[\s\S]*?"(?P=h)|b?"(?:\\[\s\S]|[^"\\])*"|b?'(?:\\.|[^'\\\n])'"""
-    r"""|(?P<c>//[^\n]*|/\*[\s\S]*?\*/)"""
-)  # ponytail: block comments are not nested-aware; a nested /* */ ends early, the code side is kept
+# A literal at the cursor: a raw string, a string (an escape may consume a
+# newline), or a char literal. Literals are kept: an idiom can be one.
+RS_LITERAL = re.compile(r"""(?:br|r)(?P<h>#*)"[\s\S]*?"(?P=h)|b?"(?:\\[\s\S]|[^"\\])*"|b?'(?:\\.|[^'\\\n])'""")
 
 
 def rs_code(text: str) -> str:
-    """`text` with `//` and `/* */` comments blanked, literals kept (an idiom can be one).
-    Raw strings and char literals are lexed, so a `//` inside one is no comment."""
-    return RS_LEX.sub(lambda m: " " * len(m.group(0)) if m.group("c") else m.group(0), text)
+    """`text` with `//` and `/* */` comments blanked (newlines kept), literals
+    kept. Block comments nest, as in Rust, so `/* /* */ // */` ends at the
+    outer `*/` and the code after it stays code."""
+    out, i, n = [], 0, len(text)
+
+    def blank(chunk: str) -> str:
+        return "".join("\n" if c == "\n" else " " for c in chunk)
+
+    while i < n:
+        lit = RS_LITERAL.match(text, i) if text[i] in "\"'br" else None
+        if lit and (text[i] in "\"'" or i == 0 or not (text[i - 1].isalnum() or text[i - 1] == "_")):
+            out.append(lit.group(0))
+            i = lit.end()
+        elif text.startswith("//", i):
+            end = text.find("\n", i)
+            end = n if end < 0 else end
+            out.append(blank(text[i:end]))
+            i = end
+        elif text.startswith("/*", i):
+            depth, j = 0, i
+            while j < n:
+                if text.startswith("/*", j):
+                    depth, j = depth + 1, j + 2
+                elif text.startswith("*/", j):
+                    depth, j = depth - 1, j + 2
+                    if depth == 0:
+                        break
+                else:
+                    j += 1
+            out.append(blank(text[i:j]))
+            i = j
+        else:
+            out.append(text[i])
+            i += 1
+    return "".join(out)
 
 
 def matches(rel: str, text: str) -> collections.Counter[Key]:

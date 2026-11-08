@@ -109,10 +109,16 @@ class Detection(Tree):
         for body in (
             'fn judge(l: &str) -> bool {\n    let _s = "a\\\n // b"; l == "#[cfg(test)]"\n}\n',
             'fn judge(l: &str) -> bool {\n    /* // */ l == "#[cfg(test)]"\n}\n',
+            # Block comments nest: the copy after the outer `*/` is code.
+            'fn judge(l: &str) -> bool {\n    /* outer /* inner */ // */ l == "#[cfg(test)]"\n}\n',
         ):
             with self.subTest(body=body):
                 self.write("src/a.rs", body)
                 self.assertEqual(self.problems(), ["new copy: src/a.rs judge (1, listed 0)"])
+
+    def test_a_function_after_a_nested_comment_is_code(self):
+        self.write("src/a.rs", '/* /* */ // */ fn judge(a: &A) -> bool { a.path().is_ident("test") }\n')
+        self.assertEqual(self.problems(), ["new copy: src/a.rs judge (1, listed 0)"])
 
     def test_a_docstring_only_function_leaves_the_next_scope_intact(self):
         self.write(
