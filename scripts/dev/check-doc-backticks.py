@@ -269,6 +269,11 @@ def main() -> int:
             gates += gate
     if gates:
         print(f"{gates} doc comment word(s) clippy::doc_markdown would refuse; put each in backticks")
+        print(
+            "If clippy accepts the line (this check is a text approximation of it), put the word "
+            "in backticks anyway, which clippy also accepts, and report the line against "
+            "scripts/dev/check-doc-backticks.py so the check can be narrowed."
+        )
     return 1 if gates else 0
 
 

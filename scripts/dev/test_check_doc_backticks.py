@@ -205,6 +205,10 @@ class Cli(unittest.TestCase):
             self.assertIn("src/new.rs:1: publish_started", out.stdout)
             self.assertNotIn("old.rs", out.stdout)
             self.assertIn("put it in backticks", out.stdout)
+            # A false block must cost seconds: the message names the workaround
+            # and asks for a report.
+            self.assertIn("If clippy accepts the line", out.stdout)
+            self.assertIn("report", out.stdout)
 
     def test_base_mode_checks_a_renamed_file(self):
         with tempfile.TemporaryDirectory() as tmp:

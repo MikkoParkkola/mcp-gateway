@@ -1604,11 +1604,14 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+          persist-credentials: false
       - name: Check the check flags what clippy flags, and nothing it accepts
         run: python3 scripts/dev/test_check_doc_backticks.py
       - name: Check this change's doc comments
         if: github.event_name == 'pull_request'
-        run: python3 scripts/dev/check-doc-backticks.py --base "origin/${{ github.base_ref }}"
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: python3 scripts/dev/check-doc-backticks.py --base "$BASE_SHA"
       - name: Check every doc comment
         if: github.event_name != 'pull_request'
         run: python3 scripts/dev/check-doc-backticks.py
