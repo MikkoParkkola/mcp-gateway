@@ -214,7 +214,7 @@ fn read_back(target: &Path, expected: &FileRevision) -> Result<(), NotDurable> {
     }
     // A directory sync makes the name durable, not the data: flush the file
     // too, so a match read from the page cache proves bytes on disk.
-    flush(&file, target).map_err(NotDurable::Sync)?;
+    flush(&mut file, target).map_err(NotDurable::Sync)?;
     let found = FileRevision::of_reader(&mut file).map_err(NotDurable::Sync)?;
     if &found == expected {
         return Ok(());
@@ -245,14 +245,17 @@ fn open_target(target: &Path) -> io::Result<std::fs::File> {
 }
 
 /// Flush the same file whose bytes are then hashed.
-fn flush(file: &std::fs::File, target: &Path) -> io::Result<()> {
+fn flush(file: &mut std::fs::File, target: &Path) -> io::Result<()> {
     #[cfg(test)]
     if fault::fires(target, |f| matches!(f, Fault::FailFileSync)).is_some() {
         return Err(io::Error::other("injected file-sync failure"));
     }
     #[cfg(not(test))]
     let _ = target;
-    file.sync_all()
+    file.sync_all()?;
+    #[cfg(test)]
+    super::crash_fs::note_flushed(target, file)?;
+    Ok(())
 }
 
 /// Run a row's hook armed for `target` at `at`.

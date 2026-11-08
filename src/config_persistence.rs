@@ -133,6 +133,7 @@ fn sync_dir_for(path: &Path, key: Option<commit::SyncKey>) -> std::io::Result<()
     #[cfg(test)]
     if synced.is_ok() {
         journal::fault::note_synced(path);
+        crash_fs::note_dir_synced(dir);
     }
     synced
 }
