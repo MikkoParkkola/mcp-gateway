@@ -139,14 +139,16 @@ impl AuthorizationError {
 
 /// The tool policy on `target`, as every transport's authorizer judges it: a
 /// refusal is `-32600` and names the policy entry that made it, for the
-/// decision record only.
+/// decision record only. An allow keeps the allow-list entry that admitted
+/// the call (D6): `Ok(None)` when no entry did (the policy is off, or its
+/// default action allowed, which names no entry).
 pub(crate) fn tool_policy_refusal(
     policy: &crate::security::ToolPolicy,
     target: ToolTarget<'_>,
-) -> Result<(), AuthorizationError> {
+) -> Result<Option<crate::security::rule_id::RuleId>, AuthorizationError> {
     policy
         .check_explained(target.server, target.tool)
-        .map(|_| ())
+        .map(Option::<&crate::security::rule_id::RuleId>::cloned)
         .map_err(|(e, rule)| {
             AuthorizationError::forbidden(
                 crate::security::decision_record::DecisionKind::ToolPolicy,
@@ -155,17 +157,6 @@ pub(crate) fn tool_policy_refusal(
             )
             .with_rule(rule.cloned())
         })
-}
-
-/// [`tool_policy_refusal`], keeping the allow-list entry that admitted the
-/// call: `Ok(None)` when no entry did (the policy is off, or its default
-/// action allowed). A stub for now: it never names the entry.
-#[expect(dead_code, reason = "the tool-policy callers switch to it once wired")]
-pub(crate) fn tool_policy_verdict(
-    policy: &crate::security::ToolPolicy,
-    target: ToolTarget<'_>,
-) -> Result<Option<crate::security::rule_id::RuleId>, AuthorizationError> {
-    tool_policy_refusal(policy, target).map(|()| None)
 }
 
 /// The caller's backend scope: whether an API key or key-server token may
@@ -399,10 +390,6 @@ impl<'a> Decision<'a> {
 
     /// This decision, naming the check that allowed it; a lower rank already
     /// held is kept.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "the checks attach their allows once wired")
-    )]
     #[must_use]
     pub(crate) fn allowing(
         mut self,
@@ -744,17 +731,23 @@ impl ToolAuthorizer for ToolPolicyAuthorizer<'_> {
         if target.server.is_empty() || target.tool.is_empty() {
             return Decision::of(Ok(()));
         }
-        Decision::of(
-            crate::security::validate_tool_name(target.tool)
-                .map_err(|e| {
-                    AuthorizationError::forbidden(
-                        crate::security::decision_record::DecisionKind::Syntax,
-                        INVALID_REQUEST,
-                        e.clone(),
-                    )
-                })
-                .and_then(|()| tool_policy_refusal(self.tool_policy, target)),
-        )
+        let verdict = crate::security::validate_tool_name(target.tool)
+            .map_err(|e| {
+                AuthorizationError::forbidden(
+                    crate::security::decision_record::DecisionKind::Syntax,
+                    INVALID_REQUEST,
+                    e.clone(),
+                )
+            })
+            .and_then(|()| tool_policy_refusal(self.tool_policy, target));
+        // D6: the allow-list entry that admitted the call is its allow.
+        let entry = verdict.as_ref().ok().cloned().flatten();
+        Decision::of(verdict.map(|_| ())).allowing(entry.map(|id| {
+            crate::security::decision_record::Allow::by(
+                crate::security::decision_record::AllowRank::ToolPolicy,
+                Some(id),
+            )
+        }))
     }
 
     /// stdio carries no per-caller backend scope.

@@ -20,7 +20,7 @@ use crate::gateway::oauth::{
     Action, OAuthAgentIdentity, check_scopes, record_agent_scope_decision,
 };
 use crate::mtls::{CertIdentity, PolicyDecision};
-use crate::security::decision_record::DecisionKind;
+use crate::security::decision_record::{Allow, AllowRank, DecisionKind};
 use crate::security::validate_tool_name;
 
 /// Whether `request` is exempt from sanitization (MIK-8154 SAN.1, option (a)):
@@ -373,10 +373,15 @@ pub(super) fn decide_tool_target<'a>(
     if target.server.is_empty() || target.tool.is_empty() {
         return Decision::of(Ok(()));
     }
+    // D6: the allow-list entry that admitted the call, if one did.
+    let mut entry = None;
     let early = validate_tool_name(target.tool)
         .map_err(|e| refused(DecisionKind::Syntax, e.clone()))
         .and_then(|()| crate::gateway::authz::authorize_backend(client, target.server))
-        .and_then(|()| crate::gateway::authz::tool_policy_refusal(generation.tool_policy(), target))
+        .and_then(|()| {
+            crate::gateway::authz::tool_policy_refusal(generation.tool_policy(), target)
+                .map(|id| entry = id)
+        })
         .and_then(|()| {
             client.map_or(Ok(()), |client| {
                 client
@@ -388,14 +393,18 @@ pub(super) fn decide_tool_target<'a>(
         return Decision::of(Err(e));
     }
 
-    let mtls = (!state.mtls_policy.is_empty())
-        .then(|| {
-            state
-                .mtls_policy
-                .evaluate_explained(cert_identity, target.server, target.tool)
-        })
-        .filter(|(decision, _)| *decision == PolicyDecision::Deny);
-    if let Some((_, rule_id)) = mtls {
+    let mtls = (!state.mtls_policy.is_empty()).then(|| {
+        state
+            .mtls_policy
+            .evaluate_explained(cert_identity, target.server, target.tool)
+    });
+    // D7: the first matching rule that allowed is the call's mTLS allow; a
+    // disabled policy names none.
+    let mtls_rule = match &mtls {
+        Some((PolicyDecision::Allow, Some(rule_id))) => Some((*rule_id).clone()),
+        _ => None,
+    };
+    if let Some((PolicyDecision::Deny, rule_id)) = mtls {
         // A refusal no rule decided (no certificate, no rule matched) names none.
         let refusal = refused(
             DecisionKind::Mtls,
@@ -468,9 +477,13 @@ pub(super) fn decide_tool_target<'a>(
             .map_err(|e| refused(DecisionKind::Ssrf, e.to_string()));
     }
 
+    let allows = [
+        entry.map(|id| Allow::by(AllowRank::ToolPolicy, Some(id))),
+        mtls_rule.map(|id| Allow::by(AllowRank::Mtls, Some(id))),
+    ];
     // The agent allow record is written even when SSRF then refuses, exactly
     // as the inline check wrote it before the verdict was deferred.
-    match agent_record {
+    let decision = match agent_record {
         Some((identity, allowed)) => Decision::recorded(verdict, move || {
             record_agent_scope_decision(
                 identity,
@@ -481,7 +494,10 @@ pub(super) fn decide_tool_target<'a>(
             );
         }),
         None => Decision::of(verdict),
-    }
+    };
+    allows
+        .into_iter()
+        .fold(decision, |decision, allow| decision.allowing(allow))
 }
 
 /// The backend-level half of [`decide_tool_target`], decided silently: may
