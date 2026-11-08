@@ -39,7 +39,11 @@ fn r9_first_start_writes_an_open_sidecar_without_an_event() {
     Fixture::calls(&log, 2, 2);
     let s = sidecar(&fx);
     assert_eq!(s["state"], "open");
-    assert_eq!(all_events(&fx), [0, 0, 0, 0], "a first start is not an event");
+    assert_eq!(
+        all_events(&fx),
+        [0, 0, 0, 0],
+        "a first start is not an event"
+    );
     // P sits after the two unsigned records written before the secret.
     let recs = fx.records();
     let first_signed = recs
@@ -73,7 +77,11 @@ fn r25_a_v3_log_migrates_once() {
     std::fs::remove_file(fx.sidecar()).unwrap();
     drop(fx.open(true, 0));
     assert_eq!(sidecar(&fx)["state"], "closed");
-    assert_eq!(all_events(&fx), [1, 1, 0, 0], "a tamper event, no second migration");
+    assert_eq!(
+        all_events(&fx),
+        [1, 1, 0, 0],
+        "a tamper event, no second migration"
+    );
 }
 
 /// R27 (lead ruling): a v3 log whose head was trimmed is unanchored legacy:
@@ -90,7 +98,11 @@ fn r27_a_trimmed_v3_log_is_unanchored_legacy() {
     assert_eq!(s["offset"].as_u64(), Some(first_signed));
     assert_eq!(all_events(&fx), [0, 0, 1, 0]);
     drop(fx.open(true, 0));
-    assert_eq!(all_events(&fx), [0, 0, 1, 0], "a second open writes nothing");
+    assert_eq!(
+        all_events(&fx),
+        [0, 0, 1, 0],
+        "a second open writes nothing"
+    );
 }
 
 /// R7 (condition 4b): a deleted sidecar on a signed v4 log is the tamper
@@ -106,7 +118,11 @@ fn r7_a_deleted_sidecar_rebuilds_closed_with_one_event() {
     assert_eq!(sidecar(&fx)["state"], "closed");
     assert_eq!(all_events(&fx), [1, 0, 0, 0]);
     drop(fx.open(true, 0));
-    assert_eq!(all_events(&fx), [1, 0, 0, 0], "a closed sidecar raises nothing again");
+    assert_eq!(
+        all_events(&fx),
+        [1, 0, 0, 0],
+        "a closed sidecar raises nothing again"
+    );
 }
 
 /// R23 (round 2 HI2): a caller cannot append a record named like one.
@@ -183,11 +199,17 @@ fn r26_a_rotated_v4_log_with_files_deleted_is_tamper() {
     drop(log);
     let sealed = crate::security::transparency_log::segments::list_segments(&fx.path).unwrap();
     assert!(!sealed.is_empty(), "the fixture rotated");
-    for file in sealed.iter().map(|s| s.path.clone()).chain([fx.path.clone()]) {
+    for file in sealed
+        .iter()
+        .map(|s| s.path.clone())
+        .chain([fx.path.clone()])
+    {
         let text = std::fs::read_to_string(&file).unwrap();
         let kept: String = text
             .lines()
-            .filter(|l| !l.contains("\"audit_segment_opened\"") && !l.contains("\"audit_log_identified\""))
+            .filter(|l| {
+                !l.contains("\"audit_segment_opened\"") && !l.contains("\"audit_log_identified\"")
+            })
             .map(|l| format!("{l}\n"))
             .collect();
         std::fs::write(&file, kept).unwrap();
@@ -208,7 +230,10 @@ fn r22_first_signing_after_a_torn_tail_is_a_first_start() {
     let plain = fx.open(false, 0);
     Fixture::calls(&plain, 0, 3);
     drop(plain);
-    let mut f = std::fs::OpenOptions::new().append(true).open(&fx.path).unwrap();
+    let mut f = std::fs::OpenOptions::new()
+        .append(true)
+        .open(&fx.path)
+        .unwrap();
     std::io::Write::write_all(&mut f, b"{\"torn\":").unwrap();
     drop(f);
     drop(fx.open(true, 0));

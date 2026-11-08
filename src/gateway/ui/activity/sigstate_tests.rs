@@ -11,7 +11,10 @@ use serde_json::Value;
 use super::access::Access;
 use super::receipt::{parse_id, receipt};
 use super::{ExportQuery, ListQuery, Logs, export_response, list_page};
-use crate::security::transparency_log::sigstart_fixture::{Fixture, SECRET};
+use crate::security::transparency_log::segments::list_segments;
+use crate::security::transparency_log::sigstart_fixture::{
+    Fixture, SECRET, rewrite, strip_sig, write_v3,
+};
 use crate::trust::provenance_public::ProvenancePublicSigner;
 
 fn logs(fx: &Fixture) -> Logs {
@@ -46,9 +49,10 @@ struct Seen {
 
 async fn seen(fx: &Fixture, tool: &str) -> Seen {
     let logs = logs(fx);
-    let list: Value =
-        serde_json::from_slice(&json_body(list_page(&logs, &Access::All, &ListQuery::default())).await)
-            .unwrap();
+    let list: Value = serde_json::from_slice(
+        &json_body(list_page(&logs, &Access::All, &ListQuery::default())).await,
+    )
+    .unwrap();
     let list = list["rows"]
         .as_array()
         .unwrap()
@@ -61,7 +65,13 @@ async fn seen(fx: &Fixture, tool: &str) -> Seen {
         .unwrap()
         .expect("a receipt");
     let s = signer();
-    let nd = json_body(export_response(&logs, &Access::All, &ExportQuery::default(), Some(&s))).await;
+    let nd = json_body(export_response(
+        &logs,
+        &Access::All,
+        &ExportQuery::default(),
+        Some(&s),
+    ))
+    .await;
     let lines: Vec<Value> = String::from_utf8(nd)
         .unwrap()
         .lines()
@@ -77,7 +87,9 @@ async fn seen(fx: &Fixture, tool: &str) -> Seen {
         format: Some("csv".into()),
         ..ExportQuery::default()
     };
-    let csv = String::from_utf8(json_body(export_response(&logs, &Access::All, &csv_q, None)).await).unwrap();
+    let csv =
+        String::from_utf8(json_body(export_response(&logs, &Access::All, &csv_q, None)).await)
+            .unwrap();
     let mut rows = csv.lines().filter(|l| !l.starts_with('#')).map(csv_fields);
     let header = rows.next().unwrap();
     let col = |name: &str| header.iter().position(|h| h == name).unwrap();
@@ -121,7 +133,10 @@ fn assert_invalid(s: &Seen, why: &str) {
     assert_eq!(s.ndjson["integrity"], why, "ndjson integrity");
     assert_eq!(s.csv_signature, "invalid", "csv");
     assert_eq!(s.csv_integrity, why, "csv integrity");
-    assert!(s.manifest["integrity_failed"].as_u64().unwrap() >= 1, "manifest");
+    assert!(
+        s.manifest["integrity_failed"].as_u64().unwrap() >= 1,
+        "manifest"
+    );
 }
 
 /// A signed log of `n` calls, then `tool_<k>` edited, rehashed, stripped.
@@ -152,7 +167,10 @@ async fn r3_an_edited_outcome_is_an_integrity_failure_not_an_effect() {
     });
     let s = seen(&fx, "tool_2").await;
     assert_invalid(&s, "sig_missing");
-    assert_eq!(s.receipt["integrity"], "sig_missing", "receipt names the failure");
+    assert_eq!(
+        s.receipt["integrity"], "sig_missing",
+        "receipt names the failure"
+    );
 }
 
 /// R4 (SIGSTATE.4): the stripped record's timestamp moved before the first
@@ -204,10 +222,17 @@ async fn r11_no_secret_reads_as_before() {
     std::fs::write(fx.sidecar(), "garbage\n").unwrap();
     let mut l = logs(&fx);
     l.secret = None;
-    let list: Value =
-        serde_json::from_slice(&json_body(list_page(&l, &Access::All, &ListQuery::default())).await)
-            .unwrap();
-    let row = list["rows"].as_array().unwrap().iter().find(|r| r["tool"] == "tool_1").unwrap().clone();
+    let list: Value = serde_json::from_slice(
+        &json_body(list_page(&l, &Access::All, &ListQuery::default())).await,
+    )
+    .unwrap();
+    let row = list["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["tool"] == "tool_1")
+        .unwrap()
+        .clone();
     assert_eq!(row["signature"], "unsigned");
 }
 
@@ -246,7 +271,7 @@ async fn r19_edits_to_legacy_bytes_are_caught() {
     let signed = lines.iter().position(|l| l.contains("\"tool_3\"")).unwrap();
     let mut forged: Value = serde_json::from_str(lines[signed]).unwrap();
     forged["tool"] = "tool_9".into();
-    crate::security::transparency_log::sigstart_fixture::strip_sig(&mut forged);
+    strip_sig(&mut forged);
     let mut forged = forged.to_string();
     assert!(forged.len() <= lines[legacy].len(), "the forged line fits");
     while forged.len() < lines[legacy].len() {
@@ -263,7 +288,7 @@ async fn r19_edits_to_legacy_bytes_are_caught() {
     let mut lines: Vec<String> = text.lines().map(str::to_string).collect();
     let mut extra: Value = serde_json::from_str(&lines[1]).unwrap();
     extra["tool"] = "tool_8".into();
-    crate::security::transparency_log::sigstart_fixture::strip_sig(&mut extra);
+    strip_sig(&mut extra);
     // Between the two legacy lines, so it lies wholly below P.
     lines.insert(1, extra.to_string());
     std::fs::write(&fx.path, lines.join("\n") + "\n").unwrap();
@@ -287,4 +312,253 @@ async fn r21_an_anchor_fault_is_reported_with_no_failing_row() {
     assert_eq!(s.manifest["signing_anchor"]["invocation"], "mac");
     assert_eq!(s.manifest["anchor_faults"], 1);
     assert_eq!(s.receipt["signing_anchor"], "mac");
+}
+
+/// Strip `tool` wherever it is: the active file or a sealed segment.
+fn strip_anywhere(fx: &Fixture, tool: &str) {
+    let files: Vec<_> = list_segments(&fx.path)
+        .unwrap()
+        .into_iter()
+        .map(|s| s.path)
+        .chain([fx.path.clone()])
+        .collect();
+    let file = files
+        .iter()
+        .find(|f| {
+            std::fs::read_to_string(f)
+                .unwrap()
+                .contains(&format!("\"{tool}\""))
+        })
+        .expect("the record is kept");
+    rewrite(file, |v| {
+        let hit = v["tool"] == tool;
+        if hit {
+            strip_sig(v);
+        }
+        hit
+    });
+}
+
+/// R5 (SIGSTATE.5, condition 3): across rotated files, and after the
+/// anchor's segment is gone, a stripped record still reads `invalid`, and
+/// the anchor itself still reads `ok` (round 3 J8).
+#[tokio::test]
+async fn r5_rotation_and_retention_keep_the_anchor() {
+    let fx = Fixture::new();
+    let log = fx.open(true, 1024);
+    Fixture::calls(&log, 0, 16);
+    drop(log);
+    let sealed = list_segments(&fx.path).unwrap();
+    assert!(sealed.len() >= 2, "the fixture rotated twice");
+    // Retention removes the oldest file, the one P names.
+    std::fs::remove_file(&sealed[0].path).unwrap();
+    let oldest_kept = std::fs::read_to_string(&sealed[1].path).unwrap();
+    let tool = serde_json::from_str::<Value>(
+        oldest_kept
+            .lines()
+            .find(|l| l.contains("\"tool\""))
+            .unwrap(),
+    )
+    .unwrap()["tool"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    strip_anywhere(&fx, &tool);
+    let s = seen(&fx, &tool).await;
+    assert_invalid(&s, "sig_missing");
+    assert_eq!(s.manifest["signing_anchor"]["invocation"], "ok");
+    // A stripped record in the active file too.
+    strip_anywhere(&fx, "tool_15");
+    assert_invalid(&seen(&fx, "tool_15").await, "sig_missing");
+}
+
+/// R27 (lead ruling): unanchored legacy: records before the first surviving
+/// signed record read `unsigned` with the flag; a stripped one after it
+/// reads `invalid` (lead condition on the residual).
+#[tokio::test]
+async fn r27_unanchored_legacy_flags_only_the_earliest_records() {
+    let fx = Fixture::new();
+    write_v3(&fx.path, 40, 5, 6);
+    drop(fx.open(true, 0));
+    let s = seen(&fx, "tool_1").await;
+    assert_state(&s, "unsigned");
+    assert_eq!(s.list["unanchored"], true);
+    assert_eq!(s.ndjson["unanchored"], true);
+    fx.strip("tool_7", |_| {});
+    assert_invalid(&seen(&fx, "tool_7").await, "sig_missing");
+}
+
+/// R33 (J2 residual pin): signatures stripped from the first signed v3
+/// records before the upgrade read `unsigned` after migration; an edit to
+/// one of them breaks the next signed record's chain link in the receipt.
+#[tokio::test]
+async fn r33_pre_upgrade_stripping_downgrades_but_an_edit_breaks_the_chain() {
+    let fx = Fixture::new();
+    write_v3(&fx.path, 1, 2, 4);
+    for tool in ["tool_2", "tool_3"] {
+        rewrite(&fx.path, |v| {
+            let hit = v["tool"] == tool;
+            if hit {
+                let o = v.as_object_mut().unwrap();
+                o.remove("sig");
+                o.remove("key_id");
+            }
+            hit
+        });
+    }
+    drop(fx.open(true, 0));
+    assert_state(&seen(&fx, "tool_3").await, "unsigned");
+    assert_eq!(
+        seen(&fx, "tool_4").await.receipt["chain"]["link"],
+        "verified"
+    );
+
+    let fx = Fixture::new();
+    write_v3(&fx.path, 1, 2, 4);
+    fx.strip("tool_3", |v| v["response_hash"] = "sha256:ff".into());
+    drop(fx.open(true, 0));
+    assert_eq!(seen(&fx, "tool_4").await.receipt["chain"]["link"], "broken");
+}
+
+/// R32 (lead condition on J4): binding to this log without legacy history.
+#[tokio::test]
+async fn r32_coverage_binds_the_sidecar_to_this_log() {
+    // (a) two logs signed from their start; B's sidecar copied into A.
+    let a = attacked(3, 1, |_| {});
+    let b = Fixture::new();
+    let log = b.open(true, 0);
+    Fixture::calls(&log, 0, 5);
+    drop(log);
+    std::fs::copy(b.sidecar(), a.sidecar()).unwrap();
+    assert_invalid(&seen(&a, "tool_1").await, "sig_missing");
+
+    // (b) P past the start with an empty legacy list: tampering. The MAC is
+    // not re-signed here, so this checks the loader reads coverage, not only
+    // the MAC: the implementation row adds a re-signed variant.
+    let fx = turned_on_midway();
+    let mut sc: Value =
+        serde_json::from_str(std::fs::read_to_string(fx.sidecar()).unwrap().trim_end()).unwrap();
+    sc["legacy"] = Value::Array(vec![]);
+    std::fs::write(fx.sidecar(), sc.to_string() + "\n").unwrap();
+    let s = seen(&fx, "tool_0").await;
+    assert_eq!(s.list["signature"], "invalid");
+    assert_ne!(s.manifest["signing_anchor"]["invocation"], "ok");
+}
+
+/// R12: the live stream's announced record is the newest one: signed, it
+/// reads `valid`; an unsigned announced record reads `invalid` with the
+/// reason (round 3 J8: q13 needs the reason, not only the state).
+#[test]
+fn r12_the_live_frame_is_placed_after_every_anchor() {
+    use super::forward::{Log, StreamKind, frame};
+    let fx = Fixture::new();
+    let log = fx.open(true, 1024);
+    Fixture::calls(&log, 0, 12);
+    drop(log);
+    let newest = fx.records().last().unwrap().1.clone();
+    let live = Log {
+        path: &fx.path,
+        kind: StreamKind::Activity,
+        generation: 0,
+        secret: Some(SECRET.as_bytes()),
+    };
+    let served = frame(&live, &Access::All, &newest).expect("a call row");
+    assert_eq!(served.row["signature"], "valid");
+    let mut forged = newest.clone();
+    strip_sig(&mut forged);
+    let served = frame(&live, &Access::All, &forged).expect("a call row");
+    assert_eq!(served.row["signature"], "invalid");
+    assert_eq!(served.row["integrity"], "sig_missing");
+}
+
+/// R16: the governance log has its own anchor: a stripped governance
+/// record reads `invalid` in the list and the export.
+#[tokio::test]
+async fn r16_the_governance_log_is_anchored_too() {
+    let inv = Fixture::new();
+    drop(inv.open(true, 0));
+    let gov = Fixture::new();
+    let log = gov.open(true, 0);
+    for target in ["backend:alpha", "backend:beta"] {
+        let mut f = serde_json::Map::new();
+        f.insert("kind".into(), "control_plane_audit".into());
+        f.insert("actor_id".into(), "alice".into());
+        f.insert("target_id".into(), target.into());
+        f.insert("action".into(), "mutate_grant".into());
+        log.append_event(f, &crate::security::audit::AuditEnvelope::gateway())
+            .unwrap();
+    }
+    drop(log);
+    rewrite(&gov.path, |v| {
+        let hit = v["target_id"] == "backend:alpha";
+        if hit {
+            v["action"] = "read_grant".into();
+            strip_sig(v);
+        }
+        hit
+    });
+    let logs = Logs {
+        invocation: inv.path.clone(),
+        governance: Some(gov.path.clone()),
+        secret: Some(SECRET.as_bytes().to_vec()),
+    };
+    let page: Value = serde_json::from_slice(
+        &json_body(list_page(&logs, &Access::All, &ListQuery::default())).await,
+    )
+    .unwrap();
+    let row = page["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["target_id"] == "backend:alpha")
+        .expect("the governance row")
+        .clone();
+    assert_eq!(row["signature"], "invalid");
+    let s = signer();
+    let nd = json_body(export_response(
+        &logs,
+        &Access::All,
+        &ExportQuery::default(),
+        Some(&s),
+    ))
+    .await;
+    let text = String::from_utf8(nd).unwrap();
+    let exported: Value = text
+        .lines()
+        .map(|l| serde_json::from_str::<Value>(l).unwrap())
+        .find(|r| r["target_id"] == "backend:alpha")
+        .expect("exported");
+    assert_eq!(exported["integrity"], "sig_missing");
+}
+
+/// R29 (round 3 J1): a stripped record appended after a sealed legacy
+/// file's digested length reads `invalid`, not legacy `unsigned`.
+#[tokio::test]
+async fn r29_bytes_past_a_legacy_files_length_are_not_legacy() {
+    let fx = Fixture::new();
+    let plain = fx.open(false, 1024);
+    Fixture::calls(&plain, 0, 12);
+    drop(plain);
+    let sealed = list_segments(&fx.path).unwrap();
+    assert!(!sealed.is_empty(), "legacy history rotated");
+    let log = fx.open(true, 1024);
+    Fixture::calls(&log, 12, 2);
+    drop(log);
+    let legacy = &sealed[0].path;
+    let text = std::fs::read_to_string(legacy).unwrap();
+    let last = text
+        .lines()
+        .filter(|l| l.contains("\"tool\""))
+        .last()
+        .unwrap();
+    let mut extra: Value = serde_json::from_str(last).unwrap();
+    extra["tool"] = "tool_99".into();
+    strip_sig(&mut extra);
+    let mut f = std::fs::OpenOptions::new()
+        .append(true)
+        .open(legacy)
+        .unwrap();
+    std::io::Write::write_all(&mut f, (extra.to_string() + "\n").as_bytes()).unwrap();
+    drop(f);
+    assert_invalid(&seen(&fx, "tool_99").await, "legacy_edited");
 }

@@ -64,8 +64,15 @@ impl Fixture {
     /// Append `n` invocation records named `tool_<first + i>`.
     pub(crate) fn calls(log: &TransparencyLogger, first: usize, n: usize) {
         for i in first..first + n {
-            log.log_invocation("s", "c", "srv", &format!("tool_{i}"), "sha256:aa", "sha256:bb")
-                .expect("append");
+            log.log_invocation(
+                "s",
+                "c",
+                "srv",
+                &format!("tool_{i}"),
+                "sha256:aa",
+                "sha256:bb",
+            )
+            .expect("append");
         }
     }
 
@@ -142,7 +149,12 @@ pub(crate) fn rewrite(file: &Path, mut edit: impl FnMut(&mut Value) -> bool) {
         }
         out.push('\n');
     }
-    assert_eq!(hits, 1, "exactly one record matched the edit in {}", file.display());
+    assert_eq!(
+        hits,
+        1,
+        "exactly one record matched the edit in {}",
+        file.display()
+    );
     std::fs::write(file, out).expect("write log");
 }
 
