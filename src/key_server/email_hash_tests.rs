@@ -13,29 +13,97 @@ const KEY2_HEX: &str = "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c
 const KEY_ID: &str = "630dcd2966c4336691125448bbb25b4ff412a49c732db2c8abc1b8581bd710dd";
 /// sha256 of the 64-character hex TEXT: what the key id must not be.
 const TEXT_HASH: &str = "6c86c6aac5fb24bcf5d9939cb7d7d5645ce39418f449e03b262dd4fa14b4b92b";
-/// An ASCII address, already lower-cased: every normalization gives these bytes.
-const NORMALIZED: &str = concat!("ada.lovelace+audit@", "example", ".com");
-/// HMAC-SHA256(bytes 0x00..0x1f, NORMALIZED)
-const HMAC: &str = "ac94f538b33623bf3198d4cab44acaf1ab5ed132505aa49a7cd11a9f05474e42";
-/// HMAC-SHA256(bytes 0x01..0x20, NORMALIZED)
-const HMAC_K2: &str = "d389f6774c947a2ee47d83bf0f937660788d326c29a2d5591afde2511ab57c26";
+/// The domain part of every fixture address.
+const DOMAIN: &str = concat!("@", "example", ".com");
+/// HMAC-SHA256(bytes 0x00..0x1f, "email-v1\0" + normalized) for each input,
+/// with the normalized bytes in hex (Python `unicodedata` NFC, `str.lower`).
+const VECTORS: [(&str, &str, &str); 6] = [
+    (
+        "Ada.Lovelace+Audit",
+        "6164612e6c6f76656c6163652b6175646974406578616d706c652e636f6d",
+        "bdc47c656456fb58d5f738d9d88f65073047549d99d59b88ca5501724ffa07db",
+    ),
+    (
+        "Ren\u{e9}",
+        "72656ec3a9406578616d706c652e636f6d",
+        "947d9c1f37360d756ca7db3fd41316df7b239c660dd08d3db8834bf40ba22325",
+    ),
+    (
+        "Rene\u{301}",
+        "72656ec3a9406578616d706c652e636f6d",
+        "947d9c1f37360d756ca7db3fd41316df7b239c660dd08d3db8834bf40ba22325",
+    ),
+    (
+        "\u{130}nci",
+        "69cc876e6369406578616d706c652e636f6d",
+        "e320cba8b6a9255fa7ddd70f8aa619e4b2d2ae7014fa87f0b62c576abbf2c7a6",
+    ),
+    (
+        "\u{fb01}le",
+        "efac816c65406578616d706c652e636f6d",
+        "01b605be3b696d78baa295d7787784b5cad4565e9aca89f1f1f793de5fd290b3",
+    ),
+    (
+        "file",
+        "66696c65406578616d706c652e636f6d",
+        "ed954cc5a5e2070b6513e643395a76a5d1f89791109f9db17f26056dd7e4cf14",
+    ),
+];
 
 fn key(text: &str) -> EmailHashKey {
     EmailHashKey::from_hex(text).expect("a valid key")
 }
 
 #[test]
-fn the_hash_is_the_known_hmac_of_the_decoded_key() {
-    let hash = key(KEY_HEX).hash_normalized(NORMALIZED);
-    assert_eq!(hash, HMAC);
-    assert_eq!(hash.len(), 64);
-    assert!(hash.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f')));
+fn each_vector_normalizes_and_hashes_to_its_known_value() {
+    let k = key(KEY_HEX);
+    for (local, normalized_hex, hash) in VECTORS {
+        let email = format!("{local}{DOMAIN}");
+        assert_eq!(
+            hex::encode(super::normalize(&email)),
+            normalized_hex,
+            "{email:?}"
+        );
+        assert_eq!(k.hash(&email), hash, "{email:?}");
+    }
+}
+
+/// Canonically equivalent spellings meet; a compatibility form does not.
+#[test]
+fn equivalent_spellings_meet_and_a_ligature_stays_distinct() {
+    let k = key(KEY_HEX);
+    let h = |local: &str| k.hash(&format!("{local}{DOMAIN}"));
+    assert_eq!(
+        h("Ren\u{e9}"),
+        h("Rene\u{301}"),
+        "NFC joins é and e + accent"
+    );
+    assert_eq!(
+        h("Ada.Lovelace+Audit"),
+        h("ada.lovelace+audit"),
+        "case folds"
+    );
+    assert_ne!(
+        h("\u{fb01}le"),
+        h("file"),
+        "NFC keeps the ligature: no NFKC"
+    );
+}
+
+/// Normalizing twice changes nothing, including after U+0130 lowercases to
+/// a decomposed sequence.
+#[test]
+fn normalization_is_idempotent() {
+    for (local, _, _) in VECTORS {
+        let once = super::normalize(&format!("{local}{DOMAIN}"));
+        assert_eq!(super::normalize(&once), once, "{local:?}");
+    }
 }
 
 #[test]
 fn another_key_gives_another_hash() {
-    assert_eq!(key(KEY2_HEX).hash_normalized(NORMALIZED), HMAC_K2);
-    assert_ne!(HMAC, HMAC_K2);
+    let email = format!("Ada.Lovelace+Audit{DOMAIN}");
+    assert_ne!(key(KEY_HEX).hash(&email), key(KEY2_HEX).hash(&email));
 }
 
 #[test]

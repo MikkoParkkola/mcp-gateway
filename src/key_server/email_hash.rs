@@ -10,6 +10,24 @@ use crate::wiped_bytes::WipedBytes;
 /// The key's length in bytes, and so its hex text's length in digits / 2.
 const KEY_BYTES: usize = 32;
 
+/// The normalization and hash version records carry as `email_hash_version`.
+pub(crate) const VERSION: u32 = 1;
+
+/// Domain separation for version 1: a later version hashes under another
+/// prefix, so its hashes cannot collide with these.
+const DOMAIN: &[u8] = b"email-v1\0";
+
+/// Normalization v1: NFC, Unicode lowercase, NFC again. The second NFC is
+/// needed because lowercasing can emit a decomposed sequence (U+0130 becomes
+/// `i` and a combining dot), so one pass alone is not stable under a second.
+/// Canonically equivalent spellings meet; compatibility forms (a ligature,
+/// fullwidth letters) stay distinct, and the domain is not IDNA-converted.
+pub(crate) fn normalize(email: &str) -> String {
+    let nfc = icu_normalizer::ComposingNormalizerBorrowed::new_nfc();
+    nfc.normalize(&nfc.normalize(email).to_lowercase())
+        .into_owned()
+}
+
 /// The installation key. `Debug` shows only the length; the bytes are wiped
 /// on drop.
 #[derive(Debug)]
@@ -63,10 +81,15 @@ impl EmailHashKey {
         crate::hashing::sha256_hex(self.0.as_bytes())
     }
 
-    /// `HMAC-SHA256(key, normalized)` as 64 lowercase hex digits. The caller
-    /// passes the already normalized email.
-    pub(crate) fn hash_normalized(&self, normalized: &str) -> String {
-        crate::hashing::hmac_sha256_hex(self.0.as_bytes(), normalized.as_bytes())
+    /// The `email_hash` of `email`: HMAC-SHA256 under this key of the
+    /// version's domain-separation prefix and the normalized address, as 64
+    /// lowercase hex digits.
+    pub(crate) fn hash(&self, email: &str) -> String {
+        let normalized = normalize(email);
+        let mut message = Vec::with_capacity(DOMAIN.len() + normalized.len());
+        message.extend_from_slice(DOMAIN);
+        message.extend_from_slice(normalized.as_bytes());
+        crate::hashing::hmac_sha256_hex(self.0.as_bytes(), &message)
     }
 }
 
