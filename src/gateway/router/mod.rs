@@ -107,6 +107,8 @@ mod control_plane_grant_clock_tests;
 #[cfg(test)]
 mod cost_key_tests;
 #[cfg(test)]
+mod direct_adr012_tests;
+#[cfg(test)]
 mod direct_anonymous_continuation_tests;
 #[cfg(test)]
 mod direct_audit_tests;

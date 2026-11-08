@@ -1,13 +1,13 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! The direct-route request helpers of `mik_7272_sub4_adr012_acs`.
+//! The direct-route request helpers of the ADR-012 rows.
 
 use std::sync::Arc;
 
+use crate::gateway::test_helpers::{AppState, create_router};
+use crate::key_server::oidc::VerifiedIdentity;
+use crate::protocol::mrtr::IDEMPOTENCY_KEY_META;
 use axum::http::StatusCode;
-use mcp_gateway::gateway::test_helpers::{AppState, create_router};
-use mcp_gateway::key_server::oidc::VerifiedIdentity;
-use mcp_gateway::protocol::mrtr::IDEMPOTENCY_KEY_META;
 use serde_json::{Value, json};
 use tower::ServiceExt;
 
@@ -56,14 +56,14 @@ pub(crate) async fn post_direct(state: &Arc<AppState>, mut body: Value) -> (Stat
         ))
         .expect("request builds");
     // Every call here is keyed, and a keyed direct call needs a verified
-    // execution principal, as on `/mcp` (MIK-8154 ANON.1).
-    request.extensions_mut().insert(VerifiedIdentity {
-        subject: "adr012".to_string(),
-        email: "adr012@id.local".to_string(),
-        name: None,
-        groups: Vec::new(),
-        issuer: "https://issuer.example".to_string(),
-    });
+    // execution principal, as on `/mcp`.
+    request.extensions_mut().insert(VerifiedIdentity::for_test(
+        "adr012",
+        "adr012@id.local",
+        None,
+        Vec::new(),
+        "https://issuer.example",
+    ));
     let response = create_router(Arc::clone(state))
         .oneshot(request)
         .await
