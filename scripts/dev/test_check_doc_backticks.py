@@ -168,6 +168,27 @@ class ClippyMarkdownRound2(unittest.TestCase):
         src = 'const A: &str = "say \\"hi\\"";\n/// The start_entry flag.\nfn f() {}\n'
         self.assertEqual(hits(src), [(2, "start_entry")])
 
+    def test_a_doc_after_a_raw_string_late_in_the_file_is_flagged(self):
+        # The raw string's end must be found from where it starts, however far
+        # into the file that is: a scan that jumps past it reads later lines as
+        # string text and hides the doc.
+        pad = "// " + "x" * 120 + "\n"
+        filler = "".join("// filler line without any quote characters\n" for _ in range(6))
+        src = pad + 'const R: &str = r#"raw"#;\n' + filler + "/// The start_entry flag.\nfn f() {}\n" + filler
+        self.assertEqual(hits(src), [(9, "start_entry")])
+
+    def test_a_doc_after_a_backslash_continued_string_is_flagged(self):
+        # Each continued line must count: a lagging line count shifts a later
+        # string's marks onto the doc above it.
+        src = (
+            'const A: &str = "one \\\ntwo \\\nthree \\\nfour";\n'
+            "fn g() {}\n"
+            "/// The start_entry flag.\n"
+            "fn f() {}\n"
+            'const B: &str = "\nx\ny";\n'
+        )
+        self.assertEqual(hits(src), [(6, "start_entry")])
+
 
 class CamelCase(unittest.TestCase):
     def test_camel_case_is_a_warning_not_a_hit(self):
