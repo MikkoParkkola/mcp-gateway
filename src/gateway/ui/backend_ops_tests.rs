@@ -768,13 +768,13 @@ fn r1_credential_refusals_table() {
         "name=value"
     );
     assert_eq!(
-        cmd("npx tool --authorization 'Bearer tok-0123456789'"),
+        cmd("npx tool --authorization \"Bearer tok-0123456789\""),
         bad_cmd,
         "quoted value"
     );
     assert_eq!(cmd("npx tool \"--api-key=k1\""), bad_cmd, "quoted flag");
     assert_eq!(
-        cmd("curl -H 'Authorization: Bearer tok-0123'"),
+        cmd("curl -H \"Authorization: Bearer tok-0123\""),
         bad_cmd,
         "header-shaped"
     );

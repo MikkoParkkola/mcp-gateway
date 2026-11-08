@@ -91,6 +91,11 @@ pub async fn run_add_command(
         Ok(r) => r,
         Err(msg) => {
             eprintln!("Error: {msg}");
+            // A credential in the command or URL is a usage error, like a
+            // value given to -e (the library's CREDENTIAL_IN_ARGV phrase).
+            if msg.contains("would write a credential into gateway.yaml as text") {
+                return ExitCode::from(2);
+            }
             return ExitCode::FAILURE;
         }
     };

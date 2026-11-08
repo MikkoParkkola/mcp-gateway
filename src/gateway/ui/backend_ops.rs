@@ -203,9 +203,77 @@ pub(crate) fn credential_refusals(
     command: Option<&str>,
     url: Option<&str>,
 ) -> Vec<(&'static str, String)> {
-    // RED STUB: rows first.
-    let _ = (command, url);
-    Vec::new()
+    if let Some(command) = command {
+        return if command_carries_credential(command) {
+            vec![("secret_in_command", "command".to_string())]
+        } else {
+            Vec::new()
+        };
+    }
+    match url {
+        Some(url) if url_carries_credential(url) => vec![("secret_in_url", "url".to_string())],
+        _ => Vec::new(),
+    }
+}
+
+/// Whether `name` names a credential: the shared rule's credential words, or
+/// an HTTP authentication header (`Authorization`, `Proxy-Authorization`,
+/// `Cookie`). Dashes count as underscores, leading dashes are dropped.
+fn credential_name(name: &str) -> bool {
+    let name = name.trim_start_matches('-').replace('-', "_");
+    let lower = name.to_ascii_lowercase();
+    ["authorization", "proxy_authorization", "cookie"].contains(&lower.as_str())
+        || crate::config::secret_values::names_a_credential(&name)
+}
+
+/// Whether `value` would be written as text holding a secret: any value but
+/// an empty one, a whole `${VAR}` template or a whole secret reference (a
+/// literal default or literal text beside a template counts as text).
+fn literal_value(value: &str) -> bool {
+    !value.is_empty() && classify(value) != Ok(ValueClass::Kept)
+}
+
+/// A URL holding userinfo, or a credential-named query parameter with a
+/// literal value. One that does not parse holds no checkable credential and
+/// is left to the transport's own validation.
+fn url_carries_credential(raw: &str) -> bool {
+    let Ok(url) = url::Url::parse(raw) else {
+        return false;
+    };
+    let userinfo = url
+        .password()
+        .map_or_else(|| url.username().to_string(), str::to_string);
+    if literal_value(&userinfo) {
+        return true;
+    }
+    url.query_pairs()
+        .any(|(name, value)| credential_name(&name) && literal_value(&value))
+}
+
+/// A command (split as the stdio start splits it) with a credential-named
+/// `--flag=value`, `--flag value`, `NAME=value` or `Name: value` argument, or
+/// an argument value that is a URL carrying a credential.
+fn command_carries_credential(command: &str) -> bool {
+    let words = crate::transport::split_command(command)
+        .unwrap_or_else(|| command.split_whitespace().map(str::to_string).collect());
+    words.iter().enumerate().any(|(i, word)| {
+        if let Some((name, value)) = word.split_once(": ")
+            && credential_name(name)
+            && literal_value(value)
+        {
+            return true;
+        }
+        if let Some((name, value)) = word.split_once('=') {
+            return (credential_name(name) && literal_value(value))
+                || url_carries_credential(value);
+        }
+        if word.starts_with("--") && credential_name(word) {
+            return words
+                .get(i + 1)
+                .is_some_and(|next| !next.starts_with('-') && literal_value(next));
+        }
+        url_carries_credential(word)
+    })
 }
 
 pub(crate) use crate::config::secret_values::{ValueClass, classify};
@@ -394,6 +462,19 @@ pub fn resolve_backend<S: std::hash::BuildHasher>(
     desc: Option<&str>,
     env: HashMap<String, String, S>,
 ) -> Result<ResolvedBackend, String> {
+    // A credential in the field that is saved would land in gateway.yaml as
+    // text: refused before anything is resolved.
+    let refused = credential_refusals(cmd, url);
+    if !refused.is_empty() {
+        let fields: Vec<String> = refused
+            .iter()
+            .map(|(code, field)| format!("{field} ({code})"))
+            .collect();
+        return Err(format!(
+            "'{name}' {CREDENTIAL_IN_ARGV}: {}. Give the credential as an env value (-e NAME or --env-file), which goes to the secret store",
+            fields.join(", ")
+        ));
+    }
     // Collect into a standard HashMap so it matches BackendConfig.env's field type.
     let env: HashMap<String, String> = env.into_iter().collect();
     let plain = |transport, description: &str| ResolvedBackend {

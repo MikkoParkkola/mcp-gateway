@@ -175,6 +175,13 @@ async fn add_backend(
         return flat_error(StatusCode::UNPROCESSABLE_ENTITY, refused.to_string()).into_response();
     }
 
+    // A credential in the saved command or URL is refused by field before
+    // anything is resolved (it would land in gateway.yaml as text).
+    let refused =
+        super::backend_ops::credential_refusals(req.command.as_deref(), req.url.as_deref());
+    if !refused.is_empty() {
+        return super::secret_slots::refused_values(&refused);
+    }
     // Resolve the whole backend: transport, description, and for a registry
     // entry its login, env templates and default state.
     let resolved = match resolve_backend(
@@ -422,6 +429,12 @@ async fn update_backend(
             "Provide either 'command' or 'url', not both",
         )
         .into_response();
+    }
+    // A credential in a new command or URL is refused by field (it would land
+    // in gateway.yaml as text).
+    let refused = super::backend_ops::credential_refusals(command.as_deref(), url.as_deref());
+    if !refused.is_empty() {
+        return super::secret_slots::refused_values(&refused);
     }
 
     // Only the values this request sets are judged and stored; values already
