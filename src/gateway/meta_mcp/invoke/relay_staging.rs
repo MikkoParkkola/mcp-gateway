@@ -122,7 +122,7 @@ impl StagedReceipts {
         generation: Option<&crate::config_reload::Generation>,
     ) {
         #[cfg(feature = "firewall")]
-        if let (Some(fw), Some(generation)) = (self.fw.clone(), generation)
+        if let (Some(fw), Some(_)) = (self.fw.clone(), generation)
             && replay::is_sync_capture(self.capture.as_ref())
         {
             let calls = std::mem::take(&mut self.calls);

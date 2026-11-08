@@ -678,7 +678,6 @@ fn r16_a_capture_under_off_is_stored_pending() {
     };
     let fw = Firewall::from_config(config, None).keeping_every_kgram();
     let digest = DeliveryDigest::of_seam((0..8_u64).collect(), true, None);
-    let generation = fw.paired_generation_for_test();
     let sync = sync_key("alice", "r16", "op");
     let handle = fw.store_replay(
         sync.clone(),

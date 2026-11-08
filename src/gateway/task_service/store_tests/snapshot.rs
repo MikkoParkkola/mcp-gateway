@@ -125,7 +125,7 @@ async fn a_row_without_a_snapshot_reads_as_none() {
 /// change is unsupported, on purpose (the upgrade note states it).
 #[test]
 fn a_snapshot_row_is_beyond_an_older_loader() {
-    assert!(SNAPSHOT_VERSION > BINDING_VERSION);
+    const { assert!(SNAPSHOT_VERSION > BINDING_VERSION) };
     assert_eq!(
         super::super::record::MAX_LOADABLE_VERSION,
         SNAPSHOT_VERSION,

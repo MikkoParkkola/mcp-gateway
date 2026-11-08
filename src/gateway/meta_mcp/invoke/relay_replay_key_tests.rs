@@ -1,13 +1,12 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! MIK-8739 rows for the key-taking replay surface (the sync lookup's
-//! Sync-only filter, and the empty commit's removal with relay detection
-//! off), split from `relay_replay_tests` for the file-size ceiling.
+//! Sync-only filter), split from `relay_replay_tests` for the file-size ceiling.
 
-use super::super::super::{REPLAY_LOOKUP, RelayKey, collecting, commit_with};
+use super::super::super::{REPLAY_LOOKUP, RelayKey, collecting};
 use super::super::stage_plan_replay;
 use super::{PROSE, completed, digest_for, relay_meta, staged_summaries, store_entry};
-use crate::security::firewall::{Firewall, FirewallConfig, StoredKey};
+use crate::security::firewall::StoredKey;
 
 /// T3 (MIK-8739): a task key in the sync lookup slot stages nothing and
 /// looks nothing up, whether that task's entry is stored or absent. Both

@@ -309,7 +309,8 @@ fn strings(value: &Value, out: &mut Vec<String>) {
 async fn k20_the_record_holds_no_text_beyond_its_stored_result() {
     let rig = rig(PROSE, OTHER_PROSE, None).await;
     let task = settle_unread(&rig, "k20").await;
-    let file = rig._store.path().join("tasks").join(format!("{task}.json"));
+    let Rig { _store: store, .. } = &rig;
+    let file = store.path().join("tasks").join(format!("{task}.json"));
     let row: Value = serde_json::from_slice(&std::fs::read(&file).expect("the row file"))
         .expect("the row decodes");
     let snapshot = &row["replaySnapshot"];

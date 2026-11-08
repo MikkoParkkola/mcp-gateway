@@ -4,8 +4,6 @@
 //! which note a capture is filed under), split from
 //! `relay_replay_tests` for the file-size ceiling.
 
-use std::time::Duration;
-
 use serde_json::json;
 
 use super::super::super::collecting;
