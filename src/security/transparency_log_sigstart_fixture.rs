@@ -32,6 +32,16 @@ impl Fixture {
         Self { _dir: dir, path }
     }
 
+    /// A fixture over an existing path, for a crash row's child: the parent
+    /// owns that directory, so this one holds only an empty one inside it.
+    pub(crate) fn at(path: PathBuf) -> Self {
+        let parent = path.parent().expect("a parent").to_path_buf();
+        let dir = tempfile::Builder::new()
+            .tempdir_in(parent)
+            .expect("temp dir");
+        Self { _dir: dir, path }
+    }
+
     /// The `.sigstart` sidecar beside the log.
     pub(crate) fn sidecar(&self) -> PathBuf {
         sibling(&self.path, "sigstart")

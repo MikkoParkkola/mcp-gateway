@@ -15,6 +15,12 @@ pub(crate) enum At {
     /// Recovery wrote the genesis open record (and its first mark), and not
     /// yet the identified record that names its id.
     BeforeIdentified,
+    /// The signing anchor is published, and this open has written no
+    /// record yet (not even its open record).
+    AfterSigstart,
+    /// Segment recovery is done and the record the anchor owes is not yet
+    /// written.
+    BeforeAnnounce,
 }
 
 /// The armed boundary and the marker file written on reaching it. Global,

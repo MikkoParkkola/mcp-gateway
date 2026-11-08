@@ -263,6 +263,8 @@ pub(super) fn recover(
     if let Some(body) = &anchor {
         sigstart::publish(path, body, secret)?;
     }
+    #[cfg(test)]
+    super::kill::point(super::kill::At::AfterSigstart);
     let (mut state, below_mark) = reopen_tail(path, config, &sealed, hw.as_ref(), now, &opened)?;
     finish_pending_expiry(path)?;
     // The active file holds the finding from its open record or a marker,
@@ -387,6 +389,8 @@ fn settle_anchor(
         body.legacy = sigstart::legacy_below(path, body.segment_seq, 0)?;
         sigstart::publish(path, body, secret)?;
     }
+    #[cfg(test)]
+    super::kill::point(super::kill::At::BeforeAnnounce);
     let mut announced = false;
     sigstart::announce(plan, anchor.as_ref(), path, secret, |event, extra| {
         announced = true;

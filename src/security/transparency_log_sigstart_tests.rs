@@ -361,3 +361,109 @@ fn r31_a_large_legacy_file_hashes_only_the_touched_chunks() {
     );
     assert_eq!(c.hashed(), 1, "one chunk hashed, not five");
 }
+
+// ── Crash rows: a child opens the signed log and aborts at a boundary ──────
+
+const SIG_KILL_AT: &str = "MCP_GW_TEST_SIGSTART_KILL_AT";
+const SIG_KILL_DIR: &str = "MCP_GW_TEST_SIGSTART_KILL_DIR";
+const SIG_MARKER: &str = "killed";
+
+/// Open the signed log in `fx` in a child killed at `at`; assert it died
+/// there (a marker, and no clean exit).
+fn open_killed_at(fx: &Fixture, at: super::kill::At) {
+    let dir = fx.path.parent().unwrap();
+    let out = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "security::transparency_log::sigstart_tests::sigstart_child",
+            "--ignored",
+            "--nocapture",
+        ])
+        .env(SIG_KILL_AT, format!("{at:?}"))
+        .env(SIG_KILL_DIR, dir)
+        .output()
+        .unwrap();
+    assert!(
+        !out.status.success(),
+        "the child exited cleanly instead of aborting at {at:?}"
+    );
+    assert!(
+        dir.join(SIG_MARKER).exists(),
+        "the child never reached {at:?}:\n{}\n{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    std::fs::remove_file(dir.join(SIG_MARKER)).unwrap();
+}
+
+#[test]
+#[ignore = "run by the sigstart crash rows, in a child that aborts"]
+fn sigstart_child() {
+    use super::kill::{self, At};
+    let (Ok(at), Some(dir)) = (std::env::var(SIG_KILL_AT), std::env::var_os(SIG_KILL_DIR)) else {
+        return;
+    };
+    let at = match at.as_str() {
+        "AfterSigstart" => At::AfterSigstart,
+        "BeforeAnnounce" => At::BeforeAnnounce,
+        other => panic!("no such boundary: {other}"),
+    };
+    let dir = std::path::PathBuf::from(dir);
+    kill::arm(at, dir.join(SIG_MARKER));
+    let fx = Fixture::at(dir.join("audit.jsonl"));
+    drop(fx.open(true, 0));
+}
+
+/// R13: killed after an `open` sidecar is published on a first start,
+/// before the open record: the reopen keeps it and raises nothing.
+#[test]
+fn r13_a_kill_after_the_first_start_sidecar_keeps_it() {
+    let fx = Fixture::new();
+    let plain = fx.open(false, 0);
+    Fixture::calls(&plain, 0, 2);
+    drop(plain);
+    open_killed_at(&fx, super::kill::At::AfterSigstart);
+    let before = std::fs::read(fx.sidecar()).expect("published before the kill");
+    drop(fx.open(true, 0));
+    assert_eq!(
+        std::fs::read(fx.sidecar()).unwrap(),
+        before,
+        "kept, not rebuilt"
+    );
+    assert_eq!(all_events(&fx), [0, 0, 0, 0]);
+}
+
+/// R13b (round 1 G5, round 3 J4): a genesis killed after its sidecar and
+/// before its open record re-mints its id on reopen; the sidecar still
+/// verifies (no id in the MAC), so nothing is raised.
+#[test]
+fn r13b_a_genesis_kill_does_not_break_the_sidecar() {
+    let fx = Fixture::new();
+    open_killed_at(&fx, super::kill::At::AfterSigstart);
+    assert!(fx.sidecar().exists());
+    let log = fx.open(true, 0);
+    Fixture::calls(&log, 0, 1);
+    drop(log);
+    assert_eq!(sidecar(&fx)["state"], "open");
+    assert_eq!(all_events(&fx), [0, 0, 0, 0]);
+}
+
+/// R30 (round 3 J3): killed after the `closed` sidecar, before its rebuilt
+/// record: the next open writes the record and marks it announced; the one
+/// after writes nothing.
+#[test]
+fn r30_a_kill_before_the_announce_retries_the_event_once() {
+    let fx = Fixture::new();
+    let log = fx.open(true, 0);
+    Fixture::calls(&log, 0, 3);
+    drop(log);
+    std::fs::remove_file(fx.sidecar()).unwrap();
+    open_killed_at(&fx, super::kill::At::BeforeAnnounce);
+    assert_eq!(sidecar(&fx)["announced"], false);
+    assert_eq!(all_events(&fx), [0, 0, 0, 0]);
+    drop(fx.open(true, 0));
+    assert_eq!(sidecar(&fx)["announced"], true);
+    assert_eq!(all_events(&fx), [1, 0, 0, 0]);
+    drop(fx.open(true, 0));
+    assert_eq!(all_events(&fx), [1, 0, 0, 0]);
+}
