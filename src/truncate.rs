@@ -34,8 +34,8 @@ pub(crate) fn truncate(s: &str, budget: Budget, marker: &str, placement: Suffix)
                 return s.to_string();
             }
             let room = match placement {
-                Suffix::Within => n.saturating_sub(marker.len()),
-                Suffix::After => n,
+                Suffix::Within => mutant!("b1", n, n.saturating_sub(marker.len())),
+                Suffix::After => mutant!("c0", n, n),
             };
             s.floor_char_boundary(room)
         }

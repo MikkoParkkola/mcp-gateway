@@ -86,7 +86,7 @@ fn same_shape(expected: &str, presented: &str) -> bool {
 
 /// Strip exactly one trailing `\r\n` or `\n`.
 fn strip_one_line_ending(raw: &[u8]) -> &[u8] {
-    raw.strip_suffix(b"\r\n")
+    mutant!("b2", None, raw.strip_suffix(b"\r\n"))
         .or_else(|| raw.strip_suffix(b"\n"))
         .unwrap_or(raw)
 }
