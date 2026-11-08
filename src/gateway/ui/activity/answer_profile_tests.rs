@@ -97,7 +97,7 @@ fn m2_profile_phases_of_a_ten_thousand_row_export() {
 #[test]
 #[ignore = "profiling, not an assertion"]
 fn m2_profile_passes_and_row_build() {
-    use super::joiner::Joined;
+    use super::answer::Joined;
     let fx = over_caps(10_000, false);
     let joiner = RefCell::new(Joiner::new(None));
     let mut carried = Seen {
