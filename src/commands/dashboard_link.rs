@@ -211,6 +211,9 @@ pub(crate) async fn admin_call(
     let body: serde_json::Value = serde_json::from_slice(&response.body).unwrap_or_default();
     if !status.is_success() {
         let reason = gateway_reason(&body).unwrap_or("no reason given");
+        // A gateway that echoes the bearer in its message must not put it on
+        // the terminal: the same shared redactor as `api`.
+        let reason = mcp_gateway::cli::redact::text(reason, &[token.to_string()]);
         return Err(format!("the gateway answered {status}: {reason}"));
     }
     if body.is_null() {

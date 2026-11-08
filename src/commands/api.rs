@@ -28,6 +28,10 @@ const PROTOCOL_MESSAGE: &str = "The gateway returned an invalid response.";
 const PROTOCOL_REMEDY: &str = "Check the gateway response against UI API 1.";
 
 /// Exit table E. Each kind has one process code, independent of HTTP status.
+/// What an error becomes when its rendering would still contain the token.
+const UNPRINTABLE_ERROR: &str =
+    "error: The error report could not be printed without exposing the credential.\n";
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
 pub(crate) enum ApiExit {
     Ok,
@@ -119,6 +123,19 @@ impl ApiError {
             format!("{error}\n")
         } else {
             format!("error: {message}\n{remedy}\n")
+        };
+        // Fixed fields (kind, schema_version, http_status) are never
+        // redacted, so a token equal to one of them would still show. Then
+        // print one fixed token-free sentence instead of the report, or
+        // nothing if even that sentence contains the token.
+        let stderr = if !token.is_empty() && stderr.contains(token) {
+            if UNPRINTABLE_ERROR.contains(token) {
+                String::new()
+            } else {
+                UNPRINTABLE_ERROR.to_string()
+            }
+        } else {
+            stderr
         };
         ApiOutcome {
             stdout: Vec::new(),

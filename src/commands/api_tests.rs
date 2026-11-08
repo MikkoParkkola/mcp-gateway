@@ -2283,3 +2283,81 @@ async fn gzip_response_is_capped_after_decompression() {
         None,
     );
 }
+
+/// A gateway answer with `status` and `body` to a GET, in human or JSON mode.
+async fn answered(token: &str, status: StatusCode, body: &str, json_output: bool) -> ApiOutcome {
+    let mut a = args("/ui/api/status");
+    a.json = json_output;
+    let body = body.as_bytes().to_vec();
+    run_api_with(
+        &a,
+        "http://127.0.0.1:1",
+        &LinkTls::default(),
+        |_| Some(token.to_string()),
+        no_stdin,
+        |_| async move {
+            Ok(AdminResponse {
+                status,
+                headers: reqwest::header::HeaderMap::new(),
+                body,
+            })
+        },
+    )
+    .await
+}
+
+/// A token equal to a fixed field of the JSON error (its http_status, its
+/// schema_version, or text inside its kind) never reaches stderr: the report
+/// becomes one fixed token-free sentence.
+#[tokio::test]
+async fn a_token_equal_to_a_fixed_error_field_never_reaches_stderr() {
+    for (token, status) in [
+        ("404", StatusCode::NOT_FOUND),
+        ("1", StatusCode::NOT_FOUND),
+        ("Found", StatusCode::NOT_FOUND),
+        ("Refused", StatusCode::UNAUTHORIZED),
+    ] {
+        let out = answered(token, status, "{}", true).await;
+        assert!(out.stdout.is_empty(), "{token}: stdout");
+        assert!(!out.stderr.contains(token), "{token}: {}", out.stderr);
+        assert!(!out.stderr.is_empty(), "{token}: something is reported");
+    }
+}
+
+/// Independent of the shared redactor: the raw token string is absent from
+/// every stream, on success and on error, in both output modes.
+#[tokio::test]
+async fn the_token_is_absent_from_every_stream_whatever_the_redactor_says() {
+    let token = "independent-canary-0123456789abcdef";
+    let echo = format!(r#"{{"echo":"{token}","message":"{token}"}}"#);
+    for (status, json_output) in [
+        (StatusCode::OK, false),
+        (StatusCode::OK, true),
+        (StatusCode::BAD_REQUEST, false),
+        (StatusCode::BAD_REQUEST, true),
+    ] {
+        let out = answered(token, status, &echo, json_output).await;
+        assert!(!String::from_utf8_lossy(&out.stdout).contains(token));
+        assert!(!out.stderr.contains(token));
+    }
+}
+
+/// The dropped-entry refusal in JSON mode: stdout empty and one structured
+/// LocalFailure object on stderr.
+#[tokio::test]
+async fn dropped_entry_refusal_in_json_mode_is_one_local_failure_object() {
+    let out = answered(
+        "#",
+        StatusCode::OK,
+        r##"{"#":"first","[redacted]":"second"}"##,
+        true,
+    )
+    .await;
+    assert!(out.stdout.is_empty(), "nothing printed on stdout");
+    let printed: serde_json::Value = serde_json::from_str(&out.stderr).expect("one JSON error");
+    assert_eq!(printed["error"]["kind"], "LocalFailure");
+    assert_eq!(
+        printed["error"]["message"],
+        "The response could not be printed safely."
+    );
+}
