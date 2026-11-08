@@ -286,3 +286,113 @@ async fn k21_limit_an_untrackable_read_switched_to_block_mid_read_is_delivered()
         "premise: the switch ran at the write"
     );
 }
+
+/// Every string leaf of `value`.
+fn strings(value: &Value, out: &mut Vec<String>) {
+    match value {
+        Value::String(s) => out.push(s.clone()),
+        Value::Array(items) => items.iter().for_each(|v| strings(v, out)),
+        Value::Object(map) => map.values().for_each(|v| strings(v, out)),
+        _ => {}
+    }
+}
+
+/// K20 (lead condition 1): the task record on disk holds no text beyond
+/// its stored result. Every segment text in the persisted snapshot occurs
+/// in the stored result, every server and tool it names is one of the
+/// row's targets, and it carries no join text (joins persist as
+/// fingerprints). The oracle is general: any pre-redaction or step-only
+/// text the snapshot kept would fail it, whatever its source.
+/// Mutants: skip the delivered-segment check; skip the join conversion.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn k20_the_record_holds_no_text_beyond_its_stored_result() {
+    let rig = rig(PROSE, OTHER_PROSE, None).await;
+    let task = settle_unread(&rig, "k20").await;
+    let file = rig._store.path().join("tasks").join(format!("{task}.json"));
+    let row: Value = serde_json::from_slice(&std::fs::read(&file).expect("the row file"))
+        .expect("the row decodes");
+    let snapshot = &row["replaySnapshot"];
+    assert!(snapshot.is_object(), "premise: a kept snapshot: {row}");
+    let mut stored = Vec::new();
+    strings(&row["model"]["task"]["result"], &mut stored);
+    let stored = stored.join("\n");
+    let targets = committed(&rig.state, &task).targets;
+    let names: Vec<&str> = targets
+        .iter()
+        .flat_map(|t| [t.server.as_str(), t.tool.as_str()])
+        .collect();
+    let receipts = snapshot["receipts"].as_array().expect("receipts");
+    assert!(!receipts.is_empty(), "premise: receipts persisted");
+    for receipt in receipts {
+        for segment in receipt["segments"].as_array().into_iter().flatten() {
+            let text = segment["text"].as_str().expect("segment text");
+            assert!(
+                stored.contains(text),
+                "a persisted segment is not in the stored result: {text:?}"
+            );
+        }
+        for name in [&receipt["server"], &receipt["tool"]] {
+            assert!(
+                names.contains(&name.as_str().unwrap_or("")),
+                "a persisted name is not a target: {name}"
+            );
+        }
+        assert!(
+            receipt["joins"].get("text").is_none(),
+            "join text persisted: {receipt}"
+        );
+    }
+}
+
+/// K7: a read under block whose answer is dropped unwritten (its body never
+/// read) rebuilds the entry but settles nothing: the entry stays pending,
+/// so a later read written under off removes it, which a kept entry would
+/// survive.
+/// Mutant: settle at judge instead of at the write.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn k7_a_read_dropped_unwritten_settles_nothing() {
+    use tower::ServiceExt as _;
+    let rig = rig(PROSE, OTHER_PROSE, None).await;
+    let task = settle_unread(&rig, "k7").await;
+    let body = task_method(7_001, "tasks/get", json!({ "taskId": task }));
+    let response = create_router(Arc::clone(&rig.state))
+        .oneshot(http_request(Some("key-a"), &body))
+        .await
+        .expect("the router must answer");
+    drop(response);
+    assert!(
+        entry_held(&rig, &task),
+        "premise: the read rebuilt the entry"
+    );
+    publish(&rig, CollusionAction::Off);
+    let reply = read(&rig, &task).await;
+    assert_eq!(status_of(&reply), "completed", "{reply}");
+    assert!(
+        !entry_held(&rig, &task),
+        "the dropped read kept the entry it never delivered"
+    );
+}
+
+/// K29 (P4): the rebuilt entry lives for the task's TTL from the read that
+/// inserted it, on the detector's clock: held just before, gone just after.
+/// Mutants: a fixed retention; retention from the commit.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn k29_a_rebuilt_entry_lives_for_the_task_ttl_from_its_read() {
+    let rig = rig(PROSE, OTHER_PROSE, None).await;
+    let task = settle_unread(&rig, "k29").await;
+    let ttl = committed(&rig.state, &task).task.ttl_ms().map_or(
+        std::time::Duration::from_secs(crate::idempotency::admission::RETENTION_SECS),
+        std::time::Duration::from_millis,
+    );
+    // Time passes between commit and the first read: the clock is the
+    // read's, never the commit's.
+    rig.relay
+        .advance_collusion_clock_for_test(std::time::Duration::from_secs(60));
+    let _ = read(&rig, &task).await;
+    let second = std::time::Duration::from_secs(1);
+    rig.relay
+        .advance_collusion_clock_for_test(ttl.saturating_sub(second));
+    assert!(entry_held(&rig, &task), "gone before its TTL");
+    rig.relay.advance_collusion_clock_for_test(second * 2);
+    assert!(!entry_held(&rig, &task), "held past its TTL");
+}
