@@ -25,7 +25,7 @@ pub(crate) const LOCK_WAIT: std::time::Duration = std::time::Duration::from_secs
 /// The vault lock, through the config lock's owner-only sidecar, waiting no
 /// later than `deadline`.
 fn take_lock(lock_path: &Path, deadline: Instant) -> Result<ExclusiveFileLock, StoreError> {
-    lock_file_blocking(lock_path, deadline).map_err(|e| match e {
+    lock_file_blocking(lock_path, "the secret vault", deadline).map_err(|e| match e {
         NotLocked::Busy => StoreError::Failed(
             "another save held the vault lock until the deadline; nothing was written".to_owned(),
         ),

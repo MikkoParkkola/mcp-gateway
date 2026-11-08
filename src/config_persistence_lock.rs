@@ -761,15 +761,22 @@ pub(crate) fn journal_pending(config: &Path) -> bool {
 
 /// Take the lock file `lock` itself, blocking until `deadline`: the same
 /// owner-only sidecar and the same attempt as the config lock, for a lock
-/// that is not beside a config (ADR-028's per-user vault lock). Only the
-/// effective user's own sidecar is accepted, with no exception for root.
+/// that is not beside a config (ADR-028's per-user vault lock, the key
+/// server's email-hash key file). Only the effective user's own sidecar is
+/// accepted, with no exception for root. `subject` names what the lock
+/// guards; the path follows it in a refusal.
 pub(crate) fn lock_file_blocking(
     lock: &Path,
+    subject: &str,
     deadline: Instant,
 ) -> Result<ExclusiveFileLock, NotLocked> {
-    // Named for what it guards; the path follows in the refusal.
-    let subject = Path::new("the secret vault");
-    poll_blocking(subject, lock, Owners::UserOnly, deadline, None::<fn(&Path)>)
+    poll_blocking(
+        Path::new(subject),
+        lock,
+        Owners::UserOnly,
+        deadline,
+        None::<fn(&Path)>,
+    )
 }
 
 #[cfg(test)]

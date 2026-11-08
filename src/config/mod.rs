@@ -39,6 +39,7 @@ mod meta_mcp_config;
 mod pattern_grammar;
 mod per_user_headers_posture;
 mod record_key;
+pub(crate) use record_key::publish_new_file;
 mod remote_provenance_posture;
 mod secret_file;
 pub(crate) mod secret_ref;
