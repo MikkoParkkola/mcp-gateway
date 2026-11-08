@@ -17,6 +17,7 @@ mod echo_rows_real_transports;
 mod fold_sites;
 mod fragments;
 mod guard_tests;
+mod identity_sources;
 mod inbound_parse_sites;
 mod invoke_stages;
 mod invoke_stages_allow;
