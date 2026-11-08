@@ -273,6 +273,53 @@ impl Firewall {
     }
 }
 
+impl Firewall {
+    /// The verdict on a stored task read whose persisted snapshot this
+    /// process cannot track (the marker, another epoch, a form it cannot
+    /// read), under `view`, the collusion view published when the read
+    /// starts: `None` when it is trackable, has no snapshot, or detection
+    /// is off or `off`. `block` refuses the read; `observe` delivers it,
+    /// the untrackable fact counted and audited as an observed relay is.
+    /// Decided at read start: the write commits after the answer is built
+    /// and cannot refuse it (a read that starts under `off` and is written
+    /// under `block` delivers untracked: the stated limit).
+    pub(crate) fn untrackable_read(
+        &self,
+        view: &super::super::CollusionView,
+        snapshot: Option<&Value>,
+        (server, tool): (&str, &str),
+        audit: (&str, &str),
+    ) -> Option<super::super::FirewallVerdict> {
+        self.relay_detector()?;
+        let trackable = serde_json::from_value::<Persisted>(snapshot?.clone())
+            .is_ok_and(|persisted| persisted.epoch == replay_epoch());
+        if trackable || view.action() == super::CollusionAction::Off {
+            return None;
+        }
+        let block = view.action() == super::CollusionAction::Block;
+        let label = if block { "block" } else { "observe" };
+        telemetry_metrics::counter!(super::RELAY_METRIC, "action" => label, "reason" => "untrackable")
+            .increment(1);
+        let verdict = super::super::FirewallVerdict {
+            allowed: !block,
+            action: if block {
+                super::super::FirewallAction::Block
+            } else {
+                super::super::FirewallAction::Warn
+            },
+            findings: vec![super::relay_finding(
+                "stored task result cannot be tracked for relay in this process".to_string(),
+                String::new(),
+            )],
+            anomaly_score: None,
+        };
+        if let Some(ref logger) = self.audit {
+            logger.log_request(audit.0, server, tool, audit.1, &Value::Null, &verdict);
+        }
+        Some(verdict)
+    }
+}
+
 #[cfg(test)]
 #[path = "collusion_gate_replay_persist_tests.rs"]
 mod tests;
