@@ -10,6 +10,7 @@ use serde_json::{Map, Value};
 
 use super::reader::{Line, Which};
 use crate::gateway::authz::BackendGrant;
+use crate::security::decision_record::read;
 use crate::security::transparency_log::signature::signature_state;
 
 /// Until findings are recorded with the call, a row says so; an empty list
@@ -211,7 +212,7 @@ pub(super) struct Filter {
     pub(super) server: Option<String>,
     pub(super) caller: Option<String>,
     pub(super) q: Option<String>,
-    /// Stub: carried, not yet applied.
+    /// Exact `decision.rule_id`; a record with no readable decision has none.
     pub(super) rule: Option<String>,
     pub(super) from: Option<DateTime<FixedOffset>>,
     pub(super) to: Option<DateTime<FixedOffset>>,
@@ -253,6 +254,11 @@ impl Filter {
             if !hit {
                 return false;
             }
+        }
+        if let Some(rule) = &self.rule
+            && !read::matches_rule(e, rule)
+        {
+            return false;
         }
         if self.from.is_some() || self.to.is_some() {
             // An untimed row is outside every time range.
