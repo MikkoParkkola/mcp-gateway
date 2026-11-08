@@ -603,6 +603,10 @@ mod generation;
 #[path = "ui_fields.rs"]
 pub(crate) mod ui_fields;
 pub use generation::Generation;
+#[cfg(all(test, feature = "webui"))]
+pub(crate) use generation::refuse_hook;
+#[cfg(feature = "webui")]
+pub(crate) use generation::refuse_multi_user_flip;
 
 /// `config` with both request-path security flags off: what the router test
 /// fixtures set on `AppState` before the flags moved into the published
@@ -654,6 +658,24 @@ use diff::tracked_sections;
 pub use diff::{ConfigPatch, compute_diff};
 pub use reload_context::ReloadContext;
 pub(crate) use reload_context::SurfacedHook;
+use reload_context::replace::startup_recovery_intent;
+
+/// Recover a byte write a crash left behind, before a serving gateway first
+/// loads `config`, recording the recovery in the audit log of the config it
+/// leaves first (`config_persistence::recover_before_start` with the record
+/// step). Here rather than in `config_persistence`, which must not
+/// depend on this module. Exists for the bundled binary's serve paths; not a
+/// stable API.
+///
+/// # Errors
+///
+/// As `config_persistence::recover_before_start`; the message says
+/// what to do, and the gateway must not start.
+pub fn recover_before_start(config: &std::path::Path) -> Result<(), String> {
+    crate::config_persistence::recover_before_start(config, &startup_recovery_intent)
+}
+#[cfg(all(test, feature = "webui"))]
+pub(crate) use reload_context::replace::order as write_order;
 #[cfg(feature = "webui")]
 pub(crate) use reload_context::replace::{
     AuditPosture, BackendOp, Expected, FileRevision, GatewayAuth, IntentKind, NO_AUDIT_LOG,
@@ -708,6 +730,10 @@ mod writer_lock_tests;
 #[cfg(all(test, unix))]
 mod writer_symlink_tests;
 
+#[cfg(test)]
+mod flip_pin_tests;
+#[cfg(all(test, feature = "webui"))]
+mod replace_audit_key_tests;
 #[cfg(test)]
 mod replace_audit_tests;
 #[cfg(test)]

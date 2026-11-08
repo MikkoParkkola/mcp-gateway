@@ -79,7 +79,10 @@ fn key_on(key: &str, admin: bool, backends: &[&str]) -> ApiKeyConfig {
 struct Scoped {
     state: Arc<AppState>,
     beta_receipt: String,
-    _dirs: (crate::gateway::router::tests::FixtureDir, tempfile::TempDir),
+    _dirs: (
+        crate::gateway::router::tests::FixtureDir,
+        std::sync::Arc<tempfile::TempDir>,
+    ),
 }
 
 /// A gateway with backends `alpha` and `beta`, the matrix's role rules and a
@@ -133,9 +136,9 @@ const CALLS: [(&str, Option<&str>, &str); 4] = [
 
 /// An invocation log of [`CALLS`] and one admin action, chained and hashed
 /// like the logger's; returns the receipt id of `beta`'s [`DEV`] call.
-fn seed_scoped_log(state: &mut Arc<AppState>) -> (tempfile::TempDir, String) {
+fn seed_scoped_log(state: &mut Arc<AppState>) -> (std::sync::Arc<tempfile::TempDir>, String) {
     use crate::security::transparency_log::TransparencyLogConfig;
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = dir.path().join("audit.jsonl");
     let mut prev = "genesis".to_string();
     let mut body = String::new();

@@ -58,6 +58,14 @@ impl ConfigFile {
     pub(crate) fn read(path: PathBuf) -> Result<Self> {
         let text =
             super::secret_file::read_secret_file(&path, super::secret_file::SecretFile::Config)?;
+        Self::of_text(path, text)
+    }
+
+    /// `text` as the file at `path`, refused as [`Self::read`] refuses a file
+    /// naming a reserved writer slot: the check a file read and startup's
+    /// recovery preview share. [`super::Config::load_pending`] skips it on
+    /// purpose, since its template names those slots.
+    fn of_text(path: PathBuf, text: String) -> Result<Self> {
         if let Some((name, line)) = reserved_slot_reference(&text) {
             return Err(crate::Error::Config(format!(
                 "Refusing to load {}: line {line} references {name}; names starting \
@@ -91,6 +99,21 @@ impl super::Config {
             super::Expansion::Literal,
         )?;
         Ok((evaluated.config, file.text))
+    }
+
+    /// `text` evaluated as the file at `path` exactly as
+    /// [`super::Config::load_evaluated`] evaluates a file read from disk (same
+    /// home, env files, secret resolution and validation), only with the
+    /// bytes supplied: startup's look at the config a pending journal's
+    /// recovery would leave, before that recovery writes it.
+    pub(crate) fn load_evaluated_text(path: &Path, text: &str) -> Result<super::Evaluated> {
+        let file = ConfigFile::of_text(path.to_path_buf(), text.to_owned())?;
+        Self::evaluate(
+            Some(&file),
+            &super::SystemHome,
+            super::Tolerance::Fail,
+            super::Expansion::Resolve,
+        )
     }
 
     /// `text` loaded as the file at `path` would be on a reload against

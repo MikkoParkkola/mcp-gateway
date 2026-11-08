@@ -21,6 +21,7 @@ pub mod admin_audit;
 pub mod backend_ops;
 pub mod backends;
 pub mod capabilities;
+mod config_file;
 pub mod control_plane;
 mod dashboard;
 pub(in crate::gateway) mod decisions;
@@ -33,6 +34,7 @@ mod guard;
 mod history;
 pub mod import;
 mod keys;
+mod keys_create;
 mod overview;
 mod policies;
 #[cfg(feature = "firewall")]
@@ -101,18 +103,6 @@ async fn write_audited(
 /// Embedded HTML — compiled into the binary, zero filesystem dependency.
 const INDEX_HTML: &str = include_str!("index.html");
 
-/// Returns `true` when the caller has admin-level access.
-///
-/// Admin access follows a credential: the bearer, an API key with `admin: true`,
-/// or an SSO identity while a `role: admin` mapping rule matches it (E1),
-/// scoped to every backend: a backend-scoped admin has no gateway-wide admin
-/// standing. The identity used when authentication is disabled is NOT admin, because an
-/// unauthenticated gateway cannot tell its operator from any other caller that
-/// reaches the port.
-fn is_admin(client: Option<&AuthenticatedClient>) -> bool {
-    client.is_some_and(AuthenticatedClient::is_gateway_admin)
-}
-
 /// Build the authenticated `/ui/api/*` and `/dashboard` sub-router.
 pub fn api_router() -> Router<Arc<AppState>> {
     let router = Router::new()
@@ -122,7 +112,10 @@ pub fn api_router() -> Router<Arc<AppState>> {
         .route(routes::UI_TOOLS_CALL, post(tool_call::call))
         .route(routes::UI_REFUSALS, get(refusals::refusals))
         .route(routes::UI_GATEWAY, get(gateway_status::gateway_status))
-        .route(routes::UI_KEYS, get(keys::keys))
+        .route(
+            routes::UI_KEYS,
+            get(keys::keys).post(keys_create::create_key),
+        )
         .route(routes::UI_CONFIG, get(config))
         .route(routes::UI_RELOAD, post(reload))
         .route(routes::UI_DASHBOARD_LINK, post(session::dashboard_link))
@@ -425,7 +418,7 @@ fn auth_facts(state: &AppState, client: Option<&AuthenticatedClient>) -> Value {
     json!({
         "enabled": state.live_config.generation().auth().enabled,
         "signed_in": client.is_some_and(|c| c.authenticated),
-        "admin": is_admin(client),
+        "admin": crate::gateway::auth::is_gateway_admin(client),
     })
 }
 
@@ -742,7 +735,27 @@ fn call_windows(
 mod keys_tests;
 
 #[cfg(test)]
+#[path = "keys_file_tests.rs"]
+mod keys_file_tests;
+
+#[cfg(test)]
 mod tests;
 
 #[cfg(test)]
 mod discovery_wiring_tests;
+
+#[cfg(test)]
+#[path = "keys_create_fixture_tests.rs"]
+mod keys_create_fixture_tests;
+
+#[cfg(test)]
+#[path = "keys_create_tests.rs"]
+mod keys_create_tests;
+
+#[cfg(test)]
+#[path = "keys_create_refusal_tests.rs"]
+mod keys_create_refusal_tests;
+
+#[cfg(test)]
+#[path = "keys_create_writer_tests.rs"]
+mod keys_create_writer_tests;

@@ -405,3 +405,30 @@ fn the_scan_finds_a_reader_in_a_matches_guard() {
         1
     );
 }
+
+/// The optional-client predicate is a free fn sharing the
+/// method's name, so the existing whole-segment needle counts every call and
+/// reference to it, and nothing else. A near name is a different segment.
+#[test]
+fn the_free_predicate_counts_under_its_key() {
+    let files = vec![(
+        "src/new.rs".to_owned(),
+        "use crate::gateway::auth::is_gateway_admin;\n\
+         fn fixture() {\n\
+             let a = crate::gateway::auth::is_gateway_admin(c);\n\
+             let b = is_gateway_admin(c);\n\
+             let d = o.map(is_gateway_admin);\n\
+         }"
+        .to_owned(),
+    )];
+    let all = found_in(&files);
+    assert_eq!(found(&files, "is_gateway_admin"), 3, "{all:?}");
+    assert_eq!(all.len(), 1, "counted under no other key: {all:?}");
+    for (text, want) in [
+        ("let a = is_gateway_admin_opt(c);", 0),
+        ("let a = my_is_gateway_admin(c);", 0),
+        ("let a = r#is_gateway_admin(c);", 1),
+    ] {
+        assert_eq!(found(&file_of(text), "is_gateway_admin"), want, "{text}");
+    }
+}

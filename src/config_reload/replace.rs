@@ -178,6 +178,12 @@ pub(crate) enum ReplaceError {
     /// The compute refused, or produced bytes that are not UTF-8 text. Bytes
     /// the loader rejects are `ReloadRefused`, after the rollback.
     Refused(String),
+    /// Auth is on and no audit log is configured: the gateway's own posture
+    /// refuses every config write (`NO_AUDIT_LOG` is its text). A type, so
+    /// a route answers it by what it is, never by matching words.
+    NoAuditLog,
+    /// The audit log refused an intent (the operation's or its recovery's); nothing written.
+    AuditRefused(String),
     /// gateway.yaml no longer resolves to the file this gateway started on.
     Unsupported(String),
     /// Staging the original or the journal failed; nothing was replaced.
@@ -231,9 +237,13 @@ async fn spawn_locked(
         })
 }
 
+#[cfg(test)]
+#[path = "replace_order.rs"]
+pub(crate) mod order;
+
 #[path = "replace_audit.rs"]
 mod audit;
-pub(crate) use audit::{Audit, Intent, IntentSink};
+pub(crate) use audit::{Audit, Intent, IntentSink, startup_recovery_intent};
 pub(crate) use audit::{AuditPosture, GatewayAuth};
 #[cfg(feature = "webui")]
 pub(crate) use audit::{BackendOp, NO_AUDIT_LOG};
@@ -295,6 +305,8 @@ pub(crate) fn settle_for(result: &Result<ReplaceOutcome, ReplaceError>) -> Settl
         ReplaceError::Busy
         | ReplaceError::Stale { .. }
         | ReplaceError::Refused(_)
+        | ReplaceError::NoAuditLog
+        | ReplaceError::AuditRefused(_)
         | ReplaceError::Stage(_)
         | ReplaceError::Secrets(_)
         | ReplaceError::NoConfigFile
@@ -543,18 +555,21 @@ impl ReloadContext {
         // config does not: recorded as an outside change, since no loaded
         // revision is kept to tell (over-reports, never under-reports).
         let unchanged = step.is_none() && template.bytes() == current.as_slice();
-        if let Audit::Required { sink, kind } = &mut audit {
+        if let Audit::Required { sink, kind, writer } = &mut audit {
             let intent = Intent {
                 kind: kind.clone(),
                 base: FileRevision::of(&current),
                 outside_change: unchanged,
                 recovery_intent_id,
+                writer: writer.clone(),
             };
             sink.append(&intent).map_err(|e| {
-                ReplaceError::Refused(format!(
+                ReplaceError::AuditRefused(format!(
                     "the audit log refused this change's record; nothing was written: {e}"
                 ))
             })?;
+            #[cfg(test)]
+            order::record(&target, "intent");
         }
         let result = match step {
             None => Ok(template.bytes().to_vec()),
@@ -630,22 +645,10 @@ impl ReloadContext {
                 secrets: Vec::new(),
             });
         }
+        #[cfg(test)]
+        order::record(target, "commit");
         self.commit(target, current, &new, replaced, entries).await
     }
-
-    /// `Err(NoConfigFile)` when the file read under this lock is gone now.
-    /// Read from the disk, never from the lock's snapshot: a recovery since
-    /// the lock was taken may have restored it. A link that no longer names
-    /// the locked target, or points at a missing one, is `Failed`, never a
-    /// missing config.
-    fn still_there(locked: &Locked, config: &std::path::Path) -> Result<(), ReplaceError> {
-        match locked.absent(config) {
-            Ok(true) => Err(ReplaceError::NoConfigFile),
-            Ok(false) => Ok(()),
-            Err(why) => Err(ReplaceError::Failed(why)),
-        }
-    }
-
     /// Stage, journal, write, reload; then keep the new bytes or put the
     /// original back.
     async fn commit(

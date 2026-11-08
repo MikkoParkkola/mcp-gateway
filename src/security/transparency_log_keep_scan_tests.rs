@@ -7,8 +7,10 @@
 //! the task store's: file-level, a backstop for review.
 
 /// Test files that still open a log without keeping its directory, each to
-/// be converted. The list may only shrink: a listed file that keeps, or no
-/// longer opens a log, fails the scan until its row is removed.
+/// be converted. A listed file that keeps, or no longer opens a log, fails
+/// the scan until its row is removed. A new row is added only for a test
+/// file the release line brought in while this sweep is open; any other new
+/// unkept file fails the scan.
 const PENDING: &[&str] = &[
     "src/commands/audit_race_tests.rs",
     "src/config_reload/override_audit_tests.rs",
@@ -77,25 +79,7 @@ const PENDING: &[&str] = &[
     "src/gateway/router/route_matrix_driver_response_tests.rs",
     "src/gateway/router/slot_verdict_g2_managed_http_tests.rs",
     "src/gateway/router/sso_admin_tests/admin_action.rs",
-    "src/gateway/router/stored_read_account_tests.rs",
-    "src/gateway/router/stored_read_busy_nonce_tests.rs",
-    "src/gateway/router/stored_read_ub_audit_tests.rs",
-    "src/gateway/router/stored_replay_liveness_idp_fixture.rs",
-    "src/gateway/router/stored_replay_liveness_tests.rs",
-    "src/gateway/router/stored_replay_liveness_tests/rebind.rs",
-    "src/gateway/router/tests/meta_firewall_verdict/list_and_task_block/direct_counted.rs",
     "src/gateway/router/tests/meta_state_fixtures.rs",
-    "src/gateway/router/tests/openwebui_adapter/connect_offer.rs",
-    "src/gateway/router/tests/openwebui_adapter/revoke_route.rs",
-    "src/gateway/router/tests/openwebui_adapter/start_route.rs",
-    "src/gateway/router/tests/refusal_wire_pins.rs",
-    "src/gateway/router/tests/task_execution_adapter/query_serialization/dark_clock_settle.rs",
-    "src/gateway/router/tests/task_execution_adapter/settlement_record.rs",
-    "src/gateway/router/ui_access_matrix_tests.rs",
-    "src/gateway/router/ui_audit_cancel_tests.rs",
-    "src/gateway/router/ui_backend_scope_tests.rs",
-    "src/gateway/router/ui_stream_tests/live_logs.rs",
-    "src/gateway/router/watch_poll_parity_tests.rs",
     "src/gateway/server/audit_start_tests.rs",
     "src/gateway/server/control_plane_store/tests/key_change_tests.rs",
     "src/gateway/server/control_plane_store/tests/lease_tests.rs",
@@ -136,8 +120,14 @@ fn is_test(rel: &str) -> bool {
 }
 
 /// Whether `text` opens a log and never keeps a directory for one.
+/// A file opens a log without keeping its dir: it neither hands the log its
+/// dir (`keep_test_dir`) nor opens it in a registered one (a `kept_tempdir(`
+/// or `kept_tempdir_in(` call; a mention in prose does not count).
 fn unkept(text: &str) -> bool {
-    text.contains("TransparencyLogger::open") && !text.contains("keep_test_dir")
+    text.contains("TransparencyLogger::open")
+        && !text.contains("keep_test_dir")
+        && !text.contains("kept_tempdir(")
+        && !text.contains("kept_tempdir_in(")
 }
 
 fn test_sources(dir: &std::path::Path, root: &std::path::Path, out: &mut Vec<(String, String)>) {
@@ -193,5 +183,12 @@ fn the_scan_tells_a_kept_log_from_an_unkept_one() {
     assert!(unkept("let log = TransparencyLogger::open(cfg).unwrap();"));
     assert!(!unkept(
         "let log = TransparencyLogger::open(cfg).unwrap();\nlog.keep_test_dir(dir);"
+    ));
+    // R14: a dir from `kept_tempdir()` is kept by the open.
+    assert!(!unkept(
+        "let dir = kept_tempdir();\nlet log = TransparencyLogger::open(cfg).unwrap();"
+    ));
+    assert!(!unkept(
+        "let dir = kept_tempdir_in(parent);\nlet log = TransparencyLogger::open(cfg).unwrap();"
     ));
 }

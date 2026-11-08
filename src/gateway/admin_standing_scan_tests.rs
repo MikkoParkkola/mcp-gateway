@@ -78,6 +78,8 @@ const SHAPES: &[(&str, Shape)] = &[
     ("is_gateway_admin", Shape::Path(&["is_gateway_admin"])),
     ("admin_standing", Shape::Path(&["admin_standing"])),
     ("is_gateway()", Shape::NullaryMethod("is_gateway")),
+    // No production reader since the one predicate replaced `ui::is_admin`;
+    // kept, so a new private `is_admin` is a reader the inventory must list.
     ("is_admin(", Shape::Call(&["is_admin"])),
     ("::for_ui(", Shape::QualifiedCall("for_ui")),
 ];
