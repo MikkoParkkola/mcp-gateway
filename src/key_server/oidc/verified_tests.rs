@@ -70,3 +70,55 @@ fn audit_output_with_name_and_groups_is_unchanged() {
         })
     );
 }
+
+/// The id computed from the pair agrees with the id of the identity built from
+/// it, including the pair a naive join would collide on; a pair that names no
+/// one has no id.
+#[test]
+fn the_actor_id_from_a_pair_matches_the_identitys() {
+    for (issuer, subject) in [
+        (ISSUER, "subject-1"),
+        ("https://idp/a", "b:c"),
+        ("https://idp/a:b", "c"),
+    ] {
+        let identity = VerifiedIdentity::checked(
+            issuer.to_owned(),
+            subject.to_owned(),
+            EMAIL.to_owned(),
+            None,
+            Vec::new(),
+        )
+        .expect("names someone");
+        assert_eq!(
+            VerifiedIdentity::stable_actor_id_for(issuer, subject),
+            Some(identity.stable_actor_id()),
+            "{issuer} {subject}"
+        );
+    }
+    assert_ne!(
+        VerifiedIdentity::stable_actor_id_for("https://idp/a", "b:c"),
+        VerifiedIdentity::stable_actor_id_for("https://idp/a:b", "c"),
+    );
+    for (issuer, subject) in [("", "s"), (ISSUER, ""), ("  ", "s"), (ISSUER, " \t")] {
+        assert_eq!(
+            VerifiedIdentity::stable_actor_id_for(issuer, subject),
+            None,
+            "{issuer:?} {subject:?}"
+        );
+    }
+}
+
+/// The formula itself, written out: length-prefixed components, lengths in
+/// bytes (`ü` is two), so a change to the shared formula fails here even
+/// though both functions would still agree with each other.
+#[test]
+fn the_actor_id_is_length_prefixed_in_bytes() {
+    assert_eq!(
+        VerifiedIdentity::stable_actor_id_for("https://idp", "\u{fc}"),
+        Some("oidc:11:https://idp:2:\u{fc}".to_owned())
+    );
+    assert_eq!(
+        VerifiedIdentity::stable_actor_id_for("https://\u{fc}.test", "s"),
+        Some("oidc:15:https://\u{fc}.test:1:s".to_owned())
+    );
+}
