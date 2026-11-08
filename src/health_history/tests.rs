@@ -402,7 +402,7 @@ fn h6b_a_save_waits_for_the_one_in_progress() {
     };
     started.recv().expect("the save started");
     // Time for a save that does not wait to take its snapshot and write.
-    std::thread::sleep(std::time::Duration::from_millis(200));
+    std::thread::sleep(std::time::Duration::from_millis(200)); // timing: absence
     assert!(!path.exists(), "a save wrote while another held the lock");
     h.stop(T0 + 90);
     drop(held);
