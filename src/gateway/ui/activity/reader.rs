@@ -72,6 +72,9 @@ pub(super) struct Page {
     pub(super) bytes_examined: u64,
     /// The cursor named a segment no longer kept; reading restarted newest.
     pub(super) cursor_reset: bool,
+    /// Where the invocation log's bytes above stood when the page ended, for
+    /// the next pass of an export.
+    pub(super) above_end: Seen,
 }
 
 /// What bounds one page.
@@ -82,7 +85,8 @@ pub(in crate::gateway::ui) struct Limits {
 }
 
 enum Item {
-    Entry(Line),
+    /// A line and its bytes, newline included.
+    Entry(Line, u64),
     Unreadable(Unreadable),
 }
 
@@ -170,11 +174,14 @@ impl LogTail {
                     continue;
                 }
                 let item = match serde_json::from_slice::<Value>(&bytes) {
-                    Ok(entry) if entry.is_object() => Item::Entry(Line {
-                        log: self.which,
-                        entry,
-                        segment: self.segment,
-                    }),
+                    Ok(entry) if entry.is_object() => Item::Entry(
+                        Line {
+                            log: self.which,
+                            entry,
+                            segment: self.segment,
+                        },
+                        above - offset,
+                    ),
                     _ => Item::Unreadable(Unreadable {
                         log: self.which,
                         segment: self.segment,
@@ -302,6 +309,41 @@ pub(super) fn read_page(
     limits: Limits,
     mut keep: impl FnMut(&Line) -> bool,
 ) -> io::Result<Page> {
+    let carried = Look::Carried(Seen {
+        above: 0,
+        head_covered: true,
+    });
+    read_page_joined(inv, gov, cursor, limits, carried, |line, _| keep(line))
+}
+
+/// Where the invocation log's bytes above a line stand, handed to `keep`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct Seen {
+    /// Bytes read above the line in this read: look-above plus every line
+    /// consumed since the page top (and, in an export, earlier passes).
+    pub(super) above: u64,
+    /// Everything above the line, up to the log head, has been read.
+    pub(super) head_covered: bool,
+}
+
+/// How a page learns what lies above its cursor.
+pub(super) enum Look<'a> {
+    /// Read forward from the cursor and give each line to the callback.
+    Fold(&'a mut dyn FnMut(&Line)),
+    /// Nothing is read: this is where an earlier pass of the same read stopped.
+    Carried(Seen),
+}
+
+/// [`read_page`] with the invocation log's look-above, and `keep` told how
+/// many bytes lie above each line.
+pub(super) fn read_page_joined(
+    inv: &Path,
+    gov: Option<&Path>,
+    cursor: Option<&Cursor>,
+    limits: Limits,
+    look: Look<'_>,
+    mut keep: impl FnMut(&Line, Seen) -> bool,
+) -> io::Result<Page> {
     let mut cursor_reset = false;
     let mut gov_bound = cursor
         .and_then(|c| c.gov_bound.as_deref())
@@ -315,6 +357,13 @@ pub(super) fn read_page(
     };
 
     let mut spent = 0_u64;
+    let Seen {
+        above: mut inv_above,
+        head_covered,
+    } = match look {
+        Look::Carried(seen) => seen,
+        Look::Fold(fold) => look_above(inv, cursor, fold, &mut spent)?,
+    };
     let mut lines = Vec::new();
     let mut unreadable = Vec::new();
     // The head of each log, read but not yet taken: `(item, boundary above)`.
@@ -353,8 +402,15 @@ pub(super) fn read_page(
             gov_bound = Some(t);
         }
         match item {
-            Item::Entry(line) => {
-                if keep(&line) {
+            Item::Entry(line, len) => {
+                let seen = Seen {
+                    above: inv_above,
+                    head_covered,
+                };
+                if line.log == Which::Invocation {
+                    inv_above += len;
+                }
+                if keep(&line, seen) {
                     lines.push(line);
                 }
             }
@@ -387,19 +443,39 @@ pub(super) fn read_page(
         scan_exhausted: stalled,
         bytes_examined: spent,
         cursor_reset,
+        above_end: Seen {
+            above: inv_above,
+            head_covered,
+        },
+    })
+}
+
+/// Read forward from the invocation cursor over [`LOOK_ABOVE`], crossing
+/// newer segments, giving each line to `fold`. Charged to `spent`.
+fn look_above(
+    inv: &Path,
+    cursor: Option<&Cursor>,
+    fold: &mut dyn FnMut(&Line),
+    spent: &mut u64,
+) -> io::Result<Seen> {
+    // Stub: nothing is read above a cursor yet.
+    let _ = (inv, fold, spent);
+    Ok(Seen {
+        above: 0,
+        head_covered: cursor.is_none(),
     })
 }
 
 fn item_time(item: &Item) -> Option<DateTime<FixedOffset>> {
     match item {
-        Item::Entry(line) => timestamp(&line.entry),
+        Item::Entry(line, _) => timestamp(&line.entry),
         Item::Unreadable(_) => None,
     }
 }
 
 fn item_segment(item: &Item) -> u64 {
     match item {
-        Item::Entry(line) => line.segment,
+        Item::Entry(line, _) => line.segment,
         Item::Unreadable(u) => u.segment,
     }
 }

@@ -7,10 +7,12 @@
 // Widened within the UI so the status report decides Activity access with
 // the resolver the routes use, not a copy of its role rules.
 pub(in crate::gateway::ui) mod access;
+mod answer;
 mod csv;
 mod cursor;
 mod export;
 pub(in crate::gateway::ui) mod forward;
+mod joiner;
 mod reader;
 mod receipt;
 /// The decision set's startup read of one record kind.
@@ -30,8 +32,10 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use self::access::{Access, Refused};
-use self::reader::{Limits, read_page};
-use self::rows::{FeedOutcome, Filter, kind_of, row};
+use self::answer::{Effect, Joined, SCOPE_LABEL, SUPPORTED_EFFECTS};
+use self::joiner::Joiner;
+use self::reader::{Limits, Look, read_page_joined};
+use self::rows::{FeedOutcome, Filter, NOT_A_CALL, kind_of, row};
 use super::AppState;
 use super::errors::{auth_required, flat_error};
 use super::guard::Guard;
@@ -47,7 +51,7 @@ const MAX_LIMIT: usize = 200;
 const PAGE_SCAN_BYTES: u64 = 8 << 20;
 
 /// The outcomes the list can filter on today.
-const SUPPORTED_OUTCOMES: [&str; 3] = ["ok", "failed", "blocked"];
+const SUPPORTED_OUTCOMES: [&str; 4] = ["ok", "failed", "blocked", "cleaned"];
 
 pub(super) fn activity_router() -> Router<Arc<AppState>> {
     Router::new()
@@ -60,6 +64,7 @@ pub(super) fn activity_router() -> Router<Arc<AppState>> {
 #[derive(Debug, Default, Deserialize)]
 struct ListQuery {
     outcome: Option<String>,
+    effect: Option<String>,
     server: Option<String>,
     caller: Option<String>,
     rule: Option<String>,
@@ -290,16 +295,21 @@ fn parse(q: &ListQuery) -> Result<Parsed, Early> {
         Some("ok") => Some(FeedOutcome::Ok),
         Some("failed") => Some(FeedOutcome::Failed),
         Some("blocked") => Some(FeedOutcome::Blocked),
-        Some("cleaned") => {
-            return Err(Box::new(bad_request(json!({
-                "error": "answer changes are not recorded by this gateway version",
-                "supported": SUPPORTED_OUTCOMES,
-            }))));
-        }
+        Some("cleaned") => None,
         Some(_) => {
             return Err(Box::new(bad_request(json!({
                 "error": "outcome not supported",
                 "supported": SUPPORTED_OUTCOMES,
+            }))));
+        }
+    };
+    let effect = match q.effect.as_deref().map(Effect::parse) {
+        None => None,
+        Some(Some(e)) => Some(e),
+        Some(None) => {
+            return Err(Box::new(bad_request(json!({
+                "error": "effect not supported",
+                "supported": SUPPORTED_EFFECTS,
             }))));
         }
     };
@@ -323,6 +333,8 @@ fn parse(q: &ListQuery) -> Result<Parsed, Early> {
     Ok(Parsed {
         filter: Filter {
             outcome,
+            cleaned: q.outcome.as_deref() == Some("cleaned"),
+            effect,
             server: q.server.clone(),
             caller: q.caller.clone(),
             q: q.q.clone(),
@@ -345,15 +357,50 @@ fn list_page(logs: &Logs, access: &Access, query: &ListQuery) -> Response {
         matches: parsed.limit,
         bytes: PAGE_SCAN_BYTES,
     };
-    let keep = |line: &reader::Line| {
-        kind_of(line)
-            .is_some_and(|kind| parsed.filter.matches(line, kind) && access.admits(line, kind))
+    let joiner = std::cell::RefCell::new(Joiner::new(logs.secret.as_deref()));
+    let mut joined: Vec<Joined> = Vec::new();
+    let mut fold = |line: &reader::Line| {
+        joiner.borrow_mut().observe(line);
     };
-    let page = match read_page(
+    let keep = |line: &reader::Line, seen| {
+        let mut j = joiner.borrow_mut();
+        if j.observe(line) {
+            return false;
+        }
+        let Some(kind) = kind_of(line) else {
+            return false;
+        };
+        let this = if kind.is_call() {
+            j.join(line, seen)
+        } else {
+            NOT_A_CALL
+        };
+        if !access.admits(line, kind) {
+            return false;
+        }
+        if kind.is_call() {
+            j.count(&this);
+        }
+        let hit = parsed.filter.matches(line, kind, &this);
+        if hit {
+            joined.push(this);
+        }
+        hit
+    };
+    let look = if parsed.cursor.is_some() {
+        Look::Fold(&mut fold)
+    } else {
+        Look::Carried(reader::Seen {
+            above: 0,
+            head_covered: true,
+        })
+    };
+    let page = match read_page_joined(
         &logs.invocation,
         logs.governance.as_deref(),
         parsed.cursor.as_ref(),
         limits,
+        look,
         keep,
     ) {
         Ok(page) => page,
@@ -366,11 +413,14 @@ fn list_page(logs: &Logs, access: &Access, query: &ListQuery) -> Response {
             .into_response();
         }
     };
+    debug_assert_eq!(joined.len(), page.lines.len());
     let rows: Vec<Value> = page
         .lines
         .iter()
-        .filter_map(|line| row(line, logs.secret.as_deref()))
+        .zip(&joined)
+        .filter_map(|(line, j)| row(line, logs.secret.as_deref(), j))
         .collect();
+    let counts = joiner.into_inner();
     Json(json!({
         "rows": rows,
         "next_cursor": page.next.as_ref().map(cursor::encode),
@@ -378,6 +428,9 @@ fn list_page(logs: &Logs, access: &Access, query: &ListQuery) -> Response {
         "cursor_reset": page.cursor_reset || parsed.token_reset,
         "unreadable_lines": page.unreadable.len(),
         "order": "recorded",
+        "join_incomplete": counts.join_incomplete,
+        "answer_integrity_failed": counts.answer_integrity_failed,
+        "answer_integrity_scope": SCOPE_LABEL,
     }))
     .into_response()
 }
@@ -393,7 +446,7 @@ struct ExportQuery {
 /// The filters an export ran under, as sent, for its manifest.
 fn filters_sent(q: &ListQuery) -> Value {
     json!({
-        "outcome": q.outcome, "server": q.server, "caller": q.caller,
+        "outcome": q.outcome, "effect": q.effect, "server": q.server, "caller": q.caller,
         "q": q.q, "from": q.from, "to": q.to,
     })
 }

@@ -10,6 +10,7 @@ use std::path::Path;
 use serde_json::{Map, Value, json};
 
 use super::access::Access;
+use super::answer::{Joined, Searched};
 use super::reader::{Line, Which};
 use super::rows::{Kind, kind_of, row};
 use super::seek::{Reads, oldest_counter, seek};
@@ -138,7 +139,9 @@ pub(super) fn receipt(
     if !access.admits(&line, kind) {
         return Ok(None);
     }
-    let Some(Value::Object(mut body)) = row(&line, secret) else {
+    // Stub until the forward scan lands: no delivery is looked for.
+    let joined = Joined::NoRecord(Searched::Finished);
+    let Some(Value::Object(mut body)) = row(&line, secret, &joined) else {
         return Ok(None);
     };
     let e = &line.entry;

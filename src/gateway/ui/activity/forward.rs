@@ -41,6 +41,7 @@ use std::path::Path;
 use serde_json::Value;
 
 use super::access::Access;
+use super::answer::{Joined, Searched};
 pub(in crate::gateway::ui) use super::reader::Limits;
 use super::reader::{Line, WINDOW, Which, read_page};
 use super::rows::{Kind, kind_of, row};
@@ -388,7 +389,7 @@ fn served(log: &Log<'_>, access: &Access, line: &Line) -> Option<Served> {
     }
     Some(Served {
         mark: mark_of(&line.entry)?,
-        row: row(line, log.secret)?,
+        row: row(line, log.secret, &Joined::NoRecord(Searched::AppendTime))?,
     })
 }
 

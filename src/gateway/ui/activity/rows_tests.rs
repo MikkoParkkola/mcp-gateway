@@ -7,7 +7,7 @@ use std::collections::BTreeSet;
 
 use serde_json::{Value, json};
 
-use super::{FINDINGS_NOT_RECORDED, FeedOutcome, Filter, Kind, kind_of, owned_by, row};
+use super::{FINDINGS_NOT_RECORDED, FeedOutcome, Filter, Kind, NOT_A_CALL, kind_of, owned_by, row};
 use crate::gateway::ui::activity::reader::{Line, Which};
 
 const HASH: &str = "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
@@ -55,7 +55,7 @@ const COMMON: [&str; 7] = [
 
 #[test]
 fn r1_each_kind_holds_exactly_its_allowlist() {
-    let r = row(&line(Which::Invocation, call("ok")), None).unwrap();
+    let r = row(&line(Which::Invocation, call("ok")), None, &NOT_A_CALL).unwrap();
     let mut want = set(&COMMON);
     want.extend(set(&[
         "outcome",
@@ -85,7 +85,7 @@ fn r1_each_kind_holds_exactly_its_allowlist() {
         "reason": "pasted secret", "rollback_summary": "r", "rollback_step": "s",
         "grant_change": {"x": 1}, "extra_field_never_named": "leak"
     });
-    let r = row(&line(Which::Governance, config), None).unwrap();
+    let r = row(&line(Which::Governance, config), None, &NOT_A_CALL).unwrap();
     let mut want = set(&COMMON);
     want.extend(set(&["action", "actor_id", "target_id", "outcome"]));
     assert_eq!(keys(&r), want);
@@ -97,7 +97,7 @@ fn r1_each_kind_holds_exactly_its_allowlist() {
         "surface": "ui", "route": "/ui/api/reload", "method": "POST", "http_status": 200,
         "tool": "t", "who": {"account": "a"}, "extra_field_never_named": "leak"
     });
-    let r = row(&line(Which::Invocation, admin), None).unwrap();
+    let r = row(&line(Which::Invocation, admin), None, &NOT_A_CALL).unwrap();
     let mut want = set(&COMMON);
     want.extend(set(&[
         "surface",
@@ -119,7 +119,7 @@ fn r2_outcomes_group_into_ok_failed_and_blocked() {
         ("denied", "blocked"),
         ("invalid", "blocked"),
     ] {
-        let r = row(&line(Which::Invocation, call(recorded)), None).unwrap();
+        let r = row(&line(Which::Invocation, call(recorded)), None, &NOT_A_CALL).unwrap();
         assert_eq!(r["outcome"], feed, "{recorded}");
     }
     let only = |o| Filter {
@@ -127,11 +127,11 @@ fn r2_outcomes_group_into_ok_failed_and_blocked() {
         ..Filter::default()
     };
     let blocked = line(Which::Invocation, call("denied"));
-    assert!(only(FeedOutcome::Blocked).matches(&blocked, Kind::Call));
-    assert!(!only(FeedOutcome::Ok).matches(&blocked, Kind::Call));
+    assert!(only(FeedOutcome::Blocked).matches(&blocked, Kind::Call, &NOT_A_CALL));
+    assert!(!only(FeedOutcome::Ok).matches(&blocked, Kind::Call, &NOT_A_CALL));
     let config = line(Which::Governance, json!({"kind": "control_plane_audit"}));
-    assert!(!only(FeedOutcome::Ok).matches(&config, Kind::Config));
-    assert!(Filter::default().matches(&config, Kind::Config));
+    assert!(!only(FeedOutcome::Ok).matches(&config, Kind::Config, &NOT_A_CALL));
+    assert!(Filter::default().matches(&config, Kind::Config, &NOT_A_CALL));
 }
 
 #[test]
@@ -141,7 +141,12 @@ fn r4_each_filter_and_their_and() {
     other["server"] = "other".into();
     other["who"]["account"] = "someone".into();
     let b = line(Which::Invocation, other);
-    let f = |f: Filter| (f.matches(&a, Kind::Call), f.matches(&b, Kind::Call));
+    let f = |f: Filter| {
+        (
+            f.matches(&a, Kind::Call, &NOT_A_CALL),
+            f.matches(&b, Kind::Call, &NOT_A_CALL),
+        )
+    };
     let base = Filter::default;
     assert_eq!(
         f(Filter {
@@ -191,25 +196,25 @@ fn r4_each_filter_and_their_and() {
             to: t("2026-10-26T11:00:00Z"),
             ..base()
         }
-        .matches(&a, Kind::Call)
+        .matches(&a, Kind::Call, &NOT_A_CALL)
     );
     assert!(
         !Filter {
             from: t("2026-10-26T10:00:01Z"),
             ..base()
         }
-        .matches(&a, Kind::Call)
+        .matches(&a, Kind::Call, &NOT_A_CALL)
     );
     let mut untimed = call("ok");
     untimed["timestamp"] = Value::Null;
     let untimed = line(Which::Invocation, untimed);
-    assert!(Filter::default().matches(&untimed, Kind::Call));
+    assert!(Filter::default().matches(&untimed, Kind::Call, &NOT_A_CALL));
     assert!(
         !Filter {
             to: t("2030-01-01T00:00:00Z"),
             ..base()
         }
-        .matches(&untimed, Kind::Call),
+        .matches(&untimed, Kind::Call, &NOT_A_CALL),
         "an untimed row is outside every time range"
     );
 }
