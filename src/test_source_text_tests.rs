@@ -126,7 +126,7 @@ fn each_test_item_shape_is_blanked_by_its_own_extent() {
 /// An item is blanked exactly when its cfg is false whenever `test` is.
 #[test]
 fn shared_cfg_cases_follow_the_rust_column() {
-    let table = include_str!("../scripts/dev/cfg-reader-cases.tsv");
+    let table = include_str!("test_source_text_cases.tsv");
     let mut rows = 0;
     let mut wrong = Vec::new();
     for line in table

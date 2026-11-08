@@ -255,7 +255,7 @@ class SharedCases(unittest.TestCase):
         judge = load_guard(Path(".")).cfg_is_test
         rows = [
             line.split("\t")
-            for line in (SCRIPT.parent / "cfg-reader-cases.tsv").read_text(encoding="utf-8").splitlines()
+            for line in (SCRIPT.parents[2] / "src/test_source_text_cases.tsv").read_text(encoding="utf-8").splitlines()
             if line and not line.startswith("#")
         ]
         self.assertGreater(len(rows), 20)
