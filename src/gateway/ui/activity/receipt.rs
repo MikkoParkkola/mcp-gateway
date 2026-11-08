@@ -11,7 +11,7 @@ use serde_json::{Map, Value, json};
 
 use super::access::Access;
 use super::reader::{Line, Which};
-use super::rows::{Kind, kind_of, row};
+use super::rows::{Check, Kind, kind_of, row};
 use super::seek::{Reads, oldest_counter, seek};
 use crate::security::transparency_log::recompute_entry_hash;
 
@@ -114,7 +114,7 @@ pub(super) fn receipt(
     log: &Path,
     id: &RowId,
     access: &Access,
-    secret: Option<&[u8]>,
+    check: &Check<'_>,
 ) -> std::io::Result<Option<Value>> {
     let mut reads = Reads::default();
     let Some(found) = seek(log, id.counter, &mut reads)? else {
@@ -130,6 +130,7 @@ pub(super) fn receipt(
         log: id.log,
         entry: found.entry,
         segment: found.segment,
+        span: Some((found.offset, found.len)),
     };
     let Some(kind) = kind_of(&line) else {
         return Ok(None);
@@ -138,9 +139,10 @@ pub(super) fn receipt(
     if !access.admits(&line, kind) {
         return Ok(None);
     }
-    let Some(Value::Object(mut body)) = row(&line, secret) else {
+    let Some(Value::Object(mut body)) = row(&line, check) else {
         return Ok(None);
     };
+    body.insert("signing_anchor".into(), check.report(id.log).into());
     let e = &line.entry;
     body.insert(
         "chain".into(),

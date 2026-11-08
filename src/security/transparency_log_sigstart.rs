@@ -16,7 +16,7 @@ use hmac::{KeyInit, Mac};
 use serde::{Deserialize, Serialize};
 
 use super::segments::{self, sibling};
-use super::{HmacSha256, sha256_raw, sig_message};
+use super::{HmacSha256, sha256_raw};
 
 /// Bytes per digested chunk of a legacy file: a reader hashes only the
 /// chunks a record's line touches, so its cost does not grow with the file.
@@ -122,23 +122,25 @@ impl Anchor {
     }
 }
 
-fn mac(body: &SigStart, secret: &[u8], key_id: &str) -> io::Result<String> {
+fn mac(body: &SigStart, secret: &[u8]) -> io::Result<String> {
     let mut covered = serde_json::to_value(body).map_err(io::Error::other)?;
     if let Some(o) = covered.as_object_mut() {
         o.remove("log_id");
     }
     let canonical = serde_json::to_string(&covered).map_err(io::Error::other)?;
+    // The log has one secret and no key rotation, so no key id is bound;
+    // the domain prefix keeps this MAC apart from the entry and `.hwm` ones.
     let digest = sha256_raw(format!("sigstart|{canonical}").as_bytes());
     let mut m = HmacSha256::new_from_slice(secret).expect("HMAC accepts any key length");
-    m.update(&sig_message(&digest, key_id));
+    m.update(&digest);
     Ok(hex::encode(m.finalize().into_bytes()))
 }
 
 /// The sidecar's bytes for `body`: one JSON line carrying its MAC.
-pub(crate) fn encode(body: &SigStart, secret: &[u8], key_id: &str) -> io::Result<Vec<u8>> {
+pub(crate) fn encode(body: &SigStart, secret: &[u8]) -> io::Result<Vec<u8>> {
     let file = OnDisk {
         body: body.clone(),
-        mac: mac(body, secret, key_id)?,
+        mac: mac(body, secret)?,
     };
     let mut out = serde_json::to_vec(&file).map_err(io::Error::other)?;
     out.push(b'\n');
@@ -146,20 +148,20 @@ pub(crate) fn encode(body: &SigStart, secret: &[u8], key_id: &str) -> io::Result
 }
 
 /// Parse and verify sidecar bytes (coverage is checked by [`load`]).
-pub(crate) fn decode(raw: &[u8], secret: &[u8], key_id: &str) -> Result<SigStart, Fault> {
+pub(crate) fn decode(raw: &[u8], secret: &[u8]) -> Result<SigStart, Fault> {
     let text = std::str::from_utf8(raw).map_err(|_| Fault::Torn)?;
     let line = text.strip_suffix('\n').ok_or(Fault::Torn)?;
     if line.contains('\n') {
         return Err(Fault::Torn);
     }
     let file: OnDisk = serde_json::from_str(line).map_err(|_| Fault::Torn)?;
-    let want = mac(&file.body, secret, key_id).map_err(|_| Fault::Torn)?;
+    let want = mac(&file.body, secret).map_err(|_| Fault::Torn)?;
     let ok: bool = subtle::ConstantTimeEq::ct_eq(want.as_bytes(), file.mac.as_bytes()).into();
     if ok { Ok(file.body) } else { Err(Fault::Mac) }
 }
 
 /// The anchor of the log at `path`, as a reader sees it.
-pub(crate) fn load(path: &Path, secret: Option<&[u8]>, key_id: &str) -> Anchor {
+pub(crate) fn load(path: &Path, secret: Option<&[u8]>) -> Anchor {
     let Some(secret) = secret.filter(|s| !s.is_empty()) else {
         return Anchor::NoSecret;
     };
@@ -168,7 +170,7 @@ pub(crate) fn load(path: &Path, secret: Option<&[u8]>, key_id: &str) -> Anchor {
         Err(e) if e.kind() == io::ErrorKind::NotFound => return Anchor::Absent,
         Err(_) => return Anchor::Broken(Fault::Unreadable),
     };
-    match decode(&raw, secret, key_id) {
+    match decode(&raw, secret) {
         Ok(body) if covers(path, &body) => Anchor::Known(body),
         Ok(_) => Anchor::Broken(Fault::Coverage),
         Err(f) => Anchor::Broken(f),
@@ -413,7 +415,7 @@ pub(super) fn classify(
     if secret.is_empty() {
         return Ok(Plan::Nothing);
     }
-    match load(path, Some(secret), key_id) {
+    match load(path, Some(secret)) {
         Anchor::Known(s) if s.announced => return Ok(Plan::Nothing),
         Anchor::Known(s) => return Ok(Plan::Owed(s)),
         Anchor::Broken(f) => return Ok(Plan::Raise(f)),
@@ -523,9 +525,9 @@ pub(super) fn body_for(plan: &Plan, path: &Path, log_id: &str) -> io::Result<Opt
 /// Publish `body` as the sidecar: a temp file, synced, renamed over, the
 /// directory synced. Rust opens files on Windows with delete sharing, so a
 /// reader holding the old file does not block the rename.
-pub(super) fn publish(path: &Path, body: &SigStart, secret: &[u8], key_id: &str) -> io::Result<()> {
+pub(super) fn publish(path: &Path, body: &SigStart, secret: &[u8]) -> io::Result<()> {
     use std::io::Write;
-    let bytes = encode(body, secret, key_id)?;
+    let bytes = encode(body, secret)?;
     let tmp = sibling(path, "sigstart.tmp");
     let mut f = std::fs::File::create(&tmp).map_err(segments::ctx("create", &tmp))?;
     f.write_all(&bytes)?;
@@ -577,7 +579,6 @@ pub(super) fn announce(
     written: Option<&SigStart>,
     path: &Path,
     secret: &[u8],
-    key_id: &str,
     mut write: impl FnMut(&str, Vec<(&'static str, serde_json::Value)>) -> io::Result<()>,
 ) -> io::Result<()> {
     if let Plan::Raise(f) = plan {
@@ -603,5 +604,5 @@ pub(super) fn announce(
     write(event, fields)?;
     let mut done = owed.clone();
     done.announced = true;
-    publish(path, &done, secret, key_id)
+    publish(path, &done, secret)
 }

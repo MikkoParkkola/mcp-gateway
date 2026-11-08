@@ -77,6 +77,17 @@ struct Logs {
     secret: Option<Vec<u8>>,
 }
 
+impl Logs {
+    /// The anchors and secret one request checks rows with.
+    fn check(&self) -> rows::Check<'_> {
+        rows::Check::new(
+            self.secret.as_deref(),
+            &self.invocation,
+            self.governance.as_deref(),
+        )
+    }
+}
+
 fn logs(state: &AppState) -> Option<Logs> {
     let invocation = state.transparency_log.as_ref()?.path();
     let governance = state
@@ -244,7 +255,7 @@ async fn receipt_route(
     };
     blocking(
         state.process.activity_reads(),
-        move || match receipt::receipt(&log, &id, &access, logs.secret.as_deref()) {
+        move || match receipt::receipt(&log, &id, &access, &logs.check()) {
             Ok(Some(body)) => Json(body).into_response(),
             Ok(None) => not_kept(),
             Err(error) => {
@@ -366,10 +377,11 @@ fn list_page(logs: &Logs, access: &Access, query: &ListQuery) -> Response {
             .into_response();
         }
     };
+    let check = logs.check();
     let rows: Vec<Value> = page
         .lines
         .iter()
-        .filter_map(|line| row(line, logs.secret.as_deref()))
+        .filter_map(|line| row(line, &check))
         .collect();
     Json(json!({
         "rows": rows,
@@ -469,7 +481,7 @@ fn export_response(
         logs.governance.as_deref(),
         &parsed.filter,
         access,
-        logs.secret.as_deref(),
+        &logs.check(),
         caps,
         size,
     ) {

@@ -262,7 +262,7 @@ pub(super) fn recover(
     // this open signs; its event waits for the announce phase below.
     let mut anchor = sigstart::body_for(&plan, path, id.as_str())?;
     if let Some(body) = &anchor {
-        sigstart::publish(path, body, secret, &config.key_id)?;
+        sigstart::publish(path, body, secret)?;
     }
     let (mut state, below_mark) = reopen_tail(path, config, &sealed, hw.as_ref(), now, &opened)?;
     finish_pending_expiry(path)?;
@@ -349,7 +349,7 @@ pub(super) fn recover(
     {
         body.segment_seq = state.seg.seq;
         body.legacy = sigstart::legacy_below(path, body.segment_seq, 0)?;
-        sigstart::publish(path, body, secret, &config.key_id)?;
+        sigstart::publish(path, body, secret)?;
     }
     let mut announced = false;
     sigstart::announce(
