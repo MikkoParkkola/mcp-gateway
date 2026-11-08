@@ -253,8 +253,8 @@ pub(crate) async fn firewalled_recorded_call(
 /// (otherwise the logger's own default).
 pub(crate) fn temp_log(
     policy: Option<crate::security::audit::AuditFailurePolicy>,
-) -> (tempfile::TempDir, Arc<crate::security::TransparencyLogger>) {
-    let dir = tempfile::tempdir().expect("a temporary directory");
+) -> (Arc<tempfile::TempDir>, Arc<crate::security::TransparencyLogger>) {
+    let dir = crate::test_dir_keep::kept_tempdir();
     let config = crate::security::transparency_log::TransparencyLogConfig {
         enabled: true,
         path: dir

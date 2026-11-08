@@ -76,7 +76,6 @@ const PENDING: &[&str] = &[
     "src/gateway/router/oracle_capability_tests.rs",
     "src/gateway/router/overview_tests.rs",
     "src/gateway/router/r2_identity_keys_tests.rs",
-    "src/gateway/router/route_matrix_driver_response_tests.rs",
     "src/gateway/router/slot_verdict_g2_managed_http_tests.rs",
     "src/gateway/router/sso_admin_tests/admin_action.rs",
     "src/gateway/router/tests/meta_state_fixtures.rs",
