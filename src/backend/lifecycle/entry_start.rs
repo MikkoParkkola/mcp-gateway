@@ -48,7 +48,11 @@ impl Backend {
         entry: &PooledEntry,
         era: EraResolution,
     ) -> Result<Arc<dyn Transport>> {
-        self.refuse_shared_start(key)?;
+        mutant!(
+            "shared-start-unrefused",
+            Ok(()),
+            self.refuse_shared_start(key)
+        )?;
         let started = self.start_entry_inner(key, entry, era).await;
         match &started {
             Ok(_) => {
@@ -271,7 +275,11 @@ impl Backend {
             let _ = transport.close().await;
             // A shutdown that won the race retired this instance, as above.
             if self.replaced_transport_cleanups.lock().stopping {
-                return Err(Error::BackendNotFound(self.name.clone()));
+                return mutant!(
+                    "publish-refusal-ok",
+                    Ok(()),
+                    Err(Error::BackendNotFound(self.name.clone()))
+                );
             }
             return Err(Error::BackendUnavailable(self.name.clone()));
         }
