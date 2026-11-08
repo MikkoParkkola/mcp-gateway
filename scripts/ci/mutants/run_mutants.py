@@ -598,16 +598,23 @@ def classify_row(outcome: Outcome, test: str, location: str) -> str:
     reports = [result for name, result in records(outcome.output) if name == test]
     if outcome.exit is None or outcome.exit < 0 or outcome.exit in (134, 137):
         return "ERROR:abort or signal"
-    if not any(SUMMARY_RE.match(line.strip()) for line in outcome.output.splitlines()):
+    summaries = [m.groups() for line in outcome.output.splitlines() if (m := SUMMARY_RE.match(line.strip()))]
+    if not summaries:
         return "ERROR:no result line"
     if not reports:
         return "ERROR:row did not run"
     if len(reports) > 1:
         return "ERROR:row reported twice"
+    if reports[0] not in ("ok", "FAILED"):
+        return f"ERROR:row {reports[0]}"
+    # A split record can be completed by a stray result word on stderr, so the
+    # record must agree with the exit code and with a summary of exactly this
+    # one test (libtest-record-parse family).
+    want = ("ok", "1", "0") if reports[0] == "ok" else ("FAILED", "0", "1")
+    if (outcome.exit == 0) != (reports[0] == "ok") or want not in [g[:3] for g in summaries]:
+        return "ERROR:record disagrees with the exit code or summary"
     if reports[0] == "ok":
         return "PASSED"
-    if reports[0] != "FAILED":
-        return f"ERROR:row {reports[0]}"
     panics = [f"{m.group(2)}:{m.group(3)}" for line in outcome.output.splitlines()
               if (m := PANIC_RE.match(line.strip())) and m.group(1) == test]
     if location in panics:
