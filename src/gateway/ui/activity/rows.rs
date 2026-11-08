@@ -211,6 +211,8 @@ pub(super) struct Filter {
     pub(super) server: Option<String>,
     pub(super) caller: Option<String>,
     pub(super) q: Option<String>,
+    /// Stub: carried, not yet applied.
+    pub(super) rule: Option<String>,
     pub(super) from: Option<DateTime<FixedOffset>>,
     pub(super) to: Option<DateTime<FixedOffset>>,
 }

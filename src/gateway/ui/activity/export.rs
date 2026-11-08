@@ -248,6 +248,7 @@ const COLUMNS: [&str; 31] = [
     "decision",
     "reach",
     "findings",
+    "findings_truncated",
 ];
 
 fn cell_value<'a>(row: &'a Value, column: &str) -> Option<&'a Value> {
