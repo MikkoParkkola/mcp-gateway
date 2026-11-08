@@ -73,11 +73,12 @@ SHARDS: dict[str, dict[str, list[tuple[str, list[str], list[str], int]]]] = {
     # second build cost 19-86 min, which #4562 removed). The `lib-b` job builds
     # it, uploads it and runs the heavier half (Linux 45b: 1237 s of 2170 s);
     # the `int` job, after its own suite, runs the other half from that binary
-    # (PREBUILT). Floors: the halves the pilot selected (run 42527204476),
-    # 9539 + 8161 = the single shard's 17700.
+    # (PREBUILT). Coverage is checked exactly on the binary (union_problems:
+    # no overlap, nothing missing); the floors are a coarse check, about 2%
+    # under the halves the pilot selected (run 42527204476: 9539 + 8161).
     "macos": {
-        "lib-b": [(*_LIB_B, 9539)],
-        "lib-a": [(*_LIB_A, 8161)],
+        "lib-b": [(*_LIB_B, 9350)],
+        "lib-a": [(*_LIB_A, 8000)],
         "int": [("suite", ["--bins", "--test", GLOB_ALL], [], 2205), ("doc", ["--doc"], [], 55)],
     },
 }
@@ -523,9 +524,17 @@ def prebuilt_rows() -> None:
     with tempfile.TemporaryDirectory() as root:
         fake = os.path.join(root, "fake-tests")
 
-        def binary(body: str) -> None:
+        # `--list`: the whole set is gateway::a, gateway::b and other::c; each half lists its own
+        # unless LIST says otherwise (overlap: the skip half lists gateway::a too; gap: it drops c).
+        def binary(body: str, lists: str = "ok") -> None:
+            skip_half = {"ok": "other::c", "overlap": "gateway::a other::c", "gap": ""}[lists]
             with open(fake, "w") as f:
-                f.write(f"#!/bin/sh\n{body}\n")
+                f.write("#!/bin/sh\n"
+                        'if [ "$1" = --list ]; then shift 3\n'
+                        '  case "$1 $2" in "gateway:: "*) n="gateway::a gateway::b";; "--skip gateway::") n="' + skip_half + '";;'
+                        ' *) n="gateway::a gateway::b other::c";; esac\n'
+                        '  for t in $n; do echo "$t: test"; done; exit 0; fi\n'
+                        f"{body}\n")
             os.chmod(fake, 0o644)  # run_prebuilt restores the exec bit an artifact drops
         floor = SHARDS["macos"]["lib-a"][0][3]
         binary(f'echo "running {floor} tests"; echo "test result: ok. {floor} passed; 0 failed; 0 ignored"; '
@@ -535,6 +544,14 @@ def prebuilt_rows() -> None:
         assert run_prebuilt("macos", "lib-a", fake) == 1, "a selection under the floor passed"
         binary(f'echo "running {floor} tests"; exit 101')
         assert run_prebuilt("macos", "lib-a", fake) == 1, "a red binary passed"
+        # The coverage guard: halves that overlap, or leave a test out, fail a green run.
+        ok_run = f'echo "running {floor} tests"; echo "test result: ok. {floor} passed; 0 failed; 0 ignored"'
+        binary(ok_run, "overlap")
+        assert run_prebuilt("macos", "lib-a", fake) == 1 and union_problems(fake, "macos"), "overlap passed"
+        binary(ok_run, "gap")
+        assert run_prebuilt("macos", "lib-a", fake) == 1 and union_problems(fake, "macos"), "a gap passed"
+        binary(ok_run)
+        assert run_prebuilt("macos", "lib-a", fake) == 0 and union_problems(fake, "macos") == []
         # export-lib copies the executable cargo names, and fails when cargo names none.
         built = os.path.join(root, "built")
         with open(built, "w") as f:
@@ -562,6 +579,17 @@ def prebuilt_rows() -> None:
     assert not waits([(False, None)] * 40), "an absent producer (int rerun alone) was awaited past grace"
     assert not waits([(False, "queued")] * 40), "a producer queued past grace was awaited"
     assert waits([(False, "queued")] * 5 + [(True, "in_progress")]), "a briefly queued producer was abandoned"
+    # The rehearsal input skips the wait and asks for the fallback, touching no API.
+    with tempfile.TemporaryDirectory() as root:
+        out = os.path.join(root, "out")
+        saved = {k: os.environ.get(k) for k in ("MACOS_LIB_REHEARSE_FALLBACK", "GITHUB_OUTPUT")}
+        os.environ.update(MACOS_LIB_REHEARSE_FALLBACK="true", GITHUB_OUTPUT=out)
+        try:
+            assert wait_lib("macos-lib-tests", "macOS shard lib-b") == 0
+            assert open(out).read() == "found=false\n"
+        finally:
+            for k, v in saved.items():
+                os.environ.pop(k, None) if v is None else os.environ.__setitem__(k, v)
 
 
 def per_binary_rows() -> None:
@@ -660,11 +688,43 @@ def export_lib(dest: str, program: tuple[str, ...] = ("cargo",)) -> int:
     return 0
 
 
+def listed(binary: str, test_args: list[str], os_kind: str) -> set[str]:
+    """The test names `binary` selects with `test_args` and the OS skips (`--list`, nothing runs)."""
+    out = subprocess.run([binary, "--list", "--format", "terse", *test_args, *SKIPS[os_kind]],
+                         capture_output=True, text=True, env={**os.environ, "CARGO_MANIFEST_DIR": ROOT},
+                         cwd=ROOT)
+    if out.returncode != 0:
+        raise RuntimeError(f"--list exited {out.returncode}: {out.stderr.strip()[-300:]}")
+    return {line[: -len(": test")] for line in out.stdout.splitlines() if line.endswith(": test")}
+
+
+def union_problems(binary: str, os_kind: str) -> list[str]:
+    """Problems with this OS's lib halves on `binary`: a test both select, or one neither does.
+    The halves' filters come from the table, so this checks exactly what the jobs run."""
+    halves = {name: steps[0][2] for name, steps in SHARDS[os_kind].items()
+              if any("--lib" in args for _, args, _, _ in steps)}
+    try:
+        whole = listed(binary, [], os_kind)
+        sets = {name: listed(binary, args, os_kind) for name, args in halves.items()}
+    except RuntimeError as error:
+        return [f"lib union: {error}"]
+    names = sorted(sets)
+    both = set.intersection(*sets.values()) if len(sets) > 1 else set()
+    missing = whole - set().union(*sets.values())
+    print(f"::notice::{os_kind} lib union: whole {len(whole)}, "
+          + ", ".join(f"{n} {len(sets[n])}" for n in names) + f", overlap {len(both)}, missing {len(missing)}")
+    out = [f"lib union: {len(both)} test(s) in both halves, e.g. {sorted(both)[:3]}"] * bool(both)
+    out += [f"lib union: {len(missing)} test(s) in neither half, e.g. {sorted(missing)[:3]}"] * bool(missing)
+    return out
+
+
 def run_prebuilt(os_kind: str, shard: str, binary: str) -> int:
     """Run a PREBUILT shard from an exported lib test binary, as `cargo test` would run it: from the
     package root with CARGO_MANIFEST_DIR set. Same floor and report as `run`."""
     ((step, _args, test_args, floor),) = SHARDS[os_kind][shard]
     os.chmod(binary, 0o755)  # an artifact round trip drops the exec bit
+    # The coverage guard: the halves' selections on this binary partition its whole list.
+    union = union_problems(binary, os_kind)
     env = {**os.environ, "CARGO_MANIFEST_DIR": ROOT}
     p = subprocess.Popen([binary, *test_args, *OUTPUT.get(os_kind, []), *SKIPS[os_kind]],
                          stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=env, cwd=ROOT)
@@ -680,6 +740,7 @@ def run_prebuilt(os_kind: str, shard: str, binary: str) -> int:
     print(f"::notice::{os_kind} {shard} {step} (prebuilt): selected {n} (floor {floor}), rc {rc}")
     failed = [f"{step}: test binary exited {rc}"] * (rc != 0)
     failed += [f"{step}: selected {n} tests, below the floor of {floor}"] * (n < floor)
+    failed += union
     for f in failed:
         print(f"::error::{os_kind} {shard} {f}")
     return 1 if failed else 0
@@ -705,6 +766,12 @@ def wait_for_lib(fetch, sleep, clock, grace: float = 600, interval: float = 20) 
 
 def wait_lib(artifact: str, producer: str) -> int:
     """Wait for `artifact` from job `producer` of this run; write found=true|false to GITHUB_OUTPUT."""
+    if os.environ.get("MACOS_LIB_REHEARSE_FALLBACK") == "true":
+        # A dispatch input: rehearse the path a missing binary takes, without breaking lib-b.
+        print(f"::notice::wait-lib: rehearsing the fallback; {artifact} not used")
+        with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+            f.write("found=false\n")
+        return 0
     repo, run_id = os.environ["GITHUB_REPOSITORY"], os.environ["GITHUB_RUN_ID"]
     attempt = os.environ.get("GITHUB_RUN_ATTEMPT", "1")
 

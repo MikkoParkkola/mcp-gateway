@@ -26,6 +26,10 @@ on:
   # runs the same jobs as a branch push, which is none of them.
   workflow_dispatch:
     inputs:
+      rehearse_macos_lib_fallback:
+        description: macOS int builds and runs its lib half itself, as when lib-b's test binary does not arrive
+        type: boolean
+        default: false
       rehearse_manifest:
         description: Build both arches and assemble the provenance-tagged index, promoting no release tag
         type: boolean
@@ -864,6 +868,7 @@ jobs:
         timeout-minutes: 120
         env:
           GH_TOKEN: ${{ github.token }}
+          MACOS_LIB_REHEARSE_FALLBACK: ${{ github.event_name == 'workflow_dispatch' && inputs.rehearse_macos_lib_fallback }}
         run: python3 scripts/ci/shard_tests.py wait-lib macos-lib-tests "macOS shard lib-b"
       - name: Fetch the lib test binary
         if: matrix.shard == 'int' && steps.wait.outputs.found == 'true'
