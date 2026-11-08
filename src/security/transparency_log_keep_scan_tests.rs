@@ -80,7 +80,6 @@ const PENDING: &[&str] = &[
     "src/gateway/router/slot_verdict_g2_managed_http_tests.rs",
     "src/gateway/router/sso_admin_tests/admin_action.rs",
     "src/gateway/router/tests/meta_state_fixtures.rs",
-    "src/gateway/server/tools_changed/audience_fixture.rs",
     "src/gateway/streaming_tests.rs",
     "src/gateway/task_service/execution/upstream/recovered_rewrite_record_tests.rs",
     "src/gateway/ui/activity/export_tests.rs",
