@@ -179,7 +179,8 @@ def opaque_lines(source: str) -> set[int]:
             i += 1
             continue
         if state == "str":
-            i += 2 if c == "\\" else 1
+            # An escaped newline still ends a line: step onto it, not past it.
+            i += 2 if c == "\\" and source[i + 1 : i + 2] != "\n" else 1
             if c == '"':
                 state = None
             continue
@@ -207,7 +208,7 @@ def opaque_lines(source: str) -> set[int]:
             continue
         raw = RAW_OPEN.match(source, i) if c in "br" else None
         if raw and (i == 0 or not (source[i - 1].isalnum() or source[i - 1] == "_")):
-            state, hashes, i = "raw", len(raw.group(1)), i + raw.end()
+            state, hashes, i = "raw", len(raw.group(1)), raw.end()
             continue
         if c == '"':
             state, i = "str", i + 1
