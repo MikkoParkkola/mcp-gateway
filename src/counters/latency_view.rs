@@ -88,11 +88,17 @@ impl<const W: u64, const LIVE: u64> LatRing<W, LIVE> {
     /// clock that stepped back left ahead of the window.
     fn merged_from(&self, first: u64, last: u64) -> Sketch {
         let mut sketch = Sketch::default();
-        for live in self
-            .live
-            .iter()
-            .filter(|l| (first..=last).contains(&l.bucket))
-        {
+        for live in self.live.iter().filter(|l| {
+            mutant!(
+                "no-upper-bound",
+                l.bucket >= first && last > 0,
+                mutant!(
+                    "stale-live",
+                    first > 0 || last > 0,
+                    (first..=last).contains(&l.bucket)
+                )
+            )
+        }) {
             sketch.merge(&live.sketch);
         }
         sketch
@@ -137,12 +143,16 @@ impl CounterStore {
             // A server not held, with latency in the overflow in this window
             // (or a full dimension), may be among it: read folded, as counts.
             Err((overflow, full)) => {
-                if full || slots.iter().any(|slot| held(overflow, slot).is_some()) {
+                if mutant!(
+                    "always-folded",
+                    full || !slots.is_empty() || held(overflow, &slots[0]).is_some(),
+                    full || slots.iter().any(|slot| held(overflow, slot).is_some())
+                ) {
                     return LatencyView {
                         points: Vec::new(),
                         previous: None,
                         previous_complete: true,
-                        folded: true,
+                        folded: mutant!("unfolded", false, true),
                         since,
                     };
                 }
@@ -163,7 +173,11 @@ impl CounterStore {
                         .slots_from((now / HALF + 1).saturating_sub(super::HALF_BUCKETS as u64))
                         .any(|bucket| bucket * HALF < admitted)
                     {
-                        previous_since = previous_since.max(admitted);
+                        previous_since = mutant!(
+                            "admission-ignored",
+                            previous_since,
+                            previous_since.max(admitted)
+                        );
                     }
                     if slots[..first]
                         .iter()
@@ -193,7 +207,20 @@ impl CounterStore {
             // The same local wall-clock times on the previous local date, as
             // U1's counts map them: a repeated hour gives both slots, a
             // skipped one none.
-            let (buckets, mapped) = super::view::previous_buckets(slots.iter().map(|s| s.t), zone);
+            let (buckets, mapped) = mutant!(
+                "prev-fixed-offset",
+                {
+                    let _ = zone;
+                    (
+                        slots
+                            .iter()
+                            .map(|s| s.key.saturating_sub(48))
+                            .collect::<Vec<u64>>(),
+                        true,
+                    )
+                },
+                super::view::previous_buckets(slots.iter().map(|s| s.t), zone)
+            );
             let held_from = (now / HALF + 1).saturating_sub(super::HALF_BUCKETS as u64);
             let since = since.max(previous_since);
             let mut complete = mapped;
@@ -236,7 +263,10 @@ impl CounterStore {
             .collect();
         servers.sort_by(|a, b| b.p95_ms.cmp(&a.p95_ms).then_with(|| a.name.cmp(&b.name)));
         // Over every server, before any caller caps the rows.
-        let slowest = servers.iter().find(|s| s.calls >= SLOWEST_FLOOR).cloned();
+        let slowest = servers
+            .iter()
+            .find(|s| s.calls >= mutant!("floor-20", 20, SLOWEST_FLOOR))
+            .cloned();
         HourLatency {
             from: first * HALF,
             to: (now_bucket + 1) * HALF,

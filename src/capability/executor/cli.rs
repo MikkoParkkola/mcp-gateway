@@ -45,6 +45,11 @@ impl CapabilityExecutor {
                 })
                 .value(),
         );
+        let _wait = mutant!(
+            "slot-wait-timed",
+            crate::gateway::SendTimer::start(),
+            crate::gateway::SendTimer::start_if(false)
+        );
         let _slot = slots
             .acquire_owned()
             .await

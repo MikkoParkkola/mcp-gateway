@@ -330,7 +330,11 @@ async fn timed_attempt(
     let sent = match client.execute(request).await {
         Ok(sent) => sent,
         Err(e) => {
-            let evidence = if redirects.load(Ordering::SeqCst) == before {
+            let evidence = if mutant!(
+                "counter-ignored",
+                true,
+                redirects.load(Ordering::SeqCst) == before
+            ) {
                 RedirectEvidence::NoRedirectFollowed
             } else {
                 RedirectEvidence::MayHaveRedirected
@@ -340,6 +344,14 @@ async fn timed_attempt(
         }
     };
     let (status, version, headers) = (sent.status(), sent.version(), sent.headers().clone());
+    let timer = mutant!(
+        "headers-only",
+        {
+            timer.finish(End::Answered);
+            SendTimer::start_if(false)
+        },
+        timer
+    );
     match sent.bytes().await {
         Ok(body) => {
             timer.finish(End::Answered);
@@ -361,7 +373,7 @@ async fn timed_attempt(
             // never arrives: callers classify by status (credential refresh,
             // rate limits), so it goes back with an empty body. A success
             // whose body failed is an error, never an empty success.
-            if status.is_success() {
+            if mutant!("refusal-body-error", true, status.is_success()) {
                 Err(Failed::Body(e))
             } else {
                 // Its headers too (a 429's Retry-After), less a length the
@@ -385,7 +397,16 @@ async fn timed_attempt(
 /// flag, read before the error is wrapped as `Transport`.
 fn end_send(timer: SendTimer, e: &reqwest::Error, evidence: RedirectEvidence) {
     if crate::security::http_diagnostics::ssrf_refusal(e).is_some()
-        && evidence == RedirectEvidence::NoRedirectFollowed
+        && mutant!(
+            "ssrf-noted",
+            false,
+            mutant!(
+                "redirect-discarded",
+                true,
+                evidence == RedirectEvidence::NoRedirectFollowed
+            )
+        )
+        || mutant!("connect-discarded", e.is_connect(), false)
     {
         timer.discard();
     } else if e.is_timeout() {
