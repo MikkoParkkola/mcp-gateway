@@ -137,11 +137,20 @@ async fn a_retry_from_another_backend_that_recorded_its_invocation_makes_the_wit
 
     let held = wait_for_decisions(&dir, 1).await;
     assert_eq!(held.len(), 1, "{held:#?}");
+    let records = invocations(&dir);
     assert_eq!(
-        invocations(&dir).len(),
+        records.len(),
         1,
         "the retry's own invocation record: {held:#?}"
     );
+    // The retry ran against the origin backend, not the withheld call's server
+    // (the record's top-level `server` and `tool`, as the writer lays them out).
+    assert_eq!(
+        records[0]["server"],
+        json!("origin_backend"),
+        "{records:#?}"
+    );
+    assert_eq!(records[0]["tool"], json!(PERSONAL), "{records:#?}");
     assert_eq!(held[0]["server"], json!(CAPS), "{held:#?}");
     assert_eq!(held[0]["invocation_recorded"], json!(true), "{held:#?}");
 }

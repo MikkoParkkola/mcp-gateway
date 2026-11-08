@@ -130,6 +130,8 @@ impl<'a> RouteStage<'a> {
             if index >= self.request_targets && routed.is_err() {
                 // Boxed at its creation: this answer is the cold path, and
                 // inline it would size every call's route-stage future.
+                // large_futures checks the boxed pointer at the await, not the answer
+                // future's size: the box is a size measure, not an allocation bound.
                 let answer = Box::pin(
                     refused.with_trace(step_trace).answer(
                         state,
@@ -154,6 +156,7 @@ impl<'a> RouteStage<'a> {
                     // the route's own answer (its HTTP status included).
                     let status = StatusCode::from_u16(status).unwrap_or(StatusCode::FORBIDDEN);
                     // Boxed at its creation, as the step answer above is.
+                    // large_futures sees the box here too: a size measure, not a bound.
                     let answer = Box::pin(refused.with_trace(step_trace).answer(
                         state,
                         target.as_target(),
