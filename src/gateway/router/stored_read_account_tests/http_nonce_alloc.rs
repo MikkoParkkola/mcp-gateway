@@ -24,7 +24,7 @@ use tower::ServiceExt;
 use super::busy_nonce::signed_fixture_with;
 use super::{BACKEND, KEY, TOOL, modern_meta};
 use crate::gateway::alloc_meter::{
-    LARGE_BYTES, Measured, isolate, measure_async, measure_async_process_wide,
+    LARGE_BYTES, Measured, TAG, isolate, measure_async, measure_async_process_wide,
 };
 use crate::security::sanitize::InputSanitizing;
 
@@ -466,7 +466,14 @@ fn a_refused_meta_call_costs_its_parse_plus_a_fixed_cap() {
                 "INTAKE.2(a) {size}: premise, the same refusal: {reply}"
             );
             let excess = refusal.bytes.saturating_sub(parse.bytes);
-            println!("INTAKE.2(a) size={size} parse={parse} refusal={refusal} over_parse={excess}");
+            // The leading newline keeps the line clear of libtest's
+            // `test <name> ... ` prefix in this one-thread child.
+            println!(
+                "\n{TAG}INTAKE.2(a) size={size} parse={} refusal={} over_parse={excess} cap={OVER_PARSE} margin={}",
+                parse.bytes,
+                refusal.bytes,
+                i128::from(OVER_PARSE) - i128::from(excess)
+            );
             assert!(
                 excess <= OVER_PARSE,
                 "INTAKE.2(a) {size}: the refusal allocated {excess} B beyond its parse, above \

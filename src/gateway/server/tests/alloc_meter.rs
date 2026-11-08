@@ -257,6 +257,16 @@ pub(crate) fn isolate(test_path: &str) -> bool {
         stdout.contains("1 passed"),
         "isolated child for {test_path} did not run exactly one test\n--- child stdout ---\n{stdout}"
     );
+    // MIK-9396 MEMB.3: a passing child's measurements reach the log too.
+    // A direct stderr write, because libtest captures only the print
+    // macros; one write with its own newlines, so the block starts and
+    // ends on a line of its own.
+    let lines = forwarded(&stdout);
+    if !lines.is_empty() {
+        use std::io::Write as _;
+        let block = format!("\n{}\n", lines.join("\n"));
+        let _ = std::io::stderr().write_all(block.as_bytes());
+    }
     true
 }
 
@@ -265,8 +275,12 @@ pub(crate) fn isolate(test_path: &str) -> bool {
 pub(crate) const TAG: &str = "alloc-meter: ";
 
 /// The tagged lines of a child's stdout, in order.
-fn forwarded(_stdout: &str) -> Vec<&str> {
-    Vec::new()
+fn forwarded(stdout: &str) -> Vec<&str> {
+    stdout
+        .lines()
+        .map(|l| l.trim_end_matches('\r'))
+        .filter(|l| l.starts_with(TAG))
+        .collect()
 }
 
 /// Clears the process-wide flag on every exit, an unwind included.
