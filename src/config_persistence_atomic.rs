@@ -117,6 +117,10 @@ fn write_atomic_observed(
         cleanup(&scratch);
         return Err(e);
     }
+    #[cfg(test)]
+    if let Ok(f) = std::fs::File::open(&target) {
+        super::crash_fs::note_data_durable(&target, &f);
+    }
     Ok(())
 }
 
