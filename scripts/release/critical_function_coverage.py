@@ -39,6 +39,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import inventory_ledger as ledger  # noqa: E402
+from c6_resolve import Unsupported as _Unsupported  # noqa: E402
+from c6_resolve import blank as _blank_rust  # noqa: E402
 
 FLOOR = 95.0
 
@@ -115,9 +117,12 @@ TRACING_NAME = re.compile(
 # leaking):
 # - A renaming `use` of a tracing item: the grade fails closed (INDIRECT) on
 #   any `use` that mentions tracing and holds `as` not followed by `_`.
-# - A `macro_rules!` wrapper: every macro defined in `src/` is treated as a
-#   possible tracing macro, so a line invoking one in a Critical function is
-#   unverifiable (only a level macro can match PLAIN_HEAD).
+# - A `macro_rules!` wrapper: every macro defined under `src/` is
+#   treated as a possible tracing macro, so a line invoking one in a Critical
+#   function is unverifiable (only a level macro can match PLAIN_HEAD).
+#   Text inside a comment or a string literal is not a definition. A file
+#   the blanker cannot lex is scanned raw, so a mention there still counts
+#   (see macro_names). The path is not an exemption.
 _GAP = r"(?:\s|/\*.*?\*/|//[^\n]*\n)*"
 # A real `use` item starts its line (after any attributes and a visibility),
 # so a doc comment, a line comment or a string literal that only mentions one
@@ -180,10 +185,28 @@ def is_safe_macro(prefix, name, safe):
 
 def macro_names(root):
     """The macro names a line may invoke and still be graded by its count:
-    SAFE_MACROS minus any name a `macro_rules!` in `src/` defines."""
+    SAFE_MACROS minus any name a `macro_rules!` in `src/` defines.
+
+    Comments and string literals (plain, raw, byte) are blanked first, via
+    `c6_resolve.blank`, so a fixture that only mentions `macro_rules!` does
+    not shadow a safe name. When `blank` raises `Unsupported`, that file is
+    scanned raw, which may over-shadow and is how the file was read before
+    blanking. `c6_resolve.resolve` and `c6_killer_drift.extract_fn` likewise
+    catch `Unsupported` instead of trusting a partial read. Every `*.rs` file
+    under `src/` is scanned. A path is not an exemption.
+    """
     local = set()
-    for path in (Path(root) / "src").rglob("*.rs"):
-        local.update(_MACRO_DEF.findall(path.read_text()))
+    src = Path(root) / "src"
+    for path in src.rglob("*.rs"):
+        raw = path.read_text()
+        try:
+            text = _blank_rust(raw)
+        except _Unsupported:
+            # Fail closed. c6_resolve.py:582 and c6_killer_drift.py:81 catch
+            # Unsupported rather than treating the file as read; here the
+            # conservative read is the raw text.
+            text = raw
+        local.update(_MACRO_DEF.findall(text))
     return SAFE_MACROS - local
 
 

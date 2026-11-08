@@ -171,7 +171,7 @@ async fn the_response_firewall_blocks_or_redacts_a_poll() {
 #[tokio::test]
 async fn a_poll_writes_an_audit_record_for_its_subscriber() {
     use crate::security::transparency_log::{TransparencyLogConfig, TransparencyLogger};
-    let dir = tempfile::tempdir().expect("dir");
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = dir.path().join("audit.ndjson");
     let log = Arc::new(
         TransparencyLogger::open(Arc::new(TransparencyLogConfig {

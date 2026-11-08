@@ -197,7 +197,7 @@ async fn logged_router_in(
     Arc<tempfile::TempDir>,
 ) {
     let (state, store) = split_state(mode, 3600).await;
-    let log_dir = Arc::new(tempfile::tempdir().expect("a log directory"));
+    let log_dir = crate::test_dir_keep::kept_tempdir();
     let log = Arc::new(
         TransparencyLogger::open(Arc::new(TransparencyLogConfig {
             enabled: true,
