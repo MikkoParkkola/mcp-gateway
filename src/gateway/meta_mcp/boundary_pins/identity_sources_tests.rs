@@ -238,7 +238,7 @@ fn every_identity_source_is_a_reviewed_row() {
 fn a_required_row_can_live_in_a_fragment() {
     let (base, moved) = without_first_row(&live_base("identity_sources"));
     let (_root, table) = scratch_table("identity_sources", &base, &[("0.tsv", &moved)]);
-    let wrong = differences(&crate_scan(), &table);
+    let wrong = differences(&crate_scan(), &table, "identity_sources");
     assert!(wrong.is_empty(), "{}", wrong.join("\n"));
 }
 
@@ -251,7 +251,7 @@ fn a_stale_fragment_row_fails_naming_it() {
         &live_base("identity_sources"),
         &[("0.tsv", stale)],
     );
-    let wrong = differences(&crate_scan(), &table);
+    let wrong = differences(&crate_scan(), &table, "identity_sources");
     assert!(
         wrong
             .iter()
@@ -270,7 +270,7 @@ fn a_key_repeated_across_files_fails_naming_both() {
         &live_base("identity_sources"),
         &[("0.tsv", &moved)],
     );
-    let wrong = differences(&crate_scan(), &table);
+    let wrong = differences(&crate_scan(), &table, "identity_sources");
     assert!(
         wrong
             .iter()
