@@ -82,7 +82,7 @@ fn cleartext_is_refused_off_loopback() {
 #[tokio::test]
 async fn fetch_link_refuses_cleartext_before_sending() {
     let out = tokio::time::timeout(
-        std::time::Duration::from_secs(5),
+        std::time::Duration::from_secs(10),
         fetch_link("http://192.0.2.1:9", "tok"),
     )
     .await

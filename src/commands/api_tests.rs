@@ -702,11 +702,11 @@ async fn answered(token: &str, status: StatusCode, body: &str, json_output: bool
     .await
 }
 
-#[path = "api_tests_errors.rs"]
+#[path = "api_errors_tests.rs"]
 mod errors;
 
-#[path = "api_tests_transport.rs"]
+#[path = "api_transport_tests.rs"]
 mod transport;
 
-#[path = "api_tests_redaction.rs"]
+#[path = "api_redaction_tests.rs"]
 mod redaction;
