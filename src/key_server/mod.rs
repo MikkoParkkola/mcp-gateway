@@ -42,6 +42,9 @@ pub(crate) mod oidc_test_harness;
 /// The output-only doc tests fail for the reason they name.
 #[cfg(test)]
 mod output_only_doc_tests;
+/// No raw email in key-server output, checked in a child process.
+#[cfg(test)]
+mod piilog_capture_tests;
 pub mod policy;
 pub mod store;
 

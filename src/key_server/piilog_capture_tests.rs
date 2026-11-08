@@ -1,0 +1,208 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+
+//! No raw email in key-server output. Each case runs in a child process that
+//! installs the production log pipeline (the bounded writer and the one fmt
+//! layer, JSON or text) as the global subscriber before any runtime starts,
+//! drives a real signed exchange and a stored-token use, then checks every
+//! captured byte. A child keeps the global subscriber out of other tests.
+
+use std::io::Write;
+use std::path::Path;
+use std::process::{Command, Stdio};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
+
+use serde_json::json;
+use tracing_subscriber::layer::SubscriberExt as _;
+use tracing_subscriber::util::SubscriberInitExt as _;
+
+use super::oidc_test_harness::{AUD, Harness, ISS_A, config_yaml};
+use crate::log_writer::{self, NoticeFormat};
+
+const CASE: &str = "MCP_GW_TEST_PIILOG_CASE";
+/// Mixed case with a plus tag: neither this nor its lower-cased form may
+/// appear anywhere in the output.
+const EMAIL: &str = "Ada.Lovelace+Audit@Example.COM";
+const SUBJECT: &str = "opaque-subject-7f3a";
+/// A hung child fails the row instead of holding a test worker.
+const CHILD_DEADLINE: Duration = Duration::from_secs(60);
+/// Logged last; its presence proves the queue drained everything before it.
+const LAST: &str = "piilog-sentinel-last";
+
+/// Run [`child`] for `case` under a watchdog; output goes to files so a large
+/// capture cannot fill a pipe and stall the child.
+fn in_child(case: &str) {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let out_path = dir.path().join("stdout");
+    let err_path = dir.path().join("stderr");
+    let mut proc = Command::new(std::env::current_exe().expect("test binary"))
+        .args([
+            "--exact",
+            "key_server::piilog_capture_tests::child",
+            "--ignored",
+            "--nocapture",
+            "--test-threads=1",
+        ])
+        .env(CASE, case)
+        .env_remove("RUST_LOG")
+        .stdout(Stdio::from(
+            std::fs::File::create(&out_path).expect("stdout file"),
+        ))
+        .stderr(Stdio::from(
+            std::fs::File::create(&err_path).expect("stderr file"),
+        ))
+        .spawn()
+        .expect("spawn child");
+    let started = Instant::now();
+    let status = loop {
+        if let Some(status) = proc.try_wait().expect("wait") {
+            break Some(status);
+        }
+        if started.elapsed() > CHILD_DEADLINE {
+            let _ = proc.kill();
+            let _ = proc.wait();
+            break None;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    };
+    let read =
+        |p: &Path| String::from_utf8_lossy(&std::fs::read(p).unwrap_or_default()).into_owned();
+    let (stdout, stderr) = (read(&out_path), read(&err_path));
+    let Some(status) = status else {
+        panic!("{case}: the child ran past {CHILD_DEADLINE:?} and was killed\n{stdout}\n{stderr}");
+    };
+    assert!(status.success(), "{case}: child failed\n{stdout}\n{stderr}");
+    // Printed only after the child's checks, so a child that ran nothing
+    // cannot read as a pass.
+    assert!(
+        stdout.contains(&format!("piilog {case} child ok")),
+        "{case}: the child ran no case\n{stdout}\n{stderr}"
+    );
+}
+
+/// A sink the writer thread fills and the child reads back.
+#[derive(Clone, Default)]
+struct Captured(Arc<Mutex<Vec<u8>>>);
+
+impl Write for Captured {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().expect("capture lock").extend_from_slice(buf);
+        Ok(buf.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+#[test]
+#[ignore = "run by the cases below, in a child process"]
+fn child() {
+    let Ok(case) = std::env::var(CASE) else {
+        return;
+    };
+    let format = match case.as_str() {
+        "json" => NoticeFormat::Json,
+        "text" => NoticeFormat::Text,
+        other => panic!("unknown case {other}"),
+    };
+    let captured = Captured::default();
+    let (writer, flush) = log_writer::spawn(
+        Box::new(captured.clone()),
+        log_writer::LOG_QUEUE_LINES,
+        log_writer::LOG_QUEUE_BYTES,
+        format,
+    )
+    .expect("writer thread");
+    tracing_subscriber::registry()
+        .with(tracing_subscriber::EnvFilter::new("trace"))
+        .with(crate::log_layer(format, writer.clone()))
+        .try_init()
+        .expect("the child's only global subscriber");
+
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()
+        .expect("runtime");
+    rt.block_on(async {
+        let yaml = config_yaml(
+            "[]",
+            &format!(
+                "policies:\n  - match: {{ issuer: \"{ISS_A}\" }}\n    \
+                 scopes: {{ backends: [\"*\"], tools: [\"*\"], rate_limit: 0 }}\n"
+            ),
+        );
+        let h = Harness::start(&yaml).await;
+        let id_token = h.mint(
+            ISS_A,
+            SUBJECT,
+            &json!({"email": EMAIL, "email_verified": true, "aud": AUD}),
+        );
+        let (status, body) = h.exchange(&id_token).await;
+        assert_eq!(status, 200, "exchange: {body}");
+        let bearer = body["access_token"]
+            .as_str()
+            .expect("access_token")
+            .to_owned();
+        assert!(
+            h.ks.validate_token(&bearer).await.is_some(),
+            "stored token use"
+        );
+        tokio::spawn(async { tracing::info!("piilog-sentinel-task") })
+            .await
+            .expect("task");
+        tokio::task::spawn_blocking(|| tracing::info!("piilog-sentinel-blocking"))
+            .await
+            .expect("blocking");
+    });
+    std::thread::spawn(|| tracing::info!("piilog-sentinel-thread"))
+        .join()
+        .expect("thread");
+    rt.shutdown_timeout(Duration::from_secs(5));
+    tracing::info!("{LAST}");
+    let dropped = writer.dropped_lines();
+    drop(flush);
+
+    let bytes = captured.0.lock().expect("capture lock").clone();
+    let text = String::from_utf8_lossy(&bytes);
+    assert_eq!(
+        dropped, 0,
+        "the writer dropped lines; the capture is incomplete"
+    );
+    for marker in [
+        "piilog-sentinel-task",
+        "piilog-sentinel-blocking",
+        "piilog-sentinel-thread",
+        LAST,
+        "token.issued",
+        "token.used",
+        SUBJECT,
+    ] {
+        assert!(
+            text.contains(marker),
+            "{case}: no {marker:?} in the capture:\n{text}"
+        );
+    }
+    let leaks: Vec<&str> = text
+        .lines()
+        .filter(|l| l.contains(EMAIL) || l.to_lowercase().contains(&EMAIL.to_lowercase()))
+        .collect();
+    assert!(
+        leaks.is_empty(),
+        "{case}: {} line(s) carry the email:\n{}",
+        leaks.len(),
+        leaks.join("\n")
+    );
+    println!("piilog {case} child ok");
+}
+
+#[test]
+fn a_json_log_of_exchange_and_use_carries_no_email() {
+    in_child("json");
+}
+
+#[test]
+fn a_text_log_of_exchange_and_use_carries_no_email() {
+    in_child("text");
+}
