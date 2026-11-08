@@ -79,15 +79,11 @@ impl PolicyEngine {
     ) -> Result<TokenScopes, ScopeRefusal> {
         for rule in &self.rules {
             if matches_rule(&rule.match_criteria, identity) {
-                debug!(
-                    email = %identity.email(),
-                    issuer = %identity.issuer(),
-                    "Policy rule matched"
-                );
+                debug!(issuer = %identity.issuer(), "Policy rule matched");
                 return apply_intersection(&rule.scopes, requested);
             }
         }
-        debug!(email = %identity.email(), "No policy rule matched");
+        debug!(issuer = %identity.issuer(), "No policy rule matched");
         Err(ScopeRefusal::Denied)
     }
 }

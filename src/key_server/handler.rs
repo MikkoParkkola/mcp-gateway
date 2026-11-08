@@ -215,9 +215,13 @@ async fn exchange_token(
     let scopes = match ks.policy.resolve_scopes(&identity, &requested) {
         Ok(scopes) => scopes,
         Err(ScopeRefusal::NoBackendsGranted) => {
-            warn!(email = %identity.email(), "Matched policy grants no backend");
+            warn!(issuer = %identity.issuer(), subject = %identity.subject(), "Matched policy grants no backend");
             let ev = AuditEvent::denied(
-                format!("policy grants no backend to {}", identity.email()),
+                format!(
+                    "policy grants no backend to {} at {}",
+                    identity.subject(),
+                    identity.issuer()
+                ),
                 client_ip,
             );
             audit::emit(&ev);
@@ -230,9 +234,13 @@ async fn exchange_token(
             );
         }
         Err(ScopeRefusal::Denied) => {
-            warn!(email = %identity.email(), "No policy matched");
+            warn!(issuer = %identity.issuer(), subject = %identity.subject(), "No policy matched");
             let ev = AuditEvent::denied(
-                format!("no policy matched for {}", identity.email()),
+                format!(
+                    "no policy matched for {} at {}",
+                    identity.subject(),
+                    identity.issuer()
+                ),
                 client_ip,
             );
             audit::emit(&ev);
