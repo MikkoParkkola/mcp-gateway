@@ -491,7 +491,8 @@ async fn a_refused_redirect_step_marks_the_plan_only_when_it_ends_it() {
 }
 
 /// Answers every name with one private address.
-struct PrivateAnswer;
+/// Answers every name with a private address, counting its lookups.
+struct PrivateAnswer(std::sync::Arc<std::sync::atomic::AtomicUsize>);
 
 impl crate::security::ssrf::HostResolver for PrivateAnswer {
     fn lookup(
@@ -500,6 +501,7 @@ impl crate::security::ssrf::HostResolver for PrivateAnswer {
     ) -> std::pin::Pin<
         Box<dyn std::future::Future<Output = crate::Result<Vec<std::net::IpAddr>>> + Send + '_>,
     > {
+        self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         Box::pin(async { Ok(vec![std::net::IpAddr::from([10, 0, 0, 1])]) })
     }
 }
@@ -520,10 +522,13 @@ async fn a_redirect_to_a_name_the_pin_refuses_records_refused() {
         }),
     );
     let port = serve(app).await;
+    let lookups = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let client = super::client::build_over(
         reqwest::Client::builder().no_proxy().dns_resolver(
-            crate::security::ssrf::PinningResolver::new(PrivateAnswer)
-                .with_policy(crate::security::ssrf::DestinationPolicy::Public),
+            crate::security::ssrf::PinningResolver::new(PrivateAnswer(std::sync::Arc::clone(
+                &lookups,
+            )))
+            .with_policy(crate::security::ssrf::DestinationPolicy::Public),
         ),
     );
     // A server answered the first hop, so the refused hop is one Failed
@@ -537,6 +542,11 @@ async fn a_redirect_to_a_name_the_pin_refuses_records_refused() {
     .await;
     crate::gateway::send_timer_seam::clear();
     assert!(!ok, "premise: the pin refused the hop");
+    // The pin resolved the hop's name: no earlier check refused it first.
+    assert!(
+        lookups.load(std::sync::atomic::Ordering::SeqCst) >= 1,
+        "the hop was refused before the pin resolved its name"
+    );
     assert_eq!(effect, Some("refused".into()));
     assert_eq!(
         notes.backend_sample(),
