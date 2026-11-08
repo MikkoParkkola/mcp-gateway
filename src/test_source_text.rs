@@ -98,10 +98,10 @@ pub(crate) fn production_text(text: &str) -> String {
         };
         // The predicate is parsed from the original text, so quoted values
         // survive; the sanitized code only located it.
-        let test = syn::parse_str::<syn::Meta>(&text[attr.open + 1..attr.close])
+        let only_under_test = syn::parse_str::<syn::Meta>(&text[attr.open + 1..attr.close])
             .is_ok_and(|meta| eval(&meta) == Cfg::False);
         from = attr.end;
-        if !test {
+        if !only_under_test {
             continue;
         }
         if !attr.inner {
