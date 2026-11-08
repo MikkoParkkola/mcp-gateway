@@ -768,3 +768,7 @@ mod tests;
 #[cfg(test)]
 #[path = "backend_add_tests.rs"]
 mod backend_add_tests;
+
+#[cfg(test)]
+#[path = "backend_ops_credential_tests.rs"]
+mod credential_tests;

@@ -37,7 +37,7 @@ fn run(root: &Path, args: &[&str], env: &[(&str, &str)], stdin: Option<&[u8]>) -
     if let Ok(profile) = std::env::var("LLVM_PROFILE_FILE") {
         command.env("LLVM_PROFILE_FILE", profile);
     }
-    let mut child = command.spawn().expect("run mcp-gateway");
+    let mut child = command.spawn().expect("run mcp-gateway"); // spawn-check: waits for exit: add exits by itself
     if let Some(bytes) = stdin {
         child
             .stdin
