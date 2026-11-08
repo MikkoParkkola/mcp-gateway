@@ -427,8 +427,13 @@ pub enum Command {
     /// # Stdio server with trailing command (claude/codex style):
     /// mcp-gateway add my-server -- npx -y @some/mcp-server --flag
     ///
-    /// # Stdio server with env vars:
-    /// mcp-gateway add -e API_KEY=xxx my-server -- npx my-mcp-server
+    /// # Stdio server with an env var taken from this shell (values never go
+    /// # on the command line, where process lists and history show them):
+    /// export MY_TOKEN=...   # or set it in your shell profile
+    /// mcp-gateway add -e MY_TOKEN my-server -- npx my-mcp-server
+    ///
+    /// # The same with values from a JSON file (`--env-file -` reads stdin):
+    /// mcp-gateway add --env-file secrets.json my-server -- npx my-mcp-server
     ///
     /// # HTTP server:
     /// mcp-gateway add --url https://mcp.sentry.dev/mcp sentry

@@ -363,9 +363,49 @@ pub(crate) fn env_inputs(
     env_file: Option<&[u8]>,
     lookup: impl Fn(&str) -> Option<String>,
 ) -> Result<std::collections::BTreeMap<String, String>, String> {
-    // RED STUB: rows first.
-    let _ = (names, env_file, lookup);
-    Ok(std::collections::BTreeMap::new())
+    let mut values = std::collections::BTreeMap::new();
+    let mut put = |name: String, value: String| {
+        if values.insert(name.clone(), value).is_some() {
+            return Err(format!("{name} is given twice; give each variable once"));
+        }
+        Ok(())
+    };
+    for given in names {
+        if let Some((name, _value)) = given.split_once('=') {
+            return Err(format!(
+                "-e takes an environment variable name, not a name with a value: values on \
+                 the command line are visible in process lists and shell history. Set {name} \
+                 in the environment and pass -e {name}, or use --env-file FILE (- for stdin)"
+            ));
+        }
+        let value =
+            lookup(given).ok_or_else(|| format!("{given} is not set in the environment"))?;
+        put(given.clone(), value)?;
+    }
+    if let Some(bytes) = env_file {
+        if bytes.len() > ENV_FILE_MAX_BYTES {
+            return Err(format!(
+                "--env-file is larger than {ENV_FILE_MAX_BYTES} bytes"
+            ));
+        }
+        let parsed: serde_json::Value = serde_json::from_slice(bytes).map_err(|e| {
+            format!(
+                "--env-file is not JSON (line {}, column {})",
+                e.line(),
+                e.column()
+            )
+        })?;
+        let serde_json::Value::Object(map) = parsed else {
+            return Err("--env-file must be a JSON object of names to values".to_string());
+        };
+        for (name, value) in map {
+            let serde_json::Value::String(value) = value else {
+                return Err(format!("--env-file: the value of {name} is not a string"));
+            };
+            put(name, value)?;
+        }
+    }
+    Ok(values)
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
