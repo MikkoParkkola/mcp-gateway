@@ -13,8 +13,8 @@ use std::sync::Arc;
 
 use serde_json::{Value, json};
 
+use super::fixture::{self, CountedBackend};
 use super::http::{keyed, modern, post_against, public_mcp_auth, state_from_with, task_id_of};
-use crate::fixture::{self, CountedBackend};
 use crate::transport::Transport;
 
 /// `tasks/get` as `key-a` until the task is terminal, bounded by [`fixture::BOUND`].

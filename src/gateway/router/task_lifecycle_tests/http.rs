@@ -28,7 +28,7 @@ use axum::http::{Request, StatusCode};
 use serde_json::{Value, json};
 use tower::ServiceExt;
 
-use crate::fixture::{self, CountedBackend, GateHandle, ServerGuard};
+use super::fixture::{self, CountedBackend, GateHandle, ServerGuard};
 
 pub(super) const TASKS: &str = "io.modelcontextprotocol/tasks";
 
