@@ -621,7 +621,7 @@ pub(crate) use staging::{
     plan_step,
 };
 #[cfg(feature = "firewall")]
-pub(crate) use staging::{commit_with, stage_with};
+pub(crate) use staging::{commit_with, stage_with, take_staged_now};
 
 #[cfg(all(test, feature = "firewall"))]
 #[path = "relay_tests.rs"]
