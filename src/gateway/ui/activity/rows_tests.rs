@@ -68,6 +68,10 @@ fn r1_each_kind_holds_exactly_its_allowlist() {
         "response_hash",
         "who",
         "findings",
+        // API2.10: the delivery record joined to the call.
+        "effect",
+        "answer_findings",
+        "answer_integrity_scope",
     ]));
     assert_eq!(keys(&r), want);
     assert_eq!(

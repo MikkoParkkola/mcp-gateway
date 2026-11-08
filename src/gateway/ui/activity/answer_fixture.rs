@@ -58,7 +58,7 @@ impl Dl {
 }
 
 pub(super) struct Fixture {
-    pub(super) dir: tempfile::TempDir,
+    pub(super) dir: Arc<tempfile::TempDir>,
     pub(super) path: PathBuf,
     pub(super) logger: TransparencyLogger,
     pub(super) secret: Option<&'static str>,
@@ -71,7 +71,7 @@ impl Fixture {
 
     /// `max_segment_bytes` of 0 never rotates.
     pub(super) fn rotating(secret: Option<&'static str>, max_segment_bytes: u64) -> Self {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = Arc::new(tempfile::tempdir().unwrap());
         let path = dir.path().join("inv.jsonl");
         let logger = TransparencyLogger::open(Arc::new(TransparencyLogConfig {
             enabled: true,
@@ -86,6 +86,7 @@ impl Fixture {
             },
         }))
         .unwrap();
+        logger.keep_test_dir(Arc::clone(&dir));
         Self {
             dir,
             path,

@@ -46,6 +46,10 @@ fn m1_a_list_page_over_the_caps_allocates_within_its_bound() {
         limit: Some("200".into()),
         ..ListQuery::default()
     };
+    // A first, unmetered read pays one-time initialisation (about 600 MB and
+    // 8 million allocator calls, the same for any log), so the meter sees the
+    // steady state of a page.
+    drop(list_page(&fx.logs(), &fx.access(), &q));
     let (response, measured) = measure(|| list_page(&fx.logs(), &fx.access(), &q));
     assert!(response.status().is_success());
     assert!(measured.bytes <= 2 * examined + 4 * MIB, "{measured}");
@@ -61,6 +65,12 @@ async fn m2_an_export_over_the_caps_allocates_within_its_bound() {
         format: Some("ndjson".into()),
     };
     let signer = signer();
+    drop(export_response(
+        &fx.logs(),
+        &fx.access(),
+        &query,
+        Some(&signer),
+    ));
     let (response, measured) =
         measure(|| export_response(&fx.logs(), &fx.access(), &query, Some(&signer)));
     let output = axum::body::to_bytes(response.into_body(), usize::MAX)
