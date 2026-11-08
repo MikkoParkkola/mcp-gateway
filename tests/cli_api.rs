@@ -533,7 +533,7 @@ async fn api_bearer_bypasses_environment_proxies() {
     let gateway_task = tokio::spawn(async move {
         axum::serve(gateway_listener, gateway_app)
             .await
-            .expect("serve")
+            .expect("serve");
     });
     let proxy_hits = Arc::new(AtomicUsize::new(0));
     let seen = Arc::clone(&proxy_hits);

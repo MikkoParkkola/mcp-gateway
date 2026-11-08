@@ -1476,7 +1476,14 @@ fn output_failure_does_not_redact_json_syntax_as_credential_bytes() {
         printed["error"]["remedy"],
         "Check the output destination before repeating the command."
     );
-    assert!(!captured.stderr.contains("null"));
+    // The token is "null": JSON's own null stays JSON null, and no string
+    // value carries the token.
+    assert!(printed["error"]["http_status"].is_null());
+    assert!(printed["error"]["request_id"].is_null());
+    for field in ["kind", "message", "remedy"] {
+        let text = printed["error"][field].as_str().expect("a string field");
+        assert!(!text.contains("null"), "{field}: {text}");
+    }
 }
 
 #[tokio::test]
@@ -2089,9 +2096,12 @@ async fn invalid_utf8_is_preserved_only_without_token_bytes() {
 
 #[tokio::test]
 async fn dropped_object_entries_refuse_the_entire_success_body() {
+    // `[redacted]` is the shared redactor's first marker
+    // (`src/security/secret_redaction.rs:124`): renaming the key `#` to it
+    // collides with the existing key, and every suffix contains the token.
     for body in [
-        json!({"#":"first","[REDACTED]":"second"}),
-        json!({"nested":[{"#":"first","[REDACTED]":"second"}]}),
+        json!({"#":"first","[redacted]":"second"}),
+        json!({"nested":[{"#":"first","[redacted]":"second"}]}),
     ] {
         let out = echoed_body("#", serde_json::to_vec(&body).expect("body")).await;
         assert_error(
