@@ -461,7 +461,36 @@ LIB_TARGET = "mcp_gateway"
 MUTANT_HEAD_RE = re.compile(r"^#mutant\s+([A-Za-z0-9._-]+)(?:\s+multi=([1-9][0-9]*))?\s*$")
 LOCATION_RE = re.compile(r"^[^\s:]+\.rs:[1-9][0-9]*$")
 SITE_LINE_RE = re.compile(r"^MUTANT-SITE (\S+) (\S+):(\d+)$")
-TEST_LINE_RE = re.compile(r"^test (.+?) \.\.\. (ok|FAILED|ignored)$")
+RECORD_RE = re.compile(r"^test (.+?) \.\.\.(?: (.*))?$")
+RESULT_RE = re.compile(r"^(ok|FAILED|ignored)(?:, .*)?$")
+
+
+def records(output: str) -> list[tuple[str, str]]:
+    """libtest's per-test records, (name, ok|FAILED|ignored), in order.
+
+    A line written straight to stderr while a test runs can land between
+    `test NAME ... ` and its result in the merged output, glued after the
+    prefix or on lines of its own. Then the record ends at the next line that
+    is a result word alone; lines between are noise. A prefix no result
+    follows yields no record (libtest-record-parse family)."""
+    found: list[tuple[str, str]] = []
+    held: str | None = None
+    for raw in output.splitlines():
+        line = raw.strip()
+        if held is not None and (r := RESULT_RE.match(line)):
+            found.append((held, r.group(1)))
+            held = None
+            continue
+        m = RECORD_RE.match(line)
+        if not m:
+            continue
+        r = RESULT_RE.match(m.group(2) or "")
+        if r:
+            found.append((m.group(1), r.group(1)))
+            held = None
+        else:
+            held = m.group(1)
+    return found
 PANIC_RE = re.compile(r"^thread '([^']+)'(?: \(\d+\))? panicked at ([^:\s]+):(\d+):\d+:")
 
 
@@ -566,8 +595,7 @@ def classify_row(outcome: Outcome, test: str, location: str) -> str:
     """PASSED, FAILED_AT_SPEC, or ERROR:<why> for one exact-name row run."""
     if outcome.timed_out:
         return "ERROR:timeout"
-    reports = [m.group(2) for line in outcome.output.splitlines()
-               if (m := TEST_LINE_RE.match(line.strip())) and m.group(1) == test]
+    reports = [result for name, result in records(outcome.output) if name == test]
     if outcome.exit is None or outcome.exit < 0 or outcome.exit in (134, 137):
         return "ERROR:abort or signal"
     if not any(SUMMARY_RE.match(line.strip()) for line in outcome.output.splitlines()):
