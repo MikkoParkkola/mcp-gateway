@@ -21,7 +21,7 @@ use super::bounded::Dispatch;
 use super::identity::LogId;
 
 /// The kind of config write an intent names.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum IntentKind {
     Save,
     Adopt,
@@ -30,7 +30,7 @@ pub(crate) enum IntentKind {
 }
 
 /// The role a settled record plays; it names the record's event.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum Role {
     /// The writer's intent, by kind.
     Intent(IntentKind),
@@ -47,6 +47,24 @@ pub(crate) enum Role {
 }
 
 impl Role {
+    /// Every role, so a reader can name a record's role by its event.
+    pub(crate) const ALL: [Self; 9] = [
+        Self::Intent(IntentKind::Save),
+        Self::Intent(IntentKind::Adopt),
+        Self::Intent(IntentKind::Restore),
+        Self::Intent(IntentKind::Backend),
+        Self::RecoveryIntent,
+        Self::Outcome,
+        Self::Abandoned,
+        Self::Deferred,
+        Self::DeliveryStopped,
+    ];
+
+    /// The role whose event is `event`, if any.
+    pub(crate) fn from_event(event: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|r| r.event() == event)
+    }
+
     /// The record's event name.
     pub(crate) const fn event(self) -> &'static str {
         match self {
@@ -126,6 +144,89 @@ pub(crate) enum InvalidPayload {
     ReservedField,
     /// The record is over the record cap.
     Oversized,
+    /// A field the role's row (step 3 §2) requires, types or forbids.
+    Field(FieldFault),
+}
+
+/// One break of a role's field row: which field, and how. Never its value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct FieldFault {
+    pub(crate) field: &'static str,
+    pub(crate) problem: FieldProblem,
+}
+
+/// How a field breaks its row.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum FieldProblem {
+    /// Required and absent.
+    Missing,
+    /// Present with the wrong type, or an empty string where one is required.
+    Mistyped,
+    /// Present where the role forbids it.
+    Forbidden,
+}
+
+/// Check `fields` (a whole record, or a payload with `event` and `token`
+/// set) against `role`'s row of step 3 §2. Settle and verify both call it.
+pub(crate) fn role_fields(role: Role, fields: &Map<String, Value>) -> Result<(), FieldFault> {
+    use FieldProblem::{Forbidden, Missing, Mistyped};
+    let fault = |field: &'static str, problem| Err(FieldFault { field, problem });
+    text_field(fields, "token", "token")?;
+    match (role, fields.get("intent_counter")) {
+        (Role::Intent(_) | Role::RecoveryIntent, Some(_)) => fault("intent_counter", Forbidden)?,
+        (Role::Outcome | Role::Deferred | Role::DeliveryStopped, None) => {
+            fault("intent_counter", Missing)?;
+        }
+        (_, Some(v)) if v.as_u64().is_none() => fault("intent_counter", Mistyped)?,
+        _ => {}
+    }
+    // settled_by belongs to an outcome alone (II.3): any other role,
+    // recovery intents included, carrying it is refused.
+    match (role, fields.get("settled_by")) {
+        (_, None) => {}
+        (Role::Outcome, Some(Value::Object(by))) => settled_by_fields(by)?,
+        (Role::Outcome, Some(_)) => fault("settled_by", Mistyped)?,
+        (_, Some(_)) => fault("settled_by", Forbidden)?,
+    }
+    if role == Role::RecoveryIntent {
+        text_field(fields, "settles", "settles")?;
+    }
+    Ok(())
+}
+
+/// An outcome's `settled_by`: a non-empty `token` and a u64 `intent_counter`.
+fn settled_by_fields(by: &Map<String, Value>) -> Result<(), FieldFault> {
+    text_field(by, "token", "settled_by.token")?;
+    let problem = match by.get("intent_counter") {
+        None => FieldProblem::Missing,
+        Some(v) if v.as_u64().is_none() => FieldProblem::Mistyped,
+        Some(_) => return Ok(()),
+    };
+    Err(FieldFault {
+        field: "settled_by.intent_counter",
+        problem,
+    })
+}
+
+/// `map[key]` must be a non-empty string; a fault names it `field`.
+fn text_field(map: &Map<String, Value>, key: &str, field: &'static str) -> Result<(), FieldFault> {
+    let problem = match map.get(key) {
+        None => FieldProblem::Missing,
+        Some(Value::String(s)) if !s.is_empty() => return Ok(()),
+        Some(_) => FieldProblem::Mistyped,
+    };
+    Err(FieldFault { field, problem })
+}
+
+/// The caller's part of a record: every chain, envelope and segment field,
+/// `timestamp` and `clock_invalid` removed; `event`, `token` and the role
+/// kept. Two repeats of one settle are equal exactly when their views are.
+pub(crate) fn caller_view(record: &Map<String, Value>) -> Map<String, Value> {
+    let mut view = record.clone();
+    for name in TransparencyLogger::reserved_field_names().chain(["timestamp", "clock_invalid"]) {
+        view.remove(name);
+    }
+    view
 }
 
 /// Test seams (V.1): settle refuses before its append, or after it, or its
@@ -289,6 +390,7 @@ fn settle_fields(
     fields.insert("event".into(), role.event().into());
     fields.insert("token".into(), token.into());
     crate::security::audit::AuditEnvelope::gateway().write_into(&mut fields);
+    role_fields(role, &fields).map_err(InvalidPayload::Field)?;
     Ok(fields)
 }
 
