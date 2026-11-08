@@ -454,6 +454,10 @@ SCHEMATA_SPEC = "schemata.tsv"
 MUTANT_ENV = "MCP_GATEWAY_MUTANT"
 # Exists only in a `--cfg mutants` build: the proof the cfg took (V1).
 CFG_PROBE = "mutant::mutants_build::only_the_named_site_switches_on"
+# The gateway library's test executable, by target name: a workspace build also
+# produces other libraries' test executables (crates/gateway-core), and the
+# probe and the site listing live only in this one.
+LIB_TARGET = "mcp_gateway"
 MUTANT_HEAD_RE = re.compile(r"^#mutant\s+([A-Za-z0-9._-]+)(?:\s+multi=([1-9][0-9]*))?\s*$")
 LOCATION_RE = re.compile(r"^[^\s:]+\.rs:[1-9][0-9]*$")
 SITE_LINE_RE = re.compile(r"^MUTANT-SITE (\S+) (\S+):(\d+)$")
@@ -693,6 +697,15 @@ def run_schemata(out: Path) -> int:
     return execute_schemata(features, mutants, out)
 
 
+def library_executable(artifacts: dict[str, dict]) -> dict:
+    """The gateway library's test executable, picked by target name."""
+    lib = artifacts.get(LIB_TARGET)
+    if lib is None or "lib" not in lib["kinds"]:
+        libs = sorted(name for name, a in artifacts.items() if "lib" in a["kinds"])
+        raise Abort(f"the build produced no {LIB_TARGET} library test executable (libraries: {libs})")
+    return lib
+
+
 def execute_schemata(features: str | None, mutants: dict[str, SpecMutant], out: Path) -> int:
     """Build, prove the cfg, reconcile, baseline, then each mutant (after plan)."""
     logs = out / "logs"
@@ -701,9 +714,7 @@ def execute_schemata(features: str | None, mutants: dict[str, SpecMutant], out: 
     absent = [e for e in named if e not in artifacts]
     if absent:
         raise Abort(f"spec executables the build did not produce: {absent}")
-    lib = next((a for a in artifacts.values() if "lib" in a["kinds"]), None)
-    if lib is None:
-        raise Abort("the build produced no library test executable")
+    lib = library_executable(artifacts)
     listed = run_cmd([lib["path"], "--list", "--format", "terse"], TEST_LIMIT, logs / "list.log")
     if f"{CFG_PROBE}: test" not in listed.output.splitlines():
         raise Abort("the build has no --cfg mutants (the probe test is absent); check RUSTFLAGS")
@@ -749,7 +760,7 @@ def execute_schemata(features: str | None, mutants: dict[str, SpecMutant], out: 
 
 
 def schemata_self_test() -> tuple[int, list[str]]:
-    """(cases run, failures) for the schemata mode's decisions (R1-R27)."""
+    """(cases run, failures) for the schemata mode's decisions (R1-R30)."""
     def out(test: str, status: str, panic: str | None = None, extra: str = "") -> str:
         lines = ["running 1 test", f"test {test} ... {status}", ""]
         if status == "FAILED":
@@ -784,6 +795,13 @@ def schemata_self_test() -> tuple[int, list[str]]:
             failures.append(f"{name}: expected {want!r}, got {got!r}")
 
     refuses("R1 empty spec", lambda: parse_spec("\n#features x\n"))
+    other_lib = {"path": "core", "sha256": "", "kinds": ["lib"]}
+    gateway_lib = {"path": "gw", "sha256": "", "kinds": ["lib"]}
+    expect("R28 the gateway library is picked by name, not the first library",
+           library_executable({"gateway_core": other_lib, LIB_TARGET: gateway_lib})["path"], "gw")
+    refuses("R29 a build without the gateway library", lambda: library_executable({"gateway_core": other_lib}))
+    refuses("R30 an mcp_gateway target that is not a library",
+            lambda: library_executable({LIB_TARGET: {"path": "gw", "sha256": "", "kinds": ["test"]}}))
     refuses("R2 a mutant with no rows", lambda: parse_spec("#mutant A\n#mutant B\nlib\tt\tsrc/x.rs:1\n"))
     _, ms = parse_spec(spec_ok)
     refuses("R3 a spec ID no site carries", lambda: reconcile({**ms, "Z": SpecMutant("Z", 1, [])}, sites_ok))
