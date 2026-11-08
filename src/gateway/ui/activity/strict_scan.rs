@@ -28,16 +28,23 @@ pub(super) enum Next {
 pub(super) struct Forward {
     reader: BufReader<Take<File>>,
     budget: u64,
+    /// Where the read began, and the file's length then: a budget that ends
+    /// exactly at the end of the file ended nothing.
+    start: u64,
+    file_len: u64,
 }
 
 impl Forward {
     /// Read from `offset` of `file`, at most `budget` bytes.
     pub(super) fn open(mut file: File, offset: u64, budget: u64) -> io::Result<Self> {
+        let file_len = file.metadata()?.len();
         file.seek(SeekFrom::Start(offset))?;
         let capacity = usize::try_from(budget.min(READ_AHEAD)).unwrap_or(1).max(1);
         Ok(Self {
             reader: BufReader::with_capacity(capacity, file.take(budget)),
             budget,
+            start: offset,
+            file_len,
         })
     }
 
@@ -50,7 +57,7 @@ impl Forward {
             buf.pop();
             return Ok(Next::Line(buf));
         }
-        let cut = self.pulled() >= self.budget;
+        let cut = self.pulled() >= self.budget && self.start + self.pulled() < self.file_len;
         // ponytail: a line over the record cap ends the read as Budget; the
         // logger never writes one, so it is never a delivery to find.
         let over_cap = u64::try_from(buf.len()).unwrap_or(u64::MAX) >= ASSEMBLY_WINDOW;
