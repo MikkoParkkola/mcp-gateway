@@ -70,7 +70,10 @@ impl StdioAnswer {
             Self::Finalized(answer) => {
                 let (response, settle) = answer.split();
                 let frame = crate::gateway::outbound::answer(None, None, response, None, None);
-                deliver(meta, frame, session_id, settle, None).await.0
+                let mut staged = StagedReceipts::none();
+                deliver(meta, frame, session_id, settle, None, &mut staged)
+                    .await
+                    .0
             }
         }
     }
@@ -125,16 +128,27 @@ impl super::Gateway {
                 let frame = reads.judge(response, params, hidden);
                 // The read is what the dispatch's scope noted: settlement
                 // runs past that scope now (`complete_delivery_read`).
-                deliver(meta, frame, session_id, settle, hidden.cloned()).await
+                deliver(
+                    meta,
+                    frame,
+                    session_id,
+                    settle,
+                    hidden.cloned(),
+                    &mut staged,
+                )
+                .await
             }
         };
         // `MIK-8408` E1: an answer admission did not retain captures no
-        // replay receipts; its live receipts still record below.
+        // replay receipts (a pending capture goes); its live receipts still
+        // record at the write.
         if !retained {
             staged.drop_replay_capture();
         }
-        meta.commit_staged(staged, frame.delivers_result());
-        frame
+        // Recorded when `stdout` takes the frame, under the generation
+        // current then: a frame still queued has delivered nothing.
+        let delivers = frame.delivers_result();
+        frame.committing_on_write(meta.commit_on_write(staged, delivers))
     }
 }
 
@@ -150,6 +164,7 @@ async fn deliver(
     session_id: &str,
     settle: Settle,
     read: Option<ReadAttribution>,
+    staged: &mut StagedReceipts,
 ) -> (OutboundFrame, bool) {
     let correlation = ResponseCorrelation {
         session_id,
@@ -168,6 +183,18 @@ async fn deliver(
         settle.stored,
     )
     .await;
+    // The answer as recorded is final: a retained one is captured pending
+    // now, before settlement publishes it for replay, so a retry that
+    // finds it finds its snapshot too.
+    if frame.delivers_result() {
+        // Only firewall builds judge under a generation; without one the
+        // capture is a no-op.
+        #[cfg(feature = "firewall")]
+        let generation = meta.current_generation();
+        #[cfg(not(feature = "firewall"))]
+        let generation: Option<std::sync::Arc<crate::config_reload::Generation>> = None;
+        staged.capture_pending(generation.as_deref());
+    }
     let retained = match (settle.execution, stored) {
         (Some(execution), Some(stored)) => execution.complete_delivery_read(
             &stored,
@@ -209,7 +236,9 @@ mod tests {
             stored: None,
             writes: WriteRecord::default(),
         };
-        let (_frame, retained) = deliver(&meta, frame, "stdio-d18", settle, None).await;
+        let mut staged = StagedReceipts::none();
+        let (_frame, retained) =
+            deliver(&meta, frame, "stdio-d18", settle, None, &mut staged).await;
         assert!(
             !retained,
             "a delivery admission did not retain must capture no replay entry"

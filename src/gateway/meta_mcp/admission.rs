@@ -185,6 +185,9 @@ impl SyncLease {
             bindings,
             effect_slot,
         };
+        // Test builds: the seam where the answer becomes replayable.
+        #[cfg(all(test, feature = "firewall"))]
+        publish_hook::run();
         let retained = lease.complete_secured(&serde_json::to_value(stored).unwrap_or(Value::Null))
             == Settlement::Retained;
         if !retained {
@@ -193,6 +196,10 @@ impl SyncLease {
         retained
     }
 }
+
+#[cfg(all(test, feature = "firewall"))]
+#[path = "admission_publish_hook.rs"]
+pub(crate) mod publish_hook;
 
 // MIK-8154 L0: the operation the last keyed admission on this thread keyed,
 // so a row can compare what two routes admit for one target.
