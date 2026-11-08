@@ -24,7 +24,7 @@ const ALLOW: &[(&str, &str, &str)] = &[];
 /// The production calls to `Generation::prepare_startup`, which seeds a
 /// generation without the reload refusals: (file, function).
 const STARTUP_SEEDS: &[(&str, &str)] = &[
-    ("src/config_reload/mod.rs", "new"),
+    ("src/config_reload/live_config.rs", "new"),
     ("src/gateway/mod.rs", "live_config"),
     ("src/gateway/server/run.rs", "run"),
     ("src/gateway/server/stdio_loop.rs", "run_stdio_on"),
