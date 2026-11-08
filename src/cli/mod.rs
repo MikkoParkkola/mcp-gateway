@@ -453,9 +453,16 @@ pub enum Command {
         #[arg(long)]
         description: Option<String>,
 
-        /// Environment variables, may be repeated (-e KEY=VALUE or --env KEY=VALUE)
-        #[arg(short = 'e', long = "env", value_name = "KEY=VALUE")]
+        /// An environment variable to pass the server, by NAME; its value is
+        /// read from this shell's environment. May be repeated. Values never
+        /// go on the command line (process lists and shell history show them)
+        #[arg(short = 'e', long = "env", value_name = "NAME")]
         env_vars: Vec<String>,
+
+        /// A JSON object of environment variable names to values, from FILE
+        /// or `-` for stdin (at most 64 KiB)
+        #[arg(long = "env-file", value_name = "FILE")]
+        env_file: Option<std::path::PathBuf>,
 
         /// Write this value into gateway.yaml as typed instead of storing it in
         /// the secret store; may be repeated (an env KEY, or header:NAME)

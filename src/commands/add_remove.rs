@@ -18,7 +18,7 @@ use mcp_gateway::{
     config::TransportConfig,
     config_persistence::load_existing_or_default,
     gateway::ui::backend_ops::{
-        add_backend, get_backend, list_backends, parse_env_vars, remove_backend, resolve_backend,
+        add_backend, get_backend, list_backends, remove_backend, resolve_backend,
     },
     gateway::ui::backends::RegistryEntryJson,
     registry::server_registry,
@@ -26,13 +26,15 @@ use mcp_gateway::{
 
 // ── add ───────────────────────────────────────────────────────────────────────
 
-/// The values `add` writes: `-e KEY=VALUE` strings, and the fields to keep
+/// The values `add` writes: `-e` names, an `--env-file`, and the fields to keep
 /// as typed instead of storing (`--keep-as-text`: an env key, or
 /// `header:NAME`).
 #[derive(Debug, Clone, Copy, Default)]
 pub struct AddValues<'a> {
-    /// `KEY=VALUE` env strings.
+    /// `-e` names, each read from this process's environment.
     pub env_vars: &'a [String],
+    /// `--env-file`: a JSON object of names to values; `-` is stdin.
+    pub env_file: Option<&'a Path>,
     /// Env keys, or `header:NAME`, to write as typed.
     pub keep_as_text: &'a [String],
 }
@@ -66,11 +68,21 @@ pub async fn run_add_command(
     mode: CommentLoss,
 ) -> ExitCode {
     // ── Build env map ──────────────────────────────────────────────────────
-    let env = match parse_env_vars(values.env_vars) {
-        Ok(e) => e,
+    let env_file = match values.env_file.map(read_env_file).transpose() {
+        Ok(bytes) => bytes,
         Err(msg) => {
             eprintln!("Error: {msg}");
-            return ExitCode::FAILURE;
+            return ExitCode::from(2);
+        }
+    };
+    let env = match env_inputs(values.env_vars, env_file.as_deref(), |name| {
+        std::env::var(name).ok()
+    }) {
+        Ok(e) => e.into_iter().collect::<std::collections::HashMap<_, _>>(),
+        // A usage error, before any side effect.
+        Err(msg) => {
+            eprintln!("Error: {msg}");
+            return ExitCode::from(2);
         }
     };
 
@@ -321,6 +333,41 @@ pub fn run_get_command(name: &str, config: &Path) -> ExitCode {
     ExitCode::SUCCESS
 }
 
+/// `--env-file`'s bytes, from the file or (`-`) stdin, read at most one
+/// byte past the bound so an oversized input is refused, not truncated.
+fn read_env_file(path: &Path) -> Result<Vec<u8>, String> {
+    use std::io::Read;
+    let limit = u64::try_from(ENV_FILE_MAX_BYTES).unwrap_or(u64::MAX) + 1;
+    let mut bytes = Vec::new();
+    let read = if path == Path::new("-") {
+        std::io::stdin().take(limit).read_to_end(&mut bytes)
+    } else {
+        std::fs::File::open(path).and_then(|f| f.take(limit).read_to_end(&mut bytes))
+    };
+    read.map_err(|e| format!("--env-file {}: {e}", path.display()))?;
+    Ok(bytes)
+}
+
+/// The largest `--env-file` accepted, as `hash-key` bounds its input.
+pub(crate) const ENV_FILE_MAX_BYTES: usize = 64 * 1024;
+
+/// The env values `add` writes, from `-e NAME` (each looked up with
+/// `lookup`, the CLI's own environment in production) and `--env-file`'s
+/// bytes (a JSON object of names to string values). A name given twice, a
+/// `-e` value with `=` (a value on the command line), a name the lookup
+/// lacks, or a file that is not such an object within
+/// [`ENV_FILE_MAX_BYTES`] is refused with a message naming the problem and
+/// never a value.
+pub(crate) fn env_inputs(
+    names: &[String],
+    env_file: Option<&[u8]>,
+    lookup: impl Fn(&str) -> Option<String>,
+) -> Result<std::collections::BTreeMap<String, String>, String> {
+    // RED STUB: rows first.
+    let _ = (names, env_file, lookup);
+    Ok(std::collections::BTreeMap::new())
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -511,14 +558,17 @@ mod tests {
         mcp_gateway::gateway::test_helpers::write_owner_only(&path, "secrets:\n  store: files\n")
             .expect("write");
 
-        // WHEN: adding with an explicit --command
+        // WHEN: adding with an explicit --command, the value from --env-file
+        let env_file = path.with_file_name("env.json");
+        std::fs::write(&env_file, br#"{"API_KEY":"secret123"}"#).expect("env file");
         let code = run_add_command(
             "my-server",
             Some("node /home/user/my-server.js"),
             None,
             Some("My custom server"),
             AddValues {
-                env_vars: &["API_KEY=secret123".to_string()],
+                env_vars: &[],
+                env_file: Some(&env_file),
                 keep_as_text: &[],
             },
             &path,
@@ -548,7 +598,8 @@ mod tests {
         let (_dir, path) = temp_config();
         mcp_gateway::gateway::test_helpers::write_owner_only(&path, "secrets:\n  store: files\n")
             .expect("write");
-        let env = ["API_KEY=secret123".to_string()];
+        let env_file = path.with_file_name("env.json");
+        std::fs::write(&env_file, br#"{"API_KEY":"secret123"}"#).expect("env file");
         for (keep, code) in [
             ("API_KEYY", ExitCode::FAILURE),
             ("API_KEY", ExitCode::SUCCESS),
@@ -559,7 +610,8 @@ mod tests {
                 None,
                 None,
                 AddValues {
-                    env_vars: &env,
+                    env_vars: &[],
+                    env_file: Some(&env_file),
                     keep_as_text: &[keep.to_string()],
                 },
                 &path,
@@ -870,6 +922,92 @@ mod tests {
             original,
             "the staged original is kept for the audited recovery"
         );
+    }
+
+    /// E2 (D-CLI): `-e NAME` takes NAME's value from the environment; a name
+    /// the environment lacks is refused, naming it.
+    #[test]
+    fn e2_a_name_takes_its_value_from_the_environment() {
+        let lookup = |name: &str| (name == "MY_TOKEN").then(|| "tok-0123456789abcdef".to_string());
+        let got = env_inputs(&["MY_TOKEN".to_string()], None, lookup).expect("found");
+        assert_eq!(
+            got.get("MY_TOKEN").map(String::as_str),
+            Some("tok-0123456789abcdef")
+        );
+        let missing = env_inputs(&["NOT_SET".to_string()], None, lookup).expect_err("refused");
+        assert!(missing.contains("NOT_SET"), "{missing}");
+    }
+
+    /// E1u (D-CLI): a `-e` value with `=` is refused without its value ever
+    /// appearing in the message.
+    #[test]
+    fn e1u_a_value_on_the_command_line_is_refused() {
+        let error = env_inputs(&["MY_TOKEN=zz-canary-value-0123".to_string()], None, |_| {
+            None
+        })
+        .expect_err("refused");
+        assert!(error.contains("MY_TOKEN"), "{error}");
+        assert!(!error.contains("zz-canary"), "{error}");
+    }
+
+    /// E4 (D-CLI): `--env-file` must be a JSON object of names to strings
+    /// within the bound; each other shape is refused, never naming a value.
+    #[test]
+    fn e4_an_env_file_that_is_not_a_bounded_object_is_refused() {
+        let file = br#"{"MY_TOKEN":"tok-0123456789abcdef","LOG_LEVEL":"debug"}"#;
+        let got = env_inputs(&[], Some(file), |_| None).expect("read");
+        assert_eq!(got.len(), 2);
+        let big = vec![b' '; ENV_FILE_MAX_BYTES + 1];
+        for (bytes, what) in [
+            (br#"{"MY_TOKEN": 12345678}"#.as_slice(), "non-string value"),
+            (b"[1]".as_slice(), "not an object"),
+            (b"not json".as_slice(), "not JSON"),
+            (big.as_slice(), "over the bound"),
+        ] {
+            let error = env_inputs(&[], Some(bytes), |_| None).expect_err(what);
+            assert!(!error.contains("12345678"), "{what}: {error}");
+        }
+    }
+
+    /// E5 (D-CLI): a name given by both sources, or twice, is refused.
+    #[test]
+    fn e5_a_name_given_twice_is_refused() {
+        let lookup = |_: &str| Some("tok-0123456789abcdef".to_string());
+        let file = br#"{"MY_TOKEN":"tok-fedcba9876543210"}"#;
+        let both = env_inputs(&["MY_TOKEN".to_string()], Some(file), lookup).expect_err("both");
+        assert!(both.contains("MY_TOKEN"), "{both}");
+        let twice = env_inputs(
+            &["MY_TOKEN".to_string(), "MY_TOKEN".to_string()],
+            None,
+            lookup,
+        )
+        .expect_err("twice");
+        assert!(twice.contains("MY_TOKEN"), "{twice}");
+    }
+
+    /// E1 (D-CLI, NEW.CLIUX.6 canary): `-e` with a value joined by `=` is a
+    /// usage error (exit 2) before any side effect: no config is created and
+    /// the value is written nowhere.
+    #[tokio::test]
+    async fn e1_a_value_on_the_command_line_is_refused_before_any_write() {
+        let (dir, path) = temp_config();
+        let code = run_add_command(
+            "my-server",
+            Some("node server.js"),
+            None,
+            None,
+            AddValues {
+                env_vars: &["MY_TOKEN=zz-canary-value-0123".to_string()],
+                env_file: None,
+                keep_as_text: &[],
+            },
+            &path,
+            CommentLoss::Refuse,
+        )
+        .await;
+        assert_eq!(code, ExitCode::from(2));
+        assert!(!path.exists(), "a config was created");
+        assert_eq!(std::fs::read_dir(dir.path()).expect("dir").count(), 0);
     }
 }
 

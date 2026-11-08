@@ -115,14 +115,18 @@ async fn the_gateways_own_output_takes_a_second_add_in_place() {
 async fn a_refused_write_after_the_store_step_leaves_no_entry() {
     let flow = "secrets: {store: files}\nbackends: {alpha: {command: x}}\n";
     let (dir, path) = file_with(flow);
-    let env = ["API_KEY=sk-live-0123456789".to_string()];
+    // The value comes from an env file outside the scanned dir.
+    let elsewhere = tempfile::tempdir().unwrap();
+    let env_file = elsewhere.path().join("env.json");
+    std::fs::write(&env_file, br#"{"API_KEY":"sk-live-0123456789"}"#).unwrap();
     let code = run_add_command(
         "gamma",
         Some("echo hi"),
         None,
         None,
         super::AddValues {
-            env_vars: &env,
+            env_vars: &[],
+            env_file: Some(&env_file),
             keep_as_text: &[],
         },
         &path,
