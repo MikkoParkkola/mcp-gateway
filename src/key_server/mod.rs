@@ -48,6 +48,9 @@ mod output_only_doc_tests;
 /// No raw email in key-server output, checked in a child process.
 #[cfg(test)]
 mod piilog_capture_tests;
+/// The hashed audit email's docs rows.
+#[cfg(test)]
+mod piilog_docs_tests;
 pub mod policy;
 pub mod store;
 
