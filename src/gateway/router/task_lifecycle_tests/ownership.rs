@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use serde_json::{Value, json};
 
-use mcp_gateway::gateway::test_helpers::AppState;
+use crate::gateway::test_helpers::AppState;
 
 use super::fixture;
 use super::http::{
@@ -515,4 +515,5 @@ async fn ac_task_1_20_auth_disabled_admits_the_unattributed_caller() {
     );
 }
 
+#[path = "lifecycle.rs"]
 mod lifecycle;

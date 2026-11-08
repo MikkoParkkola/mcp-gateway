@@ -163,6 +163,8 @@ mod dispatch_parity_tests;
 mod e5_dashboard_session_tests;
 #[cfg(test)]
 mod mrtr_component_tests;
+#[cfg(test)]
+mod task_lifecycle_tests;
 
 #[cfg(all(test, feature = "metrics"))]
 mod backend_origin_count_tests;

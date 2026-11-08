@@ -115,7 +115,7 @@
       "stage": "met",
       "blocked_on": "none",
       "evidence": [
-        "tests/mik_7272_task_1_acs.rs",
+        "src/gateway/router/task_lifecycle_tests.rs",
         "tests/task_expiry_http_lifecycle.rs",
         "docs/internal/requirements/scope-grading-2026-09-12.md",
         "src/gateway/router/tests/task_execution_adapter/input_round.rs",
@@ -131,7 +131,7 @@
       "stage": "met",
       "blocked_on": "none",
       "evidence": [
-        "tests/mik_7272_task_1_acs/lifecycle.rs",
+        "src/gateway/router/task_lifecycle_tests/lifecycle.rs",
         "src/gateway/router/handlers.rs",
         "src/gateway/task_service/execution/recovery.rs"
       ],
