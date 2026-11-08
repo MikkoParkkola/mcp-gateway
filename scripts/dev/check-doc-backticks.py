@@ -4,8 +4,8 @@
 """A cheap pre-filter for clippy's `doc_markdown` lint, which needs a build.
 
 Clippy fails a doc comment that names code without backticks. A full clippy
-run is the only real judge, but this check catches the common case in about a
-second, before a push: a word with an underscore between letters or digits
+run is the only real judge, but this check catches the common case in a few
+seconds, before a push: a word with an underscore between letters or digits
 (`start_entry`, `src/mutant_macro.rs`), or with `::` (`crate::clock`), in an
 outer `///` doc comment under `src/`, outside backticks, links, link
 reference definitions and code fences. That is a gate: it exits 1.
@@ -25,8 +25,9 @@ clippy's Markdown parser does is skipped rather than guessed: code spans of
 any backtick length, ``` and ~~~ fences and indented code are code; a
 paragraph holding HTML code tags or a blockquote, or touching a
 `#[doc = ...]` attribute, is skipped whole; a run of `///` lines counts only
-when it documents an item, field or variant, so text inside a string or macro
-input is not read as a doc; a file that is not UTF-8 is skipped.
+when it documents an item, field or variant, and a line that starts inside a
+string literal or block comment is never a doc; a file that is not UTF-8 is
+skipped.
 
     check-doc-backticks.py               every .rs file under src/
     check-doc-backticks.py --base REF    only files changed since REF
@@ -44,9 +45,9 @@ MOD_DECL = re.compile(r"^\s*(pub(\([^)]*\))?\s+)?mod\s+\w+\s*;")
 REF_DEF = re.compile(r"^\s*\[[^\]]+\]:")
 # A code span: a run of backticks closed by a run of the same length.
 TICKS = re.compile(r"(`+)(?!`).*?(?<!`)\1(?!`)", re.S)
-FENCE = re.compile(r"^\s*(```|~~~)")
+FENCE = re.compile(r"^\s*(`{3,}|~{3,})")
 # Shapes this check does not parse; a paragraph holding one is skipped whole.
-UNPARSED = re.compile(r"<(code|pre|kbd|samp)\b|^\s*>", re.I)
+UNPARSED = re.compile(r"<(code|pre|kbd|samp)\b|^\s*>|\\`", re.I)
 DOC_ATTR = re.compile(r"^\s*#!?\[doc\s*=")
 VIS = r"(pub(\([^)]*\))?\s+)?"
 # The line a doc run documents: an item, a field or an enum variant.
@@ -86,7 +87,7 @@ def documents_an_item(lines: list[str], after: int) -> bool:
     `mod name;` declaration. Lines in a string or macro input fail this."""
     for line in lines[after:]:
         stripped = line.strip()
-        if stripped.startswith(("#[", "//")) and not stripped.startswith("///"):
+        if stripped.startswith("#[") or (stripped.startswith("//") and not DOC.match(line)):
             continue
         return bool(ITEM.match(line)) and not MOD_DECL.match(line)
     return False
@@ -96,9 +97,11 @@ def touches_doc_attr(lines: list[str], run: list[tuple[int, str]], after: int) -
     """Whether a `#[doc = ...]` attribute sits right before the run or among the
     attributes after it: its text joins the same Markdown, which this check
     does not assemble."""
-    first = run[0][0] - 1
-    if first > 0 and DOC_ATTR.match(lines[first - 1]):
-        return True
+    for line in reversed(lines[: run[0][0] - 1]):
+        if not line.strip().startswith("#["):
+            break
+        if DOC_ATTR.match(line):
+            return True
     for line in lines[after:]:
         if not line.strip().startswith("#["):
             return False
@@ -112,18 +115,27 @@ def scan_paragraph(run: list[tuple[int, str]]) -> list[tuple[int, str, bool]]:
     backtick span may wrap across the run's lines, as in rustdoc."""
     if any(UNPARSED.search(body) for _, body in run):
         return []
+    # rustdoc strips the indent all the run's lines share before Markdown sees it.
+    # A tab-led line after a blank one is read as code: how rustdoc counts that
+    # tab against the shared indent is not settled here, so it never blocks.
+    tabbed = {number for number, body in run if body.lstrip(" ").startswith("\t")}
+    run = [(number, body.expandtabs(4)) for number, body in run]
+    indents = [len(body) - len(body.lstrip(" ")) for _, body in run if body.strip()]
+    common = min(indents, default=0)
     text, starts, fence, offset, after_blank = [], [], None, 0, True
     for number, body in run:
+        body = body[common:]
         marker = FENCE.match(body)
         if fence:
-            fence = None if marker and marker.group(1) == fence else fence
+            closes = marker and marker.group(1)[0] == fence[0] and len(marker.group(1)) >= len(fence)
+            fence = None if closes else fence
             body = ""
         elif marker:
             fence, body = marker.group(1), ""
         elif REF_DEF.match(body):
             body = ""
-        elif after_blank and (body.startswith("     ") or body.startswith(" \t")):
-            # An indented code block: four spaces past the one after `///`.
+        elif after_blank and body.strip() and (number in tabbed or len(body) - len(body.lstrip(" ")) >= 4):
+            # An indented code block: four columns past the run's shared indent.
             body = ""
         else:
             after_blank = False
@@ -147,13 +159,80 @@ def scan_paragraph(run: list[tuple[int, str]]) -> list[tuple[int, str, bool]]:
     return found
 
 
+RAW_OPEN = re.compile(r'b?r(#*)"')
+CHAR_LIT = re.compile(r"'(\\.[^']{0,8}|[^'\\])'")
+NEXT_SPECIAL = re.compile(r"[\"'/br\n]")
+
+
+def opaque_lines(source: str) -> set[int]:
+    """Indexes of lines that start inside a string literal or a block comment,
+    where a `///` is text, not a doc comment. Character literals and lifetimes
+    are told apart so a `'"'` does not open a string."""
+    opaque, line, i, n = set(), 0, 0, len(source)
+    state, depth, hashes = None, 0, 0
+    while i < n:
+        c = source[i]
+        if c == "\n":
+            line += 1
+            if state in ("str", "raw", "block"):
+                opaque.add(line)
+            i += 1
+            continue
+        if state == "str":
+            i += 2 if c == "\\" else 1
+            if c == '"':
+                state = None
+            continue
+        if state == "raw":
+            if c == '"' and source.startswith("#" * hashes, i + 1):
+                state, i = None, i + 1 + hashes
+            else:
+                i += 1
+            continue
+        if state == "block":
+            if source.startswith("/*", i):
+                depth, i = depth + 1, i + 2
+            elif source.startswith("*/", i):
+                depth, i = depth - 1, i + 2
+                state = None if depth == 0 else state
+            else:
+                i += 1
+            continue
+        if source.startswith("//", i):
+            end = source.find("\n", i)
+            i = n if end < 0 else end
+            continue
+        if source.startswith("/*", i):
+            state, depth, i = "block", 1, i + 2
+            continue
+        raw = RAW_OPEN.match(source, i) if c in "br" else None
+        if raw and (i == 0 or not (source[i - 1].isalnum() or source[i - 1] == "_")):
+            state, hashes, i = "raw", len(raw.group(1)), i + raw.end()
+            continue
+        if c == '"':
+            state, i = "str", i + 1
+            continue
+        if c not in "br'/":
+            # Nothing else opens a literal or a comment: jump to the next candidate.
+            nxt = NEXT_SPECIAL.search(source, i + 1)
+            i = nxt.start() if nxt else n
+            continue
+        char = CHAR_LIT.match(source, i) if c == "'" else None
+        i = char.end() if char else i + 1
+    return opaque
+
+
 def scan_text(source: str) -> list[tuple[int, str, bool]]:
     lines = source.splitlines()
+    opaque = opaque_lines(source)
     found, run = [], []
     for index, line in enumerate(lines):
-        match = DOC.match(line)
+        match = None if index in opaque else DOC.match(line)
         if match:
             run.append((index + 1, match.group(1)))
+            continue
+        if run and index not in opaque and line.strip().startswith("//"):
+            # A plain comment between doc lines: rustdoc joins the docs around it.
             continue
         if run and documents_an_item(lines, index) and not touches_doc_attr(lines, run, index):
             found.extend(scan_paragraph(run))
