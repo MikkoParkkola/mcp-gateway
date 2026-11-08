@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! D-CLI (MIK-9394 NEW.CLIUX.6) through the real binary: `add -e NAME`
+//! `add`'s env inputs through the real binary: `add -e NAME`
 //! takes the value from the process environment, `--env-file -` from stdin,
 //! and a value joined to `-e` is refused (exit 2) without appearing in any
 //! output or file. A cleared environment and a temporary home: nothing here
