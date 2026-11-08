@@ -53,7 +53,11 @@ pub(crate) fn config_yaml(allowed_domains_a: &str, extra: &str) -> String {
 
 impl Harness {
     pub(crate) async fn start(yaml: &str) -> Self {
-        let store: Arc<dyn TokenStore> = Arc::new(InMemoryTokenStore::new());
+        Self::start_with_store(yaml, Arc::new(InMemoryTokenStore::new())).await
+    }
+
+    /// As [`Self::start`], over the given token store.
+    pub(crate) async fn start_with_store(yaml: &str, store: Arc<dyn TokenStore>) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
         let addr = listener.local_addr().expect("local_addr");
         let yaml = yaml.replace("JWKS", &format!("http://{addr}/.well-known/jwks.json"));
