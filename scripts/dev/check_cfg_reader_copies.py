@@ -181,20 +181,23 @@ def _load_c6():
 _C6 = _load_c6()
 
 
-def rs_mask(text: str) -> str:
-    """`text` with Rust comments and literals blanked. Source the lexer cannot
-    read is scanned raw, so every idiom in it counts: the check fails closed."""
+def rs_blank(text: str, mode) -> str:
+    """`text` through the shared lexer. Source it cannot read is scanned raw,
+    so every idiom in it counts: the check fails closed."""
     try:
-        return _C6.blank(text)
+        return _C6.blank(text, mode)
     except _C6.Unsupported:
         return text
 
 
-def in_code(text: str, mask: str, start: int, end: int) -> bool:
-    """Whether a match touches code. Every Rust idiom has a code token beside
-    its literal (`==`, a method call, `const`, `is_ident(`), so a match wholly
-    inside a comment or a string is prose or input, not a copy."""
-    return any(mask[k] != " " for k in range(start, end) if not text[k].isspace())
+def operative(text: str, mask: str, start: int, end: int) -> bool:
+    """Whether a match's own operator or callee is code: its first or last
+    non-space character survives the full mask. Every Rust idiom starts with
+    one (`is_ident(`, `contains_word(`, `==`, `const`) or ends with one (a
+    reversed `"#[cfg(test)]" ==`), so a match wholly inside a literal is input,
+    not a copy."""
+    spots = [k for k in range(start, end) if not text[k].isspace()]
+    return bool(spots) and (mask[spots[0]] != " " or mask[spots[-1]] != " ")
 
 
 def matches(rel: str, text: str) -> collections.Counter[Key]:
@@ -209,11 +212,15 @@ def matches(rel: str, text: str) -> collections.Counter[Key]:
             for m in idiom.finditer(text):
                 found[(rel, scope(text.count("\n", 0, m.start()) + 1))] += 1
     else:
-        mask = rs_mask(text)
+        # Comments are prose: matched without them, so a comment can neither be
+        # a copy nor hide one between an idiom's tokens. Literals stay (an idiom
+        # has one); the full mask then says whether the match is code.
+        code = rs_blank(text, _C6.Wipe.COMMENTS)
+        mask = rs_blank(text, _C6.Wipe.COMMENTS_AND_LITERALS)
         scope = rs_scope(mask)
         for idiom in RS_IDIOMS:
-            for m in idiom.finditer(text):
-                if in_code(text, mask, m.start(), m.end()):
+            for m in idiom.finditer(code):
+                if operative(code, mask, m.start(), m.end()):
                     found[(rel, scope(m.start()))] += 1
     return found
 

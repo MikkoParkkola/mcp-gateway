@@ -123,6 +123,26 @@ class Detection(Tree):
         self.write("src/a.rs", '/* /* */ // */ fn judge(a: &A) -> bool { a.path().is_ident("test") }\n')
         self.assertEqual(self.problems(), ["new copy: src/a.rs judge (1, listed 0)"])
 
+    def test_a_comment_between_an_idioms_tokens_hides_nothing(self):
+        for body in (
+            'fn judge(l: &str) -> bool { l == /* marker */ "#[cfg(test)]" }\n',
+            'fn judge(a: &A) -> bool { a.is_ident(/* flag */ "test") }\n',
+        ):
+            with self.subTest(body=body):
+                self.write("src/a.rs", body)
+                self.assertEqual(self.problems(), ["new copy: src/a.rs judge (1, listed 0)"])
+
+    def test_an_idiom_split_by_a_comment_from_unrelated_code_is_no_copy(self):
+        self.write("src/a.rs", '/* contains_word( */ fn unrelated() { let _ = "test"; }\n')
+        self.assertEqual(self.problems(), [])
+
+    def test_unterminated_input_is_scanned_raw(self):
+        # The lexer cannot read it, so every idiom in it counts (fails closed).
+        for tail in ("/* never closed", '"never closed', 'r#"never closed'):
+            with self.subTest(tail=tail):
+                self.write("src/a.rs", 'fn judge(a: &A) -> bool { a.path().is_ident("test") }\n' + tail + "\n")
+                self.assertEqual(self.problems(), ["new copy: src/a.rs judge (1, listed 0)"])
+
     def test_a_docstring_only_function_leaves_the_next_scope_intact(self):
         self.write(
             "scripts/x.py",
