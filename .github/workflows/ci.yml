@@ -1591,6 +1591,28 @@ jobs:
           fi
           python3 scripts/dev/check-file-size.py --base "$base"
 
+  doc-backticks:
+    name: Doc comments name code in backticks
+    if: ${{ !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) }}
+    # A cheap pre-filter for clippy's doc_markdown lint: a word with `_` or
+    # `::` in a `///` comment under src/, outside backticks, fails here in a
+    # second instead of failing a clippy run after a full build. CamelCase is
+    # only printed, since clippy accepts known words this check cannot list.
+    # The rows pin what clippy flags and what it accepts.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: Check the check flags what clippy flags, and nothing it accepts
+        run: python3 scripts/dev/test_check_doc_backticks.py
+      - name: Check this change's doc comments
+        if: github.event_name == 'pull_request'
+        run: python3 scripts/dev/check-doc-backticks.py --base "origin/${{ github.base_ref }}"
+      - name: Check every doc comment
+        if: github.event_name != 'pull_request'
+        run: python3 scripts/dev/check-doc-backticks.py
+
   event-source-scope:
     name: Event source leaves the events core alone (MIK-7720 U10)
     if: ${{ !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) }}
