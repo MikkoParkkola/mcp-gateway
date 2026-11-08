@@ -240,39 +240,30 @@ fn url_carries_credential(raw: &str) -> bool {
     let Ok(url) = url::Url::parse(raw) else {
         return false;
     };
-    // The userinfo as written (the text gateway.yaml keeps; the parser would
-    // percent-encode a template's braces): the password, or the username
-    // when the password is absent or empty. Read only from a `//` right after
-    // the scheme, up to where the parser ends the authority (a backslash too
-    // for the special schemes), so no later `://` or fragment can lend one.
-    let special = matches!(url.scheme(), "http" | "https" | "ws" | "wss" | "ftp");
-    let written = raw
-        .get(url.scheme().len()..)
-        .and_then(|rest| rest.strip_prefix("://"))
-        .and_then(|rest| {
-            rest.split(|c| matches!(c, '/' | '?' | '#') || (special && c == '\\'))
-                .next()
-        })
-        .and_then(|authority| authority.rsplit_once('@'))
-        .map_or("", |(userinfo, _)| userinfo);
-    let secret = match written.split_once(':') {
-        Some((_, password)) if !password.is_empty() => password,
-        Some((user, _)) => user,
-        None => written,
-    };
-    // The parser's reading too (it also accepts `https:/`, `https:///`,
-    // `https:`): refused when either reading is a literal. Its encoded form
-    // of a placeholder is ignored only when the written text shows one.
-    let parsed = match url.password() {
+    // The userinfo as the parser reads it (the reading the gateway connects
+    // with): the password, or the username when the password is absent or
+    // empty. Only a whole `${NAME}` placeholder may stay.
+    let secret = match url.password() {
         Some(password) if !password.is_empty() => password,
         _ => url.username(),
     };
-    let placeholder = !secret.is_empty() && !literal_value(secret);
-    if literal_value(secret) || (!placeholder && literal_value(parsed)) {
+    if !secret.is_empty() && !is_placeholder(&secret.replace("%7B", "{").replace("%7D", "}")) {
         return true;
     }
     url.query_pairs()
         .any(|(name, value)| credential_name(&name) && literal_value(&value))
+}
+
+/// Whether `value` is exactly one `${NAME}` placeholder. Fed the parser's
+/// userinfo with only its brace escapes decoded: any other escape leaves the
+/// value refused.
+fn is_placeholder(value: &str) -> bool {
+    value
+        .strip_prefix("${")
+        .and_then(|rest| rest.strip_suffix('}'))
+        .is_some_and(|name| {
+            !name.is_empty() && name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
+        })
 }
 
 /// A command (split as the stdio start splits it) with a credential-named

@@ -837,8 +837,7 @@ fn r1_credential_refusals_table() {
         );
     }
 
-    // Delta G5c: a later `://` or a fragment cannot lend a placeholder, and
-    // a placeholder outside the canonical spelling counts as text.
+    // Delta G5c: a later `://` or a fragment cannot lend a placeholder.
     for tail in ["/mcp://${T}@x", "/mcp#https://svc:${T}@x"] {
         assert_eq!(
             url(&["https:svc:", "pw-0123456789", "@h.example", tail].concat()),
@@ -846,10 +845,32 @@ fn r1_credential_refusals_table() {
             "placeholder lent by {tail}"
         );
     }
+    // One reading (the parser's): a placeholder passes in any spelling it
+    // accepts; anything else in the userinfo, encoded or not, is refused.
     assert_eq!(
         url("https:svc:${SVC_TOKEN}@h.example/mcp"),
-        bad_url,
+        none,
         "placeholder outside the canonical spelling"
+    );
+    assert_eq!(
+        url(&["https://", "svc:", "$%7BA%7D-x", "@h.example/mcp"].concat()),
+        bad_url,
+        "text beside an encoded placeholder"
+    );
+    assert_eq!(
+        url(&["https://", "svc:", "%24%7BSVC_TOKEN%7D", "@h.example/mcp"].concat()),
+        bad_url,
+        "a placeholder with its dollar escaped stays refused"
+    );
+    assert_eq!(
+        url(&["https://", "svc:", "${SVC:-pw-0123}", "@h.example/mcp"].concat()),
+        bad_url,
+        "a placeholder with a default is text"
+    );
+    assert_eq!(
+        url(&[" https://", "svc:", "pw-0123456789", "@h.example/mcp"].concat()),
+        bad_url,
+        "leading space the parser trims"
     );
 
     assert_eq!(
