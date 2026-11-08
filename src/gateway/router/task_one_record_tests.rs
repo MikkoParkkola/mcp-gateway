@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! MIK-8855 API2.10 R0 (`tasks/get`): a re-delivery of a stored task result
+//! API2.10 R0 (`tasks/get`): a re-delivery of a stored task result
 //! writes one `transport_finalized` record under its own trace, and none under
 //! the trace of the call that submitted the task.
 

@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! MIK-8855 API2.10 R0 (`POST /mcp`): one `transport_finalized` record per
+//! API2.10 R0 (`POST /mcp`): one `transport_finalized` record per
 //! trace on the HTTP answer, the HTTP pre-dispatch refusal and the grant-slot
 //! seal failure. The direct route is `one_record.rs`; the audit-unavailable
 //! replacement and the replay are `one_record_replay.rs`.

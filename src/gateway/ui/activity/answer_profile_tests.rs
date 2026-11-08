@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! Profiling only (MIK-8855 M2): where a 10,000-row export's allocation goes,
+//! Profiling only (M2): where a 10,000-row export's allocation goes,
 //! by phase, measured with the existing alloc meter. Ignored: run with
 //! `--ignored m2_profile --nocapture`; it asserts nothing.
 

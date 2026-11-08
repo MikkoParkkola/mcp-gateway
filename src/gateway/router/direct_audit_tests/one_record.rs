@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! MIK-8855 API2.10 R0 (direct route): one `transport_finalized` record per
+//! API2.10 R0 (direct route): one `transport_finalized` record per
 //! trace. The Activity join reads two such records for one trace as tamper, so
 //! every writer path must write at most one under the call's own trace.
 

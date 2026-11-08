@@ -1,7 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! What the gateway did to an answer, as an Activity row says it (MIK-8855
-//! API2.10): the call's delivery record joined to the call by trace, and the
+//! What the gateway did to an answer, as an Activity row says it (API2.10): the call's delivery record joined to the call by trace, and the
 //! closed set of values a row may show for it.
 
 use serde_json::{Map, Value};

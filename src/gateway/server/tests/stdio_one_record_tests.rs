@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! MIK-8855 API2.10 R0 (stdio): one `transport_finalized` record per frame,
+//! API2.10 R0 (stdio): one `transport_finalized` record per frame,
 //! under the trace of that frame's own invocation record.
 
 use std::collections::BTreeMap;

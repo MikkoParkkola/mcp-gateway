@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! MIK-8855 API2.10 R0 (`POST /mcp`): the audit-unavailable replacement writes
+//! API2.10 R0 (`POST /mcp`): the audit-unavailable replacement writes
 //! no `transport_finalized` record and no second write follows; a replay
 //! writes one under its own new trace and adds none under the original's.
 
