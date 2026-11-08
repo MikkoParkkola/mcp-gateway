@@ -130,6 +130,45 @@ class ClippyMarkdown(unittest.TestCase):
         self.assertEqual(hits(src), [(2, "start_entry"), (6, "publish_started")])
 
 
+class ClippyMarkdownRound2(unittest.TestCase):
+    """Second-round shapes: each is code or text clippy accepts."""
+
+    def test_a_longer_fence_is_not_closed_by_a_shorter_one(self):
+        src = "/// ````\n/// ```\n/// let start_entry = 1;\n/// ````\nfn f() {}\n"
+        self.assertEqual(hits(src), [])
+
+    def test_indented_code_without_a_space_or_with_a_tab(self):
+        self.assertEqual(hits("///Example:\n///\n///    start_entry();\nfn f() {}\n"), [])
+        self.assertEqual(hits("/// Example:\n///\n///\tstart_entry();\nfn f() {}\n"), [])
+
+    def test_an_escaped_backtick_skips_the_paragraph(self):
+        self.assertEqual(hits("/// Uses \\` and `start_entry` here.\nfn f() {}\n"), [])
+
+    def test_a_four_slash_comment_does_not_end_the_item_search(self):
+        src = "/// The start_entry flag.\n//// a plain note\nfn f() {}\n"
+        self.assertEqual(hits(src), [(1, "start_entry")])
+
+    def test_a_doc_attribute_two_attributes_above_skips_the_run(self):
+        src = '#[doc = "```"]\n#[inline]\n/// let start_entry = 1;\n#[doc = "```"]\nfn f() {}\n'
+        self.assertEqual(hits(src), [])
+
+    def test_a_plain_comment_inside_a_code_span_does_not_split_it(self):
+        src = "/// Beside `per_user_fetch\n// a plain note\n/// _and_shared` here.\nfn f() {}\n"
+        self.assertEqual(hits(src), [])
+
+    def test_item_shaped_lines_inside_a_raw_string_are_not_docs(self):
+        src = 'const SRC: &str = r#"\n/// Uses start_entry\nfn example() {}\n"#;\nfn f() {}\n'
+        self.assertEqual(hits(src), [])
+
+    def test_lines_inside_a_block_comment_are_not_docs(self):
+        src = "/*\n/// Uses start_entry\nfn example() {}\n*/\nfn f() {}\n"
+        self.assertEqual(hits(src), [])
+
+    def test_a_string_with_an_escaped_quote_does_not_hide_later_docs(self):
+        src = 'const A: &str = "say \\"hi\\"";\n/// The start_entry flag.\nfn f() {}\n'
+        self.assertEqual(hits(src), [(2, "start_entry")])
+
+
 class CamelCase(unittest.TestCase):
     def test_camel_case_is_a_warning_not_a_hit(self):
         src = "/// Require the resource to match this ETag.\nfn f() {}\n"
