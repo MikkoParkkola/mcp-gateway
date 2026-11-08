@@ -395,7 +395,7 @@ pub(super) fn decide_tool_target<'a>(
 
     let mtls_rule = match mtls_verdict(state, cert_identity, target) {
         Ok(rule) => rule,
-        Err(refusal) => return refusal,
+        Err(refusal) => return *refusal,
     };
 
     let mut agent_record: Option<(&OAuthAgentIdentity, Result<(), String>)> = None;
@@ -478,7 +478,7 @@ fn mtls_verdict<'a>(
     state: &AppState,
     cert_identity: Option<&'a CertIdentity>,
     target: ToolTarget<'a>,
-) -> Result<Option<crate::security::rule_id::RuleId>, Decision<'a>> {
+) -> Result<Option<crate::security::rule_id::RuleId>, Box<Decision<'a>>> {
     let mtls = (!state.mtls_policy.is_empty()).then(|| {
         state
             .mtls_policy
@@ -496,7 +496,7 @@ fn mtls_verdict<'a>(
                 ),
             )
             .with_rule(rule_id.cloned());
-            Err(Decision::recorded(Err(refusal), move || {
+            Err(Box::new(Decision::recorded(Err(refusal), move || {
                 let identity_label =
                     cert_identity.map_or("<unauthenticated>", |id| id.display_name());
                 warn!(
@@ -505,7 +505,7 @@ fn mtls_verdict<'a>(
                     identity = identity_label,
                     "Tool invocation denied by mTLS policy"
                 );
-            }))
+            })))
         }
         None => Ok(None),
     }
