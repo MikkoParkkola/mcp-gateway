@@ -465,9 +465,14 @@ async fn r32_coverage_binds_the_sidecar_to_this_log() {
 #[test]
 fn r12_the_live_frame_is_placed_after_every_anchor() {
     use super::forward::{Log, StreamKind, frame};
+    // Unsigned history in earlier files, so the anchor sits past segment 0:
+    // a frame misplaced at (0, 0) would then read as legacy (q13).
     let fx = Fixture::new();
+    let plain = fx.open(false, 1024);
+    Fixture::calls(&plain, 0, 8);
+    drop(plain);
     let log = fx.open(true, 1024);
-    Fixture::calls(&log, 0, 12);
+    Fixture::calls(&log, 8, 4);
     drop(log);
     let newest = fx.records().last().unwrap().1.clone();
     let live = Log {
@@ -595,4 +600,40 @@ async fn r15_a_pre_open_record_file_keeps_its_anchor_after_rotation() {
     assert_state(&seen(&fx, "tool_1").await, "unsigned");
     strip_anywhere(&fx, "tool_3");
     assert_invalid(&seen(&fx, "tool_3").await, "sig_missing");
+}
+
+/// R34: with history from before signing, a record stripped after signing
+/// began reads `invalid` in every reader; the receipt must place it at its
+/// own offset, not at the file's start, which holds legacy bytes (q14).
+#[tokio::test]
+async fn r34_stripped_after_a_midway_start_reads_invalid_everywhere() {
+    let fx = turned_on_midway();
+    fx.strip("tool_3", |v| v["response_hash"] = "sha256:ff".into());
+    assert_invalid(&seen(&fx, "tool_3").await, "sig_missing");
+}
+
+/// R32 (c): a re-signed sidecar whose entry for its own file is shorter than
+/// the anchor offset fails coverage (q23).
+#[tokio::test]
+async fn r32c_own_file_coverage_short_of_p_is_tampering() {
+    use crate::security::transparency_log::sigstart::{self, SigStart};
+    let fx = turned_on_midway();
+    let raw = std::fs::read_to_string(fx.sidecar()).unwrap();
+    let mut v: Value = serde_json::from_str(raw.trim_end()).unwrap();
+    v.as_object_mut().unwrap().remove("mac");
+    let mut body: SigStart = serde_json::from_value(v).unwrap();
+    let own = body
+        .legacy
+        .iter_mut()
+        .find(|l| l.seq == body.segment_seq)
+        .unwrap();
+    own.len -= 1;
+    std::fs::write(
+        fx.sidecar(),
+        sigstart::encode(&body, SECRET.as_bytes()).unwrap(),
+    )
+    .unwrap();
+    let s = seen(&fx, "tool_0").await;
+    assert_eq!(s.list["signature"], "invalid");
+    assert_eq!(s.manifest["signing_anchor"]["invocation"], "coverage");
 }

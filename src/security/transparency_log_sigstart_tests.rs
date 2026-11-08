@@ -467,3 +467,32 @@ fn r30_a_kill_before_the_announce_retries_the_event_once() {
     drop(fx.open(true, 0));
     assert_eq!(all_events(&fx), [1, 0, 0, 0]);
 }
+
+/// The `segment_seq` the active file's open record names.
+fn active_seq(fx: &Fixture) -> u64 {
+    fx.records()
+        .iter()
+        .find(|(_, v)| v["event"] == "audit_segment_opened")
+        .and_then(|(_, v)| v["segment_seq"].as_u64())
+        .expect("an open record")
+}
+
+/// R15 (b): a first start's predicted seq is the seq reopen_tail gives the
+/// new active file, for a genesis and for a log whose active file is gone
+/// (q17).
+#[test]
+fn r15b_the_predicted_seq_is_the_new_active_files() {
+    let fx = Fixture::new();
+    drop(fx.open(true, 0));
+    assert_eq!(sidecar(&fx)["segment_seq"].as_u64(), Some(active_seq(&fx)));
+
+    let fx = Fixture::new();
+    let plain = fx.open(false, 1024);
+    Fixture::calls(&plain, 0, 12);
+    drop(plain);
+    assert!(!super::segments::list_segments(&fx.path).unwrap().is_empty());
+    std::fs::remove_file(&fx.path).unwrap();
+    drop(fx.open(true, 1024));
+    assert_eq!(sidecar(&fx)["segment_seq"].as_u64(), Some(active_seq(&fx)));
+    assert_eq!(sidecar(&fx)["offset"], 0);
+}
