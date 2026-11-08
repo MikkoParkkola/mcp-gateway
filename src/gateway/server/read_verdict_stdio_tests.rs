@@ -128,7 +128,7 @@ async fn read(meta: &Arc<MetaMcp>, reads: &StdioReads, n: u64, tenant: &str) -> 
 
 /// The `cross_tenant_read` values on the log's delivery records, in order,
 /// at the top level or one envelope down.
-fn verdicts(log_dir: &tempfile::TempDir) -> Vec<String> {
+fn verdicts(log_dir: &std::sync::Arc<tempfile::TempDir>) -> Vec<String> {
     let field = |record: &Value, name: &str| -> Option<String> {
         let direct = record.get(name).and_then(Value::as_str);
         direct
@@ -152,7 +152,7 @@ fn verdicts(log_dir: &tempfile::TempDir) -> Vec<String> {
 /// A then B on one stdio Meta-MCP: whether each delivers a result, and the
 /// verdicts its delivery records carry.
 pub(crate) async fn a_then_b(switch: Switch, mode: CrossTenantReads) -> ([bool; 2], Vec<String>) {
-    let log_dir = Arc::new(tempfile::tempdir().expect("log dir"));
+    let log_dir = crate::test_dir_keep::kept_tempdir();
     let meta = judged_meta(switch, mode, &log_dir).await;
     let reads = meta.stdio_reads();
     let a = read(&meta, &reads, 1, A).await.delivers_result();
@@ -207,7 +207,7 @@ async fn stdio_judges_with_the_firewall_off() {
 /// names another tenant, so A can come only from the answer's attribution.
 #[tokio::test]
 async fn the_invocation_record_names_tenants_with_the_firewall_off() {
-    let log_dir = Arc::new(tempfile::tempdir().expect("log dir"));
+    let log_dir = crate::test_dir_keep::kept_tempdir();
     let answer = text_result(&json!({ "customer_id": A }).to_string());
     let meta = judged_meta_answering(Switch::Off, CrossTenantReads::Off, &log_dir, answer).await;
     let reads = meta.stdio_reads();
