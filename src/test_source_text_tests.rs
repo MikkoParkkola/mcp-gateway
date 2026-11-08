@@ -138,7 +138,7 @@ fn an_unclosed_item_stays_and_earlier_items_are_still_blanked() {
 #[test]
 fn a_test_only_field_keeps_the_impl_after_it() {
     let source = std::fs::read_to_string(
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/config_reload/mod.rs"),
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/config_reload/live_config.rs"),
     )
     .unwrap();
     let out = production_text(&source);
