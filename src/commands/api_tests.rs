@@ -678,6 +678,10 @@ async fn unsupported_method_is_a_usage_error_before_sending() {
 }
 
 #[tokio::test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "one table of gateway status fixtures, each pinning its exact message, remedy and exit; splitting it would scatter the table"
+)]
 async fn gateway_status_reasons_use_the_exact_message_and_remedy() {
     for (status, body, code, kind, message, remedy) in [
         (
@@ -970,6 +974,10 @@ async fn request_id_prefers_body_then_header_then_null() {
 }
 
 #[tokio::test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "one table of near-miss envelopes around the not-run exception; each case differs from the real middleware body in one field"
+)]
 async fn only_the_exact_503_middleware_envelope_is_known_not_run() {
     for (status, body, code, message, remedy) in [
         (
