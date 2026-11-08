@@ -18,7 +18,8 @@ pub(crate) const KEY_ID: &str = "sigstart";
 
 /// A log under a temp dir, kept alive by the struct.
 pub(crate) struct Fixture {
-    pub(crate) dir: tempfile::TempDir,
+    /// Holds the temp dir for the fixture's lifetime.
+    _dir: tempfile::TempDir,
     pub(crate) path: PathBuf,
 }
 
@@ -26,7 +27,7 @@ impl Fixture {
     pub(crate) fn new() -> Self {
         let dir = tempfile::tempdir().expect("temp dir");
         let path = dir.path().join("audit.jsonl");
-        Self { dir, path }
+        Self { _dir: dir, path }
     }
 
     /// The `.sigstart` sidecar beside the log.
@@ -84,9 +85,12 @@ impl Fixture {
     /// Rewrite the record whose `tool` is `tool`: apply `edit`, strip
     /// `sig`/`key_id`, recompute `entry_hash`. The attack every row makes.
     pub(crate) fn strip(&self, tool: &str, edit: impl FnOnce(&mut Value)) {
+        let mut edit = Some(edit);
         rewrite(&self.path, |v| {
             if v.get("tool").and_then(Value::as_str) == Some(tool) {
-                edit(v);
+                if let Some(edit) = edit.take() {
+                    edit(v);
+                }
                 strip_sig(v);
                 true
             } else {
