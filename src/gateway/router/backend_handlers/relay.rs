@@ -118,7 +118,8 @@ pub(super) fn catalogue_refusal(
 
 /// Stage what the direct caller is delivered, after every gate, redaction and
 /// the provenance stamp. The receipt is recorded only once the answer has
-/// passed the read judge and the audit write ([`commit_direct_receipts`]).
+/// passed the read judge and the audit write, when the server takes its
+/// body's first chunk (`direct_audit::record`, via `DeferredReceipts`).
 #[cfg(feature = "firewall")]
 pub(super) fn stage_direct_delivery(
     state: &AppState,
@@ -178,10 +179,9 @@ pub(super) fn stage_direct_catalogue(
     stage_direct_delivery(state, auth, (server, method), Some(&recorded), stamps);
 }
 
-/// Record the staged receipts when the answer that was written delivers a
-/// result: a read the judge withheld, or a fail-closed audit write replaced,
-/// leaves none.
-#[cfg(feature = "firewall")]
+/// Record the staged receipts at once when `delivered`: the rows' stand-in
+/// for the write, which in production commits at the body's first chunk.
+#[cfg(all(test, feature = "firewall"))]
 pub(super) fn commit_direct_receipts(state: &AppState, delivered: bool) {
     if let Some(fw) = state.firewall.as_ref() {
         crate::gateway::meta_mcp::invoke::relay::commit_with(

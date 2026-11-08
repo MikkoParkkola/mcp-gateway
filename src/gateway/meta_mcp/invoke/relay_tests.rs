@@ -228,8 +228,9 @@ async fn meta_observe_reports_a_relay_and_sends_it() {
 }
 
 /// MIK-7800: HTTP receipts ride on the response and record only when
-/// `emit_http`, the last step, lets it out. A response a later step replaces
-/// (the grant slot) is dropped, and its receipts with it.
+/// `emit_http`, the last step, lets it out and the server takes its body.
+/// A response a later step replaces (the grant slot) is dropped, and its
+/// receipts with it.
 #[tokio::test]
 async fn http_receipts_record_only_when_emit_http_lets_the_answer_out() {
     let firewall = Arc::new(
@@ -287,13 +288,19 @@ async fn http_receipts_record_only_when_emit_http_lets_the_answer_out() {
     let refused =
         crate::gateway::meta_mcp::invoke::relay::collecting_http(Arc::clone(&meta), deliver(false))
             .await;
-    crate::gateway::outbound::emit_http(refused, None).await;
+    let refused = crate::gateway::outbound::emit_http(refused, None).await;
+    let _ = axum::body::to_bytes(refused.into_body(), usize::MAX).await;
     assert!(!relayed(), "an error answer must record no receipt");
-    // Out as built: recorded.
+    // Out as built: recorded once the server takes its body.
     let out =
         crate::gateway::meta_mcp::invoke::relay::collecting_http(Arc::clone(&meta), deliver(true))
             .await;
-    crate::gateway::outbound::emit_http(out, None).await;
+    let out = crate::gateway::outbound::emit_http(out, None).await;
+    assert!(
+        !relayed(),
+        "base: nothing is recorded before the body is taken"
+    );
+    let _ = axum::body::to_bytes(out.into_body(), usize::MAX).await;
     assert!(relayed(), "control: a delivered answer records its receipt");
 }
 
