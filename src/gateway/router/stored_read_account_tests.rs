@@ -27,7 +27,7 @@ struct Fx {
     gateway: DirectAccountGateway,
     /// The transparency log this fixture's `MetaMcp` writes (MIK-8392 B1).
     audit_path: std::path::PathBuf,
-    _audit: tempfile::TempDir,
+    _audit: std::sync::Arc<tempfile::TempDir>,
     _store: crate::gateway::router::tests::FixtureDir,
 }
 
@@ -58,7 +58,7 @@ async fn fixture() -> Fx {
     let auth = sole_operator();
     let mut gateway = DirectAccountGateway::new(auth.clone(), &Binding::Connected);
     let (mut state, store) = super::tests::test_router_app_state_with_auth(&auth).await;
-    let audit = tempfile::tempdir().expect("a log directory");
+    let audit = crate::test_dir_keep::kept_tempdir();
     let audit_path = audit.path().join("audit.jsonl");
     let log = Arc::new(
         crate::security::TransparencyLogger::open(Arc::new(

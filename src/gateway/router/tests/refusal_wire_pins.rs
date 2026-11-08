@@ -196,7 +196,7 @@ async fn admin_tool_audit_unavailable_keeps_code_status_and_message() {
     // router/authorization.rs:255 `unavailable`: a fail-closed log that cannot
     // take the admin_action record refuses an admin caller with 503.
     use crate::security::transparency_log::{TransparencyLogConfig, rotation_fault::WriteFault};
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = crate::test_dir_keep::kept_tempdir();
     let config = Arc::new(TransparencyLogConfig {
         enabled: true,
         path: dir
