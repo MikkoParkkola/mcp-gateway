@@ -243,22 +243,29 @@ fn leading_scope(code: &[u8], at: usize) -> Option<Scope> {
 /// there is input the macro may drop or rewrite, so its inner attributes mark
 /// nothing.
 fn in_macro_tokens(code: &[u8], at: usize) -> bool {
-    let ident = |c: u8| c.is_ascii_alphanumeric() || c == b'_';
+    // An identifier byte: ASCII word characters, or any byte of a non-ASCII
+    // character (Rust identifiers may be Unicode). `#` covers a raw `r#name`.
+    let ident = |c: u8| c.is_ascii_alphanumeric() || c == b'_' || c == b'#' || !c.is_ascii();
+    let space = |c: u8| c.is_ascii_whitespace();
     let mut i = 0;
     while i < at {
-        if code[i] == b'!' && i > 0 && ident(code[i - 1]) {
+        // `name!`, also `name !` (comments are already blanked to spaces).
+        let mut k = i;
+        while k > 0 && space(code[k - 1]) {
+            k -= 1;
+        }
+        let named = code[i] == b'!' && k > 0 && ident(code[k - 1]) && code[k - 1] != b'#';
+        if named {
             let mut j = i + 1;
-            while code.get(j).is_some_and(u8::is_ascii_whitespace) {
+            while code.get(j).copied().is_some_and(space) {
                 j += 1;
             }
             // `macro_rules! name {`: step over the name.
-            if code.get(j).copied().is_some_and(ident) {
-                while code.get(j).copied().is_some_and(ident) {
-                    j += 1;
-                }
-                while code.get(j).is_some_and(u8::is_ascii_whitespace) {
-                    j += 1;
-                }
+            while code.get(j).copied().is_some_and(ident) {
+                j += 1;
+            }
+            while code.get(j).copied().is_some_and(space) {
+                j += 1;
             }
             if matches!(code.get(j), Some(b'(' | b'[' | b'{')) {
                 match matching(code, j) {

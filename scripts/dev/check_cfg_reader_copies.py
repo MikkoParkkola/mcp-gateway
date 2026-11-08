@@ -133,9 +133,14 @@ def rs_scope(text: str):
 def py_code(text: str) -> str:
     """`text` with comments and docstrings blanked (newlines kept): prose, not code."""
     out = list(text)
+    lines = text.splitlines(keepends=True)
     starts = [0]
-    for line in text.splitlines(keepends=True):
+    for line in lines:
         starts.append(starts[-1] + len(line))
+
+    def chars(line_no, byte_col):
+        # ast columns are UTF-8 byte offsets; the buffer is characters.
+        return len(lines[line_no - 1].encode("utf-8")[:byte_col].decode("utf-8", "ignore"))
 
     def blank(sl, sc, el, ec):
         for i in range(starts[sl - 1] + sc, starts[el - 1] + ec):
@@ -151,22 +156,33 @@ def py_code(text: str) -> str:
             if isinstance(body, list) and body and isinstance(body[0], ast.Expr):
                 doc = body[0].value
                 if isinstance(doc, ast.Constant) and isinstance(doc.value, str):
-                    blank(doc.lineno, doc.col_offset, doc.end_lineno, doc.end_col_offset)
+                    blank(
+                        doc.lineno, chars(doc.lineno, doc.col_offset),
+                        doc.end_lineno, chars(doc.end_lineno, doc.end_col_offset),
+                    )
     except (SyntaxError, tokenize.TokenError):
         pass
     return "".join(out)
 
 
+# A lexer step: a raw string, a string, a char literal (kept), or a comment (blanked).
+RS_LEX = re.compile(r"""(?:br|r)(?P<h>#*)"[\s\S]*?"(?P=h)|b?"(?:\\.|[^"\\])*"|b?'(?:\\.|[^'\\\n])'|(?P<c>//[^\n]*)""")
+
+
 def rs_code(text: str) -> str:
-    """`text` with `//` comments blanked, string literals kept (an idiom can be one)."""
-    return re.sub(r'"(?:\\.|[^"\\])*"|(//[^\n]*)', lambda m: " " * len(m.group(0)) if m.group(1) else m.group(0), text)
+    """`text` with `//` comments blanked, literals kept (an idiom can be one).
+    Raw strings and char literals are lexed, so a `//` inside one is no comment."""
+    return RS_LEX.sub(lambda m: " " * len(m.group(0)) if m.group("c") else m.group(0), text)
 
 
 def matches(rel: str, text: str) -> collections.Counter[Key]:
     found: collections.Counter[Key] = collections.Counter()
+    # Scopes come from the original source (blanking a sole docstring would
+    # leave a body that no longer parses); idioms are matched in the code.
+    scope_text = text
     text = py_code(text) if rel.endswith(".py") else rs_code(text)
     if rel.endswith(".py"):
-        scope = py_scope(text)
+        scope = py_scope(scope_text)
         for idiom in PY_IDIOMS:
             for m in idiom.finditer(text):
                 found[(rel, scope(text.count("\n", 0, m.start()) + 1))] += 1

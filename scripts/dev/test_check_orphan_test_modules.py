@@ -192,6 +192,9 @@ class TestOnlyFiles(unittest.TestCase):
             "emit! { mod outer { #![cfg(test)] mod child; } }\n",
             "emit!( mod outer { #![cfg(test)] mod child; } );\n",
             "macro_rules! m { () => { mod outer { #![cfg(test)] mod child; } }; }\n",
+            "emit !{ mod outer { #![cfg(test)] mod child; } }\n",
+            "宏!{ mod outer { #![cfg(test)] mod child; } }\n",
+            "macro_rules! r#m { () => { mod outer { #![cfg(test)] mod child; } }; }\n",
         ):
             with self.subTest(body=body):
                 found = self.only_test_files({"src/lib.rs": body, "src/outer/child.rs": ""})

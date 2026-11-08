@@ -256,7 +256,8 @@ def file_is_test(source: Path) -> bool:
     return _scan(source, True)[1]
 
 
-MACRO_CALL = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\s*!\s*(?:[A-Za-z_][A-Za-z0-9_]*\s*)?[(\[{]")
+# `name!(`, `name !{`, `macro_rules! r#name {`; identifiers may be Unicode.
+MACRO_CALL = re.compile(r"(?:r#)?[^\W\d]\w*\s*!\s*(?:(?:r#)?[^\W\d]\w*\s*)?[(\[{]")
 
 
 def macro_spans(code: str) -> list[tuple[int, int]]:

@@ -90,6 +90,21 @@ class Detection(Tree):
         self.write("scripts/x.py", '"""Matches cfg\\\\(test spellings."""\n# also ("flag", "test")\nX = 1\n')
         self.assertEqual(self.problems(), [])
 
+    def test_a_slash_pair_inside_a_raw_string_is_no_comment(self):
+        self.write(
+            "src/a.rs",
+            'fn judge(l: &str) -> bool {\n    let _r = r#"say "//" here"#; l == "#[cfg(test)]"\n}\n',
+        )
+        self.assertEqual(self.problems(), ["new copy: src/a.rs judge (1, listed 0)"])
+
+    def test_a_unicode_docstring_keeps_the_copy_after_it_and_its_scope(self):
+        self.write(
+            "scripts/x.py",
+            'class A:\n    def judge(self, line):\n        """' + "ä" * 40 + '"""\n'
+            '        return line == "#[cfg(test)]"\n',
+        )
+        self.assertEqual(self.problems(), ["new copy: scripts/x.py A.judge (1, listed 0)"])
+
     def test_reversed_and_python_comparisons_are_copies(self):
         for rel, body, scope in (
             ("src/a.rs", 'fn judge(l: &str) -> bool { "#[cfg(test)]" == l.trim() }\n', "judge"),

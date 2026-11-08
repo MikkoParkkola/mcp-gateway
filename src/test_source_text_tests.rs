@@ -180,6 +180,10 @@ fn an_inner_cfg_counts_only_in_the_leading_run_of_its_scope() {
         "emit!( mod m { #![cfg(test)] fn product() {} } );\n",
         "emit![ mod m { #![cfg(test)] fn product() {} } ];\n",
         "macro_rules! m { () => { mod x { #![cfg(test)] fn product() {} } }; }\n",
+        "emit !{ mod m { #![cfg(test)] fn product() {} } }\n",
+        "宏!{ mod m { #![cfg(test)] fn product() {} } }\n",
+        "macro_rules! r#m { () => { mod x { #![cfg(test)] fn product() {} } }; }\n",
+        "macro_rules! 宏 { () => { mod x { #![cfg(test)] fn product() {} } }; }\n",
     ];
     for source in kept {
         assert!(
