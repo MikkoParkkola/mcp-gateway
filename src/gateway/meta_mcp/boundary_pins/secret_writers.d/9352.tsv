@@ -1,0 +1,3 @@
+# file	function	kind	count	class	reason
+src/gateway/ui/keys_create.rs	create_key	persist:write_audited	1	no-backend-values	admin key create writes a key digest spec into auth.api_keys; no backend value
+src/gateway/ui/keys_create.rs	write_audited	persist:replace_audited	1	no-backend-values	the key write under its audit; writes only auth.api_keys, no backend value
