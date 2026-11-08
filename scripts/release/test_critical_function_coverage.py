@@ -451,6 +451,68 @@ class SelectHeadLines(unittest.TestCase):
         self.assertEqual(result[9], [], "a count-0 head is missed, not unverifiable")
 
 
+class LocalMacroCollection(unittest.TestCase):
+    """A `macro_rules!` name leaves SAFE_MACROS only when the definition is
+    production code. Text in a string or comment, and a test-only file, do not
+    count."""
+
+    def names(self, files):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            for rel, text in files.items():
+                path = root / rel
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(text)
+            return cfc.macro_names(root)
+
+    def test_quoted_and_test_only_macro_rules_leave_format_safe(self):
+        # format stays in SAFE_MACROS unless a real production definition names it.
+        rows = [
+            ("string literal", {"src/lib.rs": 'const FIXTURE: &str = "macro_rules! format { () => {} }";\n'}, True),
+            ("raw string", {"src/lib.rs": 'const FIXTURE: &str = r"macro_rules! format { () => {} }";\n'}, True),
+            ("hashed raw string", {"src/lib.rs": 'const FIXTURE: &str = r#"macro_rules! format { () => {} }"#;\n'}, True),
+            ("byte string", {"src/lib.rs": 'const FIXTURE: &[u8] = b"macro_rules! format { () => {} }";\n'}, True),
+            ("byte raw string", {"src/lib.rs": 'const FIXTURE: &[u8] = br#"macro_rules! format { () => {} }"#;\n'}, True),
+            ("line comment", {"src/lib.rs": "// macro_rules! format { () => {} }\n"}, True),
+            ("block comment", {"src/lib.rs": "/* macro_rules! format { () => {} } */\n"}, True),
+            ("real definition", {"src/lib.rs": "macro_rules! format { () => {} }\n"}, False),
+            (
+                "tests file",
+                {
+                    "src/lib.rs": "fn prod() {}\n",
+                    "src/identity_sources_tests.rs": "macro_rules! format { () => {} }\n",
+                },
+                True,
+            ),
+            (
+                "tests directory",
+                {
+                    "src/lib.rs": "fn prod() {}\n",
+                    "src/gateway/tests/case.rs": "macro_rules! format { () => {} }\n",
+                },
+                True,
+            ),
+        ]
+        for label, files, stays in rows:
+            with self.subTest(label=label):
+                safe = self.names(files)
+                if stays:
+                    self.assertIn("format", safe)
+                else:
+                    self.assertNotIn("format", safe)
+
+    def test_a_real_definition_beside_quoted_text_shadows_only_its_own_name(self):
+        safe = self.names({
+            "src/lib.rs": 'const FIXTURE: &str = "macro_rules! vec { () => {} }";\nmacro_rules! format { () => {} }\n',
+        })
+        self.assertNotIn("format", safe)
+        self.assertIn("vec", safe)
+
+    def test_a_comment_inside_a_real_header_still_shadows(self):
+        safe = self.names({"src/lib.rs": "macro_rules /* c */ ! format { () => {} }\n"})
+        self.assertNotIn("format", safe)
+
+
 class HeadLineCalls(unittest.TestCase):
     """A call on a tracing macro's head line rides that line's hit count, so the
     count cannot show the call ran: the line is graded as missed and listed as
