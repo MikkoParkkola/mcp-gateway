@@ -607,7 +607,7 @@ accepts the proposal at HTTP 200 and downgrades in the result. NEG.3 alone does 
 nothing rejects. Neither is sufficient, because a backend that rejects at 400 and a backend that
 downgrades in the result are different servers.
 
-## MIK-9367 (CLIAUTH) — signed-in CLI for live administration, 3 of 7
+## CLIAUTH — signed-in CLI for live administration, 3 of 7
 
 The `api` command, the environment token and the stable route list land first; login, logout,
 `auth status`, the approval page and the keychain profile follow, so their rows stay blocking until then.
