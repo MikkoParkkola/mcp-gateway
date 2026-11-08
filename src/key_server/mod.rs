@@ -35,6 +35,8 @@ pub mod audit;
 /// The per-identity token cap holds under concurrent mints.
 #[cfg(test)]
 mod cap_race_tests;
+/// The installation key behind `email_hash`.
+pub(crate) mod email_hash;
 pub mod handler;
 #[cfg(test)]
 mod identity_rules_tests;
