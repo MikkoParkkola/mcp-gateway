@@ -503,27 +503,9 @@ async fn g46b_a_refused_read_with_an_expired_entry_leaves_it_for_the_authorized_
     );
 }
 
-/// G32 (T): a fresh firewall over the same task store (a restart)
-/// stages nothing on re-read, counted absent; the entry died with
-/// the first process.
-/// Mutant: re-derive when absent.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn g32_a_restarted_gateway_stages_nothing_counted_absent() {
-    let first = rig(PROSE, OTHER_PROSE, None).await;
-    let task = first.settle_task("g32", "gateway_execute", chain()).await;
-    assert!(
-        first.refused("key-b", 320, PROSE).await,
-        "P0: live receipt holds"
-    );
-    let Rig {
-        state: first_state,
-        _store: first_store,
-        ..
-    } = first;
-    drop(first_state);
-    let restarted = state_over_tasks(rig(PROSE, OTHER_PROSE, None).await, &first_store).await;
-    renews_nothing_after_reopen(&restarted, &task, 321).await;
-}
+// G32 (a restarted gateway renews nothing) moved to MIK-9379's
+// `relay_plan_replay_snapshot_guards`: a same-process reopen now renews from
+// the persisted snapshot, and another epoch is refused under block.
 
 /// G25 (T): a plan task delivered with detection off renews nothing
 /// when the store is reopened with detection on, counted absent, and
