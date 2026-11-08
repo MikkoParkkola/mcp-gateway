@@ -91,3 +91,82 @@ fn m2_profile_phases_of_a_ten_thousand_row_export() {
         println!("PROFILE output: {} bytes", bytes.len());
     }
 }
+
+/// The passes of an export read as `collect` reads them, without building a
+/// row: per-pass cost, then `row()` and the size function over the rows.
+#[test]
+#[ignore = "profiling, not an assertion"]
+fn m2_profile_passes_and_row_build() {
+    use super::joiner::Joined;
+    let fx = over_caps(10_000, false);
+    let joiner = RefCell::new(Joiner::new(None));
+    let mut carried = Seen {
+        above: 0,
+        head_covered: true,
+    };
+    let (mut cursor, mut per_pass, mut kept) = (None, Vec::new(), Vec::new());
+    loop {
+        let joined = RefCell::new(Vec::<Joined>::new());
+        let limits = Limits {
+            matches: 100,
+            bytes: 512 << 20,
+        };
+        let keep = |line: &super::reader::Line, seen: Seen| {
+            let mut j = joiner.borrow_mut();
+            if j.observe(line) || kind_of(line).is_none() {
+                return false;
+            }
+            let this = j.join(line, seen);
+            j.count(&this);
+            joined.borrow_mut().push(this);
+            true
+        };
+        let (page, m) = measure(|| {
+            read_page_joined(
+                &fx.path,
+                None,
+                cursor.as_ref(),
+                limits,
+                Look::Carried(carried),
+                keep,
+            )
+            .unwrap()
+        });
+        per_pass.push(m);
+        carried = page.above_end;
+        kept.extend(page.lines.iter().cloned().zip(joined.into_inner()));
+        match page.next {
+            Some(next) => cursor = Some(next),
+            None => break,
+        }
+    }
+    let total: u64 = per_pass.iter().map(|m| m.bytes).sum();
+    let calls: u64 = per_pass.iter().map(|m| m.calls).sum();
+    let mut sorted: Vec<u64> = per_pass.iter().map(|m| m.bytes).collect();
+    sorted.sort_unstable();
+    println!(
+        "PROFILE passes: {} passes, {total} B, {calls} calls; first {} B, median {} B, max {} B, last {} B",
+        per_pass.len(),
+        per_pass[0].bytes,
+        sorted[sorted.len() / 2],
+        sorted[sorted.len() - 1],
+        per_pass[per_pass.len() - 1].bytes
+    );
+    let rows = kept.len() as u64;
+    let ((), m) = measure(|| {
+        for (line, joined) in &kept {
+            drop(super::rows::row(line, None, joined));
+        }
+    });
+    report("row() over the kept lines", 1, m, rows);
+    let built: Vec<_> = kept
+        .iter()
+        .filter_map(|(l, j)| super::rows::row(l, None, j))
+        .collect();
+    let ((), m) = measure(|| {
+        for r in &built {
+            drop(ndjson_size(r));
+        }
+    });
+    report("ndjson_size over the rows", 1, m, rows);
+}
