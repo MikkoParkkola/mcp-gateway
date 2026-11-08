@@ -75,9 +75,42 @@ def ignored(path, regex):
 
 
 def dep_info_paths(text):
-    """The prerequisite paths of a dep-info file's first rule."""
-    first = text.splitlines()[0] if text else ""
-    return first.split(":", 1)[1].split()
+    """The prerequisite paths of a dep-info file's first rule. A trailing
+    backslash continues the rule on the next line, a backslash before a space
+    keeps that space inside the path, and the target ends at the first
+    colon-space (a Windows drive letter's colon is followed by a backslash)."""
+    rule = []
+    for line in text.splitlines():
+        if line.endswith("\\"):
+            rule.append(line[:-1])
+            continue
+        rule.append(line)
+        break
+    _, sep, deps = " ".join(rule).partition(": ")
+    if not sep:
+        return []
+    paths, current, chars = [], [], iter(deps)
+    for ch in chars:
+        if ch == "\\":
+            nxt = next(chars, "")
+            if nxt == " ":
+                current.append(" ")
+            else:
+                current.append(ch)
+                if nxt.isspace():
+                    paths.append("".join(current))
+                    current = []
+                elif nxt:
+                    current.append(nxt)
+        elif ch.isspace():
+            if current:
+                paths.append("".join(current))
+                current = []
+        else:
+            current.append(ch)
+    if current:
+        paths.append("".join(current))
+    return paths
 
 
 def product_sources(cargo, root):
