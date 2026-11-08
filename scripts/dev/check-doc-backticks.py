@@ -20,6 +20,14 @@ line today: `//!` inner docs (out-of-line modules), docs on a `mod name;`
 declaration, and files outside `src/`. A word joined to `-` or holding `://`
 is skipped too (a line range after a path, a URL), as clippy skips it.
 
+A false block stops every push, so whatever this check cannot read the way
+clippy's Markdown parser does is skipped rather than guessed: code spans of
+any backtick length, ``` and ~~~ fences and indented code are code; a
+paragraph holding HTML code tags or a blockquote, or touching a
+`#[doc = ...]` attribute, is skipped whole; a run of `///` lines counts only
+when it documents an item, field or variant, so text inside a string or macro
+input is not read as a doc; a file that is not UTF-8 is skipped.
+
     check-doc-backticks.py               every .rs file under src/
     check-doc-backticks.py --base REF    only files changed since REF
 """
@@ -33,8 +41,22 @@ from pathlib import Path
 
 DOC = re.compile(r"^\s*///(?!/)(.*)$")
 MOD_DECL = re.compile(r"^\s*(pub(\([^)]*\))?\s+)?mod\s+\w+\s*;")
-REF_DEF = re.compile(r"^\s*\[[^\]]+\]:\s")
-TICKS = re.compile(r"`[^`]*`", re.S)
+REF_DEF = re.compile(r"^\s*\[[^\]]+\]:")
+# A code span: a run of backticks closed by a run of the same length.
+TICKS = re.compile(r"(`+)(?!`).*?(?<!`)\1(?!`)", re.S)
+FENCE = re.compile(r"^\s*(```|~~~)")
+# Shapes this check does not parse; a paragraph holding one is skipped whole.
+UNPARSED = re.compile(r"<(code|pre|kbd|samp)\b|^\s*>", re.I)
+DOC_ATTR = re.compile(r"^\s*#!?\[doc\s*=")
+VIS = r"(pub(\([^)]*\))?\s+)?"
+# The line a doc run documents: an item, a field or an enum variant.
+ITEM = re.compile(
+    r"^\s*" + VIS + r"((async|const|unsafe|default|extern(\s+\"[^\"]*\")?)\s+)*"
+    r"(fn|struct|enum|union|trait|impl|type|const|static|mod|use|macro_rules!)\b"
+    r"|^\s*" + VIS + r"[A-Za-z_]\w*\s*:[^:]"
+    r"|^\s*[A-Z]\w*\s*(,|\{|\(|=|$)"
+    r"|^\s*\w+!\s*[\(\{\[]"
+)
 LINKS = re.compile(r"\[[^\]]*\]\([^)]*\)|<https?://[^>]*>|\[[^\]]*\]", re.S)
 UNDERSCORE = re.compile(r"[A-Za-z0-9]_[A-Za-z0-9]")
 TRIM = "()[]{}<>,.;:!?'\"*"
@@ -58,28 +80,57 @@ def is_camel_case(word: str) -> bool:
     return stem.isalnum() and sum(c.isupper() for c in stem) >= 2 and any(c.islower() for c in stem)
 
 
-def documents_a_module(lines: list[str], after: int) -> bool:
-    """Whether the doc run ending before index `after` sits on `mod name;`,
-    past any attributes."""
+def documents_an_item(lines: list[str], after: int) -> bool:
+    """Whether the doc run ending before index `after` documents an item, a
+    field or a variant (past attributes and plain comments), and not a
+    `mod name;` declaration. Lines in a string or macro input fail this."""
     for line in lines[after:]:
-        if line.strip().startswith("#["):
+        stripped = line.strip()
+        if stripped.startswith(("#[", "//")) and not stripped.startswith("///"):
             continue
-        return bool(MOD_DECL.match(line))
+        return bool(ITEM.match(line)) and not MOD_DECL.match(line)
+    return False
+
+
+def touches_doc_attr(lines: list[str], run: list[tuple[int, str]], after: int) -> bool:
+    """Whether a `#[doc = ...]` attribute sits right before the run or among the
+    attributes after it: its text joins the same Markdown, which this check
+    does not assemble."""
+    first = run[0][0] - 1
+    if first > 0 and DOC_ATTR.match(lines[first - 1]):
+        return True
+    for line in lines[after:]:
+        if not line.strip().startswith("#["):
+            return False
+        if DOC_ATTR.match(line):
+            return True
     return False
 
 
 def scan_paragraph(run: list[tuple[int, str]]) -> list[tuple[int, str, bool]]:
     """Each flagged word in one run of `///` lines as (line, word, gate). A
     backtick span may wrap across the run's lines, as in rustdoc."""
-    text, starts, fence = [], [], False
+    if any(UNPARSED.search(body) for _, body in run):
+        return []
+    text, starts, fence, offset, after_blank = [], [], None, 0, True
     for number, body in run:
-        if REF_DEF.match(body):
+        marker = FENCE.match(body)
+        if fence:
+            fence = None if marker and marker.group(1) == fence else fence
             body = ""
-        elif body.strip().startswith("```"):
-            fence, body = not fence, ""
-        elif fence:
+        elif marker:
+            fence, body = marker.group(1), ""
+        elif REF_DEF.match(body):
             body = ""
-        starts.append((sum(len(t) + 1 for t in text), number))
+        elif after_blank and (body.startswith("     ") or body.startswith(" \t")):
+            # An indented code block: four spaces past the one after `///`.
+            body = ""
+        else:
+            after_blank = False
+        if not body.strip() and not fence:
+            after_blank = True
+        starts.append((offset, number))
+        offset += len(body) + 1
         text.append(body)
     joined = "\n".join(text)
     blank = lambda m: re.sub(r"[^\n]", " ", m.group(0))
@@ -104,11 +155,9 @@ def scan_text(source: str) -> list[tuple[int, str, bool]]:
         if match:
             run.append((index + 1, match.group(1)))
             continue
-        if run and not documents_a_module(lines, index):
+        if run and documents_an_item(lines, index) and not touches_doc_attr(lines, run, index):
             found.extend(scan_paragraph(run))
         run = []
-    if run:
-        found.extend(scan_paragraph(run))
     return found
 
 
@@ -118,9 +167,9 @@ def git(*args: str) -> str:
 
 def files(base: str | None) -> list[str]:
     if base is None:
-        listed = git("ls-files", "src").split()
+        listed = git("ls-files", "-z", "src").split("\0")
     else:
-        listed = git("diff", "--name-only", "--diff-filter=AM", f"{base}...HEAD").split()
+        listed = git("diff", "-z", "--name-only", "--diff-filter=AMR", f"{base}...HEAD").split("\0")
     return [f for f in listed if f.startswith("src/") and f.endswith(".rs") and Path(f).is_file()]
 
 
@@ -130,7 +179,12 @@ def main() -> int:
     args = parser.parse_args()
     gates = 0
     for path in files(args.base):
-        for line, word, gate in scan_text(Path(path).read_text(encoding="utf-8")):
+        try:
+            source = Path(path).read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            print(f"{path}: skipped, not UTF-8 (the compiler judges it)")
+            continue
+        for line, word, gate in scan_text(source):
             kind = "error" if gate else "warning (CamelCase)"
             print(f"{path}:{line}: {word}: {kind}: put it in backticks (clippy::doc_markdown)")
             gates += gate
