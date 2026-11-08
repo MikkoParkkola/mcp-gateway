@@ -1134,6 +1134,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Test the release asset checker
         run: python3 scripts/release/test_check_release_assets.py
+      - name: Test the client download set and SBOM roots
+        run: python3 scripts/release/test_check_release_assets_client.py
       - name: Test that signing fails closed
         run: python3 scripts/release/test_sign_release_assets.py
       - name: Test that an upload onto a published release is refused
