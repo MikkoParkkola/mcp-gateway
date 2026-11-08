@@ -151,7 +151,7 @@ fn c3_a_broken_link_reads_broken_and_verify_log_agrees() {
         &path,
         &id_of(Which::Invocation, &all[3]),
         &Access::All,
-        None,
+        &Check::bare(None),
     )
     .unwrap()
     .unwrap();
@@ -160,7 +160,7 @@ fn c3_a_broken_link_reads_broken_and_verify_log_agrees() {
         &path,
         &id_of(Which::Invocation, &all[2]),
         &Access::All,
-        None,
+        &Check::bare(None),
     )
     .unwrap()
     .unwrap();
@@ -179,7 +179,7 @@ fn c3_the_genesis_record_is_first_in_kept_log() {
         &path,
         &id_of(Which::Invocation, &entries[0]),
         &Access::All,
-        None,
+        &Check::bare(None),
     )
     .unwrap()
     .unwrap();
@@ -220,7 +220,7 @@ fn c5a_c6_a_call_receipt_says_what_is_not_recorded() {
         &path,
         &id_of(Which::Invocation, &entries[0]),
         &Access::All,
-        None,
+        &Check::bare(None),
     )
     .unwrap()
     .unwrap();
@@ -248,7 +248,7 @@ fn c7_a_governance_receipt_never_serves_reason_or_rollback_text() {
         &path,
         &id_of(Which::Governance, &entries[0]),
         &Access::All,
-        None,
+        &Check::bare(None),
     )
     .unwrap()
     .unwrap();
@@ -281,8 +281,9 @@ fn l3_a_developer_reads_its_own_receipts_only() {
         issuer: "https://x".into(),
         subject: "s".into(),
     };
-    let read =
-        |log: &Path, which, entry: &Value| receipt(log, &id_of(which, entry), &dev, None).unwrap();
+    let read = |log: &Path, which, entry: &Value| {
+        receipt(log, &id_of(which, entry), &dev, &Check::bare(None)).unwrap()
+    };
     assert_eq!(
         read(&inv, Which::Invocation, &calls[0]).unwrap()["tool"],
         "mine"

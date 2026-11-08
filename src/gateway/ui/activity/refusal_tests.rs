@@ -239,7 +239,7 @@ async fn a_refusal_appears_in_both_exports_and_its_receipt_shows_the_decision() 
         None,
         &super::rows::Filter::default(),
         &Access::All,
-        None,
+        &Check::bare(None),
         super::export::CAPS,
         super::export::csv_size,
     )

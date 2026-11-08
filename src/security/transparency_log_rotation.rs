@@ -352,17 +352,10 @@ pub(super) fn recover(
         sigstart::publish(path, body, secret)?;
     }
     let mut announced = false;
-    sigstart::announce(
-        &plan,
-        anchor.as_ref(),
-        path,
-        secret,
-        &config.key_id,
-        |event, extra| {
-            announced = true;
-            chain_onto(&mut state, config, housekeeping(event, &extra))
-        },
-    )?;
+    sigstart::announce(&plan, anchor.as_ref(), path, secret, |event, extra| {
+        announced = true;
+        chain_onto(&mut state, config, housekeeping(event, &extra))
+    })?;
     if announced {
         write_mark(
             path,
