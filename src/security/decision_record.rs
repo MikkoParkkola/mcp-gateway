@@ -182,6 +182,7 @@ impl From<Refusal> for RefusedBy {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum AllowRank {
     /// A firewall rule that let through a finding whose default is to block.
+    #[cfg_attr(not(feature = "firewall"), allow(dead_code))]
     FirewallSoftenedBlock,
     /// A matched identity grant.
     Grant,
@@ -190,6 +191,7 @@ pub(crate) enum AllowRank {
     /// A tool-policy allow-list entry.
     ToolPolicy,
     /// Any other firewall rule that let a finding through.
+    #[cfg_attr(not(feature = "firewall"), allow(dead_code))]
     FirewallAllow,
     /// A call answered without deciding it again.
     NotRedecided,

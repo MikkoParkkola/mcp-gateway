@@ -393,37 +393,10 @@ pub(super) fn decide_tool_target<'a>(
         return Decision::of(Err(e));
     }
 
-    let mtls = (!state.mtls_policy.is_empty()).then(|| {
-        state
-            .mtls_policy
-            .evaluate_explained(cert_identity, target.server, target.tool)
-    });
-    // D7: the first matching rule that allowed is the call's mTLS allow; a
-    // disabled policy names none.
-    let mtls_rule = match &mtls {
-        Some((PolicyDecision::Allow, Some(rule_id))) => Some((*rule_id).clone()),
-        _ => None,
+    let mtls_rule = match mtls_verdict(state, cert_identity, target) {
+        Ok(rule) => rule,
+        Err(refusal) => return refusal,
     };
-    if let Some((PolicyDecision::Deny, rule_id)) = mtls {
-        // A refusal no rule decided (no certificate, no rule matched) names none.
-        let refusal = refused(
-            DecisionKind::Mtls,
-            format!(
-                "Tool '{}' on server '{}' is blocked by certificate policy",
-                target.tool, target.server
-            ),
-        )
-        .with_rule(rule_id.cloned());
-        return Decision::recorded(Err(refusal), move || {
-            let identity_label = cert_identity.map_or("<unauthenticated>", |id| id.display_name());
-            warn!(
-                server = target.server,
-                tool = target.tool,
-                identity = identity_label,
-                "Tool invocation denied by mTLS policy"
-            );
-        });
-    }
 
     let mut agent_record: Option<(&OAuthAgentIdentity, Result<(), String>)> = None;
     if state.agent_auth.enabled {
@@ -495,9 +468,47 @@ pub(super) fn decide_tool_target<'a>(
         }),
         None => Decision::of(verdict),
     };
-    allows
-        .into_iter()
-        .fold(decision, |decision, allow| decision.allowing(allow))
+    allows.into_iter().fold(decision, Decision::allowing)
+}
+
+/// The mTLS policy's verdict on `target` for `cert_identity`: the first
+/// matching rule that allowed, as the call's mTLS allow (D7; a disabled or
+/// empty policy names none), or the refusal decision when it denies.
+fn mtls_verdict<'a>(
+    state: &AppState,
+    cert_identity: Option<&'a CertIdentity>,
+    target: ToolTarget<'a>,
+) -> Result<Option<crate::security::rule_id::RuleId>, Decision<'a>> {
+    let mtls = (!state.mtls_policy.is_empty()).then(|| {
+        state
+            .mtls_policy
+            .evaluate_explained(cert_identity, target.server, target.tool)
+    });
+    match mtls {
+        Some((PolicyDecision::Allow, rule_id)) => Ok(rule_id.cloned()),
+        Some((PolicyDecision::Deny, rule_id)) => {
+            // A refusal no rule decided (no certificate, no rule matched) names none.
+            let refusal = refused(
+                DecisionKind::Mtls,
+                format!(
+                    "Tool '{}' on server '{}' is blocked by certificate policy",
+                    target.tool, target.server
+                ),
+            )
+            .with_rule(rule_id.cloned());
+            Err(Decision::recorded(Err(refusal), move || {
+                let identity_label =
+                    cert_identity.map_or("<unauthenticated>", |id| id.display_name());
+                warn!(
+                    server = target.server,
+                    tool = target.tool,
+                    identity = identity_label,
+                    "Tool invocation denied by mTLS policy"
+                );
+            }))
+        }
+        None => Ok(None),
+    }
 }
 
 /// The backend-level half of [`decide_tool_target`], decided silently: may

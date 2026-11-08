@@ -49,13 +49,6 @@ impl LocalIdentityGrantStore {
 
     /// The keyed id of grant `grant_id`; `None` for an unkeyed store or a
     /// grant the store does not hold.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "no production reader until the allow path names its grant"
-        )
-    )]
     #[must_use]
     pub(crate) fn rule_id(&self, grant_id: &str) -> Option<&crate::security::rule_id::RuleId> {
         self.ids.get(grant_id)
