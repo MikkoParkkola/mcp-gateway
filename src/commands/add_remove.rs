@@ -333,6 +333,32 @@ pub fn run_get_command(name: &str, config: &Path) -> ExitCode {
     ExitCode::SUCCESS
 }
 
+/// `--env-file`'s entries in file order, repeats kept.
+struct EnvFile(Vec<(String, serde_json::Value)>);
+
+impl<'de> serde::Deserialize<'de> for EnvFile {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct Entries;
+        impl<'de> serde::de::Visitor<'de> for Entries {
+            type Value = EnvFile;
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                f.write_str("a JSON object of names to values")
+            }
+            fn visit_map<M: serde::de::MapAccess<'de>>(
+                self,
+                mut map: M,
+            ) -> Result<EnvFile, M::Error> {
+                let mut entries = Vec::new();
+                while let Some(entry) = map.next_entry::<String, serde_json::Value>()? {
+                    entries.push(entry);
+                }
+                Ok(EnvFile(entries))
+            }
+        }
+        deserializer.deserialize_map(Entries)
+    }
+}
+
 /// `--env-file`'s bytes, from the file or (`-`) stdin, read at most one
 /// byte past the bound so an oversized input is refused, not truncated.
 fn read_env_file(path: &Path) -> Result<Vec<u8>, String> {
@@ -388,17 +414,20 @@ pub(crate) fn env_inputs(
                 "--env-file is larger than {ENV_FILE_MAX_BYTES} bytes"
             ));
         }
-        let parsed: serde_json::Value = serde_json::from_slice(bytes).map_err(|e| {
-            format!(
-                "--env-file is not JSON (line {}, column {})",
-                e.line(),
-                e.column()
-            )
+        // Every entry in order, a repeated name included (a JSON map would
+        // keep only the last).
+        let EnvFile(entries) = serde_json::from_slice(bytes).map_err(|e| {
+            if e.is_data() {
+                "--env-file must be a JSON object of names to values".to_string()
+            } else {
+                format!(
+                    "--env-file is not JSON (line {}, column {})",
+                    e.line(),
+                    e.column()
+                )
+            }
         })?;
-        let serde_json::Value::Object(map) = parsed else {
-            return Err("--env-file must be a JSON object of names to values".to_string());
-        };
-        for (name, value) in map {
+        for (name, value) in entries {
             let serde_json::Value::String(value) = value else {
                 return Err(format!("--env-file: the value of {name} is not a string"));
             };
@@ -997,7 +1026,8 @@ mod tests {
         let file = br#"{"MY_TOKEN":"tok-0123456789abcdef","LOG_LEVEL":"debug"}"#;
         let got = env_inputs(&[], Some(file), |_| None).expect("read");
         assert_eq!(got.len(), 2);
-        let big = vec![b' '; ENV_FILE_MAX_BYTES + 1];
+        // Over the bound but valid JSON, so the bound itself must refuse it.
+        let big = format!(r#"{{"MY_TOKEN":"{}"}}"#, "a".repeat(ENV_FILE_MAX_BYTES)).into_bytes();
         for (bytes, what) in [
             (br#"{"MY_TOKEN": 12345678}"#.as_slice(), "non-string value"),
             (b"[1]".as_slice(), "not an object"),
@@ -1048,6 +1078,28 @@ mod tests {
         assert_eq!(code, ExitCode::from(2));
         assert!(!path.exists(), "a config was created");
         assert_eq!(std::fs::read_dir(dir.path()).expect("dir").count(), 0);
+    }
+
+    /// E5b (D-CLI r1, gpt): a name repeated inside one env file is refused,
+    /// not silently replaced by its last value.
+    #[test]
+    fn e5b_a_name_repeated_in_the_env_file_is_refused() {
+        let file = br#"{"MY_TOKEN":"tok-0123456789abcdef","MY_TOKEN":"tok-fedcba9876543210"}"#;
+        let error = env_inputs(&[], Some(file), |_| None).expect_err("refused");
+        assert!(error.contains("MY_TOKEN"), "{error}");
+        assert!(!error.contains("tok-"), "{error}");
+    }
+
+    /// E4c (D-CLI r1, both seats): the env file is read at most one byte past
+    /// the bound, so an oversized file is refused without buffering it whole.
+    #[test]
+    fn e4c_an_oversized_env_file_is_read_only_past_the_bound() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("env.json");
+        std::fs::write(&path, vec![b' '; ENV_FILE_MAX_BYTES * 4]).expect("big file");
+        let bytes = read_env_file(&path).expect("read");
+        assert_eq!(bytes.len(), ENV_FILE_MAX_BYTES + 1);
+        assert!(env_inputs(&[], Some(&bytes), |_| None).is_err());
     }
 }
 
