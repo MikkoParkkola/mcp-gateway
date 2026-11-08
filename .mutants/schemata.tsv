@@ -1,0 +1,5 @@
+head_sha	55cebe5f0303771f902b6a6dbad6c9f67dd66e07
+#mutant shared-start-unrefused
+mcp_gateway	backend::pool_tests::shared_refusal::every_shared_start_of_a_per_user_backend_is_refused	src/backend/pool_tests/shared_refusal.rs:20
+#mutant publish-refusal-ok
+mcp_gateway	backend::stop_race_tests::a_start_overtaken_by_stop_refuses_as_not_found	src/backend/stop_race_tests.rs:91
