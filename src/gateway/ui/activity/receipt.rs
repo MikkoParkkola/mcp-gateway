@@ -10,8 +10,9 @@ use std::path::Path;
 use serde_json::{Map, Value, json};
 
 use super::access::Access;
-use super::answer::{Joined, Searched};
+use super::answer::{CHAIN_CHECKED, CHAIN_UNFINISHED, Joined, Searched};
 use super::reader::{Line, Which};
+use super::receipt_scan::{answer_block, scan};
 use super::rows::{Kind, kind_of, row};
 use super::seek::{Reads, oldest_counter, seek};
 use crate::security::transparency_log::recompute_entry_hash;
@@ -129,7 +130,7 @@ pub(super) fn receipt(
     }
     let line = Line {
         log: id.log,
-        entry: found.entry,
+        entry: found.entry.clone(),
         segment: found.segment,
     };
     let Some(kind) = kind_of(&line) else {
@@ -139,8 +140,15 @@ pub(super) fn receipt(
     if !access.admits(&line, kind) {
         return Ok(None);
     }
-    // Stub until the forward scan lands: no delivery is looked for.
-    let joined = Joined::NoRecord(Searched::Finished);
+    // A call looks forward for its delivery record; no other kind has one.
+    let scanned = if kind.is_call() && id.log == Which::Invocation {
+        Some(scan(log, &found, &line, secret)?)
+    } else {
+        None
+    };
+    let joined = scanned
+        .as_ref()
+        .map_or(Joined::NoRecord(Searched::NotACall), |s| s.joined.clone());
     let Some(Value::Object(mut body)) = row(&line, secret, &joined) else {
         return Ok(None);
     };
@@ -155,6 +163,19 @@ pub(super) fn receipt(
         }),
     );
     add_evidence(&mut body, kind, e);
+    if let Some(s) = &scanned {
+        if let Some(Value::Object(chain)) = body.get_mut("chain") {
+            let window = if s.chain_broken { "broken" } else { "intact" };
+            let scope = if s.finished {
+                CHAIN_CHECKED
+            } else {
+                CHAIN_UNFINISHED
+            };
+            chain.insert("window".into(), window.into());
+            chain.insert("window_scope".into(), scope.into());
+        }
+        body.insert("answer".into(), answer_block(&line, s));
+    }
     Ok(Some(body.into()))
 }
 

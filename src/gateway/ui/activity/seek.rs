@@ -22,6 +22,8 @@ const CHUNK: u64 = 64 * 1024;
 pub(super) struct Found {
     pub(super) entry: Value,
     pub(super) segment: u64,
+    /// The offset after the record's newline.
+    pub(super) end: u64,
 }
 
 /// Reads made, for the O(log n) test.
@@ -166,9 +168,13 @@ pub(super) fn seek(log: &Path, counter: u64, reads: &mut Reads) -> io::Result<Op
             continue;
         }
         match first_readable(&mut file, start, hi, reads)? {
-            Some((c, bytes, _)) if c == counter => {
+            Some((c, bytes, end)) if c == counter => {
                 let entry = serde_json::from_slice(&bytes).map_err(io::Error::other)?;
-                return Ok(Some(Found { entry, segment }));
+                return Ok(Some(Found {
+                    entry,
+                    segment,
+                    end,
+                }));
             }
             Some((c, _, end)) if c < counter => lo = end,
             // Above the target, or nothing readable up to `hi`: the target,

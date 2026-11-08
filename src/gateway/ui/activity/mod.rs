@@ -15,6 +15,7 @@ pub(in crate::gateway::ui) mod forward;
 mod joiner;
 mod reader;
 mod receipt;
+mod receipt_scan;
 /// The decision set's startup read of one record kind.
 pub(super) mod replay;
 mod rows;
