@@ -528,3 +528,6 @@ mod scope_tests;
 #[cfg(test)]
 #[path = "security_tests.rs"]
 mod security_tests;
+#[cfg(test)]
+#[path = "sigstate_tests.rs"]
+mod sigstate_tests;
