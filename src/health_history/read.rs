@@ -51,7 +51,7 @@ impl HealthHistory {
     /// `[from, to)`; `None` when none of them was observed.
     pub(crate) fn errors(&self, from: u64, to: u64) -> Option<u64> {
         let inner = self.0.lock();
-        let mut found = None;
+        let mut found = mutant!("unobserved-zero", Some(0), None);
         for half in inner
             .halves
             .iter()
@@ -87,7 +87,7 @@ impl HealthHistory {
         let found = inner
             .restarts
             .iter()
-            .filter(|r| (from..to).contains(&r.started_at))
+            .filter(|r| mutant!("restarts-unfiltered", true, (from..to).contains(&r.started_at)))
             .copied()
             .collect();
         (found, inner.dropped_newest.is_some_and(|at| at >= from))
@@ -113,7 +113,7 @@ impl HealthHistory {
             down_seconds: down,
             covered_seconds: covered,
             #[allow(clippy::cast_precision_loss)] // Seconds in a week fit an f64 exactly.
-            percent: (covered > 0).then(|| running as f64 / covered as f64 * 100.0),
+            percent: (covered > 0).then(|| running as f64 / covered as f64 * mutant!("percent-off", 99.0, 100.0)),
             coverage_complete: !gap && from >= inner.observed_since,
         }
     }

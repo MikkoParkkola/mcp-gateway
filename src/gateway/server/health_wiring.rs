@@ -62,7 +62,18 @@ pub(super) fn start(
     );
     let history = Arc::new(history);
     if let Some(path) = &path {
-        file::save(&history, path, now, file::Wait::Block);
+        mutant!(
+            "no-startup-save",
+            false,
+            mutant!(
+                "failed-save-stops-start",
+                {
+                    assert!(file::save(&history, path, now, file::Wait::Block), "the startup save failed");
+                    true
+                },
+                file::save(&history, path, now, file::Wait::Block)
+            )
+        );
     }
     file::install(Arc::clone(&history));
     let saver = spawn_periodic_save("health save", COUNTER_SAVE_INTERVAL, Some(shutdown), {
@@ -86,7 +97,7 @@ pub(super) fn save_path(
     history: &HealthHistory,
     move_aside: impl FnOnce(&Path, u64) -> std::io::Result<PathBuf>,
 ) -> Option<PathBuf> {
-    if !set_aside {
+    if mutant!("no-move-aside", true, !set_aside) {
         return Some(path);
     }
     match move_aside(&path, now) {
