@@ -63,8 +63,7 @@ fn standing(
         // Gateway-wide only: operator events are not bounded by a backend
         // scope, so a backend-scoped admin key has no standing here.
         (false, Some(key), None) => Some(Standing {
-            admin: crate::gateway::authz::admin_standing(key.admin, &key.backends)
-                == crate::gateway::authz::AdminStanding::Gateway,
+            admin: crate::gateway::authz::admin_standing(key.admin, &key.backends).is_gateway(),
             key: Some(key.name.clone()),
         }),
         _ => None,

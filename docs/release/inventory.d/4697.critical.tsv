@@ -1,0 +1,1 @@
+src/gateway/router/authorization.rs	admin_standing	1	standard	borderline	CallerStanding::admin_standing	Maps a caller standing back to an admin standing (Admin to Gateway, Standard to None) for InvokeScope::unscoped and the test-only allow_all; feeds the admin tool rule of the operator view, never a request caller

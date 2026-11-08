@@ -371,8 +371,8 @@ async fn write_audited(
         .transparency_log
         .clone()
         // No log is refused here, as the audit's own refusal, so the
-        // posture below never sees a missing log: its `Refused(NO_AUDIT_LOG)`
-        // can't reach this route's "any other Refused" answer.
+        // posture below never sees a missing log: its `NoAuditLog` can't
+        // reach this route.
         .ok_or_else(|| ReplaceError::AuditRefused(NO_AUDIT_LOG.to_owned()))?;
     let auth = GatewayAuth::of(state.live_config.running().auth.enabled);
     let who = super::admin_audit::caller_who(state, guard.client.as_ref(), guard.identity.as_ref());
@@ -435,6 +435,7 @@ fn variant_of(error: &ReplaceError) -> &'static str {
         ReplaceError::Stale { .. } => "stale",
         ReplaceError::Refused(_) => "refused",
         ReplaceError::AuditRefused(_) => "audit_refused",
+        ReplaceError::NoAuditLog => "no_audit_log",
         ReplaceError::Unsupported(_) => "unsupported",
         ReplaceError::Stage(_) => "stage",
         ReplaceError::Write(_) => "write",
@@ -474,7 +475,9 @@ fn refused_write(
         (None, Err(ReplaceError::ReloadRefused(_))) => {
             fixed(StatusCode::CONFLICT, "reload_refused")
         }
-        (None, Err(ReplaceError::AuditRefused(_))) => audit_unavailable(),
+        (None, Err(ReplaceError::AuditRefused(_) | ReplaceError::NoAuditLog)) => {
+            audit_unavailable()
+        }
         // The writer's own read check: nothing was written, so these are the
         // preconditions' answers, never the guard's text.
         (None, Err(ReplaceError::NoConfigFile)) => fixed(StatusCode::CONFLICT, "no_config_file"),

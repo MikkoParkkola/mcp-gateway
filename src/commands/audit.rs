@@ -32,7 +32,7 @@ fn run_audit_verify(
     anchor: Option<&std::path::Path>,
     config_path: Option<&std::path::Path>,
 ) -> ExitCode {
-    use mcp_gateway::security::transparency_log::{VerifyMode, verify_audit_log};
+    use mcp_gateway::security::transparency_log::{FailedCheck, VerifyMode, verify_audit_log};
     let resolve_log_config = Config::audit_verify_config;
     let verify_mode = if archive {
         VerifyMode::Archive
@@ -114,7 +114,7 @@ fn run_audit_verify(
                  segments, {} expired by retention, no tampering detected.",
                 result.entries_checked, result.segments_checked, result.segments_expired
             );
-            print_warnings(&result.warnings);
+            print_findings(&result);
             ExitCode::SUCCESS
         }
         Ok(result) => {
@@ -123,13 +123,22 @@ fn run_audit_verify(
                 .map_or_else(|| "?".to_string(), |n| n.to_string());
             let msg = result
                 .error_message
+                .clone()
                 .unwrap_or_else(|| "unknown error".to_string());
-            eprintln!(
-                "✗ Chain verification FAILED at counter {at}: {}",
-                shown(&msg)
-            );
+            match result.failed_check() {
+                // The message names the rule, the counter and the token.
+                FailedCheck::Pairing => {
+                    eprintln!("✗ Pairing verification FAILED: {}", shown(&msg));
+                }
+                FailedCheck::Chain => {
+                    eprintln!(
+                        "✗ Chain verification FAILED at counter {at}: {}",
+                        shown(&msg)
+                    );
+                }
+            }
             // A failing log can still name what it replaced: never drop that.
-            print_warnings(&result.warnings);
+            print_findings(&result);
             if !signed && result.signed_entry_seen {
                 eprintln!(
                     "note: the log has signed entries but no shared secret is configured; their HMAC was not checked."
@@ -140,13 +149,16 @@ fn run_audit_verify(
     }
 }
 
-/// Every verify warning, on stderr: the one place they are rendered, on the
-/// passing and the failing path alike. Warnings carry text read from the log,
-/// so each goes through [`shown`], which escapes controls, bidi and other
-/// format characters.
-fn print_warnings(warnings: &[String]) {
-    for warning in warnings {
+/// Every verify warning and note, on stderr: the one place they are
+/// rendered, on the passing and the failing path alike. They carry text read
+/// from the log, so each goes through [`shown`], which escapes controls, bidi
+/// and other format characters.
+fn print_findings(result: &mcp_gateway::security::transparency_log::VerifyResult) {
+    for warning in &result.warnings {
         eprintln!("warning: {}", shown(warning));
+    }
+    for note in result.notes() {
+        eprintln!("info: {}", shown(note));
     }
 }
 

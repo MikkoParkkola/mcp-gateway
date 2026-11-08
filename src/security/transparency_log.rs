@@ -128,8 +128,8 @@ pub(crate) use verify::is_signed_entry;
 #[cfg(test)]
 pub(crate) use verify::verify_segments;
 pub use verify::{
-    VerifyMode, VerifyResult, log_contains_signed_entry, show_session_entries, verify_log,
-    verify_log_signed,
+    FailedCheck, VerifyMode, VerifyResult, log_contains_signed_entry, show_session_entries,
+    verify_log, verify_log_signed,
 };
 
 use crate::security::audit::{AuditEnvelope, AuditWho, InvocationTarget};
@@ -559,18 +559,22 @@ impl TransparencyLogger {
         Self::reject_reserved_fields(fields)
     }
 
+    /// The chain, envelope and segment fields: the one list settle's refusal
+    /// and its caller view both read.
+    pub(crate) fn reserved_field_names() -> impl Iterator<Item = &'static str> {
+        const CHAIN: [&str; 5] = ["counter", "prev_entry_hash", "entry_hash", "sig", "key_id"];
+        CHAIN
+            .into_iter()
+            .chain(AuditEnvelope::RESERVED)
+            .chain(rotation::RESERVED_SEGMENT_FIELDS)
+    }
+
     /// The chain, envelope and segment fields no caller may supply, whatever
     /// the record's event.
     fn reject_reserved_fields(
         fields: &serde_json::Map<String, serde_json::Value>,
     ) -> io::Result<()> {
-        let chain = ["counter", "prev_entry_hash", "entry_hash", "sig", "key_id"];
-        let segment = rotation::RESERVED_SEGMENT_FIELDS;
-        for reserved in chain
-            .into_iter()
-            .chain(AuditEnvelope::RESERVED)
-            .chain(segment)
-        {
+        for reserved in Self::reserved_field_names() {
             if fields.contains_key(reserved) {
                 return Err(io::Error::other(format!(
                     "transparency log: reserved chain field '{reserved}' cannot be supplied by caller"
@@ -783,6 +787,14 @@ mod settle_bound_tests;
 #[cfg(test)]
 #[path = "transparency_log_settle_kind_tests.rs"]
 mod settle_kind_tests;
+
+#[cfg(test)]
+#[path = "transparency_log_pairing_tests.rs"]
+mod pairing_tests;
+
+#[cfg(test)]
+#[path = "transparency_log_pairing_field_tests.rs"]
+mod pairing_field_tests;
 
 /// Test support: `records` without the logger's `audit_log_identified`
 /// record, which every new log writes after its open record. For a row that
