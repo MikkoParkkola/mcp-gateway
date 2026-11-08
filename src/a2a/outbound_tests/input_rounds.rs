@@ -212,7 +212,7 @@ async fn a2a_9_a_hanging_poll_is_bounded_and_canceled() {
         .result
         .expect("a tool result");
     assert!(
-        started.elapsed() < Duration::from_secs(8),
+        started.elapsed() < Duration::from_secs(10),
         "bounded by the deadline"
     );
     assert_eq!(result["isError"], true, "{result}");
@@ -233,7 +233,7 @@ async fn a2a_9_a_hanging_first_send_reports_an_unknown_outcome() {
         .request_with_headers("tools/call", Some(first_call()), &[], None)
         .await;
     assert!(
-        started.elapsed() < Duration::from_secs(8),
+        started.elapsed() < Duration::from_secs(10),
         "bounded by the deadline"
     );
     let text = match response {

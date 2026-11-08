@@ -81,7 +81,10 @@ pub(crate) const MARKER: &str = "mik-7272-backend-answered";
 /// terminal state over the wire needs the same outer bound, and a second
 /// constant spelled beside it would be a second clock that can disagree with
 /// this one about how long "never happened" takes.
-pub(crate) const BOUND: Duration = Duration::from_secs(5);
+// The timing guard's 10 s floor for test waits: under load a shorter wait
+// fails a correct run. Every use waits for something that happens, so a
+// passing run never waits the bound out.
+pub(crate) const BOUND: Duration = Duration::from_secs(10);
 
 /// The backend's end of a dispatch barrier.
 struct Gate {
