@@ -606,6 +606,10 @@ def _walk(run_block: str, shell_lines: ShellLines = ShellLines.STRICT, ci_only_l
     lines = [text for text, role in scanned if role is Role.COMMAND]
     found, bound, loops = [], {}, {}
     for raw in lines:
+        if any("\n" in body for _, _, body in _lex(raw)[1]) and _parens_unbalanced(raw):
+            # A substitution read across lines is accepted only when bash could parse the
+            # command: a stray `)` is a syntax error, and the step runs nothing.
+            raise UnsupportedSyntax(f"a command spanning lines that bash cannot parse: {raw.strip()}")
         if _names_sh(raw):
             if " ".join(raw.split()) in ci_only_lines:
                 continue
@@ -639,6 +643,19 @@ def _walk(run_block: str, shell_lines: ShellLines = ShellLines.STRICT, ci_only_l
             for stage in stages:
                 found += _stage_execution(stage, stages, bound, loops)
     return found
+
+
+def _parens_unbalanced(text):
+    """Whether `text`'s top-level parentheses (subshells; a substitution's own are not top) fail
+    to pair up."""
+    top, _ = _lex(text)
+    depth = 0
+    for flag, char in zip(top, text):
+        if flag and char in "()":
+            depth += 1 if char == "(" else -1
+            if depth < 0:
+                return True
+    return depth != 0
 
 
 def _stage_execution(stage, stages, bound, loops):

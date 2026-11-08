@@ -215,12 +215,16 @@ def _scan(root, ci_only_lines=None):
                 continue
             listed = frozenset(line for wf, line in lines_table if wf == name)
             listed_seen |= {(name, " ".join(l.split())) for l in run.replace("\\\n", " ").splitlines()}
+            windows = str(step.get("shell", "")).split()[:1] in ([s] for s in NON_POSIX_SHELLS)
             try:
-                executed = workflow_shell.executions(run, ci_only_lines=listed)
+                # A non-POSIX step is not bash: its quotes and parentheses mean something else, so
+                # bash's multi-line reading would swallow later lines. One line at a time, as
+                # its forms only need finding to be classed windows.
+                blocks = run.splitlines() if windows else [run]
+                executed = [e for block in blocks for e in workflow_shell.executions(block, ci_only_lines=listed)]
             except workflow_shell.UnsupportedSyntax as err:
                 found.append(f"unsupported execution syntax in {name} step {step.get('name', '?')!r}: {err}")
                 continue
-            windows = str(step.get("shell", "")).split()[:1] in ([s] for s in NON_POSIX_SHELLS)
             for ex in executed:
                 scripts = sorted(str(p.relative_to(root)) for p in root.glob(ex.script)) if "*" in ex.script else [ex.script]
                 if not scripts:
@@ -740,10 +744,22 @@ class Rows(unittest.TestCase):
                 found = problems(self.t.root, ci_only={})
                 self.assertTrue(any(p.startswith("unsupported execution syntax in ci.yml step 'shape step'") for p in found), found)
 
-    # D27b (SHDRIFT.1): a substitution spanning lines is one command, read as bash runs it.
+    # D27b (SHDRIFT.1; a loosening, lead ruling 2026-11-08): a well-formed substitution spanning
+    # lines is one command, read as bash runs it (it was refused); one bash cannot parse
+    # (unterminated, stray `)`, an unterminated quote inside) is still refused.
     def test_d27b_a_multi_line_substitution_is_read(self):
-        found = workflow_shell.executions("out=$(python3 scripts/x.py\n)")
-        self.assertEqual([(e.script, e.args) for e in found], [("scripts/x.py", ())])
+        for block, scripts in (
+            ("out=$(python3 scripts/x.py\n)", ["scripts/x.py"]),
+            ("out=`python3 scripts/x.py\n`", ["scripts/x.py"]),
+            ("out=$(python3 scripts/x.py\n)\npython3 scripts/y.py", ["scripts/x.py", "scripts/y.py"]),
+        ):
+            with self.subTest(block):
+                self.assertEqual([e.script for e in workflow_shell.executions(block)], scripts)
+        for block in ("out=$(python3 scripts/x.py", "out=$(python3 scripts/x.py\necho done",
+                      'out=$(python3 "scripts/x.py\n)', "out=$(python3 scripts/x.py\n))",
+                      "out=$(python3 scripts/x.py\n) )", "out=$(bash scripts/ci/x.sh\n)"):
+            with self.subTest(block), self.assertRaises(workflow_shell.UnsupportedSyntax):
+                workflow_shell.executions(block)
 
     # D28 (lead ruling 2026-10-23): a `.py` path run by something other than a
     # python word is named, not lost.
@@ -1077,7 +1093,10 @@ class Rows(unittest.TestCase):
     def test_d13_heredocs_keywords_and_pwsh_steps(self):
         for s in ("scripts/h.py", "scripts/w.py"):
             self.t.script(s)
-        pwsh = "      - shell: pwsh\n        run: python scripts/w.py\n"
+        pwsh = ("      - shell: pwsh\n        run: python scripts/w.py\n"
+                "      - shell: pwsh\n        run: |\n          Test-Path \"x:\\\"\n          python scripts/v.py\n")
+        for s in ("scripts/v.py",):
+            self.t.script(s)
         self.t.workflow(
             "ci.yml",
             pr_job("python3 - <<'PY'\nprint('python3 scripts/h.py')\nPY\nif true; then echo x; fi", extra=pwsh),
@@ -1090,6 +1109,8 @@ class Rows(unittest.TestCase):
         self.assertEqual([e.script for e in found], ["scripts/i.py", "scripts/j.py", "scripts/k.py", "scripts/l.py"])
         ci_only = buckets(self.t.root, ci_only={})[2]
         self.assertTrue(any(f[0] == "scripts/w.py" and r.startswith("windows") for f, r in ci_only.items()), ci_only)
+        # A pwsh line bash would read as an open quote (`"x:\"`) does not hide the next line's run.
+        self.assertTrue(any(f[0] == "scripts/v.py" and r.startswith("windows") for f, r in ci_only.items()), ci_only)
 
     # D14a / D14b / D14c (D1: per-source binding of $base)
     def test_d14a_pre_push_base_is_the_merge_base(self):
