@@ -128,7 +128,7 @@ async fn read(meta: &Arc<MetaMcp>, reads: &StdioReads, n: u64, tenant: &str) -> 
 
 /// The `cross_tenant_read` values on the log's delivery records, in order,
 /// at the top level or one envelope down.
-fn verdicts(log_dir: &std::sync::Arc<tempfile::TempDir>) -> Vec<String> {
+fn verdicts(log_dir: &tempfile::TempDir) -> Vec<String> {
     let field = |record: &Value, name: &str| -> Option<String> {
         let direct = record.get(name).and_then(Value::as_str);
         direct
