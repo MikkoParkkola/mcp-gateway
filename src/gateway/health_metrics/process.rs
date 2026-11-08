@@ -10,10 +10,8 @@ pub(crate) const SESSIONS: &str = "mcp_gateway_sessions_active";
 /// When the process started, as Unix seconds.
 pub(crate) const START_TIME: &str = "process_start_time_seconds";
 /// Resident set size; not a recorder gauge, see [`resident_memory_exposition`].
-#[cfg(any(target_os = "linux", test))]
 const RESIDENT: &str = "process_resident_memory_bytes";
 /// The help text the scrape carries for [`RESIDENT`].
-#[cfg(any(target_os = "linux", test))]
 const RESIDENT_HELP: &str =
     "Resident set size. Linux only (read from /proc/self/statm); absent on other systems.";
 
