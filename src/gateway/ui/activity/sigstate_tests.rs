@@ -40,6 +40,8 @@ async fn json_body(r: axum::response::Response) -> Vec<u8> {
 /// What every reader says about the record whose `tool` is `tool`.
 struct Seen {
     list: Value,
+    /// `Null` when the receipt's counter seek cannot find the record (an
+    /// insertion that breaks counter order); only R19 (c) allows that.
     receipt: Value,
     ndjson: Value,
     manifest: Value,
@@ -63,7 +65,7 @@ async fn seen(fx: &Fixture, tool: &str) -> Seen {
     let id = parse_id(list["id"].as_str().unwrap()).unwrap();
     let receipt = receipt(&fx.path, &id, &Access::All, &logs.check())
         .unwrap()
-        .expect("a receipt");
+        .unwrap_or(Value::Null);
     let s = signer();
     let nd = json_body(export_response(
         &logs,
@@ -129,6 +131,13 @@ fn csv_fields(line: &str) -> Vec<String> {
 fn assert_invalid(s: &Seen, why: &str) {
     assert_eq!(s.list["signature"], "invalid", "list");
     assert_eq!(s.receipt["signature"], "invalid", "receipt");
+    assert_invalid_unseekable(s, why);
+}
+
+/// As [`assert_invalid`], for a record the receipt's counter seek cannot
+/// reach because the edit broke counter order.
+fn assert_invalid_unseekable(s: &Seen, why: &str) {
+    assert_eq!(s.list["signature"], "invalid", "list");
     assert_eq!(s.ndjson["signature"], "invalid", "ndjson");
     assert_eq!(s.ndjson["integrity"], why, "ndjson integrity");
     assert_eq!(s.csv_signature, "invalid", "csv");
@@ -269,8 +278,12 @@ async fn r19_edits_to_legacy_bytes_are_caught() {
     let lines: Vec<&str> = text.lines().collect();
     let legacy = lines.iter().position(|l| l.contains("\"tool_1\"")).unwrap();
     let signed = lines.iter().position(|l| l.contains("\"tool_3\"")).unwrap();
+    let replaced: Value = serde_json::from_str(lines[legacy]).unwrap();
     let mut forged: Value = serde_json::from_str(lines[signed]).unwrap();
     forged["tool"] = "tool_9".into();
+    // Chain-consistent where it sits, as a careful attacker would make it.
+    forged["counter"] = replaced["counter"].clone();
+    forged["prev_entry_hash"] = replaced["prev_entry_hash"].clone();
     strip_sig(&mut forged);
     let mut forged = forged.to_string();
     assert!(forged.len() <= lines[legacy].len(), "the forged line fits");
@@ -292,7 +305,7 @@ async fn r19_edits_to_legacy_bytes_are_caught() {
     // Between the two legacy lines, so it lies wholly below P.
     lines.insert(1, extra.to_string());
     std::fs::write(&fx.path, lines.join("\n") + "\n").unwrap();
-    assert_invalid(&seen(&fx, "tool_8").await, "legacy_edited");
+    assert_invalid_unseekable(&seen(&fx, "tool_8").await, "legacy_edited");
 }
 
 /// R21 (round 1 G6): a broken sidecar is reported log-wide even when every
@@ -544,8 +557,14 @@ async fn r29_bytes_past_a_legacy_files_length_are_not_legacy() {
     let log = fx.open(true, 1024);
     Fixture::calls(&log, 12, 2);
     drop(log);
-    let legacy = &sealed[0].path;
-    let text = std::fs::read_to_string(legacy).unwrap();
+    // A sealed legacy file holding a call record (the first may hold only
+    // housekeeping).
+    let (legacy, text) = sealed
+        .iter()
+        .map(|s| (s.path.clone(), std::fs::read_to_string(&s.path).unwrap()))
+        .find(|(_, t)| t.contains("\"tool\""))
+        .expect("a sealed legacy file with a call");
+    let legacy = &legacy;
     let last = text.lines().rev().find(|l| l.contains("\"tool\"")).unwrap();
     let mut extra: Value = serde_json::from_str(last).unwrap();
     extra["tool"] = "tool_99".into();
