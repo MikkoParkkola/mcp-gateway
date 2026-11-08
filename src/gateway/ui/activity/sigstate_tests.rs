@@ -579,3 +579,20 @@ async fn r29_bytes_past_a_legacy_files_length_are_not_legacy() {
     // Its copied counter repeats one, so the receipt's seek cannot reach it.
     assert_invalid_unseekable(&seen(&fx, "tool_99").await, "legacy_edited");
 }
+
+/// R15 (a): a v3 log with no open record holds the anchor, then rotates: the
+/// sealed file keeps the anchor's seq, its legacy records still read
+/// `unsigned`, and a stripped signed record in it reads `invalid`.
+#[tokio::test]
+async fn r15_a_pre_open_record_file_keeps_its_anchor_after_rotation() {
+    let fx = Fixture::new();
+    write_v3(&fx.path, 1, 2, 3);
+    drop(fx.open(true, 0));
+    let log = fx.open(true, 1024);
+    Fixture::calls(&log, 10, 8);
+    drop(log);
+    assert!(!list_segments(&fx.path).unwrap().is_empty(), "it rotated");
+    assert_state(&seen(&fx, "tool_1").await, "unsigned");
+    strip_anywhere(&fx, "tool_3");
+    assert_invalid(&seen(&fx, "tool_3").await, "sig_missing");
+}
