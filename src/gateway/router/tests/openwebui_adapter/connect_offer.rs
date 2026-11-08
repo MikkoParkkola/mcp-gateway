@@ -129,7 +129,7 @@ struct Gateway {
     tasks: Arc<crate::gateway::task_service::TaskExecutor>,
     /// The task store's directory, kept for the gateway's lifetime.
     _store: crate::gateway::router::tests::FixtureDir,
-    _dir: tempfile::TempDir,
+    _dir: std::sync::Arc<tempfile::TempDir>,
 }
 
 /// The production compile, backend construction and strategy install, with
@@ -148,7 +148,7 @@ async fn gateway_seeded(
         crate::personal_accounts::revoke_fixture::Seed,
     )],
 ) -> Gateway {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_dir_keep::kept_tempdir();
     let env = dir.path().join("adapter.env");
     crate::gateway::test_helpers::write_owner_only(
         &env,

@@ -43,7 +43,7 @@ pub(super) async fn signed_fixture_with(
     let auth = sole_operator();
     let mut gateway = DirectAccountGateway::new(auth.clone(), &Binding::Connected);
     let (mut state, store) = super::super::tests::test_router_app_state_with_auth(&auth).await;
-    let audit = tempfile::tempdir().expect("a log directory");
+    let audit = crate::test_dir_keep::kept_tempdir();
     let audit_path = audit.path().join("audit.jsonl");
     let log = Arc::new(
         crate::security::TransparencyLogger::open(Arc::new(

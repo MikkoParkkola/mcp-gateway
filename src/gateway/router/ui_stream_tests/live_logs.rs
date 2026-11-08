@@ -44,7 +44,7 @@ fn auth(backends: &[&str]) -> AuthConfig {
 /// A gateway writing both logs (`governance` false: no governance log), with
 /// the bearer, the standard key and a scoped admin key over `a` and `b`.
 async fn logged(governance: bool) -> (Arc<AppState>, impl Sized, Arc<TransparencyLogger>) {
-    let dir = Arc::new(tempfile::tempdir().unwrap());
+    let dir = crate::test_dir_keep::kept_tempdir();
     let inv = logger(&dir, "invocation.jsonl");
     let gov = governance.then(|| logger(&dir, "governance.jsonl"));
     let auth = auth(&["a", "b"]);

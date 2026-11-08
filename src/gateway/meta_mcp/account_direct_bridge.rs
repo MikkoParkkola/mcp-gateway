@@ -441,7 +441,7 @@ impl CapabilityAccount {
             account_key("alice", WORK),
             grant(ALICE_WORK_TOKEN, expires_at),
         )]);
-        let dir = std::sync::Arc::new(tempfile::tempdir().expect("a log directory"));
+        let dir = crate::test_dir_keep::kept_tempdir();
         let log = crate::gateway::meta_mcp::grant_audit_fixture::logger(
             &dir,
             crate::security::audit::AuditFailurePolicy::BestEffort,
