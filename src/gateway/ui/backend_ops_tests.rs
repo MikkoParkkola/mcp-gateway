@@ -892,3 +892,17 @@ fn r1b_command_credential_refusals_table() {
         "the URL is not saved when a command is given"
     );
 }
+
+/// Pins why mutant M14 is equivalent: the URL parser turns an empty password
+/// (`user:@`) into no password, so the userinfo check's empty-password guard
+/// never sees one. If a url crate release changes this, the row fails and
+/// the guard starts to matter.
+#[test]
+fn an_empty_url_password_parses_as_no_password() {
+    for scheme in ["http", "https"] {
+        let raw = [scheme, "://", "user", ":", "@h.example/"].concat();
+        let url = url::Url::parse(&raw).expect("parses");
+        assert_eq!(url.password(), None, "{raw}");
+        assert_eq!(url.username(), "user", "{raw}");
+    }
+}
