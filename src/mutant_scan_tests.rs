@@ -238,14 +238,25 @@ fn s14_both_crate_roots_carry_the_macros_and_the_switch() {
     for crate_root in ["src/lib.rs", "src/main.rs"] {
         let text = std::fs::read_to_string(root.join(crate_root)).expect("read the crate root");
         let file = syn::parse_file(&text).expect("parse the crate root");
-        let includes = file.items.iter().any(|item| match item {
+        // macro_rules! is textually scoped: the include must come before
+        // every module, or a site in an earlier module cannot see it.
+        let include_at = file.items.iter().position(|item| match item {
             syn::Item::Macro(m) => {
                 m.mac.path.is_ident("include")
                     && m.mac.tokens.to_string() == "\"mutant_macro.rs\""
             }
             _ => false,
         });
-        assert!(includes, "{crate_root} does not include!(\"mutant_macro.rs\")");
+        let include_at = include_at
+            .unwrap_or_else(|| panic!("{crate_root} does not include!(\"mutant_macro.rs\")"));
+        let first_mod = file
+            .items
+            .iter()
+            .position(|item| matches!(item, syn::Item::Mod(_)));
+        assert!(
+            first_mod.is_none_or(|m| include_at < m),
+            "{crate_root} includes mutant_macro.rs after a module"
+        );
         let module = file.items.iter().find_map(|item| match item {
             syn::Item::Mod(m) if m.ident == "mutant" => Some(m),
             _ => None,
