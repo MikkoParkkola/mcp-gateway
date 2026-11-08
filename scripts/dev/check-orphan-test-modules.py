@@ -257,7 +257,10 @@ def file_is_test(source: Path) -> bool:
 
 
 # `name!(`, `name !{`, `macro_rules! r#name {`; identifiers may be Unicode.
-MACRO_CALL = re.compile(r"(?:r#)?[^\W\d]\w*\s*!\s*(?:(?:r#)?[^\W\d]\w*\s*)?[(\[{]")
+# Any non-ASCII character counts as an identifier character (a combining mark
+# too): the safe side, since a false match only stops an inner cfg marking.
+_ID = r"(?:r#)?(?:[A-Za-z_]|[^\x00-\x7f])(?:\w|[^\x00-\x7f])*"
+MACRO_CALL = re.compile(_ID + r"\s*!\s*(?:" + _ID + r"\s*)?[(\[{]")
 
 
 def macro_spans(code: str) -> list[tuple[int, int]]:

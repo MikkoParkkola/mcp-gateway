@@ -105,6 +105,22 @@ class Detection(Tree):
         )
         self.assertEqual(self.problems(), ["new copy: scripts/x.py A.judge (1, listed 0)"])
 
+    def test_a_continued_string_and_a_block_comment_are_no_line_comment(self):
+        for body in (
+            'fn judge(l: &str) -> bool {\n    let _s = "a\\\n // b"; l == "#[cfg(test)]"\n}\n',
+            'fn judge(l: &str) -> bool {\n    /* // */ l == "#[cfg(test)]"\n}\n',
+        ):
+            with self.subTest(body=body):
+                self.write("src/a.rs", body)
+                self.assertEqual(self.problems(), ["new copy: src/a.rs judge (1, listed 0)"])
+
+    def test_a_docstring_only_function_leaves_the_next_scope_intact(self):
+        self.write(
+            "scripts/x.py",
+            'def empty():\n    """Only a docstring."""\n\n\ndef judge(line):\n    return line == "#[cfg(test)]"\n',
+        )
+        self.assertEqual(self.problems(), ["new copy: scripts/x.py judge (1, listed 0)"])
+
     def test_reversed_and_python_comparisons_are_copies(self):
         for rel, body, scope in (
             ("src/a.rs", 'fn judge(l: &str) -> bool { "#[cfg(test)]" == l.trim() }\n', "judge"),

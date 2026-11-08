@@ -166,11 +166,14 @@ def py_code(text: str) -> str:
 
 
 # A lexer step: a raw string, a string, a char literal (kept), or a comment (blanked).
-RS_LEX = re.compile(r"""(?:br|r)(?P<h>#*)"[\s\S]*?"(?P=h)|b?"(?:\\.|[^"\\])*"|b?'(?:\\.|[^'\\\n])'|(?P<c>//[^\n]*)""")
+RS_LEX = re.compile(
+    r"""(?:br|r)(?P<h>#*)"[\s\S]*?"(?P=h)|b?"(?:\\[\s\S]|[^"\\])*"|b?'(?:\\.|[^'\\\n])'"""
+    r"""|(?P<c>//[^\n]*|/\*[\s\S]*?\*/)"""
+)  # ponytail: block comments are not nested-aware; a nested /* */ ends early, the code side is kept
 
 
 def rs_code(text: str) -> str:
-    """`text` with `//` comments blanked, literals kept (an idiom can be one).
+    """`text` with `//` and `/* */` comments blanked, literals kept (an idiom can be one).
     Raw strings and char literals are lexed, so a `//` inside one is no comment."""
     return RS_LEX.sub(lambda m: " " * len(m.group(0)) if m.group("c") else m.group(0), text)
 
