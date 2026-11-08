@@ -768,6 +768,9 @@ mod live_overflow_tests;
 #[path = "collusion_live_stubs.rs"]
 mod live_stubs;
 #[cfg(test)]
+#[path = "collusion_replay_pending_tests.rs"]
+mod replay_pending_tests;
+#[cfg(test)]
 #[path = "collusion_replay_tests.rs"]
 mod replay_tests;
 #[cfg(test)]

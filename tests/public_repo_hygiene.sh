@@ -526,6 +526,80 @@ printf 'docs/h.md\tprivate-name\t08\n' >"$repo/scripts/dev/public-hygiene-debt.t
 git -C "$repo" add .gitignore scripts/dev docs/h.md
 assert_fail_contains "$repo" "no plain decimal hit count"
 
+# A scan whose git command fails is a failed check, never a clean one: a process substitution
+# drops its command's exit status, so the checker records each failure and exits 2. A stub git
+# fails one subcommand (exit 128), optionally after printing partial output.
+real_git="$(command -v git)"
+stub_dir="$tmp_root/gitstub"
+mkdir -p "$stub_dir"
+cat >"$stub_dir/git" <<EOF
+#!/usr/bin/env bash
+case " \$* " in
+  *" \$FAIL_SUB "*) [[ -n "\${PARTIAL:-}" ]] && printf 'docs/x.md:1:partial\n'; exit 128 ;;
+esac
+exec "$real_git" "\$@"
+EOF
+chmod +x "$stub_dir/git"
+assert_scan_fails() {
+  local repo="$1" sub="$2" partial="$3" base="$4" rc=0 output="$tmp_root/scan.out"
+  (cd "$repo" && PATH="$stub_dir:$PATH" FAIL_SUB="$sub" PARTIAL="$partial" \
+    scripts/dev/check-public-repo-hygiene.sh ${base:+--base "$base"} >"$output" 2>&1) || rc=$?
+  if [[ "$rc" -ne 2 ]] || ! grep -F -q "scan failed" "$output"; then
+    cat "$output" >&2
+    echo "expected exit 2 with 'scan failed' when git $sub fails (partial=$partial), got $rc" >&2
+    exit 1
+  fi
+}
+repo="$(make_repo scan-fails)"
+mkdir -p "$repo/docs"
+printf 'clean\n' >"$repo/docs/a.md"
+git -C "$repo" add .gitignore scripts/dev docs/a.md
+git -C "$repo" commit -q -m base
+base_commit="$(git -C "$repo" rev-parse HEAD)"
+printf 'more\n' >>"$repo/docs/a.md"
+git -C "$repo" commit -q -am change
+assert_pass "$repo"
+assert_scan_fails "$repo" grep "" ""
+assert_scan_fails "$repo" grep 1 ""
+assert_scan_fails "$repo" ls-files "" ""
+assert_scan_fails "$repo" diff "" "$base_commit"
+assert_scan_fails "$repo" diff 1 "$base_commit"
+# Each other kind of site: a plain grep over a shipped surface it cannot read, and the base's debt
+# list that git cannot show.
+printf 'readme\n' >"$repo/README.md"
+git -C "$repo" add README.md
+git -C "$repo" commit -q -m readme
+chmod 000 "$repo/README.md"
+assert_scan_fails "$repo" no-such-subcommand "" ""
+chmod 644 "$repo/README.md"
+repo="$(make_repo scan-fails-debt)"
+mkdir -p "$repo/docs"
+printf 'clean\n' >"$repo/docs/a.md"
+: >"$repo/scripts/dev/public-hygiene-debt.tsv"
+git -C "$repo" add .gitignore scripts/dev docs/a.md
+git -C "$repo" commit -q -m base
+base_commit="$(git -C "$repo" rev-parse HEAD)"
+printf 'more\n' >>"$repo/docs/a.md"
+git -C "$repo" commit -q -am change
+assert_scan_fails "$repo" show "" "$base_commit"
+# A failure record the check cannot write: a stub mktemp hands out a path in a read-only
+# directory. A clean tree then ends "record is gone"; a failing scan stops at once. Both exit 2.
+ro="$tmp_root/readonly-ledger"
+mkdir -p "$ro" "$tmp_root/mktempstub" && chmod 555 "$ro"
+printf '#!/bin/sh\necho "%s/ledger"\n' "$ro" >"$tmp_root/mktempstub/mktemp"
+chmod +x "$tmp_root/mktempstub/mktemp"
+for sub in no-such-subcommand grep; do
+  rc=0
+  (cd "$repo" && PATH="$tmp_root/mktempstub:$stub_dir:$PATH" FAIL_SUB="$sub" \
+    scripts/dev/check-public-repo-hygiene.sh >"$tmp_root/ro.out" 2>&1) || rc=$?
+  if [[ "$rc" -ne 2 ]]; then
+    cat "$tmp_root/ro.out" >&2
+    echo "expected exit 2 when the failure record cannot be written (failing: $sub), got $rc" >&2
+    exit 1
+  fi
+done
+chmod 755 "$ro"
+
 # The whole check runs on every push, so its time on this tree is shown here,
 # where a slow regression is visible. Informational: the verdict on the real
 # tree is the CI step's job, not this fixture suite's.

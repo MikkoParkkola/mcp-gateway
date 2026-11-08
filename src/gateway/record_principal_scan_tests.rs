@@ -276,7 +276,10 @@ fn g_logsites_every_production_logger_is_keyed_or_never_keys() {
         "src/gateway/server/tools_changed/audience_fixture.rs", // tools_changed.rs
         "src/gateway/ui/backends/signin_fixture.rs", // ui/backends/signin.rs
     ];
+    // Startup's recovery preview opens the surviving config's log for one
+    // gateway-envelope intent, which names no caller, so it never keys.
     const OPENERS: &[&str] = &[
+        "src/config_reload/replace_audit.rs",
         "src/gateway/server/build_meta.rs",
         "src/gateway/server/control_plane_store.rs",
     ];
@@ -316,10 +319,17 @@ fn g_logsites_every_production_logger_is_keyed_or_never_keys() {
     hits.sort();
     hits.dedup();
     assert_eq!(hits, OPENERS, "a new production logger opener");
-    let build_meta = std::fs::read_to_string(root.join(OPENERS[0])).expect("build_meta");
+    let build_meta =
+        std::fs::read_to_string(root.join("src/gateway/server/build_meta.rs")).expect("build_meta");
     assert!(
         build_meta.contains(".with_record_key(Arc::clone(&record_key))"),
         "build_meta_mcp keys the logger it opens"
+    );
+    let replace_audit = std::fs::read_to_string(root.join("src/config_reload/replace_audit.rs"))
+        .expect("replace_audit");
+    assert!(
+        !replace_audit.contains("caller_key") && replace_audit.contains("AuditEnvelope::gateway()"),
+        "a config intent now names a caller, so startup's logger needs the record key"
     );
     assert!(
         !mentions_caller_key(&root.join("src/control_plane")),
