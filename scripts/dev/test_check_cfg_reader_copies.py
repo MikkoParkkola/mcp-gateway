@@ -111,6 +111,9 @@ class Detection(Tree):
             'fn judge(l: &str) -> bool {\n    /* // */ l == "#[cfg(test)]"\n}\n',
             # Block comments nest: the copy after the outer `*/` is code.
             'fn judge(l: &str) -> bool {\n    /* outer /* inner */ // */ l == "#[cfg(test)]"\n}\n',
+            # Raw C strings are literals too (the shared lexer reads them).
+            'fn judge(l: &str) -> bool {\n    let _s = cr#"say "//" here"#; l == "#[cfg(test)]"\n}\n',
+            'fn judge(l: &str) -> bool {\n    let _s = cr#"say "/*" here"#; l == "#[cfg(test)]"\n}\n',
         ):
             with self.subTest(body=body):
                 self.write("src/a.rs", body)
