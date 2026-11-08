@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! A task's replay entry persisted in its row (MIK-9379): written by the
+//! A task's replay entry persisted in its row: written by the
 //! settle that stores the result, rebuilt by a read that finds no entry in
 //! memory. The fingerprints are keyed per process, so the persisted form
 //! carries the epoch it was made under and a process with another epoch

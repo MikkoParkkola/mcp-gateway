@@ -386,7 +386,7 @@ fn replay_sources(receipts: &[Receipt]) -> Vec<crate::security::firewall::Replay
 }
 
 /// The persisted replay snapshot of the task result `stored` this settle
-/// writes (MIK-9379): built from what this delivery staged so far, read in
+/// writes: built from what this delivery staged so far, read in
 /// place (the commit after the settle still records it), for the settle's
 /// own compare-and-set to store. `None` with relay detection off or
 /// nothing to replay.
@@ -460,7 +460,7 @@ pub(crate) fn stage_task_replay(meta: &MetaMcp, who: RelayKey<'_>, stored: &Comm
             id: stored.task.id().to_owned(),
             revision: stored.revision,
         };
-        // MIK-9379: the entry in memory, else rebuilt from the row's own
+        // The entry in memory, else rebuilt from the row's own
         // snapshot, pending and held by this delivery until its write; the
         // task's TTL bounds it from this read (24 h without one).
         let retention = stored.task.ttl_ms().map_or(

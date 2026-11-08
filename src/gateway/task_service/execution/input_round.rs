@@ -192,7 +192,7 @@ impl<'a> Settling<'a> {
     ) {
         let ids = (self.principal, self.id, self.revision);
         let mut provenance = self.provenance();
-        // MIK-9379: the replay snapshot rides the settle's own
+        // The replay snapshot rides the settle's own
         // compare-and-set, so the row that becomes readable already holds
         // it; nothing is captured in memory until a read rebuilds it.
         if dispatched && let TaskTransition::Complete(result) = &event {

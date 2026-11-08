@@ -662,7 +662,7 @@ fn g47_parallel_commits_and_replays_on_a_shared_store_each_find_their_own_entry(
 }
 
 /// r16: a capture is stored pending under an effective `off`, because
-/// nothing is delivered yet (the only capture mode since MIK-9379: a
+/// nothing is delivered yet (the only capture mode: a
 /// task's entry is persisted in its row, never captured at commit).
 #[test]
 fn r16_a_capture_under_off_is_stored_pending() {

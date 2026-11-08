@@ -166,7 +166,7 @@ async fn g27b_a_withheld_notify_frame_commits_nothing() {
     );
 }
 
-/// MIK-9379: [`settled_with_listener`] without any tasks/get: the store row
+/// [`settled_with_listener`], without any tasks/get: the store row
 /// is polled and the worker joined, so only the frame reads the task.
 async fn settled_unread_with_listener(key: &str) -> (Rig, String, Frames) {
     let (beta, mut gate) = MockBackend::holding(Answer::Sequence(vec![text(OTHER_PROSE)]));
@@ -208,7 +208,7 @@ fn publish(rig: &Rig, action: crate::security::firewall::CollusionAction) {
     rig.state.live_config.set(config);
 }
 
-/// K14 (MIK-9379): a delivered frame rebuilds the entry from the row and
+/// K14: a delivered frame rebuilds the entry from the row and
 /// settles it at its write: under block it is kept; under off it goes.
 /// Mutants: settle at storage; frames read the plain lookup (no rebuild).
 #[tokio::test]
@@ -230,7 +230,7 @@ async fn k14_a_delivered_frame_settles_the_rebuilt_entry_by_its_action() {
     }
 }
 
-/// K14 (MIK-9379): a withheld frame (minimal, no output) rebuilds and
+/// K14: a withheld frame (minimal, no output) rebuilds and
 /// settles nothing.
 /// Mutant: rebuild before the stored-read gate.
 #[tokio::test]

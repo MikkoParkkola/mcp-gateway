@@ -83,7 +83,7 @@ impl MetaMcp {
 }
 
 impl MetaMcp {
-    /// MIK-9379: the `-32002` refusal of a read of `stored` whose persisted
+    /// The `-32002` refusal of a read of `stored` whose persisted
     /// replay snapshot this process cannot track (another epoch, the
     /// untrackable marker), under the collusion action published now, at
     /// the read's start. Under `observe` the fact is counted and audited

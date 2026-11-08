@@ -401,7 +401,7 @@ fn count_plan_replay_skipped<F: std::future::Future>(
 }
 
 /// [`count_plan_replay_skipped`] for the relay counter
-/// (`mcp_gateway_collusion_relay_total`), by `reason` (MIK-9379: an
+/// (`mcp_gateway_collusion_relay_total`), by `reason` (an
 /// untrackable stored read is counted `untrackable`).
 #[cfg(all(test, feature = "metrics", feature = "firewall"))]
 fn count_relay_reason<F: std::future::Future>(reason: &str, measured: F) -> (F::Output, u64) {

@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! MIK-9379: a plan task's replay snapshot lives in its row, written by the
+//! A plan task's replay snapshot lives in its row, written by the
 //! settle that stores the result, and a read rebuilds the in-memory entry
-//! from the row it holds; the write that delivers it settles it (MIK-9267's
+//! from the row it holds; the write that delivers it settles it (the pending-snapshot
 //! rule). A snapshot this process cannot track is refused under block,
 //! decided at the read's start. Rows K1-K26 of the test plan.
 

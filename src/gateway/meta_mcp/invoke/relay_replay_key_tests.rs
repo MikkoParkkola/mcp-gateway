@@ -66,5 +66,5 @@ async fn t3_a_task_key_in_the_sync_lookup_slot_stages_and_looks_up_nothing() {
 }
 
 // T4 (an empty task commit removes the entry with detection off) is gone
-// with the commit-time task capture it pinned (MIK-9379: a task's entry
+// with the commit-time task capture it pinned (a task's entry
 // is persisted in its row and rebuilt by a read, never captured at commit).

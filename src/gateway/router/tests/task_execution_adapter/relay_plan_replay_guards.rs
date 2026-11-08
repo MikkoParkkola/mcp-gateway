@@ -503,7 +503,7 @@ async fn g46b_a_refused_read_with_an_expired_entry_leaves_it_for_the_authorized_
     );
 }
 
-// G32 (a restarted gateway renews nothing) moved to MIK-9379's
+// G32 (a restarted gateway renews nothing) moved to
 // `relay_plan_replay_snapshot_guards`: a same-process reopen now renews from
 // the persisted snapshot, and another epoch is refused under block.
 

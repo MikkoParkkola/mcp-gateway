@@ -134,7 +134,7 @@ impl MetaMcp {
         if read == StoredRead::Read && self.deferred_cooldown_refuses(stored, session, caller) {
             return Some(unrecorded(retry_later(id, None)));
         }
-        // MIK-9379: a result this process cannot track for relay is refused
+        // A result this process cannot track for relay is refused
         // under block, decided now, at the read's start (the stated limit).
         if let Some(error) = self.untrackable_refusal(stored, session, caller.api_key_name) {
             return Some(refused((error, (DecisionKind::Firewall, None))));

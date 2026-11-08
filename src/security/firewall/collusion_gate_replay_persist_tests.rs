@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! The persisted replay snapshot (MIK-9379): a round trip records what the
+//! The persisted replay snapshot: a round trip records what the
 //! in-memory entry recorded (E3 equivalence), text the stored result does
 //! not deliver is never persisted (K27, K20a), another epoch is untrackable
 //! (K26a), and two reads that both find nothing leave one entry (K16).

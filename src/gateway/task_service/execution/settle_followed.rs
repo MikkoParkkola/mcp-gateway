@@ -102,7 +102,7 @@ pub(super) async fn settle_followed(
         )
         .await;
     // A single-target followed result has no in-plan receipt: it persists
-    // no replay snapshot and captures nothing (MIK-9379).
+    // no replay snapshot and captures nothing.
     state.meta_mcp().commit_staged_relay(stored);
 }
 
