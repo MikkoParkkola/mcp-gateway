@@ -73,10 +73,11 @@ SHARDS: dict[str, dict[str, list[tuple[str, list[str], list[str], int]]]] = {
     # second build cost 19-86 min, which #4562 removed). The `lib-b` job builds
     # it, uploads it and runs the heavier half (Linux 45b: 1237 s of 2170 s);
     # the `int` job, after its own suite, runs the other half from that binary
-    # (PREBUILT). Floors: Linux 45b's halves less the 40 tests macOS keeps off.
+    # (PREBUILT). Floors: the halves the pilot selected (run 42527204476),
+    # 9539 + 8161 = the single shard's 17700.
     "macos": {
-        "lib-b": [(*_LIB_B, 9500)],
-        "lib-a": [(*_LIB_A, 8100)],
+        "lib-b": [(*_LIB_B, 9539)],
+        "lib-a": [(*_LIB_A, 8161)],
         "int": [("suite", ["--bins", "--test", GLOB_ALL], [], 2205), ("doc", ["--doc"], [], 55)],
     },
 }
