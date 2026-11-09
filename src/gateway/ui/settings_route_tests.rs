@@ -158,6 +158,10 @@ fn s8_restart_matches_whole_segments() {
         restart_fields(&["backends.owner"], &reload),
         vec!["backends.owner".to_owned()]
     );
+    // A pending name that is a string prefix of a field id, but not a whole
+    // segment of it, names a different section: never listed.
+    reload.pending_restart_fields = vec!["cost".into()];
+    assert!(restart_fields(&["cost_governance.enabled"], &reload).is_empty());
     reload.pending_restart_fields.clear();
     assert!(restart_fields(&["backends.owner"], &reload).is_empty());
 }
