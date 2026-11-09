@@ -239,6 +239,10 @@ fn r22_first_signing_after_a_torn_tail_is_a_first_start() {
     drop(fx.open(true, 0));
     assert_eq!(sidecar(&fx)["state"], "open");
     assert_eq!(all_events(&fx), [0, 0, 0, 0]);
+    // P is the length after the repair: this open appended nothing, and any
+    // record the repair wrote lies below it (kimi code review).
+    let len = std::fs::metadata(&fx.path).unwrap().len();
+    assert_eq!(sidecar(&fx)["offset"].as_u64(), Some(len));
 }
 
 use super::sigstart::{self, Fault, LegacyFile, SigStart, State};
@@ -253,6 +257,7 @@ fn body(offset: u64, legacy: Vec<LegacyFile>) -> SigStart {
         legacy,
         unanchored: false,
         announced: true,
+        signed_found: true,
     }
 }
 
@@ -281,11 +286,19 @@ fn r14_sidecar_bytes_round_trip_and_refuse_damage() {
     assert_eq!(sigstart::decode(moved.as_bytes(), secret), Err(Fault::Mac));
 }
 
-/// A one-file log whose first `p` bytes are legacy, frozen.
+/// A one-file log of JSON lines `{"n":i}` padded to `width` bytes each
+/// (newline included), its first `p` bytes frozen as legacy.
 #[cfg(feature = "webui")]
-fn frozen(fx: &Fixture, bytes: &[u8], p: u64) -> super::sigstart::Anchor {
+fn frozen(fx: &Fixture, lines: usize, width: usize, p: u64) -> super::sigstart::Anchor {
     use super::sigstart::{Anchor, CHUNK};
-    std::fs::write(&fx.path, bytes).unwrap();
+    let mut bytes = Vec::new();
+    for i in 0..lines {
+        let mut l = format!("{{\"n\":{i}}}");
+        l.push_str(&" ".repeat(width - 1 - l.len()));
+        l.push('\n');
+        bytes.extend_from_slice(l.as_bytes());
+    }
+    std::fs::write(&fx.path, &bytes).unwrap();
     let chunks = (0..p.div_ceil(CHUNK))
         .map(|i| {
             let s = usize::try_from(i * CHUNK).unwrap();
@@ -303,60 +316,83 @@ fn frozen(fx: &Fixture, bytes: &[u8], p: u64) -> super::sigstart::Anchor {
     ))
 }
 
-/// R24 (round 2 HI1): positions P-1, P and P+1 against an anchor at P.
+/// Line `i` of a [`frozen`] file: its position (newline excluded) and record.
+#[cfg(feature = "webui")]
+fn nth(i: u64, width: u64) -> (super::sigstart::LinePos, serde_json::Value) {
+    let pos = super::sigstart::LinePos::At {
+        segment: 0,
+        offset: i * width,
+        len: width - 1,
+    };
+    (pos, serde_json::json!({ "n": i }))
+}
+
+/// R24 (round 2 HI1): positions before, at and after P, with P on a line
+/// boundary; a line crossing P is not legacy (round 3 J1).
 #[cfg(feature = "webui")]
 #[test]
 fn r24_the_boundary_is_at_p() {
     use super::sigstart::{Checked, LinePos, Placed};
     let fx = Fixture::new();
-    let a = frozen(&fx, &[b'x'; 64], 32);
-    let at = |offset| LinePos::At {
-        segment: 0,
-        offset,
-        len: 1,
-    };
+    let a = frozen(&fx, 8, 16, 64);
     let mut c = Checked::default();
+    let (before, e3) = nth(3, 16);
     assert_eq!(
-        a.place(&fx.path, at(31), &mut c),
+        a.place(&fx.path, before, &e3, &mut c),
         Placed::Legacy { unanchored: false }
     );
+    let (at_p, e4) = nth(4, 16);
     assert_eq!(
-        a.place(&fx.path, at(32), &mut c),
+        a.place(&fx.path, at_p, &e4, &mut c),
         Placed::Invalid("sig_missing")
     );
+    let (after, e5) = nth(5, 16);
     assert_eq!(
-        a.place(&fx.path, at(33), &mut c),
+        a.place(&fx.path, after, &e5, &mut c),
         Placed::Invalid("sig_missing")
     );
-    // A line that starts below P but runs past it is not legacy (round 3 J1).
     let crossing = LinePos::At {
         segment: 0,
-        offset: 30,
-        len: 4,
+        offset: 48,
+        len: 20,
     };
     assert_eq!(
-        a.place(&fx.path, crossing, &mut c),
+        a.place(&fx.path, crossing, &e3, &mut c),
         Placed::Invalid("legacy_unlisted")
     );
 }
 
+/// R38 (code review C2): a record the reader serves must be the one in the
+/// verified bytes: the right position with another record is an edit.
+#[cfg(feature = "webui")]
+#[test]
+fn r38_the_served_record_must_be_the_verified_one() {
+    use super::sigstart::{Checked, Placed};
+    let fx = Fixture::new();
+    let a = frozen(&fx, 8, 16, 64);
+    let mut c = Checked::default();
+    let (pos, _) = nth(2, 16);
+    let forged = serde_json::json!({ "n": 99 });
+    assert_eq!(
+        a.place(&fx.path, pos, &forged, &mut c),
+        Placed::Invalid("legacy_edited")
+    );
+}
+
 /// R31 (round 3 J7): a record near the end of a 5 MiB legacy range hashes
-/// only the chunks its line touches, and classifies without the rest.
+/// only the chunk its line sits in.
 #[cfg(feature = "webui")]
 #[test]
 fn r31_a_large_legacy_file_hashes_only_the_touched_chunks() {
-    use super::sigstart::{CHUNK, Checked, LinePos, Placed};
+    use super::sigstart::{CHUNK, Checked, Placed};
     let fx = Fixture::new();
-    let p = 5 * CHUNK;
-    let a = frozen(&fx, &vec![b'y'; usize::try_from(p).unwrap()], p);
+    let width = 64_u64;
+    let lines = 5 * CHUNK / width;
+    let a = frozen(&fx, usize::try_from(lines).unwrap(), 64, lines * width);
     let mut c = Checked::default();
-    let near_end = LinePos::At {
-        segment: 0,
-        offset: p - CHUNK / 2,
-        len: 100,
-    };
+    let (pos, e) = nth(lines - 10, width);
     assert_eq!(
-        a.place(&fx.path, near_end, &mut c),
+        a.place(&fx.path, pos, &e, &mut c),
         Placed::Legacy { unanchored: false }
     );
     assert_eq!(c.hashed(), 1, "one chunk hashed, not five");
@@ -519,4 +555,34 @@ fn r36_a_kept_hwm_rules_out_the_v3_shape() {
     std::fs::remove_file(fx.sidecar()).unwrap();
     drop(fx.open(true, 0));
     assert_eq!(sidecar(&fx)["state"], "closed");
+}
+
+/// R30 (b) (code review M5): a keyed-`.hwm`-only rebuild killed before its
+/// record still reports `signed_found: false` when the next open writes it.
+#[test]
+fn r30b_a_delayed_rebuilt_record_keeps_signed_found() {
+    let fx = Fixture::new();
+    let log = fx.open(true, 0);
+    Fixture::calls(&log, 0, 3);
+    drop(log);
+    let text = std::fs::read_to_string(&fx.path).unwrap();
+    let mut out = String::new();
+    for line in text.lines() {
+        let mut v: Value = serde_json::from_str(line).unwrap();
+        super::sigstart_fixture::strip_sig(&mut v);
+        out.push_str(&(v.to_string() + "\n"));
+    }
+    std::fs::write(&fx.path, out).unwrap();
+    std::fs::remove_file(fx.sidecar()).unwrap();
+    open_killed_at(&fx, super::kill::At::BeforeAnnounce);
+    assert_eq!(all_events(&fx), [0, 0, 0, 0]);
+    drop(fx.open(true, 0));
+    let rebuilt: Vec<Value> = fx
+        .records()
+        .into_iter()
+        .map(|(_, v)| v)
+        .filter(|v| v["event"] == REBUILT)
+        .collect();
+    assert_eq!(rebuilt.len(), 1);
+    assert_eq!(rebuilt[0]["signed_found"], false);
 }

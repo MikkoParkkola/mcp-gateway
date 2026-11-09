@@ -47,6 +47,9 @@ struct Seen {
     manifest: Value,
     csv_signature: String,
     csv_integrity: String,
+    csv_unanchored: String,
+    /// The list page's log-wide anchor report.
+    list_anchor: Value,
 }
 
 async fn seen(fx: &Fixture, tool: &str) -> Seen {
@@ -55,6 +58,7 @@ async fn seen(fx: &Fixture, tool: &str) -> Seen {
         &json_body(list_page(&logs, &Access::All, &ListQuery::default())).await,
     )
     .unwrap();
+    let list_anchor = list["signing_anchor"].clone();
     let list = list["rows"]
         .as_array()
         .unwrap()
@@ -105,6 +109,8 @@ async fn seen(fx: &Fixture, tool: &str) -> Seen {
         manifest,
         csv_signature: row[col("signature")].clone(),
         csv_integrity: row[col("integrity")].clone(),
+        csv_unanchored: row[col("unanchored")].clone(),
+        list_anchor,
     }
 }
 
@@ -166,15 +172,42 @@ async fn r1_stripped_after_signing_began_reads_invalid_everywhere() {
     assert_invalid(&seen(&fx, "tool_1").await, "sig_missing");
 }
 
-/// R3 (SIGSTATE.3): an outcome edited from refused to delivered is never
-/// served as a definitive effect: the receipt carries the integrity failure.
+/// R3 (SIGSTATE.3): a refused call edited to delivered (outcome `ok`, its
+/// error code removed), rehashed and stripped, is an integrity failure in
+/// every reader, the receipt included, never a plain delivered row.
 #[tokio::test]
 async fn r3_an_edited_outcome_is_an_integrity_failure_not_an_effect() {
-    let fx = attacked(3, 2, |v| {
-        v["error_code"] = Value::Null;
+    use crate::security::audit::{AuditEnvelope, AuditOutcome, AuditWho, InvocationTarget};
+    use crate::security::transparency_log::{CorrelationKey, CorrelationSource};
+    let fx = Fixture::new();
+    let log = fx.open(true, 0);
+    Fixture::calls(&log, 0, 2);
+    let refused = AuditEnvelope {
+        outcome: AuditOutcome::Denied(-32001),
+        ..AuditEnvelope::ok(AuditWho::from_actor_id("c"))
+    };
+    log.log_invocation_correlated(
+        CorrelationKey {
+            id: "s",
+            source: CorrelationSource::SessionId,
+        },
+        &refused,
+        InvocationTarget::meta("srv", "tool_refused"),
+        "sha256:aa",
+        None,
+    )
+    .unwrap();
+    drop(log);
+    assert_eq!(
+        seen(&fx, "tool_refused").await.list["outcome"],
+        "blocked",
+        "a refusal first"
+    );
+    fx.strip("tool_refused", |v| {
+        v["outcome"] = "ok".into();
         v.as_object_mut().unwrap().remove("error_code");
     });
-    let s = seen(&fx, "tool_2").await;
+    let s = seen(&fx, "tool_refused").await;
     assert_invalid(&s, "sig_missing");
     assert_eq!(
         s.receipt["integrity"], "sig_missing",
@@ -269,7 +302,11 @@ async fn r19_edits_to_legacy_bytes_are_caught() {
         .flat_map(|l| [l, "\n"])
         .collect();
     std::fs::write(&fx.path, kept).unwrap();
-    assert_invalid(&seen(&fx, "tool_1").await, "legacy_edited");
+    let s = seen(&fx, "tool_1").await;
+    assert_invalid(&s, "legacy_edited");
+    // The log-wide report names the legacy fault a row met (code review M3).
+    assert_eq!(s.manifest["signing_anchor"]["invocation"], "legacy_edited");
+    assert_eq!(s.manifest["anchor_faults"], 1);
 
     // (b) a legacy line replaced by a stripped signed record of the same
     // length (padded with spaces), P unchanged.
@@ -326,6 +363,8 @@ async fn r21_an_anchor_fault_is_reported_with_no_failing_row() {
     assert_eq!(s.manifest["signing_anchor"]["invocation"], "mac");
     assert_eq!(s.manifest["anchor_faults"], 1);
     assert_eq!(s.receipt["signing_anchor"], "mac");
+    // The list page reports it too (code review M2).
+    assert_eq!(s.list_anchor["invocation"], "mac");
 }
 
 /// Strip `tool` wherever it is: the active file or a sealed segment.
@@ -398,6 +437,7 @@ async fn r27_unanchored_legacy_flags_only_the_earliest_records() {
     assert_state(&s, "unsigned");
     assert_eq!(s.list["unanchored"], true);
     assert_eq!(s.ndjson["unanchored"], true);
+    assert_eq!(s.csv_unanchored, "true", "csv (code review M4)");
     fx.strip("tool_7", |_| {});
     assert_invalid(&seen(&fx, "tool_7").await, "sig_missing");
 }
@@ -637,4 +677,168 @@ async fn r32c_own_file_coverage_short_of_p_is_tampering() {
     let s = seen(&fx, "tool_0").await;
     assert_eq!(s.list["signature"], "invalid");
     assert_eq!(s.manifest["signing_anchor"]["invocation"], "coverage");
+}
+
+/// Re-sign a sidecar after `edit`, so only its content, not its MAC, is wrong.
+fn resign(
+    fx: &Fixture,
+    edit: impl FnOnce(&mut crate::security::transparency_log::sigstart::SigStart),
+) {
+    use crate::security::transparency_log::sigstart::{self, SigStart};
+    let raw = std::fs::read_to_string(fx.sidecar()).unwrap();
+    let mut v: Value = serde_json::from_str(raw.trim_end()).unwrap();
+    v.as_object_mut().unwrap().remove("mac");
+    let mut body: SigStart = serde_json::from_value(v).unwrap();
+    edit(&mut body);
+    std::fs::write(
+        fx.sidecar(),
+        sigstart::encode(&body, SECRET.as_bytes()).unwrap(),
+    )
+    .unwrap();
+}
+
+/// R39 (kimi code review): after a fail-closed rebuild every unsigned record
+/// reads `invalid` in every reader, a legacy one included, and the manifest
+/// reports `closed`.
+#[tokio::test]
+async fn r39_after_a_closed_rebuild_every_unsigned_record_is_invalid() {
+    let fx = turned_on_midway();
+    std::fs::remove_file(fx.sidecar()).unwrap();
+    drop(fx.open(true, 0));
+    let s = seen(&fx, "tool_0").await;
+    assert_invalid(&s, "sig_missing");
+    assert_eq!(s.manifest["signing_anchor"]["invocation"], "closed");
+    assert_eq!(s.manifest["anchor_faults"], 1);
+    fx.strip("tool_3", |_| {});
+    assert_invalid(&seen(&fx, "tool_3").await, "sig_missing");
+}
+
+/// R8 (condition 4c) with legacy history: log B's sidecar, valid under the
+/// same secret and with its own legacy digests, copied over log A's, and A's
+/// open record rewritten to B's id: A's legacy bytes fail B's digests.
+#[tokio::test]
+async fn r8_a_copied_sidecar_with_legacy_digests_exempts_nothing() {
+    let a = turned_on_midway();
+    let b = turned_on_midway();
+    std::fs::copy(b.sidecar(), a.sidecar()).unwrap();
+    let b_id = b.records()[0].1["log_id"].clone();
+    rewrite(&a.path, |v| {
+        let hit = v["event"] == "audit_segment_opened";
+        if hit {
+            v["log_id"] = b_id.clone();
+            strip_sig(v);
+        }
+        hit
+    });
+    let s = seen(&a, "tool_1").await;
+    assert_invalid(&s, "legacy_edited");
+}
+
+/// R32 (b), re-signed: a sidecar whose MAC is valid but which leaves out an
+/// earlier legacy file fails coverage, and no unsigned record is exempt.
+#[tokio::test]
+async fn r32b_a_resigned_sidecar_missing_an_earlier_file_fails_coverage() {
+    let fx = Fixture::new();
+    let plain = fx.open(false, 1024);
+    Fixture::calls(&plain, 0, 12);
+    drop(plain);
+    let log = fx.open(true, 1024);
+    Fixture::calls(&log, 12, 2);
+    drop(log);
+    resign(&fx, |b| {
+        assert!(b.legacy.len() >= 2, "more than one legacy file");
+        b.legacy.remove(0);
+    });
+    let s = seen(&fx, "tool_13").await;
+    assert_eq!(s.manifest["signing_anchor"]["invocation"], "coverage");
+    assert_eq!(s.list_anchor["invocation"], "coverage");
+    let legacy = seen(&fx, "tool_11").await;
+    assert_invalid(&legacy, "sigstart_coverage");
+}
+
+/// R40 (kimi code review): the live stream's catch-up places each record at
+/// its own offset: a legacy record stays `unsigned`, a stripped one after
+/// signing began reads `invalid` with its reason.
+#[test]
+fn r40_live_catch_up_judges_each_record_at_its_place() {
+    use super::forward::{Log, Search, StreamKind, head, rows_after};
+    use super::reader::Limits;
+    let fx = turned_on_midway();
+    fx.strip("tool_3", |v| v["response_hash"] = "sha256:ff".into());
+    let live = Log {
+        path: &fx.path,
+        kind: StreamKind::Activity,
+        generation: 0,
+        secret: Some(SECRET.as_bytes()),
+    };
+    let stop = head(&live).unwrap();
+    let wide = Limits {
+        matches: 200,
+        bytes: 8 << 20,
+    };
+    let page = rows_after(
+        &live,
+        None,
+        stop.as_ref(),
+        &Access::All,
+        wide,
+        &mut Search::default(),
+    )
+    .unwrap();
+    let row = |tool: &str| {
+        page.rows
+            .iter()
+            .map(|s| s.row.clone())
+            .find(|r| r["tool"] == tool)
+            .unwrap_or_else(|| panic!("{tool} not caught up"))
+    };
+    assert_eq!(row("tool_0")["signature"], "unsigned");
+    assert_eq!(row("tool_3")["signature"], "invalid");
+    assert_eq!(row("tool_3")["integrity"], "sig_missing");
+}
+
+/// R7 (b) (kimi code review): `.sigstart` deleted under a live writer:
+/// readers fail closed at once (`missing`), and the writer's next rebuild
+/// writes exactly one rebuilt record and a `closed` sidecar.
+#[tokio::test]
+async fn r7b_a_sidecar_deleted_under_a_live_writer() {
+    use crate::security::transparency_log::sigstart_fixture::events;
+    let fx = Fixture::new();
+    let plain = fx.open(false, 0);
+    Fixture::calls(&plain, 0, 2);
+    drop(plain);
+    let log = fx.open(true, 0);
+    Fixture::calls(&log, 2, 2);
+    std::fs::remove_file(fx.sidecar()).unwrap();
+    let s = seen(&fx, "tool_0").await;
+    assert_invalid(&s, "sigstart_missing");
+    assert_eq!(s.list_anchor["invocation"], "missing");
+    // A synced append re-reads the log, which runs open-time recovery.
+    let mut f = serde_json::Map::new();
+    f.insert("kind".into(), "control_plane_audit".into());
+    f.insert("action".into(), "probe".into());
+    log.append_event_synced(f, &crate::security::audit::AuditEnvelope::gateway())
+        .unwrap();
+    drop(log);
+    assert_eq!(events(&fx.path, "audit_segment_sigstart_rebuilt"), 1);
+    let raw = std::fs::read_to_string(fx.sidecar()).expect("rebuilt");
+    assert!(raw.contains("\"state\":\"closed\""), "{raw}");
+}
+
+/// R28 (kimi code review): readers check rows with the secret the running
+/// logger opened with, not a reloaded one, so a reload that changes the
+/// secret does not turn valid rows invalid.
+#[test]
+fn r28_readers_keep_the_running_secret_across_a_reload() {
+    let mut running = crate::config::Config::default();
+    running.security.transparency_log.shared_secret = SECRET.into();
+    let live = crate::config_reload::LiveConfig::new(running.clone());
+    let mut reloaded = running;
+    reloaded.security.transparency_log.shared_secret =
+        "a-different-secret-of-32-bytes-or-more!".into();
+    live.set(reloaded);
+    assert_eq!(
+        super::verification_secret(&live).as_deref(),
+        Some(SECRET.as_bytes())
+    );
 }
