@@ -145,6 +145,11 @@ fn r1b_command_credential_refusals_table() {
         "header-shaped"
     );
     assert_eq!(
+        cmd("curl -H \"Authorization:Bearer tok-0123\""),
+        BAD_CMD,
+        "header-shaped, no space after the colon"
+    );
+    assert_eq!(
         cmd("npx tool --url=https://h/?api_key=k1"),
         BAD_CMD,
         "url in an argument"

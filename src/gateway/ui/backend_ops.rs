@@ -277,9 +277,10 @@ fn command_carries_credential(command: &str) -> bool {
         if url_carries_credential(word) {
             return true;
         }
-        if let Some((name, value)) = word.split_once(": ")
-            && credential_name(name)
-            && literal_value(value)
+        // A header argument, with or without a space after the colon.
+        if let Some((name, value)) = word.split_once(':')
+            && credential_name(name.trim())
+            && literal_value(value.trim_start())
         {
             return true;
         }
