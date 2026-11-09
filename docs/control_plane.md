@@ -60,8 +60,12 @@ Dispatch never reads the control-plane store, so a write there would be
 accepted and ignored. The reason codes are
 `grants_managed_in_identity_grants_file` (use `mcp-gateway identity grants`,
 which edits the file at `security.identity_grants.path`) and
-`policies_managed_in_gateway_config` (set `security.sanitize_input` or
-`security.ssrf_protection`). A decision on another kind still returns 422. The
+`policies_managed_in_gateway_config` (policy is set in gateway config:
+`security.tool_policy`, `security.firewall.rules`,
+`security.firewall.credential_redaction`, `security.firewall.collusion`,
+`security.sanitize_input` and `security.ssrf_protection`, per ADR-029). A policy
+write gets that 409 even when the store is unavailable; a grant write then gets
+503 `CONTROL_STORE_UNAVAILABLE`. A decision on another kind still returns 422. The
 snapshot's grants and policies are the enforced ones; the store's rows for
 those kinds are not shown, and `route.read_only` is always `true`.
 - `base_source`: `explicit` when `control_plane.store_dir` chose the store

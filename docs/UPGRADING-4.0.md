@@ -721,8 +721,9 @@ enforced grant, or show SSRF protection as off while it was on, and it called it
 Those three routes now return **409** with `reason_code`
 `grants_managed_in_identity_grants_file` or `policies_managed_in_gateway_config` (a decision of
 any other kind gets 422). A caller without admin still gets 403. Where the control-plane store
-is unavailable, as in a default Helm install (item 22), they answer **503**
-`CONTROL_STORE_UNAVAILABLE` instead of 409. Nothing is written to the control-plane store or its audit log; the
+is unavailable, as in a default Helm install (item 22), a grant write answers **503**
+`CONTROL_STORE_UNAVAILABLE` instead of 409; a policy write still answers 409, because that store
+never enforces policy. The policy refusal names every gateway config key that holds policy. Nothing is written to the control-plane store or its audit log; the
 admin-action record of item 51 is separate. The page shows
 "Read Only", lists `no_mutation_endpoint` in `current_limits`, reports `GovernanceMutation` as
 unavailable, and adds `authority`, which names where each kind is enforced.
