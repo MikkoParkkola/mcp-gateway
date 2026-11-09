@@ -24,6 +24,16 @@ pub(super) struct Check<'a> {
     inv: (PathBuf, Anchor),
     gov: Option<(PathBuf, Anchor)>,
     checked: RefCell<Checked>,
+    /// The first legacy fault each log showed (invocation, governance): the
+    /// log-wide report names it once a row met it (code review M3).
+    legacy_faults: RefCell<[Option<&'static str>; 2]>,
+}
+
+fn slot(which: Which) -> usize {
+    match which {
+        Which::Invocation => 0,
+        Which::Governance => 1,
+    }
 }
 
 impl<'a> Check<'a> {
@@ -35,6 +45,7 @@ impl<'a> Check<'a> {
             inv: load(inv),
             gov: gov.map(load),
             checked: RefCell::default(),
+            legacy_faults: RefCell::default(),
         }
     }
 
@@ -50,6 +61,7 @@ impl<'a> Check<'a> {
             inv,
             gov,
             checked: RefCell::default(),
+            legacy_faults: RefCell::default(),
         }
     }
 
@@ -62,6 +74,7 @@ impl<'a> Check<'a> {
             inv: (PathBuf::new(), Anchor::NoSecret),
             gov: None,
             checked: RefCell::default(),
+            legacy_faults: RefCell::default(),
         }
     }
 
@@ -75,7 +88,11 @@ impl<'a> Check<'a> {
     /// The log-wide anchor state, as the exports and receipts report it;
     /// `none` for a log this gateway does not keep (no governance log).
     pub(super) fn report(&self, which: Which) -> &'static str {
-        self.log(which).map_or("none", |(_, a)| a.report())
+        let anchor = self.log(which).map_or("none", |(_, a)| a.report());
+        match (anchor, self.legacy_faults.borrow()[slot(which)]) {
+            ("ok", Some(fault)) => fault,
+            _ => anchor,
+        }
     }
 
     /// Judge `line` against its log's anchor.
@@ -92,7 +109,13 @@ impl<'a> Check<'a> {
                 },
                 None => LinePos::Newest,
             };
-            anchor.place(path, pos, &mut self.checked.borrow_mut())
+            let placed = anchor.place(path, pos, &line.entry, &mut self.checked.borrow_mut());
+            if let sigstart::Placed::Invalid(why) = placed
+                && why.starts_with("legacy_")
+            {
+                self.legacy_faults.borrow_mut()[slot(line.log)].get_or_insert(why);
+            }
+            placed
         })
     }
 }

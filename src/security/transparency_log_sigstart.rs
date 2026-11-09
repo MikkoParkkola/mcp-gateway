@@ -61,6 +61,15 @@ pub(crate) struct SigStart {
     pub(crate) unanchored: bool,
     /// Its event record is written. `false` means the next open owes it.
     pub(crate) announced: bool,
+    /// For a `closed` sidecar: whether the lost boundary was found from a
+    /// signed record (or only from a keyed `.hwm`). Kept here so an event a
+    /// crash delayed reports what the open that wrote it found.
+    #[serde(default = "signed_found_default")]
+    pub(crate) signed_found: bool,
+}
+
+fn signed_found_default() -> bool {
+    true
 }
 
 #[derive(Serialize, Deserialize)]
@@ -200,29 +209,71 @@ pub(crate) enum Placed {
 }
 
 #[cfg(feature = "webui")]
-/// Per-request memory of chunks already hashed, so a page of records in one
-/// chunk hashes it once.
+/// Chunks a request kept after their digest verified.
+const KEPT_CHUNKS: usize = 4;
+
+#[cfg(feature = "webui")]
+/// Per-request memory of verified chunks: their bytes, keyed by log path,
+/// segment and chunk (round 1 code review C1: two logs share coordinates),
+/// so a record is compared with the bytes that verified, not re-read ones
+/// (C2). Bounded: at most [`KEPT_CHUNKS`], the oldest re-read when evicted.
 #[derive(Debug, Default)]
-pub(crate) struct Checked(std::collections::HashMap<(u64, u64), bool>);
+pub(crate) struct Checked {
+    kept: std::collections::VecDeque<((std::path::PathBuf, u64, u64), std::rc::Rc<Vec<u8>>)>,
+    hashed: usize,
+}
+
+#[cfg(feature = "webui")]
+impl Checked {
+    /// The verified bytes of `chunk` of segment `seq`, read once through the
+    /// pager (which checks the open record names `seq`, code review M1);
+    /// `None` when unreadable or its digest differs from `want`.
+    fn verified(
+        &mut self,
+        path: &Path,
+        seq: u64,
+        chunk: u64,
+        end: u64,
+        want: &str,
+    ) -> Option<std::rc::Rc<Vec<u8>>> {
+        use std::io::{Read, Seek, SeekFrom};
+        let key = (path.to_path_buf(), seq, chunk);
+        if let Some((_, bytes)) = self.kept.iter().find(|(k, _)| *k == key) {
+            return Some(std::rc::Rc::clone(bytes));
+        }
+        let start = chunk * CHUNK;
+        let mut f = super::pager::open_segment(path, seq, || {}).ok()??;
+        f.seek(SeekFrom::Start(start)).ok()?;
+        let mut buf = Vec::with_capacity(usize::try_from(end - start).ok()?);
+        f.take(end - start).read_to_end(&mut buf).ok()?;
+        self.hashed += 1;
+        if buf.len() as u64 != end - start || hex::encode(sha256_raw(&buf)) != want {
+            return None;
+        }
+        let bytes = std::rc::Rc::new(buf);
+        if self.kept.len() == KEPT_CHUNKS {
+            self.kept.pop_front();
+        }
+        self.kept.push_back((key, std::rc::Rc::clone(&bytes)));
+        Some(bytes)
+    }
+}
 
 #[cfg(all(test, feature = "webui"))]
 impl Checked {
     /// Chunks hashed so far.
     pub(crate) fn hashed(&self) -> usize {
-        self.0.len()
+        self.hashed
     }
 }
 
-/// The kept files of `path` as (seq, file): sealed segments, then the active one.
+/// The kept files of `path` as (seq, file): sealed segments, then the active
+/// one, through the log's one listing rule (it relists across a rotation).
 fn kept(path: &Path) -> io::Result<Vec<(u64, std::path::PathBuf)>> {
-    let sealed = segments::list_segments(path)?;
-    let after = sealed.last().map_or(0, |s| s.seq + 1);
-    let mut out: Vec<_> = sealed.into_iter().map(|s| (s.seq, s.path)).collect();
-    if path.exists() {
-        out.push((
-            segments::active_segment_seq(path, after),
-            path.to_path_buf(),
-        ));
+    let listed = segments::listing(path)?;
+    let mut out: Vec<_> = listed.sealed.into_iter().map(|s| (s.seq, s.path)).collect();
+    if let Some(seq) = listed.active {
+        out.push((seq, path.to_path_buf()));
     }
     Ok(out)
 }
@@ -252,17 +303,6 @@ fn covers(path: &Path, body: &SigStart) -> bool {
         .all(|l| l.chunks.len() as u64 == l.len.div_ceil(CHUNK))
 }
 
-#[cfg(feature = "webui")]
-/// The file holding segment `seq` of `path`: sealed, else the active file.
-fn file_of(path: &Path, seq: u64) -> std::path::PathBuf {
-    let sealed = segments::sealed_path(path, seq);
-    if sealed.exists() {
-        sealed
-    } else {
-        path.to_path_buf()
-    }
-}
-
 /// Hex sha256 of `file`'s bytes `[start, end)`, or `None` when unreadable.
 fn digest(file: &Path, start: u64, end: u64) -> Option<String> {
     use std::io::{Read, Seek, SeekFrom};
@@ -276,7 +316,15 @@ fn digest(file: &Path, start: u64, end: u64) -> Option<String> {
 #[cfg(feature = "webui")]
 impl Anchor {
     /// Place an unsigned record of the log at `path`.
-    pub(crate) fn place(&self, path: &Path, pos: LinePos, checked: &mut Checked) -> Placed {
+    /// `entry` is the record as the reader parsed it: it is exempt only if
+    /// the verified bytes at its position parse to the same record.
+    pub(crate) fn place(
+        &self,
+        path: &Path,
+        pos: LinePos,
+        entry: &serde_json::Value,
+        checked: &mut Checked,
+    ) -> Placed {
         let body = match self {
             Self::NoSecret => return Placed::Legacy { unanchored: false },
             Self::Absent => return Placed::Invalid("sigstart_missing"),
@@ -299,29 +347,41 @@ impl Anchor {
             return Placed::Invalid("legacy_unlisted");
         };
         // A sealed file never changes after its seal: any other length is an
-        // edit. Checked first, so bytes appended to it read as an edit.
-        let file = file_of(path, segment);
-        if segment != body.segment_seq
-            && std::fs::metadata(&file).map(|m| m.len()).ok() != Some(frozen.len)
-        {
-            return Placed::Invalid("legacy_edited");
+        // edit. Checked first, so bytes appended to it read as an edit. The
+        // pager's handle is the file the open record names (code review M1).
+        if segment != body.segment_seq {
+            let len = super::pager::open_segment(path, segment, || {})
+                .ok()
+                .flatten()
+                .and_then(|f| f.metadata().ok())
+                .map(|m| m.len());
+            if len != Some(frozen.len) {
+                return Placed::Invalid("legacy_edited");
+            }
         }
         if offset + len > frozen.len {
             return Placed::Invalid("legacy_unlisted");
         }
+        // The line from the verified chunks themselves, so the record served
+        // is the one that verified (code review C2).
+        let mut line = Vec::new();
         let last = (offset + len).saturating_sub(1) / CHUNK;
         for chunk in offset / CHUNK..=last {
-            let ok = *checked.0.entry((segment, chunk)).or_insert_with(|| {
-                let start = chunk * CHUNK;
-                let end = (start + CHUNK).min(frozen.len);
-                usize::try_from(chunk)
-                    .ok()
-                    .and_then(|i| frozen.chunks.get(i))
-                    .is_some_and(|want| digest(&file, start, end).as_deref() == Some(want))
-            });
-            if !ok {
+            let end = (chunk * CHUNK + CHUNK).min(frozen.len);
+            let want = usize::try_from(chunk)
+                .ok()
+                .and_then(|i| frozen.chunks.get(i));
+            let Some(bytes) = want.and_then(|w| checked.verified(path, segment, chunk, end, w))
+            else {
                 return Placed::Invalid("legacy_edited");
-            }
+            };
+            let from = usize::try_from(offset.max(chunk * CHUNK) - chunk * CHUNK).unwrap_or(0);
+            let to = usize::try_from((offset + len).min(end) - chunk * CHUNK).unwrap_or(0);
+            line.extend_from_slice(bytes.get(from..to).unwrap_or_default());
+        }
+        let same = serde_json::from_slice::<serde_json::Value>(&line).is_ok_and(|v| v == *entry);
+        if !same {
+            return Placed::Invalid("legacy_edited");
         }
         Placed::Legacy {
             unanchored: body.unanchored,
@@ -370,21 +430,47 @@ pub(super) enum Plan {
     FirstStart,
 }
 
-/// Parsed lines of `file` with their offsets and lengths (newline included).
-fn lines_of(file: &Path) -> io::Result<Vec<(u64, u64, serde_json::Value)>> {
+/// Visit each whole line of `file` that parses as a record, with its offset,
+/// until `found` says stop. Streams: a line over the record cap is skipped
+/// without being held whole, and nothing earlier is kept (code review C3:
+/// a v3 file has no size cap). `true` when `found` stopped it.
+fn scan_lines(
+    file: &Path,
+    mut found: impl FnMut(u64, &serde_json::Value) -> bool,
+) -> io::Result<bool> {
     use std::io::BufRead;
+    let cap = super::rotation::MAX_RECORD_BYTES;
     let mut r = io::BufReader::new(std::fs::File::open(file)?);
-    let (mut at, mut out, mut buf) = (0u64, Vec::new(), Vec::new());
+    let (mut at, mut start, mut buf, mut over) = (0u64, 0u64, Vec::new(), false);
     loop {
-        buf.clear();
-        let n = r.read_until(b'\n', &mut buf)? as u64;
-        if n == 0 {
-            return Ok(out);
+        let chunk = r.fill_buf()?;
+        if chunk.is_empty() {
+            // A line with no newline is a torn tail, not a record.
+            return Ok(false);
         }
-        if let Ok(v) = serde_json::from_slice::<serde_json::Value>(&buf) {
-            out.push((at, n, v));
+        let (take, ends) = chunk
+            .iter()
+            .position(|b| *b == b'\n')
+            .map_or((chunk.len(), false), |i| (i + 1, true));
+        if !over && buf.len() + take <= cap {
+            buf.extend_from_slice(&chunk[..take]);
+        } else {
+            over = true;
+            buf.clear();
         }
-        at += n;
+        r.consume(take);
+        at += take as u64;
+        if ends {
+            if !over
+                && let Ok(v) = serde_json::from_slice::<serde_json::Value>(&buf)
+                && found(start, &v)
+            {
+                return Ok(true);
+            }
+            buf.clear();
+            over = false;
+            start = at;
+        }
     }
 }
 
@@ -392,25 +478,31 @@ fn lines_of(file: &Path) -> io::Result<Vec<(u64, u64, serde_json::Value)>> {
 /// verifies under `secret`.
 pub(super) fn first_signed(path: &Path, secret: &[u8]) -> io::Result<Option<FirstSigned>> {
     for (segment, file) in kept(path)? {
-        for (offset, _, v) in lines_of(&file)? {
+        let mut hit = None;
+        scan_lines(&file, |offset, v| {
             let Some(stored) = v.get("entry_hash").and_then(serde_json::Value::as_str) else {
-                continue;
+                return false;
             };
-            let intact = super::recompute_entry_hash(&v).is_ok_and(|h| h == stored);
+            let intact = super::recompute_entry_hash(v).is_ok_and(|h| h == stored);
             if intact
-                && super::verify::is_signed_entry(&v)
-                && super::verify_entry_sig(&v, stored, secret).is_ok()
+                && super::verify::is_signed_entry(v)
+                && super::verify_entry_sig(v, stored, secret).is_ok()
             {
                 let counter = v
                     .get("counter")
                     .and_then(serde_json::Value::as_u64)
                     .unwrap_or(0);
-                return Ok(Some(FirstSigned {
+                hit = Some(FirstSigned {
                     segment,
                     offset,
                     counter,
-                }));
+                });
+                return true;
             }
+            false
+        })?;
+        if hit.is_some() {
+            return Ok(hit);
         }
     }
     Ok(None)
@@ -517,11 +609,12 @@ pub(super) fn body_for(plan: &Plan, path: &Path, log_id: &str) -> io::Result<Opt
             legacy: legacy_below(path, seq, offset)?,
             unanchored,
             announced,
+            signed_found: true,
         })
     };
     Ok(match plan {
         Plan::Nothing | Plan::Owed(_) | Plan::Raise(_) => None,
-        Plan::Rebuild { .. } => Some(SigStart {
+        Plan::Rebuild { signed_found } => Some(SigStart {
             log_id: log_id.to_string(),
             state: State::Closed,
             segment_seq: 0,
@@ -530,6 +623,7 @@ pub(super) fn body_for(plan: &Plan, path: &Path, log_id: &str) -> io::Result<Opt
             legacy: Vec::new(),
             unanchored: false,
             announced: false,
+            signed_found: *signed_found,
         }),
         Plan::Migrate(f) => Some(open(f.segment, f.offset, f.counter, false, false)?),
         Plan::Unanchored(f) => Some(open(f.segment, f.offset, f.counter, true, false)?),
@@ -559,7 +653,6 @@ pub(super) fn publish(path: &Path, body: &SigStart, secret: &[u8]) -> io::Result
 /// The record an owed event writes, and its metric's name.
 pub(super) fn event_of(
     body: &SigStart,
-    signed_found: Option<bool>,
 ) -> (
     &'static str,
     Vec<(&'static str, serde_json::Value)>,
@@ -573,7 +666,7 @@ pub(super) fn event_of(
     match (body.state, body.unanchored) {
         (State::Closed, _) => (
             EV_REBUILT,
-            vec![("signed_found", signed_found.unwrap_or(true).into())],
+            vec![("signed_found", body.signed_found.into())],
             "mcp_audit_sigstart_rebuilt_total",
         ),
         (State::Open, true) => (EV_UNANCHORED, at, "mcp_audit_sigstart_unanchored_total"),
@@ -607,16 +700,12 @@ pub(super) fn announce(
         telemetry_metrics::counter!("mcp_audit_sigstart_invalid_total").increment(1);
         return write(EV_INVALID, vec![("fault", f.as_str().into())]);
     }
-    let signed_found = match plan {
-        Plan::Rebuild { signed_found } => Some(*signed_found),
-        _ => None,
-    };
     let owed = match (plan, written) {
         (Plan::Owed(s), _) => s,
         (_, Some(s)) if !s.announced => s,
         _ => return Ok(()),
     };
-    let (event, fields, metric) = event_of(owed, signed_found);
+    let (event, fields, metric) = event_of(owed);
     tracing::warn!(event, "audit log: signing anchor set");
     telemetry_metrics::counter!(metric).increment(1);
     write(event, fields)?;

@@ -385,6 +385,11 @@ fn list_page(logs: &Logs, access: &Access, query: &ListQuery) -> Response {
         .collect();
     Json(json!({
         "rows": rows,
+        // Log-wide, even when every row here is valid (code review M2).
+        "signing_anchor": {
+            "invocation": check.report(reader::Which::Invocation),
+            "governance": check.report(reader::Which::Governance),
+        },
         "next_cursor": page.next.as_ref().map(cursor::encode),
         "scan_exhausted": page.scan_exhausted,
         "cursor_reset": page.cursor_reset || parsed.token_reset,

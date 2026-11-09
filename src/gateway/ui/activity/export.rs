@@ -95,8 +95,11 @@ pub(super) fn collect(
         truncated: Truncated::None,
         signing_anchor: [Which::Invocation, Which::Governance].map(|w| check.report(w)),
     };
+    // The report is taken when the export ends, after every row was judged,
+    // so a legacy fault a row met is in it (code review M3).
     let done = |mut c: Collected, truncated| {
         c.truncated = truncated;
+        c.signing_anchor = [Which::Invocation, Which::Governance].map(|w| check.report(w));
         Ok(c)
     };
     let mut bytes = 0_usize;
@@ -222,7 +225,7 @@ pub(super) fn ndjson(
 }
 
 /// The CSV columns, in order.
-const COLUMNS: [&str; 31] = [
+const COLUMNS: [&str; 32] = [
     "id",
     "kind",
     "counter",
@@ -247,6 +250,8 @@ const COLUMNS: [&str; 31] = [
     "http_status",
     "signature",
     "integrity",
+    // A legacy record nothing anchors (code review M4).
+    "unanchored",
     "prev_entry_hash",
     "entry_hash",
     "sig",
