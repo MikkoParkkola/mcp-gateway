@@ -594,3 +594,125 @@ fn the_delivery_scope_holds_its_future_once() {
         "scope of a {inner_size} B future is {scoped_size} B: the future is held twice"
     );
 }
+
+/// Every `async fn` whose body ends in `<task local>.scope(.., future).await`
+/// on a future it takes holds that future twice, as the delivery scope did. The
+/// plain `fn .. -> impl Future` form holds it once. Listed exceptions read a
+/// task-local before scoping, which must happen when the future is first
+/// polled, not when it is made.
+#[test]
+fn no_async_fn_holds_the_future_it_scopes_twice() {
+    use syn::visit::Visit;
+    const DELIBERATE: &[(&str, &str)] = &[(
+        "non_interactive",
+        "reads the caller's contention class when first polled",
+    )];
+    struct Scan<'a> {
+        path: &'a str,
+        found: Vec<String>,
+    }
+    fn is_future(bound: &syn::TypeParamBound) -> bool {
+        matches!(bound, syn::TypeParamBound::Trait(t)
+            if t.path.segments.last().is_some_and(|s| s.ident == "Future"))
+    }
+    fn ident_of(ty: &syn::Type) -> Option<String> {
+        match ty {
+            syn::Type::Path(p) if p.qself.is_none() && p.path.segments.len() == 1 => {
+                Some(p.path.segments[0].ident.to_string())
+            }
+            _ => None,
+        }
+    }
+    fn takes_a_future(sig: &syn::Signature) -> Vec<String> {
+        let mut futures: Vec<String> = sig
+            .generics
+            .type_params()
+            .filter(|p| p.bounds.iter().any(is_future))
+            .map(|p| p.ident.to_string())
+            .collect();
+        if let Some(w) = &sig.generics.where_clause {
+            for pred in &w.predicates {
+                if let syn::WherePredicate::Type(t) = pred
+                    && t.bounds.iter().any(is_future)
+                    && let Some(ident) = ident_of(&t.bounded_ty)
+                {
+                    futures.push(ident);
+                }
+            }
+        }
+        sig.inputs
+            .iter()
+            .filter_map(|arg| match arg {
+                syn::FnArg::Typed(pt) => match (&*pt.pat, ident_of(&pt.ty)) {
+                    (syn::Pat::Ident(pat), Some(ty)) if futures.contains(&ty) => {
+                        Some(pat.ident.to_string())
+                    }
+                    _ => None,
+                },
+                syn::FnArg::Receiver(_) => None,
+            })
+            .collect()
+    }
+    fn scopes_it(block: &syn::Block, params: &[String]) -> bool {
+        let Some(syn::Stmt::Expr(syn::Expr::Await(aw), None)) = block.stmts.last() else {
+            return false;
+        };
+        let syn::Expr::MethodCall(call) = &*aw.base else {
+            return false;
+        };
+        call.method == "scope"
+            && call.args.iter().any(|a| {
+                matches!(a, syn::Expr::Path(p)
+                    if p.path.get_ident().is_some_and(|i| params.contains(&i.to_string())))
+            })
+    }
+    impl Scan<'_> {
+        fn check(&mut self, sig: &syn::Signature, block: &syn::Block) {
+            if sig.asyncness.is_none() {
+                return;
+            }
+            let params = takes_a_future(sig);
+            let name = sig.ident.to_string();
+            if !params.is_empty()
+                && scopes_it(block, &params)
+                && !DELIBERATE.iter().any(|(n, _)| *n == name)
+            {
+                self.found.push(format!("{}: {name}", self.path));
+            }
+        }
+    }
+    impl<'ast> Visit<'ast> for Scan<'_> {
+        fn visit_item_fn(&mut self, f: &'ast syn::ItemFn) {
+            self.check(&f.sig, &f.block);
+            syn::visit::visit_item_fn(self, f);
+        }
+        fn visit_impl_item_fn(&mut self, f: &'ast syn::ImplItemFn) {
+            self.check(&f.sig, &f.block);
+            syn::visit::visit_impl_item_fn(self, f);
+        }
+    }
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let mut found = Vec::new();
+    for path in crate::mutant_scan::tracked_rs_files(root).expect("list the sources") {
+        if !path.starts_with("src/") || path.ends_with("_tests.rs") || path.contains("/tests/") {
+            continue;
+        }
+        let Ok(text) = std::fs::read_to_string(root.join(&path)) else {
+            continue;
+        };
+        let Ok(file) = syn::parse_file(&text) else {
+            continue;
+        };
+        let mut scan = Scan {
+            path: &path,
+            found: Vec::new(),
+        };
+        scan.visit_file(&file);
+        found.extend(scan.found);
+    }
+    assert!(
+        found.is_empty(),
+        "async fns that hold the future they scope twice (make each a plain fn returning \
+         the scoped future): {found:?}"
+    );
+}
