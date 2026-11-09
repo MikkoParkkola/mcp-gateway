@@ -283,3 +283,38 @@ fn an_unreadable_log_is_not_no_history() {
         assert!(read.is_err(), "{read:?}");
     }
 }
+
+/// Fail closed: one garbled line anywhere refuses, never "no history".
+#[test]
+fn a_garbled_line_refuses_instead_of_being_skipped() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let log = dir.path().join("audit.jsonl");
+    std::fs::write(
+        &log,
+        "{\"event\":\"tool.invoked\"}\n{\"event\":\"token.iss\n",
+    )
+    .expect("write");
+    let err = history_in(&log).expect_err("a garbled line is not \"no history\"");
+    assert!(err.contains("line 2"), "{err}");
+    let refused = resolve(dir.path(), None, || history_in(&log), recorded).expect_err("refused");
+    assert!(refused.contains("line 2"), "{refused}");
+    assert!(!dir.path().join(FILE).exists(), "no key was created");
+}
+
+/// A hash nested inside a record (the audit identity's shape) is history.
+#[test]
+fn a_hash_nested_under_identity_is_history() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let log = dir.path().join("audit.jsonl");
+    for nested in [
+        "{\"event\":\"token.issued\",\"identity\":{\"subject\":\"s\",\"email_hash\":\"ab\"}}",
+        "{\"event\":\"x\",\"items\":[{\"identity\":{\"email_hash_key_id\":\"cd\"}}]}",
+    ] {
+        std::fs::write(&log, format!("{nested}\n")).expect("write");
+        assert_eq!(history_in(&log), Ok(true), "{nested}");
+        let refused =
+            resolve(dir.path(), None, || history_in(&log), recorded).expect_err("refused");
+        assert!(refused.contains("restore"), "{refused}");
+        assert!(!dir.path().join(FILE).exists(), "no key was created");
+    }
+}

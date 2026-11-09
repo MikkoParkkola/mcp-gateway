@@ -69,20 +69,37 @@ pub(crate) fn creation_fields(key_id: &str) -> serde_json::Map<String, serde_jso
 
 /// Whether any retained segment of the audit log at `log` holds email-hash
 /// history: a creation record, or any record carrying `email_hash` or
-/// `email_hash_key_id`. A segment that cannot be read is an error, never
-/// "no history".
+/// `email_hash_key_id` at any depth. Fails closed: a segment that cannot be
+/// read, or a line that is not a JSON entry, is an error, never "no history".
 pub(crate) fn history_in(log: &Path) -> Result<bool, String> {
-    crate::security::transparency_log::log_contains_entry(log, "email-hash history scan", |e| {
-        e.get("event").and_then(|v| v.as_str()) == Some(CREATED_EVENT)
-            || e.get("email_hash").is_some()
-            || e.get("email_hash_key_id").is_some()
-    })
+    use crate::security::transparency_log::{Malformed, log_contains_entry};
+    log_contains_entry(
+        log,
+        "email-hash history scan",
+        Malformed::Refuse,
+        holds_history,
+    )
     .map_err(|e| {
         format!(
             "cannot read the audit log {} for email-hash history: {e}",
             log.display()
         )
     })
+}
+
+/// Whether `value`, at any depth, is a creation record or carries an
+/// `email_hash` or `email_hash_key_id` field.
+fn holds_history(value: &serde_json::Value) -> bool {
+    match value {
+        serde_json::Value::Object(map) => {
+            map.get("event").and_then(|v| v.as_str()) == Some(CREATED_EVENT)
+                || map.contains_key("email_hash")
+                || map.contains_key("email_hash_key_id")
+                || map.values().any(holds_history)
+        }
+        serde_json::Value::Array(items) => items.iter().any(holds_history),
+        _ => false,
+    }
 }
 
 /// Paths of the key file and its lock under `data_dir`.

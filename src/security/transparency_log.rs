@@ -125,13 +125,13 @@ use entry_hash::{chain_line, sha256_raw, sig_message};
 pub use entry_hash::{recompute_entry_hash, verify_entry_sig};
 pub use log_config::TransparencyLogConfig;
 pub(crate) use verify::is_signed_entry;
-pub(crate) use verify::log_contains_entry;
 #[cfg(test)]
 pub(crate) use verify::verify_segments;
 pub use verify::{
     FailedCheck, VerifyMode, VerifyResult, log_contains_signed_entry, show_session_entries,
     verify_log, verify_log_signed,
 };
+pub(crate) use verify::{Malformed, log_contains_entry};
 
 use crate::security::audit::{AuditEnvelope, AuditWho, InvocationTarget};
 pub use crate::security::audit_rotation_config::{OnDiskFull, RotationConfig};
