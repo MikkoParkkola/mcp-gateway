@@ -133,16 +133,25 @@ pub struct ReservationRequest {
 pub struct ReservationId(u64);
 
 impl ReservationId {
-    /// An id for a store implementation outside this module to hand out.
+    /// A fresh id, unique across every store in the process: no two
+    /// reservations, in this store or another, ever share one, and an id
+    /// cannot be rebuilt from a number.
     #[must_use]
-    pub fn from_raw(raw: u64) -> Self {
-        Self(raw)
+    pub fn new() -> Self {
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        Self(NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed))
     }
 
-    /// The raw value, for a store implementation outside this module.
+    /// The id's number, for a store implementation to key its pending map.
     #[must_use]
     pub fn raw(&self) -> u64 {
         self.0
+    }
+}
+
+impl Default for ReservationId {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -291,7 +300,6 @@ pub const PENDING_WINDOW_SECS: u64 = 30;
 
 #[derive(Default)]
 struct Pending {
-    next: u64,
     slots: std::collections::HashMap<u64, Slot>,
     /// Why a slot left before its owner claimed it (revoked, or reaped past
     /// its deadline), so `activate` answers the reason. The owner's
@@ -419,10 +427,9 @@ impl TokenStore for InMemoryTokenStore {
         let deadline = now
             .checked_add(PENDING_WINDOW_SECS)
             .ok_or(ReserveError::Clock)?;
-        let id = pending.next;
-        pending.next = pending.next.wrapping_add(1);
+        let id = ReservationId::new();
         pending.slots.insert(
-            id,
+            id.raw(),
             Slot {
                 issuer: request.issuer,
                 subject: request.subject,
@@ -430,7 +437,7 @@ impl TokenStore for InMemoryTokenStore {
                 deadline,
             },
         );
-        Ok(ReservationId(id))
+        Ok(id)
     }
 
     fn activate(

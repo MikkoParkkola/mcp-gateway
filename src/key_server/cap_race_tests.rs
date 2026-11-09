@@ -20,7 +20,7 @@ use super::store::{
 };
 
 const CAP: usize = 2;
-const MINTS: usize = 4;
+const MINTS: usize = 5;
 const SUBJECT: &str = "cap-race-subject";
 /// The config default token lifetime, which the harness config keeps.
 const TTL: u64 = 3600;
@@ -119,7 +119,7 @@ async fn concurrent_mints_never_pass_the_identity_cap() {
     );
     assert_eq!(
         statuses,
-        [200, 200, 429, 429],
+        [[200_u16].repeat(CAP), [429_u16].repeat(MINTS - CAP)].concat(),
         "exactly the cap is minted and the rest refused without eviction"
     );
 }

@@ -285,9 +285,12 @@ impl MintReservation {
 
     fn activate(mut self, token: TemporaryToken, now: u64) -> Result<(), ActivateError> {
         // The store either activated the slot or released it: nothing left
-        // for Drop to free.
+        // for Drop to free. Disarmed only once `activate` returns, so a store
+        // that panics inside it still has its pending slot released by Drop
+        // (abort touches pending slots only, never an active token).
+        let result = self.store.activate(&self.id, token, now);
         self.armed = false;
-        self.store.activate(&self.id, token, now)
+        result
     }
 }
 

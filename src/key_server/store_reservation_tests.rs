@@ -77,6 +77,8 @@ fn has_room(store: &InMemoryTokenStore, issuer: &str, now: u64) -> bool {
 #[tokio::test]
 async fn pending_slots_count_against_the_cap_and_stay_invisible() {
     const CAP: usize = 2;
+    // Bearer lookup reads the clock: hold it at the tokens' own time.
+    let _clock = crate::clock::test_clock::at_secs(T0);
     let s = store(CAP);
     let first = s.reserve(request(ISS, "j1"), T0).expect("first slot");
     s.activate(&first, token(ISS, "j1", T0), T0)
@@ -170,7 +172,7 @@ async fn reserve_and_activate_hold_the_store_contract() {
         );
     }
     assert_eq!(
-        s.activate(&ReservationId::from_raw(u64::MAX), token(ISS, "j4", T0), T0),
+        s.activate(&ReservationId::new(), token(ISS, "j4", T0), T0),
         Err(ActivateError::Missing)
     );
     assert!(s.get("mcpgw_j4").await.is_none());
@@ -181,6 +183,8 @@ async fn reserve_and_activate_hold_the_store_contract() {
 /// Mutant: release the slot in Drop even after activation.
 #[tokio::test]
 async fn the_mint_guard_releases_only_an_unactivated_slot() {
+    // Bearer lookup reads the clock: hold it at the tokens' own time.
+    let _clock = crate::clock::test_clock::at_secs(T0);
     let s = store(1);
     let dyn_store: Arc<dyn TokenStore> = s.clone();
     let guard = MintReservation::reserve(&dyn_store, request(ISS, "j1"), T0).expect("slot");
@@ -189,16 +193,22 @@ async fn the_mint_guard_releases_only_an_unactivated_slot() {
     assert!(has_room(&s, ISS, T0), "Drop released the pending slot");
 
     let guard = MintReservation::reserve(&dyn_store, request(ISS, "j2"), T0).expect("slot");
-    let raw = ReservationId::from_raw(guard.id.raw());
     guard.activate(token(ISS, "j2", T0), T0).expect("activates");
-    s.abort(&raw);
     assert!(
         s.get("mcpgw_j2").await.is_some(),
-        "a later abort left the active token"
+        "the guard's activation stands"
     );
+    assert!(!has_room(&s, ISS, T0), "the active token holds the slot");
+
+    // The store contract under the guard: an abort after activation, by the
+    // id's own owner, leaves the active token.
+    let id = s.reserve(request(OTHER_ISS, "k1"), T0).expect("slot");
+    s.activate(&id, token(OTHER_ISS, "k1", T0), T0)
+        .expect("activates");
+    s.abort(&id);
     assert!(
-        !has_room(&s, ISS, T0),
-        "the active token still holds the slot"
+        s.get("mcpgw_k1").await.is_some(),
+        "a later abort left the active token"
     );
 }
 
@@ -600,5 +610,42 @@ fn token_store_has_no_insert_on_its_real_path() {
         (failing.len(), twin.len()),
         (7, 7),
         "nothing else in either block"
+    );
+}
+
+/// The remaining refusals: a cap of 0 takes nothing; a JTI already active or
+/// already pending is refused, taking no slot; a deadline past the clock's
+/// range is refused.
+#[tokio::test]
+async fn reserve_refuses_cap_zero_duplicates_and_an_overflowing_deadline() {
+    assert_eq!(
+        store(0).reserve(request(ISS, "j1"), T0),
+        Err(ReserveError::CapReached)
+    );
+
+    let s = store(3);
+    let active = s.reserve(request(ISS, "j1"), T0).expect("slot");
+    s.activate(&active, token(ISS, "j1", T0), T0)
+        .expect("activates");
+    let _pending = s.reserve(request(ISS, "j2"), T0).expect("slot");
+    for jti in ["j1", "j2"] {
+        assert_eq!(
+            s.reserve(request(OTHER_ISS, jti), T0),
+            Err(ReserveError::DuplicateJti),
+            "{jti}: held by another identity's token or reservation"
+        );
+    }
+    assert!(has_room(&s, ISS, T0), "the refusals took no slot");
+    assert!(
+        !s.live_jti("j2", T0).await,
+        "the pending JTI is still pending"
+    );
+
+    // On a store of its own: a reservation at this clock reaps every slot
+    // whose deadline has passed, which would change the store above.
+    assert_eq!(
+        store(1).reserve(request(ISS, "j3"), u64::MAX - WINDOW + 1),
+        Err(ReserveError::Clock),
+        "the deadline overflows"
     );
 }
