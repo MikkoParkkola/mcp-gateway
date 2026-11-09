@@ -54,7 +54,9 @@ fn r11_receipt_for_an_unvouched_refusal_says_no_findings_are_recorded() {
     let mut d = Dl::effect("refused");
     d.findings = None;
     fx.delivery("gw-t", &d);
-    let line = line_of(&rcpt(&fx, "gw-t"));
+    let r = rcpt(&fx, "gw-t");
+    assert_eq!(r["effect"], "refused");
+    let line = line_of(&r);
     assert!(line.contains("did not vouch for this answer"), "{line}");
     assert!(!line.contains("did not produce"));
 }
@@ -66,7 +68,9 @@ fn r11b_receipt_for_an_echo_rewrite_makes_no_claim_about_the_producer() {
     let mut d = Dl::effect("rewritten");
     d.findings = None;
     fx.delivery("gw-t", &d);
-    let line = line_of(&rcpt(&fx, "gw-t"));
+    let r = rcpt(&fx, "gw-t");
+    assert_eq!(r["effect"], "rewritten");
+    let line = line_of(&r);
     assert!(line.starts_with("effect: rewritten (the gateway removed an injected value"));
     assert!(!line.contains("did not produce"));
 }
@@ -78,9 +82,9 @@ fn r6_receipt_lists_both_records_of_a_duplicate() {
     fx.delivery("gw-t", &Dl::effect("delivered"));
     fx.delivery("gw-t", &Dl::effect("refused"));
     let r = rcpt(&fx, "gw-t");
+    assert_eq!(r["effect"], "unknown");
     assert_eq!(r["answer"]["records"].as_array().unwrap().len(), 2);
     assert!(line_of(&r).contains("more than one delivery record for this trace"));
-    assert_eq!(r["effect"], "unknown");
 }
 
 #[test]
@@ -91,9 +95,9 @@ fn r20_receipt_caps_a_duplicate_list_at_two() {
         fx.delivery("gw-t", &Dl::effect("delivered"));
     }
     let r = rcpt(&fx, "gw-t");
+    assert_eq!(r["effect"], "unknown");
     assert_eq!(r["answer"]["records"].as_array().unwrap().len(), 2);
     assert_eq!(r["answer"]["more"], 3);
-    assert_eq!(r["effect"], "unknown");
 }
 
 #[test]

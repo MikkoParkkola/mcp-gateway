@@ -89,7 +89,7 @@ async fn r14_exports_carry_the_effect_and_findings() {
         .iter()
         .find(|r| r[col("trace_id")] == "gw-2")
         .unwrap();
-    let parsed: Value = serde_json::from_str(&two[col("answer_findings")]).unwrap();
+    let parsed: Value = serde_json::from_str(&two[col("answer_findings")]).unwrap_or(Value::Null);
     assert_eq!(parsed, json!(many));
     assert_eq!(two[col("answer_findings_total")], "40");
 }
