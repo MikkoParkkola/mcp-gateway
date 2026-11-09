@@ -189,7 +189,7 @@ fn gather_all(logs: &Logs) -> super::export::Collected {
         None,
         &Filter::default(),
         &Access::All,
-        None,
+        &Check::bare(None),
         CAPS,
         ndjson_size,
     )
