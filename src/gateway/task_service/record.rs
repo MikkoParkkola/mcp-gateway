@@ -542,7 +542,9 @@ pub(crate) struct CommittedTask {
     pub(crate) error_author: Option<ErrorAuthor>,
     /// The owner's digest as the record persisted it, read in the same piece
     /// as the rest of the snapshot (the events source carries it).
-    pub(crate) owner_digest: String,
+    /// Boxed: a committed view rides the dispatch futures by value, whose
+    /// allocation budget is fixed; the snapshot field below takes the room.
+    pub(crate) owner_digest: Box<str>,
     /// The members of the stored result the gateway wrote (MIK-7993): a read
     /// restores them into its own record, so its receipt leaves them out.
     pub(crate) gateway_writes: crate::gateway::gateway_writes::WriteRecord,
@@ -561,7 +563,7 @@ pub(crate) struct CommittedTask {
             reason = "read by the relay replay path, built with the firewall"
         )
     )]
-    pub(crate) replay_snapshot: Option<Value>,
+    pub(crate) replay_snapshot: Option<Box<Value>>,
 }
 
 impl CommittedTask {
@@ -631,11 +633,11 @@ impl CommittedTask {
             targets_recorded: record.version >= TARGET_VERSION,
             output_free: record.output_free,
             error_author: record.error_author,
-            owner_digest: record.admission.principal_digest.clone(),
+            owner_digest: record.admission.principal_digest.as_str().into(),
             gateway_writes: record.gateway_writes.clone(),
             bindings: record.bindings.clone(),
             bindings_recorded: record.version >= BINDING_VERSION,
-            replay_snapshot: record.replay_snapshot.clone(),
+            replay_snapshot: record.replay_snapshot.clone().map(Box::new),
         }
     }
 

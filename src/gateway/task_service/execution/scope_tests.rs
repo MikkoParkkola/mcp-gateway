@@ -18,7 +18,7 @@ fn a_retry_that_finds_a_completed_task_delivers_its_result_private() {
         targets_recorded: true,
         output_free: false,
         error_author: None,
-        owner_digest: String::new(),
+        owner_digest: Box::default(),
         gateway_writes: crate::gateway::gateway_writes::WriteRecord::default(),
         bindings: Vec::new(),
         bindings_recorded: true,

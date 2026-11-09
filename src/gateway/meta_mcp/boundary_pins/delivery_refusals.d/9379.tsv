@@ -1,0 +1,2 @@
+src/gateway/meta_mcp/task_replay/judging.rs	refuse_stored	untrackable_refusal	1	composite-or-replay	a stored task read whose replay snapshot this process cannot track, refused under block at the read start
+src/gateway/meta_mcp/task_replay/receipts.rs	untrackable_refusal	Error::Forbidden{}	1	composite-or-replay	stored task read; refuse_stored marks it a firewall refusal

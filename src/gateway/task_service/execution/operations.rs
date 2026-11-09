@@ -582,7 +582,7 @@ impl TaskExecutor {
     /// so a listener never learns of a transition that did not happen.
     pub(in crate::gateway::task_service) fn published(&self, task: &CommittedTask, task_id: &str) {
         let (status, changed_at) = (task.task.status(), task.task.last_updated_at());
-        let owner = task.owner_digest.clone();
+        let owner = task.owner_digest.to_string();
         if let Some(hook) = self.publication_hook.get() {
             hook(task_id, status, changed_at, Some(owner));
         }

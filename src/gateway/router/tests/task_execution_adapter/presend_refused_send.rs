@@ -122,6 +122,10 @@ async fn a_plan_step_refused_in_its_send_is_no_replay_call() {
         id: id.clone(),
         revision: row.revision,
     };
+    // The entry exists once a read rebuilds it from the row: a commit
+    // inserts none (task replay snapshot design, P4).
+    let read = get_task(&rig.state, "key-a", &id).await;
+    std::assert_eq!(status_of(&read), "completed", "premise: {read}");
     let (_, calls) = rig
         .relay
         .replay_digests(&key)

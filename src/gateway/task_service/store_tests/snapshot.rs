@@ -89,7 +89,7 @@ async fn a_completed_row_stores_its_snapshot() {
         .await
         .unwrap();
     let read = store.get(OWNER, &id).expect("the row reads");
-    assert_eq!(read.replay_snapshot, Some(snapshot(4)));
+    assert_eq!(read.replay_snapshot.as_deref(), Some(&snapshot(4)));
     store.close().await.unwrap();
 }
 

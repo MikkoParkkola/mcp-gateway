@@ -140,7 +140,7 @@ fn a_row_serves_backend_output_by_status() {
         targets_recorded: true,
         output_free,
         error_author: None,
-        owner_digest: String::new(),
+        owner_digest: Box::default(),
         gateway_writes: crate::gateway::gateway_writes::WriteRecord::default(),
         bindings: Vec::new(),
         bindings_recorded: true,
@@ -227,7 +227,7 @@ fn a_gateway_authored_result_is_not_backend_output() {
 fn a_committed_snapshot_carries_its_owner_digest() {
     let task = Task::create("probe").expect("the test clock reads after 1970");
     let record = row(&task, 3, None);
-    assert_eq!(CommittedTask::of(task, &record).owner_digest, "principal");
+    assert_eq!(&*CommittedTask::of(task, &record).owner_digest, "principal");
 }
 
 /// MIK-7887.RECEIPT.1: the error's author is private record state. It survives

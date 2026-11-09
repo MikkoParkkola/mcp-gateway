@@ -128,6 +128,10 @@ async fn a_refused_plan_step_stays_a_target_but_is_no_replay_call() {
         id: id.clone(),
         revision: row.revision,
     };
+    // The entry exists once a read rebuilds it from the row: a commit
+    // inserts none (task replay snapshot design, P4).
+    let read = get_task(&rig.state, "key-a", &id).await;
+    std::assert_eq!(status_of(&read), "completed", "premise: {read}");
     let (_, calls) = rig
         .relay
         .replay_digests(&key)
@@ -140,8 +144,8 @@ async fn a_refused_plan_step_stays_a_target_but_is_no_replay_call() {
     );
 }
 
-/// A one-target plan (two steps on alpha) whose replay entry is gone, by a
-/// restart, stages nothing on re-read: its stored result is the plan's own
+/// A one-target plan (two steps on alpha) whose replay entry is gone (a
+/// restart over a row that holds no snapshot) stages nothing on re-read: its stored result is the plan's own
 /// assembly, which can carry the gateway's text for a refused step, so it is
 /// never receipted whole as the one target's answer.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -192,6 +196,23 @@ async fn a_restarted_one_target_plan_receipts_nothing_whole() {
         ..
     } = first;
     drop(first_state);
+    // The entry gone for good: the row holds no replay snapshot, as an older
+    // gateway wrote it (task replay snapshot design, P5); a reopen alone
+    // would rebuild the entry from the row's own snapshot.
+    let record = first_store
+        .path()
+        .join("tasks")
+        .join(format!("{task}.json"));
+    let mut row: Value =
+        serde_json::from_slice(&std::fs::read(&record).expect("the row file: fixture"))
+            .expect("the row decodes");
+    assert!(
+        row.as_object_mut()
+            .and_then(|row| row.remove("replaySnapshot"))
+            .is_some(),
+        "premise: the settled row held a snapshot"
+    );
+    std::fs::write(&record, serde_json::to_vec(&row).unwrap()).unwrap();
     let restarted = state_over_tasks(
         rig(PROSE, OTHER_PROSE, Some(&one_target)).await,
         &first_store,

@@ -104,7 +104,7 @@ impl MetaMcp {
             let generation = self.current_generation()?;
             let verdict = fw.untrackable_read(
                 generation.collusion_view(),
-                stored.replay_snapshot.as_ref(),
+                stored.replay_snapshot.as_deref(),
                 ("gateway", "tasks/get"),
                 (session.unwrap_or(""), caller.unwrap_or("anonymous")),
             )?;

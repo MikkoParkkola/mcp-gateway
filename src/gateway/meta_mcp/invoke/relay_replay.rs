@@ -468,7 +468,7 @@ pub(crate) fn stage_task_replay(meta: &MetaMcp, who: RelayKey<'_>, stored: &Comm
             Duration::from_millis,
         );
         let crate::security::firewall::Adopted::Held(digests, calls, handle) =
-            fw.adopt_replay(&key, stored.replay_snapshot.as_ref(), retention)
+            fw.adopt_replay(&key, stored.replay_snapshot.as_deref(), retention)
         else {
             return false;
         };
