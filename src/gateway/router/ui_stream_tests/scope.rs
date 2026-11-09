@@ -94,7 +94,7 @@ async fn gateway() -> (Arc<AppState>, Vec<(&'static str, String)>, impl Sized) {
     for group in ["g-admin", "g-auditor", "g-developer"] {
         let t = token(group);
         bearers.push((group, t.token.clone()));
-        key_server.store.insert(t).await;
+        crate::key_server::store::activate_for_test(key_server.store.as_ref(), key_server.config.token_ttl_secs, t);
     }
     let auth = auth(&SCOPE, &SCOPE);
     let (state, dir) =

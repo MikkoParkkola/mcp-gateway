@@ -42,7 +42,7 @@ async fn m_b2_a_frame_withheld_at_write_is_delivered_by_the_next_change() {
     let w = World::start().await;
     let token = scoped_token("R", &["write", "scan", "fetch"]);
     let (bearer, jti) = (token.token.clone(), token.jti.clone());
-    w.key_server.store.insert(token.clone()).await;
+    crate::key_server::store::activate_for_test(w.key_server.store.as_ref(), w.key_server.config.token_ttl_secs, token.clone());
     assert!(
         !w.served_names(&bearer).await.contains(&"read".to_string()),
         "premise: the token does not see read"
@@ -57,7 +57,7 @@ async fn m_b2_a_frame_withheld_at_write_is_delivered_by_the_next_change() {
     release.notify_one();
     assert_eq!(ear.told(&w).await, 0, "premise: withheld at write");
 
-    w.key_server.store.insert(token).await;
+    crate::key_server::store::activate_for_test(w.key_server.store.as_ref(), w.key_server.config.token_ttl_secs, token);
     let mut ear = w.sse_resume(&bearer, &session).await;
     assert_eq!(ear.session_id(), session, "the same listener");
     w.store_shared("alpha", alpha_with("r2", "w2"));

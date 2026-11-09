@@ -86,7 +86,7 @@ impl LiveServer {
         config.oidc[0].jwks_uri = Some(format!("http://{addr}/.well-known/jwks.json"));
 
         let key_server = Arc::new(KeyServer {
-            store: Arc::new(InMemoryTokenStore::new()),
+            store: Arc::new(InMemoryTokenStore::for_config(&config)),
             oidc: Arc::new(OidcVerifier::with_http_client(
                 config.oidc.clone(),
                 reqwest::Client::new(),
