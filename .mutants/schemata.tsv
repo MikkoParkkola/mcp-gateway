@@ -1,0 +1,9 @@
+head_sha	250897a03dddebc4be62a21189bb4da40bcf88b3
+#mutant M1
+mcp_gateway	gateway::meta_mcp::upstream::secret_check_tests::a_mismatched_task_is_withheld_without_a_poll	src/gateway/meta_mcp/upstream/secret_check_tests.rs:194
+#mutant M2
+mcp_gateway	gateway::meta_mcp::upstream::secret_check_tests::a_rotation_during_the_poll_withholds_its_terminal_answer	src/gateway/meta_mcp/upstream/secret_check_tests.rs:179
+#mutant R2
+mcp_gateway	gateway::meta_mcp::upstream::secrets::tests::a_matched_check_renews_every_resolved_value_not_only_the_one_sent	src/gateway/meta_mcp/upstream_secrets_tests.rs:156
+mcp_gateway	backend::secret_send::tests::a_renewal_keeps_an_unchanged_value_redacted_past_its_grace	src/backend/secret_send_tests.rs:430
+mcp_gateway	gateway::meta_mcp::upstream::secret_check_tests::a_matched_query_renews_the_dispatchs_value_before_its_poll	src/gateway/meta_mcp/upstream/secret_check_tests.rs:164
