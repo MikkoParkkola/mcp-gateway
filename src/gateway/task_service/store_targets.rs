@@ -302,7 +302,7 @@ impl Shared {
                 .map(|_| Box::new(serde_json::Value::from(SNAPSHOT_UNTRACKABLE))),
             ..targets.clone()
         };
-        if targets.replay_snapshot.is_some() {
+        if mutant!("N12", false, targets.replay_snapshot.is_some()) {
             let attempt = (event.clone(), marked.clone(), false, author, writes.clone());
             match self.settle_attempt(task, record, attempt, at) {
                 Err(StoreError::Capacity) => {}
@@ -456,9 +456,9 @@ fn settled(
     // output; any other outcome, and an output-free row, stores none.
     record.replay_snapshot = targets
         .replay_snapshot
-        .filter(|_| completes && !discard)
+        .filter(|_| mutant!("N13", true, completes && !discard))
         .map(|snapshot| *snapshot);
-    if record.replay_snapshot.is_some() {
+    if mutant!("K22m", true, record.replay_snapshot.is_some()) {
         record.version = record.version.max(SNAPSHOT_VERSION);
     }
     Ok(Some((task, record)))

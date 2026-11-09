@@ -196,12 +196,15 @@ impl<'a> Settling<'a> {
         // compare-and-set, so the row that becomes readable already holds
         // it; nothing is captured in memory until a read rebuilds it.
         if dispatched && let TaskTransition::Complete(result) = &event {
-            provenance.replay_snapshot =
+            provenance.replay_snapshot = mutant!(
+                "N1",
+                None,
                 crate::gateway::meta_mcp::invoke::relay::persisted_task_replay(
                     self.state.meta_mcp(),
                     result,
                 )
-                .map(Box::new);
+                .map(Box::new)
+            );
         }
         let stored = self
             .executor

@@ -463,13 +463,32 @@ pub(crate) fn stage_task_replay(meta: &MetaMcp, who: RelayKey<'_>, stored: &Comm
         // The entry in memory, else rebuilt from the row's own
         // snapshot, pending and held by this delivery until its write; the
         // task's TTL bounds it from this read (24 h without one).
-        let retention = stored.task.ttl_ms().map_or(
-            Duration::from_secs(crate::idempotency::admission::RETENTION_SECS),
-            Duration::from_millis,
+        let retention = mutant!(
+            "K29m",
+            Duration::from_secs(2 * crate::idempotency::admission::RETENTION_SECS),
+            stored.task.ttl_ms().map_or(
+                Duration::from_secs(crate::idempotency::admission::RETENTION_SECS),
+                Duration::from_millis,
+            )
         );
-        let crate::security::firewall::Adopted::Held(digests, calls, handle) =
-            fw.adopt_replay(&key, stored.replay_snapshot.as_deref(), retention)
-        else {
+        let crate::security::firewall::Adopted::Held(digests, calls, handle) = fw.adopt_replay(
+            &key,
+            mutant!(
+                "N4",
+                None,
+                mutant!(
+                    "K25m",
+                    stored.replay_snapshot.as_deref().filter(|_| {
+                        meta.current_generation().is_some_and(|g| {
+                            g.collusion_view().action()
+                                != crate::security::firewall::CollusionAction::Off
+                        })
+                    }),
+                    stored.replay_snapshot.as_deref()
+                )
+            ),
+            retention,
+        ) else {
             return false;
         };
         hold_replay_handle(handle);
