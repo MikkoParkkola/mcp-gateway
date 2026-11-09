@@ -5,6 +5,7 @@
 //! unchanged one is not written again inside. See the parent module's docs.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 /// How long an unchanged re-check decision is not written again.
@@ -60,3 +61,28 @@ impl RepeatLedger {
         map.insert(key, (decision, now));
     }
 }
+
+/// A re-check note's suppression key and decision fingerprint.
+#[derive(Clone)]
+pub(in crate::gateway::meta_mcp) struct RepeatMark {
+    pub(super) store: Arc<DecisionDedupe>,
+    pub(super) key: String,
+    pub(super) decision: String,
+}
+
+impl std::fmt::Debug for RepeatMark {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RepeatMark")
+            .field("key", &self.key)
+            .field("decision", &self.decision)
+            .finish_non_exhaustive()
+    }
+}
+
+impl PartialEq for RepeatMark {
+    fn eq(&self, other: &Self) -> bool {
+        self.key == other.key && self.decision == other.decision
+    }
+}
+
+impl Eq for RepeatMark {}
