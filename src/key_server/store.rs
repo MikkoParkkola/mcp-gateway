@@ -384,9 +384,20 @@ impl TokenStore for InMemoryTokenStore {
         now: u64,
     ) -> Result<ReservationId, ReserveError> {
         let mut pending = self.pending();
-        pending.remove_where(ActivateError::Expired, |slot| slot.deadline <= now);
-        let same =
-            |issuer: &str, subject: &str| issuer == request.issuer && subject == request.subject;
+        pending.remove_where(ActivateError::Expired, |slot| {
+            mutant!(
+                "m3",
+                slot.deadline <= now + 1,
+                mutant!("m2", false, slot.deadline <= now)
+            )
+        });
+        let same = |issuer: &str, subject: &str| {
+            mutant!(
+                "m24",
+                subject == request.subject,
+                issuer == request.issuer && subject == request.subject
+            )
+        };
         let active = self
             .by_bearer
             .iter()
@@ -400,7 +411,7 @@ impl TokenStore for InMemoryTokenStore {
             .values()
             .filter(|s| same(&s.issuer, &s.subject))
             .count();
-        if active + reserved >= self.cap {
+        if mutant!("m1", active >= self.cap, active + reserved >= self.cap) {
             return Err(ReserveError::CapReached);
         }
         if self.by_jti.contains_key(&request.jti)
@@ -409,7 +420,7 @@ impl TokenStore for InMemoryTokenStore {
             return Err(ReserveError::DuplicateJti);
         }
         let deadline = now
-            .checked_add(PENDING_WINDOW_SECS)
+            .checked_add(mutant!("m4", self.ttl, PENDING_WINDOW_SECS))
             .ok_or(ReserveError::Clock)?;
         let id = pending.next;
         pending.next = pending.next.wrapping_add(1);
@@ -435,16 +446,23 @@ impl TokenStore for InMemoryTokenStore {
         let Some(slot) = pending.slots.remove(&id.0) else {
             return Err(pending.gone.remove(&id.0).unwrap_or(ActivateError::Missing));
         };
-        if now >= slot.deadline {
+        if mutant!("m5", false, now >= slot.deadline) {
             return Err(ActivateError::Expired);
         }
-        if token.identity.issuer() != slot.issuer
-            || token.identity.subject() != slot.subject
-            || token.jti != slot.jti
-        {
+        if mutant!(
+            "m7",
+            false,
+            token.identity.issuer() != slot.issuer
+                || token.identity.subject() != slot.subject
+                || token.jti != slot.jti
+        ) {
             return Err(ActivateError::Mismatch);
         }
-        if token.iat != now || Some(token.exp) != now.checked_add(self.ttl) {
+        if mutant!(
+            "m6",
+            false,
+            token.iat != now || Some(token.exp) != now.checked_add(self.ttl)
+        ) {
             return Err(ActivateError::Timestamps);
         }
         let bearer = token.token.clone();
@@ -497,15 +515,23 @@ impl TokenStore for InMemoryTokenStore {
         // A pending reservation for this JTI is revoked too: it can no
         // longer become a token.
         let mut pending = self.pending();
-        let was_pending = pending.remove_where(ActivateError::Revoked, |slot| slot.jti == jti) > 0;
-        self.remove_active(jti) || was_pending
+        let was_pending = pending.remove_where(
+            mutant!("m10", ActivateError::Expired, ActivateError::Revoked),
+            |slot| slot.jti == jti,
+        ) > 0;
+        mutant!(
+            "m8",
+            self.remove_active(jti),
+            self.remove_active(jti) || was_pending
+        )
     }
 
     async fn revoke_by_subject(&self, issuer: &str, subject: &str) -> usize {
         let mut pending = self.pending();
-        let removed_pending = pending.remove_where(ActivateError::Revoked, |slot| {
-            slot.issuer == issuer && slot.subject == subject
-        });
+        let removed_pending = pending.remove_where(
+            mutant!("m10", ActivateError::Expired, ActivateError::Revoked),
+            |slot| slot.issuer == issuer && slot.subject == subject,
+        );
         let jtis: Vec<String> = self
             .by_bearer
             .iter()
@@ -516,7 +542,7 @@ impl TokenStore for InMemoryTokenStore {
             .map(|e| e.value().jti.clone())
             .collect();
         let removed_active = jtis.iter().filter(|jti| self.remove_active(jti)).count();
-        removed_active + removed_pending
+        mutant!("m9", removed_active, removed_active + removed_pending)
     }
 
     async fn count_for_subject(&self, issuer: &str, subject: &str) -> usize {

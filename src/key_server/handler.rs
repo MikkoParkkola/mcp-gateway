@@ -293,7 +293,7 @@ impl MintReservation {
 
 impl Drop for MintReservation {
     fn drop(&mut self) {
-        if self.armed {
+        if mutant!("m11", false, self.armed) {
             self.store.abort(&self.id);
         }
     }
@@ -329,7 +329,21 @@ pub(super) async fn issue(
         subject: identity.subject().to_string(),
         jti: jti.clone(),
     };
-    let reservation = match MintReservation::reserve(&ks.store, request, reserve_now) {
+    let reservation = match mutant!(
+        "m12",
+        match ks.store.reserve(request, reserve_now) {
+            Ok(id) => {
+                tokio::task::yield_now().await;
+                Ok(MintReservation {
+                    store: Arc::clone(&ks.store),
+                    id,
+                    armed: true,
+                })
+            }
+            Err(e) => Err(e),
+        },
+        MintReservation::reserve(&ks.store, request, reserve_now)
+    ) {
         Ok(reservation) => reservation,
         Err(ReserveError::CapReached) => return token_cap_refusal(ks, &identity, client_ip),
         Err(ReserveError::DuplicateJti | ReserveError::Clock) => {
@@ -363,12 +377,16 @@ pub(super) async fn issue(
     let Some(exp) = now.checked_add(ttl) else {
         return clock_refusal();
     };
-    token.iat = now;
+    token.iat = mutant!(
+        "m17",
+        reserve_now,
+        mutant!("m16", crate::clock::unix_secs().unwrap_or(now), now)
+    );
     token.exp = exp;
     let response = TokenExchangeResponse {
         access_token: token.token.clone(),
         token_type: "Bearer".to_string(),
-        expires_in: exp - now,
+        expires_in: mutant!("m18", exp - reserve_now, exp - now),
         scope: format_scope_string(&token),
         jti: token.jti.clone(),
     };
@@ -376,19 +394,27 @@ pub(super) async fn issue(
     match reservation.activate(token, now) {
         Ok(()) => (StatusCode::OK, Json(response)).into_response(),
         Err(ActivateError::Revoked) => error_response(
-            StatusCode::FORBIDDEN,
+            mutant!(
+                "m13",
+                StatusCode::INTERNAL_SERVER_ERROR,
+                StatusCode::FORBIDDEN
+            ),
             "access_denied",
             "this identity's tokens were revoked while the token was being issued",
         ),
         Err(ActivateError::Expired) => {
             let mut refusal = error_response(
-                StatusCode::SERVICE_UNAVAILABLE,
+                mutant!(
+                    "m14",
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    StatusCode::SERVICE_UNAVAILABLE
+                ),
                 "temporarily_unavailable",
                 "issuing the token took too long; retry",
             );
             refusal.headers_mut().insert(
                 axum::http::header::RETRY_AFTER,
-                axum::http::HeaderValue::from_static("1"),
+                axum::http::HeaderValue::from_static(mutant!("m15", "2", "1")),
             );
             refusal
         }
@@ -417,7 +443,7 @@ async fn revoke_token(
 
     let removed = ks.store.revoke_by_jti(&jti).await;
     if removed {
-        ks.credentials_changed();
+        mutant!("m19", (), ks.credentials_changed());
         let ev = AuditEvent::revoked(&jti, None);
         audit::emit(&ev);
         (StatusCode::NO_CONTENT, Json(json!({}))).into_response()
@@ -460,7 +486,7 @@ async fn revoke_tokens_by_subject(
         );
     };
     let count = ks.store.revoke_by_subject(&issuer, &params.subject).await;
-    if count > 0 {
+    if mutant!("m21", true, mutant!("m20", count > 2, count > 0)) {
         ks.credentials_changed();
     }
     let ev = AuditEvent::revoked(&format!("bulk:{actor_id}"), None);
