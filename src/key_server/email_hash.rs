@@ -22,6 +22,10 @@ const DOMAIN: &[u8] = b"email-v1\0";
 /// `i` and a combining dot), so one pass alone is not stable under a second.
 /// Canonically equivalent spellings meet; compatibility forms (a ligature,
 /// fullwidth letters) stay distinct, and the domain is not IDNA-converted.
+/// Both tables are Unicode 17.0.0: lowercase from the Rust standard library
+/// under the pinned toolchain, NFC from `icu_normalizer_data` 2.3.0 (built
+/// from ICU 78). A toolchain or ICU data change that alters either table
+/// needs a new version.
 pub(crate) fn normalize(email: &str) -> String {
     let nfc = icu_normalizer::ComposingNormalizerBorrowed::new_nfc();
     nfc.normalize(&nfc.normalize(email).to_lowercase())

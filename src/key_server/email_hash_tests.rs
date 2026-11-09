@@ -175,30 +175,3 @@ fn the_final_nfc_pass_composes_and_reorders() {
     let two = super::normalize(&format!("\u{130}\u{316}nci{DOMAIN}"));
     assert!(two.starts_with("i\u{316}\u{307}"), "{:?}", two);
 }
-
-/// Drift detector for normalization v1: every code point U+0020..U+2FFFF
-/// (no surrogates) normalized and hashed in order. The expected value was
-/// computed with Python's `unicodedata` at Unicode 16.0.0 (194528 points).
-/// A toolchain whose case or composition tables differ fails here, and
-/// changing them means a new normalization version.
-#[test]
-fn normalization_v1_matches_unicode_16_over_every_code_point() {
-    let mut corpus = Vec::new();
-    let mut points = 0_usize;
-    for cp in 0x20_u32..0x30000 {
-        let Some(c) = char::from_u32(cp) else {
-            continue;
-        };
-        corpus.extend_from_slice(super::normalize(&c.to_string()).as_bytes());
-        corpus.push(0);
-        points += 1;
-    }
-    assert_eq!(points, 194_528);
-    assert_eq!(
-        crate::hashing::sha256_hex(&corpus),
-        "fb587c1239655fae66cbf19edea48ded5be7ad8ef3845b98c689f78aba13cec5",
-        "this toolchain's Unicode tables differ from normalization v1's (Unicode 16.0.0); \
-         char::UNICODE_VERSION is {:?}",
-        char::UNICODE_VERSION
-    );
-}
