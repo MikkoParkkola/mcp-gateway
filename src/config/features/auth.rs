@@ -436,5 +436,9 @@ mod api_key_name_tests;
 mod api_key_digest_tests;
 
 #[cfg(test)]
+#[path = "api_key_binding_tests.rs"]
+mod api_key_binding_tests;
+
+#[cfg(test)]
 #[path = "auth_dashboard_session_tests.rs"]
 mod dashboard_session_limits_tests;
