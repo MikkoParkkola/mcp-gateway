@@ -252,6 +252,30 @@ async fn delegated(h: &Harness, claims: &serde_json::Value) -> Markers {
 async fn denials(h: &Harness, claims: &serde_json::Value) -> Markers {
     let (status, body) = h.exchange(&h.mint(ISS_B, SUBJECT, claims)).await;
     assert_eq!(status, 403, "no rule for issuer B: {body}");
+    // Caller input that used to reach the refusal record verbatim.
+    let resp = reqwest::Client::new()
+        .post(format!("http://{}/auth/token", h.addr))
+        .form(&[("grant_type", EMAIL), ("subject_token", "x")])
+        .send()
+        .await
+        .expect("post");
+    assert_eq!(
+        resp.status().as_u16(),
+        400,
+        "a hostile grant_type is refused"
+    );
+    // The email (with its at-sign spelled out) inside the issuer, the email
+    // itself in the subject and a claim: an unknown issuer, refused.
+    let hostile_issuer = format!("https://{}.evil.test", EMAIL.replace('@', "-at-"));
+    let mut issuer_claims = claims.clone();
+    issuer_claims["note"] = json!(EMAIL);
+    let (status, _) = h
+        .exchange(&h.mint(&hostile_issuer, EMAIL, &issuer_claims))
+        .await;
+    assert_ne!(
+        status, 200,
+        "an unknown issuer carrying the email is refused"
+    );
     let (status, _) = h.exchange("not.a.jwt").await;
     assert_ne!(status, 200, "a garbage token is refused");
     let mut expired = claims.clone();
