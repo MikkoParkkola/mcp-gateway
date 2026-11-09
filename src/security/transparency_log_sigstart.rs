@@ -283,7 +283,13 @@ impl Checked {
         let mut buf = Vec::with_capacity(usize::try_from(end - start).ok()?);
         f.take(end - start).read_to_end(&mut buf).ok()?;
         *hashed += 1;
-        if buf.len() as u64 != end - start || mutant!("q19", false, mutant!("q41", false, hex::encode(sha256_raw(&buf)) != want)) {
+        if buf.len() as u64 != end - start
+            || mutant!(
+                "q19",
+                false,
+                mutant!("q41", false, hex::encode(sha256_raw(&buf)) != want)
+            )
+        {
             return None;
         }
         Some(buf)
@@ -357,9 +363,27 @@ impl Anchor {
     ) -> Placed {
         let body = match self {
             Self::NoSecret => return Placed::Legacy { unanchored: false },
-            Self::Absent => return mutant!("q4", Placed::Legacy { unanchored: false }, Placed::Invalid("sigstart_missing")),
-            Self::Broken(f) => return mutant!("q5", Placed::Legacy { unanchored: false }, Placed::Invalid(broken_reason(*f))),
-            Self::Known(b) if b.state == State::Closed => return mutant!("q38", Placed::Legacy { unanchored: false }, Placed::Invalid("sig_missing")),
+            Self::Absent => {
+                return mutant!(
+                    "q4",
+                    Placed::Legacy { unanchored: false },
+                    Placed::Invalid("sigstart_missing")
+                );
+            }
+            Self::Broken(f) => {
+                return mutant!(
+                    "q5",
+                    Placed::Legacy { unanchored: false },
+                    Placed::Invalid(broken_reason(*f))
+                );
+            }
+            Self::Known(b) if b.state == State::Closed => {
+                return mutant!(
+                    "q38",
+                    Placed::Legacy { unanchored: false },
+                    Placed::Invalid("sig_missing")
+                );
+            }
             Self::Known(b) => b,
         };
         let LinePos::At {
@@ -370,7 +394,11 @@ impl Anchor {
         else {
             return Placed::Invalid("sig_missing");
         };
-        if mutant!("q1", (segment, offset) > (body.segment_seq, body.offset), (segment, offset) >= (body.segment_seq, body.offset)) {
+        if mutant!(
+            "q1",
+            (segment, offset) > (body.segment_seq, body.offset),
+            (segment, offset) >= (body.segment_seq, body.offset)
+        ) {
             return Placed::Invalid("sig_missing");
         }
         if mutant!("q2", segment >= body.segment_seq, false) {
@@ -399,7 +427,9 @@ impl Anchor {
         // is the one that verified.
         let mut line = Vec::new();
         let last = (offset + len).saturating_sub(1) / CHUNK;
-        for chunk in mutant!("q34", 0, offset / CHUNK)..=mutant!("q34", (frozen.len.max(1) - 1) / CHUNK, last) {
+        for chunk in mutant!("q34", 0, offset / CHUNK)
+            ..=mutant!("q34", (frozen.len.max(1) - 1) / CHUNK, last)
+        {
             let end = (chunk * CHUNK + CHUNK).min(frozen.len);
             let want = usize::try_from(chunk)
                 .ok()
@@ -412,7 +442,15 @@ impl Anchor {
             let to = usize::try_from((offset + len).min(end) - chunk * CHUNK).unwrap_or(0);
             line.extend_from_slice(bytes.get(from..to).unwrap_or_default());
         }
-        let same = mutant!("q40", true, mutant!("q41", true, serde_json::from_slice::<serde_json::Value>(&line).is_ok_and(|v| v == *entry)));
+        let same = mutant!(
+            "q40",
+            true,
+            mutant!(
+                "q41",
+                true,
+                serde_json::from_slice::<serde_json::Value>(&line).is_ok_and(|v| v == *entry)
+            )
+        );
         if !same {
             return Placed::Invalid("legacy_edited");
         }
@@ -581,7 +619,13 @@ pub(super) fn classify(
     match load(path, Some(secret)) {
         Anchor::Known(s) if s.announced => return Ok(Plan::Nothing),
         Anchor::Known(s) => return Ok(mutant!("q32", Plan::Nothing, Plan::Owed(s))),
-        Anchor::Broken(f) => return Ok(mutant!("q8", Plan::Rebuild { signed_found: true }, Plan::Raise(f))),
+        Anchor::Broken(f) => {
+            return Ok(mutant!(
+                "q8",
+                Plan::Rebuild { signed_found: true },
+                Plan::Raise(f)
+            ));
+        }
         Anchor::NoSecret | Anchor::Absent => {}
     }
     let found = first_signed(path, secret)?;
@@ -592,13 +636,18 @@ pub(super) fn classify(
         .is_some_and(|(_, has_mac)| mutant!("q11", false, has_mac));
     let sealed = !segments::list_segments(path)?.is_empty();
     // v3.5.1 signed but wrote no `.hwm`, no identity record, no segments.
-    let v3_shape = !identified
-        && mutant!("q27", true, hwm.is_none())
-        && mutant!("q28", true, !sealed);
+    let v3_shape =
+        !identified && mutant!("q27", true, hwm.is_none()) && mutant!("q28", true, !sealed);
     Ok(match found {
-        Some(first) if v3_shape && mutant!("q26", true, starts_at_genesis(path)?) => Plan::Migrate(first),
+        Some(first) if v3_shape && mutant!("q26", true, starts_at_genesis(path)?) => {
+            Plan::Migrate(first)
+        }
         Some(first) if v3_shape => Plan::Unanchored(first),
-        Some(first) => mutant!("q10", Plan::Migrate(first), Plan::Rebuild { signed_found: true }),
+        Some(first) => mutant!(
+            "q10",
+            Plan::Migrate(first),
+            Plan::Rebuild { signed_found: true }
+        ),
         None if keyed_hwm => Plan::Rebuild {
             signed_found: false,
         },
@@ -627,7 +676,9 @@ pub(super) fn legacy_below(path: &Path, seq: u64, offset: u64) -> io::Result<Vec
     for (s, file) in kept(path)? {
         let len = match s.cmp(&seq) {
             std::cmp::Ordering::Less => std::fs::metadata(&file)?.len(),
-            std::cmp::Ordering::Equal if offset > 0 => mutant!("q25", std::fs::metadata(&file)?.len(), offset),
+            std::cmp::Ordering::Equal if offset > 0 => {
+                mutant!("q25", std::fs::metadata(&file)?.len(), offset)
+            }
             _ => continue,
         };
         out.push(LegacyFile {

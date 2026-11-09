@@ -221,7 +221,9 @@ pub(in crate::gateway::ui) fn rows_after(
                     entry,
                     segment: at.seq,
                     // The anchor's length includes the newline.
-                    span: at.anchor.map(|a| (mutant!("q36", 0, a.start), a.len.saturating_sub(1))),
+                    span: at
+                        .anchor
+                        .map(|a| (mutant!("q36", 0, a.start), a.len.saturating_sub(1))),
                 };
                 if let Some(row) = served(log, access, &line, &check) {
                     page.rows.push(row);
