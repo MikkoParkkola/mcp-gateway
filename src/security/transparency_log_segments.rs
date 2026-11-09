@@ -179,8 +179,8 @@ fn read_first_line_raw(path: &Path) -> io::Result<Option<String>> {
 /// same 4 MiB window as [`read_first_line`], but a line at a time: reading
 /// stops at the first line that is not blank, so a segment whose first line
 /// is 200 bytes costs about that, not the window. Within the window the result
-/// is the one a read of the whole window gave: a line without its `\n` and one
-/// `\r`, decoded lossily; a window with no newline is one line.
+/// is the one a read of the whole window gave: a line without its `\n` and the
+/// `\r` before that `\n`, decoded lossily; a window with no newline is one line.
 fn first_line_in(mut file: &File) -> io::Result<Option<String>> {
     use std::io::{BufRead, BufReader, Seek, SeekFrom};
     file.seek(SeekFrom::Start(0))?;
@@ -192,8 +192,13 @@ fn first_line_in(mut file: &File) -> io::Result<Option<String>> {
             return Ok(None);
         }
         let text = String::from_utf8_lossy(&raw);
-        let line = text.strip_suffix('\n').unwrap_or(&text);
-        let line = line.strip_suffix('\r').unwrap_or(line);
+        // A `\r` goes only with the `\n` it precedes: a bare one at the end of
+        // the file or at the window cap is part of the line, as `str::lines`
+        // kept it.
+        let line = match text.strip_suffix('\n') {
+            Some(line) => line.strip_suffix('\r').unwrap_or(line),
+            None => &text,
+        };
         if !line.trim().is_empty() {
             return Ok(Some(line.to_string()));
         }
