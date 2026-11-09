@@ -74,7 +74,7 @@ async fn r29_sixty_four_concurrent_calls_join_across_pages() {
         fx.call(&format!("gw-{i}"));
     }
     for k in 0..64 {
-        let i = (k * 37) % 64;
+        let i: usize = (k * 37) % 64;
         let e = if i.is_multiple_of(2) {
             "delivered"
         } else {
