@@ -221,15 +221,17 @@ async fn relay_action_needs_the_firewall_and_is_live_only_with_the_running_detec
             .iter()
             .any(|f| f == "security" || f.starts_with("security."))
     };
-    // Firewall off: the loader refuses a relay action other than `off`, so
-    // the save is refused and the file is unchanged.
-    let (_dir, path, ctx) = gateway(COMMENTED);
+    // Firewall off (it is on by default, so said explicitly): the loader
+    // refuses a relay action other than `off`, so the save is refused and the
+    // file is unchanged.
+    let off = "# operator's note\nsecurity:\n  firewall:\n    enabled: false # off\n";
+    let (_dir, path, ctx) = gateway(off);
     let refused = save(&ctx, &path, "security.firewall.collusion.action", block())
         .await
         .expect_err("needs security.firewall.enabled");
     // The loader's validation refusal, not some other failure.
     assert!(matches!(refused, UiRefused::Invalid(_)), "{refused:?}");
-    assert_eq!(read(&path), COMMENTED);
+    assert_eq!(read(&path), off);
 
     // Firewall on, detector unchanged: live.
     let on = "security:\n  firewall:\n    enabled: true\n";
