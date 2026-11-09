@@ -33,6 +33,7 @@ top-level module, outside every anchor's child directory, still needs a
 new anchor here.
 """
 
+import importlib.util
 import pathlib
 import re
 import sys
@@ -41,10 +42,17 @@ ROOT = pathlib.Path(__file__).resolve().parents[2]
 TABLE = ROOT / "docs/internal/perf/per_call_stages.tsv"
 TABLE_STDIO = ROOT / "docs/internal/perf/per_call_stages_stdio.tsv"
 HARNESS = ROOT / "src/gateway/server/tests/per_call_timing.rs"
-TEST_MOD = re.compile(
-    r"^#\[cfg\((?:all\()?test\b[^\n]*\n(?:#\[[^\n]*\n)*\s*(?:pub(?:\([^)]*\))?\s+)?mod\s+\w+",
+# A `#[cfg(..)]` line above a module; the shared reader decides whether the
+# predicate compiles only under test (MIK-9387.TCFG.2).
+CFG_MOD = re.compile(
+    r"^#\[cfg\((?P<expr>[^\n]*)\)\][ \t]*\n(?:#\[[^\n]*\n)*\s*(?:pub(?:\([^)]*\))?\s+)?mod\s+\w+",
     re.M,
 )
+_spec = importlib.util.spec_from_file_location(
+    "check_orphan_test_modules", ROOT / "scripts/dev/check-orphan-test-modules.py"
+)
+_orphan = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(_orphan)
 # The tools/call path anchor modules; see the docstring for the rule.
 ANCHORS = [
     "src/gateway/router/handlers.rs",
@@ -91,7 +99,9 @@ def without_test_modules(source):
     helpers are not stages. A file-mounted `mod x;` carries no body here, and
     nothing after a test module is dropped."""
     out, at = [], 0
-    for m in TEST_MOD.finditer(source):
+    for m in CFG_MOD.finditer(source):
+        if not _orphan.cfg_is_test(m.group("expr")):
+            continue
         rest = source[m.end():]
         brace = len(rest) - len(rest.lstrip())
         if not rest[brace:].startswith("{"):
