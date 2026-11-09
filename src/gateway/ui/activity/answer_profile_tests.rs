@@ -105,6 +105,7 @@ fn m2_profile_passes_and_row_build() {
         head_covered: true,
     };
     let (mut cursor, mut per_pass, mut kept) = (None, Vec::new(), Vec::new());
+    let mut examined: Vec<u64> = Vec::new();
     loop {
         let joined = RefCell::new(Vec::<Joined>::new());
         let limits = Limits {
@@ -133,6 +134,7 @@ fn m2_profile_passes_and_row_build() {
             .unwrap()
         });
         per_pass.push(m);
+        examined.push(page.bytes_examined);
         carried = page.above_end;
         kept.extend(page.lines.iter().cloned().zip(joined.into_inner()));
         match page.next {
@@ -152,6 +154,17 @@ fn m2_profile_passes_and_row_build() {
         sorted[sorted.len() - 1],
         per_pass[per_pass.len() - 1].bytes
     );
+    let log_bytes = std::fs::metadata(&fx.path).unwrap().len();
+    let mut sorted_examined = examined.clone();
+    sorted_examined.sort_unstable();
+    println!(
+        "PROFILE examined: log {log_bytes} B; per pass first {}, median {}, max {}, last {}; sum {}",
+        examined[0],
+        sorted_examined[sorted_examined.len() / 2],
+        sorted_examined[sorted_examined.len() - 1],
+        examined[examined.len() - 1],
+        examined.iter().sum::<u64>()
+    );
     let rows = kept.len() as u64;
     let ((), m) = measure(|| {
         for (line, joined) in &kept {
@@ -169,4 +182,20 @@ fn m2_profile_passes_and_row_build() {
         }
     });
     report("ndjson_size over the rows", 1, m, rows);
+}
+
+/// What opening a log for one page costs on its own, before any window is read.
+#[test]
+#[ignore = "profiling, not an assertion"]
+fn m2_profile_open_cost_of_one_page() {
+    use crate::security::transparency_log::pager::{open_segment, position};
+    let fx = over_caps(10_000, false);
+    for run in 1..=2 {
+        let (at, m) = measure(|| position(&fx.path, None).unwrap());
+        report("pager::position", run, m, 1);
+        let segment = at.segment;
+        let (file, m) = measure(|| open_segment(&fx.path, segment, || {}).unwrap());
+        report("pager::open_segment", run, m, 1);
+        drop(file);
+    }
 }
