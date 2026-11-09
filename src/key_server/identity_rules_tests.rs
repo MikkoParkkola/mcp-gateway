@@ -34,13 +34,13 @@ fn engine(rules: &str) -> PolicyEngine {
 }
 
 fn identity(iss: &str, email: &str) -> VerifiedIdentity {
-    VerifiedIdentity {
-        subject: "123".to_string(),
-        email: email.to_string(),
-        name: None,
-        groups: vec![],
-        issuer: iss.to_string(),
-    }
+    VerifiedIdentity::for_test(
+        "123".to_string(),
+        email.to_string(),
+        None,
+        vec![],
+        iss.to_string(),
+    )
 }
 
 fn matches(engine: &PolicyEngine, id: &VerifiedIdentity) -> bool {
@@ -536,13 +536,13 @@ async fn an_empty_subject_is_nameless_before_any_domain_refusal() {
 async fn an_unreadable_clock_issues_no_token() {
     use crate::key_server::store::TokenScopes;
     let h = Harness::start(&config_yaml("[]", "")).await;
-    let identity = VerifiedIdentity {
-        subject: "sub".to_string(),
-        email: "alice@corp.test".to_string(),
-        name: None,
-        groups: Vec::new(),
-        issuer: ISS_A.to_string(),
-    };
+    let identity = VerifiedIdentity::for_test(
+        "sub".to_string(),
+        "alice@corp.test".to_string(),
+        None,
+        Vec::new(),
+        ISS_A.to_string(),
+    );
     let response = {
         let _clock = crate::clock::test_clock::before_epoch();
         super::handler::issue(&h.ks, identity, TokenScopes::default(), None).await

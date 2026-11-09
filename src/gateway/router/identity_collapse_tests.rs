@@ -72,13 +72,13 @@ impl Idp {
 }
 
 fn identity(subject: &str) -> VerifiedIdentity {
-    VerifiedIdentity {
-        subject: subject.to_owned(),
-        email: String::new(),
-        name: None,
-        groups: vec![],
-        issuer: ISS.to_owned(),
-    }
+    VerifiedIdentity::for_test(
+        subject.to_owned(),
+        String::new(),
+        None,
+        vec![],
+        ISS.to_owned(),
+    )
 }
 
 fn stored(bearer: &str, subject: &str) -> TemporaryToken {
@@ -248,7 +248,7 @@ async fn key_server_with(tokens: &[(&str, &str, &str)]) -> Arc<KeyServer> {
     });
     for (bearer, subject, email) in tokens {
         let mut token = stored(bearer, subject);
-        token.identity.email = (*email).to_owned();
+        token.identity = token.identity.clone().with_email(*email);
         ks.store.insert(token).await;
     }
     Arc::new(ks)

@@ -226,16 +226,16 @@ mod tests {
     use crate::config::{KeyServerPolicyConfig, PolicyMatchConfig, PolicyScopesConfig};
 
     fn make_identity(email: &str, issuer: &str, groups: &[&str]) -> VerifiedIdentity {
-        VerifiedIdentity {
-            subject: "sub123".to_string(),
-            email: email.to_string(),
-            name: None,
-            groups: groups
+        VerifiedIdentity::for_test(
+            "sub123".to_string(),
+            email.to_string(),
+            None,
+            groups
                 .iter()
                 .map(std::string::ToString::to_string)
                 .collect(),
-            issuer: issuer.to_string(),
-        }
+            issuer.to_string(),
+        )
     }
 
     fn make_engine(rules: Vec<KeyServerPolicyConfig>) -> PolicyEngine {

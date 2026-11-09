@@ -199,7 +199,9 @@ fn validate_shadow(shadow: &BTreeMap<String, u64>) -> io::Result<()> {
 mod sink;
 #[cfg(test)]
 pub(crate) use sink::stall_seam;
-pub(crate) use sink::{HttpSegmentSink, SegmentCounts, WriterIdentity, global_segment_counts};
+pub(crate) use sink::{
+    HttpSegmentSink, Kept, SegmentCounts, WriterIdentity, global_segment_counts,
+};
 
 #[cfg(test)]
 #[path = "window_tests.rs"]

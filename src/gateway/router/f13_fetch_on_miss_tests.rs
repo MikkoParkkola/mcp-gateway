@@ -299,13 +299,13 @@ async fn post(
         .unwrap();
     if let Some(subject) = subject {
         // Auth is disabled in this state, so the middleware leaves it in place.
-        request.extensions_mut().insert(VerifiedIdentity {
-            subject: subject.to_string(),
-            email: format!("{subject}@example.invalid"),
-            name: None,
-            groups: vec![],
-            issuer: "https://idp.example.invalid".to_string(),
-        });
+        request.extensions_mut().insert(VerifiedIdentity::for_test(
+            subject.to_string(),
+            format!("{subject}@example.invalid"),
+            None,
+            vec![],
+            "https://idp.example.invalid".to_string(),
+        ));
     }
     let response = router.clone().oneshot(request).await.unwrap();
     let status = response.status();

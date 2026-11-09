@@ -22,13 +22,13 @@ fn pair(subject: Option<GrantSubject>) -> Option<(String, String)> {
 }
 
 fn verified() -> VerifiedIdentity {
-    VerifiedIdentity {
-        subject: "oidc-subject".to_string(),
-        email: "owner@corp.example".to_string(),
-        name: None,
-        groups: Vec::new(),
-        issuer: "https://issuer.example".to_string(),
-    }
+    VerifiedIdentity::for_test(
+        "oidc-subject".to_string(),
+        "owner@corp.example".to_string(),
+        None,
+        Vec::new(),
+        "https://issuer.example".to_string(),
+    )
 }
 
 #[tokio::test]
@@ -133,8 +133,8 @@ async fn blank_verified_identity_does_not_suppress_admitted_cf() {
     let h = headers(&[(HEADER_CF_ACCESS_JWT, jwt.as_str())]);
     for (case, mut blank) in [("blank issuer", verified()), ("blank subject", verified())] {
         match case {
-            "blank issuer" => blank.issuer.clear(),
-            _ => blank.subject.clear(),
+            "blank issuer" => blank = blank.with_issuer(""),
+            _ => blank = blank.with_subject(""),
         }
         let admission = caller_grant_subject(
             Some(&blank),

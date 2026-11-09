@@ -23,39 +23,85 @@ from dataclasses import dataclass, field
 # not an opener and does not match: a delimiter is a word.
 HEREDOC = re.compile(r"<<[-~]?\s*(['\"]?)(\w+)\1")
 
-def heredocs_dropped(lines):
-    """`lines` with every heredoc body and terminator removed."""
-    kept, delimiter = [], None
-    for line in lines:
-        if delimiter is not None:
-            # Inside a payload only the terminator is looked for. Scanning for
-            # a further opener here would resume on `<<~CAVEATS` — Ruby source
-            # inside a shell heredoc — and hand the rest of the payload back to
-            # the assertions as workflow text.
-            if line.strip() == delimiter:
-                delimiter = None
-            continue
-        kept.append(line)
-        opener = HEREDOC.search(line)
-        if opener:
-            delimiter = opener.group(2)
-    return kept
+
+class Reading(enum.Enum):
+    """How `_heredoc_scan` reads its lines. YAML_TEXT: whole workflow files read as text (the
+    tag-manifest assertions): one line is one command, any `HEREDOC` match opens a body, and a
+    terminator may be indented like the YAML around it. SHELL: one `run:` block read as bash
+    reads it: continuations joined, a quoted string or substitution spanning lines kept whole,
+    comments dropped, openers only where bash sees an operator, delimiters queued in order, and
+    a terminator matched exactly (`<<-` strips leading tabs only)."""
+
+    YAML_TEXT = "yaml-text"
+    SHELL = "shell"
 
 
-def heredoc_bodies(lines):
-    """The body lines `heredocs_dropped` removes (terminators excluded)."""
-    bodies, delimiter = [], None
+class Role(enum.Enum):
+    COMMAND = "command"
+    BODY = "body"  # unquoted delimiter: bash expands `$( )` in it
+    QUOTED_BODY = "quoted-body"  # any quoting in the delimiter: the body is data
+
+
+@dataclass(frozen=True)
+class _Opener:
+    delimiter: str
+    strip_tabs: bool
+    quoted: bool
+
+
+def _heredoc_scan(lines, reading: Reading) -> list[tuple[str, Role]]:
+    """The one heredoc reader: `lines` as (text, Role) in order, terminators dropped.
+
+    Inside a payload only the terminator is looked for. Scanning for a further opener there
+    would resume on `<<~CAVEATS` (Ruby source inside a shell heredoc) and hand the rest of
+    the payload back to the assertions as workflow text."""
+    out, pending, buffer, carry = [], [], None, ""
     for line in lines:
-        if delimiter is not None:
-            if line.strip() == delimiter:
-                delimiter = None
+        if pending and buffer is None:
+            head = pending[0]
+            if reading is Reading.YAML_TEXT:
+                closes = line.strip() == head.delimiter
             else:
-                bodies.append(line)
+                # In an unquoted body bash joins backslash-newlines first and compares the
+                # joined line: `a\` + `EOF` is body, a lone `\` + `EOF` still ends it.
+                joined = carry + line
+                closes = (joined.lstrip("\t") if head.strip_tabs else joined) == head.delimiter
+            if closes:
+                pending.pop(0)
+                carry = ""
+            else:
+                out.append((line, Role.QUOTED_BODY if head.quoted else Role.BODY))
+                trailing = len(line) - len(line.rstrip("\\"))
+                continues = reading is Reading.SHELL and not head.quoted and trailing % 2 == 1
+                carry = (carry + line)[:-1] if continues else ""
             continue
-        opener = HEREDOC.search(line)
-        if opener:
-            delimiter = opener.group(2)
-    return bodies
+        if reading is Reading.YAML_TEXT:
+            out.append((line, Role.COMMAND))
+            opener = HEREDOC.search(line)
+            if opener:
+                pending.append(_Opener(opener.group(2), False, bool(opener.group(1))))
+            continue
+        buffer = line if buffer is None else buffer + line
+        state = _lex_state(buffer)
+        if state.continued:
+            buffer = buffer[:-1]  # bash drops the backslash-newline: the lines join with nothing
+            continue
+        if state.open:
+            buffer += "\n"  # a quote or substitution spans the newline: one command still
+            continue
+        command = _comment_dropped(buffer, state)
+        buffer = None
+        if command.strip():
+            out.append((command, Role.COMMAND))
+        pending += _openers(_ansi_c_decoded(command))  # `<<$'EOF'` is delimiter EOF, quoted
+    if buffer is not None and buffer.strip():
+        out.append((buffer, Role.COMMAND))  # unterminated: read as written (Python fails to tokenize)
+    return out
+
+
+def heredocs_dropped(lines):
+    """`lines` (workflow text) with every heredoc body and terminator removed."""
+    return [text for text, role in _heredoc_scan(lines, Reading.YAML_TEXT) if role is Role.COMMAND]
 
 
 def joined(lines):
@@ -179,18 +225,60 @@ UNSUPPORTED = ("eval", "source", ".")
 SH_SCRIPT = re.compile(r"^(?:\./)?(?!\.\./)((?:[\w.-]+/)*[\w.-]+\.sh)$")
 # Any word ending in .sh triggers the rule, however it is spelled ($DIR/x.sh, x-*.sh, "x.sh").
 SH_MENTION = re.compile(r"\.sh(?![\w.-])")
+# The same, with quotes or escapes between the letters, for text shlex cannot split.
+SH_MENTION_QUOTED = re.compile(r"\.[\\'\"]*s[\\'\"]*h(?![\w.-])")
 
 
 def _names_sh(text):
     """Whether `text` names a .sh, as written or once the shell drops quotes and escapes (x.s"h",
-    x.$'sh'). Text shlex cannot split counts if `.sh` survives any quotes or escapes between."""
+    x.$'\x73h'). Text shlex cannot split counts if `.sh` survives any quotes or escapes between."""
     if SH_MENTION.search(text):
         return True
-    text = text.replace("$'", "'").replace('$"', '"')  # bash's ANSI-C and locale quoting
+    text = _ansi_c_decoded(text)
     try:
         return bool(SH_MENTION.search(" ".join(shlex.split(text))))
     except ValueError:
-        return bool(re.search(r"\.[\\'\"]*s[\\'\"]*h(?![\w.-])", text))
+        return bool(SH_MENTION_QUOTED.search(text))
+
+
+_ANSI_C_SIMPLE = {"a": "\a", "b": "\b", "e": "\x1b", "E": "\x1b", "f": "\f", "n": "\n", "r": "\r",
+                  "t": "\t", "v": "\v", "\\": "\\", "'": "'", '"': '"', "?": "?"}
+_ANSI_C_ESCAPE = re.compile(r"\\(?:x([0-9A-Fa-f]{1,2})|([0-7]{1,3})|u([0-9A-Fa-f]{1,4})|U([0-9A-Fa-f]{1,8})|c(.)|(.))", re.S)
+
+
+def _ansi_c_value(body):
+    r"""What bash makes of the text between `$'` and `'`: octal and hex give one byte (an octal
+    past 255 wraps), `\u`/`\U` a code point, `\cX` a control character; an unknown escape keeps
+    its backslash."""
+    def one(m):
+        hexa, octal, u4, u8, ctrl, other = m.groups()
+        if hexa or octal:
+            return chr(int(hexa, 16) if hexa else int(octal, 8) & 0xFF)
+        if u4 or u8:
+            return chr(min(int(u4 or u8, 16), 0x10FFFF))
+        if ctrl:
+            return chr(ord(ctrl) & 0x1F)
+        return _ANSI_C_SIMPLE.get(other, "\\" + other)
+    return _ANSI_C_ESCAPE.sub(one, body).split("\0", 1)[0]  # bash ends the value at a NUL
+
+
+def _ansi_c_decoded(text):
+    """`text` with every `$'…'` bash reads rewritten as the single-quoted string it stands for, and
+    a top-level `$"…"` as plain double quotes, so every reader after this sees what bash passes.
+    A `$'` left unterminated stays as written (and is refused where a word must be read)."""
+    state = _lex_state(text)
+    out, i = [], 0
+    for begin, finish in state.ansi_c:
+        out.append(text[i:begin])
+        out.append("'" + _ansi_c_value(text[begin + 2:finish - 1]).replace("'", "'\\''") + "'")
+        i = finish
+    out.append(text[i:])
+    decoded = "".join(out)
+    top, _ = _lex(decoded)
+    locale = [k for k in range(len(decoded)) if top[k] and decoded.startswith('$"', k)]
+    return "".join(ch for k, ch in enumerate(decoded) if k not in locale)  # `$"x"` -> `"x"`
+
+
 SH_SYNTAX_LOOP = re.compile(r'^for\s+(\w+)\s+in\s+((?:\S+\.sh\s+)*\S+\.sh)\s*;\s*do\s+bash\s+-n\s+"\$\1"\s*;\s*done$')
 
 
@@ -203,8 +291,7 @@ class ShellLines(enum.Enum):
 
 
 def _token(word, bound):
-    """`word` with CI tokens replaced by placeholders (§5.2), quotes stripped."""
-    word = word.strip("'\"")
+    """`word` (already dequoted) with CI tokens replaced by placeholders (§5.2)."""
     for name, value in bound.items():
         word = word.replace("${" + name + "}", value).replace("$" + name, value)
     word = re.sub(r"\$\{?BASE_SHA\}?", "<BASE_TIP>", word)
@@ -229,20 +316,56 @@ def _binding(value):
     return value, ""
 
 
+_REDIRECT = re.compile(r"\d*(?:>>?|>\||<<<|<>?|>&|<&)|&>>?")
+# The run list writes CI tokens as placeholders (`<BASE_TIP>`, `<HEAD>..x`): words, not input
+# redirections. No workflow line can use the spelling: bash would read a file named `BASE_TIP>`.
+_PLACEHOLDER = re.compile(r"<[A-Z_]+>")
+
+
 def _without_redirections(words):
-    """`words` with shell redirections (`> f`, `2>&1`, `>/dev/null`) removed."""
+    """`words` (as written, quotes kept) with shell redirections removed: an operator alone
+    (`> f`, `<<< w`, `&> f`) takes the next word with it; one with its target attached
+    (`>f`, `2>&1`, `<in`, `&>log`, `<<EOF`) is dropped alone."""
     kept, skip = [], False
     for word in words:
         if skip:
             skip = False
             continue
-        if re.fullmatch(r"\d*>>?|<", word):
+        if _REDIRECT.fullmatch(word):
             skip = True
             continue
-        if re.match(r"^\d*>>?|^\d*>&", word):
+        if _REDIRECT.match(word) and not _PLACEHOLDER.match(word):
             continue
         kept.append(word)
     return kept
+
+
+def _words(text):
+    """`text`'s shell words as (written, value): split where `_lex` sees top-level whitespace,
+    so adjacent quoted and unquoted fragments stay one word (`"--"strict` is `--strict`).
+    Redirections are removed on the written words (a quoted ">" is an argument), then each is
+    dequoted. ValueError on an unterminated quote."""
+    top, _ = _lex(text)
+    written, current = [], ""
+    for flag, char in zip(top, text):
+        if flag and char.isspace():
+            if current:
+                written.append(current)
+            current = ""
+        else:
+            current += char
+    if current:
+        written.append(current)
+    return [(w, "".join(shlex.split(w))) for w in _without_redirections(written)]
+
+
+def _ansi_c(written):
+    """Whether a word uses `$'…'` quoting bash reads (complete or unterminated) or `$"…"`: a
+    credited command using it is refused, since no decoding here is trusted for its value."""
+    state = _lex_state(written)
+    top = state.top
+    return bool(state.ansi_c) or state.ansi_c_open or any(
+        top[i] and written.startswith('$"', i) for i in range(len(written)))
 
 
 def _single_value(value):
@@ -255,16 +378,35 @@ def _single_value(value):
 
 
 def _lex(text):
-    """One reading of shell quoting for `text`: (top, spans).
+    """One reading of shell quoting for `text`: (top, spans); see `_lex_state`."""
+    state = _lex_state(text)
+    return state.top, state.spans
+
+
+@dataclass(frozen=True)
+class _LexState:
+    top: list
+    spans: list
+    open: bool  # `text` ends inside a quote or a command substitution
+    continued: bool  # `text` ends in a backslash bash removes with the newline after it
+    comment: int  # where a top-level `#` comment starts, -1 for none
+    ansi_c: list  # (start, end) of each complete `$'…'` (start at the `$`, end past the `'`)
+    ansi_c_open: bool  # `text` ends inside a `$'…'`
+
+
+def _lex_state(text):
+    """One reading of shell quoting for `text`.
 
     `top[i]` is True where the shell would see an operator at index i: outside
-    quotes, escapes and command substitutions. `spans` are the outermost
+    quotes, escapes, comments and command substitutions. `spans` are the outermost
     command substitutions as (start, end, body): `$( … )` and backticks,
     nested ones included in their parent's body, single-quoted ones never.
     A context stack, not a set of regexes, so `"it's $(x)"`, `"a\\"b"` and
-    `$(a $(b))` read as the shell reads them.
+    `$(a $(b))` read as the shell reads them. A `#` starting a word at top level
+    comments out the rest of its line: quotes in a comment open nothing.
     """
-    top, spans, stack, escaped, i, start = [False] * len(text), [], [], False, 0, None
+    top, spans, stack, escaped, i, start, comment = [False] * len(text), [], [], False, 0, None, -1
+    ansi_c, ansi_start = [], None
     while i < len(text):
         frame = stack[-1] if stack else None
         char, width = text[i], 1
@@ -273,6 +415,21 @@ def _lex(text):
         elif frame == "'":
             if char == "'":
                 stack.pop()
+        elif frame == "$'":
+            # Bash's ANSI-C quoting: a backslash escapes here, so `\'` does not end it.
+            if char == "\\":
+                escaped = True
+            elif char == "'":
+                stack.pop()
+                ansi_c.append((ansi_start, i + 1))
+        elif text.startswith("$'", i) and frame != '"':
+            stack.append("$'")
+            ansi_start, width = i, 2
+        elif not stack and char == "#" and (i == 0 or (top[i - 1] and text[i - 1] in " \t\n;&|()")):
+            end = text.find("\n", i)
+            comment = i if comment < 0 else comment
+            i = len(text) if end < 0 else end
+            continue
         elif char == "\\":
             escaped = True
         elif frame == '"' and char == '"':
@@ -301,7 +458,74 @@ def _lex(text):
         i += width
     # An unterminated quote leaves the rest non-top: a Python stage then fails
     # to tokenize (fail closed); any other command runs nothing seen here.
-    return top, spans
+    return _LexState(top, spans, bool(stack), escaped, comment, ansi_c, "$'" in stack)
+
+
+def _comment_dropped(text, state):
+    """`text` without its top-level comment (it runs to the end: see `_heredoc_scan`)."""
+    return text[:state.comment].rstrip() if state.comment >= 0 else text
+
+
+_WORD_END = frozenset(" \t\n;&|()<>")
+
+
+def _arithmetic_spans(command, top):
+    """(start, end) of each top-level `(( … ))` arithmetic command (`$(( ))` is a substitution
+    and never top-level). An unclosed one runs to the end: nothing after it opens a heredoc."""
+    spans, i = [], 0
+    while i < len(command) - 1:
+        if top[i] and top[i + 1] and command.startswith("((", i) and (i == 0 or command[i - 1] != "$"):
+            end = next((k for k in range(i + 2, len(command) - 1)
+                        if top[k] and top[k + 1] and command.startswith("))", k)), len(command))
+            spans.append((i, end))
+            i = end + 2
+            continue
+        i += 1
+    return spans
+
+
+def _openers(command):
+    """The heredocs `command` opens, in the order bash reads their bodies. A delimiter is the
+    whole word after `<<`/`<<-`; quoting anywhere in it makes the body data and is removed."""
+    top, _ = _lex(command)
+    found, i, arithmetic = [], 0, _arithmetic_spans(command, top)
+    while i < len(command) - 1:
+        if any(a <= i < b for a, b in arithmetic):
+            i += 1  # `((x = 1 << n))`: a shift, not an opener
+            continue
+        if command.startswith("<<<", i):
+            i += 3  # a here-string, not an opener (and its last two `<` are not one either)
+            continue
+        if not (top[i] and top[i + 1] and command.startswith("<<", i)):
+            i += 1
+            continue
+        j = i + 2
+        strip_tabs = command.startswith("-", j)
+        j += strip_tabs
+        while j < len(command) and command[j] in " \t":
+            j += 1
+        word, quoted = "", False
+        while j < len(command) and command[j] not in _WORD_END:
+            char = command[j]
+            if char == "'":
+                close = command.find("'", j + 1)
+                close = len(command) if close < 0 else close
+                word, quoted, j = word + command[j + 1:close], True, close + 1
+            elif char == '"':
+                j, quoted = j + 1, True
+                while j < len(command) and command[j] != '"':
+                    if command[j] == "\\" and command[j + 1:j + 2] in ('"', "\\", "$", "`"):
+                        j += 1
+                    word, j = word + command[j:j + 1], j + 1
+                j += 1
+            elif char == "\\":
+                word, quoted, j = word + command[j + 1:j + 2], True, j + 2
+            else:
+                word, j = word + char, j + 1
+        if word or quoted:  # `<<''` is an empty delimiter; a bare `<<` opens nothing
+            found.append(_Opener(word, strip_tabs, quoted))
+        i = j
+    return found
 
 
 def _split_top(text, separators):
@@ -342,15 +566,24 @@ def _without_substitutions(text):
 
 
 def _command_words(piece):
-    """The words of a simple command, prefixes peeled: keywords, `VAR=value`
-    assignments and `env [VAR=value…]`. Python commands must tokenize; other
-    commands whose quoting shlex cannot read run nothing this check sees."""
+    """The words of a simple command, redirections removed and prefixes peeled: keywords,
+    `VAR=value` assignments and `env [VAR=value…]`. Python commands must tokenize and may not
+    use `$'…'` quoting; other commands whose quoting cannot be read run nothing this check sees."""
+    decoded = _ansi_c_decoded(piece)
     try:
-        words = shlex.split(piece)
+        names = set(shlex.split(decoded)) | {w.rsplit("/", 1)[-1] for w in shlex.split(decoded)}
+    except ValueError:
+        names = set(re.split(r"[\s\"'/]+", decoded))
+    is_python = bool((PYTHONS | GATE_PYTHONS) & names)
+    try:
+        pairs = _words(piece)
     except ValueError as err:
-        if not PYTHONS & set(re.split(r"[\s\"'/]+", piece)):
+        if not is_python:
             return []
         raise UnsupportedSyntax(f"{err}: {piece}") from None
+    if is_python and any(_ansi_c(w) for w, _ in pairs):
+        raise UnsupportedSyntax(f"`$'…'` quoting in a Python command is not decoded: {piece}")
+    words = [value for _, value in pairs]
     while words and (words[0] in KEYWORDS or ASSIGN.match(words[0])):
         words = words[1:]
     if words and words[0] == "env":
@@ -376,23 +609,11 @@ _INLINE_AFTER = re.compile(r"^(?:\s+-[A-Za-z]+)*\s+-(?:[A-Za-z]*[cm]\b|\s|$)")  
 
 
 def _guard_lines(run_block):
-    """`run_block`'s command text for the guard: continuations joined, comment
-    lines and QUOTED heredoc bodies dropped (unquoted ones expand `$( )`)."""
+    """`run_block`'s command text for the guard: commands as bash reads them (see
+    `_heredoc_scan`) plus UNQUOTED heredoc bodies (they expand `$( )`)."""
     text = re.sub(r"\$\{\{\s*(.*?)\s*\}\}", lambda m: "${{" + m.group(1).replace(" ", "") + "}}", run_block)
-    kept, quoted = [], None
-    for line in text.replace("\\\n", " ").splitlines():
-        if quoted is not None:
-            if line.strip() == quoted[0]:
-                quoted = None
-            elif not quoted[1]:
-                kept.append(line)
-            continue
-        if not line.strip().startswith("#"):
-            kept.append(line)
-        opener = HEREDOC.search(line)
-        if opener:
-            quoted = (opener.group(2), bool(opener.group(1)))
-    return kept
+    return [_ansi_c_decoded(line) for line, role in _heredoc_scan(text.splitlines(), Reading.SHELL)
+            if role is not Role.QUOTED_BODY]
 
 
 def _data_stripped(line):
@@ -442,18 +663,22 @@ def _walk(run_block: str, shell_lines: ShellLines = ShellLines.STRICT, ci_only_l
     """The walker proper: every script execution it can read, in order."""
     # One word per `${{ … }}` expression, so whitespace splitting keeps it whole.
     run_block = re.sub(r"\$\{\{\s*(.*?)\s*\}\}", lambda m: "${{" + m.group(1).replace(" ", "") + "}}", run_block)
-    raw_lines = run_block.replace("\\\n", " ").splitlines()
+    scanned = _heredoc_scan(run_block.splitlines(), Reading.SHELL)
     # A heredoc body is data to the Python reading, but it may be a script fed to a shell
     # (`bash <<EOF`): a .sh named in one fails closed unless that exact line is listed.
-    for body in heredoc_bodies(raw_lines):
-        if (_names_sh(body) and " ".join(body.split()) not in ci_only_lines
+    for body, role in scanned:
+        if (role is not Role.COMMAND and _names_sh(body) and " ".join(body.split()) not in ci_only_lines
                 and shell_lines is ShellLines.STRICT):
             raise UnsupportedSyntax(f"a .sh inside a heredoc body: {body.strip()}")
-    lines = heredocs_dropped(raw_lines)
+    lines = [text for text, role in scanned if role is Role.COMMAND]
     found, bound, loops = [], {}, {}
     for raw in lines:
-        if raw.strip().startswith("#"):
-            continue
+        if any("\n" in body and (PY_WORD.search(body) or PY_PATH.search(body) or _names_sh(body))
+               for _, _, body in _lex(raw)[1]):
+            # One that names a script is refused, as before the one scanner (lead ruling 2026-11-08, after a review found
+            # `out=$(python3 x.py<newline>) |`, which bash rejects, credited as a run): reading it
+            # would need bash's own parse to tell a runnable command from a syntax error.
+            raise UnsupportedSyntax(f"a command substitution spanning lines; write it on one line: {raw.strip()}")
         if _names_sh(raw):
             if " ".join(raw.split()) in ci_only_lines:
                 continue
@@ -506,7 +731,7 @@ def _stage_execution(stage, stages, bound, loops):
         rest.pop(0)
     if not rest:
         return found
-    target = rest[0].strip("'\"")
+    target = rest[0]
     for var, pattern in loops.items():
         if target in ("$" + var, "${" + var + "}"):
             target = pattern
@@ -514,7 +739,7 @@ def _stage_execution(stage, stages, bound, loops):
         return found
     if "*" in target and not any(target == p for p in loops.values()):
         raise UnsupportedSyntax(f"a glob operand runs only its first match: {stage}")
-    return found + _forms(words[0], target, _without_redirections(rest[1:]), stages, bound)
+    return found + _forms(words[0], target, rest[1:], stages, bound)
 
 
 def _forms(argv0, target, args, stages, bound):
@@ -548,20 +773,22 @@ def _shell_line(line, bound):
     process = [i for i, (flag, char) in enumerate(zip(top, line)) if flag and char in "<>" and line[i + 1:i + 2] == "("]
     if spans or chained or process:
         raise UnsupportedSyntax(f"a .sh in a chained or substituted command; write it as its own line: {line}")
-    # Redirections are found in the words as written (a quoted ">" is an argument), then quotes
-    # are dropped; the script word itself must be written plainly (no quotes or escapes).
+    # Words as bash reads them (see `_words`); the script word itself must be written plainly
+    # (no quotes or escapes), and no word may use `$'…'` quoting, which is not decoded here.
     try:
-        written = _without_redirections(shlex.split(line, posix=False))
-        words = [" ".join(shlex.split(w)) for w in written]
+        pairs = _words(line)
     except ValueError as err:
         raise UnsupportedSyntax(f"{err}: {line}") from None
+    if any(_ansi_c(w) for w, _ in pairs):
+        raise UnsupportedSyntax(f"`$'…'` quoting on a .sh line is not decoded: {line}")
+    written, words = [w for w, _ in pairs], [v for _, v in pairs]
     argv0 = words[0] if words else ""
     if argv0 == "bash":
         words = words[1:]
         if words[:1] == ["-n"]:
-            if len(words) == 2 and SH_SCRIPT.match(words[1]):
+            if len(words) == 2 and written[-1] == words[1] and SH_SCRIPT.match(words[1]):
                 return []
-            raise UnsupportedSyntax(f"`bash -n` checks one script per line (or the loop form): {line}")
+            raise UnsupportedSyntax(f"`bash -n` checks one plainly written script per line (or the loop form): {line}")
     plain = written[len(written) - len(words):] if words else []
     script = SH_SCRIPT.match(words[0]) if words and plain[0] == words[0] else None
     if not script:

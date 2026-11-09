@@ -42,13 +42,13 @@ fn cache_principal_tags_cannot_collide() {
     assert_ne!(cred, other, "two API keys must not share one principal");
 
     let subject = GrantSubject::for_test(digest, digest, None);
-    let actor = crate::key_server::oidc::VerifiedIdentity {
-        subject: digest.to_string(),
-        email: String::new(),
-        name: None,
-        groups: Vec::new(),
-        issuer: digest.to_string(),
-    };
+    let actor = crate::key_server::oidc::VerifiedIdentity::for_test(
+        digest.to_string(),
+        String::new(),
+        None,
+        Vec::new(),
+        digest.to_string(),
+    );
     let spelled = [
         caller_cache_principal(Some(digest), None, None, None, Authentication::Anonymous),
         caller_cache_principal(None, Some(&actor), None, None, Authentication::Anonymous),
@@ -312,13 +312,13 @@ fn named_callers_keep_their_cache_principal_byte_for_byte() {
         ),
         CachePrincipal::Caller("grant:4:mtls:7:agent-a".to_owned())
     );
-    let identity = crate::key_server::oidc::VerifiedIdentity {
-        subject: "alice".to_owned(),
-        email: String::new(),
-        name: None,
-        groups: vec![],
-        issuer: "https://idp-a.example".to_owned(),
-    };
+    let identity = crate::key_server::oidc::VerifiedIdentity::for_test(
+        "alice".to_owned(),
+        String::new(),
+        None,
+        vec![],
+        "https://idp-a.example".to_owned(),
+    );
     assert_eq!(
         identity.stable_actor_id(),
         "oidc:21:https://idp-a.example:5:alice"

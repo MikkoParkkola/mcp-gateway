@@ -99,8 +99,8 @@ fn subjects_proven_behind_one_shared_key_stay_apart() {
     let bare = source_fingerprint(shared().principal_source(None));
 
     let (mut alice, mut bob) = (NAMED_CALLER.clone(), NAMED_CALLER.clone());
-    alice.subject = "alice".to_string();
-    bob.subject = "bob".to_string();
+    alice = alice.with_subject("alice");
+    bob = bob.with_subject("bob");
     let by_identity = |who| {
         source_fingerprint(
             crate::gateway::meta_mcp::MetaMcpCallerContext {

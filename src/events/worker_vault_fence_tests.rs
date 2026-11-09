@@ -35,13 +35,13 @@ fn managed_config() -> crate::config::Config {
 }
 
 fn person(subject: &str) -> VerifiedIdentity {
-    VerifiedIdentity {
-        subject: subject.into(),
-        email: format!("{subject}@example.com"),
-        name: None,
-        groups: Vec::new(),
-        issuer: "https://idp".into(),
-    }
+    VerifiedIdentity::for_test(
+        subject,
+        format!("{subject}@example.com"),
+        None,
+        Vec::new(),
+        "https://idp",
+    )
 }
 
 /// Each user's grant binding, as custody would answer it; a rotation moves

@@ -610,6 +610,28 @@ class BaseRef(unittest.TestCase):
         with self.assertRaises(SystemExit):
             guard.read_base("no-such-ref")
 
+    # Merge-base mode (pull requests, lanes): the tip dropped the row after the branch was cut,
+    # and the branch never touched it, so the branch point's list is the comparison; base mode
+    # keeps the tip's.
+    def test_merge_base_mode_reads_the_list_at_the_branch_point(self):
+        self.git("branch", "-M", "line")
+        self.git("branch", "feature")
+        guard.ALLOWLIST.write_text("")
+        self.git("commit", "-q", "-am", "the tip shrinks the list")
+        self.git("checkout", "-q", "feature")
+        pin = guard.comparison_commit(guard.ROOT, "line", guard.Compare.MERGE_BASE)
+        self.assertEqual(pin, self.listed)
+        self.assertEqual(guard.read_base(pin), [self.row])
+        self.assertEqual(guard.read_base(guard._pinned_base("line")), [])
+
+    def test_merge_base_mode_without_a_branch_point_refuses(self):
+        self.git("branch", "-M", "line")
+        self.git("checkout", "-q", "--orphan", "unrelated")
+        self.git("commit", "-q", "-m", "unrelated history")
+        self.git("checkout", "-q", "-f", "line")
+        with self.assertRaisesRegex(SystemExit, "fetch full history"):
+            guard.main(["--base", "unrelated", "--compare", "merge-base"])
+
     def test_added_lines_are_read_against_the_base(self):
         rs = Path(self.dir.name) / "src/x_tests.rs"
         rs.parent.mkdir(parents=True)
@@ -687,7 +709,7 @@ class Members(unittest.TestCase):
         self.assertRefused(body, guard.SETTER)
 
     def test_sub4_timeout_field(self):
-        # tests/mik_7272_sub4_adr012_acs.rs:239-252, in the assert-free helper `backend_for`
+        # src/gateway/router/direct_adr012_tests.rs, in the assert-free helper `backend_for`
         body = (
             "let config = BackendConfig {\n    enabled: true,\n    stop_when_idle_for: None,\n"
             "    timeout: Duration::from_millis(300),\n    env: HashMap::default(),\n    ..BackendConfig::default()\n};"

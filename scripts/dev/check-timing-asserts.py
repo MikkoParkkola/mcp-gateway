@@ -132,6 +132,7 @@ from check_timing_asserts_newcode import (
     scan_new,
 )
 from check_timing_asserts_carry import carried_rows, make_revision
+from base_revision import Compare, add_argument, comparison_commit
 
 ROOT = Path(__file__).resolve().parents[2]
 ALLOWLIST = Path(__file__).with_name("timing-asserts-allowlist.tsv")
@@ -348,6 +349,7 @@ def _compute_carried(pin: str, base_rows, rows):
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n", 1)[0])
     parser.add_argument("--base", metavar="REF", help="refuse allowlist rows added since REF")
+    add_argument(parser)
     args = parser.parse_args(argv)
     texts = {p.relative_to(ROOT).as_posix(): p.read_text(encoding="utf-8", errors="replace") for p in rust_files()}
     consts = tree_consts(texts)
@@ -360,11 +362,20 @@ def main(argv: list[str] | None = None) -> int:
     carried = frozenset()
     if args.base:
         # PR-C: new or changed spans only (judge_new).
-        pin = _pinned_base(args.base)
+        if Compare(args.compare) is Compare.MERGE_BASE:
+            # One commit, the branch point, for the allowlist, the moved-function evidence and the
+            # changed lines: a shrink that landed on the tip later is not this change growing it.
+            try:
+                pin = comparison_commit(ROOT, args.base, Compare.MERGE_BASE)
+            except RuntimeError as exc:
+                raise SystemExit(f"FAIL {exc}; the shrink-only check is not skipped") from None
+            changed = added_lines(pin)
+        else:
+            pin, changed = _pinned_base(args.base), added_lines(args.base)
         base_rows = read_base(pin)
         if base_rows is not None:
             carried = _compute_carried(pin, base_rows, rows)
-        found, new_errors = judge_new(found, rows, texts, consts, includers, added_lines(args.base), carried=carried)
+        found, new_errors = judge_new(found, rows, texts, consts, includers, changed, carried=carried)
     else:
         print("No --base: the new-code rules (10 s floor, sleep windows, poll budgets) were not run.")
     errors = judge(found, rows, base_rows, carried=carried) + new_errors

@@ -318,13 +318,13 @@ mod tests {
     use crate::key_server::oidc::VerifiedIdentity;
 
     fn make_identity(subject: &str, email: &str) -> VerifiedIdentity {
-        VerifiedIdentity {
-            subject: subject.to_string(),
-            email: email.to_string(),
-            name: None,
-            groups: Vec::new(),
-            issuer: "https://accounts.google.com".to_string(),
-        }
+        VerifiedIdentity::for_test(
+            subject.to_string(),
+            email.to_string(),
+            None,
+            Vec::new(),
+            "https://accounts.google.com".to_string(),
+        )
     }
 
     fn make_token(subject: &str, email: &str, exp_offset_secs: i64) -> TemporaryToken {
@@ -495,7 +495,7 @@ mod tests {
         let store = InMemoryTokenStore::new();
         let at_a = make_token("123", "", 3600);
         let mut at_b = make_token("123", "", 3600);
-        at_b.identity.issuer = "https://idp-b.example".to_string();
+        at_b.identity = at_b.identity.clone().with_issuer("https://idp-b.example");
         let bearer_b = at_b.token.clone();
         store.insert(at_a).await;
         store.insert(at_b).await;

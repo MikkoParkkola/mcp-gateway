@@ -461,7 +461,36 @@ LIB_TARGET = "mcp_gateway"
 MUTANT_HEAD_RE = re.compile(r"^#mutant\s+([A-Za-z0-9._-]+)(?:\s+multi=([1-9][0-9]*))?\s*$")
 LOCATION_RE = re.compile(r"^[^\s:]+\.rs:[1-9][0-9]*$")
 SITE_LINE_RE = re.compile(r"^MUTANT-SITE (\S+) (\S+):(\d+)$")
-TEST_LINE_RE = re.compile(r"^test (.+?) \.\.\. (ok|FAILED|ignored)$")
+RECORD_RE = re.compile(r"^test (.+?) \.\.\.(?: (.*))?$")
+RESULT_RE = re.compile(r"^(ok|FAILED|ignored)(?:, .*)?$")
+
+
+def records(output: str) -> list[tuple[str, str]]:
+    """libtest's per-test records, (name, ok|FAILED|ignored), in order.
+
+    A line written straight to stderr while a test runs can land between
+    `test NAME ... ` and its result in the merged output, glued after the
+    prefix or on lines of its own. Then the record ends at the next line that
+    is a result word alone; lines between are noise. A prefix no result
+    follows yields no record (libtest-record-parse family)."""
+    found: list[tuple[str, str]] = []
+    held: str | None = None
+    for raw in output.splitlines():
+        line = raw.strip()
+        if held is not None and (r := RESULT_RE.match(line)):
+            found.append((held, r.group(1)))
+            held = None
+            continue
+        m = RECORD_RE.match(line)
+        if not m:
+            continue
+        r = RESULT_RE.match(m.group(2) or "")
+        if r:
+            found.append((m.group(1), r.group(1)))
+            held = None
+        else:
+            held = m.group(1)
+    return found
 PANIC_RE = re.compile(r"^thread '([^']+)'(?: \(\d+\))? panicked at ([^:\s]+):(\d+):\d+:")
 
 
@@ -566,20 +595,26 @@ def classify_row(outcome: Outcome, test: str, location: str) -> str:
     """PASSED, FAILED_AT_SPEC, or ERROR:<why> for one exact-name row run."""
     if outcome.timed_out:
         return "ERROR:timeout"
-    reports = [m.group(2) for line in outcome.output.splitlines()
-               if (m := TEST_LINE_RE.match(line.strip())) and m.group(1) == test]
+    reports = [result for name, result in records(outcome.output) if name == test]
     if outcome.exit is None or outcome.exit < 0 or outcome.exit in (134, 137):
         return "ERROR:abort or signal"
-    if not any(SUMMARY_RE.match(line.strip()) for line in outcome.output.splitlines()):
+    summaries = [m.groups() for line in outcome.output.splitlines() if (m := SUMMARY_RE.match(line.strip()))]
+    if not summaries:
         return "ERROR:no result line"
     if not reports:
         return "ERROR:row did not run"
     if len(reports) > 1:
         return "ERROR:row reported twice"
+    if reports[0] not in ("ok", "FAILED"):
+        return f"ERROR:row {reports[0]}"
+    # A split record can be completed by a stray result word on stderr, so the
+    # record must agree with the exit code and with a summary of exactly this
+    # one test (libtest-record-parse family).
+    want = ("ok", "1", "0") if reports[0] == "ok" else ("FAILED", "0", "1")
+    if (outcome.exit == 0) != (reports[0] == "ok") or want not in [g[:3] for g in summaries]:
+        return "ERROR:record disagrees with the exit code or summary"
     if reports[0] == "ok":
         return "PASSED"
-    if reports[0] != "FAILED":
-        return f"ERROR:row {reports[0]}"
     panics = [f"{m.group(2)}:{m.group(3)}" for line in outcome.output.splitlines()
               if (m := PANIC_RE.match(line.strip())) and m.group(1) == test]
     if location in panics:
@@ -855,6 +890,35 @@ def schemata_self_test() -> tuple[int, list[str]]:
     priv = [re.compile(r"(^|[^A-Za-z0-9])MIK-[0-9]+")]
     refuses("R22 a ticket id in the spec", lambda: check_public_text("#mutant A\n# see MI" "K-1234\n", priv))
     expect("R22 a clean spec", check_public_text(spec_ok, priv), None)
+    # R31-R35: a line written straight to stderr while a row runs can land
+    # between libtest's `test NAME ... ` and its result (fixtures/libtest).
+    fx = Path(__file__).resolve().parent / "fixtures" / "libtest"
+    h12 = "gateway::server::test_seams::health_start_tests::h12_both_files_are_saved_before_serving_and_the_stop_is_clean"
+    meter = ("gateway::router::stored_read_account_tests::http_nonce_alloc::"
+             "a_refused_meta_call_costs_its_parse_plus_a_fixed_cap")
+    for name, file, exit_code, test, want in [
+        ("R31 a stderr line glued after the prefix, then ok", "midline-stderr.txt", 0, h12, "PASSED"),
+        ("R32 forwarded measurement lines, then ok", "alloc-meter-one-thread.txt", 0, meter, "PASSED"),
+        ("R33 a stderr line, then FAILED at the spec line", "failed-after-noise.txt", 101, "m::row_that_fails",
+         "FAILED_AT_SPEC"),
+        ("R34 a caught panic printed by a passing row", "panic-in-passing-test.txt", 0,
+         "m::passes_after_a_caught_panic", "PASSED"),
+        ("R35 a filter that matched nothing", "zero-match.txt", 0, h12, "ERROR:row did not run"),
+    ]:
+        text = (fx / file).read_text(encoding="utf-8")
+        expect(name, classify_row(Outcome(exit_code, text, False), test, "src/x.rs:9"), want)
+    for name, file, exit_code, want in [
+        ("R37 a stray ok line before the real FAILED is no pass", "stray-ok-before-failed.txt", 101,
+         "ERROR:record disagrees with the exit code or summary"),
+        ("R38 a stray FAILED line before the real ok is no kill", "stray-failed-before-ok.txt", 0,
+         "ERROR:record disagrees with the exit code or summary"),
+    ]:
+        text = (fx / file).read_text(encoding="utf-8")
+        expect(name, classify_row(Outcome(exit_code, text, False), "m::row_with_noise", "src/x.rs:9"), want)
+    expect("R36 a held prefix with no result stays unrun",
+           classify_row(Outcome(0, f"running 1 test\ntest {t} ... noise\n\ntest result: ok. 1 passed; 0 failed;"
+                                   " 0 ignored; 0 measured; 9 filtered out\n", False), t, loc),
+           "ERROR:row did not run")
     return n, failures
 
 

@@ -65,13 +65,13 @@ async fn invoke(gw: &Gateway, key: &str, nonce: &str, q: &str) -> Value {
         .header("mcp-name", "gateway_invoke")
         .body(axum::body::Body::from(body.to_string()))
         .unwrap();
-    request.extensions_mut().insert(VerifiedIdentity {
-        subject: "alpha".to_string(),
-        email: "alpha@example.invalid".to_string(),
-        name: None,
-        groups: vec![],
-        issuer: "https://issuer.example.invalid".to_string(),
-    });
+    request.extensions_mut().insert(VerifiedIdentity::for_test(
+        "alpha".to_string(),
+        "alpha@example.invalid".to_string(),
+        None,
+        vec![],
+        "https://issuer.example.invalid".to_string(),
+    ));
     let response = gw.router.clone().oneshot(request).await.unwrap();
     let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     serde_json::from_slice(&bytes).unwrap_or(Value::Null)
@@ -176,13 +176,13 @@ async fn surfaced_call(gw: &Gateway, nonce: &str) -> Value {
         .header("mcp-name", TOOL)
         .body(axum::body::Body::from(body.to_string()))
         .unwrap();
-    request.extensions_mut().insert(VerifiedIdentity {
-        subject: "alpha".to_string(),
-        email: "alpha@example.invalid".to_string(),
-        name: None,
-        groups: vec![],
-        issuer: "https://issuer.example.invalid".to_string(),
-    });
+    request.extensions_mut().insert(VerifiedIdentity::for_test(
+        "alpha".to_string(),
+        "alpha@example.invalid".to_string(),
+        None,
+        vec![],
+        "https://issuer.example.invalid".to_string(),
+    ));
     let response = gw.router.clone().oneshot(request).await.unwrap();
     let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     serde_json::from_slice(&bytes).unwrap_or(Value::Null)
@@ -271,13 +271,13 @@ async fn task_invoke(gw: &Gateway, key: &str, nonce: &str) -> Value {
         .header("mcp-name", "gateway_invoke")
         .body(axum::body::Body::from(body.to_string()))
         .unwrap();
-    request.extensions_mut().insert(VerifiedIdentity {
-        subject: "alpha".to_string(),
-        email: "alpha@example.invalid".to_string(),
-        name: None,
-        groups: vec![],
-        issuer: "https://issuer.example.invalid".to_string(),
-    });
+    request.extensions_mut().insert(VerifiedIdentity::for_test(
+        "alpha".to_string(),
+        "alpha@example.invalid".to_string(),
+        None,
+        vec![],
+        "https://issuer.example.invalid".to_string(),
+    ));
     let response = gw.router.clone().oneshot(request).await.unwrap();
     let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     serde_json::from_slice(&bytes).unwrap_or(Value::Null)

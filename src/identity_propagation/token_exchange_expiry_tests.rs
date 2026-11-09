@@ -9,13 +9,13 @@ use tokio::net::TcpListener;
 use super::*;
 
 fn identity() -> VerifiedIdentity {
-    VerifiedIdentity {
-        subject: "alice".to_string(),
-        email: "alice@corp".to_string(),
-        name: None,
-        groups: vec![],
-        issuer: "https://idp".to_string(),
-    }
+    VerifiedIdentity::for_test(
+        "alice".to_string(),
+        "alice@corp".to_string(),
+        None,
+        vec![],
+        "https://idp".to_string(),
+    )
 }
 
 /// An exchange endpoint answering `body`, and a strategy pointed at it.

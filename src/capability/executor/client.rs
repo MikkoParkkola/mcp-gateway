@@ -3,10 +3,15 @@
 //! The executor's HTTP client: direct and pinned, or through the operator's
 //! `capabilities.egress_proxy` (#1881).
 
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use reqwest::Client;
 
+use crate::counters::End;
+use crate::gateway::SendTimer;
+use crate::security::RedirectEvidence;
 use crate::security::ssrf::{RedirectDecision, redirect_decision};
 use crate::{Error, Result};
 
@@ -26,25 +31,35 @@ use crate::{Error, Result};
 /// # Panics
 ///
 /// Panics if the reqwest client cannot be created (invalid TLS config, etc.).
-pub(super) fn build(proxy: Option<&url::Url>) -> Client {
-    configured(route(proxy))
+pub(super) fn build(proxy: Option<&url::Url>) -> CapabilityClient {
+    over(route(proxy))
 }
 
 /// [`build`] over `builder`, for a test that supplies its own resolver: the
-/// same settings and redirect policy.
+/// same settings, redirect policy and redirect count.
 #[cfg(test)]
-pub(super) fn build_over(builder: reqwest::ClientBuilder) -> Client {
-    configured(builder)
+pub(super) fn build_over(builder: reqwest::ClientBuilder) -> CapabilityClient {
+    over(builder)
 }
 
-/// [`build`]'s settings and redirect policy, over `builder`'s route.
-fn configured(builder: reqwest::ClientBuilder) -> Client {
+/// A [`CapabilityClient`] over `builder`'s route, counting its redirects.
+fn over(builder: reqwest::ClientBuilder) -> CapabilityClient {
+    let redirects = Arc::new(AtomicU64::new(0));
+    let http = configured(builder, Arc::clone(&redirects));
+    CapabilityClient { http, redirects }
+}
+
+/// [`build`]'s settings and redirect policy, over `builder`'s route, the
+/// policy counting each redirect response into `seen`.
+fn configured(builder: reqwest::ClientBuilder, seen: Arc<AtomicU64>) -> Client {
     builder
         .timeout(Duration::from_secs(60))
         .pool_max_idle_per_host(10)
         .pool_idle_timeout(Duration::from_secs(90))
         .tcp_keepalive(Duration::from_secs(30))
-        .redirect(reqwest::redirect::Policy::custom(|attempt| {
+        .redirect(reqwest::redirect::Policy::custom(move |attempt| {
+            // A response came back, whether this hop is followed or refused.
+            seen.fetch_add(1, Ordering::SeqCst);
             // A 307/308 re-sends the body and every header but `Authorization`,
             // so a request that started on TLS or loopback (where a credential
             // may go) never continues in cleartext off this machine (#3013).
@@ -74,6 +89,46 @@ fn configured(builder: reqwest::ClientBuilder) -> Client {
         }))
         .build()
         .expect("Failed to create HTTP client")
+}
+
+/// A capability HTTP client and the redirect responses it has received, so a
+/// send can tell whether its own request may have followed one. The count is
+/// per client, shared by concurrent calls: a refusal is discarded only when
+/// the count did not move across its attempt, so a concurrent call's redirect
+/// can at worst add a Failed sample, never drop a real one. (The MCP HTTP
+/// transport keeps the same kind of counter for its retry evidence.)
+#[derive(Debug, Clone)]
+pub(crate) struct CapabilityClient {
+    pub(super) http: Client,
+    pub(super) redirects: Arc<AtomicU64>,
+}
+
+impl CapabilityClient {
+    /// `http`, counting nothing: a test client with its own redirect policy.
+    #[cfg(test)]
+    pub(super) fn uncounted(http: Client) -> Self {
+        Self {
+            http,
+            redirects: Arc::default(),
+        }
+    }
+}
+
+/// A test's own reqwest client, counting nothing (its redirect policy is the
+/// test's).
+#[cfg(test)]
+impl From<Client> for CapabilityClient {
+    fn from(http: Client) -> Self {
+        Self::uncounted(http)
+    }
+}
+
+impl std::ops::Deref for CapabilityClient {
+    type Target = Client;
+
+    fn deref(&self) -> &Client {
+        &self.http
+    }
 }
 
 /// A redirect hop the policy refused: typed, so the send can tell the
@@ -192,66 +247,150 @@ pub(super) fn redact_url(e: reqwest::Error) -> reqwest::Error {
 
 pub(super) async fn send_with_retry(
     request: reqwest::RequestBuilder,
+    redirects: &AtomicU64,
     label: &str,
     retry_timeouts: bool,
     health: &crate::failsafe::HealthTracker,
 ) -> Result<reqwest::Response> {
     let started = std::time::Instant::now();
     let mut backoff_ms: u64 = 100;
+    let mut request = Some(request);
     for attempt in 1..=MAX_SEND_ATTEMPTS {
-        let Some(attempt_req) = request.try_clone() else {
-            // Non-cloneable body: a single attempt is the best we can do.
-            return match request.send().await {
-                Ok(resp) => {
-                    health.record_success(started.elapsed());
-                    Ok(resp)
-                }
-                Err(e) => Err(
-                    crate::security::http_diagnostics::ssrf_refusal(&e).map_or_else(
-                        || {
-                            note_redirect_refusal(&e);
-                            health.record_failure();
-                            Error::Transport(format!("{label} failed: {}", redact_url(e)))
-                        },
-                        |refused| {
-                            crate::gateway::delivery_facts::refused_while_vouched();
-                            refused
-                        },
-                    ),
-                ),
-            };
+        // A non-cloneable body gets a single attempt: the best we can do.
+        let (this, last) = match request
+            .as_ref()
+            .and_then(reqwest::RequestBuilder::try_clone)
+        {
+            Some(clone) => (clone, attempt == MAX_SEND_ATTEMPTS),
+            None => match request.take() {
+                Some(only) => (only, true),
+                // Taken only for a final attempt, which always returns.
+                None => return Err(Error::Internal(format!("{label}: request already sent"))),
+            },
         };
-        match attempt_req.send().await {
+        let e = match timed_attempt(this, redirects).await {
             Ok(resp) => {
                 health.record_success(started.elapsed());
                 return Ok(resp);
             }
-            Err(e) => {
-                // A refused destination is refused again: one attempt, no health mark.
-                if let Some(refused) = crate::security::http_diagnostics::ssrf_refusal(&e) {
-                    crate::gateway::delivery_facts::refused_while_vouched();
-                    return Err(refused);
-                }
-                note_redirect_refusal(&e);
-                let transient = e.is_connect() || (retry_timeouts && e.is_timeout());
-                let e = redact_url(e);
-                if transient && attempt < MAX_SEND_ATTEMPTS {
-                    tracing::warn!(
-                        label = label,
-                        attempt = attempt,
-                        backoff_ms = backoff_ms,
-                        error = %e,
-                        "transient outbound transport error; retrying"
-                    );
-                    tokio::time::sleep(Duration::from_millis(backoff_ms)).await;
-                    backoff_ms *= 2;
-                    continue;
-                }
+            Err(Failed::Body(e)) => {
                 health.record_failure();
-                return Err(Error::Transport(format!("{label} failed: {e}")));
+                return Err(Error::Protocol(format!(
+                    "{label}: failed to read the response body: {}",
+                    redact_url(e)
+                )));
             }
+            Err(Failed::Send(e)) => e,
+        };
+        // A refused destination is refused again: one attempt, no health mark.
+        if let Some(refused) = crate::security::http_diagnostics::ssrf_refusal(&e) {
+            crate::gateway::delivery_facts::refused_while_vouched();
+            return Err(refused);
         }
+        note_redirect_refusal(&e);
+        let transient = e.is_connect() || (retry_timeouts && e.is_timeout());
+        let e = redact_url(e);
+        if transient && !last {
+            tracing::warn!(
+                label = label,
+                attempt = attempt,
+                backoff_ms = backoff_ms,
+                error = %e,
+                "transient outbound transport error; retrying"
+            );
+            tokio::time::sleep(Duration::from_millis(backoff_ms)).await;
+            backoff_ms *= 2;
+            continue;
+        }
+        health.record_failure();
+        return Err(Error::Transport(format!("{label} failed: {e}")));
     }
     // The final attempt always returns above; the loop cannot fall through.
     unreachable!("send_with_retry exhausted attempts without returning")
+}
+
+/// How one attempt failed: before an answer arrived, or reading its body.
+enum Failed {
+    Send(reqwest::Error),
+    Body(reqwest::Error),
+}
+
+/// One attempt, timed from the send through the body read, so a slow or
+/// stalled body counts and the backoff between attempts does not. The body
+/// is read here (every caller reads it whole) and handed back in a rebuilt
+/// response, which callers read as they did the original.
+async fn timed_attempt(
+    request: reqwest::RequestBuilder,
+    redirects: &AtomicU64,
+) -> std::result::Result<reqwest::Response, Failed> {
+    let (client, built) = request.build_split();
+    let request = built.map_err(Failed::Send)?;
+    let before = redirects.load(Ordering::SeqCst);
+    let timer = SendTimer::start();
+    let sent = match client.execute(request).await {
+        Ok(sent) => sent,
+        Err(e) => {
+            let evidence = if redirects.load(Ordering::SeqCst) == before {
+                RedirectEvidence::NoRedirectFollowed
+            } else {
+                RedirectEvidence::MayHaveRedirected
+            };
+            end_send(timer, &e, evidence);
+            return Err(Failed::Send(e));
+        }
+    };
+    let (status, version, headers) = (sent.status(), sent.version(), sent.headers().clone());
+    match sent.bytes().await {
+        Ok(body) => {
+            timer.finish(End::Answered);
+            // The rebuilt response carries no request URL: no capability
+            // caller reads one, and `status_error` strips it anyway.
+            let mut rebuilt = axum::http::Response::new(body);
+            *rebuilt.status_mut() = status;
+            *rebuilt.version_mut() = version;
+            *rebuilt.headers_mut() = headers;
+            Ok(reqwest::Response::from(rebuilt))
+        }
+        Err(e) => {
+            timer.finish(if e.is_timeout() {
+                End::TimedOut
+            } else {
+                End::Failed
+            });
+            // A refusal (a 401, a 429) keeps its status even when its body
+            // never arrives: callers classify by status (credential refresh,
+            // rate limits), so it goes back with an empty body. A success
+            // whose body failed is an error, never an empty success.
+            if status.is_success() {
+                Err(Failed::Body(e))
+            } else {
+                // Its headers too (a 429's Retry-After), less a length the
+                // empty body no longer has.
+                let mut empty = axum::http::Response::new(axum::body::Bytes::new());
+                *empty.status_mut() = status;
+                *empty.version_mut() = version;
+                *empty.headers_mut() = headers;
+                empty.headers_mut().remove(reqwest::header::CONTENT_LENGTH);
+                Ok(reqwest::Response::from(empty))
+            }
+        }
+    }
+}
+
+/// How a send that failed before any answer ended. An SSRF refusal with no
+/// redirect response across the attempt refused the first hop, which was
+/// never sent to: nothing is noted. After a redirect response a server
+/// answered first, so the send failed (a concurrent call's redirect can only
+/// add such a sample: see [`CapabilityClient`]). A timeout is reqwest's own
+/// flag, read before the error is wrapped as `Transport`.
+fn end_send(timer: SendTimer, e: &reqwest::Error, evidence: RedirectEvidence) {
+    if crate::security::http_diagnostics::ssrf_refusal(e).is_some()
+        && evidence == RedirectEvidence::NoRedirectFollowed
+    {
+        timer.discard();
+    } else if e.is_timeout() {
+        timer.finish(End::TimedOut);
+    } else {
+        timer.finish(End::Failed);
+    }
 }
