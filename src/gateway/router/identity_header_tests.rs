@@ -433,6 +433,7 @@ async fn key_server_still_enforces_iat_cap() {
         )),
         config,
         email_key: crate::key_server::email_hash::EmailHashKey::for_test(),
+        revocation_signals: std::sync::atomic::AtomicU64::new(0),
     };
     let token = |iat_ago| {
         idp.sign(&json!({

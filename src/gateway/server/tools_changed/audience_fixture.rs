@@ -594,7 +594,7 @@ impl World {
     }
 
     /// A principal's bearer: a live temporary token for `subject`.
-    pub(super) async fn principal(&self, subject: &str) -> String {
+    pub(super) fn principal(&self, subject: &str) -> String {
         let token = principal_token(subject);
         let bearer = token.token.clone();
         crate::key_server::store::activate_for_test(self.key_server.store.as_ref(), self.key_server.config.token_ttl_secs, token);

@@ -111,6 +111,8 @@ pub struct KeyServer {
     pub config: KeyServerConfig,
     /// The installation key behind every audit record's `email_hash`.
     pub(crate) email_key: Arc<email_hash::EmailHashKey>,
+    /// How many credential-revocation signals this key server has sent.
+    pub(crate) revocation_signals: std::sync::atomic::AtomicU64,
 }
 
 impl KeyServer {
@@ -128,7 +130,17 @@ impl KeyServer {
             policy,
             config,
             email_key,
+            revocation_signals: std::sync::atomic::AtomicU64::new(0),
         }
+    }
+
+    /// A credential this key server issued may have been revoked: wake every
+    /// listener re-check (process-wide), and count it here, so a row can
+    /// read exactly this server's signals.
+    pub(crate) fn credentials_changed(&self) {
+        self.revocation_signals
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        crate::events::credentials_changed();
     }
 
     /// Log one WARN per identity provider whose subjects are email
