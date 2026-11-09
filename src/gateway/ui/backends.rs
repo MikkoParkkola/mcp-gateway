@@ -179,10 +179,14 @@ async fn add_backend(
 
     // A credential in the saved command or URL is refused by field before
     // anything is resolved (it would land in gateway.yaml as text).
-    let refused =
-        super::backend_ops::credential_refusals(req.command.as_deref(), req.url.as_deref());
-    if !refused.is_empty() {
-        return super::secret_slots::refused_values(&refused);
+    if let Some(answer) = update_refusals::credential_answer(
+        &state,
+        RefusalKind::Add,
+        &req.name,
+        req.command.as_deref(),
+        req.url.as_deref(),
+    ) {
+        return answer;
     }
     // Resolve the whole backend: transport, description, and for a registry
     // entry its login, env templates and default state.
@@ -419,7 +423,7 @@ async fn update_backend(
     } = req;
 
     let tools = allowed_tools.as_ref().and_then(Option::as_deref);
-    if let Some(refused) = refuse_update(&name, tools, command.as_deref(), url.as_deref()) {
+    if let Some(refused) = refuse_update(&state, &name, tools, command.as_deref(), url.as_deref()) {
         return refused;
     }
 
