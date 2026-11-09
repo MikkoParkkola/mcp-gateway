@@ -1,0 +1,3 @@
+head_sha	4c7cbc402f530717b80d014b0e4144bf8cc530e2
+#mutant K21m
+mcp_gateway	gateway::router::tests::task_execution_adapter::relay_plan_replay_snapshot_guards::k26_another_epoch_is_refused_under_block_only	src/gateway/router/tests/task_execution_adapter/relay_plan_replay_snapshot_guards.rs:265
