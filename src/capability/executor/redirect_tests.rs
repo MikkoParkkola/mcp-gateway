@@ -90,7 +90,7 @@ async fn a_blocked_redirect_is_the_ssrf_refusal_and_leaves_health_alone() {
     for _ in 0..3 {
         let outcome = tokio::time::timeout(
             crate::test_wait::HANG_BOUND,
-            super::send_with_retry(client.get(&url), "test", true, &health),
+            super::send_with_retry(client.get(&url), &client.redirects, "test", true, &health),
         )
         .await
         .expect("bounded");
@@ -152,7 +152,7 @@ async fn redirected_in(
         before();
         let outcome = tokio::time::timeout(
             crate::test_wait::HANG_BOUND,
-            super::send_with_retry(client.get(&url), "test", true, &health),
+            super::send_with_retry(client.get(&url), &client.redirects, "test", true, &health),
         )
         .await
         .expect("bounded");
@@ -266,7 +266,7 @@ async fn single_attempt_refused(location: &'static str) -> crate::Error {
     let (outcome, facts) = delivery_facts::scope(async {
         let outcome = tokio::time::timeout(
             crate::test_wait::HANG_BOUND,
-            super::send_with_retry(request, "test", true, &health),
+            super::send_with_retry(request, &client.redirects, "test", true, &health),
         )
         .await
         .expect("bounded");
@@ -307,7 +307,7 @@ async fn a_single_attempt_rejected_redirect_leaves_health_alone() {
         let request = client.post(format!("http://127.0.0.1:{port}/")).body(body);
         let outcome = tokio::time::timeout(
             crate::test_wait::HANG_BOUND,
-            super::send_with_retry(request, "test", true, &health),
+            super::send_with_retry(request, &client.redirects, "test", true, &health),
         )
         .await
         .expect("bounded");
@@ -321,13 +321,16 @@ async fn a_single_attempt_rejected_redirect_leaves_health_alone() {
 
 /// The `response_effect` a delivery cell holds after one send of `request`
 /// through `client`, and whether the send succeeded.
-async fn effect_of_send(request: reqwest::RequestBuilder) -> (bool, Option<serde_json::Value>) {
+async fn effect_of_send(
+    request: reqwest::RequestBuilder,
+    redirects: &std::sync::atomic::AtomicU64,
+) -> (bool, Option<serde_json::Value>) {
     use crate::gateway::delivery_facts;
     let health = crate::failsafe::HealthTracker::new("test");
     let (ok, facts) = delivery_facts::scope(async {
         let outcome = tokio::time::timeout(
             crate::test_wait::HANG_BOUND,
-            super::send_with_retry(request, "test", true, &health),
+            super::send_with_retry(request, redirects, "test", true, &health),
         )
         .await
         .expect("bounded");
@@ -373,6 +376,7 @@ async fn an_allowed_redirect_is_followed_and_records_no_refusal() {
     let client = super::client::build(Some(&proxy));
     let (ok, effect) = Box::pin(effect_of_send(
         client.get("http://capability-fixture.test/"),
+        &client.redirects,
     ))
     .await;
     assert!(ok, "premise: the send succeeds");
@@ -408,6 +412,7 @@ async fn an_ordinary_transport_failure_records_no_refusal() {
     let client = super::client::build(None);
     let (ok, effect) = Box::pin(effect_of_send(
         client.get(format!("http://127.0.0.1:{port}/")),
+        &client.redirects,
     ))
     .await;
     assert!(!ok, "premise: the send fails");
@@ -448,7 +453,7 @@ async fn composite_with_refused_step(
         let outcome = delivery_facts::step(async {
             tokio::time::timeout(
                 crate::test_wait::HANG_BOUND,
-                super::send_with_retry(client.get(&url), "test", true, &health),
+                super::send_with_retry(client.get(&url), &client.redirects, "test", true, &health),
             )
             .await
             .expect("bounded")
@@ -486,7 +491,8 @@ async fn a_refused_redirect_step_marks_the_plan_only_when_it_ends_it() {
 }
 
 /// Answers every name with one private address.
-struct PrivateAnswer;
+/// Answers every name with a private address, counting its lookups.
+struct PrivateAnswer(std::sync::Arc<std::sync::atomic::AtomicUsize>);
 
 impl crate::security::ssrf::HostResolver for PrivateAnswer {
     fn lookup(
@@ -495,6 +501,7 @@ impl crate::security::ssrf::HostResolver for PrivateAnswer {
     ) -> std::pin::Pin<
         Box<dyn std::future::Future<Output = crate::Result<Vec<std::net::IpAddr>>> + Send + '_>,
     > {
+        self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         Box::pin(async { Ok(vec![std::net::IpAddr::from([10, 0, 0, 1])]) })
     }
 }
@@ -515,16 +522,68 @@ async fn a_redirect_to_a_name_the_pin_refuses_records_refused() {
         }),
     );
     let port = serve(app).await;
+    let lookups = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let client = super::client::build_over(
         reqwest::Client::builder().no_proxy().dns_resolver(
-            crate::security::ssrf::PinningResolver::new(PrivateAnswer)
-                .with_policy(crate::security::ssrf::DestinationPolicy::Public),
+            crate::security::ssrf::PinningResolver::new(PrivateAnswer(std::sync::Arc::clone(
+                &lookups,
+            )))
+            .with_policy(crate::security::ssrf::DestinationPolicy::Public),
         ),
     );
-    let (ok, effect) = Box::pin(effect_of_send(
+    // A server answered the first hop, so the refused hop is one Failed
+    // send: only the client's own redirect count tells it from an unsent one.
+    let send = std::time::Duration::from_millis(7);
+    crate::gateway::send_timer_seam::inject(send);
+    let ((ok, effect), notes) = crate::gateway::with_dispatch_scope(Box::pin(effect_of_send(
         client.get(format!("http://127.0.0.1:{port}/")),
+        &client.redirects,
+    )))
+    .await;
+    crate::gateway::send_timer_seam::clear();
+    assert!(!ok, "premise: the pin refused the hop");
+    // The pin resolved the hop's name: no earlier check refused it first.
+    assert!(
+        lookups.load(std::sync::atomic::Ordering::SeqCst) >= 1,
+        "the hop was refused before the pin resolved its name"
+    );
+    assert_eq!(effect, Some("refused".into()));
+    assert_eq!(
+        notes.backend_sample(),
+        Some((send, crate::counters::End::Failed))
+    );
+}
+
+/// Latency row 23c(b): a public hop answered 302 to a denied address. A
+/// server did answer, so the refused redirect notes one send, Failed.
+#[tokio::test]
+async fn a_refused_redirect_hop_notes_a_failed_send() {
+    use crate::counters::End;
+    use crate::gateway::{send_timer_seam as seam, with_dispatch_scope};
+    let app = axum::Router::new().route(
+        "/",
+        axum::routing::get(|| async {
+            (
+                axum::http::StatusCode::FOUND,
+                [(axum::http::header::LOCATION, "http://10.255.255.1/")],
+            )
+        }),
+    );
+    let port = serve(app).await;
+    let client = super::client::build(None);
+    let health = crate::failsafe::HealthTracker::new("test");
+    let url = format!("http://127.0.0.1:{port}/");
+    let send = std::time::Duration::from_millis(7);
+    seam::inject(send);
+    let (outcome, notes) = with_dispatch_scope(tokio::time::timeout(
+        crate::test_wait::HANG_BOUND,
+        super::send_with_retry(client.get(&url), &client.redirects, "test", true, &health),
     ))
     .await;
-    assert!(!ok, "premise: the pin refused the hop");
-    assert_eq!(effect, Some("refused".into()));
+    seam::clear();
+    let err = outcome
+        .expect("bounded")
+        .expect_err("a blocked redirect fails");
+    assert!(crate::security::ssrf::is_ssrf_refusal(&err), "{err}");
+    assert_eq!(notes.backend_sample(), Some((send, End::Failed)));
 }
