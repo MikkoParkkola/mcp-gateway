@@ -576,3 +576,21 @@ async fn the_overflow_refusal_delivered_records_refused() {
     .await;
     assert_eq!(effect, "refused");
 }
+
+/// The delivery scope holds the future it wraps once. As an `async fn` it
+/// kept the argument beside the task-local future that owns it, so a boxed
+/// dispatch future was twice its size on every call, a refused one included.
+#[test]
+fn the_delivery_scope_holds_its_future_once() {
+    let payload = [7u8; 4096];
+    let inner = async move {
+        std::hint::black_box(&payload);
+    };
+    let inner_size = std::mem::size_of_val(&inner);
+    let scoped = super::scope(inner);
+    let scoped_size = std::mem::size_of_val(&scoped);
+    assert!(
+        scoped_size < inner_size + 1024,
+        "scope of a {inner_size} B future is {scoped_size} B: the future is held twice"
+    );
+}
