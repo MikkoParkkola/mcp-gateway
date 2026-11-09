@@ -221,9 +221,12 @@ type ChunkKey = (std::path::PathBuf, u64, u64);
 /// Per-request memory of verified chunks: their bytes, keyed by log path,
 /// segment and chunk (the two logs share coordinates), so a record is
 /// compared with the bytes that verified, not re-read ones. Bounded: at most [`KEPT_CHUNKS`], the oldest re-read when evicted.
+/// A chunk that failed is remembered too (its key only), so every other row
+/// in an edited chunk fails closed without reading it again.
 #[derive(Debug, Default)]
 pub(crate) struct Checked {
     kept: std::collections::VecDeque<(ChunkKey, std::rc::Rc<Vec<u8>>)>,
+    failed: std::collections::HashSet<ChunkKey>,
     hashed: usize,
 }
 
@@ -240,26 +243,45 @@ impl Checked {
         end: u64,
         want: &str,
     ) -> Option<std::rc::Rc<Vec<u8>>> {
-        use std::io::{Read, Seek, SeekFrom};
         let key = (path.to_path_buf(), seq, chunk);
         if let Some((_, bytes)) = self.kept.iter().find(|(k, _)| *k == key) {
             return Some(std::rc::Rc::clone(bytes));
         }
-        let start = chunk * CHUNK;
-        let mut f = super::pager::open_segment(path, seq, || {}).ok()??;
-        f.seek(SeekFrom::Start(start)).ok()?;
-        let mut buf = Vec::with_capacity(usize::try_from(end - start).ok()?);
-        f.take(end - start).read_to_end(&mut buf).ok()?;
-        self.hashed += 1;
-        if buf.len() as u64 != end - start || hex::encode(sha256_raw(&buf)) != want {
+        if self.failed.contains(&key) {
             return None;
         }
-        let bytes = std::rc::Rc::new(buf);
+        let Some(bytes) = Self::read_verified(path, seq, chunk, end, want, &mut self.hashed) else {
+            self.failed.insert(key);
+            return None;
+        };
+        let bytes = std::rc::Rc::new(bytes);
         if self.kept.len() == KEPT_CHUNKS {
             self.kept.pop_front();
         }
         self.kept.push_back((key, std::rc::Rc::clone(&bytes)));
         Some(bytes)
+    }
+
+    /// Read `chunk` through the pager and check it against `want`.
+    fn read_verified(
+        path: &Path,
+        seq: u64,
+        chunk: u64,
+        end: u64,
+        want: &str,
+        hashed: &mut usize,
+    ) -> Option<Vec<u8>> {
+        use std::io::{Read, Seek, SeekFrom};
+        let start = chunk * CHUNK;
+        let mut f = super::pager::open_segment(path, seq, || {}).ok()??;
+        f.seek(SeekFrom::Start(start)).ok()?;
+        let mut buf = Vec::with_capacity(usize::try_from(end - start).ok()?);
+        f.take(end - start).read_to_end(&mut buf).ok()?;
+        *hashed += 1;
+        if buf.len() as u64 != end - start || hex::encode(sha256_raw(&buf)) != want {
+            return None;
+        }
+        Some(buf)
     }
 }
 
