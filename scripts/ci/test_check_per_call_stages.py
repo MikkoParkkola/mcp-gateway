@@ -36,6 +36,15 @@ class WithoutTestModules(unittest.TestCase):
     def test_a_cfg_all_test_module_is_removed(self):
         self.assertEqual(fns("fn a(){}\n#[cfg(all(test, x))]\nmod t { fn h(){} }\nfn e(){}\n"), ["a", "e"])
 
+    # MIK-9387.TCFG.2: the shared reader decides, wherever `test` sits.
+    def test_test_in_any_operand_of_all_is_removed(self):
+        self.assertEqual(fns("fn a(){}\n#[cfg(all(x, test))]\nmod t { fn h(){} }\nfn e(){}\n"), ["a", "e"])
+
+    def test_any_test_or_x_and_test_mode_are_kept(self):
+        for gate in ("any(test, x)", "test_mode", 'all(feature = "a,test")'):
+            with self.subTest(gate=gate):
+                self.assertEqual(fns(f"fn a(){{}}\n#[cfg({gate})]\nmod t {{ fn h(){{}} }}\n"), ["a", "h"])
+
 
 class Discovery(unittest.TestCase):
     """F1: the checked file set is derived from the anchors' child-module

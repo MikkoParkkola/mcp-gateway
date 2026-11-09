@@ -482,6 +482,32 @@ def test_redos_fix_keeps_what_the_attribute_run_captures() -> None:
     assert [m.group(1) for m in inv.MACRO_EXPORT_RE.finditer(exported)] == ["sample"]
     assert inv.OUTER_ATTRS_RE.search("x\n#[derive(Debug)]\n#[repr(C)]\n").group(1) == "#[derive(Debug)]\n#[repr(C)]\n"
 
+
+# MIK-9387.TCFG.2: test-only code is judged by the shared reader, wherever `test` sits.
+def test_an_inline_module_under_any_test_only_cfg_is_left_out() -> None:
+    for gate, kept in (("all(x, test)", False), ("all(test, x)", False), ("any(test, x)", True), ("test_mode", True)):
+        code, _ = inv.prod_scan_text(f"#[cfg({gate})]\nmod t {{ fn h() {{}} }}\nfn e() {{}}\n")
+        assert ("fn h" in code) == kept, (gate, code)
+        assert "fn e" in code, (gate, code)
+
+
+def test_module_files_skip_test_only_declarations_and_inner_test_files() -> None:
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as tmp:
+        src = Path(tmp)
+        (src / "lib.rs").write_text(
+            "mod plain;\n#[cfg(all(x, test))]\nmod gated;\n#[cfg(any(test, x))]\nmod either;\nmod inner;\n",
+            encoding="utf-8",
+        )
+        for name in ("plain", "gated", "either"):
+            (src / f"{name}.rs").write_text("", encoding="utf-8")
+        (src / "inner.rs").write_text("#![cfg(test)]\nmod child;\n", encoding="utf-8")
+        (src / "inner").mkdir()
+        (src / "inner" / "child.rs").write_text("", encoding="utf-8")
+        found = {p.relative_to(src).as_posix() for p in inv.module_files(src / "lib.rs")}
+    assert found == {"lib.rs", "plain.rs", "either.rs"}, sorted(found)
+
 if __name__ == "__main__":
     failed = 0
     for name, fn in sorted(globals().items()):

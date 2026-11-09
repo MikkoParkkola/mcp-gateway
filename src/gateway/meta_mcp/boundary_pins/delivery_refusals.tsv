@@ -231,16 +231,16 @@ src/gateway/router/accounts/journeys.rs	status	journey_refusal	1	no-record	accou
 src/gateway/router/accounts/journeys.rs	status	refusal	3	no-record	accounts, SSE, start-up or admin UI: no call delivery
 src/gateway/router/authorization.rs	decide_tool_target	tool_policy_refusal	1	feeds	the HTTP tool-policy error; the route stage and the direct preflight raise it
 src/gateway/router/authorization.rs	require_admin_log_level	audit_refusal	1	not-delivered	audit row
-src/gateway/router/backend_handlers.rs	apply_backend_tool_call_security	key_refusal	1	recorded	direct undeclared key; raised in key_check where the text refuses
+src/gateway/router/backend_handlers/direct_security.rs	apply_backend_tool_call_security	key_refusal	1	recorded	direct undeclared key; raised in key_check where the text refuses
 src/gateway/router/backend_handlers.rs	cached_error_response	Error::ResponseFirewallRefused	1	recorded	the frame is marked delivery_refusal
 src/gateway/router/backend_handlers.rs	cached_error_response	is_firewall_refusal	1	not-delivered	predicate
 src/gateway/router/backend_handlers.rs	cached_error_response	refusal	1	composite-or-replay	idempotency replay of a cached firewall refusal
-src/gateway/router/backend_handlers.rs	firewall_refusal	relay_refusal	1	recorded	403, classed Denied by the direct recorder
-src/gateway/router/backend_handlers.rs	firewall_refusal	request_refusal	1	recorded	request firewall 403, classed Denied by the direct recorder
-src/gateway/router/backend_handlers.rs	guard_tool_call	firewall_refusal	1	feeds	builds the request-firewall or relay refusal guard_tool_call returns, recorded at its own sites in firewall_refusal
-src/gateway/router/backend_handlers.rs	guard_tool_call	refusal	1	recorded	kill switch: sealed, recorded at the direct outlet
-src/gateway/router/backend_handlers.rs	guard_tool_call	take_refusal	1	not-delivered	a memo: the noted refusing check and its rule, kept for the withheld call's record
-src/gateway/router/backend_handlers.rs	guard_tool_call	withheld_refusal	1	recorded	raised above it in this fn (direct withheld call)
+src/gateway/router/backend_handlers/direct_security.rs	firewall_refusal	relay_refusal	1	recorded	403, classed Denied by the direct recorder
+src/gateway/router/backend_handlers/direct_security.rs	firewall_refusal	request_refusal	1	recorded	request firewall 403, classed Denied by the direct recorder
+src/gateway/router/backend_handlers/direct_security.rs	guard_tool_call	firewall_refusal	1	feeds	builds the request-firewall or relay refusal guard_tool_call returns, recorded at its own sites in firewall_refusal
+src/gateway/router/backend_handlers/direct_security.rs	guard_tool_call	refusal	1	recorded	kill switch: sealed, recorded at the direct outlet
+src/gateway/router/backend_handlers/direct_security.rs	guard_tool_call	take_refusal	1	not-delivered	a memo: the noted refusing check and its rule, kept for the withheld call's record
+src/gateway/router/backend_handlers/direct_security.rs	guard_tool_call	withheld_refusal	1	recorded	raised above it in this fn (direct withheld call)
 src/gateway/router/backend_handlers/direct_audit.rs	audited_call_judged	audit_unavailable_refusal	1	not-a-decision	the audit sink failed
 src/gateway/router/backend_handlers/direct_caller.rs	intake_refusal	intake_refusal	1	not-a-decision	a keyed call with no execution principal
 src/gateway/router/backend_handlers/direct_caller.rs	read_envelope	backend_refusal	1	recorded	403, classed Denied by the direct recorder
@@ -324,7 +324,10 @@ src/gateway/ui/discovery_adopt.rs	adopt_discovery	name_refusal	1	no-record	admin
 src/gateway/ui/discovery_adopt.rs	answer	config_refusal	1	no-record	admin UI discovery adopt: the config writer's guarded read refused gateway.yaml, fixed text, no call delivery
 src/gateway/ui/events.rs	replay_one	refusal	1	no-record	accounts, SSE, start-up or admin UI: no call delivery
 src/gateway/ui/import.rs	fetch_error_message	ssrf_refusal	1	no-record	accounts, SSE, start-up or admin UI: no call delivery
+src/gateway/ui/keys_create.rs	check_expiry	refuse_with	1	no-record	admin UI key create: refuses an expiry past the clock read under the config lock, fixed text, no call delivery
 src/gateway/ui/keys_create.rs	check_flip	refuse_multi_user_flip	1	no-record	admin UI key create: refuses a key that would flip the running multi-user status, no call delivery
+src/gateway/ui/keys_create.rs	check_flip	refuse_with	1	no-record	admin UI key create: records the flip refusal the route answers as restart_required, fixed text, no call delivery
+src/gateway/ui/keys_create.rs	compute	refuse_with	1	no-record	admin UI key create: records the in-place edit refusal the route answers as not_written, fixed text, no call delivery
 src/gateway/ui/overview.rs	kpi_and_servers	startup_refusal	1	no-record	the Overview's Needs-you list: a start-up denial shown to the admin, no call delivery
 src/gateway/ui/policies_rules.rs	refused	first_refusal	1	not-delivered	the Policies read model's flag on a rule; nothing is refused
 src/gateway/ui/preview.rs	preview_backend	refusal	1	no-record	accounts, SSE, start-up or admin UI: no call delivery
