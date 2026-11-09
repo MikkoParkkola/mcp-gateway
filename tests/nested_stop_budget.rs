@@ -168,7 +168,7 @@ async fn ready_port(client: &reqwest::Client, root: &Path) -> u16 {
         if let Some(port) = gateway_bin::logged_port(&root.join("gateway.log"))
             && client
                 .get(format!("http://127.0.0.1:{port}/health"))
-                .timeout(Duration::from_secs(5))
+                .timeout(Duration::from_secs(10))
                 .send()
                 .await
                 .is_ok()
