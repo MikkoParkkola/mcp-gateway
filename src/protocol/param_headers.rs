@@ -14,6 +14,7 @@ use serde_json::Value;
 use std::collections::HashSet;
 
 /// Maximum nested property-schema depth, with the root at depth zero.
+/// Validation and mirroring stop at this depth; deeper levels are ignored.
 const MAX_MIRROR_DEPTH: usize = 32;
 
 /// JSON Schema keyword carrying the mirror declaration.
@@ -25,7 +26,7 @@ pub const PARAM_HEADER_PREFIX: &str = "Mcp-Param-";
 /// Largest integer an IEEE-754 double represents exactly (2^53 - 1).
 pub const SAFE_INTEGER_MAX: i64 = 9_007_199_254_740_991;
 
-/// A violation of an `x-mcp-header` constraint or the schema depth limit.
+/// A violation of an `x-mcp-header` constraint.
 ///
 /// Any variant excludes the whole tool from `tools/list` (HEADER.8).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -45,8 +46,6 @@ pub enum MirrorViolation {
     /// An `integer` property declares a `minimum`/`maximum` bound outside the
     /// IEEE-754 safe range.
     IntegerOutOfRange,
-    /// Nested property schemas exceed the validation depth limit.
-    TooDeep,
 }
 
 impl std::fmt::Display for MirrorViolation {
@@ -61,7 +60,6 @@ impl std::fmt::Display for MirrorViolation {
             Self::IntegerOutOfRange => {
                 "integer property declares a bound outside the IEEE-754 safe range"
             }
-            Self::TooDeep => "property schema exceeds the mirror validation depth limit",
         };
         f.write_str(reason)
     }
@@ -206,9 +204,10 @@ pub fn mirrored_params(input_schema: &Value) -> Result<Vec<MirroredParam>, Mirro
     Ok(mirrored)
 }
 
-/// Validates declarations at every property-schema level, regardless of arguments.
-/// Header names must be unique across the whole traversal, ignoring ASCII case.
-/// The root is depth zero; nesting beyond 32 property-schema levels is rejected.
+/// Validates declarations through `MAX_MIRROR_DEPTH`, regardless of arguments.
+/// Header names must be unique across the visited levels, ignoring ASCII case.
+/// The root is depth zero; deeper levels are neither validated nor mirrored,
+/// and exceeding the depth bound is not a violation.
 pub(crate) fn validate_mirrors(input_schema: &Value) -> Result<(), MirrorViolation> {
     validate_mirror_level(input_schema, 0, &mut HashSet::new())
 }
@@ -219,7 +218,7 @@ fn validate_mirror_level(
     seen: &mut HashSet<String>,
 ) -> Result<(), MirrorViolation> {
     if depth > MAX_MIRROR_DEPTH {
-        return Err(MirrorViolation::TooDeep);
+        return Ok(());
     }
     for param in mirrored_params(schema)? {
         if !seen.insert(param.header_name.to_ascii_lowercase()) {
@@ -270,9 +269,11 @@ pub fn is_param_header(name: &str) -> bool {
 /// The `Mcp-Param-*` headers one `tools/call` must carry, derived from the
 /// tool's own `inputSchema` and that call's arguments (HEADER.5).
 ///
-/// Traversal and validation cover `properties` at every nested schema level.
-/// Validation is independent of arguments: a violation anywhere, including a
-/// duplicate header name across levels or excessive depth, mirrors nothing.
+/// Traversal and validation cover `properties` through `MAX_MIRROR_DEPTH`,
+/// with the root at depth zero. Deeper levels are neither validated nor mirrored;
+/// exceeding the depth bound is not a violation.
+/// Validation is independent of arguments: a violation within the visited levels,
+/// including a duplicate header name across levels, mirrors nothing.
 /// Such a tool is also excluded from `tools/list`.
 ///
 /// Empty strings are emitted unchanged. Every other value passes through the
@@ -283,11 +284,19 @@ pub fn mirror_headers(input_schema: &Value, arguments: &Value) -> Vec<(String, S
         return Vec::new();
     }
     let mut out = Vec::new();
-    collect_mirrors(input_schema, arguments, &mut out);
+    collect_mirrors(input_schema, arguments, 0, &mut out);
     out
 }
 
-fn collect_mirrors(schema: &Value, arguments: &Value, out: &mut Vec<(String, String)>) {
+fn collect_mirrors(
+    schema: &Value,
+    arguments: &Value,
+    depth: usize,
+    out: &mut Vec<(String, String)>,
+) {
+    if depth > MAX_MIRROR_DEPTH {
+        return;
+    }
     if let Ok(declared) = mirrored_params(schema) {
         for param in declared {
             if let Some(value) = arguments.get(&param.property).and_then(header_value_for) {
@@ -308,7 +317,7 @@ fn collect_mirrors(schema: &Value, arguments: &Value, out: &mut Vec<(String, Str
             continue;
         }
         if let Some(nested) = arguments.get(name).filter(|value| value.is_object()) {
-            collect_mirrors(property, nested, out);
+            collect_mirrors(property, nested, depth + 1, out);
         }
     }
 }
