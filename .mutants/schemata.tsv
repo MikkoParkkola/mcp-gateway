@@ -1,0 +1,40 @@
+head_sha	903de3b47fab9c5b2c6ccaa272084303cf609598
+#mutant N1
+mcp_gateway	gateway::router::tests::task_execution_adapter::relay_plan_replay_snapshot_guards::k1_k6_no_completed_revision_is_readable_without_its_snapshot	src/gateway/router/tests/task_execution_adapter/relay_plan_replay_snapshot_guards.rs:101
+#mutant N4
+mcp_gateway	gateway::router::tests::task_execution_adapter::relay_plan_replay_snapshot_guards::k1_k6_no_completed_revision_is_readable_without_its_snapshot	src/gateway/router/tests/task_execution_adapter/relay_plan_replay_snapshot_guards.rs:115
+mcp_gateway	gateway::router::tests::task_execution_adapter::relay_plan_replay_snapshot_guards::k5_stored_under_off_read_under_block_is_kept	src/gateway/router/tests/task_execution_adapter/relay_plan_replay_snapshot_guards.rs:157
+mcp_gateway	gateway::router::tests::task_execution_adapter::relay_plan_replay_snapshot_guards::k17_off_then_block_rebuilds_and_tracks	src/gateway/router/tests/task_execution_adapter/relay_plan_replay_snapshot_guards.rs:173
+mcp_gateway	gateway::router::tests::task_execution_adapter::relay_plan_replay_snapshot_guards::g32_a_reopened_gateway_in_the_same_process_renews_from_the_row	src/gateway/router/tests/task_execution_adapter/relay_plan_replay_snapshot_guards.rs:205
+mcp_gateway	gateway::router::tests::task_execution_adapter::relay_plan_replay_notify_guards::k14_a_delivered_frame_settles_the_rebuilt_entry_by_its_action	src/gateway/router/tests/task_execution_adapter/relay_plan_replay_notify_guards.rs:229
+#mutant K25m
+mcp_gateway	gateway::router::tests::task_execution_adapter::relay_plan_replay_snapshot_guards::k25_a_read_judged_under_off_and_written_under_block_is_kept	src/gateway/router/tests/task_execution_adapter/relay_plan_replay_snapshot_guards.rs:132
+#mutant K29m
+mcp_gateway	gateway::router::tests::task_execution_adapter::relay_plan_replay_snapshot_guards::k29_a_rebuilt_entry_lives_for_the_task_ttl_from_its_read	src/gateway/router/tests/task_execution_adapter/relay_plan_replay_snapshot_guards.rs:394
+#mutant N6
+mcp_gateway	security::firewall::collusion_gate::replay_persist::tests::another_epoch_is_untrackable	src/security/firewall/collusion_gate_replay_persist_tests.rs:134
+mcp_gateway	gateway::router::tests::task_execution_adapter::relay_plan_replay_snapshot_guards::k26_another_epoch_is_refused_under_block_only	src/gateway/router/tests/task_execution_adapter/relay_plan_replay_snapshot_guards.rs:259
+#mutant N11
+mcp_gateway	security::firewall::collusion_gate::replay_persist::tests::another_epoch_is_untrackable	src/security/firewall/collusion_gate_replay_persist_tests.rs:134
+#mutant SZ multi=2
+mcp_gateway	security::firewall::collusion_gate::replay_persist::tests::a_snapshot_over_the_replay_caps_is_untrackable	src/security/firewall/collusion_gate_replay_persist_tests.rs:244
+#mutant ADM
+mcp_gateway	security::firewall::collusion::replay_pending_tests::fits_agrees_with_admission_at_both_caps	src/security/firewall/collusion_replay_pending_tests.rs:647
+#mutant K21m
+mcp_gateway	gateway::router::tests::task_execution_adapter::relay_plan_replay_snapshot_guards::k21_limit_an_untrackable_read_switched_to_block_mid_read_is_delivered	src/gateway/router/tests/task_execution_adapter/relay_plan_replay_snapshot_guards.rs:283
+#mutant N7
+mcp_gateway	gateway::router::tests::task_execution_adapter::relay_plan_replay_snapshot_guards::k26_another_epoch_is_refused_under_block_only	src/gateway/router/tests/task_execution_adapter/relay_plan_replay_snapshot_guards.rs:261
+#mutant N8
+mcp_gateway	security::firewall::collusion_gate::replay_persist::tests::text_the_stored_result_lacks_is_never_persisted	src/security/firewall/collusion_gate_replay_persist_tests.rs:118
+#mutant N8b
+mcp_gateway	security::firewall::collusion_gate::replay_persist::tests::a_round_trip_records_what_the_digest_recorded	src/security/firewall/collusion_gate_replay_persist_tests.rs:80
+#mutant N12
+mcp_gateway	gateway::task_service::store_tests::snapshot::a_snapshot_with_no_room_leaves_the_marker_not_a_failure	src/gateway/task_service/store_tests/snapshot.rs:167
+#mutant N13
+mcp_gateway	gateway::task_service::store_tests::snapshot::an_output_free_outcome_stores_no_snapshot	src/gateway/task_service/store_tests/snapshot.rs:198
+#mutant K22m
+mcp_gateway	gateway::task_service::store_tests::snapshot::a_row_without_a_snapshot_reads_as_none	src/gateway/task_service/store_tests/snapshot.rs:112
+#mutant K4m
+mcp_gateway	gateway::router::tests::task_execution_adapter::relay_plan_replay_snapshot_guards::k4_steady_off_holds_nothing_after_the_read	src/gateway/router/tests/task_execution_adapter/relay_plan_replay_snapshot_guards.rs:144
+#mutant SW
+mcp_gateway	security::firewall::collusion_gate::replay_persist::tests::an_undelivered_rebuilt_entry_is_swept_after_its_retention	src/security/firewall/collusion_gate_replay_persist_tests.rs:227
