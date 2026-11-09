@@ -30,7 +30,7 @@ fn zed_settings() -> String {
     "local": {{
       "command": "npx",
       "args": ["-y", "some-server", "--root", "/Users/a b/notes",],
-      "env": {{ "DEMO_VAR": "{SENTINEL}", }},
+      "env": {{ "DEMO_API_KEY": "{SENTINEL}", }},
     }},
     "remote": {{
       "url": "https://mcp.example.test/mcp",
@@ -155,15 +155,16 @@ fn commented_zed_settings_are_discovered_with_env_headers_and_args() {
     home.write_zed_settings(&zed_settings());
     let out = write_config(&home);
 
-    // `--write` moves each literal into the secret store: the
-    // config carries only a `file:` reference, and the value never reaches it.
+    // `--write` moves each credential value (a credential-named env key, every
+    // header) into the secret store: the config carries only a `file:`
+    // reference, and the value never reaches it.
     let written = std::fs::read_to_string(&out).expect("the config reads");
     assert!(
         !written.contains(SENTINEL),
         "a literal reached the config: {written}"
     );
     let local = backend(&out, "local");
-    assert_eq!(stored(local.env.get("DEMO_VAR")), SENTINEL);
+    assert_eq!(stored(local.env.get("DEMO_API_KEY")), SENTINEL);
     let TransportConfig::Stdio { command, .. } = &local.transport else {
         panic!("local is not stdio");
     };
@@ -212,12 +213,14 @@ fn discovery_output_never_shows_a_secret_value() {
 fn an_unset_variable_in_an_imported_value_is_refused_at_load() {
     let home = Home::new();
     home.write_zed_settings(
-        r#"{ "context_servers": { "local": { "command": "srv", "env": { "DEMO_VAR": "${DISCOVERY_1876_UNSET}" } } } }"#,
+        r#"{ "context_servers": { "local": { "command": "srv", "env": { "DEMO_API_KEY": "${DISCOVERY_1876_UNSET}" } } } }"#,
     );
     let out = write_config(&home);
     let error = Config::load(Some(&out)).expect_err("an unset reference must refuse the load");
     assert!(
-        error.to_string().contains("backends.local.env.DEMO_VAR"),
+        error
+            .to_string()
+            .contains("backends.local.env.DEMO_API_KEY"),
         "the refusal names the field: {error}"
     );
 
@@ -240,7 +243,7 @@ fn an_unset_variable_in_an_imported_value_is_refused_at_load() {
     assert_eq!(
         loaded.backends["local"]
             .env
-            .get("DEMO_VAR")
+            .get("DEMO_API_KEY")
             .map(String::as_str),
         Some("expanded-value")
     );
