@@ -8,6 +8,9 @@ connections go only to the destinations in the table below. Those are:
 
 - addresses you configured;
 - a URL you type in a command, enter in the web UI, or write into a capability file;
+- a URL a capability builds from values the calling MCP client passes: a capability's
+  endpoint can take arguments, and a shipped one takes its whole URL from its caller
+  (`capabilities/media/video_download.yaml:37`, `src/capability/executor/request.rs:49`);
 - callback URLs your authenticated clients registered, if you turn events on;
 - two fixed public services, each contacted only by the command that names it:
   `registry.npmjs.org` when you run `doctor` (on by default, with three
@@ -17,20 +20,25 @@ connections go only to the destinations in the table below. Those are:
 A destination in the table is where a connection starts. An HTTP redirect it
 answers with can lead somewhere else: the gateway checks each hop against its
 address policy before following it (`src/security/ssrf/mod.rs`,
-`ssrf_redirect_policy`). Host names are resolved through your operating
-system's resolver (`src/security/ssrf/resolver.rs:42`).
+`ssrf_redirect_policy`). On a direct connection, host names are resolved
+through your operating system's resolver (`src/security/ssrf/resolver.rs:42`).
+Through a proxy you set (`capabilities.egress_proxy` for capabilities,
+`HTTPS_PROXY` where the environment proxy is used), the proxy resolves them
+(`src/capability/executor/client.rs:24-28`).
 
 ## How this list is kept honest
 
-`scripts/dev/check-outbound-clients.py` runs in CI. It counts, per source file
-and per kind, the places in product code that build an HTTP, WebSocket, TCP or
-UDP client. A new place, a removed one, or one kind replacing another fails the
-check until `scripts/dev/outbound-sites.tsv` and this page list it.
+`scripts/dev/check-outbound-clients.py` runs in CI. It looks for a fixed set of
+client-constructor names (HTTP, WebSocket, TCP, UDP) in product code, counts
+them per source file and per kind, once per line, and fails when a count
+changes until `scripts/dev/outbound-sites.tsv` is updated. It also fails when a
+listed file is not named on this page.
 
-The check sees constructors, not every request. It does not see a new caller
-of a client an existing place builds, a DNS lookup, a child process's traffic,
-or a request your browser makes. Changes of those kinds are reviewed by hand
-against this page.
+It is a tripwire, not a proof. It does not see a constructor spelled another
+way, one site replaced by another of the same kind in the same file, a new
+caller of a client an existing site builds, a change of destination at an
+existing site, a DNS lookup, a child process's traffic, or a request your
+browser makes. Those are reviewed by hand against this page.
 
 ## What it does not do
 
@@ -60,10 +68,10 @@ against this page.
 |---|---|---|
 | `src/transport/http/client.rs` | the gateway talks to an HTTP backend | the backends you configured (A2A included) |
 | `src/transport/websocket_pinned.rs` | the gateway talks to a WebSocket backend | the backends you configured |
-| `src/oauth/client/destination.rs` | a backend needs OAuth | the discovery and token endpoints of the servers you configured |
+| `src/oauth/client/destination.rs` | a backend needs OAuth | the discovery and token endpoints of the servers you configured, and the client-registration endpoint their metadata advertises (`src/oauth/client/registration.rs:139`) |
 | `src/identity_propagation/token_exchange.rs` | identity propagation is configured | the identity provider you configured |
 | `src/key_server/oidc_jwks_cache.rs` | the key server verifies a token | the signing keys (JWKS) of the issuers you configured |
-| `src/capability/executor/client.rs` | a capability runs | the URL written in that capability file |
+| `src/capability/executor/client.rs` | a capability runs | the URL in that capability file, with any `{argument}` filled from the calling client's values, checked against the address policy; through `capabilities.egress_proxy` if you set one |
 | `src/gateway/router/accounts/bridge.rs` | a personal account is used | the provider you configured |
 | `src/events/client.rs` | events are on (off by default, `src/config/features/events.rs:186`) | callback URLs your authenticated clients registered; pending deliveries resume after a restart (`src/events/runtime.rs:188`) |
 | `src/security/ssrf/mod.rs` | the shared client for addresses the gateway does not trust: `cap install --from-github`, `cap import <URL>` (`src/capability/openapi/convert.rs:162`), `import-url`, the web UI import, personal-account providers and capability calls | the address the command, the import or the configuration names. `import-url <URL>` probes several well-known API description paths on that URL's host (`src/capability/discovery/mod.rs:168`) |
@@ -71,7 +79,7 @@ against this page.
 | `src/commands/skills.rs` | you run `skills` with an `http(s)` source | that URL |
 | `src/commands/doctor/npm_pin.rs` | you run `doctor`; on by default, off with `--no-registry-check`, `MCP_GATEWAY_DOCTOR_NO_REGISTRY_CHECK` or `security.posture: hardened` (`src/commands/doctor/npm_pin.rs:62`) | `registry.npmjs.org`, one request per npx package an enabled stdio backend pins. The request path is the package name (`:150`); the pinned version is compared locally, not sent. The User-Agent is `mcp-gateway-doctor` (`:31`). An `HTTPS_PROXY` you set is used |
 | `src/commands/doctor.rs`, `src/commands/doctor/ws_reach.rs` | you run `doctor` | your configured HTTP and WebSocket backends |
-| `src/commands/doctor/health.rs`, `src/commands/stats.rs`, `src/commands/dashboard_link.rs`, `src/commands/config_export/mod.rs` | you run `doctor`, `stats`, `dashboard` or `config export` | the local gateway |
+| `src/commands/doctor/health.rs`, `src/commands/stats.rs`, `src/commands/dashboard_link.rs`, `src/commands/config_export/mod.rs` | you run `doctor`, `stats`, `dashboard` or `config export` | the gateway your config names, normally this machine's; `stats --url` points it at another |
 
 `cap install --from-github` fetches from `raw.githubusercontent.com/<repo>`
 only when you run it (`src/registry/mod.rs:298`, `src/commands/cap.rs:322`).
