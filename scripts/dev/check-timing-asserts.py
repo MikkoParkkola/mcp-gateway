@@ -35,7 +35,8 @@ expected to elapse, then asserted; a poll budget under 10 s; a short product
 timer slept against; and (MIK-8360) a short timeout reaching a product through
 a timeout-named builder or call (`.with_x_timeout(1 s)`), a timeout-named field
 (`timeout: 300 ms`), or a `timeout(W, ..)` whose result is asserted `is_ok`.
-A `// timing:` tag from the closed set, a `timing-oracle:`, or a paused clock
+A `// timing:` tag from the closed set, a `timing-oracle: vs <timer> (<ticket>)`
+(`(why: <reason>)` in place of the ticket on new lines), or a paused clock
 exempts a site. For an elapsed bound, the paused clock exempts it only when
 the instant measured is tokio's: a `std::time::Instant` reads real time on a
 paused clock too (MIK-8360).
