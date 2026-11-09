@@ -140,9 +140,11 @@ fn extract_unverified_claims_rejects_malformed_token() {
     assert!(result.is_err());
 }
 
+/// A verified identity's `Debug` shows the subject and the issuer, and names
+/// the email, name and groups only by presence: a stray `?identity` in a log
+/// line carries none of them.
 #[test]
-fn verified_identity_serializes_to_json() {
-    // GIVEN: a verified identity
+fn verified_identity_debug_names_personal_fields_only_by_presence() {
     let identity = VerifiedIdentity::for_test(
         "12345".to_string(),
         "alice@company.com".to_string(),
@@ -151,12 +153,14 @@ fn verified_identity_serializes_to_json() {
         "https://accounts.google.com".to_string(),
     );
 
-    // WHEN: serialized to JSON
-    let json = serde_json::to_string(&identity).unwrap();
+    let shown = format!("{identity:?}");
 
-    // THEN: contains expected fields
-    assert!(json.contains("alice@company.com"));
-    assert!(json.contains("ml-engineers"));
+    for kept in ["12345", "https://accounts.google.com", "<present>"] {
+        assert!(shown.contains(kept), "{kept} missing: {shown}");
+    }
+    for hidden in ["alice@company.com", "Alice", "ml-engineers"] {
+        assert!(!shown.contains(hidden), "{hidden} shown: {shown}");
+    }
 }
 
 // MIK-6702.CP.ID.1 — stable_actor_id is collision-safe when an issuer

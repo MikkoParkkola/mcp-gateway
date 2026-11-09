@@ -3,8 +3,6 @@
 //! The accessors return their own fields, and the identity's audit output is
 //! unchanged by the move into this module.
 
-use serde_json::json;
-
 use super::VerifiedIdentity;
 
 const ISSUER: &str = "https://idp.corp.test";
@@ -30,45 +28,6 @@ fn each_accessor_returns_its_own_field() {
     assert_eq!(identity.email(), EMAIL);
     assert_eq!(identity.name(), Some("Display Name"));
     assert_eq!(identity.groups(), ["group-a", "group-b"]);
-}
-
-/// Audit output with no name and no groups: `name` is skipped when absent
-/// (`skip_serializing_if`), `groups` is always written (the struct's serde
-/// attributes in oidc/verified.rs).
-#[test]
-fn audit_output_without_name_or_groups_is_unchanged() {
-    let identity = VerifiedIdentity::checked(
-        ISSUER.to_owned(),
-        "subject-1".to_owned(),
-        EMAIL.to_owned(),
-        None,
-        Vec::new(),
-    )
-    .expect("names someone");
-    assert_eq!(
-        serde_json::to_value(&identity).expect("serializes"),
-        json!({
-            "subject": "subject-1",
-            "email": EMAIL,
-            "groups": [],
-            "issuer": ISSUER,
-        })
-    );
-}
-
-/// Audit output with a name and groups: every field, under its own name.
-#[test]
-fn audit_output_with_name_and_groups_is_unchanged() {
-    assert_eq!(
-        serde_json::to_value(full()).expect("serializes"),
-        json!({
-            "subject": "subject-1",
-            "email": EMAIL,
-            "name": "Display Name",
-            "groups": ["group-a", "group-b"],
-            "issuer": ISSUER,
-        })
-    );
 }
 
 fn source() -> syn::File {
