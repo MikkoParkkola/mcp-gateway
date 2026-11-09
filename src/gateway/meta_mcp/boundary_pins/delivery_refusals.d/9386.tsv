@@ -1,0 +1,3 @@
+# file	fn	callee	count	class	note (classes: see delivery_framing.rs)
+src/key_server/handler.rs	issue	clock_refusal	3	no-record	the key server's token endpoint: the host clock reads before 1970, or the token lifetime overflows it; no token issued
+src/key_server/handler.rs	issue	token_cap_refusal	1	no-record	the key server's token endpoint: the identity's active and pending tokens fill its cap; nothing evicted
