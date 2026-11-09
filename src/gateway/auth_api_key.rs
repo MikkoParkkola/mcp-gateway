@@ -33,6 +33,10 @@ pub struct ResolvedApiKey {
     pub(crate) explicit_principal: Option<String>,
     /// The digest before the last rotation and the end of its grace.
     pub(crate) previous: Option<PreviousDigest>,
+    /// The approver a CLI login key is bound to; `None` for every other key.
+    pub(crate) approved_by: Option<crate::config::ApiKeyBinding>,
+    /// The host a CLI login key reported, for display only.
+    pub(crate) cli_host: Option<String>,
 }
 
 /// A rotated key's previous digest, accepted until `expires_at` (ADR-022).

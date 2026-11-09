@@ -49,7 +49,11 @@ fn joined(auth: &ResolvedAuthConfig, live: Option<&ResolvedApiKey>) -> (Option<S
         .and_then(|key| auth.key_last_used(key))
         .and_then(|secs| DateTime::from_timestamp(secs, 0))
         .map(rfc3339);
-    let is_live = live.is_some_and(|key| !crate::config::api_key_expired_now(key.expires_at));
+    // Effective liveness: a CLI key whose approver is gone is listed, not live.
+    let is_live = live.is_some_and(|key| {
+        !crate::config::api_key_expired_now(key.expires_at)
+            && auth.binding_live(key, crate::clock::utc_now().ok())
+    });
     (last_used, is_live)
 }
 
@@ -67,6 +71,7 @@ fn file_entry(auth: &ResolvedAuthConfig, live: &[ResolvedApiKey], key: &ApiKeyCo
         "rate_limit": key.rate_limit,
         "last_used": last_used,
         "live": is_live,
+        "cli_host": key.cli_host,
     })
 }
 
@@ -84,6 +89,7 @@ fn live_entry(auth: &ResolvedAuthConfig, key: &ResolvedApiKey) -> Value {
         "rate_limit": key.rate_limit,
         "last_used": last_used,
         "live": is_live,
+        "cli_host": key.cli_host,
     })
 }
 

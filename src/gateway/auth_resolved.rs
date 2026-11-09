@@ -52,6 +52,8 @@ fn resolve_api_keys(
                 personal: k.kind == crate::config::ApiKeyKind::Personal,
                 explicit_principal: k.principal.clone(),
                 previous,
+                approved_by: k.approved_by.clone(),
+                cli_host: k.cli_host.clone(),
             })
         })
         .collect::<Result<Vec<_>>>()
@@ -269,12 +271,37 @@ impl ResolvedAuthConfig {
     ) -> bool {
         self.api_keys().iter().any(|k| {
             k.quota_principal.same_key_principal(&minter.quota)
-                && secret_still_valid(k, &minter.digest_tag, |end| {
-                    !crate::config::api_key_expired(Some(end), at)
-                })
-                && crate::gateway::authz::admin_standing(k.admin, &k.backends).is_gateway()
-                && !crate::config::api_key_expired(k.expires_at, at)
+                && approver_holds(k, &minter.digest_tag, at)
+                && self.binding_live(k, Some(at))
         })
+    }
+
+    /// Whether `key`'s approver still stands at `at`. A key with no binding
+    /// is not a CLI key and passes, so every other key keeps today's path.
+    /// A CLI key needs exactly one key carrying its approver's stable
+    /// principal; that key must be unbound itself (no chains, and a self
+    /// binding denies), still accept the digest it approved with (current, or
+    /// previous inside its grace), and be an unexpired gateway-wide admin. No
+    /// reading of the clock denies a CLI key.
+    pub(crate) fn binding_live(
+        &self,
+        key: &ResolvedApiKey,
+        at: Option<chrono::DateTime<chrono::Utc>>,
+    ) -> bool {
+        let Some(bound) = &key.approved_by else {
+            return true;
+        };
+        let Some(at) = at else {
+            return false;
+        };
+        let keys = self.api_keys();
+        let mut matching = keys
+            .iter()
+            .filter(|k| k.quota_principal.has_limit_key(&bound.quota_principal));
+        let (Some(root), None) = (matching.next(), matching.next()) else {
+            return false;
+        };
+        root.approved_by.is_none() && approver_holds(root, &bound.digest_tag, at)
     }
 
     /// When `key` last authenticated in this process, in unix seconds:
@@ -419,6 +446,10 @@ impl ResolvedAuthConfig {
         if via_previous && expired(key.previous.as_ref().map(|p| p.expires_at)) {
             return None;
         }
+        // A CLI key stands only while its approver does (CLIAUTH binding).
+        if !self.binding_live(key, now) {
+            return None;
+        }
         // Accepted: the key's last use, at the reading that judged it. With no
         // reading there is no time to record, so nothing is written.
         if let Some(now) = now {
@@ -479,7 +510,8 @@ impl ResolvedAuthConfig {
             .iter()
             .find(|k| k.name == name && k.principal().storage_form() == principal)?;
         (!crate::config::api_key_expired_now(key.expires_at)
-            && binding.holds(key, |end| !crate::config::api_key_expired_now(Some(end))))
+            && binding.holds(key, |end| !crate::config::api_key_expired_now(Some(end)))
+            && self.binding_live(key, crate::clock::utc_now().ok()))
         .then(|| Self::client_of(key))
     }
 
@@ -497,7 +529,8 @@ impl ResolvedAuthConfig {
             .iter()
             .find(|k| k.name == name && k.principal().storage_form() == principal)?;
         (!crate::config::api_key_expired(key.expires_at, now)
-            && binding.holds(key, |end| !crate::config::api_key_expired(Some(end), now)))
+            && binding.holds(key, |end| !crate::config::api_key_expired(Some(end), now))
+            && self.binding_live(key, Some(now)))
         .then(|| Self::client_of(key))
     }
 
@@ -629,6 +662,16 @@ impl KeyBinding<'_> {
 
 /// Whether the secret fingerprinted `tag` still authenticates as `key`: its
 /// current digest, or its previous one while `in_grace` says the grace runs.
+/// Whether `key` can stand behind something it approved or minted with the
+/// digest tagged `tag`: it still accepts that digest (current, or previous
+/// inside its grace), it is a gateway-wide admin, and it has not expired.
+fn approver_holds(key: &ResolvedApiKey, tag: &str, at: chrono::DateTime<chrono::Utc>) -> bool {
+    secret_still_valid(key, tag, |end| {
+        !crate::config::api_key_expired(Some(end), at)
+    }) && crate::gateway::authz::admin_standing(key.admin, &key.backends).is_gateway()
+        && !crate::config::api_key_expired(key.expires_at, at)
+}
+
 fn secret_still_valid(
     key: &ResolvedApiKey,
     tag: &str,
