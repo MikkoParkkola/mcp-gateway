@@ -77,7 +77,10 @@ fn move_aside(log: &Path, to: &Path) -> usize {
 
 #[test]
 fn a_key_change_keeps_grants_and_policies_and_starts_fresh_logs() {
-    let (cfg, data) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let (cfg, data) = (
+        crate::test_dir_keep::kept_tempdir(),
+        crate::test_dir_keep::kept_tempdir(),
+    );
     let store_dir = data.path().join("cp");
     let inv = data.path().join("invocation.jsonl");
     let gov = store_dir.join("audit.jsonl");

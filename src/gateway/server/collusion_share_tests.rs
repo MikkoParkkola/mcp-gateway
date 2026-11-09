@@ -10,7 +10,7 @@ use crate::config::Config;
 
 #[tokio::test]
 async fn both_firewalls_share_one_relay_detector() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = dir.path().join("gateway.yaml");
     let yaml = "security:\n  firewall:\n    collusion:\n      action: observe\n";
     crate::gateway::test_helpers::write_owner_only(&path, yaml).expect("write config");
@@ -47,7 +47,7 @@ async fn both_firewalls_share_one_relay_detector() {
 /// from the same `response_firewall` that `run` calls.
 #[tokio::test]
 async fn both_firewalls_exempt_the_gateways_own_continuations() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = dir.path().join("gateway.yaml");
     crate::gateway::test_helpers::write_owner_only(&path, "{}\n").expect("write config");
     let config = Config::load(Some(&path)).expect("an empty config loads");
