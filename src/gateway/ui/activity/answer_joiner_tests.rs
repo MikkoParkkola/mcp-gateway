@@ -100,7 +100,7 @@ fn r45_read_ahead_is_charged_to_the_budget() {
 }
 
 /// An unsigned delivery record line for `trace`, with `findings`.
-fn delivery_line(trace: &str, findings: serde_json::Value) -> Line {
+fn delivery_line(trace: &str, findings: &serde_json::Value) -> Line {
     let mut entry = json!({
         "counter": 2, "trace_id": trace, "event": "response_delivery_attempt",
         "response_stage": "transport_finalized", "response_effect": "annotated",
@@ -120,15 +120,15 @@ fn delivery_line(trace: &str, findings: serde_json::Value) -> Line {
 #[test]
 fn r7c_a_found_record_stays_found_when_the_window_is_unfinished() {
     let mut joiner = Joiner::new(None);
-    assert!(joiner.observe(&delivery_line("gw-t", json!([]))));
+    assert!(joiner.observe(&delivery_line("gw-t", &json!([]))));
     let near = Seen {
         above: 10,
         head_covered: false,
     };
-    let joined = joiner.join(&call_line(), near);
-    joiner.count(&joined);
-    assert_eq!(joined.effect(), Effect::Annotated, "{joined:?}");
-    assert!(matches!(joined, Joined::Found(_)), "{joined:?}");
+    let answer = joiner.join(&call_line(), near);
+    joiner.count(&answer);
+    assert_eq!(answer.effect(), Effect::Annotated, "{answer:?}");
+    assert!(matches!(answer, Joined::Found(_)), "{answer:?}");
     assert_eq!(joiner.join_incomplete, 0);
 }
 
@@ -150,7 +150,7 @@ fn findings_are_projected_through_kind_severity_and_where_only() {
         {"kind": {"deep": "object"}, "severity": "high", "where": "text"},
         "not an object",
     ]);
-    joiner.observe(&delivery_line("gw-t", findings));
+    joiner.observe(&delivery_line("gw-t", &findings));
     let seen = Seen {
         above: 0,
         head_covered: true,
@@ -170,7 +170,7 @@ fn a_finding_field_is_capped_so_the_projection_stays_bounded() {
     let mut joiner = Joiner::new(None);
     let long = "k".repeat(10_000);
     let findings = json!([{"kind": long, "severity": "low", "where": "text"}]);
-    joiner.observe(&delivery_line("gw-t", findings));
+    joiner.observe(&delivery_line("gw-t", &findings));
     let seen = Seen {
         above: 0,
         head_covered: true,
