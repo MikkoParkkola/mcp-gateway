@@ -72,7 +72,7 @@ impl Fixture {
     /// A log that seals its segment at `max_segment_bytes` (0 would seal before
     /// every record).
     pub(super) fn rotating(secret: Option<&'static str>, max_segment_bytes: u64) -> Self {
-        let dir = Arc::new(tempfile::tempdir().unwrap());
+        let dir = crate::test_dir_keep::kept_tempdir();
         let path = dir.path().join("inv.jsonl");
         let logger = TransparencyLogger::open(Arc::new(TransparencyLogConfig {
             enabled: true,
