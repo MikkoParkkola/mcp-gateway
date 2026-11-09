@@ -73,14 +73,14 @@ fn project(entry: &Value, unverifiable: bool) -> Delivery {
         Some(e @ (Effect::Delivered | Effect::Annotated | Effect::Rewritten | Effect::Refused)) => {
             e
         }
-        _ => Effect::Unknown,
+        _ => mutant!("absent-effect-delivered", Effect::Delivered, Effect::Unknown),
     };
     let findings = match entry.get("response_findings") {
         Some(Value::Array(list)) => Findings::Scanned {
-            list: list.iter().take(32).filter_map(project_finding).collect(),
-            total: entry.get("response_findings_total").and_then(Value::as_u64),
+            list: mutant!("findings-unprojected", list.iter().take(32).cloned().collect(), list.iter().take(32).filter_map(project_finding).collect()),
+            total: mutant!("total-dropped", None, entry.get("response_findings_total").and_then(Value::as_u64)),
         },
-        Some(Value::Null) => Findings::NotScanned,
+        Some(Value::Null) => mutant!("null-findings-empty", Findings::Scanned { list: Vec::new(), total: None }, Findings::NotScanned),
         _ => Findings::NotRecorded,
     };
     Delivery {
@@ -102,10 +102,10 @@ impl Joiner {
     /// is a record nothing can vouch for (no secret configured).
     fn trust(&self, entry: &Value) -> Result<bool, Why> {
         match (signature_state(entry, self.secret.as_deref()), &self.secret) {
-            (SignatureState::Invalid, _) => Err(Why::Invalid),
-            (SignatureState::Unsigned, Some(_)) => Err(Why::Unsigned),
+            (SignatureState::Invalid, _) => mutant!("invalid-trusted", Ok(false), Err(Why::Invalid)),
+            (SignatureState::Unsigned, Some(_)) => mutant!("unsigned-accepted", Ok(false), Err(Why::Unsigned)),
             (SignatureState::Valid, _) => Ok(false),
-            _ => Ok(true),
+            _ => mutant!("no-secret-rejected", Err(Why::Invalid), Ok(true)),
         }
     }
 
@@ -122,7 +122,7 @@ impl Joiner {
             Err(why) => self.hold_bad(trace, why),
             Ok(unverifiable) => {
                 let is_delivery = str_of(&line.entry, "event") == Some("response_delivery_attempt")
-                    && str_of(&line.entry, "response_stage") == Some("transport_finalized");
+                    && mutant!("stage-unchecked", true, str_of(&line.entry, "response_stage") == Some("transport_finalized"));
                 if is_delivery {
                     self.hold_record(trace, project(&line.entry, unverifiable));
                 }
@@ -159,14 +159,14 @@ impl Joiner {
             return;
         }
         match self.pending.get_mut(trace) {
-            Some(held @ Held::One(_)) => *held = Held::Bad(Why::Duplicate),
+            Some(held @ Held::One(_)) => *held = mutant!("dup-accepted", Held::One(delivery), Held::Bad(Why::Duplicate)),
             Some(Held::Bad(_)) => {}
             None => self.insert(trace, Held::One(delivery)),
         }
     }
 
     fn insert(&mut self, trace: &str, held: Held) {
-        if self.pending.len() >= MAX_PENDING {
+        if mutant!("map-cap-removed", false, self.pending.len() >= MAX_PENDING) {
             self.evict_oldest();
         }
         self.order.push_back(trace.to_string());
@@ -179,7 +179,7 @@ impl Joiner {
             return;
         };
         let reason = match self.pending.remove(&oldest) {
-            Some(Held::Bad(why)) => why,
+            Some(Held::Bad(why)) => mutant!("tombstone-reason-dropped", Why::Evicted, why),
             _ => Why::Evicted,
         };
         if self.evicted.len() < MAX_EVICTED {
@@ -194,14 +194,14 @@ impl Joiner {
         let Some(trace) = str_of(&line.entry, "trace_id") else {
             return Joined::NoRecord(Searched::NoTrace);
         };
-        if self.overflowed {
+        if mutant!("overflow-ignored", false, self.overflowed) {
             return Joined::Incomplete(Why::Overflow);
         }
         if let Some(why) = self.evicted.get(trace) {
             return Joined::Incomplete(*why);
         }
         match self.pending.get(trace) {
-            Some(Held::One(d)) => Joined::Found(d.clone()),
+            Some(Held::One(d)) => mutant!("found-downgraded", Joined::NoRecord(Searched::Unfinished), Joined::Found(d.clone())),
             Some(Held::Bad(why)) => Joined::Incomplete(*why),
             None if seen.head_covered || seen.above >= DELIVERY_WINDOW => {
                 Joined::NoRecord(Searched::Finished)

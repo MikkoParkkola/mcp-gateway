@@ -254,7 +254,7 @@ pub(crate) fn tail_window_assembled(
         // A direct read at the full window gets the same over-cap check: a
         // smaller window can never hold a whole first line over the cap, so
         // the check changes nothing there.
-        (tail, read) => Ok((over_cap_at_start(tail), read)),
+        (tail, read) => Ok((mutant!("direct-over-cap-skipped", tail, over_cap_at_start(tail)), read)),
     }
 }
 
