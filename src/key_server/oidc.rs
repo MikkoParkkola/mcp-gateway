@@ -523,7 +523,8 @@ impl OidcVerifier {
         }
 
         // Unknown kid: refresh once and retry
-        debug!(kid = %kid, "Key not found in cached JWKS, refreshing");
+        // The kid comes from a header no signature has vouched for yet: not logged.
+        debug!("Key not found in cached JWKS, refreshing");
         let jwks = self.jwks_cache.get_or_fetch(issuer, jwks_uri, true).await?;
         find_key_in_jwks(&jwks, kid).ok_or_else(|| OidcError::UnknownKeyId(kid.to_string()))
     }

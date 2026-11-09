@@ -304,6 +304,21 @@ async fn denials(h: &Harness, claims: &serde_json::Value) -> Markers {
         status, 200,
         "an unknown issuer carrying the email is refused"
     );
+    // A configured issuer, signed by the right key, but with the email as its
+    // key id: unknown kid, refused before any signature check.
+    let info = h.key.key_info();
+    let mut header = jsonwebtoken::Header::new(jsonwebtoken::Algorithm::ES256);
+    header.kid = Some(EMAIL.to_owned());
+    let now = i64::try_from(crate::clock::unix_secs().expect("a clock after the epoch"))
+        .expect("seconds fit i64");
+    let kid_token = jsonwebtoken::encode(
+        &header,
+        &json!({"iss": ISS_A, "sub": SUBJECT, "aud": AUD, "iat": now, "exp": now + 300}),
+        &jsonwebtoken::EncodingKey::from_ec_pem(info.private_key_pem.as_bytes()).expect("pem"),
+    )
+    .expect("sign");
+    let (status, _) = h.exchange(&kid_token).await;
+    assert_ne!(status, 200, "an email-bearing kid is refused");
     let (status, _) = h.exchange("not.a.jwt").await;
     assert_ne!(status, 200, "a garbage token is refused");
     let mut expired = claims.clone();
