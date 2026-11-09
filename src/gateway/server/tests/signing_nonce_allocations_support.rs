@@ -227,7 +227,7 @@ pub(in crate::gateway::server) struct Fixture {
     pub(in crate::gateway::server) mtls_policy: Arc<MtlsPolicy>,
     pub(in crate::gateway::server) backend: EchoBackend,
     /// The gateway's data directory, kept for the fixture's lifetime.
-    _data_dir: tempfile::TempDir,
+    _data_dir: std::sync::Arc<tempfile::TempDir>,
 }
 
 impl Fixture {
@@ -314,7 +314,7 @@ impl Fixture {
     ) -> Self {
         let backend = EchoBackend::start().await;
         let config = config_for(&backend.url, require_nonce);
-        let data_dir = tempfile::tempdir().expect("tempdir");
+        let data_dir = crate::test_dir_keep::kept_tempdir();
         let gateway = Gateway::new(config)
             .await
             .expect("the production constructor must accept this configuration")

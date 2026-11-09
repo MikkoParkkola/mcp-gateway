@@ -213,13 +213,13 @@ struct StdioLoop {
     stdin: tokio::io::DuplexStream,
     stdout: tokio::io::Lines<tokio::io::BufReader<tokio::io::DuplexStream>>,
     _served: tokio::task::JoinHandle<crate::Result<()>>,
-    _dir: tempfile::TempDir,
+    _dir: std::sync::Arc<tempfile::TempDir>,
 }
 
 impl StdioLoop {
     async fn start() -> Self {
         use tokio::io::AsyncBufReadExt as _;
-        let dir = tempfile::tempdir().expect("tempdir");
+        let dir = crate::test_dir_keep::kept_tempdir();
         let path = dir.path().join("gateway.yaml");
         // The URL is never dialled: the transport is replaced below.
         let yaml = format!(

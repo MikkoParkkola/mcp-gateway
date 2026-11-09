@@ -129,7 +129,7 @@ struct Answers {
 }
 
 async fn across_shutdown(mode: ProtocolRevisionWindow) -> Answers {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = crate::test_dir_keep::kept_tempdir();
     let backend = HeldBackend::start().await;
     let mut gateway = Gateway::new(config(dir.path(), mode, &backend.url))
         .await
