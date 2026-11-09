@@ -133,6 +133,7 @@ fn sync_dir_for(path: &Path, key: Option<commit::SyncKey>) -> std::io::Result<()
     #[cfg(test)]
     if synced.is_ok() {
         journal::fault::note_synced(path);
+        crash_fs::note_dir_synced(dir);
     }
     synced
 }
@@ -140,6 +141,14 @@ fn sync_dir_for(path: &Path, key: Option<commit::SyncKey>) -> std::io::Result<()
 // Primitive A: commit the config's bytes and prove them durable.
 #[path = "config_persistence_commit.rs"]
 pub(crate) mod commit;
+
+#[cfg(test)]
+#[path = "config_persistence_crash_fs.rs"]
+pub(crate) mod crash_fs;
+
+#[cfg(test)]
+#[path = "config_persistence_crash_fs_tests.rs"]
+mod crash_fs_tests;
 
 #[cfg(test)]
 #[path = "config_persistence_commit_tests.rs"]
