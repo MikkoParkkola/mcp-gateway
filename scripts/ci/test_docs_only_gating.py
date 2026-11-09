@@ -275,6 +275,64 @@ def runs(job: dict, c: dict) -> bool:
     return evaluate(cond, local) if cond else all_ok
 
 
+def expression_value(text, github: dict):
+    """A concurrency value: each `${{ }}` in `text` evaluated with GitHub's `&&`/`||` returning
+    operands (Python's `and`/`or` do the same), over the subset ci.yml's concurrency block uses.
+    A value that is one expression keeps its type; one mixed with literal text is a string."""
+    text = str(text).strip()
+
+    def one(expr: str):
+        expr = re.sub(r"format\('pr-\{0\}',\s*github\.event\.pull_request\.number\)",
+                      f"'pr-{github.get('event', {}).get('pull_request', {}).get('number', '')}'", expr)
+
+        def name(m):
+            value = github
+            for part in m.group(0).split(".")[1:]:
+                value = value.get(part, "") if isinstance(value, dict) else ""
+            return repr(value)
+        expr = re.sub(r"\bgithub(?:\.[\w-]+)+", name, expr)
+        expr = re.sub(r"!(?!=)", " not ", expr).replace("&&", " and ").replace("||", " or ")
+        return eval(expr, {"__builtins__": {}}, {})  # noqa: S307 - literals only after substitution
+
+    whole = re.fullmatch(r"\$\{\{(.*)\}\}", text, re.S)
+    if whole and "${{" not in whole.group(1):
+        return one(whole.group(1))
+    return re.sub(r"\$\{\{(.*?)\}\}", lambda m: str(one(m.group(1))), text)
+
+
+def concurrency_errors(block: dict) -> list[str]:
+    """Release-line pushes share one group and cancel older ones; every other non-PR event keeps
+    a group of its own run and never cancels; a pull request keeps pr-<n> and cancels."""
+    out = []
+    line = {"event_name": "push", "ref": f"refs/heads/{RELEASE_LINE}", "run_id": "101"}
+    cases = {
+        "release-line push": (line, "shared", True),
+        "next release-line push": ({**line, "run_id": "102"}, "shared", True),
+        "tag push": ({"event_name": "push", "ref": "refs/tags/v4.0.0", "run_id": "103"}, "own", False),
+        "main push": ({"event_name": "push", "ref": "refs/heads/main", "run_id": "104"}, "own", False),
+        "other branch push": ({"event_name": "push", "ref": "refs/heads/x", "run_id": "105"}, "own", False),
+        "dispatch on the line": ({"event_name": "workflow_dispatch", "ref": f"refs/heads/{RELEASE_LINE}",
+                                  "run_id": "106"}, "own", False),
+        "pull request": ({"event_name": "pull_request", "ref": "refs/pull/7/merge", "run_id": "107",
+                          "event": {"pull_request": {"number": 7}}}, "pr", True),
+    }
+    groups = {}
+    for label, (github, kind, cancels) in cases.items():
+        github = {"workflow": "CI", **github}
+        group = str(expression_value(block.get("group", ""), github))
+        cancel = expression_value(block.get("cancel-in-progress", False), github)
+        groups[label] = group
+        if bool(cancel) is not cancels:
+            out.append(f"concurrency: a {label} {'does not cancel' if cancels else 'cancels'} an older run")
+        if kind == "own" and github["run_id"] not in group:
+            out.append(f"concurrency: a {label} shares a group ({group}); it must keep a run of its own")
+        if kind == "pr" and not group.endswith("pr-7"):
+            out.append(f"concurrency: a pull request's group is {group}, not its pr-<n>")
+    if groups["release-line push"] != groups["next release-line push"]:
+        out.append("concurrency: two release-line pushes get different groups; the newer cannot cancel the older")
+    return out
+
+
 def main() -> int:
     jobs = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())["jobs"]
     errors = []
@@ -409,12 +467,13 @@ def main() -> int:
     on = workflow.get(True) or workflow.get("on") or {}
     if RELEASE_LINE not in (on.get("push") or {}).get("branches", []):
         errors.append(f"ci.yml does not run on a push to {RELEASE_LINE}")
-    # Every merge keeps its own run, so a red one names its merge commit.
-    cancel = str((workflow.get("concurrency") or {}).get("cancel-in-progress", ""))
-    c = ctx("push", "success", "false")
-    c["github"].update(POST_MERGE_PUSH)
-    if cancel in ("true", "True") or (cancel.startswith("${{") and evaluate(cancel, c)):
-        errors.append("ci.yml cancels an in-progress run on a release-line push")
+    # A newer release-line tip cancels the push runs of older tips (lead decision 2026-11-09,
+    # superseding MIK-8163's "every merge keeps its own run, so a red one names its merge commit"):
+    # a 7-merge train queued about 250 push jobs behind every PR's CI. The train already tested the
+    # exact landed tree, bisecting one train's merges is local, and every PR's own CI and the train
+    # run the shrink gates. Tags, dispatches (the release freeze dispatches on the line), main and
+    # other branches keep a run of their own; pull requests keep their per-PR group.
+    errors += concurrency_errors(workflow.get("concurrency") or {})
     for e in errors:
         print(f"docs-gating: {e}", file=sys.stderr)
     if not errors:
