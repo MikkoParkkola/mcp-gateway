@@ -7,6 +7,7 @@
 #     (<merge sha> is github.sha of the pull_request event: GitHub's test-merge
 #      commit of the head into the base; see from_git_in)
 #   changed-scope.sh --classify < NUL-separated paths    same, for a path list
+#   changed-scope.sh --range <base> <head>                same, for two commits of the local repository
 #   changed-scope.sh --self-test
 #
 # docs_only=true only when EVERY changed path is in a closed allowlist:
@@ -73,6 +74,22 @@ from_git_in() {
   classify <"$probe/paths"
 }
 
+# Local mode, for merge-train: the PR mode's listing (--no-renames) and deleted-root-file rule, between two
+# commits of the repository in the current directory. merge-train runs it on its own checkout with the
+# base copy of this script, to judge a train's docs-only allowance the way the scope job would.
+from_range() {
+  local base=$1 head=$2 probe rc=0
+  probe=$(mktemp -d) || return 1
+  if git diff -z --no-renames --name-only "$base" "$head" >"$probe/paths" &&
+     git diff -z --no-renames --name-only --diff-filter=D "$base" "$head" >"$probe/deleted"; then
+    if [[ $(deletes_root_file <"$probe/deleted") == true ]]; then echo false; else classify <"$probe/paths"; fi
+  else
+    rc=1
+  fi
+  rm -rf -- "$probe"
+  return $rc
+}
+
 self_test() {
   local rc=0 got
   expect() { # want, description, paths...
@@ -100,12 +117,47 @@ self_test() {
     if [[ $got != "$want" ]]; then echo "self-test: deleted [$list]: expected $want, got $got" >&2; rc=1; fi
   done
   [[ $rc -eq 0 ]] && echo "self-test: 13 path lists and 4 deletion lists classified as expected"
+  range_self_test || rc=1
+  return $rc
+}
+
+# --range on a throwaway repository: the rename and deleted-root-file rules hold in local mode
+# too (merge-train runs this mode on its own checkout).
+range_self_test() {
+  local repo rc=0 base got
+  repo=$(mktemp -d) || return 1
+  git -C "$repo" init -q && mkdir -p "$repo/src" "$repo/docs" &&
+    echo a >"$repo/src/old.rs" && echo r >"$repo/README.md" && echo d >"$repo/docs/x.md" &&
+    git -C "$repo" add -A && git -C "$repo" -c user.name=t -c user.email=t@t commit -q -m base || { rm -rf -- "$repo"; return 1; }
+  base=$(git -C "$repo" rev-parse HEAD)
+  range_case() { # want, description, then a shell edit run inside the repository
+    local want=$1 desc=$2 edit=$3
+    git -C "$repo" checkout -q --detach "$base" &&
+      (cd "$repo" && eval "$edit") && git -C "$repo" add -A &&
+      git -C "$repo" -c user.name=t -c user.email=t@t commit -q -m "$desc" || { echo "self-test: --range $desc: setup failed" >&2; rc=1; return; }
+    got=$(cd "$repo" && from_range "$base" HEAD)
+    [[ $got == "$want" ]] || { echo "self-test: --range $desc: expected $want, got $got" >&2; rc=1; }
+  }
+  range_case true  "docs edit"                   'echo e >docs/x.md'
+  range_case false "rename from src/ into docs/" 'git mv src/old.rs docs/old.rs'
+  range_case false "deleted root file"           'git rm -q README.md'
+  range_case false "source edit"                 'echo b >src/old.rs'
+  rm -rf -- "$repo"
+  [[ $rc -eq 0 ]] && echo "self-test: 4 --range cases classified as expected"
   return $rc
 }
 
 case ${1:-} in
   --self-test) self_test ;;
   --classify) echo "docs_only=$(classify)" ;;
+  --range)
+    if out=$(from_range "${2:?base sha}" "${3:?head sha}"); then
+      echo "docs_only=$out"
+    else
+      echo "docs_only=false"
+      echo "could not list changed files; running everything" >&2
+    fi
+    ;;
   *)
     if out=$(from_git "${1:?merge sha}" "${2:?pr number}" "${3:?head sha}"); then
       echo "docs_only=$out"
