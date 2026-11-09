@@ -177,9 +177,13 @@ pub(crate) fn email_domain(email: &str) -> Option<&str> {
     (!local.is_empty() && !domain.is_empty() && !domain.contains('@')).then_some(domain)
 }
 
+/// How a redacting `Debug` names a personal field: by presence only.
+fn shown(present: bool) -> &'static str {
+    if present { "<present>" } else { "<absent>" }
+}
+
 impl std::fmt::Debug for IdTokenClaims {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let shown = |present: bool| if present { "<present>" } else { "<absent>" };
         f.debug_struct("IdTokenClaims")
             .field("iss", &self.iss)
             .field("sub", &self.sub)

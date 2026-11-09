@@ -94,7 +94,7 @@ pub struct VerifiedIdentity {
 /// does: a stray `?identity` cannot log them.
 impl std::fmt::Debug for VerifiedIdentity {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let shown = |present: bool| if present { "<present>" } else { "<absent>" };
+        let shown = super::shown;
         f.debug_struct("VerifiedIdentity")
             .field("subject", &self.subject)
             .field("email", &shown(!self.email.is_empty()))

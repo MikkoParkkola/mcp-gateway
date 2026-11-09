@@ -141,26 +141,34 @@ fn extract_unverified_claims_rejects_malformed_token() {
 }
 
 /// A verified identity's `Debug` shows the subject and the issuer, and names
-/// the email, name and groups only by presence: a stray `?identity` in a log
-/// line carries none of them.
+/// the email, name and groups only by presence, each in its own field: a
+/// stray `?identity` in a log line carries none of them.
 #[test]
 fn verified_identity_debug_names_personal_fields_only_by_presence() {
-    let identity = VerifiedIdentity::for_test(
+    let full = VerifiedIdentity::for_test(
         "12345".to_string(),
         "alice@company.com".to_string(),
         Some("Alice".to_string()),
         vec!["ml-engineers".to_string()],
         "https://accounts.google.com".to_string(),
     );
-
-    let shown = format!("{identity:?}");
-
-    for kept in ["12345", "https://accounts.google.com", "<present>"] {
-        assert!(shown.contains(kept), "{kept} missing: {shown}");
-    }
-    for hidden in ["alice@company.com", "Alice", "ml-engineers"] {
-        assert!(!shown.contains(hidden), "{hidden} shown: {shown}");
-    }
+    assert_eq!(
+        format!("{full:?}"),
+        "VerifiedIdentity { subject: \"12345\", email: \"<present>\", name: \"<present>\", \
+         groups: \"<present>\", issuer: \"https://accounts.google.com\" }"
+    );
+    let bare = VerifiedIdentity::for_test(
+        "12345".to_string(),
+        String::new(),
+        None,
+        Vec::new(),
+        "https://accounts.google.com".to_string(),
+    );
+    assert_eq!(
+        format!("{bare:?}"),
+        "VerifiedIdentity { subject: \"12345\", email: \"<absent>\", name: \"<absent>\", \
+         groups: \"<absent>\", issuer: \"https://accounts.google.com\" }"
+    );
 }
 
 // MIK-6702.CP.ID.1 — stable_actor_id is collision-safe when an issuer
