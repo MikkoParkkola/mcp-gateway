@@ -229,9 +229,8 @@ pub(super) fn recover(
     // that held an id, or a mark that survived, the log it follows is gone.
     let gone = sealed.is_empty() && !std::fs::metadata(path).is_ok_and(|m| m.len() > 0);
     let hw = segments::read_hwm(path, secret, &config.key_id);
-    // The signing anchor's plan is decided before tail repair writes a
-    // record, so a record it signs cannot make an unsigned log look signed.
-    let plan = anchor_plan(path, config, &sealed)?;
+    // Before tail repair writes anything (see `sigstart::plan`).
+    let plan = sigstart::plan(path, config, &sealed)?;
     let dropped = if std::fs::metadata(path).is_ok_and(|m| m.len() > 0) {
         repair_torn_tail(path, config, sealed.last(), hw.as_ref())?
     } else {
@@ -345,26 +344,6 @@ pub(super) fn recover(
     state.seg.sealed = segments::list_segments(path)?.len();
     segments::sync_dir(path)?;
     Ok((state, id))
-}
-
-/// The signing anchor's plan, decided before tail repair writes a record,
-/// so a record the repair signs cannot make an unsigned log look signed.
-fn anchor_plan(
-    path: &Path,
-    config: &TransparencyLogConfig,
-    sealed: &[Segment],
-) -> io::Result<sigstart::Plan> {
-    // A path that is not a regular file fails later with its own error.
-    if path.exists() && !path.is_file() {
-        return Ok(sigstart::Plan::Nothing);
-    }
-    let identified = identity::resolve(path, sealed)?.is_some();
-    sigstart::classify(
-        path,
-        config.shared_secret.as_bytes(),
-        &config.key_id,
-        identified,
-    )
 }
 
 /// After segment recovery: correct a first start's predicted seq, then write

@@ -517,6 +517,26 @@ fn starts_at_genesis(path: &Path) -> io::Result<bool> {
         .is_some_and(|v| v["counter"] == 1 && v["prev_entry_hash"] == "genesis"))
 }
 
+/// The signing anchor's plan, decided before tail repair writes a record,
+/// so a record the repair signs cannot make an unsigned log look signed.
+pub(super) fn plan(
+    path: &Path,
+    config: &super::TransparencyLogConfig,
+    sealed: &[super::segments::Segment],
+) -> io::Result<Plan> {
+    // A path that is not a regular file fails later with its own error.
+    if path.exists() && !path.is_file() {
+        return Ok(Plan::Nothing);
+    }
+    let identified = super::identity::resolve(path, sealed)?.is_some();
+    classify(
+        path,
+        config.shared_secret.as_bytes(),
+        &config.key_id,
+        identified,
+    )
+}
+
 /// Decide the plan. `identified`: the log holds an identity or open record.
 pub(super) fn classify(
     path: &Path,
