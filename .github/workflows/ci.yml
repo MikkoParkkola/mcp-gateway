@@ -713,7 +713,10 @@ jobs:
   # !cancelled() so a failed shard still yields a verdict, but a cancelled run
   # (superseded by a newer push) creates no aggregate job: always() ran these
   # after the cancel and held the run, and the newer run behind it, for a
-  # runner. Cancelling a PR's newest run with no newer one behind it leaves
+  # runner. A superseded run still stuck "queued" (an older ci.yml, or a job
+  # that ignores the cancel) frees only with
+  # `gh api -X POST repos/{owner}/{repo}/actions/runs/<id>/force-cancel`;
+  # a plain `gh run cancel` leaves always() jobs alive. Cancelling a PR's newest run with no newer one behind it leaves
   # these skipped, and branch protection reads a skipped required check as
   # passing: merge only through the train, which reads it red. The skip guards
   # are the shards' own, so a throwaway PR or a post-merge push skips this as before;
