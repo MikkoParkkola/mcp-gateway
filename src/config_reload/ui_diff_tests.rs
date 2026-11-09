@@ -743,7 +743,7 @@ async fn an_alert_on_its_dash_line_shows_that_line() {
     );
 }
 
-/// K8: red oracle is a BadParam reason that omits the submitted backend name.
+/// K8: red oracle is a `BadParam` reason that omits the submitted backend name.
 #[tokio::test]
 async fn k8_missing_backend_does_not_echo_name() {
     const CANARY: &str = "missing-backend-canary";

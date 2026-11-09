@@ -487,8 +487,6 @@ fn every_writer_result_maps_to_one_refusal() {
     use crate::config_reload::reload_context::replace::ui_diff::PreviewRefused;
     use crate::secret_store::SaveError;
 
-    let failed = || Mapped::Refusal(UiRefused::Failed(super::FAILED.to_owned()));
-    let journal = || std::path::PathBuf::from("j");
     let rows = [
         (ReplaceError::Busy, None, Mapped::Refusal(UiRefused::Busy)),
         (
@@ -562,6 +560,21 @@ fn every_writer_result_maps_to_one_refusal() {
             None,
             Mapped::Refusal(UiRefused::Preview(PreviewRefused::Untrusted("t".into()))),
         ),
+    ];
+    for (error, halt, want) in rows {
+        let what = format!("{error:?} {halt:?}");
+        assert_eq!(map_error(error, halt), want, "{what}");
+    }
+}
+
+#[test]
+fn writer_failures_map_to_fixed_text() {
+    use super::{Mapped, map_error};
+    use crate::config_reload::reload_context::replace::ReplaceError;
+
+    let failed = || Mapped::Refusal(UiRefused::Failed(super::FAILED.to_owned()));
+    let journal = || std::path::PathBuf::from("j");
+    let rows = [
         (ReplaceError::Stage("s".into()), None, failed()),
         (ReplaceError::Write("w".into()), None, failed()),
         (ReplaceError::Failed("f".into()), None, failed()),

@@ -221,7 +221,7 @@ mod tests {
         assert_eq!(post_write_class(&refusal), RefusalClass::Internal);
     }
 
-    /// K5: red oracle is ShuttingDown for the shared shutdown literal.
+    /// K5: red oracle is `ShuttingDown` for the shared shutdown literal.
     #[test]
     fn k5_other_kind_with_shutdown_text() {
         let refusal = ReloadRefusal {

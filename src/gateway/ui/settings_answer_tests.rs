@@ -214,11 +214,10 @@ row!(
 );
 
 async fn constructor(why: super::super::secret_slots::Unopened, status: StatusCode) {
-    let response = match secret_target(Err(why)) {
-        Err(response) => response,
-        Ok(_) => panic!("a failed open produced a target"),
+    let Err(response) = secret_target(Err(why)) else {
+        panic!("a failed open produced a target");
     };
-    let (got, body) = decode(response).await;
+    let (got, body) = decode(*response).await;
     assert_eq!(got, status, "{body}");
     assert!(!body.to_string().contains(CANARY));
 }
@@ -255,14 +254,13 @@ async fn vault_failed() {
     let dir = tempfile::tempdir().expect("dir");
     let store: super::super::secret_slots::Store =
         Arc::new(crate::secret_store::FilesStore::new(dir.path()));
-    let response = match secret_target(Ok((
+    let Err(response) = secret_target(Ok((
         store,
         Err(crate::secret_store::StoreError::Failed(CANARY.into())),
-    ))) {
-        Err(response) => response,
-        Ok(_) => panic!("a failed vault produced a target"),
+    ))) else {
+        panic!("a failed vault produced a target");
     };
-    let (status, body) = decode(response).await;
+    let (status, body) = decode(*response).await;
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{body}");
     assert!(!body.to_string().contains(CANARY));
 }

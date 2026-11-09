@@ -76,9 +76,23 @@ async fn s18_secret_save() {
     route.store = Some(SettingsStoreForTest::Store(store.clone()));
     let mut result = None;
     let ((), logs) = crate::test_log_capture::capture_at(tracing::Level::TRACE, || {
-        result = Some(futures::executor::block_on(
-            route.save(json!([secret("secret-save-canary")])),
-        ));
+        result = Some(futures::executor::block_on(async {
+            let request = route.saved_body(&json!([secret("secret-save-canary")]));
+            let response = route
+                .response(true, &request.to_string(), client(true))
+                .await;
+            let status = response.status();
+            let bytes = axum::body::to_bytes(response.into_body(), 1 << 20)
+                .await
+                .expect("body");
+            assert!(
+                !bytes
+                    .windows(b"secret-save-canary".len())
+                    .any(|window| window == b"secret-save-canary")
+            );
+            let body: serde_json::Value = serde_json::from_slice(&bytes).expect("JSON answer");
+            (status, body)
+        }));
     });
     let (status, body) = result.expect("answer");
     assert_eq!(status, StatusCode::OK, "{body}");
@@ -86,7 +100,12 @@ async fn s18_secret_save() {
     assert_eq!(body["changed"], true);
     assert_eq!(body["comments"], "kept");
     assert!(body["reload"]["changes"].is_string());
-    assert_eq!(body["reload"]["pending_restart_fields"], json!(["auth"]));
+    assert!(
+        body["reload"]["pending_restart_fields"]
+            .as_array()
+            .expect("pending restart fields")
+            .contains(&json!("auth"))
+    );
     assert_eq!(body["restart_required"], json!(["auth.bearer_token"]));
     let values = store.values.lock().expect("values");
     assert_eq!(values.len(), 1);
@@ -97,12 +116,24 @@ async fn s18_secret_save() {
         b"secret-save-canary"
     );
     assert!(route.text().contains(&values[0].0));
+    // The reload names the changed secret input by its store reference, never
+    // by the secret itself.
+    let pending = body["reload"]["pending_restart_fields"]
+        .as_array()
+        .expect("pending restart fields");
+    assert!(pending.contains(&json!(values[0].0)), "{pending:?}");
+    assert!(
+        pending
+            .iter()
+            .all(|p| !p.to_string().contains("secret-save-canary")),
+        "{pending:?}"
+    );
     assert!(!route.text().contains("secret-save-canary"));
     assert!(!body.to_string().contains("secret-save-canary"));
     assert!(!logs.contains("secret-save-canary"));
 }
 
-/// S19: red oracle is an unprovable patch with set_secret and no value, before any create.
+/// S19: red oracle is an unprovable patch with `set_secret` and no value, before any create.
 #[tokio::test]
 async fn s19_secret_patch() {
     let text = BASE.replace("environment: \"dev\"", "environment: &env \"dev\"");
@@ -112,7 +143,7 @@ async fn s19_secret_patch() {
     let body = refused(
         route
             .save(json!([
-                set("environment", json!("prod")),
+                set("environment", &json!("prod")),
                 secret("patch-secret-canary")
             ]))
             .await,
@@ -138,7 +169,7 @@ async fn s20_stale_secret() {
     let mut route = Route::new(BASE).await;
     let store = recording(&route, None);
     route.store = Some(SettingsStoreForTest::Store(store.clone()));
-    let body = route.saved_body(json!([secret("stale-secret-canary")]));
+    let body = route.saved_body(&json!([secret("stale-secret-canary")]));
     let outside = BASE.replace("\"dev\"", "\"outside\"");
     route.write(&outside);
     let body = refused(
@@ -165,7 +196,7 @@ async fn s21_noop_reloads_outside_edit() {
     let route = Route::new(BASE).await;
     let outside = BASE.replace("owner: \"team\"", "owner: \"outside\"");
     route.write(&outside);
-    let (status, body) = route.save(json!([set("environment", json!("dev"))])).await;
+    let (status, body) = route.save(json!([set("environment", &json!("dev"))])).await;
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(
         body,
@@ -184,7 +215,9 @@ async fn s21_noop_reloads_outside_edit() {
 #[tokio::test]
 async fn s22_unchanged_restart_field() {
     let route = Route::new(BASE).await;
-    let (status, body) = route.save(json!([set("auth.enabled", json!(false))])).await;
+    let (status, body) = route
+        .save(json!([set("auth.enabled", &json!(false))]))
+        .await;
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(body["changed"], false);
     assert_eq!(body["revision"], route.revision());
@@ -205,7 +238,9 @@ async fn s23_reverted_restart_field() {
         .await
         .expect("publish pending auth");
     assert!(reload.pending_restart_fields.iter().any(|id| id == "auth"));
-    let (status, body) = route.save(json!([set("auth.enabled", json!(false))])).await;
+    let (status, body) = route
+        .save(json!([set("auth.enabled", &json!(false))]))
+        .await;
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(body["changed"], true);
     assert_eq!(body["restart_required"], json!([]));
@@ -241,13 +276,13 @@ async fn s25_backend_present() {
     );
 }
 
-/// S25: red oracle is fixed bad_param when backend is absent.
+/// S25: red oracle is fixed `bad_param` when backend is absent.
 #[tokio::test]
 async fn s25_backend_missing() {
     let route = Route::new(BASE).await;
     let body = refused(
         route
-            .save(json!([set("backends.owner", json!("new-team"))]))
+            .save(json!([set("backends.owner", &json!("new-team"))]))
             .await,
         StatusCode::UNPROCESSABLE_ENTITY,
         "bad_param",
@@ -257,7 +292,7 @@ async fn s25_backend_missing() {
     assert_eq!(route.text(), BASE);
 }
 
-/// S25: red oracle is a not_plain_key patch for an existing quoted backend key.
+/// S25: red oracle is a `not_plain_key` patch for an existing quoted backend key.
 #[tokio::test]
 async fn s25_backend_nonplain() {
     let text = BASE.replace("  a:\n", "  \"a\":\n");
@@ -275,6 +310,37 @@ async fn s25_backend_nonplain() {
         "code":"not_plain_key","reason":"a key on the path is not a plain key"}])
     );
     assert_eq!(route.text(), text);
+}
+
+fn assert_config_preview(case: &str, body: &serde_json::Value, config_mark: &str) {
+    let mut reasons = body.clone();
+    if case == "stale" {
+        assert!(
+            reasons["diff"]
+                .as_str()
+                .expect("preview")
+                .contains(config_mark)
+        );
+        reasons.as_object_mut().expect("object").remove("diff");
+    }
+    if case == "unprovable" {
+        let patch = reasons["patch"].as_array_mut().expect("patch");
+        assert!(patch.iter().any(|step| {
+            step["op"] == "set"
+                && step["value"]
+                    .as_str()
+                    .is_some_and(|v| v.contains(config_mark))
+        }));
+        for step in patch {
+            if step["op"] == "set" {
+                step.as_object_mut().expect("step").remove("value");
+            }
+        }
+    }
+    assert!(
+        !reasons.to_string().contains(config_mark),
+        "config value outside preview"
+    );
 }
 
 // Each canary case is a separate test so a stub cannot hide later cases.
@@ -297,11 +363,13 @@ async fn canary_case(case: &str) {
         "bad_param" => {
             json!([{"field":"backends.owner","backend":backend_mark,"value":{"set":config_mark}}])
         }
-        "unknown" => json!([set(&id_mark, json!(config_mark))]),
-        "invalid" => json!([set("environment", json!(config_mark)), secret(&secret_mark)]),
-        _ => json!([set("environment", json!(config_mark)), secret(&secret_mark)]),
+        "unknown" => json!([set(&id_mark, &json!(config_mark))]),
+        _ => json!([
+            set("environment", &json!(config_mark)),
+            secret(&secret_mark)
+        ]),
     };
-    let mut body = route.saved_body(fields);
+    let mut body = route.saved_body(&fields);
     if case == "stale" {
         route.write(&text.replace("\"dev\"", "\"outside\""));
     }
@@ -361,34 +429,7 @@ async fn canary_case(case: &str) {
         assert!(!logs.contains(marker), "private marker in logs");
     }
     assert!(!logs.contains(&config_mark), "config value logged");
-    let mut reasons = body.clone();
-    if case == "stale" {
-        assert!(
-            reasons["diff"]
-                .as_str()
-                .expect("preview")
-                .contains(&config_mark)
-        );
-        reasons.as_object_mut().expect("object").remove("diff");
-    }
-    if case == "unprovable" {
-        let patch = reasons["patch"].as_array_mut().expect("patch");
-        assert!(patch.iter().any(|step| {
-            step["op"] == "set"
-                && step["value"]
-                    .as_str()
-                    .is_some_and(|v| v.contains(&config_mark))
-        }));
-        for step in patch {
-            if step["op"] == "set" {
-                step.as_object_mut().expect("step").remove("value");
-            }
-        }
-    }
-    assert!(
-        !reasons.to_string().contains(&config_mark),
-        "config value outside preview"
-    );
+    assert_config_preview(case, &body, &config_mark);
     assert!(store.values.lock().expect("values").is_empty());
 }
 
@@ -397,7 +438,7 @@ async fn canary_case(case: &str) {
 async fn s26_invalid() {
     canary_case("invalid").await;
 }
-/// S26: red oracle is posture_refused without exposing the publication value.
+/// S26: red oracle is `posture_refused` without exposing the publication value.
 #[tokio::test(flavor = "multi_thread")]
 async fn s26_posture() {
     canary_case("posture").await;
@@ -412,12 +453,12 @@ async fn s26_stale() {
 async fn s26_unprovable() {
     canary_case("unprovable").await;
 }
-/// S26: red oracle is bad_param without the backend-name marker.
+/// S26: red oracle is `bad_param` without the backend-name marker.
 #[tokio::test(flavor = "multi_thread")]
 async fn s26_bad_param() {
     canary_case("bad_param").await;
 }
-/// S26: red oracle is unknown_field without the submitted id marker.
+/// S26: red oracle is `unknown_field` without the submitted id marker.
 #[tokio::test(flavor = "multi_thread")]
 async fn s26_unknown() {
     canary_case("unknown").await;
@@ -428,7 +469,7 @@ async fn s26_store() {
     canary_case("store").await;
 }
 
-/// S27: red oracle is invalid_body after an escaped secret was accepted and a later member fails.
+/// S27: red oracle is `invalid_body` after an escaped secret was accepted and a later member fails.
 #[tokio::test]
 async fn s27_escaped_then_malformed() {
     let mut route = Route::new(BASE).await;
@@ -456,7 +497,7 @@ async fn s27_escaped_then_malformed() {
     );
 }
 
-/// S27: red oracle is invalid_body for duplicate secret members, with no store access.
+/// S27: red oracle is `invalid_body` for duplicate secret members, with no store access.
 #[tokio::test]
 async fn s27_duplicate_secret() {
     let mut route = Route::new(BASE).await;

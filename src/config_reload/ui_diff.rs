@@ -408,16 +408,16 @@ async fn validate(
 ) -> Result<(), UiRefused> {
     ctx.validate_template(target, template, None)
         .await
-        .map_err(validate_refusal)
+        .map_err(|error| validate_refusal(&error))
 }
 
 /// The answer to a change the config loader would refuse: fixed text, since
 /// the loader's own message can quote what the file holds.
 pub(super) const LOADER_REFUSED: &str = "the change would be refused by the config loader";
 
-pub(super) fn validate_refusal(e: ReplaceError) -> UiRefused {
+pub(super) fn validate_refusal(e: &ReplaceError) -> UiRefused {
     match e {
-        ReplaceError::ReloadRefused { class, .. } => UiRefused::ReloadRefused { class },
+        ReplaceError::ReloadRefused { class, .. } => UiRefused::ReloadRefused { class: *class },
         ReplaceError::Refused(_) => UiRefused::Invalid(LOADER_REFUSED.to_owned()),
         ReplaceError::Unsupported(_) => {
             UiRefused::Unsupported("this change is not supported here".to_owned())

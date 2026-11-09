@@ -25,17 +25,6 @@ pub(super) struct BeforeApply {
 impl ReloadContext {
     /// The refusals a reload answers before `apply_patch` stops or starts any
     /// backend: each says nothing was started, stopped or published.
-    pub(super) fn refuse_before_apply(
-        &self,
-        new_config: &Config,
-        patch: &ConfigPatch,
-    ) -> std::result::Result<(), String> {
-        match self.before_apply_refusal(new_config, patch) {
-            Some(refusal) => Err(refusal.text),
-            None => Ok(()),
-        }
-    }
-
     pub(super) fn before_apply_refusal(
         &self,
         new_config: &Config,
@@ -191,7 +180,7 @@ mod tests {
     use crate::config_reload::compute_diff;
     use crate::config_reload::replace_test_support::setup;
 
-    /// K1: red oracle is NetworkPosture rather than the stub CapabilityClash.
+    /// K1: red oracle is `NetworkPosture` rather than the stub `CapabilityClash`.
     #[test]
     fn k1_network_posture_kind() {
         let (_dir, _path, ctx) = setup();
@@ -204,7 +193,7 @@ mod tests {
         assert_eq!(refusal.kind, BeforeApplyKind::NetworkPosture);
     }
 
-    /// K1: red oracle is AccountBinding rather than the stub CapabilityClash.
+    /// K1: red oracle is `AccountBinding` rather than the stub `CapabilityClash`.
     #[test]
     fn k1_account_binding_kind() {
         let (_dir, _path, ctx) = setup();
@@ -217,7 +206,7 @@ mod tests {
         assert_eq!(refusal.kind, BeforeApplyKind::AccountBinding);
     }
 
-    /// K1: oracle is CapabilityClash; this control already passes the stub.
+    /// K1: oracle is `CapabilityClash`; this control already passes the stub.
     #[test]
     fn k1_capability_clash_kind() {
         use crate::capability::{CapabilityBackend, CapabilityExecutor};

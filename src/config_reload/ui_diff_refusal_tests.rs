@@ -13,7 +13,7 @@ fn no_input_text(refusal: &UiRefused) {
 /// K6: red oracle is the typed posture refusal without its input reason.
 #[test]
 fn k6_posture_is_typed() {
-    let got = validate_refusal(ReplaceError::ReloadRefused {
+    let got = validate_refusal(&ReplaceError::ReloadRefused {
         class: RefusalClass::Posture,
         reason: CANARY.to_owned(),
     });
@@ -29,7 +29,7 @@ fn k6_posture_is_typed() {
 /// K6: red oracle is Unsupported with a fixed reason, not debug input text.
 #[test]
 fn k6_unsupported_is_fixed() {
-    let got = validate_refusal(ReplaceError::Unsupported(CANARY.to_owned()));
+    let got = validate_refusal(&ReplaceError::Unsupported(CANARY.to_owned()));
     assert!(matches!(got, UiRefused::Unsupported(_)), "{got:?}");
     no_input_text(&got);
 }
@@ -37,7 +37,7 @@ fn k6_unsupported_is_fixed() {
 /// K6: red oracle is Failed with a fixed reason, rather than Unsupported.
 #[test]
 fn k6_failed_is_fixed() {
-    let got = validate_refusal(ReplaceError::Failed(CANARY.to_owned()));
+    let got = validate_refusal(&ReplaceError::Failed(CANARY.to_owned()));
     assert!(matches!(got, UiRefused::Failed(_)), "{got:?}");
     no_input_text(&got);
 }
@@ -45,7 +45,7 @@ fn k6_failed_is_fixed() {
 /// K6: red oracle is Failed for Busy, which has no input string to echo.
 #[test]
 fn k6_busy_is_failed() {
-    let got = validate_refusal(ReplaceError::Busy);
+    let got = validate_refusal(&ReplaceError::Busy);
     assert!(matches!(got, UiRefused::Failed(_)), "{got:?}");
     no_input_text(&got);
 }
@@ -53,7 +53,7 @@ fn k6_busy_is_failed() {
 /// K6: red oracle is Invalid with a fixed reason for a compute refusal.
 #[test]
 fn k6_refused_is_fixed() {
-    let got = validate_refusal(ReplaceError::Refused(CANARY.to_owned()));
+    let got = validate_refusal(&ReplaceError::Refused(CANARY.to_owned()));
     assert!(matches!(got, UiRefused::Invalid(_)), "{got:?}");
     no_input_text(&got);
 }

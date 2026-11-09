@@ -69,12 +69,12 @@ impl Route {
         std::fs::read_to_string(self.path()).expect("file")
     }
     pub(super) fn write(&self, text: &str) {
-        write_owner_only(&self.path(), text).expect("outside edit");
+        write_owner_only(self.path(), text).expect("outside edit");
     }
     pub(super) fn revision(&self) -> String {
         FileRevision::of(self.text().as_bytes()).as_str().into()
     }
-    pub(super) fn saved_body(&self, fields: Value) -> Value {
+    pub(super) fn saved_body(&self, fields: &Value) -> Value {
         json!({"base_revision": self.revision(), "fields": fields})
     }
     pub(super) async fn diff(&self, fields: Value) -> (StatusCode, Value) {
@@ -82,7 +82,7 @@ impl Route {
             .await
     }
     pub(super) async fn save(&self, fields: Value) -> (StatusCode, Value) {
-        self.raw(true, &self.saved_body(fields).to_string(), client(true))
+        self.raw(true, &self.saved_body(&fields).to_string(), client(true))
             .await
     }
     pub(super) async fn raw(
@@ -91,6 +91,14 @@ impl Route {
         body: &str,
         who: AuthenticatedClient,
     ) -> (StatusCode, Value) {
+        decode(self.response(save, body, who).await).await
+    }
+    pub(super) async fn response(
+        &self,
+        save: bool,
+        body: &str,
+        who: AuthenticatedClient,
+    ) -> Response {
         let route = if save {
             routes::UI_SETTINGS
         } else {
@@ -104,14 +112,13 @@ impl Route {
             .expect("request");
         let guard = Guard::for_route(route, &Method::POST, Some(who));
         let store = self.store.clone().map(Extension);
-        let response = if save {
+        if save {
             let body = Json::<SaveBody>::from_request(request, &()).await;
             settings_save(State(self.state.clone()), store, guard, body).await
         } else {
             let body = Json::<DiffBody>::from_request(request, &()).await;
             settings_diff(State(self.state.clone()), store, guard, body).await
-        };
-        decode(response).await
+        }
     }
     pub(super) fn audit(&mut self) -> Arc<crate::security::TransparencyLogger> {
         let log = Arc::new(
@@ -155,7 +162,7 @@ pub(super) async fn decode(response: Response) -> (StatusCode, Value) {
     let bytes = to_bytes(response.into_body(), 1 << 20).await.expect("body");
     (status, serde_json::from_slice(&bytes).expect("JSON answer"))
 }
-pub(super) fn set(field: &str, value: Value) -> Value {
+pub(super) fn set(field: &str, value: &Value) -> Value {
     json!({"field": field, "value": {"set": value}})
 }
 pub(super) fn secret(value: &str) -> Value {

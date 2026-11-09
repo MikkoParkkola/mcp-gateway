@@ -5,6 +5,7 @@ use super::{SettingsStoreForTest, restart_fields, test_support::*};
 use crate::config_reload::FileRevision;
 use axum::http::StatusCode;
 use serde_json::{Value, json};
+use std::sync::Arc;
 
 /// S1: red oracle is the exact zero-context budget diff and original revision.
 #[cfg(feature = "cost-governance")]
@@ -12,13 +13,13 @@ use serde_json::{Value, json};
 async fn s1_budget_diff() {
     let route = Route::new(BUDGET).await;
     let (status, body) = route
-        .diff(json!([set("cost_governance.budgets.daily", json!(12.5))]))
+        .diff(json!([set("cost_governance.budgets.daily", &json!(12.5))]))
         .await;
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(
         body,
         json!({"revision": route.revision(), "diff":
-        "--- a/gateway.yaml\n+++ b/gateway.yaml\n@@ -7,1 +7,1 @@\n-    daily: 10.0 # daily cap\n+    daily: 12.5 # daily cap\n"})
+        "--- a/gateway.yaml\n+++ b/gateway.yaml\n@@ -7,1 +7,1 @@\n-    daily: 10.0 # <comment>\n+    daily: 12.5 # <comment>\n"})
     );
     assert_eq!(route.text(), BUDGET);
 }
@@ -41,7 +42,7 @@ async fn s2_secret_diff() {
     assert_eq!(route.text(), BASE);
 }
 
-/// S3: red oracle is invalid_body for a secret literal sent to diff, before store access.
+/// S3: red oracle is `invalid_body` for a secret literal sent to diff, before store access.
 #[tokio::test]
 async fn s3_diff_rejects_secret_bytes() {
     let mut route = Route::new(BASE).await;
@@ -64,7 +65,7 @@ async fn s4_budget_save() {
     let route = Route::new(BUDGET).await;
     let next = BUDGET.replace("10.0", "12.5");
     let (status, body) = route
-        .save(json!([set("cost_governance.budgets.daily", json!(12.5))]))
+        .save(json!([set("cost_governance.budgets.daily", &json!(12.5))]))
         .await;
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(
@@ -83,7 +84,9 @@ async fn s4_budget_save() {
 async fn s5_refusing_reload() {
     let route = Route::with_reload(BASE, true).await;
     refused(
-        route.save(json!([set("environment", json!("prod"))])).await,
+        route
+            .save(json!([set("environment", &json!("prod"))]))
+            .await,
         StatusCode::INTERNAL_SERVER_ERROR,
         "failed",
     );
@@ -100,7 +103,9 @@ async fn s6_anchored_key() {
     let text = BASE.replace("environment: \"dev\"", "environment: &env \"dev\"");
     let route = Route::new(&text).await;
     let body = refused(
-        route.save(json!([set("environment", json!("prod"))])).await,
+        route
+            .save(json!([set("environment", &json!("prod"))]))
+            .await,
         StatusCode::UNPROCESSABLE_ENTITY,
         "not_in_place",
     );
@@ -119,7 +124,7 @@ async fn s6_anchored_key() {
 async fn s7_restart_parent() {
     let route = Route::new(BASE).await;
     let next = BASE.replace("enabled: false", "enabled: true");
-    let (status, body) = route.save(json!([set("auth.enabled", json!(true))])).await;
+    let (status, body) = route.save(json!([set("auth.enabled", &json!(true))])).await;
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(
         body,
@@ -157,14 +162,14 @@ fn s8_restart_matches_whole_segments() {
     assert!(restart_fields(&["backends.owner"], &reload).is_empty());
 }
 
-/// S9: red oracle is typed posture_refused on both routes after an outside publication edit.
+/// S9: red oracle is typed `posture_refused` on both routes after an outside publication edit.
 #[tokio::test]
 async fn s9_network_posture() {
     let route = Route::new(BASE).await;
     let outside = format!("{BASE}server:\n  public_url: https://public.example.test\n");
     route.write(&outside);
     for save in [false, true] {
-        let fields = json!([set("environment", json!("prod"))]);
+        let fields = json!([set("environment", &json!("prod"))]);
         let answer = if save {
             route.save(fields).await
         } else {
@@ -190,7 +195,7 @@ async fn s9b_invalid_config() {
         let route = Route::new(BASE).await;
         route.write(&outside);
         for save in [false, true] {
-            let fields = json!([set("environment", json!("prod"))]);
+            let fields = json!([set("environment", &json!("prod"))]);
             let answer = if save {
                 route.save(fields).await
             } else {
@@ -207,7 +212,9 @@ async fn s9b_invalid_config() {
 async fn s9b_internal_after_write() {
     let route = Route::with_reload(BASE, true).await;
     refused(
-        route.save(json!([set("environment", json!("prod"))])).await,
+        route
+            .save(json!([set("environment", &json!("prod"))]))
+            .await,
         StatusCode::INTERNAL_SERVER_ERROR,
         "failed",
     );
@@ -223,7 +230,7 @@ async fn s9b_internal_after_write() {
 async fn s9c_post_write_posture() {
     let route = Route::new(BASE).await;
     let pause = crate::config_reload::arm_reload_pause(&route.path());
-    let save = route.save(json!([set("environment", json!("prod"))]));
+    let save = route.save(json!([set("environment", &json!("prod"))]));
     tokio::pin!(save);
     tokio::select! {
         result = &mut save => panic!("S9c: save answered before reaching the reload: {result:?}"),
@@ -264,15 +271,15 @@ async fn s10_non_admin() {
     }
 }
 
-/// S11: red oracle is unknown_field at entry 2, without repeating the submitted id.
+/// S11: red oracle is `unknown_field` at entry 2, without repeating the submitted id.
 #[tokio::test]
 async fn s11_unknown_field() {
     let route = Route::new(BASE).await;
     for save in [false, true] {
         let fields = json!([
-            set("environment", json!("dev")),
-            set("auth.enabled", json!(false)),
-            set("unknown-id-canary", json!(true))
+            set("environment", &json!("dev")),
+            set("auth.enabled", &json!(false)),
+            set("unknown-id-canary", &json!(true))
         ]);
         let answer = if save {
             route.save(fields).await
@@ -286,17 +293,17 @@ async fn s11_unknown_field() {
     }
 }
 
-/// S12: red oracle is bad_value for each wrong scalar type on both routes.
+/// S12: red oracle is `bad_value` for each wrong scalar type on both routes.
 #[tokio::test]
 async fn s12_wrong_scalar_types() {
     let route = Route::new(BASE).await;
     let mut fields = vec![
-        set("auth.enabled", json!("true")),
-        set("environment", json!(42)),
+        set("auth.enabled", &json!("true")),
+        set("environment", &json!(42)),
     ];
     #[cfg(feature = "cost-governance")]
     fields.extend([
-        set("cost_governance.budgets.daily", json!("12.5")),
+        set("cost_governance.budgets.daily", &json!("12.5")),
         json!({"field":"cost_governance.alerts.at_percent","index":0,"value":{"set":12.5}}),
         json!({"field":"cost_governance.alerts.action","index":0,"value":{"set":false}}),
     ]);
@@ -320,7 +327,7 @@ async fn s12_wrong_scalar_types() {
 async fn s12_num_accepts_integer() {
     let route = Route::new(BUDGET).await;
     for save in [false, true] {
-        let fields = json!([set("cost_governance.budgets.daily", json!(12))]);
+        let fields = json!([set("cost_governance.budgets.daily", &json!(12))]);
         let (status, body) = if save {
             route.save(fields).await
         } else {
@@ -334,25 +341,32 @@ async fn s12_num_accepts_integer() {
 #[tokio::test]
 async fn s13_stale() {
     let route = Route::new(BASE).await;
-    let body = route.saved_body(json!([set("environment", json!("prod"))]));
+    let body = route.saved_body(&json!([set("environment", &json!("prod"))]));
     let outside = BASE.replace("\"dev\"", "\"staging\"");
     route.write(&outside);
     let answer = route.raw(true, &body.to_string(), client(true)).await;
     assert_eq!(
         refused(answer, StatusCode::CONFLICT, "stale"),
         json!({"error":"stale",
-        "current": route.revision(), "diff":"--- a/gateway.yaml\n+++ b/gateway.yaml\n@@ -2,1 +2,1 @@\n-environment: \"staging\" # where\n+environment: \"prod\" # where\n"})
+        "current": route.revision(), "diff":"--- a/gateway.yaml\n+++ b/gateway.yaml\n@@ -2,1 +2,1 @@\n-environment: \"staging\" # <comment>\n+environment: \"prod\" # <comment>\n"})
     );
     assert_eq!(route.text(), outside);
 }
 
-/// S14: red oracle is audit_log_required when running auth is on and no logger exists.
+/// S14: red oracle is `audit_log_required` when running auth is on and no logger exists.
 #[tokio::test]
 async fn s14_audit_required() {
     let text = BASE.replace("enabled: false", "enabled: true");
-    let route = Route::new(&text).await;
+    let mut route = Route::new(&text).await;
+    Arc::get_mut(&mut route.state)
+        .expect("unique state")
+        .live_config = Arc::clone(&route.ctx.live_config);
+    assert!(route.state.live_config.running().auth.enabled);
+    assert!(route.state.transparency_log.is_none());
     let body = refused(
-        route.save(json!([set("environment", json!("prod"))])).await,
+        route
+            .save(json!([set("environment", &json!("prod"))]))
+            .await,
         StatusCode::SERVICE_UNAVAILABLE,
         "audit_log_required",
     );
@@ -394,9 +408,9 @@ async fn s16_admin_audit() {
         } else {
             crate::gateway::routes::UI_SETTINGS_DIFF
         };
-        let fields = json!([set("environment", json!("prod"))]);
+        let fields = json!([set("environment", &json!("prod"))]);
         let body = if save {
-            route.saved_body(fields)
+            route.saved_body(&fields)
         } else {
             json!({"fields":fields})
         };
@@ -424,13 +438,13 @@ async fn s16_admin_audit() {
     }
 }
 
-/// S17: red oracle is one fixed invalid_body for malformed JSON, unknown members and bad revisions.
+/// S17: red oracle is one fixed `invalid_body` for malformed JSON, unknown members and bad revisions.
 #[tokio::test]
 async fn s17_invalid_bodies() {
     let route = Route::new(BASE).await;
     for save in [false, true] {
         let valid = if save {
-            route.saved_body(json!([]))
+            route.saved_body(&json!([]))
         } else {
             json!({"fields":[]})
         };

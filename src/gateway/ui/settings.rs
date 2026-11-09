@@ -115,13 +115,15 @@ fn field_error(id: FieldId, code: &'static str, reason: &str) -> Response {
         .into_response()
 }
 
-fn identify<S>(body: FieldBody<S>, entry: usize) -> Result<(FieldId, Param, S), Response> {
+fn identify<S>(body: FieldBody<S>, entry: usize) -> Result<(FieldId, Param, S), Box<Response>> {
     let Some(id) = FieldId::of(&body.field) else {
-        return Err((
-            StatusCode::UNPROCESSABLE_ENTITY,
-            Json(json!({"error": "unknown_field", "entry": entry})),
-        )
-            .into_response());
+        return Err(Box::new(
+            (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Json(json!({"error": "unknown_field", "entry": entry})),
+            )
+                .into_response(),
+        ));
     };
     Ok((
         id,
@@ -133,9 +135,9 @@ fn identify<S>(body: FieldBody<S>, entry: usize) -> Result<(FieldId, Param, S), 
     ))
 }
 
-fn scalar(id: FieldId, value: serde_json::Value) -> Result<Scalar, Response> {
+fn scalar(id: FieldId, value: &serde_json::Value) -> Result<Scalar, Box<Response>> {
     let Some(kind) = id.spec().kind else {
-        return Err(answer(UiRefused::WrongKind(id)));
+        return Err(Box::new(answer(UiRefused::WrongKind(id))));
     };
     let converted = match kind {
         ValueKind::Bool => value.as_bool().map(Scalar::Bool),
@@ -145,7 +147,13 @@ fn scalar(id: FieldId, value: serde_json::Value) -> Result<Scalar, Response> {
             value.as_str().map(|v| Scalar::Str(v.to_owned()))
         }
     };
-    converted.ok_or_else(|| field_error(id, "bad_value", "value does not match the field's type"))
+    converted.ok_or_else(|| {
+        Box::new(field_error(
+            id,
+            "bad_value",
+            "value does not match the field's type",
+        ))
+    })
 }
 
 pub(super) async fn settings_diff(
@@ -174,12 +182,12 @@ pub(super) async fn settings_diff(
     for (entry, body) in body.fields.into_iter().enumerate() {
         let (id, param, value) = match identify(body, entry) {
             Ok(field) => field,
-            Err(response) => return response,
+            Err(response) => return *response,
         };
         let value = match value {
-            ValueBody::Set(value) => match scalar(id, value) {
+            ValueBody::Set(value) => match scalar(id, &value) {
                 Ok(value) => PreviewValue::Set(value),
-                Err(response) => return response,
+                Err(response) => return *response,
             },
             ValueBody::Remove(_) => PreviewValue::Remove,
             ValueBody::Secret(_) => PreviewValue::Secret,
@@ -228,12 +236,12 @@ pub(super) async fn settings_save(
     for (entry, body) in body.fields.into_iter().enumerate() {
         let (id, param, value) = match identify(body, entry) {
             Ok(field) => field,
-            Err(response) => return response,
+            Err(response) => return *response,
         };
         let value = match value {
-            SaveValueBody::Set(value) => match scalar(id, value) {
+            SaveValueBody::Set(value) => match scalar(id, &value) {
                 Ok(value) => SaveValue::Set(value),
-                Err(response) => return response,
+                Err(response) => return *response,
             },
             SaveValueBody::Remove(_) => SaveValue::Remove,
             SaveValueBody::Secret(value) => SaveValue::Secret(value),
@@ -266,7 +274,7 @@ pub(super) async fn settings_save(
         let opened = secret_slots::open_store(config.secrets.store, dir).await;
         match secret_target(opened) {
             Ok(target) => Some(target),
-            Err(response) => return response,
+            Err(response) => return *response,
         }
     } else {
         None
@@ -314,12 +322,12 @@ fn patch_steps(patch: Patch) -> serde_json::Value {
         GiveUp::Other => "the edit cannot be proven in place",
     };
     json!(patch.steps.into_iter().map(|step| {
-        let (op, path, value) = match step {
-            PatchStep::Set { path, value } => ("set", path, value),
-            PatchStep::Remove { path } => ("remove", path, None),
-            PatchStep::SetSecret { path } => ("set_secret", path, None),
+        let (op, location, value) = match step {
+            PatchStep::Set { path: location, value } => ("set", location, value),
+            PatchStep::Remove { path: location } => ("remove", location, None),
+            PatchStep::SetSecret { path: location } => ("set_secret", location, None),
         };
-        let mut step = json!({"op": op, "path": path_text(&path), "code": patch.code.as_str(), "reason": reason});
+        let mut step = json!({"op": op, "path": path_text(&location), "code": patch.code.as_str(), "reason": reason});
         if let Some(value) = value { step["value"] = json!(value); }
         if let Some(line) = patch.line { step["line"] = json!(line); }
         step
@@ -361,6 +369,36 @@ fn answer_for(refusal: UiRefused, fields: &[&str]) -> Response {
     answer(refusal)
 }
 
+fn bad_value(id: FieldId, reason: &str) -> Response {
+    let mut allowed = vec![
+        "expected a boolean".to_owned(),
+        "expected an integer".to_owned(),
+        "expected a number".to_owned(),
+        "expected a string".to_owned(),
+        "out of range".to_owned(),
+        "a control character".to_owned(),
+    ];
+    match id.spec().kind {
+        Some(ValueKind::Num { min }) => allowed.push(format!("below {min}")),
+        Some(ValueKind::Str {
+            max_chars: Some(max),
+        }) => allowed.push(format!("over {max} characters")),
+        Some(ValueKind::Enum(words)) => {
+            allowed.push(format!("not one of {}", words.join(", ")));
+        }
+        Some(ValueKind::Bool | ValueKind::Int { .. } | ValueKind::Str { max_chars: None })
+        | None => {}
+    }
+    let reason = allowed
+        .iter()
+        .find(|fixed| fixed.as_str() == reason)
+        .map_or(
+            "value does not satisfy the field's constraints",
+            String::as_str,
+        );
+    field_error(id, "bad_value", reason)
+}
+
 fn answer(refusal: UiRefused) -> Response {
     let error = |status, code, text| structured_error(status, code, text).into_response();
     let response = match refusal {
@@ -369,34 +407,7 @@ fn answer(refusal: UiRefused) -> Response {
             "wrong_kind",
             "the operation does not match the field's kind",
         ),
-        UiRefused::BadValue(id, reason) => {
-            let mut allowed = vec![
-                "expected a boolean".to_owned(),
-                "expected an integer".to_owned(),
-                "expected a number".to_owned(),
-                "expected a string".to_owned(),
-                "out of range".to_owned(),
-                "a control character".to_owned(),
-            ];
-            match id.spec().kind {
-                Some(ValueKind::Num { min }) => allowed.push(format!("below {min}")),
-                Some(ValueKind::Str {
-                    max_chars: Some(max),
-                }) => allowed.push(format!("over {max} characters")),
-                Some(ValueKind::Enum(words)) => {
-                    allowed.push(format!("not one of {}", words.join(", ")))
-                }
-                Some(
-                    ValueKind::Bool | ValueKind::Int { .. } | ValueKind::Str { max_chars: None },
-                )
-                | None => {}
-            }
-            let reason = allowed.iter().find(|fixed| **fixed == reason).map_or(
-                "value does not satisfy the field's constraints",
-                String::as_str,
-            );
-            field_error(id, "bad_value", reason)
-        }
+        UiRefused::BadValue(id, reason) => bad_value(id, &reason),
         UiRefused::BadParam(id, reason) => {
             let reason = match reason.as_str() {
                 "needs a backend" => "needs a backend",
@@ -508,7 +519,7 @@ fn secret_target(
         ),
         Unopened,
     >,
-) -> Result<SecretTarget, Response> {
+) -> Result<SecretTarget, Box<Response>> {
     match opened {
         Ok((store, Ok(vault))) => Ok(SecretTarget { vault, store }),
         Ok((_, Err(_))) | Err(Unopened::Failed) => {
@@ -530,6 +541,7 @@ fn secret_target(
             .into_response(),
         )),
     }
+    .map_err(Box::new)
 }
 
 #[cfg(test)]
