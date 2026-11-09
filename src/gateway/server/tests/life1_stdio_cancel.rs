@@ -50,7 +50,7 @@ struct Served {
     /// `tools/call` rounds the backend has received.
     rounds: Arc<AtomicUsize>,
     task: JoinHandle<crate::Result<()>>,
-    _dir: tempfile::TempDir,
+    _dir: std::sync::Arc<tempfile::TempDir>,
 }
 
 async fn spawn_backend() -> (String, Arc<AtomicUsize>) {
@@ -113,7 +113,7 @@ async fn spawn_backend() -> (String, Arc<AtomicUsize>) {
 /// already past its handshake.
 async fn serve(output_capacity: usize) -> Served {
     let (backend_url, rounds) = spawn_backend().await;
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = dir.path().join("gateway.yaml");
     // The task store under the test's own directory, never the default under $HOME.
     let yaml = format!(

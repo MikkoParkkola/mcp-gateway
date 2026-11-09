@@ -33,6 +33,10 @@ pub struct DurableTelemetrySink {
     parent_sync_pending: bool,
     #[cfg(test)]
     created_by: crate::test_late_write::Creator,
+    /// The temp dirs this sink keeps; declared last so the window's files
+    /// close before the dirs can go.
+    #[cfg(test)]
+    _kept_dirs: Vec<std::sync::Arc<tempfile::TempDir>>,
 }
 
 /// What one stdio persist adds: this process's stdio counts, its list
@@ -58,6 +62,14 @@ impl DurableTelemetrySink {
     ///
     /// A v1 window is refused with the archive instruction, never converted.
     pub fn open(data_dir: &Path) -> io::Result<Self> {
+        #[cfg(test)]
+        let kept_dirs = crate::test_dir_keep::kept_dirs_for(data_dir);
+        #[cfg(test)]
+        if kept_dirs.is_empty() {
+            crate::test_dir_keep::report_unkept(crate::test_dir_keep::TELEMETRY_WINDOW, data_dir);
+        }
+        #[cfg(test)]
+        crate::test_dir_keep::run_before_first_fs_call();
         let directory = data_dir.join(DURABLE_TELEMETRY_DIR);
         std::fs::create_dir_all(&directory)?;
         force_directory_owner_only(&directory)?;
@@ -75,6 +87,8 @@ impl DurableTelemetrySink {
             parent_sync_pending: false,
             #[cfg(test)]
             created_by: crate::test_late_write::Creator::default(),
+            #[cfg(test)]
+            _kept_dirs: kept_dirs,
         })
     }
 
@@ -293,3 +307,7 @@ pub(crate) mod write_seam {
 #[cfg(test)]
 #[path = "durable_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "durable_keep_tests.rs"]
+mod keep_tests;

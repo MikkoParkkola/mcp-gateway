@@ -5,7 +5,8 @@
 
 `Tests`, `Windows check` and `macOS check` are the names merge tooling and
 branch protection read. Each is now an aggregate that `needs:` its shard jobs
-and runs under `always()`. Only an exact `success` from every needed job
+and runs under `!cancelled()`: after any shard failure or skip, never on a
+cancelled run, which a newer run supersedes. Only an exact `success` from every needed job
 passes. A skipped or cancelled shard is red, never green: a skipped job is
 not evidence that anything ran.
 

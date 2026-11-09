@@ -323,7 +323,7 @@ impl Stdio {
     /// Open the session's durable task store (the fixture otherwise serves
     /// `tasks: None`, so X14 never runs).
     async fn with_tasks(mut self) -> Self {
-        let dir = std::sync::Arc::new(tempfile::tempdir().expect("store root"));
+        let dir = crate::test_dir_keep::kept_tempdir();
         let mut config = crate::config::Config::default();
         config.tasks.store_dir = dir.path().display().to_string();
         let (tasks, expiry) = stdio_tasks::open(

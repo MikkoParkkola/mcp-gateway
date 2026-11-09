@@ -46,7 +46,7 @@ async fn export_poll_recovers_from_a_poisoned_exporter_mutex() {
     use crate::security::TransparencyLogger;
     use crate::security::transparency_log::TransparencyLogConfig;
 
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = crate::test_dir_keep::kept_tempdir();
     let log_path = dir.path().join("inv.jsonl");
     let logger = TransparencyLogger::open(Arc::new(TransparencyLogConfig {
         enabled: true,
