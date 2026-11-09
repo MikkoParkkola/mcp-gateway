@@ -511,17 +511,21 @@ fn every_writer_result_maps_to_one_refusal() {
             )),
         ),
         (
+            // The writer's own refusal text never leaves: fixed text instead.
             ReplaceError::Refused("r".into()),
             None,
-            Mapped::Refusal(UiRefused::Invalid("r".into())),
+            Mapped::Refusal(UiRefused::Invalid(super::LOADER_REFUSED.to_owned())),
         ),
         (
+            // The reload's class rides out typed; its text stays behind.
             ReplaceError::ReloadRefused {
                 class: RefusalClass::Internal,
                 reason: "l".into(),
             },
             None,
-            Mapped::Refusal(UiRefused::Invalid("l".into())),
+            Mapped::Refusal(UiRefused::ReloadRefused {
+                class: RefusalClass::Internal,
+            }),
         ),
         (
             ReplaceError::NoAuditLog,
@@ -588,12 +592,15 @@ fn every_writer_result_maps_to_one_refusal() {
 #[test]
 fn k7_store_failure_is_failed() {
     let mapped = super::map_error(
-        super::ReplaceError::Secrets(crate::secret_store::SaveError::Store(
-            StoreError::Failed("store-canary".to_owned()),
-        )),
+        super::ReplaceError::Secrets(crate::secret_store::SaveError::Store(StoreError::Failed(
+            "store-canary".to_owned(),
+        ))),
         None,
     );
-    assert!(matches!(mapped, super::Mapped::Refusal(UiRefused::Failed(_))));
+    assert!(matches!(
+        mapped,
+        super::Mapped::Refusal(UiRefused::Failed(_))
+    ));
 }
 
 /// K7: oracle is a timed-out secret refusal; this control passes the stub.

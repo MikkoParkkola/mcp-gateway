@@ -411,12 +411,14 @@ async fn validate(
         .map_err(validate_refusal)
 }
 
+/// The answer to a change the config loader would refuse: fixed text, since
+/// the loader's own message can quote what the file holds.
+pub(super) const LOADER_REFUSED: &str = "the change would be refused by the config loader";
+
 pub(super) fn validate_refusal(e: ReplaceError) -> UiRefused {
     match e {
         ReplaceError::ReloadRefused { class, .. } => UiRefused::ReloadRefused { class },
-        ReplaceError::Refused(_) => {
-            UiRefused::Invalid("the change would be refused by the config loader".to_owned())
-        }
+        ReplaceError::Refused(_) => UiRefused::Invalid(LOADER_REFUSED.to_owned()),
         ReplaceError::Unsupported(_) => {
             UiRefused::Unsupported("this change is not supported here".to_owned())
         }

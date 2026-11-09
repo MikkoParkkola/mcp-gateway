@@ -24,7 +24,7 @@ use crate::config_reload::{ReloadContext, ReloadOutcome};
 use crate::secret_store::{NewSecretOwned, SaveError, SecretStore, StoreError, Vault};
 use crate::wiped_bytes::WipedBytes;
 
-use super::ui_diff::{PreviewRefused, Shown, UiRefused, changes_for, ui_diff};
+use super::ui_diff::{LOADER_REFUSED, PreviewRefused, Shown, UiRefused, changes_for, ui_diff};
 use super::{
     AuditPosture, Expected, FileRevision, IntentKind, Replace, ReplaceError, Replaced, SecretStep,
     replace_audited,
@@ -230,9 +230,7 @@ fn map_error(error: ReplaceError, halt: Option<Halt>) -> Mapped {
             UiRefused::Unsupported("the edit's secret slots do not match".to_owned())
         }
         ReplaceError::ReloadRefused { class, .. } => UiRefused::ReloadRefused { class },
-        ReplaceError::Refused(_) => {
-            UiRefused::Invalid("the change would be refused by the config loader".to_owned())
-        }
+        ReplaceError::Refused(_) => UiRefused::Invalid(LOADER_REFUSED.to_owned()),
         // No log under auth, or the log refused this save's intent: either
         // way the audit the save requires is not there, and nothing was
         // written (the adopt route answers both alike).

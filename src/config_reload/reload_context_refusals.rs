@@ -198,7 +198,9 @@ mod tests {
         let old = ctx.live_config.get();
         let mut new = (*old).clone();
         new.server.public_url = Some("https://gw.example.com".to_owned());
-        let refusal = ctx.before_apply_refusal(&new, &compute_diff(&old, &new)).unwrap();
+        let refusal = ctx
+            .before_apply_refusal(&new, &compute_diff(&old, &new))
+            .unwrap();
         assert_eq!(refusal.kind, BeforeApplyKind::NetworkPosture);
     }
 
@@ -209,7 +211,9 @@ mod tests {
         let old = ctx.live_config.get();
         let mut new = (*old).clone();
         new.backends.get_mut("a").unwrap().account = Some("work".to_owned());
-        let refusal = ctx.before_apply_refusal(&new, &compute_diff(&old, &new)).unwrap();
+        let refusal = ctx
+            .before_apply_refusal(&new, &compute_diff(&old, &new))
+            .unwrap();
         assert_eq!(refusal.kind, BeforeApplyKind::AccountBinding);
     }
 
@@ -220,15 +224,19 @@ mod tests {
         use std::sync::Arc;
 
         let (_dir, path, _) = setup();
-        let ctx = crate::config_reload::replace_test_support::unshared(&path)
-            .with_capabilities(Some(Arc::new(CapabilityBackend::new(
+        let ctx = crate::config_reload::replace_test_support::unshared(&path).with_capabilities(
+            Some(Arc::new(CapabilityBackend::new(
                 "edits",
                 Arc::new(CapabilityExecutor::new()),
-            ))));
+            ))),
+        );
         let old = ctx.live_config.get();
         let mut new = (*old).clone();
-        new.backends.insert("edits".to_owned(), new.backends["a"].clone());
-        let refusal = ctx.before_apply_refusal(&new, &compute_diff(&old, &new)).unwrap();
+        new.backends
+            .insert("edits".to_owned(), new.backends["a"].clone());
+        let refusal = ctx
+            .before_apply_refusal(&new, &compute_diff(&old, &new))
+            .unwrap();
         assert_eq!(refusal.kind, BeforeApplyKind::CapabilityClash);
     }
 }

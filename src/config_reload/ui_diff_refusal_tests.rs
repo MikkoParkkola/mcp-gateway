@@ -19,7 +19,9 @@ fn k6_posture_is_typed() {
     });
     assert_eq!(
         got,
-        UiRefused::ReloadRefused { class: RefusalClass::Posture }
+        UiRefused::ReloadRefused {
+            class: RefusalClass::Posture
+        }
     );
     no_input_text(&got);
 }
