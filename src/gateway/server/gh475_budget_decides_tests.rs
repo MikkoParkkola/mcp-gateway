@@ -29,7 +29,7 @@ use crate::config::Config;
 /// built. The tempdir goes out of scope with the config already parsed —
 /// nothing downstream re-reads the file.
 async fn built_from_yaml(yaml: &str) -> super::BuiltMetaMcp {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = dir.path().join("gateway.yaml");
     crate::gateway::test_helpers::write_owner_only(&path, yaml).expect("write config");
     let config = Config::load(Some(&path)).expect("the configured error_budget must load");

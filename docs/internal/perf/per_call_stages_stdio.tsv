@@ -464,10 +464,13 @@ src/gateway/server/window_saver.rs	checkpoint_detached	-	U1 window checkpoint on
 src/gateway/server/window_saver.rs	drop	-	U1 window writer thread end (Running guard), off the request path
 src/gateway/server/window_saver.rs	finished	-	U1 window writer count on a writer's end, off the request path
 src/gateway/server/window_saver.rs	global_counts	-	U1 window counts for the saver's ticks and seal, off the request path
+src/gateway/server/window_saver.rs	hold_next_work	-	Test support: holds the next window writer thread before its work; test builds only
 src/gateway/server/window_saver.rs	idle	-	U1 window writer drain, once at shutdown
+src/gateway/server/window_saver.rs	kept_at_spawn	-	U1 window: the temp dirs a detached open keeps, taken at spawn; a no-op in release builds, off the request path
 src/gateway/server/window_saver.rs	open_detached	-	U1 window segment open, once per serve before serving
 src/gateway/server/window_saver.rs	open_into	-	U1 window segment open and its tick retries, off the request path
 src/gateway/server/window_saver.rs	production	-	startup saver settings, once per serve
+src/gateway/server/window_saver.rs	release	-	Test support: releases a held window writer thread; test builds only
 src/gateway/server/window_saver.rs	spawn	-	U1 window writer thread start for the open and each checkpoint, off the request path
 src/gateway/server/window_saver.rs	start_window_saver	-	startup U1 window saver, once per serve; seals at shutdown
 src/gateway/server/window_seal_http_backend.rs	answer	-	test-only (the module is cfg(test))

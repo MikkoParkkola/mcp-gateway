@@ -162,7 +162,7 @@ async fn held_across(s: &mut Session, path: &Path, to: &str, line: (&str, Value)
 /// refused with -32002, and the backend is not called. GREEN pin on base.
 #[tokio::test]
 async fn t4a_a_held_stdio_line_read_under_block_still_refuses() {
-    let dir = tempfile::tempdir().expect("a private folder");
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = dir.path().join("gateway.yaml");
     write_action(&path, "block");
     let (mut s, sends) = session(dir.path(), &path).await;
@@ -187,7 +187,7 @@ async fn t4a_a_held_stdio_line_read_under_block_still_refuses() {
 /// startup `block`.
 #[tokio::test]
 async fn t4b_a_held_stdio_line_read_under_off_still_sends() {
-    let dir = tempfile::tempdir().expect("a private folder");
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = dir.path().join("gateway.yaml");
     write_action(&path, "block");
     let (mut s, sends) = session(dir.path(), &path).await;
@@ -212,7 +212,7 @@ async fn t4b_a_held_stdio_line_read_under_off_still_sends() {
 /// read after the reload follows the published `off`: dispatched once.
 #[tokio::test]
 async fn t4c_a_held_stdio_catalogue_line_read_under_block_still_refuses() {
-    let dir = tempfile::tempdir().expect("a private folder");
+    let dir = crate::test_dir_keep::kept_tempdir();
     let path = dir.path().join("gateway.yaml");
     write_action(&path, "block");
     let (mut s, sends) = session(dir.path(), &path).await;
