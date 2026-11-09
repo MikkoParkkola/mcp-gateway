@@ -152,7 +152,7 @@ fn swap_strings(value: &mut Value, from: &str, to: &str) {
 async fn a_receipt_showing_another_callers_record_moves_its_cell() {
     let req = ("GET", routes::UI_ACTIVITY_RECEIPT, "other-receipt");
     moves(Caller::AdminKey, req, false, StatusCode::OK, |v| {
-        swap_strings(v, OTHER_DEV, DEV)
+        swap_strings(v, OTHER_DEV, DEV);
     })
     .await;
 }
@@ -186,7 +186,7 @@ async fn an_action_allowed_flip_moves_the_snapshot_cell() {
 async fn status_reporting_admin_moves_its_cell() {
     let req = ("GET", routes::UI_STATUS, "plain");
     moves(Caller::StandardKey, req, false, StatusCode::OK, |v| {
-        v["auth"]["admin"] = json!(true)
+        v["auth"]["admin"] = json!(true);
     })
     .await;
 }
@@ -195,7 +195,7 @@ async fn status_reporting_admin_moves_its_cell() {
 async fn status_showing_the_full_view_moves_its_cell() {
     let req = ("GET", routes::UI_STATUS, "plain");
     moves(Caller::StandardKey, req, false, StatusCode::OK, |v| {
-        v["servers"] = json!([])
+        v["servers"] = json!([]);
     })
     .await;
 }
