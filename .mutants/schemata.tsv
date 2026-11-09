@@ -1,0 +1,8 @@
+head_sha	7acc4e321fa31a2b67e7ee94524b17176f65bce0
+#mutant store-off
+mcp_gateway	counters::latency::tests::closed_keeps_counts	src/counters/latency_tests.rs:248
+mcp_gateway	counters::latency::tests::lat4_fixed_clock_two_buckets	src/counters/latency_tests.rs:75
+mcp_gateway	counters::latency_view::tests::series_latency_p95_shape	src/counters/latency_view_tests.rs:52
+mcp_gateway	counters::latency_view::tests::series_latency_month_points_are_day_starts	src/counters/latency_view_tests.rs:74
+mcp_gateway	counters::latency_view::tests::series_latency_compare_prev	src/counters/latency_view_tests.rs:87
+mcp_gateway	counters::latency_view::tests::overview_names_slowest	src/counters/latency_view_tests.rs:144
