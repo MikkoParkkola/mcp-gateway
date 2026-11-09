@@ -135,7 +135,12 @@ impl Anchor {
 fn mac(body: &SigStart, secret: &[u8]) -> io::Result<String> {
     let mut covered = serde_json::to_value(body).map_err(io::Error::other)?;
     if let Some(o) = covered.as_object_mut() {
-        o.remove("log_id");
+        if !mutant!("q35", true, false) {
+            o.remove("log_id");
+        }
+        if mutant!("q7", true, false) {
+            o.remove("offset");
+        }
     }
     let canonical = serde_json::to_string(&covered).map_err(io::Error::other)?;
     // The log has one secret and no key rotation, so no key id is bound;
@@ -251,7 +256,7 @@ impl Checked {
         let mut buf = Vec::with_capacity(usize::try_from(end - start).ok()?);
         f.take(end - start).read_to_end(&mut buf).ok()?;
         self.hashed += 1;
-        if buf.len() as u64 != end - start || hex::encode(sha256_raw(&buf)) != want {
+        if buf.len() as u64 != end - start || mutant!("q19", false, mutant!("q41", false, hex::encode(sha256_raw(&buf)) != want)) {
             return None;
         }
         let bytes = std::rc::Rc::new(buf);
@@ -285,7 +290,7 @@ fn kept(path: &Path) -> io::Result<Vec<(u64, std::path::PathBuf)>> {
 /// Every kept byte below an `open` anchor is digested: without it, a sidecar from another log, or one stripped of
 /// its digests, would exempt this log's records.
 fn covers(path: &Path, body: &SigStart) -> bool {
-    if body.state == State::Closed {
+    if mutant!("q6", true, body.state == State::Closed) {
         return true;
     }
     let Ok(files) = kept(path) else {
@@ -296,7 +301,7 @@ fn covers(path: &Path, body: &SigStart) -> bool {
         if *seq < body.segment_seq {
             listed(*seq).is_some()
         } else if *seq == body.segment_seq && body.offset > 0 {
-            listed(*seq).is_some_and(|l| l.len == body.offset)
+            listed(*seq).is_some_and(|l| mutant!("q23", true, l.len == body.offset))
         } else {
             true
         }
@@ -330,9 +335,9 @@ impl Anchor {
     ) -> Placed {
         let body = match self {
             Self::NoSecret => return Placed::Legacy { unanchored: false },
-            Self::Absent => return Placed::Invalid("sigstart_missing"),
-            Self::Broken(f) => return Placed::Invalid(broken_reason(*f)),
-            Self::Known(b) if b.state == State::Closed => return Placed::Invalid("sig_missing"),
+            Self::Absent => return mutant!("q4", Placed::Legacy { unanchored: false }, Placed::Invalid("sigstart_missing")),
+            Self::Broken(f) => return mutant!("q5", Placed::Legacy { unanchored: false }, Placed::Invalid(broken_reason(*f))),
+            Self::Known(b) if b.state == State::Closed => return mutant!("q38", Placed::Legacy { unanchored: false }, Placed::Invalid("sig_missing")),
             Self::Known(b) => b,
         };
         let LinePos::At {
@@ -343,7 +348,10 @@ impl Anchor {
         else {
             return Placed::Invalid("sig_missing");
         };
-        if (segment, offset) >= (body.segment_seq, body.offset) {
+        if mutant!("q1", (segment, offset) > (body.segment_seq, body.offset), (segment, offset) >= (body.segment_seq, body.offset)) {
+            return Placed::Invalid("sig_missing");
+        }
+        if mutant!("q2", segment >= body.segment_seq, false) {
             return Placed::Invalid("sig_missing");
         }
         let Some(frozen) = body.legacy.iter().find(|l| l.seq == segment) else {
@@ -362,14 +370,14 @@ impl Anchor {
                 return Placed::Invalid("legacy_edited");
             }
         }
-        if offset + len > frozen.len {
+        if mutant!("q31", false, offset + len > frozen.len) {
             return Placed::Invalid("legacy_unlisted");
         }
         // The line from the verified chunks themselves, so the record served
         // is the one that verified.
         let mut line = Vec::new();
         let last = (offset + len).saturating_sub(1) / CHUNK;
-        for chunk in offset / CHUNK..=last {
+        for chunk in mutant!("q34", 0, offset / CHUNK)..=mutant!("q34", (frozen.len.max(1) - 1) / CHUNK, last) {
             let end = (chunk * CHUNK + CHUNK).min(frozen.len);
             let want = usize::try_from(chunk)
                 .ok()
@@ -382,7 +390,7 @@ impl Anchor {
             let to = usize::try_from((offset + len).min(end) - chunk * CHUNK).unwrap_or(0);
             line.extend_from_slice(bytes.get(from..to).unwrap_or_default());
         }
-        let same = serde_json::from_slice::<serde_json::Value>(&line).is_ok_and(|v| v == *entry);
+        let same = mutant!("q40", true, mutant!("q41", true, serde_json::from_slice::<serde_json::Value>(&line).is_ok_and(|v| v == *entry)));
         if !same {
             return Placed::Invalid("legacy_edited");
         }
@@ -550,8 +558,8 @@ pub(super) fn classify(
     }
     match load(path, Some(secret)) {
         Anchor::Known(s) if s.announced => return Ok(Plan::Nothing),
-        Anchor::Known(s) => return Ok(Plan::Owed(s)),
-        Anchor::Broken(f) => return Ok(Plan::Raise(f)),
+        Anchor::Known(s) => return Ok(mutant!("q32", Plan::Nothing, Plan::Owed(s))),
+        Anchor::Broken(f) => return Ok(mutant!("q8", Plan::Rebuild { signed_found: true }, Plan::Raise(f))),
         Anchor::NoSecret | Anchor::Absent => {}
     }
     let found = first_signed(path, secret)?;
@@ -559,14 +567,16 @@ pub(super) fn classify(
     let keyed_hwm = hwm
         .as_deref()
         .and_then(|raw| segments::parse_hwm(raw, secret, key_id))
-        .is_some_and(|(_, has_mac)| has_mac);
+        .is_some_and(|(_, has_mac)| mutant!("q11", false, has_mac));
     let sealed = !segments::list_segments(path)?.is_empty();
     // v3.5.1 signed but wrote no `.hwm`, no identity record, no segments.
-    let v3_shape = !identified && hwm.is_none() && !sealed;
+    let v3_shape = !identified
+        && mutant!("q27", true, hwm.is_none())
+        && mutant!("q28", true, !sealed);
     Ok(match found {
-        Some(first) if v3_shape && starts_at_genesis(path)? => Plan::Migrate(first),
+        Some(first) if v3_shape && mutant!("q26", true, starts_at_genesis(path)?) => Plan::Migrate(first),
         Some(first) if v3_shape => Plan::Unanchored(first),
-        Some(_) => Plan::Rebuild { signed_found: true },
+        Some(first) => mutant!("q10", Plan::Migrate(first), Plan::Rebuild { signed_found: true }),
         None if keyed_hwm => Plan::Rebuild {
             signed_found: false,
         },
@@ -595,7 +605,7 @@ pub(super) fn legacy_below(path: &Path, seq: u64, offset: u64) -> io::Result<Vec
     for (s, file) in kept(path)? {
         let len = match s.cmp(&seq) {
             std::cmp::Ordering::Less => std::fs::metadata(&file)?.len(),
-            std::cmp::Ordering::Equal if offset > 0 => offset,
+            std::cmp::Ordering::Equal if offset > 0 => mutant!("q25", std::fs::metadata(&file)?.len(), offset),
             _ => continue,
         };
         out.push(LegacyFile {
@@ -615,7 +625,7 @@ pub(super) fn end_of(path: &Path) -> io::Result<(u64, u64)> {
     match std::fs::metadata(path) {
         Ok(m) if m.len() > 0 => Ok((segments::active_segment_seq(path, next), m.len())),
         Ok(_) => Ok((next, 0)),
-        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok((next, 0)),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok((mutant!("q17", next + 1, next), 0)),
         Err(e) => Err(e),
     }
 }
@@ -645,11 +655,14 @@ pub(super) fn body_for(plan: &Plan, path: &Path, log_id: &str) -> io::Result<Opt
             counter: 0,
             legacy: Vec::new(),
             unanchored: false,
-            announced: false,
+            announced: mutant!("q21", true, false),
             signed_found: *signed_found,
         }),
         Plan::Migrate(f) => Some(open(f.segment, f.offset, f.counter, false, false)?),
-        Plan::Unanchored(f) => Some(open(f.segment, f.offset, f.counter, true, false)?),
+        Plan::Unanchored(f) => {
+            let (seq, offset) = mutant!("q30", end_of(path)?, (f.segment, f.offset));
+            Some(open(seq, offset, f.counter, true, false)?)
+        }
         Plan::FirstStart => {
             let (seq, offset) = end_of(path)?;
             Some(open(seq, offset, 0, false, true)?)
@@ -731,7 +744,7 @@ pub(super) fn announce(
     let (event, fields, metric) = event_of(owed);
     tracing::warn!(event, "audit log: signing anchor set");
     telemetry_metrics::counter!(metric).increment(1);
-    write(event, fields)?;
+    mutant!("q9", Ok(()), write(event, fields))?;
     let mut done = owed.clone();
     done.announced = true;
     publish(path, &done, secret)
