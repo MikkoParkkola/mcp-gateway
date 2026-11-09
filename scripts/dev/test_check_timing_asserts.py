@@ -709,7 +709,7 @@ class Members(unittest.TestCase):
         self.assertRefused(body, guard.SETTER)
 
     def test_sub4_timeout_field(self):
-        # tests/mik_7272_sub4_adr012_acs.rs:239-252, in the assert-free helper `backend_for`
+        # src/gateway/router/direct_adr012_tests.rs, in the assert-free helper `backend_for`
         body = (
             "let config = BackendConfig {\n    enabled: true,\n    stop_when_idle_for: None,\n"
             "    timeout: Duration::from_millis(300),\n    env: HashMap::default(),\n    ..BackendConfig::default()\n};"

@@ -16,13 +16,13 @@ pub(super) fn token(groups: &[&str]) -> crate::key_server::TemporaryToken {
     crate::key_server::TemporaryToken {
         jti: InMemoryTokenStore::generate_jti(),
         token: InMemoryTokenStore::generate_bearer(),
-        identity: crate::key_server::oidc::VerifiedIdentity {
-            subject: "sub".to_owned(),
-            email: "user@issuer.test".to_owned(),
-            name: None,
-            groups: groups.iter().map(ToString::to_string).collect(),
-            issuer: ISSUER.to_owned(),
-        },
+        identity: crate::key_server::oidc::VerifiedIdentity::for_test(
+            "sub".to_owned(),
+            "user@issuer.test".to_owned(),
+            None,
+            groups.iter().map(ToString::to_string).collect(),
+            ISSUER.to_owned(),
+        ),
         scopes: crate::key_server::store::TokenScopes {
             backends: vec!["*".to_owned()],
             tools: vec![],

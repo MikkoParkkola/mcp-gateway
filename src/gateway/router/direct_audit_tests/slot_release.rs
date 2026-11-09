@@ -98,13 +98,13 @@ async fn call_with(fx: &Fixture, arm: Arm, id: u64, tenant: &str, extra: &Value)
         .unwrap();
     request
         .extensions_mut()
-        .insert(crate::key_server::oidc::VerifiedIdentity {
-            subject: "alice".to_string(),
-            email: "alice@example.invalid".to_string(),
-            name: None,
-            groups: vec![],
-            issuer: "https://a.example.invalid".to_string(),
-        });
+        .insert(crate::key_server::oidc::VerifiedIdentity::for_test(
+            "alice".to_string(),
+            "alice@example.invalid".to_string(),
+            None,
+            vec![],
+            "https://a.example.invalid".to_string(),
+        ));
     let response = fx.router.clone().oneshot(request).await.unwrap();
     let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     String::from_utf8_lossy(&bytes).into_owned()

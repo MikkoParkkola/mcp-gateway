@@ -54,13 +54,13 @@ fn proven_subject() -> GrantSubject {
 }
 
 fn verified() -> VerifiedIdentity {
-    VerifiedIdentity {
-        subject: "user-1".to_string(),
-        email: String::new(),
-        name: None,
-        groups: Vec::new(),
-        issuer: "https://issuer.example".to_string(),
-    }
+    VerifiedIdentity::for_test(
+        "user-1".to_string(),
+        String::new(),
+        None,
+        Vec::new(),
+        "https://issuer.example".to_string(),
+    )
 }
 
 fn mtls_subject(subject: &str) -> GrantSubject {

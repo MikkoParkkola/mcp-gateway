@@ -267,13 +267,13 @@ fn owner_digest(gw: &Gateway, subject: &str, account: &str) -> String {
         .account
         .unwrap()
         .0;
-    let identity = crate::key_server::oidc::VerifiedIdentity {
-        subject: subject.to_owned(),
-        email: String::new(),
-        name: None,
-        groups: Vec::new(),
-        issuer: crate::gateway::openwebui_adapter::adapter_issuer(INSTALLATION),
-    };
+    let identity = crate::key_server::oidc::VerifiedIdentity::for_test(
+        subject.to_owned(),
+        String::new(),
+        None,
+        Vec::new(),
+        crate::gateway::openwebui_adapter::adapter_issuer(INSTALLATION),
+    );
     account_key(Some(Principal::Verified(&identity)), &descriptor)
         .unwrap()
         .digest()

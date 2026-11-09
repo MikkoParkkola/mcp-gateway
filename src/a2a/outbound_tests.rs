@@ -5,22 +5,18 @@
 //! Every row starts a real `Backend` from an `a2a_url` config and talks to it
 //! the way the invoke funnel does (`tools/list`, `tools/call`), so the rows pin
 //! the transport the gateway actually starts, not a helper beside it.
-#![cfg(feature = "a2a")]
 
 use std::collections::HashMap;
 use std::time::Duration;
 
-use mcp_gateway::backend::Backend;
-use mcp_gateway::config::{BackendConfig, FailsafeConfig, TransportConfig};
+use crate::backend::Backend;
+use crate::config::{BackendConfig, FailsafeConfig, TransportConfig};
 use serde_json::{Value, json};
 
 mod common;
-#[path = "a2a_outbound/input_rounds.rs"]
 mod input_rounds;
-#[path = "a2a_outbound/stub.rs"]
 mod stub;
 #[cfg(feature = "firewall")]
-#[path = "a2a_outbound/untrusted.rs"]
 mod untrusted;
 
 use stub::{Agent, Answer};
@@ -59,12 +55,12 @@ fn backend_timed(
         secrets: Vec::new(),
         passthrough: false,
         allow_cleartext_credentials: true,
-        input_schema_enforcement: mcp_gateway::config::InputSchemaEnforcement::default(),
+        input_schema_enforcement: crate::config::InputSchemaEnforcement::default(),
         allow_flagged_tools: std::collections::BTreeMap::new(),
         runtime_profile: None,
         identity_propagation: None,
         account: None,
-        signature_chain: mcp_gateway::config::ChainMode::default(),
+        signature_chain: crate::config::ChainMode::default(),
         chain_origins: Vec::new(),
         chain_signer: None,
         ..BackendConfig::default()
@@ -459,7 +455,7 @@ async fn a2a_4_the_cards_tenant_rides_every_send() {
 /// per-request credential reaches the agent on that request alone.
 #[tokio::test]
 async fn a2a_7_a_propagated_credential_reaches_the_agent_per_request() {
-    use mcp_gateway::identity_propagation::{
+    use crate::identity_propagation::{
         IdentityPropagationConfig, PropagationStrategyKind, SessionMode,
     };
     let (base, log) = stub::serve(Agent::answering(stub::completed_task(
@@ -467,14 +463,14 @@ async fn a2a_7_a_propagated_credential_reaches_the_agent_per_request() {
     )))
     .await;
 
-    let mut config = mcp_gateway::config::Config::default();
-    let mut backend_config = mcp_gateway::config::BackendConfig {
+    let mut config = crate::config::Config::default();
+    let mut backend_config = crate::config::BackendConfig {
         transport: TransportConfig::A2a {
             a2a_url: base.clone(),
             a2a_agent_card_path: None,
         },
         allow_cleartext_credentials: true,
-        ..mcp_gateway::config::BackendConfig::default()
+        ..crate::config::BackendConfig::default()
     };
     backend_config.identity_propagation = Some(IdentityPropagationConfig {
         strategy: PropagationStrategyKind::Passthrough,

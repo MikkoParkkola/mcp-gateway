@@ -140,13 +140,13 @@ pub(super) fn descriptor_revision() -> String {
 /// A fixture identity. Supplied to the dispatch entry directly: this is a
 /// FIXTURE principal, not a token this module verified.
 pub(super) fn identity(subject: &str) -> VerifiedIdentity {
-    VerifiedIdentity {
-        subject: subject.to_string(),
-        email: DISPLAY_EMAIL.to_string(),
-        name: Some(DISPLAY_NAME.to_string()),
-        groups: vec!["everyone".to_string()],
-        issuer: INBOUND_ISSUER.to_string(),
-    }
+    VerifiedIdentity::for_test(
+        subject.to_string(),
+        DISPLAY_EMAIL.to_string(),
+        Some(DISPLAY_NAME.to_string()),
+        vec!["everyone".to_string()],
+        INBOUND_ISSUER.to_string(),
+    )
 }
 
 /// A structurally complete `personal_managed` descriptor, with the same field

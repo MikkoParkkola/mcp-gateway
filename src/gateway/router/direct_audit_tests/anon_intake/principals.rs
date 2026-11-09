@@ -141,13 +141,13 @@ async fn send(fx: &Fixture, uri: &str, body: &Value, source: &Source) -> (Status
         .body(axum::body::Body::from(body.to_string()))
         .expect("a static request builds");
     if matches!(source.caller, Caller::Oidc) {
-        request.extensions_mut().insert(VerifiedIdentity {
-            subject: "1".to_string(),
-            email: "one@example.invalid".to_string(),
-            name: None,
-            groups: vec![],
-            issuer: "https://a.example.invalid".to_string(),
-        });
+        request.extensions_mut().insert(VerifiedIdentity::for_test(
+            "1".to_string(),
+            "one@example.invalid".to_string(),
+            None,
+            vec![],
+            "https://a.example.invalid".to_string(),
+        ));
     }
     insert_identity(&mut request, &source.caller);
     if source.proxied {

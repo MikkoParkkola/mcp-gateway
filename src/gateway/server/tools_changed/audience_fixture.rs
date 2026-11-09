@@ -157,13 +157,13 @@ pub(super) fn principal_token(subject: &str) -> TemporaryToken {
     TemporaryToken {
         jti: InMemoryTokenStore::generate_jti(),
         token: InMemoryTokenStore::generate_bearer(),
-        identity: VerifiedIdentity {
-            subject: subject.to_string(),
-            email: format!("{subject}@example.invalid"),
-            name: None,
-            groups: vec![],
-            issuer: "https://idp.example.invalid".to_string(),
-        },
+        identity: VerifiedIdentity::for_test(
+            subject.to_string(),
+            format!("{subject}@example.invalid"),
+            None,
+            vec![],
+            "https://idp.example.invalid".to_string(),
+        ),
         scopes: crate::key_server::store::TokenScopes {
             backends: ["alpha", "beta", "gamma", "caps"]
                 .map(String::from)
