@@ -10,6 +10,9 @@
 //! A file never data-synced or snapshotted is absent under `DropAll`. Arming
 //! treats existing bytes as durable. A new, unhooked file at a directory
 //! snapshot is assumed data-synced, as the crate's other writers are.
+//! A file the OS will not let us read because a byte-range lock is held on
+//! it (the config lock file on Windows) is outside the model: it is never
+//! projected, removed or rewritten.
 //!
 //! Generations use handle identity: (dev, ino) on Unix and
 //! `win_acl::file_identity` (volume serial, 128-bit file id) on Windows.
@@ -71,6 +74,18 @@ fn key(dir: &Path) -> PathBuf {
     std::fs::canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf())
 }
 
+/// Windows `ERROR_LOCK_VIOLATION`: a byte-range lock is held on the file.
+const LOCK_VIOLATION: i32 = 33;
+
+/// The file's bytes, or `None` when a byte-range lock forbids the read.
+fn read_unlocked(file: &File) -> Option<Vec<u8>> {
+    match read_bytes(file) {
+        Ok(bytes) => Some(bytes),
+        Err(e) if e.raw_os_error() == Some(LOCK_VIOLATION) => None,
+        Err(e) => panic!("crash_fs: read file: {e:?}"),
+    }
+}
+
 fn read_bytes(mut file: &File) -> io::Result<Vec<u8>> {
     file.rewind()?;
     let mut bytes = Vec::new();
@@ -94,7 +109,9 @@ pub(crate) fn arm(dir: &Path) -> Armed {
             .expect("crash_fs: UTF-8 name");
         let file = File::open(entry.path()).expect("crash_fs: open file");
         let generation = file_id(&file).expect("crash_fs: file identity");
-        let bytes = read_bytes(&file).expect("crash_fs: read file");
+        let Some(bytes) = read_unlocked(&file) else {
+            continue;
+        };
         overlay.names.insert(name.clone(), generation);
         overlay.current.insert(name.clone(), generation);
         overlay.data.insert(generation, bytes);
@@ -127,7 +144,9 @@ pub(crate) fn cut(dir: &Path, mode: Mode) {
                 .expect("crash_fs: UTF-8 name");
             let file = File::open(entry.path()).expect("crash_fs: open file");
             let generation = file_id(&file).expect("crash_fs: file identity");
-            let bytes = read_bytes(&file).expect("crash_fs: read file");
+            let Some(bytes) = read_unlocked(&file) else {
+                continue;
+            };
             durable.current.insert(name.clone(), generation);
             observed.insert(name, bytes);
         }
@@ -199,7 +218,10 @@ pub(super) fn note_dir_synced(dir: &Path) {
         let file = File::open(entry.path()).expect("crash_fs: open file");
         let generation = file_id(&file).expect("crash_fs: file identity");
         if let std::collections::btree_map::Entry::Vacant(entry) = overlay.data.entry(generation) {
-            entry.insert(read_bytes(&file).expect("crash_fs: read file"));
+            let Some(bytes) = read_unlocked(&file) else {
+                continue;
+            };
+            entry.insert(bytes);
             overlay.held.insert(generation, file);
         }
         names.insert(name, generation);
