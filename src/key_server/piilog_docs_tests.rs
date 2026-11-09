@@ -26,9 +26,9 @@ fn lacks(text: &str, needles: &[&str]) -> Vec<String> {
 }
 
 /// The upgrading note: the new field and key id, the key file and its
-/// backup, the optional configured key and how to generate one, the token
-/// store's changed contract, the audit policies, the lookup surfaces, the
-/// email-shaped-subject limit with its warning, and rollback.
+/// backup, the optional configured key and how to generate one, the audit
+/// record's changed type, the audit log the key server now requires, the
+/// email-shaped-subject limit with its warning, the IDNA limit, and rollback.
 #[test]
 fn the_upgrading_note_names_every_consequence() {
     let text = read(UPGRADING);
@@ -40,16 +40,13 @@ fn the_upgrading_note_names_every_consequence() {
             KEY_FILE,
             "audit_email_hmac_secret_ref",
             "openssl rand -hex 32",
-            "TokenStore",
-            "insert",
-            "reserve",
-            "activate",
-            "FailClosed",
-            "BestEffort",
+            "SafeIdentity",
+            "AuditEvent",
+            "security.transparency_log.enabled",
             "pseudonym",
             "WARN",
-            "rollback",
             "IDNA",
+            "rollback",
         ],
     );
     assert!(missing.is_empty(), "{UPGRADING} lacks {missing:?}");
