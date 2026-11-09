@@ -53,16 +53,27 @@ pub(crate) fn config_yaml(allowed_domains_a: &str, extra: &str) -> String {
 
 impl Harness {
     pub(crate) async fn start(yaml: &str) -> Self {
-        Self::start_with_store(yaml, Arc::new(InMemoryTokenStore::new())).await
+        Self::start_with_store(yaml, |c| {
+            Arc::new(InMemoryTokenStore::new(
+                c.max_tokens_per_identity as usize,
+                c.token_ttl_secs,
+            ))
+        })
+        .await
     }
 
-    /// As [`Self::start`], over the given token store.
-    pub(crate) async fn start_with_store(yaml: &str, store: Arc<dyn TokenStore>) -> Self {
+    /// As [`Self::start`], over the token store `store` builds from the
+    /// loaded config.
+    pub(crate) async fn start_with_store(
+        yaml: &str,
+        store: impl FnOnce(&crate::config::KeyServerConfig) -> Arc<dyn TokenStore>,
+    ) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
         let addr = listener.local_addr().expect("local_addr");
         let yaml = yaml.replace("JWKS", &format!("http://{addr}/.well-known/jwks.json"));
         let config = load(&yaml).expect("harness config loads");
         let key = Arc::new(GatewayKeyPair::generate().expect("keypair"));
+        let store = store(&config);
         let ks = Arc::new(KeyServer {
             store,
             oidc: Arc::new(OidcVerifier::with_http_client(

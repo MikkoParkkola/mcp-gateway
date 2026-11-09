@@ -49,7 +49,10 @@ use super::{
     audit::{self, AuditEvent},
     oidc::VerifiedIdentity,
     policy::{RequestedScopes, ScopeRefusal},
-    store::{InMemoryTokenStore, TemporaryToken, TokenScopes},
+    store::{
+        ActivateError, InMemoryTokenStore, ReservationId, ReservationRequest, ReserveError,
+        TemporaryToken, TokenScopes, TokenStore,
+    },
 };
 use crate::config::KeyServerOidcConfig;
 
@@ -251,59 +254,153 @@ async fn exchange_token(
         }
     };
 
-    // Enforce max tokens per identity
-    if let Some(refusal) = token_cap_refusal(&ks, &identity, client_ip).await {
-        return refusal;
-    }
-
     issue(&ks, identity, scopes, client_ip).await
 }
 
-/// Issue a temporary token for a verified identity and its resolved scopes,
-/// dated by one read of the clock, and store it.
+/// One mint's claim on a pending slot. Dropped before activation (an early
+/// return, a panic, a client that disconnects mid-mint) it releases the
+/// slot; once [`activate`](Self::activate) ran, the store owns the outcome
+/// and Drop does nothing.
+struct MintReservation {
+    store: Arc<dyn TokenStore>,
+    id: ReservationId,
+    armed: bool,
+}
+
+impl MintReservation {
+    /// Reserve a slot and take ownership of it in the same synchronous step:
+    /// no await separates the two, so a cancelled mint cannot leak the slot.
+    fn reserve(
+        store: &Arc<dyn TokenStore>,
+        request: ReservationRequest,
+        now: u64,
+    ) -> Result<Self, ReserveError> {
+        let id = store.reserve(request, now)?;
+        Ok(Self {
+            store: Arc::clone(store),
+            id,
+            armed: true,
+        })
+    }
+
+    fn activate(mut self, token: TemporaryToken, now: u64) -> Result<(), ActivateError> {
+        // The store either activated the slot or released it: nothing left
+        // for Drop to free.
+        self.armed = false;
+        self.store.activate(&self.id, token, now)
+    }
+}
+
+impl Drop for MintReservation {
+    fn drop(&mut self) {
+        if self.armed {
+            self.store.abort(&self.id);
+        }
+    }
+}
+
+/// The 503 for a host clock that reads before 1970: a token dated from the
+/// epoch would be refused on any readable clock, so none is issued.
+fn clock_refusal() -> axum::response::Response {
+    warn!("key server: the host clock reads before 1970; no token issued");
+    error_response(
+        StatusCode::SERVICE_UNAVAILABLE,
+        "temporarily_unavailable",
+        "the host clock reads before 1970; retry once it is set",
+    )
+}
+
+/// Issue a temporary token for a verified identity and its resolved scopes.
+/// A slot under the identity's cap is reserved first; the token becomes
+/// valid only when that reservation is activated, dated by the clock read
+/// that activation uses.
 pub(super) async fn issue(
     ks: &KeyServer,
     identity: VerifiedIdentity,
     scopes: TokenScopes,
     client_ip: Option<IpAddr>,
 ) -> axum::response::Response {
-    // An issuer refuses on a clock that cannot be read (before 1970): a token
-    // dated from the epoch would be refused on any readable clock, and
-    // nothing is stored (MIK-8202).
-    let Ok(now) = crate::clock::unix_secs() else {
-        warn!("key server: the host clock reads before 1970; no token issued");
-        return error_response(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "temporarily_unavailable",
-            "the host clock reads before 1970; retry once it is set",
-        );
+    let Ok(reserve_now) = crate::clock::unix_secs() else {
+        return clock_refusal();
+    };
+    let jti = InMemoryTokenStore::generate_jti();
+    let request = ReservationRequest {
+        issuer: identity.issuer().to_string(),
+        subject: identity.subject().to_string(),
+        jti: jti.clone(),
+    };
+    let reservation = match MintReservation::reserve(&ks.store, request, reserve_now) {
+        Ok(reservation) => reservation,
+        Err(ReserveError::CapReached) => return token_cap_refusal(ks, &identity, client_ip),
+        Err(ReserveError::DuplicateJti | ReserveError::Clock) => {
+            warn!("key server: no pending slot could be reserved; no token issued");
+            return error_response(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "temporarily_unavailable",
+                "the token could not be reserved; retry",
+            );
+        }
     };
 
-    let ttl = ks.config.token_ttl_secs;
-    let token = TemporaryToken {
-        jti: InMemoryTokenStore::generate_jti(),
+    let mut token = TemporaryToken {
+        jti,
         token: InMemoryTokenStore::generate_bearer(),
         identity,
         scopes,
-        iat: now,
-        // `token_ttl_secs` is bounded at load; never wraps regardless.
-        exp: now.saturating_add(ttl),
+        // Dated at activation below.
+        iat: 0,
+        exp: 0,
         client_ip,
     };
+    // The issuance attempt: it names the JTI, never a validity window.
+    let ev = AuditEvent::issued(&token, &ks.email_key);
+    audit::emit(&ev);
 
+    let Ok(now) = crate::clock::unix_secs() else {
+        return clock_refusal();
+    };
+    let ttl = ks.config.token_ttl_secs;
+    let Some(exp) = now.checked_add(ttl) else {
+        return clock_refusal();
+    };
+    token.iat = now;
+    token.exp = exp;
     let response = TokenExchangeResponse {
         access_token: token.token.clone(),
         token_type: "Bearer".to_string(),
-        expires_in: ttl,
+        expires_in: exp - now,
         scope: format_scope_string(&token),
         jti: token.jti.clone(),
     };
 
-    let ev = AuditEvent::issued(&token, &ks.email_key);
-    audit::emit(&ev);
-    ks.store.insert(token).await;
-
-    (StatusCode::OK, Json(response)).into_response()
+    match reservation.activate(token, now) {
+        Ok(()) => (StatusCode::OK, Json(response)).into_response(),
+        Err(ActivateError::Revoked) => error_response(
+            StatusCode::FORBIDDEN,
+            "access_denied",
+            "this identity's tokens were revoked while the token was being issued",
+        ),
+        Err(ActivateError::Expired) => {
+            let mut refusal = error_response(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "temporarily_unavailable",
+                "issuing the token took too long; retry",
+            );
+            refusal.headers_mut().insert(
+                axum::http::header::RETRY_AFTER,
+                axum::http::HeaderValue::from_static("1"),
+            );
+            refusal
+        }
+        Err(ActivateError::Missing | ActivateError::Mismatch | ActivateError::Timestamps) => {
+            warn!("key server: the reservation refused its own token; no token issued");
+            error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "server_error",
+                "the token could not be issued",
+            )
+        }
+    }
 }
 
 /// `DELETE /auth/token/{jti}` — Revoke a specific token by its JTI.
@@ -376,24 +473,16 @@ async fn revoke_tokens_by_subject(
         .into_response()
 }
 
-/// The 429 response when `(issuer, subject)` already holds the configured
-/// maximum of active tokens; `None` while it is under the cap.
-async fn token_cap_refusal(
+/// The 429 response when `(issuer, subject)`'s active plus pending tokens
+/// already fill the configured maximum. Nothing is evicted.
+fn token_cap_refusal(
     ks: &KeyServer,
     identity: &VerifiedIdentity,
     client_ip: Option<IpAddr>,
-) -> Option<axum::response::Response> {
-    let active_count = ks
-        .store
-        .count_for_subject(identity.issuer(), identity.subject())
-        .await;
-    if active_count < ks.config.max_tokens_per_identity as usize {
-        return None;
-    }
+) -> axum::response::Response {
     warn!(
         issuer = %identity.issuer(),
         subject = %identity.subject(),
-        active = active_count,
         max = ks.config.max_tokens_per_identity,
         "Max tokens per identity exceeded"
     );
@@ -405,11 +494,11 @@ async fn token_cap_refusal(
         client_ip,
     );
     audit::emit(&ev);
-    Some(error_response(
+    error_response(
         StatusCode::TOO_MANY_REQUESTS,
         "too_many_tokens",
         "Maximum number of active tokens for this identity exceeded",
-    ))
+    )
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────
