@@ -183,20 +183,19 @@ fn the_final_nfc_pass_composes_and_reorders() {
 /// changing them means a new normalization version.
 #[test]
 fn normalization_v1_matches_unicode_16_over_every_code_point() {
-    use sha2::Digest as _;
-    let mut hasher = sha2::Sha256::new();
+    let mut corpus = Vec::new();
     let mut points = 0_usize;
     for cp in 0x20_u32..0x30000 {
         let Some(c) = char::from_u32(cp) else {
             continue;
         };
-        hasher.update(super::normalize(&c.to_string()).as_bytes());
-        hasher.update([0_u8]);
+        corpus.extend_from_slice(super::normalize(&c.to_string()).as_bytes());
+        corpus.push(0);
         points += 1;
     }
     assert_eq!(points, 194_528);
     assert_eq!(
-        hex::encode(hasher.finalize()),
+        crate::hashing::sha256_hex(&corpus),
         "fb587c1239655fae66cbf19edea48ded5be7ad8ef3845b98c689f78aba13cec5",
         "this toolchain's Unicode tables differ from normalization v1's (Unicode 16.0.0); \
          char::UNICODE_VERSION is {:?}",
