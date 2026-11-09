@@ -55,10 +55,15 @@ pub(crate) async fn with_caller_slot<F: Future>(request: F) -> F::Output {
 }
 
 /// Run `run` as `caller`'s: a task worker's run, which has no intake.
-pub(crate) async fn with_caller<F: Future>(caller: Arc<dyn CallerHiding>, run: F) -> F::Output {
+/// A plain function, not an `async fn`: an `async fn` would hold `run` twice
+/// (the argument beside the task-local future that owns it).
+pub(crate) fn with_caller<F: Future>(
+    caller: Arc<dyn CallerHiding>,
+    run: F,
+) -> impl Future<Output = F::Output> {
     let slot = OnceLock::new();
     let _ = slot.set(caller);
-    CALLER.scope(slot, run).await
+    CALLER.scope(slot, run)
 }
 
 /// Install the caller of the open slot. The first caller wins: a later
