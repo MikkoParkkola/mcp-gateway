@@ -438,3 +438,46 @@ async fn a_clean_stored_answer_keeps_its_seals() {
     assert_eq!(outcome, Scrubbed::Clean);
     assert_eq!(serde_json::to_string(&answer).expect("serializes"), before);
 }
+
+/// A held value only in the stored text as written, gone once the strip
+/// rewrites it compact: the stored answer is not put back, and the seal
+/// stays off.
+#[tokio::test(start_paused = true)]
+async fn a_held_value_only_in_the_text_the_strip_rewrote_is_not_put_back() {
+    let steps = "{\n  \"step\": \"held\",\n  \"_meta\": {\"provenance\": {\"receipt\": {}, \"public_signature\": {\"sig\": \"s\"}}}\n}";
+    let mut answer = crate::protocol::JsonRpcResponse::success(
+        crate::protocol::RequestId::Number(1),
+        serde_json::json!({ "content": [{ "type": "text", "text": steps }] }),
+    );
+    let outcome = super::scrub_stored(&[holding("\"step\": \"held\"")], &mut answer);
+    let wire = serde_json::to_string(&answer).expect("serializes");
+    assert_eq!(outcome, Scrubbed::Redacted, "{wire}");
+    assert!(
+        !wire.contains("public_signature"),
+        "a seal was kept: {wire}"
+    );
+    assert!(
+        !wire.contains("\\\"step\\\": \\\"held\\\""),
+        "the held value was put back: {wire}"
+    );
+}
+
+/// Text shaped as JSON that names a seal but will not parse may still carry
+/// it: a redacted answer holding one is refused.
+#[tokio::test(start_paused = true)]
+async fn a_redacted_answer_with_seal_text_that_will_not_parse_is_refused() {
+    let mut answer = crate::protocol::JsonRpcResponse::success(
+        crate::protocol::RequestId::Number(1),
+        serde_json::json!({
+            "text": "answer held-secret-value",
+            "content": [{ "type": "text", "text": "{\"_meta\": {\"provenance\": {\"public_signature\": \"p\"" }],
+        }),
+    );
+    let outcome = super::scrub_stored(&[holding("held-secret-value")], &mut answer);
+    let wire = serde_json::to_string(&answer).expect("serializes");
+    assert_eq!(outcome, Scrubbed::Refuse, "{wire}");
+    assert!(
+        answer.result.is_none(),
+        "a refused answer carries no result: {wire}"
+    );
+}

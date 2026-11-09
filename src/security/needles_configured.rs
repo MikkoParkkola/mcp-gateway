@@ -151,28 +151,44 @@ pub(crate) fn scrub_stored(
         .as_ref()
         .filter(|result| holds_seal(result))
         .cloned();
-    let removed = match (&sealed, response.result.as_mut()) {
+    let stripped = match (&sealed, response.result.as_mut()) {
         (Some(_), Some(result)) => drop_seals(result),
-        _ => Vec::new(),
+        _ => true,
     };
     let outcome = scrub_unsealed(sets, response);
     let Some(original) = sealed else {
         return outcome;
     };
-    if outcome != Scrubbed::Clean {
-        return outcome;
+    // Put back only an answer nothing held is in anywhere, its seals, their
+    // key names and the text the strip rewrote included: the stored bytes.
+    let held = sets
+        .iter()
+        .find(|set| !holds_no_needle(&original, &set.snapshot()));
+    match (outcome, held) {
+        (Scrubbed::Clean, None) => {
+            response.result = Some(original);
+            Scrubbed::Clean
+        }
+        // Seal-bearing text that would not parse may still carry its seal:
+        // a changed answer with one is refused rather than sent.
+        (Scrubbed::Clean | Scrubbed::Redacted, held) if !stripped => {
+            use crate::gateway::delivery_facts::{echo_redacted, echo_refusal_built};
+            let message = held
+                .or_else(|| sets.first())
+                .map_or(ECHO_REFUSAL, |set| refusal_message(set));
+            *response = JsonRpcResponse::error(response.id.clone(), REFUSAL_CODE, message);
+            echo_redacted();
+            echo_refusal_built();
+            Scrubbed::Refuse
+        }
+        // A held value only in what the strip removed or rewrote: the seals
+        // stay off, and the answer is no longer the stored one.
+        (Scrubbed::Clean, Some(_)) => {
+            crate::gateway::delivery_facts::echo_redacted();
+            Scrubbed::Redacted
+        }
+        (other, _) => other,
     }
-    if removed.iter().all(|seal| {
-        sets.iter()
-            .all(|set| holds_no_needle(seal, &set.snapshot()))
-    }) {
-        response.result = Some(original);
-        return Scrubbed::Clean;
-    }
-    // A held value inside a seal itself: the seal stays off, and the answer
-    // is no longer the stored one.
-    crate::gateway::delivery_facts::echo_redacted();
-    Scrubbed::Redacted
 }
 
 /// Whether `value` may hold a provenance seal: a `public_signature` member
@@ -202,41 +218,42 @@ fn holds_seal(value: &Value) -> bool {
 }
 
 /// Remove every provenance seal from `value`, at any depth and inside JSON
-/// text, and return the removed signatures. Text holding a seal is parsed,
-/// unsealed and written back compact (it goes out only in an answer the scrub
-/// changed). Iterative over each value; text inside text recurses once per
+/// text. Text naming a seal is parsed, unsealed and written back compact (it
+/// goes out only in an answer the scrub changed); false when such text is
+/// shaped as JSON but did not parse, so a seal may remain in it. Iterative over each value; text inside text recurses once per
 /// level of escaping, and each level doubles the escapes, so the depth stays
 /// a few dozen at most.
-fn drop_seals(value: &mut Value) -> Vec<Value> {
-    let mut removed = Vec::new();
+fn drop_seals(value: &mut Value) -> bool {
+    let mut stripped = true;
     let mut pending = vec![value];
     while let Some(next) = pending.pop() {
         match next {
             Value::Object(object) => {
-                if let Some(seal) = object
+                if let Some(provenance) = object
                     .get_mut("_meta")
                     .and_then(|meta| meta.get_mut("provenance"))
                     .and_then(Value::as_object_mut)
-                    .and_then(|provenance| provenance.remove("public_signature"))
                 {
-                    removed.push(seal);
+                    provenance.remove("public_signature");
                 }
                 pending.extend(object.values_mut());
             }
             Value::Array(items) => pending.extend(items.iter_mut()),
             Value::String(text) if text.contains("public_signature") => {
-                if let Ok(mut inner) = serde_json::from_str::<Value>(text) {
-                    let seals = drop_seals(&mut inner);
-                    if !seals.is_empty() {
+                match serde_json::from_str::<Value>(text) {
+                    Ok(mut inner) => {
+                        stripped &= drop_seals(&mut inner);
                         *text = inner.to_string();
-                        removed.extend(seals);
                     }
+                    // Prose that names a seal is not one; text shaped as
+                    // JSON that will not parse may carry one.
+                    Err(_) => stripped &= !text.trim_start().starts_with(['{', '[']),
                 }
             }
             _ => {}
         }
     }
-    removed
+    stripped
 }
 
 /// [`scrub_stored`] once its seals are off.
