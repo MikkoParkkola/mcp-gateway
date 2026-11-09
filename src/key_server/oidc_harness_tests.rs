@@ -77,6 +77,7 @@ impl Harness {
             policy: Arc::new(PolicyEngine::new(config.policies.clone())),
             config,
             email_key: crate::key_server::email_hash::EmailHashKey::for_test(),
+            revocation_signals: std::sync::atomic::AtomicU64::new(0),
         });
         let jwks = Router::new()
             .route("/.well-known/jwks.json", get(jwks_handler))
@@ -140,6 +141,18 @@ impl Harness {
     }
 
     /// DELETE `/auth/tokens?<query>` with the admin bearer.
+    /// `DELETE /auth/token/{jti}` as the admin: the status.
+    pub(crate) async fn revoke_jti(&self, jti: &str) -> u16 {
+        reqwest::Client::new()
+            .delete(format!("http://{}/auth/token/{jti}", self.addr))
+            .bearer_auth(ADMIN)
+            .send()
+            .await
+            .expect("revoke one")
+            .status()
+            .as_u16()
+    }
+
     pub(crate) async fn revoke(&self, query: &str) -> (u16, Value) {
         let resp = reqwest::Client::new()
             .delete(format!("http://{}/auth/tokens?{query}", self.addr))

@@ -417,7 +417,7 @@ async fn revoke_token(
 
     let removed = ks.store.revoke_by_jti(&jti).await;
     if removed {
-        crate::events::credentials_changed();
+        ks.credentials_changed();
         let ev = AuditEvent::revoked(&jti, None);
         audit::emit(&ev);
         (StatusCode::NO_CONTENT, Json(json!({}))).into_response()
@@ -461,7 +461,7 @@ async fn revoke_tokens_by_subject(
     };
     let count = ks.store.revoke_by_subject(&issuer, &params.subject).await;
     if count > 0 {
-        crate::events::credentials_changed();
+        ks.credentials_changed();
     }
     let ev = AuditEvent::revoked(&format!("bulk:{actor_id}"), None);
     audit::emit(&ev);
@@ -775,3 +775,7 @@ mod tests {
         assert!(scope.contains("tools:tavily-search"));
     }
 }
+
+#[cfg(test)]
+#[path = "store_reservation_tests.rs"]
+mod store_reservation_tests;

@@ -17,7 +17,7 @@ fn alpha_with(read: &str) -> Vec<crate::protocol::Tool> {
 /// Principals A and B, each warm on their own slot of `beta`.
 async fn duo() -> (World, String, String) {
     let w = World::start().await;
-    let (a, b) = (w.principal("A").await, w.principal("B").await);
+    let (a, b) = (w.principal("A"), w.principal("B"));
     w.slot_serves("beta", "A", vec![tool("a_tool", "a")]);
     w.slot_serves("beta", "B", vec![tool("b_tool", "b")]);
     for (bearer, who) in [(&a, "a_tool"), (&b, "b_tool")] {
@@ -188,7 +188,7 @@ async fn r12_a_plain_stream_attached_first_leaves_the_code_mode_one_quiet() {
 async fn judging_stays_on_caches(listen: bool) {
     use std::sync::atomic::Ordering::SeqCst;
     let (w, _a, _b) = duo().await;
-    let (cold, control) = (w.principal("C").await, w.principal("D").await);
+    let (cold, control) = (w.principal("C"), w.principal("D"));
     w.slot_serves("beta", "D", vec![tool("d_tool", "d")]);
     let before = (w.probe.mints.load(SeqCst), w.probe.fetches.load(SeqCst));
     let _ = w.discovered(&control, "beta").await;
