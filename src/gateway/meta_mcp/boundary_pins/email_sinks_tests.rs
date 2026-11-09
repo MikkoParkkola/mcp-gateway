@@ -105,6 +105,15 @@ fn a_serialize_or_debug_on_another_type_is_not_refused() {
 fn instrument_without_skip_on_a_raw_identity_fn_is_refused() {
     let refused = scanned("#[tracing::instrument] fn f(i: &VerifiedIdentity) {}").refused;
     assert_eq!(refused.len(), 1, "{refused:?}");
+    // A skip list that leaves the raw argument out, or a field merely named
+    // "skip", still records it.
+    for refused in [
+        "#[instrument(skip(other))] fn f(i: &VerifiedIdentity, other: u8) {}",
+        "#[instrument(fields(skipped = 1))] fn f(i: &VerifiedIdentity) {}",
+        "#[instrument(skip(i))] fn f(i: &VerifiedIdentity, t: TemporaryToken) {}",
+    ] {
+        assert_eq!(scanned(refused).refused.len(), 1, "{refused}");
+    }
     for allowed in [
         "#[instrument(skip(i))] fn f(i: &VerifiedIdentity) {}",
         "#[instrument(skip_all)] fn f(i: Option<TemporaryToken>) {}",

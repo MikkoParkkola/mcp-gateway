@@ -145,23 +145,69 @@ impl Visitor<'_> {
         }) else {
             return;
         };
-        // `skip(..)` or `skip_all` inside the attribute's arguments.
-        if let syn::Meta::List(list) = &attr.meta
-            && list.tokens.to_string().contains("skip")
-        {
-            return;
-        }
-        let takes_raw = sig.inputs.iter().any(|arg| match arg {
-            syn::FnArg::Typed(t) => mentions_raw(&t.ty),
-            syn::FnArg::Receiver(_) => false,
-        });
-        if takes_raw {
+        let skipped = skipped_args(&attr.meta);
+        let unskipped: Vec<String> = sig
+            .inputs
+            .iter()
+            .filter_map(|arg| match arg {
+                syn::FnArg::Typed(t) if mentions_raw(&t.ty) => Some(t),
+                _ => None,
+            })
+            .map(|t| match &*t.pat {
+                syn::Pat::Ident(p) => name(&p.ident),
+                _ => "_".to_owned(),
+            })
+            .filter(|arg| !skipped.covers(arg))
+            .collect();
+        if !unskipped.is_empty() {
             self.refuse(&format!(
-                "#[instrument] without skip on `{}`, which takes a raw identity",
+                "#[instrument] on `{}` records the raw identity argument(s) {unskipped:?}; skip them",
                 name(&sig.ident)
             ));
         }
     }
+}
+
+/// What an `#[instrument]` attribute leaves out of its span.
+enum Skipped {
+    All,
+    Named(Vec<String>),
+}
+
+impl Skipped {
+    fn covers(&self, arg: &str) -> bool {
+        match self {
+            Self::All => true,
+            Self::Named(names) => names.iter().any(|n| n == arg),
+        }
+    }
+}
+
+/// The arguments an `#[instrument(..)]` skips: `skip_all`, or the names
+/// inside its `skip(..)` group. A bare `#[instrument]` skips nothing.
+fn skipped_args(meta: &syn::Meta) -> Skipped {
+    let syn::Meta::List(list) = meta else {
+        return Skipped::Named(Vec::new());
+    };
+    let mut tokens = list.tokens.clone().into_iter().peekable();
+    let mut names = Vec::new();
+    while let Some(token) = tokens.next() {
+        let proc_macro2::TokenTree::Ident(ident) = token else {
+            continue;
+        };
+        if ident == "skip_all" {
+            return Skipped::All;
+        }
+        if ident == "skip"
+            && let Some(proc_macro2::TokenTree::Group(group)) = tokens.peek()
+        {
+            names.extend(group.stream().into_iter().filter_map(|t| match t {
+                proc_macro2::TokenTree::Ident(i) => Some(syn::ext::IdentExt::unraw(&i).to_string()),
+                _ => None,
+            }));
+        }
+    }
+    Skipped::Named(names)
 }
 
 /// Whether `ty` names a raw type anywhere (a reference, an `Option`, a
