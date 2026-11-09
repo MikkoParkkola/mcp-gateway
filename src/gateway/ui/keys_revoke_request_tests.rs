@@ -37,11 +37,15 @@ fn send_delete(fx: &Fixture, name: &str, call: Call, if_match: Option<&str>) -> 
             .await
             .expect("infallible");
         let status = response.status();
+        let cache_control = response
+            .headers()
+            .get("cache-control")
+            .map(|v| v.to_str().unwrap().to_owned());
         let bytes = to_bytes(response.into_body(), 1 << 16).await.expect("body");
         Sent {
             status,
             body: String::from_utf8(bytes.to_vec()).expect("UTF-8"),
-            cache_control: None,
+            cache_control,
             headers: Vec::new(),
             logs: String::new(),
         }
@@ -165,3 +169,6 @@ mod keys_revoke_target_tests;
 
 #[path = "keys_revoke_writer_tests.rs"]
 mod keys_revoke_writer_tests;
+
+#[path = "keys_revoke_outcome_tests.rs"]
+mod keys_revoke_outcome_tests;
