@@ -1,8 +1,9 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! Pager progress rows: a page that has advanced nothing assembles one record
-//! even past its budget (by at most the record cap), so paging never repeats a
-//! cursor; a page that has advanced keeps the strict budget.
+//! Pager progress rows: a log the page has advanced nothing in assembles one
+//! record even past the budget (by at most one assembly window per log read),
+//! so paging never repeats a cursor; a log that has advanced keeps the strict
+//! budget.
 
 use serde_json::Map;
 
