@@ -201,7 +201,16 @@ fn load(file: &Path, configured: Option<&str>) -> Result<(EmailHashKey, Envelope
     let text = crate::config::secret_ref::read_file_ref("the key-server email HMAC envelope", file)
         .map_err(|e| refused(e.to_string()))?;
     let mut envelope: Envelope =
-        serde_json::from_str(&text).map_err(|e| refused(format!("not a valid envelope: {e}")))?;
+        // serde's message can quote the offending value, which may be the
+        // key itself: name only where the file stops making sense.
+        serde_json::from_str(&text).map_err(|e| {
+            refused(format!(
+                "not a valid envelope ({:?} error at line {} column {})",
+                e.classify(),
+                e.line(),
+                e.column()
+            ))
+        })?;
     if envelope.version != VERSION {
         return Err(refused(format!(
             "schema version {} is not {VERSION}",

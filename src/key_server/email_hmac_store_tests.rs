@@ -318,3 +318,20 @@ fn a_hash_nested_under_identity_is_history() {
         assert!(!dir.path().join(FILE).exists(), "no key was created");
     }
 }
+
+/// A malformed field holding the key never puts the key in the refusal.
+#[test]
+fn a_malformed_envelope_never_quotes_the_key() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    for bad in [
+        format!("{{\"version\":1,\"mode\":\"{KEY_HEX}\",\"key_id\":\"x\"}}"),
+        format!("{{\"version\":\"{KEY_HEX}\",\"mode\":\"generated\",\"key_id\":\"x\"}}"),
+        format!("{{\"version\":1,\"mode\":\"generated\",\"key_id\":\"x\",\"{KEY_HEX}\":1}}"),
+    ] {
+        write_envelope(dir.path(), &serde_json::Value::Null);
+        std::fs::write(dir.path().join(FILE), &bad).expect("write");
+        let err = id(dir.path(), None).expect_err("refused");
+        assert!(!err.contains(KEY_HEX), "{err}");
+        assert!(err.contains("line 1"), "{err}");
+    }
+}
