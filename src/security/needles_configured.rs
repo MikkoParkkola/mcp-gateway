@@ -178,8 +178,39 @@ pub(crate) fn scrub_stored(
             echo_refusal_built();
             return Scrubbed::Refuse;
         }
+        if let Some(result) = response.result.as_mut() {
+            drop_seals(result);
+        }
     }
     outcome
+}
+
+/// Remove the public signature from every `_meta.provenance` in `value`, at
+/// any depth: a stored tool result carries its receipt in its own `_meta`, a
+/// stored task in its `result`. Each seal was made over the bytes before the
+/// redaction, so it no longer covers what is served, and its payload carries
+/// those bytes' unsalted digest: a client could test guesses of the removed
+/// value against it. The receipt stays; it holds no digest of the result.
+/// The same rule as `delivered_wire`. Iterative, so a deep answer cannot
+/// exhaust the stack.
+fn drop_seals(value: &mut Value) {
+    let mut pending = vec![value];
+    while let Some(next) = pending.pop() {
+        match next {
+            Value::Object(object) => {
+                if let Some(provenance) = object
+                    .get_mut("_meta")
+                    .and_then(|meta| meta.get_mut("provenance"))
+                    .and_then(Value::as_object_mut)
+                {
+                    provenance.remove("public_signature");
+                }
+                pending.extend(object.values_mut());
+            }
+            Value::Array(items) => pending.extend(items.iter_mut()),
+            _ => {}
+        }
+    }
 }
 
 /// The first set one of whose values the scrub formed in `parts`: each set
