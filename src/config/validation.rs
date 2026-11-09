@@ -119,6 +119,7 @@ impl Config {
         flagged_tools::validate_flagged_tool_pins(&self.backends)?;
         self.validate_agent_key_material(overlay)?;
         self.auth.validate_api_key_names()?;
+        self.auth.validate_api_key_bindings()?;
         #[cfg(feature = "firewall")]
         self.validate_firewall_rule_keys()?;
         #[cfg(feature = "firewall")]

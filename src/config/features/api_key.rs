@@ -134,6 +134,7 @@ pub struct ApiKeyConfig {
 /// key, 64 lowercase hex) and the full tag of the digest it approved with
 /// (64 lowercase hex). Neither is a secret or a digest of the key itself.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ApiKeyBinding {
     /// The approver's stable principal.
     pub quota_principal: String,
@@ -148,11 +149,14 @@ pub struct ApiKeyBinding {
 pub(crate) fn cli_key_expiry(
     now: DateTime<Utc>,
     requested: chrono::Duration,
-    _ceiling: chrono::Duration,
-    _approver_expires_at: Option<DateTime<Utc>>,
+    ceiling: chrono::Duration,
+    approver_expires_at: Option<DateTime<Utc>>,
 ) -> Option<DateTime<Utc>> {
-    // Stub for the red rows: no clamp yet.
-    Some(now + requested)
+    // The shortest of the three bounds wins; a key that would expire at or
+    // before `now` grants nothing, so there is no zero or negative lifetime.
+    let granted = now.checked_add_signed(requested.min(ceiling))?;
+    let expiry = approver_expires_at.map_or(granted, |end| granted.min(end));
+    (expiry > now).then_some(expiry)
 }
 
 // Manual `Debug` (CWE-532): a derived one printed the key. The digest is not a
