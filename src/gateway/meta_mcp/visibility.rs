@@ -27,7 +27,13 @@ use crate::identity_grants::{
 use crate::{Error, Result};
 
 /// One identity-grant evaluation: the request judged and its verdict.
-type GrantVerdict = (IdentityGrantRequest, IdentityGrantEvaluation);
+/// One grant evaluation: the request, its evaluation, and the matched row's
+/// keyed id, read under the same borrow as the match (D8).
+type GrantVerdict = (
+    IdentityGrantRequest,
+    IdentityGrantEvaluation,
+    Option<crate::security::rule_id::RuleId>,
+);
 
 /// What the chokepoint reads about a caller, as a `Copy` view.
 ///
@@ -546,10 +552,10 @@ impl MetaMcp {
         }) else {
             return Err(Error::ToolNotFound(tool.to_string()));
         };
-        let evaluation = self.identity_grants.read().evaluate(&request);
+        let (evaluation, rule_id) = self.identity_grants.read().evaluate_explained(&request);
         #[cfg(test)]
         after_grant_evaluation::fire();
-        Ok(Some((request, evaluation)))
+        Ok(Some((request, evaluation, rule_id)))
     }
 
     /// The answer one grant `verdict` gives, noted for its record under
@@ -559,7 +565,7 @@ impl MetaMcp {
         server: &str,
         tool: &str,
         scope: InvokeScope<'_>,
-        (request, evaluation): &GrantVerdict,
+        (request, evaluation, rule_id): &GrantVerdict,
         emit: Emit,
     ) -> Result<()> {
         // D3-a: a dispatch decision is noted for its record; an unslotted
@@ -569,6 +575,22 @@ impl MetaMcp {
             super::grant_audit::note_grant_decision(logger, server, tool, &evaluation.audit)?;
         }
         if evaluation.allowed {
+            // D8: an audited matched grant is the call's allow, by its keyed
+            // id and the operator's grant_id. Public and shared capabilities
+            // match no row, so they note nothing.
+            if emit == Emit::Audit
+                && evaluation.reason
+                    == crate::identity_grants::IdentityGrantDecisionReason::GrantMatched
+            {
+                #[cfg(test)]
+                before_grant_note::fire();
+                let mut allow = crate::security::decision_record::Allow::by(
+                    crate::security::decision_record::AllowRank::Grant,
+                    rule_id.clone(),
+                );
+                allow.grant_id.clone_from(&evaluation.grant_id);
+                super::invoke::audit::note_allowed_by(allow);
+            }
             return Ok(());
         }
         if emit == Emit::Audit {
@@ -653,6 +675,28 @@ pub(super) mod after_grant_evaluation {
     }
 
     /// Run `hook` once, after the next grant evaluation on this thread.
+    pub(in crate::gateway::meta_mcp) fn set(hook: impl FnOnce() + 'static) {
+        HOOK.with(|slot| *slot.borrow_mut() = Some(Box::new(hook)));
+    }
+
+    pub(super) fn fire() {
+        if let Some(hook) = HOOK.with(|slot| slot.borrow_mut().take()) {
+            hook();
+        }
+    }
+}
+
+/// A reload landing between a matched grant's evaluation and its note, set
+/// by a test cell: the note must name the row the evaluation matched.
+#[cfg(test)]
+pub(super) mod before_grant_note {
+    use std::cell::RefCell;
+
+    thread_local! {
+        static HOOK: RefCell<Option<Box<dyn FnOnce()>>> = const { RefCell::new(None) };
+    }
+
+    /// Run `hook` once, just before the next matched grant is noted.
     pub(in crate::gateway::meta_mcp) fn set(hook: impl FnOnce() + 'static) {
         HOOK.with(|slot| *slot.borrow_mut() = Some(Box::new(hook)));
     }
