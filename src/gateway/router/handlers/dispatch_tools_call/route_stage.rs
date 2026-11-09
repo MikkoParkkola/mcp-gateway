@@ -70,6 +70,7 @@ impl<'a> RouteStage<'a> {
             // name withheld from this caller is not a target: the meta
             // layer answers it as a name that matches no tool.
             let checked = target.as_target();
+            let mut step_trace: Option<String> = None;
             // A requested target the caller cannot see takes the missing name's
             // path; a step's target keeps the strict authorize.
             let routed = if index < self.request_targets {
@@ -112,16 +113,27 @@ impl<'a> RouteStage<'a> {
                     Err(refusal) => Err(refusal),
                 }
             } else {
-                state.meta_mcp.authorize_route_target(
-                    invoke_scope,
-                    (checked.server, checked.tool),
-                    checked.arguments,
-                )
+                // A step's check runs under a trace of its own, so its decision
+                // note is traced and the refusal's invocation record (written
+                // under the same trace) is the one record of this call.
+                let trace = crate::gateway::trace::generate();
+                step_trace = Some(trace.clone());
+                crate::gateway::trace::TRACE_ID.sync_scope(trace, || {
+                    state.meta_mcp.authorize_route_target(
+                        invoke_scope,
+                        (checked.server, checked.tool),
+                        checked.arguments,
+                    )
+                })
             };
             // A step's target is operator-defined: any refusal of it is neutral (A3).
             if index >= self.request_targets && routed.is_err() {
-                return Err(Box::new(Err(refused
-                    .answer(
+                // Boxed at its creation: this answer is the cold path, and
+                // inline it would size every call's route-stage future.
+                // large_futures checks the boxed pointer at the await, not the answer
+                // future's size: the box is a size measure, not an allocation bound.
+                let answer = Box::pin(
+                    refused.with_trace(step_trace).answer(
                         state,
                         target.as_target(),
                         self.id.clone(),
@@ -129,8 +141,9 @@ impl<'a> RouteStage<'a> {
                         STEP_NOT_PERMITTED.to_string(),
                         StatusCode::from_u16(STEP_NOT_PERMITTED_STATUS)
                             .unwrap_or(StatusCode::FORBIDDEN),
-                    )
-                    .await)));
+                    ),
+                );
+                return Err(Box::new(Err(answer.await)));
             }
             match routed {
                 Ok(()) => {}
@@ -142,16 +155,17 @@ impl<'a> RouteStage<'a> {
                     // Answered here, not in the meta layer, so the refusal keeps
                     // the route's own answer (its HTTP status included).
                     let status = StatusCode::from_u16(status).unwrap_or(StatusCode::FORBIDDEN);
-                    return Err(Box::new(Err(refused
-                        .answer(
-                            state,
-                            target.as_target(),
-                            self.id.clone(),
-                            code,
-                            message,
-                            status,
-                        )
-                        .await)));
+                    // Boxed at its creation, as the step answer above is.
+                    // large_futures sees the box here too: a size measure, not a bound.
+                    let answer = Box::pin(refused.with_trace(step_trace).answer(
+                        state,
+                        target.as_target(),
+                        self.id.clone(),
+                        code,
+                        message,
+                        status,
+                    ));
+                    return Err(Box::new(Err(answer.await)));
                 }
                 // Any other refusal (an unwritable grant record) is answered as
                 // the meta layer answers it.
