@@ -657,10 +657,101 @@ async fn reserve_refuses_cap_zero_duplicates_and_an_overflowing_deadline() {
 async fn a_reservation_id_claims_nothing_in_another_store() {
     let (a, b) = (store(1), store(1));
     let from_a = a.reserve(request(ISS, "j1"), T0).expect("slot in a");
-    let _from_b = b.reserve(request(ISS, "j1"), T0).expect("slot in b");
+    let from_b = b.reserve(request(ISS, "j1"), T0).expect("slot in b");
     assert_eq!(
         b.activate(&from_a, token(ISS, "j1", T0), T0),
         Err(ActivateError::Missing),
         "a's id activated b's reservation"
     );
+    a.abort(&from_b);
+    b.activate(&from_b, token(ISS, "j1", T0), T0)
+        .expect("b's own reservation survived both foreign attempts");
+    a.activate(&from_a, token(ISS, "j1", T0), T0)
+        .expect("a's own reservation survived");
+}
+
+/// A store that panics inside `activate`, before or after committing.
+struct PanicsInActivate {
+    inner: Arc<InMemoryTokenStore>,
+    after_commit: bool,
+}
+
+#[async_trait::async_trait]
+impl TokenStore for PanicsInActivate {
+    fn reserve(
+        &self,
+        request: ReservationRequest,
+        now: u64,
+    ) -> Result<ReservationId, ReserveError> {
+        self.inner.reserve(request, now)
+    }
+    fn activate(
+        &self,
+        id: &ReservationId,
+        token: TemporaryToken,
+        now: u64,
+    ) -> Result<(), ActivateError> {
+        if self.after_commit {
+            self.inner.activate(id, token, now).expect("commits");
+        }
+        panic!("the store failed inside activate");
+    }
+    fn abort(&self, id: &ReservationId) {
+        self.inner.abort(id);
+    }
+    async fn get(&self, bearer: &str) -> Option<TemporaryToken> {
+        self.inner.get(bearer).await
+    }
+    async fn live_jti(&self, jti: &str, now: u64) -> bool {
+        self.inner.live_jti(jti, now).await
+    }
+    async fn revoke_by_jti(&self, jti: &str) -> bool {
+        self.inner.revoke_by_jti(jti).await
+    }
+    async fn revoke_by_subject(&self, issuer: &str, subject: &str) -> usize {
+        self.inner.revoke_by_subject(issuer, subject).await
+    }
+    async fn count_for_subject(&self, issuer: &str, subject: &str) -> usize {
+        self.inner.count_for_subject(issuer, subject).await
+    }
+    async fn reap_expired(&self) -> usize {
+        self.inner.reap_expired().await
+    }
+}
+
+/// A store panicking inside `activate` before committing has its pending
+/// slot released by the guard as the panic unwinds; one panicking after
+/// committing keeps its active token, since the guard's abort touches
+/// pending slots only.
+/// Mutant: the guard disarms before calling `activate`.
+#[tokio::test]
+async fn a_store_panicking_inside_activate_leaks_no_slot_and_keeps_a_committed_token() {
+    let _clock = crate::clock::test_clock::at_secs(T0);
+    for after_commit in [false, true] {
+        let inner = store(1);
+        let store: Arc<dyn TokenStore> = Arc::new(PanicsInActivate {
+            inner: inner.clone(),
+            after_commit,
+        });
+        let guard = MintReservation::reserve(&store, request(ISS, "j1"), T0).expect("slot");
+        let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            guard.activate(token(ISS, "j1", T0), T0)
+        }));
+        assert!(unwound.is_err(), "the store panicked");
+        if after_commit {
+            assert!(
+                inner.get("mcpgw_j1").await.is_some(),
+                "the committed token stands"
+            );
+            assert!(
+                !has_room(&inner, ISS, T0),
+                "the committed token holds the slot"
+            );
+        } else {
+            assert!(
+                has_room(&inner, ISS, T0),
+                "the unwinding guard released the pending slot"
+            );
+        }
+    }
 }
