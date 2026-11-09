@@ -133,6 +133,23 @@ async fn an_ungranted_surfaced_task_call_is_refused_before_x14() {
     ungranted_refusal("x14-ga-grant").await;
 }
 
+/// The x14 row's counting, with its timing forced: the withheld sync call's
+/// own record, written after its answer on the slot's task, is parked until
+/// the sync answer is back, then let through. Counting records without
+/// waiting for that write reads the sync record in the task's window.
+#[tokio::test]
+async fn an_ungranted_refusal_counts_its_late_withheld_record_in_its_own_window() {
+    let row = armed(false, false, AuditFailurePolicy::BestEffort, surfaced).await;
+    let hold = crate::gateway::meta_mcp::grant_audit::seams::hold_next_best_effort_write_for_test();
+    let release = async {
+        hold.held().await;
+        hold.release();
+    };
+    let (sync, task) = (by_surfaced_name(1, PERSONAL), by_surfaced_name(2, PERSONAL));
+    let counted = refused_like_sync(&row, sync, as_task(task, "x14-ga-late"));
+    let ((), _) = tokio::join!(release, counted);
+}
+
 #[tokio::test]
 async fn a_non_admin_surfaced_task_call_of_an_admin_capability_is_refused_before_x14() {
     non_admin_refusal("x14-ga-admin").await;

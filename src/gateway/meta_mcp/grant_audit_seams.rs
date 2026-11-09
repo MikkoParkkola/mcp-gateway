@@ -77,6 +77,7 @@ thread_local! {
     static AFTER_SPAWN: RefCell<Vec<GrantNote>> = const { RefCell::new(Vec::new()) };
     static HOLDS_SIGNALLED: Cell<usize> = const { Cell::new(0) };
     static SPAWNS: RefCell<Vec<SpawnSnapshot>> = const { RefCell::new(Vec::new()) };
+    static IN_FLIGHT: Cell<usize> = const { Cell::new(0) };
 }
 
 /// S1: park the next grant-record write at its start, before it is handed to
@@ -216,4 +217,30 @@ pub(crate) fn after_worker_spawn() {
 /// S2: the snapshots of every worker spawn on this thread, in order.
 pub(crate) fn worker_spawns_for_test() -> Vec<SpawnSnapshot> {
     SPAWNS.with(|s| s.borrow().clone())
+}
+
+/// A slot's spawned grant-record write started on this thread.
+pub(super) fn write_spawned() {
+    IN_FLIGHT.with(|n| n.set(n.get() + 1));
+}
+
+/// A slot's spawned grant-record write finished on this thread.
+pub(super) fn write_finished() {
+    IN_FLIGHT.with(|n| n.set(n.get().saturating_sub(1)));
+}
+
+/// Wait until every grant-record write a slot spawned on this thread has
+/// finished, so a row counting records sees the late ones too: a withheld
+/// call's own record is written after its answer, on the slot's task, and no
+/// caller waits for it. Panics after 10 s, naming how many are still running.
+pub(crate) async fn grant_writes_settled_for_test() {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while IN_FLIGHT.with(Cell::get) > 0 {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "{} grant-record writes still running after 10 s",
+            IN_FLIGHT.with(Cell::get)
+        );
+        tokio::task::yield_now().await;
+    }
 }
