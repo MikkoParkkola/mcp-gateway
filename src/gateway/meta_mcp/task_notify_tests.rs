@@ -155,7 +155,7 @@ async fn a_frame_carries_the_task_as_it_is_at_delivery() {
 /// the stored result or error, completed and failed alike.
 #[tokio::test]
 async fn a_frame_of_an_unvouched_row_carries_the_withheld_answer() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = Arc::new(tempfile::tempdir().expect("tempdir"));
     let (meta, _log) = gateway(&dir, AuditFailurePolicy::FailClosed);
     let echoed = "echo of key legacy-secret-6d02";
     let reason = crate::gateway::meta_mcp::upstream::SECRETS_WITHHELD;
