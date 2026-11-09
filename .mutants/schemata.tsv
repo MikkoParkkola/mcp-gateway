@@ -1,0 +1,59 @@
+head_sha	cda437178f87a8792faf735b99ff535732dde7bd
+#mutant stage-unchecked
+mcp_gateway	gateway::ui::activity::answer_list_tests::r8_a_notification_record_is_ignored	src/gateway/ui/activity/answer_list_tests.rs:125
+#mutant dup-accepted
+mcp_gateway	gateway::ui::activity::answer_list_tests::r6_a_duplicate_record_reads_tamper	src/gateway/ui/activity/answer_list_tests.rs:98
+#mutant absent-effect-delivered
+mcp_gateway	gateway::ui::activity::answer_list_tests::r10_an_omitted_effect_reads_unknown_never_delivered	src/gateway/ui/activity/answer_list_tests.rs:145
+#mutant null-findings-empty
+mcp_gateway	gateway::ui::activity::answer_list_tests::r9_vouched_unscanned_reads_not_scanned	src/gateway/ui/activity/answer_list_tests.rs:133
+#mutant total-dropped
+mcp_gateway	gateway::ui::activity::answer_list_tests::r21_truncated_findings_carry_their_total	src/gateway/ui/activity/answer_list_tests.rs:208
+#mutant map-cap-removed
+mcp_gateway	gateway::ui::activity::answer_integrity_tests::r17_eviction_names_the_call_and_spares_the_rest	src/gateway/ui/activity/answer_integrity_tests.rs:24
+#mutant tombstone-reason-dropped
+mcp_gateway	gateway::ui::activity::answer_integrity2_tests::r40_the_integrity_reason_survives_eviction	src/gateway/ui/activity/answer_integrity2_tests.rs:63
+#mutant overflow-ignored
+mcp_gateway	gateway::ui::activity::answer_integrity2_tests::r39_tombstone_overflow_never_restores_a_record	src/gateway/ui/activity/answer_integrity2_tests.rs:45
+#mutant invalid-trusted
+mcp_gateway	gateway::ui::activity::answer_integrity_tests::r27_a_tampered_delivery_record_poisons_its_trace	src/gateway/ui/activity/answer_integrity_tests.rs:71
+#mutant unsigned-accepted
+mcp_gateway	gateway::ui::activity::answer_integrity_tests::r32_a_stripped_signature_under_a_secret_never_delivers	src/gateway/ui/activity/answer_integrity_tests.rs:103
+#mutant no-secret-rejected
+mcp_gateway	gateway::ui::activity::answer_integrity_tests::r33_no_secret_cannot_vouch	src/gateway/ui/activity/answer_integrity_tests.rs:121
+#mutant found-downgraded
+mcp_gateway	gateway::ui::activity::answer_list_tests::r7_a_single_record_is_complete_on_an_unfinished_window	src/gateway/ui/activity/answer_list_tests.rs:111
+#mutant cleaned-matches-all
+mcp_gateway	gateway::ui::activity::answer_list_tests::r2_cleaned_lists_rewritten_and_annotated_only	src/gateway/ui/activity/answer_list_tests.rs:87
+#mutant answer-in-findings
+mcp_gateway	gateway::ui::activity::answer_list_tests::r12_answer_findings_never_fills_findings	src/gateway/ui/activity/answer_list_tests.rs:178
+#mutant effect-filter-off
+mcp_gateway	gateway::ui::activity::answer_page_tests::r30_the_effect_filter_takes_each_value	src/gateway/ui/activity/answer_page_tests.rs:132
+#mutant look-above-skipped
+mcp_gateway	gateway::ui::activity::answer_page_tests::r4_the_join_survives_the_page_edge	src/gateway/ui/activity/answer_page_tests.rs:49
+#mutant joined-pushed-always
+mcp_gateway	gateway::ui::activity::answer_joiner_tests::r18_joined_stays_in_step_with_the_lines	src/gateway/ui/activity/mod.rs:426
+#mutant look-above-unbounded
+mcp_gateway	gateway::ui::activity::answer_far_tests::r37_a_delivery_beyond_the_window_reads_no_record_and_counts_nothing	src/gateway/ui/activity/answer_far_tests.rs:36
+#mutant look-above-first-segment
+mcp_gateway	gateway::ui::activity::answer_segment_tests::r37_the_look_above_crosses_segments_to_the_delivery	src/gateway/ui/activity/answer_segment_tests.rs:33
+#mutant advanced-dropped
+mcp_gateway	gateway::ui::activity::answer_progress_tests::r43g_an_incomplete_newest_line_does_not_buy_a_second_assembly	src/gateway/ui/activity/answer_progress_tests.rs:184
+#mutant direct-over-cap-skipped
+mcp_gateway	gateway::ui::activity::answer_progress_tests::r43h_an_assembled_record_over_the_cap_is_unreadable	src/gateway/ui/activity/answer_progress_tests.rs:204
+#mutant chain-downgrade-removed
+mcp_gateway	gateway::ui::activity::answer_receipt2_tests::r38b_continuity_is_checked_across_the_window	src/gateway/ui/activity/answer_receipt2_tests.rs:86
+#mutant receipt-joins-every-trace
+mcp_gateway	gateway::ui::activity::answer_receipt3_tests::r13c_unrelated_traces_do_not_evict_the_calls_own_record	src/gateway/ui/activity/answer_receipt3_tests.rs:26
+#mutant effect-filter-widened
+mcp_gateway	gateway::ui::activity::refusal_tests::an_effect_filter_never_lists_a_refusal	src/gateway/ui/activity/refusal_tests.rs:284
+#mutant findings-unprojected
+mcp_gateway	gateway::ui::activity::answer_joiner_tests::findings_are_projected_through_kind_severity_and_where_only	src/gateway/ui/activity/answer_joiner_tests.rs:159
+#mutant receipt-dup-cap-removed
+mcp_gateway	gateway::ui::activity::answer_receipt_tests::r20_receipt_caps_a_duplicate_list_at_two	src/gateway/ui/activity/answer_receipt_tests.rs:99
+#mutant receipt-scan-unbounded
+mcp_gateway	gateway::ui::activity::answer_receipt2_tests::r13_the_receipt_scans_forward_within_its_bound	src/gateway/ui/activity/answer_receipt2_tests.rs:38
+#mutant chain-check-removed
+mcp_gateway	gateway::ui::activity::answer_receipt2_tests::r38_a_deleted_only_record_reads_no_record_and_a_broken_chain	src/gateway/ui/activity/answer_receipt2_tests.rs:73
+#mutant export-bypasses-join
+mcp_gateway	gateway::ui::activity::answer_export_tests::r14_exports_carry_the_effect_and_findings	src/gateway/ui/activity/answer_export_tests.rs:82
