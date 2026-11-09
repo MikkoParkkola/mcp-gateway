@@ -532,7 +532,7 @@ impl ReplayReceipts {
         retention: Duration,
     ) -> Option<Acquired> {
         let bytes = entry_bytes(&parts.0, &parts.1, &parts.2);
-        let mut lapsed = false;
+        let lapsed;
         let (found, evicted) = {
             let mut inner = self.inner.lock();
             let (live, missed) = acquire_locked(&mut inner, key, now);

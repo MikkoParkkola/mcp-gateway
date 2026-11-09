@@ -257,13 +257,11 @@ impl Firewall {
         let Some(snapshot) = snapshot else {
             // Nothing to rebuild from: an entry already held is served as a
             // lookup serves it; a miss is counted by the store, as always.
-            return match self.relay.replay.acquire(key, self.relay.now()) {
-                Some(acquired) => {
-                    let (entry, handle) = acquired.into_parts();
-                    Adopted::Held(replayed(&entry), entry.calls.clone(), handle)
-                }
-                None => Adopted::NoSnapshot,
-            };
+            return self
+                .replay_digests_for_delivery(key)
+                .map_or(Adopted::NoSnapshot, |(digests, calls, handle)| {
+                    Adopted::Held(digests, calls, handle)
+                });
         };
         let Some(parts) = self.trackable_parts(snapshot) else {
             return Adopted::Untrackable;

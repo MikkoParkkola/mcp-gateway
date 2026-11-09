@@ -273,3 +273,28 @@ fn a_snapshot_over_the_replay_caps_is_untrackable() {
         "a block read of an over-cap snapshot was not refused at its start"
     );
 }
+
+/// A read whose row carries no snapshot is served an entry already held:
+/// a pending one is acquired, so the read holds a handle it settles at its
+/// write; with nothing held it reads as no snapshot.
+#[test]
+fn a_read_without_a_snapshot_acquires_an_entry_already_held() {
+    let fw = firewall(CollusionAction::Block);
+    let value = persisted(&fw, &digest(ANSWER), &json!(ANSWER)).expect("a snapshot");
+    let Adopted::Held(_, _, first) = fw.adopt_replay(&key("t8"), Some(&value), hour()) else {
+        panic!("premise: rebuilt from the snapshot");
+    };
+    drop(first);
+    let Adopted::Held(digests, _, handle) = fw.adopt_replay(&key("t8"), None, hour()) else {
+        panic!("a held entry was not served to a read without a snapshot");
+    };
+    assert_eq!(digests.len(), 1);
+    assert!(
+        handle.is_some(),
+        "the pending entry was not held for this read"
+    );
+    assert!(matches!(
+        fw.adopt_replay(&key("t9"), None, hour()),
+        Adopted::NoSnapshot
+    ));
+}
