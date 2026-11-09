@@ -234,7 +234,7 @@ pub(super) fn note_dir_synced(dir: &Path) {
             .file_name()
             .into_string()
             .expect("crash_fs: UTF-8 name");
-        if overlay.excluded.as_ref() == Some(&name) {
+        if mutant!("exclude-ignored-sync", false, overlay.excluded.as_ref() == Some(&name)) {
             continue;
         }
         let path = entry.path();
