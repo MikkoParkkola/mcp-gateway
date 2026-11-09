@@ -98,11 +98,11 @@ async fn rig(endpoint: &Endpoint, policy: AuditFailurePolicy, surface: bool, den
 
 fn identity() -> crate::key_server::oidc::VerifiedIdentity {
     crate::key_server::oidc::VerifiedIdentity::for_test(
-        SUBJECT,
+        SUBJECT.to_string(),
         format!("{SUBJECT}@example.invalid"),
         None,
         vec![],
-        ISSUER,
+        ISSUER.to_string(),
     )
 }
 
