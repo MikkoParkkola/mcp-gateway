@@ -192,6 +192,10 @@ impl LogTail {
         loop {
             if let Some((offset, bytes, above)) = self.pending.pop() {
                 self.end = offset;
+                // Consuming any bytes is progress, a skipped partial head
+                // included: from here the log keeps the strict budget, so it
+                // never assembles twice in one page.
+                self.advanced = true;
                 if bytes.is_empty() {
                     // A window ending on a newline: the head is empty.
                     self.skip_head = false;
