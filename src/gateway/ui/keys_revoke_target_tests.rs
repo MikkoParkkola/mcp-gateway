@@ -5,7 +5,7 @@ use super::super::keys_create_fixture_tests::{ROOT, item, root_item, spec, yaml_
 use super::*;
 use crate::config::ApiKeyConfig;
 
-fn target_setup() -> Setup {
+pub(super) fn target_setup() -> Setup {
     let mut setup = Setup::default();
     setup.text = yaml_of(&[root_item(), item("target", "target-secret", "")]);
     setup.running.api_keys.push(ApiKeyConfig {
@@ -17,7 +17,7 @@ fn target_setup() -> Setup {
     setup
 }
 
-fn tag(secret: &str) -> String {
+pub(super) fn tag(secret: &str) -> String {
     crate::gateway::auth::digest_tag_of(
         &crate::config::parse_api_key_digest(&spec(secret)).unwrap(),
     )

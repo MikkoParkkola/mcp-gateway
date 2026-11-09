@@ -162,3 +162,6 @@ fn if_match_does_not_replace_the_body_revision() {
 
 #[path = "keys_revoke_target_tests.rs"]
 mod keys_revoke_target_tests;
+
+#[path = "keys_revoke_writer_tests.rs"]
+mod keys_revoke_writer_tests;
