@@ -1,0 +1,79 @@
+head_sha	02cc184e2a9a74516fc3994ec47d18971eb37890
+#mutant q1
+mcp_gateway	security::transparency_log::sigstart_tests::r24_the_boundary_is_at_p	src/security/transparency_log_sigstart_tests.rs:359
+#mutant q2
+mcp_gateway	security::transparency_log::sigstart_tests::r24_the_boundary_is_at_p	src/security/transparency_log_sigstart_tests.rs:354
+#mutant q4
+mcp_gateway	gateway::ui::activity::sigstate_tests::r18_an_offline_copy_without_its_sidecar_fails_closed	src/gateway/ui/activity/sigstate_tests.rs:138
+#mutant q5
+mcp_gateway	gateway::ui::activity::sigstate_tests::r32_coverage_binds_the_sidecar_to_this_log	src/gateway/ui/activity/sigstate_tests.rs:498
+#mutant q6
+mcp_gateway	gateway::ui::activity::sigstate_tests::review::r32c_own_file_coverage_short_of_p_is_tampering	src/gateway/ui/activity/sigstate_review_tests.rs:32
+mcp_gateway	gateway::ui::activity::sigstate_tests::review::r32b_a_resigned_sidecar_missing_an_earlier_file_fails_coverage	src/gateway/ui/activity/sigstate_review_tests.rs:106
+#mutant q7
+mcp_gateway	security::transparency_log::sigstart_tests::r14_sidecar_bytes_round_trip_and_refuse_damage	src/security/transparency_log_sigstart_tests.rs:300
+#mutant q35
+mcp_gateway	security::transparency_log::sigstart_tests::r14_sidecar_bytes_round_trip_and_refuse_damage	src/security/transparency_log_sigstart_tests.rs:298
+#mutant q19
+mcp_gateway	gateway::ui::activity::sigstate_tests::r19_edits_to_legacy_bytes_are_caught	src/gateway/ui/activity/sigstate_tests.rs:138
+#mutant q31
+mcp_gateway	security::transparency_log::sigstart_tests::r24_the_boundary_is_at_p	src/security/transparency_log_sigstart_tests.rs:373
+#mutant q34 multi=2
+mcp_gateway	security::transparency_log::sigstart_tests::r31_a_large_legacy_file_hashes_only_the_touched_chunks	src/security/transparency_log_sigstart_tests.rs:412
+#mutant q32
+mcp_gateway	security::transparency_log::sigstart_tests::r30_a_kill_before_the_announce_retries_the_event_once	src/security/transparency_log_sigstart_tests.rs:540
+#mutant q8
+mcp_gateway	security::transparency_log::sigstart_tests::r6_an_edited_sidecar_is_kept_and_raised	src/security/transparency_log_sigstart_tests.rs:160
+#mutant q10
+mcp_gateway	security::transparency_log::sigstart_tests::r7_a_deleted_sidecar_rebuilds_closed_with_one_event	src/security/transparency_log_sigstart_tests.rs:121
+#mutant q11
+mcp_gateway	security::transparency_log::sigstart_tests::r10_strip_all_with_a_keyed_hwm_is_tamper	src/security/transparency_log_sigstart_tests.rs:183
+#mutant q27
+mcp_gateway	security::transparency_log::sigstart_tests::r36_a_kept_hwm_rules_out_the_v3_shape	src/security/transparency_log_sigstart_tests.rs:596
+#mutant q28
+mcp_gateway	security::transparency_log::sigstart_tests::r26_a_rotated_v4_log_with_files_deleted_is_tamper	src/security/transparency_log_sigstart_tests.rs:223
+#mutant q26
+mcp_gateway	security::transparency_log::sigstart_tests::r27_a_trimmed_v3_log_is_unanchored_legacy	src/security/transparency_log_sigstart_tests.rs:100
+#mutant q30
+mcp_gateway	security::transparency_log::sigstart_tests::r27_a_trimmed_v3_log_is_unanchored_legacy	src/security/transparency_log_sigstart_tests.rs:101
+#mutant q25
+mcp_gateway	security::transparency_log::sigstart_tests::r25_a_v3_log_migrates_once	src/security/transparency_log_sigstart_tests.rs:77
+#mutant q21
+mcp_gateway	security::transparency_log::sigstart_tests::r30_a_kill_before_the_announce_retries_the_event_once	src/security/transparency_log_sigstart_tests.rs:537
+#mutant q9
+mcp_gateway	security::transparency_log::sigstart_tests::r7_a_deleted_sidecar_rebuilds_closed_with_one_event	src/security/transparency_log_sigstart_tests.rs:122
+#mutant q17 multi=2
+mcp_gateway	security::transparency_log::sigstart_tests::r15b_the_predicted_seq_is_the_new_active_files	src/security/transparency_log_sigstart_tests.rs:562
+#mutant q3
+mcp_gateway	gateway::ui::activity::sigstate_tests::r2_records_before_signing_began_stay_unsigned	src/gateway/ui/activity/sigstate_tests.rs:228
+#mutant q18
+mcp_gateway	gateway::ui::activity::sigstate_tests::r16_the_governance_log_is_anchored_too	src/gateway/ui/activity/sigstate_tests.rs:591
+#mutant q15
+mcp_gateway	gateway::ui::activity::sigstate_tests::r1_stripped_after_signing_began_reads_invalid_everywhere	src/gateway/ui/activity/sigstate_tests.rs:148
+mcp_gateway	gateway::ui::activity::sigstate_tests::r3_an_edited_outcome_is_an_integrity_failure_not_an_effect	src/gateway/ui/activity/sigstate_tests.rs:148
+#mutant q29
+mcp_gateway	gateway::ui::activity::sigstate_tests::r27_unanchored_legacy_flags_only_the_earliest_records	src/gateway/ui/activity/sigstate_tests.rs:438
+#mutant q13
+mcp_gateway	gateway::ui::activity::sigstate_tests::r12_the_live_frame_is_placed_after_every_anchor	src/gateway/ui/activity/sigstate_tests.rs:530
+#mutant q14
+mcp_gateway	gateway::ui::activity::sigstate_tests::r2_records_before_signing_began_stay_unsigned	src/gateway/ui/activity/sigstate_tests.rs:229
+#mutant q22
+mcp_gateway	gateway::ui::activity::sigstate_tests::r21_an_anchor_fault_is_reported_with_no_failing_row	src/gateway/ui/activity/sigstate_tests.rs:363
+#mutant q23
+mcp_gateway	gateway::ui::activity::sigstate_tests::review::r32c_own_file_coverage_short_of_p_is_tampering	src/gateway/ui/activity/sigstate_review_tests.rs:32
+#mutant q36
+mcp_gateway	gateway::ui::activity::sigstate_tests::review::r40_live_catch_up_judges_each_record_at_its_place	src/gateway/ui/activity/sigstate_review_tests.rs:148
+#mutant q38
+mcp_gateway	gateway::ui::activity::sigstate_tests::review::r39_after_a_closed_rebuild_every_unsigned_record_is_invalid	src/gateway/ui/activity/sigstate_tests.rs:138
+#mutant q40
+mcp_gateway	security::transparency_log::sigstart_tests::r38_the_served_record_must_be_the_verified_one	src/security/transparency_log_sigstart_tests.rs:390
+#mutant q41 multi=2
+mcp_gateway	gateway::ui::activity::sigstate_tests::review::r8_a_copied_sidecar_with_legacy_digests_exempts_nothing	src/gateway/ui/activity/sigstate_tests.rs:138
+#mutant q42
+mcp_gateway	gateway::ui::activity::sigstate_tests::review::r7b_a_sidecar_deleted_under_a_live_writer	src/gateway/ui/activity/sigstate_review_tests.rs:168
+#mutant q43
+mcp_gateway	gateway::ui::activity::sigstate_tests::review::r28_readers_keep_the_running_secret_across_a_reload	src/gateway/ui/activity/sigstate_review_tests.rs:193
+#mutant q45
+mcp_gateway	security::transparency_log::sigstart_tests::r42_an_edited_chunk_is_hashed_once	src/security/transparency_log_sigstart_tests.rs:436
+#mutant q46
+mcp_gateway	gateway::ui::activity::sigstate_tests::review::r43_a_valid_live_frame_does_not_load_the_anchor	src/gateway/ui/activity/sigstate_review_tests.rs:283
