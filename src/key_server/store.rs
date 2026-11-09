@@ -479,9 +479,11 @@ impl TokenStore for InMemoryTokenStore {
         if !crate::clock::unix_secs().is_ok_and(|now| !token.is_expired(now)) {
             // Lazy eviction: remove on access, once really past its expiry.
             if token.aged_out() {
-                let _pending = self.pending();
-                self.by_bearer.remove(bearer);
-                self.by_jti.remove(&token.jti);
+                {
+                    let _pending = self.pending();
+                    self.by_bearer.remove(bearer);
+                    self.by_jti.remove(&token.jti);
+                }
                 debug!(jti = %token.jti, "Lazy-evicted expired token");
             }
             return None;
@@ -538,20 +540,25 @@ impl TokenStore for InMemoryTokenStore {
     }
 
     async fn reap_expired(&self) -> usize {
-        let _pending = self.pending();
+        let pending = self.pending();
         let expired_bearers: Vec<String> = self
             .by_bearer
             .iter()
             .filter(|e| e.value().aged_out())
             .map(|e| e.key().clone())
             .collect();
-
         let count = expired_bearers.len();
-        for bearer in expired_bearers {
-            if let Some((_, token)) = self.by_bearer.remove(&bearer) {
+        let reaped: Vec<String> = expired_bearers
+            .iter()
+            .filter_map(|bearer| self.by_bearer.remove(bearer))
+            .map(|(_, token)| {
                 self.by_jti.remove(&token.jti);
-                debug!(jti = %token.jti, "Reaped expired token");
-            }
+                token.jti
+            })
+            .collect();
+        drop(pending);
+        for jti in reaped {
+            debug!(jti = %jti, "Reaped expired token");
         }
         count
     }
