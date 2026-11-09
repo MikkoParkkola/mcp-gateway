@@ -412,6 +412,30 @@ fn r31_a_large_legacy_file_hashes_only_the_touched_chunks() {
     assert_eq!(c.hashed(), 1, "one chunk hashed, not five");
 }
 
+/// R42 (code review): an edited chunk is hashed once per request; every
+/// other row in it fails closed from memory, not by re-reading the chunk.
+#[cfg(feature = "webui")]
+#[test]
+fn r42_an_edited_chunk_is_hashed_once() {
+    use super::sigstart::{Checked, Placed};
+    let fx = Fixture::new();
+    let a = frozen(&fx, 8, 16, 128);
+    // Edit a byte inside the frozen range: the chunk's digest now differs.
+    let mut bytes = std::fs::read(&fx.path).unwrap();
+    bytes[5] = b'9';
+    std::fs::write(&fx.path, &bytes).unwrap();
+    let mut c = Checked::default();
+    for i in 1..8 {
+        let (pos, e) = nth(i, 16);
+        assert_eq!(
+            a.place(&fx.path, pos, &e, &mut c),
+            Placed::Invalid("legacy_edited"),
+            "row {i}"
+        );
+    }
+    assert_eq!(c.hashed(), 1, "the failed chunk is remembered");
+}
+
 // ── Crash rows: a child opens the signed log and aborts at a boundary ──────
 
 const SIG_KILL_AT: &str = "MCP_GW_TEST_SIGSTART_KILL_AT";
