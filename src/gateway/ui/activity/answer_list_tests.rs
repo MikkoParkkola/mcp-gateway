@@ -8,7 +8,7 @@ use serde_json::{Value, json};
 
 use super::answer_fixture::{Dl, Fixture};
 use super::{ListQuery, list_page};
-use crate::security::decision_record_read::NOT_RECORDED_BY_VERSION;
+use crate::security::decision_record::read::NOT_RECORDED_BY_VERSION;
 
 pub(super) fn q(pairs: &[(&str, &str)]) -> ListQuery {
     let mut q = ListQuery::default();
