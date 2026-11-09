@@ -113,6 +113,14 @@ const SERVED_BY: &[(&str, Method, &[Citation])] = &[
         )],
     ),
     (
+        "/ui/api/keys/{name}",
+        Method::DELETE,
+        &[(
+            "src/gateway/ui/keys_revoke_outcome_tests.rs",
+            "success_is_a_no_store_200_with_exactly_name_revoked_revision",
+        )],
+    ),
+    (
         "/ui/api/reload",
         Method::POST,
         &[(

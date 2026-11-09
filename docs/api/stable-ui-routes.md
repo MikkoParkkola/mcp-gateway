@@ -8,6 +8,7 @@
 GET /ui/api/status — Gateway health and the caller's access.
 GET /ui/api/overview — Overview of gateway activity and backend health.
 GET /ui/api/keys — Configured API keys and their last use, without secrets.
+DELETE /ui/api/keys/{name} — Revoke one API key using a revision and optional expected_key_tag.
 GET /ui/api/activity — Recent activity from the transparency logs.
 GET /ui/api/decisions — Decisions awaiting an administrator.
 GET /ui/api/refusals — Recent refused administration changes.

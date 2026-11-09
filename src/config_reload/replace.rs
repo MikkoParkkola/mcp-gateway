@@ -544,7 +544,7 @@ impl ReloadContext {
         // config does not: recorded as an outside change, since no loaded
         // revision is kept to tell (over-reports, never under-reports).
         let unchanged = step.is_none() && template.bytes() == current.as_slice();
-        Self::record_write_intent(&mut audit, &current, unchanged, recovery_intent_id, &target)?;
+        receipt::record_write_intent(&mut audit, &current, unchanged, recovery_intent_id, &target)?;
         let result = match step {
             None => Ok(template.bytes().to_vec()),
             Some(step) => fill_secrets(template, step, deadline, &mut entries).await,
@@ -566,7 +566,7 @@ impl ReloadContext {
         let how = settle_for(&result);
         #[cfg(test)]
         let recording_receipt = receipt.is_some();
-        let result = Self::check_revoke_receipt(result, receipt, &current, &target);
+        let result = receipt::check_revoke_receipt(result, receipt, &current, &target);
         // The config locks go before any store call: a discard's keychain
         // deletes must not hold up the next writer. A death in between is
         // the `Entries` guard's.
@@ -582,68 +582,6 @@ impl ReloadContext {
         }
         entries.settle(how).await;
         result
-    }
-
-    /// Append the write intent before creating secrets or changing config bytes.
-    fn record_write_intent(
-        audit: &mut Audit,
-        current: &[u8],
-        unchanged: bool,
-        recovery_intent_id: Option<audit::IntentId>,
-        target: &std::path::Path,
-    ) -> Result<(), ReplaceError> {
-        #[cfg(not(test))]
-        let _ = target;
-        if let Audit::Required { sink, kind, writer } = audit {
-            let intent = Intent {
-                kind: kind.clone(),
-                base: FileRevision::of(current),
-                outside_change: unchanged,
-                recovery_intent_id,
-                writer: writer.clone(),
-            };
-            sink.append(&intent).map_err(|e| {
-                ReplaceError::AuditRefused(format!(
-                    "the audit log refused this change's record; nothing was written: {e}"
-                ))
-            })?;
-            #[cfg(test)]
-            order::record(target, "intent");
-        }
-        Ok(())
-    }
-
-    /// Check the optional revoke receipt while the caller still holds both locks.
-    fn check_revoke_receipt(
-        result: Result<ReplaceOutcome, ReplaceError>,
-        receipt: Option<receipt::RevokeCheck>,
-        current: &[u8],
-        target: &std::path::Path,
-    ) -> Result<(ReplaceOutcome, Option<receipt::RevokeReceipt>), ReplaceError> {
-        #[cfg(not(test))]
-        let _ = target;
-        result.and_then(|outcome| {
-            #[cfg(test)]
-            if receipt.is_some() {
-                order::record(target, "reload");
-            }
-            let checked = receipt
-                .map(|check| {
-                    check.confirm(
-                        outcome
-                            .revision
-                            .clone()
-                            .unwrap_or_else(|| FileRevision::of(current)),
-                    )
-                })
-                .transpose()
-                .map_err(ReplaceError::Failed)?;
-            #[cfg(test)]
-            if checked.is_some() {
-                order::record(target, "receipt");
-            }
-            Ok((outcome, checked))
-        })
     }
 
     /// Compute, check and commit the new bytes; `entries` learns when the

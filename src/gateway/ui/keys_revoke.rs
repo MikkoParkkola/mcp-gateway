@@ -124,20 +124,7 @@ pub(super) async fn revoke_key(
             config.auth.api_keys.retain(|key| key.name != name);
             refuse_multi_user_flip(live.running(), &config.auth)
                 .map_err(|_| "restart_required".to_owned())?;
-            let changes: Vec<_> = at
-                .into_iter()
-                .map(|at| {
-                    (
-                        FieldPath(vec![
-                            Segment::Key("auth".into()),
-                            Segment::Key("api_keys".into()),
-                            Segment::Index(at),
-                        ]),
-                        Change::Remove,
-                    )
-                })
-                .collect();
-            let template = edit_in_place(text, &changes).map_err(|_| "not_written".to_owned())?;
+            let template = remove_key(text, at)?;
             tags.set(selected)
                 .map_err(|_| "target_changed".to_owned())?;
             Ok(template)
@@ -147,6 +134,27 @@ pub(super) async fn revoke_key(
         .await
         .map(|receipt| serde_json::json!({"name": receipt.name, "revoked": true, "revision": receipt.revision.as_str()}));
     revoke_response(result)
+}
+
+/// Remove the selected file entry while preserving the surrounding YAML.
+fn remove_key(
+    text: &str,
+    at: Option<usize>,
+) -> Result<crate::config_persistence::keyedit::Template, String> {
+    let changes: Vec<_> = at
+        .into_iter()
+        .map(|at| {
+            (
+                FieldPath(vec![
+                    Segment::Key("auth".into()),
+                    Segment::Key("api_keys".into()),
+                    Segment::Index(at),
+                ]),
+                Change::Remove,
+            )
+        })
+        .collect();
+    edit_in_place(text, &changes).map_err(|_| "not_written".to_owned())
 }
 
 fn revoke_response(result: Result<serde_json::Value, ReplaceError>) -> Response {
