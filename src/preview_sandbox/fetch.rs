@@ -106,7 +106,11 @@ fn npm_spec(spec: &str) -> Result<(), Refusal> {
         })
         && !archive(name)
         && version.is_none_or(|v| !archive(v));
-    if mutant!("q8", true, ok) { Ok(()) } else { Err(not_registry(spec)) }
+    if mutant!("q8", true, ok) {
+        Ok(())
+    } else {
+        Err(not_registry(spec))
+    }
 }
 
 fn npm_name_part(part: &str) -> bool {
@@ -151,7 +155,11 @@ fn pypi_spec(spec: &str) -> Result<(), Refusal> {
                 && v.chars()
                     .all(|c| c.is_ascii_alphanumeric() || ".!+-_*".contains(c))
         });
-    if mutant!("q30", true, ok) { Ok(()) } else { Err(not_registry(spec)) }
+    if mutant!("q30", true, ok) {
+        Ok(())
+    } else {
+        Err(not_registry(spec))
+    }
 }
 
 #[cfg(test)]
