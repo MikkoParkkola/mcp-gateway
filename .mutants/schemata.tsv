@@ -1,0 +1,49 @@
+head_sha	0306c8a80f28c1a9cc6896391ed27f947ee2623d
+#mutant m1
+mcp_gateway	key_server::handler::store_reservation_tests::pending_slots_count_against_the_cap_and_stay_invisible	src/key_server/store_reservation_tests.rs:86
+#mutant m2
+mcp_gateway	key_server::handler::store_reservation_tests::an_expired_pending_slot_is_reclaimed_by_the_cap_check	src/key_server/store_reservation_tests.rs:122
+#mutant m3
+mcp_gateway	key_server::handler::store_reservation_tests::an_expired_pending_slot_is_reclaimed_by_the_cap_check	src/key_server/store_reservation_tests.rs:116
+#mutant m4
+mcp_gateway	key_server::handler::store_reservation_tests::reserve_and_activate_hold_the_store_contract	src/key_server/store_reservation_tests.rs:139
+#mutant m5
+mcp_gateway	key_server::handler::store_reservation_tests::reserve_and_activate_hold_the_store_contract	src/key_server/store_reservation_tests.rs:139
+#mutant m6
+mcp_gateway	key_server::handler::store_reservation_tests::reserve_and_activate_hold_the_store_contract	src/key_server/store_reservation_tests.rs:162
+#mutant m7
+mcp_gateway	key_server::handler::store_reservation_tests::reserve_and_activate_hold_the_store_contract	src/key_server/store_reservation_tests.rs:162
+#mutant m8
+mcp_gateway	key_server::handler::store_reservation_tests::revocation_reaches_pending_reservations	src/key_server/store_reservation_tests.rs:327
+mcp_gateway	key_server::handler::store_reservation_tests::revoking_pending_mints_over_the_routes_signals_once	src/key_server/store_reservation_tests.rs:536
+#mutant m9
+mcp_gateway	key_server::handler::store_reservation_tests::revocation_reaches_pending_reservations	src/key_server/store_reservation_tests.rs:337
+mcp_gateway	key_server::handler::store_reservation_tests::revoking_pending_mints_over_the_routes_signals_once	src/key_server/store_reservation_tests.rs:549
+#mutant m10 multi=2
+mcp_gateway	key_server::handler::store_reservation_tests::a_mint_whose_reservation_is_lost_answers_why	src/key_server/store_reservation_tests.rs:448
+mcp_gateway	key_server::handler::store_reservation_tests::revocation_reaches_pending_reservations	src/key_server/store_reservation_tests.rs:344
+#mutant m11
+mcp_gateway	key_server::handler::store_reservation_tests::the_mint_guard_releases_only_an_unactivated_slot	src/key_server/store_reservation_tests.rs:189
+#mutant m12
+mcp_gateway	key_server::handler::store_reservation_tests::a_mint_cancelled_right_after_reserve_leaks_no_slot	src/key_server/store_reservation_tests.rs:312
+#mutant m13
+mcp_gateway	key_server::handler::store_reservation_tests::a_mint_whose_reservation_is_lost_answers_why	src/key_server/store_reservation_tests.rs:448
+#mutant m14
+mcp_gateway	key_server::handler::store_reservation_tests::a_mint_whose_reservation_is_lost_answers_why	src/key_server/store_reservation_tests.rs:448
+#mutant m15
+mcp_gateway	key_server::handler::store_reservation_tests::a_mint_whose_reservation_is_lost_answers_why	src/key_server/store_reservation_tests.rs:453
+#mutant m16
+mcp_gateway	key_server::handler::store_reservation_tests::activation_uses_the_handlers_own_clock_read	src/key_server/store_reservation_tests.rs:481
+#mutant m17
+mcp_gateway	key_server::handler::store_reservation_tests::a_delayed_activation_dates_the_token_fresh	src/key_server/store_reservation_tests.rs:513
+#mutant m18
+mcp_gateway	key_server::handler::store_reservation_tests::activation_uses_the_handlers_own_clock_read	src/key_server/store_reservation_tests.rs:497
+mcp_gateway	key_server::handler::store_reservation_tests::a_delayed_activation_dates_the_token_fresh	src/key_server/store_reservation_tests.rs:516
+#mutant m19
+mcp_gateway	key_server::handler::store_reservation_tests::revoking_pending_mints_over_the_routes_signals_once	src/key_server/store_reservation_tests.rs:537
+#mutant m20
+mcp_gateway	key_server::handler::store_reservation_tests::revoking_pending_mints_over_the_routes_signals_once	src/key_server/store_reservation_tests.rs:554
+#mutant m21
+mcp_gateway	key_server::handler::store_reservation_tests::revoking_pending_mints_over_the_routes_signals_once	src/key_server/store_reservation_tests.rs:561
+#mutant m24
+mcp_gateway	key_server::handler::store_reservation_tests::pending_slots_count_against_the_cap_and_stay_invisible	src/key_server/store_reservation_tests.rs:103
