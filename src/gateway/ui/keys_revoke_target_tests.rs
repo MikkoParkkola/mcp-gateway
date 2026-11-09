@@ -1,0 +1,173 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+//! R3 exact-target rows; DELETE is intentionally red until A52 lands.
+use super::super::keys_create_fixture_tests::{ROOT, item, root_item, spec, yaml_of};
+use super::*;
+use crate::config::ApiKeyConfig;
+
+fn target_setup() -> Setup {
+    let mut setup = Setup::default();
+    setup.text = yaml_of(&[root_item(), item("target", "target-secret", "")]);
+    setup.running.api_keys.push(ApiKeyConfig {
+        name: "target".into(),
+        key_sha256: Some(spec("target-secret")),
+        backends: vec!["*".into()],
+        ..Default::default()
+    });
+    setup
+}
+
+fn tag(secret: &str) -> String {
+    crate::gateway::auth::digest_tag_of(
+        &crate::config::parse_api_key_digest(&spec(secret)).unwrap(),
+    )
+}
+
+fn refuse(setup: Setup, name: &str, binding: Option<String>) -> Sent {
+    let fx = Fixture::new(setup);
+    let mut body = json!({"revision": revision(&fx)});
+    if let Some(tag) = binding {
+        body["expected_key_tag"] = json!(tag);
+    }
+    delete(&fx, name, Call::new(&body), None) // also asserts exact unchanged bytes
+}
+
+#[test]
+fn a_duplicate_name_is_refused_without_removal() {
+    for in_file in [true, false] {
+        let mut setup = target_setup();
+        if in_file {
+            setup.text.push_str(&item("target", "duplicate-secret", ""));
+        } else {
+            let mut duplicate = setup.running.api_keys[1].clone();
+            duplicate.key_sha256 = Some(spec("duplicate-secret"));
+            setup.running.api_keys.push(duplicate);
+        }
+        let sent = refuse(setup, "target", None);
+        assert_eq!(sent.status, StatusCode::CONFLICT, "{}", sent.body);
+    }
+}
+
+#[test]
+fn a_replaced_identity_is_refused() {
+    let mut setup = target_setup();
+    setup.running.api_keys[1].key_sha256 = Some(spec("replacement"));
+    let sent = refuse(setup, "target", None);
+    assert_eq!(sent.status, StatusCode::CONFLICT, "{}", sent.body);
+}
+
+#[test]
+fn an_old_profile_tag_against_a_same_name_replacement_is_target_changed() {
+    let sent = refuse(target_setup(), "target", Some(tag("absent-old-secret")));
+    assert_eq!(sent.status, StatusCode::CONFLICT, "{}", sent.body);
+    assert_eq!(sent.json(), json!({"error": "target_changed"}));
+}
+
+#[test]
+fn a_bound_tag_under_another_name_is_refused() {
+    for name in ["target", "old-root-name"] {
+        let sent = refuse(target_setup(), name, Some(tag(ROOT)));
+        assert_eq!(sent.status, StatusCode::CONFLICT, "{}", sent.body);
+    }
+}
+
+#[test]
+fn a_tag_colliding_with_another_key_or_the_bearer_is_identity_in_use() {
+    for target_previous in [false, true] {
+        for other_slot in ["current", "previous", "bearer"] {
+            let mut setup = target_setup();
+            let previous = format!(
+                "      previous_key_sha256: \"{}\"\n      previous_expires_at: 2099-01-01T00:00:00Z\n",
+                spec("collision")
+            );
+            let target = if target_previous {
+                item("target", "target-secret", &previous)
+            } else {
+                item("target", "collision", "")
+            };
+            let other = if other_slot == "previous" {
+                item("other", "other-secret", &previous)
+            } else {
+                item("other", "collision", "")
+            };
+            // Keep live target compatible; put the conflicting slot on disk.
+            if target_previous {
+                setup.running.api_keys[1].previous_key_sha256 = Some(spec("collision"));
+                setup.running.api_keys[1].previous_expires_at =
+                    Some("2099-01-01T00:00:00Z".parse().unwrap());
+            } else {
+                setup.running.api_keys[1].key_sha256 = Some(spec("collision"));
+            }
+            setup.text = if other_slot == "bearer" {
+                yaml_of(&[root_item(), target]).replace(
+                    "  enabled: true\n",
+                    "  enabled: true\n  bearer_token: collision\n",
+                )
+            } else {
+                yaml_of(&[root_item(), target, other])
+            };
+            let sent = refuse(setup, "target", None);
+            assert_eq!(sent.status, StatusCode::CONFLICT, "{}", sent.body);
+            assert_eq!(sent.json(), json!({"error": "identity_in_use"}));
+        }
+    }
+}
+
+#[test]
+fn an_absent_unbound_target_needs_a_binding() {
+    let sent = refuse(target_setup(), "absent", None);
+    assert_eq!(sent.status, StatusCode::CONFLICT, "{}", sent.body);
+    assert_eq!(sent.json(), json!({"error": "target_binding_required"}));
+}
+
+#[test]
+fn the_authorizer_survives_and_self_revoke_needs_no_second_login() {
+    let mut setup = target_setup();
+    setup
+        .text
+        .push_str(&item("survivor", "survivor-secret", ""));
+    let mut survivor = setup.running.api_keys[1].clone();
+    survivor.name = "survivor".into();
+    survivor.key_sha256 = Some(spec("survivor-secret"));
+    setup.running.api_keys.push(survivor);
+    let fx = Fixture::new(setup);
+    for (name, secret, removed) in [
+        (
+            "target",
+            "target-secret",
+            item("target", "target-secret", ""),
+        ),
+        ("root", ROOT, root_item()),
+    ] {
+        let before = fx.text();
+        let mut call =
+            Call::new(&json!({"revision": revision(&fx), "expected_key_tag": tag(secret)}));
+        call.client = fx
+            .live
+            .generation()
+            .auth()
+            .validate_token(ROOT)
+            .expect("A authenticates");
+        let sent = send_delete(&fx, name, call, None);
+        assert_eq!(sent.status, StatusCode::OK, "{}", sent.body);
+        assert_eq!(fx.bytes(), before.replacen(&removed, "", 1).as_bytes());
+        assert_eq!(
+            sent.json(),
+            json!({"name": name, "revoked": true, "revision": revision(&fx)})
+        );
+        assert!(fx.live.generation().auth().validate_token(secret).is_none());
+        if name == "target" {
+            // A's next request is authenticated afresh against the published generation.
+            let mut next = Call::new(&json!({"revision": revision(&fx)}));
+            next.client = fx
+                .live
+                .generation()
+                .auth()
+                .validate_token(ROOT)
+                .expect("A survives K");
+            let accepted = delete(&fx, "absent", next, None);
+            assert_eq!(accepted.status, StatusCode::CONFLICT, "{}", accepted.body);
+            assert_eq!(accepted.json(), json!({"error": "target_binding_required"}));
+        }
+    }
+}

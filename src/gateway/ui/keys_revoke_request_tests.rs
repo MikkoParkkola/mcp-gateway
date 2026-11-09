@@ -15,6 +15,12 @@ use crate::security::audit::CredentialKind;
 // transport. Check bytes before status so a red response cannot hide a write.
 fn delete(fx: &Fixture, name: &str, call: Call, if_match: Option<&str>) -> Sent {
     let before = fx.bytes();
+    let sent = send_delete(fx, name, call, if_match);
+    assert_eq!(fx.bytes(), before, "DELETE changed gateway.yaml");
+    sent
+}
+
+fn send_delete(fx: &Fixture, name: &str, call: Call, if_match: Option<&str>) -> Sent {
     let mut request = Request::builder()
         .method("DELETE")
         .uri(format!("/ui/api/keys/{name}"))
@@ -24,7 +30,7 @@ fn delete(fx: &Fixture, name: &str, call: Call, if_match: Option<&str>) -> Sent 
     if let Some(revision) = if_match {
         request = request.header("if-match", revision);
     }
-    let sent = fx.rt.block_on(async {
+    fx.rt.block_on(async {
         let response = super::admin_audit::audited_api_router(&fx.state)
             .with_state(fx.state.clone())
             .oneshot(request.body(Body::from(call.body)).expect("request"))
@@ -39,9 +45,7 @@ fn delete(fx: &Fixture, name: &str, call: Call, if_match: Option<&str>) -> Sent 
             headers: Vec::new(),
             logs: String::new(),
         }
-    });
-    assert_eq!(fx.bytes(), before, "DELETE changed gateway.yaml");
-    sent
+    })
 }
 
 fn revision(fx: &Fixture) -> String {
@@ -155,3 +159,6 @@ fn if_match_does_not_replace_the_body_revision() {
         sent.body
     );
 }
+
+#[path = "keys_revoke_target_tests.rs"]
+mod keys_revoke_target_tests;
