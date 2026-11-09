@@ -649,3 +649,18 @@ async fn reserve_refuses_cap_zero_duplicates_and_an_overflowing_deadline() {
         "the deadline overflows"
     );
 }
+
+/// An id one store handed out claims nothing in another store, even for the
+/// same request: ids are unique across the process.
+/// Mutant: every reservation gets the same id.
+#[tokio::test]
+async fn a_reservation_id_claims_nothing_in_another_store() {
+    let (a, b) = (store(1), store(1));
+    let from_a = a.reserve(request(ISS, "j1"), T0).expect("slot in a");
+    let _from_b = b.reserve(request(ISS, "j1"), T0).expect("slot in b");
+    assert_eq!(
+        b.activate(&from_a, token(ISS, "j1", T0), T0),
+        Err(ActivateError::Missing),
+        "a's id activated b's reservation"
+    );
+}
