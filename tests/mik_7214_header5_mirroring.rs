@@ -329,6 +329,35 @@ fn a_nested_duplicate_header_name_excludes_the_tool() {
     assert!(mirror_headers(&schema, &arguments).is_empty());
 }
 
+/// Bounds mirroring to validated levels. Red if a depth-40 annotation mirrors or the depth-2 control does not.
+#[test]
+fn an_annotation_below_the_depth_bound_is_not_mirrored() {
+    for depth in [40, 2] {
+        let mut schema = json!({"type": "object", "properties": {
+            "tenant": {"type": "string", "x-mcp-header": "Tenant"}
+        }});
+        let mut arguments = json!({"tenant": "acme"});
+        for _ in 0..depth {
+            schema = json!({"type": "object", "properties": {"nested": schema}});
+            arguments = json!({"nested": arguments});
+        }
+
+        let mirrored = mirror_headers(&schema, &arguments);
+        if depth == 40 {
+            assert!(
+                mirrored.is_empty(),
+                "annotations beyond the bound are ignored"
+            );
+        } else {
+            assert_eq!(
+                mirrored,
+                vec![("Mcp-Param-Tenant".to_string(), "acme".to_string())],
+                "annotations within the bound are mirrored"
+            );
+        }
+    }
+}
+
 #[test]
 fn nested_annotated_property_is_mirrored_and_spaced_value_is_encoded() {
     let schema = json!({
