@@ -137,3 +137,7 @@ pub(super) async fn keys(
     };
     Json(answer).into_response()
 }
+
+#[cfg(test)]
+#[path = "keys_binding_tests.rs"]
+mod binding_tests;
