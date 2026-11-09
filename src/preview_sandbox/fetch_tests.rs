@@ -150,7 +150,7 @@ fn npm_version_ranges_are_accepted() {
     assert!(phases("npx", &["a-b.c_d~e"]).fetch.is_some());
 }
 
-/// T1: PyPI forms that are not a registry package refuse, naming the form.
+/// T1: `PyPI` forms that are not a registry package refuse, naming the form.
 #[test]
 fn pypi_non_registry_specs_refuse() {
     for spec in [
@@ -174,7 +174,7 @@ fn pypi_non_registry_specs_refuse() {
     }
 }
 
-/// T1: PyPI names keep case, dots and underscores; `==version` is the one
+/// T1: `PyPI` names keep case, dots and underscores; `==version` is the one
 /// version form.
 #[test]
 fn pypi_names_and_pins_are_accepted() {
@@ -195,7 +195,7 @@ fn pypi_names_and_pins_are_accepted() {
     }
 }
 
-/// T7 (N5): PyPI extras refuse with their own reason.
+/// T7 (N5): `PyPI` extras refuse with their own reason.
 #[test]
 fn pypi_extras_are_not_previewed() {
     for spec in ["pkg[extra]", "pkg[a,b]==1"] {

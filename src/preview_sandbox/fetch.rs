@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! The command plan (ADR-027): whether a typed command fetches a registry
-//! package before it runs. `npx` and `uvx` fetch exactly one npm or PyPI
+//! package before it runs. `npx` and `uvx` fetch exactly one npm or `PyPI`
 //! package named by a plain registry spec; any other program runs as typed.
 #![cfg_attr(
     not(test),
@@ -17,7 +17,7 @@ use super::{Refusal, Target};
 pub(crate) enum Fetch {
     /// An npm spec: `name` or `@scope/name`, optional `@version`.
     Npm(String),
-    /// A PyPI spec: a name, optional `==version`.
+    /// A `PyPI` spec: a name, optional `==version`.
     Uv(String),
 }
 
