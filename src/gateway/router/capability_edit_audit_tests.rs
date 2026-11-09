@@ -330,3 +330,6 @@ async fn caped11_a_refused_delete_record_withholds_the_answer() {
         "the handler ran and the delete committed before its record was refused"
     );
 }
+
+#[path = "capability_header_secret_tests.rs"]
+mod header_secrets;
