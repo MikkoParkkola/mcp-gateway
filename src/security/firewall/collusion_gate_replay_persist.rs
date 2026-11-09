@@ -214,14 +214,22 @@ impl Firewall {
         };
         let mut kept = Vec::with_capacity(snapshots.len());
         for snapshot in snapshots {
-            if !snapshot.delivered_by(&delivered) {
+            if mutant!("N8", false, !snapshot.delivered_by(&delivered)) {
                 return untrackable;
             }
-            kept.push(snapshot.with_join_fingerprints(detector));
+            kept.push(mutant!(
+                "N8b",
+                snapshot.clone(),
+                snapshot.with_join_fingerprints(detector)
+            ));
         }
         // One the replay store would refuse is untrackable from the start, so
         // a read refuses it at its start, never after delivering it untracked.
-        if !self.relay.replay.fits(&kept, calls, answer_digest) {
+        if mutant!(
+            "SZ",
+            false,
+            !self.relay.replay.fits(&kept, calls, answer_digest)
+        ) {
             return untrackable;
         }
         let mut persisted = Vec::with_capacity(kept.len());
@@ -261,7 +269,7 @@ impl Firewall {
             return Adopted::NoSnapshot;
         };
         let Some(parts) = self.trackable_parts(snapshot) else {
-            return Adopted::Untrackable;
+            return mutant!("N11", Adopted::NoSnapshot, Adopted::Untrackable);
         };
         let Some(acquired) = self
             .relay
@@ -285,7 +293,7 @@ impl Firewall {
         snapshot: &Value,
     ) -> Option<(Vec<ReplayReceipt>, ReplayCalls, String)> {
         let persisted = serde_json::from_value::<Persisted>(snapshot.clone()).ok()?;
-        if persisted.epoch != replay_epoch() {
+        if mutant!("N6", false, persisted.epoch != replay_epoch()) {
             return None;
         }
         let receipts: Vec<ReplayReceipt> = persisted
@@ -293,10 +301,14 @@ impl Firewall {
             .into_iter()
             .map(PersistedReceipt::into_receipt)
             .collect();
-        self.relay
-            .replay
-            .fits(&receipts, &persisted.calls, &persisted.answer_digest)
-            .then_some((receipts, persisted.calls, persisted.answer_digest))
+        mutant!(
+            "SZ",
+            true,
+            self.relay
+                .replay
+                .fits(&receipts, &persisted.calls, &persisted.answer_digest)
+        )
+        .then_some((receipts, persisted.calls, persisted.answer_digest))
     }
 
     /// The verdict on a stored task read whose persisted snapshot this
@@ -317,10 +329,14 @@ impl Firewall {
     ) -> Option<super::super::FirewallVerdict> {
         self.relay_detector()?;
         let trackable = self.trackable_parts(snapshot?).is_some();
-        if trackable || view.action() == super::CollusionAction::Off {
+        if trackable || mutant!("K21m", false, view.action() == super::CollusionAction::Off) {
             return None;
         }
-        let block = view.action() == super::CollusionAction::Block;
+        let block = mutant!(
+            "N7",
+            view.action() != super::CollusionAction::Off,
+            view.action() == super::CollusionAction::Block
+        );
         let label = if block { "block" } else { "observe" };
         telemetry_metrics::counter!(super::RELAY_METRIC, "action" => label, "reason" => "untrackable")
             .increment(1);
