@@ -79,7 +79,8 @@ async fn pending_slots_count_against_the_cap_and_stay_invisible() {
     const CAP: usize = 2;
     let s = store(CAP);
     let first = s.reserve(request(ISS, "j1"), T0).expect("first slot");
-    s.activate(&first, token(ISS, "j1", T0), T0).expect("activates");
+    s.activate(&first, token(ISS, "j1", T0), T0)
+        .expect("activates");
     let pending = s.reserve(request(ISS, "j2"), T0).expect("second slot");
     for extra in ["j3", "j4", "j5"] {
         assert_eq!(
@@ -88,10 +89,18 @@ async fn pending_slots_count_against_the_cap_and_stay_invisible() {
             "{extra}: active + pending fill the cap"
         );
     }
-    assert!(s.get("mcpgw_j1").await.is_some(), "the active token was not evicted");
-    assert!(s.get("mcpgw_j2").await.is_none(), "a pending bearer is not valid");
+    assert!(
+        s.get("mcpgw_j1").await.is_some(),
+        "the active token was not evicted"
+    );
+    assert!(
+        s.get("mcpgw_j2").await.is_none(),
+        "a pending bearer is not valid"
+    );
     assert!(!s.live_jti("j2", T0).await, "a pending JTI is not live");
-    let other = s.reserve(request(OTHER_ISS, "k1"), T0).expect("another issuer's own cap");
+    let other = s
+        .reserve(request(OTHER_ISS, "k1"), T0)
+        .expect("another issuer's own cap");
     s.abort(&other);
     s.abort(&pending);
     assert!(has_room(&s, ISS, T0), "the aborted slot came back");
@@ -104,13 +113,19 @@ async fn pending_slots_count_against_the_cap_and_stay_invisible() {
 async fn an_expired_pending_slot_is_reclaimed_by_the_cap_check() {
     let s = store(1);
     let stale = s.reserve(request(ISS, "j1"), T0).expect("slot");
-    assert!(!has_room(&s, ISS, T0 + WINDOW - 1), "still pending inside the window");
-    let fresh = s.reserve(request(ISS, "j2"), T0 + WINDOW).expect("the expired slot was reclaimed");
+    assert!(
+        !has_room(&s, ISS, T0 + WINDOW - 1),
+        "still pending inside the window"
+    );
+    let fresh = s
+        .reserve(request(ISS, "j2"), T0 + WINDOW)
+        .expect("the expired slot was reclaimed");
     assert_eq!(
         s.activate(&stale, token(ISS, "j1", T0 + WINDOW), T0 + WINDOW),
         Err(ActivateError::Expired)
     );
-    s.activate(&fresh, token(ISS, "j2", T0 + WINDOW), T0 + WINDOW).expect("the new owner activates");
+    s.activate(&fresh, token(ISS, "j2", T0 + WINDOW), T0 + WINDOW)
+        .expect("the new owner activates");
 }
 
 /// The deadline is `now` + the pending window (not the token lifetime); a
@@ -149,7 +164,10 @@ async fn reserve_and_activate_hold_the_store_contract() {
             matches!(refusal, ActivateError::Timestamps | ActivateError::Mismatch),
             "{label}: {refusal:?}"
         );
-        assert!(has_room(&s, ISS, T0), "{label}: the refused slot was released");
+        assert!(
+            has_room(&s, ISS, T0),
+            "{label}: the refused slot was released"
+        );
     }
     assert_eq!(
         s.activate(&ReservationId::from_raw(u64::MAX), token(ISS, "j4", T0), T0),
@@ -174,8 +192,14 @@ async fn the_mint_guard_releases_only_an_unactivated_slot() {
     let raw = ReservationId::from_raw(guard.id.raw());
     guard.activate(token(ISS, "j2", T0), T0).expect("activates");
     s.abort(&raw);
-    assert!(s.get("mcpgw_j2").await.is_some(), "a later abort left the active token");
-    assert!(!has_room(&s, ISS, T0), "the active token still holds the slot");
+    assert!(
+        s.get("mcpgw_j2").await.is_some(),
+        "a later abort left the active token"
+    );
+    assert!(
+        !has_room(&s, ISS, T0),
+        "the active token still holds the slot"
+    );
 }
 
 /// The store, recording when `reserve` has returned.
@@ -186,12 +210,22 @@ struct Watched {
 
 #[async_trait::async_trait]
 impl TokenStore for Watched {
-    fn reserve(&self, request: ReservationRequest, now: u64) -> Result<ReservationId, ReserveError> {
+    fn reserve(
+        &self,
+        request: ReservationRequest,
+        now: u64,
+    ) -> Result<ReservationId, ReserveError> {
         let id = self.inner.reserve(request, now);
-        self.reserved.store(true, std::sync::atomic::Ordering::SeqCst);
+        self.reserved
+            .store(true, std::sync::atomic::Ordering::SeqCst);
         id
     }
-    fn activate(&self, id: &ReservationId, token: TemporaryToken, now: u64) -> Result<(), ActivateError> {
+    fn activate(
+        &self,
+        id: &ReservationId,
+        token: TemporaryToken,
+        now: u64,
+    ) -> Result<(), ActivateError> {
         self.inner.activate(id, token, now)
     }
     fn abort(&self, id: &ReservationId) {
@@ -222,7 +256,10 @@ fn key_server(store: Arc<dyn TokenStore>) -> crate::key_server::KeyServer {
         crate::config::KeyServerConfig::default(),
         crate::key_server::email_hash::EmailHashKey::for_test(),
     );
-    assert_eq!(ks.config.token_ttl_secs, TTL, "the store's lifetime is the config's");
+    assert_eq!(
+        ks.config.token_ttl_secs, TTL,
+        "the store's lifetime is the config's"
+    );
     ks.store = store;
     ks
 }
@@ -246,22 +283,36 @@ fn a_mint_cancelled_right_after_reserve_leaks_no_slot() {
     let finished = loop {
         match mint.as_mut().poll(&mut cx) {
             std::task::Poll::Ready(response) => break Some(response),
-            std::task::Poll::Pending if watched.reserved.load(std::sync::atomic::Ordering::SeqCst) => {
+            std::task::Poll::Pending
+                if watched.reserved.load(std::sync::atomic::Ordering::SeqCst) =>
+            {
                 break None;
             }
             std::task::Poll::Pending => {}
         }
     };
     drop(mint);
-    assert!(watched.reserved.load(std::sync::atomic::Ordering::SeqCst), "the mint reserved");
-    #[allow(clippy::disallowed_methods, reason = "the store's reads use the host clock")]
+    assert!(
+        watched.reserved.load(std::sync::atomic::Ordering::SeqCst),
+        "the mint reserved"
+    );
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "the store's reads use the host clock"
+    )]
     let now = crate::clock::unix_secs().expect("a readable clock");
     match finished {
         Some(response) => {
             assert_eq!(response.status(), axum::http::StatusCode::OK);
-            assert!(!has_room(&inner, ISS, now), "the finished mint's token holds the slot");
+            assert!(
+                !has_room(&inner, ISS, now),
+                "the finished mint's token holds the slot"
+            );
         }
-        None => assert!(has_room(&inner, ISS, now), "the cancelled mint's slot came back"),
+        None => assert!(
+            has_room(&inner, ISS, now),
+            "the cancelled mint's slot came back"
+        ),
     }
 }
 
@@ -274,12 +325,20 @@ async fn revocation_reaches_pending_reservations() {
     let s = store(3);
     let _pending = s.reserve(request(ISS, "j1"), T0).expect("slot");
     assert!(s.revoke_by_jti("j1").await, "a pending JTI is revoked");
-    assert!(!s.revoke_by_jti("j1").await, "a second revoke finds nothing");
+    assert!(
+        !s.revoke_by_jti("j1").await,
+        "a second revoke finds nothing"
+    );
 
     let active = s.reserve(request(ISS, "j2"), T0).expect("slot");
-    s.activate(&active, token(ISS, "j2", T0), T0).expect("activates");
+    s.activate(&active, token(ISS, "j2", T0), T0)
+        .expect("activates");
     let pending = s.reserve(request(ISS, "j3"), T0).expect("slot");
-    assert_eq!(s.revoke_by_subject(ISS, SUB).await, 2, "one active + one pending");
+    assert_eq!(
+        s.revoke_by_subject(ISS, SUB).await,
+        2,
+        "one active + one pending"
+    );
     assert_eq!(s.revoke_by_subject(ISS, SUB).await, 0, "nothing left");
     assert!(s.get("mcpgw_j2").await.is_none());
     assert_eq!(
@@ -308,17 +367,27 @@ struct Meddling {
 
 #[async_trait::async_trait]
 impl TokenStore for Meddling {
-    fn reserve(&self, request: ReservationRequest, now: u64) -> Result<ReservationId, ReserveError> {
+    fn reserve(
+        &self,
+        request: ReservationRequest,
+        now: u64,
+    ) -> Result<ReservationId, ReserveError> {
         let now = match self.meddle {
             Meddle::Stale => now - WINDOW,
             _ => now,
         };
         self.inner.reserve(request, now)
     }
-    fn activate(&self, id: &ReservationId, token: TemporaryToken, now: u64) -> Result<(), ActivateError> {
+    fn activate(
+        &self,
+        id: &ReservationId,
+        token: TemporaryToken,
+        now: u64,
+    ) -> Result<(), ActivateError> {
         if let Meddle::Revoke = self.meddle {
             let revoked = futures::executor::block_on(
-                self.inner.revoke_by_subject(token.identity.issuer(), token.identity.subject()),
+                self.inner
+                    .revoke_by_subject(token.identity.issuer(), token.identity.subject()),
             );
             assert_eq!(revoked, 1, "the pending mint was revoked");
         }
@@ -362,7 +431,9 @@ fn meddling(meddle: Meddle) -> (Arc<Meddling>, crate::key_server::KeyServer) {
 }
 
 async fn body(response: axum::response::Response) -> serde_json::Value {
-    let bytes = axum::body::to_bytes(response.into_body(), 1 << 16).await.expect("body");
+    let bytes = axum::body::to_bytes(response.into_body(), 1 << 16)
+        .await
+        .expect("body");
     serde_json::from_slice(&bytes).expect("a JSON body")
 }
 
@@ -375,11 +446,24 @@ async fn a_mint_whose_reservation_is_lost_answers_why() {
         let (store, ks) = meddling(meddle);
         let response = issue(&ks, identity(ISS, SUB), TokenScopes::default(), None).await;
         assert_eq!(response.status().as_u16(), status);
-        let retry = response.headers().get(axum::http::header::RETRY_AFTER).cloned();
-        assert_eq!(retry.as_ref().map(|v| v.to_str().expect("ascii")), (status == 503).then_some("1"));
+        let retry = response
+            .headers()
+            .get(axum::http::header::RETRY_AFTER)
+            .cloned();
+        assert_eq!(
+            retry.as_ref().map(|v| v.to_str().expect("ascii")),
+            (status == 503).then_some("1")
+        );
         let body = body(response).await;
-        assert!(body.get("access_token").is_none(), "{status}: no bearer: {body}");
-        assert_eq!(store.count_for_subject(ISS, SUB).await, 0, "{status}: no token stored");
+        assert!(
+            body.get("access_token").is_none(),
+            "{status}: no bearer: {body}"
+        );
+        assert_eq!(
+            store.count_for_subject(ISS, SUB).await,
+            0,
+            "{status}: no token stored"
+        );
     }
 }
 
@@ -395,9 +479,20 @@ async fn activation_uses_the_handlers_own_clock_read() {
         issue(&ks, identity(ISS, SUB), TokenScopes::default(), None).await
     };
     assert_eq!(response.status().as_u16(), 200);
-    let (now, iat, exp) = store.activated.lock().expect("unpoisoned").expect("activated");
-    assert!(now > T0, "activation read the clock after the reservation did");
-    assert_eq!((iat, exp), (now, now + TTL), "the token is dated by that read");
+    let (now, iat, exp) = store
+        .activated
+        .lock()
+        .expect("unpoisoned")
+        .expect("activated");
+    assert!(
+        now > T0,
+        "activation read the clock after the reservation did"
+    );
+    assert_eq!(
+        (iat, exp),
+        (now, now + TTL),
+        "the token is dated by that read"
+    );
     let body = body(response).await;
     assert_eq!(body["expires_in"], serde_json::json!(exp - now));
 }
@@ -431,7 +526,10 @@ async fn revoking_pending_mints_over_the_routes_signals_once() {
     use std::sync::atomic::Ordering::SeqCst;
     let h = Harness::start(&config_yaml("[]", "")).await;
     let signals = || h.ks.revocation_signals.load(SeqCst);
-    #[allow(clippy::disallowed_methods, reason = "the store's reads use the host clock")]
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "the store's reads use the host clock"
+    )]
     let now = crate::clock::unix_secs().expect("a readable clock");
 
     let _pending = h.ks.store.reserve(request(ISS_A, "j1"), now).expect("slot");
@@ -441,14 +539,24 @@ async fn revoking_pending_mints_over_the_routes_signals_once() {
     assert_eq!(signals(), 1, "no signal for a JTI already gone");
 
     let active = h.ks.store.reserve(request(ISS_A, "j2"), now).expect("slot");
-    h.ks.store.activate(&active, token(ISS_A, "j2", now), now).expect("activates");
+    h.ks.store
+        .activate(&active, token(ISS_A, "j2", now), now)
+        .expect("activates");
     let _pending = h.ks.store.reserve(request(ISS_A, "j3"), now).expect("slot");
     let issuer: String = url::form_urlencoded::byte_serialize(ISS_A.as_bytes()).collect();
     let query = format!("issuer={issuer}&subject={SUB}");
     let (status, body) = h.revoke(&query).await;
-    assert_eq!((status, body["revoked"].clone()), (200, serde_json::json!(2)), "{body}");
+    assert_eq!(
+        (status, body["revoked"].clone()),
+        (200, serde_json::json!(2)),
+        "{body}"
+    );
     assert_eq!(signals(), 2, "one signal for the bulk revoke");
     let (status, body) = h.revoke(&query).await;
-    assert_eq!((status, body["revoked"].clone()), (200, serde_json::json!(0)), "{body}");
+    assert_eq!(
+        (status, body["revoked"].clone()),
+        (200, serde_json::json!(0)),
+        "{body}"
+    );
     assert_eq!(signals(), 2, "no signal for an empty bulk revoke");
 }

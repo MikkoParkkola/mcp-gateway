@@ -36,10 +36,19 @@ struct HeldAtCount {
 
 #[async_trait::async_trait]
 impl TokenStore for HeldAtCount {
-    fn reserve(&self, request: ReservationRequest, now: u64) -> Result<ReservationId, ReserveError> {
+    fn reserve(
+        &self,
+        request: ReservationRequest,
+        now: u64,
+    ) -> Result<ReservationId, ReserveError> {
         self.inner.reserve(request, now)
     }
-    fn activate(&self, id: &ReservationId, token: TemporaryToken, now: u64) -> Result<(), ActivateError> {
+    fn activate(
+        &self,
+        id: &ReservationId,
+        token: TemporaryToken,
+        now: u64,
+    ) -> Result<(), ActivateError> {
         self.inner.activate(id, token, now)
     }
     fn abort(&self, id: &ReservationId) {
@@ -83,7 +92,9 @@ async fn concurrent_mints_never_pass_the_identity_cap() {
              scopes: {{ backends: [\"*\"], tools: [\"*\"], rate_limit: 0 }}\n"
         ),
     );
-    let h = Arc::new(Harness::start_with_store(&yaml, |_| -> Arc<dyn TokenStore> { store.clone() }).await);
+    let h = Arc::new(
+        Harness::start_with_store(&yaml, |_| -> Arc<dyn TokenStore> { store.clone() }).await,
+    );
     let mut mints = Vec::new();
     for _ in 0..MINTS {
         let h = Arc::clone(&h);

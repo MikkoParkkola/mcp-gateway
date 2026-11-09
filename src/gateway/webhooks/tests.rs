@@ -689,8 +689,16 @@ async fn a_session_whose_token_was_revoked_receives_no_webhook_data() {
     let revoked = temporary_token(&["capabilities"]);
     let (kept_bearer, revoked_bearer) = (kept.token.clone(), revoked.token.clone());
     let revoked_jti = revoked.jti.clone();
-    crate::key_server::store::activate_for_test(key_server.store.as_ref(), key_server.config.token_ttl_secs, kept);
-    crate::key_server::store::activate_for_test(key_server.store.as_ref(), key_server.config.token_ttl_secs, revoked);
+    crate::key_server::store::activate_for_test(
+        key_server.store.as_ref(),
+        key_server.config.token_ttl_secs,
+        kept,
+    );
+    crate::key_server::store::activate_for_test(
+        key_server.store.as_ref(),
+        key_server.config.token_ttl_secs,
+        revoked,
+    );
     let multiplexer = make_multiplexer();
     multiplexer.set_authorizer(authorizer(Some(Arc::clone(&key_server))));
     let mut rx_kept = open_session(&multiplexer, "kept", Some(&kept_bearer));

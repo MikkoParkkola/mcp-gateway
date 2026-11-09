@@ -141,8 +141,16 @@ async fn a_revoked_session_is_not_told_about_tools_list_changes() {
     let revoked = temporary_token(&["alpha"]);
     let (kept_bearer, revoked_bearer) = (kept.token.clone(), revoked.token.clone());
     let revoked_jti = revoked.jti.clone();
-    crate::key_server::store::activate_for_test(key_server.store.as_ref(), key_server.config.token_ttl_secs, kept);
-    crate::key_server::store::activate_for_test(key_server.store.as_ref(), key_server.config.token_ttl_secs, revoked);
+    crate::key_server::store::activate_for_test(
+        key_server.store.as_ref(),
+        key_server.config.token_ttl_secs,
+        kept,
+    );
+    crate::key_server::store::activate_for_test(
+        key_server.store.as_ref(),
+        key_server.config.token_ttl_secs,
+        revoked,
+    );
     let mux = multiplexer(authorizer(AUTH_ON, Some(Arc::clone(&key_server))));
     let mut rx_kept = open_session(&mux, "kept", Some(&kept_bearer));
     let mut rx_revoked = open_session(&mux, "revoked", Some(&revoked_bearer));
