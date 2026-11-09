@@ -324,7 +324,7 @@ impl ReplayReceipts {
         inner.sweep(now);
         // Overwrite or refusal, the previous entry under the key goes first.
         inner.take(&key);
-        if bytes > self.entry_cap || bytes > self.total_cap {
+        if !self.admits(bytes) {
             return (None, evicted);
         }
         while inner.bytes.saturating_add(bytes) > self.total_cap {
@@ -507,7 +507,13 @@ impl ReplayReceipts {
         calls: &ReplayCalls,
         answer_digest: &str,
     ) -> bool {
-        let bytes = entry_bytes(receipts, calls, answer_digest);
+        self.admits(entry_bytes(receipts, calls, answer_digest))
+    }
+
+    /// The one admission rule by size: an entry of `bytes` fits the
+    /// per-entry cap and the total cap. Insertion and [`Self::fits`] (a
+    /// stored task read's judgement) both ask it, so they cannot disagree.
+    fn admits(&self, bytes: usize) -> bool {
         bytes <= self.entry_cap && bytes <= self.total_cap
     }
 
