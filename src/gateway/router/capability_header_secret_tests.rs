@@ -263,3 +263,27 @@ async fn capedit14_a_literal_with_a_stale_base_is_refused_without_a_patch() {
     assert!(body.contains("literal_in_header"), "{body}");
     assert!(!body.contains(LITERAL), "{body}");
 }
+
+/// Second leak (red-run finding): a literal JSON credential header was already
+/// refused, by the undeclared-placeholder check, but that answer echoed the
+/// token in its message and in the returned patch. Whatever refuses it, the
+/// answer names no value: neither the message nor any patch carries it.
+#[tokio::test]
+async fn capedit_a_refused_json_credential_is_echoed_nowhere() {
+    let json = format!(r#"{{"api_key":"{LITERAL}"}}"#);
+    let (status, body, _fx, _) = save(&doc(&[("X-Credentials", &json)], false)).await;
+    assert!(!status.is_success(), "the save went through: {body}");
+    let answer: serde_json::Value = serde_json::from_str(&body).expect("a JSON answer");
+    let message = answer["message"].as_str().unwrap_or_default();
+    let errors = answer["errors"].to_string();
+    let patch = answer["patch"].as_str().unwrap_or_default();
+    assert!(
+        !message.contains(LITERAL),
+        "the message echoed it: {message}"
+    );
+    assert!(
+        !errors.contains(LITERAL),
+        "the field errors echoed it: {errors}"
+    );
+    assert!(!patch.contains(LITERAL), "the patch echoed it");
+}
