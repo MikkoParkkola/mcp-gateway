@@ -74,6 +74,32 @@ where
 mod tests {
     use super::*;
 
+    // ── with_trace_id, dropped before it is polled ───────────────────────
+
+    /// A caller's future dropped before its first poll is dropped under the
+    /// caller's own trace ID, not the one it was given: a destructor that
+    /// reads [`current`] during cancellation sees the context it ran in.
+    #[test]
+    fn an_unpolled_trace_scope_drops_its_future_outside_the_scope() {
+        struct Records(std::sync::Arc<std::sync::Mutex<Option<Option<String>>>>);
+        impl Drop for Records {
+            fn drop(&mut self) {
+                *self.0.lock().expect("lock") = Some(current());
+            }
+        }
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(None));
+        let guard = Records(std::sync::Arc::clone(&seen));
+        let inner = async move {
+            let _keep = &guard;
+        };
+        drop(with_trace_id("gw-inner".to_owned(), inner));
+        assert_eq!(
+            *seen.lock().expect("lock"),
+            Some(None),
+            "the unpolled future was dropped inside the trace scope it was given"
+        );
+    }
+
     // ── generate ──────────────────────────────────────────────────────────
 
     #[test]
