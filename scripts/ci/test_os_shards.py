@@ -11,7 +11,7 @@ Static checks on ci.yml and scripts/ci/shard_tests.py:
   lib, bins, tests, doctests; Windows: `--tests`, which is lib, bins, tests);
 - each shard matrix in ci.yml lists exactly that OS's shards;
 - the aggregates keep the required names, need their shard jobs, run under
-  always() with the shards' own skip guards, and pass the same job ids to
+  !cancelled() with the shards' own skip guards, and pass the same job ids to
   check_needs.py;
 - no shard name equals a required name, every macOS shard name starts with
   `macOS ` (merge tooling treats that prefix as macOS), and none contains
@@ -164,8 +164,8 @@ def workflow_problems(jobs: dict, st) -> list[str]:
         guard = str(shard.get("if", "")).strip()
         if guard.startswith("${{") and guard.endswith("}}"):
             guard = guard[3:-2].strip()
-        if str(agg.get("if", "")).replace(" ", "") != ("${{ always() && " + guard + " }}").replace(" ", ""):
-            out.append(f"{agg_key}: if must be always() plus the shards' own guard, exactly")
+        if str(agg.get("if", "")).replace(" ", "") != ("${{ !cancelled() && " + guard + " }}").replace(" ", ""):
+            out.append(f"{agg_key}: if must be !cancelled() plus the shards' own guard, exactly")
         for extra in EXTRA_NEEDS.get(agg_key, []):
             if str(jobs.get(extra, {}).get("if", "")) != str(shard.get("if", "")):
                 out.append(f"{extra}: if must equal {shard_key}'s guard")
@@ -189,8 +189,10 @@ def self_test(jobs: dict, st) -> None:
         return bool(workflow_problems(j, st))
 
     mutations = {
-        "bare always()": lambda j: j["test"].__setitem__("if", "${{ always() }}"),
-        "no always()": lambda j: j["macos-check"].__setitem__("if", j["macos-shards"]["if"]),
+        "bare !cancelled()": lambda j: j["test"].__setitem__("if", "${{ !cancelled() }}"),
+        "always() runs it on a cancelled run": lambda j: j["test"].__setitem__(
+            "if", str(j["test"]["if"]).replace("!cancelled()", "always()")),
+        "no !cancelled()": lambda j: j["macos-check"].__setitem__("if", j["macos-shards"]["if"]),
         "dropped need": lambda j: j["windows-check"].__setitem__("needs", ["windows-shards"]),
         "renamed aggregate": lambda j: j["test"].__setitem__("name", "Tests (all)"),
         "shard named like the check": lambda j: j["macos-shards"].__setitem__("name", "macOS check"),
@@ -230,12 +232,12 @@ def self_test(jobs: dict, st) -> None:
         shards = labelled_guard if "macos-shards" in clause_on else train_guard
         check = labelled_guard if "macos-check" in clause_on else train_guard
         j["macos-shards"]["if"] = "${{ " + shards + " }}"
-        j["macos-check"]["if"] = "${{ always() && " + check + " }}"
+        j["macos-check"]["if"] = "${{ !cancelled() && " + check + " }}"
 
     def train_only(j):
         j["macos-shards"]["strategy"]["matrix"]["shard"] = sorted(st.SHARDS["macos"])
         j["macos-shards"]["if"] = "${{ " + train_guard + " }}"
-        j["macos-check"]["if"] = "${{ always() && " + train_guard + " }}"
+        j["macos-check"]["if"] = "${{ !cancelled() && " + train_guard + " }}"
 
     for name, form in (("train-only", train_only), ("labelled", labelled_form)):
         j = copy.deepcopy(jobs)
@@ -245,7 +247,7 @@ def self_test(jobs: dict, st) -> None:
         "expression without the label clause": lambda j: labelled_form(j, clause_on=()),
         "label clause on a static matrix": lambda j: (train_only(j), j["macos-shards"].__setitem__(
             "if", "${{ " + labelled_guard + " }}"), j["macos-check"].__setitem__(
-            "if", "${{ always() && " + labelled_guard + " }}")),
+            "if", "${{ !cancelled() && " + labelled_guard + " }}")),
         "label clause on one macOS job": lambda j: labelled_form(j, clause_on=("macos-shards",)),
         "train list missing a shard": lambda j: labelled_form(j, b=["lib"]),
         "labelled list without lib": lambda j: labelled_form(j, a='["int"]'),
