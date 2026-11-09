@@ -6,8 +6,9 @@
 //! - `kind` `default_allow` with `rule_id` absent: `Checks::allowed`
 //!   (`decision_record.rs:231`) is the only writer of an allow attribution and
 //!   its only caller is the not-redecided copy (`:193`), so a fresh allowed call
-//!   records `default_allow` (`:268-272`) whichever check allowed it. Every row
-//!   but A6a is marked `flipped by allow attribution`, which records the allowing check.
+//!   records `default_allow` (`:268-272`) whichever check allowed it. Rows A1
+//!   and A4 are marked `flipped by allow attribution`: they record the allowing
+//!   check. A5 and A6a stay `default_allow`: no entry decided them.
 //! - `grant_id` absent: nothing writes it (`decision_record.rs:304`).
 //! - findings `NotRun`: no production writer of `request_findings` yet.
 //! - effect (`undeclared`, `tool_annotation`): the fixture lists `read` with no
@@ -111,10 +112,19 @@ async fn a1_allow_list_pattern() {
         generation: None,
     })
     .await;
-    // flipped by allow attribution
+    // flipped by allow attribution: the matched entry, not the decoy before it.
+    let entry = crate::security::rule_id::RuleId::of(
+        "tool_policy",
+        &crate::gateway::record_principal::test_record_key().rule_id_key(),
+        &serde_json::to_vec(&("allow", "alpha:read")).expect("serialises"),
+    );
     assert_row(
         &decision,
-        &allowed("a1_allow_list_pattern", "flipped by allow attribution"),
+        &DecisionRow {
+            kind: "tool_policy",
+            rule_id: RuleId::named(entry.as_str()),
+            ..allowed("a1_allow_list_pattern", "")
+        },
     );
     // Only the matching entry removed: the decoy stays, and cannot admit it.
     let without = policy(&ToolPolicyConfig {
@@ -147,12 +157,13 @@ async fn a5_tool_policy_default_rule() {
         generation: None,
     })
     .await;
-    // flipped by allow attribution
+    // Not flipped: a default-action allow names no entry, so it records
+    // `default_allow` like a call no rule restricted.
     assert_row(
         &decision,
         &allowed(
             "a5_tool_policy_default_rule",
-            "flipped by allow attribution",
+            "a default-action allow names no entry",
         ),
     );
     let default_deny = policy(&ToolPolicyConfig {
@@ -201,7 +212,7 @@ async fn a6a_meta_no_rule() {
 #[cfg(feature = "firewall")]
 async fn shell_call_under(
     rules: Vec<crate::security::firewall::FirewallRule>,
-) -> (bool, usize, Value) {
+) -> (bool, usize, Value, crate::security::rule_id::RuleKey) {
     use crate::security::firewall::{Firewall, FirewallConfig};
     let dir = std::sync::Arc::new(tempfile::tempdir().expect("a log directory"));
     let (mut meta, sent) = table_meta(&dir, BackendConfig::default());
@@ -233,11 +244,18 @@ async fn shell_call_under(
     let [record] = all.as_slice() else {
         panic!("premise: one invocation record: {all:?}; answer {answer:?}");
     };
-    (delivered, sent.load(Ordering::SeqCst), record.clone())
+    // The key the published generation names its firewall rules under.
+    let key = meta
+        .current_generation()
+        .expect("premise: a generation is published")
+        .auth()
+        .record_key()
+        .rule_id_key();
+    (delivered, sent.load(Ordering::SeqCst), record.clone(), key)
 }
 
 /// A4: a firewall Allow rule softens the shell-injection finding that would
-/// block the call. Recorded `default_allow` today (flipped by allow attribution); the
+/// block the call. Records that rule as the allowing check (flipped by allow attribution); the
 /// firewall found and allowed a High finding, but the decision keeps no trace
 /// of it: the constructor's `request_findings: None` (`decision_record.rs:305`)
 /// is the only production line that sets the field, so findings stay `NotRun`
@@ -265,20 +283,30 @@ async fn a4_firewall_allow_rule() {
         tool_match: "write".to_string(),
         ..soften.clone()
     };
-    let (delivered, sent, record) = shell_call_under(vec![elsewhere.clone(), soften]).await;
+    let (delivered, sent, record, key) =
+        shell_call_under(vec![elsewhere.clone(), soften.clone()]).await;
     assert!(
         delivered,
         "premise: the softened call is delivered: {record}"
     );
     assert_eq!(sent, 1, "premise: the backend was sent the call once");
     assert_eq!(record["outcome"], "ok", "{record}");
-    // flipped by allow attribution
+    // flipped by allow attribution: the softening rule, not the decoy before it.
+    let rule = crate::security::rule_id::RuleId::of(
+        "firewall",
+        &key,
+        &serde_json::to_vec(&soften).expect("serialises"),
+    );
     assert_row(
         &record["decision"],
-        &allowed("a4_firewall_allow_rule", "flipped by allow attribution"),
+        &DecisionRow {
+            kind: "firewall",
+            rule_id: RuleId::named(rule.as_str()),
+            ..allowed("a4_firewall_allow_rule", "")
+        },
     );
     // Only the matching rule removed: the decoy stays, and cannot admit it.
-    let (delivered, sent, record) = shell_call_under(vec![elsewhere]).await;
+    let (delivered, sent, record, _) = shell_call_under(vec![elsewhere]).await;
     assert!(
         !delivered,
         "control: no rule did not block the call: {record}"

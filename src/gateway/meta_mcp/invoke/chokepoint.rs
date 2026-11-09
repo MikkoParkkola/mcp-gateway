@@ -417,7 +417,9 @@ impl MetaMcp {
         };
         let published = self.current_generation();
         let policy = firewall.policy_under(scope.authorizer.generation().or(published.as_deref()));
-        let (mut verdict, mut rule) = firewall.rescan_attributed(
+        // D10: the provenance comes from the arguments' scan only; a bridge
+        // retry's answers can block, never name the allow.
+        let (mut verdict, mut rule, provenance) = firewall.rescan_with_provenance(
             policy,
             target,
             outbound.arguments,
@@ -443,6 +445,13 @@ impl MetaMcp {
             verdict.findings.extend(answered.findings);
         }
         verdict.allowed = verdict.action != FirewallAction::Block;
+        // Noted before the early return, whenever the merged verdict lets the
+        // call through (a softened call may still warn).
+        if verdict.allowed
+            && let Some(allow) = provenance
+        {
+            super::audit::note_allowed_by(allow);
+        }
         if verdict.action == FirewallAction::Allow {
             return Ok(());
         }

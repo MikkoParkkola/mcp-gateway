@@ -17,7 +17,7 @@ use crate::security::firewall::{FirewallAction, FirewallRule};
 use crate::security::rule_id::RuleId;
 
 /// The id `fx` records for `rule`: its serde bytes under the running key.
-fn firewall_id(fx: &Fx, rule: &FirewallRule) -> RuleId {
+pub(super) fn firewall_id(fx: &Fx, rule: &FirewallRule) -> RuleId {
     let key = fx
         .state
         .live_config
@@ -199,18 +199,23 @@ async fn response_block(route: Route) {
     for (name, pinned, current) in cases {
         let got = super::call_as(&fx, (route, injected()), pinned, current).await;
         let case = (route, name);
-        // The invocation record holds the request's decision, which allowed
-        // (the shell rule only warned); the response refusal is its own
-        // delivery record, so a response verdict leaking into the decision
-        // would change the kind as well as the rule.
+        // The invocation record holds the request's decision, which allowed:
+        // the pinned shell rule only warned on a finding that blocks by
+        // default, so it is named as the request's allow. The response
+        // refusal is its own delivery record, so a response verdict leaking
+        // into the decision would name the answer's credential rule instead.
         assert!(
             got.refused
                 && got.calls == 1
-                && got.kind == "default_allow"
                 && got.message == json!("Response blocked by security firewall"),
             "{case:?}: premise, the sent request's answer is blocked: {got:?}"
         );
-        assert!(got.rule.is_null(), "{case:?}: {got:?}");
+        let request_rule = firewall_id(&fx, &pinned.security.firewall.rules[0]);
+        assert_eq!(
+            (got.kind.clone(), got.rule.clone()),
+            (json!("firewall"), json!(request_rule.as_str())),
+            "{case:?}: the request's warn rule, not the answer's"
+        );
         let hex = shell.as_str().trim_start_matches("firewall:");
         assert!(!delivered(&got).contains(hex), "{case:?}: {got:?}");
     }

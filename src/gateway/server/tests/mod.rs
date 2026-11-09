@@ -72,6 +72,8 @@ mod stdio_listing_scope;
 #[cfg(feature = "firewall")]
 mod stdio_response_firewall;
 
+#[cfg(feature = "firewall")]
+mod stdio_allow_attribution;
 mod stdio_initialize_order;
 #[cfg(feature = "firewall")]
 mod stdio_tenant_reads;

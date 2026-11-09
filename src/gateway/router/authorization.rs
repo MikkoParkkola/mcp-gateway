@@ -20,7 +20,7 @@ use crate::gateway::oauth::{
     Action, OAuthAgentIdentity, check_scopes, record_agent_scope_decision,
 };
 use crate::mtls::{CertIdentity, PolicyDecision};
-use crate::security::decision_record::DecisionKind;
+use crate::security::decision_record::{Allow, AllowRank, DecisionKind};
 use crate::security::validate_tool_name;
 
 /// Whether `request` is exempt from sanitization (MIK-8154 SAN.1, option (a)):
@@ -373,10 +373,15 @@ pub(super) fn decide_tool_target<'a>(
     if target.server.is_empty() || target.tool.is_empty() {
         return Decision::of(Ok(()));
     }
+    // D6: the allow-list entry that admitted the call, if one did.
+    let mut entry = None;
     let early = validate_tool_name(target.tool)
         .map_err(|e| refused(DecisionKind::Syntax, e.clone()))
         .and_then(|()| crate::gateway::authz::authorize_backend(client, target.server))
-        .and_then(|()| crate::gateway::authz::tool_policy_refusal(generation.tool_policy(), target))
+        .and_then(|()| {
+            crate::gateway::authz::tool_policy_refusal(generation.tool_policy(), target)
+                .map(|id| entry = id)
+        })
         .and_then(|()| {
             client.map_or(Ok(()), |client| {
                 client
@@ -388,33 +393,10 @@ pub(super) fn decide_tool_target<'a>(
         return Decision::of(Err(e));
     }
 
-    let mtls = (!state.mtls_policy.is_empty())
-        .then(|| {
-            state
-                .mtls_policy
-                .evaluate_explained(cert_identity, target.server, target.tool)
-        })
-        .filter(|(decision, _)| *decision == PolicyDecision::Deny);
-    if let Some((_, rule_id)) = mtls {
-        // A refusal no rule decided (no certificate, no rule matched) names none.
-        let refusal = refused(
-            DecisionKind::Mtls,
-            format!(
-                "Tool '{}' on server '{}' is blocked by certificate policy",
-                target.tool, target.server
-            ),
-        )
-        .with_rule(rule_id.cloned());
-        return Decision::recorded(Err(refusal), move || {
-            let identity_label = cert_identity.map_or("<unauthenticated>", |id| id.display_name());
-            warn!(
-                server = target.server,
-                tool = target.tool,
-                identity = identity_label,
-                "Tool invocation denied by mTLS policy"
-            );
-        });
-    }
+    let mtls_rule = match mtls_verdict(state, cert_identity, target) {
+        Ok(rule) => rule,
+        Err(refusal) => return *refusal,
+    };
 
     let mut agent_record: Option<(&OAuthAgentIdentity, Result<(), String>)> = None;
     if state.agent_auth.enabled {
@@ -468,9 +450,13 @@ pub(super) fn decide_tool_target<'a>(
             .map_err(|e| refused(DecisionKind::Ssrf, e.to_string()));
     }
 
+    let allows = [
+        entry.map(|id| Allow::by(AllowRank::ToolPolicy, Some(id))),
+        mtls_rule.map(|id| Allow::by(AllowRank::Mtls, Some(id))),
+    ];
     // The agent allow record is written even when SSRF then refuses, exactly
     // as the inline check wrote it before the verdict was deferred.
-    match agent_record {
+    let decision = match agent_record {
         Some((identity, allowed)) => Decision::recorded(verdict, move || {
             record_agent_scope_decision(
                 identity,
@@ -481,6 +467,47 @@ pub(super) fn decide_tool_target<'a>(
             );
         }),
         None => Decision::of(verdict),
+    };
+    allows.into_iter().fold(decision, Decision::allowing)
+}
+
+/// The mTLS policy's verdict on `target` for `cert_identity`: the first
+/// matching rule that allowed, as the call's mTLS allow (D7; a disabled or
+/// empty policy names none), or the refusal decision when it denies.
+fn mtls_verdict<'a>(
+    state: &AppState,
+    cert_identity: Option<&'a CertIdentity>,
+    target: ToolTarget<'a>,
+) -> Result<Option<crate::security::rule_id::RuleId>, Box<Decision<'a>>> {
+    let mtls = (!state.mtls_policy.is_empty()).then(|| {
+        state
+            .mtls_policy
+            .evaluate_explained(cert_identity, target.server, target.tool)
+    });
+    match mtls {
+        Some((PolicyDecision::Allow, rule_id)) => Ok(rule_id.cloned()),
+        Some((PolicyDecision::Deny, rule_id)) => {
+            // A refusal no rule decided (no certificate, no rule matched) names none.
+            let refusal = refused(
+                DecisionKind::Mtls,
+                format!(
+                    "Tool '{}' on server '{}' is blocked by certificate policy",
+                    target.tool, target.server
+                ),
+            )
+            .with_rule(rule_id.cloned());
+            Err(Box::new(Decision::recorded(Err(refusal), move || {
+                let identity_label =
+                    cert_identity.map_or("<unauthenticated>", |id| id.display_name());
+                warn!(
+                    server = target.server,
+                    tool = target.tool,
+                    identity = identity_label,
+                    "Tool invocation denied by mTLS policy"
+                );
+            })))
+        }
+        None => Ok(None),
     }
 }
 

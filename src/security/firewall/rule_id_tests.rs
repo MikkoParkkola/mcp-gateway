@@ -296,3 +296,6 @@ fn the_relay_refusals_note_no_rule() {
         );
     }
 }
+
+#[path = "allow_provenance_tests.rs"]
+mod allow_provenance;

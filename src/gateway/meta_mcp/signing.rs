@@ -72,6 +72,10 @@ pub(crate) struct SigningInvocationContext {
     nonce: CapturedNonce,
     request_id: Option<Value>,
     prepared_target: Option<(String, String)>,
+    /// The allow signing's policy check noted for `prepared_target`, taken
+    /// once by the dispatch that skips its own check, so no later call or
+    /// request inherits it.
+    prepared_allow: std::sync::Mutex<Option<crate::security::decision_record::Allow>>,
     /// The nonce passed admission. Only an admitted context signs, so a
     /// response is never signed over a nonce the store did not register.
     admitted: bool,
@@ -204,6 +208,7 @@ impl SigningInvocationContext {
             nonce: CapturedNonce::Missing,
             request_id: None,
             prepared_target: None,
+            prepared_allow: std::sync::Mutex::new(None),
             admitted: false,
             nonce_stamp: None,
             refund: NonceRefund::default(),
@@ -284,6 +289,22 @@ impl SigningInvocationContext {
             take_meta_nonce(request.get_mut("params"));
         }
         Ok(())
+    }
+
+    /// Keep `allow` as the prepared target's signing-time allow.
+    pub(crate) fn store_prepared_allow(
+        &self,
+        allow: Option<crate::security::decision_record::Allow>,
+    ) {
+        if let Ok(mut held) = self.prepared_allow.lock() {
+            *held = allow;
+        }
+    }
+
+    /// The prepared target's signing-time allow, taken: a second read finds
+    /// nothing.
+    pub(crate) fn take_prepared_allow(&self) -> Option<crate::security::decision_record::Allow> {
+        self.prepared_allow.lock().ok()?.take()
     }
 
     pub(crate) fn prepared_for(&self, server: &str, tool: &str) -> bool {
@@ -595,8 +616,14 @@ impl super::MetaMcp {
         // stdio its slot is judged only after signing.
         let skipped = context.origin == Origin::GatewayInvoke
             && self.withheld_invoke_target(arguments, session, caller);
+        // D3: kept for the prepared target, whose dispatch skips its check.
+        let mut signing_allow = None;
         if context.origin == Origin::GatewayInvoke && !skipped {
-            self.check_visible_policy(arguments, session, caller)?;
+            let (checked, allow) = super::invoke::audit::collect_allow(|| {
+                self.check_visible_policy(arguments, session, caller)
+            });
+            checked?;
+            signing_allow = allow;
         } else if skipped {
             self.check_call_level_policy(arguments, caller)?;
         }
@@ -619,6 +646,7 @@ impl super::MetaMcp {
                 extract_required_str(arguments, "server")?.to_owned(),
                 extract_required_str(arguments, "tool")?.to_owned(),
             ));
+            context.store_prepared_allow(signing_allow);
         }
         context.admitted = true;
         Ok(())
@@ -755,6 +783,10 @@ impl super::MetaMcp {
 #[cfg(test)]
 #[path = "signing_test_seams.rs"]
 mod test_seams;
+
+#[cfg(test)]
+#[path = "signing_prepared_allow_tests.rs"]
+mod prepared_allow_tests;
 
 #[cfg(test)]
 #[path = "signing_delivery_tests.rs"]

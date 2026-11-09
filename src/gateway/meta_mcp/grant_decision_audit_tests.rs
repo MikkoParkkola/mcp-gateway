@@ -431,3 +431,6 @@ async fn surfaced_call_grant_denial_writes_one_record() {
 
 #[path = "grant_decision_rule_id_tests.rs"]
 mod rule_ids;
+
+#[path = "grant_allow_attribution_tests.rs"]
+mod allow_attribution;
