@@ -35,7 +35,8 @@ mod snapshot_scope_tests;
 
 #[cfg(test)]
 use mutations::{
-    Decision, DecisionRequest, GRANT_WRITES_REFUSED, apply_mutation, resolve_decision_core,
+    Decision, DecisionRequest, GRANT_WRITES_REFUSED, POLICY_WRITES_REFUSED, apply_mutation,
+    resolve_decision_core,
 };
 use mutations::{
     actor_from_client, mutate_grant, mutate_policy, mutation_disabled_reason, resolve_decision,

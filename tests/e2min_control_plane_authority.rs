@@ -80,7 +80,16 @@ fn writes() -> Vec<(&'static str, Value, &'static str, &'static [&'static str])>
     );
     let policies = (
         "policies_managed_in_gateway_config",
-        &["security.sanitize_input", "security.ssrf_protection"][..],
+        // ADR-029's decision table: every gateway.yaml key the Policies
+        // screen edits, not only the two switches.
+        &[
+            "security.tool_policy",
+            "security.firewall.rules",
+            "security.firewall.credential_redaction",
+            "security.firewall.collusion",
+            "security.sanitize_input",
+            "security.ssrf_protection",
+        ][..],
     );
     vec![
         (
