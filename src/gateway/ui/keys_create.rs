@@ -508,8 +508,10 @@ pub(super) async fn create_key(
     Extension(generation): Extension<Arc<crate::config_reload::Generation>>,
     named: Option<Extension<NamedApiKey>>,
     #[cfg(test)] known: Option<axum::Extension<KnownSecret>>,
-    #[cfg(test)] before_lock: Option<axum::Extension<BeforeLock>>,
-    #[cfg(test)] inject: Option<axum::Extension<InjectWriter>>,
+    #[cfg(test)] (before_lock, inject): (
+        Option<axum::Extension<BeforeLock>>,
+        Option<axum::Extension<InjectWriter>>,
+    ),
     body: Result<Json<CreateBody>, JsonRejection>,
 ) -> Response {
     if let Err(refused) = guard.admit() {

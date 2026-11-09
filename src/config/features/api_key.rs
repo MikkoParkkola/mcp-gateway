@@ -142,23 +142,6 @@ pub struct ApiKeyBinding {
     pub digest_tag: String,
 }
 
-/// The expiry a CLI login key gets: `now` plus the requested lifetime,
-/// clamped to `ceiling` and to the approver's own expiry; `None` when nothing
-/// is left to grant.
-#[must_use]
-pub(crate) fn cli_key_expiry(
-    now: DateTime<Utc>,
-    requested: chrono::Duration,
-    ceiling: chrono::Duration,
-    approver_expires_at: Option<DateTime<Utc>>,
-) -> Option<DateTime<Utc>> {
-    // The shortest of the three bounds wins; a key that would expire at or
-    // before `now` grants nothing, so there is no zero or negative lifetime.
-    let granted = now.checked_add_signed(requested.min(ceiling))?;
-    let expiry = approver_expires_at.map_or(granted, |end| granted.min(end));
-    (expiry > now).then_some(expiry)
-}
-
 // Manual `Debug` (CWE-532): a derived one printed the key. The digest is not a
 // secret, but it is an offline-guessing target for a short key, so it stays
 // out of logs too.

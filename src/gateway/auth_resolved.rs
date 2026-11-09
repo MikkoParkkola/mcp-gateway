@@ -53,6 +53,7 @@ fn resolve_api_keys(
                 explicit_principal: k.principal.clone(),
                 previous,
                 approved_by: k.approved_by.clone(),
+                #[cfg(feature = "webui")]
                 cli_host: k.cli_host.clone(),
             })
         })

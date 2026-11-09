@@ -36,6 +36,7 @@ pub struct ResolvedApiKey {
     /// The approver a CLI login key is bound to; `None` for every other key.
     pub(crate) approved_by: Option<crate::config::ApiKeyBinding>,
     /// The host a CLI login key reported, for display only.
+    #[cfg(feature = "webui")]
     pub(crate) cli_host: Option<String>,
 }
 

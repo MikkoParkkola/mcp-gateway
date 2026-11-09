@@ -113,13 +113,16 @@ fn removing_the_approver_ends_the_child() {
 #[test]
 fn the_child_follows_the_approving_digest_through_its_grace_only() {
     let bound = bound_to_root();
-    let grace_end = now() + chrono::Duration::seconds(60);
+    let grace_end = now() + crate::duration_bound::delta!(seconds, 60);
     let mut rotated = key("root", ROOT_B, Some(P1));
     rotated.previous_key_sha256 = Some(crate::config::api_key_digest_spec(ROOT_A.as_bytes()));
     rotated.previous_expires_at = Some(grace_end);
     let keys = || vec![rotated.clone(), child(bound.clone())];
     assert!(
-        child_live(keys(), grace_end - chrono::Duration::seconds(1)),
+        child_live(
+            keys(),
+            grace_end - crate::duration_bound::delta!(seconds, 1)
+        ),
         "a routine rotation ended the child inside the grace"
     );
     assert!(

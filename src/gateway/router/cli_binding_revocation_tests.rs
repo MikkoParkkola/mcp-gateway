@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! R1: authoritative root removal with its CLI child still configured.
 use super::live_keys_tests::{reload_text, status};
-use crate::config::{ApiKeyBinding, ApiKeyConfig, AuthConfig};
+use crate::config::{ApiKeyBinding, ApiKeyConfig, AuthConfig, EventsConfig};
 use crate::gateway::auth::{KeyBinding, live};
 use axum::http::StatusCode;
 use std::sync::Arc;
@@ -122,7 +122,7 @@ async fn event_admission_and_admin_standing_end_with_the_root() {
             .events_services(Arc::clone(&state.live_config), LiveCredentials::default())
     };
     let hub_dir = Arc::new(tempfile::tempdir().expect("events dir"));
-    let hub = EventsHub::open(&Default::default(), hub_dir.path()).expect("hub");
+    let hub = EventsHub::open(&EventsConfig::default(), hub_dir.path()).expect("hub");
     hub.keep_test_dir(hub_dir);
     hub.start(services());
     let source = hub.install_operational_source(

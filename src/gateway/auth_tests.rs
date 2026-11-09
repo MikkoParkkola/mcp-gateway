@@ -134,6 +134,7 @@ fn debug_output_redacts_bearer_and_api_keys() {
             explicit_principal: None,
             previous: None,
             approved_by: None,
+            #[cfg(feature = "webui")]
             cli_host: None,
         }],
         public_paths: vec![],
@@ -223,6 +224,7 @@ fn constant_time_token_comparison_accepts_correct_rejects_wrong() {
             explicit_principal: None,
             previous: None,
             approved_by: None,
+            #[cfg(feature = "webui")]
             cli_host: None,
         }],
         public_paths: vec![],
@@ -285,6 +287,7 @@ fn test_api_key_validation() {
                 explicit_principal: None,
                 previous: None,
                 approved_by: None,
+                #[cfg(feature = "webui")]
                 cli_host: None,
             },
             ResolvedApiKey {
@@ -301,6 +304,7 @@ fn test_api_key_validation() {
                 explicit_principal: None,
                 previous: None,
                 approved_by: None,
+                #[cfg(feature = "webui")]
                 cli_host: None,
             },
         ],
@@ -631,6 +635,7 @@ fn admin_key(admin: bool) -> ResolvedApiKey {
         explicit_principal: None,
         previous: None,
         approved_by: None,
+        #[cfg(feature = "webui")]
         cli_host: None,
     }
 }

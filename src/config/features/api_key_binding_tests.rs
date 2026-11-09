@@ -4,15 +4,10 @@
 //! as `approved_by` (the approver's stable principal and the full tag of the
 //! digest it presented) plus the host the CLI reported. Load checks only the
 //! binding's syntax: an approver that is gone leaves a loadable, inert key.
-//! The lifetime policy clamps a requested lifetime to the ceiling and to the
-//! approver's own remaining life, and refuses when nothing is left.
 
 use std::fmt::Write as _;
 
-use chrono::{Duration, TimeZone, Utc};
-
 use crate::config::Config;
-use crate::config::features::api_key::cli_key_expiry;
 
 const PRINCIPAL: &str = "1111111111111111111111111111111111111111111111111111111111111111";
 const TAG: &str = "2222222222222222222222222222222222222222222222222222222222222222";
@@ -106,53 +101,4 @@ fn a_binding_whose_approver_is_absent_still_loads() {
     // checks syntax only; liveness is judged at authorization.
     let (_dir, loaded) = load(&binding(PRINCIPAL, TAG));
     assert!(loaded.is_ok(), "an absent approver leaves a loadable key");
-}
-
-#[test]
-fn lifetime_is_clamped_to_the_ceiling_and_the_approvers_remaining_life() {
-    let now = Utc
-        .with_ymd_and_hms(2026, 11, 9, 12, 0, 0)
-        .single()
-        .expect("time");
-    let ceiling = Duration::seconds(1800);
-    let at = |secs| now + Duration::seconds(secs);
-    // Root expires first: the root's expiry wins.
-    assert_eq!(
-        cli_key_expiry(now, Duration::seconds(3600), ceiling, Some(at(900))),
-        Some(at(900))
-    );
-    // Root lives long: the ceiling wins.
-    assert_eq!(
-        cli_key_expiry(now, Duration::seconds(3600), ceiling, Some(at(7200))),
-        Some(at(1800))
-    );
-    // The request is the shortest: it wins (ignoring it must turn this red).
-    assert_eq!(
-        cli_key_expiry(now, Duration::seconds(900), ceiling, Some(at(7200))),
-        Some(at(900))
-    );
-    // A root with no expiry bounds nothing; the ceiling still holds.
-    assert_eq!(
-        cli_key_expiry(now, Duration::seconds(3600), ceiling, None),
-        Some(at(1800))
-    );
-}
-
-#[test]
-fn no_lifetime_is_left_when_the_approver_expires_now() {
-    let now = Utc
-        .with_ymd_and_hms(2026, 11, 9, 12, 0, 0)
-        .single()
-        .expect("time");
-    let ceiling = Duration::seconds(1800);
-    assert_eq!(
-        cli_key_expiry(now, Duration::seconds(3600), ceiling, Some(now)),
-        None,
-        "an approver expiring now leaves nothing to grant"
-    );
-    assert_eq!(
-        cli_key_expiry(now, Duration::zero(), ceiling, None),
-        None,
-        "a zero request grants nothing"
-    );
 }
