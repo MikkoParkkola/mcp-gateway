@@ -10,7 +10,7 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use super::{ReplaceError, SecretStep};
+use super::{RefusalClass, ReplaceError, SecretStep};
 use crate::config::{Config, EnvOverlay, PENDING_SLOT_PREFIX, reserved_slot_reference};
 use crate::config_persistence::keyedit::{Segment, SlotId, Template};
 use crate::config_persistence::lock::Locked;
@@ -136,8 +136,10 @@ impl ReloadContext {
         })
         .await
         .map_err(|e| ReplaceError::Failed(format!("the config check task failed: {e}")))?;
-        let evaluated = evaluated
-            .map_err(|e| ReplaceError::ReloadRefused(format!("Failed to parse config: {e}")))?;
+        let evaluated = evaluated.map_err(|e| ReplaceError::ReloadRefused {
+            class: RefusalClass::Internal,
+            reason: format!("Failed to parse config: {e}"),
+        })?;
         if let Some(step) = step {
             refuse_shared_credentials(step, &evaluated.config, &evaluated.overlay)?;
         }
@@ -147,8 +149,10 @@ impl ReloadContext {
         // goes in only as carried over unchanged, and none while it runs.
         #[cfg(feature = "firewall")]
         {
-            let refused =
-                |e: String| ReplaceError::ReloadRefused(format!("Failed to validate config: {e}"));
+            let refused = |e: String| ReplaceError::ReloadRefused {
+                class: RefusalClass::Internal,
+                reason: format!("Failed to validate config: {e}"),
+            };
             crate::security::firewall::refuse_while_running(
                 self.live_config.running(),
                 &evaluated.config,
@@ -166,7 +170,10 @@ impl ReloadContext {
             inputs: evaluated.inputs,
             configured: evaluated.configured,
         })
-        .map_err(ReplaceError::ReloadRefused)
+        .map_err(|reason| ReplaceError::ReloadRefused {
+            class: RefusalClass::Internal,
+            reason,
+        })
     }
 
     /// `Err(NoConfigFile)` when the file read under this lock is gone now.

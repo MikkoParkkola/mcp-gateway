@@ -23,7 +23,7 @@ use crate::config_reload::ReloadContext;
 use crate::config_reload::ui_fields::{EditRefused, FieldId, PreviewEdit, PreviewValue, Seg};
 use crate::yaml::Value;
 
-use super::{FileRevision, ReplaceError};
+use super::{FileRevision, RefusalClass, ReplaceError};
 
 /// A preview of one edit.
 #[derive(Debug, Clone, PartialEq)]
@@ -164,6 +164,7 @@ pub(crate) enum UiRefused {
     Preview(PreviewRefused),
     /// The loader or the reload would refuse the result.
     Invalid(String),
+    ReloadRefused { class: RefusalClass },
     Unsupported(String),
     /// Save: auth is on and no audit log is configured, or the audit log
     /// refused this save's intent; nothing was written either way.
@@ -407,13 +408,16 @@ async fn validate(
 ) -> Result<(), UiRefused> {
     ctx.validate_template(target, template, None)
         .await
-        .map_err(|e| match e {
-            ReplaceError::Refused(why) | ReplaceError::ReloadRefused(why) => {
-                UiRefused::Invalid(why)
-            }
-            ReplaceError::Failed(why) => UiRefused::Unsupported(why),
-            other => UiRefused::Unsupported(format!("{other:?}")),
-        })
+        .map_err(validate_refusal)
+}
+
+pub(super) fn validate_refusal(e: ReplaceError) -> UiRefused {
+    match e {
+        ReplaceError::Refused(why) => UiRefused::Invalid(why),
+        ReplaceError::ReloadRefused { .. } => UiRefused::Invalid("x".to_owned()),
+        ReplaceError::Failed(why) => UiRefused::Unsupported(why),
+        other => UiRefused::Unsupported(format!("{other:?}")),
+    }
 }
 
 #[path = "ui_diff_show.rs"]
@@ -422,3 +426,7 @@ mod show;
 #[cfg(test)]
 #[path = "ui_diff_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "ui_diff_refusal_tests.rs"]
+mod refusal_tests;

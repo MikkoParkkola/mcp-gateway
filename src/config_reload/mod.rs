@@ -293,7 +293,7 @@ pub(crate) use reload_context::replace::order as write_order;
 #[cfg(feature = "webui")]
 pub(crate) use reload_context::replace::{
     AuditPosture, BackendOp, Expected, FileRevision, GatewayAuth, IntentKind, NO_AUDIT_LOG,
-    Replace, ReplaceError, ReplaceOutcome, Replaced, SecretStep, replace_audited,
+    RefusalClass, Replace, ReplaceError, ReplaceOutcome, Replaced, SecretStep, replace_audited,
 };
 #[cfg(test)]
 use reload_context::{
@@ -393,3 +393,7 @@ mod runtime_name_clash_tests;
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+#[path = "refusal_class_tests.rs"]
+mod refusal_class_tests;

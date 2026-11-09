@@ -4,6 +4,8 @@
 //! `ReplaceError` variant (the writer's answer injected), the live-table
 //! check after a write, and the order of the intent and the commit.
 
+use crate::config_reload::RefusalClass;
+
 use std::sync::{Arc, Mutex};
 
 use axum::http::StatusCode;
@@ -125,7 +127,12 @@ fn a_candidate_refusal_is_a_500_and_not_an_audit_refusal() {
 #[test]
 fn p9_a_reload_refusal_is_a_409_and_logs_its_variant() {
     let fx = Fixture::new(Setup::default());
-    let sent = injected(&fx, || Err(ReplaceError::ReloadRefused("zq-detail".into())));
+    let sent = injected(&fx, || {
+        Err(ReplaceError::ReloadRefused {
+            class: RefusalClass::Internal,
+            reason: "zq-detail".into(),
+        })
+    });
     assert_eq!(sent.status, StatusCode::CONFLICT, "{}", sent.body);
     assert_eq!(error_of(&sent), "reload_refused");
     assert!(sent.logs.contains("reload_refused"), "{}", sent.logs);
@@ -138,9 +145,10 @@ fn p9_a_reload_refusal_is_a_409_and_logs_its_variant() {
 fn p9b_writer_text_that_reads_like_the_flip_is_not_parsed() {
     let fx = Fixture::new(Setup::default());
     let sent = injected(&fx, || {
-        Err(ReplaceError::ReloadRefused(
-            "the key list would change whether the gateway is multi-user".into(),
-        ))
+        Err(ReplaceError::ReloadRefused {
+            class: RefusalClass::Internal,
+            reason: "the key list would change whether the gateway is multi-user".into(),
+        })
     });
     assert_eq!(sent.status, StatusCode::CONFLICT, "{}", sent.body);
     assert_eq!(error_of(&sent), "reload_refused");

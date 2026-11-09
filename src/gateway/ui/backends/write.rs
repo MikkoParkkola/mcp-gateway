@@ -228,7 +228,7 @@ fn refused_write(e: &ReplaceError) -> axum::response::Response {
         }
         ReplaceError::Refused(_) => unwritten("refused"),
         ReplaceError::AuditRefused(_) => unwritten("audit_refused"),
-        ReplaceError::ReloadRefused(_) => unwritten("reload_refused"),
+        ReplaceError::ReloadRefused { .. } => unwritten("reload_refused"),
         ReplaceError::Unsupported(_) => unwritten("unsupported"),
         ReplaceError::Stage(_) => unwritten("stage"),
         ReplaceError::Write(_) => unwritten("write"),

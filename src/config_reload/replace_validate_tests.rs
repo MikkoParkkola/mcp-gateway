@@ -334,7 +334,7 @@ async fn loud_refusals(dir: &Path, audit: impl Fn() -> Audit) -> Vec<String> {
     .await
     .expect_err("the reload refuses");
     assert!(
-        matches!(reload_refusal, ReplaceError::ReloadRefused(_)),
+        matches!(reload_refusal, ReplaceError::ReloadRefused { .. }),
         "premise: the reload's refusal after the write: {reload_refusal:?}"
     );
     assert_eq!(

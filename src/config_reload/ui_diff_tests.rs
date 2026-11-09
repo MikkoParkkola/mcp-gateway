@@ -738,3 +738,18 @@ async fn an_alert_on_its_dash_line_shows_that_line() {
         "--- a/gateway.yaml\n+++ b/gateway.yaml\n@@ -3,1 +3,1 @@\n-    - at_percent: 50\n+    - at_percent: 60\n"
     );
 }
+
+/// K8: red oracle is a BadParam reason that omits the submitted backend name.
+#[tokio::test]
+async fn k8_missing_backend_does_not_echo_name() {
+    const CANARY: &str = "missing-backend-canary";
+    let (_dir, _path, ctx) = gateway("backends: {}\n");
+    let error = ui_diff(&ctx, &edit(vec![set("backends.owner", on(CANARY), s("A"))]))
+        .await
+        .expect_err("absent backend");
+    let UiRefused::BadParam(field, reason) = error else {
+        panic!("expected BadParam: {error:?}");
+    };
+    assert_eq!(field, id("backends.owner"));
+    assert!(!reason.contains(CANARY), "{reason}");
+}

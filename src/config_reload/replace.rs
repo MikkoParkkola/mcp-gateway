@@ -4,13 +4,8 @@
 //! under the config lock pair, then one reload, and the old bytes back on
 //! disk whenever that reload refuses.
 //!
-//! Web UI settings saves (a spliced file) and configuration-history restores
-//! (stored bytes) both write through [`replace_audited`]. It refuses a write
-//! made from a stale view of the file, keeps the original in a private copy
-//! with a journal ([`crate::config_persistence::journal`]) until a reload has
-//! accepted the new bytes, and puts the original back on a refused reload or
-//! a failed write. A crash anywhere is recovered by the next holder of the
-//! config lock.
+//! Settings saves and history restores share the audited writer. Refused
+//! reloads restore the old bytes; the next lock holder recovers crashed writes.
 //!
 //! Lock order, for every holder: the reload lock, then the config sidecar
 //! lock, then (for a save that also writes secrets) the vault lock. Nothing
@@ -30,8 +25,23 @@ use crate::secret_store::{
     NewSecretOwned, PendingSecrets, SaveError, SecretStore, Vault, create_secrets,
 };
 
-use super::ReloadContext;
 use crate::config_persistence::keyedit::Template;
+
+use super::ReloadContext;
+use super::lock_api::ReloadRefusal;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RefusalClass {
+    Posture,
+    Invalid,
+    ShuttingDown,
+    Internal,
+}
+
+/// Classification is wired in after the refusal types and oracle rows.
+pub(super) fn post_write_class(_refusal: &ReloadRefusal) -> RefusalClass {
+    RefusalClass::Internal
+}
 
 // The revision type lives with the config commit primitive, which every
 // build compiles; the replace path names it from there.
@@ -165,7 +175,10 @@ pub(crate) enum ReplaceError {
     Write(String),
     /// The reload refused the new bytes, or the check of them before any
     /// entry or write did; the original stands.
-    ReloadRefused(String),
+    ReloadRefused {
+        class: RefusalClass,
+        reason: String,
+    },
     /// Putting the original back failed; the journal stays `staged`.
     RollbackFailed { journal: PathBuf, error: String },
     /// The reload accepted the bytes but that could not be recorded
@@ -291,7 +304,7 @@ pub(crate) fn settle_for(result: &Result<ReplaceOutcome, ReplaceError>) -> Settl
         // The rollback came back: a failed one is `RollbackFailed`.
         | ReplaceError::Unsupported(_)
         | ReplaceError::Write(_)
-        | ReplaceError::ReloadRefused(_) => Settle::Discard,
+        | ReplaceError::ReloadRefused { .. } => Settle::Discard,
         // The file on disk may name them; `Failed` proves nothing either way.
         ReplaceError::RollbackFailed { .. }
         | ReplaceError::Unconfirmed { .. }
@@ -614,7 +627,10 @@ impl ReloadContext {
             let reload = self
                 .reload_outcome_locked_at(target)
                 .await
-                .map_err(ReplaceError::ReloadRefused)?;
+                .map_err(|reason| ReplaceError::ReloadRefused {
+                    class: RefusalClass::Internal,
+                    reason,
+                })?;
             return Ok(ReplaceOutcome {
                 revision: None,
                 kept_beside: None,
@@ -716,7 +732,10 @@ impl ReloadContext {
                 unkeep();
                 Err(Self::roll_back(
                     target,
-                    ReplaceError::ReloadRefused(refusal),
+                    ReplaceError::ReloadRefused {
+                        class: RefusalClass::Internal,
+                        reason: refusal,
+                    },
                 ))
             }
         }

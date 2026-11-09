@@ -3,6 +3,8 @@
 //! The adopt route's pieces that need no running gateway: every writer
 //! outcome's answer, and the compute's splice and refusals.
 
+use crate::config_reload::RefusalClass;
+
 use axum::body::to_bytes;
 use axum::http::StatusCode;
 use serde_json::Value;
@@ -86,7 +88,10 @@ fn writer_outcomes() -> Vec<(
         failed(ReplaceError::Secrets(SaveError::Store(StoreError::Failed(
             CANARY.to_owned(),
         )))),
-        failed(ReplaceError::ReloadRefused(CANARY.to_owned())),
+        failed(ReplaceError::ReloadRefused {
+            class: RefusalClass::Internal,
+            reason: CANARY.to_owned(),
+        }),
         failed(ReplaceError::Unsupported(CANARY.to_owned())),
         failed(ReplaceError::Stage(CANARY.to_owned())),
         failed(ReplaceError::Write(CANARY.to_owned())),

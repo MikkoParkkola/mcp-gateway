@@ -3,6 +3,8 @@
 //! The settings save: stale revisions, all or nothing across the file and the
 //! secret store, the owner field, and nothing lost.
 
+use crate::config_reload::reload_context::replace::RefusalClass;
+
 use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -514,7 +516,10 @@ fn every_writer_result_maps_to_one_refusal() {
             Mapped::Refusal(UiRefused::Invalid("r".into())),
         ),
         (
-            ReplaceError::ReloadRefused("l".into()),
+            ReplaceError::ReloadRefused {
+                class: RefusalClass::Internal,
+                reason: "l".into(),
+            },
             None,
             Mapped::Refusal(UiRefused::Invalid("l".into())),
         ),
@@ -577,4 +582,29 @@ fn every_writer_result_maps_to_one_refusal() {
         let what = format!("{error:?} {halt:?}");
         assert_eq!(map_error(error, halt), want, "{what}");
     }
+}
+
+/// K7: red oracle is Failed for an operational secret-store failure.
+#[test]
+fn k7_store_failure_is_failed() {
+    let mapped = super::map_error(
+        super::ReplaceError::Secrets(crate::secret_store::SaveError::Store(
+            StoreError::Failed("store-canary".to_owned()),
+        )),
+        None,
+    );
+    assert!(matches!(mapped, super::Mapped::Refusal(UiRefused::Failed(_))));
+}
+
+/// K7: oracle is a timed-out secret refusal; this control passes the stub.
+#[test]
+fn k7_store_timeout_stays_timeout() {
+    let mapped = super::map_error(
+        super::ReplaceError::Secrets(crate::secret_store::SaveError::Store(StoreError::TimedOut)),
+        None,
+    );
+    assert!(matches!(
+        mapped,
+        super::Mapped::Refusal(UiRefused::SecretsRefused { timeout: true })
+    ));
 }

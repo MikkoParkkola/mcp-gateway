@@ -4,6 +4,8 @@
 //! bytes stand, go only when the old file provably stayed, and are left
 //! listed as unused whenever the file on disk may name them.
 
+use crate::config_reload::reload_context::replace::RefusalClass;
+
 use std::collections::BTreeSet;
 use std::path::Path;
 use std::sync::Arc;
@@ -266,7 +268,7 @@ async fn a_refused_reload_restores_the_original_and_discards() {
     .expect_err("the posture refuses the reload");
 
     assert!(
-        matches!(failure, ReplaceError::ReloadRefused(_)),
+        matches!(failure, ReplaceError::ReloadRefused { .. }),
         "{failure:?}"
     );
     assert_eq!(read(&path), START);
@@ -341,7 +343,10 @@ fn entries_settle_by_the_final_result() {
         (err(ReplaceError::Stage(String::new())), Settle::Discard),
         (err(ReplaceError::Write(String::new())), Settle::Discard),
         (
-            err(ReplaceError::ReloadRefused(String::new())),
+            err(ReplaceError::ReloadRefused {
+                class: RefusalClass::Internal,
+                reason: String::new(),
+            }),
             Settle::Discard,
         ),
         (
