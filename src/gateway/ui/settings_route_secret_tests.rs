@@ -111,9 +111,11 @@ async fn s18_secret_save() {
     assert_eq!(values.len(), 1);
     assert_eq!(values[0].1, b"secret-save-canary");
     let stored_path = values[0].0.strip_prefix("file:").expect("files reference");
+    // The files store pads one `\n`, which the `file:` reader drops, so the
+    // value reads back byte for byte (src/secret_store/files.rs).
     assert_eq!(
         std::fs::read(stored_path).expect("stored bytes"),
-        b"secret-save-canary"
+        b"secret-save-canary\n"
     );
     assert!(route.text().contains(&values[0].0));
     // The reload names the changed secret input by its store reference, never
