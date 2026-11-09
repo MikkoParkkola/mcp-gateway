@@ -1590,6 +1590,9 @@ jobs:
           base="$BEFORE"
           if [ -z "$base" ] || [ "$base" = "0000000000000000000000000000000000000000" ]; then
             base="HEAD^"
+          elif ! git cat-file -e "$base^{commit}" 2>/dev/null; then
+            # A force push: the tip it replaced is on no branch, so full history lacks it.
+            git fetch --no-tags origin "$base"
           fi
           python3 scripts/dev/check-file-size.py --base "$base"
       # A pull request: against where it left the base, so a baseline shrink

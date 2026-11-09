@@ -280,6 +280,36 @@ class RatchetThroughGit(unittest.TestCase):
             self.assertEqual(status, 1, out)
             self.assertIn("fetch-depth", out)
 
+    # What the train checks: the branch merged onto the tip. The untouched stale row merges away
+    # (the tip's shrink wins), and putting it back on the merged tree fails against the tip.
+    def test_r12_on_the_merged_tree_the_stale_row_is_gone_and_restoring_it_fails(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            git, baseline = self.branch_after_a_tip_shrink(root)
+            git("merge", "-q", "--no-edit", "line")
+            self.assertEqual(baseline.read_text(encoding="utf-8"), "805 src/a.rs\n")
+            status, out = self.judged(root, baseline, ["--base", "line"])
+            self.assertEqual(status, 0, out)
+            (root / "src/b.rs").write_text(body(801), encoding="utf-8")
+            baseline.write_text("805 src/a.rs\n801 src/b.rs\n", encoding="utf-8")
+            status, out = self.judged(root, baseline, ["--base", "line"])
+            self.assertEqual(status, 1, out)
+            self.assertIn("src/b.rs", out)
+
+    # A push job after a force push: the before-commit is no ancestor of HEAD. Base mode (what push
+    # jobs pass) still reads the list at the before-commit, so a row it had removed cannot come
+    # back with the rewrite; merge-base mode would have read the older branch point instead.
+    def test_r13_a_force_pushed_head_is_judged_against_the_list_it_replaced(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            git, baseline = self.branch_after_a_tip_shrink(root)
+            before = git("rev-parse", "line").stdout.decode().strip()
+            ancestor = subprocess.run(["git", "merge-base", "--is-ancestor", before, "HEAD"], cwd=root)
+            self.assertNotEqual(ancestor.returncode, 0, "the before-commit must not be an ancestor here")
+            status, out = self.judged(root, baseline, ["--base", before])
+            self.assertEqual(status, 1, out)
+            self.assertIn("src/b.rs", out)
+
     def test_r7_a_raised_allowance_through_base_is_refused(self):
         with TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -363,15 +393,25 @@ class Wiring(unittest.TestCase):
         self.assertFalse((self.REPO / "scripts/ci/check-loc-ceiling.sh").exists())
         ci = (self.REPO / ".github/workflows/ci.yml").read_text(encoding="utf-8")
         self.assertNotIn("check-loc-ceiling", ci)
-        step = ci[ci.index("- name: Check the 800-line ceiling") :]
-        step = step[: step.find("\n      - ", 1) if "\n      - " in step[1:] else len(step)]
-        self.assertIn("check-file-size.py --base", step)
-        self.assertIn("git fetch", step)
-        self.assertIn("0000000000000000000000000000000000000000", step)
-        # The base: the PR's base on a pull request, the previous tip on a
-        # push, and the parent commit when a push has no previous tip.
-        self.assertIn("github.event.pull_request.base.sha || github.event.before", step)
-        self.assertIn("HEAD^", step)
+        def step(name):
+            text = ci[ci.index(f"- name: {name}") :]
+            return text[: text.find("\n      - ", 1) if "\n      - " in text[1:] else len(text)]
+        job = ci[ci.index("Check the gate refuses what it claims to") - 600 : ci.index("- name: Check the 800-line ceiling against the branch point")]
+        # Full history: a pull request's branch point must be in the clone.
+        self.assertIn("fetch-depth: 0", job)
+        # A push: against the previous tip, or the parent when there is none; strict (base mode).
+        push = step("Check the 800-line ceiling against the previous tip")
+        self.assertIn("github.event.before", push)
+        self.assertIn("0000000000000000000000000000000000000000", push)
+        self.assertIn("HEAD^", push)
+        self.assertIn('check-file-size.py --base "$base"', push)
+        self.assertNotIn("merge-base", push)
+        # After a force push the replaced tip is on no branch: it is fetched by id when missing.
+        self.assertIn('git fetch --no-tags origin "$base"', push)
+        # A pull request: against its branch point.
+        pr = step("Check the 800-line ceiling against the branch point")
+        self.assertIn("github.event.pull_request.base.sha", pr)
+        self.assertIn('check-file-size.py --base "$BASE_SHA" --compare merge-base', pr)
 
 
 
