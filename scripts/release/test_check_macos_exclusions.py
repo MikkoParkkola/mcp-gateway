@@ -245,6 +245,16 @@ class Predicates(unittest.TestCase):
         found = self.tree('#[cfg(all(target_os = "linux", test))]\nmod probe_tests;\n', path="src/reload/mod.rs")
         self.assertEqual(found, ["not run on macOS and not listed: src/reload/mod.rs probe_tests"])
 
+    def test_p13b_a_module_under_any_test_or_x_is_production(self) -> None:
+        # MIK-9387.TCFG.3a: any(test, ..) also builds outside tests, so a module
+        # gated on it is production code, not a test module needing a listing.
+        # Alone it always runs on macOS under test; the misread shows only
+        # inside a gate that is off on macOS.
+        found = self.tree(
+            '#[cfg(all(any(test, unix), target_os = "linux"))]\nmod helper;\n', path="src/reload/mod.rs"
+        )
+        self.assertEqual(found, [])
+
     def test_p14_true_and_false_are_decided(self) -> None:
         self.assert_on("#[cfg(true)]")
         self.assert_on("#[cfg(false)]")  # off on both platforms: not a macOS gap
