@@ -76,12 +76,12 @@ struct Prepared {
 }
 
 impl Prepared {
-    fn new(server: String, tool: String) -> Box<Self> {
-        Box::new(Self {
+    const fn new(server: String, tool: String) -> Self {
+        Self {
             server,
             tool,
             allow: std::sync::Mutex::new(None),
-        })
+        }
     }
 }
 
@@ -661,10 +661,10 @@ impl super::MetaMcp {
         // stays unprepared, so admission and the grant stamp run the whole
         // policy for it should it ever get past the gate.
         if context.origin == Origin::GatewayInvoke && !skipped {
-            context.prepared_target = Some(Prepared::new(
+            context.prepared_target = Some(Box::new(Prepared::new(
                 extract_required_str(arguments, "server")?.to_owned(),
                 extract_required_str(arguments, "tool")?.to_owned(),
-            ));
+            )));
             context.store_prepared_allow(signing_allow);
         }
         context.admitted = true;
