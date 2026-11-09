@@ -22,7 +22,7 @@ pub(crate) fn resident_memory_bytes() -> Option<u64> {
 }
 
 /// The resident bytes `statm` at `path` reports, pages of `page` bytes.
-#[cfg(any(target_os = "linux", test))]
+#[cfg(any(target_os = "linux", all(test, feature = "metrics")))]
 pub(crate) fn bytes_from(path: &std::path::Path, page: u64) -> Option<u64> {
     std::fs::read_to_string(path)
         .ok()
@@ -30,7 +30,7 @@ pub(crate) fn bytes_from(path: &std::path::Path, page: u64) -> Option<u64> {
 }
 
 /// The second field of a `statm` line (resident pages) times the page size.
-#[cfg(any(target_os = "linux", test))]
+#[cfg(any(target_os = "linux", all(test, feature = "metrics")))]
 pub(crate) fn resident_bytes(statm: &str, page: u64) -> Option<u64> {
     statm
         .split_whitespace()
