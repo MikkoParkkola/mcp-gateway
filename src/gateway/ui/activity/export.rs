@@ -225,7 +225,7 @@ pub(super) fn ndjson(
 }
 
 /// The CSV columns, in order.
-const COLUMNS: [&str; 32] = [
+const COLUMNS: [&str; 33] = [
     "id",
     "kind",
     "counter",
