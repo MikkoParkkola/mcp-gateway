@@ -16,7 +16,7 @@ pub(crate) enum RefusalClass {
 pub(super) fn post_write_class(refusal: &ReloadRefusal) -> RefusalClass {
     use crate::config_reload::{ReloadFailure, reload_failure};
     match refusal.kind {
-        ReloadRefusalKind::Posture => RefusalClass::Posture,
+        ReloadRefusalKind::Posture => mutant!("postwrite-kind-ignored", RefusalClass::Internal, RefusalClass::Posture),
         ReloadRefusalKind::Other
             if reload_failure(&refusal.text) == ReloadFailure::ShuttingDown =>
         {

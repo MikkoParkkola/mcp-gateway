@@ -84,7 +84,7 @@ impl ReloadContext {
             // restart reads the whole file. Claiming more than the two facts
             // below is how a security message starts the next report.
             return Some(BeforeApply {
-                kind: BeforeApplyKind::NetworkPosture,
+                kind: mutant!("beforeapply-posture-mistagged", BeforeApplyKind::AccountBinding, BeforeApplyKind::NetworkPosture),
                 text: format!(
                     "{POSTURE_REFUSED_PREFIX} {} No backend was started or stopped, \
                      and no configuration was published. {restart}",

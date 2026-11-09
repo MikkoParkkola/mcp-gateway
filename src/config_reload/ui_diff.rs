@@ -434,7 +434,7 @@ pub(super) fn validate_refusal(e: &ReplaceError) -> UiRefused {
         | ReplaceError::Secrets(_)
         | ReplaceError::NoConfigFile
         | ReplaceError::ConfigRefused(_) => {
-            UiRefused::Failed("the preview did not complete".to_owned())
+            mutant!("validate-failed-unsupported", UiRefused::Unsupported("the preview did not complete".to_owned()), UiRefused::Failed("the preview did not complete".to_owned()))
         }
     }
 }

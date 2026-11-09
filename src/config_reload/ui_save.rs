@@ -237,7 +237,7 @@ fn map_error(error: ReplaceError, halt: Option<Halt>) -> Mapped {
         ReplaceError::NoAuditLog | ReplaceError::AuditRefused(_) => UiRefused::NoAuditLog,
         ReplaceError::Busy => UiRefused::Busy,
         ReplaceError::Secrets(SaveError::Refused(e) | SaveError::Store(e)) => match e {
-            StoreError::Failed(_) => UiRefused::Failed(FAILED.to_owned()),
+            StoreError::Failed(_) => mutant!("store-failed-refused", UiRefused::SecretsRefused { timeout: false }, UiRefused::Failed(FAILED.to_owned())),
             StoreError::TimedOut => UiRefused::SecretsRefused { timeout: true },
             StoreError::Exists
             | StoreError::Unavailable(_)

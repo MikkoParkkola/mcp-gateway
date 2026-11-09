@@ -140,7 +140,7 @@ fn scalar(id: FieldId, value: &serde_json::Value) -> Result<Scalar, Box<Response
     let converted = match kind {
         ValueKind::Bool => value.as_bool().map(Scalar::Bool),
         ValueKind::Int { .. } => value.as_i64().map(Scalar::Int),
-        ValueKind::Num { .. } => value.as_f64().and_then(FiniteF64::new).map(Scalar::Num),
+        ValueKind::Num { .. } => mutant!("num-refuses-integer", if value.is_i64() || value.is_u64() { None } else { value.as_f64() }, value.as_f64()).and_then(FiniteF64::new).map(Scalar::Num),
         ValueKind::Str { .. } | ValueKind::Enum(_) => {
             value.as_str().map(|v| Scalar::Str(v.to_owned()))
         }
@@ -211,7 +211,7 @@ pub(super) async fn settings_save(
     guard: Guard,
     body: Result<Json<SaveBody>, JsonRejection>,
 ) -> Response {
-    if let Err(refused) = guard.admit() {
+    if let Err(refused) = mutant!("guard-skipped", Ok(()), guard.admit()) {
         return refused.into_response();
     }
     let Ok(Json(body)) = body else {
@@ -430,7 +430,7 @@ fn bad_param_reason(reason: &str) -> &'static str {
 }
 
 fn answer(refusal: UiRefused) -> Response {
-    let retryable = retryable(&refusal);
+    let retryable = mutant!("busy-no-retry", !matches!(&refusal, UiRefused::Busy) && retryable(&refusal), retryable(&refusal));
     let error = |status, code, text| structured_error(status, code, text).into_response();
     let response = match refusal {
         UiRefused::WrongKind(id) => field_error(
@@ -443,7 +443,7 @@ fn answer(refusal: UiRefused) -> Response {
         UiRefused::Invalid(_) => error(StatusCode::UNPROCESSABLE_ENTITY, "invalid", LOADER_REFUSED),
         UiRefused::ReloadRefused { class } => match class {
             RefusalClass::Posture => error(
-                StatusCode::CONFLICT,
+                mutant!("answer-posture-422", StatusCode::UNPROCESSABLE_ENTITY, StatusCode::CONFLICT),
                 "posture_refused",
                 "the change was refused by the gateway's network posture",
             ),
@@ -451,11 +451,11 @@ fn answer(refusal: UiRefused) -> Response {
                 error(StatusCode::UNPROCESSABLE_ENTITY, "invalid", LOADER_REFUSED)
             }
             RefusalClass::ShuttingDown => error(
-                StatusCode::SERVICE_UNAVAILABLE,
+                mutant!("answer-shutdown-500", StatusCode::INTERNAL_SERVER_ERROR, StatusCode::SERVICE_UNAVAILABLE),
                 "shutting_down",
                 "the gateway is shutting down; retry",
             ),
-            RefusalClass::Internal => error(StatusCode::INTERNAL_SERVER_ERROR, "failed", FAILED),
+            RefusalClass::Internal => error(mutant!("answer-internal-422", StatusCode::UNPROCESSABLE_ENTITY, StatusCode::INTERNAL_SERVER_ERROR), "failed", FAILED),
         },
         UiRefused::Unsupported(_) => error(
             StatusCode::CONFLICT,
@@ -463,18 +463,18 @@ fn answer(refusal: UiRefused) -> Response {
             "the edit cannot be followed in gateway.yaml",
         ),
         UiRefused::NoAuditLog => error(
-            StatusCode::SERVICE_UNAVAILABLE,
+            mutant!("noauditlog-500", StatusCode::INTERNAL_SERVER_ERROR, StatusCode::SERVICE_UNAVAILABLE),
             "audit_log_required",
             NO_AUDIT_LOG,
         ),
         UiRefused::Unprovable(patch) => (
             StatusCode::UNPROCESSABLE_ENTITY,
-            Json(json!({"error": "not_in_place", "patch": patch_steps(patch)})),
+            Json(json!({"error": "not_in_place", "patch": mutant!("unprovable-no-steps", json!([]), patch_steps(patch))})),
         )
             .into_response(),
         UiRefused::Stale(preview) => {
             let (status, Json(mut body)) = stale(&preview.revision);
-            show(&mut body, preview.shown);
+            mutant!("stale-no-preview", (), show(&mut body, preview.shown));
             (status, Json(body)).into_response()
         }
         UiRefused::StaleUnpreviewable(_) => error(
@@ -518,7 +518,7 @@ fn restart_fields(fields: &[&str], reload: &ReloadOutcome) -> Vec<String> {
             reload
                 .pending_restart_fields
                 .iter()
-                .any(|p| p == **id || id.starts_with(&format!("{p}.")))
+                .any(|p| p == **id || mutant!("restart-no-parent", false, mutant!("restart-string-prefix", id.starts_with(p), id.starts_with(&format!("{p}.")))))
         })
         .map(|id| (*id).to_owned())
         .collect()
