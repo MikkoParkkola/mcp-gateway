@@ -190,6 +190,19 @@ class CodeReviewBypasses(unittest.TestCase):
         root = tree({"src/a.rs": "#[cfg(all(test, unix))]\n" + self.LIT}, "mod a;\n")
         self.assertEqual(cis.violations(root), [])
 
+    # MIK-9387.TCFG.2: the shared reader decides (scripts/dev/check-orphan-test-modules.py).
+    def test_an_any_whose_every_operand_needs_test_is_test_code(self):
+        root = tree({"src/a.rs": "#[cfg(any(test, all(test, unix)))]\n" + self.LIT}, "mod a;\n")
+        self.assertEqual(cis.violations(root), [])
+
+    def test_a_quoted_comma_is_not_an_operand(self):
+        root = tree({"src/a.rs": '#[cfg(all(feature = "a,test,b"))]\n' + self.LIT}, "mod a;\n")
+        self.assertEqual(len(cis.violations(root)), 1, cis.violations(root))
+
+    def test_a_child_of_an_inner_test_file_is_test_code(self):
+        root = tree({"src/a.rs": "#![cfg(test)]\nmod child;\n", "src/a/child.rs": self.LIT}, "mod a;\n")
+        self.assertEqual(cis.violations(root), [])
+
     def test_production_reachability_wins_whatever_the_walk_order(self):
         root = tree({
             "src/a.rs": "#[cfg(test)]\n#[path = \"shared.rs\"]\nmod t;\n",

@@ -184,6 +184,9 @@ mod f13_text_a_tests;
 mod firewall_publish_fixture;
 #[cfg(all(test, feature = "webui"))]
 mod gateway_status_tests;
+/// Identity-grant refusals through `/mcp`, read back as Activity rows.
+#[cfg(all(test, feature = "webui"))]
+mod grant_refusal_rows_tests;
 /// GH1942.HARDEN.1 rows 10 and 11: hardened requires declared elicitation.
 #[cfg(test)]
 mod hardened_elicitation_tests;
