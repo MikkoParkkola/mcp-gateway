@@ -83,13 +83,13 @@ mod tests {
     /// reads [`current`] during cancellation sees the context it ran in.
     #[test]
     fn an_unpolled_trace_scope_drops_its_future_outside_the_scope() {
-        struct Records(std::sync::Arc<std::sync::Mutex<Option<Option<String>>>>);
+        struct Records(std::sync::Arc<std::sync::Mutex<Vec<Option<String>>>>);
         impl Drop for Records {
             fn drop(&mut self) {
-                *self.0.lock().expect("lock") = Some(current());
+                self.0.lock().expect("lock").push(current());
             }
         }
-        let seen = std::sync::Arc::new(std::sync::Mutex::new(None));
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
         let guard = Records(std::sync::Arc::clone(&seen));
         let inner = async move {
             let _keep = &guard;
@@ -97,7 +97,7 @@ mod tests {
         drop(with_trace_id("gw-inner".to_owned(), inner));
         assert_eq!(
             *seen.lock().expect("lock"),
-            Some(None),
+            [None],
             "the unpolled future was dropped inside the trace scope it was given"
         );
     }
