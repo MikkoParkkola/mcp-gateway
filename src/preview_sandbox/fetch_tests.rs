@@ -112,6 +112,13 @@ fn npm_non_registry_specs_refuse() {
         "pkg@1\\2",
         "Pkg",
         "a:b",
+        // npm reads a dot-led version as a path and an archive name as a file.
+        "pkg@..",
+        "pkg@.hidden",
+        "pkg.tgz",
+        "pkg@foo.tgz",
+        "pkg@x.tar",
+        "pkg@x.TAR.GZ",
         "",
         long.as_str(),
     ] {
@@ -127,6 +134,11 @@ fn npm_name_length_is_capped_at_214() {
     assert_eq!(phases("npx", &[ok.as_str()]).fetch, Some(Fetch::Npm(ok)));
     let scoped = format!("@s/{}", "a".repeat(212));
     assert!(refusal("npx", &[scoped.as_str()]).contains("not a registry package"));
+    let scoped = format!("@s/{}", "a".repeat(211));
+    assert_eq!(
+        phases("npx", &[scoped.as_str()]).fetch,
+        Some(Fetch::Npm(scoped))
+    );
 }
 
 /// T1: npm version ranges keep their own characters.
@@ -215,4 +227,24 @@ fn a_plan_refusal_ends_with_the_shared_tail() {
         text.ends_with("the server can still be added without a preview"),
         "{text}"
     );
+}
+
+/// A non-UTF-8 spec refuses; non-UTF-8 server arguments after a valid spec
+/// pass through unchanged.
+#[cfg(unix)]
+#[test]
+fn non_utf8_specs_refuse_and_non_utf8_args_pass_through() {
+    use std::os::unix::ffi::OsStringExt as _;
+    let raw = OsString::from_vec(vec![b'p', 0xff, b'k']);
+    let target = Target {
+        program: PathBuf::from("npx"),
+        args: vec![raw.clone()],
+    };
+    let text = plan(&target).expect_err("non-UTF-8 spec").to_string();
+    assert!(text.contains("not a registry package"), "{text}");
+    let target = Target {
+        program: PathBuf::from("uvx"),
+        args: vec![OsString::from("pkg"), raw.clone()],
+    };
+    assert_eq!(plan(&target).expect("valid spec").run_args, vec![raw]);
 }
