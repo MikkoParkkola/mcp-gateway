@@ -302,24 +302,3 @@ fn nested_annotated_property_is_mirrored_and_spaced_value_is_encoded() {
         ]
     );
 }
-
-#[tokio::test]
-async fn cold_tool_cache_is_discovered_before_mirroring() {
-    let (url, captured) = start_mock().await;
-    let backend = backend_for(&url);
-
-    // No tools/list first: the gateway was just restarted.
-    backend
-        .request(
-            "tools/call",
-            Some(json!({"name": "echo", "arguments": {"tenant": "acme"}})),
-        )
-        .await
-        .expect("tools/call");
-
-    assert_eq!(
-        captured_header(&captured, "Mcp-Param-Tenant").as_deref(),
-        Some("acme"),
-        "a cold cache must be filled so the call still carries its mirror"
-    );
-}

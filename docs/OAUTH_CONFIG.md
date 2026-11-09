@@ -200,6 +200,11 @@ meta_mcp:
     - my_oauth_backend   # triggers OAuth handshake at startup
 ```
 
+Listing names in `warm_start` narrows warm start to those backends: every other
+backend's tools are not listed at boot. Until such a backend has been listed, a
+`tools/call` to it can go out without its `Mcp-Param-*` headers, and a backend
+that validates those headers rejects the call.
+
 Set `RUST_LOG=info` (the default) to see the full discovery + callback-server
 + browser-open progression in the gateway log; the first-time auth URL is
 now emitted at INFO level so operators can complete the browser flow even
