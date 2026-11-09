@@ -33,6 +33,21 @@ import re
 import subprocess
 import sys
 import tokenize
+from pathlib import Path as _Path
+
+
+def _load_base_revision():
+    """scripts/dev/base_revision.py, loaded by path (callers run with python -I)."""
+    spec = importlib.util.spec_from_file_location(
+        "base_revision", _Path(__file__).resolve().parent / "base_revision.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+_BASE_REVISION = _load_base_revision()
+Compare, add_argument, comparison_commit = (
+    _BASE_REVISION.Compare, _BASE_REVISION.add_argument, _BASE_REVISION.comparison_commit)
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -272,11 +287,10 @@ def git(*args: str) -> str:
     return r.stdout
 
 
-def base_allowances(rev: str) -> tuple[str | None, collections.Counter[Key] | None]:
-    """The base's list, or, when the base has none yet, its tree's matches."""
-    # The given revision itself, not a merge-base: a list the base already
-    # shrank may not regrow, whatever the branch's own history holds.
-    commit = git("rev-parse", "--verify", f"{rev}^{{commit}}").strip()
+def base_allowances(rev: str, compare: Compare = Compare.BASE) -> tuple[str | None, collections.Counter[Key] | None]:
+    """The list at the comparison commit (base_revision), or, when it has none yet, its tree's
+    matches."""
+    commit = comparison_commit(ROOT, rev, compare)
     if LIST in git("ls-tree", "-r", "--name-only", commit, "--", LIST).split():
         return git("show", f"{commit}:{LIST}"), None
     found: collections.Counter[Key] = collections.Counter()
@@ -290,9 +304,10 @@ def base_allowances(rev: str) -> tuple[str | None, collections.Counter[Key] | No
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--base", help="refuse an allowance larger than this revision's")
+    add_argument(ap)
     args = ap.parse_args(argv)
     try:
-        base_list, base_found = base_allowances(args.base) if args.base else (None, None)
+        base_list, base_found = base_allowances(args.base, Compare(args.compare)) if args.base else (None, None)
         found = problems(ROOT, base_list, base_found)
     except (RuntimeError, ValueError, OSError) as exc:
         print(f"cfg reader copies: {exc}", file=sys.stderr)
