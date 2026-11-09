@@ -50,7 +50,11 @@ async fn gateway(
         crate::config::KeyServerConfig::default(),
         crate::key_server::email_hash::EmailHashKey::for_test(),
     ));
-    crate::key_server::store::activate_for_test(key_server.store.as_ref(), key_server.config.token_ttl_secs, token);
+    crate::key_server::store::activate_for_test(
+        key_server.store.as_ref(),
+        key_server.config.token_ttl_secs,
+        token,
+    );
     let auth = AuthConfig {
         enabled: true,
         bearer_token: Some(BEARER.to_owned()),

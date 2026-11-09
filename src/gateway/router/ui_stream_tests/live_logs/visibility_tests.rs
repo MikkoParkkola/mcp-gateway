@@ -30,7 +30,11 @@ async fn keyed(
         crate::config::KeyServerConfig::default(),
         crate::key_server::email_hash::EmailHashKey::for_test(),
     ));
-    crate::key_server::store::activate_for_test(key_server.store.as_ref(), key_server.config.token_ttl_secs, tok);
+    crate::key_server::store::activate_for_test(
+        key_server.store.as_ref(),
+        key_server.config.token_ttl_secs,
+        tok,
+    );
     let dir = crate::test_dir_keep::kept_tempdir();
     let inv = logger(&dir, "invocation.jsonl");
     inv.keep_test_dir(Arc::clone(&dir));

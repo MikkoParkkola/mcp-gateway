@@ -85,7 +85,11 @@ async fn closed_listen_body(revoke: bool) -> String {
     ));
     let token = temporary_token();
     let (credential, jti) = (bearer(&token.token), token.jti.clone());
-    crate::key_server::store::activate_for_test(key_server.store.as_ref(), key_server.config.token_ttl_secs, token);
+    crate::key_server::store::activate_for_test(
+        key_server.store.as_ref(),
+        key_server.config.token_ttl_secs,
+        token,
+    );
     let registry = SubscriptionRegistry::new(4, authorizer(Arc::clone(&key_server)));
     let listener = registry
         .subscribe_as(credential)

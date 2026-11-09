@@ -190,7 +190,8 @@ pub trait TokenStore: Send + Sync + 'static {
     /// # Errors
     ///
     /// [`ReserveError`] naming why no slot was reserved.
-    fn reserve(&self, request: ReservationRequest, now: u64) -> Result<ReservationId, ReserveError>;
+    fn reserve(&self, request: ReservationRequest, now: u64)
+    -> Result<ReservationId, ReserveError>;
 
     /// Turn the reservation `id` into the active `token`, at `now`: the
     /// identity and JTI must match the reservation, its deadline must not
@@ -200,7 +201,12 @@ pub trait TokenStore: Send + Sync + 'static {
     /// # Errors
     ///
     /// [`ActivateError`] naming why the token was not activated.
-    fn activate(&self, id: &ReservationId, token: TemporaryToken, now: u64) -> Result<(), ActivateError>;
+    fn activate(
+        &self,
+        id: &ReservationId,
+        token: TemporaryToken,
+        now: u64,
+    ) -> Result<(), ActivateError>;
 
     /// Release the pending slot `id`, if it is still pending. Idempotent.
     fn abort(&self, id: &ReservationId);
@@ -310,12 +316,17 @@ impl InMemoryTokenStore {
     /// lifetime.
     #[must_use]
     pub(crate) fn for_config(config: &crate::config::KeyServerConfig) -> Self {
-        Self::new(config.max_tokens_per_identity as usize, config.token_ttl_secs)
+        Self::new(
+            config.max_tokens_per_identity as usize,
+            config.token_ttl_secs,
+        )
     }
 
     fn pending(&self) -> std::sync::MutexGuard<'_, Pending> {
         // A panic while holding the lock leaves plain data behind: keep going.
-        self.pending.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+        self.pending
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
     /// Remove the active token `jti` from both indices. The caller holds
@@ -349,10 +360,15 @@ impl InMemoryTokenStore {
 
 #[async_trait::async_trait]
 impl TokenStore for InMemoryTokenStore {
-    fn reserve(&self, request: ReservationRequest, now: u64) -> Result<ReservationId, ReserveError> {
+    fn reserve(
+        &self,
+        request: ReservationRequest,
+        now: u64,
+    ) -> Result<ReservationId, ReserveError> {
         let mut pending = self.pending();
         pending.remove_where(ActivateError::Expired, |slot| slot.deadline <= now);
-        let same = |issuer: &str, subject: &str| issuer == request.issuer && subject == request.subject;
+        let same =
+            |issuer: &str, subject: &str| issuer == request.issuer && subject == request.subject;
         let active = self
             .by_bearer
             .iter()
@@ -361,14 +377,22 @@ impl TokenStore for InMemoryTokenStore {
                 same(id.issuer(), id.subject()) && !e.value().is_expired(now)
             })
             .count();
-        let reserved = pending.slots.values().filter(|s| same(&s.issuer, &s.subject)).count();
+        let reserved = pending
+            .slots
+            .values()
+            .filter(|s| same(&s.issuer, &s.subject))
+            .count();
         if active + reserved >= self.cap {
             return Err(ReserveError::CapReached);
         }
-        if self.by_jti.contains_key(&request.jti) || pending.slots.values().any(|s| s.jti == request.jti) {
+        if self.by_jti.contains_key(&request.jti)
+            || pending.slots.values().any(|s| s.jti == request.jti)
+        {
             return Err(ReserveError::DuplicateJti);
         }
-        let deadline = now.checked_add(PENDING_WINDOW_SECS).ok_or(ReserveError::Clock)?;
+        let deadline = now
+            .checked_add(PENDING_WINDOW_SECS)
+            .ok_or(ReserveError::Clock)?;
         let id = pending.next;
         pending.next = pending.next.wrapping_add(1);
         pending.slots.insert(
@@ -383,7 +407,12 @@ impl TokenStore for InMemoryTokenStore {
         Ok(ReservationId(id))
     }
 
-    fn activate(&self, id: &ReservationId, token: TemporaryToken, now: u64) -> Result<(), ActivateError> {
+    fn activate(
+        &self,
+        id: &ReservationId,
+        token: TemporaryToken,
+        now: u64,
+    ) -> Result<(), ActivateError> {
         let mut pending = self.pending();
         let Some(slot) = pending.slots.remove(&id.0) else {
             return Err(pending.gone.remove(&id.0).unwrap_or(ActivateError::Missing));
@@ -506,12 +535,18 @@ impl TokenStore for InMemoryTokenStore {
 /// seconds (the store's frozen lifetime): the one way test fixtures put a
 /// token in a store.
 #[cfg(test)]
-#[allow(clippy::disallowed_methods, reason = "test fixtures read the host clock")]
+#[allow(
+    clippy::disallowed_methods,
+    reason = "test fixtures read the host clock"
+)]
 pub(crate) fn activate_for_test(store: &dyn TokenStore, ttl: u64, mut token: TemporaryToken) {
     let now = crate::clock::unix_secs().expect("a readable clock");
     // The fixture's own window is replaced: refuse one that was meant to be
     // expired rather than silently make it live.
-    assert!(token.exp > now, "an expired fixture token cannot be activated");
+    assert!(
+        token.exp > now,
+        "an expired fixture token cannot be activated"
+    );
     let request = ReservationRequest {
         issuer: token.identity.issuer().to_string(),
         subject: token.identity.subject().to_string(),
@@ -520,7 +555,9 @@ pub(crate) fn activate_for_test(store: &dyn TokenStore, ttl: u64, mut token: Tem
     let id = store.reserve(request, now).expect("a slot under the cap");
     token.iat = now;
     token.exp = now + ttl;
-    store.activate(&id, token, now).expect("the reservation activates");
+    store
+        .activate(&id, token, now)
+        .expect("the reservation activates");
 }
 
 /// Spawn a background task that reaps expired tokens every `interval`.

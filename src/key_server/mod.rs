@@ -428,7 +428,10 @@ mod tests {
             ("mcpgw_nameless_subject", "", "https://issuer.invalid"),
             ("mcpgw_nameless_issuer", "sub", ""),
         ] {
-            store::activate_for_test(ks.store.as_ref(), ks.config.token_ttl_secs, TemporaryToken {
+            store::activate_for_test(
+                ks.store.as_ref(),
+                ks.config.token_ttl_secs,
+                TemporaryToken {
                     jti: format!("jti-{bearer}"),
                     token: bearer.to_string(),
                     identity: identity(subject, "u@corp.invalid", issuer),
@@ -436,7 +439,8 @@ mod tests {
                     iat: 0,
                     exp: u64::MAX,
                     client_ip: None,
-                });
+                },
+            );
             assert!(ks.store.get(bearer).await.is_some(), "the store holds it");
             assert!(
                 ks.validate_token(bearer).await.is_none(),
@@ -480,7 +484,10 @@ mod tests {
             crate::key_server::email_hash::EmailHashKey::for_test(),
         );
         let text = "mcpgw_runtime_principal";
-        store::activate_for_test(ks.store.as_ref(), ks.config.token_ttl_secs, TemporaryToken {
+        store::activate_for_test(
+            ks.store.as_ref(),
+            ks.config.token_ttl_secs,
+            TemporaryToken {
                 jti: "jti-runtime".to_string(),
                 token: text.to_string(),
                 identity: identity("sub", "u@corp.invalid", "https://issuer.invalid"),
@@ -488,7 +495,8 @@ mod tests {
                 iat: 0,
                 exp: u64::MAX,
                 client_ip: None,
-            });
+            },
+        );
         let (client, _) = ks.validate_token(text).await.expect("token is live");
         let p = client.principal.storage_form();
         assert_ne!(p, crate::gateway::auth::principal_of(text).storage_form());

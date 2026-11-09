@@ -496,8 +496,16 @@ mod tests {
         let (kept, revoked) = (temporary_token(&["alpha"]), temporary_token(&["alpha"]));
         let (kept_cred, revoked_cred) = (bearer(&kept.token), bearer(&revoked.token));
         let revoked_jti = revoked.jti.clone();
-        crate::key_server::store::activate_for_test(key_server.store.as_ref(), key_server.config.token_ttl_secs, kept);
-        crate::key_server::store::activate_for_test(key_server.store.as_ref(), key_server.config.token_ttl_secs, revoked);
+        crate::key_server::store::activate_for_test(
+            key_server.store.as_ref(),
+            key_server.config.token_ttl_secs,
+            kept,
+        );
+        crate::key_server::store::activate_for_test(
+            key_server.store.as_ref(),
+            key_server.config.token_ttl_secs,
+            revoked,
+        );
         assert!(key_server.store.revoke_by_jti(&revoked_jti).await);
         let state = authorizer(key_server);
 
@@ -525,7 +533,11 @@ mod tests {
         ));
         let token = temporary_token(&["alpha"]);
         let credential = bearer(&token.token);
-        crate::key_server::store::activate_for_test(key_server.store.as_ref(), key_server.config.token_ttl_secs, token);
+        crate::key_server::store::activate_for_test(
+            key_server.store.as_ref(),
+            key_server.config.token_ttl_secs,
+            token,
+        );
         let state = authorizer(key_server);
 
         assert_eq!(
