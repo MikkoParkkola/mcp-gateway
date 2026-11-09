@@ -34,18 +34,29 @@ fn refuse(setup: Setup, name: &str, binding: Option<String>) -> Sent {
 
 #[test]
 fn a_duplicate_name_is_refused_without_removal() {
-    for in_file in [true, false] {
-        let mut setup = target_setup();
-        if in_file {
-            setup.text.push_str(&item("target", "duplicate-secret", ""));
-        } else {
-            let mut duplicate = setup.running.api_keys[1].clone();
-            duplicate.key_sha256 = Some(spec("duplicate-secret"));
-            setup.running.api_keys.push(duplicate);
-        }
-        let sent = refuse(setup, "target", None);
-        assert_eq!(sent.status, StatusCode::CONFLICT, "{}", sent.body);
-    }
+    // In the running table: a valid file cannot hold two entries of one name.
+    let mut setup = target_setup();
+    let mut duplicate = setup.running.api_keys[1].clone();
+    duplicate.key_sha256 = Some(spec("duplicate-secret"));
+    setup.running.api_keys.push(duplicate);
+    let sent = refuse(setup, "target", None);
+    assert_eq!(sent.status, StatusCode::CONFLICT, "{}", sent.body);
+}
+
+/// A file that does not load (here: a duplicate name) has no A12 revision,
+/// so no revoke can take the write path: refused, nothing written.
+#[test]
+fn an_unloadable_file_takes_no_revoke() {
+    let mut setup = target_setup();
+    setup.text.push_str(&item("target", "duplicate-secret", ""));
+    let fx = Fixture::new(setup);
+    assert!(
+        fx.get()["revision"].is_null(),
+        "premise: no revision for an unloadable file"
+    );
+    let sent = delete(&fx, "target", Call::new(&json!({"revision": "any"})), None);
+    assert!(sent.status.is_client_error(), "{}", sent.body);
+    assert_ne!(sent.json()["revoked"], true);
 }
 
 #[test]
@@ -73,43 +84,33 @@ fn a_bound_tag_under_another_name_is_refused() {
 
 #[test]
 fn a_tag_colliding_with_another_key_or_the_bearer_is_identity_in_use() {
-    for target_previous in [false, true] {
-        for other_slot in ["current", "previous", "bearer"] {
-            let mut setup = target_setup();
-            let previous = format!(
-                "      previous_key_sha256: \"{}\"\n      previous_expires_at: 2099-01-01T00:00:00Z\n",
-                spec("collision")
-            );
-            let target = if target_previous {
-                item("target", "target-secret", &previous)
-            } else {
-                item("target", "collision", "")
-            };
-            let other = if other_slot == "previous" {
-                item("other", "other-secret", &previous)
-            } else {
-                item("other", "collision", "")
-            };
-            // Keep live target compatible; put the conflicting slot on disk.
-            if target_previous {
-                setup.running.api_keys[1].previous_key_sha256 = Some(spec("collision"));
-                setup.running.api_keys[1].previous_expires_at =
-                    Some("2099-01-01T00:00:00Z".parse().unwrap());
-            } else {
-                setup.running.api_keys[1].key_sha256 = Some(spec("collision"));
+    // A valid file cannot share a digest between keys or with the bearer, so
+    // the collision lives in the running table, over a valid file.
+    for slot in ["current", "previous", "bearer"] {
+        let mut setup = target_setup();
+        setup.text = yaml_of(&[
+            root_item(),
+            item("target", "target-secret", ""),
+            item("other", "other-secret", ""),
+        ]);
+        let mut other = setup.running.api_keys[1].clone();
+        other.name = "other".into();
+        match slot {
+            "current" => other.key_sha256 = Some(spec("target-secret")),
+            "previous" => {
+                other.key_sha256 = Some(spec("other-secret"));
+                other.previous_key_sha256 = Some(spec("target-secret"));
+                other.previous_expires_at = Some("2099-01-01T00:00:00Z".parse().expect("time"));
             }
-            setup.text = if other_slot == "bearer" {
-                yaml_of(&[root_item(), target]).replace(
-                    "  enabled: true\n",
-                    "  enabled: true\n  bearer_token: collision\n",
-                )
-            } else {
-                yaml_of(&[root_item(), target, other])
-            };
-            let sent = refuse(setup, "target", None);
-            assert_eq!(sent.status, StatusCode::CONFLICT, "{}", sent.body);
-            assert_eq!(sent.json(), json!({"error": "identity_in_use"}));
+            _ => {
+                other.key_sha256 = Some(spec("other-secret"));
+                setup.running.bearer_token = Some("target-secret".into());
+            }
         }
+        setup.running.api_keys.push(other);
+        let sent = refuse(setup, "target", None);
+        assert_eq!(sent.status, StatusCode::CONFLICT, "{slot}: {}", sent.body);
+        assert_eq!(sent.json(), json!({"error": "identity_in_use"}), "{slot}");
     }
 }
 
