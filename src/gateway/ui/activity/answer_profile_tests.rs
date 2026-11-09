@@ -199,3 +199,23 @@ fn m2_profile_open_cost_of_one_page() {
         drop(file);
     }
 }
+
+/// M1's fixture, read as a list page: cumulative allocation and the bytes the
+/// page examined, for the ratchet rows.
+#[test]
+#[ignore = "profiling, not an assertion"]
+fn m1_profile_one_list_page() {
+    let fx = over_caps(200, true);
+    let log_bytes = std::fs::metadata(&fx.path).unwrap().len();
+    let lines = std::fs::read_to_string(&fx.path).unwrap().lines().count() as u64;
+    let query = super::ListQuery {
+        limit: Some("200".into()),
+        ..super::ListQuery::default()
+    };
+    for run in 1..=2 {
+        let (response, m) = measure(|| super::list_page(&fx.logs(), &fx.access(), &query));
+        drop(response);
+        report("m1 list page", run, m, 200);
+        println!("PROFILE m1 log: {log_bytes} B, {lines} lines");
+    }
+}
