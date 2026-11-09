@@ -229,18 +229,21 @@ impl LogTail {
                 self.end = 0;
                 continue;
             };
-            // One page budget: the window takes what is left, and the pager's
-            // re-read for a line longer than the window (up to ASSEMBLY_WINDOW)
-            // is not taken past it. The page then ends resumable, and the next
-            // one, with a fresh budget, reads the line whole.
+            // One page budget: the window and the pager's re-read for a line
+            // longer than the window (up to ASSEMBLY_WINDOW) are charged
+            // together, so assembly is attempted only when both fit what is
+            // left. Otherwise the window takes what is left and the page ends
+            // resumable at a line it cannot hold; the next one, with a fresh
+            // budget, reads the line whole.
             let remaining = budget - *spent;
-            let (tail, read) = if remaining < ASSEMBLY_WINDOW {
-                tail_window_in(file, self.end, WINDOW.min(remaining))?
-            } else {
+            let assemble = remaining >= WINDOW + ASSEMBLY_WINDOW;
+            let (tail, read) = if assemble {
                 tail_window_assembled(file, self.end, WINDOW)?
+            } else {
+                tail_window_in(file, self.end, WINDOW.min(remaining))?
             };
             *spent += read;
-            if remaining < ASSEMBLY_WINDOW && matches!(tail, Tail::LineTooLong) {
+            if !assemble && matches!(tail, Tail::LineTooLong) {
                 return Ok(None);
             }
             match tail {
