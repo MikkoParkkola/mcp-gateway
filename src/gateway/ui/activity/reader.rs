@@ -109,6 +109,8 @@ struct LogTail {
     /// partial append at the end of the active file: drop it silently.
     skip_head: bool,
     done: bool,
+    /// This page has taken an item from this log: the strict budget applies.
+    advanced: bool,
 }
 
 impl LogTail {
@@ -130,6 +132,7 @@ impl LogTail {
             pending: Vec::new(),
             skip_head: pos.is_none(),
             done: false,
+            advanced: false,
         };
         tail.file = tail.open_segment(at.lost_if_unopened())?;
         if let Some(f) = &tail.file {
@@ -192,6 +195,7 @@ impl LogTail {
                         offset,
                     }),
                 };
+                self.advanced = true;
                 return Ok(Some((item, above)));
             }
             if self.done {
@@ -222,28 +226,31 @@ impl LogTail {
                 }
                 continue;
             }
-            if *spent >= budget {
+            if *spent >= budget && self.advanced {
                 return Ok(None);
             }
             let Some(file) = &self.file else {
                 self.end = 0;
                 continue;
             };
-            // One page budget: the window and the pager's re-read for a line
-            // longer than the window (up to ASSEMBLY_WINDOW) are charged
-            // together, so assembly is attempted only when both fit what is
-            // left. Otherwise the window takes what is left and the page ends
-            // resumable at a line it cannot hold; the next one, with a fresh
-            // budget, reads the line whole.
-            let remaining = budget - *spent;
+            // One page budget. The window and the pager's re-read for a line
+            // longer than the window are charged together, so assembly runs
+            // only when both fit what is left. A log this page has taken
+            // nothing from may overshoot instead, so paging always advances:
+            // it reads one window of ASSEMBLY_WINDOW (the record cap plus a
+            // newline) at once, so its peak is at most that past the budget
+            // already spent, per log. Past that, the page ends resumable.
+            let remaining = budget.saturating_sub(*spent);
             let assemble = remaining >= WINDOW + ASSEMBLY_WINDOW;
             let (tail, read) = if assemble {
                 tail_window_assembled(file, self.end, WINDOW)?
-            } else {
+            } else if self.advanced {
                 tail_window_in(file, self.end, WINDOW.min(remaining))?
+            } else {
+                tail_window_assembled(file, self.end, ASSEMBLY_WINDOW)?
             };
             *spent += read;
-            if !assemble && matches!(tail, Tail::LineTooLong) {
+            if self.advanced && !assemble && matches!(tail, Tail::LineTooLong) {
                 return Ok(None);
             }
             match tail {
@@ -258,6 +265,7 @@ impl LogTail {
                         segment: self.segment,
                         offset: self.end,
                     });
+                    self.advanced = true;
                     return Ok(Some((item, above)));
                 }
                 Tail::Lines { start, .. } => {

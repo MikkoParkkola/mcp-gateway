@@ -33,16 +33,20 @@ fn pad(fx: &Fixture) {
 }
 
 #[test]
-fn r43_the_assembly_probe_is_not_taken_past_the_remaining_budget() {
+fn r43_an_unadvanced_page_may_pass_its_budget_by_the_record_cap_at_most() {
     let fx = Fixture::new(None);
     fx.call("gw-c");
     pad(&fx);
     let first = page(&fx, None, 3 * MIB);
-    // An unadvanced page may assemble one record past its budget, by at most
-    // the record cap.
+    // An unadvanced page assembles the record whatever its budget, and may
+    // pass the budget by at most the record cap.
     assert!(first.bytes_examined <= 3 * MIB + ASSEMBLY_WINDOW);
-    assert!(first.scan_exhausted);
-    let cursor = first.next.expect("a resumable cursor");
-    let second = page(&fx, Some(&cursor), 8 * MIB);
-    assert!(second.lines.iter().any(|l| l.entry["trace_id"] == "gw-c"));
+    let mut cursor = first.next;
+    let mut reached_call = first.lines.iter().any(|l| l.entry["trace_id"] == "gw-c");
+    while let Some(c) = cursor {
+        let next = page(&fx, Some(&c), 8 * MIB);
+        reached_call |= next.lines.iter().any(|l| l.entry["trace_id"] == "gw-c");
+        cursor = next.next;
+    }
+    assert!(reached_call);
 }
