@@ -135,8 +135,8 @@ fn the_expectation_holds_known_answers() {
 
 /// A receipt for a call with no decision object reads the by-version
 /// line in `findings`, not the old placeholder. That text is why the six
-/// `other-receipt` 200 cells (AdminKey, AdminKeyUnmapped, Bearer, OidcAdmin,
-/// OidcAuditor, Session) carry a new digest in `ui_access_matrix.tsv`.
+/// `other-receipt` 200 cells (`AdminKey`, `AdminKeyUnmapped`, `Bearer`, `OidcAdmin`,
+/// `OidcAuditor`, `Session`) carry a new digest in `ui_access_matrix.tsv`.
 #[tokio::test]
 async fn matrix_known_receipt_cells_moved_for_findings_line() {
     let fx = fixture(Gateway::On, false).await;

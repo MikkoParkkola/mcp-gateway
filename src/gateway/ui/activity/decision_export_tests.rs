@@ -156,7 +156,7 @@ fn export_rule_filter_stops_at_scan_cap() {
 }
 
 /// The CSV `findings_truncated` cell of one call: `true`, or empty.
-fn truncated_cell(extra: Value) -> String {
+fn truncated_cell(extra: &Value) -> String {
     let dir = tempfile::tempdir().unwrap();
     let mut d = decision(Some("r1"));
     d["request_findings"] = json!([super::decision_fixtures::finding(
@@ -199,12 +199,12 @@ fn gather_all(logs: &Logs) -> super::export::Collected {
 #[test]
 fn csv_truncation_cell_is_true_or_empty() {
     assert_eq!(
-        truncated_cell(json!({"request_findings_truncated": true})),
+        truncated_cell(&json!({"request_findings_truncated": true})),
         "true"
     );
     assert_eq!(
-        truncated_cell(json!({"request_findings_truncated": false})),
+        truncated_cell(&json!({"request_findings_truncated": false})),
         ""
     );
-    assert_eq!(truncated_cell(json!({})), "");
+    assert_eq!(truncated_cell(&json!({})), "");
 }

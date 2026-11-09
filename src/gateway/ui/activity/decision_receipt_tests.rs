@@ -30,7 +30,7 @@ fn receipt_of(decision: Option<Value>) -> Value {
 }
 
 /// A v2 decision with `patch`'s members set over the fixture's.
-fn with(patch: Value) -> Value {
+fn with(patch: &Value) -> Value {
     let mut d = decision(Some("r1"));
     for (k, v) in patch.as_object().unwrap() {
         d[k] = v.clone();
@@ -45,7 +45,7 @@ fn keys(v: &Value) -> Vec<&str> {
 #[test]
 fn receipt_v2_record_serves_the_full_decision_projection() {
     let found = finding("pii", "high", "arguments.query");
-    let body = receipt_of(Some(with(json!({
+    let body = receipt_of(Some(with(&json!({
         "grant_id": "grant-1", "request_findings": [found.clone()],
         "config_revision": "cfg-1", "running_revision": "run-1",
     }))));
@@ -66,7 +66,7 @@ fn receipt_revisions_absent_are_never_invented() {
     let none = receipt_of(Some(decision(Some("r1"))));
     let d = &none["decision"];
     assert!(d.get("config_revision").is_none() && d.get("running_revision").is_none());
-    let one = receipt_of(Some(with(json!({"config_revision": "cfg-1"}))));
+    let one = receipt_of(Some(with(&json!({"config_revision": "cfg-1"}))));
     assert_eq!(one["decision"]["config_revision"], "cfg-1");
     assert!(!keys(&one["decision"]).contains(&"running_revision"));
 }
@@ -82,7 +82,7 @@ fn receipt_decided_reads_each_variant() {
         ),
         ("replayed", evidence::DECIDED_REPLAYED),
     ] {
-        let body = receipt_of(Some(with(json!({"decided": stored}))));
+        let body = receipt_of(Some(with(&json!({"decided": stored}))));
         assert_eq!(body["decision"]["decided"], line, "{stored}");
     }
 }
@@ -98,14 +98,14 @@ fn receipt_v1_record_reads_by_version_lines() {
 
 #[test]
 fn receipt_v2_empty_findings_reads_none_and_matches_the_row() {
-    let body = receipt_of(Some(with(json!({"request_findings": []}))));
+    let body = receipt_of(Some(with(&json!({"request_findings": []}))));
     assert_eq!(body["decision"]["findings"], evidence::NO_FINDINGS);
     assert_eq!(body["findings"], body["decision"]["findings"]);
 }
 
 #[test]
 fn receipt_undeclared_effect_reads_its_line() {
-    let body = receipt_of(Some(with(json!({"declared_effect": "undeclared"}))));
+    let body = receipt_of(Some(with(&json!({"declared_effect": "undeclared"}))));
     assert_eq!(body["decision"]["effect"], evidence::UNDECLARED);
 }
 
@@ -127,7 +127,7 @@ fn receipt_absent_rule_and_grant_read_their_lines() {
 fn truncation_is_marked_both_ways() {
     let found = json!([finding("pii", "high", "arguments.q")]);
     let marked = |extra: Value| {
-        let mut d = with(json!({"request_findings": found}));
+        let mut d = with(&json!({"request_findings": found}));
         for (k, v) in extra.as_object().unwrap() {
             d[k] = v.clone();
         }
