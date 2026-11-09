@@ -101,7 +101,11 @@ fn npm_spec(spec: &str) -> Result<(), Refusal> {
     let ok = scope.is_none_or(npm_name_part)
         && npm_name_part(name)
         && name_len <= NPM_NAME_MAX
-        && version.is_none_or(|v| !v.is_empty() && v.chars().all(npm_version_char));
+        && version.is_none_or(|v| {
+            !v.is_empty() && !v.starts_with('.') && v.chars().all(npm_version_char)
+        })
+        && !archive(name)
+        && version.is_none_or(|v| !archive(v));
     if ok { Ok(()) } else { Err(not_registry(spec)) }
 }
 
@@ -111,6 +115,15 @@ fn npm_name_part(part: &str) -> bool {
         && part
             .chars()
             .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || "-._~".contains(c))
+}
+
+/// npm reads a spec ending in an archive suffix as a local file, whatever
+/// else it looks like; a dot-led version (above) as a path.
+fn archive(part: &str) -> bool {
+    let lower = part.to_ascii_lowercase();
+    [".tgz", ".tar", ".tar.gz"]
+        .iter()
+        .any(|ext| lower.ends_with(ext))
 }
 
 /// A semver range's characters; never `:`, `/` or `\`, so no alias, URL or path.
