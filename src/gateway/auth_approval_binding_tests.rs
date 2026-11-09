@@ -145,12 +145,25 @@ fn the_same_principal_on_a_new_secret_does_not_inherit_consent() {
     assert!(!child_live(vec![replaced, child(bound_to_root())], now()));
 }
 
+/// Two keys sharing the approver's stable principal cannot be running: the
+/// table is refused at load. The binding check's "exactly one approver" rule
+/// stays as a defensive refusal behind that.
 #[test]
-fn two_keys_matching_the_approver_deny() {
+fn two_keys_matching_the_approver_cannot_be_running() {
     let twin = key("root-twin", OTHER, Some(P1));
+    let config = AuthConfig {
+        enabled: true,
+        api_keys: vec![root(), twin, child(bound_to_root())],
+        ..AuthConfig::default()
+    };
+    let built = ResolvedAuthConfig::try_from_config(
+        &config,
+        &crate::config::EnvOverlay::none(),
+        crate::gateway::record_principal::TEST_RECORD_KEY,
+    );
     assert!(
-        !child_live(vec![root(), twin, child(bound_to_root())], now()),
-        "an ambiguous approver kept the child live"
+        built.is_err(),
+        "a table with two keys of one principal loaded"
     );
 }
 

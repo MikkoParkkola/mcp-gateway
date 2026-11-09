@@ -57,40 +57,53 @@ fn joined(auth: &ResolvedAuthConfig, live: Option<&ResolvedApiKey>) -> (Option<S
     (last_used, is_live)
 }
 
+/// A CLI login key's entry also shows the host it reported, as plain data;
+/// every other entry keeps its fields unchanged.
+fn with_cli_host(host: Option<&str>, mut entry: Value) -> Value {
+    if let (Some(host), Some(fields)) = (host, entry.as_object_mut()) {
+        fields.insert("cli_host".to_owned(), Value::from(host));
+    }
+    entry
+}
+
 /// One file entry, joined with the live key of its name.
 fn file_entry(auth: &ResolvedAuthConfig, live: &[ResolvedApiKey], key: &ApiKeyConfig) -> Value {
     let (last_used, is_live) = joined(auth, live.iter().find(|l| l.name == key.name));
-    json!({
-        "name": key.name,
-        "backends": key.backends,
-        "allowed_tools": key.allowed_tools,
-        "denied_tools": key.denied_tools,
-        "admin": key.admin,
-        "expires_at": key.expires_at.map(rfc3339),
-        "previous_expires_at": key.previous_expires_at.map(rfc3339),
-        "rate_limit": key.rate_limit,
-        "last_used": last_used,
-        "live": is_live,
-        "cli_host": key.cli_host,
-    })
+    with_cli_host(
+        key.cli_host.as_deref(),
+        json!({
+            "name": key.name,
+            "backends": key.backends,
+            "allowed_tools": key.allowed_tools,
+            "denied_tools": key.denied_tools,
+            "admin": key.admin,
+            "expires_at": key.expires_at.map(rfc3339),
+            "previous_expires_at": key.previous_expires_at.map(rfc3339),
+            "rate_limit": key.rate_limit,
+            "last_used": last_used,
+            "live": is_live,
+        }),
+    )
 }
 
 /// One live key, for an answer with no usable file behind it.
 fn live_entry(auth: &ResolvedAuthConfig, key: &ResolvedApiKey) -> Value {
     let (last_used, is_live) = joined(auth, Some(key));
-    json!({
-        "name": key.name,
-        "backends": key.backends,
-        "allowed_tools": key.allowed_tools,
-        "denied_tools": key.denied_tools,
-        "admin": key.admin,
-        "expires_at": key.expires_at.map(rfc3339),
-        "previous_expires_at": key.previous.as_ref().map(|p| rfc3339(p.expires_at)),
-        "rate_limit": key.rate_limit,
-        "last_used": last_used,
-        "live": is_live,
-        "cli_host": key.cli_host,
-    })
+    with_cli_host(
+        key.cli_host.as_deref(),
+        json!({
+            "name": key.name,
+            "backends": key.backends,
+            "allowed_tools": key.allowed_tools,
+            "denied_tools": key.denied_tools,
+            "admin": key.admin,
+            "expires_at": key.expires_at.map(rfc3339),
+            "previous_expires_at": key.previous.as_ref().map(|p| rfc3339(p.expires_at)),
+            "rate_limit": key.rate_limit,
+            "last_used": last_used,
+            "live": is_live,
+        }),
+    )
 }
 
 /// The answer for no file (`absent`) or a file that failed to load
