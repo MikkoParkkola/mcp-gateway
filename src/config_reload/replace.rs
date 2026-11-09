@@ -33,29 +33,9 @@ use crate::secret_store::{
 use super::ReloadContext;
 use crate::config_persistence::keyedit::Template;
 
-/// The SHA-256 of a file's bytes, lowercase hex: the revision a diff or a
-/// history view was made from. Not `config_revision`, which also covers the
-/// process environment and `file:` secrets.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct FileRevision(String);
-
-impl FileRevision {
-    /// The revision of `bytes`.
-    #[must_use]
-    pub(crate) fn of(bytes: &[u8]) -> Self {
-        Self(crate::hashing::sha256_hex(bytes))
-    }
-
-    /// The hex digest.
-    #[must_use]
-    #[cfg_attr(
-        all(not(feature = "webui"), not(test)),
-        expect(dead_code, reason = "read by the web UI's discovery route")
-    )]
-    pub(crate) fn as_str(&self) -> &str {
-        &self.0
-    }
-}
+// The revision type lives with the config commit primitive, which every
+// build compiles; the replace path names it from there.
+pub(crate) use crate::config_persistence::commit::FileRevision;
 
 /// What the file must hold for the write to go ahead.
 #[cfg_attr(
@@ -148,13 +128,6 @@ pub(crate) struct ReplaceOutcome {
     /// The kept copy, for [`Replaced::KeepBeside`].
     pub(crate) kept_beside: Option<PathBuf>,
     /// The reload that accepted it.
-    #[cfg_attr(
-        all(test, not(feature = "webui")),
-        expect(
-            dead_code,
-            reason = "first callers: the web UI settings save and the configuration-history restore"
-        )
-    )]
     pub(crate) reload: ReloadOutcome,
     /// Each stored secret's field and the reference the written file holds for
     /// it, in the secret step's order; empty without one. Read from this write
@@ -262,6 +235,10 @@ mod validate;
 /// writer does.
 #[path = "ui_diff.rs"]
 pub(crate) mod ui_diff;
+/// The settings save (U8): the writer's caller for a UI edit.
+#[cfg(any(test, feature = "webui"))]
+#[path = "ui_save.rs"]
+pub(crate) mod ui_save;
 use slots::{fill_secrets, fits_when_filled, same_fields};
 
 /// What happens to a replacement's new store entries.
@@ -679,7 +656,7 @@ impl ReloadContext {
                 let _ = std::fs::remove_file(kept);
             }
         };
-        if let Err(e) = journal::begin(target, FileRevision::of(current).0) {
+        if let Err(e) = journal::begin(target, FileRevision::of(current).as_str().to_owned()) {
             unkeep();
             return Err(Self::roll_back(
                 target,
