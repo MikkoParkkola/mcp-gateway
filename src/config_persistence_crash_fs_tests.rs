@@ -217,26 +217,43 @@ fn an_unhooked_replacement_then_flush_keeps_the_flushed_bytes() {
     assert_eq!(std::fs::read(&path).expect("read"), FLUSHED);
 }
 
-/// C10: red oracle: a byte-range lock on a file that is not the gateway's
-/// lock sidecar stops arming by name; a harness that skipped every locked
-/// file would arm silently and fail this assertion.
+/// C10: red oracle: only the armed config's own lock sidecar is left out. A
+/// foreign `.other.yaml.lock` beside an `other.yaml`, held under a byte-range
+/// lock, stops arming by name; a harness that skipped any locked file, or
+/// guessed the sidecar from a file name, would arm silently and fail here.
 #[cfg(windows)]
 #[test]
 fn a_foreign_locked_file_is_refused_by_name() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let foreign = dir.path().join("other.yaml");
+    let (dir, config) = config();
+    std::fs::write(dir.path().join("other.yaml"), OLD).expect("seed");
+    let foreign = dir.path().join(".other.yaml.lock");
     std::fs::write(&foreign, OLD).expect("seed");
     let held = std::fs::File::open(&foreign).expect("open");
     held.lock().expect("byte-range lock");
-    let path = dir.path().to_path_buf();
-    let caught = std::panic::catch_unwind(move || drop(crash_fs::arm(&path)));
+    let probe = std::fs::read(&foreign).expect_err("read under the lock");
+    assert_eq!(probe.raw_os_error(), Some(33), "the lock blocks reads");
+    let caught = std::panic::catch_unwind(move || drop(crash_fs::arm_config(&config)));
     let message = caught
         .err()
         .and_then(|e| e.downcast_ref::<String>().cloned())
         .unwrap_or_default();
     assert!(
-        message.contains("other.yaml"),
+        message.contains(".other.yaml.lock"),
         "arm over a foreign locked file: {message:?}"
     );
     drop(held);
+}
+
+/// C11: red oracle: the armed config's lock sidecar is outside the model
+/// whatever its lock state; a harness that snapshotted it would restore its
+/// arming bytes under `DropAll`.
+#[test]
+fn the_config_lock_sidecar_is_left_untouched_by_a_cut() {
+    let (dir, config) = config();
+    let sidecar = super::lock::lock_path(&config);
+    std::fs::write(&sidecar, b"armed").expect("seed sidecar");
+    let _armed = crash_fs::arm_config(&config);
+    std::fs::write(&sidecar, b"later").expect("rewrite sidecar");
+    crash_fs::cut(dir.path(), Mode::DropAll);
+    assert_eq!(std::fs::read(&sidecar).expect("sidecar"), b"later");
 }

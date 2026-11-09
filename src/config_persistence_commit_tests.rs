@@ -560,7 +560,7 @@ fn a_token_survives_power_loss_in_every_mode() {
     for mode in crash_modes() {
         let (_dir, path) = config();
         let held = lock(&path);
-        let _armed = super::crash_fs::arm(held.target.parent().unwrap());
+        let _armed = super::crash_fs::arm_config(&held.target);
         let token = commit(&held, &path, Action::Forward, NEW).expect("token");
         super::crash_fs::cut(held.target.parent().unwrap(), mode);
         let bytes = std::fs::read(&path).expect("read after cut");
@@ -576,7 +576,7 @@ fn a_sync_failure_is_lost_under_drop_all_kept_under_keep_all() {
     for mode in crash_modes() {
         let (_dir, path) = config();
         let held = lock(&path);
-        let _armed = super::crash_fs::arm(held.target.parent().unwrap());
+        let _armed = super::crash_fs::arm_config(&held.target);
         let _fault = fault::set(&path, Fault::FailDirSync(SyncKey::Commit(Action::Forward)));
         let got = commit(&held, &path, Action::Forward, NEW);
         assert!(matches!(got, Err(NotDurable::Sync(_))), "{got:?}");
@@ -601,7 +601,7 @@ fn verify_flushes_bytes_written_without_sync() {
     for mode in crash_modes() {
         let (_dir, path) = config();
         let held = lock(&path);
-        let _armed = super::crash_fs::arm(held.target.parent().unwrap());
+        let _armed = super::crash_fs::arm_config(&held.target);
         std::fs::write(&path, NEW).expect("unsynced in-place write");
         let token = verify(&held, &path, &FileRevision::of(NEW)).expect("token");
         super::crash_fs::cut(held.target.parent().unwrap(), mode);

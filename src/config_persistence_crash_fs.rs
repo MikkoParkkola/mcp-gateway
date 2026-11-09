@@ -10,9 +10,10 @@
 //! A file never data-synced or snapshotted is absent under `DropAll`. Arming
 //! treats existing bytes as durable. A new, unhooked file at a directory
 //! snapshot is assumed data-synced, as the crate's other writers are.
-//! The gateway's own config lock sidecar, unreadable on Windows while its
-//! byte-range lock is held, is outside the model: it is never
-//! projected, removed or rewritten.
+//! Arming through `arm_config` leaves that config's own lock sidecar
+//! (`lock::lock_path`) outside the model by name, whatever its lock state: it
+//! is never snapshotted, projected, removed or rewritten. Any other file the
+//! overlay cannot read panics by name.
 //!
 //! Generations use handle identity: (dev, ino) on Unix and
 //! `win_acl::file_identity` (volume serial, 128-bit file id) on Windows.
@@ -53,6 +54,9 @@ pub(crate) struct Overlay {
     pub(crate) current: BTreeMap<String, FileId>,
     pub(crate) data: BTreeMap<FileId, Vec<u8>>,
     pub(crate) held: BTreeMap<FileId, File>,
+    /// The one file name left out of the model: the armed config's lock
+    /// sidecar, which Windows will not let us read while it is held.
+    pub(crate) excluded: Option<String>,
 }
 
 static ARMED: Mutex<Option<HashMap<PathBuf, Overlay>>> = Mutex::new(None);
@@ -74,34 +78,10 @@ fn key(dir: &Path) -> PathBuf {
     std::fs::canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf())
 }
 
-/// Windows `ERROR_LOCK_VIOLATION`: a byte-range lock is held on the file.
-const LOCK_VIOLATION: i32 = 33;
-
-/// Whether `path` is the gateway's own lock sidecar for a config file in the
-/// same directory (`lock::lock_path`), the one file the overlay may find
-/// locked.
-fn is_config_lock(path: &Path) -> bool {
-    let Some(config) = path
-        .file_name()
-        .and_then(|n| n.to_str())
-        .and_then(|n| n.strip_prefix('.'))
-        .and_then(|n| n.strip_suffix(".lock"))
-    else {
-        return false;
-    };
-    let config = path.with_file_name(config);
-    config.is_file() && super::lock::lock_path(&config) == path
-}
-
-/// The file's bytes, or `None` for the gateway's own lock sidecar while its
-/// byte-range lock forbids the read. Any other unreadable file panics by
-/// name, so a real config file another process holds is never dropped.
-fn read_unlocked(file: &File, path: &Path) -> Option<Vec<u8>> {
-    match read_bytes(file) {
-        Ok(bytes) => Some(bytes),
-        Err(e) if e.raw_os_error() == Some(LOCK_VIOLATION) && is_config_lock(path) => None,
-        Err(e) => panic!("crash_fs: read {}: {e:?}", path.display()),
-    }
+/// The file's bytes. A file the overlay cannot read (another process's
+/// byte-range lock on Windows) panics by name: it is never silently dropped.
+fn read_named(file: &File, path: &Path) -> Vec<u8> {
+    read_bytes(file).unwrap_or_else(|e| panic!("crash_fs: read {}: {e:?}", path.display()))
 }
 
 fn read_bytes(mut file: &File) -> io::Result<Vec<u8>> {
@@ -114,8 +94,25 @@ fn read_bytes(mut file: &File) -> io::Result<Vec<u8>> {
 }
 
 pub(crate) fn arm(dir: &Path) -> Armed {
+    arm_excluding(dir, None)
+}
+
+/// Arms the config's directory, leaving the config's own lock sidecar out.
+pub(crate) fn arm_config(config: &Path) -> Armed {
+    let sidecar = super::lock::lock_path(config);
+    let name = sidecar
+        .file_name()
+        .and_then(|n| n.to_str())
+        .map(str::to_owned);
+    arm_excluding(config.parent().expect("crash_fs: config directory"), name)
+}
+
+fn arm_excluding(dir: &Path, excluded: Option<String>) -> Armed {
     let dir = key(dir);
-    let mut overlay = Overlay::default();
+    let mut overlay = Overlay {
+        excluded,
+        ..Overlay::default()
+    };
     for entry in std::fs::read_dir(&dir).expect("crash_fs: read directory") {
         let entry = entry.expect("crash_fs: read entry");
         if !entry.file_type().expect("crash_fs: file type").is_file() {
@@ -125,12 +122,13 @@ pub(crate) fn arm(dir: &Path) -> Armed {
             .file_name()
             .into_string()
             .expect("crash_fs: UTF-8 name");
+        if overlay.excluded.as_ref() == Some(&name) {
+            continue;
+        }
         let path = entry.path();
         let file = File::open(&path).expect("crash_fs: open file");
         let generation = file_id(&file).expect("crash_fs: file identity");
-        let Some(bytes) = read_unlocked(&file, &path) else {
-            continue;
-        };
+        let bytes = read_named(&file, &path);
         overlay.names.insert(name.clone(), generation);
         overlay.current.insert(name.clone(), generation);
         overlay.data.insert(generation, bytes);
@@ -161,12 +159,13 @@ pub(crate) fn cut(dir: &Path, mode: Mode) {
                 .file_name()
                 .into_string()
                 .expect("crash_fs: UTF-8 name");
+            if durable.excluded.as_ref() == Some(&name) {
+                continue;
+            }
             let path = entry.path();
             let file = File::open(&path).expect("crash_fs: open file");
             let generation = file_id(&file).expect("crash_fs: file identity");
-            let Some(bytes) = read_unlocked(&file, &path) else {
-                continue;
-            };
+            let bytes = read_named(&file, &path);
             durable.current.insert(name.clone(), generation);
             observed.insert(name, bytes);
         }
@@ -235,14 +234,14 @@ pub(super) fn note_dir_synced(dir: &Path) {
             .file_name()
             .into_string()
             .expect("crash_fs: UTF-8 name");
+        if overlay.excluded.as_ref() == Some(&name) {
+            continue;
+        }
         let path = entry.path();
         let file = File::open(&path).expect("crash_fs: open file");
         let generation = file_id(&file).expect("crash_fs: file identity");
         if let std::collections::btree_map::Entry::Vacant(entry) = overlay.data.entry(generation) {
-            let Some(bytes) = read_unlocked(&file, &path) else {
-                continue;
-            };
-            entry.insert(bytes);
+            entry.insert(read_named(&file, &path));
             overlay.held.insert(generation, file);
         }
         names.insert(name, generation);
