@@ -50,7 +50,7 @@ async fn an_enabled_key_server_without_the_audit_log_is_refused() {
 /// the log holds exactly one creation record; a second start adds none.
 #[tokio::test]
 async fn with_the_audit_log_the_key_is_created_and_recorded_once() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = Arc::new(tempfile::tempdir().unwrap());
     let log_path = dir.path().join("audit.jsonl");
     let log_config = crate::security::transparency_log::TransparencyLogConfig {
         enabled: true,
@@ -61,6 +61,8 @@ async fn with_the_audit_log_the_key_is_created_and_recorded_once() {
         crate::security::transparency_log::TransparencyLogger::open(Arc::new(log_config))
             .expect("the log opens"),
     );
+    // The log's late writes land in a directory the test still holds.
+    logger.keep_test_dir(Arc::clone(&dir));
     let gateway = Gateway::new(config(&dir))
         .await
         .expect("the config is valid");
