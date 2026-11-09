@@ -116,6 +116,9 @@ pub(super) enum Why {
     Unsigned,
     /// More than one `transport_finalized` record for the trace.
     Duplicate,
+    /// The receipt's window broke the chain after a record was found: the
+    /// record cannot be vouched for.
+    Chain,
 }
 
 impl Why {
@@ -125,7 +128,7 @@ impl Why {
             Self::Invalid => Some("invalid"),
             Self::Unsigned => Some("unsigned"),
             Self::Duplicate => Some("duplicate"),
-            Self::Evicted | Self::Overflow => None,
+            Self::Evicted | Self::Overflow | Self::Chain => None,
         }
     }
 }

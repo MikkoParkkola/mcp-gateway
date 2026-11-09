@@ -93,6 +93,8 @@ pub(super) fn scan(
             };
             out.lines += 1;
             let Ok(entry @ Value::Object(_)) = serde_json::from_slice::<Value>(&bytes) else {
+                // A complete line that is no record is a break, never a skip.
+                out.chain_broken = true;
                 continue;
             };
             out.chain_broken |= !follows(&prev, &entry);
@@ -102,12 +104,16 @@ pub(super) fn scan(
                     out.records.push(summary(&entry));
                 }
             }
-            let line = Line {
-                log: Which::Invocation,
-                entry: entry.clone(),
-                segment: seq,
-            };
-            joiner.observe(&line);
+            // Continuity covers every record; the join takes only this call's
+            // trace, so other traces cannot evict its record.
+            if trace.is_some() && entry.get("trace_id").and_then(Value::as_str) == trace {
+                let line = Line {
+                    log: Which::Invocation,
+                    entry: entry.clone(),
+                    segment: seq,
+                };
+                joiner.observe(&line);
+            }
             prev = entry;
         };
         out.bytes += forward.pulled();
@@ -117,6 +123,11 @@ pub(super) fn scan(
         }
         match segments(log)?.into_iter().find(|s| *s > seq) {
             None => break,
+            // Segment numbers are contiguous: a gap is an unread segment.
+            Some(next) if next != seq + 1 => {
+                (out.stopped, out.finished) = ("missing segment", false);
+                break;
+            }
             Some(_) if crossed => {
                 (out.stopped, out.finished) = ("end of the next segment", false);
                 break;
@@ -130,6 +141,10 @@ pub(super) fn scan(
         head_covered: out.finished,
     };
     out.joined = joiner.join(call, seen);
+    // A found record in a window whose chain broke is not vouched for.
+    if out.chain_broken && matches!(out.joined, Joined::Found(_)) {
+        out.joined = Joined::Incomplete(Why::Chain);
+    }
     Ok(out)
 }
 
@@ -159,6 +174,7 @@ fn incomplete_line(why: Why) -> String {
             if why == Why::Invalid { "invalid" } else { "unsigned under the configured secret" }
         ),
         Why::Duplicate => "more than one delivery record for this trace: the writer writes one; treated as tampering".into(),
+        Why::Chain => "the log chain broke inside the delivery window, so the delivery record cannot be vouched for; effect not stated".into(),
         Why::Evicted | Why::Overflow => "the join was incomplete".into(),
     }
 }
