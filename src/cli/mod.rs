@@ -27,12 +27,14 @@
 //! mcp-gateway tool completions zsh > ~/.zsh/completions/_mcp-gateway
 //! ```
 
+pub mod api;
 pub mod completion;
 pub mod dashboard_link;
 pub mod events;
 pub mod identity;
 pub mod invoke;
 pub mod output;
+pub mod redact;
 mod setup;
 pub mod skills;
 pub(crate) mod stdout;
@@ -358,6 +360,9 @@ pub enum Command {
     DashboardLink(dashboard_link::DashboardLinkArgs),
     /// Administer MCP Events: list and replay dead-lettered deliveries
     Events(events::EventsArgs),
+    /// Send one request to a running gateway's admin API (`/ui/api/...`) and
+    /// print its JSON; reads `MCP_GATEWAY_TOKEN`.
+    Api(api::ApiArgs),
 
     /// Lint capability YAMLs against agent-UX best practices
     ///
