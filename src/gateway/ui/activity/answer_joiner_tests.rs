@@ -179,3 +179,21 @@ fn a_finding_field_is_capped_so_the_projection_stays_bounded() {
     let kind = list[0]["kind"].as_str().unwrap();
     assert!(kind.len() <= 128, "{}", kind.len());
 }
+
+#[test]
+fn a_finding_field_keeps_the_first_128_characters_not_bytes() {
+    let mut joiner = Joiner::new(None);
+    let text: String = "é日🦀a".chars().cycle().take(200).collect();
+    let findings = json!([{"kind": text, "severity": text, "where": text}]);
+    joiner.observe(&delivery_line("gw-t", &findings));
+    let seen = Seen {
+        above: 0,
+        head_covered: true,
+    };
+    let list = listed(joiner.join(&call_line(), seen));
+    let want: String = text.chars().take(128).collect();
+    assert!(want.len() > 128, "premise: bytes and characters differ");
+    for key in ["kind", "severity", "where"] {
+        assert_eq!(list[0][key].as_str(), Some(want.as_str()), "{key}");
+    }
+}
