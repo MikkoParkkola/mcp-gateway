@@ -1,0 +1,15 @@
+diff --git a/src/config_persistence_crash_fs.rs b/src/config_persistence_crash_fs.rs
+index e2a474c19d..185464787e 100644
+--- a/src/config_persistence_crash_fs.rs
++++ b/src/config_persistence_crash_fs.rs
+@@ -128,7 +128,9 @@ fn arm_excluding(dir: &Path, excluded: Option<String>) -> Armed {
+         let path = entry.path();
+         let file = File::open(&path).expect("crash_fs: open file");
+         let generation = file_id(&file).expect("crash_fs: file identity");
+-        let bytes = read_named(&file, &path);
++        let Ok(bytes) = read_bytes(&file) else {
++            continue;
++        };
+         overlay.names.insert(name.clone(), generation);
+         overlay.current.insert(name.clone(), generation);
+         overlay.data.insert(generation, bytes);

@@ -1,0 +1,13 @@
+diff --git a/src/config_persistence_crash_fs.rs b/src/config_persistence_crash_fs.rs
+index e2a474c19d..3a88b8c052 100644
+--- a/src/config_persistence_crash_fs.rs
++++ b/src/config_persistence_crash_fs.rs
+@@ -122,7 +122,7 @@ fn arm_excluding(dir: &Path, excluded: Option<String>) -> Armed {
+             .file_name()
+             .into_string()
+             .expect("crash_fs: UTF-8 name");
+-        if overlay.excluded.as_ref() == Some(&name) {
++        if false {
+             continue;
+         }
+         let path = entry.path();
